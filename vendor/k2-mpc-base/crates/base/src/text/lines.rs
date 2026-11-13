@@ -273,7 +273,7 @@ pub enum Tokens {
     /// Cells: runs between commas and tabs.
     Cells,
     /// Every character a token of its own: D1 widens nothing, so it is the identity (the
-    /// undo model check's single-letter alphabets, where the G1 evidence was taken).
+    /// undo model check's single-letter alphabets, where the full-bound evidence was taken).
     Chars,
     /// Whole lines. No pack uses it: the oracle's `rewrite-whole-line` mutant.
     Lines,
@@ -537,7 +537,7 @@ mod tests {
 
     proptest::proptest! {
         /// With every character its own token (the undo model check's alphabets), D1 is the
-        /// identity on any change and any ownership: the G1 evidence stands as taken.
+        /// identity on any change and any ownership: the full-bound evidence stands as taken.
         #[test]
         fn d1_is_the_identity_on_character_tokens(
             old in "[ab\n]{0,16}",

@@ -4,7 +4,7 @@
 # whole commit and needs none of this. Run from the repo root:
 #   tools/test-bundle.sh --env PART=base-a1 tools/tests/full.sh <out> $(tools/tests/full-paths.sh base-a1)
 set -eu
-# .cargo/config.toml: the untrusted-wire acknowledgement the kit's own tests need (K10)
+# .cargo/config.toml: the untrusted-wire acknowledgement the kit's own tests need
 KIT="Cargo.toml Cargo.lock .cargo/config.toml .config/nextest.toml crates/base/Cargo.toml crates/base/src vendor/yrs"
 # the kit for a part that doesn't run its unit tests: without the test-only module files (each
 # `#[cfg(test)] mod x;`, never compiled when the kit is a dependency); v0.9.3, to make room
@@ -33,7 +33,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
     # the JS client's shared vectors, which client_vectors.rs checks (v0.9.7)
     echo "$KIT_LIB" $T client/test/vectors ;;
   # the evidence notes and their run records, checked (Python only; no cargo)
-  # oss-check (K-OSS-3) reads the licence files, NOTICE.md and every manifest of ours (not the
+  # oss-check reads the licence files, NOTICE.md and every manifest of ours (not the
   # lockfiles, which are large: in a bundle it checks package.json files without them)
   evidence) EF=
       echo "tools/evidence docs/evidence tools/check-private.sh tools/test-check-private.sh tools/private-allow.txt" \
@@ -42,9 +42,9 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
       "scripts/pack-checks/carrier-row.sh tools/test-carrier-row.sh" \
       "client/LICENSE-MIT client/LICENSE-APACHE" \
       $(git ls-files '*Cargo.toml' '*package.json' | grep -v '^vendor/' | tr '\n' ' ') ;;
-  # bundled with STRIP_DOCS=1 since v0.9.7 (the K5 run_tool test put it 600 characters
+  # bundled with STRIP_DOCS=1 since v0.9.7 (the App viewer's run_tool test put it 600 characters
   # past a job's 120,000 inline; it runs no doctests; tools/README.md)
-  # app_view's grid case uses the grid test pack (C1)
+  # app_view's grid case uses the grid test pack
   base-c) echo "$KIT_LIB" $(for t in $C; do printf ' crates/base/tests/%s.rs' "$t"; done) crates/base/tests/grid_pack ;;
   base-d) echo "$KIT_LIB" $(for t in $D; do printf ' crates/base/tests/%s.rs' "$t"; done) ;;
   # the error surface (v0.10): its tests, the error goldens, the generated docs/ERRORS.md, the
@@ -57,7 +57,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
   # bundled with STRIP_DOCS=1 since v0.9.7 (D1 put it at 145,656 inline characters;
   # tools/README.md)
   spec-undo) echo "$KIT_LIB crates/spec-undo spec/quint/undo_diff.qnt docs/SPEC-UNDO.md" ;;
-  # K10's build-time guard, checked from inside the repo and as a host would build (no cargo
+  # the build-time guard, checked from inside the repo and as a host would build (no cargo
   # check of tests: the lib alone)
   wire-guard) echo "$KIT_LIB tools/tests/wire-guard.sh" ;;
   # fmt and clippy need every target of every crate: a --repo job only

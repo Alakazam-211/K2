@@ -1,0 +1,21 @@
+MPCE-E571 store_keys_wrong (store)
+exit:     6
+message:  the engine refused the store: it was written under another secret or digest key
+next:     Nothing was read and nothing changed. Check the host's keys for this document: restore its own secret and digest key from where the store came from. Never make new keys for a store that has native records.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E571",
+  "name": "store_keys_wrong",
+  "area": "store",
+  "exit": 6,
+  "message": "the engine refused the store: it was written under another secret or digest key",
+  "next": "Nothing was read and nothing changed. Check the host's keys for this document: restore its own secret and digest key from where the store came from. Never make new keys for a store that has native records.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

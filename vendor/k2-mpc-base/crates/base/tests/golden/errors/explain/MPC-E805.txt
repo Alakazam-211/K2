@@ -3,7 +3,7 @@ exit:     4
 message:  {verb}: {line}
 next:     The row, column or cell the verb names is unknown or deleted (stdout says which, and who deleted it when you may read history). A raw keyed cell write naming a row or column the table doesn't know (dropped, or never in it) is refused the same way, whole. Nothing was applied. List the live ones (row list, col list), or restore a deleted one first (row restore, col restore).
 step:     row list; why: The row, column or cell is unknown or deleted; list the live ones, or restore a deleted one first.
-rule:     CSV contract §3.3 (C1)
+rule:     CSV contract §3.3
 verbs:    a pack's own verbs
 status:   live
 --- json
@@ -19,7 +19,7 @@ status:   live
     "args": [],
     "why": "The row, column or cell is unknown or deleted; list the live ones, or restore a deleted one first."
   },
-  "rule": "CSV contract §3.3 (C1)",
+  "rule": "CSV contract §3.3",
   "verbs": ["@pack"],
   "returned_by": [],
   "status": "live",

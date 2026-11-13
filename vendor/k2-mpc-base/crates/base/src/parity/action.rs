@@ -23,7 +23,7 @@ macro_rules! person_actions {
         ///
         /// **Deliberately exhaustive** (not `#[non_exhaustive]`): a pack maps actions with a
         /// `match`, so adding a row here is a compile error in every pack until it is
-        /// mapped. That is the parity rule (K-PAR-3): a new action without a mapping must
+        /// mapped. That is the parity rule: a new action without a mapping must
         /// not compile.
         ///
         /// ```compile_fail
@@ -77,7 +77,7 @@ person_actions! {
     Who = 6, ALL3, "See who's here";
     /// P7.
     Follow = 7, TG, "Follow someone";
-    /// P8 (and, later, declaring an intent range: K-PRES-12).
+    /// P8 (and, later, declaring an intent range).
     Caret = 8, TG, "Place the caret / select; say what I'm working on";
     /// P9.
     Type = 9, TG, "Type at a position";
@@ -131,7 +131,7 @@ person_actions! {
     ReleaseLease = 33, BLOB, "Release my lease";
     /// P34 (tier 0): owner only.
     BreakLease = 34, BLOB, "Break someone else's lease";
-    // the grid tier (CSV contract §3.5, K-CSV-3, K-CSV-7): a structured doc's own actions
+    // the grid tier (CSV contract §3.5): a structured doc's own actions
     /// P35: `row insert`.
     RowInsert = 35, GRID, "Insert a row";
     /// P36: `row move`.
@@ -150,7 +150,7 @@ person_actions! {
     Sort = 42, GRID, "Sort by a column";
     /// P43: `row restore`, `col restore` (also `undo`, `revert`).
     RestoreElement = 43, GRID, "Bring back a deleted row or column";
-    /// P44: `rows drop-deleted`, owner only (K-CSV-7: frees the size limit; not erasure,
+    /// P44: `rows drop-deleted`, owner only (frees the size limit; not erasure,
     /// history keeps the rows; anyone else gets exit 3).
     DropDeleted = 44, GRID, "Remove deleted rows to free space (owner only)";
 }

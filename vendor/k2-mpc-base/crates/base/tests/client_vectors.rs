@@ -1,4 +1,4 @@
-//! Shared test vectors for the JS client (`client/`, K1): how [`position::transform`] moves
+//! Shared test vectors for the JS client (`client/`): how [`position::transform`] moves
 //! every character boundary of a text through a hunk set, with both biases. The client's
 //! `position.ts` must reproduce each one exactly (`client/test/vectors.test.ts`).
 //!

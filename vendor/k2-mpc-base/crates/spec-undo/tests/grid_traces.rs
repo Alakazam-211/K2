@@ -16,7 +16,7 @@
 //! (`grid_traces_<class>`). `grid_mutants_each_fail` runs the model
 //! as each mutant of §8 (xv)–(xxvi) and records CAUGHT or SURVIVED per mutant
 //! (`grid_mutant_<name>`); over every class each must be caught (a shard only records).
-//! `write_with_no_identity` (KC7, Yrs only) plants writes with no identity through the kit's
+//! `write_with_no_identity` (Yrs only) plants writes with no identity through the kit's
 //! conformance hook `set_outside_without_identity_for_tests`.
 
 use std::collections::{BTreeMap, HashMap};
@@ -309,7 +309,7 @@ enum Step {
     /// An outside save applying these verbs to the file.
     Outside(Vec<Verb>),
     /// The same, its writes recorded with no identity (a write merged in from elsewhere
-    /// whose writer the engine doesn't report: KC7, a pinned Yrs deviation, spec S2).
+    /// whose writer the engine doesn't report: a pinned Yrs deviation, spec S2).
     OutsideNoId(Vec<Verb>),
     Restart,
 }
@@ -645,7 +645,7 @@ fn script(class: &str, rng: &mut SmallRng) -> Vec<Step> {
             Undo("p1", 2, all),
             Undo("p1", 1, partial),
         ],
-        // KC7 (Yrs only): a holder with no identity is someone else's, never own
+        // Yrs only: a holder with no identity is someone else's, never own
         // the outside writes "" (VALUES[4]): never a body value nor one p1 wrote, so the
         // undo isn't `already`
         "write_with_no_identity" => match rng.gen_range(0..3) {
@@ -1236,8 +1236,8 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
     let mut own: HashMap<&'static str, Vec<u64>> = HashMap::new();
     // the kit's recent writes, as its echo detection keeps them (`Disk::own`): a file holding
     // one is its own write coming back, not an outside edit; an outside save that comes in
-    // clears them, as the kit does (v0.9.5's echo rule, on grid ingests since the C1 merge
-    // with main: after a person's save, an earlier write of the kit's is their edit)
+    // clears them, as the kit does (v0.9.5's echo rule, on grid ingests too:
+    // after a person's save, an earlier write of the kit's is their edit)
     let mut owns: Vec<String> = Vec::new();
     let mut done = 0;
     let mut cov: BTreeMap<&'static str, u64> = BTreeMap::new();
@@ -1530,7 +1530,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
                 kit.s()
                     .set_outside_without_identity_for_tests(false)
                     .unwrap();
-                // K-AUD-1's sync check after every outside step (the harness flushed first, so
+                // the sync check after every outside step (the harness flushed first, so
                 // the doc was clean): the replica the next one is made on is the doc, a file
                 // left as it was included (the change-counter marker re-syncs a replica that
                 // lagged a change that only deleted; v0.9.5's rule)
@@ -1540,7 +1540,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
                     return fail(
                         done,
                         step,
-                        format!("K-AUD-1 after the outside save: {drift:?}"),
+                        format!("the sync audit after the outside save: {drift:?}"),
                     );
                 }
                 if std::env::var("GRID_VERBOSE").is_ok() {
@@ -1688,7 +1688,7 @@ const C_RESTORED: &str = "holder restored_by compared";
 const C_RESTORED_SOME: &str = "holder restored_by compared (a restored write)";
 /// A write --base's conflicts as an exact set (the kit's against `merge3_text`'s).
 const C_CONFLICTS: &str = "write --base conflicts compared";
-/// K-AUD-1's disk sync check after an outside save.
+/// the disk sync check after an outside save.
 const C_SYNCS: &str = "disk syncs audited";
 
 /// Compare each facet's holder: the change it resolves to (S2), that change's author, whom it

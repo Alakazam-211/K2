@@ -27,7 +27,7 @@
 //! - O4: an identical change on both sides is taken once;
 //! - O5: two different insertions at the same point conflict, except at the end of a
 //!   **non-empty** text, where both land, theirs first, then ours (two agents appending to
-//!   a log). Two writes to an empty doc conflict (K-BR-11, spec v1.3 R3).
+//!   a log). Two writes to an empty doc conflict (spec v1.3 R3).
 //!
 //! O5 makes the merge asymmetric in one place: with both sides appending, swapping ours
 //! and theirs swaps the order of the two appends. Everything else is symmetric.
@@ -1285,7 +1285,7 @@ mod tests {
 
     #[test]
     fn empty_base_double_write_conflicts() {
-        // K-BR-11 / CT merge.empty_base_same_point_conflicts: O5 needs a non-empty doc
+        // CT merge.empty_base_same_point_conflicts: O5 needs a non-empty doc
         assert!(matches!(merge3("", "b\n", "a\n"), Merge::Conflicts(_)));
         // the same text written twice is still taken once (O4)
         assert_eq!(clean("", "a\n", "a\n"), "a\n");

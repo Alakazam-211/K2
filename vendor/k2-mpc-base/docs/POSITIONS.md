@@ -1,6 +1,6 @@
 # Positions
 
-How each surface of the kit counts positions (K-ADDR-4). In one line: **UTF-8 bytes inside
+How each surface of the kit counts positions. In one line: **UTF-8 bytes inside
 the kit and on the hunk channel; `line:col` (1-based lines, 1-based columns in Unicode scalar
 values) for people and command-line verbs; UTF-16 code units only inside the update bytes
 exchanged with Yjs clients, and in the JS client library's presence and marks data for a
@@ -77,7 +77,7 @@ Mac software, where the whole file has no `\n`).
 
 | Count | A line ends at | Used by | Why |
 |---|---|---|---|
-| `\n` lines (`lines`) | `\n` | `cat`, `head`, `tail`, `wc`, `grep`, `sed`, `diff`, `view` and every `-n` number; `--lines`, `--at`, `insert`, `sed -i` addresses and `patch`; the lines `claim --lines` takes | The mirror verbs print what the real tool prints on the same bytes (K-PAR-7), and an edit by line must hit the line `cat -n` printed |
+| `\n` lines (`lines`) | `\n` | `cat`, `head`, `tail`, `wc`, `grep`, `sed`, `diff`, `view` and every `-n` number; `--lines`, `--at`, `insert`, `sed -i` addresses and `patch`; the lines `claim --lines` takes | The mirror verbs print what the real tool prints on the same bytes, and an edit by line must hit the line `cat -n` printed |
 | Rendered lines (`rendered_lines`) | LF, CRLF or a lone CR, and one per record whatever ends it | The line map: `LN`, `row list`, `blame`, conflict reports, and the lines claims, views, the roster and `activity` report | A row needs lines of its own whatever ends the records |
 
 Where the two meet:
@@ -131,7 +131,7 @@ A verb's row in `capabilities` states the positions it takes, and for some verbs
 none.** `select --keys` has no row because it takes keys only, and a key never shifts.
 
 These verbs print positions and have no row yet, so `capabilities` doesn't state them. Their rows
-come in Wave 1c:
+come in a later release:
 
 | Verb | What it prints |
 |---|---|
@@ -141,5 +141,6 @@ come in Wave 1c:
 | `watch`, `tail -f` | byte offsets (`ChangeEvent.hunks`) |
 | `blame --structure` | where each row and column is (`PlaceBlame.at`) |
 
-Some verbs with a row print positions their row doesn't state yet, also for Wave 1c: `insert`,
-`replace`, `delete`, `sed -i` and `patch` print the lines a change touched, and `claim` its lines.
+Some verbs with a row print positions their row doesn't state yet, also for a later release:
+`insert`, `replace`, `delete`, `sed -i` and `patch` print the lines a change touched, and `claim`
+its lines.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the golden tool corpus against the real GNU tools (K-PAR-7).
+"""Check the golden tool corpus against the real GNU tools.
 
 Run on Linux with GNU coreutils, grep, sed, diffutils and patch in PATH, in a UTF-8 locale:
 

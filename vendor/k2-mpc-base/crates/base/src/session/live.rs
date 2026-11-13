@@ -32,6 +32,7 @@ mod next_change_tests;
 mod purge;
 mod removed;
 mod tier0_history;
+mod verb_state;
 mod view_index;
 mod watch;
 mod writers;
@@ -304,7 +305,7 @@ pub struct ReadResult {
     pub bytes: Vec<u8>,
     /// Each text root's text, in schema order.
     pub text_by_root: Vec<(String, String)>,
-    /// Every root's content, in schema order (A6): text, a list's live elements, a map.
+    /// Every root's content, in schema order: text, a list's live elements, a map.
     pub content: Vec<(String, Neutral)>,
     /// The version read. A valid `base` for [`Session::write_base`] while it stays cached.
     pub version: Seq,
@@ -332,10 +333,10 @@ pub struct EditResult {
     pub changed: Vec<LineRange>,
     pub lines_added: usize,
     pub lines_removed: usize,
-    /// Per structured root it changed, its element counts (A6).
+    /// Per structured root it changed, its element counts.
     pub elems: Vec<ElemCounts>,
     /// Cells it wrote into a deleted row or column (kept, hidden: contract §1.6), each with
-    /// who deleted the row or column (K-CSV-4: reported to the writer and the deleter).
+    /// who deleted the row or column (reported to the writer and the deleter).
     pub hidden: Vec<HiddenCellWrite>,
 }
 
@@ -350,7 +351,7 @@ pub enum WriteOutcome {
 }
 
 impl WriteOutcome {
-    /// The exit code (K-EXIT-1): 0 applied, 1 conflict, 8 base expired (never retry).
+    /// The exit code: 0 applied, 1 conflict, 8 base expired (never retry).
     pub fn exit(&self) -> u8 {
         match self {
             WriteOutcome::Applied(_) => crate::tools::exit::OK,
@@ -372,7 +373,7 @@ pub struct EditOptions {
     pub policy: ClaimPolicy,
     /// Apply only if the doc is still at this version (default `None`: no guard).
     pub if_version: Option<Seq>,
-    /// A structured edit's base (K-BR-12, `--base V`): refused (exit 1) only if a facet the
+    /// A structured edit's base (`--base V`): refused (exit 1) only if a facet the
     /// edit touches was written after V by someone else. An agent's structured edit needs
     /// this or `if_version` ([`SessionError::NeedsBase`] otherwise).
     pub base: Option<Seq>,
@@ -414,7 +415,7 @@ impl EditOptions {
         self
     }
 
-    /// The structured edit's base version (K-BR-12: checked per element facet).
+    /// The structured edit's base version (checked per element facet).
     pub fn base(mut self, v: Seq) -> Self {
         self.base = Some(v);
         self
@@ -428,7 +429,7 @@ impl EditOptions {
         self
     }
 
-    /// **Undo grouping** (undo spec U3, K4): consecutive edits from one connection with the
+    /// **Undo grouping** (undo spec U3): consecutive edits from one connection with the
     /// same `token` merge into **one undo step**. The editor proposes the token (the JS
     /// client sends one per edit, a new one when the kind of edit changes); the session
     /// closes the group, so the next edit starts a new step, on:
@@ -671,7 +672,7 @@ pub enum UndoOutcome {
 }
 
 impl UndoOutcome {
-    /// The exit code (K-EXIT-1): 1 when anything conflicted or was skipped, else 0.
+    /// The exit code: 1 when anything conflicted or was skipped, else 0.
     pub fn exit(&self) -> u8 {
         match self {
             UndoOutcome::Applied {
@@ -701,11 +702,11 @@ pub struct ChangeEvent {
     pub at_ms: u64,
     /// The person an assistant agent made this change for (its approval starts `Pending`).
     pub on_behalf_of: Option<String>,
-    /// What the change did to this root (A5): its hunks, or its list or map ops as applied,
+    /// What the change did to this root: its hunks, or its list or map ops as applied,
     /// by key, with their write identities.
     pub applied: crate::elem::Applied,
-    /// Cells it wrote into a deleted row or column, with who deleted it (the deleter's side
-    /// of K-CSV-4).
+    /// Cells it wrote into a deleted row or column, with who deleted it (the deleter's
+    /// side).
     pub hidden: Vec<HiddenCellWrite>,
     /// What kind of change it is (the change record's kind, as `log` lists it): an edit, an
     /// undo, a redo, a revert, a restore, an outside save or the import. On the wire,
@@ -715,7 +716,7 @@ pub struct ChangeEvent {
     /// holds it ([`ChangeInfo::turn`]): `None` for a person's, an outside save, and any call
     /// the host gave none.
     pub turn: Option<Turn>,
-    /// The id of the pack verb that made it (rendering-data contract gap 9), as its change
+    /// The id of the pack verb that made it, as its change
     /// record holds it ([`ChangeInfo::verb`]): `shape move`, `replace-section`. `None` for a raw
     /// write, a kit tool, an outside save, an undo, a redo, a revert, a restore and the import.
     /// [`ChangeEvent::via`] stays the participant's client (`cli`), never the verb.
@@ -724,7 +725,7 @@ pub struct ChangeEvent {
 
 /// An outside save that changed only the file's codec settings (a re-save with a BOM, CRLF or
 /// another delimiter; the content the same), sent to [`Session::subscribe_settings`]
-/// subscribers (C1k). Not a [`ChangeEvent`]: the doc's content and version don't change (no
+/// subscribers. Not a [`ChangeEvent`]: the doc's content and version don't change (no
 /// change record without an engine update), so a replica that follows changes by version
 /// never sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -765,7 +766,7 @@ pub struct Status {
     pub disk: Option<DiskState>,
 }
 
-/// What [`Session::audit_disk_sync`] found (K-AUD-1, v0.9.4): the doc reports clean, yet
+/// What [`Session::audit_disk_sync`] found (v0.9.4): the doc reports clean, yet
 /// the disk replica of one of its roots is not the doc's. Metadata only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -807,7 +808,7 @@ struct Member {
     /// The span its latest change touched, in the root's text now (carried: not expanding;
     /// gone once its text is all removed or replaced, `awareness::carry_edit_span`).
     edited: Option<(String, usize, usize)>,
-    /// On a grid: its caret, view and last edit by key (A10).
+    /// On a grid: its caret, view and last edit by key.
     grid: grid_presence::GridPresence,
     /// Its element selection, pointer and viewport.
     elem: elem_presence::ElemPresence,
@@ -848,12 +849,12 @@ struct History {
     cleared: bool,
     bucket: Option<Bucket>,
     last_read: Option<Seq>,
-    /// The person's open undo group (U3, K4): the top of `undo` while edits may still join
+    /// The person's open undo group (U3): the top of `undo` while edits may still join
     /// it. Any other push, and any undo or redo, closes it.
     open: Option<OpenGroup>,
 }
 
-/// An open undo group (U3, K4): whose edits may join it, and its newest change.
+/// An open undo group (U3): whose edits may join it, and its newest change.
 struct OpenGroup {
     conn: ConnId,
     token: u64,
@@ -940,6 +941,9 @@ struct State {
     /// A keyed doc's live view (not a table's), kept in step by every change
     /// (`live/keyed_view.rs`); `None` until first needed.
     live_view: Option<keyed_view::LiveView>,
+    /// The pack's verb state (`live/verb_state.rs`): built when a structured verb first runs,
+    /// kept by every change with the live view, dropped with it. Never stored.
+    verb_state: Option<verb_state::KeptVerbState>,
     /// The reverse of every change since the oldest read base of a keyed doc, oldest first,
     /// and the size of the roots it holds.
     undo_journal: VecDeque<keyed_view::Undo>,
@@ -956,7 +960,7 @@ struct State {
     subs: Vec<(ConnId, Option<String>, SyncSender<ChangeEvent>)>,
     /// Keyed watches (`live/watch.rs`) and the events of the change being committed.
     watch: watch::WatchHub,
-    /// Every App viewer's handles in this doc (K5).
+    /// Every App viewer's handles in this doc.
     handles: Handles,
     /// Roster subscribers and what they were last told ([`Session::subscribe_roster`]).
     roster: RosterHub,
@@ -971,7 +975,7 @@ struct State {
     /// The verb the change being committed came from (`sed -i`), for the activity ring.
     verb_hint: Option<String>,
     /// A table's present cells (live or hidden), columns and rows (live or deleted), counted
-    /// on first need and kept in step by every change (the size limits, K-CSV-7).
+    /// on first need and kept in step by every change (the size limits).
     grid_size: Option<(usize, usize, usize)>,
     /// A keyed doc's elements (live or deleted) and map entries, every root's, counted on
     /// first need and kept in step by every change (`Config::keyed_max_entries`).
@@ -980,10 +984,10 @@ struct State {
     /// history tick), and the copies it found edited (left alone while their stat holds).
     last_copy_cleanup_ms: Option<u64>,
     copies_edited: HashMap<PathBuf, disk::Seen>,
-    /// The carrier (K1, `live/carrier.rs`): the bytes the kit last read from the file or wrote
+    /// The carrier (`live/carrier.rs`): the bytes the kit last read from the file or wrote
     /// to it, for a pack that opts in. `None` until the store's is loaded or the file is read.
     carrier: Option<Arc<[u8]>>,
-    /// The carrier's pairing (K1b, `live/carrier.rs`), for a pack that mints its keys
+    /// The carrier's pairing (`live/carrier.rs`), for a pack that mints its keys
     /// (`Pack::wants_pairing`): the carrier's keys, with the sync seq it was made at. Set with
     /// the carrier at every sync point; `None` beside a carrier only when it couldn't be made
     /// (a rendering is then refused, never spliced by guess).
@@ -992,9 +996,17 @@ struct State {
     /// (`crate::view_index::ViewCarrier`, decoded once per carrier): replaced when the carrier
     /// changes (`live/view_index.rs`).
     view_carrier: Option<Arc<crate::view_index::ViewCarrier>>,
-    /// The doc's view index as last built, by (carrier id, rev): reused until either changes
-    /// (`live/view_index.rs`); dropped with the live view.
+    /// The doc's view index as last built, by (carrier id, rev): reused until either changes,
+    /// kept through changes when the pack derives by change (`live/view_index.rs`); dropped
+    /// with the live view.
     view_cache: Option<view_index::ViewCache>,
+    /// Whether the pack derives its view index by change (`Pack::view_derive_change`):
+    /// `None` until asked, then its answer, so a pack that doesn't is asked once.
+    view_by_change: Option<bool>,
+    /// The view index kept before a new carrier was taken in while a keyed watch is open on a
+    /// doc with a 3D slot: the next frame (or the disk check's end) compares placements with it
+    /// (`live/watch.rs`, `settle_carrier_watch`).
+    view_carrier_before: Option<Arc<crate::view_index::ViewIndex>>,
     /// The last rendering of the live doc as its file that failed, with the version it was
     /// at (the pack's error), cleared by one that succeeds: a read that renders nothing reports
     /// it while the doc is still at that version.
@@ -1024,7 +1036,7 @@ struct State {
     /// right before the commit by the verb's entry, taken by it (as `next_verb`).
     next_cells: Option<crate::grid::CellsReport>,
     /// Conformance only: outside saves record their writes with no identity, as a write
-    /// merged in from elsewhere whose writer the engine doesn't report (KC7, Yrs only).
+    /// merged in from elsewhere whose writer the engine doesn't report (Yrs only).
     #[cfg(feature = "conformance")]
     outside_without_identity: bool,
     /// The undo group token of the edit being committed ([`EditOptions::group`]).
@@ -1061,7 +1073,7 @@ fn canonical_hunks(text: &str, hunks: &[Hunk]) -> Vec<Hunk> {
     out
 }
 
-/// A watcher's rights (K11): read at most, whatever the host grants.
+/// A watcher's rights: read at most, whatever the host grants.
 fn watched(rights: Rights, watcher: bool) -> Rights {
     match (watcher, rights.read) {
         (false, _) => rights,
@@ -1083,7 +1095,7 @@ struct Disk {
     /// is three-way merged onto the live text from (v0.9.5: its text only, never its
     /// elements; [`Session::ingest`]). Whenever the doc renders to the synced bytes, it is
     /// the doc itself (same elements, not only the same text): [`Session::resync_replica`]
-    /// (v0.9.4), which K-AUD-1 checks. After a save the doc holds more than, it holds a
+    /// (v0.9.4), which the sync audit checks. After a save the doc holds more than, it holds a
     /// client the doc never has ([`Session::replica_to_file`]).
     replica: Replica,
     replica_bytes: u64,
@@ -1197,7 +1209,7 @@ pub struct Session {
     pack: Arc<dyn Pack>,
     schema: Schema,
     /// The schema has a structured root (a grid): content is read by key, versions are
-    /// typed, changes are recorded by key (C1c).
+    /// typed, changes are recorded by key.
     structured: bool,
     doc_id: DocId,
     state: Mutex<State>,
@@ -1578,6 +1590,7 @@ impl Session {
                 read_bases: VecDeque::new(),
                 read_base_bytes: 0,
                 live_view: None,
+                verb_state: None,
                 undo_journal: VecDeque::new(),
                 journal_bytes: 0,
                 synced_digest: None,
@@ -1600,6 +1613,8 @@ impl Session {
                 pairing: None,
                 view_carrier: None,
                 view_cache: None,
+                view_by_change: None,
+                view_carrier_before: None,
                 render_failed: std::cell::RefCell::new(None),
                 grid_now: std::cell::RefCell::new(None),
                 no_stack: false,
@@ -1696,7 +1711,7 @@ impl Session {
         // a structured import's ops, by key (its record and its element writes)
         let (elems, counts) = grid::elem_records(&made.applied, &edits, &grid::Befores::new());
         if structured {
-            grid::check_import_size(&config, &schema, &ordered)?;
+            grid::check_import_size(&config, config.keyed_limit(&*pack), &schema, &ordered)?;
         }
         // each root's imported text: fresh elements from the import client's clocks, as the
         // engine applied them
@@ -2016,7 +2031,7 @@ impl Session {
         self.keep_own_replica_rows(st, &pid, granted)?;
         if let Some(n) = presence::refusal(rights, need) {
             if watcher && n != Need::Read {
-                // past participants_max: read-only until the host promotes it (K11)
+                // past participants_max: read-only until the host promotes it
                 self.emit(AuditEvent::Refused {
                     key: st.key.clone(),
                     pid: pid.clone(),
@@ -2236,7 +2251,7 @@ impl Session {
             }
         };
         st.joins += 1;
-        // K11: a new pid past participants_max watches (read-only, no presence detail); a pid
+        // A new pid past participants_max watches (read-only, no presence detail); a pid
         // already here keeps what it is
         let here = |w: bool| {
             st.members
@@ -2425,7 +2440,7 @@ impl Session {
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::View, now)?;
         if self.is_grid() {
-            // the rendered lines, as the rows on them (A10)
+            // the rendered lines, as the rows on them
             if range.first == 0 || range.first > range.last {
                 return Err(SessionError::BadPosition(format!(
                     "lines {}..{}",
@@ -2455,7 +2470,7 @@ impl Session {
             text,
             position::line_start(text, last).expect("line checked"),
         );
-        // a watcher (K11) shows no presence: its view is not kept
+        // a watcher shows no presence: its view is not kept
         if !st.members[i].watcher {
             st.members[i].view = Some((range.root.clone(), s, e));
             st.members[i].view_ms = Some(now);
@@ -2672,7 +2687,7 @@ impl Session {
             .flush(now, version, rows, watching, &mut st.handles, &waiting);
     }
 
-    /// Let the earliest watcher in (K11), when a slot is free: a participant left since it
+    /// Let the earliest watcher in, when a slot is free: a participant left since it
     /// joined past [`Config::participants_max`]. **Only on the host's say-so**: a slot that
     /// frees never promotes anyone by itself. Its connections get presence, and their rights
     /// are the host's again from the next call. Returns the pid let in, or `None` (no slot
@@ -2716,7 +2731,7 @@ impl Session {
         Ok(Some(pid))
     }
 
-    /// How many participants are watching past [`Config::participants_max`] (K11): the
+    /// How many participants are watching past [`Config::participants_max`]: the
     /// roster's `watching: N`. Needs read.
     pub fn watching(&self, conn: ConnId) -> Result<usize> {
         let now = self.now();
@@ -2821,7 +2836,7 @@ impl Session {
         Ok(rx)
     }
 
-    /// Outside saves that change only the file's codec settings ([`SettingsChanged`], C1k):
+    /// Outside saves that change only the file's codec settings ([`SettingsChanged`]):
     /// their own subscription, beside [`Session::subscribe`]'s changes, since they change
     /// neither the content nor the version. Needs read. A full or dropped receiver is cut off.
     pub fn subscribe_settings(&self, conn: ConnId) -> Result<Receiver<SettingsChanged>> {
@@ -3865,7 +3880,7 @@ impl Session {
     }
 
     /// Refuse a new on-behalf edit while the doc's pending on-behalf records are over
-    /// their cap (K-HIST-23): `held: approvals_backlog`, so revertability is never lost.
+    /// their cap: `held: approvals_backlog`, so revertability is never lost.
     fn check_backlog(&self, st: &State, i: usize) -> Result<()> {
         if st.members[i].p.on_behalf_of.is_none() {
             return Ok(());
@@ -3911,7 +3926,7 @@ impl Session {
         now: u64,
         versions: Vec<Version>,
     ) -> Result<EditResult> {
-        // a person's grouped edit (U3, K4): what it may join, read before it lands
+        // a person's grouped edit (U3): what it may join, read before it lands
         let group = st
             .group_hint
             .take()
@@ -3985,7 +4000,7 @@ impl Session {
     /// (and `versions`, stored before them) in one durable transaction, and do the
     /// bookkeeping: attribution, carets, events, compaction. An agent's edit over
     /// [`Config::agent_version_lines`] lines or [`Config::agent_version_percent`] of the doc
-    /// cuts a version of the text before it first (K-HIST-4). Returns, per step, its log
+    /// cuts a version of the text before it first. Returns, per step, its log
     /// position and regions (`None` when it changed nothing); undo stacks are the caller's.
     #[allow(clippy::type_complexity)]
     fn commit(
@@ -4042,7 +4057,7 @@ impl Session {
             }
             false => None,
         };
-        // a pack verb's change moves the acting agent's presence (contract gap 11): what it
+        // a pack verb's change moves the acting agent's presence: what it
         // names, in order, read before the edits are applied
         let verb_named = match pack_verb {
             Some(_) if n_steps == 1 && self.structured => {
@@ -4093,7 +4108,7 @@ impl Session {
             let a = &applied[0];
             let c = &self.config;
             let cut = match &orig_snap {
-                // K-HIST-4 for grids: 20 rows or 10% of rows (a sort counts the rows moved)
+                // the agent safety cut for grids: 20 rows or 10% of rows (a sort counts the rows moved)
                 Some((content, _)) => {
                     let total: usize = content
                         .iter()
@@ -4314,7 +4329,14 @@ impl Session {
         {
             prof!("commit.live_view");
             let texts: Vec<&str> = text_roots.iter().map(String::as_str).collect();
-            self.view_after(st, version_before, st.version, &streams, &texts);
+            self.view_after(
+                st,
+                version_before,
+                st.version,
+                &streams,
+                &texts,
+                verb_state::ChangeFrom::Local,
+            );
         }
         {
             prof!("commit.watch");
@@ -4462,7 +4484,7 @@ impl Session {
             *bytes -= s.pop_front().map_or(0, |b| b.bytes());
         }
         h.cleared = false;
-        // any push closes the open group; a grouped edit opens it again (U3 (e), K4)
+        // any push closes the open group; a grouped edit opens it again (U3 (e))
         h.open = None;
     }
 
@@ -4877,7 +4899,7 @@ impl Session {
         });
     }
 
-    /// `out` as `conn` may see it: an App viewer's (K5) goes through its handles (`f` for the
+    /// `out` as `conn` may see it: an App viewer's goes through its handles (`f` for the
     /// value; a refusal naming someone else, by handle). Anyone else's is unchanged.
     pub(super) fn for_viewer<T>(
         &self,
@@ -4901,7 +4923,7 @@ impl Session {
         }
     }
 
-    /// A tool run's output (`run_tool_with`) as `conn` may see it: an App viewer's (K5) names
+    /// A tool run's output (`run_tool_with`) as `conn` may see it: an App viewer's names
     /// the others by handle. Its notes are lensed where they are made (`batch_notes`), and a
     /// grid verb's printed attributions under the verb's lock (`LockedHistory`); the rest
     /// here.
@@ -4949,7 +4971,7 @@ impl Session {
     }
 
     /// `q` with an App viewer's handles (`--by p2`, `--on-behalf-of p1`) turned back into
-    /// pids (K5); anyone else's unchanged.
+    /// pids; anyone else's unchanged.
     pub(super) fn unhandle_query(&self, conn: ConnId, q: &LogQuery) -> LogQuery {
         let mut q = q.clone();
         let Ok(mut st) = self.lock() else {
@@ -4967,7 +4989,7 @@ impl Session {
         q
     }
 
-    /// Member `i`'s pid when it is an App viewer (it sees handles, never pids: K5).
+    /// Member `i`'s pid when it is an App viewer (it sees handles, never pids).
     fn app_viewer(st: &State, i: usize) -> Option<String> {
         let m = &st.members[i];
         (m.p.kind == ParticipantKind::App).then(|| m.p.pid.clone())
@@ -4986,7 +5008,7 @@ impl Session {
         p.len()
     }
 
-    /// Distinct pids watching past `participants_max` (K11).
+    /// Distinct pids watching past `participants_max`.
     fn watching_count(st: &State) -> usize {
         let mut p: Vec<&str> = st
             .members
@@ -5054,6 +5076,8 @@ impl Session {
                 if st.live_view_seq() != Some(version) {
                     Self::drop_live_view(st);
                 }
+                // the pack's verb state is built again from the reloaded doc
+                st.verb_state = None;
                 self.reload_disk(st);
                 self.emit(AuditEvent::Recovered {
                     key: st.key.clone(),
@@ -5319,7 +5343,7 @@ impl Session {
     // ----- for the manager -----
 
     /// The pack's own verb `name` ([`Pack::verbs`]), when `name` isn't a kit verb.
-    /// Whether `conn` is an agent's connection (K-ADDR-3 checks agents' positional edits); a
+    /// Whether `conn` is an agent's connection (agents' positional edits are checked); a
     /// connection that isn't joined: no (the verb's admission refuses it).
     pub(crate) fn is_agent(&self, conn: ConnId) -> bool {
         self.lock().is_ok_and(|st| {
@@ -5602,7 +5626,7 @@ impl Session {
         })
     }
 
-    /// `r` as the host may show it: an error's paths made safe (K7): inside this file's
+    /// `r` as the host may show it: an error's paths made safe: inside this file's
     /// root, relative; elsewhere, `<outside>`.
     fn shown<T>(&self, r: Result<T>) -> Result<T> {
         r.map_err(|e| {
@@ -5617,7 +5641,7 @@ impl Session {
         })
     }
 
-    /// The identity (device and inode) of the file this session syncs with (K9, K-DISK-14):
+    /// The identity (device and inode) of the file this session syncs with:
     /// a host keys sessions by it as well as by the path. `None` without a file, when the
     /// file is gone, or where the platform has none.
     pub fn file_identity(&self) -> Result<Option<super::disk::FileIdentity>> {
@@ -5630,7 +5654,7 @@ impl Session {
         Ok(self.lock()?.disk.as_ref().map(|d| d.path.clone()))
     }
 
-    /// The lost-edit audit's sync check (K-AUD-1, v0.9.4): when the doc is synced with its
+    /// The lost-edit audit's sync check (v0.9.4): when the doc is synced with its
     /// file ([`DiskState::Clean`]), the disk replica (the doc as the file holds it, on which
     /// the next outside edit is made) must hold the doc's text **on the doc's elements**.
     /// Same text on other elements is the stale base that corrupted an outside edit after
@@ -5926,7 +5950,7 @@ impl Session {
             }
             _ => None,
         };
-        // the file as last synced is the carrier (K1), before anything renders the doc
+        // the file as last synced is the carrier, before anything renders the doc
         if let Some(b) = on_disk.as_deref().filter(|b| file_hash(&key, b) == hash) {
             self.keep_carrier(st, b, seq, now);
         }
@@ -6069,8 +6093,8 @@ impl Session {
             && self.pack.check_merged(root, theirs).is_ok()
     }
 
-    /// The doc as file bytes: spliced into the carrier for a pack that opts in (K1,
-    /// `live/carrier.rs`), else the pack's encoding.
+    /// The doc as file bytes: spliced into the carrier for a pack that opts in
+    /// (`live/carrier.rs`), else the pack's encoding.
     fn render(&self, st: &State) -> Result<Vec<u8>> {
         let r = self.encode_live(st, &self.content(st)?, &st.codec);
         // what a read that renders nothing reports (`render_failure`)
@@ -6196,6 +6220,13 @@ impl Session {
     /// Look at the file; read it when forced or when its stat changed; ingest an outside
     /// edit. Never writes the file.
     fn disk_check(&self, st: &mut State, now: u64, force: bool) -> Result<DiskCheck> {
+        let out = self.disk_check_inner(st, now, force);
+        // a new carrier with no change frame to carry it: watches learn of moved placements
+        self.settle_carrier_watch(st);
+        out
+    }
+
+    fn disk_check_inner(&self, st: &mut State, now: u64, force: bool) -> Result<DiskCheck> {
         let Some(d) = st.disk.as_mut() else {
             return Ok(DiskCheck::Unchanged);
         };
@@ -6233,7 +6264,7 @@ impl Session {
             if was_missing || st.declined.is_some() {
                 self.restored(st)?;
             }
-            // the file as last synced: the carrier (K1), if the session doesn't hold it yet
+            // the file as last synced: the carrier, if the session doesn't hold it yet
             let seq = st.disk.as_ref().map_or(st.version, |d| d.synced_seq);
             self.keep_carrier(st, &bytes, seq, now);
             return Ok(DiskCheck::Unchanged);
@@ -6259,8 +6290,8 @@ impl Session {
                 key: st.key.clone(),
             });
         }
-        // the save taken in is the sync point, and its bytes the carrier (K1) with their
-        // pairing (K1b), kept by `settle_saved` before anything renders the doc that took it; a
+        // the save taken in is the sync point, and its bytes the carrier with their
+        // pairing, kept by `settle_saved` before anything renders the doc that took it; a
         // declined save is neither
         self.ingest(st, &bytes, h, now)
     }
@@ -6852,8 +6883,6 @@ impl Session {
         st.last_change_ms = now;
         st.texts = after;
         st.version = seq;
-        // a keyed doc's text roots merged from the file: the keyed watch's frame for it
-        self.flush_watch(st);
         if self.keeps_view() {
             // (a text merge keeps no stream: a keyed doc's live view is read afresh)
             Self::drop_live_view(st);
@@ -6886,13 +6915,17 @@ impl Session {
             seq,
         });
         self.finish_removals(st, removed, seq - 1, seq, now);
-        self.settle_saved(st, bytes, now)?;
+        let settled = self.settle_saved(st, bytes, now);
+        // a keyed doc's text roots merged from the file: the keyed watch's frame for it, once
+        // the save is the carrier (its view index reads the save's carrier)
+        self.flush_watch(st);
+        settled?;
         self.maybe_compact(st);
         Ok(DiskCheck::Ingested { version: seq })
     }
 
     /// [`Session::settle_dirty`] after an outside save the store has, `bytes` the save. First
-    /// the save is the carrier (K1) with its pairing (K1b), at the new sync point: whatever
+    /// the save is the carrier with its pairing, at the new sync point: whatever
     /// renders the doc that took it (this settle, a write-back, a read) splices into the save,
     /// never into the bytes from the sync point before, whose pairing can name keys the save
     /// took out of the doc (a pack that re-keys on a save: `MPC-E521`, kept for the next read).
@@ -7030,7 +7063,7 @@ impl Session {
         if let Err(e) = stored {
             self.disk_error(st, "recording the re-synced disk replica", e);
         }
-        // the same bytes, maybe new keys: the carrier's pairing is made again (K1b)
+        // the same bytes, maybe new keys: the carrier's pairing is made again
         let seq = st.version;
         self.resync_pairing(st, seq);
         Ok(())
@@ -7051,7 +7084,7 @@ impl Session {
     ///   lacks).
     ///
     /// The replica is no longer the base an outside save is made on (only its text is), so
-    /// this keeps K-AUD-1's sync check meaningful and the stored state small; it is the one
+    /// this keeps the sync check meaningful and the stored state small; it is the one
     /// place an ingest sets the replica.
     fn replica_to_file(
         &self,
@@ -7208,9 +7241,9 @@ impl Session {
         d.dirty_since = None;
         // the file holds the doc's content now
         st.synced_digest = Self::view_digest(st).map(|x| (st.version, x));
-        // the bytes written are the carrier (K1)
+        // the bytes written are the carrier
         if !carrier::planted_carrier_stale() {
-            // a pack that pairs (K1b) pairs the bytes with the content just written
+            // a pack that pairs pairs the bytes with the content just written
             let held = match self.pack.wants_pairing() {
                 true => self.content(st).ok(),
                 false => None,
@@ -7448,7 +7481,7 @@ struct Applied {
     removed: usize,
     last_end: Option<(String, usize)>,
     /// A structured change: its ops by key per root (record v3), its counts, the applied
-    /// stream (A5), the list elements it touched (version cuts), and the cells it wrote
+    /// stream, the list elements it touched (version cuts), and the cells it wrote
     /// into deleted rows or columns.
     elems: Vec<ElemRoot>,
     counts: Vec<ElemCounts>,

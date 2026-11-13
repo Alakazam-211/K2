@@ -324,7 +324,7 @@ fn sequence(seed: u64, steps: usize) -> Result<Counts, String> {
         if new.host.mismatches.load(Ordering::SeqCst) != 0 {
             return Err(at("the in-step side reported a replica mismatch"));
         }
-        // K-AUD-1's sync check (v0.9.4): a clean doc's replica is the doc, on its elements
+        // the sync check (v0.9.4): a clean doc's replica is the doc, on its elements
         for (side, s) in [("old", &old.s), ("new", &new.s)] {
             let drift = s.audit_disk_sync().unwrap();
             if !drift.is_empty() {

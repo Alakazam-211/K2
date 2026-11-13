@@ -8,7 +8,7 @@ mutants that must fail in both.
 | Piece | Where |
 |---|---|
 | The Quint model | `spec/quint/undo.qnt` (SPEC-UNDO v1.9, over abstract text) |
-| Evidence for G1 | `docs/evidence/g1-undo.md` |
+| Evidence | `docs/evidence/undo-model-check.md` |
 | The pinned diff | `spec/quint/undo_diff.qnt`, reached only by the mutants `f3-rediff` and (i); a hand transcription of it equals `diff::hunks` on every pair of texts up to 4 long (`crates/spec-undo/tests/quint_diff.rs`; The diff, below) |
 | The bounded world (the same abstraction, in Rust, over the oracle) | `crates/spec-undo/src/bounded.rs` |
 | ITF replay | `crates/spec-undo/src/itf.rs`, `src/bin/undo_itf_replay.rs` |
@@ -156,8 +156,8 @@ appears.
   transition into an already-visited state adds nothing. So a bfs class count of 0 does not
   mean no transition hits the class. At the seven exact bounds the bfs counts 0
   all-or-nothing undo refusals at six bounds and 0 blocked requests at all seven, while
-  200,000 G1 walks count 12,633 and 7,487 (audit job `95a4221d`, tag `ev-95a4221d`), and TLC reaches both at
-  2 × 1 + 2 undos + 1 revert (`240529ae`, tag `ev-240529ae`).
+  200,000 walks at the full bound count 12,633 and 7,487 (audit job `95a4221d`, tag `ev-95a4221d`),
+  and TLC reaches both at 2 × 1 + 2 undos + 1 revert (`240529ae`, tag `ev-240529ae`).
 
 ### Six rules hold by construction
 
@@ -171,10 +171,11 @@ COMPLETE:** a COMPLETE shows only that the code implementing each rule agrees wi
   **U9's `!erased` clause is never reached**: no code in `undo.qnt` sets a region's
   `erased`, and the bounded world never redacts a record (one-letter secrets; R9's 8-byte
   windows), so the merge's `erased` branch, the clause and the Erased report are reached by
-  no model-check run: TLC cover COMPLETE (`240529ae`, tag `ev-240529ae`), the oracle 0 at all seven bounds and
-  in 400,000 G1 walks (`95a4221d`, tag `ev-95a4221d`). The only evidence for the erased clause is the trace
-  test's class `revert_over_erased`: 31 hits in 256 traces (job `38fdc54f`, tag `ev-38fdc54f`, a run of
-  `trace_equivalence` with `--nocapture` at main's spec-undo code plus two counters).
+  no model-check run: TLC cover COMPLETE (`240529ae`, tag `ev-240529ae`), the oracle 0 at all seven
+  bounds and in 400,000 walks at the full bound (`95a4221d`, tag `ev-95a4221d`). The only evidence
+  for the erased clause is the trace test's class `revert_over_erased`: 31 hits in 256 traces (job
+  `38fdc54f`, tag `ev-38fdc54f`, a run of `trace_equivalence` with `--nocapture` at main's spec-undo
+  code plus two counters).
 - **U13:** undo and redo plan on a scratch copy and return before `*self = work`; revert
   returns before `new_batch` (`undo.qnt`: the conflicts and blocked branches return the
   input state), so a refusal can't change the state. Mutant `u13-refused-revert-applies`
@@ -193,11 +194,11 @@ COMPLETE:** a COMPLETE shows only that the code implementing each rule agrees wi
 
 **The genuinely relational checks are `own_only`, `I1`, `RT` and `U22a`.** No TLC or bfs
 run at the documented bounds had shown U22a can fail. Its only failing witnesses are
-mutant (i) in G1 walks (`48962ffa`) and, now, mutant (i) at 2 pids × 2 events + 1 revert
-(`abb`, 4): TLC `Invariant m_u22a2_undo_inv_U22a is violated`, 5 states, and the enumerator
-`U22a@4` (job `b9742756`, tag `ev-b9742756`). Its control is job `528c615e` (tag `ev-528c615e`):
-TLC on `undo.qnt` at 2 pids × 2 events + 0 undos + 1 revert (`abb`, 4, `MULTI`, purge,
-`REDUCE`), no mutant, only `inv_U22a` checked: COMPLETE, 7,059,123 states, depth 6.
+mutant (i) in walks at the full bound (`48962ffa`) and, now, mutant (i) at 2 pids × 2 events + 1
+revert (`abb`, 4): TLC `Invariant m_u22a2_undo_inv_U22a is violated`, 5 states, and the enumerator
+`U22a@4` (job `b9742756`, tag `ev-b9742756`). Its control is job `528c615e` (tag `ev-528c615e`): TLC
+on `undo.qnt` at 2 pids × 2 events + 0 undos + 1 revert (`abb`, 4, `MULTI`, purge, `REDUCE`), no
+mutant, only `inv_U22a` checked: COMPLETE, 7,059,123 states, depth 6.
 
 ## Readings
 
@@ -209,8 +210,8 @@ earlier, per-copy reading** (a purge's removal as one hunk per copy of the lette
 hunks not joined, so one region each and no taint between them) held in the oracle until
 `04487c5` and in the model until the model revision of 2026-10-29 (`cd9840c`). Every count
 and walk at a bound with a purge and a revert taken before those commits is under that
-reading; the exact counts and the G1 exhaustive pair were re-run under the canonical one
-(`docs/evidence/g1-undo.md`).
+reading; the exact counts and the exhaustive pair were re-run under the canonical one
+(`docs/evidence/undo-model-check.md`).
 
 ## Findings
 
@@ -257,9 +258,9 @@ additions are four mutants, two independently formulated checks and a debug-asse
   least counterexample and checks it, and its least depth (5) rests on the enumerator's
   `--first` run and TLC's one-worker run (`counts.sh` `PART=m`). **That bound turns off
   two-region edits and purge** (2 × 2 + 1 undo + 1 revert, seed `a`, `MAXLEN` 3), only to
-  keep TLC's search small: the witness uses neither. **It is not in the G1 walks**: from
-  `abb` with `MAXLEN` 4 its least witness at G1 is six exact steps, which uniform walks
-  don't draw (0 of 20,000, job `2668cf01`); the other three are (below).
+  keep TLC's search small: the witness uses neither. **It is not in the walks at the full bound**:
+  from `abb` with `MAXLEN` 4 its least witness at the full bound is six exact steps, which uniform
+  walks don't draw (0 of 20,000, job `2668cf01`); the other three are (below).
 
 ### Four mutants (`Mutant::ALL`, `MUTANT` in `undo.qnt`, `counts.sh` `PART=m`, `smoke.sh`)
 
@@ -313,7 +314,7 @@ rule violated at the level it stops on: one each), and each leaves the oracle as
   fit a test (about 10^6 states at depth 5 alone, over 20 GB for a full `bfs`), so its least
   depth is the jobs'. TLC took 496 s with one worker (301,577 states); the enumerator 52 s.
 
-**At the literal G1 bound, on walks.** The rows `g1.sh` and `g1-smoke.sh` declare
+**At the full bound, on walks.** The rows `g1.sh` and `g1-smoke.sh` declare
 (`tools/undo/expect.sh`), with their verdicts, run at the branch head `37c36196`:
 
 | Mutant | Walk row (`g1.sh` walks-mutants, 50,000 walks; `g1-smoke.sh`, 20,000; walks-bias declares the same rows) | Its own rule, at its own bound (`counts.sh` `PART=m`, job `2ee1b04f`) |
@@ -324,7 +325,7 @@ rule violated at the level it stops on: one each), and each leaves the oracle as
 | `i1-per-request` | **not in walks** (six-step least witness; 0 of 20,000 drew it): `g1-smoke.sh` declares its 20,000 walks SAMPLED, `violations=[]` (job `2668cf01`); left out of `g1.sh`'s lists (`NW`, the comment beside `AUDIT_MUTANTS`) | **caught exhaustively** at its own bound: I1, depth 5, TLC (one worker) and the enumerator |
 | (iv) `iv-redo-retries-skipped` | stopped by the oracle's own shared-edge assertion at depth 5 ("a shared edge's elements must be foreign"; the enumerator's pseudo-rule for a failed assertion), **not U17**; its walk row accepts either | U17 (and U17doc), depth 3: its own-bound rows `tlc@iv-redo-retries-skipped/U17`, `enum@…/U17` (job `2ee1b04f`) |
 
-`i1-per-request`'s least witness at G1, from `abb` with `MAXLEN` 4: p1 deletes a letter,
+`i1-per-request`'s least witness at the full bound, from `abb` with `MAXLEN` 4: p1 deletes a letter,
 appends R, deletes R; p2 appends; p2 reverts p1's delete; p1 `undo --steps 2`. Uniform walks
 don't draw those six steps. The three caught on walks fail their own rule only.
 
@@ -374,11 +375,10 @@ invariant in the configuration's order, `inv_O5` or `inv_U17`).
 The release jobs build without debug assertions, so the oracle's own `debug_assert!`s never
 ran in a model job. `debug.sh` (`sh tools/undo/job.sh enum tools/undo/debug.sh`) rebuilds
 `undo_enum` with `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true` in its own target dir and runs
-the oracle at the seven exact bounds and on walks at the literal G1 bound, with and without a
-restart. Job `16f98d6f`: the
-seven counts as below, no rule violated, no assertion failed; 100,000 walks at G1 (1,200,000
-steps) and 100,000 with a restart (1,300,000 steps), none violated. About 12 minutes on 4
-threads (the build 82 s).
+the oracle at the seven exact bounds and on walks at the full bound, with and without a restart. Job
+`16f98d6f`: the seven counts as below, no rule violated, no assertion failed; 100,000 walks at the
+full bound (1,200,000 steps) and 100,000 with a restart (1,300,000 steps), none violated. About 12
+minutes on 4 threads (the build 82 s).
 
 ### Counts after the changes (TLC = enumerator)
 
@@ -506,10 +506,11 @@ hunks, as the trace oracle since commit `04487c5`; under the old per-copy readin
 was one hunk per copy): 2 × 1 + 1 undo + 1 revert **35,758** (was 35,792), 1 × 3 + 1 revert + 1
 restart **199,268** (was 200,530), 2 × 1 + 2 undos + 1 revert **49,644** (was 49,656). The other
 four are unchanged: 3,889, 220,210, 144 and 542,418. TLC = enumerator at all seven. Recorded in
-`docs/evidence/g1-undo.md` (runs `88555d19`, `ee85bf3c`; the re-runs after the revision `3f360ca1` (tag `ev-3f360ca1`),
-`708bd100` (tag `ev-708bd100`)). Latest: v0.10.0's merge commit `260ef4e`, jobs `f57e1522` (`counts.sh` `PART=a`: the
-first four bounds; ITF 2,000 traces and the regression traces, 0 mismatches) and `5d514715`
-(`PART=b`: the other three), the same seven counts, TLC = enumerator.
+`docs/evidence/undo-model-check.md` (runs `88555d19`, `ee85bf3c`; the re-runs after the revision
+`3f360ca1` (tag `ev-3f360ca1`), `708bd100` (tag `ev-708bd100`)). Latest: v0.10.0's merge commit
+`260ef4e`, jobs `f57e1522` (`counts.sh` `PART=a`: the first four bounds; ITF 2,000 traces and the
+regression traces, 0 mismatches) and `5d514715` (`PART=b`: the other three), the same seven counts,
+TLC = enumerator.
 
 **Violation sets.** On the enumerator without `--first` (every rule's least depth, the whole
 bound), v0.9.0's binaries against these, at every bound above and at each mutant's bound:
@@ -686,7 +687,7 @@ The jobs ran branch `g1/u4-oracle` (commits `c906453`, `cbe337e`), cherry-picked
 | `85262144` (indicative (bundle)) | `counts.sh`, `PART=b` | three bounds equal (one quint compile retried, the known flake) |
 | `a75a2670` (indicative (bundle)) | `counts.sh`, `PART=m` | every mutant, one TLC worker: the depths above |
 
-The G1-bound estimates below are v1.7's; v1.8's states are a few percent more at the bounds
+The full-bound estimates below are v1.7's; v1.8's states are a few percent more at the bounds
 above.
 
 ## Results v1.7 (exact hunk sets, restart)
@@ -724,7 +725,7 @@ Job `7a899e60` (indicative (bundle); source stated as `a5bc7d0`); the smoke job 
 deleted: `aab`); a delete of what separates the regions (`aa`: they touch); a delete of
 `[0, 2)`, across the left region's start only; then the restart. After it the left region
 reads as tainted at its end too, the right one inherits that taint (U22a), and the revert's
-conflicts change. On walks at the literal G1 bound plus one restart
+conflicts change. On walks at the full bound plus one restart
 it fails at depth 8; `f3-rediff` at depth 3.
 
 ## Results v1.6 (an 8-core x86 node; jobs from `tools/undo/*.sh`)
@@ -736,12 +737,12 @@ Quint simulator traces through the wrapper `tools/undo/itf.qnt.in`, replayed ste
 
 | Bound | Traces | Steps | Mismatches |
 |---|---|---|---|
-| **G1**: 3 pids × 3 events + 2 undos + 1 revert (seed `abb`, `MAXLEN` 4) | 3,000 | 35,798 (up to 12 actions) | 0 |
+| **The full bound**: 3 pids × 3 events + 2 undos + 1 revert (seed `abb`, `MAXLEN` 4) | 3,000 | 35,798 (up to 12 actions) | 0 |
 | 2 pids × 1 event + 1 undo + 1 revert (`abb`, 4) | 1,000 | 4,000 | 0 |
 | *before the fix below:* 2 pids × 1 event + 1 undo + 1 revert | 7,600 | 30,400 | 0 |
 | *before the fix below:* 2 pids × 2 events + 1 undo (`ab`, 3) | 6,000 | 30,000 | 0 |
 
-At G1 the replayed actions were 22,311 edits, 4,555 purges, 4,204 undos, 1,759 redos and
+At the full bound the replayed actions were 22,311 edits, 4,555 purges, 4,204 undos, 1,759 redos and
 2,969 reverts. The replay saw every action kind and the model reproduces F3 (`own_only` in its `viol`, as in the oracle's).
 
 ### TLC's exact counts = the enumerator's
@@ -779,14 +780,14 @@ At 2 pids × 1 event + 1 undo (`abb`, 4): TLC with one worker (a shortest counte
 | (vii) O5 on the region's base | O5 | 3 | 3 |
 | skip-U19 (purge keeps stacks) | U19 | 1 | 1 |
 
-The same set fails `cargo test -p k2-mpc-spec-undo --features mutants --test mutants`, and on
-random walks at the literal G1 bound (20,000 walks each, `tools/undo/g1-smoke.sh`): the same
-rule, at the same depth (3; skip-U19 at 1). 150,000 walks of the oracle of record at G1 (1.8M
-steps) violate no rule the runs stop at (F3 observed).
+The same set fails `cargo test -p k2-mpc-spec-undo --features mutants --test mutants`, and on random
+walks at the full bound (20,000 walks each, `tools/undo/g1-smoke.sh`): the same rule, at the same
+depth (3; skip-U19 at 1). 150,000 walks of the oracle of record at the full bound (1.8M steps)
+violate no rule the runs stop at (F3 observed).
 
-## The G1 bound
+## The full bound
 
-The spec's G1 bound is 3 pids × 3 events + 2 undos + 1 revert. **In this action space it is
+The full bound is the spec's: 3 pids × 3 events + 2 undos + 1 revert. **In this action space it is
 far beyond exhaustive enumeration:** Knuth's estimate of the action-sequence tree is about
 10^21 nodes; with pid symmetry and per-seed deduplication, not one of the 875,724 depth-4
 seeds finished in 120 s (4 threads, > 23M states), which puts the distinct states at 10^13 or
@@ -800,12 +801,12 @@ states counted per seed, with pid symmetry):
 | 2 pids × 2 events + 2 undos + 1 revert | ≈ 6.5 × 10^8 (± 15 %) | `g1.sh` (`PART=exhaustive`) |
 | 3 pids × 2 events + 2 undos, no revert | ≈ 2.6 × 10^10 (± 32 %, 4 seeds) | `g1.sh` (`PART=long`) |
 | 3 pids × 2 events + 1 undo + 1 revert | ≈ 1.4 × 10^11 (± 7 %, seed `ab`) | not planned |
-| **G1**: 3 pids × 3 events + 2 undos + 1 revert | ≥ 10^13 | sampled: Quint ITF traces (`g1-smoke.sh`) and random walks (`g1.sh`, `PART=walks`) |
+| **The full bound**: 3 pids × 3 events + 2 undos + 1 revert | ≥ 10^13 | sampled: Quint ITF traces (`g1-smoke.sh`) and random walks (`g1.sh`, `PART=walks`) |
 
-**Throughput measured:** on this Mac (M-series) about 30–60k states/s per thread for `dfs`
-with every check, and about 1,000 G1 walks/s per thread; on an 8-core x86 node the walks
-ran about 5× slower per thread (1M walks in 655 s on 8 threads), and `dfs` is assumed to
-scale the same way (not measured there).
+**Throughput measured:** on this Mac (M-series) about 30–60k states/s per thread for `dfs` with
+every check, and about 1,000 walks/s per thread at the full bound; on an 8-core x86 node the walks
+ran about 5× slower per thread (1M walks in 655 s on 8 threads), and `dfs` is assumed to scale the
+same way (not measured there).
 
 **Runtime estimates:**
 

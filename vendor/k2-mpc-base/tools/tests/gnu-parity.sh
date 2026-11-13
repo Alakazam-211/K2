@@ -1,4 +1,4 @@
-# The live GNU parity check (K-PAR-7): the golden corpus's `gnu: same` cases against the real
+# The live GNU parity check: the golden corpus's `gnu: same` cases against the real
 # GNU tools. Ships: scripts/gnu-parity.py crates/base/tests/golden. Needs python3, GNU
 # coreutils, grep, sed, diffutils and patch; no Rust.
 for t in cat head tail wc grep sed diff patch python3; do printf '%s: ' "$t"; command -v $t || echo MISSING; done

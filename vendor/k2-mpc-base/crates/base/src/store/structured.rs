@@ -1,4 +1,4 @@
-//! Structured (list and map) docs in the store, format 6 (C1c, K-FMT-10 item 22):
+//! Structured (list and map) docs in the store, format 6:
 //!
 //! - **Typed versions** (version record 3): each structured root's content in the kit's
 //!   typed neutral encoding (a list as `[(key, value)]` in order, a map as sorted
@@ -10,7 +10,7 @@
 //!   `ELEM_WRITES` in the change's own transaction). Content lives only in values.
 //! - **`ELEM_WRITES`** `(doc, root, key, facet)` → the change (its log position) and write
 //!   that hold that facet now, and the write it restores when an undo, redo or revert put it
-//!   back (U23). Blame, the per-facet `--base` check (K-BR-12), undo and revert read it; the
+//!   back (U23). Blame, the per-facet `--base` check, undo and revert read it; the
 //!   audit checks it against the doc. Kept for the doc's life; a dropped element leaves it.
 //! - **Change summaries version 2**: per structured root, element counts (`log`).
 //!
@@ -141,7 +141,7 @@ impl ElemOpKind {
 }
 
 /// Who holds one facet now: change `seq`'s write `write` (`None`: a write with no identity,
-/// which the per-facet check counts as someone else's, KC7), and for a value an undo, redo or
+/// which the per-facet check counts as someone else's), and for a value an undo, redo or
 /// revert put back, the write it restores.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ElemWrite {
@@ -174,7 +174,7 @@ pub(crate) struct ElemOpRecord {
     pub left: Vec<String>,
     pub value_before: Option<Value>,
     pub value_after: Option<Value>,
-    /// A purge redacted the values (C1f).
+    /// A purge redacted the values.
     pub redacted: bool,
     /// The facet's holder just before the op (filled in by the store, from `ELEM_WRITES`).
     pub prev: Option<ElemWrite>,

@@ -1,4 +1,4 @@
-//! The items of a structure read's pages (K-READ-2): each item's text form, rendered from the
+//! The items of a structure read's pages: each item's text form, rendered from the
 //! same value its JSON is, and the shortening that makes any item fit a page.
 //!
 //! **Every page fits the budget, in text and in JSON.** An item counts as the larger of its

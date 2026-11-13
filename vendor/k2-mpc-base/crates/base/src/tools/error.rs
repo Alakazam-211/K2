@@ -2,7 +2,7 @@
 
 use crate::session::SessionError;
 
-/// Exit codes (the PRD's §9.1 table).
+/// Exit codes (one table for every verb).
 pub mod exit {
     /// Success. For `diff`: no differences.
     pub const OK: u8 = 0;
@@ -116,7 +116,7 @@ impl ToolRunError {
     }
 }
 
-/// The exit code for a session error: the requirements' one table (K-EXIT-1, `docs/SESSIONS.md`).
+/// The exit code for a session error: the requirements' one table (`docs/SESSIONS.md`).
 /// Total: every variant is listed, so a new one doesn't compile until it is mapped.
 ///
 /// Anything that says "the thing you named doesn't exist" (a doc, version, change, approval,
@@ -162,6 +162,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::BadClaim(_)
         | SessionError::SelectionTooLarge { .. }
         | SessionError::AtLimit { .. }
+        | SessionError::KeyedAtLimit { .. }
         | SessionError::NeedsBase
         | SessionError::IndexUnsupported
         | SessionError::AgentWriteRefused
@@ -231,7 +232,7 @@ mod tests {
     use super::*;
     use crate::session::{Need, SessionError};
 
-    /// K-EXIT-1: one table. `session_exit` lists every variant (a new one doesn't compile
+    /// One table. `session_exit` lists every variant (a new one doesn't compile
     /// until mapped); this pins the codes.
     #[test]
     fn exit_code_table_is_total() {

@@ -53,7 +53,7 @@ async function open(server: FakeServer, handle: string) {
   return { link, live, welcome: w, closes, acks, rej, reloads, undos, errors };
 }
 
-describe("reconnect (G4, G5)", () => {
+describe("reconnect", () => {
   it("mid-edit, applied: the `since` reply lists it under the old client ID, and it settles as acked", async () => {
     const net = new Net();
     const server = new FakeServer(net, "hello");
@@ -145,7 +145,7 @@ describe("reconnect (G4, G5)", () => {
   });
 });
 
-describe("the own-edit filter (G3) and undo (G9)", () => {
+describe("the own-edit filter and undo", () => {
   it("the host forwards events before V, skips V, then acks: no gap, no `since`", () => {
     const net = new Net();
     const server = new FakeServer(net, "abc");

@@ -1,4 +1,4 @@
-//! C1c: sessions and the store for structured (grid) docs, public API only. A tiny table pack
+//! Sessions and the store for structured (grid) docs, public API only. A tiny table pack
 //! (`csv-lite`: one record per line, fields split by `,`, no quoting) stands in for the CSV
 //! pack. Test names carry the amendment's IT names where one applies (`store::…`,
 //! `versions::…`, `blame::…`, `grid::…`).
@@ -6,8 +6,8 @@
 //! - the store: typed versions round-trip; a store without grid docs stays at format 5 (its
 //!   tables and stamp untouched); the first grid doc upgrades it to 6 in place; a newer
 //!   store is refused with one line;
-//! - sessions: structured edits (A6) with their stream (A5), counts and the read's content;
-//!   an agent needs a base, checked per facet (K-BR-12); the size limits (K-CSV-7, KC4);
+//! - sessions: structured edits with their stream, counts and the read's content;
+//!   an agent needs a base, checked per facet; the size limits;
 //!   `rows drop-deleted` (owner only, frees the cap, history keeps the rows);
 //! - history: restore by identity, revert from v3 records (with conflicts and U23 blame),
 //!   `blame_cell`, change summaries;
@@ -529,7 +529,7 @@ fn grid_agent_edit_needs_base() {
         e.to_string(),
         "an agent's grid edit needs a base: read first and pass --base"
     );
-    // with a base it applies; a person needs none (K-BR-12, live last-writer-wins)
+    // with a base it applies; a person needs none (live last-writer-wins)
     let v = s.read(a).unwrap().version;
     op(&s, a, &EditOptions::new().base(v), |t| {
         t.set_cell(&k("r1"), &k("c1"), "x")
@@ -618,7 +618,7 @@ fn grid_base_conflict_per_facet() {
     assert!(matches!(e, SessionError::FacetConflict(_)), "{e:?}");
 }
 
-// ---------- the size limits (K-CSV-7, KC4) and rows drop-deleted ----------
+// ---------- the size limits and rows drop-deleted ----------
 
 #[test]
 fn grid_verb_past_cap_exit_2_and_drop_deleted_frees_it() {
@@ -764,6 +764,51 @@ fn grid_rows_past_the_row_cap_exit_2_blank_ones_included() {
     );
     // (a rect row with a present cell renders every column)
     assert_eq!(text(&s, p), "x,\nc,d\n");
+}
+
+/// A size limit of any size is compared exactly: limits past `i64::MAX` (as large as
+/// `usize::MAX`) let a table grow, on cells, columns and rows alike; at a limit the refusal
+/// still fires.
+#[test]
+fn grid_limits_of_any_size_let_a_table_grow() {
+    let big = usize::try_from(i64::MAX).expect("a 64-bit host");
+    for limit in [big, big + 1, usize::MAX - 1, usize::MAX] {
+        let mut c = config();
+        c.grid_max_cells = limit;
+        c.grid_max_cols = limit;
+        c.grid_max_rows = limit;
+        let f = fx_with("anylimit", c);
+        let s = f.open("t.csv", "a,b\nc,d\n");
+        let p = f.person(&s, "p");
+        let grew = op(&s, p, &EditOptions::new(), |t| {
+            t.insert_row(Anchor::End, &["e".into(), "f".into()])
+                .map(|x| x.1)
+        });
+        assert!(
+            grew.is_ok(),
+            "grid limit {limit}: the table didn't grow: {grew:?}"
+        );
+        assert_eq!(text(&s, p), "a,b\nc,d\ne,f\n", "grid limit {limit}");
+    }
+    // at a small limit the refusal still fires
+    let mut c = config();
+    c.grid_max_cells = 4;
+    let f = fx_with("anylimit-at", c);
+    let s = f.open("t.csv", "a,b\nc,d\n");
+    let p = f.person(&s, "p");
+    let e = op(&s, p, &EditOptions::new(), |t| {
+        t.insert_row(Anchor::End, &["e".into(), "f".into()])
+            .map(|x| x.1)
+    })
+    .unwrap_err();
+    assert_eq!(
+        e,
+        SessionError::AtLimit {
+            what: "cells",
+            limit: 4,
+            would_be: 6
+        }
+    );
 }
 
 #[test]
@@ -990,7 +1035,7 @@ fn outside_edit_is_applied_by_key_and_keeps_unsynced_changes() {
     assert!(s.audit().unwrap().is_clean(), "{:?}", s.audit());
 }
 
-/// C1d part 2: ONE outside save that moves a row and edits another keeps both keys (was:
+/// ONE outside save that moves a row and edits another keeps both keys (was:
 /// the edited row deleted and re-inserted under a new key, losing its blame).
 #[test]
 fn outside_save_moving_one_row_and_editing_another_keeps_both_keys() {
@@ -1856,7 +1901,7 @@ fn revert_own_chain_newest_first_applies_on_every_facet() {
     assert!(s.audit().unwrap().is_clean());
 }
 
-// ---------- C1e: undo by element (spec v1.10 §6a), one test per case class ----------
+// ---------- undo by element (spec v1.10 §6a), one test per case class ----------
 
 fn undone(r: Result<UndoOutcome, SessionError>) -> bool {
     matches!(r, Ok(UndoOutcome::Applied { ref skipped, .. }) if skipped.is_empty())
@@ -2139,7 +2184,7 @@ fn keys(s: &Session, c: ConnId) -> Vec<String> {
     rows.iter().map(|(k, _)| k.as_str().to_owned()).collect()
 }
 
-/// v1.10 addendum (S4, G1-8 §3): restore → delete conflicts unless every undel covering one
+/// v1.10 addendum (S4): restore → delete conflicts unless every undel covering one
 /// of the element's deletes that isn't own is in the batch's causal past. A session's history
 /// is linear, so the concurrent class is model-and-native only; this is its linear form on
 /// Yrs: p2's later undel (covering a later delete) holds existence, and p1's undo of its own
@@ -2187,7 +2232,7 @@ fn undo_class_header_switch_is_one_region() {
 /// on, or on and off; a cell set back to its value; an undo, a revert or a version restore of
 /// a change), then nothing, a tick, a flush or a restart, then an outside edit of any line
 /// (a cell, a new row, a row deleted, a row moved). The doc and the file must both end as
-/// the outside edit, the sync audit (K-AUD-1) and the store audit must find nothing.
+/// the outside edit, the sync audit and the store audit must find nothing.
 /// `NO_BYTE_CASES` sets the count (default 256; 10^4 on a node).
 mod no_byte {
     use super::*;
@@ -2475,23 +2520,27 @@ mod no_byte {
             assert_eq!(
                 s.audit_disk_sync().unwrap(),
                 vec![],
-                "{why}: K-AUD-1 at the end"
+                "{why}: the sync audit at the end"
             );
         }
         assert!(s.audit().unwrap().is_clean(), "{why}: {:?}", s.audit());
     }
 
-    /// K-AUD-1 before the outside save, for every change: the re-sync marker is the change
+    /// The sync audit before the outside save, for every change: the re-sync marker is the change
     /// counter (as v0.9.5 has it for text), so a change that only deleted (an empty cell
     /// unset, `drop-deleted`) re-syncs the replica too.
     fn sync_audit(s: &Session, change: Change, why: &str) {
         let _ = change;
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{why}: K-AUD-1");
+        assert_eq!(
+            s.audit_disk_sync().unwrap(),
+            vec![],
+            "{why}: the sync audit"
+        );
     }
 
-    /// The change-counter marker (v0.9.5's, for grids in C1g): after a change that only
+    /// The change-counter marker (v0.9.5's, for grids too): after a change that only
     /// deleted and moved no byte, the write-back that finds nothing to write re-syncs the
-    /// replica (K-AUD-1 clean).
+    /// replica (the sync audit clean).
     #[test]
     fn the_replica_follows_a_change_that_only_deleted() {
         let f = Fix::new();
@@ -2627,7 +2676,7 @@ mod no_byte {
     }
 }
 
-/// Outside saves as a keyed three-way merge (C1 must-have (c), contract §2.9.1): base = the
+/// Outside saves as a keyed three-way merge (the CSV contract, §2.9.1): base = the
 /// grid as the file held it, ours = the file, theirs = live (dirty or not); where both
 /// changed one element the file wins, and the live value is never lost (a version cut, a
 /// heads-up note to its author, an audit event). The grid twin of v0.9.5's outside-save
@@ -3238,7 +3287,7 @@ mod outside_merge {
     /// ticks and restarts come and go; a plain editor saves the file (cells rewritten, a
     /// line appended or removed), inside the write delay too. After every save each value it
     /// wrote is in the live grid (the file wins, never dropped), and after every write-back
-    /// the file is the doc, K-AUD-1's sync check and the lost-edit audit are clean.
+    /// the file is the doc, the sync check and the lost-edit audit are clean.
     #[test]
     fn grid_soak_with_outside_saves() {
         let rounds = soak_rounds();
@@ -3420,7 +3469,7 @@ mod outside_merge {
                 assert_eq!(
                     s.audit_disk_sync().unwrap(),
                     vec![],
-                    "round {round}: K-AUD-1"
+                    "round {round}: the sync audit"
                 );
                 let a = s.audit().unwrap();
                 assert!(a.is_clean(), "round {round}: {a:?}");
@@ -3573,7 +3622,7 @@ mod outside_merge {
         assert_eq!(
             s.audit_disk_sync().unwrap(),
             vec![],
-            "{why}: K-AUD-1 before"
+            "{why}: the sync audit before"
         );
         let nr = seed.len();
         // the line -> row key map as the file holds it (live renders the same bytes)
@@ -3754,7 +3803,11 @@ mod outside_merge {
         }
         let _ = want_t;
         assert_eq!(f.bytes(), render(&after), "{why}: the file is the merge");
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{why}: K-AUD-1 after");
+        assert_eq!(
+            s.audit_disk_sync().unwrap(),
+            vec![],
+            "{why}: the sync audit after"
+        );
         assert!(s.audit().unwrap().is_clean(), "{why}: {:?}", s.audit());
     }
 
@@ -3852,7 +3905,7 @@ mod outside_merge {
         }
     }
 
-    // ---------- re-identification with edits pending (C1 must-have: the identity gap) ----------
+    // ---------- re-identification with edits pending (the identity gap) ----------
 
     /// A sequence that changes no byte but may give elements new keys.
     #[derive(Debug, Clone, Copy)]
@@ -4253,7 +4306,11 @@ mod outside_merge {
         f.advance(2_000);
         s.flush(p1).unwrap();
         assert_eq!(f.bytes(), text(&want), "{why}: the file");
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{why}: K-AUD-1");
+        assert_eq!(
+            s.audit_disk_sync().unwrap(),
+            vec![],
+            "{why}: the sync audit"
+        );
         assert!(s.audit().unwrap().is_clean(), "{why}: {:?}", s.audit());
     }
 
@@ -8171,7 +8228,11 @@ mod outside_merge {
                 "{what}: a cell stored under {cell:?}"
             );
             assert_eq!(cells, cells_before, "{what}: the cell map");
-            assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{what}: K-AUD-1");
+            assert_eq!(
+                s.audit_disk_sync().unwrap(),
+                vec![],
+                "{what}: the sync audit"
+            );
             assert!(s.audit().unwrap().is_clean(), "{what}: audit");
         }
 
@@ -8288,14 +8349,18 @@ mod outside_merge {
                     assert!(!cells.contains_key(&cell), "{what}: {cell:?} stored");
                     assert_eq!(cells, cells_before, "{what}: the cell map");
                     assert!(s.take_notes(p2).unwrap().notes.is_empty(), "{what}: a note");
-                    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{what}: K-AUD-1");
+                    assert_eq!(
+                        s.audit_disk_sync().unwrap(),
+                        vec![],
+                        "{what}: the sync audit"
+                    );
                     assert!(s.audit().unwrap().is_clean(), "{what}: audit");
                 }
             });
         }
 
         /// The other side of the line: a deleted row or column the table still knows takes
-        /// the write as a hidden write with its §4.3 message (K-CSV-4), and a key the same edit
+        /// the write as a hidden write with its §4.3 message, and a key the same edit
         /// inserts first takes it as a plain write.
         #[test]
         fn a_keyed_write_under_a_deleted_or_newly_inserted_key_still_applies() {
@@ -8900,7 +8965,7 @@ mod outside_merge {
     }
 }
 
-/// C1k (request 5): an edit closure reads the doc's codec settings from its view (the pack's
+/// An edit closure reads the doc's codec settings from its view (the pack's
 /// dialect, to hold an op to the codec's rules); a view the session didn't hand out has none.
 #[test]
 fn an_edit_closure_reads_the_codec_settings() {
@@ -8924,7 +8989,7 @@ fn an_edit_closure_reads_the_codec_settings() {
     );
 }
 
-/// C1k (request 7): the value limit is a knob (`Config::grid_max_value_len`, default 64 KiB),
+/// The value limit is a knob (`Config::grid_max_value_len`, default 64 KiB),
 /// raised or lowered by the host: an edit closure's table ops follow it (its view carries it),
 /// and every structured change is held to it (`AtLimit`, `value bytes`, exit 2; raw ops too).
 #[test]
@@ -9014,7 +9079,7 @@ fn the_value_limit_is_a_knob() {
     assert!(raw(&s, p, "y".repeat(100 * 1024 + 1)).is_err());
 }
 
-/// C1k (request 8): a pack's tests build an in-memory doc from its decoded content as the
+/// A pack's tests build an in-memory doc from its decoded content as the
 /// session's import does (`session::test_support::import_edits`, feature `test-support`).
 #[test]
 fn import_edits_builds_the_doc_an_import_makes() {

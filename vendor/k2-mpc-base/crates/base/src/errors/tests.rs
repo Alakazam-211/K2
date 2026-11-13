@@ -92,6 +92,13 @@ fn doc_errors_with(x: &str) -> Vec<DocError> {
             actual: Kind::Map,
         },
         D::Unsupported(Kind::Tree),
+        D::RootKindNotNative {
+            root: "rows".into(),
+            kind: Kind::MovableList,
+        },
+        D::ReplicaLagging,
+        D::VectorNeedsParts { entries: 10_000 },
+        D::NeedsStateTransfer,
         D::Hunk(HunkError::Order { index: 1 }),
         D::Hunk(HunkError::Range { index: 1 }),
         D::Hunk(HunkError::Empty { index: 1 }),
@@ -316,6 +323,11 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             limit: 25_000,
             would_be: 25_001,
         },
+        S::KeyedAtLimit {
+            limit: 25_000,
+            would_be: 25_001,
+            from: crate::session::LimitSource::HostWide,
+        },
         S::FacetConflict(vec![crate::session::FacetConflict {
             root: "rows".into(),
             key: "r3".into(),
@@ -447,17 +459,21 @@ fn ids_names_and_areas_are_well_formed() {
             assert!(e.id.starts_with(KIT_PREFIX), "{}", e.id);
             (KIT_PREFIX, &e.id[KIT_PREFIX.len()..])
         };
+        // the engine's own allocation runs past three figures (MPCE-E1000 and up)
+        let figures = if e.is_engine() { 3..=4 } else { 3..=3 };
         assert!(
-            digits.len() == 3 && digits.bytes().all(|b| b.is_ascii_digit()),
-            "{}: {prefix} and three digits",
+            figures.contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit()),
+            "{}: {prefix} and three figures (four for the engine's)",
             e.id
         );
-        assert_eq!(
-            digits.as_bytes()[0] - b'0',
-            e.area.digit(),
-            "{}: its hundreds digit is its area's",
-            e.id
-        );
+        if digits.len() == 3 {
+            assert_eq!(
+                digits.as_bytes()[0] - b'0',
+                e.area.digit(),
+                "{}: its hundreds digit is its area's",
+                e.id
+            );
+        }
         assert!(ids.insert(e.id), "{} twice", e.id);
         assert!(names.insert(e.name), "name {} twice", e.name);
         assert!(
@@ -536,7 +552,7 @@ fn entries_name_real_verbs() {
     assert!(file_rows >= 28, "only {file_rows} file rows");
 }
 
-/// K-EXIT-1 and condition 2: an id never changes an exit code. Every variant maps to a live
+/// An id never changes an exit code. Every variant maps to a live
 /// id whose exit is the one `session_exit` / `ToolError::exit` gives.
 #[test]
 fn every_variant_maps_to_a_live_id_with_its_exit() {
@@ -669,7 +685,7 @@ fn json_shape_is_stable() {
         r#"{"id":"MPC-E110","exit":1,"message":"doc changed since 12 (now 14)","next":""#
     ));
     assert!(j.ends_with(
-        r#","rule":"A14 (--if-version), K-T0-5","details":{"expected":12,"actual":14}}"#
+        r#","rule":"the version guard (--if-version), K-T0-5","details":{"expected":12,"actual":14}}"#
     ));
     assert_eq!(r.plain(), "doc changed since 12 (now 14) (MPC-E110)");
     // details are never prose: no detail value is the message
@@ -714,7 +730,7 @@ fn explain_and_capabilities_run() {
     assert_eq!(out.refusal.unwrap().id(), "MPC-E120");
 }
 
-/// K7 (v0.9.8): every refusal, its message and every detail, with a known workspace root
+/// Paths made safe to show (v0.9.8): every refusal, its message and every detail, with a known workspace root
 /// fed through every string a constructor takes (a path inside the root, one outside it,
 /// as OS errors print them), then [`ErrorReport::redacted`]: no absolute path survives; the
 /// one inside is shown relative to the root.
@@ -753,7 +769,7 @@ fn no_absolute_path_survives_redaction() {
     );
 }
 
-/// K6 (v0.9.8): a host's `next` for one surface changes that surface's `next` only: never
+/// A host's guidance (v0.9.8): a host's `next` for one surface changes that surface's `next` only: never
 /// the id, exit code, message, rule or details, nor the registry's `next` elsewhere.
 #[test]
 fn next_override_never_changes_the_rest() {
@@ -813,7 +829,7 @@ fn export_errors() -> Vec<ExportError> {
     ]
 }
 
-/// K-PAR-10: the names a step's verb may take: the kit's verbs, the doc-less verbs and the
+/// The names a step's verb may take: the kit's verbs, the doc-less verbs and the
 /// grid verbs, by their registry names (never a hand list).
 fn kit_verb_names() -> BTreeSet<&'static str> {
     crate::parity::KIT_VERBS
@@ -843,7 +859,7 @@ fn host_text(s: &str) -> Option<&'static str> {
     None
 }
 
-/// K-PAR-10, over every entry: its step is absent (nothing to run), or valid: the verb is a
+/// Over every entry: its step is absent (nothing to run), or valid: the verb is a
 /// kit verb by its registry name (flags in `args`), with a reason. A file type's row (`@file`)
 /// names one of that file type's verbs: the integration test `error_ids` holds it to a file
 /// registry built from the file type's verb list.
@@ -875,7 +891,7 @@ fn every_next_step_names_a_kit_verb_and_a_reason() {
     );
 }
 
-/// K-PAR-10: no host command text in any entry's message or `next`, nor in a step's reason
+/// No host command text in any entry's message or `next`, nor in a step's reason
 /// or arguments; arguments are single argv tokens with no host prefix; a reason names no
 /// command line.
 #[test]
@@ -918,7 +934,7 @@ fn no_host_command_text_in_the_registry() {
     assert_eq!(host_text("the K2-agnostic kit's mpc-k2x"), None);
 }
 
-/// K-PAR-10: an argument `{key}` is a plain identifier, and names a detail the refusal
+/// An argument `{key}` is a plain identifier, and names a detail the refusal
 /// carries (its message template names it); any other argument has no braces.
 #[test]
 fn step_placeholders_are_plain_detail_keys() {
@@ -954,7 +970,7 @@ fn step_placeholders_are_plain_detail_keys() {
     assert!(seen >= 1, "no placeholder: the check is vacuous");
 }
 
-/// K-PAR-10 (additive this release): the report's JSON carries `next_step` right after
+/// The report's JSON carries `next_step` right after
 /// `next` when the entry has one, and leaves it out when not; the same on every surface;
 /// `next` keeps its prose.
 #[test]

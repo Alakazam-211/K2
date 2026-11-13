@@ -1,4 +1,4 @@
-//! K9 (v0.9.8, K-DISK-14): a file with more than one name (a hard link) isn't opened live,
+//! Hard links (v0.9.8): a file with more than one name (a hard link) isn't opened live,
 //! as a text doc or a tier-0 blob doc: `Declined` `hard_linked`, `MPC-E412` (exit 4), the
 //! message naming no path. A host keys sessions by `FileIdentity` (device and inode) as well
 //! as the path: two names of one file have one identity, and an open session reports its

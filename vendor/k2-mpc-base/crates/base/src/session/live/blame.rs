@@ -1,4 +1,4 @@
-//! Blame on a live text doc (K-HIST-11, K-HIST-18, P22): [`Session::blame`]. A child of
+//! Blame on a live text doc (P22): [`Session::blame`]. A child of
 //! `live`, so it works on the session's own state.
 //!
 //! **Grain.** Text is blamed per character: every live character is an element with an ID
@@ -44,8 +44,8 @@ pub struct BlameLine {
     /// The line's text, without its `\n`.
     pub text: String,
     /// The pid that wrote it: a participant, `kit:import` (the file's first content),
-    /// `kit:external` (an edit made outside the kit), a pseudonym (an erased participant,
-    /// K-PURGE-7), or `kit:unknown` when the store has no owner for the client (never a
+    /// `kit:external` (an edit made outside the kit), a pseudonym (an erased
+    /// participant), or `kit:unknown` when the store has no owner for the client (never a
     /// guess).
     pub author: String,
     /// The change (its log position, the stable change id). `None` for text from before
@@ -56,12 +56,12 @@ pub struct BlameLine {
     pub via: Option<String>,
     /// When the change was made (host clock, ms).
     pub at_ms: Option<u64>,
-    /// The person an assistant's change was made for (K-ID-10).
+    /// The person an assistant's change was made for.
     pub on_behalf_of: Option<String>,
     /// The approval state of an on-behalf change.
     pub approval: Option<ApprovalState>,
-    /// A purge reached the change behind this line (its revert record was redacted,
-    /// K-PURGE-3): its recorded content is gone, its metadata (id, time, author or the
+    /// A purge reached the change behind this line (its revert record was
+    /// redacted): its recorded content is gone, its metadata (id, time, author or the
     /// author's pseudonym) stays. The line's text is the live text, which a purge never
     /// changes (edit it out, or purge with `and_remove`). Not known once the change's record
     /// has left the revert window.
@@ -440,11 +440,11 @@ impl Session {
         Ok(out)
     }
 
-    /// **Blame** `root` (K-HIST-11, P22): each line's most recent author, by the rule on
-    /// [`BlameLine`], with the change, kind, surface, time, `on_behalf_of` and approval state
-    /// (K-HIST-18), and `erased` where a purge reached the change. `lines` is `blame -L a,b`:
+    /// **Blame** `root` (P22): each line's most recent author, by the rule on
+    /// [`BlameLine`], with the change, kind, surface, time, `on_behalf_of` and approval state,
+    /// and `erased` where a purge reached the change. `lines` is `blame -L a,b`:
     /// 1-based, inclusive, of this root (`first` must exist; `last` past the end is
-    /// clamped); `None` blames every line. Needs read and **history** (K-PERM-9). Reads only:
+    /// clamped); `None` blames every line. Needs read and **history**. Reads only:
     /// nothing in the doc, the store or presence changes.
     ///
     /// Cost (v0.9.5): the provenance map's runs for the lines asked for (the map is kept up
@@ -859,7 +859,7 @@ mod tests {
         let snap = |s: &Session| {
             let st = s.lock().unwrap();
             (
-                st.doc.state_vector(),
+                st.doc.try_state_vector().unwrap(),
                 st.doc.encode_state().unwrap(),
                 st.texts.clone(),
                 st.version,

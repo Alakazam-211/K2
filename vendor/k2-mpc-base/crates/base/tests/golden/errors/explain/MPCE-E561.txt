@@ -1,0 +1,21 @@
+MPCE-E561 native_store_corrupt (store)
+exit:     6
+message:  the engine refused a stored record: it fails the load's checks
+next:     Nothing was opened past this record. If the host lowered its limits, raise them again; if it releases records, check it settled their digests first. Otherwise restore the document from another copy: the host's state, for a replica; for the host's own store, a peer replica, a backup, or the document's Yrs store where one is kept.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E561",
+  "name": "native_store_corrupt",
+  "area": "store",
+  "exit": 6,
+  "message": "the engine refused a stored record: it fails the load's checks",
+  "next": "Nothing was opened past this record. If the host lowered its limits, raise them again; if it releases records, check it settled their digests first. Otherwise restore the document from another copy: the host's state, for a replica; for the host's own store, a peer replica, a backup, or the document's Yrs store where one is kept.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,4 +1,4 @@
-//! Person undo grouping (undo spec U3, kit v0.9.7, K4): consecutive edits from one connection
+//! Person undo grouping (undo spec U3, kit v0.9.7): consecutive edits from one connection
 //! with the same [`EditOptions::group`] token merge into **one undo step**. A child of `live`,
 //! so it works on the session's own state; it touches only the undo stack push.
 //!

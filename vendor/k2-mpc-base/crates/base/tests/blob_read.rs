@@ -1,4 +1,4 @@
-//! The structure index's read side (slice A2) and claims by node (slice A5): the typed reads a
+//! The structure index's read side and claims by node: the typed reads a
 //! host's views call, `BlobSession::run_tool`'s verbs over them, the address grammar on nodes,
 //! the read budget and its cursors, the registry a pack's blob docs get, the parity of the
 //! verbs with the typed calls, and claims that never block a write. The file type is a

@@ -16,7 +16,7 @@
 //! **Retired marks.** A drop forgets its key, so the dropper records the highest number it
 //! dropped per prefix and tag under its **own** mark key ([`mark_key`], one per dropper, in a
 //! pack's marks Map), and [`retired_mark`] reads the max over every dropper's: monotone under
-//! any concurrency. A mint only reads marks. Marks are written by the keyed drop (slice 6a);
+//! any concurrency. A mint only reads marks. Marks are written by the keyed drop;
 //! [`marks_for_drops`] gives the writes.
 //!
 //! [`KeyShape`] is the looser grammar underneath: `<prefix><n>` or `<prefix><n>.<anything>`.

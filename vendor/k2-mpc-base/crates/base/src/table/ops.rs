@@ -6,7 +6,7 @@
 //! counters, and the change writes the counters back (`meta.next_row` / `next_col`), so
 //! several builders on one table make one change with distinct keys.
 //!
-//! The op rules (K-CSV-10): clear is a set to `""`; a multi-element move (a sort, a block
+//! The op rules: clear is a set to `""`; a multi-element move (a sort, a block
 //! move) is one forward chain ([`crate::elem::chain`], [`crate::elem::reorder`]); a deleted
 //! row or column comes back by restore.
 
@@ -186,7 +186,7 @@ impl Table {
         Ok(ch.finish(self))
     }
 
-    /// Clear a cell: a set to `""` (K-CSV-10a), never a delete.
+    /// Clear a cell: a set to `""`, never a delete.
     pub fn clear_cell(&mut self, row: &Key, col: &Key) -> Result<Vec<Edit>, TableError> {
         self.set_cell(row, col, "")
     }
@@ -387,7 +387,7 @@ impl Table {
     }
 
     /// A block move of rows: `rows` (live, distinct), in this order, to `to`, as one forward
-    /// chain (K-CSV-10b).
+    /// chain.
     pub fn move_rows(&mut self, rows: &[Key], to: Anchor) -> Result<Vec<Edit>, TableError> {
         self.move_block(ROWS, rows, to)
     }
@@ -726,7 +726,7 @@ impl Table {
         Ok(ch.finish(self))
     }
 
-    /// `rows drop-deleted` (K-CSV-7): remove every deleted row and column, with every cell,
+    /// `rows drop-deleted`: remove every deleted row and column, with every cell,
     /// name and quote exception keyed by one, from the live sheet ([`ListOp::Drop`], map
     /// deletes), so they stop counting toward the size limit. They can't be restored from
     /// the sheet afterwards; versions and change records still hold them (not erasure). The

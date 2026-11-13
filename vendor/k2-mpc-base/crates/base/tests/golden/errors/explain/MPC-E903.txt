@@ -3,7 +3,7 @@ exit:     2
 message:  bad claim: this doc has {count} live claims (the most)
 next:     This doc has as many live claims as it allows. Wait for some to end (activity and who show them), or edit without a claim.
 step:     activity; why: This doc has all the live claims it allows; wait for some to end, or edit without a claim.
-rule:     A13 (claims_max)
+rule:     claims (claims_max)
 verbs:    claim
 status:   live
 --- json
@@ -19,7 +19,7 @@ status:   live
     "args": [],
     "why": "This doc has all the live claims it allows; wait for some to end, or edit without a claim."
   },
-  "rule": "A13 (claims_max)",
+  "rule": "claims (claims_max)",
   "verbs": ["claim"],
   "returned_by": ["claim"],
   "status": "live",

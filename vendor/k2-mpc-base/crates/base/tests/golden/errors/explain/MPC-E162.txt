@@ -1,0 +1,21 @@
+MPC-E162 root_kind_not_native (sessions and edits)
+exit:     2
+message:  root {root} is {kind}: this file type isn't switched to the native engine yet
+next:     The host chose the native engine for a file type with a list or map root. Nothing was made or loaded. This file type isn't switched to the native engine yet: open it on Yrs.
+rule:     the native engine: text roots only
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E162",
+  "name": "root_kind_not_native",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "root {root} is {kind}: this file type isn't switched to the native engine yet",
+  "next": "The host chose the native engine for a file type with a list or map root. Nothing was made or loaded. This file type isn't switched to the native engine yet: open it on Yrs.",
+  "rule": "the native engine: text roots only",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,12 +1,12 @@
-//! [`BlobSession::run_tool`]: the structure index's verbs and claims by node, as one call
-//! (slice A2, A5). A thin parser over the typed calls ([`BlobSession::index_list`],
+//! [`BlobSession::run_tool`]: the structure index's verbs and claims by node, as one call.
+//! A thin parser over the typed calls ([`BlobSession::index_list`],
 //! [`BlobSession::index_nodes`], [`BlobSession::index_diff`], [`BlobSession::index_blame`],
 //! [`BlobSession::claim_nodes`] and the rest), so a verb and a host's view see the same thing;
 //! the verbs add the read budget, cursors and output ([`super::index_page`]).
 //!
 //! The verbs go by the pack's names ([`crate::index::IndexVerbs`]): `<noun> list`, `<noun>
 //! show`, `<noun> diff`, `<noun> blame`, with `outline` and `node` the kit's names for the
-//! first two (K-READ-1), and `claim --node`, `claim --renew`, `claim --release`. Every other
+//! first two, and `claim --node`, `claim --renew`, `claim --release`. Every other
 //! verb of a blob doc is its own call, not this one.
 
 use super::index_page::{self as page, Hints, Shape};
@@ -288,7 +288,7 @@ impl BlobSession {
     ///   [`BlobSession::release_claim`]. An agent's `#N` names a version with `--version`
     ///   ([`ToolOptions::positional`], `MPC-E171`).
     ///
-    /// **Pages** (K-READ-2): every page is at most [`ToolOptions::read_budget`] bytes, in text
+    /// **Pages**: every page is at most [`ToolOptions::read_budget`] bytes, in text
     /// and in JSON: an item counts as the larger of its two forms, so a page is the same page
     /// in both. An item that couldn't fit a page alone is shortened until it does, saying what
     /// it left out and the read that returns it ([`super::index_page`]). Past the budget the
@@ -607,7 +607,7 @@ impl BlobSession {
         }
     }
 
-    /// An agent's claim by `#N` with no `--version` (K-ADDR-3): a warning, or `MPC-E171`.
+    /// An agent's claim by `#N` with no `--version`: a warning, or `MPC-E171`.
     fn positional_claim(
         &self,
         conn: ConnId,
@@ -706,7 +706,7 @@ impl BlobSession {
         Ok(out)
     }
 
-    /// Page a read (K-READ-2) and print it.
+    /// Page a read and print it.
     fn page_out(
         &self,
         p: Paged,

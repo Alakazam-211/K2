@@ -1,10 +1,10 @@
-//! The view index (rendering-data contract gaps 1, 2 and 3) on a board-shaped toy pack: pages
+//! The view index on a board-shaped toy pack: pages
 //! (containers) and items (units), live as keyed roots and on the blob tier as a structure index,
 //! one file read both ways. Public API only.
 //!
 //! The rows: the schema gives the expected index from both sources at one version, and the two
 //! are identical but for their source fields; addresses round-trip, and the presence setters and
-//! claims speak them; the paged form reassembles. With a carrier (K1, a variant of the toy whose
+//! claims speak them; the paged form reassembles. With a carrier (a variant of the toy whose
 //! file holds lines the live store never models): the derive hook reads it, N reads of an
 //! unchanged doc decode it zero times (one decode per carrier), a change reaches what is
 //! derived from it, and a keyed watch's change frame carries the render hash of the page it
@@ -131,6 +131,8 @@ const VIEW: ViewSchema = ViewSchema {
         placeholder_idx: NodeSrc::Attr("ph_idx"),
         ..BlobView::NONE
     }),
+    unit_derived: &[],
+    space: None,
 };
 
 // ----- the toy's file -----
@@ -557,6 +559,7 @@ fn expected(tier: Tier, rev: Option<u64>, version: Option<u64>) -> ViewIndex {
             unit: "px".into(),
         }),
         fonts: Vec::new(),
+        space: None,
         layouts: vec![
             Layout {
                 key: "@lay:1".into(),
@@ -1166,7 +1169,7 @@ fn no_schema_no_index_and_a_bad_schema_is_refused() {
     assert!(VIEW.check(&SCHEMA, BoardPack.composite()).is_ok());
 }
 
-// ----- the carrier (K1): what only the file's bytes hold -----
+// ----- the carrier: what only the file's bytes hold -----
 
 /// One **kid line** of a carrier board, `K|page|item|id|dx|dy|w|h|font`: a unit nested in item
 /// `item` of page `page`, at (`dx`, `dy`) from the item's box, whose text uses `font`. The live
@@ -1283,7 +1286,7 @@ fn board_text(content: &[(String, Neutral)]) -> Result<String, PackError> {
     Ok(out)
 }
 
-/// The board, keeping a carrier (K1): its file may hold kid lines ([`Kid`]), which the live
+/// The board, keeping a carrier: its file may hold kid lines ([`Kid`]), which the live
 /// store never models. `encode_from` gives the carrier back for the content it decodes to, and
 /// otherwise the content's board lines followed by the carrier's kid lines. The derive hook
 /// reads the kids from the carrier: each a nested unit of its item, placed from the item's

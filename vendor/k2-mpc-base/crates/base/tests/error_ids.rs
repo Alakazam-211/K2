@@ -721,7 +721,7 @@ impl Pack for RefItems {
     }
 }
 
-/// [`Items`] as a pack that keeps a carrier (K1): its versions' files are spliced into the
+/// [`Items`] as a pack that keeps a carrier: its versions' files are spliced into the
 /// carrier as of each version.
 struct CarrierItems;
 
@@ -1067,7 +1067,7 @@ fn walk() -> Seen {
     let y = f.agent(&s, "y", Rights::editor());
     s.claim(x, lines(1, 1), None, None, false).unwrap();
     seen.res(s.claim(y, lines(3, 3), None, None, false)); // E903
-                                                          // a join past participants_max watches (K11): its edit is refused
+                                                          // a join past participants_max watches: its edit is refused
     let f = fx("watching", |c| c.participants_max = 1);
     let s = f.open("w.md", b"1\n");
     f.agent(&s, "x", Rights::editor());
@@ -1113,7 +1113,7 @@ fn walk() -> Seen {
     let kp = f2.person(&s, "kp", Rights::full());
     seen.res(s.edit(kp, insert_item("c"), None)); // E822
     seen.res(f.mgr.open_file(Arc::new(MD), &key("ws"), &f.ws(), &f.ws())); // E411
-                                                                           // a file with two names (a hard link) isn't opened live (K9)
+                                                                           // a file with two names (a hard link) isn't opened live
     let one = f.ws().join("linked.md");
     std::fs::write(&one, "x\n").unwrap();
     std::fs::hard_link(&one, f.ws().join("linked-too.md")).unwrap();
@@ -1230,7 +1230,7 @@ fn walk() -> Seen {
     f.mgr.release().unwrap();
     seen.res(f.mgr.open(Arc::new(MD), &key("d2.md"), Some(b"x\n"))); // E514
 
-    // ---- the grid (8xx, C1): the grid test pack, through its verbs and edits
+    // ---- the grid (8xx): the grid test pack, through its verbs and edits
     // header + r1, r2 by c1, c2: 4 cells, the most there may be
     let f = fx("grid", |c| c.grid_max_cells = 4);
     let s = f
@@ -1371,7 +1371,7 @@ fn walk() -> Seen {
         &EditOptions::new(),
     )); // E720
 
-    // an address that names two columns (K-ADDR-2)
+    // an address that names two columns
     let s = f
         .mgr
         .open(
@@ -1438,7 +1438,7 @@ fn walk() -> Seen {
     )); // E177
     no_render.store(false, Ordering::SeqCst);
 
-    // an agent's edit by line with no version, where the host refuses it (K-ADDR-3)
+    // an agent's edit by line with no version, where the host refuses it
     let s = f.open("pos.md", b"a\nb\n");
     let ag = f.agent(&s, "pa", Rights::editor());
     let refuse = k2_mpc_base::tools::ToolOptions::new()
@@ -1573,7 +1573,7 @@ fn index_walk(seen: &mut Seen) {
     s.purge(c, Some(v)).unwrap();
     job_err(seen, job.commit_wire(input, &wire).unwrap_err()); // E717
 
-    // the read side (A2): a partial node read, cursors, the budget
+    // the read side: a partial node read, cursors, the budget
     let s = f
         .mgr
         .open_blob(
@@ -1652,7 +1652,7 @@ fn every_verb_reachable_id_is_reached_with_its_exit() {
 }
 
 /// Today's wording is kept: the id is appended, never in place of a message, and exit codes
-/// are the table's (K-EXIT-1).
+/// are the table's.
 #[test]
 fn plain_text_keeps_the_wording() {
     let e = SessionError::Held {

@@ -67,7 +67,7 @@ pub enum IndexMutant {
     NoDecodeBudget,
     /// A stored row of format 2 drops a node's view geometry (row format 2's items).
     IndexV2FieldDropped,
-    // the read side (A2) and claims by node (A5)
+    // the read side and claims by node
     /// A structure read checks no rights: not read, not history for another version.
     ReadSkipsRights,
     /// A page holds everything, whatever the read budget.
@@ -205,7 +205,7 @@ pub fn with_index_mutant<R>(mutant: IndexMutant, f: impl FnOnce() -> R) -> R {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AnnotMutant {
-    /// A key gone with a candidate reads orphaned (the draft's C9 hole).
+    /// A key gone with a candidate reads orphaned.
     CandidateReadsOrphaned,
     /// A hidden node hides a kind change (precedence rows 4 and 5 swapped).
     HiddenOverDoubt,
@@ -342,7 +342,7 @@ pub(crate) fn annotation_pause_point() {
     }
 }
 
-/// A fault planted in person undo grouping (undo spec U3, K4, v0.9.7), so the grouping
+/// A fault planted in person undo grouping (undo spec U3, v0.9.7), so the grouping
 /// tests can show they catch each one. Installed per thread by [`with_group_mutant`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -511,7 +511,7 @@ pub fn demote_mutant() -> Option<DemoteMutant> {
     DEMOTE_MUTANT.with(|m| m.get())
 }
 
-/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
 pub fn with_demote_mutant<R>(mutant: DemoteMutant, f: impl FnOnce() -> R) -> R {
     struct Back(Option<DemoteMutant>);
     impl Drop for Back {
@@ -538,18 +538,18 @@ pub enum KeyedMutant {
     /// "purge skips live copies": a purge of a live doc leaves its recorded conflict copies
     /// on disk and in `live_copies`, unreported, whatever they hold.
     PurgeSkipsLiveCopies,
-    /// "carrier stale" (K1): a kit write doesn't become the carrier, so `Pack::encode_from` is
+    /// "carrier stale": a kit write doesn't become the carrier, so `Pack::encode_from` is
     /// handed the bytes from one write earlier.
     CarrierStale,
-    /// "purge keeps carrier" (K1): the carrier a write replaces is left for blob GC (its count
+    /// "purge keeps carrier": the carrier a write replaces is left for blob GC (its count
     /// given back, its bytes in the blob folder until the grace runs out) instead of removed
     /// at once, so a purge's write-back leaves the erased bytes behind.
     PurgeKeepsCarrier,
-    /// "copy compared with encode" (K1): a live conflict copy of a pack that keeps a carrier is
+    /// "copy compared with encode": a live conflict copy of a pack that keeps a carrier is
     /// compared, on `tick` and by a purge, with `Pack::encode` of its kept version instead of
     /// what the kit wrote (the version spliced into its carrier), so it never matches.
     CopyComparedWithEncode,
-    /// "file_at uses encode" (K1): `Session::file_at` of a pack that keeps a carrier renders the
+    /// "file_at uses encode": `Session::file_at` of a pack that keeps a carrier renders the
     /// version with `Pack::encode`, without its opaque bytes.
     FileAtUsesEncode,
     /// "removal ignores waiting puts": a removal at once (a purge's, a replaced carrier's)
@@ -568,24 +568,24 @@ pub enum KeyedMutant {
     /// "list rereads root": a list op's change reads the whole list root afresh from the engine
     /// into the live view, as before, instead of replaying the op on it.
     ListReReadsRoot,
-    /// "synced content stale" (K1b): a kit write keeps the carrier's pairing from the sync
+    /// "synced content stale": a kit write keeps the carrier's pairing from the sync
     /// point before, so `Pack::encode_from_paired` is handed keys that don't fit the bytes.
     SyncedContentStale,
-    /// "splice without match" (K1b): when the pack refuses a pairing that doesn't fit, the kit
+    /// "splice without match": when the pack refuses a pairing that doesn't fit, the kit
     /// falls back to the carrier-only hook (`Pack::encode_from`), which splices by guess.
     SpliceWithoutMatch,
-    /// "pairing missing on version" (K1b): a version cut takes the live carrier but not its
+    /// "pairing missing on version": a version cut takes the live carrier but not its
     /// pairing, so its file can't be paired (`file_at` is refused).
     PairingMissingOnVersion,
-    /// "holds file calls pack" (K1b): whether a keyed doc holds an outside save is decided by
+    /// "holds file calls pack": whether a keyed doc holds an outside save is decided by
     /// splicing the live content into the save's bytes, before the replica has taken the save,
     /// as before, instead of comparing keyed content.
     HoldsFileCallsPack,
-    /// "dirty save merged by key" (K1b): an outside save on a keyed doc that isn't a table,
+    /// "dirty save merged by key": an outside save on a keyed doc that isn't a table,
     /// landing while the doc holds changes the file doesn't, is merged by key onto them, as
     /// before, instead of keeping both.
     DirtySaveMergedByKey,
-    /// "settle before carrier" (K1, K1b): an outside save becomes the carrier only after the
+    /// "settle before carrier": an outside save becomes the carrier only after the
     /// settle has rendered the doc that took it, as before, so that rendering splices into the
     /// bytes, and pairs with the keys, of the sync point before the save.
     SettleBeforeCarrier,
@@ -820,7 +820,7 @@ pub fn with_selection_mutant<R>(mutant: SelectionMutant, f: impl FnOnce() -> R) 
     f()
 }
 
-/// A fault in the rendering-data contract's kit items (the turn, claim events, focus and
+/// A fault in the kit items (the turn, claim events, focus and
 /// range, the verb), so their tests can show they catch it (`tests/contract_presence.rs`,
 /// `tests/contract_verbs.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -834,10 +834,10 @@ pub enum ContractMutant {
     /// Setting a text range leaves the participant's focus where it was (r1.3 says: the range's
     /// container).
     RangeDoesNotSetFocus,
-    /// A change a pack verb made is stored without its verb (gap 9 says: on the change record,
+    /// A change a pack verb made is stored without its verb (it belongs on the change record,
     /// so history and a reload show it).
     VerbNotRecorded,
-    /// A pack verb's change moves the presence of a person who ran it too (gap 11 says: the kit
+    /// A pack verb's change moves the presence of a person who ran it too (the rule: the kit
     /// moves an agent's focus and selection only; a person sets their own).
     VerbMovesPersonPresence,
     /// A live revert or restore leaves the host-given turn off the change it makes (K2's ask:
@@ -866,7 +866,7 @@ pub fn with_contract_mutant<R>(mutant: ContractMutant, f: impl FnOnce() -> R) ->
     f()
 }
 
-/// A fault in the view index (rendering-data contract gaps 1 to 6, [`crate::view_index`]), so its
+/// A fault in the view index ([`crate::view_index`]), so its
 /// tests can show they catch it (`tests/view_index.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -876,7 +876,7 @@ pub enum ViewMutant {
     /// The kit's inverse of an address ignores the pack's mapping and reads the address as a
     /// key, so the address it hands out doesn't lead back to the element.
     AddressNotInverse,
-    /// The live index hands the derive hook no carrier (K1), so what only the file's bytes hold
+    /// The live index hands the derive hook no carrier, so what only the file's bytes hold
     /// is missing from it.
     DeriveIgnoresCarrier,
     /// The kept index is reused while the doc changes: its key is the carrier's id alone, not
@@ -888,6 +888,15 @@ pub enum ViewMutant {
     /// The roster's element presence and claims go out with the live store's keys where the
     /// pack's addresses belong (`Session::roster`, the roster events).
     RosterKeysLeak,
+    /// A keyed watch's change frame carries none of the units' derived values the change set
+    /// or removed (`derived.units.<unit>.<name>`, from the view index before and after it).
+    FrameMissesUnitDerived,
+    /// The view index kept through a change keeps a unit the change touched as it was before
+    /// (the kit builds it again only when it is new): a field the change wrote is stale.
+    UpdateSkipsTouched,
+    /// The view index kept through a change builds every unit again, touched or not: right,
+    /// but the change costs the whole doc (the kept index's counts catch it).
+    UpdateRebuildsAll,
 }
 
 thread_local! {
@@ -907,31 +916,105 @@ pub fn take_carrier_decodes() -> u64 {
     CARRIER_DECODES.with(|c| c.replace(0))
 }
 
+/// A fault in the 3D placement slot ([`crate::placement`]), so its rows show they catch it
+/// (`tests/view_place.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlaceMutant {
+    /// A unit delta says `place` only when a location moved: a change of rotation or scale
+    /// alone goes out with no `place` and no `placement_after`.
+    PlaceDroppedOnRotation,
+    /// The render hint doesn't name the containers of what is placed through a moved element.
+    NoChainHint,
+    /// An `F32` slot's numbers are printed as their `f64` digits.
+    F32AsF64Digits,
+    /// The kept index asks the pack for every unit's placement on every change.
+    AskEveryUnit,
+    /// A placement relative to nothing is read as relative to its unit's container.
+    NoneIsContainerFrame,
+    /// A chain's missing link (an element not shown or not placed) is taken as identity.
+    MissingLinkIdentity,
+    /// A unit that comes into view (`add`, `restore`) has no `placement_after`.
+    NoPlacementOnAdd,
+    /// A test build doesn't check the placements' chains for a cycle.
+    CycleUnchecked,
+}
+
 thread_local! {
-    /// The carrier pairings the kit made on this thread (K1b, `Pack::pairing`). A count, never
+    static PLACE_MUTANT: std::cell::Cell<Option<PlaceMutant>> = const { std::cell::Cell::new(None) };
+    /// The placements the kit asked a pack for on this thread (`Pack::view_placement`). A count.
+    static PLACEMENT_ASKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The placement fault planted on this thread, if any.
+pub fn place_mutant() -> Option<PlaceMutant> {
+    PLACE_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_place_mutant<R>(mutant: PlaceMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<PlaceMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            PLACE_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(PLACE_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// One placement asked of a pack.
+pub(crate) fn count_placement_ask() {
+    PLACEMENT_ASKS.with(|c| c.set(c.get() + 1));
+}
+
+/// This thread's placements asked of a pack since the last take, reset to 0.
+pub fn take_placement_asks() -> u64 {
+    PLACEMENT_ASKS.with(|c| c.replace(0))
+}
+
+thread_local! {
+    /// The view index's units the kit built from the keyed state on this thread (a whole
+    /// build builds each; a change kept builds the units it touched). A count, never a timing.
+    static VIEW_UNIT_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One unit of a live view index built from the keyed state.
+pub(crate) fn count_view_unit_build() {
+    VIEW_UNIT_BUILDS.with(|c| c.set(c.get() + 1));
+}
+
+/// This thread's view index units built since the last take, reset to 0: a whole build of a
+/// doc of N units builds N; keeping the index through a change builds the units it touched.
+pub fn take_view_unit_builds() -> u64 {
+    VIEW_UNIT_BUILDS.with(|c| c.replace(0))
+}
+
+thread_local! {
+    /// The carrier pairings the kit made on this thread (`Pack::pairing`). A count, never
     /// a timing.
     static PAIRINGS_MADE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    /// The renderings an outside save's held check made on this thread (K1b). A count.
+    /// The renderings an outside save's held check made on this thread. A count.
     static HELD_RENDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// One pairing made by the kit (K1b).
+/// One pairing made by the kit.
 pub(crate) fn count_pairing_made() {
     PAIRINGS_MADE.with(|c| c.set(c.get() + 1));
 }
 
-/// This thread's pairings made since the last take, reset to 0 (K1b): how many times the kit
+/// This thread's pairings made since the last take, reset to 0: how many times the kit
 /// asked a pack for a carrier's pairing.
 pub fn take_pairings_made() -> u64 {
     PAIRINGS_MADE.with(|c| c.replace(0))
 }
 
-/// One rendering made by an outside save's held check (K1b).
+/// One rendering made by an outside save's held check.
 pub(crate) fn count_held_render() {
     HELD_RENDERS.with(|c| c.set(c.get() + 1));
 }
 
-/// This thread's held-check renderings since the last take, reset to 0 (K1b): a keyed doc that
+/// This thread's held-check renderings since the last take, reset to 0: a keyed doc that
 /// isn't a table makes none.
 pub fn take_held_renders() -> u64 {
     HELD_RENDERS.with(|c| c.replace(0))
@@ -956,6 +1039,109 @@ pub fn with_view_mutant<R>(mutant: ViewMutant, f: impl FnOnce() -> R) -> R {
     }
     let _back = Back(VIEW_MUTANT.with(|m| m.replace(Some(mutant))));
     f()
+}
+
+/// A fault in planning a single list insert or delete from the engine's slot index
+/// (`engine/structured.rs`), installed per thread by [`with_list_plan_mutant`], so its rows show
+/// they catch it (`tests/list_plan.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ListPlanMutant {
+    /// A single insert after an anchor, planned from the index, lands one slot after where
+    /// the full read puts it.
+    FastInsertAfterOffByOne,
+}
+
+thread_local! {
+    static LIST_PLAN_MUTANT: std::cell::Cell<Option<ListPlanMutant>> =
+        const { std::cell::Cell::new(None) };
+    /// Whether a single list insert or delete is planned from the engine's slot index (on by
+    /// default, as in a host build); off, every list change is planned by the full read.
+    static LIST_PLAN_FAST: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// The list plan fault planted on this thread, if any.
+pub fn list_plan_mutant() -> Option<ListPlanMutant> {
+    LIST_PLAN_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_list_plan_mutant<R>(mutant: ListPlanMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ListPlanMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            LIST_PLAN_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(LIST_PLAN_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// Whether a single list insert or delete is planned from the slot index on this thread.
+pub fn list_plan_fast() -> bool {
+    LIST_PLAN_FAST.with(|c| c.get())
+}
+
+/// Run `f` with the slot index's plan `on` or off on this thread (off: the full read plans
+/// every list change, the reference the differential row compares with); restored afterwards,
+/// even if `f` unwinds.
+pub fn with_list_plan_fast<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    struct Back(bool);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            LIST_PLAN_FAST.with(|c| c.set(self.0));
+        }
+    }
+    let _back = Back(LIST_PLAN_FAST.with(|c| c.replace(on)));
+    f()
+}
+
+/// A fault in keeping a pack's verb state (`session/live/verb_state.rs`), installed per thread
+/// by [`with_verb_state_mutant`], so its rows show the kept state's checks catch it
+/// (`tests/verb_state.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VerbStateMutant {
+    /// An outside save doesn't run the pack's change hook, but the kept state is marked as in
+    /// step with it: a verb after the save reads the state from before it.
+    OutsideSaveSkipped,
+}
+
+thread_local! {
+    static VERB_STATE_MUTANT: std::cell::Cell<Option<VerbStateMutant>> =
+        const { std::cell::Cell::new(None) };
+    /// The verb states the kit built to keep on this thread (not the checks' fresh builds).
+    /// A count, never a timing.
+    static VERB_STATE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The verb state fault planted on this thread, if any.
+pub fn verb_state_mutant() -> Option<VerbStateMutant> {
+    VERB_STATE_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_verb_state_mutant<R>(mutant: VerbStateMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<VerbStateMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            VERB_STATE_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(VERB_STATE_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// One verb state built to keep.
+pub(crate) fn count_verb_state_build() {
+    VERB_STATE_BUILDS.with(|c| c.set(c.get() + 1));
+}
+
+/// This thread's verb states built to keep since the last take, reset to 0: one per doc the
+/// first time a verb runs on it (and after a change the pack couldn't keep it through); the
+/// checks' fresh builds don't count.
+pub fn take_verb_state_builds() -> u64 {
+    VERB_STATE_BUILDS.with(|c| c.replace(0))
 }
 
 /// A keyed watch's planted fault (`session/live/watch.rs`), installed per thread by

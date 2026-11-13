@@ -75,7 +75,7 @@ client/test/wire.test.ts fake_stacks_undo
 client/test/wire.test.ts fake_stacks_redo
 client/test/wire.test.ts fake_stacks_clear
 
-# v0.10.0.3 (b11f00cc): K-AUD-1 after a restart, the disk replica's write-back (5effd640..57c3562b)
+# v0.10.0.3 (b11f00cc): the sync audit after a restart, the disk replica's write-back (5effd640..57c3562b)
 an_outside_save_then_a_restart_keeps_the_replica_the_docs_text
 a_stale_replica_after_a_restart_is_reported_and_repaired
 # the soak's must-never-fire events include DiskReplicaRepaired (57c3562b)

@@ -1,5 +1,6 @@
 //! Map and MovableList on Yrs: the layout of the CSV seam design §4.1, with the engine
-//! answers E1 (restore is an undelete) and E4 (every register holds its winning write).
+//! answers on restores (restore is an undelete) and registers (every register holds its
+//! winning write).
 //!
 //! For a MovableList root `R` (Kleppmann's list of slots plus an LWW position register):
 //! - `R/slots` (`YArray`): one string `"<slot id>\x1f<key>"` per slot. A slot id is the
@@ -33,6 +34,7 @@ use std::sync::Arc;
 
 use yrs::{Any, Array, ArrayRef, Map, MapRef, Out, ReadTxn, TransactionMut};
 
+use super::slot_index::SlotIndex;
 #[cfg(test)]
 use super::yrs::is_root;
 use super::yrs::{root_array, root_map};
@@ -436,6 +438,48 @@ impl ListPlan {
         })
     }
 
+    /// A plan holding only what a change planned from the slot index writes (no slots read).
+    fn empty() -> Self {
+        Self {
+            arena: Vec::new(),
+            raw: Vec::new(),
+            live: Vec::new(),
+            removed: Vec::new(),
+            cur: HashMap::new(),
+            dead: HashMap::new(),
+            dead_at_start: HashSet::new(),
+            vals: HashMap::new(),
+            dropped: Vec::new(),
+            inserts: Vec::new(),
+            pos_w: Writes::default(),
+            val_w: Writes::default(),
+            dead_w: Writes::default(),
+        }
+    }
+
+    /// The slot index of the list as this plan leaves it (its removals done): the index a
+    /// full read after the change would build. O(slots), in memory.
+    fn index_after(&self) -> SlotIndex {
+        let mut at = vec![u32::MAX; self.arena.len()];
+        let mut slots = Vec::with_capacity(self.raw.len());
+        for &e in &self.raw {
+            if self.removed[e as usize] {
+                continue;
+            }
+            at[e as usize] = slots.len() as u32;
+            slots.push((self.arena[e as usize].clone(), self.live[e as usize]));
+        }
+        let cur = self
+            .cur
+            .iter()
+            .map(|(k, e)| {
+                let e = e.map(|e| at[e as usize]).filter(|&x| x != u32::MAX);
+                (k.clone(), e)
+            })
+            .collect();
+        SlotIndex::of_slots(slots, cur, self.dead.clone())
+    }
+
     fn writes(&self) -> bool {
         !self.inserts.is_empty()
             || !self.dropped.is_empty()
@@ -720,6 +764,172 @@ impl ListRead {
     }
 }
 
+/// Whether a single list insert or delete is planned from the slot index (always, but in a
+/// test thread that switched it off: `differential::with_list_plan_fast`).
+fn fast_on() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    {
+        crate::differential::list_plan_fast()
+    }
+    #[cfg(not(any(test, feature = "differential")))]
+    {
+        true
+    }
+}
+
+/// The planted fault [`crate::differential::ListPlanMutant::FastInsertAfterOffByOne`].
+fn planted_after_off_by_one() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::list_plan_mutant()
+        == Some(crate::differential::ListPlanMutant::FastInsertAfterOffByOne)
+    {
+        return true;
+    }
+    false
+}
+
+/// What a change planned from the slot index does to it once the change is made.
+#[derive(Clone)]
+enum FastOp {
+    /// A new slot at array position `p`.
+    Insert { p: usize, slot: Arc<str>, key: Key },
+    /// `key` deleted (its slot, if any, stops showing it) by `w`.
+    Delete {
+        key: Key,
+        at: Option<u32>,
+        w: WriteId,
+    },
+}
+
+impl FastOp {
+    fn apply(&self, ix: &mut SlotIndex) {
+        match self {
+            FastOp::Insert { p, slot, key } => {
+                let live = !ix.dead.contains_key(key);
+                let x = ix.insert_at(*p, (slot.clone(), key.clone()), live);
+                ix.cur.insert(key.clone(), Some(x));
+            }
+            FastOp::Delete { key, at, w } => {
+                if let Some(x) = at {
+                    ix.set_live(*x, false);
+                }
+                ix.dead.insert(key.clone(), *w);
+            }
+        }
+    }
+}
+
+/// Plan a change of one list root that is a single insert or delete from the root's slot
+/// index: what [`ListPlan::apply`] gives on a full read, in O(log n). The slot index is the
+/// doc as it is (no other op of the change touches this root).
+fn fast_apply<T: ReadTxn>(
+    txn: &T,
+    r: &ListRefs,
+    ix: &SlotIndex,
+    op: &ListOp,
+    w: WriteId,
+) -> Result<(ListApplied, ListPlan, Option<FastOp>), OpRefusalOr> {
+    let key = op.key();
+    let applied = |index_before, index_after, value_before, value_after, effect| ListApplied {
+        kind: op.kind(),
+        key: key.clone(),
+        write: w,
+        index_before,
+        index_after,
+        value_before,
+        value_after,
+        effect,
+    };
+    let slot_of = |k: &Key| -> Result<Option<u32>, OpRefusal> {
+        ix.cur
+            .get(k)
+            .copied()
+            .ok_or_else(|| OpRefusal::UnknownKey(k.to_string()))
+    };
+    let mut plan = ListPlan::empty();
+    match op {
+        ListOp::Insert { at, value, .. } => {
+            if ix.cur.contains_key(key) {
+                return Err(OpRefusal::KeyExists(key.to_string()).into());
+            }
+            let anchor = |k: &Key| -> Result<usize, OpRefusalOr> {
+                match slot_of(k)? {
+                    Some(e) => Ok(ix.rank(e)),
+                    None => Err(OpRefusalOr::Doc(malformed(format!(
+                        "element {k} has no slot"
+                    )))),
+                }
+            };
+            let mut p = match at {
+                Anchor::Start => 0,
+                Anchor::End => ix.len(),
+                Anchor::After(k) => anchor(k)? + 1,
+                Anchor::Before(k) => anchor(k)?,
+            };
+            if matches!(at, Anchor::After(_)) && planted_after_off_by_one() {
+                p = (p + 1).min(ix.len());
+            }
+            let slot = w.encode();
+            plan.inserts
+                .push((p as u32, format!("{slot}{SEP}{}", key.as_str())));
+            plan.pos_w.put(key, slot.clone());
+            if *value != Value::Null {
+                plan.val_w.put(key, enc_reg(&w, value));
+            }
+            let after = ix.live_before(p);
+            let fast = FastOp::Insert {
+                p,
+                slot: Arc::from(slot.as_str()),
+                key: key.clone(),
+            };
+            Ok((
+                applied(
+                    None,
+                    Some(after),
+                    None,
+                    Some(value.clone()),
+                    Effect::Visible,
+                ),
+                plan,
+                Some(fast),
+            ))
+        }
+        ListOp::Delete { .. } => {
+            let e = slot_of(key)?;
+            let v = reg_of(txn, &r.val, key.as_str())?
+                .map(|(_, v)| v)
+                .unwrap_or_default();
+            if let Some(d) = ix.dead.get(key) {
+                let winner = Some(*d);
+                return Ok((
+                    applied(
+                        None,
+                        None,
+                        Some(v.clone()),
+                        Some(v),
+                        Effect::None { winner },
+                    ),
+                    plan,
+                    None,
+                ));
+            }
+            let before = e.filter(|&x| ix.is_live(x)).map(|x| ix.live_rank(x));
+            plan.dead_w.put(key, Some(w.encode()));
+            let fast = FastOp::Delete {
+                key: key.clone(),
+                at: e,
+                w,
+            };
+            Ok((
+                applied(before, None, Some(v.clone()), Some(v), Effect::Visible),
+                plan,
+                Some(fast),
+            ))
+        }
+        _ => unreachable!("only a single insert or delete is planned from the index"),
+    }
+}
+
 /// A refusal of the op, or a doc error found while planning it.
 enum OpRefusalOr {
     Refused(OpRefusal),
@@ -847,11 +1057,41 @@ pub(crate) struct Plan {
     pub applied: Vec<Applied>,
     lists: Vec<(&'static str, ListPlan)>,
     maps: Vec<(&'static str, MapPlan)>,
+    /// The list roots planned from their slot index, with what the change does to it.
+    fast: Vec<(&'static str, Option<FastOp>)>,
 }
 
 impl Plan {
     pub(crate) fn writes(&self) -> bool {
         self.lists.iter().any(|(_, p)| p.writes()) || self.maps.iter().any(|(_, p)| p.writes())
+    }
+
+    /// Keep each list root's slot index in step with this change, once it is made: a root
+    /// planned from its index has the change applied to it (O(log n)); a root the full read
+    /// planned gets the index of the plan's result (O(slots), in memory). A root with no index
+    /// keeps none: it is built on the next change planned from it.
+    pub(crate) fn made(&self, indexes: &mut HashMap<&'static str, SlotIndex>) {
+        for (root, p) in &self.lists {
+            match self.fast.iter().find(|(r, _)| r == root) {
+                Some((_, Some(op))) => {
+                    if let Some(ix) = indexes.get_mut(root) {
+                        op.apply(ix);
+                    }
+                }
+                Some((_, None)) => {}
+                None => {
+                    if let Some(ix) = indexes.get_mut(root) {
+                        prof!("engine.slot_index_after_plan");
+                        *ix = p.index_after();
+                    }
+                }
+            }
+        }
+    }
+
+    /// The list roots this plan writes (their slot indexes are dropped when the change fails).
+    pub(crate) fn list_roots(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.lists.iter().map(|(r, _)| *r)
     }
 
     /// Write the planned change into a replica's transaction (after its text edits).
@@ -877,6 +1117,7 @@ pub(crate) fn plan<T: ReadTxn>(
     txn: &T,
     lists: &HashMap<&'static str, ListRefs>,
     maps: &HashMap<&'static str, MapRef>,
+    indexes: &mut HashMap<&'static str, SlotIndex>,
     client: ClientId,
     change: u64,
     edits: &[Edit],
@@ -885,6 +1126,7 @@ pub(crate) fn plan<T: ReadTxn>(
         applied: Vec::with_capacity(edits.len()),
         lists: Vec::new(),
         maps: Vec::new(),
+        fast: Vec::new(),
     };
     let mut op_no: u32 = 0;
     let mut next = || {
@@ -910,6 +1152,35 @@ pub(crate) fn plan<T: ReadTxn>(
                 let (&name, refs) = lists
                     .get_key_value(root.as_str())
                     .expect("list roots are checked");
+                // a single insert or delete, the change's only op on this root: planned from
+                // the root's slot index (built from a full read the first time)
+                let single = matches!(
+                    ops.as_slice(),
+                    [ListOp::Insert { .. } | ListOp::Delete { .. }]
+                ) && edits
+                    .iter()
+                    .filter(|e| matches!(e, Edit::List { root: r, .. } if r == root))
+                    .count()
+                    == 1;
+                if single && fast_on() {
+                    if !indexes.contains_key(name) {
+                        let full = ListPlan::new(txn, refs)?;
+                        prof!("engine.slot_index_build");
+                        indexes.insert(name, full.index_after());
+                    }
+                    let (done, p, fast) = {
+                        prof!("engine.list_plan_index");
+                        fast_apply(txn, refs, &indexes[name], &ops[0], next())
+                            .map_err(|e| refused(root, 0, e))?
+                    };
+                    out.lists.push((name, p));
+                    out.fast.push((name, fast));
+                    out.applied.push(Applied::List {
+                        root: root.clone(),
+                        ops: vec![done],
+                    });
+                    continue;
+                }
                 let at = match out.lists.iter().position(|(r, _)| *r == name) {
                     Some(i) => i,
                     None => {

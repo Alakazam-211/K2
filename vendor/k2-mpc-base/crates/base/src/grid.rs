@@ -507,7 +507,7 @@ pub(crate) enum CornerError {
     /// A keyed element lies strictly between its element and the cell.
     NotNormal(Axis),
     /// Past the last row or column, or before the first.
-    OutOfBounds(Axis),
+    OutsideSheet(Axis),
 }
 
 impl std::fmt::Display for CornerError {
@@ -523,7 +523,7 @@ impl std::fmt::Display for CornerError {
                 "the corner's {} offset reaches past a keyed element (not in normal form)",
                 a.as_str()
             ),
-            CornerError::OutOfBounds(a) => {
+            CornerError::OutsideSheet(a) => {
                 write!(f, "the corner is outside the sheet's {}", a.as_str())
             }
         }
@@ -651,7 +651,7 @@ impl GridNumbers {
             }
         };
         if n == 0 || n > max {
-            return Err(CornerError::OutOfBounds(axis));
+            return Err(CornerError::OutsideSheet(axis));
         }
         if next.is_some_and(|x| n >= x) {
             return Err(CornerError::NotNormal(axis));
@@ -750,7 +750,7 @@ pub struct ContainerDerived {
 /// and put on the frame with [`crate::session::WatchExtras::grid`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FrameDerived {
-    /// Per unit (by address): per cell field, its new A1 text, `None` when no longer a formula.
+    /// Per unit (by address): per cell field, its new A1 text, `None` when it stopped being a formula.
     pub a1: BTreeMap<String, BTreeMap<String, Option<String>>>,
     /// Per container (by address): its merges and style table, whole, when either changed.
     pub containers: BTreeMap<String, ContainerDerived>,
@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn numbers_and_normal_form() {
-        // rows 1, 3 (gap 1), 4; cols 1, 2
+        // rows 1, 3, 4; cols 1, 2
         let g = GridNumbers::new(
             &SLOT,
             vec![(k("r1"), 0), (k("r2"), 1), (k("r3"), 0)],
@@ -884,7 +884,7 @@ mod tests {
         assert_eq!(g.line(Axis::Rows, Some(&k("r3")), 96), Ok(100));
         assert_eq!(
             g.line(Axis::Rows, Some(&k("r3")), 97),
-            Err(CornerError::OutOfBounds(Axis::Rows))
+            Err(CornerError::OutsideSheet(Axis::Rows))
         );
         assert_eq!(
             g.corner(2, 5),
@@ -894,7 +894,7 @@ mod tests {
         assert_eq!(empty.corner(1, 1), Corner::new(None, 1, None, 1));
         assert_eq!(
             empty.line(Axis::Rows, None, 0),
-            Err(CornerError::OutOfBounds(Axis::Rows))
+            Err(CornerError::OutsideSheet(Axis::Rows))
         );
     }
 }

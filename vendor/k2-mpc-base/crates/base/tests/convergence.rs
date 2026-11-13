@@ -132,7 +132,7 @@ fn run(seed: u64, ticks: u32) {
                 c.inbox.clear(); // in-flight frames to a dropped socket are lost
             } else if !c.online && tick >= c.offline_until {
                 // client's step 2: everything the session lacks (only its own content)
-                let sv = s.state_vector();
+                let sv = s.try_state_vector().unwrap();
                 let mine = c
                     .doc
                     .transact()
@@ -163,7 +163,7 @@ fn run(seed: u64, ticks: u32) {
                     Ok(_) => {}
                     Err(k2_mpc_base::DocError::MissingDeps { .. }) => {
                         // an earlier frame was lost with a drop: the client resyncs, as a real provider does
-                        let sv = s.state_vector();
+                        let sv = s.try_state_vector().unwrap();
                         let mine = cs[i]
                             .doc
                             .transact()
@@ -247,7 +247,7 @@ fn run(seed: u64, ticks: u32) {
 
     // Drain: everyone online, everything delivered, then resync to be sure nothing was lost.
     for c in cs.iter_mut() {
-        let sv = s.state_vector();
+        let sv = s.try_state_vector().unwrap();
         let mine = c
             .doc
             .transact()

@@ -1,5 +1,5 @@
 //! A host-given **turn**: the id of one agent step, which the host passes on every write call
-//! so a view can group a run's changes (rendering-data contract, Item 2, gap 8).
+//! so a view can group a run's changes.
 //!
 //! - **The host's, never the kit's.** The kit never invents one, never reads one from a
 //!   client, and `None` is the default on every call. A host computes it server-side (K2: a

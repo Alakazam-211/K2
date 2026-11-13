@@ -1,6 +1,6 @@
-//! In-crate tests of the grid session (C1c): the lost-edit audit's planted violations
-//! (K-AUD-1, grid form: a dropped cell write, a silent cell overwrite, a row lost in a move),
-//! planted through the live doc (kit-made Yrs updates only) and the store; and KC7 (a write
+//! In-crate tests of the grid session: the lost-edit audit's planted violations
+//! (grid form: a dropped cell write, a silent cell overwrite, a row lost in a move),
+//! planted through the live doc (kit-made Yrs updates only) and the store; and the engine's unidentified writes (a write
 //! with no identity counts as someone else's in the per-facet base check).
 
 use super::*;
@@ -319,7 +319,7 @@ fn audit_catches_an_index_that_lost_an_acknowledged_write() {
     );
 }
 
-/// KC7: on this engine a merged restore or delete carries no writer identity; the base
+/// On this engine a merged restore or delete carries no writer identity; the base
 /// check counts such a write as someone else's, so it is a conflict, never an overwrite,
 /// even when the change was the caller's own.
 #[test]

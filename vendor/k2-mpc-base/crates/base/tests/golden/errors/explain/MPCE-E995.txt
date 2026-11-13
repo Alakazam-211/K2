@@ -1,0 +1,21 @@
+MPCE-E995 merge_not_a_fold (limits)
+exit:     2
+message:  the engine refused the update: a merge in it doesn't fold
+next:     Nothing was applied. From a peer the update is malformed or forged: drop it, and if the peer keeps sending such updates, close it as hostile and resync from the host. (From the host it is MPC-E163: this replica is behind.)
+rule:     the MPCE seam (stable codes)
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E995",
+  "name": "merge_not_a_fold",
+  "area": "limits",
+  "exit": 2,
+  "message": "the engine refused the update: a merge in it doesn't fold",
+  "next": "Nothing was applied. From a peer the update is malformed or forged: drop it, and if the peer keeps sending such updates, close it as hostile and resync from the host. (From the host it is MPC-E163: this replica is behind.)",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

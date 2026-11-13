@@ -1,4 +1,4 @@
-//! Presence on a grid (A10, K-PRES-6, CSV contract §6): carets, views, claims and the last
+//! Presence on a grid (CSV contract §6): carets, views, claims and the last
 //! edit **by element identity**. A child of `live`, so it works on the session's own state.
 //!
 //! - **Positions are keys.** A caret is a cell `(row key, col key)`; a selection, a view, a
@@ -394,7 +394,7 @@ fn touches(
     t.cells.iter().any(|(r, c)| in_rows(r) && in_cols(c))
 }
 
-/// Every grid span that expands with its anchors (A10): the live grid claims, then the grid
+/// Every grid span that expands with its anchors: the live grid claims, then the grid
 /// reservations (a hand-off holds what the claim held, and grows as it would have), as
 /// `(index, is a reservation, (id, holder, span))`. A reservation's id is its ended claim's.
 fn grid_spans(st: &State) -> Vec<(usize, bool, (ClaimId, String, GridSpan))> {
@@ -609,8 +609,8 @@ impl Session {
 
     // ----- the public calls -----
 
-    /// Place `conn`'s caret on a cell, or select the rectangle from `anchor` to `head` (A10,
-    /// `cursor --cell R,C [--to R,C]`): by identity, so it follows moves and sorts and is
+    /// Place `conn`'s caret on a cell, or select the rectangle from `anchor` to `head`
+    /// (`cursor --cell R,C [--to R,C]`): by identity, so it follows moves and sorts and is
     /// dropped when its row or column is deleted. Needs edit. Both cells' rows and columns
     /// must be live ([`SessionError::BadPosition`] otherwise). A grid only.
     pub fn set_cell_cursor(
@@ -830,7 +830,7 @@ impl Session {
         let info = Self::grid_claim_info(&g, &claim, now);
         let actor = claim.actor();
         st.aware.claims.push(claim);
-        // the roster push (K5) tells subscribers, as a line claim's start is told
+        // the roster push tells subscribers, as a line claim's start is told
         st.roster.record(
             RosterEvent::ClaimStarted {
                 who: Who::of(&pid),
@@ -868,7 +868,7 @@ impl Session {
         Ok(info)
     }
 
-    /// Claim `span` (A10, `claim --rows`/`--cols`/`--cells`, or `--lines a,b`) for `ttl_ms`,
+    /// Claim `span` (`claim --rows`/`--cols`/`--cells`, or `--lines a,b`) for `ttl_ms`,
     /// as [`Session::claim`] does for lines: advisory, anchored by key (see the module), it
     /// ends on the claimant's own edit touching it (unless `hold`), on release, time or
     /// leave, and, on a grid, with [`ClaimEnd::Deleted`] once nothing it covers is live. On
@@ -885,7 +885,7 @@ impl Session {
         hold: bool,
     ) -> Result<ClaimInfo> {
         let out = self.claim_span_inner(conn, span, ttl_ms, note, hold);
-        // an App viewer (K5) sees the others by handle
+        // an App viewer sees the others by handle
         self.for_viewer(conn, out, |l, c| l.claim(c))
     }
 
@@ -1043,7 +1043,7 @@ impl Session {
         (claims, reservations)
     }
 
-    /// The claim policy on a structured change by member `i` (A10): under
+    /// The claim policy on a structured change by member `i`: under
     /// [`ClaimPolicy::Respect`], an **agent's** change touching another participant's live
     /// grid claim or element claim, or a reservation of either handed to someone else, is
     /// refused ([`SessionError::Claimed`], [`SessionError::ElemsClaimed`], exit 5) before
@@ -1123,7 +1123,7 @@ impl Session {
     /// it, `None` for an outside edit): claims expand at their ends and end
     /// [`ClaimEnd::Deleted`] when nothing they cover is live; carets on a deleted row or
     /// column, and views and last edits with nothing live, are dropped; the actor's last edit
-    /// is the rows it touched and its caret the last cell it wrote (K-PRES-7).
+    /// is the rows it touched and its caret the last cell it wrote.
     pub(super) fn grid_presence_after(
         &self,
         st: &mut State,
@@ -1445,7 +1445,7 @@ impl Session {
         Some(rows)
     }
 
-    /// [`Session::read_with`] on a grid (CSV contract §3.2, A10): the read verbs see the
+    /// [`Session::read_with`] on a grid (CSV contract §3.2): the read verbs see the
     /// rendered file; the lines they showed become a view of the rows on them, the lines they
     /// looked at get the heads-up notes about those rows, and `--for-edit` takes a short
     /// claim on those rows.

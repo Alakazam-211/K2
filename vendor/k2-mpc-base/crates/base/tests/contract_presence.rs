@@ -1,4 +1,4 @@
-//! The kit side of the rendering-data contract's presence (r1.4, Items 3 and 4; gaps 10, 27 and
+//! The kit side of the presence (r1.4, Items 3 and 4, 27 and
 //! 30) on a deck-shaped keyed doc: `slides` and `shapes` (MovableLists) and `fields` (a Map of
 //! `<shape>\x1f<field>`, composite on `shapes`), whose pack names a shape's slide as its
 //! container (`s259-3` is on `s259`). Public API only.
@@ -259,7 +259,7 @@ fn focus_key(e: &RosterEntry) -> Option<String> {
     e.focus.as_ref().map(|f| format!("{}:{}", f.root, f.key))
 }
 
-// ---------- gap 10: focus ----------
+// ---------- focus ----------
 
 /// Focus needs read (a reader may set it), names a live element of a list root, and leaves when
 /// that element goes. Refusals leave it as it was.
@@ -318,7 +318,7 @@ fn a_watcher_is_refused_focus_and_range() {
         .all(|e| e.participant.pid != "kai"));
 }
 
-// ---------- gap 10: range ----------
+// ---------- range ----------
 
 /// The check behind the range rows: Ada focuses slide 1 (s256), then sets a range in slide 4's
 /// body (s259-3): her focus is slide 4 (contract case A). `Err` says what was wrong.
@@ -476,7 +476,7 @@ fn focus_and_range_reach_the_roster_push() {
     assert_eq!(got, ["focus s259", "range s259-3:0..18", "range -"]);
 }
 
-// ---------- gap 27: claim events, and a claim's start on an agent's presence ----------
+// ---------- claim events, and a claim's start on an agent's presence ----------
 
 fn keys(v: &[&str]) -> Vec<Key> {
     v.iter().map(|x| k(x)).collect()
@@ -670,7 +670,7 @@ fn claim_events_carry_the_actor_and_their_times() {
     );
 }
 
-// ---------- gap 30: the watcher count ----------
+// ---------- the watcher count ----------
 
 /// The presence stream's `watching {count}` (contract GOLD case H): Kai joins past the cap, so
 /// the count goes to 1 with no row, no `Joined` and no presence for him; Kai leaves, so it goes

@@ -1,5 +1,5 @@
 # Does the oracle ever panic WITHOUT a mutant (v0.9.3, after `window.rs`'s shared-edge
-# assertion fired under mutant iv in a G1 walk)? 1M random walks at the literal G1 bound, then
+# assertion fired under mutant iv in a walk at the full bound)? 1M random walks at the full bound, then
 # 1M with one restart, the oracle of record; then mutant iv on walks, which must now end
 # promptly (a panic counts as `panic@<depth>`, exit 1). Read each SUMMARY's violations=[...]
 # and panic="...". `sh tools/undo/job.sh enum tools/undo/oracle-panics.sh` in a --repo job; about 20-40 min.

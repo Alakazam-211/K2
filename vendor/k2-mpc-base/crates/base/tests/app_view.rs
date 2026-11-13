@@ -1,4 +1,4 @@
-//! Opaque handles for App viewers (K5): a viewer whose participant kind is `App` never sees a
+//! Opaque handles for App viewers: a viewer whose participant kind is `App` never sees a
 //! pid. Its whole stream (the roster and its push, change events, read, blame, the log,
 //! claims, reservations, activity, heads-up notes, approvals, refusals and their error
 //! reports, the hunk channel's `edit_at_base` and `events_since`, `run_tool`'s output (its
@@ -6,10 +6,10 @@
 //! roster, leases, reads, versions, the log, blame, approvals, and lease refusals) is
 //! scanned for every pid in the doc, its own included; any one found fails. Handles are per
 //! viewer, stable across its reconnects, and independent between viewers. On a grid doc
-//! (C1) the same holds for the grid verbs' output through `run_tool` (`cell get --json`'s
+//! the same holds for the grid verbs' output through `run_tool` (`cell get --json`'s
 //! author, a deleted element's "by" line, a `--for-edit` claim or conflict, the fence, hidden
 //! writes and refusals), grid blame and `write --base` by key. No absolute path
-//! reaches a viewer either (K7): a file session's disk error is shown relative to its
+//! reaches a viewer either: a file session's disk error is shown relative to its
 //! workspace. Public API only.
 
 use std::collections::HashMap;
@@ -454,7 +454,7 @@ fn an_app_viewer_of_a_blob_doc_sees_no_pid() {
     assert!(plain.0.contains(HELPER), "{}", plain.0);
 }
 
-/// K7 (v0.9.8): no absolute path reaches a viewer. A file session whose write-back fails
+/// Paths made safe to show (v0.9.8): no absolute path reaches a viewer. A file session whose write-back fails
 /// (the file's name is so long that the write's temp file can't be named, which fails for
 /// every user) refuses the App's `flush` with a disk error that names the file relative to
 /// the workspace: the workspace's absolute path appears nowhere in the refusal, its message,
@@ -525,7 +525,7 @@ fn no_absolute_path_reaches_an_app_viewer() {
     seen.assert_no_pid();
 }
 
-// ---------- a grid doc (C1) ----------
+// ---------- a grid doc ----------
 
 /// An App viewer of a grid doc: every grid verb whose output can name a participant, run by
 /// the viewer through `run_tool`, plus grid blame and `write --base` by key, holds no pid

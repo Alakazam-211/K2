@@ -1,0 +1,21 @@
+MPCE-E1000 own_line_parents (sessions and edits)
+exit:     2
+message:  the engine refused the change: it names more than one parent on one agent's line
+next:     Nothing changed. Name only the latest parent on each agent's line. At a load, the store holds a run no released writer makes: restore the document from another copy.
+rule:     the MPCE seam (stable codes)
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E1000",
+  "name": "own_line_parents",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "the engine refused the change: it names more than one parent on one agent's line",
+  "next": "Nothing changed. Name only the latest parent on each agent's line. At a load, the store holds a run no released writer makes: restore the document from another copy.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

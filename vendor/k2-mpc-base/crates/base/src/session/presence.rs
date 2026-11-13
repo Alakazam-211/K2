@@ -27,7 +27,7 @@ pub(crate) struct Presence {
     /// Latest caret move (text) or other sign of editing intent.
     pub last_cursor_ms: Option<u64>,
     pub hidden_since_ms: Option<u64>,
-    /// Joined past [`Config::participants_max`] (K11): read-only, no presence detail, counted
+    /// Joined past [`Config::participants_max`]: read-only, no presence detail, counted
     /// in the roster only as `watching`.
     pub watcher: bool,
 }

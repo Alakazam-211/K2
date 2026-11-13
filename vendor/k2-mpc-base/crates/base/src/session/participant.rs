@@ -163,7 +163,7 @@ pub struct CursorAt {
     pub head: LineCol,
 }
 
-/// A caret or selection on a grid, by identity (A10, K-PRES-6): the anchor and head cells
+/// A caret or selection on a grid, by identity: the anchor and head cells
 /// `(row key, column key)`, equal for a caret. A selection is the rectangle between them:
 /// the rows (and columns) between the two keys in the current order. It follows moves and
 /// sorts with no transform; when its row or column is deleted it is dropped.
@@ -217,7 +217,7 @@ pub const ELEM_SELECTION_MAX: usize = 256;
 /// mapping, and a key whose element stops being live leaves it
 /// ([`super::Session::set_selection`]).
 ///
-/// `addresses` are the same elements by address ([`super::Pack::address_of`], contract gap 2),
+/// `addresses` are the same elements by address ([`super::Pack::address_of`]),
 /// in the same order: what the wire carries as the selection's `keys`. The kit fills them on
 /// every selection it hands out (the roster, its events, the setters' replies); [`Self::new`]
 /// starts them as the keys themselves (a pack's default addresses).
@@ -247,13 +247,13 @@ impl ElemSelection {
     }
 }
 
-/// The container a connection has in view (rendering-data contract Item 3, `focus`): an
+/// The container a connection has in view (`focus`): an
 /// element of a MovableList root, by key (a slide of a deck's `slides`). Set by the host for a
 /// person ([`super::Session::set_focus`]), and by the kit for an agent when it takes a claim
 /// ([`super::Session::claim_elems`]); a text range sets it too
 /// ([`super::Session::set_range`]). It leaves when its element stops being live.
 ///
-/// The key is the live store's own. The wire carries addresses (`@sld:256`, contract gap 2):
+/// The key is the live store's own. The wire carries addresses (`@sld:256`):
 /// [`super::Session::set_focus_at`] takes one and returns the focus by address, and
 /// [`super::Session::address_of`] converts a stored focus ([`super::Pack::address_of`]).
 /// `address` is the element's address, what the wire carries as the focus's `key`: the kit
@@ -284,7 +284,7 @@ impl ElemFocus {
     }
 }
 
-/// A caret or a selection inside one element's text field (rendering-data contract Item 3,
+/// A caret or a selection inside one element's text field (a
 /// `range`): `field` of element `key` of the MovableList root `root`, whose text is the string
 /// value of the [composite](super::Pack::composite) map key `<key>\x1f<field>`. `anchor` stays
 /// put while `head` moves (equal for a bare caret), in **UTF-8 bytes** of that text (a client
@@ -432,7 +432,7 @@ pub struct RosterEntry {
     pub away: bool,
     /// The most active connection's caret that has one (a text doc).
     pub cursor: Option<CursorAt>,
-    /// On a grid: the most active connection's cell caret or selection that has one (A10).
+    /// On a grid: the most active connection's cell caret or selection that has one.
     pub cell: Option<CellCursor>,
     /// The range they are looking at (readers' "viewing highlight"), from the most active
     /// connection that has one.

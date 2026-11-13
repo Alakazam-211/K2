@@ -8,7 +8,7 @@ use crate::blob::BlobError;
 use crate::doc::DocError;
 use crate::index::IndexJobError;
 use crate::session::{
-    ConflictKind, ConflictRegion, Declined, Need, PackError, SessionError, UndoOutcome,
+    ConflictKind, ConflictRegion, Declined, KeyedLimit, Need, PackError, SessionError, UndoOutcome,
     WriteOutcome,
 };
 use crate::store::StoreError;
@@ -219,12 +219,22 @@ impl Refusal for SessionError {
             S::KeySpaceFull { prefix, tag } => rep(&r::KEY_SPACE_FULL, msg)
                 .with("prefix", prefix)
                 .with("tag", tag),
+            S::KeyedAtLimit {
+                limit,
+                would_be,
+                from,
+            } => rep(&r::KEYED_AT_LIMIT, msg)
+                .with("what", "elements and fields")
+                .with("limit", *limit)
+                .with("would_be", *would_be)
+                .with("limit_source", from.as_str()),
             S::AtLimit {
                 what,
                 limit,
                 would_be,
             } => rep(
-                // a keyed doc that isn't a table has its own row (its limit, its next step)
+                // a keyed doc that isn't a table has its own row (its limit, its next step);
+                // the kit refuses it with `KeyedAtLimit`, a host's own `AtLimit` lands here
                 if *what == "elements and fields" {
                     &r::KEYED_AT_LIMIT
                 } else {
@@ -302,7 +312,15 @@ fn declined(d: &Declined, msg: String) -> ErrorReport {
         "hard_linked" => &r::DECLINED_HARD_LINKED,
         _ => &r::DECLINED_PACK,
     };
-    rep(entry, msg).with("code", d.code)
+    let report = rep(entry, msg).with("code", d.code);
+    // the kit's own `live_too_large` names the limit that applied and where it came from, in
+    // its fixed wording (`KeyedLimit::phrase`), read back here
+    match KeyedLimit::from_decline(&d.message) {
+        Some(k) if d.code == "live_too_large" => report
+            .with("limit", k.limit)
+            .with("limit_source", k.source.as_str()),
+        _ => report,
+    }
 }
 
 fn store(e: &StoreError, msg: String) -> ErrorReport {
@@ -408,6 +426,9 @@ fn doc(e: &DocError, msg: String) -> ErrorReport {
             .with("wanted", format!("{wanted:?}"))
             .with("actual", format!("{actual:?}")),
         D::Unsupported(k) => rep(&r::UNSUPPORTED_KIND, msg).with("kind", format!("{k:?}")),
+        D::RootKindNotNative { root, kind } => rep(&r::ROOT_KIND_NOT_NATIVE, msg)
+            .with("root", root)
+            .with("kind", format!("{kind:?}")),
         D::Hunk(h) => {
             let (why, index) = match h {
                 HunkError::Order { index } => ("order", index),
@@ -428,6 +449,11 @@ fn doc(e: &DocError, msg: String) -> ErrorReport {
             .with("op", *index)
             .with("problem", op_refusal_word(refusal)),
         D::Malformed(_) => rep(&r::MALFORMED_DOC, msg),
+        D::ReplicaLagging => rep(&r::REPLICA_LAGGING, msg),
+        D::VectorNeedsParts { entries } => {
+            rep(&r::VECTOR_NEEDS_PARTS, msg).with("entries", *entries)
+        }
+        D::NeedsStateTransfer => rep(&r::NEEDS_STATE_TRANSFER, msg),
     }
 }
 
@@ -562,7 +588,7 @@ fn regions(cs: &[ConflictRegion]) -> Value {
                     ("ours", Value::from(&c.ours)),
                     ("theirs", Value::from(&c.theirs)),
                 ];
-                // a structured doc's element (C1): its key and why it conflicts
+                // a structured doc's element: its key and why it conflicts
                 if let Some(k) = &c.key {
                     o.push(("key", Value::from(k)));
                 }

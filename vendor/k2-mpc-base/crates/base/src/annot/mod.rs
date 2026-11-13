@@ -1,4 +1,4 @@
-//! **Annotations** (slice A4): comment threads pinned to anchors, per doc
+//! **Annotations**: comment threads pinned to anchors, per doc
 //! (`docs/SESSIONS.md`, "Annotations").
 //!
 //! One generic table set, keyed by doc and thread, so any doc kind can carry comments: the

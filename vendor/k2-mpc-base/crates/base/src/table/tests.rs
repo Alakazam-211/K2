@@ -1,7 +1,7 @@
 //! Unit tests of the table module: the model and render rules, the plain applier, the grid
-//! ops (K-CSV-10's `sort_is_forward_chain`, `block_move_is_forward_chain`,
+//! ops (the `sort_is_forward_chain`, `block_move_is_forward_chain`,
 //! `clear_is_set_empty`), the hidden-cell-writes report, the aligner, and one test per
-//! `merge3` rule (K-BR-3's `table::merge3_*`) with the report's exact shape.
+//! `merge3` rule (the `table::merge3_*`) with the report's exact shape.
 
 use super::*;
 use crate::elem::{chain, Effect, MapApplied};
@@ -206,7 +206,7 @@ fn the_header_renders_by_the_same_rule() {
     assert_eq!(values(&t.render()), vals(&[&["a", "b"], &["1", "2"]]));
 }
 
-/// C1k (request 4): the header line is written only when the header is on and the table has
+/// The header line is written only when the header is on and the table has
 /// a live row or a name on a live column, as the codec writes it.
 #[test]
 fn the_header_line_is_written_only_with_a_row_or_a_name() {
@@ -238,7 +238,7 @@ fn the_header_line_is_written_only_with_a_row_or_a_name() {
     assert!(!v.header_renders() && v.render().is_empty());
 }
 
-/// C1k (request 4): a lone blank line is no header, at an import and at an outside save (the
+/// A lone blank line is no header, at an import and at an outside save (the
 /// codec reads it so): header off, one blank row.
 #[test]
 fn a_lone_blank_line_is_no_header() {
@@ -309,7 +309,7 @@ fn nl_lines_bridge_the_two_counts() {
     assert_eq!(NlLines::of("a\rb\n\nc\n").rendered(1, 2), (1, 3));
 }
 
-/// C1k (request 6): a codec's own line is the preamble's, no row's and no header's.
+/// A codec's own line is the preamble's, no row's and no header's.
 #[test]
 fn a_preamble_line_belongs_to_no_row() {
     let t = table(&[&["h"], &["one"]], true, Shape::Rect);
@@ -611,7 +611,7 @@ fn insert_restore_rename_header() {
     assert_eq!(t.set_header(true).unwrap(), vec![]);
 }
 
-/// C1k (request 3): the header switch never changes the rendering, as the codec's rule.
+/// The header switch never changes the rendering, as the codec's rule.
 #[test]
 fn the_header_switch_follows_the_codec_rule() {
     // off → on refused where the only live row is blank; nothing applied
@@ -1153,7 +1153,7 @@ fn merge3_other_elements_both_apply() {
     );
 }
 
-/// The report's exact shape (K-BR-8): rule, region by key, base/ours/theirs, theirs' writes.
+/// The report's exact shape: rule, region by key, base/ours/theirs, theirs' writes.
 #[test]
 fn merge3_report_shape() {
     let b = base();
@@ -1253,7 +1253,7 @@ fn merge3_of_a_reconciled_rewrite() {
     );
 }
 
-// ---------- C1c: places of deleted rows, drop-deleted ----------
+// ---------- places of deleted rows, drop-deleted ----------
 
 /// A doc holding `t`'s import, as a session would.
 fn doc_of(rows: &[&[&str]], header: bool) -> (crate::doc::Doc, Table) {
@@ -1317,7 +1317,7 @@ fn drop_deleted_frees_rows_cols_and_their_cells() {
     assert!(t.clone().drop_deleted().unwrap().is_empty(), "idempotent");
 }
 
-// ---------- C1d part 2: a move and an edit in one save ----------
+// ---------- a move and an edit in one save ----------
 
 #[test]
 fn reconcile_one_save_moving_a_row_and_editing_another_keeps_both_keys() {
@@ -1352,7 +1352,7 @@ fn reconcile_ambiguity_rule() {
     assert_eq!(keys(&r.deleted_rows), "r2");
 }
 
-// ---------- C1k: a row in its unchanged slot keeps its key by position ----------
+// ---------- a row in its unchanged slot keeps its key by position ----------
 
 #[test]
 fn reconcile_pairs_rows_in_an_unchanged_slot_by_position() {

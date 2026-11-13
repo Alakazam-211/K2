@@ -332,7 +332,7 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> (Merged, Rules) {
     (m, rules)
 }
 
-/// The conflict regions of a refused `write --base` (K-BR-2: "conflict, nothing applied,
+/// The conflict regions of a refused `write --base` ("conflict, nothing applied,
 /// with regions and line numbers"), the oracle's own, read off [`merge3`]'s own sides and
 /// pairs: every pair of hunks that conflicts (O1, O2, O5) joins the two hunks, a chain of
 /// such pairs is one region, and regions whose ranges on the base overlap or touch join into

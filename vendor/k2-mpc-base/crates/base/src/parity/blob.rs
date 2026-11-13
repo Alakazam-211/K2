@@ -1,4 +1,4 @@
-//! The parity harness for tier 0 (any file, K-PAR-3): the same check as [`super::check`],
+//! The parity harness for tier 0 (any file): the same check as [`super::check`],
 //! on blob docs. Each case runs the **person path** (a tab: the [`BlobSession`] API
 //! directly) and the **agent path** (registered verbs only, through a reference binding)
 //! on two identical blob docs, then compares the file, the versions, the lease, the actor's

@@ -1,4 +1,4 @@
-//! The ID table (K-ID-13): every ID or address kind a verb takes or prints, as data, with its
+//! The ID table: every ID or address kind a verb takes or prints, as data, with its
 //! durability class, its scope and the verbs that accept it.
 //!
 //! An address is **(scope, id)**: `r17` names a row of one table, `v12` a version of one
@@ -12,7 +12,7 @@
 //!   `w14:paraId`...), in the same form.
 //! - [`markdown`] renders a table; [`kit_markdown`] is the kit's `docs/IDS.md` (a test holds
 //!   the committed file to it); [`check`] checks a table against a verb registry.
-//! - `churn` (feature `test-support`): the ID-churn judge (K-COD-10), a harness a pack's
+//! - `churn` (feature `test-support`): the ID-churn judge, a harness a pack's
 //!   tests run over its corpus.
 //!
 //! Plain data, K2-agnostic: no host, route or CLI name appears here.
@@ -425,8 +425,8 @@ pub fn kit_markdown() -> String {
         "# IDs and addresses\n\n\
          <!-- Generated from crates/base/src/ids/mod.rs by `ids::kit_markdown()`; don't edit \
          by hand. Regenerate: MPC_BLESS=1 cargo test -p k2-mpc-base --test ids. -->\n\n\
-         Every ID or address kind the kit's verbs take or print, as data (`ids::KIT`, \
-         K-ID-13). An address is **(scope, id)**: an ID means something only inside its \
+         Every ID or address kind the kit's verbs take or print, as data (`ids::KIT`). \
+         An address is **(scope, id)**: an ID means something only inside its \
          scope (`r17` is a row of one table, `v12` a version of one doc).\n\n\
          ## Classes\n\n\
          Each kind has one class (P1), listed most durable first:\n\n",
@@ -446,7 +446,7 @@ pub fn kit_markdown() -> String {
          in the same form, and generates its own `docs/IDS.md` from them with `ids::markdown`; \
          `ids::check` holds the rows to its verb registry. A pack lists only its own kinds: \
          the kit's apply to every pack of their tier.\n\n\
-         **The ID-churn judge** (K-COD-10; `ids::churn::judge`, feature `test-support`): over \
+         **The ID-churn judge** (`ids::churn::judge`, feature `test-support`): over \
          a pack's corpus, a no-op save (decode, encode, read back) must give the file's bytes \
          back and keep every ID, and each one-unit edit (a verb's edits written back, or an \
          outside save read back) must keep the ID of every object it doesn't touch. It is a \

@@ -1,5 +1,4 @@
-//! Person-writer reuse's costs and savings (`Config::reuse_person_writers`;
-//! `docs/design/person-writer-reuse-r0.md` §6, the ruling on Q4), measured, each printing
+//! Person-writer reuse's costs and savings (`Config::reuse_person_writers`), measured, each printing
 //! `MEASURE` lines. Ignored: run on a compute node, release,
 //! `--ignored --nocapture --test-threads 1` (with `--features native` for the native column).
 //!

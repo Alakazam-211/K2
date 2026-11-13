@@ -1,4 +1,4 @@
-# Timers overhead gate (E-PERF-29, K-PERF-14)
+# Timers overhead gate
 
 **Status: GREEN under the rule fixed in advance, with the limits stated in "The limits of this result" below.** That gate covers timers off. The timers-on figure is the separate run below, which has limits of its own and no pass or fail.
 

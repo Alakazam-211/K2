@@ -1041,7 +1041,7 @@ impl Session {
     /// [`Config::note_repeat_ms`], at most one batch per reader per
     /// [`Config::note_interval_ms`], at most [`Config::note_batch_max`] per batch.
     ///
-    /// For member `i`; an App reader (K5) sees the others by handle.
+    /// For member `i`; an App reader sees the others by handle.
     pub(super) fn batch_notes(&self, st: &mut State, i: usize, raw: Vec<Note>, now: u64) -> Notes {
         let reader = st.members[i].p.pid.clone();
         // notes waiting for this reader (a change overrode its value) always come
@@ -1056,7 +1056,7 @@ impl Session {
         out
     }
 
-    /// `notes` as member `i` sees them: an App viewer (K5) by handle, anyone else unchanged.
+    /// `notes` as member `i` sees them: an App viewer by handle, anyone else unchanged.
     fn notes_as_seen(st: &mut State, i: usize, notes: Vec<Note>) -> Vec<Note> {
         match Self::app_viewer(st, i) {
             Some(v) => {

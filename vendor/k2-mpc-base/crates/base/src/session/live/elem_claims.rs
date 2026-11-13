@@ -151,7 +151,7 @@ impl Session {
         hold: bool,
     ) -> Result<ClaimInfo> {
         let out = self.claim_elems_inner(conn, root, keys, ttl_ms, note, hold);
-        // an App viewer (K5) sees the others by handle
+        // an App viewer sees the others by handle
         self.for_viewer(conn, out, |l, c| l.claim(c))
     }
 
@@ -341,7 +341,7 @@ impl Session {
         Ok(info)
     }
 
-    /// An agent's presence on taking a claim on elements (rendering-data contract Item 3, Q19):
+    /// An agent's presence on taking a claim on elements (Q19):
     /// its **selection is replaced** by the claimed keys (in the order given, a repeat once),
     /// and its **focus** goes to the claim's first container in document order (each key's
     /// container by [`Pack::container_of`]; the earliest by its position in its list). Later

@@ -1,4 +1,4 @@
-//! The injection-safe fence for read verbs (PRD §9.6, K-SEC-8).
+//! The injection-safe fence for read verbs.
 //!
 //! stdout stays the content, byte-exact. The fence goes to stderr around it:
 //!

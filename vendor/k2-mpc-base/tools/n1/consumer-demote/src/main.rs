@@ -6,11 +6,15 @@
 //!   byte, and the current one as `expect.txt` lists them (never a misreading: a demoted doc is
 //!   a plain tier-0 doc to it, without its live log); a text open is refused `PackMismatch`
 //!   (`stored: "kit:blob"`); a purge and an erasure are refused before anything changes
-//!   (`NewerData`, the table named); it writes a version to `model.ifc` and deletes `gone.ifc`
-//!   (its live-log rows left for this repo's next open to sweep).
+//!   (`NewerData`, the table named) by a release before v0.17.0, and done by v0.17.0 and later,
+//!   which know the table (`K2MB_N1_PREV`, the previous release's crate version, which `n1.sh`
+//!   reads from its manifest); it writes a version to `model.ifc` and deletes `gone.ifc` (its
+//!   live-log rows left for this repo's next open to sweep, or taken with it by a release that
+//!   knows them).
 //! - `produce <dir>`: it writes `<dir>/rev`, a text doc `model.ifc` with a change the file
-//!   never got (made without the file, as after a crash) and then an outside save, for this
-//!   repo's `n1_demote_prev_store` to demote. `live.txt` holds its live state.
+//!   never got (made without the file, as when a process stops before its write-back) and then
+//!   an outside save, for this repo's `n1_demote_prev_store` to demote. `live.txt` holds its
+//!   live state.
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
@@ -89,6 +93,17 @@ fn person(pid: &str) -> Participant {
     Participant::new(pid, pid, "#123456", ParticipantKind::Person, "tab")
 }
 
+/// Whether this build knows the demotion's table (`demoted_changes`): its crate version,
+/// `K2MB_N1_PREV`, is v0.17.0 or later. Unset: a build before it.
+fn knows_demoted() -> bool {
+    let Ok(v) = std::env::var("K2MB_N1_PREV") else {
+        return false;
+    };
+    let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+    assert_eq!(n.len(), 3, "K2MB_N1_PREV={v:?}: not MAJOR.MINOR.PATCH");
+    (n[0], n[1], n[2]) >= (0, 17, 0)
+}
+
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -141,15 +156,20 @@ fn read(dir: &Path) {
             other => panic!("{name}: a text open: {:?}", other.map(|_| ())),
         }
         if name == "model.ifc" {
-            let refused = |r: Result<(), SessionError>, what: &str| match r {
-                Err(SessionError::Store(StoreError::NewerData { table })) => {
+            // a release that knows `demoted_changes` purges and erases (the erasure renames
+            // agent-a in the live log: the current build's `n1_demote_after` checks it); an
+            // older one refuses both before anything changes
+            let knows = knows_demoted();
+            let outcome = |r: Result<(), SessionError>, what: &str| match r {
+                Ok(()) if knows => println!("{name}: {what} ok (this release knows the table)"),
+                Err(SessionError::Store(StoreError::NewerData { table })) if !knows => {
                     assert_eq!(table, "demoted_changes", "{what}");
                     println!("{name}: {what} refused (NewerData {table})");
                 }
-                other => panic!("{name}: {what}: {other:?}"),
+                other => panic!("{name}: {what} (knows demoted_changes: {knows}): {other:?}"),
             };
-            refused(b.purge(c, None).map(|_| ()), "purge");
-            refused(
+            outcome(b.purge(c, None).map(|_| ()), "purge");
+            outcome(
                 b.erase_participant(c, "agent-a", "erased-1").map(|_| ()),
                 "erasure",
             );
@@ -233,7 +253,7 @@ fn produce(dir: &Path) {
         .conn;
     write(&t, a, &with_door);
     drop(t);
-    assert!(mgr.close(&key(name), "crash").unwrap());
+    assert!(mgr.close(&key(name), "stopped").unwrap());
     assert_eq!(fs::read(&path).unwrap(), with_3.as_bytes());
     mgr.release().unwrap();
     h.now.fetch_add(5_000, Ordering::SeqCst);

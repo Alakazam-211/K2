@@ -170,7 +170,7 @@ fn ev(op: AnnotOp, by: &Attribution) -> AnnotEvent {
     }
 }
 
-// ----- what an App viewer sees (K5): pids become its handles -----
+// ----- what an App viewer sees: pids become its handles -----
 
 fn lens_attr(l: &mut super::super::handles::Lens<'_>, mut a: Attribution) -> Attribution {
     a.pid = l.pid(&a.pid);
@@ -704,7 +704,7 @@ impl BlobSession {
 
     /// **Re-anchor** thread `t` to `to` (a node, or the whole doc): the only call that
     /// changes where a thread points. A [`ParticipantKind::Person`]'s applies (the history
-    /// row records who confirmed it, K-ANN-9) and lifts a purge's hold on the anchor's
+    /// row records who confirmed it) and lifts a purge's hold on the anchor's
     /// records; anyone else's (an agent's) is recorded as [`Thread::pending_anchor`], shown as
     /// a proposal, and changes nothing until a person re-anchors to it. Needs comment (and
     /// history for a node of an older version).
@@ -906,7 +906,7 @@ impl BlobSession {
             .annot_events(self.doc_id, t, since, limit.clamp(1, ANNOT_LOG_MAX))?)
     }
 
-    /// **Purge annotations** (owner, K-PURGE-3): clear what `what` names, then rewrite the
+    /// **Purge annotations** (owner): clear what `what` names, then rewrite the
     /// store file, so no byte is left. Bodies, and with [`AnnotPurge::Thread`],
     /// [`AnnotPurge::Text`] and [`AnnotPurge::All`] the anchors' copies of node names and
     /// hints (those anchors then read `Suspect(HintsPurged)` while their key is found, and get
@@ -973,7 +973,7 @@ impl BlobSession {
         PurgeOutcome::of_blobs(counts, not_reached, rewrite)
     }
 
-    /// **Participant erasure** on a blob doc (owner, K-PURGE-7): `pid` becomes `pseudonym` in
+    /// **Participant erasure** on a blob doc (owner): `pid` becomes `pseudonym` in
     /// every attribution the doc holds (its versions and approvals, and every thread,
     /// comment, history row and mention), the bodies the erased participant wrote, or an agent
     /// wrote on their behalf, are cleared, their connections are removed (`Left { Kicked }`),

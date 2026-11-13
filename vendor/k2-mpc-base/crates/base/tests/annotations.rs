@@ -1,4 +1,4 @@
-//! Comment threads on blob docs (slices A3 and A4): anchors' states across versions, rights,
+//! Comment threads on blob docs: anchors' states across versions, rights,
 //! attribution and history, events, caps, App handles, and everything purge and erasure must
 //! reach (the byte scan). The file-type side is the structure index's stand-in pack
 //! ([`index_pack`]). Each test runs under the mutant `MPC_ANNOT_MUTANT` names, when set.

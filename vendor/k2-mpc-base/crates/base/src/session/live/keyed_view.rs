@@ -183,7 +183,7 @@ impl Session {
         Ok(state)
     }
 
-    /// Whether an agent's change of `edits` can cut a version before it (K-HIST-4 for lists:
+    /// Whether an agent's change of `edits` can cut a version before it (for lists:
     /// more elements touched than `Config::agent_version_elems`, or more than
     /// `Config::agent_version_percent` of the live elements). A change touches at most one
     /// element per list op, so a keyed doc's live view (its lists' lengths, O(roots)) tells
@@ -265,6 +265,8 @@ impl Session {
         st.live_view = None;
         // the view index built from it goes with it (values may be erased)
         st.view_cache = None;
+        // and the pack's verb state kept with it
+        st.verb_state = None;
         st.undo_journal.clear();
         st.journal_bytes = 0;
         let now = st.version;
@@ -291,6 +293,7 @@ impl Session {
         after: Seq,
         stream: &[ElemApplied],
         texts: &[&str],
+        from: verb_state::ChangeFrom,
     ) {
         if !self.keeps_view() {
             return;
@@ -300,7 +303,12 @@ impl Session {
             .is_err()
         {
             Self::drop_live_view(st);
+            return;
         }
+        // the kept view index learns what the change touched, to be kept through it
+        self.view_index_after(st, before, after, stream);
+        // the pack's verb state is kept through it now: no verb reads it behind the doc
+        self.verb_state_after(st, before, after, stream, from);
     }
 
     fn view_after_inner(

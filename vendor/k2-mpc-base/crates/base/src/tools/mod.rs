@@ -438,7 +438,7 @@ impl EditOutput {
 /// bounded, no I/O, never calling back into the kit.
 pub type PackEdit = Box<dyn FnOnce(&str, &str, &[u8]) -> Result<EditOutput, ToolError>>;
 
-/// What a pack's structured verb computed (A9): the edits to apply by key (one change; empty:
+/// What a pack's structured verb computed: the edits to apply by key (one change; empty:
 /// nothing applies), its stdout, and its exit code (0, 1 for the verb's "no", 4 for an
 /// element it can't find...). A structured **read** verb returns no edits.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -485,7 +485,7 @@ impl StructOutput {
     }
 }
 
-/// What a structured verb computes on (A9): the doc as a [`crate::session::View`], its
+/// What a structured verb computes on: the doc as a [`crate::session::View`], its
 /// stdin, and the pack's codec for the two things the kit never does itself: decoding a
 /// block of records in the doc's dialect ([`VerbCtx::decode_block`]) and mapping rendered
 /// lines to rows ([`VerbCtx::line_map`], `L42`).
@@ -496,7 +496,7 @@ pub struct VerbCtx<'a> {
     codec: &'a [u8],
     hist: Option<&'a dyn VerbHistory>,
     /// The version positional addresses (`#N`, `LN`) count in, when it isn't the live one: an
-    /// edit's `--base` (K-ADDR-3, R-1).
+    /// edit's `--base` (R-1).
     at: Option<&'a crate::session::View>,
 }
 
@@ -516,6 +516,11 @@ pub(crate) trait VerbHistory {
         key: &str,
         facet: crate::elem::Facet,
     ) -> Option<crate::session::ElemBlame>;
+    /// The pack's verb state at [`VerbHistory::version`], when the pack keeps one for this doc
+    /// ([`crate::session::Pack::verb_state_build`]).
+    fn verb_state(&self) -> Option<&(dyn crate::session::VerbState + 'static)> {
+        None
+    }
 }
 
 impl<'a> VerbCtx<'a> {
@@ -540,7 +545,7 @@ impl<'a> VerbCtx<'a> {
         self.at = Some(at);
         self
     }
-    /// The doc as positional addresses (`#N`, `LN`) count in it (K-ADDR-3): an edit's `--base`
+    /// The doc as positional addresses (`#N`, `LN`) count in it: an edit's `--base`
     /// version, else the live doc ([`VerbCtx::view`]). A key or a name always resolves live.
     pub fn positions_view(&self) -> &'a crate::session::View {
         self.at.unwrap_or(self.view)
@@ -591,6 +596,17 @@ impl<'a> VerbCtx<'a> {
     ) -> Option<crate::session::ElemBlame> {
         self.hist.and_then(|h| h.last_write(root, key, facet))
     }
+    /// The pack's **verb state** for this doc as its type `T`
+    /// ([`crate::session::Pack::verb_state_build`]): kept by the kit beside a live keyed doc
+    /// that isn't a table, in step with every change, at the version the verb runs on. A
+    /// read-only borrow for the call. `None` when the pack keeps none (or none of type `T`),
+    /// for a table, and outside a session call: a verb then computes what it needs from
+    /// [`VerbCtx::view`].
+    pub fn verb_state<T: crate::session::VerbState>(&self) -> Option<&'a T> {
+        self.hist
+            .and_then(|h| h.verb_state())
+            .and_then(|s| s.downcast_ref::<T>())
+    }
     /// `header on|off` on `t` as the pack allows it ([`crate::session::Pack::set_header`]);
     /// a refusal is exit 2 with the pack's reason, `t` unchanged.
     pub fn set_header(
@@ -637,7 +653,7 @@ impl<'a> VerbCtx<'a> {
 /// ([`PackVerb::positional`]).
 pub type FindPositional = fn(&[String]) -> Option<String>;
 
-/// A pack's structured verb, parsed (A9): `(the doc as a View, stdin, the pack's codec) ->
+/// A pack's structured verb, parsed: `(the doc as a View, stdin, the pack's codec) ->
 /// StructOutput`. A pure function of its inputs, run under the session lock (an edit verb
 /// inside [`crate::session::Session::edit_ops_with`]): bounded, no I/O, never calling back
 /// into the kit.
@@ -647,15 +663,15 @@ pub type StructEdit = Box<dyn FnOnce(&VerbCtx<'_>) -> Result<StructOutput, ToolE
 enum VerbFn {
     /// A text edit verb (amendment 6).
     Text(fn(&[String]) -> Result<PackEdit, ToolError>),
-    /// A structured edit verb (A9).
+    /// A structured edit verb.
     StructEdit(fn(&[String]) -> Result<StructEdit, ToolError>),
-    /// A structured read verb (A9).
+    /// A structured read verb.
     StructRead(fn(&[String]) -> Result<StructEdit, ToolError>),
 }
 
 /// A verb a pack adds beside the kit's tools: a **text edit verb** (amendment 6, e.g.
 /// Markdown's `replace-section`, [`PackVerb::edit`]) or, for a structured doc (a
-/// [`crate::table`] pack), a **structured verb** computing ops by key (A9, the CSV pack's
+/// [`crate::table`] pack), a **structured verb** computing ops by key (the CSV pack's
 /// `row insert`, `cell get`: [`PackVerb::structured_edit`], [`PackVerb::structured_read`]).
 /// Declared by [`crate::session::Pack::verbs`]; [`crate::session::Session::run_tool`] runs it
 /// as it runs the kit's verbs: `parse` checks the arguments before the doc is touched (an
@@ -667,7 +683,7 @@ enum VerbFn {
 /// - A structured edit verb computes on the doc as a [`crate::session::View`] inside
 ///   [`crate::session::Session::edit_ops_with`], and its edits apply as one change, by key,
 ///   with the same plumbing as the kit's edit verbs: `--if-version V` (doc-wide) and `--base
-///   V` (per element facet, K-BR-12) are taken out of its arguments by the kit (an agent's
+///   V` (per element facet) are taken out of its arguments by the kit (an agent's
 ///   structured edit needs one of them), and the host's claim policy applies to the cells,
 ///   rows and columns it touches. Needs read and edit.
 /// - A structured read verb computes on a View of the live doc; it returns no edits. Needs
@@ -713,7 +729,7 @@ impl PackVerb {
         }
     }
 
-    /// A structured edit verb (A9): as [`PackVerb::edit`], but `name` may be two words
+    /// A structured edit verb: as [`PackVerb::edit`], but `name` may be two words
     /// (`row insert`) and `parse` returns a [`StructEdit`] computing ops by key. `parse`
     /// gets the arguments after the verb's words, without `--if-version` and `--base`.
     pub const fn structured_edit(
@@ -734,7 +750,7 @@ impl PackVerb {
         }
     }
 
-    /// A structured read verb (A9, `cell get`, `row list`): its [`StructEdit`] reads the
+    /// A structured read verb (`cell get`, `row list`): its [`StructEdit`] reads the
     /// View and returns no edits (edits are refused, exit 2). `--if-version` and `--base`
     /// are refused (exit 2), as for the kit's reads.
     pub const fn structured_read(
@@ -755,7 +771,7 @@ impl PackVerb {
         }
     }
 
-    /// **Declare its positional addresses** (K-ADDR-3, R-2): `find(args)` returns the
+    /// **Declare its positional addresses** (R-2): `find(args)` returns the
     /// positional address in a call's arguments (after the verb's words, without
     /// `--if-version` and `--base`), as the caller wrote it (`--nth 2`, `--row #3`), or
     /// `None`. An agent's text edit verb with one and no `--if-version` is then refused or
@@ -766,7 +782,7 @@ impl PackVerb {
         self
     }
 
-    /// **Declare its position units** (K-ADDR-4): each flag that takes a position, or the place
+    /// **Declare its position units**: each flag that takes a position, or the place
     /// it prints one, with its [`crate::parity::positions::Unit`]. `&[]` says it takes and
     /// prints none. A verb that doesn't call this still runs, and `capabilities` shows it as
     /// undeclared; [`crate::parity::positions::check`] is the test that refuses that.
@@ -810,7 +826,7 @@ impl PackVerb {
         }
     }
 
-    /// A structured verb (A9): ops by key on a structured doc, not text.
+    /// A structured verb: ops by key on a structured doc, not text.
     pub fn is_structured(&self) -> bool {
         !matches!(self.run, VerbFn::Text(_))
     }
@@ -1037,7 +1053,7 @@ impl Tool {
     }
 
     /// The edit's positional address, as given (`--lines 3,4`, `--at 2:5`, a `sed -i` line
-    /// address): it counts lines in some version (K-ADDR-3). `None` for reads, `append`,
+    /// address): it counts lines in some version. `None` for reads, `append`,
     /// exact `replace`, `patch` (its context lines locate it) and `sed -i` scripts addressed
     /// by pattern or `$` only.
     pub fn positional(&self) -> Option<String> {

@@ -7,7 +7,7 @@
 //!   forge                            does Update::insertions() catch foreign client IDs?
 //!   peer                             stdio JSON-lines peer for the Node interop harness
 //!
-//! Throwaway code: it answers the D0 questions and seeds the C9 benchmarks.
+//! Throwaway code: it answers the engine choice's questions and seeds the benchmarks.
 
 mod alloc;
 mod peer;

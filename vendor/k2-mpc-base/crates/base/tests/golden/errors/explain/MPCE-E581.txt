@@ -1,0 +1,21 @@
+MPCE-E581 checkpoint_drops_s_record (store)
+exit:     6
+message:  the engine refused a cut: the checkpoint drops a stable record its kept records name
+next:     Nothing was written: the store is as it was. This is an engine bug: report it with the record index in the message.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E581",
+  "name": "checkpoint_drops_s_record",
+  "area": "store",
+  "exit": 6,
+  "message": "the engine refused a cut: the checkpoint drops a stable record its kept records name",
+  "next": "Nothing was written: the store is as it was. This is an engine bug: report it with the record index in the message.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

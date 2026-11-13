@@ -1,4 +1,4 @@
-//! The structure index's parity cases (A2, A5): for a pack with an index, its list, show,
+//! The structure index's parity cases: for a pack with an index, its list, show,
 //! diff and blame verbs (and `outline`, `node`) and the node claims, each run as a person (a
 //! host's view: the typed calls) and as an agent (the registered verbs, through
 //! [`crate::session::BlobSession::run_tool`]), with the same output byte for byte.
@@ -267,7 +267,7 @@ fn partial_person(p: &mut BlobPerson<'_>) -> Result<Step, String> {
         .session()
         .index_nodes(c, &addrs, None, 0)
         .map_err(person_err)?;
-    // a view shows the miss; the verb's exit for it is 4 (K-READ-1)
+    // a view shows the miss; the verb's exit for it is 4
     let exit = if r.missing.is_empty() {
         tools::exit::OK
     } else {

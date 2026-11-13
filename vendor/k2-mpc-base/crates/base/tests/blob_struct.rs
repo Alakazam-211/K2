@@ -1,4 +1,4 @@
-//! The structure index (slice A1): the job a host runs, the row and overlay in the store, the
+//! The structure index: the job a host runs, the row and overlay in the store, the
 //! caps, keyed hashes, the worker's wire, and everything a purge must reach. The file-type side
 //! is a stand-in ([`index_pack`]); the kit knows no format.
 

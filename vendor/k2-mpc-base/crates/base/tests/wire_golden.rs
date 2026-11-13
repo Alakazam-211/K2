@@ -944,7 +944,7 @@ fn the_wire_json_is_golden() {
     // ada types a line at a base; the agent edits at the same (now stale) base
     let mut errors: Vec<(&str, ErrorReport)> = Vec::new();
     f.edit(ada, v0, vec![h(9, 9, "zero\n")]).unwrap();
-    // with the host's turn (rendering-data contract gap 8): on the change event as given
+    // with the host's turn: on the change event as given
     let turn = k2_mpc_base::Turn::new("t:1a2b3c4d5e6f7a8b.12").unwrap();
     let applied = f
         .edit_with(
@@ -2285,7 +2285,7 @@ fn element_claims_are_golden() {
     );
 }
 
-// ---------- focus and range (wire 3; rendering-data contract Item 3, gap 10) ----------
+// ---------- focus and range (wire 3) ----------
 
 /// Ada (a person) subscribes; she focuses `i1`, then sets a range in `i2`'s `title`, which moves
 /// her focus to `i2` (the range's container: here every element is its own); Bob rewrites that
@@ -2435,7 +2435,7 @@ fn focus_and_range_are_golden() {
         .any(|e| matches!(e, RosterEvent::Watching { count: 1 })));
 }
 
-// ---------- the pack verb on a change event (rendering-data contract gap 9) ----------
+// ---------- the pack verb on a change event ----------
 
 /// A text pack with one verb of its own, `shout` (uppercase the doc), for `change_events_verb.json`.
 struct ShoutPack;

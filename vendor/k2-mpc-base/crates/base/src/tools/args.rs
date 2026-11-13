@@ -230,7 +230,7 @@ pub(crate) fn take_if_version(
     Ok((v.get(), rest))
 }
 
-/// `--if-version V` and `--base V` taken out of a structured pack verb's arguments (A9):
+/// `--if-version V` and `--base V` taken out of a structured pack verb's arguments:
 /// (if-version, base, the rest). As [`take_if_version`]; `--base` takes a version as reads
 /// print it (`1842` or `v1842`), at most once; options end at `--`.
 pub(crate) type Guards = (

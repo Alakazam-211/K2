@@ -1,4 +1,4 @@
-//! A live doc's **carrier** (K1, `docs/SESSIONS.md`, "The carrier (K1)"): for a pack that opts
+//! A live doc's **carrier** (`docs/SESSIONS.md`, "The carrier"): for a pack that opts
 //! in (`Pack::wants_carrier`), the bytes the kit last read from the doc's file or wrote to it,
 //! kept as a blob in the doc's space, and **each version's carrier**, the file's bytes as of
 //! that version, so a version's file is that version spliced into them.
@@ -21,7 +21,7 @@
 //!   carriers of the versions it erased, and removes their blobs at once), a doc delete.
 //!   Rows whose version is gone (an older kit's retention) are swept at the next load.
 //!
-//! **The carrier's pairing** (K1b, a third additive table, `carrier_pairings`, created lazily):
+//! **The carrier's pairing** (a third additive table, `carrier_pairings`, created lazily):
 //! for a pack that mints its keys (`Pack::wants_pairing`), the carrier's keys in the order the
 //! pack's decode yields its units, beside each carrier row: `(doc, slot)` → the carrier blob it
 //! pairs, the sync seq it was made at, and the pack's keys (`Pairing::to_bytes`). The live slot
@@ -55,7 +55,7 @@ pub(super) const LIVE_CARRIERS: TableDefinition<u64, &[u8]> = TableDefinition::n
 pub(super) const VERSION_CARRIERS: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("version_carriers");
 
-/// `(doc, slot)` → [`PairingRow`] (record version 1): the carrier's pairing (K1b).
+/// `(doc, slot)` → [`PairingRow`] (record version 1): the carrier's pairing.
 pub(super) const CARRIER_PAIRINGS: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("carrier_pairings");
 
@@ -260,7 +260,7 @@ pub(super) fn carry_new_versions(
             t.insert((id, *vid), enc_vrow(&live, *seq).as_slice())?;
         }
     }
-    // and the live carrier's pairing (K1b): the version's carrier is the live one, from the last
+    // and the live carrier's pairing: the version's carrier is the live one, from the last
     // sync point, so its keys are that point's
     #[cfg(any(test, feature = "differential"))]
     if crate::differential::keyed_mutant()
@@ -410,7 +410,7 @@ impl DocStore {
     /// `seq` (`None`: it has none), in one durable transaction: the live row takes a count on the
     /// new blob and gives the old one's back at `now`; every version at `seq` takes the new blob
     /// too (the file then is that version's file), and on the doc's first carrier so do the
-    /// versions at `seq` that have none. With `pairing` (K1b: the pack's keys for these bytes,
+    /// versions at `seq` that have none. With `pairing` (the pack's keys for these bytes,
     /// `Pairing::to_bytes`), the live pairing row and those versions' take it in the same
     /// transaction; dropping the carrier drops the live pairing. Returns the blobs that now have
     /// no reference, for the caller to remove at once ([`crate::blob::BlobStore`]'s removal).
@@ -507,7 +507,7 @@ impl DocStore {
     }
 
     /// The pairing at `slot` of doc `id` ([`LIVE_SLOT`] or a version id), if it has one this kit
-    /// can read (K1b).
+    /// can read.
     pub(crate) fn carrier_pairing(
         &self,
         id: DocId,
@@ -585,7 +585,7 @@ impl DocStore {
                     out.push(vid);
                 }
             }
-            // and the pairings of versions that are gone (K1b; the live slot isn't a version)
+            // and the pairings of versions that are gone (the live slot isn't a version)
             if let Ok(p) = r.open_table(CARRIER_PAIRINGS) {
                 for kv in p.range((doc, 0)..(doc, LIVE_SLOT))? {
                     let vid = kv?.0.value().1;

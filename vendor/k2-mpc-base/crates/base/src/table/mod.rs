@@ -1,6 +1,6 @@
 //! Tables: the CSV contract's composition (§1.1) over the kit's structured kinds, as plain
-//! data (A7). Engine-free and codec-free: it works on keys, cells and rendered records
-//! (fields), never on engine IDs or file bytes, so the CSV pack, the grid editor (G7) and any
+//! data. Engine-free and codec-free: it works on keys, cells and rendered records
+//! (fields), never on engine IDs or file bytes, so the CSV pack, the grid editor and any
 //! other table-shaped pack share it.
 //!
 //! **Six roots on three primitives** ([`ROOTS`]): `rows` and `cols` (MovableLists; an
@@ -20,13 +20,13 @@
 //!   to it (cell set and clear, block set and clear, row and column insert, move, delete,
 //!   restore, rename, sort as one forward chain, block moves, the header switch).
 //! - [`hidden_cell_writes`]: the cells a change wrote into deleted rows or columns (kept,
-//!   hidden, and reported: contract §1.6, engine answer E3).
-//! - [`reconcile()`]: the aligner (A8): a new rendering (an outside save, an agent's
+//!   hidden, and reported: contract §1.6, the engine's answer on deleted rows).
+//! - [`reconcile()`]: the aligner: a new rendering (an outside save, an agent's
 //!   `write --base` body) → minimal keyed grid ops.
 //! - [`merge3()`]: the grid three-way merge of `write --base` (contract §3.4), with a
 //!   conflict report.
 //!
-//! The kit's op rules (K-CSV-10): clearing a cell is a set to `""` (a map delete only where a
+//! The kit's op rules: clearing a cell is a set to `""` (a map delete only where a
 //! cell must become absent); multi-element moves are forward chains ([`crate::elem::chain`]);
 //! keys are never reused, and a deleted row or column comes back by restore, never by
 //! re-inserting its key. Values are checked here ([`check_value`]: no NUL, at most
@@ -1135,7 +1135,7 @@ impl Table {
     }
 
     /// The cells a change wrote that are hidden here (their row or column is deleted): a
-    /// write that landed in a deleted row (contract §1.6, E3; [`hidden_cell_writes`]).
+    /// write that landed in a deleted row (contract §1.6; [`hidden_cell_writes`]).
     pub fn hidden_cell_writes<W: Clone>(&self, applied: &[Applied<W>]) -> Vec<HiddenWrite<W>> {
         hidden_cell_writes(applied, |root, k| {
             if root == ROWS {
@@ -1470,8 +1470,8 @@ impl<W> HiddenWrite<W> {
 
 /// The cells `applied` sets (in [`CELLS`]) whose row or column is not live now, by `live(root,
 /// key)` (`root` is [`ROWS`] or [`COLS`]): a cell written into a deleted row, concurrently or
-/// by a stale writer, is kept, hidden, and reported to the writer (contract §1.6, §4.3; engine
-/// answer E3). Map keys that aren't cell keys are skipped. In stream order.
+/// by a stale writer, is kept, hidden, and reported to the writer (contract §1.6, §4.3; the
+/// engine's answer on deleted rows). Map keys that aren't cell keys are skipped. In stream order.
 pub fn hidden_cell_writes<W: Clone>(
     applied: &[Applied<W>],
     mut live: impl FnMut(&str, &Key) -> bool,

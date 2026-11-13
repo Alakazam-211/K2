@@ -1,4 +1,4 @@
-//! No absolute path in what the kit hands out (K7, v0.9.8): [`redact`].
+//! No absolute path in what the kit hands out (v0.9.8): [`redact`].
 
 use std::path::Path;
 

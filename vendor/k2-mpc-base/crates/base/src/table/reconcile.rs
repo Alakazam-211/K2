@@ -1,4 +1,4 @@
-//! The aligner (A8, contract §2.9): a file has no keys, so a new rendering of a table (an
+//! The aligner (contract §2.9): a file has no keys, so a new rendering of a table (an
 //! outside save by a spreadsheet, a text edit verb's result, an agent's `write --base` body)
 //! is turned into **keyed grid ops** against the table as the file last held it.
 //!
@@ -29,10 +29,10 @@
 //!    differ) is a new row, its old one deleted.
 //! 3. **Order.** A longest run of kept rows (columns) in their old relative order stays; every
 //!    other one is placed right after its new left neighbour, left to right, so consecutive
-//!    placements are one forward chain (K-CSV-10b). Moves are the minimal set (n − LIS).
+//!    placements are one forward chain. Moves are the minimal set (n − LIS).
 //! 4. **Cells, names, quoting.** Per rendered field, by the render rules read backwards: a
 //!    non-empty (or quoted) field is a present cell with that value; an empty field keeps an
-//!    absent cell absent and sets a present one to `""` (clear is a set, K-CSV-10a); a
+//!    absent cell absent and sets a present one to `""` (clear is a set); a
 //!    missing field (past the record's end) is an absent cell (a map delete: the one place
 //!    the kit deletes a cell). A `ragged` row's last field is always present (it renders
 //!    through it); a non-blank `rect` row has at least one present cell. Quote exceptions

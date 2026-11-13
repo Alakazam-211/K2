@@ -1,6 +1,6 @@
-//! Reading a structure index (slice A2): the outline order and `#N`, the kit's one address
-//! grammar over nodes, the diff of two versions, and the read budget with its cursors
-//! (K-READ-1…3). Pure functions over [`IndexView`]s: the session calls
+//! Reading a structure index: the outline order and `#N`, the kit's one address
+//! grammar over nodes, the diff of two versions, and the read budget with its cursors.
+//! Pure functions over [`IndexView`]s: the session calls
 //! ([`crate::session::BlobSession::index_list`] and the rest) add rights and versions, and
 //! [`crate::session::BlobSession::run_tool`] the verbs.
 //!
@@ -23,7 +23,7 @@ use crate::errors::{ids, ErrorReport, Value};
 use crate::hash::{hex, HmacSha256};
 use crate::store::{DocKey, VersionId};
 
-/// The default read budget (K-READ-2): the most bytes one page of a structure read returns,
+/// The default read budget: the most bytes one page of a structure read returns,
 /// counted as the canonical JSON of the page (its compact form, the one `--json` prints) in
 /// every output mode, so a cursor means the same page in text and JSON. A host sets another
 /// with [`crate::tools::ToolOptions::read_budget`].
@@ -37,7 +37,7 @@ pub const READ_BUDGET_MIN: usize = 16_384;
 /// How many versions a blame walks back before it stops (`IndexBlame::stopped_at`).
 pub const BLAME_WALK_MAX: usize = 256;
 
-/// At most this many candidates are listed for one missing or ambiguous address (K-READ-3);
+/// At most this many candidates are listed for one missing or ambiguous address;
 /// `candidates_total` says how many there are.
 pub const CANDIDATES_MAX: usize = 20;
 
@@ -119,7 +119,7 @@ pub struct NodeRead {
     pub descendants: Vec<OutlineNode>,
 }
 
-/// An address that names nothing, with what does exist (K-READ-3).
+/// An address that names nothing, with what does exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MissingAddress {
@@ -490,7 +490,7 @@ impl<'a> Walk<'a> {
             .collect()
     }
 
-    /// Several addresses in one version (K-READ-1): one entry per address, in order. A name
+    /// Several addresses in one version: one entry per address, in order. A name
     /// or ID two nodes share refuses the whole read (`MPC-E170`), as does one that doesn't
     /// parse.
     pub fn nodes(&self, addrs: &[String], depth: u16) -> Result<NodesRead, ReadRefusal> {

@@ -601,7 +601,7 @@ fn a_cells_claim_holds_off_other_agents_not_people() {
             }],
         }]
     };
-    // D7 (r5, c4) is inside: refused; E7 (c5) outside: applied
+    // `D7` (r5, c4) is inside: refused; `E7` (c5) outside: applied
     let e = s
         .edit_ops(brook, cell("@sheet:1/row:r5", "c4", "9900"), &respect(&s))
         .unwrap_err();

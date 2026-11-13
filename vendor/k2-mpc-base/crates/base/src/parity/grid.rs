@@ -1,4 +1,4 @@
-//! The parity harness's grid stage (A11, K-PAR-3, CSV contract §3.5): the same check as
+//! The parity harness's grid stage (CSV contract §3.5): the same check as
 //! [`super::check`], on a grid doc (a [`crate::table`] pack's session). Each case runs the
 //! **person path** (a tab: the session API directly) and the **agent path** (registered verbs
 //! only: the kit's of [`Tier::Grid`] and the pack's structured verbs) on two identical grid
@@ -354,7 +354,7 @@ fn covered(cases: &[GridCase]) -> Vec<(PersonAction, &'static str)> {
     cases.iter().map(|c| (c.action, c.verb)).collect()
 }
 
-/// The parity check for a grid pack (A11), as [`super::check`] is for a text pack: one row
+/// The parity check for a grid pack, as [`super::check`] is for a text pack: one row
 /// per action of [`Tier::Grid`]; the list and the grid registry ([`Registry::for_pack`] of a
 /// [`crate::table`] pack: the kit's grid verbs and the pack's structured verbs) agree both
 /// ways; every listed verb has a case ([`super::kit_grid_cases`], or the pack's `extra`), and

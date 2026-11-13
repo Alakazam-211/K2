@@ -4,11 +4,13 @@
 //! test (`crates/base/tests/golden/errors/registry.snapshot`) holds this.
 //!
 //! Message templates use `{key}` for the report's details. `next` is prose: what happened,
-//! then what to run. `.step(verb, args, why)` is the same as data ([`super::NextStep`],
-//! K-PAR-10): a kit verb by its registry name, its arguments as argv tokens (`{key}`: the
+//! then what to run. `.step(verb, args, why)` is the same as data ([`super::NextStep`]):
+//! a kit verb by its registry name, its arguments as argv tokens (`{key}`: the
 //! refusal's `details.key`), and why, in prose naming no command line. An entry with nothing
 //! to run (wait, ask a person, report it, use ordinary file tools) has no step.
 //! Neither names a host's command (its program name, the doc path): the host renders those.
+//!
+//! Rule (each entry's fifth field): a stable key for the requirement this error enforces.
 
 use super::Area::{
     self, Blob, Disk, Erasure, Export, History, Limits, Presence, Session, Store, Structured,
@@ -347,7 +349,7 @@ PACK_MISMATCH = e("MPC-E109", "pack_mismatch", Session, 4, "K-FMT-2", ANY,
 
 // 110–119: edit guards and conflicts
 
-STALE = e("MPC-E110", "stale", Session, 1, "A14 (--if-version), K-T0-5",
+STALE = e("MPC-E110", "stale", Session, 1, "the version guard (--if-version), K-T0-5",
     &["@change", "write"],
     "doc changed since {expected} (now {actual})",
     "Someone changed the doc after the version you named, so nothing was applied. Read it \
@@ -404,9 +406,9 @@ BAD_PARTICIPANT = e("MPC-E115", "bad_participant", Session, 2, "K-PRES-9",
     "The host passed an identity the kit refuses (the message says which field). This is \
      the host's to fix, not the caller's.");
 
-// 116–117: comment rights (annotations, A4)
+// 116–117: comment rights (annotations)
 
-FORBIDDEN_COMMENT = e("MPC-E116", "forbidden_comment", Session, 3, "K-ANN-6, Q24",
+FORBIDDEN_COMMENT = e("MPC-E116", "forbidden_comment", Session, 3, "K-ANN-6",
     ANNOT_CHANGE,
     "refused: needs Comment rights",
     "You can read this doc but not comment on it: commenting needs edit, or the comment right \
@@ -467,7 +469,7 @@ PATCH_REJECTS = e("MPC-E124", "patch_rejects", Session, 1, "K-PAR-8, K-BR-9",
         "The hunks that fit were applied and the failed ones were not; read the lines they were \
          for and make those changes again on the live text.");
 
-REPLACE_NO_MATCH = e("MPC-E125", "replace_no_match", Session, 1, "A12 (exact replace)",
+REPLACE_NO_MATCH = e("MPC-E125", "replace_no_match", Session, 1, "exact replace",
     &["replace"],
     "replace: --old matches nothing in {doc}; nothing applied",
     "The exact text in --old isn't in the doc (it matches byte for byte, with \\n line \
@@ -477,7 +479,7 @@ REPLACE_NO_MATCH = e("MPC-E125", "replace_no_match", Session, 1, "A12 (exact rep
         "The exact old text isn't in the doc; read the lines again and copy the text byte for \
          byte.");
 
-REPLACE_NOT_UNIQUE = e("MPC-E126", "replace_not_unique", Session, 1, "A12 (exact replace)",
+REPLACE_NOT_UNIQUE = e("MPC-E126", "replace_not_unique", Session, 1, "exact replace",
     &["replace"],
     "replace: --old matches {matches} times in {doc}; nothing applied",
     "--old must match exactly once. Add surrounding text to --old until it matches once, or \
@@ -487,7 +489,7 @@ REPLACE_NOT_UNIQUE = e("MPC-E126", "replace_not_unique", Session, 1, "A12 (exact
         "The old text matches more than once; add surrounding text until it matches once, or \
          replace every match.");
 
-PACK_VERB_NO = e("MPC-E127", "pack_verb_no", Session, 1, "A6 (pack verbs)", &["@pack"],
+PACK_VERB_NO = e("MPC-E127", "pack_verb_no", Session, 1, "pack verbs", &["@pack"],
     "{verb}: nothing applied",
     "The file type's own verb found nothing to change (stdout says why: e.g. no such \
      section). Check its target (cat, grep -n) and run it again; nothing was applied.")
@@ -606,13 +608,13 @@ BAD_ROOT_NAME = e("MPC-E153", "bad_root_name", Session, 2, "K-SCH-1", &["(host)"
     "schema root name {root}: names must be non-empty, unique and free of '/'",
     "A pack's schema names a root the kit can't store (empty, holding '/', or twice). The \
      pack has to fix its schema; this file type can't open live until then.")
-    .indirect("a pack with a bad schema (C1)");
+    .indirect("a pack with a bad schema");
 
 MALFORMED_DOC = e("MPC-E154", "malformed_doc", Session, 2, "K-SEC-5", ANY,
     "the doc's state is malformed: {reason}",
     "The doc holds something the kit never writes (a bug, or a damaged store). Nothing was \
      applied. Don't retry: report it to the host's operator with this message.")
-    .indirect("a damaged doc state (C1)");
+    .indirect("a damaged doc state");
 
 // 160–169: the catalog itself and the engine's seam
 
@@ -629,9 +631,41 @@ ENGINE_UNLISTED = e("MPC-E161", "engine_unlisted", Session, 2, "the MPCE seam (s
     "the engine refused this ({code}), and this build's catalog doesn't list the code",
     "A newer engine refused something this kit build can't explain. Nothing was applied. \
      Report the code; the engine's own docs describe it.")
-    .reserved("the native engine (MPCE ranges at G2-core)");
+    .reserved("the native engine (its own MPCE ranges)");
 
-// 170–179: addresses and cursors (K-ADDR-1…3, K-READ-1…3; src/addr.rs)
+ROOT_KIND_NOT_NATIVE = e("MPC-E162", "root_kind_not_native", Session, 2,
+    "the native engine: text roots only", &["(host)"],
+    "root {root} is {kind}: this file type isn't switched to the native engine yet",
+    "The host chose the native engine for a file type with a list or map root. Nothing was \
+     made or loaded. This file type isn't switched to the native engine yet: open it on Yrs.")
+    .indirect("a host choosing the native engine for a file type with a list or map root \
+     (feature native)");
+
+REPLICA_LAGGING = e("MPC-E163", "replica_lagging", Session, 2,
+    "the MPCE seam (stable codes): one host, one engine version", SYNC,
+    "this replica's engine refused the host's merge: it is behind the host's engine",
+    "The host relayed a change this replica's engine can't take (MPCE-E995 from the host): \
+     this replica runs an older engine than the host. Nothing was applied. Upgrade this \
+     replica, then resync it from the host; don't treat the host as hostile.")
+    .indirect("a replica behind the host's engine (feature native)");
+
+VECTOR_NEEDS_PARTS = e("MPC-E164", "vector_needs_parts", Session, 2,
+    "the MPCE seam (stable codes): a vector is never sent smaller or empty", SYNC,
+    "the version vector ({entries} writers) doesn't fit one frame: send it in parts",
+    "Nothing was sent. The doc's version vector is past one frame (MPCE-E983): send it as \
+     parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never \
+     send a smaller or empty vector.")
+    .indirect("a native doc with about 10,000 writers or more (feature native)");
+
+NEEDS_STATE_TRANSFER = e("MPC-E165", "needs_state_transfer", Session, 2,
+    "the MPCE seam (stable codes): a replica behind a cut", SYNC,
+    "the peer's history is compacted past this doc's state: it needs a state transfer",
+    "Nothing was applied. The peer compacted the history this doc lacks (MPCE-E262), so no \
+     diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry \
+     the catch-up and don't close the peer: it isn't at fault.")
+    .indirect("a native replica behind a peer's cut (feature native)");
+
+// 170–179: addresses and cursors (src/addr.rs)
 
 AMBIGUOUS_ADDRESS = e("MPC-E170", "ambiguous_address", Session, 2, "K-ADDR-2, K-EXIT-1",
     &["@pack"],
@@ -768,7 +802,7 @@ CLEARED_BY_PURGE = e("MPC-E207", "cleared_by_purge", History, 0, "U19, K-PURGE-4
         "A purge cleared every undo history; find the change in the log and revert it, or edit \
          the text by hand.");
 
-VERSION_NO_CARRIER = e("MPC-E208", "version_no_carrier", History, 4, "K1 (carrier bytes)",
+VERSION_NO_CARRIER = e("MPC-E208", "version_no_carrier", History, 4, "the carrier's bytes",
     &["show --version", "(host)"],
     "version {version} has no copy of its file's own bytes (version_no_carrier)",
     "This file type is written back by splicing into the file's own bytes, and the kit keeps \
@@ -782,7 +816,7 @@ VERSION_NO_CARRIER = e("MPC-E208", "version_no_carrier", History, 4, "K1 (carrie
 
 // ---------------------------------------------------------------- 3xx presence and claims
 
-CLAIMED = e("MPC-E301", "claimed", Presence, 5, "A13 (claims), K-PRES-12",
+CLAIMED = e("MPC-E301", "claimed", Presence, 5, "claims, K-PRES-12",
     &["claim", "@change"],
     "{lines} claimed by {name} ({by}); {remaining_ms} ms left",
     "Someone else is working on those lines right now (a live claim). Nothing was applied. \
@@ -792,7 +826,7 @@ CLAIMED = e("MPC-E301", "claimed", Presence, 5, "A13 (claims), K-PRES-12",
         "Someone else holds a live claim on those lines; see who is where, then wait for the time \
          left and retry, or work on other lines.");
 
-NO_CLAIM = e("MPC-E302", "no_claim", Presence, 4, "A13 (claims)",
+NO_CLAIM = e("MPC-E302", "no_claim", Presence, 4, "claims",
     &["claim --renew", "claim --release"],
     "no live claim {claim}",
     "That claim already ended (it expired, or your edit ended it), or you hold none. Take a \
@@ -800,7 +834,7 @@ NO_CLAIM = e("MPC-E302", "no_claim", Presence, 4, "A13 (claims)",
     .step("claim", &[],
         "That claim already ended, or you hold none; take a new one if you still need it.");
 
-CLAIM_CONTENDED = e("MPC-E303", "claim_contended", Presence, 2, "A13 (claims)",
+CLAIM_CONTENDED = e("MPC-E303", "claim_contended", Presence, 2, "claims",
     &["claim --renew"],
     "{claim} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)",
     "Others are waiting for your claim, so it can't be extended. Finish your edit before it \
@@ -809,7 +843,7 @@ CLAIM_CONTENDED = e("MPC-E303", "claim_contended", Presence, 2, "A13 (claims)",
         "Others are waiting for your claim, so it can't be extended; finish your edit before it \
          ends, or release it.");
 
-BAD_CLAIM = e("MPC-E304", "bad_claim", Presence, 2, "A13 (claims)",
+BAD_CLAIM = e("MPC-E304", "bad_claim", Presence, 2, "claims",
     &["claim", "claim --renew", "claim --release"],
     "bad claim: {reason}",
     "The claim call isn't valid as given (the message says why: not your claim, a zero \
@@ -818,7 +852,7 @@ BAD_CLAIM = e("MPC-E304", "bad_claim", Presence, 2, "A13 (claims)",
     .step("claim --release", &[],
         "The claim call isn't valid as given; fix its arguments, or release all of your claims.");
 
-WATCHING = e("MPC-E305", "watching", Presence, 3, "K11 (participants_max)", CHANGE,
+WATCHING = e("MPC-E305", "watching", Presence, 3, "the participant cap (participants_max)", CHANGE,
     "watching: the doc has its {max} participants; read-only until the host lets you in",
     "This doc already has as many participants as it allows, so you joined as a watcher: \
      you can read it and follow changes, but not edit or show presence. This is refused for \
@@ -837,7 +871,7 @@ SELECTION_TOO_LARGE = e("MPC-E310", "selection_too_large", Presence, 2, "K-PRES-
         "A selection holds at most 256 elements and a grid's cells at most 16 ranges; clear it, \
          then select fewer.");
 
-// 320–329: comment threads (annotations, A4)
+// 320–329: comment threads (annotations)
 
 NO_ANNOTATION = e("MPC-E320", "no_annotation", Presence, 4, "K-ANN-1",
     &["reply", "resolve", "resolve --reopen", "comment --delete", "reanchor", "comments --log"],
@@ -917,7 +951,7 @@ BAD_PATH = e("MPC-E411", "bad_path", Disk, 2, "K-SEC-6, K-DISK-14", &["mv", "(ho
     "The path isn't a regular file inside the workspace (a folder, a link pointing outside \
      it...). Use a path to a regular file inside the workspace.");
 
-DECLINED_HARD_LINKED = e("MPC-E412", "declined_hard_linked", Disk, 4, "K-DISK-14 (K9)",
+DECLINED_HARD_LINKED = e("MPC-E412", "declined_hard_linked", Disk, 4, "K-DISK-14 (hard links)",
     &["(host)"],
     "live editing is off: {reason} (hard_linked)",
     "The file has more than one name (a hard link), so edits made live through one name \
@@ -939,12 +973,14 @@ SAVE_TICKET_INVALID = e("MPC-E414", "save_ticket_invalid", Disk, 2, "K-T0-5", HO
      connection's, or isn't this doc's (or is too old to be remembered). Nothing was recorded. \
      A lapsed, replaced or reloaded ticket is not this: it returns with not_recorded set.");
 
-// a keyed doc that isn't a table, over its live size limit (`Config::keyed_max_entries`)
+// a keyed doc that isn't a table, over its live size limit (`Config::keyed_limit`)
 DECLINED_LIVE_TOO_LARGE = e("MPC-E415", "declined_live_too_large", Disk, 4,
     "K-PACK-4, K-DISK-8, K-CSV-7", ANY,
     "live editing is off: {reason} (live_too_large)",
     "The file holds more elements and fields than a live doc of its type may hold \
-     (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where \
+     (details.limit; details.limit_source says whose limit it is: host_per_pack, the host's \
+     for this file type; pack_default, the file type's own default; or host_wide, the host's \
+     for every file type). It isn't live: it stays at tier 0 (or 0.5 where \
      its type merges whole files) and opens the ordinary way, so its file verbs and ordinary \
      file tools work on it, with nothing merged live. Don't retry the live verb.")
     .step("cat", &[],
@@ -1079,7 +1115,7 @@ ENGINE_MISMATCH = e("MPC-E520", "engine_mismatch", Store, 6, "K-FMT-2, K-FMT-4",
      a build that runs that engine, or ask the host's operator to migrate it; don't retry.")
     .indirect("a doc stored by a build on another engine");
 
-PAIRING_MISMATCH = e("MPC-E521", "pairing_mismatch", Store, 1, "K1b (carrier pairing)", ANY,
+PAIRING_MISMATCH = e("MPC-E521", "pairing_mismatch", Store, 1, "the carrier's pairing", ANY,
     "the file's pairing doesn't fit it: {reason} (pairing_mismatch)",
     "The file type writes the doc back by splicing into the file's own bytes, pairing each unit \
      of the file with a key the kit kept for it. The keys kept don't fit the file, so the file \
@@ -1238,7 +1274,7 @@ INDEX_STALE = e("MPC-E717", "index_stale", Blob, 1, "structure index", &["(host)
         "That version changed while its index was being built; see which versions the doc has \
          now.");
 
-BLOB_REF_UNKNOWN = e("MPC-E720", "blob_ref_unknown", Blob, 4, "structured live, slice 5",
+BLOB_REF_UNKNOWN = e("MPC-E720", "blob_ref_unknown", Blob, 4, "blob references in keyed docs",
     &["@pack", "(host)"],
     "no blob {blob} in this doc's space",
     "The value names a blob this doc's space doesn't hold: it was never stored here, it was \
@@ -1246,7 +1282,7 @@ BLOB_REF_UNKNOWN = e("MPC-E720", "blob_ref_unknown", Blob, 4, "structured live, 
      doc's space, then send the change again with the id that returned.");
 
 // ---------------------------------------------------------------- 8xx structured and CSV
-// the CSV grid work (C1): wired at the C1 merge with main (v0.10.0); the walk in
+// the CSV grid work: wired in v0.10.0; the walk in
 // tests/error_ids.rs reaches them on a grid doc (the grid test pack).
 
 NEEDS_BASE = e("MPC-E801", "needs_base", Structured, 2, "K-BR-12", &["cell set", "@change"],
@@ -1257,7 +1293,7 @@ NEEDS_BASE = e("MPC-E801", "needs_base", Structured, 2, "K-BR-12", &["cell set",
         "Agents edit tables against what they read; read the table first, then run the edit again \
          against the version it printed.");
 
-AT_LIMIT = e("MPC-E802", "at_limit", Structured, 2, "K-CSV-7 (KC4)", &["@change"],
+AT_LIMIT = e("MPC-E802", "at_limit", Structured, 2, "K-CSV-7 (table limits)", &["@change"],
     "this table is at its size limit ({limit} {what}, deleted rows included); the owner can \
      free space with `rows drop-deleted`",
     "The table can't grow past its limit (details.what: cells, columns or rows); nothing was \
@@ -1267,7 +1303,7 @@ AT_LIMIT = e("MPC-E802", "at_limit", Structured, 2, "K-CSV-7 (KC4)", &["@change"
         "The table is at its size limit; remove rows or columns first, or have an owner free the \
          space deleted rows still hold.");
 
-FACET_CONFLICT = e("MPC-E803", "facet_conflict", Structured, 1, "K-BR-12 (KC7)",
+FACET_CONFLICT = e("MPC-E803", "facet_conflict", Structured, 1, "K-BR-12 (writes with no identity)",
     &["@change"],
     "{count} element(s) changed since your base: {where}",
     "Someone changed the same cells or rows after the version you read. Nothing was \
@@ -1276,7 +1312,7 @@ FACET_CONFLICT = e("MPC-E803", "facet_conflict", Structured, 1, "K-BR-12 (KC7)",
         "Someone changed the same cells or rows since your base; read again, redo your change on \
          the new values, and pass the new base.");
 
-OP_REFUSED = e("MPC-E804", "op_refused", Structured, 2, "K-SCH-2 (C1)", &["@change"],
+OP_REFUSED = e("MPC-E804", "op_refused", Structured, 2, "K-SCH-2", &["@change"],
     "op {op} on root {root}: {problem}",
     "One of the edit's row, column or cell operations can't apply (an unknown or reused \
      key, a move next to itself, dropping a live element); nothing of the change was \
@@ -1285,7 +1321,7 @@ OP_REFUSED = e("MPC-E804", "op_refused", Structured, 2, "K-SCH-2 (C1)", &["@chan
         "An operation names an unknown or reused key; list the rows or columns again and use the \
          keys shown.");
 
-NO_ELEMENT = e("MPC-E805", "no_element", Structured, 4, "CSV contract §3.3 (C1)",
+NO_ELEMENT = e("MPC-E805", "no_element", Structured, 4, "CSV contract §3.3",
     &["@pack"],
     "{verb}: {line}",
     "The row, column or cell the verb names is unknown or deleted (stdout says which, and \
@@ -1298,7 +1334,7 @@ NO_ELEMENT = e("MPC-E805", "no_element", Structured, 4, "CSV contract §3.3 (C1)
          one first.");
 
 HEADER_NAMES_UNRENDERED = e("MPC-E806", "header_names_unrendered", Structured, 2,
-    "CSV contract §1.4 (C1)", &["@pack"],
+    "CSV contract §1.4", &["@pack"],
     "the columns have names that would appear as a header line; clear them or add a row first",
     "The table has no row, and its columns still hold names from before the header was \
      switched off: switching it on would write them as a header line, changing the file. \
@@ -1308,7 +1344,7 @@ HEADER_NAMES_UNRENDERED = e("MPC-E806", "header_names_unrendered", Structured, 2
          row first, then switch.");
 
 HEADER_ONLY_ROW_BLANK = e("MPC-E807", "header_only_row_blank", Structured, 2,
-    "CSV contract §1.4 (C1)", &["@pack"],
+    "CSV contract §1.4", &["@pack"],
     "header on: the only row is a blank line, and a blank header line with nothing after it \
      isn't written (the file would change); add a non-blank row first",
     "The table's only row is blank: as the header it would be a blank header line with \
@@ -1320,7 +1356,7 @@ HEADER_ONLY_ROW_BLANK = e("MPC-E807", "header_only_row_blank", Structured, 2,
 
 // 820-: tagged keys (crate::mint; the writer-tag rule on a pack's declared roots)
 
-KEY_NOT_OWN = e("MPC-E820", "key_not_own", Structured, 2, "structured live, slice 1",
+KEY_NOT_OWN = e("MPC-E820", "key_not_own", Structured, 2, "writer-tagged keys",
     &["@change"],
     "insert {key} on {root} doesn't carry your writer tag {tag}",
     "This list's keys carry their writer: an insert must name <prefix><n>.<tag> with one of \
@@ -1328,26 +1364,28 @@ KEY_NOT_OWN = e("MPC-E820", "key_not_own", Structured, 2, "structured live, slic
      through a verb or Session::mint_key, which mints a key with your own writer tag; never \
      reuse another writer's tag.");
 
-KEY_SPACE_FULL = e("MPC-E821", "key_space_full", Structured, 2, "structured live, slice 1",
+KEY_SPACE_FULL = e("MPC-E821", "key_space_full", Structured, 2, "writer-tagged keys",
     HOST,
     "no key fits 24 bytes for prefix {prefix} and tag {tag}",
     "Every key of this prefix and writer tag that fits a list key's 24 bytes is taken. \
      Nothing was written. The pack's key prefix is too long for a tagged key: use a shorter \
      prefix (the pack's fix).");
 
-// a keyed doc that isn't a table, at its live size limit (`Config::keyed_max_entries`)
+// a keyed doc that isn't a table, at its live size limit (`Config::keyed_limit`)
 KEYED_AT_LIMIT = e("MPC-E822", "keyed_at_limit", Structured, 2, "K-CSV-7 (keyed docs)",
     &["@change"],
     "this doc is at its live size limit ({limit} {what}, deleted elements included); nothing \
      was applied",
     "The doc can't grow past its live size limit (details.limit elements and fields: every \
-     list element, deleted ones included until dropped, plus every field; capabilities shows \
-     keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove \
-     elements or fields it no longer needs, then make the change again; a change that \
+     list element, deleted ones included until dropped, plus every field; \
+     details.limit_source says whose limit it is: host_per_pack, the host's for this file \
+     type; pack_default, the file type's own default; or host_wide, the host's for every file \
+     type). Nothing was applied and nothing was dropped. Read the doc, remove \
+     elements or fields it doesn't need any more, then make the change again; a change that \
      doesn't add elements or fields always goes through.")
     .step("cat", &[],
-        "The doc is at its live size limit; read it, remove elements or fields it no longer \
-         needs, then make the change again.");
+        "The doc is at its live size limit; read it, remove elements or fields it doesn't \
+         need any more, then make the change again.");
 
 // 823–829: free, for structured docs.
 
@@ -1665,7 +1703,7 @@ TOOL_LIMIT = e("MPC-E902", "tool_limit", Limits, 2, "K-PAR-7, K-SEC-4", RUN_TOOL
     .step("head", &[],
         "The call would pass a bound; narrow it: fewer lines, a simpler pattern, smaller edits.");
 
-CLAIMS_DOC_CAP = e("MPC-E903", "claims_doc_cap", Limits, 2, "A13 (claims_max)", &["claim"],
+CLAIMS_DOC_CAP = e("MPC-E903", "claims_doc_cap", Limits, 2, "claims (claims_max)", &["claim"],
     "bad claim: this doc has {count} live claims (the most)",
     "This doc has as many live claims as it allows. Wait for some to end (activity and who \
      show them), or edit without a claim.")
@@ -1674,7 +1712,7 @@ CLAIMS_DOC_CAP = e("MPC-E903", "claims_doc_cap", Limits, 2, "A13 (claims_max)", 
          claim.");
 
 CLAIMS_PARTICIPANT_CAP = e("MPC-E904", "claims_participant_cap", Limits, 2,
-    "A13 (claims_per_participant)", &["claim"],
+    "claims (claims_per_participant)", &["claim"],
     "bad claim: you hold {count} claims here (the most); release one",
     "You hold as many claims on this doc as you may. Release one you no longer need \
      (claim --release --id ID), then claim again.")
@@ -1683,7 +1721,7 @@ CLAIMS_PARTICIPANT_CAP = e("MPC-E904", "claims_participant_cap", Limits, 2,
          again.");
 
 CLAIM_WAITERS_CAP = e("MPC-E905", "claim_waiters_cap", Limits, 2,
-    "A13 (claim_waiters_max)", &["(host)"],
+    "claims (claim_waiters_max)", &["(host)"],
     "bad claim: {count} already waiting for {claim}",
     "That claim already has as many waiters as it allows. Retry after it ends, or work \
      elsewhere.")
@@ -1691,7 +1729,7 @@ CLAIM_WAITERS_CAP = e("MPC-E905", "claim_waiters_cap", Limits, 2,
         "That claim already has as many waiters as it allows; see where others are working and \
          work elsewhere, or retry after it ends.");
 
-// 906: C3's `connection_work_throttled` (the C3 kit design and the engine cite it)
+// 906: `connection_work_throttled`, reserved for the native engine's sessions
 
 ANNOTATION_CAP = e("MPC-E907", "annotation_cap", Limits, 2, "K-ANN-1 (annot_* limits)",
     &["comment", "reply", "resolve", "resolve --reopen", "reanchor"],
@@ -1735,10 +1773,87 @@ CHECKPOINT_MAC = e("MPCE-E567", "checkpoint_mac", Store, 6,
     "Nothing was loaded from it. Restore the doc from its log, or reload it.")
     .indirect("the native engine's store (feature native)");
 
+NATIVE_STORE_CORRUPT = e("MPCE-E561", "native_store_corrupt", Store, 6,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused a stored record: it fails the load's checks",
+    "Nothing was opened past this record. If the host lowered its limits, raise them again; if \
+     it releases records, check it settled their digests first. Otherwise restore the document \
+     from another copy: the host's state, for a replica; for the host's own store, a peer \
+     replica, a backup, or the document's Yrs store where one is kept.")
+    .indirect("the native engine's store (feature native)");
+
 CUT_PURGE_PENDING = e("MPCE-E568", "cut_purge_pending", Store, 1,
     "the MPCE seam (stable codes)", &["(host)"],
     "the engine didn't adopt a cut: a purge happened since its position, or a rewrite isn't \
      finished",
     "Nothing changed. Finish the rewrite, then cut again from a new fork.")
     .indirect("the native engine's store (feature native)");
+
+STORE_KEYS_WRONG = e("MPCE-E571", "store_keys_wrong", Store, 6,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused the store: it was written under another secret or digest key",
+    "Nothing was read and nothing changed. Check the host's keys for this document: restore \
+     its own secret and digest key from where the store came from. Never make new keys for a \
+     store that has native records.")
+    .indirect("the native engine's store (feature native)");
+
+STABLE_PART_OF_CHANGE = e("MPCE-E573", "stable_part_of_change", Store, 2,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused the stable point: it splits a change",
+    "Nothing changed. Pass a stable point that is an apply-order prefix of whole changes. At \
+     a load, the store holds a stable record no released writer makes: restore the document \
+     from another copy (the host's state, a peer replica, a backup).")
+    .indirect("the native engine's stable point (feature native)");
+
+S_RECORD_MISSING = e("MPCE-E580", "s_record_missing", Store, 1,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused the write: the stable record it returned isn't in the store yet",
+    "Nothing was written. Append the stable record set_stable returned, then retry. If its \
+     bytes were lost before they were written, reload the document from the store and set the \
+     stable point again.")
+    .indirect("the native engine's stable point (feature native)");
+
+CHECKPOINT_DROPS_S_RECORD = e("MPCE-E581", "checkpoint_drops_s_record", Store, 6,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused a cut: the checkpoint drops a stable record its kept records name",
+    "Nothing was written: the store is as it was. This is an engine bug: report it with the \
+     record index in the message.")
+    .indirect("the native engine's store (feature native)");
+
+STORE_NONCE_INVALID = e("MPCE-E582", "store_nonce_invalid", Store, 6,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused the store nonce: missing, all zero, or equal to a key",
+    "Nothing was created. A new store needs a fresh random 16-byte nonce, never reused and \
+     never equal to its keys: the kit makes one for every store, so this is a kit bug: report \
+     it.")
+    .indirect("the native engine's new store (feature native)");
+
+PART_CAP_BELOW_ENTRY = e("MPCE-E987", "part_cap_below_entry", Limits, 2,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused its limits: a part size is below the largest checkpoint entry",
+    "Nothing was made or loaded. Raise checkpoint_part_bytes (and record_bytes) to at least \
+     the largest checkpoint entry the limits admit, or lower string_bytes_per_op.")
+    .indirect("the native engine's limits (feature native)");
+
+MERGE_NOT_A_FOLD = e("MPCE-E995", "merge_not_a_fold", Limits, 2,
+    "the MPCE seam (stable codes)", SYNC,
+    "the engine refused the update: a merge in it doesn't fold",
+    "Nothing was applied. From a peer the update is malformed or forged: drop it, and if the \
+     peer keeps sending such updates, close it as hostile and resync from the host. (From the \
+     host it is MPC-E163: this replica is behind.)")
+    .indirect("the native engine's admission (feature native)");
+
+CAUSAL_CHECK_OVER_LIMIT = e("MPCE-E997", "causal_check_over_limit", Limits, 2,
+    "the MPCE seam (stable codes)", SYNC,
+    "the engine refused the update: its causal check is over a limit",
+    "Nothing was applied. Split the update at run boundaries into parts each within the \
+     limits (one run always is), and send them in causal order.")
+    .indirect("the native engine's admission (feature native)");
+
+OWN_LINE_PARENTS = e("MPCE-E1000", "own_line_parents", Session, 2,
+    "the MPCE seam (stable codes)", SYNC,
+    "the engine refused the change: it names more than one parent on one agent's line",
+    "Nothing changed. Name only the latest parent on each agent's line. At a load, the store \
+     holds a run no released writer makes: restore the document from another copy.")
+    .indirect("the native engine's admission (feature native)");
 }

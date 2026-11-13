@@ -42,7 +42,7 @@ pub struct ToolOutput {
     pub refusal: Option<ErrorReport>,
     /// Warnings about the call itself, for **stderr** (one `note: ` line each), never part of
     /// `stdout`: an agent's edit by position with no version, applied in
-    /// [`PositionalMode::Warn`] ([`positional_note`], K-ADDR-3). Empty for most calls.
+    /// [`PositionalMode::Warn`] ([`positional_note`]). Empty for most calls.
     pub warnings: Warnings,
 }
 
@@ -83,7 +83,7 @@ impl PartialEq<Vec<String>> for Warnings {
     }
 }
 
-/// What an agent's edit by position with no version does (K-ADDR-3, R-1, R-2): an edit
+/// What an agent's edit by position with no version does (R-1, R-2): an edit
 /// verb's line or range (`--lines`, `--line`, `--after`, `--at`, `--range`, a `sed -i` line
 /// address) or a pack verb's positional address (`--nth K`, [`super::PackVerb::positional`])
 /// counts positions in some version, and an agent's edit names that version with
@@ -101,7 +101,7 @@ pub enum PositionalMode {
 }
 
 /// The mode [`ToolOptions::default`] uses: [`PositionalMode::Warn`] for this one release
-/// (K-ADDR-3's compatibility window); the next release flips it to
+/// (the compatibility window); the next release flips it to
 /// [`PositionalMode::Refuse`]. A host may choose either with [`ToolOptions::positional`].
 pub const POSITIONAL_DEFAULT: PositionalMode = PositionalMode::Warn;
 
@@ -148,7 +148,7 @@ pub struct ToolOptions {
     /// What an agent's edit by position with no version does (default
     /// [`POSITIONAL_DEFAULT`]).
     pub positional: PositionalMode,
-    /// The most bytes one page of a structure read returns (K-READ-2; default
+    /// The most bytes one page of a structure read returns (default
     /// [`crate::index::READ_BUDGET`], at least [`crate::index::READ_BUDGET_MIN`]). Terminal
     /// verbs (`cat`, `sed`...) ignore it.
     pub read_budget: usize,
@@ -263,7 +263,7 @@ impl Session {
     /// another participant's live claim exits 5 with nothing applied, and a person is never
     /// refused). Read verbs ignore the policy. `run_tool` is this with the defaults.
     ///
-    /// An App viewer (K5) sees the others by handle in everything the output carries: the
+    /// An App viewer sees the others by handle in everything the output carries: the
     /// fence's contributors, a `--for-edit` claim or conflict (or the refusal it carries), the
     /// hidden-cell writes' deleters, a refusal naming someone, and the attributions a grid verb
     /// prints (`cell get --json`'s author, a deleted element's "by" line). Notes are lensed
@@ -410,7 +410,7 @@ impl Session {
         }
     }
 
-    /// A pack's structured verb (A9): a read runs on a View of the live doc under the lock (a
+    /// A pack's structured verb: a read runs on a View of the live doc under the lock (a
     /// read base is recorded, as for `cat`); an edit computes its ops on the View inside
     /// [`Session::edit_ops_with`] and they apply as one change, by key, with `--if-version`,
     /// `--base` and the claim policy. `args` are the arguments after the verb's words.
@@ -488,7 +488,7 @@ impl Session {
         eo.if_version = if_version;
         eo.base = base;
         eo.turn = opts.turn;
-        // the change records the pack verb that made it (rendering-data contract gap 9)
+        // the change records the pack verb that made it
         eo.verb = Some(v.name());
         let mut report: Option<(Vec<u8>, u8)> = None;
         let mut own: Option<&'static crate::errors::ErrorEntry> = None;
@@ -711,7 +711,7 @@ impl Session {
         })
     }
 
-    /// K-ADDR-3 for an edit with a positional `address`: a person's, or one naming its version
+    /// The version check for an edit with a positional `address`: a person's, or one naming its version
     /// (`if_version`, `base`), goes ahead; an agent's with neither is refused
     /// ([`PositionalMode::Refuse`]) or goes ahead with a warning ([`PositionalMode::Warn`]).
     fn positional_check(
@@ -733,7 +733,7 @@ impl Session {
     }
 }
 
-/// The refusal a structured verb's "no" is (C1, the grid verbs' exits, CSV contract §3.3):
+/// The refusal a structured verb's "no" is (the grid verbs' exits, CSV contract §3.3):
 /// exit 4 (an unknown or deleted row, column or cell) is `MPC-E805 no_element`, exit 1 the
 /// pack verb's "no" (`MPC-E127`); its first stdout line is the message. Exit 0 and 2 (a
 /// usage error, already a [`ToolError`]) are none.

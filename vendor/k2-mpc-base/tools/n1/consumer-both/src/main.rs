@@ -13,6 +13,11 @@
 //! table named): reported, and the store opened again after it. Its delete isn't refused, and
 //! it can't erase rows of a table it doesn't know.
 //!
+//! Which outcome is expected is decided by the two builds' versions (`K2MB_N1_WRITER`,
+//! `K2MB_N1_READER`, which `n1.sh` reads from each kit's manifest): the rewrite is refused,
+//! naming a table, exactly when the writer knows a table the reader doesn't (`TABLES`), and
+//! must succeed otherwise.
+//!
 //! v0.14.0's producer (`K2MB_N1_PERSONS`) also leaves person-device writers (`client_kinds`
 //! kind 2), listed in `persons-<store>`: a build of either side never hands one of a.md's to
 //! its own joins here (a person's, an agent's), and its rewrite keeps them (the kit's
@@ -24,6 +29,34 @@ use k2_mpc_base::session::{
     TextFilePack,
 };
 use k2_mpc_base::store::{DocKey, DocStore, StoreError};
+
+/// The tables the producer leaves, each with the first release that knows it.
+const TABLES: &[(&str, (u64, u64, u64))] = &[
+    ("client_kinds", (0, 11, 0)),
+    ("change_turns", (0, 15, 0)),
+    ("blob_turns", (0, 15, 0)),
+    ("change_verbs", (0, 15, 0)),
+];
+
+/// A crate version from the environment (`n1.sh` reads each kit's from its manifest).
+fn version(var: &str) -> (u64, u64, u64) {
+    let v = std::env::var(var)
+        .unwrap_or_else(|_| panic!("{var} is unset (tools/n1/n1.sh sets it)"));
+    let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+    assert_eq!(n.len(), 3, "{var}={v:?}: not MAJOR.MINOR.PATCH");
+    (n[0], n[1], n[2])
+}
+
+/// The tables of the other build's store this build doesn't know: written by the other build
+/// (`K2MB_N1_WRITER`, its version, knows them) and not known to this one (`K2MB_N1_READER`).
+fn unknown_tables() -> Vec<&'static str> {
+    let (writer, reader) = (version("K2MB_N1_WRITER"), version("K2MB_N1_READER"));
+    TABLES
+        .iter()
+        .filter(|(_, since)| writer >= *since && reader < *since)
+        .map(|(t, _)| *t)
+        .collect()
+}
 
 struct H;
 impl Host for H {
@@ -141,20 +174,25 @@ fn main() {
         drop((s, mgr));
         let check = store.check_rewritable();
         println!("{file}: check_rewritable: {check:?}");
+        // the tables of the other build's store this build doesn't know, by its version: a
+        // build that knows them all takes the store; one that doesn't refuses the rewrite
+        // naming one of them, before anything changes
+        let unknown = unknown_tables();
         match check {
-            // a newer kit's table this build doesn't know (client_kinds, after v0.10.2;
-            // change_turns and change_verbs, after v0.14.0)
             Err(StoreError::NewerData { table })
-                if ["client_kinds", "change_turns", "blob_turns", "change_verbs"]
-                    .contains(&table.as_str()) =>
+                if !unknown.is_empty() && unknown.contains(&table.as_str()) =>
             {
                 println!("{file}: rewrite refused before any change (table {table:?})");
             }
-            other => {
-                other.expect("rewritable");
+            Ok(()) if unknown.is_empty() => {
                 let r = store.rewrite_file().expect("no table this build doesn't know");
                 println!("{file}: rewrite_file ok ({r:?})");
             }
+            other => panic!(
+                "{file}: the rewrite (tables this build doesn't know: {unknown:?}): expected {}, \
+                 got {other:?}",
+                if unknown.is_empty() { "Ok" } else { "refused naming one of them" }
+            ),
         }
         drop(store);
         let store = DocStore::open(file).expect("the store opens again");

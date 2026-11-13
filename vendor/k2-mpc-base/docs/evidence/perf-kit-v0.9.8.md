@@ -238,7 +238,7 @@ is not the kit's:** it is the engine (§E), listed after the kit's causes for K2
   - (b): about −12 ms [derived]: what is left is the file write and the catch-up.
 - **Risk:**
   - (a): low.
-  - (b): the crash-safety protocol of the write-back (K-AUD-1) must be re-proved. It needs
+  - (b): the write-back's safety protocol for a stopped process must be re-proved. It needs
     the disk crash tests.
 - **Format bump:** (a) no, (b) yes.
 

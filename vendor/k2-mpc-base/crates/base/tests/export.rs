@@ -2,7 +2,7 @@
 //! version) and the `export` contract (the registry, the identity exporter, a test exporter
 //! for the contract). Public API only.
 //!
-//! Grid docs (k2-mpc-base's C1): `file_at` round-trips at every version, before and after
+//! Grid docs: `file_at` round-trips at every version, before and after
 //! structural changes (`grid_file_at_round_trips_every_version`).
 
 use std::collections::HashMap;
@@ -121,7 +121,7 @@ impl Fx {
             .unwrap()
             .conn
     }
-    /// Everything an export must leave alone (X-DOC-1, the parts the API shows).
+    /// Everything an export must leave alone (the parts the API shows).
     fn untouched(&self) -> String {
         format!(
             "{:?}\n{:?}\n{:?}",
@@ -221,7 +221,7 @@ fn rights_file_at_needs_history_file_now_read() {
     assert!(f.s.file_now(reader).is_err());
 }
 
-/// X-DOC-1 (what the API shows): `file_at`, `file_now` and an export through the registry
+/// What the API shows: `file_at`, `file_now` and an export through the registry
 /// leave the doc as it was: status, versions, log.
 #[test]
 fn reading_and_exporting_never_change_the_doc() {
@@ -249,7 +249,7 @@ fn reading_and_exporting_never_change_the_doc() {
             &ctl(&AtomicBool::new(false), ExportLimits::default()),
         )
         .unwrap();
-    // X-DOC-3: the as-is target passes the version's bytes through unchanged
+    // The as-is target passes the version's bytes through unchanged
     assert_eq!(out.bytes, at.bytes);
     assert_eq!(r.bytes, at.bytes.len() as u64);
     assert_eq!(f.untouched(), before, "the doc is as it was");
@@ -549,7 +549,7 @@ fn the_identity_exporter_passes_bytes_and_one_root_through() {
     assert!(p.windows(2).all(|w| w[0].0 < w[1].0), "progress only grows");
 }
 
-/// Every export error maps to its stable id and exit (X-ERR-1).
+/// Every export error maps to its stable id and exit.
 #[test]
 fn export_errors_have_stable_ids() {
     for (e, id, exit) in [
@@ -753,9 +753,9 @@ fn walk(d: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
-// ---------- grid docs (C1) ----------
+// ---------- grid docs ----------
 
-/// `file_at` on a grid doc (the C1 ↔ main round): at each named version, before and after
+/// `file_at` on a grid doc: at each named version, before and after
 /// structural changes (a row moved, a row deleted, a column inserted, the header switched),
 /// the bytes are `pack.encode` of that version's content (`show_content`) with the codec
 /// settings the version stored, and the file the doc rendered then; `Exact` (a grid's

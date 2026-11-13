@@ -24,12 +24,12 @@ export interface ChangeEvent {
   /** What kind of change it is (the kit's `ChangeKind`, kit v0.10.1; absent from an older
    * host). An undo and a redo say so here. */
   kind?: "edit" | "undo" | "redo" | "revert" | "restore" | "external" | "import";
-  /** The host-given turn of the agent step that made it (rendering-data contract gap 8):
+  /** The host-given turn of the agent step that made it:
    * opaque, at most 64 bytes, compared only for equality, to group one agent run's changes.
    * `null` for a person's change, an outside save, and any call the host gave none; absent
    * from a host before wire 3. An App viewer always gets `null`. */
   turn?: string | null;
-  /** The id of the pack verb that made it (rendering-data contract gap 9), as the pack names it
+  /** The id of the pack verb that made it, as the pack names it
    * (`shape move`, `replace-section`), at most 64 bytes. `null` for a raw write, a kit tool
    * (`sed -i`, `append`), an outside save, an undo, a redo, a revert, a restore and the import;
    * absent from a host before it (wire 3, kit after v0.14.0). `via` stays the client (`cli`),
@@ -37,7 +37,7 @@ export interface ChangeEvent {
   verb?: string | null;
 }
 
-/** What to run next, as data (the kit's `NextStep`, K-PAR-10): a kit verb by its registry
+/** What to run next, as data (the kit's `NextStep`): a kit verb by its registry
  * name, its arguments one argv token each (`{key}` stands for the refusal's `details.key`),
  * and why, in prose. No host syntax: the host (or its UI) renders it in its own. */
 export interface NextStep {
@@ -206,7 +206,7 @@ export interface ClaimActor {
 }
 
 /**
- * One roster change, mirroring the kit's `RosterEvent` (K5): a snapshot first, then deltas.
+ * One roster change, mirroring the kit's `RosterEvent`: a snapshot first, then deltas.
  * `who` is the participant's id or opaque handle (`Who::Pid` / `Who::Handle`) as a string.
  * Notes of kind `note` are passed through untyped: their payload belongs to the kit's notes,
  * which grow by release. `overwritten` (and a snapshot's waiting copies of it) is typed in full.
@@ -703,8 +703,7 @@ export interface GridSlot {
   cell_derived?: string[];
 }
 
-/** The pack's view schema, as the snapshot's view carries it (the rendering-data contract's
- * §1.2). */
+/** The pack's view schema, as the snapshot's view carries it. */
 export interface ViewSchemaJson {
   containers: string;
   units: string;
@@ -723,6 +722,46 @@ export interface ViewSchemaJson {
   /** The live grid, for a pack whose units are a grid's rows; `null` (or absent, from an older
    * kit) otherwise. */
   grid?: GridSlot | null;
+  /** The names of the pack's derived values per unit (small texts only the pack works out: a
+   * transform, a label as people read it): each unit carries its own in `derived`, and a
+   * change's `derived.units.<unit>.<name>` updates them. Absent: none (and from an older kit). */
+  unit_derived?: string[];
+  /** The 3D slot (WIRE.md, "Placements in 3D"): the fields a placement is read from and its
+   * numbers' precision. Absent: no 3D (and from an older kit). */
+  space?: SpaceSlotJson;
+}
+
+/** The view schema's 3D slot. */
+export interface SpaceSlotJson {
+  unit_fields: string[];
+  container_fields: string[];
+  precision: "f32" | "f64";
+}
+
+/** A rotation, radians: Euler angles about X, Y, Z (in that slot order) turned in the order
+ * word's order about fixed axes; a quaternion `w, x, y, z`; an axis and an angle. */
+export type RotationJson = { euler: string; angles: number[] } | { quat: number[] } | { axis: number[]; angle: number };
+
+/** One step of a placement. */
+export type StepJson =
+  | { trs: { loc: number[]; rot: RotationJson; scale: number[] } }
+  | { axes: { origin: number[]; z: number[] | null; x: number[] | null } }
+  | { matrix: number[] };
+
+/** Where a unit or container sits: relative to another element's address, or (`null`) the doc's
+ * space; the first step outermost; `approx` a reason word when the file can't say exactly. */
+export interface PlacementJson {
+  relative_to: string | null;
+  steps: StepJson[];
+  approx?: string | null;
+}
+
+/** The doc's space. */
+export interface SpaceJson {
+  length_unit: string;
+  metres_per_unit: number | null;
+  up: string;
+  handed: string;
 }
 
 /** One container of the view index (a slide), by address; `position` from 1. */
@@ -736,6 +775,8 @@ export interface ViewContainer {
   fonts: number[];
   has_fields: string[];
   unit_count: number;
+  /** Its placement (a 3D slot with container fields); absent or `null`: not placed. */
+  placement?: PlacementJson | null;
 }
 
 /** One unit of the view index (a shape), by address, in native units. */
@@ -759,6 +800,11 @@ export interface ViewUnit {
   hidden: boolean;
   placeholder: { type: string; idx: string | null } | null;
   editable_text: "plain" | "formatted" | "never" | null;
+  /** The pack's derived values (the view schema's `unit_derived`), `{name: text}`, each text at
+   * most `VIEW_TEXT_MAX` bytes; absent when the unit has none. */
+  derived?: Record<string, string>;
+  /** Its placement (a 3D slot); absent or `null`: not placed by the slot, not drawn from it. */
+  placement?: PlacementJson | null;
 }
 
 /** The view index's snapshot, as a snapshot's head carries it: everything but the units. */
@@ -771,9 +817,11 @@ export interface ViewSnapshotJson {
   fonts: unknown[];
   layouts: unknown[];
   containers: ViewContainer[];
+  /** The doc's space (a 3D slot). */
+  space?: SpaceJson;
 }
 
-/** What a change did to one unit of the view (the rendering-data contract's `UnitDelta`):
+/** What a change did to one unit of the view (the `UnitDelta`):
  * its address and its container's (before a `delete`, after anything else), the kinds of
  * change, the geometry field's value before and after when the change moved it (`null`
  * otherwise, and for an empty one), the fields that changed (names only), whether it is hidden
@@ -782,12 +830,15 @@ export interface ViewSnapshotJson {
 export interface UnitDelta {
   key: string;
   container: string | null;
-  ops: ("add" | "delete" | "restore" | "reorder" | "move_resize" | "rotate" | "flip" | "text" | "style" | "hide_show" | "props" | "cell")[];
+  ops: ("add" | "delete" | "restore" | "reorder" | "move_resize" | "rotate" | "flip" | "place" | "text" | "style" | "hide_show" | "props" | "cell")[];
   geom_before: string | null;
   geom_after: string | null;
   fields: string[];
   hidden_after: boolean | null;
   placeholder_type: string | null;
+  /** A 3D slot: its placement after the change, on `add` and `restore` always and with `place`
+   * when it moved (`null`: none now). Absent: not carried. */
+  placement_after?: PlacementJson | null;
 }
 
 /** What a change did to one container (`ContainerDelta`): a list op with its positions (from
@@ -799,11 +850,13 @@ export interface ContainerDelta {
   position_after: number | null;
   hidden_after: boolean | null;
   fields: string[];
+  /** A 3D slot with container fields: its placement after the change (`null`: none now). */
+  placement_after?: PlacementJson | null;
 }
 
 /** The head of a snapshot: the doc's keyed state at version `upto` follows in `pages` pages.
  * `view`: the view index's snapshot at `upto` (its view schema, page, fonts, layouts and
- * containers: the rendering-data contract's Item 1), opaque here, or `null` when the doc's pack
+ * containers), opaque here, or `null` when the doc's pack
  * declares no view schema; its units follow in `units` pages. */
 export interface KeyedSnapshotFrame {
   type: "keyed_snapshot";
@@ -903,6 +956,8 @@ export interface OpsChangeFrame {
   derived: FrameDerived | null;
   /** The containers whose render hash changed (`null`: none). */
   render_hashes: Record<string, string> | null;
+  /** A 3D slot: the doc's space after the change, when it changed. */
+  view_space?: SpaceJson;
 }
 
 /** A change frame's `derived` (WIRE.md, "Derived values"): what only the pack works out, by

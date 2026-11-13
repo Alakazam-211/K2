@@ -12,7 +12,7 @@ Map (kit v0.10 work, for the CSV grid): ops, readers and the applied stream in `
 `mlist.*`, `map.*`, `table.*` (the CSV table's composition) and `stream.*` rules in the
 conformance suite, over engine-neutral structured capabilities, with planted negatives, the
 Yrs deviations pinned in the kit Doc's `KNOWN_DEVIATIONS`, and mpce-model and the native
-engine awaiting their list and map primitives (`docs/CONFORMANCE.md`). The others are
+engine awaiting their list and map primitives. The others are
 specified here and are built, each with its suite, when the first pack needs them. Declaring an unimplemented kind fails loudly at `Doc::new`, and so does a
 root name that is empty, repeated, or holds `/`.
 
@@ -37,7 +37,7 @@ root name that is empty, repeated, or holds `/`.
   This is tier 0's mechanism, built in `src/blob.rs` (keyed CAS files under a host folder,
   the index in the store) and `session::BlobSession` (see SESSIONS.md, "Tier 0").
 - **Tables are composites, not one kind** (the kit's `table` module composes them, engine-free:
-  the CSV contract's six roots, render rules, key minting, grid ops, the aligner
+  the CSV pack's six roots, render rules, key minting, grid ops, the aligner
   `table::reconcile`, the grid three-way merge `table::merge3`, and `table::hidden_cell_writes`):
   - grid structure: two MovableLists (rows, columns), keyed by row and column keys;
   - cell values: a Map keyed by (row key, column key), LWW or Text per cell;
@@ -79,7 +79,7 @@ root name that is empty, repeated, or holds `/`.
   and after, and its effect (shown, hidden, or none, with the current winner).
 - **A merged update reports what it did too** (another replica's changes, applied as bytes):
   `Doc::applied_since(&before)` derives the stream by a keyed diff of the state around it
-  (`Doc::keyed_state`, `elem::keyed_diff`; CSV seam design §4.2). Keys are identities, so the
+  (`Doc::keyed_state`, `elem::keyed_diff`). Keys are identities, so the
   diff is exact up to the choice of moves (a minimal set); each op's write is the facet's
   winner, `None` where the engine keeps no identity (on Yrs, a restore and a map delete). It
   reports what readers can see: a move of a deleted element, and writes that changed nothing,
@@ -97,10 +97,10 @@ The kit checks **identities**, never **values**:
   stored and read back unchanged (`tests/structured.rs`,
   `the_kit_leaves_value_checks_to_the_pack`).
 
-Value rules are the pack's, in its per-op schema check (K-SCH-4; the table layer for the CSV
-grid, `table::check_value`): the CSV contract's "NUL is refused" and "one value: 64 KiB"
+Value rules are the pack's, in its per-op schema check (the table layer for the CSV
+grid, `table::check_value`): the CSV pack's "NUL is refused" and "one value: 64 KiB"
 (exit 2) live there. Per the
-engine answer E10, such a check is a **pure function of the op and its causal past**, never
+engine's answer, such a check is a **pure function of the op and its causal past**, never
 of concurrent state: key format, value size, no NUL, "a set carries the element's own key",
 "an insert doesn't reuse a key in its causal past". "The row is live" or "this column exists
 here" are not allowed: a cell set into a row deleted concurrently must stay legal (it is

@@ -1,4 +1,4 @@
-//! The parity harness (K-PAR-3): each person action, the person's way and the agent's way,
+//! The parity harness: each person action, the person's way and the agent's way,
 //! on two identical docs, then the observable effects compared.
 
 use std::collections::HashMap;
@@ -510,7 +510,7 @@ impl Stage {
             .unwrap_or_default())
     }
 
-    /// A grid doc's content by key, as the observer reads it (A11: rows and columns in
+    /// A grid doc's content by key, as the observer reads it (rows and columns in
     /// order, cells, names, quoting, meta).
     pub fn content(&self) -> Result<Vec<(String, crate::doc::Neutral)>, String> {
         Ok(self
@@ -1440,7 +1440,7 @@ fn key_pair(s: &str) -> Result<(crate::elem::Key, crate::elem::Key), String> {
 }
 
 impl Agent<'_> {
-    /// The reference binding of the kit's verbs whose grid form differs (A10-A12): `cursor
+    /// The reference binding of the kit's verbs whose grid form differs: `cursor
     /// --cell`, `claim --rows/--cols/--cells`, `follow`, `write --base V` (merged by key),
     /// `show --version`, `blame --cell`, `blame --structure`, `rows drop-deleted`. `None`:
     /// the text binding applies.
@@ -1714,7 +1714,7 @@ pub struct Observation {
     /// Changes made during the path (attribution: who, for whom, kind, line counts).
     pub changes: Vec<ChangeObs>,
     /// Versions cut during the path, without the agent-only safety cut before a large agent
-    /// edit (`BeforeAgent`, K-HIST-4: a version, not a behaviour difference).
+    /// edit (`BeforeAgent`: a version, not a behaviour difference).
     pub versions: Vec<VersionObs>,
     /// Every approval record (seq, state, by).
     pub approvals: Vec<(Seq, ApprovalState, Option<String>)>,
@@ -2060,7 +2060,7 @@ pub fn run_case(pack: &Arc<dyn Pack>, registry: &Registry, case: &Case) -> Vec<F
     problems
 }
 
-/// The parity check for one pack (K-PAR-1…3):
+/// The parity check for one pack:
 ///
 /// 1. the list has exactly one row per [`PersonAction`];
 /// 2. the list and the registry agree both ways: every live row's verbs are registered and

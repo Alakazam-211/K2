@@ -1,0 +1,21 @@
+MPCE-E582 store_nonce_invalid (store)
+exit:     6
+message:  the engine refused the store nonce: missing, all zero, or equal to a key
+next:     Nothing was created. A new store needs a fresh random 16-byte nonce, never reused and never equal to its keys: the kit makes one for every store, so this is a kit bug: report it.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E582",
+  "name": "store_nonce_invalid",
+  "area": "store",
+  "exit": 6,
+  "message": "the engine refused the store nonce: missing, all zero, or equal to a key",
+  "next": "Nothing was created. A new store needs a fresh random 16-byte nonce, never reused and never equal to its keys: the kit makes one for every store, so this is a kit bug: report it.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

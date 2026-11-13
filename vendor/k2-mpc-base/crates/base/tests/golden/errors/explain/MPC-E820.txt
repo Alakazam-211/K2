@@ -2,7 +2,7 @@ MPC-E820 key_not_own (structured and CSV)
 exit:     2
 message:  insert {key} on {root} doesn't carry your writer tag {tag}
 next:     This list's keys carry their writer: an insert must name <prefix><n>.<tag> with one of the list's prefixes and your own writer tag (details.tag). Nothing was applied. Insert through a verb or Session::mint_key, which mints a key with your own writer tag; never reuse another writer's tag.
-rule:     structured live, slice 1
+rule:     writer-tagged keys
 verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
 status:   live
 --- json
@@ -13,7 +13,7 @@ status:   live
   "exit": 2,
   "message": "insert {key} on {root} doesn't carry your writer tag {tag}",
   "next": "This list's keys carry their writer: an insert must name <prefix><n>.<tag> with one of the list's prefixes and your own writer tag (details.tag). Nothing was applied. Insert through a verb or Session::mint_key, which mints a key with your own writer tag; never reuse another writer's tag.",
-  "rule": "structured live, slice 1",
+  "rule": "writer-tagged keys",
   "verbs": ["@change"],
   "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
   "status": "live",

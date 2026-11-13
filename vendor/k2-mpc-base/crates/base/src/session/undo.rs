@@ -646,7 +646,7 @@ pub(crate) struct Batch {
     pub on_behalf_of: Option<String>,
     /// Ordered by root, then start.
     pub regions: Vec<Region>,
-    /// A later change landed inside one of its regions or touching one (U3 (g), K4): set by
+    /// A later change landed inside one of its regions or touching one (U3 (g)): set by
     /// [`Batch::transform`], read only for a person's open undo group, which such a change
     /// closes. False when pushed.
     pub touched: bool,
@@ -673,7 +673,7 @@ impl Batch {
     }
 }
 
-/// Person grouping (U3, K4): the open group's region `prev`, at bounds `a..b` in the text
+/// Person grouping (U3): the open group's region `prev`, at bounds `a..b` in the text
 /// just before the next edit, and that edit's only region `next` (made on that text), as
 /// **one region**: what turns the text after `next` back into the text before the group,
 /// over the union of their windows. Its ours is one hunk over the whole window, as a fresh
@@ -1177,7 +1177,7 @@ mod tests {
         assert_eq!(diff::apply(&undone, hunks), live);
     }
 
-    // ----- revert is at least as conservative as undo (C7b) -----
+    // ----- revert is at least as conservative as undo -----
 
     use crate::session::carry::RevertIndex;
     use crate::store::{RecordHunk, RecordRoot, RevertRecord, RootShape};
@@ -1313,7 +1313,7 @@ mod tests {
         );
         let r = outcome(&live, reverted(&mut rv)).unwrap_err();
         assert_eq!(r, undo);
-        // --partial: nothing is clean, so nothing applies (C7a applied the right region)
+        // --partial: nothing is clean, so nothing applies (the right region was applied before)
         let p = plan_v17(&texts(&live), vec![reverted(&mut rv)], Mode::Partial);
         assert!(
             matches!(&p, Plan::Steps { steps, blocked: Some(c) } if steps.is_empty() && c.len() == 2),

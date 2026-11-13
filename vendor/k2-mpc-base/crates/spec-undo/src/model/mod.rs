@@ -137,7 +137,7 @@ pub struct Report {
     pub kind: Kind,
 }
 
-/// One conflicting region of a refused `write --base` (K-BR-2, O1–O5;
+/// One conflicting region of a refused `write --base` (O1–O5;
 /// [`merge::write_base_regions`]): its root, its byte range `[start, end)` in the **base**,
 /// and its 1-based lines (first, last) in the base, in the writer's text (`ours_lines`) and
 /// in the live text (`theirs_lines`).
@@ -263,7 +263,7 @@ pub struct Bounds {
     pub group_idle_ms: u64,
     /// How text splits into tokens for D1 (v1.10): the kit's markdown and text packs use
     /// words (the default). The model check's single-letter alphabets use characters, under
-    /// which D1 is the identity, so the G1 evidence stands as taken.
+    /// which D1 is the identity, so the full-bound evidence stands as taken.
     pub tokens: lines::Tokens,
 }
 

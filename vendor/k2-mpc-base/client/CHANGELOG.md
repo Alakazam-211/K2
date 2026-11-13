@@ -3,6 +3,26 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.18.0 (kit tag v0.18.0)
+
+Still wire 3: every addition is optional, and with a kit that sends none the client behaves as
+0.17.0.
+
+- **Derived values per unit** (WIRE.md, "Derived values per unit"): `wire.ts` gains the view
+  schema's `unit_derived` and a unit's `derived`; `KeyedWatch.unitDerived(name, unit)` reads them
+  and `KeyedWatch.unit(address)` the unit, kept from the snapshot's units pages and each
+  change's `derived.units` (`KeyedView.unit`, `KeyedView.applyDerived`).
+- Tests: `test/unit-derived.test.ts` (hand-built frames and the kit's
+  `test/golden/keyed_frames_unit_derived.json`); `test/n1-wire.test.ts` has the previous
+  client read that golden to the same state and units.
+
+- **Placements in 3D** (WIRE.md, "Placements in 3D"): `wire.ts` gains `PlacementJson`,
+  `StepJson`, `RotationJson`, `SpaceJson`, `SpaceSlotJson`, a unit's and a container's
+  `placement`, a delta's `placement_after`, the op `place` and `view_space`; `src/placement.ts`
+  (`placementMatrix`, `worldMatrix`, `stepMatrix`, `mul`); `KeyedWatch.placement`, `space` and
+  `worldMatrix`; `KeyedView.placementOf`. Tests: `test/placement.test.ts` (the shared vectors,
+  the kit's `golden/keyed_frames_placement.json`, hand-built frames), and an N-1 row.
+
 ## 0.17.0 (kit tag v0.17.0)
 
 The client for kit v0.17.0. Still wire 3 (`WIRE_VERSION` 3): the live grid is behind its
@@ -27,8 +47,8 @@ behaves exactly as 0.16.0.
     sets its own focus to the sheet, refuses more than 16 ranges itself with `MPC-E310`; a focus
     on another sheet clears its cells), `claimCells({container, ranges: [range]}, opts)` (under
     `cell_claims`; other than one range is `MPC-E304`, unsent), `cellsSupported`,
-    `cellClaimsSupported`, `PresencePeer.cells`, and claims on cells in `claims()` (`ClaimView.cells`,
-    `root` `""`, no `keys`; the actor from the event).
+    `cellClaimsSupported`, `PresencePeer.cells`, and claims on cells in `claims()`
+    (`ClaimView.cells`, `root` `""`, no `keys`; the actor from the event).
   - Rows: `test/grid-view.test.ts` on the shared vector `test/vectors/grid_view.tsv`, and
     `test/grid-presence.test.ts` with the kit's roster golden `roster_events_cells.json`
     (required). Plants `GridGapIgnored` (`withGridGapIgnored`) and `ClaimCellsActorMissing`
@@ -74,7 +94,7 @@ wire-2 host (no `welcome.wire`) the client behaves exactly as 0.14.0.
 - **`ChangeEvent.verb`** (`wire.ts`): the id of the pack verb that made a change (`shape move`,
   `replace-section`), or `null` (a raw write, a kit tool, an outside save, undo, redo, revert,
   restore). Absent from an older host. Additive within wire 3: `WIRE_VERSION` stays 3.
-- **An agent's verbs move its presence** (kit side, contract gap 11): they arrive as the usual
+- **An agent's verbs move its presence** (kit side, K2's ask): they arrive as the usual
   `focus` and `selection` roster events, so nothing new to fold.
 - **`PresenceChannel.watching` and `onWatching`**: how many watch past the host's participant
   cap (the roster's `watching`), for a view's "+1 watching".
@@ -166,12 +186,12 @@ to an older host sends none of the new frames (`welcome.features`).
   nothing queued it goes at once; held while disconnected, it goes on the new connection in the
   same place; a held undo or redo isn't counted in `pending`. Hosts change nothing. Tests: unit
   and end-to-end, and the fake host's undo and redo stacks per participant, as the kit's.
-- **`mint` helpers, new (structured live, slice 1):** `writerTag`, `parseTag`, `parseKey`,
+- **`mint` helpers, new:** `writerTag`, `parseTag`, `parseKey`,
   `formatKey`, `nextFor`, `markKey` and `retiredMark`, with `MAX_CLIENT_ID`, `MAX_KIT_CLIENT`,
   `MAX_KEY_LEN`, `MAX_PREFIX_LEN` and `MAX_TAG_LEN` and the types `TaggedKey` and `MintError`:
   the kit's tagged keys (`n` as a `bigint`), checked against the kit's shared vectors
   (`test/vectors/mint.json`).
-- **`refs` helpers, new (slice 2):** `resolveRef`, `resolveRefs` and `resolveParents`, with the
+- **`refs` helpers, new:** `resolveRef`, `resolveRefs` and `resolveParents`, with the
   types `Ref`, `RefState` and `Lists`: a reference's state as the kit computes it, checked
   against `test/vectors/refs.json`.
 - **`PresenceChannel.claim` and `release`:** claims on elements of a list root (`PRESENCE.md`).
@@ -238,7 +258,7 @@ by `canRetry`; Re-apply with presence first) and the tests that cover each.
   package now carries `LICENSE-MIT` and `LICENSE-APACHE` (copies of the kit's, in `files`), so
   `npm pack` includes them.
 
-- **`ErrorReport.next_step`** (K-PAR-10): a refusal's `next` as data, `{verb, args, why}`
+- **`ErrorReport.next_step`**: a refusal's `next` as data, `{verb, args, why}`
   (the new `NextStep` type; `verb` is always a kit verb). It is optional: absent when there is
   nothing to run, and from a host on an older kit, and such a report reads as before; `next`
   keeps its prose.
@@ -307,9 +327,9 @@ DOM, and `src/editor/*` is unchanged. Additive: every existing name and signatur
   copy.
 - **Batching:** at most one callback a listener a delivery, with the latest snapshot, none when
   nothing changed. This connection's own activity (its entry's `lastActiveAt`) never calls back
-  by itself: the person typing re-renders no participant list. **New option** `LiveOptions.schedule` (`FrameScheduler`): default
-  `requestAnimationFrame` when present, else a 16 ms (`FRAME_MS`) timer on `LiveOptions.timers`;
-  `(deliver) => deliver()` for immediate delivery (an agent, a Node tool).
+  by itself: the person typing re-renders no participant list. **New option** `LiveOptions.schedule`
+  (`FrameScheduler`): default `requestAnimationFrame` when present, else a 16 ms (`FRAME_MS`) timer
+  on `LiveOptions.timers`; `(deliver) => deliver()` for immediate delivery (an agent, a Node tool).
 - **New exports:** `participantKind`, `defaultScheduler`, `FRAME_MS`, and the types
   `Participant`, `ParticipantKind`, `Range16`, `Mark`, `MarkPlacement`, `InsertPreview`,
   `InsertHereResult`, `InsertRefusal`, `FrameScheduler` (from both entry points); `Presence`
@@ -323,8 +343,9 @@ DOM, and `src/editor/*` is unchanged. Additive: every existing name and signatur
   range and reason; dismiss; Re-apply by the rule; a lost reply (`cant-tell`, landed); insert
   here where the preview said, once, in its own undo group; multi-hunk refused. Planted faults,
   each failing its check: byte offsets, no batching, a callback every delivery, a caret on this
-  connection, activity by the raw caret, the own activity compared again, insert here without the one-hunk check, local edits
-  without their group (`PRESENCE_PLANT=<name>` plants one in every test).
+  connection, activity by the raw caret, the own activity compared again, insert here without the
+  one-hunk check, local edits without their group (`PRESENCE_PLANT=<name>` plants one in every
+  test).
 
 **Per-connection carets.** The same person on two devices or in two tabs sees their other
 connection's caret, as Google Docs shows one login's other tabs. Library only (`live.ts`,
@@ -441,12 +462,13 @@ kit's CHANGELOG under v0.10.0.1.
 - **"Insert my text here"** (M2): a single-hunk action the person chooses, beside Re-apply. It
   first shows the typed text in the editor where it would go (announced in the note,
   `role="status"`; for a replacement or deletion the note adds that the removal isn't redone),
-  and inserts it only on **Insert** (its own undo step); **Cancel** or Escape inserts nothing. Presence is checked first for a lost change. Handle: `insertHere(id)`,
+  and inserts it only on **Insert** (its own undo step); **Cancel** or Escape inserts nothing.
+  Presence is checked first for a lost change. Handle: `insertHere(id)`,
   `confirmInsert()`, `cancelInsert()`, `InsertResult`; class `cm-mpc-insert-preview`.
 - **Copy** on every rejection with text (`copyRejected(id)`): to the clipboard, or the text
   selected when the clipboard refuses. The row's text is selectable.
-- New strings: `insertHere`, `insertConfirm`, `insertCancel`, `insertPreview`, `insertRemovedText`, `insertMultiHunk`,
-  `copy`, `copied`, `copyFailed`, `conflictReapply`, `cantPlace`.
+- New strings: `insertHere`, `insertConfirm`, `insertCancel`, `insertPreview`, `insertRemovedText`,
+  `insertMultiHunk`, `copy`, `copied`, `copyFailed`, `conflictReapply`, `cantPlace`.
 
 **Deprecated**
 - `LiveText.reapplyGuard(id)` and the type `ReapplyGuard` (from v0.9.8.2): a stub over
@@ -478,11 +500,11 @@ kit's CHANGELOG under v0.10.0.1.
   them back where the server would.
 - **Re-apply's guards (single hunk):** it re-inserts the typed text only for a pure insertion,
   with no reload since, nothing else inserted at its place since and no text around its place
-  (or at its edge) deleted or replaced since; otherwise `unknown` with `reason` `not-insertion`, `reloaded`, `tie`
-  or `deleted-around` (strings `notInsertion`, `reloaded`, `tie`, `deletedAround`), the
-  rejection kept. Before, a deletion said `applied` and changed nothing, a replacement's text
-  went in beside the old text, a change pending at a reload went in at the start of the
-  document, at a tie the text went in before the other insertion where the server puts it
+  (or at its edge) deleted or replaced since; otherwise `unknown` with `reason` `not-insertion`,
+  `reloaded`, `tie` or `deleted-around` (strings `notInsertion`, `reloaded`, `tie`,
+  `deletedAround`), the rejection kept. Before, a deletion said `applied` and changed nothing, a
+  replacement's text went in beside the old text, a change pending at a reload went in at the start
+  of the document, at a tie the text went in before the other insertion where the server puts it
   after, and a place inside deleted text went to the deletion's start (and stayed there when
   that deletion was itself refused). An insertion refused for competing text (`MPC-E111`) is
   `deleted-around`. `LiveText.reapplyGuard(id)` and the type `ReapplyGuard` are new.
@@ -513,5 +535,5 @@ The live wire contract (`WIRE.md`): the handshake, closing, reconnecting
 
 ## 0.9.7
 
-The hunk channel's client (K1): `LiveText`, the kit's rebase rules, the CodeMirror 6 binding
+The hunk channel's client: `LiveText`, the kit's rebase rules, the CodeMirror 6 binding
 (`codemirrorLive`). See the kit's CHANGELOG, v0.9.7 and before.

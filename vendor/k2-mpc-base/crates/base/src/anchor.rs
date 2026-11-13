@@ -1,4 +1,4 @@
-//! **Anchors** (slice A3): where a comment is pinned, and what that pin means in a given
+//! **Anchors**: where a comment is pinned, and what that pin means in a given
 //! version of a file (`docs/SESSIONS.md`, "Anchors").
 //!
 //! Pure and generic: it reads no store and knows no file type, so it is tested alone. An
@@ -721,7 +721,7 @@ mod tests {
         });
     }
 
-    /// C8: a renamed layer fits no row of the design's table; here it is the same node.
+    /// A renamed layer fits no row of the anchor rules; here it is the same node.
     #[test]
     fn a_renamed_layer_is_attached() {
         m(|| {
@@ -735,7 +735,7 @@ mod tests {
         });
     }
 
-    /// C8: a plain move, however far, is the same node.
+    /// A plain move, however far, is the same node.
     #[test]
     fn a_plain_move_is_attached() {
         m(|| {
@@ -898,7 +898,7 @@ mod tests {
         });
     }
 
-    /// C9 and K-ANN-9: an orphan with a suggested re-anchor reads suspect, with the
+    /// An orphan with a suggested re-anchor reads suspect, with the
     /// candidate, and still points at its own key.
     #[test]
     fn an_orphan_with_a_candidate_is_suspect() {

@@ -1,0 +1,21 @@
+MPCE-E573 stable_part_of_change (store)
+exit:     2
+message:  the engine refused the stable point: it splits a change
+next:     Nothing changed. Pass a stable point that is an apply-order prefix of whole changes. At a load, the store holds a stable record no released writer makes: restore the document from another copy (the host's state, a peer replica, a backup).
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E573",
+  "name": "stable_part_of_change",
+  "area": "store",
+  "exit": 2,
+  "message": "the engine refused the stable point: it splits a change",
+  "next": "Nothing changed. Pass a stable point that is an apply-order prefix of whole changes. At a load, the store holds a stable record no released writer makes: restore the document from another copy (the host's state, a peer replica, a backup).",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

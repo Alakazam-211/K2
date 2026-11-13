@@ -9,6 +9,8 @@
 //!   checked here: it is the documented N−1 limit (`docs/SESSIONS.md`, "Blob references").
 //! - It refuses a rewrite, and so a purge, before changing anything (`doc_blob_refs`), and its
 //!   doc delete leaves the rows and the count. This repo's `n1_refs_after` reads what's left.
+//!   A release that knows the table (v0.11.0 and later: `K2MB_N1_PREV`, its crate version, which
+//!   `n1.sh` reads from its manifest) takes the store and its delete gives the count back.
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -68,6 +70,17 @@ fn key(path: &str) -> DocKey {
         space: "ws".into(),
         path: path.into(),
     }
+}
+
+/// Whether this build knows the references' table (`doc_blob_refs`): its crate version,
+/// `K2MB_N1_PREV`, is v0.11.0 or later. Unset: a build before it.
+fn knows_refs() -> bool {
+    let Ok(v) = std::env::var("K2MB_N1_PREV") else {
+        return false;
+    };
+    let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+    assert_eq!(n.len(), 3, "K2MB_N1_PREV={v:?}: not MAJOR.MINOR.PATCH");
+    (n[0], n[1], n[2]) >= (0, 11, 0)
 }
 
 fn named(ids: &str, what: &str) -> BlobId {
@@ -161,19 +174,32 @@ fn main() {
     mgr.release().unwrap();
     drop((s, mgr));
 
+    // a release before v0.11.0 refuses the rewrite naming the table and its delete leaves the
+    // rows and the count; one that knows `doc_blob_refs` takes the store and gives the count back
+    let knows = knows_refs();
     match store.check_rewritable() {
-        Err(StoreError::NewerData { table }) if table == "doc_blob_refs" => {
+        Ok(()) if knows => println!("rewrite ok (this release knows doc_blob_refs)"),
+        Err(StoreError::NewerData { table }) if !knows && table == "doc_blob_refs" => {
             println!("rewrite refused before any change (table {table:?})");
         }
-        other => panic!("expected the rewrite refused, got {other:?}"),
+        other => panic!(
+            "the rewrite (knows doc_blob_refs: {knows}): expected {}, got {other:?}",
+            if knows { "Ok" } else { "refused naming doc_blob_refs" }
+        ),
     }
     let b = store.find(&key("b.items")).unwrap().expect("b.items");
     store.delete_doc(b, now.load(Ordering::SeqCst)).unwrap();
-    assert_eq!(
-        blobs.info("ws", &deleted).unwrap().map(|x| x.1),
-        Some(1),
-        "its delete can't give back a count it doesn't know"
-    );
-    println!("doc delete: left the rows and the count");
+    let left = blobs.info("ws", &deleted).unwrap().map(|x| x.1);
+    if knows {
+        assert_eq!(left, Some(0), "its delete gives back the doc's count");
+        println!("doc delete: the rows and the count given back");
+    } else {
+        assert_eq!(
+            left,
+            Some(1),
+            "its delete can't give back a count it doesn't know"
+        );
+        println!("doc delete: left the rows and the count");
+    }
     println!("N-1 REFS (older side) OK");
 }

@@ -47,7 +47,7 @@ fn client(id: u64, from: &Doc) -> (YDoc, TextRef) {
 
 /// What `c` has past `doc`'s state, as the client would send it.
 fn since(c: &YDoc, doc: &Doc) -> Vec<u8> {
-    let sv = StateVector::decode_v1(&doc.state_vector()).unwrap();
+    let sv = StateVector::decode_v1(&doc.try_state_vector().unwrap()).unwrap();
     c.transact().encode_state_as_update_v1(&sv)
 }
 
@@ -61,7 +61,7 @@ fn base() -> Doc {
 fn snapshot(d: &Doc) -> (String, Vec<u8>, Vec<u8>) {
     (
         d.text(ROOT).unwrap(),
-        d.state_vector(),
+        d.try_state_vector().unwrap(),
         d.encode_state().unwrap(),
     )
 }

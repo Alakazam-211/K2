@@ -1,4 +1,4 @@
-//! Golden parity corpus for the text tools (K-PAR-7): `tests/golden/tools.golden`.
+//! Golden parity corpus for the text tools: `tests/golden/tools.golden`.
 //!
 //! Every case runs through the pure tool API and must match exactly: stdout (or the new
 //! text for edit verbs), patch's report, the exit code, and for refusals the error kind.

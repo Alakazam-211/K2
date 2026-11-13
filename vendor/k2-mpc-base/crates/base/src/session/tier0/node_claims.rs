@@ -1,4 +1,4 @@
-//! Claims by node (slice A5, `docs/SESSIONS.md`, "Claims on nodes"): an agent or a person
+//! Claims by node (`docs/SESSIONS.md`, "Claims on nodes"): an agent or a person
 //! says which nodes of a blob doc's structure index they are working on. The CSV claim model,
 //! cut to what a whole-file doc needs:
 //!
@@ -232,7 +232,7 @@ impl BlobSession {
             .collect()
     }
 
-    /// **Claim nodes** of the structure index by key (A5) for `ttl_ms` ([`Config::claim_default_ms`]
+    /// **Claim nodes** of the structure index by key for `ttl_ms` ([`Config::claim_default_ms`]
     /// when `None`, at most [`Config::claim_max_ms`]; `Some(0)` is refused), with an optional
     /// note. Needs edit, as any claim. Every key must name a node of the current version's
     /// index (else [`SessionError::BadPosition`]; no index yet: [`SessionError::IndexPending`]).

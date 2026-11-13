@@ -144,7 +144,7 @@ pub trait BlobPack: Send + Sync {
         crate::anchor::candidate_by_default(was, node)
     }
 
-    /// The pack's view schema (rendering-data contract §1.2, gap 1), with its
+    /// The pack's view schema, with its
     /// [`crate::view_index::BlobView`]: how a version's structure index maps to the view index
     /// ([`crate::view_index::ViewIndex::blob`], [`BlobSession::view_index`]). The same schema
     /// as the pack's live side ([`super::Pack::view_schema`]), so both tiers give one shape.
@@ -231,7 +231,7 @@ pub struct AnyFile;
 
 impl BlobPack for AnyFile {}
 
-/// `name (conflict <who> YYYY-MM-DD HHMMSS).ext`, in UTC (K-A11Y-5). `who` is made safe for a
+/// `name (conflict <who> YYYY-MM-DD HHMMSS).ext`, in UTC. `who` is made safe for a
 /// file name (no separators or control characters, at most 64 characters; `someone` when
 /// empty).
 pub fn conflict_copy_name(file_name: &str, at_ms: u64, who: &str) -> String {
@@ -407,7 +407,7 @@ struct Expected {
 }
 
 /// Returned by [`BlobSession::set_approval`]: the version's approval record and, when it was
-/// declined, the way back (K-HIST-19 for tier 0). A declined version stays: blobs have no
+/// declined, the way back (for tier 0). A declined version stays: blobs have no
 /// `revert`, so the person reverses it **explicitly** with `restore --version restore_to`;
 /// the kit never restores on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -439,7 +439,7 @@ pub struct BlobAuthor {
 }
 
 /// Returned by [`BlobSession::blame`]: tier 0's blame is the pointer's history (the blob
-/// is one opaque unit, K-HIST-11's "whole blob" grain). Metadata only, no content.
+/// is one opaque unit, the "whole blob" grain). Metadata only, no content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BlobBlame {
@@ -603,7 +603,7 @@ struct BDisk {
 
 struct BState {
     key: DocKey,
-    /// Every App viewer's handles in this doc (K5).
+    /// Every App viewer's handles in this doc.
     handles: super::handles::Handles,
     store: Option<Arc<DocStore>>,
     closed: Option<SessionError>,
@@ -1251,7 +1251,7 @@ impl BlobSession {
         Ok(())
     }
 
-    /// `out` as `conn` may see it: an App viewer's (K5) goes through its handles (`f` for the
+    /// `out` as `conn` may see it: an App viewer's goes through its handles (`f` for the
     /// value; a refusal naming someone else, as `Leased`'s holder, by handle). Anyone
     /// else's is unchanged.
     fn for_viewer<T>(
@@ -1613,7 +1613,7 @@ impl BlobSession {
 
     /// **Blame** for any file (tier 0, P22): the current version's setter and a summary of
     /// the version history (how many versions, who set them, most recent first). Needs read
-    /// and history (K-PERM-9).
+    /// and history.
     pub fn blame(&self, conn: ConnId) -> Result<BlobBlame> {
         let out = self.blame_inner(conn);
         self.for_viewer(conn, out, |l, b| l.blob_blame(b))
@@ -2282,7 +2282,7 @@ impl BlobSession {
         self.commit_own(st, i, v, now)
     }
 
-    // ----- approvals of on-behalf writes (K-ID-10, K-ID-11, K-T0-9) -----
+    // ----- approvals of on-behalf writes -----
 
     /// Settle the approval of version `vid`, written (or restored) by an assistant agent on
     /// behalf of a person: `Approved` or `Declined`, once. The rules are the text doc's
@@ -2292,7 +2292,7 @@ impl BlobSession {
     /// apply (nothing is written but the record). The version itself is never held or
     /// undone by this.
     ///
-    /// A **declined** version stays (K-HIST-19 for tier 0): [`BlobApproval::restore_to`] is
+    /// A **declined** version stays (for tier 0): [`BlobApproval::restore_to`] is
     /// the version before it, which the person restores explicitly if they want it back,
     /// and [`BlobApproval::later`] lists the versions written since (a restore replaces
     /// their content too: blobs don't merge). The kit never restores on its own.
@@ -2437,7 +2437,7 @@ impl BlobSession {
         Ok(all)
     }
 
-    // ----- erasure (K-PURGE, K-T0-9) -----
+    // ----- erasure (K-PURGE) -----
 
     /// **Purge** blob version `version` (`Some`; the current one is refused with
     /// [`StoreError::CurrentVersion`]: write or restore another first), or (`None`) the
@@ -2560,7 +2560,7 @@ impl BlobSession {
     }
 
     /// The doc's recorded conflict copies that exist now (beside its file, or in the host's
-    /// folder; for a byte scan, K-T0-9). Needs history.
+    /// folder; for a byte scan). Needs history.
     pub fn conflict_copies(&self, conn: ConnId) -> Result<Vec<PathBuf>> {
         let now = self.now();
         let mut st = self.lock()?;
@@ -2630,7 +2630,7 @@ impl BlobSession {
             .collect())
     }
 
-    /// K-A11Y-5's cleanup (on `tick`, at most every [`Config::history_tick_ms`]): delete a
+    /// the cleanup (on `tick`, at most every [`Config::history_tick_ms`]): delete a
     /// recorded copy older than [`Config::conflict_copy_keep_ms`] when it is still a regular
     /// file holding exactly its version's bytes (compared by keyed id). Kept: a copy whose
     /// version (the content, or the save that made it) is named; a copy a person edited;
@@ -2915,7 +2915,7 @@ impl BlobSession {
         })
     }
 
-    /// `r` as the host may show it: an error's paths made safe (K7): inside this file's
+    /// `r` as the host may show it: an error's paths made safe: inside this file's
     /// root, relative; elsewhere, `<outside>`.
     fn shown<T>(&self, r: Result<T>) -> Result<T> {
         r.map_err(|e| {
@@ -2930,7 +2930,7 @@ impl BlobSession {
         })
     }
 
-    /// The identity (device and inode) of the file this session syncs with (K9, K-DISK-14):
+    /// The identity (device and inode) of the file this session syncs with:
     /// a host keys sessions by it as well as by the path. `None` without a file, when the
     /// file is gone, or where the platform has none.
     pub fn file_identity(&self) -> Result<Option<super::disk::FileIdentity>> {

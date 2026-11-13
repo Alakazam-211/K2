@@ -72,7 +72,7 @@ impl fmt::Display for Who {
     }
 }
 
-/// Who holds a claim, as its events carry it (rendering-data contract Item 4): the claimant's
+/// Who holds a claim, as its events carry it: the claimant's
 /// name, kind and colour when they took it, so a view never joins a claim event against the
 /// roster (the claimant may have left by the time it ends). Their id is the event's `who`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,7 +237,7 @@ pub enum RosterEvent {
         /// In key order.
         keys: Vec<Key>,
         /// The same elements by address ([`super::Pack::address_of`]), in the same order: what
-        /// the wire carries as the event's `keys` (contract gap 2).
+        /// the wire carries as the event's `keys`.
         addresses: Vec<String>,
         note: Option<String>,
         hold: bool,

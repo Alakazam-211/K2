@@ -43,7 +43,7 @@ Record fields (null when unknown):
 | `tool` | `tlc` or `enumerator` (`mpce-enum`, which prints its own `RUNREC` lines: `crates/mpce-enum/src/runrec.rs`) |
 | `status` | `COMPLETE`: the whole reachable state space, no violation: for TLC, "depth of the complete state graph search" printed and 0 states left on queue; `PARTIAL`: stopped by a cap with states still queued, so `states` is a lower bound; `VIOLATION`: an invariant or property failed; `ERROR`: the tool failed (for TLC, an exit other than 0, 10–14 or 124); `NO_RESULT` / `UNKNOWN`: no count in the log |
 | `states` | distinct states (for `PARTIAL`, the count reached when it stopped) |
-| `depth` | **One convention, TLC's:** the number of states on the longest shortest path from an initial state, the initial state counting as 1. For `COMPLETE`, TLC's "depth of the complete state graph search", or the enumerator's BFS level count (its levels include the initial state, so it is the same quantity); for `VIOLATION`, TLC's depth reached, or for the enumerator the violation's BFS depth d (d transitions from the initial state) converted to d + 1. Searches without BFS levels (sweep-line, reverse search, sampling) record null. Caveat: TLC with more than one worker is not strictly level-synchronous, so its reported depth can exceed the BFS depth (see `docs/evidence/g1-client-protocol-draft.md`, 2×1 r2), and its first violation need not be a shortest one (§4) |
+| `depth` | **One convention, TLC's:** the number of states on the longest shortest path from an initial state, the initial state counting as 1. For `COMPLETE`, TLC's "depth of the complete state graph search", or the enumerator's BFS level count (its levels include the initial state, so it is the same quantity); for `VIOLATION`, TLC's depth reached, or for the enumerator the violation's BFS depth d (d transitions from the initial state) converted to d + 1. Searches without BFS levels (sweep-line, reverse search, sampling) record null. Caveat: TLC with more than one worker is not strictly level-synchronous, so its reported depth can exceed the BFS depth, and its first violation need not be a shortest one (§4) |
 | `queued` | TLC's states left on queue at the last report |
 | `workers` | TLC's worker count, from the log's `Running ... with N worker(s) on ...` line (`tlc_record` and `collect.py` read it). 1 is a strict BFS. Absent when the log does not show it; a run backfilled from its job's commands file (`export TLC_WORKERS=1`) has `workers: 1` and says so in `workers_from` |
 | `cap_s` | the time cap in seconds, when known (a backfilled TLC run stopped by its cap: its wall time, which can run a second over) |
@@ -107,8 +107,8 @@ Prose is not scanned for uncited counts, but every citation in it is checked.
 TLC with `-workers auto` shares one queue between workers, so a worker can check a state of the
 next level before the current level is done. Its counts are exact, but its **first violation
 need not be a shortest one**: 6 rich-text mutant cells were 1 or 2 states deeper than the
-shortest violation (`docs/evidence/g1-richtext-draft.md`, note 11), and so were 5 of 26 layers
-mutants (`docs/evidence/g1-layers-draft.md`) and 3 of 16 map/list teeth (`docs/evidence/g1-lmm-tlc.md`). So:
+shortest violation, and so were 5 of 26 layers mutants and 3 of 16 map/list teeth (K2 Engine's
+runs). So:
 
 - A **least depth** (a mutant's first violation depth, its shortest trace) must cite a TLC run
   with `workers: 1` (run it with `TLC_WORKERS=1`; e.g. `tools/quint/depth_w1.sh`) or an

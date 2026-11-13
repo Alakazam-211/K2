@@ -1,4 +1,4 @@
-# K10's build-time guard (crates/base/src/lib.rs): the `untrusted-wire` feature doesn't build
+# the build-time guard (crates/base/src/lib.rs): the `untrusted-wire` feature doesn't build
 # without `--cfg k2_mpc_untrusted_wire_ack`. Sourced by tools/tests/full.sh (PART=wire-guard),
 # at the repo root, after `timed`. Each step passes when the build does what it must:
 #   - in the repo with RUSTFLAGS set (it replaces .cargo/config.toml): the feature alone is

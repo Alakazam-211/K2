@@ -1,4 +1,4 @@
-//! The host-given turn (rendering-data contract r1.4, Item 2, gap 8): an optional turn id on
+//! The host-given turn: an optional turn id on
 //! every write entry, live and tier 0, stored on the change record, carried on change events
 //! and in history, never invented by the kit, and cleared by a participant's erasure. Public
 //! API only.

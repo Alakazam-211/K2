@@ -224,6 +224,8 @@ pub struct WatchChange {
     /// frame then has none of the three fields).
     pub deltas: Option<ViewDeltas>,
     pub extras: WatchExtras,
+    /// For a 3D slot: the doc's space after the change, when it changed (`view_space`).
+    pub space_after: Option<crate::placement::Space>,
 }
 
 /// The snapshot's head (`keyed_snapshot`): the schema, the view index's snapshot, and how many
@@ -721,6 +723,9 @@ fn change_json(c: &WatchChange) -> Json {
             },
         ),
     ]);
+    if let (Some(sp), Json::Obj(m)) = (&c.space_after, &mut v) {
+        m.push(("view_space".to_owned(), sp.to_value()));
+    }
     // the view deltas, right after the ops, only for a pack with a view schema
     if let (Some(d), Json::Obj(m)) = (&c.deltas, &mut v) {
         let at = m
@@ -1196,6 +1201,59 @@ fn planted_frame_misses_render_hash() -> bool {
     false
 }
 
+/// The planted fault [`crate::differential::ViewMutant::FrameMissesUnitDerived`].
+fn planted_frame_misses_unit_derived() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::view_mutant()
+        == Some(crate::differential::ViewMutant::FrameMissesUnitDerived)
+    {
+        return true;
+    }
+    false
+}
+
+/// A change frame's `derived` with the units' derived values the change set or removed
+/// ([`ViewChange::unit_derived`]) joined in: `units.<unit>.<name>`, the text or `null`. The
+/// pack's own `derived` (from [`Pack::watch_extras`]) keeps every key it has, and a name it set
+/// for a unit wins; a pack's `derived` that isn't an object (nor `null`) is left as it is.
+fn merge_unit_derived(
+    derived: Option<Json>,
+    units: crate::view_index::DerivedChanges,
+) -> Option<Json> {
+    let mut top = match derived {
+        None | Some(Json::Null) => Vec::new(),
+        Some(Json::Obj(m)) => m,
+        Some(other) => return Some(other),
+    };
+    let at = match top.iter().position(|(k, _)| k == "units") {
+        Some(i) => i,
+        None => {
+            top.push(("units".into(), Json::Obj(Vec::new())));
+            top.len() - 1
+        }
+    };
+    if let Json::Obj(us) = &mut top[at].1 {
+        for (unit, values) in units {
+            let ui = match us.iter().position(|(k, _)| *k == unit) {
+                Some(i) => i,
+                None => {
+                    us.push((unit, Json::Obj(Vec::new())));
+                    us.len() - 1
+                }
+            };
+            let Json::Obj(fs) = &mut us[ui].1 else {
+                continue;
+            };
+            for (name, text) in values {
+                if !fs.iter().any(|(k, _)| *k == name) {
+                    fs.push((name, text.map_or(Json::Null, Json::from)));
+                }
+            }
+        }
+    }
+    Some(Json::Obj(top))
+}
+
 /// The planted fault [`crate::differential::WatchMutant::SnapshotOffByOne`].
 fn planted_snapshot_off_by_one() -> bool {
     #[cfg(any(test, feature = "differential"))]
@@ -1424,6 +1482,7 @@ impl Session {
             }
             _ => vec![None; groups.len()],
         };
+        let mut named: Vec<String> = Vec::new();
         for (g, &(i, j)) in groups.iter().enumerate() {
             let ch = self.watch_change(
                 st,
@@ -1432,7 +1491,22 @@ impl Session {
                 deltas[g].take(),
                 state.as_deref(),
                 view,
+                g + 1 == groups.len(),
             );
+            for d in ch.deltas.iter() {
+                named.extend(
+                    d.units
+                        .iter()
+                        .filter(|u| u.placement_after.is_some())
+                        .map(|u| u.key.clone()),
+                );
+                named.extend(
+                    d.containers
+                        .iter()
+                        .filter(|c| c.placement_after.is_some())
+                        .map(|c| c.key.clone()),
+                );
+            }
             let handles = &mut st.handles;
             st.watch.subs.retain(|s| {
                 let ch = match &s.app {
@@ -1442,6 +1516,56 @@ impl Session {
                 s.tx.try_send(ch).is_ok()
             });
         }
+        // a new carrier taken in since the last frame, which moved placements these frames
+        // don't name: every watch takes a fresh snapshot
+        if let (Some(old), Some(new)) = (st.view_carrier_before.take(), after.as_deref()) {
+            if Self::carrier_moved(&old, new, &named) {
+                st.watch.subs.clear();
+            }
+        }
+    }
+
+    /// When a new carrier was taken in with no change frame to carry it (an outside save that
+    /// changed only what the carrier holds): every watch takes a fresh snapshot if a placement
+    /// moved. Called at the end of a disk check.
+    pub(super) fn settle_carrier_watch(&self, st: &mut State) {
+        let Some(old) = st.view_carrier_before.take() else {
+            return;
+        };
+        if st.watch.subs.is_empty() {
+            return;
+        }
+        if let Ok(Some(new)) = self.kept_view_index(st) {
+            if Self::carrier_moved(&old, &new, &[]) {
+                st.watch.subs.clear();
+            }
+        }
+    }
+
+    /// Whether any unit's or container's placement differs between `old` and `new`, leaving out
+    /// the addresses in `named` (a frame carries theirs).
+    /// Elements in only one of the two came or went with a delta of their own.
+    fn carrier_moved(old: &ViewIndex, new: &ViewIndex, named: &[String]) -> bool {
+        let named: std::collections::HashSet<&str> = named.iter().map(String::as_str).collect();
+        let was: HashMap<&str, &Option<crate::placement::Placement>> = old
+            .units
+            .iter()
+            .map(|u| (u.key.as_str(), &u.placement))
+            .chain(
+                old.containers
+                    .iter()
+                    .map(|c| (c.key.as_str(), &c.placement)),
+            )
+            .collect();
+        new.units
+            .iter()
+            .map(|u| (u.key.as_str(), &u.placement))
+            .chain(
+                new.containers
+                    .iter()
+                    .map(|c| (c.key.as_str(), &c.placement)),
+            )
+            .any(|(k, p)| !named.contains(k) && was.get(k).is_some_and(|w| *w != p))
     }
 
     /// The pack's view schema, when it has one that fits the doc (the snapshot refuses one
@@ -1452,7 +1576,10 @@ impl Session {
             .filter(|vs| vs.check(&self.schema, self.pack.composite()).is_ok())
     }
 
-    /// One change's frame (unnumbered) from its events, one per root it touched.
+    /// One change's frame (unnumbered) from its events, one per root it touched. `last`: the
+    /// last change of the flush, which carries the units' derived values the flush set or
+    /// removed (read from the view index after it, as the render hashes are).
+    #[allow(clippy::too_many_arguments)]
     fn watch_change(
         &self,
         st: &State,
@@ -1461,8 +1588,20 @@ impl Session {
         deltas: Option<ViewDeltas>,
         state: Option<&KeyedState>,
         view: Option<ViewChange<'_>>,
+        last: bool,
     ) -> WatchChange {
         let e = &evs[0];
+        let mut deltas = deltas;
+        let mut space_after = None;
+        if let (Some(vs), Some(v)) = (self.watch_view_schema(), view) {
+            if let Some(d) = deltas.as_mut() {
+                crate::view_delta::place_deltas(&vs, d, v.before, v.after);
+            }
+            let was = v.before.and_then(|b| b.space.as_ref());
+            if last && vs.space.is_some() && was != v.after.space.as_ref() {
+                space_after = v.after.space.clone();
+            }
+        }
         let mut ops = Vec::new();
         for e in evs {
             ops_of(&*self.pack, &e.applied, &mut ops);
@@ -1480,6 +1619,13 @@ impl Session {
                     .collect();
             }
         }
+        // the units' derived values the change set or removed, beside the pack's own
+        if let (true, Some(v)) = (last && !planted_frame_misses_unit_derived(), view) {
+            let d = v.unit_derived();
+            if !d.is_empty() {
+                extras.derived = merge_unit_derived(extras.derived.take(), d);
+            }
+        }
         WatchChange {
             seq: 0,
             rev: e.version,
@@ -1495,6 +1641,7 @@ impl Session {
             ops,
             deltas,
             extras,
+            space_after,
         }
     }
 

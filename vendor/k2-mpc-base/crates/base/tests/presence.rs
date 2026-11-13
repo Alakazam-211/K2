@@ -2,7 +2,7 @@
 //! heads-up notes, the activity ring, richer roster rows, conflict reports, and the rule that
 //! none of it ever reaches the store. Public API only.
 //!
-//! On a grid (A10, K-PRES-6, CSV contract §6), with the kit's test table pack
+//! On a grid (CSV contract §6), with the kit's test table pack
 //! (`tests/grid_pack`): carets and claims by key follow moves and sorts; claims expand at
 //! their ends and end `Deleted` when nothing they cover is live; the claim policy and the
 //! notes judge cells, rows and columns; `write --base` conflicts name the claimants.
@@ -1674,7 +1674,7 @@ fn claim_note_cap_counts_bytes() {
     assert_eq!(heard, at_limit);
 }
 
-// ---------- grids (A10) ----------
+// ---------- grids ----------
 
 mod grid {
     use super::*;
@@ -1843,7 +1843,7 @@ mod grid {
         (how.to_owned(), pid.to_owned())
     }
 
-    /// Hand-off on a grid (C1 must-have (a), as text claims have it): when a grid claim with
+    /// Hand-off on a grid (as text claims have it): when a grid claim with
     /// waiters is released, its rows (cells, columns) are reserved for the first waiter; an
     /// agent other than that waiter can neither claim nor (under `Respect`) edit there; the
     /// waiter's claim there takes it over (the rest of the queue waits for that claim).
@@ -2025,7 +2025,7 @@ mod grid {
         assert_eq!(g.handoffs().last(), Some(&ev("deleted", "bot")));
     }
 
-    /// `ClaimPolicy::Respect` on `write_base_grid` (C1 must-have (b)): an agent's merge whose
+    /// `ClaimPolicy::Respect` on `write_base_grid`: an agent's merge whose
     /// applying part touches another's claim is exit 5, nothing applied; elsewhere it
     /// applies; `Ignore` and a person are never refused.
     #[test]
@@ -2094,7 +2094,7 @@ mod grid {
         );
     }
 
-    /// IT `presence::grid_caret_follows_move` (K-PRES-6): a cell caret is a key pair; it
+    /// IT `presence::grid_caret_follows_move`: a cell caret is a key pair; it
     /// follows a move and a sort with no transform, and is dropped when its row is deleted.
     #[test]
     fn grid_caret_follows_move() {
@@ -2190,7 +2190,7 @@ mod grid {
         assert_eq!(c.note.as_deref(), Some(at_limit.as_str()));
     }
 
-    /// IT `presence::claim_ends_deleted` (K-PRES-6): a claim whose rows are all deleted ends
+    /// IT `presence::claim_ends_deleted`: a claim whose rows are all deleted ends
     /// with `Deleted`; one with a row left keeps covering it (a deleted end keeps its place).
     #[test]
     fn claim_ends_deleted() {
@@ -2720,7 +2720,7 @@ mod grid {
         }
     }
 
-    /// The roster push's grid side (K5 with C1): a cell caret is a
+    /// The roster push's grid side: a cell caret is a
     /// `RosterEvent::CellCursor`, coalesced like a text caret (moves inside one interval are
     /// one event, the last place), told again when its position changes under it (a move by
     /// someone else), and `None` when its row is deleted; an App viewer sees it by handle. A
@@ -2811,7 +2811,7 @@ mod grid {
         );
     }
 
-    /// `events_since` (K3) on a grid: its changes are ops by key, which the live window
+    /// `events_since` on a grid: its changes are ops by key, which the live window
     /// (text hunks) can't replay, so a base behind the doc is `MPC-E112 base_expired` (read
     /// again), never an empty list that would read as "nothing happened"; the doc's own
     /// version gives none.
@@ -2829,7 +2829,7 @@ mod grid {
         assert_eq!(g.s.events_since(p, v1).unwrap(), vec![]);
     }
 
-    /// K5 on a grid: an App viewer's cell blame, structure blame, `write --base` conflicts
+    /// Handles on a grid: an App viewer's cell blame, structure blame, `write --base` conflicts
     /// and roster name the others by handle, never by pid.
     #[test]
     fn an_app_viewer_of_a_grid_sees_no_pid() {

@@ -1,6 +1,6 @@
 //! SHA-256, and HMAC-SHA256: the keyed hash that addresses blobs (tier 0, per space key)
 //! and names a file's content for disk sync (the synced hash and echo suppression, per doc
-//! key). No plain content hash is stored (K-PURGE-1, -13): a hash of a short secret can be
+//! key). No plain content hash is stored: a hash of a short secret can be
 //! brute-forced, a keyed one can't, and destroying its key makes it meaningless.
 //!
 //! Written here rather than taken from a crate: the kit needs one stable content hash, and

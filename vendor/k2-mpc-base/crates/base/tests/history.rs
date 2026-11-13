@@ -1,4 +1,4 @@
-//! C7a: undo to spec v1.4 (regions per hunk, `--partial`, redo, `--drop`, `--for`),
+//! Undo to spec v1.4 (regions per hunk, `--partial`, redo, `--drop`, `--for`),
 //! versions (automatic cuts, named, retention, restore), the history reads and their right,
 //! and `revert` with its window, carry, rights and the pending on-behalf cap. Public API
 //! only. Some test names carry the spec's CT names (`hist_*`); `docs/SPEC-UNDO.md` §8 ("CT
@@ -253,7 +253,7 @@ fn hist_undo_whole_doc_delete_then_append_conflicts() {
 
 #[test]
 fn merge_empty_base_same_point_conflicts() {
-    // K-BR-11: two write --base on an empty doc conflict
+    // Two write --base on an empty doc conflict
     let f = fx("emptybase");
     let s = f.open("e.md", b"");
     let a = f.join(&s, agent("a"), Rights::editor());
@@ -409,7 +409,7 @@ fn hist_undo_multi_step_partial_stops_at_a_blocked_step() {
 
 #[test]
 fn undo_for_person() {
-    // K-HIST-21: an assistant's undo --for <person> undoes only edits made for them
+    // An assistant's undo --for <person> undoes only edits made for them
     let f = fx("undofor");
     let s = f.open("f.md", b"one\ntwo\n");
     f.host.grant("asst", Rights::editor());
@@ -443,7 +443,7 @@ fn undo_for_person() {
 
 #[test]
 fn undo_survives_rejoin_not_unload() {
-    // K-HIST-17, U6, U18
+    // U6, U18
     let mut c = config();
     c.idle_unload_ms = 1_000;
     let f = fx_with("rejoin", c);
@@ -634,7 +634,7 @@ fn revert_record_taint_on_crossing_delete() {
     assert_eq!(text(&s, a), "aaaB ccc\n");
 }
 
-/// C7b: revert is as conservative as undo where two regions of a change came to touch,
+/// Revert is as conservative as undo where two regions of a change came to touch,
 /// someone inserted at the shared edge and a deletion then crossed it. Undo reports both
 /// regions (Taint); C7a's revert missed the right one and, with `--partial`, applied it.
 #[test]
@@ -724,7 +724,7 @@ fn hist_revert_declined_after_restart() {
     assert_eq!(text(&s, p), "# The plan\n- one\n- two\n");
 }
 
-/// Undo spec U22a (v1.6), restart transparency (E-HIST-3): a pending on-behalf change's
+/// Undo spec U22a (v1.6), restart transparency: a pending on-behalf change's
 /// two regions; a deletion crosses the left region's **start** only; the window moves
 /// (the record's carry is persisted); the regions are then made to touch. The right region
 /// inherits the left's **end** taint, which is clean, so revert conflicts on the left
@@ -1407,7 +1407,7 @@ fn on_behalf_backlog_refuses_new() {
 
 #[test]
 fn pending_on_behalf_survives_compaction() {
-    // K-HIST-20: the revert record doesn't depend on the log
+    // The revert record doesn't depend on the log
     let mut c = config();
     c.compact_entries = 5;
     let f = fx_with("compaction", c);
@@ -1652,7 +1652,7 @@ fn log_lists_changes_and_versions_with_filters() {
     assert!(s.log(p, &LogQuery::default().pending()).unwrap().is_empty());
 }
 
-// ---------- person undo grouping (undo spec U3, K4; hist.undo_group_person) ----------
+// ---------- person undo grouping (undo spec U3; hist.undo_group_person) ----------
 //
 // Each closer as a scenario (a function that panics when the rule is broken, so the mutant
 // test can run it under a planted fault), then the trace class: seeded histories of a person

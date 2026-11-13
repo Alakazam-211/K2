@@ -1000,7 +1000,7 @@ fn group_trace_equivalence_large() {
     );
 }
 
-/// The kit's three planted grouping faults (`differential::GroupMutant`, K4's) are each caught
+/// The kit's three planted grouping faults (`differential::GroupMutant`) are each caught
 /// by the grouping class within `GROUP_MUTANT_TRACES` traces (default 256), and the catching
 /// trace passes without its fault.
 #[test]

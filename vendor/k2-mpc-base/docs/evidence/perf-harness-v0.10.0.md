@@ -1,4 +1,4 @@
-# Performance harness: the v0.10.0 Yrs baseline (E-PERF-29)
+# Performance harness: the v0.10.0 Yrs baseline
 
 Every figure cites the run that printed it (`[run JOB/RUN:field]`, checked by `tools/evidence/check.py`). Measurements only. The harness is `tools/perf/` (`tools/README.md`, Performance harness): the kit built with **no features** (as a host builds it), every call timed alone, the median of 5 runs per side, the sides interleaved A, B, A, B on one node. Times are in **ns**.
 
@@ -30,7 +30,7 @@ Pending: the large doc (5 runs a side) in a later window; the fixture is grown. 
 | Row | E-PERF | p50 (A) | p95 (A) | B/A p50 ×1000 | B/A p95 ×1000 |
 |---|---|---|---|---|---|
 | `edit` | 30 | 295,911 [run 46462c69/perfh_med_h10000_edit_A:p50] | 320,321 [run 46462c69/perfh_med_h10000_edit_A:p95] | 991 [run 46462c69/perfh_ratio_h10000_edit:ratio_p50_milli] | 1,005 [run 46462c69/perfh_ratio_h10000_edit:ratio_p95_milli] |
-| `edit_nosync` | 29 (C19 ratio row) | 194,290 [run 46462c69/perfh_med_h10000_edit_nosync_A:p50] | 215,360 [run 46462c69/perfh_med_h10000_edit_nosync_A:p95] | 1,009 [run 46462c69/perfh_ratio_h10000_edit_nosync:ratio_p50_milli] | 1,011 [run 46462c69/perfh_ratio_h10000_edit_nosync:ratio_p95_milli] |
+| `edit_nosync` | 29 (the ratio row) | 194,290 [run 46462c69/perfh_med_h10000_edit_nosync_A:p50] | 215,360 [run 46462c69/perfh_med_h10000_edit_nosync_A:p95] | 1,009 [run 46462c69/perfh_ratio_h10000_edit_nosync:ratio_p50_milli] | 1,011 [run 46462c69/perfh_ratio_h10000_edit_nosync:ratio_p95_milli] |
 | `edit_with` | 30 | 351,341 [run 46462c69/perfh_med_h10000_edit_with_A:p50] | 378,821 [run 46462c69/perfh_med_h10000_edit_with_A:p95] | 999 [run 46462c69/perfh_ratio_h10000_edit_with:ratio_p50_milli] | 1,001 [run 46462c69/perfh_ratio_h10000_edit_with:ratio_p95_milli] |
 | `tool_replace` | 30 | 345,790 [run 46462c69/perfh_med_h10000_tool_replace_A:p50] | 373,061 [run 46462c69/perfh_med_h10000_tool_replace_A:p95] | 998 [run 46462c69/perfh_ratio_h10000_tool_replace:ratio_p50_milli] | 1,001 [run 46462c69/perfh_ratio_h10000_tool_replace:ratio_p95_milli] |
 | `tool_sed` | 30 | 492,971 [run 46462c69/perfh_med_h10000_tool_sed_A:p50] | 524,282 [run 46462c69/perfh_med_h10000_tool_sed_A:p95] | 997 [run 46462c69/perfh_ratio_h10000_tool_sed:ratio_p50_milli] | 1,001 [run 46462c69/perfh_ratio_h10000_tool_sed:ratio_p95_milli] |
@@ -277,4 +277,4 @@ The data and the pages in use are the same across fixtures, within small differe
 
 ## Empty slots
 
-`fork(V)` (E-PERF-35) and `changed_since(V)` (E-PERF-34): **no Yrs path**. Empty until the native engine; never zeros. `write_base` (3 others' edits after the read) is the Yrs stand-in for E-PERF-34.
+`fork(V)` and `changed_since(V)`: **no Yrs path**. Empty until the native engine; never zeros. `write_base` (3 others' edits after the read) is the Yrs stand-in for `changed_since`.

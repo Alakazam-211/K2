@@ -147,7 +147,7 @@ impl Session {
         let space = st.key.space.clone();
         let mut puts: Vec<BlobId> = Vec::new();
         let out = self.demote_in(st, &store, blobs, to, file, now, &mut puts);
-        // the puts no longer wait: referenced by a version, or given up
+        // the puts stop waiting: referenced by a version, or given up
         for id in &puts {
             blobs.settle(&space, id);
         }

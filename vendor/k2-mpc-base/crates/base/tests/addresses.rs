@@ -1,4 +1,4 @@
-//! The kit's address grammar (K-ADDR-1, K-ADDR-2) on the grid verbs, through
+//! The kit's address grammar on the grid verbs, through
 //! `Session::run_tool` on a table doc (the grid test pack): the `@k:` key form, a bare number
 //! that is never a position, and an ambiguous name or `--where` refused with exit 2,
 //! `MPC-E170 ambiguous_address` and every candidate in `details.candidates` (the golden
@@ -149,7 +149,7 @@ fn names_that_look_like_other_forms_still_work() {
     );
 }
 
-/// K-ADDR-2, golden: an ambiguous column name is refused with every candidate (never the
+/// Golden: an ambiguous column name is refused with every candidate (never the
 /// first), on reads and edits alike.
 #[test]
 fn an_ambiguous_name_is_refused_with_its_candidates() {
@@ -178,7 +178,7 @@ fn an_ambiguous_name_is_refused_with_its_candidates() {
     );
 }
 
-/// K-ADDR-2, golden: a `--where` that matches two rows is refused with both.
+/// Golden: a `--where` that matches two rows is refused with both.
 #[test]
 fn an_ambiguous_where_is_refused_with_its_candidates() {
     let f = fx("id,city\nk1,Oslo\nk2,Rome\nk2,Lima\n");

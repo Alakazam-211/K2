@@ -11,7 +11,7 @@
 //! Theirs is kept as **shapes** `(start, end, inserted length)`: the inserted text is
 //! always the live window's, so it is read from there when the region is merged
 //! ([`materialize`]). The applied-hunk stream reports every change at element-identity
-//! positions (E-HIST-5), so composing its hunks gives exactly which base elements are gone
+//! positions, so composing its hunks gives exactly which base elements are gone
 //! and which foreign elements stand where.
 //!
 //! **Composition.** The window is a sequence of pieces: runs of surviving base elements and

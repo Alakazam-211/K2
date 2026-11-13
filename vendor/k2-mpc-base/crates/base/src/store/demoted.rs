@@ -18,7 +18,8 @@
 //! keys stay. Every per-doc table is named in `KEPT` or [`ERASED`]; a unit test fails on one
 //! in neither, so a new table can't be forgotten here.
 //!
-//! A crash before the commit leaves the text doc exactly as it was; after it, the blob doc.
+//! A process that stops before the commit leaves the text doc exactly as it was; after it, the
+//! blob doc.
 //!
 //! **`demoted_changes`** is one additive per-doc table, **without a format bump** (the terms of
 //! `change_turns` and `change_verbs`): created lazily by the first demotion, keyed `(doc, n)`
@@ -180,8 +181,8 @@ pub(crate) struct DemoteRows<'a> {
 
 #[cfg(test)]
 thread_local! {
-    /// Test-only: fail the demotion after every write, before the commit (a crash
-    /// mid-demotion: the transaction is dropped, so nothing of it lands).
+    /// Test-only: fail the demotion after every write, before the commit (a process
+    /// stopping mid-demotion: the transaction is dropped, so nothing of it lands).
     pub(crate) static FAIL_BEFORE_COMMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -264,7 +265,7 @@ impl DocStore {
         #[cfg(test)]
         if FAIL_BEFORE_COMMIT.with(std::cell::Cell::get) {
             return Err(StoreError::Corrupt(
-                "test: crash before the demotion's commit",
+                "test: stopped before the demotion's commit",
             ));
         }
         w.commit()?;

@@ -1,4 +1,4 @@
-//! N−1 of the carrier (K1; tools/n1/n1.sh `layout-carrier`), built against the previous release,
+//! N−1 of the carrier (tools/n1/n1.sh `layout-carrier`), built against the previous release,
 //! which knows nothing of it. The store comes from this repo's `n1_carrier_producer`: three live
 //! docs of the test pack `deck-carrier`, each with a carrier (`live_carriers`, one count each on
 //! its blob) and its import version's (`version_carriers`, one blob for the three). Its pack is

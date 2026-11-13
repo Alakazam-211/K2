@@ -62,7 +62,7 @@ With `--json`, a refusal prints **exactly one line on stdout**, the object, and 
 on stdout; the exit code is unchanged:
 
 ```json
-{"id":"MPC-E301","exit":5,"message":"lines 3–6 claimed by Bot (bot) \"rewriting the Sync section\"; 44131 ms left","next":"Someone else is working on those lines right now …","rule":"A13 (claims), K-PRES-12","details":{"claim":"claim-1","by":"bot","name":"Bot","lines":[3,6],"remaining_ms":44131,"note":"rewriting the Sync section"}}
+{"id":"MPC-E301","exit":5,"message":"lines 3–6 claimed by Bot (bot) \"rewriting the Sync section\"; 44131 ms left","next":"Someone else is working on those lines right now …","rule":"claims, K-PRES-12","details":{"claim":"claim-1","by":"bot","name":"Bot","lines":[3,6],"remaining_ms":44131,"note":"rewriting the Sync section"}}
 ```
 
 - The six keys and their order are stable. `details` is structured (numbers, values, lists,
@@ -72,7 +72,7 @@ on stdout; the exit code is unchanged:
   id) goes in **one extra key, `"host"`**, which the kit never writes: e.g. `"host":
   {"ask_with": "k2 permission request …"}` or `"host": {"can_request": false}`. Never change
   or add to the kit's six keys. The plain `Ask with:` line may still go to stderr.
-- Success output with `--json` is K2's existing shape (K-BR-1: the version read); this slice
+- Success output with `--json` is K2's existing shape (the version read); the kit
   doesn't change it.
 
 ## `k2 doc explain [ID] [--json]`
@@ -115,32 +115,32 @@ section of `k2 doc --help`; the kit's part is generated, so K2 shouldn't copy it
   `errors::entries()` at build time (id, name, exit, area, status, `next`), so it can't drift.
   Retired ids stay listed; reserved ones (`MPC-E801`–`E803`, the CSV grid refusals; `E161`)
   are marked reserved.
-- **K2's own refusals are K2's**: a path outside the workspace, a vault-managed path
-  (K-SEC-12), a held permission card, a link lost mid-verb (exit 7), no daemon. They are not
+- **K2's own refusals are K2's**: a path outside the workspace, a vault-managed path,
+  a held permission card, a link lost mid-verb (exit 7), no daemon. They are not
   `MPC-` ids. If K2 wants ids for them, a K2 prefix in K2's own catalog keeps the two apart.
-- **Engine ids** (`MPCE-Ennn`, allocated by the engine at G2-core) pass through as strings:
+- **Engine ids** (`MPCE-Ennn`, allocated by the engine) pass through as strings:
   `ErrorReport::engine(code, message)`; a code this kit build doesn't list prints as
   `MPC-E161` with `details.code` set.
 
-## Guidance per surface, paths and hard links (v0.9.8: K6, K7, K9)
+## Guidance per surface, paths and hard links (v0.9.8)
 
-- **`next` per surface (K6).** The registry's `next` is written for an agent with only the
+- **`next` per surface.** The registry's `next` is written for an agent with only the
   CLI. A surface that shows refusals to people (a tab, an App) sets its own:
   `report.with_next("app", "Ask the doc's owner to let you edit.")`, then prints
   `report.next_for("app")` or `report.to_json_for("app")`. Only `next` changes: the id, exit
   code, message, rule and details are the same on every surface, and `next()` /
   `to_json()` stay the registry's. Key the override by the id (`report.id()`), never by the
   message.
-- **No absolute paths (K7).** Every refusal the kit builds from an OS error (a file
+- **No absolute paths.** Every refusal the kit builds from an OS error (a file
   session's disk errors, `open_file` and `open_blob_file`) shows paths relative to the
   workspace root the session was opened with, or `<outside>`. For anything else, pass the
   workspace root: `report.redacted(root)` (or `errors::redact(text, root)` for the host's
   own strings, or `SessionError::redacted(root)`). The id and exit code don't change. The
   audit events (`AuditEvent::DiskError`) keep the real paths for the operator: never
   forward them to a guest.
-- **Hard links (K9).** `open_file` and `open_blob_file` decline a file with more than one
+- **Hard links.** `open_file` and `open_blob_file` decline a file with more than one
   name: `Declined` `hard_linked`, `MPC-E412` (exit 4). Key sessions by the file's identity
-  as well as its path (K-DISK-14): `session::file_identity(path)` (device and inode, before
+  as well as its path: `session::file_identity(path)` (device and inode, before
   opening) and `Session::file_identity()` / `BlobSession::file_identity()` (the open
   session's file), so one file reached by two paths never gets two live docs.
 
@@ -156,9 +156,9 @@ section of `k2 doc --help`; the kit's part is generated, so K2 shouldn't copy it
 
 ## Tests on the host side
 
-- K-PAR-4's table run through `k2 doc`: every refusal ends with ` (MPC-Ennn)` in plain text,
-  and with `--json` stdout is one object with the six keys whose `exit` equals the process's
-  exit code.
+- Every refusal in the kit's registry, run through `k2 doc`: each ends with ` (MPC-Ennn)` in
+  plain text, and with `--json` stdout is one object with the six keys whose `exit` equals the
+  process's exit code.
 - Exit 3 still ends with K2's permission line (or `It can't be requested.`).
 - `k2 doc capabilities --json` parses, lists every verb K2 routes, and its limits equal the
   daemon's `Config`.

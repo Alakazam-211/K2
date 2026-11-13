@@ -11,7 +11,7 @@
 //!
 //! **What is timed** is a fixed list of paths ([`Path`]), placed at the kit's seam (never
 //! inside the engine), so every engine is measured at the same points: `docs/SESSIONS.md`,
-//! "Timers", gives each path's place and the requirement it serves.
+//! "Timers", gives each path's place.
 //!
 //! **Reading:**
 //! - [`read`]: one path's `(count, total ns)`, without allocating. A single-threaded caller
@@ -68,43 +68,43 @@ macro_rules! paths {
 paths! {
     /// `Doc::edit_as` / `Doc::edit_applied` / the session's `Doc::edit_made` (the shared
     /// body): one change applied to an engine doc (the session's, a disk replica's or a bare
-    /// doc's). E-PERF-30.
+    /// doc's).
     EditAs = "edit_as",
     /// A session's commit of a change: the store, then the bookkeeping (every mutating verb's
     /// shared tail).
     Commit = "commit",
-    /// The store's durable transaction commit alone (the time E-PERF-29 leaves out of a
-    /// ratio).
+    /// The store's durable transaction commit alone (the time a
+    /// ratio leaves out).
     StoreTxnCommit = "store.txn_commit",
-    /// `Session::blame` (a line range or the whole doc). E-PERF-31.
+    /// `Session::blame` (a line range or the whole doc).
     Blame = "blame",
     /// Undo's and revert's provenance lookups, per region planned (`undo::plan`): the
     /// window's roots (`Prov::roots`) and the region's revert, which asks which runs' roots
     /// are live (`Prov::any_live`). Timed as one block: a lookup alone (about 160 ns on a
-    /// release build) costs about what a running timer does. E-PERF-32.
+    /// release build) costs about what a running timer does.
     ProvLookup = "prov.lookup",
     /// Rebuilding the provenance map from scratch (the cold path, O(doc)).
     ProvRebuild = "prov.rebuild",
-    /// A disk write-back (render, replica, file). E-PERF-33.
+    /// A disk write-back (render, replica, file).
     WriteBack = "write_back",
     /// A write-back's atomic file write alone.
     WriteBackFile = "write_back.file",
     /// `Session::write_base` / `write_base_with` on a text root.
     WriteBase = "write_base",
-    /// `write --base`: the text at the base version (the Yrs stand-in for `changed_since`,
-    /// E-PERF-34).
+    /// `write --base`: the text at the base version (the Yrs stand-in for
+    /// `changed_since`).
     WriteBaseBaseText = "write_base.base_text",
     /// `write --base`: the three-way merge.
     WriteBaseMerge = "write_base.merge",
-    /// `Session::load`: a stored doc loaded into a session. E-PERF-36, -47.
+    /// `Session::load`: a stored doc loaded into a session.
     Load = "load",
     /// A load's store read (snapshot and log).
     LoadStoreRead = "load.store_read",
-    /// A load's engine doc built from the store's bytes (`Doc::from_store`). E-PERF-36.
+    /// A load's engine doc built from the store's bytes (`Doc::from_store`).
     LoadDoc = "load.doc",
-    /// `Session::join` / `join_shared` / `join_replacing`. E-PERF-47.
+    /// `Session::join` / `join_shared` / `join_replacing`.
     Join = "join",
-    /// An outside save merged in (text roots). E-PERF-41.
+    /// An outside save merged in (text roots).
     Ingest = "ingest",
     /// An outside save: the diff of the save against the synced text, per root.
     IngestDiff = "ingest.diff",
@@ -112,30 +112,29 @@ paths! {
     IngestMerge = "ingest.merge",
     /// An outside save: the merge trimmed and made canonical, per root.
     IngestCanon = "ingest.canon",
-    /// `SessionManager::tick`. E-PERF-42.
+    /// `SessionManager::tick`.
     Tick = "tick",
     /// A tick's history work, per loaded session.
     TickHistory = "tick.history",
     /// A tick's disk work (stat backup, due write-back), per loaded session.
     TickDisk = "tick.disk",
-    /// Undo and revert planning (`undo::plan`, text roots). E-PERF-43.
+    /// Undo and revert planning (`undo::plan`, text roots).
     UndoPlan = "undo.plan",
     /// `Session::undo_with` / `redo_with` (also `undo` / `redo`).
     Undo = "undo",
     /// `Session::revert`.
     Revert = "revert",
     /// Notes delivered to a member (by `take_notes` or riding on any verb's reply).
-    /// E-PERF-44.
     NotesDeliver = "notes.deliver",
     /// `Session::take_notes`.
     Notes = "notes",
-    /// `Session::events_since` (the Live editor's catch-up). E-PERF-46.
+    /// `Session::events_since` (the Live editor's catch-up).
     EventsSince = "events_since",
     /// `events_since`: the window read from the store.
     EventsSinceWindow = "events_since.window",
-    /// `write --base` on a grid. E-PERF-45.
+    /// `write --base` on a grid.
     GridWriteBase = "grid.write_base",
-    /// An outside save merged into a grid (reconcile). E-PERF-45.
+    /// An outside save merged into a grid (reconcile).
     GridIngest = "grid.ingest",
     /// Undo planning on a grid, per step.
     GridUndoPlan = "grid.undo.plan",

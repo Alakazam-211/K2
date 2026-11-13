@@ -33,6 +33,7 @@
 #                A CHANGELOG, vendor/ and the two cut scripts may. No file in DROPPED_FILES
 #                exists, and no kept text file names one (by its name without `.sh`).
 #   text         no line added since the commit recorded in TEXT_BASE (the previous host release;
+#                a file renamed with at least 75% of its text the same counts only its changes;
 #                every tracked text file git diffs, vendored trees too) uses a term in
 #                TEXT_TERMS, printed as `check-public-cut: text: PATH:LINE: TERM`. Public text
 #                is reviewed by this generic scan. A term matches any case, from the start of a
@@ -43,6 +44,18 @@
 #                an entry that matches no such line blocks too. A TEXT_BASE that is missing,
 #                untracked, not one full sha or not an ancestor of HEAD blocks, as does a
 #                root with no git history. Exempt: TEXT_EXCEPTIONS and the two lists' own lines.
+#   labels       no line of a kept text file (vendor/ aside; a CHANGELOG included) holds an
+#                internal label, each pattern in LABEL_PATTERNS named by its kind: a requirement
+#                id (`K-BR-12`) outside the error registry's rule column, an ask label (`K5`), a
+#                plan slice, a numbered contract gap, a `KC` item, or a pointer to a PRD. The rule
+#                column is read where it is data: the registry's fifth field, the `rule` of a
+#                JSON report, the `Rule` lines and table column of docs/ERRORS.md and the explain
+#                goldens. In prose only (LABEL_PROSE_PATTERNS: a Markdown line or a code comment,
+#                its `code` spans out): a release-line name (`C1e`), an amendment label (`A13`),
+#                an unnumbered plan slice, an engine-answer label (`E8`), a plan stage
+#                (`stage D`); the rule column holds neither of the first two either.
+#                LABEL_EXEMPT names the files read as data whole. Printed as
+#                `check-public-cut: labels: PATH:LINE: KIND`.
 #   private      tools/check-private.sh is clean.
 #   windows-names  tools/check-windows-names.sh is clean: this tree is what a host's Windows
 #                machines check out. The script missing blocks too.
@@ -65,7 +78,7 @@ DROPPED_CRATES="crates/conformance:k2-mpc-conformance"
 DROPPED_TREES="fuzz tools/fuzz docs/evidence/runs"
 DROPPED_REFS='(^|[^A-Za-z0-9_-])fuzz/|tools/fuzz([^A-Za-z0-9_-]|$)|(^[ \t]*|exclude.*)"fuzz"|cargo[- ]fuzz|k2[-_]mpc[-_]base[-_]fuzz|k2_mpc_base::fuzzing|(^|[^A-Z_])FUZZ_(CPUS|HOME|MAX_JOBS|MEM|NODES|SECS|SHIP|SUMMARY_DIR|TIMEOUT|TZ|USED|WINDOW|WITH|WS)'
 # Single files a public cut removes (a check of what the cut takes out), paths from the root.
-DROPPED_FILES="tools/check-engine-features.sh tools/test-engine-features.sh"
+DROPPED_FILES="tools/check-engine-features.sh tools/test-engine-features.sh tools/vendor-engine.sh tools/test-vendor-engine.sh docs/CONFORMANCE.md docs/design/person-writer-reuse-r0.md"
 # Files a public cut must carry at its root.
 LICENCE_FILES="LICENSE-MIT LICENSE-APACHE"
 # The pinned regression tests every cut must still have (relative to the root).
@@ -78,6 +91,24 @@ TEXT_CODE_TOKENS='panic!|::panic|panic::|should_panic|panic_any|panic_handler|Pa
 # The commit the text rule diffs from, and the lines reviewed and kept (tools/README.md).
 TEXT_BASE=tools/public-text-base
 TEXT_EXCEPTIONS=tools/public-text-exceptions.txt
+# Internal labels, KIND=extended regex, one per line; a match anywhere in a kept text file's line
+# blocks (the labels rule above). A requirement id stays only in the error registry's rule column.
+LABEL_PATTERNS='requirement id=(^|[^A-Za-z0-9_-])[KEX]-[A-Z][A-Z0-9]*-[0-9]
+ask label=(^|[^A-Za-z0-9_.-])K([13-9]|1[01])([^A-Za-z0-9_,]|$)
+plan slice=(^|[^A-Za-z])[Ss]lices? [0-9]
+contract gap=rendering-data contract|contract.s gaps? [0-9]|contract gaps? [0-9]|[(;] ?gaps? [0-9]
+KC item=(^|[^A-Za-z0-9_-])KC[0-9]
+PRD pointer=(^|[^A-Za-z])PRDs?([^A-Za-z]|$)'
+# Labels read in prose only (a Markdown line, or the comment part of a code line, its `code`
+# spans taken out), where a cell reference or an option value can't be meant; the same
+# KIND=regex form. Release-line and amendment labels are refused in the rule column too.
+LABEL_PROSE_PATTERNS='release-line name=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])C[1-9][0-9]?[a-z]?([^A-Za-z0-9_:'"'"'"]|: |$)
+amendment label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])(A([2-9]|1[0-9])|A1[-–]A[0-9])([^A-Za-z0-9_:'"'"'"]|: |$)
+unnumbered plan slice=(^|[^A-Za-z])([Tt]his|[Tt]hat|[Nn]ext|[Ee]arlier|[Ll]ater) slice([^A-Za-z]|$)
+engine-answer label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])E[1-9]([^A-Za-z0-9_:'"'"'"]|: |$)
+plan stage=(^|[^A-Za-z])stage [A-Z]([^A-Za-z]|$)'
+# Files the labels rule reads as data whole: this script and the gate, which name the patterns.
+LABEL_EXEMPT="tools/check-public-cut.sh tools/tests/public-cut-gate.sh"
 # ---------------------------------------------------------------------------------------------
 
 if [ "${1:-}" = --print-config ]; then
@@ -367,8 +398,9 @@ TBASE=$(mktemp)
 if text_base > "$TBASE"; then
   TD=$(mktemp)
   # the tree (the cut, staged or committed) against the base; -U0, so only added lines count.
-  # Every option that a user's git config could change is given here.
-  if git -c core.quotepath=off diff --no-color --no-ext-diff --no-textconv --no-renames --no-relative \
+  # A file moved with most of its text (-M75%) counts only the lines that changed: a rename adds
+  # no text. Every option that a user's git config could change is given here.
+  if git -c core.quotepath=off diff --no-color --no-ext-diff --no-textconv -M75% -l5000 --no-relative \
        --diff-filter=d --src-prefix=a/ --dst-prefix=b/ -U0 --inter-hunk-context=0 "$(cat "$TBASE")" -- > "$TD" 2>/dev/null; then
     awk -v terms="$TEXT_TERMS" -v tokens="$TEXT_CODE_TOKENS" -v exfile="$TEXT_EXCEPTIONS" \
         -v selfline="TEXT_TERMS='$TEXT_TERMS'" -v selftokens="TEXT_CODE_TOKENS='$TEXT_CODE_TOKENS'" '
@@ -460,6 +492,45 @@ if text_base > "$TBASE"; then
   rm -f "$TD"
 fi
 rm -f "$TBASE"
+
+# ---- labels ---------------------------------------------------------------------------------
+# Every kept text file but vendor/ and LABEL_EXEMPT (binary files: grep -I). The rule column is
+# taken out first where it is data; then each pattern is tried on what is left of the line.
+grep -Ev '^vendor/' "$LIST" | while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  case " $LABEL_EXEMPT " in *" $f "*) continue ;; esac
+  grep -Iq . "$f" 2>/dev/null || continue
+  printf '%s\n' "$f"
+done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTERNS" awk '
+  BEGIN {
+    n = split(ENVIRON["LABEL_PATTERNS"], row, "\n"); for (i = 1; i <= n; i++) { k = index(row[i], "="); kind[i] = substr(row[i], 1, k - 1); rx[i] = substr(row[i], k + 1) }
+    m = split(ENVIRON["LABEL_PROSE_PATTERNS"], row, "\n"); for (i = 1; i <= m; i++) { k = index(row[i], "="); pkind[i] = substr(row[i], 1, k - 1); prx[i] = substr(row[i], k + 1) }
+  }
+  {
+    file = $0; ln = 0; md = (file ~ /\.md$/)
+    reg = (file ~ /(^|\/)errors\/registry\.rs$/); errs = (file == "docs/ERRORS.md"); gold = (file ~ /\/golden\/errors\//)
+    while ((getline line < file) > 0) {
+      ln++
+      # the registry rule column: no release-line or amendment label
+      if (reg && match(line, /e\("MPC-E[0-9]+", *"[a-z0-9_]+", *[A-Za-z]+, *[0-9]+, *"[^"]*"/)) {
+        rule = substr(line, RSTART, RLENGTH); sub(/.*, *"/, "", rule); sub(/"$/, "", rule)
+        for (i = 1; i <= 2; i++) if (rule ~ prx[i]) print "check-public-cut: labels: " file ":" ln ": " pkind[i] " (rule column)"
+      }
+      # prose: a Markdown line, or the comment of a code line, its code spans out
+      t = ""
+      if (md) t = line
+      else if (line ~ /^[ \t]*(\/\/|#|\*|\/\*)/) t = line
+      else if ((p = index(line, "// ")) > 0) t = substr(line, p)
+      if (t != "") { gsub(/`[^`]*`/, "", t); for (i = 1; i <= m; i++) if (t ~ prx[i]) print "check-public-cut: labels: " file ":" ln ": " pkind[i] }
+      # the rule column, where it is data
+      gsub(/\\?"rule\\?" *: *\\?"[^"\\]*/, "", line)
+      if (reg) { sub(/e\("MPC-E[0-9]+", *"[a-z0-9_]+", *[A-Za-z]+, *[0-9]+, *"[^"]*"/, "", line); sub(/^[ \t]*"[^"]*", *(ANY|SYNC|CHANGE|HOST|RUN_TOOL|UNDO|&\[|[A-Z_]+,)/, "", line) }
+      if (errs && (line ~ /^\| `MPC-/ || line ~ /^- \*\*Rule:\*\*/)) continue
+      if (gold && line ~ /^rule:/) continue
+      for (i = 1; i <= n; i++) if (line ~ rx[i]) print "check-public-cut: labels: " file ":" ln ": " kind[i]
+    }
+    close(file)
+  }' >> "$OUT"
 
 # ---- private --------------------------------------------------------------------------------
 if [ -f tools/check-private.sh ]; then

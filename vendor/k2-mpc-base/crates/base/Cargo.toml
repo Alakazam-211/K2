@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.17.0"
+version = "0.18.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ description = "Multiplayer kit for file-type packs: docs on K2-defined primitive
 [features]
 # Decoding bytes from remote clients (sync step 1/2, updates). Off by default, and a host must
 # not enable it until the strict decoder lands (docs/ARCHITECTURE.md, rule 4).
-# **Build-time guard (K10):** with this feature, the crate doesn't compile unless the build
+# **Build-time guard:** with this feature, the crate doesn't compile unless the build
 # also sets `--cfg k2_mpc_untrusted_wire_ack` (docs/HOST-WIRE.md: the six gates first).
 # The kit's own tests enable it (self dev-dependency below); this repo's .cargo/config.toml
 # sets the cfg for builds run inside it.
@@ -25,7 +25,7 @@ conformance = []
 differential = []
 # Test-only helpers for packs' own tests (`k2_mpc_base::session::test_support`: an import's
 # edits, to build in-memory docs as a session does; `k2_mpc_base::ids::churn`: the ID-churn
-# judge, K-COD-10). Off by default; no host enables it.
+# judge). Off by default; no host enables it.
 test-support = []
 # Test-only: plant a bug in the engine's position index (the vendored Yrs's feature of the
 # same name), to prove the kit reports what the index's shadow check finds (v0.9.7). Never in
@@ -58,5 +58,5 @@ rand = { version = "0.8", features = ["small_rng"] }
 yrs = { path = "../../vendor/yrs", version = "=0.28.0" }
 
 [lints.rust]
-# K10's acknowledgement cfg (lib.rs): a known name, not an unexpected one.
+# the acknowledgement cfg (lib.rs): a known name, not an unexpected one.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(k2_mpc_untrusted_wire_ack)"] }

@@ -5,7 +5,7 @@
 # it with CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true in its own target dir (`target-dbg`, so
 # the job's release binaries stay as they are) and runs the oracle of record at the seven
 # exact bounds (counts.sh's: the distinct counts must be counts.sh's, no rule violated) and on
-# random walks at the literal G1 bound, with and without a restart. A failed assertion is the
+# random walks at the full bound, with and without a restart. A failed assertion is the
 # enumerator's abort pseudo-rule, with its message (exit 1). Run as:
 #
 #   sh tools/undo/job.sh enum tools/undo/debug.sh

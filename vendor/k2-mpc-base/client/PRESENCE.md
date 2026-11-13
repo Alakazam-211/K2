@@ -150,8 +150,8 @@ draws its own selection from its own state.
 
 ## Focus and range (wire 3)
 
-The rendering-data contract's `focus` (the container in view, a slide) and `range` (a caret or
-selection inside one element's text field). Both need a wire-3 host that lists their feature.
+`focus` (the container in view, a slide) and `range` (a caret or selection inside one element's
+text field), as K2's rendering data asks. Both need a wire-3 host that lists their feature.
 
 ```ts
 presence.setFocus({ root: "slides", key: "s259" });           // null: clear
@@ -228,7 +228,7 @@ if (presence.claimsSupported) {
 - **An agent's claim moves its presence** (wire 3): its focus goes to the claim's first
   container, and its selection becomes the claimed keys, on the roster right after the claim's
   start.
-- **An agent's verbs move its presence too** (contract gap 11): each pack verb an agent runs that
+- **An agent's verbs move its presence too** (K2's ask): each pack verb an agent runs that
   changes elements sets its focus to the container of the last element it touched (the last
   container touched wins) and its selection to the live elements it touched. They arrive as the
   usual `focus` and `selection` roster events: nothing new to fold. A person's presence is never
@@ -255,7 +255,7 @@ of an address.
 ```ts
 const grid = watch.grid!;                                    // KeyedWatch: the view schema's grid
 const numbers = gridNumbers(watch.state!, watch.view!.schema, "@sheet:1");
-const start = cornerAt(numbers, 4, 3)!;                      // C4, in normal form
+const start = cornerAt(numbers, 4, 3)!;                      // row 4, column C, in normal form
 const end = cornerAt(numbers, 15, 4)!;                       // D15
 presence.setCells({ container: "@sheet:1", active: start, ranges: [{ start, end }] }, "sheets");
 rangeA1(numbers, { start, end });                            // "C4:D15"
@@ -272,7 +272,7 @@ const claim = await presence.claimCells({ container: "@sheet:1", ranges: [{ star
   your cells here, as the host drops them.
 - **Refusals:** the channel refuses itself, unsent, more than 16 ranges (`MPC-E310`) and a claim
   on other than one range (`MPC-E304`). The host refuses a corner that isn't live, isn't in normal
-  form or is out of bounds, an active cell outside the ranges, another sheet's corner
+  form or is outside the sheet, an active cell outside the ranges, another sheet's corner
   (`MPC-E114`), and a watcher (`MPC-E305`). A refused value isn't sent again on a reconnect.
 - **Kept by keys, dropped, never moved:** an insert inside a range grows it; a range whose corner's
   row or column goes, or whose corner leaves normal form, is dropped (the roster's `cells` says
@@ -299,7 +299,7 @@ const claim = await presence.claimCells({ container: "@sheet:1", ranges: [{ star
 | `blankNumbers(lines, first?)` | the numbers no keyed row has, up to the last one |
 | `colLetters(n)`, `colNumber(letters)` | 27 ↔ `AA`, 16384 ↔ `XFD` |
 | `colLabel(grid, n)` | a column header by the grid's `col_label` |
-| `cornerAt(numbers, row, col)` | the corner, in normal form, of a cell by its numbers (`null` out of bounds) |
+| `cornerAt(numbers, row, col)` | the corner, in normal form, of a cell by its numbers (`null` outside the sheet) |
 | `cornerNumbers(numbers, corner)` | a corner's row and column numbers (`null` when it isn't one) |
 | `cornerProblem(numbers, corner)` | why it isn't one: `bad`, `row`, `col` (not live here), `row_form`, `col_form`, `rows_max`, `cols_max`; `null` when it is |
 | `cornerA1`, `rangeA1`, `cellsA1` | A1 (always letters): `E18`, `C4:D15`, `{active, ranges}` |

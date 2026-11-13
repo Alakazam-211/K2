@@ -1,4 +1,4 @@
-//! K1b, the carrier's pairing (`docs/SESSIONS.md`, "The carrier's pairing";
+//! The carrier's pairing (`docs/SESSIONS.md`, "The carrier's pairing";
 //! `docs/design/carrier-synced-content-r0.md`): for a pack that keeps a carrier and **mints** its
 //! keys, the kit keeps the carrier's keys (a `Pairing`, in the order the pack's decode yields the
 //! units) with every carrier, live and per version, and hands it to `Pack::encode_from_paired`.
@@ -257,7 +257,7 @@ impl Pack for RowsPack {
         let rows = rows_of(c)?;
         if self.rekeys.load(Ordering::SeqCst) {
             // the carrier's keys are of one save: a key the doc holds from a later one means the
-            // pairing names keys the doc no longer has
+            // pairing names keys the doc doesn't hold any more
             let paired = keys.iter().filter_map(save_of).max().unwrap_or(0);
             let later = rows
                 .iter()
@@ -549,7 +549,8 @@ impl Fx {
     fn advance(&self, ms: u64) {
         self.host.now.fetch_add(ms, Ordering::SeqCst);
     }
-    /// A crash: a new manager on the same stores, the old one dropped without a write-back.
+    /// A stopped process: a new manager on the same stores, the old one dropped without a
+    /// write-back.
     fn restart(&mut self) {
         self.mgr = SessionManager::new(
             self.store.clone(),
@@ -1145,8 +1146,8 @@ fn a_save_on_unwritten_changes_keeps_both() {
     row_a_save_on_unwritten_changes_keeps_both().unwrap();
 }
 
-/// The same across a restart: the agent's edit is in the store, the kit never wrote it (a crash
-/// before the write-back), and the app saves while the doc is loaded again.
+/// The same across a restart: the agent's edit is in the store, the kit never wrote it (the
+/// process stopped before the write-back), and the app saves while the doc is loaded again.
 fn row_a_save_on_unwritten_changes_keeps_both_after_a_restart() -> Result<(), String> {
     const ROW: &str = "row_a_save_on_unwritten_changes_keeps_both_after_a_restart";
     let mut f = fx("dirty-restart");
@@ -1199,7 +1200,7 @@ fn the_planted_dirty_save_merged_by_key_is_caught_by_name() {
 
 // ---------- a save the pack re-keys: its carrier and pairing before anything renders ----------
 
-/// `row list` as `c`, the error as text (the row reports it instead of panicking).
+/// `row list` as `c`, the error as text (the row reports it instead of unwinding).
 fn row_list_of(s: &Session, c: ConnId) -> Result<String, String> {
     s.run_tool(c, ROWS, &["row".into(), "list".into()], b"")
         .map(|o| String::from_utf8(o.stdout).unwrap())

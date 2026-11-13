@@ -1,5 +1,5 @@
 //! A purge of one text doc in the store: one transaction over every kit table that holds
-//! its content (K-PURGE-2, -3, -7, -13). The session decides what is targeted and supplies
+//! its content. The session decides what is targeted and supplies
 //! the re-encoded state; [`super::DocStore::rewrite_file`] then leaves no bytes behind.
 //!
 //! - **Log** (`updates`): every entry up to the purge's head becomes `redacted {byte
@@ -13,7 +13,7 @@
 //!   deleted text a needle matches, are blanked and marked `redacted` (a revert over them
 //!   reports `erased`). Change ids, authors, times and lengths stay (`changes` keeps each
 //!   change's hunk positions and lengths).
-//! - **Structured roots** (C1f, A13; CSV seam design §7.4): content is values (a map's values,
+//! - **Structured roots** (CSV seam design §7.4): content is values (a map's values,
 //!   a list's element values: a table's cells, hidden ones too, its column names). A value
 //!   is redacted **whole**, never in part (a register has no sub-value identity): in a typed
 //!   version it becomes empty, with a [`Redaction`] `{root}/{key}` of its byte length; in a
@@ -144,7 +144,7 @@ pub struct PurgeCounts {
     pub revert_hunks: u64,
     /// Content bytes taken out of versions and revert records.
     pub bytes: u64,
-    /// Structured values redacted whole, in versions and revert records (C1f).
+    /// Structured values redacted whole, in versions and revert records.
     pub values: u64,
     /// Rows where participant erasure replaced the pid.
     pub attributions: u64,

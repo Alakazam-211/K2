@@ -1,6 +1,6 @@
-//! The parity harness's grid stage (A11, K-PAR-3, CSV contract §3.5) with the kit's test table
+//! The parity harness's grid stage (CSV contract §3.5) with the kit's test table
 //! pack (`grid-lite`, `tests/grid_pack`): every grid-tier row through the harness (the kit's
-//! verbs by [`parity::kit_grid_cases`], the pack's skeleton structured verbs (A9) by the
+//! verbs by [`parity::kit_grid_cases`], the pack's skeleton structured verbs by the
 //! cases here), comparing the grid by key, and negative controls proving it fails loudly.
 
 #[path = "grid_pack/mod.rs"]
@@ -54,7 +54,7 @@ fn row(a: PersonAction) -> ParityRow {
                 "claim --release",
             ],
         ),
-        // the text edit verbs on a rendered grid come with reconcile (C1i)
+        // the text edit verbs on a rendered grid come with reconcile
         P::Type => ParityRow::live_but(a, &["cell set"], &["insert"]),
         P::TypeOver => ParityRow::live_but(a, &["cell set"], &["replace"]),
         P::Delete => ParityRow::live_but(a, &["cells clear", "row delete"], &["delete", "sed -i"]),
@@ -69,11 +69,11 @@ fn row(a: PersonAction) -> ParityRow {
         P::Restore => ParityRow::live(a, &["restore", "version --name"]),
         P::Rename => ParityRow::live(a, &["mv"]),
         P::Blame => ParityRow::live(a, &["blame", "blame --cell", "blame --structure"]),
-        P::Annotate => ParityRow::deferred(a, &["comment"], "K-ANN-7", "cell anchors"),
+        P::Annotate => ParityRow::deferred(a, &["comment"], "comments on cells", "cell anchors"),
         P::Export => ParityRow::live(a, &["export", "export --version"]),
         P::WhyOff => ParityRow::live(a, &["status"]),
         P::UndoPartial => ParityRow::live(a, &["undo --partial"]),
-        P::Mention => ParityRow::deferred(a, &["comment"], "K-ANN-7", "cell anchors"),
+        P::Mention => ParityRow::deferred(a, &["comment"], "comments on cells", "cell anchors"),
         P::Purge => ParityRow::deferred(a, &["purge"], "the purge verb", "not bound by the kit"),
         P::Approve => ParityRow::live(a, &["approve", "decline"]),
         P::Pending => ParityRow::live(a, &["log --pending"]),

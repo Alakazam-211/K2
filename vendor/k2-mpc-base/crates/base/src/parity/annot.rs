@@ -1,10 +1,10 @@
-//! The parity harness for comment threads (K-PAR-3, slice A4): every annotation action a
+//! The parity harness for comment threads: every annotation action a
 //! person takes in a tab (the [`BlobSession`] calls directly) has an agent verb
 //! ([`super::ANNOTATION_VERBS`], run by [`BlobSession::run_annotation`]) with the same effect.
 //! Each case runs both paths on two identical blob docs and compares the threads, their
 //! comments, the history (who did what, never a body), the exit code and the output.
 //!
-//! **The one documented difference** (K-ANN-9): an agent's `reanchor` is a proposal. Its
+//! **The one documented difference**: an agent's `reanchor` is a proposal. Its
 //! case confirms it as the same person afterwards ([`AnnotCase::confirm`]), and the
 //! comparison leaves out the proposal's own history row; everything else must match.
 

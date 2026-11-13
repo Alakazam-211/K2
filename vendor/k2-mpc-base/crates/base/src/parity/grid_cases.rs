@@ -1,4 +1,4 @@
-//! The kit's parity cases on a grid doc (A11): for every grid-tier action the kit binds, the
+//! The kit's parity cases on a grid doc: for every grid-tier action the kit binds, the
 //! person path and the agent path through each kit verb, on [`super::GRID_DOC`]. One
 //! exhaustive `match` ([`kit_grid_cases`]); the grid actions' own verbs (P9-P13's `cell set`,
 //! `cells set`, `cells clear`; P35-P43) are a pack's, so their cases are the pack's.
@@ -822,7 +822,7 @@ fn g44_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-/// The kit's grid cases for `action` (A11): each kit verb serving it on a grid doc, the
+/// The kit's grid cases for `action`: each kit verb serving it on a grid doc, the
 /// person's way and the agent's way. Empty for the actions whose verbs are a pack's (P9-P13,
 /// P35-P43), the ones a grid doesn't have (P15 formatting; the leases), and the ones the kit
 /// doesn't bind yet (P23, P27 annotations, P28 purge): a grid pack's list maps those.

@@ -1,6 +1,6 @@
-//! A small table pack for the kit's grid tests (A9-A12): `grid-lite`, one record per line,
-//! fields split by `,`, no quoting, the first record the header. It stands in for the CSV pack
-//! (C1h), and lists the kit's grid verbs ([`k2_mpc_base::table::verbs::VERBS`], C1i), with
+//! A small table pack for the kit's grid tests: `grid-lite`, one record per line,
+//! fields split by `,`, no quoting, the first record the header. It stands in for the CSV pack,
+//! and lists the kit's grid verbs ([`k2_mpc_base::table::verbs::VERBS`]), with
 //! its own block decoder for their stdin (`cells set`, `row insert`): one record per line,
 //! fields split by `,`.
 #![allow(dead_code)]

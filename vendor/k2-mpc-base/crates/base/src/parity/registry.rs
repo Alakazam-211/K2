@@ -1,4 +1,4 @@
-//! The verb registry (K-PAR-2): every verb an agent can run, what it serves and needs.
+//! The verb registry: every verb an agent can run, what it serves and needs.
 
 use std::fmt;
 
@@ -97,9 +97,9 @@ pub enum Api {
     /// `Session::activity`.
     Activity,
     /// `Session::edit_ops_with` (what `run_tool` runs a pack's structured edit verbs
-    /// through, A9).
+    /// through).
     EditOps,
-    /// `Session::drop_deleted` (`rows drop-deleted`, K-CSV-7).
+    /// `Session::drop_deleted` (`rows drop-deleted`).
     DropDeleted,
     /// `Session::blame_cell` (`blame --cell R,C`).
     BlameCell,
@@ -841,7 +841,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK01,
     )
     .on(TG),
-    // grids (CSV contract §3.5, §5.5; K-CSV-7)
+    // grids (CSV contract §3.5, §5.5)
     kit(
         "rows drop-deleted",
         E,
@@ -873,7 +873,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK0,
     )
     .on(GRID),
-    // tier 0: the lease (K-T0-2)
+    // tier 0: the lease
     kit(
         "lease",
         E,
@@ -996,7 +996,7 @@ const fn annot(
 /// [`super::check_annotations`]'s (P23 `Annotate` is a text and grid row; on blob docs these
 /// are its verbs). The rights: read for the reads, history for the log, the comment right
 /// (implied by edit) for the rest, and `comment --delete` also its author, the person it was
-/// for, or an owner. An agent's `reanchor` is a proposal a person confirms (K-ANN-9).
+/// for, or an owner. An agent's `reanchor` is a proposal a person confirms.
 pub const ANNOTATION_VERBS: &[VerbSpec] = &[
     annot(
         "comment",
@@ -1237,7 +1237,7 @@ impl Registry {
     ///
     /// - A text pack's verbs are edit verbs that need read and edit and run through
     ///   `run_tool` / `edit_with`; one word each.
-    /// - A grid pack's verbs are structured verbs (A9): edit verbs need read and edit and run
+    /// - A grid pack's verbs are structured verbs: edit verbs need read and edit and run
     ///   through `run_tool` / `edit_ops_with`, read verbs need read and run through `run_tool`;
     ///   a name is one or two words (`row insert`).
     ///
@@ -1333,7 +1333,7 @@ impl Registry {
     /// the annotation verbs ([`ANNOTATION_VERBS`], any pack: a comment on the whole doc needs
     /// no index), plus, when the pack has a structure index ([`crate::session::BlobPack::index_spec`]),
     /// its verbs under the names the pack gives ([`crate::index::IndexVerbs`]), `outline` and
-    /// `node` as other names for its list and show verbs (K-READ-1), and claims by node
+    /// `node` as other names for its list and show verbs, and claims by node
     /// (`claim --node`, `claim --renew`, `claim --release`). A pack with no index gets exactly
     /// `for_tier(Tier::Blob).with_annotations()`, and `for_tier` never lists any of these: a
     /// host that hasn't adopted them sees no change. The annotation verbs serve P23 and P27,
@@ -1726,7 +1726,7 @@ mod tests {
                 "lease --break"
             ]
         );
-        // the brief's "both" verbs, and the approvals (K-T0-9, v0.5.0)
+        // the brief's "both" verbs, and the approvals (v0.5.0)
         for n in [
             "log",
             "restore",
@@ -1750,8 +1750,8 @@ mod tests {
                 assert!(blob.serving(a).count() > 0, "{a}");
             }
         }
-        // the grid tier (A11): the kit's reads, presence, history and its own three; no text
-        // edit verbs (reconcile, C1i), no leases
+        // the grid tier: the kit's reads, presence, history and its own three; no text
+        // edit verbs (reconcile), no leases
         let grid = Registry::for_tier(Tier::Grid);
         assert_eq!(grid.tier(), Tier::Grid);
         let names: Vec<&str> = grid.verbs().iter().map(|v| v.name).collect();

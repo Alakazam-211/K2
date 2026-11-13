@@ -1,9 +1,280 @@
 # Changelog
 
+## v0.18.0 (2026-11-12)
+
+A host release on v0.17.0. The crate version is `0.18.0`; the client's is `0.18.0`. The live
+wire stays version 3 (every addition optional). The store format is the same (`STORE_FORMAT` 6,
+`STORE_FORMAT_READ` 7, `STORE_FORMAT_BASE` 5) and no store needs a migration. Pairs with the
+markdown, text, board, csv, psd and pptx pack tags of this release.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.17.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The native engine stays off.
+
+### What changes for K2
+
+- **Build the view index's structs with `..X::default()`.** The kit adds fields to them in
+  minor releases: this one adds `Unit::derived`, which breaks a full `Unit { .. }` literal. Build
+  `Unit`, `Container`, `ViewIndex`, `FontUse`, `Layout`, `Bbox`, `Flip`, `UnitText` and
+  `Placeholder` with `..X::default()`, and the schema's parts (`ViewSchema`, `UnitFields`,
+  `ContainerFields`, `Derived`, `BlobView`, `GridSlot`) with `..X::NONE`. Each struct's docs say
+  so; `tests/view_structs.rs` builds every one that way.
+- **A keyed doc's `MPC-E822` is `SessionError::KeyedAtLimit { limit, would_be, from }`**, where it
+  was `AtLimit { what: "elements and fields", .. }`. Same id, exit code (2) and message. A host
+  that matched `AtLimit` for a keyed doc matches `KeyedAtLimit`. `MPC-E822`'s and `MPC-E415`'s
+  details gain `limit` and `limit_source` (`host_per_pack`, `pack_default` or `host_wide`), and
+  `MPC-E415`'s message names the limit in words. `explain` points at `details.limit`.
+- **The keyed size limit per file type, and who sets it.** The host owns it:
+  `Config::keyed_max_entries_by_pack` (by pack name; it wins, and it is the only way a type gets
+  more than the host-wide limit), else the lower of the pack's recommended
+  `Pack::keyed_entries_default()` and the host-wide `Config::keyed_max_entries`.
+  `Config::keyed_limit(&dyn Pack)` resolves it. A host that sets no per-type limit, with packs
+  that recommend none, sees no change. **A fix:** a limit past `i64::MAX` (`usize::MAX`, the usual
+  "no limit") refused every growing change; it doesn't any more.
+- **`Doc::state_vector` is deprecated:** use `Doc::try_state_vector` (typed) or
+  `Doc::state_vector_parts`. It works as before on Yrs (the only engine a host runs); a host that
+  calls it sees a deprecation warning. Before any host turns the native engine on, a breaking
+  release removes it or makes it fallible.
+- **Four new error ids, all of the native engine (off for every host):** `MPC-E162
+  root_kind_not_native`, `MPC-E163 replica_lagging`, `MPC-E164 vector_needs_parts`, `MPC-E165
+  needs_state_transfer`. None is reachable with the native engine off.
+- **Additive, nothing to do:** a unit's placement in 3D (`ViewSchema::space`, the wire's
+  `placement`), a pack's verb state (`Pack::verb_state_build`), derived values per unit and the
+  view index kept through changes, and the view hooks reading the carrier's pairing. Client
+  0.18.0 reads the new wire fields.
+- **Fixes with no API change:** an outside save's change frame is built on its carrier (it went
+  out before the kit kept the save, so it could carry the old file's facts); a single list insert
+  or delete plans in O(log n) on Yrs; a build of the kit's lib without test code has no dead-code
+  warning (`steps` in the list plan's index), and the lint now builds it that way.
+- **No store migration, wire still 3.** N−1 is checked both ways against v0.17.0 in every mode.
+
+### Overview
+
+New API and wire fields for the view index (additive: the live wire stays version 3, no store
+change); a keyed doc's live size limit per file type (additive API) and a fix to size limits
+past `i64::MAX`; a pack's verb state kept by the kit (additive API); four new kit error
+ids, `MPC-E162` to `MPC-E165`, and ten engine entries, all behind the `native` feature
+(not for hosts until the switch); the vendored engine moves to its main `5fc2a71f`; a
+single list insert or delete planned in O(log n); otherwise text and tooling.
+
+### View slots for a live structured doc (additive)
+
+All additive: the live wire stays version 3, no store change, and a v0.17.0 host or client
+reads a doc from this kit as before (`docs/SESSIONS.md`, "The view index").
+
+- **Derived values per unit.** `ViewSchema::unit_derived` names them (at most
+  `UNIT_DERIVED_MAX`, 8; `DERIVED_NAME_MAX`, 64 bytes a name); the derive hook sets them with
+  `Unit::set_derived` (`Unit::derived`, `Unit::derived_value`). They ride each unit of a units
+  page (`derived`) and each change frame's `derived.units.<unit>.<name>`
+  (`ViewChange::unit_derived`, `DerivedChanges`). The schema's JSON names them in `unit_derived`
+  only when there are some.
+- **Reads by unit and by container**: `Session::view_unit`, `Session::view_container`,
+  `Session::view_derived` (`UnitsDerived`); `ViewIndex::unit`, `container`, `derived_of`.
+- **The view index kept through changes**: `Pack::view_derive_change` (default `false`: built
+  whole, as before) and `ViewTouched`; the count `differential::take_view_unit_builds`; plants
+  `ViewMutant::FrameMissesUnitDerived`, `UpdateSkipsTouched`, `UpdateRebuildsAll`.
+- **A geometry field with no 2D slot** (a scene's transform): a change to it is a `move_resize`
+  delta naming the field. The kit read the 2D slot's parts for any field of class `geometry`,
+  so with no slot it built no change frame.
+- **The client** (`client/CHANGELOG.md`): `KeyedWatch.unitDerived`, `KeyedWatch.unit`; the
+  wire's `unit_derived` and a unit's `derived`.
+- `docs/design/view-3d-slot-r0.md`: a proposal for a unit's placement in 3D (not built).
+- **For pack authors: build the view index's structs with `..X::default()`.** Adding
+  `Unit::derived` breaks a pack that builds a `Unit` as a full literal (a deck's group children
+  did). The kit adds fields to these structs in minor releases: build `Unit`, `Container`,
+  `ViewIndex`, `FontUse`, `Layout`, `Bbox`, `Flip`, `UnitText` and `Placeholder` with
+  `..X::default()`, and the schema's parts (`ViewSchema`, `UnitFields`, `ContainerFields`,
+  `Derived`, `BlobView`, `GridSlot`) with `..X::NONE`, setting only the fields you have. Each
+  struct's docs say so; `tests/view_structs.rs` builds every one of them that way. Where you
+  set every field a struct has today, allow `clippy::needless_update`: the update is what keeps
+  the next field from breaking you.
+
+### A pack's verb state (additive)
+
+`docs/SESSIONS.md`, "Verb state". For a pack whose verbs need an index beside the doc (a
+timeline's items by track and start), kept by the kit so a verb costs what it touches:
+
+- `Pack::verb_state_build(&View) -> Option<Box<dyn VerbState>>` (new; default `None`: nothing
+  changes for a pack that doesn't use it): built from the live view of a keyed doc that isn't
+  a table, the first time a structured verb runs on it.
+- `Pack::verb_state_change(&mut dyn VerbState, &[Applied], &View) -> bool` (new; default
+  `false`, built again on the next verb): called on every change to the doc, in its commit
+  (verbs, a host's edits, outside saves, undo and redo, restore and revert).
+- `VerbState` (new): any `Send + Sync + Debug + PartialEq` type, by a blanket impl;
+  `downcast_ref` and `downcast_mut` on `dyn VerbState`.
+- `VerbCtx::verb_state::<T>()` (new): a verb's read-only borrow of it.
+- Dropped with the live view (a reload, a purge or erasure, a session that closes); never
+  stored, never on the wire. Test builds (and the `differential` feature) compare it with a
+  fresh build after every change and at every hand-out, and fail loudly on a difference;
+  `differential::VerbStateMutant::OutsideSaveSkipped` and `differential::take_verb_state_builds`
+  (new) are its plant and its count.
+
+### A keyed doc's size limit per file type (additive), and a fix
+
+- **A size limit past `i64::MAX` doesn't refuse every change that grows a doc any more** (fix):
+  `Config::keyed_max_entries`, `grid_max_cells`, `grid_max_cols` and `grid_max_rows` were
+  compared after a cast to `i64`, so a limit that didn't fit one (`usize::MAX` among them, the
+  usual "no limit") wrapped negative and every growing change was refused (`MPC-E822`, or the
+  grid's `AtLimit`). The comparison is now exact for every limit; the count a refusal names
+  is the same.
+- **A keyed doc's live size limit per file type** (additive; `docs/SESSIONS.md`, "The limit
+  per file type"). The host owns the limits; a doc's is:
+  - `Config::keyed_max_entries_by_pack: BTreeMap<String, usize>` (new; default empty): the
+    host's limit for a file type, by its pack's name (`Pack::schema().name`); when set it wins
+    whatever it is, and it is the only way a type gets more than the host-wide limit;
+  - else the lower of `Pack::keyed_entries_default() -> Option<usize>` (new; default `None`:
+    the pack's recommended limit from its own measured shapes) and the host-wide limit: a
+    pack may lower the limit, never raise it (a default at or above it reads `host_wide`);
+  - else `Config::keyed_max_entries`, the host-wide limit, as before.
+
+  `Config::keyed_limit(&dyn Pack) -> KeyedLimit` resolves it (`KeyedLimit { limit, source }`,
+  `LimitSource::{HostPerPack, PackDefault, HostWide}`, both `#[non_exhaustive]`). A host that
+  sets no per-type limit, with packs that recommend none, sees no change.
+- **The size refusals name the limit that applied and where it came from.** `MPC-E822`'s and
+  `MPC-E415`'s details gain `limit` and `limit_source` (`host_per_pack`, `pack_default` or
+  `host_wide`); `MPC-E822` keeps `what` and `would_be`. A keyed doc's `MPC-E822` is now
+  `SessionError::KeyedAtLimit { limit, would_be, from }` (new; the variant is
+  `#[non_exhaustive]`, and `SessionError` already is): before, `AtLimit { what: "elements and
+  fields", .. }`. The id, exit code (2) and message are the same; a host that matched
+  `AtLimit` for a keyed doc matches `KeyedAtLimit` (no host or pack of ours does). The kit
+  doesn't return `AtLimit` with `elements and fields` any more; one a host builds still maps to
+  `MPC-E822`. `MPC-E415`'s message names the limit in words: "past the live limit (6 elements
+  and fields; the host's limit for this file type)", where it said "(6)".
+- **Why `MPC-E415` reads its limit back from its message (for a later release):** `Declined`
+  is a public struct that packs build with a literal, so a new field would break every pack
+  that builds one. The kit writes the limit and its source in fixed words and the report's
+  details read them back. `Declined` should get a non-breaking way to carry more (the
+  pattern `view_index::Unit` is getting for the same problem) in a follow-up; then the
+  details come from fields, not the message.
+- **`explain` for `MPC-E415` and `MPC-E822`:** the next text points at `details.limit` and
+  `details.limit_source` instead of `capabilities`' `keyed_max_entries`, which isn't the
+  limit for a type the host or its pack sets one for. `capabilities` still lists the host-wide
+  limit; the per-type map isn't listed (it isn't one number).
+
+### Placements in 3D (additive)
+
+The view schema's 3D slot (`docs/design/view-3d-slot-r1.1.md`; `docs/SESSIONS.md`, "The view
+index"; `client/WIRE.md`, "Placements in 3D"). Additive: the wire stays version 3, no store
+change, a 2D pack's frames unchanged.
+
+- `k2_mpc_base::placement`: `Placement`, `Step`, `Rotation`, `EulerOrder`, `Space`, `Axis`,
+  `Handed`, `Precision`, `SpaceSlot`, `SpaceSrc`, `ExactF64`, `PLACEMENT_STEPS_MAX`, `Mat4`,
+  `Link`, `world_matrix`, `mul`, `sin_cos`.
+- `ViewSchema::space`, `Pack::view_placement`, `Pack::view_space`; `Unit::placement`,
+  `Container::placement`, `ViewIndex::space`, `ViewSnapshot::space`, `ViewIndex::world_matrix`;
+  `UnitOp::Place`, `UnitDelta::placement_after`, `ContainerDelta::placement_after`,
+  `ViewDeltas::placed_through`, `WatchChange::space_after`.
+- A new carrier that moves placements no frame names makes every keyed watch take a snapshot.
+- A cycle among a pack's placements fails a test build loudly, naming its elements; a release
+  build keeps the index, and nothing placed through the cycle has a world matrix.
+- Plants `PlaceMutant::*` and the count `differential::take_placement_asks`.
+- `docs/design/view-3d-slot-r1.md` and `r1.1.md`: the design after review (r1.1 built).
+- **An outside save's frame is built on its carrier** (fix): the keyed watch's change frame for
+  an outside save went out before the kit kept the save as the carrier, so its view index (the
+  placements, render hashes and units' derived values the frame reads from it) was the old
+  carrier's: a unit the save added with a placement only the file holds went out with
+  `placement_after: null`, and the watch then took a snapshot. The frame now goes out after the
+  carrier and its pairing are kept, on a by-key save and on a keyed doc's text merge alike; a
+  save that moves a placement through the carrier alone, with no delta naming it, still makes
+  the watch take a snapshot.
+- **The view hooks read the carrier's pairing** (additive; `docs/SESSIONS.md`, "The view hooks
+  read it"): `ViewCarrier::pairing() -> Option<&Pairing>` (new), for `view_derive`,
+  `view_derive_change` and `view_placement`, so a pack that pairs finds a unit's file-only facts
+  by key, and keeps the index through units that come, go or move between carriers instead of
+  having it built whole. `None` for a pack that doesn't pair. No wire or store change.
+
+### Engine, tooling and text
+
+- **A single list insert or delete plans in O(log n)** (Yrs engine; no API, wire or store
+  change). The engine planned every list change by reading the whole root: every slot of its
+  array and its position and delete registers, for the place a key's slot sits at, the shown
+  elements before it (the applied stream's indices) and which keys exist or are deleted. Each
+  list root now keeps a slot index between changes (`engine/slot_index.rs`, an order-statistic
+  tree of its slots), and a change whose only op on a root is one insert or one delete is
+  planned from it. Measured on a build node (release, checks off): the plan of a single insert
+  takes 1.6 us at 1,000 elements and 2.1 us at 10,000 (the full read: 654 us and 9,320 us).
+  Moves, sets, restores, drops and several ops on a root are planned by the full read as
+  before, and leave the index of their result (in memory, no read). The index is built from
+  one full read the first time, and dropped by a merged update, a reset or a change that
+  fails. `differential::with_list_plan_fast` (the full read for every change, the reference)
+  and `differential::ListPlanMutant` are its test switch and plant (`tests/list_plan.rs`).
+- **The native engine at main `5fc2a71f`** (`tools/vendor-engine.sh`), with the adapter on its
+  store-head interface: the calls that read or write records take the doc's records; every
+  new store gets a **fresh 16-byte store nonce the kit makes** (a new doc, the relay-based
+  load, the empty replica after a failed reopen; never reused; the engine takes no
+  randomness); and the kit never raises the engine's load ceiling.
+- **A version vector past one frame goes in parts** (feature `native`; `MPCE-E983`, about
+  10,000 writers): `Doc::state_vector_parts` gives kind-4 parts, and the kit's own catch-up
+  sends them when the one frame won't do; the peer answers with diff parts, applied as one
+  request. Never a smaller or empty vector. A peer compacted past a replica's state
+  (`MPCE-E262`) is `MPC-E165 needs_state_transfer` (`DocError::NeedsStateTransfer`): not
+  retried, the peer not closed.
+- **`Doc::state_vector` is deprecated** (every build): use `Doc::try_state_vector` (new, typed:
+  on the native engine past one frame it refuses as `MPC-E164 vector_needs_parts`; Yrs's never
+  fails) or `Doc::state_vector_parts` (new: the native engine's kind-4 parts, Yrs's one
+  vector). `Doc::state_vector` keeps its signature and works as before on Yrs; on a native doc
+  past one frame (which nothing reaches: no host turns the native engine on) it fails hard
+  naming `MPC-E164`. **Before any host turns the native engine on, `Doc::state_vector` is
+  removed or made fallible in a breaking release, and hosts move to the typed forms.** The
+  kit's own callers have moved.
+- **The engine's host-facing codes have their own entries** (`docs/ERRORS.md`): `MPCE-E561
+  native_store_corrupt` (before: `MPC-E146 load_failed` with the engine's code), `E571
+  store_keys_wrong` (a store under another secret or digest key), `E573
+  stable_part_of_change`, `E580 s_record_missing`, `E581 checkpoint_drops_s_record`, `E582
+  store_nonce_invalid`, `E987 part_cap_below_entry`, `E995 merge_not_a_fold` (from a peer),
+  `E997 causal_check_over_limit` and four-digit `E1000 own_line_parents`. A code the
+  registry doesn't list (`MPC-E161 engine_unlisted`) carries the engine's own next step in
+  `details.engine_next_step`. `DocError::Engine` gains `next_step` (the native feature's
+  API).
+- **`MPC-E163 replica_lagging`**: `MPCE-E995` from the host (a relay, not a peer) means this
+  replica runs an older engine than the host: upgrade it (`DocError::ReplicaLagging`).
+- **`tools/vendor-engine.sh --release`** also needs a tag made by the engine's
+  `tools/tag.sh` and refuses any `known_divergence_*` test; the switch will use it.
+- `tools/public-text-base` is v0.17.0's tag^ (`9b04ba33`, the twin of main's `9a246ccf`, same tree):
+  the text rule's base must be an ancestor of the cut.
+- **`Engine::catch_up_from` without a one-arm match on the public cut:** its native-engine case is
+  a cfg'd `if let` statement, not a cfg'd match arm, so the cut's tree (which drops the cfg'd
+  code) passes `clippy -D warnings`. `tools/README.md`, "The public cut", names the cut's lint as
+  its own check. No behaviour change.
+- **A lint step for the kit's lib as a host builds it** (`tools/tests/full.sh`, part `lint`):
+  `cargo clippy -p k2-mpc-base --lib -- -D warnings`, no test cfg and no feature another member
+  turns on. It caught `steps` in `engine/slot_index.rs` read only by the test-build counter
+  (`engine_visits!`, which now reads its value in every build).
+- Two released CHANGELOG lines (v0.10.0's "The cost", v0.9.1's "Undo spec suite") are wrapped
+  to 100 characters, each put as "not ... any more" where it read otherwise (same meaning).
+- **`MPC-E162 root_kind_not_native`** (feature `native`): `Doc::new_on` and `Doc::load_on` refuse
+  the native engine for a file type with a list or map root, naming the root and its kind
+  (`DocError::RootKindNotNative`; `DocError` is `#[non_exhaustive]`, so this adds a variant
+  without a break). Such a file type isn't switched to the native engine until lists get the
+  engine's placement rules. Before, the same call refused with `MPC-E150 unsupported_kind`.
+  Yrs is unchanged.
+- **`tools/vendor-engine.sh <engine-sha>`** vendors the native engine's crates at one commit of
+  the engine's main, and refuses a short or off-main sha, a changed crate set, the engine's
+  list/map-root test option turned on, a licence outside the allow-list, a new external
+  dependency, and anything that would change `Cargo.lock` (`tools/README.md`). Its self-test
+  is `tools/test-vendor-engine.sh`. `scripts/check-licences.sh --expr` checks licence
+  expressions with the same rule and no cargo.
+- **Public text in plain words.** Comments, docs and test names say "the carrier" and "the
+  carrier's pairing" where they used plan labels, and describe a process that stopped before its
+  write-back, a corner outside the sheet and the like in plain words. One test of
+  `tests/demote.rs` is renamed, the same row: `row_closed_unwritten_change_is_kept`.
+- **`explain` for `MPC-E208` and `MPC-E521`:** the `rule` field reads "the carrier's bytes" and
+  "the carrier's pairing". The message, next text and exit code are unchanged.
+- `docs/design/carrier-synced-content-r0.md` describes the pairing as built in v0.17.0.
+- The CHANGELOGs' lines are wrapped to at most 100 characters.
+- **No internal labels in public text.** Requirement ids stay only in the error registry's rule
+  column, which the registry now defines: a stable key for the requirement an error enforces.
+  Docs, comments and messages say in words what the ask labels, plan slices, numbered contract
+  gaps and other internal references pointed at. `tools/check-public-cut.sh` gains a `labels`
+  rule that blocks them.
+- **`explain`'s `rule` field** for `MPC-E116`, `E305`, `E412`, `E720`, `E802`–`E807`, `E820`
+  and `E821` reads in words or drops a label (for example `MPC-E305`: "the participant cap
+  (participants_max)"; `MPC-E820`: "writer-tagged keys"). The message, next text and exit code
+  are unchanged.
+
 ## v0.17.0 (2026-11-12)
 
 A host release on v0.16.0. The crate version is `0.17.0`; the client's is `0.17.0`. A minor
-version: new API (text → tier 0, the carrier's pairing K1b, the live grid) and one behaviour
+version: new API (text → tier 0, the carrier's pairing, the live grid) and one behaviour
 change on keyed docs (below). The live wire stays version 3 (every addition optional). One new
 error id, `MPC-E521`. The store format is the same (`STORE_FORMAT` 6, `STORE_FORMAT_READ` 7,
 `STORE_FORMAT_BASE` 5) and no store needs a migration; two tables are added without a format
@@ -42,7 +313,7 @@ commit is cut by `tools/public-cut.sh`; main keeps all of it).
   a save as the carrier only after rendering the doc with the one before, so a carrier pack's
   doc holding the save could be marked dirty. Now every rendering from the save on is handed
   the save. No API change.
-- **The carrier's pairing (K1b)** is for packs (no host call): a new error,
+- **The carrier's pairing** is for packs (no host call): a new error,
   **`MPC-E521` `pairing_mismatch`** (exit 1; the file is left as it was, the doc keeps its
   changes), may reach a host from a pack that pairs. No pack in this release pairs.
 - **Pack authors:** the live grid adds two `ViewSchema` fields (`field_class_prefix`, `grid`).
@@ -52,16 +323,16 @@ commit is cut by `tools/public-cut.sh`; main keeps all of it).
 - **No store migration, wire still 3.** N−1 is checked both ways against v0.16.0: stores, the
   wire, carriers, index rows, pairings and demoted docs.
 
-### K1b, the carrier's pairing
+### The carrier's pairing
 
-**K1b, the carrier's pairing**, for a carrier pack that mints its keys (rows, timeline items,
-scene objects), and the two outside-save fixes of the live-plans review. One additive table
-(`carrier_pairings`, no format bump), one new error id (`MPC-E521`), no wire change. A pack that
-doesn't opt in sees no change but the keep-both rule below. Design:
-`docs/design/carrier-synced-content-r0.md`; `docs/SESSIONS.md`, "The carrier's pairing (K1b)".
+**The carrier's pairing**, for a carrier pack that mints its keys (rows, timeline items, scene
+objects), and two outside-save fixes. One additive table (`carrier_pairings`, no format bump), one
+new error id (`MPC-E521`), no wire change. A pack that doesn't opt in sees no change but the
+keep-both rule below. Design: `docs/design/carrier-synced-content-r0.md`; `docs/SESSIONS.md`, "The
+carrier's pairing".
 
 - **An outside save is the carrier, with its pairing, before anything renders the doc that took
-  it** (fix, K1 and K1b): the settle after a save (is the doc clean?) rendered the doc with the
+  it** (fix): the settle after a save (is the doc clean?) rendered the doc with the
   carrier and pairing of the sync point before, and only then took the save as the carrier. For
   a pack that re-keys on a save (keys that follow the file, as a workbook's rows), the old
   pairing named keys gone from the doc: the pack's splice refused it, rightly, and the kit kept
@@ -110,7 +381,7 @@ doesn't opt in sees no change but the keep-both rule below. Design:
   which this build's open sweeps; this build makes again a pairing an older write left stale,
   and makes one for an older store's doc. A version cut before the doc had a pairing stays
   `MPC-E208`.
-- `docs/PACK_TEMPLATE.md`: "A carrier pack that mints its keys: the pairing (K1b)".
+- `docs/PACK_TEMPLATE.md`: "A carrier pack that mints its keys: the pairing".
 
 ### A live grid: the grid slot, cells presence, cells claims, what a verb wrote
 
@@ -182,8 +453,8 @@ id, no wire change. `docs/SESSIONS.md`, "Text → tier 0".
   history off the file's key.
 - **Nothing is lost.** Every text version becomes a tier-0 version holding exactly what its
   `file_at` gave; the live doc's final state becomes current (a change the file never got,
-  unwritten or left when a process stopped before its write-back, included) and is written to the file (`Demotion::written`;
-  retried on `tick` when the file can't be written).
+  unwritten or left when a process stopped before its write-back, included) and is written to the
+  file (`Demotion::written`; retried on `tick` when the file can't be written).
 - **An outside save since the last sync is never merged by lines:** tier 0's keep-both rule (the
   save current, the live state a version and a conflict copy; `Demotion::kept_both`,
   `AuditEvent::BlobConflict`).
@@ -314,11 +585,11 @@ hands none sees nothing change: its rows are written as format 1, byte for byte 
 
 ### The view index, addresses, the keyed watch and view deltas
 
-The rendering-data contract's view index (gaps 1, 2 and 3). Additive: no store format change
+The view index K2 asked for, for its rendering data. Additive: no store format change
 (nothing is stored), no wire change (still version 3), no new error id. A pack that doesn't
 declare a view schema sees nothing change.
 
-- **The view schema** (gap 1): `Pack::view_schema()` (default `None`: no view index) declares
+- **The view schema:** `Pack::view_schema()` (default `None`: no view index) declares
   once the list root of the containers (a deck's slides) and of the units (its shapes), the
   unit field that names a unit's container (and the container field it matches), the page size
   and native unit, where each view field is (kind, name, alt, text, hidden, editable text,
@@ -329,26 +600,26 @@ declare a view schema sees nothing change.
 - **Focus follows the schema:** with a view schema, a unit's container (for a range's focus,
   an agent's claim and its verbs) is the one its container field names, so a pack needs no
   `Pack::container_of` for its units; `container_of` is asked for the other roots, as before.
-- **Addresses** (gap 2): `Pack::address_of(root, key)` and its inverse `Pack::key_of(root,
+- **Addresses:** `Pack::address_of(root, key)` and its inverse `Pack::key_of(root,
   address)` (default: the address is the key). The kit's edge: `Session::address_of`,
   `Session::resolve_address(conn, address)` (needs read; `MPC-E114` when no element, or
   elements of two roots, have it), `view_index::key_candidates`, and the presence setters and
   claims by address: `Session::set_focus_at`, `set_selection_at`, `set_range_at` and
   `claim_elems_at`, each returning what it set by address. A mapping that isn't one to one is
   refused as the pack's bug (`SessionError::Pack`).
-- **`ViewIndex`** (gap 3): one shape from either source. `Session::view_index(conn)` builds it
+- **`ViewIndex`:** one shape from either source. `Session::view_index(conn)` builds it
   from the live doc's keyed state (`tier` live, `rev`), `BlobSession::view_index(conn,
   version)` from a version's structure index (`tier` blob, `version`), both through the
   schema, then the pack's `view_derive` hook (what only the pack works out), then the kit
   (units in their containers' order, `unit_count`). Pure builders for a host: `ViewIndex::live`
   and `ViewIndex::blob`. Containers in order, units by container back to front, every key an
   address; text, names, titles and alt cut to `VIEW_TEXT_MAX` (1,024 bytes); a container's
-  `render_hash` is a keyed hash only. `to_value()` gives the contract's JSON.
+  `render_hash` is a keyed hash only. `to_value()` gives its JSON.
 - **The paged form** for a watch: `ViewIndex::snapshot()` (everything but the units;
   `ViewSnapshot::to_value(&schema)` adds the schema) and `ViewIndex::units_page(container,
   from, budget)` (a container's units in pages of at most `budget` bytes of their compact JSON,
   at least `VIEW_PAGE_MIN`, and at least one unit; `next` for the following page).
-- **The derive hook reads the carrier** (K1; gaps 4, 5 and 6 on the live tier): for a pack that
+- **The derive hook reads the carrier** (on the live tier): for a pack that
   keeps one, `ViewSource::Live` now carries the doc's carrier with the keyed state
   (`ViewSource::Live(state, Option<&ViewCarrier>)`, a change to the hook's match), for what
   only the file's bytes hold (fonts, render hashes, field kinds, a group's children, boxes
@@ -364,10 +635,11 @@ declare a view schema sees nothing change.
   the live view. `encode_from` is unchanged.
 - **The keyed watch reads the same kept index:** `Session::watch_state` (a snapshot's view
   index) goes through it, and each change frame reads the index before and after the change
-  (`view_index::ViewChange`, the last argument of `Pack::watch_extras`), so a pack's `derived` values can carry what its derive hook read from the
-  carrier with no second build. When the pack gives no `render_hashes`, the kit's are the
-  containers whose render hash changed (`ViewChange::render_hashes`). While a watch is open, a
-  view-schema doc's index is built once per change for the frame; the next read gets it kept.
+  (`view_index::ViewChange`, the last argument of `Pack::watch_extras`), so a pack's `derived`
+  values can carry what its derive hook read from the carrier with no second build. When the pack
+  gives no `render_hashes`, the kit's are the containers whose render hash changed
+  (`ViewChange::render_hashes`). While a watch is open, a view-schema doc's index is built once per
+  change for the frame; the next read gets it kept.
 - Test-only: `differential::ViewMutant` (`SchemaFieldIgnored`, `AddressNotInverse`,
   `DeriveIgnoresCarrier`, `DeriveCacheStale`, `FrameMissesRenderHash`), caught by
   `tests/view_index.rs`, and
@@ -412,7 +684,7 @@ declare a view schema sees nothing change.
     byte for byte.
   - No store change: no format bump, no new table, no new error id.
 
-- **View deltas in the change frames** (the rendering-data contract's Item 2;
+- **View deltas in the change frames** (K2's ask;
   `k2_mpc_base::view_delta`; `client/WIRE.md`, "View deltas"): for a pack with a view schema,
   each `ops_change` carries what the change did to the view, worked out by the kit from the
   change's ops and the schema, generically, so a watcher keeps its view without running pack
@@ -433,8 +705,8 @@ declare a view schema sees nothing change.
     for byte.
   - The snapshot's `schema` gains `composite` (`[{map, list}]`, `Pack::composite`), so a client
     reads an element's fields by address.
-  - Rows `tests/view_deltas.rs`: the contract's scripted turn and cases C, E and F on a deck with
-    the contract's view schema, against the contract's hand-made deltas
+  - Rows `tests/view_deltas.rs`: K2's scripted turn and three of its cases on a deck with its
+    view schema, against its hand-made deltas
     (`tests/golden/view_turn.json`); seeded traces on both container namings with every list
     and field op, undo and redo, each change's deltas checked against the view index before and
     after it; no schema, no deltas. Planted fault `WatchMutant::DeltaGeomStale`, caught by both.
@@ -464,9 +736,9 @@ declare a view schema sees nothing change.
 ## v0.15.1 (2026-11-12)
 
 A host release on v0.15.0. The crate version is `0.15.1`; the client's stays `0.15.0` (its code
-is unchanged since v0.15.0; only its N−1 test moved). No public API change, no wire change (still version 3)
-and no new error id. The store format is the same (`STORE_FORMAT` 6, `STORE_FORMAT_READ` 7,
-`STORE_FORMAT_BASE` 5) and no store needs a migration; one added row comes without a format
+is unchanged since v0.15.0; only its N−1 test moved). No public API change, no wire change (still
+version 3) and no new error id. The store format is the same (`STORE_FORMAT` 6, `STORE_FORMAT_READ`
+7, `STORE_FORMAT_BASE` 5) and no store needs a migration; one added row comes without a format
 bump (below). Pairs with the markdown, text, board, csv and psd pack tags of this release, and
 with the pptx pack's v0.1.2.
 
@@ -506,7 +778,7 @@ For a host, in short (details below):
   - the live view replays each list op from its positions before and after (no element read),
     and the read bases' journal keeps the ops, not a copy of the list. A keyed doc's live view
     carries no `places` (empty, as a version's view);
-  - an agent's change copies the doc first only when it can cut a version (K-HIST-4), decided
+  - an agent's change copies the doc first only when it can cut a version, decided
     from the view's lengths;
   - the disk replica's re-sync after an insert, a delete, a restore or a drop renders only when
     the doc's content digest (kept by the view) equals the synced content's;
@@ -552,7 +824,7 @@ For a host, in short (details below):
   hash only; otherwise (an outside save, a process stopped before a write-back, an older kit's
   store) it
   renders as before, and records what it learnt. An older kit reads the sync table's first two
-  rows only. Details: `docs/SESSIONS.md`, "The carrier (K1)".
+  rows only. Details: `docs/SESSIONS.md`, "The carrier".
 - **Test-only counts and plants** (`differential`): `take_entry_visits`, the entries the kit
   read or copied in bulk on a thread, and `set_view_checks`, which switches off the checks a
   test build makes of the live view (every hand-out against the engine doc, every rebuilt read
@@ -606,7 +878,7 @@ For a host, in short (details below):
     watcher count (`RosterEvent::Watching`) is pinned.
   - **Host cache keys:** `BlobStore::host_cache_key` and `host_cache_key_at`, for a host's own
     caches of a space's content (`MPC-E603` once the space key is destroyed).
-  - **The carrier (K1):** `Pack::wants_carrier` and `Pack::encode_from`, for a pack that writes
+  - **The carrier:** `Pack::wants_carrier` and `Pack::encode_from`, for a pack that writes
     the file back by splicing (the pptx pack); a version without its carrier is refused with
     `MPC-E208`. `DocStore::live_copies` lists a live doc's conflict copies.
 - **The live wire is version 3.** Everything new is additive. An older client on this host
@@ -627,21 +899,21 @@ For a host, in short (details below):
 
 In detail:
 
-- **A live revert and restore take the host's turn** (new, additive; K2's ask, rendering-data
-  contract gap 8). `Session::revert_with(conn, change, partial, &HistoryOptions)` and
+- **A live revert and restore take the host's turn** (new, additive; K2's ask).
+  `Session::revert_with(conn, change, partial, &HistoryOptions)` and
   `Session::restore_with(conn, vid, &HistoryOptions)` record the host-given turn
   (`HistoryOptions::turn`) on the change they make, on text and keyed docs, so the activity line
   credits the right turn. `revert` and `restore` are unchanged and record none. Tier 0's
   `BlobSession::restore_with` already took one.
-- **An agent's verbs now move its presence** (rendering-data contract gap 11; a behaviour
-  change, no new API). When a pack's verb run through `run_tool` changes elements of a keyed doc
+- **An agent's verbs now move its presence** (K2's ask; a behaviour change,
+  no new API). When a pack's verb run through `run_tool` changes elements of a keyed doc
   that isn't a table, the kit sets the acting agent's focus to the container
   (`Pack::container_of`) of the last element the change touched (the last container touched
   wins), and its selection to the live elements it touched in that element's list. A verb that
   touches no element moves nothing, and a raw write, an undo, a redo, a revert or a restore is
   no verb. A person's own verb never moves their presence. The roster carries the new focus and
   selection as usual. Details: `docs/SESSIONS.md`, "Presence".
-- **The pack verb on a change** (new, additive; rendering-data contract gap 9). A change a
+- **The pack verb on a change** (new, additive; K2's ask). A change a
   pack's own verb made (`run_tool` running a structured verb such as `shape move`, or a text
   pack's verb such as `replace-section`) now carries the verb's id: `ChangeEvent::verb` (the
   push and `events_since`) and `ChangeInfo::verb` (the log).
@@ -654,12 +926,12 @@ In detail:
   - The store keeps verbs in a new table, `change_verbs`, with no format bump, on the terms of
     `change_turns`: an older kit refuses a store-file rewrite with `MPC-E502` once a change has a
     verb. Details: `docs/SESSIONS.md`, "Verbs".
-- **The watcher count, pinned** (rendering-data contract gap 30). The roster's
+- **The watcher count, pinned** (K2's ask). The roster's
   `RosterEvent::Watching { count }` (`watching {count}` on the wire) comes whenever the number
   of participants watching past `Config::participants_max` changes, and a snapshot carries it.
   A watcher gets no roster row, no `Joined` or `Left`, and no presence. New rows pin this; the
   kit's behaviour is unchanged.
-- **Claim events carry who and when** (additive; rendering-data contract gap 27). The roster's
+- **Claim events carry who and when** (additive; K2's ask). The roster's
   `ClaimStarted` and `ClaimStartedElems` gain `actor` (the new `ClaimActor`: name, kind and
   colour; the id is `who`) and `started_ms`. `ClaimEnded` gains `actor`, `at_ms`, and `at_rev`,
   the change that ended it (`Edited`, `Deleted`) or `None`. On the wire, the claim events and a
@@ -669,7 +941,7 @@ In detail:
   its selection with the claimed keys, and sets its focus to the claim's first container in
   document order (by `Pack::container_of`). A person's claim leaves their presence alone. This
   is a behaviour change: before, an agent's claim left its selection as it was.
-- **Focus and range** (new, additive; rendering-data contract gap 10, the kit's side).
+- **Focus and range** (new, additive; K2's ask, the kit's side).
   - `Session::set_focus(conn, Option<ElemFocus>)`: the container a connection has in view (a
     deck's slide). Needs read. It goes when its element stops being live.
   - `Session::set_range(conn, Option<ElemRange>)`: a caret or selection inside one element's
@@ -680,7 +952,7 @@ In detail:
   - A watcher is refused both (`MPC-E305`), as every element setter.
   - The roster carries them: `RosterEntry::focus` and `range` (and the same on `Device`), and the
     new `RosterEvent::Focus` and `RosterEvent::Range`.
-  - Keys are the live store's own for now; the contract's addresses come with its gap 2.
+  - Keys are the live store's own for now; addresses come in a later release.
 - **The live wire is version 3** (`session::WIRE_VERSION`; `client/WIRE.md`, "Wire versions").
   Everything new is additive: a change's `turn`, the roster's `focus` and `range`, the claim
   events' actor and times, the client frames `focus` and `range` behind the features of the
@@ -689,7 +961,7 @@ In detail:
   - **A new client on an older host** (no `welcome.wire`) sends no `focus` or `range`, and reads
     the missing fields as absent.
   - K2's own wire goldens pin wire 2. They change only where K2 adds the new fields.
-- **Turns** (new, additive; rendering-data contract gap 8). A host can now pass a turn id, the
+- **Turns** (new, additive; K2's ask). A host can now pass a turn id, the
   id of one agent step, on every write call, so a view can group one agent run's changes.
   - The kit never makes one up and never reads one from a client. `None` is the default, and a
     call without one records none. The type is `Turn` (`Turn::new`: 1 to 64 bytes of printable
@@ -741,9 +1013,9 @@ In detail:
   tier 0 (or 0.5) as it does for any declined file. A change that would grow a live doc past
   it is refused, nothing applied: `AtLimit { what: "elements and fields" }`, with its own new
   id **`MPC-E822` `keyed_at_limit`** (exit 2; its next step reads the doc and removes
-  elements or fields, not the table's `rows drop-deleted`). An outside save past it declines the file (`DiskCheck::Declined`, code
-  `live_too_large`); the file is never written over. Tables keep their own limits, as
-  before. `capabilities` lists the new limit.
+  elements or fields, not the table's `rows drop-deleted`). An outside save past it declines the
+  file (`DiskCheck::Declined`, code `live_too_large`); the file is never written over. Tables keep
+  their own limits, as before. `capabilities` lists the new limit.
 - **A behaviour change for keyed docs that aren't tables: an app's save over the kit's own
   write keeps both,** the rule tier 0 took in v0.14.0. Until now an outside save of such a
   doc was applied straight onto the live doc by key, with no merge, no note and no audit
@@ -786,7 +1058,7 @@ In detail:
   may hold erased content the kit can't vouch for, so it is left and reported as
   `NotReached::ConflictCopies`; a copy holding nothing the purge erased stays. A doc without
   its file reports its recorded copies as `NotReached::File`.
-- **The carrier (K1; new, additive): a pack that models its format only in part can write the
+- **The carrier (new, additive): a pack that models its format only in part can write the
   file back by splicing.** Two new `Pack` methods, both with defaults, so a pack that doesn't
   opt in builds and behaves as before:
   - `wants_carrier(&self) -> bool` (default `false`): opt in.
@@ -823,7 +1095,7 @@ In detail:
     anything (`MPC-E502`, naming the table), and leaves the rows and counts of a doc it
     deletes, which this release's open gives back. `NotReached::File` now
     also covers the carrier when the file can't be written back. `Status::estimated_bytes`
-    counts the carrier's bytes. Details: `docs/SESSIONS.md`, "The carrier (K1)"; pack authors:
+    counts the carrier's bytes. Details: `docs/SESSIONS.md`, "The carrier"; pack authors:
     `docs/PACK_TEMPLATE.md`. `tools/n1/n1.sh layout-carrier` checks N−1 both ways.
 
 - **A removal at once never takes a blob a put is waiting to reference** (a behaviour change
@@ -1008,14 +1280,13 @@ the evidence run records; and the engine-feature guard with its self-test
 
 For a host, in short (details below):
 
-- **The structure index, opt-in per pack (A1 to A5):** a pack that indexes turns a blob
-  version into a tree of nodes the host indexes with its own worker (A1); `BlobSession` reads
-  it with rights and paged answers (`index_list`, `index_nodes`, `index_diff`, `index_blame`;
-  A2), anchors a comment on a node or the whole doc (`crate::anchor`; A3), keeps comment
-  threads when the host adopts them (`crate::annot`, `Registry::with_annotations`; A4), and
-  takes advisory claims by node (A5). `AnyFile` and a pack with no index are unchanged, as is
-  `Registry::for_tier`. The new enum variants and struct fields are on `#[non_exhaustive]`
-  types, so a host's code builds as is.
+- **The structure index, opt-in per pack:** a pack that indexes turns a blob version into a
+  tree of nodes the host indexes with its own worker; `BlobSession` reads it with rights and
+  paged answers (`index_list`, `index_nodes`, `index_diff`, `index_blame`), anchors a comment
+  on a node or the whole doc (`crate::anchor`), keeps comment threads when the host adopts
+  them (`crate::annot`, `Registry::with_annotations`), and takes advisory claims by node.
+  `AnyFile` and a pack with no index are unchanged, as is `Registry::for_tier`. The new enum
+  variants and struct fields are on `#[non_exhaustive]` types, so a host's code builds as is.
 - **What a host may want to adopt:** `Rights::comment` (implied by edit; a read-only share
   comments only when granted), `Need::Comment`, `Action::Annotate`; `AuditEvent::IndexWanted`
   (the host runs the index job), `AuditEvent::Annotation` and `AuditEvent::AnchorState`;
@@ -1057,14 +1328,15 @@ In detail:
 - **The ledger's paths** list the PSD pack's targets, and the kit's `index_result` target (a
   structure-index worker's result: a typed refusal or a checked draft).
 
-### Anchors and comment threads (A3, A4)
+### Anchors and comment threads
 
 - **Anchors (`crate::anchor`, pure):** an anchor on the whole doc or on a node by its key, and
   its state in a version, exactly one of attached, hint-stale, suspect (duplicate key, weak key,
   kind changed, identity doubt, candidate only, hints purged), hidden, orphaned, by a fixed
   precedence; candidates are shown and never taken. `index::Fingerprint` gains `content` (the
-  node's keyed content hash), so the judge needs only the anchor and the later node. `BlobPack::judge_anchor` and
-  `anchor_candidate` (defaulted: no pack changes) are the file type's half.
+  node's keyed content hash), so the judge needs only the anchor and the later node.
+  `BlobPack::judge_anchor` and `anchor_candidate` (defaulted: no pack changes) are the file type's
+  half.
 - **Comment threads (`crate::annot`), opt-in per host:** `BlobSession::comment`, `reply`,
   `resolve`, `reopen`, `delete_comment`, `thread`, `comments`, `annotation_log`, `reanchor`,
   `purge_annotations`, `erase_participant`, and `run_annotation` (the verbs over the same calls;
@@ -1081,7 +1353,7 @@ In detail:
   `PurgedScope::Annotations`, `AnnotationText`; `NotReached::SentNotifications` (on annotation
   purges only); `PurgeCounts::comments`, `anchors`; `Config::annot_body_max_bytes`,
   `annot_threads_max`, `annot_comments_max`; error ids `MPC-E116`, `E117`, `E320`, `E321`,
-  `E907` (`E906` is C3's); the ID kind `annotation` (`ann-12`). No store format bump.
+  `E907` (`E906` belongs to other work); the ID kind `annotation` (`ann-12`). No store format bump.
 - **Review round:** five tables (a thread-history index and a per-thread change row, so
   `comments --since` sees every change and reads one row a thread); `annot_thread_log_max`;
   `Registry::for_blob_pack` lists the annotation verbs and `BlobSession::run_tool` runs them;
@@ -1091,7 +1363,7 @@ In detail:
   Session's does and waits for comment writes already admitted, and clears bodies written on
   the erased person's behalf; readers without history see only the current version's node
   copies; a purge's clear of an anchor sticks until a re-anchor.
-### The structure index: reading it (A2) and claims by node (A5)
+### The structure index: reading it and claims by node
 
 - **Typed reads with rights**, on `BlobSession`: `index_list` (the outline, depth-first, each
   node's `#N`), `index_nodes` (several addresses, `None` per miss with candidates), `index_diff`
@@ -1101,10 +1373,10 @@ In detail:
   every call; App viewers see handles. `BlobStatus::index` says where the current version's
   index stands.
 - **The verbs: `BlobSession::run_tool`** (new), a parser over those calls under the names the
-  pack gives (`IndexVerbs`), with `outline` and `node` as the kit's names (K-READ-1). A partial
+  pack gives (`IndexVerbs`), with `outline` and `node` as the kit's names. A partial
   `node` read exits 4 with `MPC-E172 address_not_found` and lists every address. Reads page under
   `ToolOptions::read_budget` (default `READ_BUDGET`, 32,768 bytes of the page's compact JSON) with
-  opaque cursors bound to the doc, version, verb and arguments (K-READ-2): `MPC-E173
+  opaque cursors bound to the doc, version, verb and arguments: `MPC-E173
   stale_cursor`, `MPC-E174 bad_cursor`, `MPC-E175 over_budget` (`--no-truncate`). A node larger
   than a page comes alone without its text, which `--text` reads whole.
 - **`Registry::for_blob_pack`** (new): tier 0's verbs, plus a pack's index verbs and node claims
@@ -1130,7 +1402,7 @@ In detail:
   ancestors in full), `<list> --under ADDR` (new; `ListQuery::under`). `READ_BUDGET_MIN` is
   16,384, room for any frame and a stub. `--no-truncate` refuses whenever the whole answer is
   over the budget, a shortened item included. Text pages print the same shortened items.
-- **Candidates capped (K-READ-3):** at most `CANDIDATES_MAX` (20) for a missing or an
+- **Candidates capped:** at most `CANDIDATES_MAX` (20) for a missing or an
   ambiguous address, with `candidates_total` (`MissingAddress::candidates_total`, `MPC-E170`'s
   `details.candidates_total`). A node read's misses are on its first page only, at most a
   quarter of the budget, with `missing_total`; `MPC-E172` lists the first
@@ -1146,7 +1418,7 @@ In detail:
   `non_exhaustive` forbids outside the crate; add fields with a default in `BlobCase::new`.
   `parity::kit_index_cases` (new).
 
-### The structure index (A1)
+### The structure index
 
 - **New, opt-in per pack:** `BlobPack::index_spec`, `index`, `agent_writes` (all defaulted, so
   `AnyFile` and every existing pack are unchanged). A pack that indexes turns a blob version into
@@ -1160,7 +1432,12 @@ In detail:
   (`blob_index_max_bytes`, `blob_index_max_nodes`, `blob_index_max_stored_bytes`), events, and
   error ids `MPC-E711`, `E712`, `E713`, `E714`, `E715`, `E717`. No store format bump. A
   `purge_space_key` that removed index rows also rewrites the store file.
-- **Hardening of the same slice:** key overlays record their pack and format (an overlay of another format is absent, never laid over a new row); the digest key is derived with the space key as the message, so no blob id can equal it; the orphan sweep finds rows in a read transaction; minted keys are written once per format, and a late job changes nothing already shown; a deleted version loses its overlay; a stored row with a bad parent is `Corrupt` at decode; a worker's result is capped field by field and on total decoded size.
+- **Hardening in this release:** key overlays record their pack and format (an overlay of another
+  format is absent, never laid over a new row); the digest key is derived with the space key as the
+  message, so no blob id can equal it; the orphan sweep finds rows in a read transaction; minted
+  keys are written once per format, and a late job changes nothing already shown; a deleted version
+  loses its overlay; a stored row with a bad parent is `Corrupt` at decode; a worker's result is
+  capped field by field and on total decoded size.
 
 ### Guards: the engine's test hooks, and keys in `Debug`
 
@@ -1260,7 +1537,7 @@ In detail:
   `too_large` (it opens as text), and an outside save past it declines the file. In
   `capabilities` with the other limits.
 
-### The log entry's body (C3; breaking for hosts that build a `LogEntry`)
+### The log entry's body (breaking for hosts that build a `LogEntry`)
 
 - **`LogEntry.update: Vec<u8>` is replaced by `LogEntry.body: EntryBody`**, with
   `EntryBody::Yrs(update)` for a doc on Yrs and `EntryBody::Native(NativeRef { at })` for a
@@ -1278,9 +1555,9 @@ In detail:
 - **Storage:** Yrs entries stay log record version 3, byte for byte, so a store with no native
   doc is unchanged and the previous release reads it. Native entries are a new version 4 (body
   tag 2, the position); versions 1 to 3 read as Yrs. No session makes a native entry yet: a
-  native doc can't be stored until C3 stamps it.
+  native doc can't be stored until a later release stamps it.
 
-### Native documents' keys (C3; feature `native`, not for hosts until the switch)
+### Native documents' keys (feature `native`, not for hosts until the switch)
 
 - **`NativeKeys`** (new): a document's two keys on the native engine, its digest key and its
   store secret, per document for its whole life, host-made and kept outside the store.
@@ -1295,8 +1572,8 @@ In detail:
 - **`docs/SESSIONS.md`, "Erasure":** a purge holds against the store as it stands, not
   against an older copy of it. On the native engine a record put back or edited in place is
   refused at load, but a restored older copy, or one cut short at its end, loads as the doc
-  was before the purge: erasing backups and older copies is the host's job. A `K-PURGE-12`
-  row; `purge_docs_state_the_erasure_limit` holds the text.
+  was before the purge: erasing backups and older copies is the host's job. A row in the
+  table of what purge doesn't reach; `purge_docs_state_the_erasure_limit` holds the text.
 
 ### Tooling and docs
 
@@ -1585,9 +1862,10 @@ For a host, in short (details in the sections below):
   hasn't written, unless it is one of those. A read-only agent draws a fresh ID per join and isn't
   reused. A drawn ID that has no row can come round again: the doc holds nothing of it. No format
   bump.
-- **K-QUOTA-3 stays open.** `tests/join_store_row.rs` `joins_1m` shows 10^6 read-only joins leave
-  the table as it was. Writers who reconnect aren't covered: each connection that writes adds a
-  row, and a writer own replica adds one per join, until a later change.
+- **A bound on the client table stays open.** `tests/join_store_row.rs` `joins_1m` shows 10^6
+  read-only joins leave the table as it was. Writers who reconnect aren't covered: each
+  connection that writes adds a row, and a writer own replica adds one per join, until a later
+  change.
 - **Tests:** `tests/join_store_row.rs`, `store::tests::an_edit_and_its_row_land_together`.
   `tools/tests/wire-guard.sh` pins that a host's build has no `unsynced_for_tests`, the only switch
   for a store commit that skips its sync to disk.
@@ -1599,7 +1877,7 @@ For a host, in short (details in the sections below):
 
 ## v0.11.0: blob references from doc versions
 
-- **A doc's values can hold a blob (structured live, slice 5).** A pack declares the roots
+- **A doc's values can hold a blob.** A pack declares the roots
   (`Pack::blob_ref_roots`, default none). A list or map value there that is exactly
   `blob:<64 hex>` (`BlobId::to_ref`, `BlobId::parse_ref`) names that blob of the doc's space, and
   the doc holds one count on it, taken in the change's own transaction, while any record names
@@ -1613,7 +1891,8 @@ For a host, in short (details in the sections below):
   or a version restore is never refused for one: the value stays, and `blob_refs` reports it
   `Missing`. If the blob arrives, this kit's GC doesn't collect it: the doc takes its count.
 - **A purge recomputes the references from what's left,** and a blob nothing references any more
-  goes at once (with no blob store on the session: `NotReached::LeftForBlobGc`, new). A doc delete gives its counts back; a load takes what's missing for the live doc.
+  goes at once (with no blob store on the session: `NotReached::LeftForBlobGc`, new). A doc delete
+  gives its counts back; a load takes what's missing for the live doc.
 - **Known growth:** retention doesn't release a reference. A blob replaced many times stays until
   a purge or the doc's delete.
 - **Store: a new table, `doc_blob_refs` (no format bump),** created by the first name. The counts
@@ -1629,9 +1908,9 @@ For a host, in short (details in the sections below):
   that doc, and a blob already collected can't come back.** An older kit takes no reference for a
   value it writes, so with no other reference its GC collects the blob past its grace while the
   doc still names it. After the upgrade such a name reads `Missing`. A load heals what the live doc
-  names, so a name only a version or a revert record holds stays unprotected until a purge. K2 and the kits it vendors
-  have no pack writing these values, so it takes another host writing them on an older kit.
-  `tools/n1/n1.sh node-refs` pins both this and the case that holds.
+  names, so a name only a version or a revert record holds stays unprotected until a purge. K2 and
+  the kits it vendors have no pack writing these values, so it takes another host writing them on an
+  older kit. `tools/n1/n1.sh node-refs` pins both this and the case that holds.
 - **Tests:** `session::blob_ref_tests`, `tests/blob_refs.rs` and the store's. Planted faults
   (`MPC_STRUCT_MUTANT`, feature `differential`): `ref-after-commit` (the reference taken after the
   commit: an interrupted write leaves a named blob with none), `sweep-skips-table` (the sweep leaves
@@ -1679,7 +1958,7 @@ For a host, in short (details in the sections below):
 - `MPC-E114`'s `next` and `next_step` now cover a line, a position or an element: the step is
   `cat`, in place of `wc -l`. The id, name, exit and verbs are unchanged.
 
-## v0.11.0: keys two writers never mint alike (structured live, slice 1)
+## v0.11.0: keys two writers never mint alike
 
 - **Tagged keys, new (`k2_mpc_base::mint`).** A pack that wants list keys two writers can never
   mint alike opts a list root in with `Pack::tagged_keys` (default none), with its prefixes. A
@@ -1712,7 +1991,7 @@ For a host, in short (details in the sections below):
   (`MPC_STRUCT_MUTANT`, feature `differential`): `any-writer-tag`, `single-lww-mark`,
   `client-id-zero`, `shift-not-resample` and `reuse-held-client`.
 
-## v0.11.0: references to elements (structured live, slice 2)
+## v0.11.0: references to elements
 
 - **`k2_mpc_base::refs`, new:** the state of a pack value that names a list element (a link's
   end, a parent), so such a reference is never moved or deleted silently. `Ref { root, key,
@@ -1735,18 +2014,73 @@ For a host, in short (details in the sections below):
 
 ## v0.11.0: fixes (outside saves, purges, grids, claims, reads and capabilities)
 
-- **Outside saves: a save in the store returns `Ok`.** After taking an outside save the kit works out whether the doc still differs from the file, and if the pack's `encode` failed there the check returned the error for a save that had landed. It now returns the check's usual result, the failure goes to `AuditEvent::DiskError`, and the doc counts as dirty, so the write-back looks again. Nothing landed twice before this either: a repeat check found the save already taken. It affects text docs as well as table docs, and only a pack whose `encode` fails. K2's packs fail there only on damaged codec settings, or the text pack on a doc holding a CR; K2 logs a check's error and now logs and audits the same failure as a disk error.
-- **Grids: an outside save that fails before the store reloads the doc.** A failure after the doc took a save and before the store commit (the pack's `encode`, or a read) left the doc holding a save the store never got, and a repeat check said `Unchanged`, so it was never logged. The doc now reloads and the save stays in the file for the next check. Every claim ends `Reset` and the undo stacks clear, as for a failed store commit. The bug is ours. It affects table docs only.
-- **Purges: an erasure doesn't depend on rendering the file.** A purge whose write-back and re-sync failed because the pack's `encode` failed returned the error with the live removal landed and the history not erased, and a purge with `and_remove` could never get past it while `encode` kept failing. It now reports an `AuditEvent::DiskError`, erases what it can reach and lists `NotReached::File`: the file and the kit's copy of it still hold the text until a write-back, and purging again then takes the freed pages too.
-- **Grids: a change in the store returns `Ok`, whatever happens to the disk replica after it.** A grid change that re-identified elements re-synced the disk replica after its store commit, and if the pack's `encode` failed there the call returned the error. The change had landed, so a host that retried made it twice, and it wasn't on the undo stack. The bug is ours. The call now returns `Ok` and the change can be undone; the failure goes to `AuditEvent::DiskError`, and an outside save or a write-back re-syncs first. It affects table docs only, with a pack whose `encode` can fail: text docs don't re-sync there, and K2 has no table callers.
-- **Grids: a claim ends `Edited` only when its owner's change lands.** A change that landed nothing (restoring a live row, deleting a cell that isn't there) or that the doc refused left the claim marked, so the next change by anyone ended it `Edited`, and a hand-off reservation passed on the same way. The bug is ours. An op with no effect beside one that lands now touches nothing either, as for an element claim; the claim policy still judges what a change names. It affects table docs only: text docs mark after the engine applied the change, and K2 has no table callers.
-- **Grids: a failed read after the doc took a change reloads the doc.** A write into a deleted row reads who deleted it, and an undo, redo, revert or restore reads the row marks, both after the doc took the change. If that read failed, the call returned an error and the doc kept a change the store never got. The doc now reloads, as for a failed store commit: every claim ends `Reset` and the undo stacks clear. Only a failing store read reaches this. It affects table docs only.
-- **Claims:** a host that passes a claim `note` over 1024 bytes (`CLAIM_NOTE_MAX`) now gets `MPC-E304 bad_claim`, and nothing is taken.
-- **Grids: a refused `write --base live` marks nothing.** The kit recorded a column remap before its last checks. So a `Session::write_live_grid` call with columns that map non-exactly, refused at a limit or by a claim, or changing nothing under a pack whose `reconcile` leaves `cols_exact` false, marked the next change by anyone as a remap: keyed writes from an older base were refused as `rewritten_row`, and a person's undo of that change could conflict once someone wrote a cell after it. The bug is ours. The remap is now recorded after those checks and that return. It affects table docs only; text docs never set it, and K2 has no table callers.
-- **Sessions: a change that doesn't land leaves nothing for the next one.** A call's one-shot settings for its change (its label, leaving the undo stack, row and column marks, the overwrite notes it will store) are now set right before the commit and taken first in it. Before, a commit that failed at its apply, or a read error in `rows drop-deleted`, could pass them to the next change: a wrong label, an edit off the undo stack, a false mark, or a stored note telling someone a write overwrote their value when it never landed. No public call was found that reaches these. It affects table docs only.
-- **Reads: a read that fails tells nothing away.** A read verb that failed after the doc was read (`sed s//x/`, `diff` with old text that isn't UTF-8, an output over the limit, a pack's read verb returning an error, a grid's refused `LN`) still counted as the caller's read: it logged activity and moved their last read, so their next read didn't say who had changed the doc. No content was affected. It now moves nothing. In every kit release we checked: v0.10.2 and v0.10.0.2.
-- **`capabilities`: positions it had wrong.** New unit `doc_coords`, with rows for `pointer --at` and `viewport --rect`, which take a doc's own coordinates and had no row. `who` and `activity` said `stdout lines`, but on a grid they report rendered lines: their forms now split by tier (text `lines`, grid `rendered_lines`), and `who` adds grid `doc_coords`. Read a `who` or `activity` form's `tier`, which was `null`. No row still means a verb takes no position; `docs/POSITIONS.md` lists the verbs that print positions with no row yet.
-- New audit event `AuditEvent::NotesWithoutChange { key, change, version, authors }`: overwrite notes were planned and the commit changed nothing. Metadata only. It isn't expected to fire, and it changes nothing the kit does. If it does fire, report it: it's a bug in the kit.
+- **Outside saves: a save in the store returns `Ok`.** After taking an outside save the kit works
+  out whether the doc still differs from the file, and if the pack's `encode` failed there the check
+  returned the error for a save that had landed. It now returns the check's usual result, the
+  failure goes to `AuditEvent::DiskError`, and the doc counts as dirty, so the write-back looks
+  again. Nothing landed twice before this either: a repeat check found the save already taken. It
+  affects text docs as well as table docs, and only a pack whose `encode` fails. K2's packs fail
+  there only on damaged codec settings, or the text pack on a doc holding a CR; K2 logs a check's
+  error and now logs and audits the same failure as a disk error.
+- **Grids: an outside save that fails before the store reloads the doc.** A failure after the doc
+  took a save and before the store commit (the pack's `encode`, or a read) left the doc holding a
+  save the store never got, and a repeat check said `Unchanged`, so it was never logged. The doc now
+  reloads and the save stays in the file for the next check. Every claim ends `Reset` and the undo
+  stacks clear, as for a failed store commit. The bug is ours. It affects table docs only.
+- **Purges: an erasure doesn't depend on rendering the file.** A purge whose write-back and re-sync
+  failed because the pack's `encode` failed returned the error with the live removal landed and the
+  history not erased, and a purge with `and_remove` could never get past it while `encode` kept
+  failing. It now reports an `AuditEvent::DiskError`, erases what it can reach and lists
+  `NotReached::File`: the file and the kit's copy of it still hold the text until a write-back, and
+  purging again then takes the freed pages too.
+- **Grids: a change in the store returns `Ok`, whatever happens to the disk replica after it.** A
+  grid change that re-identified elements re-synced the disk replica after its store commit, and if
+  the pack's `encode` failed there the call returned the error. The change had landed, so a host
+  that retried made it twice, and it wasn't on the undo stack. The bug is ours. The call now returns
+  `Ok` and the change can be undone; the failure goes to `AuditEvent::DiskError`, and an outside
+  save or a write-back re-syncs first. It affects table docs only, with a pack whose `encode` can
+  fail: text docs don't re-sync there, and K2 has no table callers.
+- **Grids: a claim ends `Edited` only when its owner's change lands.** A change that landed nothing
+  (restoring a live row, deleting a cell that isn't there) or that the doc refused left the claim
+  marked, so the next change by anyone ended it `Edited`, and a hand-off reservation passed on the
+  same way. The bug is ours. An op with no effect beside one that lands now touches nothing either,
+  as for an element claim; the claim policy still judges what a change names. It affects table docs
+  only: text docs mark after the engine applied the change, and K2 has no table callers.
+- **Grids: a failed read after the doc took a change reloads the doc.** A write into a deleted row
+  reads who deleted it, and an undo, redo, revert or restore reads the row marks, both after the doc
+  took the change. If that read failed, the call returned an error and the doc kept a change the
+  store never got. The doc now reloads, as for a failed store commit: every claim ends `Reset` and
+  the undo stacks clear. Only a failing store read reaches this. It affects table docs only.
+- **Claims:** a host that passes a claim `note` over 1024 bytes (`CLAIM_NOTE_MAX`) now gets
+  `MPC-E304 bad_claim`, and nothing is taken.
+- **Grids: a refused `write --base live` marks nothing.** The kit recorded a column remap before its
+  last checks. So a `Session::write_live_grid` call with columns that map non-exactly, refused at a
+  limit or by a claim, or changing nothing under a pack whose `reconcile` leaves `cols_exact` false,
+  marked the next change by anyone as a remap: keyed writes from an older base were refused as
+  `rewritten_row`, and a person's undo of that change could conflict once someone wrote a cell after
+  it. The bug is ours. The remap is now recorded after those checks and that return. It affects
+  table docs only; text docs never set it, and K2 has no table callers.
+- **Sessions: a change that doesn't land leaves nothing for the next one.** A call's one-shot
+  settings for its change (its label, leaving the undo stack, row and column marks, the overwrite
+  notes it will store) are now set right before the commit and taken first in it. Before, a commit
+  that failed at its apply, or a read error in `rows drop-deleted`, could pass them to the next
+  change: a wrong label, an edit off the undo stack, a false mark, or a stored note telling someone
+  a write overwrote their value when it never landed. No public call was found that reaches these.
+  It affects table docs only.
+- **Reads: a read that fails tells nothing away.** A read verb that failed after the doc was read
+  (`sed s//x/`, `diff` with old text that isn't UTF-8, an output over the limit, a pack's read verb
+  returning an error, a grid's refused `LN`) still counted as the caller's read: it logged activity
+  and moved their last read, so their next read didn't say who had changed the doc. No content was
+  affected. It now moves nothing. In every kit release we checked: v0.10.2 and v0.10.0.2.
+- **`capabilities`: positions it had wrong.** New unit `doc_coords`, with rows for `pointer --at`
+  and `viewport --rect`, which take a doc's own coordinates and had no row. `who` and `activity`
+  said `stdout lines`, but on a grid they report rendered lines: their forms now split by tier (text
+  `lines`, grid `rendered_lines`), and `who` adds grid `doc_coords`. Read a `who` or `activity`
+  form's `tier`, which was `null`. No row still means a verb takes no position; `docs/POSITIONS.md`
+  lists the verbs that print positions with no row yet.
+- New audit event `AuditEvent::NotesWithoutChange { key, change, version, authors }`: overwrite
+  notes were planned and the commit changed nothing. Metadata only. It isn't expected to fire, and
+  it changes nothing the kit does. If it does fire, report it: it's a bug in the kit.
 
 ### Grids: line numbers from other tools now name the right row
 
@@ -1810,7 +2144,7 @@ For a host, in short (details in the sections below):
 ### Grids: an insert with `--base` doesn't conflict on the table's key counter
 
 - **The bug (ours, in the kit).** Every insert writes the table's key counter
-  (`meta.next_row`, `meta.next_col`), and the per-facet base check (K-BR-12) counted that write
+  (`meta.next_row`, `meta.next_col`), and the per-facet base check counted that write
   as a facet of the edit. So once anyone else had inserted a row after the version an agent read,
   the agent's own `row insert … --base V` was refused with `MPC-E803 facet_conflict` (exit 1,
   nothing applied), though no cell, row or position overlapped: `1 element changed since your
@@ -1922,7 +2256,7 @@ The timers from the v0.10.1 line. They are off by default. Their overhead gate i
 `k2_mpc_base::timers` adds per-path call counts, total and longest time, and p50/p95/p99 on
 32 paths (`docs/SESSIONS.md`, "Timers").
 
-- **In every build:** no feature and no test-only hook. They are what E-PERF-29's Yrs baseline
+- **In every build:** no feature and no test-only hook. They are what the Yrs speed baseline
   reads in hook-free release builds.
 - **Off by default:**
   - Off, a timed path costs one relaxed load and a branch.
@@ -1955,7 +2289,7 @@ The timers from the v0.10.1 line. They are off by default. Their overhead gate i
 
 ## v0.10.2 (2026-11-02)
 
-The first host release after v0.10.0.3: the v0.10.0.3 disk-replica fix (K-AUD-1, kept, not
+The first host release after v0.10.0.3: the v0.10.0.3 disk-replica fix (kept, not
 rolled back), the client as a library only, live presence as data, per-connection carets and
 the caret re-send. v0.10.1 was not released to hosts: what the docs mark "kit v0.10.1"
 (`client/WIRE.md`, `client/PRESENCE.md`) first ships here. **The timers from the unreleased
@@ -2015,7 +2349,7 @@ For a host, in short (details in the sections below):
 
 ## v0.10.2: the disk replica after a restart (also in v0.10.0.3)
 
-- **The merge base is right after a restart (a lost-edit risk, K-AUD-1).** An outside save
+- **The merge base is right after a restart (a lost-edit risk).** An outside save
   merged while the doc held changes not yet written back leaves the disk replica (the base the
   next outside save is merged onto) holding the file's text, recorded at the merged change's
   version. A reopen took that equal version as "the replica is the doc's state", so the first
@@ -2038,8 +2372,8 @@ For a host, in short (details in the sections below):
 - **Tests** (`tests/disk.rs`): `an_outside_save_then_a_restart_keeps_the_replica_the_docs_text`
   pins the property's minimal failing case (it failed on v0.10.0.1 and v0.10.0.2);
   `a_stale_replica_after_a_restart_is_reported_and_repaired` plants the old reopen (test-only:
-  `differential::with_reopen_step_by_version`) and sees the event fire once with K-AUD-1 clean
-  after the repair, and with the fix sees no event.
+  `differential::with_reopen_step_by_version`) and sees the event fire once with the sync check
+  clean after the repair, and with the fix sees no event.
 
 ## v0.10.2: the conformance suite's engine half v2 rules
 
@@ -2079,7 +2413,7 @@ For a host, in short (details in the sections below):
 
 ### Hardening: a refused apply leaves no trace
 
-- **`core.refused_no_trace`** (new conformance rule; gate G2a, the native adapter; needs
+- **`core.refused_no_trace`** (new conformance rule; gated on the native adapter; needs
   Authorship and Canonical): after every refused delivery or client update, the replica's
   text, version, encoded state vector and encoded state are equal to before, byte for byte,
   and it takes valid batches after. Passes on the reference model and on the kit Doc on the
@@ -2118,7 +2452,7 @@ For a host, in short (details in the sections below):
   `license.workspace`; `fuzz`, the D0 spike and the N−1 consumers in their own manifests) and in
   the client's `package.json` and its lockfile's root entry (and the spike's). README and
   NOTICE.md say so; `vendor/` keeps its own licences. No code change.
-- **The licence is checked (K-OSS-3):** `tools/oss-check.sh` fails unless `LICENSE-MIT` and
+- **The licence is checked:** `tools/oss-check.sh` fails unless `LICENSE-MIT` and
   `LICENSE-APACHE` are at the root (and are those licences), NOTICE.md is there, every crate of
   ours says `license = "MIT OR Apache-2.0"` (directly or by the workspace) and `publish = false`,
   every `package.json` of ours (and its lockfile's root entry) says the same licence, and a
@@ -2131,7 +2465,7 @@ For a host, in short (details in the sections below):
   `package.json`'s `files`, so `npm pack` includes them (npm packs only what is under the
   package's folder).
 
-### Positions bound to a version, with one release of warnings (Wave 1a: K-ADDR-3, R-1, R-2)
+### Positions bound to a version, with one release of warnings (R-1, R-2)
 
 - **R-1, grids:** a grid edit's `#N` and `LN` count in its `--base` version (was: the live
   table when the verb applied). A positional edit whose base the kit no longer holds is
@@ -2146,7 +2480,7 @@ For a host, in short (details in the sections below):
   applied (now live). **The next release flips the default to `Refuse`.** People's edits are
   unchanged.
 
-### One address grammar and its error ids (Wave 1a: K-ADDR-1, K-ADDR-2)
+### One address grammar and its error ids
 
 - **`addr`** (new module): the kit's one address grammar, `addr::parse(s, Forms)`: a scoped
   native ID `@<kind>:<id>[/…]`, a minted key `@k:<key>` (or `key:<key>`), `#N`, `LN`, a forced
@@ -2156,9 +2490,9 @@ For a host, in short (details in the sections below):
   `docs/SESSIONS.md`, "Addresses".
 - **New error ids** (append only; `registry.snapshot` grows by four lines): `MPC-E170
   ambiguous_address` (exit 2, live), `MPC-E171 positional_needs_version` (exit 2, reserved
-  for K-ADDR-3; live with R-1/R-2 below), `MPC-E172 address_not_found` (exit 4, reserved for `node`, K-READ-1),
-  `MPC-E173 stale_cursor` (exit 1, reserved for K-READ-2's cursors). Exit 2 here is usage, not
-  held: a host prints no permission line for them.
+  for positions bound to a version; live with R-1/R-2 below), `MPC-E172 address_not_found`
+  (exit 4, reserved for `node`), `MPC-E173 stale_cursor` (exit 1, reserved for paged reads'
+  cursors). Exit 2 here is usage, not held: a host prints no permission line for them.
 - **`ToolError::Address`** (new variant; `ToolError` is `#[non_exhaustive]`): an address
   refused with its own report and details, exit 2, its message the verb's own line.
 - **The grid verbs** (`table::verbs`) parse their addresses through the grammar: rows and
@@ -2167,7 +2501,7 @@ For a host, in short (details in the sections below):
   `details.candidates` (each match's `@k:` address and `#N`). A bare word starting with `@`
   is still a column name on a grid (no native IDs there).
 
-### Structured next steps (K-PAR-10): `next_step` beside `next`, additive
+### Structured next steps: `next_step` beside `next`, additive
 
 - **New wire field, additive**: an error id gets a `next_step`, `{verb, args, why}`
   (`errors::NextStep`; `ErrorEntry::step: Option<NextStep>`, `ErrorReport::next_step()`).
@@ -2196,7 +2530,7 @@ For a host, in short (details in the sections below):
   instead of `next`. `next` converts or retires only in a later release, and only after K2
   renders `next_step`.
 
-### The position encoding, stated (K-ADDR-4)
+### The position encoding, stated
 
 - **`capabilities` states how positions are counted**: a new top-level `positions` key in
   `--json` (and a "Positions" section in the text form): `internal` and `wire` `utf8_bytes`
@@ -2217,7 +2551,7 @@ For a host, in short (details in the sections below):
   round-trip; a Yrs client's insert at a UTF-16 index lands at the byte the CLI's `line:col`
   names, and the kit's byte offset is the client's UTF-16 index. No behaviour changes.
 
-### The ID table and the ID-churn judge (K-ID-13, K-COD-10)
+### The ID table and the ID-churn judge
 
 - **`ids`** (new module, `crates/base/src/ids/mod.rs`): `IdKind { kind, example, class, scope,
   accepted_by, note }` and `IdClass` (durable, file-local, unique-name, positional, session,
@@ -2235,9 +2569,8 @@ For a host, in short (details in the sections below):
   every ID, and each one-unit edit (a verb's edits written back, or an outside save read
   back) must keep the ID of every object it doesn't touch. Run on the text pack and the grid
   test pack (zero churn); planted renumberings (a read-back that re-keys a row, a save that
-  renumbers a line's ID) fail it. **Not yet:** refusing such a write at run time (K-COD-10's
-  last sentence): it needs a pack hook and a new error id, so it waits for the first pack
-  whose file carries native IDs.
+  renumbers a line's ID) fail it. **Not yet:** refusing such a write at run time: it needs a
+  pack hook and a new error id, so it waits for the first pack whose file carries native IDs.
 
 ### The sync layer at the engine tag mpce-g2a-m2.3 (hardening; the engine's licence)
 
@@ -2279,14 +2612,14 @@ For a host, in short (details in the sections below):
   re-base without `on_rebase`; new `TrustClaimedBase` (the base taken as claimed, not through
   the send log). `IntegrateInline`, `NoDepMap`, `ForgetOnAck` and `ReadmitBelowS` as before.
 
-### The native engine behind a feature (C2 of the engine migration, in progress)
+### The native engine behind a feature (a step of the engine migration, in progress)
 
-- **Feature `native`, off by default and not for hosts until the switch (stage D).** It adds
-  the native engine (`mpce-core`, `mpce-codec`, vendored) behind the kit's engine seam. Until
-  C3, **sessions refuse to store a doc on it** (`Doc::check_storable`, at import and
-  promotion: it would be stamped as Yrs's). Without the feature nothing changes, and the
-  kit's normal dependency tree has no `mpce-*` crate: `tools/tests/wire-guard.sh` checks it,
-  in the repo and as a host builds it.
+- **Feature `native`, off by default and not for hosts until the switch to the native
+  engine.** It adds the native engine (`mpce-core`, `mpce-codec`, vendored) behind the kit's
+  engine seam. Until a later step, **sessions refuse to store a doc on it**
+  (`Doc::check_storable`, at import and promotion: it would be stamped as Yrs's). Without the
+  feature nothing changes, and the kit's normal dependency tree has no `mpce-*` crate:
+  `tools/tests/wire-guard.sh` checks it, in the repo and as a host builds it.
 - **Seam prep, the same on Yrs:** `Engine::yrs()` is an `Option`; provenance counts in the
   doc's own units (`Prov` carries `Doc::units()`; the build-wide `UNITS` is gone); the edit
   path reports each text hunk's first inserted clock as applied (`Made::firsts`) instead of
@@ -2298,10 +2631,9 @@ For a host, in short (details in the sections below):
   id with `details.engine_code` where the kit has the meaning, else `MPC-E161
   engine_unlisted` with the code (no registry rows yet).
 - **The native conformance column** (`NativeText`, empty deviation list): the core rules,
-  `core.authorship` with no pin, and `core.sec`. `core.steady_plain` awaits the engine's
-  G2a M4 (E-TEXT-13); the suite measures and prints it every
-  run (`native::core_steady_plain_measured`) and gates on it once the column claims Steady.
-  Never a pin.
+  `core.authorship` with no pin, and `core.sec`. `core.steady_plain` awaits a later engine
+  milestone; the suite measures and prints it every run (`native::core_steady_plain_measured`)
+  and gates on it once the column claims Steady. Never a pin.
 
 ### `sec.rebase_required`: the re-base epoch as the engine's model has it
 
@@ -2313,16 +2645,16 @@ host's until mpce-sync carries it):
   pipelined update is re-based in epoch 2, not again in epoch 1.
 - **The fence** (`recvOp`, `u.ep < x.ep`), three new cases: (a) an old-epoch copy of an update
   already in the log is ignored, never equivocation; (b) an old-epoch update not in the log is
-  held and re-based into a newer epoch; (c) the epoch survives a reconnect (A9, Addendum G1-3
-  (4)): a client whose frames were lost with its connection resends after the reconnect, and
-  its re-based updates are ignored while its offline one is re-based, in epoch 3.
+  held and re-based into a newer epoch; (c) the epoch survives a reconnect: a client whose
+  frames were lost with its connection resends after the reconnect, and its re-based updates
+  are ignored while its offline one is re-based, in epoch 3.
   `Rebase` gains `disconnect`, `reconnect` (the handshake: resends, then a catch-up) and
   `insert_offline`. A known update with other content is equivocation (the model's
   `sameContent`).
 - **Negatives**: `NoEpochFence` is now the model's `client-no-epoch-fence` (no fence: the
   resend of a re-based update is reported as equivocation); new `EpochPerConnection` (the
   model's `cp_lost_frame`); the old `NoEpochFence` (references to re-based events left
-  unmapped) is `NoDepMap`. Requirement: E-SEC-14, -16, -17 (amended G1-3), E-CORE-4.
+  unmapped) is `NoDepMap`.
 
 ### The client protocol's rules on the engine's sync layer (mpce-sync 0.1.0, test-only)
 
@@ -2352,32 +2684,32 @@ host's until mpce-sync carries it):
   mutants stay on `seams::RefReceipts` (mpce-sync's receipt check has no planted variant).
   `seams::RefRebase` is gone.
 
-### Eight new conformance rules (engine half v2, draft 2.1; review C-a)
+### Eight new conformance rules (engine half v2)
 
-`docs/CONFORMANCE.md` lists each with its gate (the PRD's) and its delivery target (T = G2a M2,
-~11-18). Each has a planted negative that must fail it.
+`docs/CONFORMANCE.md` lists each with its gate and its delivery target. Each has a planted
+negative that must fail it.
 
-- **`core.authorship`** (E-CORE-5, gate G2-core): the agents whose new events a batch carries,
+- **`core.authorship`**: the agents whose new events a batch carries,
   reported before anything changes; a batch on agent A's connection may carry new events by A
   only. Runs on both engines; on the kit it is the kit's own client check, through the
   `conformance` feature's hooks `replica::check_from` / `replica::deliver_from`, which call
   the same code as `Doc::check_client_update` / `apply_client_update` (one body, shared;
   `untrusted-wire` stays off in the suite). Pinned on Yrs.
   Mutants: `TipOnly`, `KnownAsNew`.
-- **`core.sec`** (E-CORE-1, G2-core): byte-identical canonical state whatever the delivery
+- **`core.sec`**: byte-identical canonical state whatever the delivery
   order: 1,680 interleavings of a concurrent script and 100 causal orders of a seeded run.
   Passes on both engines (the kit's `encode_state` included). Mutant: `ArrivalOrder`.
-- **`core.steady_plain`** (E-TEXT-13, G2a): a loaded fragmented doc against
-  1.2 × text + 24 B × index runs + 64 KiB, with the counting allocator. Pinned on Yrs; planted pair: plain text and index pass (198 KB), 16 B per
-  character fails (478 KB).
-- **`prov.record`** (E-PROV-1, G2a): one record per change, its author the agent that made it
-  (C20), on whose behalf, host time, and time never in a merge; on a kit session. Pinned on
-  the kit: its record has no person-or-agent kind (interface r1.7's typed core will).
+- **`core.steady_plain`**: a loaded fragmented doc against
+  1.2 × text + 24 B × index runs + 64 KiB, with the counting allocator. Pinned on Yrs; planted pair:
+  plain text and index pass (198 KB), 16 B per character fails (478 KB).
+- **`prov.record`**: one record per change, its author the agent that made it, on whose
+  behalf, host time, and time never in a merge; on a kit session. Pinned on
+  the kit: its record has no person-or-agent kind (a later interface's typed core will).
   Mutants: `BehalfAsAuthor`, `RecordPerHunk`.
-- **`perm.predicate_called`**, **`perm.refused_whole`** (E-PERM-1, -2; K-PERM-15; G2a):
-  awaiting the kit's write predicate (K-PERM-15) and the native engine's; they run on a test
+- **`perm.predicate_called`**, **`perm.refused_whole`**:
+  awaiting the kit's write predicate and the native engine's; they run on a test
   seam, `seams::GatedYrs`. Six mutants.
-- **`sec.false_receipt`** (E-CLI-14), **`sec.rebase_required`** (E-SEC-14, -17), G2-core: not
+- **`sec.false_receipt`**, **`sec.rebase_required`**: not
   applicable on Yrs (no stability frontier); awaiting the kit on the native engine's client
   protocol; they run on the engine's sync layer, mpce-sync (below). Nine mutants.
 - The kit Doc's deviation list is fifteen entries (`core.authorship`, `core.steady_plain`,
@@ -2388,7 +2720,7 @@ host's until mpce-sync carries it):
   `conformance_hook_is_the_client_check`, holds the hook's answers and resulting state equal
   to the client API's on every outcome.
 
-## v0.10.2: C1, the seam prep for the native engine
+## v0.10.2: the seam prep for the native engine
 
 ### N−1 both ways (tools/n1)
 
@@ -2458,7 +2790,7 @@ UTF-16 count on a clock path now goes through `units_of`. `CharBlame.clock` and
   `StoreError::ClockOverflow` (`MPC-E501` `store_failed`, exit 6) before anything is
   written; it is never stored truncated.
 - Yrs clocks are u32, so a Yrs doc never reaches that refusal. The u64 record layout comes
-  with the native records (stage D).
+  with the native records, at the switch to the native engine.
 - `StoreError` gains `ClockOverflow(u64)`; it is `#[non_exhaustive]`.
 - **Reads keep v0.10.0's refusal.** A change-clocks or provenance row with a clock past the
   doc's engine's (`EngineDoc::max_clock`; Yrs: `u32::MAX`) can only be damage. Blame,
@@ -2476,8 +2808,9 @@ refuse them as `Corrupt`.
 ### The seam's `new` and `text` return `Result` (P14)
 
 `EngineDoc::new` and `EngineDoc::text` are fallible, so an engine can refuse a schema it can't
-hold. A text root the doc doesn't hold is `DocError::Malformed`. `Doc::new` and `Doc::text` returned `Result` already; the public API is
-unchanged. `Doc` checks the root's kind first, so no caller of `Doc` reaches the new error.
+hold. A text root the doc doesn't hold is `DocError::Malformed`. `Doc::new` and `Doc::text` returned
+`Result` already; the public API is unchanged. `Doc` checks the root's kind first, so no caller of
+`Doc` reaches the new error.
 
 ### `Doc` runs on an engine enum
 
@@ -2675,12 +3008,13 @@ is behind, as before; the client's frames don't change when it lands.
 - **"Insert my text here"** (M2): a single-hunk action the person chooses, beside Re-apply. It
   first shows the typed text in the editor where it would go (announced in the note,
   `role="status"`; for a replacement or deletion the note adds that the removal isn't redone),
-  and inserts it only on **Insert** (its own undo step); **Cancel** or Escape inserts nothing. Presence is checked first for a lost change. Handle: `insertHere(id)`,
+  and inserts it only on **Insert** (its own undo step); **Cancel** or Escape inserts nothing.
+  Presence is checked first for a lost change. Handle: `insertHere(id)`,
   `confirmInsert()`, `cancelInsert()`, `InsertResult`; class `cm-mpc-insert-preview`.
 - **Copy** on every rejection with text (`copyRejected(id)`): to the clipboard, or the text
   selected when the clipboard refuses. The row's text is selectable.
-- New strings: `insertHere`, `insertConfirm`, `insertCancel`, `insertPreview`, `insertRemovedText`, `insertMultiHunk`,
-  `copy`, `copied`, `copyFailed`, `conflictReapply`, `cantPlace`.
+- New strings: `insertHere`, `insertConfirm`, `insertCancel`, `insertPreview`, `insertRemovedText`,
+  `insertMultiHunk`, `copy`, `copied`, `copyFailed`, `conflictReapply`, `cantPlace`.
 
 **Deprecated**
 - `LiveText.reapplyGuard(id)` and the type `ReapplyGuard` (from v0.9.8.2): a stub over
@@ -2691,7 +3025,7 @@ is behind, as before; the client's frames don't change when it lands.
 
 ## v0.10.0 (2026-10-30)
 
-C1, structured kinds and the grid: the C1 line (grids and the CSV seam) on top of v0.9.7.1.
+Structured kinds and the grid: the grid line (grids and the CSV seam) on top of v0.9.7.1.
 Pairs with k2-mpc-csv 0.1.0, k2-mpc-markdown 0.7.8 and k2-mpc-text 0.2.9.
 
 **Includes v0.9.7.1's fixes** (its section below): `write --base` merges by whole lines
@@ -2720,53 +3054,57 @@ file's rows onto keys, and a wrong pairing could merge a row someone rewrote wit
 cells: a row nobody wrote. A text can't say otherwise ("A' moved here" and "B edited in place" can
 be the same bytes), so safety no longer rests on pairing:
 - **`write --base`:** a row the text didn't leave exact and the live side changed too is one
-  `edited_row` conflict, nothing of it applied, `--partial` included; the message names the row by key
-  and line and the way out (re-read, or `cell set --base`).
-- **An outside save** (and a stale `write_live_grid`, a revert, a version restore): the text's row wins
-  whole; every live cell that differs gets the Overwritten note, and a version holds it. A live
+  `edited_row` conflict, nothing of it applied, `--partial` included; the message names the row by
+  key and line and the way out (re-read, or `cell set --base`).
+- **An outside save** (and a stale `write_live_grid`, a revert, a version restore): the text's row
+  wins whole; every live cell that differs gets the Overwritten note, and a version holds it. A live
   switch between empty and absent in one cell isn't a live edit of that cell when the base row, with
   only that cell switched, renders the same bytes. A blank row given a `""` cell (blank to `,`)
-  changes bytes and is an edit. Before, such a switch was judged on the whole row's bytes, so another
-  live edit in the row made it count: a spurious note and audit event for the cell.
-- **The cost:** two people's different cells in one row no longer auto-merge through a text. Grid verbs
-  that name a cell keep the per-cell merge. It can be relaxed later without a store format change.
+  changes bytes and is an edit. Before, such a switch was judged on the whole row's bytes, so
+  another live edit in the row made it count: a spurious note and audit event for the cell.
+- **The cost:** two people's different cells in one row don't auto-merge through a text any more.
+  Grid verbs that name a cell keep the per-cell merge. It can be relaxed later without a store
+  format change.
 - **"Exact" compares decoded field values exactly** (a trailing space counts, a blank line isn't
-  `""`), under an exact column mapping (own position, or unique header name). How a field is quoted is
-  no change: a tool requoting a whole file overwrites nothing and bounces nothing.
-- **Row marks** (`row_marks`, in format 6): a keyed write whose base predates a text's non-exact pairing
-  of a row it names is refused (`edited_row`), even on a cell the text didn't change; a non-exact
-  column mapping marks the whole doc. An undo, revert or restore that changes a marked row marks it
-  again. `EditOptions::seen`: a person's edit is guarded the same way if the host passes the version
-  their view last rendered; **no client sends it yet, and without it an edit lands at current.**
-- **Undo (spec S13, grid rows only; text undo is untouched):** undoing a change on a re-paired row with
-  later edits conflicts (`rewritten_row`); `--partial` skips it and reports the skip; a revert rewrites
-  the row whole.
+  `""`), under an exact column mapping (own position, or unique header name). How a field is quoted
+  is no change: a tool requoting a whole file overwrites nothing and bounces nothing.
+- **Row marks** (`row_marks`, in format 6): a keyed write whose base predates a text's non-exact
+  pairing of a row it names is refused (`edited_row`), even on a cell the text didn't change; a
+  non-exact column mapping marks the whole doc. An undo, revert or restore that changes a marked row
+  marks it again. `EditOptions::seen`: a person's edit is guarded the same way if the host passes
+  the version their view last rendered; **no client sends it yet, and without it an edit lands at
+  current.**
+- **Undo (spec S13, grid rows only; text undo is untouched):** undoing a change on a re-paired row
+  with later edits conflicts (`rewritten_row`); `--partial` skips it and reports the skip; a revert
+  rewrites the row whole.
 - **Pairing decides identity and blame only.** A wrong pair costs blame on that key: stated, not a
-  safety cost. Exact duplicates can't be told apart. Native merges would bypass the server's checks and
-  don't exist today (the untrusted-wire path doesn't reach sessions).
+  safety cost. Exact duplicates can't be told apart. Native merges would bypass the server's checks
+  and don't exist today (the untrusted-wire path doesn't reach sessions).
 
 **Host notes**
 - **Overwritten notes reach a connected editor:** `RosterEvent::Overwritten`, to its author's own
   subscriptions, and `RosterEvent::Snapshot::overwritten` (`client/WIRE.md`). They persist across a
-  restart in the change's own transaction, one per row per author, values capped (256 bytes, 32 cells),
+  restart in the change's own transaction, one per row per author, values capped (256 bytes, 32
+  cells),
   at most 64 per author with the overflow rolled up, expiring with the revert window. A purge strips
   their values; `Debug` doesn't print them. Someone who can't read the doc gets nothing, not even a
   count, until they can. `Session::take_notes` and a verb's notes still deliver them; a push doesn't
-  consume one, so dedupe on `(change, row)`. `rows drop-deleted` can't be undone, so it notes what it
-  removes: `dropped_row` (a deleted row's cells) and `dropped_col` (a deleted column's cells in rows
-  that stay), to whoever wrote them; the note carries the value and names no version. A delete's note
-  carries the live values it hid.
+  consume one, so dedupe on `(change, row)`. `rows drop-deleted` can't be undone, so it notes what
+  it removes: `dropped_row` (a deleted row's cells) and `dropped_col` (a deleted column's cells in
+  rows that stay), to whoever wrote them; the note carries the value and names no version. A
+  delete's note carries the live values it hid.
 - **`--partial` applies nothing of a text when a column layout change on either side conflicts with
   it:** any conflict at a column (`edited_col`: the text deleted a column the live side wrote into;
   `deleted_col`: the text moved a column the live side deleted; `moved_col`: both moved it), or a
   `deleted_col` at a cell or a name (the text wrote into, or renamed, a column the live side
-  deleted). The layout every row of the text assumes changed, so `write --base --partial` returns the
-  same conflicts as plain `write --base`. Before, it applied the text's rows beside a held column's old
-  cells: a row nobody wrote. A text that never touches a column the live side deleted applies as
-  before, every field by key. A text's column insert on its own never conflicts. Beside a live column
-  delete, though, the text's fields can still meet the deleted column (`deleted_col` at its cells).
-  Before, `--partial` then applied the insert, so a new empty column took the deleted one's place.
-  Now it applies nothing. An `edited_col` conflict now names the writers of the cells it met.
+  deleted). The layout every row of the text assumes changed, so `write --base --partial` returns
+  the same conflicts as plain `write --base`. Before, it applied the text's rows beside a held
+  column's old cells: a row nobody wrote. A text that never touches a column the live side deleted
+  applies as before, every field by key. A text's column insert on its own never conflicts. Beside a
+  live column delete, though, the text's fields can still meet the deleted column (`deleted_col` at
+  its cells). Before, `--partial` then applied the insert, so a new empty column took the deleted
+  one's place. Now it applies nothing. An `edited_col` conflict now names the writers of the cells
+  it met.
 - A grid's overwrite note to a reader without history now clears `version` and `restore_from`
   and sets `no_history`, on every delivery path. A text note is unchanged (it clears `version`
   only); whether a text reader without history should keep `restore_from` is under review for
@@ -2786,7 +3124,7 @@ be the same bytes), so safety no longer rests on pairing:
   whole edit (`SessionError::UnknownElem`, `MPC-E805 no_element`, exit 4, as the grid verbs'),
   naming the drop's change and who ran it while its record is in the revert window, else saying
   the key isn't in the table; nothing applies. A deleted key the table still knows stays a hidden
-  write with its §4.3 message, and a key the same edit inserts takes the write. Map deletes are
+  write with its message, and a key the same edit inserts takes the write. Map deletes are
   not checked (they store nothing). Since grids landed; grids have not shipped.
 - **A reversal over a re-paired row the doc has dropped:** a revert that rewrites such a row
   whole (S13) returned an engine refusal (`UnknownKey`) instead of an outcome, and an undo or redo
@@ -2797,7 +3135,7 @@ be the same bytes), so safety no longer rests on pairing:
   edit of the cell, so a text writing that cell applies with no conflict. Before, it was a cell
   conflict.
 - **`HiddenCellWrite::message`:** the kit now supplies the sentence for a cell written into a
-  deleted row or column (csv contract §4.3's template), so every host and agent shows the same
+  deleted row or column, so every host and agent shows the same
   text: `r2: c1 set by p2 in a row deleted by p1; row restore --row r2 brings it back` (a column:
   `… in a column deleted by bot; col restore --col c2 brings it back`; both: `… in a row deleted by
   p1 and a column deleted by bot; row restore --row r2 and col restore --col c2 bring it back`).
@@ -2836,8 +3174,8 @@ be the same bytes), so safety no longer rests on pairing:
   own row: a row nobody wrote. The outside save's whole-row loop also reads the file's columns
   live in the result.
 - **A reversal never writes under a dropped key:** an undo, redo or revert of a batch that touched a
-  dropped row or column conflicts (`dropped`) for its cells too; `--partial` skips them (spec S11). `AuditEvent::OutsideOverride` records each, with no
-  content. No `ChangeEvent` field carries it.
+  dropped row or column conflicts (`dropped`) for its cells too; `--partial` skips them (spec S11).
+  `AuditEvent::OutsideOverride` records each, with no content. No `ChangeEvent` field carries it.
 - **Store format 6, lazy and one-way** (`store::STORE_FORMAT` 6, `STORE_FORMAT_BASE` 5): a
   store is stamped 6, and gains the `elem_writes` table, only in the transaction that writes
   its first structured doc (a grid). A store that never holds one stays at 5 byte for byte,
@@ -2846,17 +3184,17 @@ be the same bytes), so safety no longer rests on pairing:
   back only with stores that never opened a grid.
 
 **Breaking**
-- **`session::Reconciled` gains `exact_rows` and `cols_exact`**, and `table::Reconciled` too. A table
-  pack with its own `reconcile` must pass them on from `table::reconcile`: the defaults (empty, false)
-  are the strict reading, every row merged whole and every keyed write from an older base refused, so
-  a pack can't turn the row rule off by leaving them out.
-- **`Session::write_live_grid` takes `seen`**, the version the body was made from. Stale, it takes the
-  outside-save path, with notes; unknown, `GridWrite::BaseExpired`.
+- **`session::Reconciled` gains `exact_rows` and `cols_exact`**, and `table::Reconciled` too. A
+  table pack with its own `reconcile` must pass them on from `table::reconcile`: the defaults
+  (empty, false) are the strict reading, every row merged whole and every keyed write from an older
+  base refused, so a pack can't turn the row rule off by leaving them out.
+- **`Session::write_live_grid` takes `seen`**, the version the body was made from. Stale, it takes
+  the outside-save path, with notes; unknown, `GridWrite::BaseExpired`.
 - **`RosterEvent::Snapshot` gains `overwritten`** (a `match` naming every field needs `..`).
 - **`FacetConflict` gains `rewritten_row`.**
 - **`store::VersionReason` gains `BeforeDrop`** (stored as 8): `rows drop-deleted` cuts that version
-  first; its cell map holds the dropped rows' and columns' cells (restoring an element from it arrives
-  in v0.10.1). An exhaustive `match` needs the new arm.
+  first; its cell map holds the dropped rows' and columns' cells (restoring an element from it
+  arrives in v0.10.1). An exhaustive `match` needs the new arm.
 - **`PersonAction` gains the grid tier's rows P35-P44** (`RowInsert` … `DropDeleted`), on
   purpose: the enum is exhaustive, so every pack's `match` stops compiling until it maps
   them. A text or Markdown pack maps them N/A (`ParityRow::not_applicable`, verbs absent:
@@ -2865,30 +3203,30 @@ be the same bytes), so safety no longer rests on pairing:
   clone the caret where it is used twice, `set_cursor(c, root, at.clone(), at)`.
 - `Tier` gained `Tier::Grid` and `ClaimEnd` / `ReservationEnd` gained `Deleted` (all
   `#[non_exhaustive]`: additive for matches with a wildcard).
-- **`StructEdit` takes a `&VerbCtx`** (C1i) instead of `(&View, &[u8])`: `ctx.view()`,
+- **`StructEdit` takes a `&VerbCtx`** instead of `(&View, &[u8])`: `ctx.view()`,
   `ctx.stdin()`, plus the pack's block decoder (`ctx.decode_block`) and line map
   (`ctx.line_map`). Fix: `|view, stdin| …` becomes `|ctx| { let (view, stdin) =
   (ctx.view(), ctx.stdin()); … }`.
 
-**Added (C1g)**
-- Presence by key on grids (A10): `Session::set_cell_cursor`, `RosterEntry.cell`
+**Added (grid presence, parity, verbs and blame)**
+- Presence by key on grids: `Session::set_cell_cursor`, `RosterEntry.cell`
   (`CellCursor`), `ClaimSpan` and `Session::claim_span`, grid views, notes and
   `--for-edit`; claims expand at their ends and end `Deleted`; hand-off reservations of
   grid claims; the claim policy on structured edits and on `write_base_grid`
   (`GridWriteOptions::policy`); `GridConflict.claimed_by`.
-- The parity grid tier (A11): `Tier::Grid`, `parity::check_grid`, `GridCase`,
+- The parity grid tier: `Tier::Grid`, `parity::check_grid`, `GridCase`,
   `kit_grid_cases`, `observe_grid_case`; kit grid verbs `rows drop-deleted`, `blame --cell`,
   `blame --structure`.
-- Structured pack verbs (A9): `PackVerb::structured_edit` / `structured_read`,
+- Structured pack verbs: `PackVerb::structured_edit` / `structured_read`,
   `StructEdit`, `StructOutput`.
-- Element blame (A12): line blame on tables, `Session::blame_structure`.
+- Element blame: line blame on tables, `Session::blame_structure`.
 
-**Added (C1i: the grid verbs, contract §3.1)**
+**Added (the grid verbs)**
 - `table::verbs::VERBS`: the grid verbs for any table pack, as structured pack verbs: `cell
   get`, `cell set`, `cells set`, `cells clear`, `row insert|move|delete|restore|list`, `col
   insert|move|delete|restore|rename|list`, `sort`, `header on|off`. A pack lists them from
-  its `verbs()`. Addressing (§1.7): keys, `#N`, `LN`, column names, `key:` / `name:`,
-  `--where C=V`; exits (§3.3): 0, 1 (`--base`), 2 (usage, ambiguous), 4 (unknown or deleted,
+  its `verbs()`. Addressing: keys, `#N`, `LN`, column names, `key:` / `name:`,
+  `--where C=V`; exits: 0, 1 (`--base`), 2 (usage, ambiguous), 4 (unknown or deleted,
   with the restore hint). `row_listing` / `col_listing` are the listings a tab shows.
 - `Pack::decode_block(bytes, codec)`: a block of records in the doc's dialect (`cells set`'s
   stdin); the kit never parses a file format itself. Default: declined (`cells set` exits 2).
@@ -2915,7 +3253,7 @@ be the same bytes), so safety no longer rests on pairing:
   reconciled by key against the live table (rows matched keep their keys; a missing row is
   deleted, restorable), with the limits and claim policy of every grid write.
 
-**Changed (C1k: what the CSV binding found)**
+**Changed (what the CSV binding found)**
 - **The aligner keeps a row's key by position in its unchanged slot** (`table::reconcile`'s
   last pairing step): a run of new rows between the same two kept rows (or table ends) as an
   equal run of old rows pairs in order, whatever they hold. Was: a blank line edited, or any
@@ -2934,7 +3272,7 @@ be the same bytes), so safety no longer rests on pairing:
 - **`write --base live` and outside saves:** a row replaced in its own slot keeps its key
   (above); `tests/grid_verbs.rs`'s `write --base live` case now adds its new row elsewhere.
 
-**Added (C1k)**
+**Added (from the CSV binding)**
 - `View::codec()` / `View::with_codec`: the doc's codec settings on the views the session
   hands an edit closure (`edit_ops_with`) or a read verb; `VerbCtx::codec()`.
 - `LineOwner::Preamble`: a line a codec writes of its own in front of the records (CSV's
@@ -2958,12 +3296,12 @@ be the same bytes), so safety no longer rests on pairing:
   `SettingsChanged` (a distinct event, not a `ChangeEvent`: the re-save has no change record,
   so it has no new version). No store format change.
 
-**Breaking (C1k)**
+**Breaking (from the CSV binding)**
 - `LineOwner` gained `Preamble` and is now `#[non_exhaustive]`: a `match` needs a wildcard
   arm. `Table` gained a private field (its value limit): build one with `Table::new`,
   `Table::import` or `Table::from_keyed`, not a struct literal.
 
-**Changed (the C1 merge with main)**
+**Changed (the grid line's merge with main)**
 - `header on` with no row, over names the columns kept while the header was off, is refused:
   `TableError::HeaderNamesUnrendered`, `MPC-E806 header_names_unrendered` (exit 2, nothing
   applied; "the columns have names that would appear as a header line; clear them or add a
@@ -2977,7 +3315,7 @@ be the same bytes), so safety no longer rests on pairing:
   kit's is taken as their edit, as for text (v0.9.5's echo rule; was: the kit's echo,
   ignored). `grid_store.rs`: `after_a_persons_save_an_earlier_kit_write_is_their_edit`.
 
-**Changed (C1 must-have (c), contract §2.9.1)**
+**Changed (grids)**
 - **A grid's outside save is a keyed three-way merge**, as v0.9.5 makes it for text: base =
   the grid as the file held it (the disk replica), ours = the file aligned on it, theirs =
   the live grid, dirty or not; merged by key (`table::merge3_outside`) and applied to the live
@@ -2988,7 +3326,7 @@ be the same bytes), so safety no longer rests on pairing:
   `Session::take_notes`) and `AuditEvent::OutsideOverride`. Never refused, never dropped.
   The file's placed rows land right after their left neighbour in the file; at a gap where
   both sides inserted rows, the file's rows come first (text outside saves put live first;
-  both deterministic, contract §2.9.1).
+  both deterministic).
 - The disk replica's re-sync marker is the change counter (`synced_seq` vs `version`), as in
   v0.9.5, and a grid change that re-identifies elements re-syncs it at once when the doc
   renders the synced bytes; rows the live doc re-identified with edits pending take the live
@@ -2996,10 +3334,10 @@ be the same bytes), so safety no longer rests on pairing:
   while edits were pending are paired with the base's by what they hold (the same values,
   else at least half of them, else the one new element at their place; `Table::
   reidentify_onto`), and the file's changes to an element the live doc dropped since come
-  back under a fresh key. One marker for text and grids: the C1 merge with main kept one
-  copy of `resync_if_synced` and `resync_replica` (main's), shared by both ingests.
+  back under a fresh key. One marker for text and grids: the grid line's merge with main
+  kept one copy of `resync_if_synced` and `resync_replica` (main's), shared by both ingests.
 
-**The C1 merge with main (v0.9.5, the K work)**
+**The grid line's merge with main (v0.9.5, the K work)**
 - **Error ids for the grid (on main's registry):** `MPC-E801 needs_base`, `E802 at_limit`
   and `E803 facet_conflict` go live (reserved on main); new `MPC-E153 bad_root_name`,
   `E154 malformed_doc`, `E804 op_refused` (`DocError::RootName`, `Malformed`, `Op`) and
@@ -3010,11 +3348,11 @@ be the same bytes), so safety no longer rests on pairing:
   `would_be`; an undo conflict region on a grid adds `key` and `why`. `capabilities` lists
   the grid tier on the verbs that serve it and the grid knobs (`grid_max_cells`,
   `grid_max_cols`, `grid_max_value_len`, and `agent_version_elems`).
-- **Roster push on a grid (K5):** `RosterEvent::CellCursor { who, cell, version }`, coalesced
+- **Roster push on a grid:** `RosterEvent::CellCursor { who, cell, version }`, coalesced
   as `Cursor` is (one per participant per flush, the last place; told again when its position
   changes under it; `None` when it is dropped). A grid claim's `ClaimStarted` is pushed (its
   `ClaimEnded` already was). `RosterEvent` is `#[non_exhaustive]`: additive.
-- **K5 handles on a grid:** an App viewer sees handles in heads-up notes (the ones an outside
+- **Handles on a grid:** an App viewer sees handles in heads-up notes (the ones an outside
   save left waiting too, `take_notes`), grid claims, `ChangeEvent.hidden[].deleted_by`,
   `LogItem::Settings`, `FacetConflict.by`, `blame_cell` / `blame_elem` /
   `blame_structure`, and `write_base_grid` / `write_live_grid` conflicts, and in everything
@@ -3022,12 +3360,12 @@ be the same bytes), so safety no longer rests on pairing:
   deleted element's "by" line: the verb's history is lensed under its lock), the fence's
   contributors, a `--for-edit` claim or conflict, hidden writes' deleters and refusals
   naming someone (`tests/app_view.rs`, `an_app_viewers_grid_verbs_hold_no_pid`).
-- **The live window (K3) on a structured doc:** `events_since` / `edit_at_base` with a base
+- **The live window on a structured doc:** `events_since` / `edit_at_base` with a base
   behind the doc are `MPC-E112 base_expired` (read again): a grid's changes are ops by key,
   which the window can't replay (it returned an empty list before).
 - **Outside saves on a grid follow v0.9.5's echo rule:** an ingest clears the kit's recent
   writes, so one coming back after a person's save is their save, not an echo.
-- **Undo grouping (K4):** a structured edit never joins a person's open undo group (a step of
+- **Undo grouping:** a structured edit never joins a person's open undo group (a step of
   its own).
 - **Exports reach grids; P24 is live for csv:** the `export` and `export --version` verbs
   serve the grid tier too (a grid's version renders with the codec it stored), and a grid
@@ -3082,9 +3420,10 @@ WIRE.md; now they are checked against the kit's own JSON too.
   existing goldens are unchanged.
 - `client/test/golden.test.ts` checks every field of `overwritten` and of its cells against key
   lists that `satisfies` the type in `wire.ts` (a renamed field fails to compile, or fails the
-  key-set check; the editor's own `RemovedTextNote` is held to the same names), the snapshot's `overwritten` (present only with waiting notes, deduped on
-  `(change, row)`), `closed {reason}` as the last event, and the roll-up's counts (64 waiting,
-  the last `rule: "rollup"`, `cells: []`, every place counted).
+  key-set check; the editor's own `RemovedTextNote` is held to the same names), the snapshot's
+  `overwritten` (present only with waiting notes, deduped on `(change, row)`), `closed {reason}` as
+  the last event, and the roll-up's counts (64 waiting, the last `rule: "rollup"`, `cells: []`,
+  every place counted).
 
 **Docs**
 - `client/WIRE.md`: notes of kind `note` are the ones passed through untyped; `overwritten`,
@@ -3120,7 +3459,7 @@ Rust change in the kit; no new dependency; the client's existing frames are unch
 - **Undo's reply:** `undone {op, steps, version, notice?}` after the `change` frames it made;
   `steps: 0` is "nothing to undo" (with `MPC-E206` / `MPC-E207` as `notice` when the kit says
   why); conflicts stay `refused` with `MPC-E201`.
-- **Carets (G6):** the kit's `set_cursor` resolves offsets against the current text and takes
+- **Carets:** the kit's `set_cursor` resolves offsets against the current text and takes
   no version, so the host maps a stale `cursor` frame through `events_since` with
   `position::transform` (`Bias::After`, as the kit carries carets) or drops it. A caret frame
   has no reply.
@@ -3195,14 +3534,14 @@ it. The kit's Rust side is unchanged.
   them back where the server would.
   **Re-apply's guards (single hunk):** it re-inserts the typed text only for a pure insertion,
   with no reload since, nothing else inserted at its place since and no text around its place
-  (or at its edge) deleted or replaced since; anything else is `unknown` with `reason` `not-insertion`,
-  `reloaded`, `tie` or `deleted-around`, the rejection kept (`LiveText.reapplyGuard`). Each
-  guard closes an M1 case that put the wrong text in: a deletion said `applied` and changed
-  nothing, a replacement's text went in beside the old, a change pending at a reload went in at
-  the start of the document, at a tie the text went before the other insertion where the
-  server's rule puts it after, and a place inside deleted text went to the deletion's start
-  (and stayed there when that deletion was refused). The Re-apply scan (seeds 1–500, strict
-  host): every Re-apply that still applies matches the server's rebase rule.
+  (or at its edge) deleted or replaced since; anything else is `unknown` with `reason`
+  `not-insertion`, `reloaded`, `tie` or `deleted-around`, the rejection kept
+  (`LiveText.reapplyGuard`). Each guard closes an M1 case that put the wrong text in: a deletion
+  said `applied` and changed nothing, a replacement's text went in beside the old, a change pending
+  at a reload went in at the start of the document, at a tie the text went before the other
+  insertion where the server's rule puts it after, and a place inside deleted text went to the
+  deletion's start (and stayed there when that deletion was refused). The Re-apply scan (seeds
+  1–500, strict host): every Re-apply that still applies matches the server's rebase rule.
 - **The reconnect rule** (WIRE.md, Reconnecting): `prev=<old client ID>` on every reconnect
   (`ConnectOptions.prev`); the host leaves that connection first and drops its late frames.
   `LiveText.disconnected()` keeps edits made with no connection in its queue until
@@ -3257,8 +3596,9 @@ it. The kit's Rust side is unchanged.
 
 v0.9.8 plus what v0.9.7.2 added to v0.9.7.1 (the same commits, ported): an outside save that may
 have removed someone's text now tells them, and gives them the text; and a revert of an outside
-save or of a promoted version puts back the roots it removed. No merge change, no store or wire format change, no new dependency. A new roster
-event, so a host matching `RosterEvent::Snapshot` exhaustively needs `..`.
+save or of a promoted version puts back the roots it removed. No merge change, no store or wire
+format change, no new dependency. A new roster event, so a host matching `RosterEvent::Snapshot`
+exhaustively needs `..`.
 
 The crate version is `0.9.8+1` (Cargo takes three numbers; the build metadata resolves as
 0.9.8); the git tag is v0.9.8.1. It closes v0.9.8's known issue "stale outside saves remove
@@ -3340,7 +3680,7 @@ known issue "revert of an outside save loses roots".
 - Test builds only: `crates/base`'s dev-dependency on itself also enables the `conformance`
   feature (`Session::char_blame`); the feature only adds functions.
 
-**Evidence scope.** The undo model check's G1 runs (724.6M states) and the trace test have
+**Evidence scope.** The undo model check's full-bound runs (724.6M states) and the trace test have
 no outside-save step and no promotion, so they say nothing for or against this path; the
 property above is the kit-vs-oracle check for it. An outside-save step in the trace
 generator is a follow-up.
@@ -3429,7 +3769,7 @@ The crate version is `0.9.7+2`; the git tag is v0.9.7.2.
 - Test builds only: `crates/base`'s dev-dependency on itself also enables the `conformance`
   feature (`Session::char_blame`); the feature only adds functions.
 
-**Evidence scope.** The undo model check's G1 runs (724.6M states) and the trace test have
+**Evidence scope.** The undo model check's full-bound runs (724.6M states) and the trace test have
 no outside-save step and no promotion, so they say nothing for or against this path; the
 property above is the kit-vs-oracle check for it. An outside-save step in the trace
 generator is a follow-up.
@@ -3611,7 +3951,8 @@ The crate version is `0.9.7+1` (Cargo takes three numbers; the build metadata re
 - D1 class (b) (`undo_foreign_tokens`, `d1_authored_ranges`): the three writers' words are
   on adjacent lines (they still merge, and each undo removes only its own word); the same
   words in one line are a conflict (`class_b_in_one_line_the_write_conflicts`).
-- `tests/blame.rs`: `deleting_a_line_next_to_one_with_the_same_start_keeps_its_neighbour_its_authors`
+- `tests/blame.rs`:
+  `deleting_a_line_next_to_one_with_the_same_start_keeps_its_neighbour_its_authors`
   (a verb delete, the deleter's undo, a verb insert and `replace_text` on `seed:0`…`seed:4`:
   every line keeps its author); `lines::edit_hunks_pair_lines_first`.
 
@@ -3625,11 +3966,11 @@ line by line, exports P0 (the kit's side) and the vendored engine at k2-yrs k2.6
 verbs, fails its parity check (below, "Exports P0").
 
 **Headlines**
-- **Live typing APIs (K1–K5, K10–K11):** the hunk channel (`ChangeEvent`'s hunks, what
-  editors rebase over), `edit_at_base` and `events_since` (K2, K3), undo over the channel
-  (K4), the `run_tool` lens for App viewers (K5: handles, never pids, in `run_tool` output),
-  roster push and participant overflow (K10, K11; `Config::participants_max`). Below: "The
-  hunk channel", "K5" and "The agent error surface".
+- **Live typing APIs:** the hunk channel (`ChangeEvent`'s hunks, what
+  editors rebase over), `edit_at_base` and `events_since`, undo over the channel,
+  the `run_tool` lens for App viewers (handles, never pids, in `run_tool` output),
+  roster push and the participant cap (`Config::participants_max`). Below: "The
+  hunk channel", "`run_tool`'s output for App viewers" and "The agent error surface".
 - **D1 (undo spec v1.10):** a change is never built from someone else's text; an undo
   never changes a word someone else wrote, and says so instead. Below: "D1".
 - **Speed:** the incremental disk write-back and blame, the engine's position index
@@ -3643,7 +3984,7 @@ verbs, fails its parity check (below, "Exports P0").
 - **Outside saves merge line by line:** no line joined, spliced, lost or brought back by
   an outside save's merge (both fuzz corpora: 0 of each). Below: "Speed" (Fixed).
 - **Exports P0, the kit's side,** and the P24 `export` verbs. Below: "Exports P0".
-- **Host guidance, paths and hard links (K6, K7, K9).** Below.
+- **Host guidance, paths and hard links.** Below.
 - **Stable error ids** (`MPC-Ennn`, `docs/ERRORS.md`): the first tagged release with the
   registry. Below: "The agent error surface".
 - **Engine:** k2-yrs k2.6.3 (hardening; warning-free), `k2-yrs-0.28.0-k2.6.3`, vendored
@@ -3676,15 +4017,15 @@ sentence hosts pin verbatim (`k2 doc --help`):
 
 **Rule:** a fresh change (no roots given: edits, verbs, `write`, `write --base`'s own hunks,
 a version restore, a live edit at a base, a person's grouped keystrokes, an outside save, a
-tier-0 version a promotion replays) is widened to the tokens of the new text that hold what it inserted or
-that it joined; inside them, only the changer's own characters are kept, and the rest are
-deleted and inserted afresh with the change. Undo, redo, revert and purge are left as they
+tier-0 version a promotion replays) is widened to the tokens of the new text that hold what it
+inserted or that it joined; inside them, only the changer's own characters are kept, and the rest
+are deleted and inserted afresh with the change. Undo, redo, revert and purge are left as they
 are. Tokens are the pack's (`Pack::tokens`): words by default, `Tokens::Code` for code,
 `Tokens::Cells` for cells; `TextFilePack::with_tokens` chooses one.
 
 **Host notes:**
 - The hunk channel (`ChangeEvent`) carries the hunks the participant authored, not the
-  widened ones (E-LIVE r2.1): the same text, and what clients rebase over. So does the live
+  widened ones (live rules r2.1): the same text, and what clients rebase over. So does the live
   window (`events_since`, and what `edit_at_base` rebases over), read from the store, after
   a restart too. Carets, views and claims follow the authored hunks; undo regions and revert
   records follow the elements.
@@ -3714,17 +4055,17 @@ are. Tokens are the pack's (`Pack::tokens`): words by default, `Tokens::Code` fo
   kit's, and covered by delete, purge, rewrite and erasure.
 
 **Tests and evidence:** the shared function's unit and property tests (D1 under
-`Tokens::Chars` is the identity, so the undo model check's G1 evidence stands as taken); the
+`Tokens::Chars` is the identity, so the undo model check's full-bound evidence stands as taken); the
 oracle applies the same function; classes (a), (b) and (c) on the oracle, the kit and the
 conformance suite (`hist.undo_own_only_tokens`); the three D1 mutants
 (`reuse-foreign-elements-in-changed-token`, `rewrite-whole-line`,
 `rewrite-merged-ranges`) each fail their class in the oracle and the kit; the trace test
 (oracle vs kit) on words, the grouping class included, and a 50,000-trace run on a node
 (`d1_traces_large`); an outside save's widening with its negative control; blame, the log
-and the live window after a reopen and after a purge. D1 is not yet in the TLC cross-check (the Quint model follows);
-its three mutants live outside `Mutant::ALL` until it is.
+and the live window after a reopen and after a purge. D1 is not yet in the TLC cross-check (the
+Quint model follows); its three mutants live outside `Mutant::ALL` until it is.
 
-### K5: `run_tool`'s output for App viewers
+### `run_tool`'s output for App viewers
 
 - **`run_tool`'s output names others by handle for an App viewer** (text docs;
   `Session::tool_output_as_seen`): a read's fence (its contributors), a `--for-edit` claim or
@@ -3826,9 +4167,9 @@ change (still 5); no dependency changes.
   of every line and of a random `-L` range equals blame from the rebuild in every field),
   and three planted faults caught by it and by the runtime check. `tests/blame_cost.rs`
   (ignored): blame's cost at 1.2k, 40k and 300k changes. The `differential` feature gains
-  `with_prov_mutant`, `with_blame_check_hook` and three test-only `Session` hooks (`blame_rebuilt_for_tests`,
-  `prov_differs_for_tests`, `prov_built_for_tests`); `DocStore::unsynced_for_tests` is
-  available under it too.
+  `with_prov_mutant`, `with_blame_check_hook` and three test-only `Session` hooks
+  (`blame_rebuilt_for_tests`, `prov_differs_for_tests`, `prov_built_for_tests`);
+  `DocStore::unsynced_for_tests` is available under it too.
 - **The edit path's canary adapts to the doc's size:** the canary's interval grows with the
   doc's history past `Config::edit_check_scale_units` (default 50,000 UTF-16 units, about
   the history at v10k in the 32-participant soak; `doc::DEFAULT_EDIT_CHECK_SCALE_UNITS`; 0: a
@@ -3877,7 +4218,7 @@ no change to existing behaviour.
   write-back writes it); `Current` (a past version rendered with today's line endings, BOM
   and final newline: exact unless an outside save changed them since); `ChangedSince` (the
   log shows a settings change since that version; returned once the log records settings
-  changes, C1).
+  changes, in a later release).
 - **Module `export`**, the contract between a host and format exporters (which live outside
   the kit): `Exporter` (`id`, `targets(kind)`, `export(src, target, opts, sink, ctl)`),
   `ExportTarget`, `Fidelity`, `OptionSpec` / `OptionKind` / `Options` (checked before any
@@ -3923,7 +4264,7 @@ no change to existing behaviour.
   writer. `tests/tier0_large.rs`: a 50 MB file's versions copied out with `file_at_to` /
   `file_now_to` in bounded memory (the allocator's peak), compared as they stream.
   `tests/error_ids.rs` reaches the seven ids through `ExportRegistry::export`.
-- Grid docs' `file_at` round trip comes with C1 (the C1 ↔ main round).
+- Grid docs' `file_at` round trip comes with the grid work (its round with main).
 
 **Known limits**
 - **Per-version codec settings:** a version stores its content, not the codec settings in
@@ -3931,23 +4272,23 @@ no change to existing behaviour.
   next store format bump's list: store the codec settings with each version, making every
   `file_at` exact.
 
-### Host guidance, paths, hard links (K6, K7, K9)
+### Host guidance, paths, hard links
 
 **Additive** for hosts; no exit code changes; no store format change; no new dependency.
 
 **Added**
-- **K6, `next` per surface:** `ErrorReport::with_next(surface, text)`, `next_for(surface)`,
+- **`next` per surface:** `ErrorReport::with_next(surface, text)`, `next_for(surface)`,
   `to_json_for(surface)`, `to_value_for(surface)`. A host's own guidance for a surface (a
   tab, an App); the id, exit code, message, rule and details never change (a test holds it
   for every refusal).
-- **K7, no absolute paths:** `errors::redact(text, root)`, `ErrorReport::redacted(root)`,
+- **No absolute paths:** `errors::redact(text, root)`, `ErrorReport::redacted(root)`,
   `SessionError::redacted(root)`: a path inside the workspace root becomes relative to it,
   any other absolute path `<outside>`. The kit applies it itself where it knows the root:
   `SessionManager::open_file` / `open_blob_file`, and a file session's (text or tier 0)
   `file_changed`, `check_disk`, `file_moved` and `flush`. A registry-wide test feeds a
   root through every refusal; `tests/app_view.rs` checks no absolute path reaches an App
   viewer.
-- **K9, hard links:** `open_file` and `open_blob_file` decline a file with more than one
+- **Hard links:** `open_file` and `open_blob_file` decline a file with more than one
   name: `Declined` `hard_linked`, new id **`MPC-E412`** (`declined_hard_linked`, exit 4).
   `session::FileIdentity` (device and inode), `session::file_identity(path)`,
   `Session::file_identity()`, `BlobSession::file_identity()`.
@@ -3976,14 +4317,14 @@ are unchanged)
 **Additive** for hosts; no exit code changes; no store format change; no new dependency.
 
 **Added**
-- **`Session::edit_at_base(conn, root, base, hunks, &EditOptions)`** (K2, amendment E-LIVE
-  r2): a live edit made at a base version, rebased positionally through every change since
+- **`Session::edit_at_base(conn, root, base, hunks, &EditOptions)`**: a live edit made at a
+  base version, rebased positionally through every change since
   (`session::rebase`: the change applied first stays left at a tie; deletion vs deletion is a
   no-op; others' insertions are never deleted; a replacement's text at the left end) and
   applied as one attributed change. Refusals: `MPC-E111` only for competing text (a
   replacement meeting a range deleted since, or an insert strictly inside one) with the
   region; `MPC-E112` past the window; `MPC-E151` for hunks invalid at the base.
-- **`Session::events_since(conn, version)`** (K3): the `ChangeEvent`s since a version, from
+- **`Session::events_since(conn, version)`**: the `ChangeEvent`s since a version, from
   the store, bounded by `Config::live_window_events` (1,000) and `live_window_bytes`
   (4 MiB); `MPC-E112` past them.
 - **`session::rebase`** (`rebase_ours`, `rebase_incoming`, `map_point`, `map_range`): the
@@ -3994,7 +4335,7 @@ are unchanged)
   r2.1: the window is exactly the hunk sets broadcast (checked against every subscriber, every
   kind of change); clients typing in the same multi-author word never bounce; the mutant
   `window-holds-expanded-hunks` is caught.
-- **E-LIVE r2.3: each hunk is carried as sent** (r2.2's rule (1), "re-canonicalize at every
+- **Live rules r2.3: each hunk is carried as sent** (r2.2's rule (1), "re-canonicalize at every
   step", withdrawn on both sides, after K2 Engine's exhaustive model found it wrong both ways
   at 2 clients × 2 changes). `session::rebase::Carried` (new): a change while it is carried,
   its hunks keeping their identities through every step (`through` for the server's role and
@@ -4006,7 +4347,7 @@ are unchanged)
   and **137** (the conflict names hunk 1, not the merged hunk 0) change; five cases are
   appended (209–213: the two counterexamples, an insert at each edge of a deleted range (S3),
   a fully absorbed change (S4)).
-- **E-LIVE r2.3 S3: "strictly inside" under both tie-break placements.** An insertion conflicts
+- **Live rules r2.3 S3: "strictly inside" under both tie-break placements.** An insertion conflicts
   with a range a change since deleted (rule 4 (b) ii) only if it is strictly inside wherever
   a tie put it among others' insertions at its point: each insertion is also carried with the
   other bias (its left placement), and both must have deleted characters on both sides. So
@@ -4023,7 +4364,7 @@ are unchanged)
     and `recanon-both-sides` (caught by P2/P2c); the trace hook counts server and mirror
     disagreements and replays K2 Engine's exported cases (`LIVE_TRACES`); a TP1 property
     along histories for the carried forms.
-- **Undo grouping for streamed edits** (K4, undo spec U3): `EditOptions::group(token)`.
+- **Undo grouping for streamed edits** (undo spec U3): `EditOptions::group(token)`.
   Consecutive edits from one connection with the same token (through `edit_at_base` or
   `edit_with_options`) are **one undo step**. The session closes a group on idle on the host
   clock (`Config::undo_group_idle_ms`, 1 s), a non-contiguous edit, a word boundary typed (a
@@ -4084,7 +4425,7 @@ are unchanged)
 - `docs/HOST-ERRORS.md`: how a host's CLI surfaces them (`k2 doc explain`, `k2 doc
   capabilities`, `--json`, the catalog rows). `crates/base/examples/mpc.rs`: a reference host
   (the blind-agent test's CLI).
-- **The roster push** (K5): `Session::subscribe_roster(conn)` and
+- **The roster push**: `Session::subscribe_roster(conn)` and
   `SessionManager::subscribe_roster(conn)` return a `Receiver<RosterEvent>`. The first event is
   a full `Snapshot` (the `roster()` rows with each participant's rights, at the doc's
   version); then deltas: `Joined`, `Left`, `Rights`, `Role`, `Away`, `Cursor` (anchor and
@@ -4103,19 +4444,19 @@ are unchanged)
   - Built on the session's own presence and claims (`roster()` and the push share one fold);
     no new state beyond what subscribers were last told, and nothing when nobody subscribes.
   - No new agent verb: it is a host's feed, not a person's action, so no parity row.
-- **Opaque handles for App viewers** (K5): a viewer whose `Participant::kind` is
+- **Opaque handles for App viewers**: a viewer whose `Participant::kind` is
   `ParticipantKind::App` never sees a pid, its own included. Every pid the kit hands it
   becomes a handle, `p1`, `p2`...: the roster and its push (`Who::Handle`, new), change
   events' author and `on_behalf_of`, `read`'s contributors, `blame`, `log` (and its `--by` /
   `--on-behalf-of` filters, which take the viewer's handles; a raw pid matches nothing),
-  `claims`, `reservations`, `activity`, approvals, heads-up notes, `write --base` conflict notes, and
-  refusals that name someone (`Claimed`'s `by`, in the error and its report), and
+  `claims`, `reservations`, `activity`, approvals, heads-up notes, `write --base` conflict notes,
+  and refusals that name someone (`Claimed`'s `by`, in the error and its report), and
   `run_tool`'s output (v0.9.7, below).
   - Per doc and per viewer: numbered in the order that viewer first sees each pid; the same
     for the same pid across the viewer's reconnects while the doc is loaded; independent
     between viewers. The kit's own markers (`kit:import`, `kit:external`...) pass unchanged.
   - Erasing a participant forgets its handles.
-- **Participant overflow** (K11): `Config::participants_max` (new, default 32) distinct
+- **The participant cap**: `Config::participants_max` (new, default 32) distinct
   participants per doc. A new pid joining past it is a **watcher**: read-only whatever the
   host grants, no caret, view or claims, no roster row (the roster shows only a count:
   `Session::watching`, `RosterEvent::Snapshot { watching }`, `RosterEvent::Watching`).
@@ -4347,8 +4688,8 @@ k2-yrs k2.2.2; no other dependency change.
   passes; `docs/YRS-FORK.md`).
 
 **Added**
-- **K-AUD-1:** `SyncDrift::Pending { replica }`, in any disk state, when the doc or the disk
-  replica holds an update it couldn't integrate (missing dependencies) or is poisoned.
+- **The lost-edit audit:** `SyncDrift::Pending { replica }`, in any disk state, when the doc or
+  the disk replica holds an update it couldn't integrate (missing dependencies) or is poisoned.
 - **`text::merge::merge3_keep_both`, `outside_sides`, `outside_merge_sides`;
   `text::lines::align_deletions`.**
 - **The soak replays and diagnoses** (from v0.9.6's tooling): `SOAK_CLIENT_SEED` (exact
@@ -4362,7 +4703,7 @@ k2-yrs k2.2.2; no other dependency change.
     which must be suppressed as an echo.
   - Each save is checked by the soak's line oracle: exactly its lines gone or there, and
     nothing else lost.
-  - K-AUD-1 runs after every save.
+  - The sync check runs after every save.
 
 **Tests**
 - `tests/disk.rs`:
@@ -4384,7 +4725,7 @@ k2-yrs k2.2.2; no other dependency change.
     1. the result is `merge3_hunks`'s when the merge is clean;
     2. and 3. the doc is the keep-both model, so no outside change and no unwritten change
        is lost;
-    4. no update is left pending (the ingest succeeds, K-AUD-1 has no `Pending`, and a
+    4. no update is left pending (the ingest succeeds, the sync check has no `Pending`, and a
        reopen from the store gives the same text).
   - It runs 256 cases by default (`NO_BYTE_CASES`). It ran 10^4 on nodes, together with
     v0.9.4's no-byte property at 10^4: four shards of 2,500 each, `PROPTEST_RNG_SEED` 1–4,
@@ -4473,7 +4814,7 @@ k2-yrs k2.2.2; no other dependency change.
   its first window to its last (`4dd41374`), recorded for information.
 
 **Open**
-- **Grids (the C1 line):** the same three-way design applies to the keyed reconcile. It is
+- **Grids:** the same three-way design applies to the keyed reconcile. It is
   not in v0.9.x, which has no grid docs.
 
 ## v0.9.4 (2026-10-29)
@@ -4517,7 +4858,7 @@ format change** (still 5) and no dependency change.
     above.
 
 **Added**
-- **K-AUD-1's sync check:** `Session::audit_disk_sync() -> Vec<SyncDrift>`. It runs when the
+- **The sync check:** `Session::audit_disk_sync() -> Vec<SyncDrift>`. It runs when the
   doc is `Clean`, and checks that the disk replica holds the doc's text **on the doc's
   elements**.
   - It returns `SyncDrift::Text { root }` or `SyncDrift::Elements { root }` for each root
@@ -4564,7 +4905,7 @@ format change** (still 5) and no dependency change.
 
 **Open**
 - **The grid twin of the property test** turns a header off and on, and sets a cell back to
-  its value. It lands with C1, which brings grid docs to the kit; v0.9.4 has none.
+  its value. It lands with the grid work, which brings grid docs to the kit; v0.9.4 has none.
 - **Not this bug:** an outside edit that arrives while a participant's changes are still
   unwritten, where those changes deleted and retyped the same text along with other edits
   (so the bytes did change). That is a true concurrent edit, and the merge keeps both
@@ -4648,8 +4989,9 @@ and run record).
   could have, and no longer can.
 
 **The soak (the 2× check still fails)**
-- **Result:** 10 minutes on a build node (`a5d53680`): 193,214 calls, 2.7× v0.9.2's; version 100,194.
-  Calls/s 1,363 in the first window, 154 in the last 150 s: 8.85× slower (the check allows 2×).
+- **Result:** 10 minutes on a build node (`a5d53680`): 193,214 calls, 2.7× v0.9.2's; version
+  100,194. Calls/s 1,363 in the first window, 154 in the last 150 s: 8.85× slower (the check allows
+  2×).
 - **Why:** a profile shows the replica's cost is gone. Two whole-history costs remain on the
   path:
   - **The engine's own position lookup.** Yrs walks a text root's items from the start,
@@ -4659,7 +5001,7 @@ and run record).
 - At equal history the new path is 55–68× faster per edit (40k–300k changes). v0.9.3 does
   **not** claim the soak condition; see "Open".
 
-**CSV `cell set` at 100k cells** (C1a's measurement, the structured kinds on `c1/structured`;
+**CSV `cell set` at 100k cells** (the measurement of the structured kinds on `c1/structured`;
 the same node for both): p99 185.1 ms → **1.3 ms**, peak extra heap per edit 57 MiB →
 0.8 MiB. These are from a scratch merge of `c1/structured` with this release's engine and
 edit path; the merged code will re-run it.
@@ -4692,7 +5034,7 @@ edit path; the merged code will re-run it.
   `panic="..."`), and every mode exits promptly. A walker's panic used to leave the process
   running until the job's timeout (job `7fc87257`). The harness mutant
   `harness-oracle-panics` tests every mode. Judged without a mutant (`9bfb3b47`): 300k walks at
-  the literal G1 bound and 300k with a restart, no violation and no panic. Under mutant (iv)
+  the full bound and 300k with a restart, no violation, every walk ran to its end. Under mutant (iv)
   `window.rs`'s shared-edge assertion now ends the run at once (`panic@5`).
 - **Node jobs:** the kit plus yrs is over a job's bundle, so `tools/test-bundle.sh` ships
   `vendor/yrs` without `src/`. The job rebuilds it from the public crate (sha256 checked) and
@@ -4755,7 +5097,7 @@ format change** (still 5). No new dependency. `docs/SESSIONS.md`, amendment 16.
   insertion ever made, deleted ones included (GC drops their content, not their IDs and
   lengths), so under churn it grows with the number of changes while the text stays the same
   size, and each edit's replica with it. **Linear in history, not a cache effect**: measured
-  without session, store or fsync (`tests/edit_cost.rs`, M5): 105 µs per edit at 1,200
+  without session, store or fsync (`tests/edit_cost.rs`): 105 µs per edit at 1,200
   changes, 969 at 10,200, 4,837 at 40,200 (state 8 → 83 KB, text constant). In the soak, the
   replica build is 46% of a call at 100 s and 82% at 270 s; the store commit stays flat
   (≈ 2 ms on the Mac, its fsync); the kit's own session code stays under 0.3 ms.
@@ -4806,8 +5148,8 @@ format change** (still 5). No new dependency. `docs/SESSIONS.md`, amendment 16.
 
 **Open**
 - The soak's throughput check (2×) fails at 10 minutes while the per-verb replica stays
-  (8.89× at this release): see the numbers above. Options: a client-per-transaction patch in the engine (no replica at
-  all), or a bounded pool of warm replicas (the rule today says no).
+  (8.89× at this release): see the numbers above. Options: a client-per-transaction patch in the
+  engine (no replica at all), or a bounded pool of warm replicas (the rule today says no).
 - Imported text versions fall under text retention by their original times (blob versions
   were never thinned).
 - The tier-0 history calls on a text session have no agent verbs yet.
@@ -4818,9 +5160,18 @@ A patch: small asks from a host's integration and the Markdown demo, the 32-part
 the undo spec v1.9. **Additive**: no field added to a public struct, no new enum variant, no
 store format change (still 5), no new dependency. `docs/SESSIONS.md`, amendment 15.
 
-**The promise, corrected.** v0.9.0's wording said a conflicted undo applies what it cleanly can; a plain undo applies nothing (exit 1), and only `--partial` applies the clean parts. The promise, as it stands:
+**The promise, corrected.** v0.9.0's wording said a conflicted undo applies what it cleanly can; a
+plain undo applies nothing (exit 1), and only `--partial` applies the clean parts. The promise, as
+it stands:
 
-Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, a plain undo applies nothing and reports the conflict; with --partial it applies the parts it cleanly can and reports the rest. It never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.
+Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never
+removes text someone else wrote, even if it is identical to yours, and someone else's undo never
+stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows
+who wrote it and who restored it, and later undos and reverts treat it as the original author's. If
+someone else has since changed the same lines, a plain undo applies nothing and reports the
+conflict; with --partial it applies the parts it cleanly can and reports the rest. It never
+overwrites their change. Nothing is lost: undone text stays in history and can be restored. This
+holds across restarts.
 
 **Added**
 - **`Session::edit_with_options(conn, root, &EditOptions, f)`**: `edit_with` with the claim
@@ -4895,7 +5246,17 @@ Undo, redo and revert only ever remove text that the change they reverse put the
   sha256-checked; it stops with a clear message over 64 chunks (a runner refuses more than
   about 66 variables). `tools/README.md`.
 
-**Undo spec suite (SPEC-UNDO v1.9; no change to the kit's behaviour).** From the model check's fidelity review of v1.8: U10a (`hist.undo_own_only`) is read over the regions a step **applies** (a region skipped under `--partial` no longer lends its roots), in the oracle, the Quint model, the enumerator and the trace test's kit-side check; **I1 is checked after every step** of an undo or redo (the kit commits each step as its own change); O4a's wording says the live root is looked for in the text as the step merges it, window included. New mutant **(xi) `xi-no-o4a`** (O4 on roots, no O4a) fails I1 at depth 4 on TLC and the enumerator (2 × 1 + 1 undo + 1 revert), its mid-text witness at depth 5 in `tests/mutants.rs`; it joins every mutant loop in `tools/undo`. TLC = enumerator at all seven small bounds with v1.8's counts, every violation set unchanged; trace test 256 traces + restart twin, 0 mismatches. The Quint model's IR is 19.87 MB of Apalache's 20 MB JSON limit; `smoke.sh` prints it.
+**Undo spec suite (SPEC-UNDO v1.9; no change to the kit's behaviour).** From the model check's
+fidelity review of v1.8: U10a (`hist.undo_own_only`) is read over the regions a step **applies** (a
+region skipped under `--partial` doesn't lend its roots any more), in the oracle, the Quint model,
+the enumerator and the trace test's kit-side check; **I1 is checked after every step** of an undo or
+redo (the kit commits each step as its own change); O4a's wording says the live root is looked for
+in the text as the step merges it, window included. New mutant **(xi) `xi-no-o4a`** (O4 on roots, no
+O4a) fails I1 at depth 4 on TLC and the enumerator (2 × 1 + 1 undo + 1 revert), its mid-text witness
+at depth 5 in `tests/mutants.rs`; it joins every mutant loop in `tools/undo`. TLC = enumerator at
+all seven small bounds with v1.8's counts, every violation set unchanged; trace test 256 traces +
+restart twin, 0 mismatches. The Quint model's IR is 19.87 MB of Apalache's 20 MB JSON limit;
+`smoke.sh` prints it.
 
 **Found, not fixed here**
 - **Two participants' claims can come to overlap.** Once the text between two claims is
@@ -4911,7 +5272,13 @@ another participant's text**, and text they put back **keeps its provenance**. *
 5** (an in-place upgrade from 4; no downgrade). No new dependency. Undo spec v1.8
 (`docs/SPEC-UNDO.md`).
 
-**The promise.** Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, the undo applies what it cleanly can and reports the rest as a conflict; it never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts. (corrected in v0.9.1)
+**The promise.** Undo, redo and revert only ever remove text that the change they reverse put there.
+Your undo never removes text someone else wrote, even if it is identical to yours, and someone
+else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original
+author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the
+original author's. If someone else has since changed the same lines, the undo applies what it
+cleanly can and reports the rest as a conflict; it never overwrites their change. Nothing is lost:
+undone text stays in history and can be restored. This holds across restarts. (corrected in v0.9.1)
 
 **Public API.** Additions only:
 - `text::merge::merge3_hunks` (a merge of two exact hunk sets) and `merge3_hunks_by` (the same
@@ -4996,12 +5363,13 @@ where noted below.
 - The model check: roots in the bounded state (as labels, machine-checked exact); I1 stops
   every run; TLC's state count equals the enumerator's at seven bounds; every mutant, (x)
   included, fails in both inside an exhaustive bound (`docs/MODEL-CHECK.md`).
-- The trace test: 256 traces and the 64-trace restart twin, 0 mismatches, with each live character's root, I1 and U10a by root compared on both sides; the new class hit 186 times.
+- The trace test: 256 traces and the 64-trace restart twin, 0 mismatches, with each live character's
+  root, I1 and U10a by root compared on both sides; the new class hit 186 times.
 
 **Conformance**
 - `hist.undo_own_only` reads roots and covers F3, (a) and (b) with the expected outcomes.
 - `sec.client_provenance_refused` declared: on the kit it holds by construction (no API takes
-  provenance); native: awaiting (G2, the engine's).
+  provenance); native: awaiting the engine's.
 - `text.blame_char` and `hist.blame_grain` restated: a character maps to its provenance-root
   insert, plus the restoring event.
 
@@ -5036,8 +5404,8 @@ hosts; no store format change (still 4); no new dependency. Undo spec v1.6
 - The model check `MC text-undo` (`docs/MODEL-CHECK.md`): `spec/quint/undo.qnt`, the
   bounded world over the oracle, the exhaustive enumerator `undo_enum`, ITF replay
   `undo_itf_replay`, six mutants (feature `mutants`), and K2-agnostic node jobs (`tools/`).
-  ITF replay 0 mismatches (G1 bound included); TLC's exact counts equal the enumerator's at
-  four small bounds; every mutant fails in both at the same depth. The G1 bound itself is
+  ITF replay 0 mismatches (the full bound included); TLC's exact counts equal the enumerator's at
+  four small bounds; every mutant fails in both at the same depth. The full bound itself is
   beyond exhaustive reach; its plan is in the doc.
 - Two findings, reported, not fixed here: **F3**, undo can delete another participant's
   identical character when their insertion at the region's start repeats its text
@@ -5355,7 +5723,7 @@ cases on both paths.
 
 ## v0.5.0 (2026-10-27)
 
-Approvals for on-behalf blob writes (K-T0-9), on its own because it changes the store
+Approvals for on-behalf blob writes, on its own because it changes the store
 format and decides who may settle an approval. The API contract is `docs/SESSIONS.md`
 (amendment 11). **Store format 4**; no new dependency.
 
@@ -5363,20 +5731,20 @@ format and decides who may settle an approval. The API contract is `docs/SESSION
 - **On-behalf blob writes get a pending approval.** A `write` or `restore` by an assistant
   whose participant has `on_behalf_of` applies at once (never held) and records
   `Approval { Pending, by: None, at_ms: None, author, on_behalf_of }` for that version in the
-  same transaction: the text doc's record and rules (K-ID-10).
-- **Only the named person settles it** (K-ID-11): `BlobSession::set_approval(conn, version,
+  same transaction: the text doc's record and rules.
+- **Only the named person settles it**: `BlobSession::set_approval(conn, version,
   Approved | Declined)`. The agent, another person or an owner get
   `Forbidden { need: Approver }` and an `AuditEvent::Refused`; `Pending` is no target; once
   settled it can't flip (`BadApproval`), the same way again is a no-op; no approval is
   `NoApproval` (exit 4). `approval` and `approvals` with text's read rules.
-- **Decline keeps history** (K-HIST-19 for tier 0): the result, `BlobApproval`, names the
+- **Decline keeps history** (tier 0): the result, `BlobApproval`, names the
   version to restore (`restore_to`) and the versions after it (`later`, which a restore also
   replaces: blobs don't merge). Nothing is restored automatically.
 - **Surfaced:** `BlobLogEntry::approval`, `BlobBlame::approval` (current version); `who`
   shows the agent for the person, as before.
 - **Parity:** `approve`, `decline`, `log --pending` on both tiers; tier-0 cases for P29 and
   P30 (31 cases over 16 live rows); the blob observation compares approval records.
-- **Purge reaches it** (K-PURGE-3): a purged version's approval record is kept as metadata
+- **Purge reaches it**: a purged version's approval record is kept as metadata
   (no content, no blob id) and counted (`PurgeCounts::approvals`); delete and the file
   rewrite cover the new table.
 
@@ -5414,8 +5782,8 @@ store written by v0.4.0, `tests/fixtures/store-format3-v040`);
 
 ## v0.4.0 (2026-10-27)
 
-Tier-0 kit asks from the first host. The API contract is `docs/SESSIONS.md` (amendment 10). **Store format
-stays 3**, no store change; no new dependency.
+Tier-0 kit asks from the first host. The API contract is `docs/SESSIONS.md` (amendment 10). **Store
+format stays 3**, no store change; no new dependency.
 
 **What's in it**
 - **Per-verb tiers.** `parity::Tier { Text, Blob }`; `VerbSpec::tiers` (`applies_to`) says
@@ -5435,7 +5803,7 @@ stays 3**, no store change; no new dependency.
   import / write / restore / external / conflict-kept / merged, `of`, `on_behalf_of`, name,
   `redacted`, size, the conflict copy). Same rights as `versions`; built from what's stored.
   It is the blob `log` verb.
-- **Conflict copies per K-A11Y-5:** `<name> (conflict <who> YYYY-MM-DD HHMMSS).<ext>` (UTC),
+- **Conflict copies:** `<name> (conflict <who> YYYY-MM-DD HHMMSS).<ext>` (UTC),
   in the folder the host chooses; listed in `BlobStatus::conflict_copies`; deleted on `tick`
   after 30 days (`Config::conflict_copy_keep_ms`) unless named, edited, or not the kit's;
   reported in `TickReport::conflict_copies_removed`. The purge byte scan and
@@ -5463,8 +5831,8 @@ need `tiers`.
 one; the 30-day cleanup on `tick`.
 
 **Verified locally:** the full suite (298 tests, 1 ignored; new: `tests/parity_blob.rs` with 3,
-7 in `tests/tier0.rs` incl. `conflict_copy_naming_cleanup`, `parity::registry::tiers_are_consistent`),
-clippy `-D warnings`, `cargo fmt --check`.
+7 in `tests/tier0.rs` incl. `conflict_copy_naming_cleanup`,
+`parity::registry::tiers_are_consistent`), clippy `-D warnings`, `cargo fmt --check`.
 
 ## v0.3.1 (2026-10-27)
 
@@ -5474,7 +5842,7 @@ format stays 3. No new dependency.
 **Fixed:** `tools::session_exit` gave **6** (store unavailable) for a version that doesn't
 exist (`StoreError::NoVersion`, e.g. a tier-0 `read_version`, `restore`, `name_version` or
 `purge` of version 99). Everything that means "the thing you named doesn't exist" now exits
-**4** (K-EXIT-1):
+**4**:
 
 | Error | Was | Now |
 |---|---|---|
@@ -5487,15 +5855,17 @@ Real store failures (`Db`, `Corrupt`, `Newer`, `Locked`, `NoRandom`...) stay 6;
 `Store(CurrentVersion)` stays 2 and `Store(PurgedVersion)` 4.
 
 **Tests:** `tools::error::missing_things_exit_4_and_store_failures_exit_6` (every variant of
-the sweep, from the session, the store and the blob store), `tier0::a_missing_version_exits_4_not_6`.
+the sweep, from the session, the store and the blob store),
+`tier0::a_missing_version_exits_4_not_6`.
 
-**Verified locally:** the full suite (287 tests, 1 ignored), clippy `-D warnings`, `cargo fmt --check`.
+**Verified locally:** the full suite (287 tests, 1 ignored), clippy `-D warnings`,
+`cargo fmt --check`.
 
 ## v0.3.0 (2026-10-27)
 
 Blame (P22 live). The API contract is `docs/SESSIONS.md` ("Blame"; amendment 8, additive,
 lists every change). **Store format stays 3**: one new table, so a v0.2.0 build still reads
-and writes a v0.3.0 store (N−1, K-FMT-10). No new dependency.
+and writes a v0.3.0 store (N−1). No new dependency.
 
 **What's in it**
 - **`Session::blame(conn, root, lines)`** (needs history): each line's most recent author at
@@ -5536,8 +5906,8 @@ but running `diff_range` on the live doc leaves both byte-identical too (block s
 in-memory only), so that test can't catch a regression to the live doc; the throwaway
 replica is held by code review.
 
-**Not in this release:** blame of a version (`--version`), blame through the wire (C5), char
-blame export at the native migration (K-FMT-5); the WS sync protocol and JS client.
+**Not in this release:** blame of a version (`--version`), blame through the wire, char
+blame export at the native migration; the WS sync protocol and JS client.
 
 ## v0.2.0 (2026-10-27)
 
@@ -5592,8 +5962,8 @@ licence gate.
 `MPC_ERASURE_SCALE=200 cargo test -p k2-mpc-base --release --test erasure` (the `tests/erasure.rs`
 module docs give the `k2 compute run` line).
 
-**Not in this release:** a `purged` event to subscribers and the `purged` frame (K-PURGE-6),
-the orphaned-doc lifetime (K-PURGE-8), backups (K-PURGE-9), participant erasure on blob
+**Not in this release:** a `purged` event to subscribers and the `purged` frame,
+the orphaned-doc lifetime, backups, participant erasure on blob
 docs, approvals for on-behalf blob writes; blame; the WS sync protocol and JS client.
 
 ## v0.1.0 (2026-10-27)

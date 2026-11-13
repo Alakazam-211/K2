@@ -1,4 +1,4 @@
-//! The carrier pack's byte-exact row (K1, the pack contract: `docs/PACK_TEMPLATE.md`, "A format
+//! The carrier pack's byte-exact row (the pack contract: `docs/PACK_TEMPLATE.md`, "A format
 //! the pack models only in part"), as the kit runs it for any pack that keeps a carrier
 //! ([`super::Pack::wants_carrier`]): an untouched doc writes back byte for byte. A pack calls
 //! [`carrier_judge`] over its corpus from its own tests (feature `test-support`); a pack that
@@ -13,7 +13,7 @@
 //!    and a flush leaves it as it was.
 //!
 //! The kit leans on this row: opening an untouched carrier file renders nothing, because the
-//! doc as imported is taken to render as the file (`docs/SESSIONS.md`, "The carrier (K1)").
+//! doc as imported is taken to render as the file (`docs/SESSIONS.md`, "The carrier").
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -100,7 +100,7 @@ fn the_hook(pack: &dyn Pack, bytes: &[u8]) -> Result<(), String> {
             .position(|(n, _)| n == r)
             .unwrap_or(usize::MAX)
     });
-    // a pack that pairs (K1b): the file's own keys, as its decode minted them
+    // a pack that pairs: the file's own keys, as its decode minted them
     let out = match pack.wants_pairing() {
         true => {
             let pairing = pack
@@ -141,8 +141,10 @@ fn through_the_kit(pack: &Arc<dyn Pack>, name: &str, bytes: &[u8]) -> Result<(),
         DocStore::open(scratch.0.join("docs.redb")).map_err(|e| format!("the store: {e}"))?,
     );
     let host: Arc<dyn Host> = Arc::new(JudgeHost);
+    // no size limit: the host's for this type wins over the pack's own default
     let config = Config {
         keyed_max_entries: usize::MAX,
+        keyed_max_entries_by_pack: [(pack.schema().name.to_owned(), usize::MAX)].into(),
         grid_max_cells: usize::MAX,
         ..Config::default()
     };

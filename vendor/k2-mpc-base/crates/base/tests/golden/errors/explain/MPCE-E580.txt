@@ -1,0 +1,21 @@
+MPCE-E580 s_record_missing (store)
+exit:     1
+message:  the engine refused the write: the stable record it returned isn't in the store yet
+next:     Nothing was written. Append the stable record set_stable returned, then retry. If its bytes were lost before they were written, reload the document from the store and set the stable point again.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E580",
+  "name": "s_record_missing",
+  "area": "store",
+  "exit": 1,
+  "message": "the engine refused the write: the stable record it returned isn't in the store yet",
+  "next": "Nothing was written. Append the stable record set_stable returned, then retry. If its bytes were lost before they were written, reload the document from the store and set the stable point again.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

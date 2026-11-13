@@ -2,7 +2,7 @@ MPC-E521 pairing_mismatch (store)
 exit:     1
 message:  the file's pairing doesn't fit it: {reason} (pairing_mismatch)
 next:     The file type writes the doc back by splicing into the file's own bytes, pairing each unit of the file with a key the kit kept for it. The keys kept don't fit the file, so the file type can't tell which unit is which and wrote nothing rather than guess. The file is as it was and the doc keeps every change. Report it; an app's next save of the file sets the pairing again.
-rule:     K1b (carrier pairing)
+rule:     the carrier's pairing
 verbs:    any verb on a doc
 status:   live
 --- json
@@ -13,7 +13,7 @@ status:   live
   "exit": 1,
   "message": "the file's pairing doesn't fit it: {reason} (pairing_mismatch)",
   "next": "The file type writes the doc back by splicing into the file's own bytes, pairing each unit of the file with a key the kit kept for it. The keys kept don't fit the file, so the file type can't tell which unit is which and wrote nothing rather than guess. The file is as it was and the doc keeps every change. Report it; an app's next save of the file sets the pairing again.",
-  "rule": "K1b (carrier pairing)",
+  "rule": "the carrier's pairing",
   "verbs": ["*"],
   "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
   "status": "live",

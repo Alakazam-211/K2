@@ -144,12 +144,12 @@ pub struct LineRange {
 }
 
 /// A position as a caller gives it: a byte offset, or `line:col` (`cursor --at L:C`) in a
-/// text root; or, in a structured doc, an element by identity (A10).
+/// text root; or, in a structured doc, an element by identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum At {
     Byte(usize),
     Line(LineCol),
-    /// An element by identity (A10, K-PRES-6): on a grid ([`crate::table`]), a cell, `root`
+    /// An element by identity: on a grid ([`crate::table`]), a cell, `root`
     /// [`crate::table::CELLS`] and `key` its cell key ([`crate::table::cell_key`]; `cursor
     /// --cell R,C`). Keys are stable: it needs no transform, and it is dropped when its row
     /// or column is deleted. Never a position in a text root.

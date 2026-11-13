@@ -1,4 +1,4 @@
-//! The position encoding (K-ADDR-4, `docs/POSITIONS.md`): `capabilities` states it, every verb
+//! The position encoding (`docs/POSITIONS.md`): `capabilities` states it, every verb
 //! that takes or prints positions has a row in its one table, and each unit it states is the
 //! one the verbs and the API use, on text with multi-byte and non-BMP characters (`é` is 2
 //! bytes, `中` 3, `🎉` 4 bytes and 2 UTF-16 units; each is one column), and a file with a BOM
@@ -86,7 +86,7 @@ fn unit_of(c: &Value, verb: &str, at: &str) -> String {
 fn capabilities_states_the_encoding() {
     let c = caps(&[]);
     let p = c.get("positions").expect("capabilities has no positions");
-    // K-ADDR-4: UTF-8 bytes inside, line:col in Unicode scalar values at the edge
+    // UTF-8 bytes inside, line:col in Unicode scalar values at the edge
     assert_eq!(str_of(p, "internal"), "utf8_bytes");
     assert_eq!(
         str_of(p, "line_col"),

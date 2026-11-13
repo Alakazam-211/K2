@@ -1,18 +1,17 @@
-//! Structured (grid) docs in a session (C1c; CSV seam design §2 A6, §7.1–7.2, §7.5, §7.7,
-//! §7.8). A child of `live`, so it works on the session's own state.
+//! Structured (grid) docs in a session. A child of `live`, so it works on the session's own state.
 //!
 //! - **Edits** ([`Session::edit_ops`], [`Session::edit_ops_with`]): list and map ops by key,
 //!   one change, attributed as text edits are, under the same lock, version guard and rate
-//!   limit. Before anything applies: an agent needs a base (K-BR-12); `--base V` refuses only
+//!   limit. Before anything applies: an agent needs a base; `--base V` refuses only
 //!   when a facet the edit touches was written after V by someone else (judged by write
 //!   identity from `ELEM_WRITES`, a write with no identity counting as someone else's,
-//!   KC7); a table's size limits (K-CSV-7, KC4) refuse growth past them, never content.
+//!   on this engine); a table's size limits refuse growth past them, never content.
 //! - **Records**: each change's ops by key (revert record v3) with the live key before each
 //!   list op, its counts, and its element writes (`ELEM_WRITES`, written in the change's own
 //!   transaction).
 //! - **History**: typed versions; restore by identity (revive, delete, the minimal moves as
 //!   forward chains, then sets) as one forward change; revert from the v3 record by the
-//!   element rules (seam §7.3, item 3); blame per element ([`Session::blame_cell`]).
+//!   element rules (item 3); blame per element ([`Session::blame_cell`]).
 //! - **Files**: outside edits are aligned to the doc as the file last held it
 //!   ([`super::super::Pack::reconcile`]) and applied **by key** to the live doc, so changes
 //!   the file never got are kept; `write --base` for grids is [`crate::table::merge3`]
@@ -21,8 +20,8 @@
 //! - **`rows drop-deleted`** ([`Session::drop_deleted`], owner only) and the **lost-edit
 //!   audit's grid form** ([`Session::audit`]).
 //!
-//! Not here (later slices): undo and redo by element (C1e), erasure of values (C1f),
-//! presence by element and the grid parity tier (C1g), the grid verbs (C1i).
+//! Not here (later slices): undo and redo by element, erasure of values,
+//! presence by element and the grid parity tier, the grid verbs.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -34,6 +33,7 @@ use crate::elem::{
     ListOpKind, MapOp, MapOpKind, Value, WriteId,
 };
 use crate::session::awareness::{ClaimSpan, GridSpan, Overwrite};
+use crate::session::config::KeyedLimit;
 use crate::store::{ElemFacet, ElemOpKind, ElemOpRecord, ElemWrite, StoredEffect};
 use crate::table::{self, Table};
 use crate::tools::VerbHistory;
@@ -50,7 +50,7 @@ pub(super) fn resolved(w: &ElemWrite) -> (Seq, Option<WriteId>) {
     w.restores.unwrap_or((w.seq, w.write))
 }
 
-/// One facet a `--base` edit touched that someone else wrote after the base (K-BR-12).
+/// One facet a `--base` edit touched that someone else wrote after the base.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FacetConflict {
@@ -107,7 +107,7 @@ impl fmt::Display for FacetConflict {
 }
 
 /// A cell a change wrote into a deleted row or column: kept, hidden, comes back with a
-/// restore (contract §1.6, K-CSV-4), with who deleted the row (or column).
+/// restore (contract §1.6), with who deleted the row (or column).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct HiddenCellWrite {
@@ -235,7 +235,7 @@ pub struct PlaceBlame {
     pub moved: Option<ElemBlame>,
 }
 
-/// `blame --structure` (A12, K-HIST-11): per live row and column, in order, who inserted it
+/// `blame --structure`: per live row and column, in order, who inserted it
 /// and who last moved it ([`Session::blame_structure`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -248,7 +248,7 @@ pub struct StructureBlame {
 
 /// The doc's history for a structured verb, under the call's lock ([`VerbHistory`]): the
 /// version, and attributed last writes when the caller has the history right (as `blame`).
-/// For an App viewer (K5) the attributions are by handle: its lens runs on a working copy of
+/// For an App viewer the attributions are by handle: its lens runs on a working copy of
 /// the doc's handles, which the caller puts back after the verb ([`LockedHistory::handles`]),
 /// so a handle a verb's output names is the one every later call gives.
 struct LockedHistory<'s> {
@@ -301,6 +301,10 @@ impl VerbHistory for LockedHistory<'_> {
             None => b,
         })
     }
+
+    fn verb_state(&self) -> Option<&(dyn crate::session::VerbState + 'static)> {
+        Session::verb_state_now(self.st)
+    }
 }
 
 /// A rendered file's lines, without their terminators: LF, CRLF or a lone CR ends a line (as
@@ -337,12 +341,12 @@ fn split_lines(text: &str) -> Vec<String> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GridWriteOptions {
-    /// `--partial` (K-BR-9): apply the clean part, report the conflicts.
+    /// `--partial`: apply the clean part, report the conflicts.
     pub partial: bool,
     /// What the merge does about others' claims (default [`ClaimPolicy::Ignore`]): under
     /// [`ClaimPolicy::Respect`] an agent's merged change touching another participant's grid
     /// claim (or a reservation handed to someone else) is refused, exit 5, nothing applied,
-    /// as for every other edit (A10).
+    /// as for every other edit.
     pub policy: ClaimPolicy,
     /// The host-given turn of this call ([`crate::turn`]; default `None`): stored on the
     /// change it makes and carried on its events.
@@ -378,7 +382,7 @@ pub struct GridConflict {
     /// Who last wrote the region (`None`: nobody recorded, or not attributable).
     pub written_by: Option<String>,
     pub written_in: Option<Seq>,
-    /// Who (other than the writer) holds a live claim covering it (A10): their pids, in
+    /// Who (other than the writer) holds a live claim covering it: their pids, in
     /// the order they claimed.
     pub claimed_by: Vec<String>,
     /// The row's (or column's) 0-based index in the live table, when it is live.
@@ -425,7 +429,7 @@ pub enum GridWrite {
 }
 
 impl GridWrite {
-    /// The exit code (K-EXIT-1): 0 applied, 1 conflict, 8 base expired.
+    /// The exit code: 0 applied, 1 conflict, 8 base expired.
     pub fn exit(&self) -> u8 {
         match self {
             GridWrite::Applied(_) => crate::tools::exit::OK,
@@ -456,7 +460,7 @@ impl GridWriteReport {
     }
 }
 
-/// One finding of [`Session::audit`] (K-AUD-1, grid form).
+/// One finding of [`Session::audit`] (grid form).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AuditViolation {
@@ -722,9 +726,19 @@ fn push_root(roots: &mut Vec<ElemRoot>, root: &str, list: bool, ops: Vec<ElemOpR
     }
 }
 
-/// [`SessionError::AtLimit`]'s `what` for a keyed doc that isn't a table
-/// ([`Config::keyed_max_entries`]).
-pub(super) const KEYED_ENTRIES: &str = "elements and fields";
+/// What a count of `before` becomes after a change that adds `grow` (negative when it removes
+/// more than it adds), when the change is refused: it grows the count, and past `limit`. A
+/// change that doesn't grow the count always passes, so nothing is ever trapped. Exact for
+/// every `usize` limit: nothing is cast to a signed type (a limit past `i64::MAX` once wrapped
+/// negative and refused every growing change); a count past `usize::MAX` reads as
+/// `usize::MAX`.
+fn grows_past(before: usize, grow: isize, limit: usize) -> Option<usize> {
+    if grow <= 0 {
+        return None;
+    }
+    let would_be = before.saturating_add(grow.unsigned_abs());
+    (would_be > limit).then_some(would_be)
+}
 
 /// The planted fault [`crate::differential::KeyedMutant::ReadEncodes`].
 fn planted_read_encodes() -> bool {
@@ -779,31 +793,34 @@ fn holds_file_calls_pack() -> bool {
     false
 }
 
-/// The decline of a keyed doc that isn't a table, past [`Config::keyed_max_entries`] with `n`
-/// elements and fields (`MPC-E415`): it isn't live, and stays at tier 0 (or 0.5).
-fn keyed_too_large(config: &Config, n: Option<usize>) -> Declined {
-    let max = config.keyed_max_entries;
+/// The decline of a keyed doc that isn't a table, past its live size limit `limit` with `n`
+/// elements and fields (`MPC-E415`): it isn't live, and stays at tier 0 (or 0.5). The message
+/// names the limit and where it came from ([`KeyedLimit::phrase`]); the report's details read
+/// them back (`limit`, `limit_source`).
+fn keyed_too_large(limit: KeyedLimit, n: Option<usize>) -> Declined {
+    let limit = limit.phrase();
     Declined {
         code: "live_too_large",
         message: match n {
             Some(n) => format!(
-                "this file has {n} elements and fields, past the live limit ({max}), so it stays \
-                 at tier 0"
+                "this file has {n} elements and fields, past the live limit ({limit}), so it \
+                 stays at tier 0"
             ),
             None => format!(
-                "the file now holds more than the live limit ({max} elements and fields), so it \
-                 stays at tier 0"
+                "the file now holds more than the live limit ({limit}), so it stays at tier 0"
             ),
         },
     }
 }
 
-/// A table import over the size limits is declined `too_large` (K-CSV-7): the host falls
-/// back to the next pack (live text). A keyed import that isn't a table, over
-/// [`Config::keyed_max_entries`] elements and fields (its list elements plus its map entries),
-/// is declined `live_too_large` (`MPC-E415`): the host opens the file at tier 0 (or 0.5).
+/// A table import over the size limits is declined `too_large`: the host falls
+/// back to the next pack (live text). A keyed import that isn't a table, over `keyed` (the
+/// limit for its type, [`Config::keyed_limit`]) elements and fields (its list elements plus its
+/// map entries), is declined `live_too_large` (`MPC-E415`): the host opens the file at tier 0
+/// (or 0.5).
 pub(super) fn check_import_size(
     config: &Config,
+    keyed: KeyedLimit,
     schema: &Schema,
     ordered: &[(String, Neutral)],
 ) -> Result<()> {
@@ -819,8 +836,8 @@ pub(super) fn check_import_size(
                 Neutral::Text(_) => 0,
             })
             .sum();
-        if n > config.keyed_max_entries {
-            return Err(SessionError::Declined(keyed_too_large(config, Some(n))));
+        if n > keyed.limit {
+            return Err(SessionError::Declined(keyed_too_large(keyed, Some(n))));
         }
         return Ok(());
     }
@@ -854,7 +871,7 @@ pub(super) fn check_import_size(
     if rows > config.grid_max_rows {
         return Err(over("rows", rows, config.grid_max_rows));
     }
-    // a value or name past `grid_max_value_len` (C1k)
+    // a value or name past `grid_max_value_len`
     let longest = ordered
         .iter()
         .filter(|(r, _)| r == table::CELLS || r == table::NAMES)
@@ -877,7 +894,7 @@ pub(super) fn check_import_size(
     Ok(())
 }
 
-/// The facets an edit touches (K-BR-12's table, per op): a map op its key's value; an
+/// The facets an edit touches (the table, per op): a map op its key's value; an
 /// insert its anchor's position and existence; a move the element's position and
 /// existence; a delete its existence and position; a restore its existence; a set its
 /// value. A table row's (column's) delete also touches the cells it hides (added by the
@@ -1006,8 +1023,8 @@ fn value_text(v: &Option<Value>) -> String {
     }
 }
 
-/// The edits that make `live` hold `target` (a version's content) **by identity** (K-HIST-8,
-/// contract §5.2): per list root, revive the version's keys that are deleted now, delete the
+/// The edits that make `live` hold `target` (a version's content) **by identity**
+/// (the CSV contract, §5.2): per list root, revive the version's keys that are deleted now, delete the
 /// live keys it doesn't have, re-insert its keys the list no longer knows (dropped since),
 /// then the minimal moves (every element outside a longest run already in the version's
 /// order, placed right after its left neighbour, left to right: forward chains), then the
@@ -1150,7 +1167,7 @@ pub(super) fn restore_edits(
 /// Spec v1.10 S12: a version's rows and columns the live table no longer knows (`drop-deleted`
 /// removed them) come back under **fresh keys**, minted from the live counters, with their
 /// cells, names and quote exceptions re-keyed and the counters written past them: a key is
-/// never reused in its causal past (K-CSV-10c; native's per-op check refuses it). Returns the
+/// never reused in its causal past (native's per-op check refuses it). Returns the
 /// mapping, old key to fresh key.
 fn rekey_dropped(live: &KeyedState, content: &mut [(String, Neutral)]) -> Result<Vec<(Key, Key)>> {
     let mut t = Table::from_keyed(live).map_err(|e| SessionError::BadEdit(e.to_string()))?;
@@ -1279,8 +1296,8 @@ impl Session {
             }
         }
         let client = st.members[i].client;
-        // the axes as they were, for what it touches; its owner's own change ends a grid claim
-        // (A10), marked below, only once it has landed
+        // the axes as they were, for what it touches; its owner's own change ends a grid claim,
+        // marked below, only once it has landed
         let axes = {
             prof!("apply.touch_axes");
             self.touch_axes(st)?
@@ -1587,13 +1604,13 @@ impl Session {
         st.grid_size = Some((cells, cols, rows));
     }
 
-    /// K-CSV-7 / KC4: refuse a change that takes a table past a limit (and grows it there);
+    /// Refuse a change that takes a table past a limit (and grows it there);
     /// a change that doesn't grow it always passes, so nothing is ever trapped.
     fn check_limits(&self, st: &mut State, edits: &[Edit]) -> Result<()> {
         if !table::is_table(&self.schema) {
             return self.check_keyed_limits(st, edits);
         }
-        // a value or name past the limit (C1k: `Config::grid_max_value_len`)
+        // a value or name past the limit (`Config::grid_max_value_len`)
         let max = self.config.grid_max_value_len;
         for e in edits {
             if let Edit::Map { root, ops } = e {
@@ -1616,7 +1633,8 @@ impl Session {
         }
         let (cells, cols, rows) = self.grid_size(st)?;
         let mut present: HashMap<&str, bool> = HashMap::new();
-        let (mut c, mut k, mut n) = (cells as i64, cols as i64, rows as i64);
+        // what the change adds to each count (negative when it removes more than it adds)
+        let (mut c, mut k, mut n): (isize, isize, isize) = (0, 0, 0);
         for e in edits {
             match e {
                 Edit::Map { root, ops } if root == table::CELLS => {
@@ -1627,7 +1645,7 @@ impl Session {
                             None => st.doc.map_get(table::CELLS, key)?.is_some(),
                         };
                         let now = matches!(o, MapOp::Set { .. });
-                        c += i64::from(now) - i64::from(was);
+                        c += isize::from(now) - isize::from(was);
                         present.insert(key, now);
                     }
                 }
@@ -1644,34 +1662,36 @@ impl Session {
                 _ => {}
             }
         }
-        let over = |what, now: i64, before: usize, limit: usize| {
-            (now > limit as i64 && now > before as i64).then_some(SessionError::AtLimit {
+        let over = |what, before: usize, grow: isize, limit: usize| {
+            grows_past(before, grow, limit).map(|would_be| SessionError::AtLimit {
                 what,
                 limit,
-                would_be: now.max(0) as usize,
+                would_be,
             })
         };
-        if let Some(e) = over("cells", c, cells, self.config.grid_max_cells) {
+        if let Some(e) = over("cells", cells, c, self.config.grid_max_cells) {
             return Err(e);
         }
-        if let Some(e) = over("columns", k, cols, self.config.grid_max_cols) {
+        if let Some(e) = over("columns", cols, k, self.config.grid_max_cols) {
             return Err(e);
         }
-        if let Some(e) = over("rows", n, rows, self.config.grid_max_rows) {
+        if let Some(e) = over("rows", rows, n, self.config.grid_max_rows) {
             return Err(e);
         }
         Ok(())
     }
 
     /// [`Session::check_limits`] for a keyed doc that isn't a table: refuse a change that takes
-    /// its elements and fields past [`Config::keyed_max_entries`] and grows them there; a change
-    /// that doesn't grow them always passes, so nothing is ever trapped.
+    /// its elements and fields past the limit for its type ([`Config::keyed_limit`]) and grows
+    /// them there ([`SessionError::KeyedAtLimit`], naming the limit and where it came from); a
+    /// change that doesn't grow them always passes, so nothing is ever trapped.
     fn check_keyed_limits(&self, st: &mut State, edits: &[Edit]) -> Result<()> {
         if keyed_limit_skipped() {
             return Ok(());
         }
         let before = self.keyed_size(st)?;
-        let mut n = before as i64;
+        // what the change adds (negative when it removes more than it adds)
+        let mut n: isize = 0;
         let mut present: HashMap<(&str, &str), bool> = HashMap::new();
         for e in edits {
             match e {
@@ -1683,7 +1703,7 @@ impl Session {
                             None => st.doc.map_get(root, o.key())?.is_some(),
                         };
                         let now = matches!(o, MapOp::Set { .. });
-                        n += i64::from(now) - i64::from(was);
+                        n += isize::from(now) - isize::from(was);
                         present.insert(at, now);
                     }
                 }
@@ -1699,20 +1719,27 @@ impl Session {
                 Edit::Text { .. } => {}
             }
         }
-        let limit = self.config.keyed_max_entries;
-        if n > limit as i64 && n > before as i64 {
-            return Err(SessionError::AtLimit {
-                what: KEYED_ENTRIES,
-                limit,
-                would_be: n.max(0) as usize,
+        let keyed = self.keyed_limit();
+        if let Some(would_be) = grows_past(before, n, keyed.limit) {
+            return Err(SessionError::KeyedAtLimit {
+                limit: keyed.limit,
+                would_be,
+                from: keyed.source,
             });
         }
         Ok(())
     }
 
-    /// K-BR-12: `--base V` refuses (nothing applied) when a facet the edit touches was
+    /// The live size limit of this keyed doc's type and where it came from
+    /// ([`Config::keyed_limit`]): read at every check, so a host's change to its settings applies
+    /// to the next change.
+    fn keyed_limit(&self) -> KeyedLimit {
+        self.config.keyed_limit(&*self.pack)
+    }
+
+    /// `--base V` refuses (nothing applied) when a facet the edit touches was
     /// written after V by anyone but the caller, judged by write identity: a write with no
-    /// identity (a merged restore or delete on this engine) counts as someone else's (KC7).
+    /// identity (a merged restore or delete on this engine) counts as someone else's.
     fn check_base(&self, st: &State, i: usize, edits: &[Edit], base: Seq) -> Result<()> {
         let mut facets = facets_of(edits, table::is_table(&self.schema));
         // a row's (column's) delete also touches the values of the cells it hides: a row's
@@ -1854,9 +1881,9 @@ impl Session {
     }
 
     /// The structured edit's checks, in order, before anything applies: an agent names a
-    /// base (K-BR-12), inserts into a tagged root carry the writer's own tag
-    /// ([`Pack::tagged_keys`]), the base per facet, the size limits (K-CSV-7), the claim policy on
-    /// grid claims (A10) and element claims, and a value naming a blob names one the doc's space
+    /// base, inserts into a tagged root carry the writer's own tag
+    /// ([`Pack::tagged_keys`]), the base per facet, the size limits, the claim policy on
+    /// grid claims and element claims, and a value naming a blob names one the doc's space
     /// holds ([`Pack::blob_ref_roots`]).
     fn structured_guards(
         &self,
@@ -1901,7 +1928,7 @@ impl Session {
     /// edit itself inserts: a cell under a key the table doesn't know (dropped, or never in it)
     /// could never be seen, restored or swept, so the whole edit is refused
     /// ([`SessionError::UnknownElem`]), naming the drop when the store still holds its record.
-    /// A deleted key the table knows stays a hidden write (csv contract §4.3, K-CSV-4).
+    /// A deleted key the table knows stays a hidden write (csv contract §4.3).
     fn check_cell_keys(&self, st: &State, edits: &[Edit]) -> Result<()> {
         if !table::is_table(&self.schema) || planted_keyed_write_under_unknown_key() {
             return Ok(());
@@ -1975,8 +2002,8 @@ impl Session {
         Ok(None)
     }
 
-    /// Apply `edits` (list and map ops by key, or text hunks) through `conn` as one change
-    /// (A6). Needs edit. Checked under the lock, in order: the version guard (`if_version`,
+    /// Apply `edits` (list and map ops by key, or text hunks) through `conn` as one change.
+    /// Needs edit. Checked under the lock, in order: the version guard (`if_version`,
     /// doc-wide), the approvals backlog, then for structured edits an agent's base
     /// ([`SessionError::NeedsBase`]), the base per facet ([`SessionError::FacetConflict`]) and
     /// the size limits ([`SessionError::AtLimit`]); for a table, a cell under a row or column
@@ -2009,7 +2036,7 @@ impl Session {
         self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
-    /// Read live, compute, apply, atomically (A6): `f` gets the doc as a [`View`] under the
+    /// Read live, compute, apply, atomically: `f` gets the doc as a [`View`] under the
     /// session lock and returns the edits (none: nothing applies, `None`). Checks as
     /// [`Session::edit_ops`]. `f` must be bounded and must not call back into the kit; its
     /// error is [`EditWithError::Compute`], a panic is passed on after the lock is released.
@@ -2023,11 +2050,11 @@ impl Session {
             .map(|(r, _)| r)
     }
 
-    /// [`Session::edit_ops_with`] for a pack's structured verb (A9, through `run_tool`): the
+    /// [`Session::edit_ops_with`] for a pack's structured verb (through `run_tool`): the
     /// change is logged under `verb`, and the heads-up notes on the elements it touches
     /// (others' claims, carets, views, recent edits there) come back with it. `at_base`: the
-    /// verb names positions (`#N`, `LN`), which count in the `--base` version (K-ADDR-3,
-    /// R-1): `f` also gets that version's doc when it isn't the live one (the live doc, a
+    /// verb names positions (`#N`, `LN`), which count in the `--base` version:
+    /// `f` also gets that version's doc when it isn't the live one (the live doc, a
     /// recent read or a stored version; none of them: [`SessionError::BaseExpired`]). `f` also
     /// returns what a grid verb wrote ([`crate::grid::CellsReport`]): the acting agent's cells
     /// move to it once the change applied.
@@ -2068,6 +2095,8 @@ impl Session {
             prof!("edit.view");
             self.verb_view(st)?
         };
+        // the pack's verb state, built on the first verb, kept by every change since
+        self.ensure_verb_state(st, &view);
         let hist = LockedHistory::new(self, st, i);
         let edits = match catch_unwind(AssertUnwindSafe(|| {
             prof!("edit.verb");
@@ -2123,7 +2152,7 @@ impl Session {
         Ok(((res.version != v).then_some(res), notes))
     }
 
-    /// A pack's structured read verb (A9): `f` reads the live doc as a [`View`] under the
+    /// A pack's structured read verb: `f` reads the live doc as a [`View`] under the
     /// lock, after the read is recorded (a read base, so `write --base` from its version
     /// works, and "contributors since last read"). Needs read.
     pub(crate) fn read_view_with<R>(
@@ -2161,6 +2190,7 @@ impl Session {
                 false => self.verb_view(st)?,
             }
         };
+        self.ensure_verb_state(st, &view);
         let hist = LockedHistory::new(self, st, i);
         let (r, shown, refused) = match catch_unwind(AssertUnwindSafe(|| {
             prof!("read.verb");
@@ -2204,7 +2234,7 @@ impl Session {
         Ok((read, r, notes, for_edit))
     }
 
-    /// `rows drop-deleted` (K-CSV-7): the doc's **owner** removes every deleted row and
+    /// `rows drop-deleted`: the doc's **owner** removes every deleted row and
     /// column, with the cells, names and quote exceptions keyed by them, from the live sheet
     /// ([`Table::drop_deleted`]), as one attributed change, audited
     /// ([`AuditEvent::DroppedDeleted`]). They stop counting toward the size limit and can't
@@ -2398,7 +2428,7 @@ impl Session {
         Ok(Some(Arc::new(View::of_content(&v.content))))
     }
 
-    /// `write --base V` for a table (contract §3.4, K-BR-3, K7): `body` (the file's bytes as
+    /// `write --base V` for a table (contract §3.4): `body` (the file's bytes as
     /// the caller wants them) is aligned to the table at V ([`super::super::Pack::reconcile`])
     /// and three-way merged by key onto the live table ([`table::merge3`]): only what the
     /// caller changed since V applies, element by element; overlaps are reported with who
@@ -2417,7 +2447,7 @@ impl Session {
     ) -> Result<GridWriteReport> {
         timed!(GridWriteBase);
         let out = self.write_base_grid_inner(conn, base, body, opts);
-        // an App viewer (K5) sees the others by handle
+        // an App viewer sees the others by handle
         self.for_viewer(conn, out, |l, r| l.grid_write(r))
     }
 
@@ -2517,7 +2547,7 @@ impl Session {
     /// ([`super::Pack::reconcile`]: rows and columns matched by content keep their keys) and
     /// applied as one change, with the size limits and the claim policy of every edit. No
     /// merge, so nothing conflicts: what the body leaves out is deleted (restorable), what it
-    /// changes is set. For people (K-BR-5): an agent derives its body from a read and uses
+    /// changes is set. For people: an agent derives its body from a read and uses
     /// [`Session::write_base_grid`] with that version, so others' changes since are kept.
     ///
     /// `seen` is the version the body was made from: the live doc's, or the write is **stale**
@@ -2532,7 +2562,7 @@ impl Session {
         opts: &GridWriteOptions,
     ) -> Result<GridWriteReport> {
         let out = self.write_live_grid_inner(conn, seen, body, opts);
-        // an App viewer (K5) sees the others by handle
+        // an App viewer sees the others by handle
         self.for_viewer(conn, out, |l, r| l.grid_write(r))
     }
 
@@ -3013,7 +3043,7 @@ impl Session {
             let erased = why == "erased";
             let mut c = ConflictRegion::element(root, key, l, why);
             if erased {
-                // a purge took the value (C1f), as a text revert over purged text says
+                // a purge took the value, as a text revert over purged text says
                 c.kind = crate::session::ConflictKind::Erased;
             }
             c.theirs = match (&by, &w) {
@@ -3045,7 +3075,7 @@ impl Session {
         Ok(v.content)
     }
 
-    /// Blame one element facet (A12): who holds `root`/`key`'s `facet` now, from
+    /// Blame one element facet: who holds `root`/`key`'s `facet` now, from
     /// `ELEM_WRITES` (the engine's winner agrees: the audit checks it). A value an undo, redo
     /// or revert put back blames its original write, with the restoring change second
     /// (U23). `None`: nothing recorded (never written). Needs history.
@@ -3057,7 +3087,7 @@ impl Session {
         facet: Facet,
     ) -> Result<Option<ElemBlame>> {
         let out = self.blame_elem_inner(conn, root, key, facet);
-        // an App viewer (K5) sees the others by handle
+        // an App viewer sees the others by handle
         self.for_viewer(conn, out, |l, b| b.map(|b| l.elem_blame(b)))
     }
 
@@ -3137,14 +3167,14 @@ impl Session {
         })
     }
 
-    /// `blame --structure` (A12, K-HIST-11): per live row and column, in order, who
+    /// `blame --structure`: per live row and column, in order, who
     /// inserted it and who last moved it (moves don't author content, so line blame never
     /// goes to a sort; this is where moves show). A move an undo, redo or revert put back
     /// blames the position it restores (`moved: None` when that is the insert's own).
     /// Needs history. A table only.
     pub fn blame_structure(&self, conn: ConnId) -> Result<StructureBlame> {
         let out = self.blame_structure_inner(conn);
-        // an App viewer (K5) sees the others by handle
+        // an App viewer sees the others by handle
         self.for_viewer(conn, out, |l, b| l.structure_blame(b))
     }
 
@@ -3193,7 +3223,7 @@ impl Session {
         Ok(out)
     }
 
-    /// [`Session::blame`] on a table (A12, contract §5.5): the rendered file's lines; a data
+    /// [`Session::blame`] on a table (contract §5.5): the rendered file's lines; a data
     /// row's lines go to its most recent cell write (the greatest change id among its present
     /// cells in live columns, a value put back blaming the write it restores), the header's
     /// to the most recent write of a live column's name, and a row with no present cell to
@@ -3365,7 +3395,7 @@ impl Session {
         Ok(out)
     }
 
-    /// Blame one cell of a table (A12, K-HIST-11): who wrote its value (or deleted it).
+    /// Blame one cell of a table: who wrote its value (or deleted it).
     /// `None`: no write recorded (an absent cell never written, or a row or column the table
     /// doesn't have). The `blame --cell` verb refuses that as the kit refuses any address
     /// outside the doc, as `blame -L` past the end does: [`SessionError::BadPosition`]
@@ -3377,9 +3407,9 @@ impl Session {
         self.blame_elem(conn, table::CELLS, &table::cell_key(row, col), Facet::Value)
     }
 
-    // ----- the lost-edit audit (K-AUD-1, grid form) -----
+    // ----- the lost-edit audit (grid form) -----
 
-    /// The lost-edit audit for a structured doc (K-AUD-1, seam §7.8): (a) the stored log
+    /// The lost-edit audit for a structured doc: (a) the stored log
     /// replays to the live doc; (b) per element facet, every acknowledged write is live or
     /// superseded by an attributed write or delete (a cell in a deleted row stays, hidden):
     /// the index (`ELEM_WRITES`) is checked against the doc's registers (their winning write
@@ -3609,7 +3639,7 @@ impl Session {
 
     /// Conformance only: while `on`, outside saves record their writes with **no identity**
     /// (`ELEM_WRITES.write` empty), as a write merged in from elsewhere whose writer the
-    /// engine doesn't report: KC7's case, which only Yrs has (spec v1.10 S2). The grid trace
+    /// engine doesn't report: the case, which only Yrs has (spec v1.10 S2). The grid trace
     /// class `write_with_no_identity` uses it; the kit has no such merge path yet.
     #[cfg(feature = "conformance")]
     pub fn set_outside_without_identity_for_tests(&self, on: bool) -> Result<()> {
@@ -3686,7 +3716,7 @@ impl Session {
         } else {
             None
         };
-        // the host's value limit holds for the file's values too (C1k)
+        // the host's value limit holds for the file's values too
         let synced = View::new(synced).with_max_value(self.config.grid_max_value_len);
         let rec = match self.pack.reconcile(&synced, bytes, &st.codec) {
             Ok(r) => r,
@@ -3701,7 +3731,7 @@ impl Session {
         // the save on the synced grid (for the replica) and the merge on the live grid (for
         // the doc)
         let file_edits = self.normalize(rec.edits)?;
-        // a keyed doc that isn't a table (K1b): the content the save holds, keyed (the synced
+        // a keyed doc that isn't a table: the content the save holds, keyed (the synced
         // state with the save's edits, on a throwaway copy of the replica: nothing renders), and
         // whether the save lands on changes the file doesn't have, which keeps both below
         let target = match is_table {
@@ -3767,7 +3797,7 @@ impl Session {
             };
             d.replica_bytes = sync.state.len() as u64;
             // a re-save that changed only the codec settings (a BOM, CRLF, another
-            // delimiter) is an attributed outside change, never silent (C1k): a version by
+            // delimiter) is an attributed outside change, never silent: a version by
             // the external participant holding the new settings; the doc's log doesn't move
             // (no change record without an engine update)
             let old_codec = std::mem::replace(&mut st.codec, rec.codec.clone());
@@ -3845,7 +3875,7 @@ impl Session {
         }
         if self.check_limits(st, &edits).is_err() {
             if !is_table {
-                return self.decline(st, keyed_too_large(&self.config, None));
+                return self.decline(st, keyed_too_large(self.keyed_limit(), None));
             }
             return self.decline(
                 st,
@@ -3873,7 +3903,7 @@ impl Session {
         // version (the live doc now) is kept as a version (cut below unless one holds it) and
         // as a conflict copy, with one `BlobConflict`. Decided from the store until this
         // session synced the file (`kit_wrote_file`): a restart changes nothing. The same when
-        // the save lands on changes the file doesn't have (K1b): one rule, so a save is never
+        // the save lands on changes the file doesn't have: one rule, so a save is never
         // merged by key with unwritten changes
         let over_kit = !is_table
             && !keyed_save_applied_silently()
@@ -4047,8 +4077,17 @@ impl Session {
         st.last_version_seq = seq;
         st.last_change_ms = now;
         st.version = seq;
-        self.view_after(st, before_seq, seq, &a.stream, &[]);
-        self.flush_watch(st);
+        self.view_after(
+            st,
+            before_seq,
+            seq,
+            &a.stream,
+            &[],
+            verb_state::ChangeFrom::Outside,
+        );
+        // the keyed watch's frame goes out once the save is the carrier (below): its view
+        // index, which the frame's placements, render hashes and derived values read, is the
+        // one the save's carrier gives
         self.grid_presence_after(st, None, &a.stream, now);
         self.elem_presence_after(st, Some(&a.stream));
         st.log_entries += 1;
@@ -4131,7 +4170,10 @@ impl Session {
             }
             None => DiskCheck::Ingested { version: seq },
         };
-        self.settle_saved(st, bytes, now)?;
+        let settled = self.settle_saved(st, bytes, now);
+        // the frame, built on the save's carrier and its pairing
+        self.flush_watch(st);
+        settled?;
         self.maybe_compact(st);
         Ok(out)
     }
@@ -4259,7 +4301,7 @@ impl Session {
 
     /// Whether the live doc holds an outside save. For a keyed doc that isn't a table (`target`:
     /// the save's content, keyed, from the synced state and the save's edits) it is a keyed
-    /// comparison, key for key, with no pack call (K1b): rendering the doc into the save's bytes
+    /// comparison, key for key, with no pack call: rendering the doc into the save's bytes
     /// would pair it with keys the replica doesn't hold yet. A table renders and compares
     /// ([`Session::holds_file`]).
     fn holds_save(
@@ -4295,7 +4337,7 @@ impl Session {
     }
 
     /// Whether the live doc, rendered with `codec`, is the file's `bytes` (for a pack that keeps
-    /// a carrier, spliced into those bytes, which become it: K1).
+    /// a carrier, spliced into those bytes, which become it).
     fn holds_file(&self, st: &State, bytes: &[u8], codec: &[u8]) -> Result<bool> {
         #[cfg(any(test, feature = "differential"))]
         crate::differential::count_held_render();

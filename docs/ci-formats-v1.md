@@ -320,6 +320,7 @@ signer trusts only its own pins. It is closed JSON, at most 8 MiB.
 | `pairing_pins` | fp → base64 SPKI | what the client server pinned at pairing: the PRD §4.1.6 cross-check |
 | `provenance` | v3 only, always there: label → DSSE envelope | each job's build statement (`docs/provenance-v1.md`); `{}` when no node signed one. Every label is a `receipts` label; each envelope has one signature and a 64-hex `keyid`. Nothing in it is trusted for being here: the signer checks each against its receipt (prd-compute-build-attestations-v1 S4) |
 | `roster_approvals` | v3 only, optional: a list of objects | reserved for the node owner's signed approvals of the rosters (prd §18, slice A2); absent until then. A reader that doesn't know them carries them unread |
+| `reported` | v2 and v3, optional: label → artifact name → base64 bytes | files a job wrote that a policy's `[build.<name>.reported]` reads; trusted only as far as the bytes hash to that artifact in the label's signed receipt (`k2 ci evidence --reported`); absent when empty |
 
 A v2 bundle has neither `provenance` nor `roster_approvals`; a v3 bundle
 without `provenance` is refused.
@@ -375,6 +376,8 @@ the repo at sign time.
 | `independent` | required exactly when `dual` is set |
 | `secret_sha256` | S9: SHA-256 of values baked into the binary, keyed by secret name |
 | `network` | optional (S4): the networks a job may have run under (`none`, `no-lan`, `on`), as its build statement records them; needs `provenance` `prefer` or `required`, and a receipt without a statement is then refused |
+| `rust_pin` | optional (0.46.13): `true` = the receipts' rustc must be the commit's pinned channel even with no `{rust_pin}` need |
+| `reported` | optional (0.46.13): `file` (an artifact name) and `equals` (JSON pointer → exact string): the job-written JSON file must be that artifact byte for byte and hold those values (K2's aarch64 cross toolchain hashes) |
 
 Rules for builds:
 
@@ -411,6 +414,12 @@ under `prefer` when its build names `network`.
   (Q11), which needs a dual build.
 
 **`[keys.<slot>]`:** `kind = "minisign"` and `public` (the `RW…` line).
+Optional `held = false` (0.46.13): the signer never holds or signs with
+this key; its assets get a `verdict` only, under the version's open
+session (a script signs with a key the signer doesn't hold).
+
+`rust_pin`, `reported` and `held` keep `version = 1`: absent, a policy reads as
+before; an older signer refuses a file that has them.
 
 ## 9. `.k2/ci.toml` (`ci_config::CiConfig`, `version = 1`)
 
@@ -435,7 +444,9 @@ the policy's build fails at signing.
     verify node must differ in, default `["host"]` (`node` is implied).
     `k2 ci release` places by it; the signer checks its own policy's list;
   - `timeout_secs`, `cpus`, `mem_gb` (0.46.11): the jobs' limits, as for
-    a check. The signer doesn't read them.
+    a check. The signer doesn't read them;
+  - `exclusive` (0.46.13, optional): each job runs alone on its node, for
+    a build that holds vault secrets.
 
   Labels are unique across builds. Both additions are optional and absent
   when unset, so a file without them parses as before.

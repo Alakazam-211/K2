@@ -1,0 +1,143 @@
+# K2's signer policy for project `k2` on k2-signer (docs/ci-formats-v1.md
+# §8; prd-compute-build-attestations-v1 S1). The signer NEVER reads this
+# file from the repo: `k2 ci setup --plan --out setup.json` fills in the
+# three placeholder values from the release server's real state, and a person at
+# the signing machine runs `sudo k2-signer-admin apply-setup setup.json`,
+# reads every statement (this policy as a diff), compares the
+# fingerprints, then applies it with the sha256 it prints.
+#
+# The ported k2sign rules (scripts/k2sign/policy): the same release
+# commands, needs, files and OAuth secrets; the dual build on two hosts;
+# the GitHub tag on the approved base; the pinned rustc; and, for aarch64,
+# the cross toolchain hashes the job's build-info.json records (BA-10).
+# crates/k2-signer/tests/k2_policy.rs keeps this file, .k2/ci.toml, the
+# k2sign policy, scripts/ci/cross-pins.sh and the public keys in the source
+# tree in step.
+#
+# New build machines (BA-32): roster_changes = "ask". A node key no person
+# accepted is never placed on: release.sh asks the signer's `preflight` for
+# the accepted keys and passes them to `k2 ci release --only-keys`.
+version = 1
+project = "k2"
+controllers = ["@CONTROLLER_FP@"]
+owners = ["@OWNER_FP@"]
+workspaces = ["@WORKSPACE_ID@"]
+receipt_max_hours = 24
+roster_max_age_hours = 168
+roster_changes = "ask"
+seat_moves = "ask"
+taint_basis = ["owner_attested", "rekeyed", "self_clean"]
+
+[source]
+kind = "github_tag"
+repo = "Alakazam-211/K2"
+tag_prefix = "v"
+
+[build.linux-x86_64]
+argv = ["bash", "scripts/ci/build-linux-bins.sh", "x86_64"]
+needs = ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]
+rust_pin = true
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
+secrets_optional = ["BUILD_MICROSOFT_CLIENT_ID"]
+isolation = ["job_uid", "exclusive"]
+walls = ["job_user"]
+dual = ["dist/k2-root-helper-linux-x86_64", "dist/k2-node-linux-x86_64", "dist/k2-app-engine-linux-x86_64", "dist/k2-daemon-linux-x86_64"]
+independent = ["host"]
+
+[build.linux-aarch64]
+argv = ["bash", "scripts/ci/build-linux-bins.sh", "aarch64"]
+needs = ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]
+rust_pin = true
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
+secrets_optional = ["BUILD_MICROSOFT_CLIENT_ID"]
+isolation = ["job_uid", "exclusive"]
+walls = ["job_user"]
+dual = ["dist/k2-root-helper-linux-aarch64", "dist/k2-node-linux-aarch64", "dist/k2-app-engine-linux-aarch64", "dist/k2-daemon-linux-aarch64"]
+independent = ["host"]
+
+# The zig tarball and cargo-zigbuild crate the aarch64 build fetched,
+# recorded in its build-info.json (scripts/ci/cross-pins.sh).
+[build.linux-aarch64.reported]
+file = "dist/build-info.json"
+equals = { "/cross/zig_tarball_sha256" = "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239", "/cross/cargo_zigbuild_crate_sha256" = "0b0c2fe7d5f1a782047272e3fc1cd44214c450776bbde564bf92b9776dc2d781" }
+
+[build.linux-app]
+argv = ["bash", "scripts/ci/build-linux-app.sh"]
+needs = ["cmake@3", "bun@1.2", "sys:pkg-config", "sys:libwebkit2gtk-4.1-dev", "sys:libgtk-3-dev", "sys:libayatana-appindicator3-dev", "sys:librsvg2-dev", "sys:patchelf", "sys:libxdo-dev", "sys:file", "sys:xdg-utils", "sys:libssl-dev", "sys:libasound2-dev"]
+rust_pin = true
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+isolation = ["job_uid", "exclusive", "tenant_uid"]
+walls = ["job_user"]
+
+# Signed by k2-signer with the update keys (U2, and U1 for the bridge).
+[assets.k2-daemon-linux-x86_64]
+key = "u2"
+build = "linux-x86_64"
+artifact = "dist/k2-daemon-linux-x86_64"
+check = "artifact"
+
+[assets.k2-daemon-linux-aarch64]
+key = "u2"
+build = "linux-aarch64"
+artifact = "dist/k2-daemon-linux-aarch64"
+check = "artifact"
+
+# Signed by the release user's sign-*.sh with the root-helper key, which
+# the signer never holds: they ask its `verdict` first (BA-11).
+[assets.k2-root-helper-linux-x86_64]
+key = "root-helper"
+build = "linux-x86_64"
+artifact = "dist/k2-root-helper-linux-x86_64"
+check = "artifact"
+
+[assets.k2-node-linux-x86_64]
+key = "root-helper"
+build = "linux-x86_64"
+artifact = "dist/k2-node-linux-x86_64"
+check = "artifact"
+
+[assets.k2-app-engine-linux-x86_64]
+key = "root-helper"
+build = "linux-x86_64"
+artifact = "dist/k2-app-engine-linux-x86_64"
+check = "artifact"
+
+[assets.k2-root-helper-linux-aarch64]
+key = "root-helper"
+build = "linux-aarch64"
+artifact = "dist/k2-root-helper-linux-aarch64"
+check = "artifact"
+
+[assets.k2-node-linux-aarch64]
+key = "root-helper"
+build = "linux-aarch64"
+artifact = "dist/k2-node-linux-aarch64"
+check = "artifact"
+
+[assets.k2-app-engine-linux-aarch64]
+key = "root-helper"
+build = "linux-aarch64"
+artifact = "dist/k2-app-engine-linux-aarch64"
+check = "artifact"
+
+# U1: the retired update key, for installs older than 0.46.6 (the bridge).
+[keys.u1]
+kind = "minisign"
+public = "RWQFu172RhQR6QBqzmij2E9btDGhDWmpdH+ah1/M4PmuHPINUWvKLf6o"
+
+# U2: the signing Mac's primary update key (crates/k2-release-keys).
+[keys.u2]
+kind = "minisign"
+public = "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv"
+
+# The root-helper key's primary (crates/k2-root-proto/src/keys.rs). Never
+# held by the signer.
+[keys.root-helper]
+kind = "minisign"
+public = "RWSV9wBCWGnbGBvUcoZDJWucBgmvxNmRbApWopWr+kUOYbmuZ7+kSYI1"
+held = false

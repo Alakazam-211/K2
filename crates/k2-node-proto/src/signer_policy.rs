@@ -640,7 +640,7 @@ public = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"
         assert!(!b.rust_pin && b.reported.is_none());
         assert!(plain.keys["updater"].held);
         let text = plain.to_toml().unwrap();
-        assert!(!text.contains("rust_pin") && !text.contains("reported") && !text.contains("held"), "{text}");
+        assert!(!text.contains("rust_pin =") && !text.contains("reported") && !text.contains("held ="), "{text}");
 
         let with = MIN.replace("isolation = [\"job_uid\", \"exclusive\"]\n", OPTIONAL)
             .replace("[keys.updater]", "[keys.root-helper]\nkind = \"minisign\"\npublic = \"RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\"\nheld = false\n\n[keys.updater]");

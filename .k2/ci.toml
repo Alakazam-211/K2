@@ -1,0 +1,67 @@
+# K2's own Linux release builds on K2 Compute, the client path
+# (prd-compute-build-attestations-v1 S1; scripts/release.sh
+# K2_CI_PATH=client). `k2 ci release` reads this file AT THE RELEASE COMMIT:
+# it places the set on this server's seat on the owner's lane and submits
+# it. The signer never trusts this file: its policy (.k2/signer.toml, as a
+# person approved it at the signing machine) must name the same command,
+# needs, files, env and secrets for each build, or signing refuses.
+# crates/k2-signer/tests/k2_policy.rs keeps the two (and the old path in
+# scripts/lib/compute-release.sh) in step.
+#
+# No `rust@` need: each job takes the channel and targets of the commit's
+# rust-toolchain.toml (an explicit rust@ would drop the aarch64 target),
+# and the signer checks every receipt's rustc against that channel
+# (rust_pin = true in its policy).
+version = 1
+
+[release]
+project = "k2"
+owner = "rosson.k2.dev"
+lane = "ci-standard"
+
+# L1 + V1: the x86_64 daemon, root helper, k2-node and App engine, built
+# twice on nodes on two hosts. They hold the OAuth values (vault names
+# BUILD_GMAIL_CLIENT_ID and BUILD_GMAIL_CLIENT_SECRET, granted to the lane),
+# so each runs alone on its node.
+[release.builds.linux-x86_64]
+argv = ["bash", "scripts/ci/build-linux-bins.sh", "x86_64"]
+needs = ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
+label = "L1"
+verify_label = "V1"
+independent = ["host"]
+exclusive = true
+cpus = 8
+mem_gb = 20
+timeout_secs = 7200
+
+# L2 + V2: the same set for aarch64, cross-compiled on x86_64 nodes with
+# the hash-pinned zig and cargo-zigbuild (scripts/ci/cross-pins.sh); the
+# job's build-info.json records both hashes and the signer checks them.
+[release.builds.linux-aarch64]
+argv = ["bash", "scripts/ci/build-linux-bins.sh", "aarch64"]
+needs = ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
+label = "L2"
+verify_label = "V2"
+independent = ["host"]
+exclusive = true
+cpus = 8
+mem_gb = 20
+timeout_secs = 7200
+
+# L3: deb, rpm and AppImage (no secrets; published with their SHA256SUMS,
+# not signed by the signer).
+[release.builds.linux-app]
+argv = ["bash", "scripts/ci/build-linux-app.sh"]
+needs = ["cmake@3", "bun@1.2", "sys:pkg-config", "sys:libwebkit2gtk-4.1-dev", "sys:libgtk-3-dev", "sys:libayatana-appindicator3-dev", "sys:librsvg2-dev", "sys:patchelf", "sys:libxdo-dev", "sys:file", "sys:xdg-utils", "sys:libssl-dev", "sys:libasound2-dev"]
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+label = "L3"
+cpus = 8
+mem_gb = 24
+timeout_secs = 7200

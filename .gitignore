@@ -30,7 +30,11 @@ crates/k2so-core/drizzle_sql/meta/
 # monetization roadmap, tunnel decisions). NEVER published to the public K2 repo.
 # Kept on disk for the daemon; untracked in git. (Re-home publish-safety.)
 /.k2so/
-/.k2/
+/.k2/*
+# Except K2's own CI and signer config (k2 ci release reads .k2/ci.toml at
+# the commit; .k2/signer.toml is the signer policy a person approves).
+!/.k2/ci.toml
+!/.k2/signer.toml
 SKILL.md
 CLAUDE.md
 GEMINI.md

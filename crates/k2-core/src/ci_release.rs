@@ -338,10 +338,16 @@ pub const SIGNER_POLICY_PATH: &str = ".k2/signer.toml";
 /// (a typo, or one this build doesn't know) is refused.
 pub fn render_signer_policy(template: &str, controller_fp: &str, owner_fp: &str, workspace_id: &str) -> Result<String, String> {
     let out = template.replace("@CONTROLLER_FP@", controller_fp).replace("@OWNER_FP@", owner_fp).replace("@WORKSPACE_ID@", workspace_id);
-    if let Some(i) = out.find('@') {
-        let rest = &out[i..];
-        let end = rest[1..].find('@').map(|j| j + 2).unwrap_or(rest.len().min(32));
-        return Err(format!("{SIGNER_POLICY_PATH}: an unknown placeholder {} (it knows @CONTROLLER_FP@, @OWNER_FP@, @WORKSPACE_ID@)", &rest[..end]));
+    // A placeholder is `@` + capitals and `_` + `@` (a need like `cmake@3` is not one).
+    let b = out.as_bytes();
+    for (i, _) in out.match_indices('@') {
+        let n = b[i + 1..].iter().take_while(|c| c.is_ascii_uppercase() || **c == b'_').count();
+        if n > 0 && b.get(i + 1 + n) == Some(&b'@') {
+            return Err(format!(
+                "{SIGNER_POLICY_PATH}: an unknown placeholder {} (it knows @CONTROLLER_FP@, @OWNER_FP@, @WORKSPACE_ID@)",
+                &out[i..i + n + 2]
+            ));
+        }
     }
     Ok(out)
 }
@@ -679,6 +685,11 @@ mod tests {
         assert_eq!(out, "controllers = [\"c1\"]\nowners = [\"o1\"]\nworkspaces = [\"ws-1\"]\n");
         let e = render_signer_policy("x = \"@OWNER@\"\n", "c", "o", "w").unwrap_err();
         assert!(e.contains("@OWNER@"), "{e}");
+        // Needs like cmake@3 and a lone @ are not placeholders.
+        assert_eq!(render_signer_policy("needs = [\"cmake@3\", \"bun@1.2\"] # a@b\n", "c", "o", "w").unwrap(), "needs = [\"cmake@3\", \"bun@1.2\"] # a@b\n");
+        // The committed K2 policy fills in.
+        let k2 = render_signer_policy(include_str!("../../../.k2/signer.toml"), &"c".repeat(64), &"o".repeat(64), "ws-1").unwrap();
+        assert!(k2.contains(&"c".repeat(64)) && k2.contains("\"ws-1\""));
     }
 
     #[test]

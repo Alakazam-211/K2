@@ -14,7 +14,7 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-fixture="$here/../../../tests/release/fixtures/provenance-v1.json"
+fixture="$here/../tests/fixtures/provenance-v1.json"
 [ -f "$fixture" ] || { echo "no fixture at $fixture" >&2; exit 2; }
 out="${1:-$(mktemp -d)}"
 mkdir -p "$out"

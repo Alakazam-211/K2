@@ -1,6 +1,6 @@
-//! The frozen format's golden vectors (tests/release/fixtures/provenance-v1.json,
-//! written by make-provenance-v1.py with openssl, not by any Rust crate):
-//! this crate, which shares no code with the writer, reads every vector's
+//! The frozen format's golden vectors (tests/fixtures/provenance-v1.json, a
+//! copy of the K2 repository's own, written with openssl, not by any Rust
+//! crate): this crate, which shares no code with the writer, reads every vector's
 //! envelope, verifies it with the vector's node key, and gets exactly the
 //! vector's payload, statement, PAE and `.intoto.jsonl` line back. A failure
 //! here means a reader and the writer disagree about the format.

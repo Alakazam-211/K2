@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 pub type EditCase = (&'static str, Box<dyn Fn(&mut Value)>, &'static str);
 
 pub fn fixture() -> Value {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/release/fixtures/provenance-v1.json");
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/provenance-v1.json");
     let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
     serde_json::from_str(&text).expect("provenance-v1.json is JSON")
 }

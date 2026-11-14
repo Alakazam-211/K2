@@ -22,11 +22,14 @@
 // here when uncontrolled. The logic is `useHomeGroups`. The swipe
 // (`useGroupSwipe`) is `swipe` ({progress 0–1, direction next|prev,
 // settling while it glides}, null at rest), read from the swipe store
-// when the prop is left out: the root carries `--group-swipe-progress`,
-// `data-swipe-direction` (next, prev or none) and `data-swipe-armed` once
-// it would commit (past SWIPE_COMMIT_AT, or gliding to land), and the
-// group it would land on steps up to primary ink while the bar centres
-// between it and the current one. The accent moves when it lands.
+// when the prop is left out. The root carries `data-swiping`,
+// `data-swipe-direction` (next, prev or none), `data-swipe-armed` once it
+// would commit (past SWIPE_COMMIT_AT, or gliding to land) and
+// `--group-swipe-progress` (set from the live swipe in a rAF by
+// `group-bar-ink`, not by React). The current icon is `data-swipe-role`
+// "from" and the one it heads to "to": the accent blends from one to the
+// other with the swipe (home-groups.css), with no hover ink on any icon
+// meanwhile, and the bar centres between the two.
 
 import { useEffect, useRef, useState } from 'react'
 import { SWIPE_COMMIT_AT, type SwipeProgress } from '@/lib/group-swipe'
@@ -43,6 +46,7 @@ import {
   GROUP_RAIL_MAX_PX,
 } from './group-bar-look'
 import { useGroupBarScroll } from './group-bar-scroll'
+import { GROUP_SWIPE_PROGRESS_VAR, useGroupSwipeInk } from './group-bar-ink'
 import GroupBarTip from './GroupBarTip'
 import GroupEditModal from './GroupEditModal'
 import './home-groups.css'
@@ -109,7 +113,6 @@ const LONG_PRESS_MS = 500
 const ITEM =
   'no-drag relative flex h-[var(--k2-group-target)] w-[var(--k2-group-target)] flex-shrink-0 items-center justify-center cursor-pointer focus:outline-none transition-colors duration-[var(--motion-duration-fast)] ease-[var(--motion-ease-standard)]'
 const ITEM_REST = 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-const ITEM_PENDING = 'text-[var(--color-text-primary)]'
 const ITEM_CURRENT = 'text-[var(--color-accent-text)]'
 
 /** The group a swipe would land on (no wrap), or null. */
@@ -174,6 +177,9 @@ export default function HomeGroupBar({
   const armed = swipeArmed(swipe)
   const pendingId = armed ? swipeTargetId(groups, currentId, swipe) : null
   const headingId = swipeTargetId(groups, currentId, swipe)
+  // A swipe passed in (a look check) sets the blend itself; the live one paints it.
+  useGroupSwipeInk(rootRef, swipeProp === undefined)
+  const inkStyle = swipeProp !== undefined ? { [GROUP_SWIPE_PROGRESS_VAR]: swipeProp?.progress ?? 0 } : null
 
   useGroupBarScroll(frameRef, scrollerRef, vertical, headingId && swipe && swipe.progress > 0 ? [currentId, headingId] : [currentId], `${groups.length}:${iconPx}`)
 
@@ -208,9 +214,10 @@ export default function HomeGroupBar({
       aria-label="Groups"
       aria-orientation={orientation}
       data-home-group-bar={orientation}
+      data-swiping={swipe ? '' : undefined}
       data-swipe-direction={swipe?.direction ?? 'none'}
       data-swipe-armed={armed ? '' : undefined}
-      style={{ '--group-swipe-progress': swipe?.progress ?? 0, [GROUP_BAR_ICON_VAR]: `${iconPx}px`, [GROUP_BAR_GAP_VAR]: `${GROUP_BAR_GAP_PX}px`, [GROUP_BAR_TARGET_VAR]: `${GROUP_BAR_TARGET_PX}px` } as React.CSSProperties}
+      style={{ ...inkStyle, [GROUP_BAR_ICON_VAR]: `${iconPx}px`, [GROUP_BAR_GAP_VAR]: `${GROUP_BAR_GAP_PX}px`, [GROUP_BAR_TARGET_VAR]: `${GROUP_BAR_TARGET_PX}px` } as React.CSSProperties}
       className={`flex min-w-0 justify-center ${vertical ? 'w-full flex-col items-center' : 'h-[var(--k2-group-target)] w-full flex-row items-center'}`}
     >
       <div
@@ -237,6 +244,7 @@ export default function HomeGroupBar({
                 data-group-id={g.id}
                 data-current={current ? '' : undefined}
                 data-pending={g.id === pendingId ? '' : undefined}
+                data-swipe-role={headingId ? (current ? 'from' : g.id === headingId ? 'to' : undefined) : undefined}
                 data-recent-first={g.recentFirst ? '' : undefined}
                 data-k2-focus=""
                 aria-label={g.name}
@@ -244,7 +252,7 @@ export default function HomeGroupBar({
                 aria-keyshortcuts={chord ? chordToAria(chord) : undefined}
                 aria-current={current ? 'true' : undefined}
                 aria-haspopup="dialog"
-                className={`${ITEM} ${current ? ITEM_CURRENT : g.id === pendingId ? ITEM_PENDING : ITEM_REST}`}
+                className={`${ITEM} ${current ? ITEM_CURRENT : ITEM_REST}`}
                 onClick={() => onSelect(g.id)}
                 onContextMenu={(e) => {
                   e.preventDefault()

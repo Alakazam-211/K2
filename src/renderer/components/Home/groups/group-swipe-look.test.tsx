@@ -19,6 +19,11 @@ vi.mock('@tauri-apps/api/event', () => ({
 import HomeGroupBar, { swipeTargetId, type GroupBarItem } from './HomeGroupBar'
 import { GroupSwipeStrip } from './GroupSwipeSlide'
 import { rowShifts } from './useRowFlip'
+import { useHomeGroups } from './useHomeGroups'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+
+const groupsCss = readFileSync(join(__dirname, 'home-groups.css'), 'utf8')
 import { GLIDE_EASE, SWIPE_TUNING as T } from '@/lib/group-swipe'
 import { GLIDE_LAND_SLACK_MS, groupSwipeLive, useGroupSwipe, useGroupSwipeStore } from '@/hooks/useGroupSwipe'
 import { selectedHome, useHomesStore, type Home } from '@/stores/homes'
@@ -243,6 +248,101 @@ describe('the group bar during a swipe', () => {
     expect(swipeTargetId(G, 'g1', { progress: 0.5, direction: 'next' })).toBe('g2')
     expect(swipeTargetId(G, 'g1', { progress: 0.5, direction: 'prev' })).toBeNull()
     expect(swipeTargetId(G, 'g3', { progress: 0.5, direction: 'next' })).toBeNull()
+  })
+})
+
+function BarNav(): React.JSX.Element {
+  useGroupSwipe(true)
+  const g = useHomeGroups()
+  return (
+    <nav data-group-swipe-zone="">
+      <div data-group-swipe-stage="">
+        <div data-testid="list">rows</div>
+      </div>
+      <HomeGroupBar {...g.bar} />
+    </nav>
+  )
+}
+
+describe('the group bar’s colours follow the swipe (Rosson: no white, then a sudden blue)', () => {
+  const bar = (): HTMLElement => screen.getByRole('toolbar')
+  const icon = (i: number): HTMLElement => bar().querySelectorAll<HTMLElement>('[data-group-id]')[i]
+  const blend = (): string => bar().style.getPropertyValue('--group-swipe-progress')
+  /** The accent's share (%) a rule in home-groups.css gives an icon at progress `p`. */
+  const accentShare = (role: 'from' | 'to', p: number): number => {
+    const rule = new RegExp(`\\[data-swipe-role="${role}"\\]\\s*\\{\\s*color:\\s*color-mix\\(in oklab, var\\(--color-accent-text\\) calc\\(([^;]*?)\\* 100%\\), var\\(--color-text-muted\\)\\);`)
+    const m = rule.exec(groupsCss)
+    if (!m) throw new Error(`no ${role} rule`)
+    const expr = m[1].replace(/var\(--group-swipe-progress\)/g, String(p))
+    if (!/^[\d\s.()+*/-]+$/.test(expr)) throw new Error(`odd calc: ${expr}`)
+    return Math.round(Number(new Function(`return ${expr}`)()) * 100)
+  }
+
+  it('at 50% both icons are mid-blend, set outside React; the rest stay muted', () => {
+    render(<BarNav />)
+    expect(bar().hasAttribute('data-swiping')).toBe(false)
+    for (let i = 0; i < 24; i++) wheel(5) // locks at 10 px, then 5 a frame: 120 px = 50%
+    wait(FRAME)
+    expect(blend()).toBe('0.5')
+    expect(bar().hasAttribute('data-swiping')).toBe(true)
+    expect([icon(0), icon(1), icon(2)].map((el) => el.getAttribute('data-swipe-role'))).toEqual(['from', 'to', null])
+    expect([accentShare('from', 0.5), accentShare('to', 0.5)]).toEqual([50, 50])
+    expect([accentShare('from', 0), accentShare('to', 0), accentShare('from', 1), accentShare('to', 1)]).toEqual([100, 0, 0, 100])
+    // The bright "about to switch" ink is gone.
+    expect(icon(1).className.split(/\s+/)).not.toContain('text-[var(--color-text-primary)]')
+  })
+
+  it('no hover ink and no colour transition on any icon while a swipe is under way', () => {
+    expect(groupsCss).toMatch(/\[data-home-group-bar\]\[data-swiping\] \[data-group-id\]:not\(\[data-current\]\) \{ color: var\(--color-text-muted\); \}/)
+    expect(groupsCss).toMatch(/\[data-home-group-bar\]\[data-swiping\] \[data-group-id\] \{ transition: none; \}/)
+    // Three attributes and a :not() (0,4,0) outrank Tailwind's hover:text-… (0,2,0).
+    render(<BarNav />)
+    expect(icon(2).className).toContain('hover:text-[var(--color-text-primary)]')
+    for (let i = 0; i < 12; i++) wheel(5)
+    expect(bar().hasAttribute('data-swiping')).toBe(true)
+  })
+
+  it('on release the blend glides with the strip: on to the new group, or back', () => {
+    render(<BarNav />)
+    for (let i = 0; i < 23; i++) wheel(5)
+    letGo()
+    const f = groupSwipeLive.get()
+    if (f.kind !== 'glide') throw new Error('no glide')
+    expect(bar().style.transition).toBe(`--group-swipe-progress ${f.ms}ms ${f.easing}`)
+    expect(blend()).toBe('1')
+    wait(f.ms + GLIDE_LAND_SLACK_MS + FRAME)
+    expect(icon(1).hasAttribute('data-current')).toBe(true)
+    expect(bar().hasAttribute('data-swiping')).toBe(false)
+    expect(blend()).toBe('')
+    // A short one glides back.
+    for (let i = 0; i < 8; i++) wheel(5)
+    letGo()
+    expect(blend()).toBe('0')
+    wait(1000)
+    expect(icon(1).hasAttribute('data-current')).toBe(true)
+  })
+
+  it('"current" is never empty, nor doubled, through a commit', () => {
+    render(<BarNav />)
+    const counts = new Set<number>()
+    const look = (): void => {
+      counts.add(bar().querySelectorAll('[data-current]').length)
+    }
+    const mo = new MutationObserver(look)
+    mo.observe(bar(), { subtree: true, attributes: true, childList: true })
+    for (let i = 0; i < 23; i++) {
+      wheel(5)
+      look()
+    }
+    letGo()
+    look()
+    for (let t = 0; t < 400; t += 8) {
+      wait(8)
+      look()
+    }
+    mo.disconnect()
+    expect(current()).toBe('Two')
+    expect([...counts]).toEqual([1])
   })
 })
 

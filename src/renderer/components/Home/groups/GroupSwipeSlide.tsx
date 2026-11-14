@@ -1,139 +1,150 @@
-// Home groups: what the sideways swipe looks like in the nav (K2 Design's
-// mock, Rosson's call: slide plus peek, and no reduced-motion variant).
-//   - While two fingers move, the agent list follows by up to 40% of its
-//     width and fades towards half, and the group it would land on peeks in
-//     from that side: its glyph and name, "Next group" (or "Previous
-//     group"), then "Let go to switch" past SWIPE_COMMIT_AT with a stronger
-//     edge. The rail peeks the glyph alone.
-//   - Let go past the line: one short move, out then in, on the fast motion
-//     token each (100 ms Terminal, 140 ms Glass), ease-out, no bounce. The
-//     old group's rows slide out, the new group's slide in.
-//   - Let go short of it: the list slides back on the same token.
-// The main pane never moves. The logic (thresholds, commit) is
-// `lib/group-swipe.ts` and `useGroupSwipe`; this only reads its store.
+// Home groups: what the sideways swipe looks like in the nav and the rail
+// (Rosson: slide only, no reduced-motion variant, and no words telling
+// the person what to do).
+//   - `GroupSwipeStrip` wraps the agent list. While a swipe is under way
+//     the group it heads to rides in beside the list, at its edge, as one
+//     strip: that group's rows with its glyph and name at the leading edge
+//     (the peek, part of the motion, not a message).
+//   - The strip follows the fingers 1:1, then glides on: to the next group
+//     (the switch happens as it lands) or back home. Past the first or last
+//     group it moves a third as far and glides back.
+// The motion comes from `groupSwipeLive` (hooks/useGroupSwipe), not React:
+// the transform is set on the strip in a rAF, so the list never re-renders
+// per wheel event. Transform only (the GPU's), with a CSS transition for
+// the glide. The main pane never moves.
 
-import { useEffect, useRef, useState } from 'react'
-import { SWIPE_COMMIT_AT } from '@/lib/group-swipe'
-import { useGroupSwipeStore } from '@/hooks/useGroupSwipe'
-import { useHomesStore } from '@/stores/homes'
+import { useLayoutEffect, useRef } from 'react'
+import { groupSwipeLive, useGroupSwipeStore, type SwipeFrame } from '@/hooks/useGroupSwipe'
+import { useHomesStore, type Home } from '@/stores/homes'
 import { GroupGlyph } from './GroupGlyph'
-import { SWIPE_FOLLOW, SWIPE_PEEK_FULL_AT } from './group-bar-look'
 
-/** The settle's two halves start and end here (share of the list's width). */
-const OUT_TO = 0.6
-const IN_FROM = 0.24
-
-/** The Style's fast motion token, in ms (100 Terminal, 140 Glass). */
-export function fastMotionMs(): number {
-  if (typeof document === 'undefined') return 120
-  const raw = getComputedStyle(document.documentElement).getPropertyValue('--motion-duration-fast').trim()
-  const n = parseFloat(raw)
-  if (!Number.isFinite(n)) return 120
-  return raw.endsWith('ms') ? n : n * 1000
+interface StripMotion {
+  width: number
+  applied: SwipeFrame | null
 }
 
-const EASE = 'var(--motion-duration-fast) var(--motion-ease-out-soft, ease-out)'
-
-type Phase = { kind: 'out'; fromId: string; sign: number } | { kind: 'in'; sign: number } | null
-
-export interface GroupSwipeSlide {
-  /** The style for the list's content (it slides; the frame stays). */
-  listStyle: React.CSSProperties
-  /** During the first half of a committed settle: the group whose rows
-   *  slide out (the one just left). Null otherwise. */
-  shownGroupId: string | null
-  /** The peek, while a swipe is under way and there is a group that way. */
-  peek: React.JSX.Element | null
+function shift(share: number, width: number): string {
+  return `translate3d(${(-share * width).toFixed(2)}px, 0, 0)`
 }
 
-export function useGroupSwipeSlide(variant: 'nav' | 'rail'): GroupSwipeSlide {
-  const swipe = useGroupSwipeStore((s) => s.swipe)
-  const release = useGroupSwipeStore((s) => s.release)
+/** Put the strip where `f` says. Idempotent per frame. */
+export function paintStrip(el: HTMLElement, f: SwipeFrame, m: StripMotion): void {
+  if (m.applied === f) return
+  const fromRest = !m.applied || m.applied.kind === 'rest'
+  m.applied = f
+  if (f.kind === 'rest') {
+    el.style.transition = ''
+    el.style.transform = ''
+    el.style.willChange = ''
+    // The incoming rows were drawn from the top: the landed list starts there too.
+    if (f.landed) {
+      const scroller = el.querySelector<HTMLElement>('[data-scroll-edges-list], [data-group-swipe-scroller]')
+      if (scroller) scroller.scrollTop = 0
+    }
+    return
+  }
+  if (fromRest || m.width <= 0) m.width = el.offsetWidth
+  el.style.willChange = 'transform'
+  if (f.kind === 'track') {
+    el.style.transition = 'none'
+    el.style.transform = shift(f.offset, m.width)
+    return
+  }
+  // The glide starts exactly where the fingers left it.
+  el.style.transition = 'none'
+  el.style.transform = shift(f.from, m.width)
+  void el.offsetWidth
+  el.style.transition = `transform ${f.ms}ms ${f.easing}`
+  el.style.transform = shift(f.to, m.width)
+  // Landing on the group: its name rides in and fades as the header takes it.
+  const peek = el.querySelector<HTMLElement>('[data-group-swipe-peek]')
+  if (peek && f.outcome === 'commit') {
+    peek.style.transition = `opacity ${f.ms}ms ease-out`
+    peek.style.opacity = '0'
+  }
+}
+
+function useStripMotion(ref: React.RefObject<HTMLDivElement | null>, groupId: string): void {
+  const motion = useRef<StripMotion>({ width: 0, applied: null })
+  useLayoutEffect(() => {
+    let raf = 0
+    const apply = (): void => {
+      raf = 0
+      if (ref.current) paintStrip(ref.current, groupSwipeLive.get(), motion.current)
+    }
+    const off = groupSwipeLive.subscribe(() => {
+      if (!raf) raf = requestAnimationFrame(apply)
+    })
+    apply()
+    return () => {
+      off()
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [ref])
+  // A commit has landed and the new group's rows are drawn: the strip
+  // comes back to rest in the same paint.
+  useLayoutEffect(() => {
+    if (ref.current && groupSwipeLive.get().kind === 'rest') paintStrip(ref.current, groupSwipeLive.get(), motion.current)
+  }, [ref, groupId])
+}
+
+/** The incoming group's glyph and name at the leading edge of its rows
+ *  (the glyph alone in the rail). */
+function GroupSwipePeek({ variant, group, index, sign }: { variant: 'nav' | 'rail'; group: Home; index: number; sign: number }): React.JSX.Element {
+  const edge = sign > 0 ? 'left' : 'right'
+  return (
+    <div
+      data-group-float="peek"
+      data-group-swipe-peek={group.id}
+      className={`pointer-events-none absolute top-[38%] z-20 flex min-w-0 max-w-[calc(100%-16px)] items-center gap-2 ${variant === 'rail' ? 'p-1.5' : 'px-3 py-2'}`}
+      style={{ [edge]: variant === 'rail' ? 2 : 8 }}
+    >
+      <span className="flex-shrink-0 text-[var(--color-text-secondary)]">
+        <GroupGlyph icon={group.icon ?? null} index={index} />
+      </span>
+      {variant === 'nav' && (
+        <span className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{group.name}</span>
+      )}
+    </div>
+  )
+}
+
+export interface GroupSwipeStripProps {
+  variant: 'nav' | 'rail'
+  /** The incoming group's rows, drawn as the list draws them (inert). */
+  renderIncoming(group: Home): React.ReactNode
+  /** The list itself. */
+  children: React.ReactNode
+}
+
+/** The agent list and, during a swipe, the group it heads to beside it. */
+export function GroupSwipeStrip({ variant, renderIncoming, children }: GroupSwipeStripProps): React.JSX.Element {
+  // Only the direction re-renders this (the motion is groupSwipeLive's).
+  const direction = useGroupSwipeStore((s) => s.swipe?.direction ?? null)
   const homes = useHomesStore((s) => s.homes)
   const selectedId = useHomesStore((s) => s.selectedId)
-  const [phase, setPhase] = useState<Phase>(null)
-  // The group a swipe started from (it doesn't change until the release).
-  const fromRef = useRef<string | null>(null)
-  if (swipe) fromRef.current = selectedId
-  const seenSeq = useRef(release?.seq ?? 0)
-
-  useEffect(() => {
-    if (!release || release.seq === seenSeq.current) return
-    seenSeq.current = release.seq
-    if (release.outcome !== 'commit' || !fromRef.current) return
-    const sign = release.direction === 'next' ? 1 : -1
-    const fast = fastMotionMs()
-    setPhase({ kind: 'out', fromId: fromRef.current, sign })
-    let raf = 0
-    const t = setTimeout(() => {
-      setPhase({ kind: 'in', sign })
-      raf = requestAnimationFrame(() => {
-        raf = requestAnimationFrame(() => setPhase(null))
-      })
-    }, fast)
-    return () => {
-      clearTimeout(t)
-      cancelAnimationFrame(raf)
-    }
-  }, [release])
-
-  let listStyle: React.CSSProperties
-  if (phase?.kind === 'out') {
-    listStyle = { transform: `translateX(${-phase.sign * OUT_TO * 100}%)`, opacity: 0, transition: `transform ${EASE}, opacity ${EASE}` }
-  } else if (phase?.kind === 'in') {
-    listStyle = { transform: `translateX(${phase.sign * IN_FROM * 100}%)`, opacity: 0, transition: 'none' }
-  } else if (swipe && swipe.progress > 0) {
-    const sign = swipe.direction === 'next' ? 1 : -1
-    listStyle = {
-      transform: `translateX(${(-sign * swipe.progress * SWIPE_FOLLOW * 100).toFixed(2)}%)`,
-      opacity: 1 - swipe.progress * 0.5,
-      transition: 'none',
-    }
-  } else {
-    listStyle = { transform: 'translateX(0)', opacity: 1, transition: `transform ${EASE}, opacity ${EASE}` }
-  }
-
-  let peek: React.JSX.Element | null = null
-  if (swipe && swipe.progress > 0 && !phase) {
-    const at = homes.findIndex((h) => h.id === selectedId)
-    const sign = swipe.direction === 'next' ? 1 : -1
-    const to = at + sign
-    const target = at >= 0 && to >= 0 && to < homes.length ? homes[to] : null
-    if (target) {
-      const armed = swipe.progress >= SWIPE_COMMIT_AT
-      const shift = (1 - Math.min(swipe.progress / SWIPE_PEEK_FULL_AT, 1)) * 110 * sign
-      const side = variant === 'rail' ? { [sign > 0 ? 'right' : 'left']: 2 } : { [sign > 0 ? 'right' : 'left']: 8 }
-      peek = (
+  const ref = useRef<HTMLDivElement>(null)
+  useStripMotion(ref, selectedId)
+  const at = homes.findIndex((h) => h.id === selectedId)
+  const sign = direction === 'next' ? 1 : direction === 'prev' ? -1 : 0
+  const to = at + sign
+  const incoming = sign !== 0 && at >= 0 && to >= 0 && to < homes.length ? homes[to] : null
+  return (
+    <div ref={ref} className="relative flex min-h-0 w-full flex-1 flex-col" data-group-swipe-strip={variant}>
+      {children}
+      {incoming && (
         <div
-          data-group-float="peek"
-          data-group-swipe-peek={target.id}
-          data-armed={armed ? '' : undefined}
-          role={variant === 'rail' ? undefined : 'status'}
-          aria-hidden={variant === 'rail' ? 'true' : undefined}
-          className={`pointer-events-none absolute top-[38%] z-20 flex flex-col gap-0.5 ${variant === 'rail' ? 'p-1.5' : 'px-3 py-2'}`}
-          style={{ ...side, transform: `translateX(${shift.toFixed(1)}%)` }}
+          key={incoming.id}
+          data-group-swipe-incoming={incoming.id}
+          aria-hidden="true"
+          inert
+          className="pointer-events-none absolute inset-y-0 flex w-full flex-col"
+          style={{ left: `${sign * 100}%` }}
         >
-          {variant === 'rail' ? (
-            <span className="text-[var(--color-text-secondary)]">
-              <GroupGlyph icon={target.icon ?? null} index={to} />
-            </span>
-          ) : (
-            <>
-              <span className="flex items-center gap-2 whitespace-nowrap text-[13px] font-semibold text-[var(--color-text-primary)]">
-                <span className="text-[var(--color-text-secondary)]">
-                  <GroupGlyph icon={target.icon ?? null} index={to} />
-                </span>
-                {target.name}
-              </span>
-              <span className="whitespace-nowrap text-[10px] text-[var(--color-text-secondary)]">
-                {armed ? 'Let go to switch' : sign > 0 ? 'Next group' : 'Previous group'}
-              </span>
-            </>
-          )}
+          {renderIncoming(incoming)}
+          <GroupSwipePeek variant={variant} group={incoming} index={to} sign={sign} />
         </div>
-      )
-    }
-  }
-
-  return { listStyle, shownGroupId: phase?.kind === 'out' ? phase.fromId : null, peek }
+      )}
+    </div>
+  )
 }

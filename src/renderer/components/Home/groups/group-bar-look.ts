@@ -75,8 +75,3 @@ export function groupDialogSize(vw: number, vh: number): GroupDialogSize {
   const height = Math.max(0, Math.min(GROUP_DIALOG_MAX.height, vh - 2 * GROUP_DIALOG_MARGIN.y))
   return { width, height, onePane: width < GROUP_DIALOG_TWO_PANE_MIN }
 }
-
-/** The swipe's look: the list follows the finger by this share of the nav's
- *  width, fading to half; the peek is fully in at half the swipe. */
-export const SWIPE_FOLLOW = 0.4
-export const SWIPE_PEEK_FULL_AT = 0.5

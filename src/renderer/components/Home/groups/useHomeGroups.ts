@@ -9,14 +9,14 @@
 // pinned, recentFirst}, currentId, swipe {progress, direction} | null, and
 // onSelect, onRename (an empty name is saved as the next unused "Group N"),
 // onSetIcon, onCreate → id, onDelete (refused for the last group), onPin,
-// onUnpin, onReorderPins, onSetRecentFirst, onReorderGroups. Also here: the
-// swipe's release (commit or cancel), each agent's last send by the person
-// (`lastMessagedAt`), and this computer's recent icons.
+// onUnpin, onReorderPins, onSetRecentFirst, onReorderGroups. The swipe is
+// not passed through here: the bar reads it from `useGroupSwipeStore`
+// itself, so a swipe never re-renders the nav. Also here: each agent's last
+// send by the person (`lastMessagedAt`), and this computer's recent icons.
 
 import { useMemo, useState } from 'react'
 import { cleanHomeName, nextGroupName, selectedHome, useHomesStore } from '@/stores/homes'
 import { HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
-import { useGroupSwipeStore } from '@/hooks/useGroupSwipe'
 import { pinnedRows } from '@/lib/home-row-order'
 import { readRecentGroupIcons } from '@/lib/group-icon-recents'
 import type { GroupBarItem, GroupEditing, HomeGroupBarProps } from './HomeGroupBar'
@@ -46,8 +46,6 @@ export function emptyNameFallback(homes: readonly { id: string; name: string }[]
 export function useHomeGroups(): HomeGroups {
   const homes = useHomesStore((s) => s.homes)
   const current = useHomesStore(selectedHome)
-  const swipe = useGroupSwipeStore((s) => s.swipe)
-  const swipeRelease = useGroupSwipeStore((s) => s.release)
   const [editing, setEditing] = useState<GroupEditing | null>(null)
 
   const groups = useMemo<GroupBarItem[]>(
@@ -73,8 +71,6 @@ export function useHomeGroups(): HomeGroups {
   const bar: HomeGroupBarProps = {
     groups,
     currentId: current.id,
-    swipe,
-    swipeRelease,
     editing,
     onEditingChange: setEditing,
     shortcutLabel: groupShortcutLabel,

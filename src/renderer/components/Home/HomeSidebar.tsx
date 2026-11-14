@@ -57,11 +57,11 @@ import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButto
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
-import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
+import { RowDropLine, dropTargetIndex, useRowDragReorder, type RowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameHeader from './groups/GroupNameHeader'
 import { useHomeGroups } from './groups/useHomeGroups'
-import { useGroupSwipeSlide } from './groups/GroupSwipeSlide'
+import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
 import { useRowFlip } from './groups/useRowFlip'
 import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
 import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
@@ -427,13 +427,85 @@ function WorkspaceHomeRowView({ home, row, index }: { home: Home; row: HomeRow; 
   )
 }
 
+interface HomeRowDrag {
+  reorder: RowDragReorder<'home'>
+  listRef: React.RefObject<HTMLDivElement | null>
+  onDrop(from: number, gap: number): void
+}
+
+/** A group's rows as the nav draws them: pins first under "Pinned", then
+ *  "Agents". With `drag`, the live list (reorder, hover read-ahead);
+ *  without it, the group riding in beside the list during a swipe. */
+function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React.JSX.Element {
+  const rows = displayRows(home)
+  const pinCount = rows.filter(isPinned).length
+  // "Pinned" over the pins; "Agents" over the rest once there are pins or
+  // "Most recent at the top" is on (K2 Design's mock).
+  const agentsCaption = pinCount > 0 || !!home.recentFirst
+  const lineAt = (gap: number): boolean => !!drag?.reorder.showsDropLineAt('home', gap)
+  return (
+    <>
+      {pinCount > 0 && <HomeRowCaption kind="pinned" />}
+      {rows.map((row, idx) => [
+        agentsCaption && idx === pinCount ? <HomeRowCaption key="agents-caption" kind="agents" recentFirst={!!home.recentFirst} /> : null,
+        <div
+          key={row.address}
+          {...(drag ? { 'data-home-row': row.address } : { 'data-home-row-preview': row.address })}
+          data-pinned={isPinned(row) ? '' : undefined}
+          style={drag ? { opacity: drag.reorder.isDragging('home', idx) ? 0.4 : 1 } : undefined}
+          onMouseDown={
+            drag
+              ? (e) =>
+                  drag.reorder.onRowMouseDown(e, {
+                    zone: 'home',
+                    index: idx,
+                    container: () => drag.listRef.current,
+                    rowSelector: '[data-home-row]',
+                    onDrop: drag.onDrop,
+                  })
+              : undefined
+          }
+          onClickCapture={drag?.reorder.onRowClickCapture}
+          // Read a remote row's Thread ahead (remote Thread load Fix 4).
+          onMouseEnter={drag ? () => homeRowHoverPrefetch.enter(row.address) : undefined}
+          onMouseLeave={drag ? () => homeRowHoverPrefetch.leave() : undefined}
+        >
+          {lineAt(idx) && <RowDropLine />}
+          <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
+          {idx < rows.length - 1 && idx !== pinCount - 1 && !lineAt(idx + 1) && (
+            <div className="border-b border-[var(--color-border)]" />
+          )}
+        </div>,
+      ])}
+      {lineAt(rows.length) && <RowDropLine />}
+    </>
+  )
+}
+
+function EmptyHomeNote(): React.JSX.Element {
+  return (
+    <div className="px-3 py-6 text-center">
+      <p className="text-xs text-[var(--color-text-muted)]">No agents on this Home yet</p>
+      <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">Add an agent to get started</p>
+    </div>
+  )
+}
+
+/** The group a swipe heads to, riding in beside the list: its rows from
+ *  the top, drawn as the list will draw them when it lands. */
+function HomeRowsPreview({ home }: { home: Home }): React.JSX.Element {
+  return (
+    <ScrollEdgeFrame className="flex-1 min-h-0" scrollClassName="overflow-hidden py-1" tint={HOME_NAV_EDGE_TINT}>
+      <div>
+        <HomeRowItems home={home} />
+      </div>
+      {displayRows(home).length === 0 && <EmptyHomeNote />}
+    </ScrollEdgeFrame>
+  )
+}
+
 export default function HomeSidebar(): React.JSX.Element {
-  const selected = useHomesStore(selectedHome)
-  const homes = useHomesStore((s) => s.homes)
-  // A committed swipe slides the group just left out before the new one
-  // slides in (groups/GroupSwipeSlide): for that moment the list shows it.
-  const slide = useGroupSwipeSlide('nav')
-  const home = (slide.shownGroupId ? homes.find((h) => h.id === slide.shownGroupId) : undefined) ?? selected
+  const home = useHomesStore(selectedHome)
   const pickerOpen = useHomeAddPickerStore((s) => s.open)
   const setPickerOpen = useHomeAddPickerStore((s) => s.setOpen)
   const barRef = useRef<HTMLDivElement | null>(null)
@@ -474,10 +546,6 @@ export default function HomeSidebar(): React.JSX.Element {
 
   // Pins first, then the rest (manual or most recent first).
   const rows = displayRows(home)
-  const pinCount = rows.filter(isPinned).length
-  // "Pinned" over the pins; "Agents" over the rest once there are pins or
-  // "Most recent at the top" is on (K2 Design's mock).
-  const agentsCaption = pinCount > 0 || !!home.recentFirst
   // Most recent at the top: a row that moves up glides there.
   useRowFlip(listRef, rows.map((r) => r.address), !!home.recentFirst, home.id)
 
@@ -500,55 +568,22 @@ export default function HomeSidebar(): React.JSX.Element {
 
       {/* Home roster. When it scrolls, its ends fade softly under the Home
           picker and the bottom bar, as the Thread's do (Rosson 2026-11-14),
-          tinted with the nav's own fill. */}
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-home-list-stage="">
+          tinted with the nav's own fill. The sideways swipe moves it as one
+          strip with the group it heads to (groups/GroupSwipeSlide). */}
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-home-list-stage="" data-group-swipe-stage="">
+      <GroupSwipeStrip variant="nav" renderIncoming={(g) => <HomeRowsPreview home={g} />}>
       <ScrollEdgeFrame
         className="flex-1 min-h-0"
         scrollClassName="overflow-y-auto overflow-x-hidden py-1"
         tint={HOME_NAV_EDGE_TINT}
         testId="home-nav-list"
       >
-        <div ref={listRef} style={slide.listStyle} data-home-list-slide="">
-          {pinCount > 0 && <HomeRowCaption kind="pinned" />}
-          {rows.map((row, idx) => [
-            agentsCaption && idx === pinCount ? <HomeRowCaption key="agents-caption" kind="agents" recentFirst={!!home.recentFirst} /> : null,
-            <div
-              key={row.address}
-              data-home-row={row.address}
-              data-pinned={isPinned(row) ? '' : undefined}
-              style={{ opacity: rowDrag.isDragging('home', idx) ? 0.4 : 1 }}
-              onMouseDown={(e) =>
-                rowDrag.onRowMouseDown(e, {
-                  zone: 'home',
-                  index: idx,
-                  container: () => listRef.current,
-                  rowSelector: '[data-home-row]',
-                  onDrop: dropHomeRow,
-                })
-              }
-              onClickCapture={rowDrag.onRowClickCapture}
-              // Read a remote row's Thread ahead (remote Thread load Fix 4).
-              onMouseEnter={() => homeRowHoverPrefetch.enter(row.address)}
-              onMouseLeave={() => homeRowHoverPrefetch.leave()}
-            >
-              {rowDrag.showsDropLineAt('home', idx) && <RowDropLine />}
-              <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
-              {idx < rows.length - 1 && idx !== pinCount - 1 && !rowDrag.showsDropLineAt('home', idx + 1) && (
-                <div className="border-b border-[var(--color-border)]" />
-              )}
-            </div>,
-          ])}
-          {rowDrag.showsDropLineAt('home', rows.length) && <RowDropLine />}
+        <div ref={listRef}>
+          <HomeRowItems home={home} drag={{ reorder: rowDrag, listRef, onDrop: dropHomeRow }} />
         </div>
-
-        {rows.length === 0 && (
-          <div className="px-3 py-6 text-center">
-            <p className="text-xs text-[var(--color-text-muted)]">No agents on this Home yet</p>
-            <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">Add an agent to get started</p>
-          </div>
-        )}
+        {rows.length === 0 && <EmptyHomeNote />}
       </ScrollEdgeFrame>
-      {slide.peek}
+      </GroupSwipeStrip>
       </div>
 
       {/* Setup checklist (renders nothing while off, hidden or finished) */}
@@ -564,7 +599,7 @@ export default function HomeSidebar(): React.JSX.Element {
           <HomeGroupBar {...groups.bar} />
         </div>
       <div ref={barRef} className="relative flex flex-col gap-2" data-nav-footer="">
-        {pickerOpen && <AddAgentPicker home={selected} />}
+        {pickerOpen && <AddAgentPicker home={home} />}
         <div className={NAV_FOOTER_ROW_CLASS}>
           <NavFooterButton
             label="Add Agent"

@@ -31,7 +31,8 @@ html:not([data-style="terminal"]) [data-home-group-bar] [data-group-id][data-k2-
 [data-group-bar-frame][data-fade-start] > [data-group-bar-fade="start"],
 [data-group-bar-frame][data-fade-end] > [data-group-bar-fade="end"] { visibility: visible; }
 
-/* Small floats (the bar's name tip, the swipe peek): the elevated fill and
+/* Small floats (the bar's name tip, the swipe's peek at the incoming
+   group's edge): the elevated fill and
    edge in Terminal; Glass's menu material, rounded. */
 [data-group-float] {
   background: var(--color-bg-elevated);
@@ -44,7 +45,6 @@ html[data-style="glass"] [data-group-float] {
   border-width: 0.5px;
 }
 html[data-style="glass"] [data-group-float="peek"] { border-radius: 14px; }
-[data-group-float="peek"][data-armed] { border-color: var(--color-text-secondary); }
 
 /* The dialog list's selected row: a 2px edge in Terminal. */
 html[data-style="terminal"] [data-group-list-row][aria-selected="true"]:not([data-one-pane] *)::before {

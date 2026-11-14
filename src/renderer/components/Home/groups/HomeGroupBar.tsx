@@ -20,14 +20,17 @@
 //
 // Presentational: groups and callbacks in, only which dialog is open held
 // here when uncontrolled. The logic is `useHomeGroups`. The swipe
-// (`useGroupSwipe`) reaches it as `swipe` ({progress 0–1, direction
-// next|prev}, null at rest): the root carries `--group-swipe-progress`,
-// `data-swipe-direction` (next, prev or none) and `data-swipe-armed` past
-// SWIPE_COMMIT_AT, and the group the swipe would land on steps up to
-// primary ink while the bar centres between it and the current one.
+// (`useGroupSwipe`) is `swipe` ({progress 0–1, direction next|prev,
+// settling while it glides}, null at rest), read from the swipe store
+// when the prop is left out: the root carries `--group-swipe-progress`,
+// `data-swipe-direction` (next, prev or none) and `data-swipe-armed` once
+// it would commit (past SWIPE_COMMIT_AT, or gliding to land), and the
+// group it would land on steps up to primary ink while the bar centres
+// between it and the current one. The accent moves when it lands.
 
 import { useEffect, useRef, useState } from 'react'
-import { SWIPE_COMMIT_AT, type SwipeProgress, type SwipeRelease } from '@/lib/group-swipe'
+import { SWIPE_COMMIT_AT, type SwipeProgress } from '@/lib/group-swipe'
+import { useGroupSwipeStore } from '@/hooks/useGroupSwipe'
 import { GroupGlyph } from './GroupGlyph'
 import {
   GROUP_BAR_GAP_PX,
@@ -85,9 +88,8 @@ export interface HomeGroupBarProps {
   onPin?(groupId: string, rowId: string): void
   onUnpin?(groupId: string, rowId: string): void
   onReorderPins?(groupId: string, rowIds: string[]): void
-  swipe: SwipeProgress
-  /** How the last swipe ended (`seq` grows per release), for the slide. */
-  swipeRelease?: (SwipeRelease & { seq: number }) | null
+  /** The swipe; left out, the bar reads the live one (`useGroupSwipeStore`). */
+  swipe?: SwipeProgress
   /** `vertical` in the collapsed rail. */
   orientation?: 'horizontal' | 'vertical'
   /** Controlled dialog state (the nav header's "…" opens it too). */
@@ -118,6 +120,12 @@ export function swipeTargetId(groups: readonly GroupBarItem[], currentId: string
   return i >= 0 && to >= 0 && to < groups.length ? groups[to].id : null
 }
 
+/** The swipe would switch if let go now (past the line), or is gliding to land. */
+export function swipeArmed(swipe: SwipeProgress | undefined): boolean {
+  if (!swipe) return false
+  return swipe.settling ? swipe.settling === 'commit' : swipe.progress >= SWIPE_COMMIT_AT
+}
+
 /** Where focus goes when the Groups dialog closes: the "…" that opened it,
  *  else the icon of the group it opened on (or the current one). */
 function returnFocus(root: HTMLElement | null, editing: GroupEditing, currentId: string): void {
@@ -140,7 +148,7 @@ export default function HomeGroupBar({
   onDelete,
   onSetRecentFirst,
   onReorderGroups,
-  swipe,
+  swipe: swipeProp,
   orientation = 'horizontal',
   editing: editingProp,
   onEditingChange,
@@ -161,7 +169,10 @@ export default function HomeGroupBar({
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [tip, setTip] = useState<{ id: string; el: HTMLElement; keyboard: boolean } | null>(null)
   const vertical = orientation === 'vertical'
-  const pendingId = swipe && swipe.progress >= SWIPE_COMMIT_AT ? swipeTargetId(groups, currentId, swipe) : null
+  const liveSwipe = useGroupSwipeStore((s) => s.swipe)
+  const swipe = swipeProp !== undefined ? swipeProp : liveSwipe
+  const armed = swipeArmed(swipe)
+  const pendingId = armed ? swipeTargetId(groups, currentId, swipe) : null
   const headingId = swipeTargetId(groups, currentId, swipe)
 
   useGroupBarScroll(frameRef, scrollerRef, vertical, headingId && swipe && swipe.progress > 0 ? [currentId, headingId] : [currentId], `${groups.length}:${iconPx}`)
@@ -198,7 +209,7 @@ export default function HomeGroupBar({
       aria-orientation={orientation}
       data-home-group-bar={orientation}
       data-swipe-direction={swipe?.direction ?? 'none'}
-      data-swipe-armed={swipe && swipe.progress >= SWIPE_COMMIT_AT ? '' : undefined}
+      data-swipe-armed={armed ? '' : undefined}
       style={{ '--group-swipe-progress': swipe?.progress ?? 0, [GROUP_BAR_ICON_VAR]: `${iconPx}px`, [GROUP_BAR_GAP_VAR]: `${GROUP_BAR_GAP_PX}px`, [GROUP_BAR_TARGET_VAR]: `${GROUP_BAR_TARGET_PX}px` } as React.CSSProperties}
       className={`flex min-w-0 justify-center ${vertical ? 'w-full flex-col items-center' : 'h-[var(--k2-group-target)] w-full flex-row items-center'}`}
     >

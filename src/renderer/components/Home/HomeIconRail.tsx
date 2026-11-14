@@ -5,7 +5,8 @@
 // with its letter avatar. Above the bottom buttons, the group bar stands
 // upright (one icon per group, the current one in the accent colour; five
 // show, then it scrolls). Pinned agents sit first, under a short rule. The
-// sideways swipe slides the icons and peeks the next group's glyph.
+// sideways swipe moves the icons as one strip with the next group's,
+// its glyph at their leading edge.
 
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -26,7 +27,7 @@ import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameFlash from './groups/GroupNameFlash'
 import { displayRows, isPinned } from '@/lib/home-row-order'
 import { useHomeGroups } from './groups/useHomeGroups'
-import { useGroupSwipeSlide } from './groups/GroupSwipeSlide'
+import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
 
 const RAIL_WIDTH = 48
 
@@ -84,14 +85,34 @@ function RailRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element
   return <OtherRowIcon home={home} row={row} />
 }
 
-export default function HomeIconRail(): React.JSX.Element {
-  const selected = useHomesStore(selectedHome)
-  const homes = useHomesStore((s) => s.homes)
-  const slide = useGroupSwipeSlide('rail')
-  const home = (slide.shownGroupId ? homes.find((h) => h.id === slide.shownGroupId) : undefined) ?? selected
-  const groups = useHomeGroups()
+/** A group's rail icons, pins first under a short rule. */
+function RailRows({ home }: { home: Home }): React.JSX.Element {
   const rows = displayRows(home)
   const pinCount = rows.filter(isPinned).length
+  return (
+    <div className="flex w-full flex-col items-center gap-0.5">
+      {rows.map((row, i) => [
+        <RailRow key={row.address} home={home} row={row} />,
+        pinCount > 0 && i === pinCount - 1 && i < rows.length - 1 ? (
+          <span key="pin-rule" aria-hidden="true" data-home-rail-pin-rule="" className="mx-auto my-[3px] h-px w-5 flex-shrink-0 bg-[var(--color-divider)]" />
+        ) : null,
+      ])}
+    </div>
+  )
+}
+
+/** The group a swipe heads to, riding in beside the rail's icons. */
+function RailRowsPreview({ home }: { home: Home }): React.JSX.Element {
+  return (
+    <div className="flex-1 flex flex-col items-center gap-0.5 overflow-hidden w-full">
+      <RailRows home={home} />
+    </div>
+  )
+}
+
+export default function HomeIconRail(): React.JSX.Element {
+  const home = useHomesStore(selectedHome)
+  const groups = useHomeGroups()
   return (
     <div
       data-material="tile"
@@ -114,18 +135,12 @@ export default function HomeIconRail(): React.JSX.Element {
         </svg>
       </button>
 
-      <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden" data-home-rail-stage="">
-        <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full">
-          <div className="flex w-full flex-col items-center gap-0.5" style={slide.listStyle} data-home-list-slide="">
-            {rows.map((row, i) => [
-              <RailRow key={row.address} home={home} row={row} />,
-              pinCount > 0 && i === pinCount - 1 && i < rows.length - 1 ? (
-                <span key="pin-rule" aria-hidden="true" data-home-rail-pin-rule="" className="mx-auto my-[3px] h-px w-5 flex-shrink-0 bg-[var(--color-divider)]" />
-              ) : null,
-            ])}
+      <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden" data-home-rail-stage="" data-group-swipe-stage="">
+        <GroupSwipeStrip variant="rail" renderIncoming={(g) => <RailRowsPreview home={g} />}>
+          <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full" data-group-swipe-scroller="">
+            <RailRows home={home} />
           </div>
-        </div>
-        {slide.peek}
+        </GroupSwipeStrip>
       </div>
 
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">

@@ -674,6 +674,22 @@ describe('the Thread paints first; the terminal attaches beside it', () => {
     expect(h.sockets.length).toBe(1)
   })
 
+  it('held with a label (an asleep agent): the terminal place says it, and nothing spawns', async () => {
+    const view = renderInRoom(
+      room,
+      <TabVisibilityContext.Provider value={true}>
+        <SessionViewChromeContext.Provider value={chrome({ viewTab: 'split' })}>
+          <TerminalPane terminalId="pg-test" cwd="/tmp/ws" attachAgentName="proj-1" holdSpawn heldLabel="Asleep. Wake it." />
+        </SessionViewChromeContext.Provider>
+      </TabVisibilityContext.Provider>,
+    )
+    expect(view.getByTestId('terminal-pane-held').textContent).toBe('Asleep. Wake it.')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(SPAWN()).toBe(0)
+  })
+
   it('attach pending: the Thread and its message box are there while the spawn has not answered', async () => {
     globalThis.fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch
     const view = renderInRoom(room, pane(chrome({ viewTab: 'thread' })))

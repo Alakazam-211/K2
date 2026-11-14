@@ -522,9 +522,9 @@ export interface TerminalPaneProps {
    * live grid before the first paint. Set by Projects tiles.
    */
   pauseHiddenPaint?: boolean
-  /** No spawn or attach until false (a pane not yet spawned; arming stays
-   *  one-way). The Thread paints meanwhile; the same pane attaches later. */
+  /** No spawn or attach until false (arming stays one-way); the Thread paints meanwhile. */
   holdSpawn?: boolean
+  heldLabel?: string // what the held pane's place says (default "Loading session…")
 }
 
 type Phase =
@@ -603,6 +603,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     syncSizeOnShow = false,
     pauseHiddenPaint = false,
     holdSpawn = false,
+    heldLabel,
   } = props
   const sessionChrome = useSessionViewChrome()
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
@@ -5694,7 +5695,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         )}
         </div>
       </div>
-      {holdSpawn && !spawnArmed && <TerminalHeldLabel />}
+      {holdSpawn && !spawnArmed && <TerminalHeldLabel text={heldLabel} />}
       {/* Passive-view affordance: this pane is watching a grid sized
           by another viewer (scaled down to fit). Styling matches the
           DEV badge above. */}

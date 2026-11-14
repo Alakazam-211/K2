@@ -28,7 +28,7 @@ import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged, onAgentIdentit
 import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
-import type { SplitPaneView } from '@/components/SessionView/sessionViewTab'
+import { overlayViewer, type SplitPaneView } from '@/components/SessionView/sessionViewTab'
 import {
   PinnedSessionBody,
   barShowsModeToggle,
@@ -844,26 +844,41 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     | { kind: 'error'; message: string; folderTrust?: boolean }
     // 0.46.11: the daemon waits for the person to pick the first chat's LLM.
     | { kind: 'choose'; harnesses: FirstChatHarness[]; error: string | null }
+    // A view without the terminal (Thread, Chatter) asks whether the session
+    // is running (`sessions/lookup-by-agent`, a read) instead of ensuring it.
+    | { kind: 'checking' }
+    // Not running, and nothing has asked for it: the agent stays asleep.
+    // Showing the terminal (Terminal view, Split with a terminal side, a
+    // peek) ensures it; a message wakes it in the daemon (the Thread post's
+    // delivery wakes a dormant session).
+    | { kind: 'asleep' }
   const [phase, setPhase] = useState<Phase>({ kind: 'ensuring' })
   const phaseRef = useRef(phase)
   phaseRef.current = phase
-  // The first ensure (no session known yet, so no terminal attached): a view
-  // that shows the Thread renders the ready pane at once with its spawn held
-  // (TerminalPane `holdSpawn`). The Thread and its message box paint now,
-  // and when the ensure answers the same pane attaches: nothing remounts.
-  // The session runs headless in the daemon; the Thread never needed the
-  // terminal. Once a session has been attached, a later ensure (refresh,
-  // switch, continue) is a respawn and keeps its own body below.
+  // Until a session is known, a view that shows the Thread renders the ready
+  // pane at once with its spawn held (TerminalPane `holdSpawn`). The Thread
+  // and its message box paint now, and when there is a session to show the
+  // same pane attaches: nothing remounts. The session runs headless in the
+  // daemon; the Thread never needed the terminal. Once a session has been
+  // attached, a later ensure (refresh, switch, continue) is a respawn and
+  // keeps its own body below.
   const attachedOnceRef = useRef(false)
   if (phase.kind === 'ready') attachedOnceRef.current = true
-  const firstEnsureRef = useRef(true)
-  firstEnsureRef.current = phase.kind === 'ensuring' && !attachedOnceRef.current
+  // The attach key whose pane has been let go (spawned or attached): only
+  // that pane needs a remount for a new session. A held pane attaches to
+  // whatever is live when it lets go.
+  const releasedNonceRef = useRef<number | null>(null)
+  // Woken while asleep (a message, a heartbeat): the terminal still attaches
+  // only when it is shown.
+  const [wokeWhileAsleep, setWokeWhileAsleep] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   // Bumped to force TerminalPane to re-attach (remount) after a daemon
   // respawn (refresh / dropdown switch / SessionAdded). The daemon kills
   // the old PTY + spawns a new one under the same key; a fresh TerminalPane
   // re-runs its idempotent spawn POST and binds to the NEW PTY.
   const [attachNonce, setAttachNonce] = useState(0)
+  const attachNonceRef = useRef(attachNonce)
+  attachNonceRef.current = attachNonce
 
   // Pinned-chat background retention — hold the grid-WS while this pane
   // is hidden IFF the workspace is in the canonical Active section
@@ -920,6 +935,12 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     threadPanel,
     setThreadPanel,
   } = useSessionViewTab(overlayConv, room.scope, projectId)
+  // The view shows the terminal: Terminal view, a Split with a terminal side,
+  // or Thread view's peek. Only then does opening the agent start its session.
+  const overlayShown = overlayViewer(viewTab, { left: splitLeft, right: splitRight })
+  const terminalWanted = !overlayShown.hidePty || (viewTab === 'thread' && terminalRevealed)
+  const terminalWantedRef = useRef(terminalWanted)
+  terminalWantedRef.current = terminalWanted
   // Split view's Thread column floats the picture and name, search and the
   // workspace's bell (SplitColumnFloats).
   const splitBell = useMemo(() => (projectId ? <ThreadFloatBell projectId={projectId} /> : null), [projectId])
@@ -961,7 +982,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // being ensured (a remote server only; a Thread view mounted meanwhile
   // shares this read), so it paints from the view cache when it shows.
   useEffect(() => {
-    if (phase.kind !== 'ensuring' || !overlayAddr) return
+    if ((phase.kind !== 'ensuring' && phase.kind !== 'checking') || !overlayAddr) return
     void prefetchThread(room.scope, overlayAddr)
   }, [phase.kind, overlayAddr, room.scope])
 
@@ -1105,18 +1126,62 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const folderHoldPanel = folderHold.held ? <FolderTrustHoldPanel hold={folderHold} /> : null
   const folderHoldBanner = folderHold.held ? <FolderTrustHoldPanel hold={folderHold} inline /> : null
 
-  // Visit → ensure (find-or-spawn; daemon resolves resume vs fresh).
+  // Visit → ensure (find-or-spawn; daemon resolves resume vs fresh), when
+  // the view shows the terminal. A view without it (Thread, Chatter) never
+  // starts the session: it asks whether one is running, attaches if so, and
+  // otherwise leaves the agent asleep (K2 Companion's rule: a sleeping agent
+  // stays asleep until the terminal is shown or a message is sent).
   // Mounting this pane is a visit or other need — seedBoot / Active-list
   // warming must NOT mount it (retainer is display-only until visit).
   // Cold boot / relaunch-revive of a visited pane is just this call:
   // the daemon reads workspace_sessions canonically (#679 preserved).
   useEffect(() => {
-    void ensure(false)
+    // A view-only room's ensure only looks the session up; it never starts one.
+    if (room.readOnly || terminalWantedRef.current) {
+      void ensure(false)
+      return
+    }
+    let cancelled = false
+    setPhase({ kind: 'checking' })
+    void daemonCliGet<{ sessionAlive?: unknown }>(room.scope, 'sessions/lookup-by-agent', { agent: projectId })
+      .then((r) => r?.sessionAlive === true)
+      .catch((err: unknown) => {
+        // Not knowing is not a reason to start it: stay asleep until asked.
+        console.warn('[AgentChatPane] lookup-by-agent failed; leaving the agent asleep:', err)
+        return false
+      })
+      .then((alive) => {
+        // Moved on meanwhile (the terminal was shown, a message woke it).
+        if (cancelled || phaseRef.current.kind !== 'checking') return
+        if (!alive) {
+          setPhase({ kind: 'asleep' })
+          return
+        }
+        // Running: attach as before (the ensure finds the live session).
+        setPhase({ kind: 'ensuring' })
+        void ensure(false)
+      })
+    return () => {
+      cancelled = true
+    }
     // Only on (re)mount per workspace. `ensure` is stable across
     // restoredSessionId churn for THIS workspace; we deliberately don't
     // re-ensure when the offline hint changes (daemon is authoritative).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectPath])
+
+  // An ensure (any: a wake, a refresh) attaches as usual once it answers.
+  useEffect(() => {
+    if (phase.kind === 'ensuring') setWokeWhileAsleep(false)
+  }, [phase.kind])
+
+  // Asleep (or still asking) and the terminal is shown now: start it.
+  useEffect(() => {
+    if (!terminalWanted) return
+    if (phase.kind !== 'asleep' && phase.kind !== 'checking') return
+    setPhase({ kind: 'ensuring' })
+    void ensure(false)
+  }, [terminalWanted, phase.kind, ensure])
 
   // Subscribe to the daemon's session lifecycle for THIS workspace.
   //   SessionAdded(agent_name === projectId) → re-attach (daemon respawned
@@ -1134,18 +1199,23 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // 1–3s and reset the tab icon/label (the flicker). When the session
         // id matches what we're attached to, do nothing.
         if (event.session_id === attachedSessionIdRef.current) return
-        // The first ensure's own spawn, heard before its answer: no terminal
-        // is attached yet (a held pane, if any, attaches when it lets go),
-        // so there is nothing to remount.
-        const firstEnsure = firstEnsureRef.current
+        // Only a pane that has attached needs a remount for the new session.
+        // A held one (the first ensure's own spawn heard before its answer,
+        // or an asleep agent woken) attaches when it lets go.
+        const paneAttached = releasedNonceRef.current === attachNonceRef.current
+        const before = phaseRef.current.kind
+        const wasAsleep = before === 'asleep' || before === 'checking'
         attachedSessionIdRef.current = event.session_id
         const held = freshHoldProviderIdRef.current
         setPhase({
           kind: 'ready',
           sessionId: event.session_id,
-          canonicalSessionId: held ?? event.session_id,
+          // Woken from asleep: the conversation shown stays the one shown
+          // (its remembered view with it); the PTY id is not a conversation.
+          canonicalSessionId: held ?? (wasAsleep ? lastOverlayConvRef.current : null) ?? event.session_id,
         })
-        if (!firstEnsure) setAttachNonce((n) => n + 1)
+        if (wasAsleep) setWokeWhileAsleep(true)
+        if (paneAttached) setAttachNonce((n) => n + 1)
       },
       onRemoved: (event) => {
         if (event.agent_name !== projectId) return
@@ -1153,7 +1223,16 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // later fresh session (Retry) is recognised as a genuine change and
         // re-attaches.
         attachedSessionIdRef.current = null
-        setPhase({ kind: 'idle' })
+        if (!room.readOnly && !terminalWantedRef.current) {
+          // Reaped while only its Thread (or Chatter) is shown: asleep, as
+          // when it is opened asleep. The Thread and its box stay; showing
+          // the terminal or a message wakes it. A fresh held pane replaces
+          // the one on the gone session.
+          setPhase({ kind: 'asleep' })
+          setAttachNonce((n) => n + 1)
+        } else {
+          setPhase({ kind: 'idle' })
+        }
         // Pinned-chat retention — let the retainer evict a backgrounded
         // instance (fires AFTER the idle flip so a kept-mounted pane —
         // foreground workspace — already shows the idle state).
@@ -1355,7 +1434,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       onSplitRight={setSplitRight}
       terminalRevealed={terminalRevealed}
       onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
-      terminalAvailable={phase.kind === 'ready'}
+      // Asleep, the terminal toggle is how the person wakes it (a peek).
+      terminalAvailable={phase.kind === 'ready' || phase.kind === 'asleep' || phase.kind === 'checking'}
       threadPanel={threadPanel}
       onThreadPanel={setThreadPanel}
       pinnedProvider={liveProvider}
@@ -1448,12 +1528,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     )
   }
 
-  if (phase.kind === 'ensuring') {
-    // Fix 1: a view that shows the Thread shows it now, beside the
-    // terminal's "Loading session…", instead of waiting for the ensure.
-    const threadShown =
-      overlayAddr !== '' &&
-      (viewTab === 'thread' || (viewTab === 'split' && (splitLeft === 'thread' || splitRight === 'thread')))
+  if (phase.kind === 'ensuring' || phase.kind === 'checking' || phase.kind === 'asleep') {
+    // Fix 1: a view that shows the Thread (or Chatter) shows it now, beside
+    // the terminal's place, instead of waiting for the session.
+    const threadShown = overlayAddr !== '' && (overlayShown.thread || overlayShown.chatter)
     if (!threadShown) {
       return (
         <>
@@ -1464,7 +1542,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         </>
       )
     }
-    if (attachedOnceRef.current) {
+    if (phase.kind === 'ensuring' && attachedOnceRef.current) {
       // A respawn (refresh, switch, continue): the Thread beside the
       // terminal's "Loading session…" until the new session is known.
       return (
@@ -1490,9 +1568,12 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     }
   }
 
-  // phase.kind === 'ready', or the first ensure with the Thread shown: the
-  // same pane, its spawn held until the ensure answers (see attachedOnceRef).
-  const holdSpawn = phase.kind === 'ensuring'
+  // phase.kind === 'ready', or no session yet with the Thread shown: the
+  // same pane, its spawn held until there is a session to show (see
+  // attachedOnceRef). Woken from asleep, it waits until it is shown.
+  const holdSpawn = phase.kind !== 'ready' || (wokeWhileAsleep && !terminalWanted)
+  if (!holdSpawn) releasedNonceRef.current = attachNonce
+  const heldLabel = phase.kind === 'asleep' ? ASLEEP_LABEL : undefined
   return (
     <>
     {continueDialog}
@@ -1529,6 +1610,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           // daemon R4+R5 remain the product. Defense-in-depth only.
           sessionId={phase.kind === 'ready' ? phase.sessionId : undefined}
           holdSpawn={holdSpawn}
+          heldLabel={heldLabel}
           seedLabel={displayName}
           lockLabel={true}
           showComposeBar
@@ -1546,6 +1628,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     </>
   )
 }
+
+/** The terminal's place while the agent sleeps (Thread or Chatter view). */
+export const ASLEEP_LABEL = 'Asleep. Open the terminal or send a message to wake it.'
 
 /** While the pinned Chat is being ensured: the Thread (and Chatter), with
  *  "Loading session…" where the terminal will be. The message box is there

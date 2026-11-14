@@ -98,6 +98,9 @@ const h = vi.hoisted(() => {
     // box, `TerminalPane.tsx` render), so a test can see whether the Thread
     // survives the terminal's attach.
     threadInPane: { value: false },
+    // `sessions/lookup-by-agent`'s answer: the agent's session is running.
+    alive: { value: true },
+    lookups: { value: 0 },
   }
 })
 
@@ -112,7 +115,15 @@ vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {
     daemonCliPost: primaryOnly(h.daemonCliPost),
-    daemonCliGet: primaryOnly(h.daemonCliGet),
+    // `sessions/lookup-by-agent` (a Thread or Chatter view asks it instead
+    // of ensuring) answers from `h.alive` whatever a test's GET mock is.
+    daemonCliGet: primaryOnly((route: string, params?: unknown) => {
+      if (route === 'sessions/lookup-by-agent') {
+        h.lookups.value += 1
+        return Promise.resolve({ agentName: 'proj-1', sessionId: h.alive.value ? 'sess-1' : null, sessionAlive: h.alive.value })
+      }
+      return h.daemonCliGet(route, params)
+    }),
   }
 })
 
@@ -167,7 +178,7 @@ vi.mock('@/kessel-term/TerminalPane', async () => {
           data-retain={String(props.retainWhileHidden === true)}
           data-hold={String(props.holdSpawn === true)}
         >
-          {props.holdSpawn === true ? 'Loading session…' : null}
+          {props.holdSpawn === true ? String(props.heldLabel ?? 'Loading session…') : null}
           <div data-testid="message-compose" data-compose-bar="" />
         </div>
       )
@@ -299,7 +310,7 @@ class FakeWS {
 }
 vi.stubGlobal('WebSocket', FakeWS)
 
-import { AgentChatPane } from './AgentChatPane'
+import { AgentChatPane, ASLEEP_LABEL } from './AgentChatPane'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { sessionViewTabStorageKey } from '@/components/SessionView/sessionViewTab'
@@ -341,6 +352,8 @@ beforeEach(() => {
   h.terminalMountCount.value = 0
   h.activeIds.value = new Set()
   h.threadInPane.value = false
+  h.alive.value = true
+  h.lookups.value = 0
 })
 
 function ensureBodies(): Array<Record<string, unknown>> {
@@ -1289,6 +1302,193 @@ describe('Continue in a new chat — pinned session switcher', () => {
     expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'terminal/send-message')).toBe(false)
     expect(h.addTabToGroup).not.toHaveBeenCalled()
     expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
+  })
+})
+
+// A sleeping agent stays asleep while the person only reads its Thread (K2
+// Companion's rule): opening it in Thread or Chatter view asks whether the
+// session runs (a read) and never ensures it. Showing the terminal (Terminal
+// view, Split with a terminal side, a peek) ensures it once; a message wakes
+// it in the daemon, and the terminal attaches only once it is shown.
+describe('a sleeping agent stays asleep in Thread view', () => {
+  const asleepRoom = testRoom({
+    tabs: useTabsStore,
+    projects: [{ id: 'proj-1', path: '/ws', handle: 'sales', workspaces: [] } as never],
+    activity: { setViewing: vi.fn() },
+    activeSet: {
+      getState: () => ({ activeProjectIds: h.activeIds.value }),
+      getInitialState: () => ({ activeProjectIds: h.activeIds.value }),
+      subscribe: () => () => {},
+    },
+    presence: EMPTY_PRESENCE,
+  })
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+  }
+  const pickView = async (label: string): Promise<void> => {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('session-view-button'))
+    })
+    const row = Array.from(document.querySelectorAll('[data-context-menu] button')).find((button) =>
+      Array.from(button.querySelectorAll('span')).some((span) => span.textContent === label),
+    )
+    if (!row) throw new Error(`no "${label}" in the view menu`)
+    await act(async () => {
+      fireEvent.click(row)
+    })
+  }
+  const openAsleep = async (view: string): Promise<void> => {
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view, left: 'terminal', right: 'thread' }))
+    renderInRoom(
+      asleepRoom,
+      <>
+        <AgentChatPane agentName="agent" projectPath="/ws" />
+        <ContextMenu />
+      </>,
+    )
+    await waitFor(() => expect(h.lookups.value).toBe(1))
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').textContent).toContain(ASLEEP_LABEL))
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    h.threadInPane.value = true
+    h.alive.value = false
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
+      if (route === 'thread/post') return { ok: true, id: 'p1', seq: 1, body: (body as { text: string }).text }
+      return mountEnsure()
+    })
+  })
+  afterEach(() => {
+    localStorage.clear()
+    h.daemonCliPost.mockImplementation(async () => mountEnsure())
+  })
+
+  it('Thread view: the Thread is shown, nothing is ensured or spawned, and the terminal place says it is asleep', async () => {
+    await openAsleep('thread')
+    await settle()
+    expect(ensureBodies()).toHaveLength(0)
+    expect(screen.getByTestId('thread-overlay-pane')).toBeTruthy()
+    const pane = screen.getByTestId('terminal-pane')
+    expect(pane.getAttribute('data-hold')).toBe('true')
+    expect(pane.getAttribute('data-sessionid')).toBe('NONE')
+    // The terminal toggle stays usable: a peek is how the person wakes it.
+    expect(screen.getByTestId('thread-drawer-selector').querySelector('[data-thread-drawer-segment="terminal"]')?.hasAttribute('disabled')).toBe(false)
+  })
+
+  it('Chatter view: nothing is ensured either', async () => {
+    await openAsleep('chatter')
+    await settle()
+    expect(ensureBodies()).toHaveLength(0)
+  })
+
+  it('switching to Terminal view wakes it: one ensure, and the same pane attaches', async () => {
+    await openAsleep('thread')
+    await pickView('Terminal')
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    await settle()
+    expect(ensureBodies()).toHaveLength(1)
+    expect(ensureBodies()[0].forceRespawn).toBeFalsy()
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-1')
+  })
+
+  it('opening Split view wakes it: one ensure', async () => {
+    await openAsleep('thread')
+    await pickView('Split view')
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    await settle()
+    expect(ensureBodies()).toHaveLength(1)
+    expect(h.terminalMountCount.value).toBe(1)
+  })
+
+  it('a peek at the terminal wakes it: one ensure, and the same pane and Thread stay', async () => {
+    await openAsleep('thread')
+    const thread = screen.getByTestId('thread-overlay-pane')
+    const peek = screen.getByTestId('thread-drawer-selector').querySelector<HTMLElement>('[data-thread-drawer-segment="terminal"]')!
+    await act(async () => {
+      fireEvent.click(peek)
+    })
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    await settle()
+    expect(ensureBodies()).toHaveLength(1)
+    expect(h.terminalMountCount.value).toBe(1)
+    expect(screen.getByTestId('thread-overlay-pane')).toBe(thread)
+  })
+
+  it('a message goes through the Thread route without an ensure; the daemon wakes it, and the terminal attaches only when shown', async () => {
+    await openAsleep('thread')
+    const box = screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea') as HTMLTextAreaElement
+    box.focus()
+    fireEvent.change(box, { target: { value: 'morning' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('thread/post', expect.objectContaining({ addr: 'sales', text: 'morning', via: 'compose' })),
+    )
+    // The daemon's delivery woke the session: its SessionAdded arrives.
+    await act(async () => {
+      h.sessionHandlers.current!.onAdded!({ agent_name: 'proj-1', workspace_path: '/ws', session_id: 'sess-woken' })
+    })
+    await settle()
+    expect(ensureBodies()).toHaveLength(0)
+    // Running now, but not shown: still held, no attach.
+    const pane = screen.getByTestId('terminal-pane')
+    expect(pane.getAttribute('data-sessionid')).toBe('sess-woken')
+    expect(pane.getAttribute('data-hold')).toBe('true')
+    // The label no longer says asleep.
+    expect(pane.textContent).not.toContain(ASLEEP_LABEL)
+    // Shown: it attaches to the running session, still with no ensure and no remount.
+    await pickView('Terminal')
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    await settle()
+    expect(ensureBodies()).toHaveLength(0)
+    expect(h.terminalMountCount.value).toBe(1)
+  })
+
+  it('a running agent in Thread view is attached as before: one look, one ensure, the pane attached', async () => {
+    h.alive.value = true
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'thread', left: 'terminal', right: 'thread' }))
+    renderInRoom(asleepRoom, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    await settle()
+    expect(h.lookups.value).toBe(1)
+    expect(ensureBodies()).toHaveLength(1)
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-1')
+  })
+
+  it('reaped while only the Thread is shown: asleep, the box stays, nothing restarts it until the terminal is shown', async () => {
+    h.alive.value = true
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'thread', left: 'terminal', right: 'thread' }))
+    renderInRoom(
+      asleepRoom,
+      <>
+        <AgentChatPane agentName="agent" projectPath="/ws" />
+        <ContextMenu />
+      </>,
+    )
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    expect(ensureBodies()).toHaveLength(1)
+    await act(async () => {
+      h.sessionHandlers.current!.onRemoved!({ agent_name: 'proj-1', workspace_path: '/ws', session_id: 'sess-1' })
+    })
+    await settle()
+    expect(screen.getByTestId('terminal-pane').textContent).toContain(ASLEEP_LABEL)
+    expect(screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea')).not.toBeNull()
+    expect(screen.queryByText('Chat session ended')).toBeNull()
+    expect(ensureBodies()).toHaveLength(1)
+    await pickView('Terminal')
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    await settle()
+    expect(ensureBodies()).toHaveLength(2)
+  })
+
+  it('Terminal view ensures at once, as before (no look first)', async () => {
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }))
+    renderInRoom(asleepRoom, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    expect(h.lookups.value).toBe(0)
+    expect(ensureBodies()).toHaveLength(1)
   })
 })
 

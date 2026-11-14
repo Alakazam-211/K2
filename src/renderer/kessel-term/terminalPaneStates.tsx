@@ -9,7 +9,7 @@
  *   view shows just this, as it always has.
  */
 
-export function TerminalHeldLabel(): React.JSX.Element {
+export function TerminalHeldLabel({ text = 'Loading session…' }: { text?: string }): React.JSX.Element {
   return (
     <div
       data-testid="terminal-pane-held"
@@ -27,7 +27,7 @@ export function TerminalHeldLabel(): React.JSX.Element {
         pointerEvents: 'none',
       }}
     >
-      Loading session…
+      {text}
     </div>
   )
 }

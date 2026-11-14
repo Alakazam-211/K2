@@ -66,7 +66,8 @@ has unsure 'a.sh:9: [k2 as a word in shell code]'
 has text 'a.sh:10:'
 [ "$(show text | grep -c '^cli/src/a.sh:10:')" = 2 ] || die "line 10 should have two text uses: $(show text)"; ok
 has text 'a.sh:12: [printed text] k2 vault get NAME'
-has unsure 'a.sh:13: [$(k2 ...): runs the command]'
+# In a quoted heredoc nothing runs: $(k2 ...) there is an example, so text.
+has text 'a.sh:13:'
 # Names that only contain k2 are not uses of the word at all.
 for c in text comment kept unsure; do hasnt "$c" 'a.sh:14:'; done
 # Interpreter code: an identifier is never text; a sentence in a string is.
@@ -80,8 +81,8 @@ has text 'schema/talk.entries:1:'
 has unsure 'schema/talk.entries:1: [k2 followed by a word that is not a command]'
 
 out="$(python3 "$FLIP" --root "$S")"
-case "$out" in *"will change: text 9, comment 2"*) ok ;; *) die "the dry run counts: $out" ;; esac
-case "$out" in *"will not:    kept 1, unsure 10"*) ok ;; *) die "the dry run counts: $out" ;; esac
+case "$out" in *"will change: text 10, comment 2"*) ok ;; *) die "the dry run counts: $out" ;; esac
+case "$out" in *"will not:    kept 1, unsure 9"*) ok ;; *) die "the dry run counts: $out" ;; esac
 
 # The dry run and --show change nothing.
 before="$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | shasum)"
@@ -89,7 +90,7 @@ python3 "$FLIP" --root "$S" >/dev/null; python3 "$FLIP" --root "$S" --unsure >/d
 [ "$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | shasum)" = "$before" ] || die "a dry run changed a file"; ok
 
 # --apply rewrites text and comments, and nothing else.
-python3 "$FLIP" --apply --root "$S" | grep -q "rewrote 11 uses of k2 to k5 in 2 files" || die "--apply said: $(python3 "$FLIP" --apply --root "$S")"; ok
+python3 "$FLIP" --apply --root "$S" | grep -q "rewrote 12 uses of k2 to k5 in 2 files" || die "--apply said: $(python3 "$FLIP" --apply --root "$S")"; ok
 line() { sed -n "${1}p" "$S/cli/src/a.sh"; }
 [ "$(line 1)" = '# k5 msg sends a message (a comment)' ] || die "line 1: $(line 1)"; ok
 [ "$(line 3)" = '    echo "Usage: k5 msg <addr> [text]" >&2' ] || die "line 3: $(line 3)"; ok
@@ -99,7 +100,7 @@ line() { sed -n "${1}p" "$S/cli/src/a.sh"; }
 [ "$(line 7)" = '    MODE="k2"' ] || die "line 7: $(line 7)"; ok
 [ "$(line 8)" = '    bin="$(command -v k2 || true)"' ] || die "line 8: $(line 8)"; ok
 [ "$(line 9)" = '    out="$(k2 vault get "$name")"' ] || die "line 9: $(line 9)"; ok
-[ "$(line 13)" = 'Example: eval "$(k2 vault env)"' ] || die "line 13: $(line 13)"; ok
+[ "$(line 13)" = 'Example: eval "$(k5 vault env)"' ] || die "line 13: $(line 13)"; ok
 [ "$(line 14)" = 'K2 is not k2.dev, k2so, k2skn_, $K2_PORT, ~/.k2, cli/k2 or dev.k2.daemon' ] || die "line 14: $(line 14)"; ok
 [ "$(line 18)" = 'k2 = load()' ] || die "line 18: $(line 18)"; ok
 [ "$(line 19)" = 'print("try: k5 msg <addr>", k2)' ] || die "line 19: $(line 19)"; ok

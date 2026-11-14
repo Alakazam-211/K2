@@ -22,7 +22,8 @@ the bare word `k2` into a class:
   kept      a name that is not the CLI's: `[k2 ...]` log and stamp prefixes.
             Never changes.
   unsure    everything else: a string that is exactly "k2" (a value, not a
-            sentence), `k2` as a command word in shell code, `$(k2 ...)`, a
+            sentence), `k2` as a command word in shell code, `$(k2 ...)` where
+            the shell would run it (not in a quoted heredoc, which prints it), a
             heredoc that feeds an interpreter (python, node, sql) when the
             word is not inside a string there. Never changed by this tool:
             someone reads each one and either rewrites the line so it is
@@ -162,7 +163,7 @@ def contexts(line, stack):
                 stack[-1] = ("(", depth)
         h = HEREDOC.match(line, i)
         if h and heredoc is None and not line[:i].rstrip().endswith("$(("):
-            heredoc = (h.group(3), h.group(1) == "-", bool(INTERPRETER.search(line[:i])))
+            heredoc = (h.group(3), h.group(1) == "-", bool(INTERPRETER.search(line[:i])), bool(h.group(2)))
             ctx += ["bare"] * (h.end() - i)
             i = h.end()
             continue
@@ -224,7 +225,7 @@ def classify(line, m, where, known):
         return "comment", "comment"
     if where == "bare":
         return "unsure", "k2 as a word in shell code"
-    if before.rstrip().endswith("$("):
+    if before.rstrip().endswith("$(") and where != "heredoc-quoted":
         return "unsure", "$(k2 ...): runs the command"
     if whole_string_is_name(line, m):
         return "unsure", "a string that is exactly k2 (a value)"
@@ -240,21 +241,24 @@ def classify_file(path, known):
     with open(path, encoding="utf-8") as f:
         lines = f.read().split("\n")
     if path.endswith(".entries"):
-        # Schema entries are JSON inside one printed heredoc: all text.
+        # Schema entries are JSON inside one printed, quoted heredoc (it
+        # opens in schema-head.sh): all text, and nothing in it runs.
         for n, line in enumerate(lines, 1):
             for m in WORD.finditer(line):
-                yield n, m.start(), m.end(), *classify(line, m, "heredoc", known)
+                yield n, m.start(), m.end(), *classify(line, m, "heredoc-quoted", known)
         return
     stack, heredoc = [], None
     rows = []
     for n, line in enumerate(lines, 1):
         if heredoc:
-            term, strip, is_code = heredoc
+            term, strip, is_code, is_quoted = heredoc
             if (line.lstrip("\t") if strip else line) == term:
                 heredoc = None
                 continue
             for m in WORD.finditer(line):
-                where = "heredoc-code" if is_code else "heredoc"
+                # A quoted heredoc (<<'EOF') expands nothing, so $(k2 ...)
+                # in it is an example for the reader, not a command run.
+                where = "heredoc-code" if is_code else ("heredoc-quoted" if is_quoted else "heredoc")
                 if is_code and line.strip().startswith("#"):
                     where = "comment"
                 rows.append((n, m.start(), m.end(), *classify(line, m, where, known)))

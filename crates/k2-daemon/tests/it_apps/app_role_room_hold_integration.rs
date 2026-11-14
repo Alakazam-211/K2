@@ -80,7 +80,11 @@ fn box3(env: &Env, t: &str, users: bool) -> Box3 {
     let shop_name = format!("rshop{t}");
     let shop = app_row(&sales, &shop_name);
     if users {
+        // As on the server it was reported from: "Build and run Apps", "…and
+        // manage them end to end" and "Let this agent manage its Apps' users".
         allow_manage(&sales, true);
+        k2_core::workspace::settings::set_agents_can_manage_apps_full(&sales.id, true).expect("switch 2");
+        assert!(k2_core::workspace::settings::agents_can_manage_app_users(&sales.id));
     } else {
         allow_build_only(&sales, true);
     }

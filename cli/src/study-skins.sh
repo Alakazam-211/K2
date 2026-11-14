@@ -110,8 +110,9 @@ PER-APP LOGINS (0.45.5)
   WHAT WORKS AT ONCE: such a login uses the App's own room right away, with no
   owner step. Its role says what else it gets: the agent that owns the App may
   put any room on this box and any cap on that App's roles and logins, with no
-  grant and no card (k2 app role room <role> <room> --caps thread:read,files:read).
-  A login the agent set up gets the rest once the person
+  grant and no card (k2 app role room <role> <room> --caps thread:read,files:read),
+  with "Let this agent manage its Apps' users" on; off, it's one held request
+  with a card for the owner (exit 2). A login the agent set up gets the rest once the person
   chooses their own password: the answer says what waits and how. A role of
   another App is refused, and a box login stays the owner's. A name people on
   this box use is refused

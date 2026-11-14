@@ -23,7 +23,7 @@
 //!   [`UNREADABLE_NOTICE_AFTER_SECS`], so a one-minute blip says nothing.
 //!   While the workspace folder itself is gone the inbox can't be written
 //!   (and K2 must not recreate the folder), so the note goes to the
-//!   workspace's Thread instead.
+//!   workspace's Thread instead, and its "back" line follows it there.
 //!
 //! "Missing" is only a confirmed absence: the read failed with NotFound,
 //! the workspace folder is there and readable, and an exists check on the
@@ -300,12 +300,13 @@ pub fn set_thread_sink(sink: ThreadSink) {
 }
 
 /// Deliver one note: the workspace's inbox while its folder is there,
-/// else its Thread. Returns the channel it went to.
-fn deliver(project_path: &str, title: &str, body: &str) -> Result<&'static str, String> {
+/// else its Thread. `thread_first` sends a "back" line where the outage's
+/// notice went. Returns the channel it went to.
+fn deliver(project_path: &str, title: &str, body: &str, thread_first: bool) -> Result<&'static str, String> {
     let dir = Path::new(project_path);
     // Never `inbox::compose` into a folder that went away: it would
     // create the folder again where the real one is about to be restored.
-    if dir.is_dir() {
+    if !thread_first && dir.is_dir() {
         match crate::inbox::compose(dir, title, body, Some("high"), Some("heartbeat"), Some("k2")) {
             Ok(_) => return Ok(CHANNEL_INBOX),
             Err(e) => crate::log_debug!("[heartbeat-tick] inbox note for {project_path}: {e}"),
@@ -322,7 +323,7 @@ fn notice_text(hb: &AgentHeartbeat, ep: &WaitingEpisode) -> (String, String) {
         "K2 skipped heartbeat '{name}' at {at}: {cause}.\n\n\
          Nothing is turned off. The heartbeat stays on and K2 keeps retrying: \
          it checks again every minute while a fire is due, and it runs as soon \
-         as the file can be read. You get one more note when it is back.\n\n\
+         as the file can be read. You get one more note when it can be read again.\n\n\
          - If the file was deleted by mistake, put it back at {rel}.\n\
          - If you meant to stop this heartbeat, turn it off: k2 heartbeat disable {name}\n\
          - See where it stands: k2 heartbeat list",
@@ -393,7 +394,7 @@ pub fn skip_due_fire(
             || (now - ep.since).num_seconds() >= UNREADABLE_NOTICE_AFTER_SECS;
         if tell {
             let (title, body) = notice_text(hb, &ep);
-            match deliver(project_path, &title, &body) {
+            match deliver(project_path, &title, &body, false) {
                 Ok(channel) => insert_row(
                     conn,
                     project_id,
@@ -438,7 +439,8 @@ fn recovered(
     crate::log_debug!("[heartbeat-tick] {} WAKEUP.md is back after {}", hb.name, fires(ep.skipped));
     if ep.noticed.is_some() {
         let (title, body) = back_text(hb, ep);
-        if let Err(e) = deliver(project_path, &title, &body) {
+        let thread_first = ep.noticed.as_deref() == Some(CHANNEL_THREAD);
+        if let Err(e) = deliver(project_path, &title, &body, thread_first) {
             crate::log_debug!("[heartbeat-tick] {} back note: {e}", hb.name);
         }
     }

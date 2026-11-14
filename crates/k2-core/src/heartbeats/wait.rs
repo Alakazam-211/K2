@@ -309,8 +309,12 @@ pub fn derive(hb: &AgentHeartbeat, inputs: &WaitInputs, now: DateTime<Local>) ->
     // missing workspace folder: a folder that went away makes every file
     // unreadable, and this says what the row is doing about it (skipping
     // fires, retrying, still on).
+    // Like an empty body, a due slot it is waiting on has no known fire
+    // time (it fires when the file can be read), so only a future slot is
+    // stored: a designed wait, never `overdue` or `no_ticks`.
     if let Some(detail) = &inputs.wakeup_waiting {
-        return WaitState::new(slot, WAIT_WAKEUP_WAITING, Some(detail.clone()));
+        let next = slot.filter(|s| *s > now);
+        return WaitState::new(next, WAIT_WAKEUP_WAITING, Some(detail.clone()));
     }
     if !inputs.project_dir_exists {
         return WaitState::new(slot, WAIT_NO_PROJECT, Some("workspace folder not found".to_string()));

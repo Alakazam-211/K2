@@ -18,8 +18,18 @@
 //!   `rendering` until asked again. The renderer's own wall ([`WALL`]) is
 //!   enforced in its worker; the host also gives each render [`HOST_CAP`]
 //!   and reports `timeout` past it, whatever the worker does.
-//! - **The push.** Each landed or failed render is `preview_ready` on the
-//!   doc's sockets ([`super::super::host_events`]).
+//! - **The push** ([`super::super::host_events`]), on the doc's sockets: a
+//!   render starting is `preview_rendering`; one landing is `preview_ready`
+//!   with `state: "ready"`, its `render_ms` and `without_modifiers` (and a
+//!   scene view's `camera`); one failing is `preview_ready` with `state:
+//!   "failed"` and its code. An older client that knows only
+//!   `preview_ready` reads it as it always did.
+//! - **Name-only changes** ([`super::reuse`]): a container whose render
+//!   hash the doc already has drawn under another address (a renamed object
+//!   or camera: a scene's digest leaves ids out) is answered from that
+//!   image at once, `preview_ready` with `reused_from`, no worker run.
+//! - **Looks** ([`super::Look`]): a job is per look as well as per width;
+//!   a transparent image is cached under its own name.
 //! - **Purge.** [`doc_purged`], [`space_removed`], [`doc_moved`] and
 //!   [`upkeep`] are the hooks' service side (memo, failures, audit), with
 //!   [`super::cache`] doing the files.
@@ -36,7 +46,7 @@ use k2_mpc_base::blob::BlobStore;
 use k2_mpc_base::session::{ConnId, Session};
 use k2_mpc_base::store::DocKey;
 
-use super::{cache, Container, FailCode, Failed, NoSideFiles, Page, PreviewRenderer, Source, Width};
+use super::{cache, extras, reuse, Container, FailCode, Failed, Look, NoSideFiles, Page, PreviewRenderer, Source, Width};
 use crate::docs::host;
 use crate::docs::host_events::{self, HostEvent};
 
@@ -153,8 +163,10 @@ pub fn head(
     let snap = Arc::new(list(blobs, renderer, key, file.version, None, file.bytes)?);
     if let Some(prev) = prev {
         for k in dirty(&prev, &snap) {
-            for w in cache::widths_cached(key, &k.c.key, &snap.build) {
-                request(blobs, &snap, &k.c.key, w);
+            for look in Look::ALL.into_iter().filter(|l| renderer.draws(*l)) {
+                for w in reuse::widths_to_redraw(&prev, k, &look.cache_build(&snap.build)) {
+                    request(blobs, &snap, &k.c.key, w, look);
+                }
             }
         }
     }
@@ -201,7 +213,7 @@ pub fn dirty<'a>(prev: &Snapshot, next: &'a Snapshot) -> Vec<&'a Keyed> {
 
 // ── The queue ────────────────────────────────────────────────────────
 
-type JobId = (DocKey, String, String, Width);
+type JobId = (DocKey, String, String, Width, Look);
 
 struct Job {
     id: JobId,
@@ -224,10 +236,14 @@ fn queue() -> &'static (Mutex<Queue>, Condvar) {
 }
 
 /// What a request found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Requested {
     /// Queued now, or already waiting or drawing.
     Rendering,
+    /// Answered from the image another container of the doc drew at the
+    /// same render hash (`from`, its address): cached under this one's key
+    /// now, `preview_ready` pushed, no worker run.
+    Reused { from: String },
     /// The last render of exactly this failed (asked again: it isn't retried
     /// until the doc changes or the daemon restarts).
     Failed(FailCode),
@@ -237,10 +253,23 @@ pub enum Requested {
     NoContainer,
 }
 
-/// Queue a render of `container` at `width` from `snap`.
-pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, width: Width) -> Requested {
+/// Queue a render of `container` at `width` in `look` from `snap`, unless
+/// the doc already has its image under another address ([`reuse`]).
+pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, width: Width, look: Look) -> Requested {
     let Some(k) = snap.container(container) else { return Requested::NoContainer };
-    let id: JobId = (snap.key.clone(), k.c.key.clone(), k.hash.clone(), width);
+    let id: JobId = (snap.key.clone(), k.c.key.clone(), k.hash.clone(), width, look);
+    {
+        let q = queue().0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(code) = q.failed.get(&id) {
+            return Requested::Failed(*code);
+        }
+        if q.running.contains(&id) || q.waiting.iter().any(|j| j.id == id) {
+            return Requested::Rendering;
+        }
+    }
+    if let Some(from) = reuse::try_reuse(blobs, snap, k, width, look) {
+        return Requested::Reused { from };
+    }
     let (lock, cv) = queue();
     let mut q = lock.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(code) = q.failed.get(&id) {
@@ -266,8 +295,8 @@ pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, wi
 }
 
 /// Whether a render of exactly this is waiting or drawing.
-pub fn rendering(key: &DocKey, container: &str, hash: &str, width: Width) -> bool {
-    let id: JobId = (key.clone(), container.to_string(), hash.to_string(), width);
+pub fn rendering(key: &DocKey, container: &str, hash: &str, width: Width, look: Look) -> bool {
+    let id: JobId = (key.clone(), container.to_string(), hash.to_string(), width, look);
     let q = queue().0.lock().unwrap_or_else(|p| p.into_inner());
     q.running.contains(&id) || q.waiting.iter().any(|j| j.id == id)
 }
@@ -310,16 +339,25 @@ fn worker() {
     }
 }
 
-/// Draw one job under the host cap, cache it, and push `preview_ready`.
+/// Draw one job under the host cap, cache it, and push `preview_rendering`
+/// before and `preview_ready` after.
 fn draw(job: &Job) -> Result<(), FailCode> {
-    let (key, _, hash, width) = &job.id;
+    let (key, _, hash, width, look) = &job.id;
     let snap = job.snap.clone();
     let container = job.container.clone();
-    let w = *width;
+    let (w, look) = (*width, *look);
+    host_events::publish(HostEvent::PreviewRendering {
+        key: key.clone(),
+        container: job.container.key.clone(),
+        render_hash: hash.clone(),
+        width: w.as_str(),
+        look: look_field(look),
+        rev: job.snap.rev,
+    });
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("k2-docs-preview-render".into()).spawn(move || {
         let src = Source { doc: &snap.bytes, side: &NoSideFiles };
-        let _ = tx.send(snap.renderer.render(&src, &container, w, WALL));
+        let _ = tx.send(snap.renderer.render(&src, &container, w, look, WALL));
     });
     let result = match spawned {
         Ok(_) => match rx.recv_timeout(HOST_CAP) {
@@ -329,11 +367,15 @@ fn draw(job: &Job) -> Result<(), FailCode> {
         Err(e) => Err(Failed::new(FailCode::RendererError, format!("no render thread: {e}"))),
     };
     let rendered_at_ms = host::now_ms();
+    let mut ready = Vec::new();
     let outcome = match result {
         Ok(img) => {
-            let meta = meta_json(&job.snap, &job.container.key, hash, w, &img, rendered_at_ms);
-            match cache::put(&job.blobs, key, &job.container.key, hash, w, &job.snap.build, &meta, &img.bytes) {
-                Ok(()) => Ok(()),
+            let meta = meta_json(&job.snap, &job.container.key, hash, w, look, &img, rendered_at_ms);
+            match cache::put(&job.blobs, key, &job.container.key, hash, w, &look.cache_build(&job.snap.build), &meta, &img.bytes) {
+                Ok(()) => {
+                    ready = ready_fields(&meta);
+                    Ok(())
+                }
                 Err(e) => {
                     log_debug!("[docs/preview] WARN: caching a preview of {}: {e}", host::key_label(key));
                     Err(FailCode::RendererError)
@@ -354,13 +396,42 @@ fn draw(job: &Job) -> Result<(), FailCode> {
         failed: outcome.err().map(FailCode::as_str),
         rev: job.snap.rev,
         rendered_at_ms,
+        extras: if outcome.is_ok() { ready } else { look_fields(look) },
     });
     outcome
 }
 
+/// A look as the frames and the metadata name it: left out for opaque (what
+/// every older answer was), `"transparent"` otherwise.
+pub fn look_field(look: Look) -> Option<&'static str> {
+    (look != Look::Opaque).then_some(look.as_str())
+}
+
+fn look_fields(look: Look) -> Vec<(String, k2_mpc_base::errors::Value)> {
+    look_field(look).map(|l| vec![("look".to_string(), k2_mpc_base::errors::Value::from(l))]).unwrap_or_default()
+}
+
+/// The fields a `ready` push carries after the old ones, from the image's
+/// metadata: `render_ms`, `without_modifiers`, then what is there of
+/// `look`, `reused_from` and `camera`.
+pub fn ready_fields(meta: &serde_json::Value) -> Vec<(String, k2_mpc_base::errors::Value)> {
+    use k2_mpc_base::errors::Value;
+    let mut f = vec![
+        ("render_ms".to_string(), Value::from(meta["render_ms"].as_u64().unwrap_or(0))),
+        ("without_modifiers".to_string(), Value::from(meta["without_modifiers"].as_bool().unwrap_or(false))),
+    ];
+    for k in ["look", "reused_from", "camera"] {
+        if let Some(v) = meta.get(k) {
+            f.push((k.to_string(), extras::to_wire(v)));
+        }
+    }
+    f
+}
+
 /// The metadata kept with an image and answered with it (contract Item 8's
 /// `Preview` table).
-pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, img: &super::Image, rendered_at_ms: u64) -> serde_json::Value {
+#[allow(clippy::too_many_arguments)]
+pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, look: Look, img: &super::Image, rendered_at_ms: u64) -> serde_json::Value {
     let mut v = serde_json::json!({
         "kind": snap.renderer.kind(),
         "container": container,
@@ -378,6 +449,12 @@ pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, img
     // A scene drawn from base meshes says so (the view shows "shown without modifiers").
     if img.without_modifiers {
         v["without_modifiers"] = serde_json::json!(true);
+    }
+    if let Some(l) = look_field(look) {
+        v["look"] = serde_json::json!(l);
+    }
+    for (k, x) in &img.extras {
+        v[k.as_str()] = x.clone();
     }
     v
 }
@@ -525,7 +602,7 @@ mod tests {
     #[test]
     fn dirty_is_the_containers_whose_hash_moved_or_that_are_new() {
         let c = |key: &str, hash: &str| Keyed {
-            c: Container { key: key.into(), position: 1, title: String::new(), hidden: false, digest: [0; 32], locator: "1".into() },
+            c: Container { key: key.into(), position: 1, title: String::new(), hidden: false, digest: [0; 32], locator: "1".into(), extras: Default::default() },
             hash: hash.into(),
         };
         let snap = |cs: Vec<Keyed>| Snapshot {

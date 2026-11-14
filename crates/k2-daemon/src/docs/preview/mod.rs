@@ -37,9 +37,14 @@
 
 pub mod cache;
 pub mod deck;
+pub mod extras;
+pub mod reuse;
 pub mod route;
 pub mod scene;
 pub mod service;
+
+#[cfg(test)]
+mod scene_tab_tests;
 
 use super::target::Target;
 
@@ -84,6 +89,41 @@ impl Width {
             Width::Thumb => 1 << 20,
             Width::Thumb2x => 2 << 20,
             Width::Full => 4 << 20,
+        }
+    }
+}
+
+/// How a still is drawn: on the renderer's own background, or transparent
+/// (RGBA, coverage alpha, no background), so one image serves every look a
+/// client paints behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Look {
+    Opaque,
+    Transparent,
+}
+
+impl Look {
+    pub const ALL: [Look; 2] = [Look::Opaque, Look::Transparent];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Look::Opaque => "opaque",
+            Look::Transparent => "transparent",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Look> {
+        Look::ALL.into_iter().find(|l| l.as_str() == s.trim())
+    }
+
+    /// The renderer build an image of this look is cached under: the build
+    /// itself for an opaque image (the names every existing entry has),
+    /// `<build>.rgba` for a transparent one. No background colour is in it:
+    /// a transparent still has none.
+    pub fn cache_build(self, build: &str) -> String {
+        match self {
+            Look::Opaque => build.to_string(),
+            Look::Transparent => format!("{build}.rgba"),
         }
     }
 }
@@ -151,6 +191,10 @@ pub struct Container {
     /// `sldId`; a timeline: a media key and a source time). Opaque to the
     /// host, never on the wire.
     pub locator: String,
+    /// What the type shows beside it, as the listing sends it (a scene
+    /// object's local box, a camera's display values; empty for a slide).
+    /// Never a digest.
+    pub extras: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A file's containers, as a renderer lists them.
@@ -177,6 +221,9 @@ pub struct Image {
     /// view says "shown without modifiers"). Always false for a deck.
     pub without_modifiers: bool,
     pub render_ms: u32,
+    /// What the type reports with the image, kept in its metadata and sent
+    /// with `preview_ready` (a scene view's camera; empty for a slide).
+    pub extras: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Files a renderer may read besides the doc itself, resolved by the host
@@ -211,13 +258,22 @@ pub trait PreviewRenderer: Send + Sync {
     fn build(&self) -> String;
     /// Whether it draws this doc as it is served now (its core on, its tier).
     fn serves(&self, t: &Target) -> bool;
+    /// The look a request gets when it names none.
+    fn default_look(&self) -> Look {
+        Look::Opaque
+    }
+    /// Whether it can draw this look.
+    fn draws(&self, look: Look) -> bool {
+        look == Look::Opaque
+    }
     /// The containers of `bytes`, with their raw digests. Runs in the
     /// daemon on bytes the live pack already holds (bounded by the pack's
     /// limits); never draws.
     fn list(&self, bytes: &[u8]) -> Result<Listing, Failed>;
-    /// Draw `container` of `src` at `width` px, out of process, within
-    /// `wall`. Blocking.
-    fn render(&self, src: &Source<'_>, container: &Container, width: Width, wall: std::time::Duration) -> Result<Image, Failed>;
+    /// Draw `container` of `src` at `width` px in `look` (one it
+    /// [`draws`](PreviewRenderer::draws)), out of process, within `wall`.
+    /// Blocking.
+    fn render(&self, src: &Source<'_>, container: &Container, width: Width, look: Look, wall: std::time::Duration) -> Result<Image, Failed>;
 }
 
 /// Every renderer, in the order they are asked.

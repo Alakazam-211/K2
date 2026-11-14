@@ -23,6 +23,14 @@
 //!   meshes says so (`without_modifiers` in the image's metadata: the view
 //!   shows "shown without modifiers").
 //!
+//! - **Transparent by default.** The 3D tab paints its own looks behind the
+//!   still, so a scene view is drawn transparent ([`Look::Transparent`]:
+//!   RGBA with coverage alpha, no background) unless the request asks for
+//!   `look=opaque`; the cache keys the look, never a background colour.
+//! - **What rides along** ([`super::extras`]): each object's local box,
+//!   each camera's display values, the turntable frames' titles, and with
+//!   each image the camera that drew it.
+//!
 //! **Which worker** (the k2-deckrender order): `K2_SCENERENDER_BIN` in a
 //! debug build only (tests), else `k2-scenerender` beside the daemon (`K2
 //! Daemon.app`). With neither, every render fails `renderer_error`.
@@ -36,7 +44,7 @@ use k2_scenerender::host::{self, Limits, SceneRequest};
 use k2_scenerender::proto::{FailureCode, ImageFormat, BINARY_NAME, PROTO, VERSION};
 use k2_scenerender::scene::InputLimits;
 
-use super::{Container, FailCode, Failed, Image, Listing, PreviewRenderer, Source, Width};
+use super::{extras, Container, FailCode, Failed, Image, Listing, Look, PreviewRenderer, Source, Width};
 use crate::docs::target::Target as DocTarget;
 
 /// Debug builds only: the worker binary.
@@ -88,7 +96,8 @@ pub fn list_k2scene(k2scene: &[u8]) -> Result<Listing, Failed> {
         .into_iter()
         .enumerate()
         .map(|(i, it)| Container {
-            title: if it.target == Target::Scene { "Scene".into() } else { it.title },
+            title: extras::scene_title(it.target, &it.title),
+            extras: extras::scene_item(&it),
             key: it.key,
             position: i as u32 + 1,
             hidden: false,
@@ -107,21 +116,30 @@ pub fn limits_for(width: Width, wall: Duration) -> Limits {
     l
 }
 
-/// Draw `container` of a K2SCENE1 at `width`, out of process, within `wall`.
-pub fn render_k2scene(k2scene: &[u8], container: &Container, width: Width, wall: Duration) -> Result<Image, Failed> {
+/// The worker's request for one view in `look`: WebP; transparent with no
+/// background, or opaque on the renderer's own neutral.
+pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> SceneRequest<'_> {
+    let mut req = SceneRequest::new(k2scene, vec![target.view(width.px())]);
+    req.format = ImageFormat::Webp;
+    req.background = None;
+    req.transparent = look == Look::Transparent;
+    req
+}
+
+/// Draw `container` of a K2SCENE1 at `width` in `look`, out of process, within `wall`.
+pub fn render_k2scene(k2scene: &[u8], container: &Container, width: Width, look: Look, wall: Duration) -> Result<Image, Failed> {
     let Some(bin) = binary() else {
         return Err(Failed::new(FailCode::RendererError, format!("{BINARY_NAME} isn't installed beside the daemon")));
     };
-    render_k2scene_with(&bin, k2scene, container, width, wall)
+    render_k2scene_with(&bin, k2scene, container, width, look, wall)
 }
 
 /// [`render_k2scene`] with the worker at `bin`.
-pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, width: Width, wall: Duration) -> Result<Image, Failed> {
+pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, width: Width, look: Look, wall: Duration) -> Result<Image, Failed> {
     let Some(target) = Target::from_locator(&container.locator) else {
         return Err(Failed::new(FailCode::RendererError, format!("not a scene locator: {:?}", container.locator)));
     };
-    let mut req = SceneRequest::new(k2scene, vec![target.view(width.px())]);
-    req.format = ImageFormat::Webp;
+    let req = request_for(k2scene, target, width, look);
     let started = std::time::Instant::now();
     match host::render(bin, &req, &limits_for(width, wall)) {
         Ok(mut r) => {
@@ -142,6 +160,7 @@ pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, wi
                 fonts_substituted: Vec::new(),
                 without_modifiers: v.meta.without_modifiers,
                 render_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
+                extras: extras::scene_view(&v.meta),
                 bytes: v.image,
             })
         }
@@ -169,12 +188,21 @@ impl PreviewRenderer for SceneRenderer {
         false
     }
 
+    /// The 3D tab's stills: transparent, so one image serves every look.
+    fn default_look(&self) -> Look {
+        Look::Transparent
+    }
+
+    fn draws(&self, _look: Look) -> bool {
+        true
+    }
+
     fn list(&self, bytes: &[u8]) -> Result<Listing, Failed> {
         list_k2scene(&mesh_read(bytes)?)
     }
 
-    fn render(&self, src: &Source<'_>, container: &Container, width: Width, wall: Duration) -> Result<Image, Failed> {
-        render_k2scene(&mesh_read(src.doc)?, container, width, wall)
+    fn render(&self, src: &Source<'_>, container: &Container, width: Width, look: Look, wall: Duration) -> Result<Image, Failed> {
+        render_k2scene(&mesh_read(src.doc)?, container, width, look, wall)
     }
 }
 
@@ -204,14 +232,14 @@ mod tests {
                 ("@obj:Item.001", 4, "o1", "Item.001"),
                 ("@obj:Item.002", 5, "o2", "Item.002"),
                 ("@obj:Item.003", 6, "o3", "Item.003"),
-                ("@turntable:0", 7, "t0", ""),
-                ("@turntable:1", 8, "t1", ""),
-                ("@turntable:2", 9, "t2", ""),
-                ("@turntable:3", 10, "t3", ""),
-                ("@turntable:4", 11, "t4", ""),
-                ("@turntable:5", 12, "t5", ""),
-                ("@turntable:6", 13, "t6", ""),
-                ("@turntable:7", 14, "t7", ""),
+                ("@turntable:0", 7, "t0", "Turntable 1"),
+                ("@turntable:1", 8, "t1", "Turntable 2"),
+                ("@turntable:2", 9, "t2", "Turntable 3"),
+                ("@turntable:3", 10, "t3", "Turntable 4"),
+                ("@turntable:4", 11, "t4", "Turntable 5"),
+                ("@turntable:5", 12, "t5", "Turntable 6"),
+                ("@turntable:6", 13, "t6", "Turntable 7"),
+                ("@turntable:7", 14, "t7", "Turntable 8"),
             ]
         );
         assert_eq!(list_k2scene(&encode(&scene_with_camera())).expect("again"), l, "the same bytes list the same");
@@ -277,12 +305,17 @@ mod tests {
         let bytes = encode(&s);
         let l = list_k2scene(&bytes).expect("listing");
         for (c, without, height) in [(&l.containers[0], true, 240), (&l.containers[1], true, 180), (&l.containers[2], false, 240), (&l.containers[3], true, 240), (&l.containers[6], true, 240)] {
-            let img = render_k2scene_with(&bin, &bytes, c, Width::Thumb, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{}: {:?}", c.key, f));
+            let img = render_k2scene_with(&bin, &bytes, c, Width::Thumb, Look::Opaque, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{}: {:?}", c.key, f));
             assert_eq!((img.mime, img.format, img.width, img.height), ("image/webp", "webp-lossless", 320, height), "{}", c.key);
             assert_eq!(&img.bytes[..4], b"RIFF");
             assert_eq!(img.without_modifiers, without, "{}", c.key);
+            assert!(img.extras["camera"]["proj"].as_array().is_some_and(|p| p.len() == 16), "{}: the camera that drew it", c.key);
         }
+        // Transparent: a lossless WebP whose header says it has alpha.
+        let t = render_k2scene_with(&bin, &bytes, &l.containers[0], Width::Thumb, Look::Transparent, Duration::from_secs(60)).expect("transparent");
+        assert_eq!(&t.bytes[12..16], b"VP8L");
+        assert_ne!(t.bytes[24] & 0x10, 0, "the VP8L header's alpha bit");
         let bad = Container { locator: "x9".into(), ..l.containers[0].clone() };
-        assert_eq!(render_k2scene_with(&bin, &bytes, &bad, Width::Thumb, Duration::from_secs(60)).expect_err("locator").code, FailCode::RendererError);
+        assert_eq!(render_k2scene_with(&bin, &bytes, &bad, Width::Thumb, Look::Opaque, Duration::from_secs(60)).expect_err("locator").code, FailCode::RendererError);
     }
 }

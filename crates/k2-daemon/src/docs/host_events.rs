@@ -4,14 +4,20 @@
 //!
 //! | Event | Frame | Who gets it |
 //! |---|---|---|
-//! | a preview rendered or failed ([`super::preview`]) | `preview_ready {container, render_hash, width, state, failed, rev, rendered_at_ms}` | sockets on that doc; each forwards it only while its person may read the doc |
+//! | a preview started drawing ([`super::preview`]) | `preview_rendering {container, render_hash, width, look?, rev}` | sockets on that doc; each forwards it only while its person may read the doc |
+//! | a preview rendered or failed ([`super::preview`]) | `preview_ready {container, render_hash, width, state, failed, rev, rendered_at_ms}`, then on `ready`: `render_ms`, `without_modifiers`, and when there: `look`, `reused_from`, `camera`; on `failed`: `look` when there | the same |
 //! | an agent's turn ended ([`super::turn::ended`]) | `turn_end {turn, actor, at_ms}` | every socket; each forwards it only for a turn its doc's changes carried |
 //! | a comment op (`AuditEvent::Annotation`) | `roster_event {kind: "comment_event", thread, comment, op, author, at_ms, anchor}` | sockets on that doc, readers only |
 //! | an anchor's state moved (`AuditEvent::AnchorState`) | `roster_event {kind: "anchor_state", thread, rev, was, now}` | the same |
 //!
 //! **Never content.** A preview names a hash, a turn its id and actor, a
 //! comment its thread, op and author: a body is read on demand through the
-//! rights-checked routes.
+//! rights-checked routes. (A scene view's `camera` is the projection its
+//! still was drawn with, sent to readers only, as the image is.)
+//!
+//! **Older clients.** `preview_rendering` is a frame type they don't know
+//! (and skip); `preview_ready` keeps every field it had, in order, with the
+//! new ones after them.
 //!
 //! **Off the session lock.** The kit calls [`super::host::K2Host::on_event`]
 //! with the session locked: [`publish`] only pushes onto bounded queues
@@ -43,7 +49,13 @@ pub enum HostEvent {
         failed: Option<&'static str>,
         rev: u64,
         rendered_at_ms: u64,
+        /// Fields after the old ones (`render_ms`, `without_modifiers`,
+        /// `look`, `reused_from`, `camera`), in order.
+        extras: Vec<(String, Value)>,
     },
+    /// A preview of `container` at `render_hash`, `width` and `look` (left
+    /// out: opaque) started drawing.
+    PreviewRendering { key: DocKey, container: String, render_hash: String, width: &'static str, look: Option<&'static str>, rev: u64 },
     /// An agent's turn ended (`actor`: its pid).
     TurnEnd { turn: String, actor: Option<String>, at_ms: u64 },
     /// A comment op on `key`'s doc: ids, op and author only.
@@ -56,7 +68,10 @@ impl HostEvent {
     /// The doc it is about (`None`: a turn end, for every socket).
     pub fn key(&self) -> Option<&DocKey> {
         match self {
-            HostEvent::PreviewReady { key, .. } | HostEvent::Comment { key, .. } | HostEvent::AnchorState { key, .. } => Some(key),
+            HostEvent::PreviewReady { key, .. }
+            | HostEvent::PreviewRendering { key, .. }
+            | HostEvent::Comment { key, .. }
+            | HostEvent::AnchorState { key, .. } => Some(key),
             HostEvent::TurnEnd { .. } => None,
         }
     }
@@ -65,16 +80,33 @@ impl HostEvent {
     /// `{id, name, kind, colour}` (the socket knows K2's names).
     pub fn frame(&self, author: impl Fn(&str) -> Value) -> Value {
         match self {
-            HostEvent::PreviewReady { container, render_hash, width, state, failed, rev, rendered_at_ms, .. } => Value::obj([
-                ("type", Value::from("preview_ready")),
-                ("container", Value::from(container.as_str())),
-                ("render_hash", Value::from(render_hash.as_str())),
-                ("width", Value::from(*width)),
-                ("state", Value::from(*state)),
-                ("failed", failed.map_or(Value::Null, |c| Value::obj([("code", Value::from(c))]))),
-                ("rev", Value::from(*rev)),
-                ("rendered_at_ms", Value::from(*rendered_at_ms)),
-            ]),
+            HostEvent::PreviewReady { container, render_hash, width, state, failed, rev, rendered_at_ms, extras, .. } => {
+                let mut f: Vec<(String, Value)> = vec![
+                    ("type".into(), Value::from("preview_ready")),
+                    ("container".into(), Value::from(container.as_str())),
+                    ("render_hash".into(), Value::from(render_hash.as_str())),
+                    ("width".into(), Value::from(*width)),
+                    ("state".into(), Value::from(*state)),
+                    ("failed".into(), failed.map_or(Value::Null, |c| Value::obj([("code", Value::from(c))]))),
+                    ("rev".into(), Value::from(*rev)),
+                    ("rendered_at_ms".into(), Value::from(*rendered_at_ms)),
+                ];
+                f.extend(extras.iter().cloned());
+                Value::Obj(f)
+            }
+            HostEvent::PreviewRendering { container, render_hash, width, look, rev, .. } => {
+                let mut f: Vec<(String, Value)> = vec![
+                    ("type".into(), Value::from("preview_rendering")),
+                    ("container".into(), Value::from(container.as_str())),
+                    ("render_hash".into(), Value::from(render_hash.as_str())),
+                    ("width".into(), Value::from(*width)),
+                ];
+                if let Some(l) = look {
+                    f.push(("look".into(), Value::from(*l)));
+                }
+                f.push(("rev".into(), Value::from(*rev)));
+                Value::Obj(f)
+            }
             HostEvent::TurnEnd { turn, actor, at_ms } => Value::obj([
                 ("type", Value::from("turn_end")),
                 ("turn", Value::from(turn.as_str())),
@@ -192,6 +224,7 @@ mod tests {
             failed: None,
             rev: 7,
             rendered_at_ms: 1_000,
+            extras: Vec::new(),
         }
     }
 
@@ -240,6 +273,7 @@ mod tests {
             failed: Some("timeout"),
             rev: 7,
             rendered_at_ms: 1_000,
+            extras: Vec::new(),
         };
         assert!(failed.frame(who).to_json().contains(r#""state":"failed","failed":{"code":"timeout"}"#));
         assert_eq!(

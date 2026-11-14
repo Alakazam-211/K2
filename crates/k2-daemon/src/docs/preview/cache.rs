@@ -54,7 +54,7 @@ pub const KEEP_PER_SLOT: usize = 3;
 
 const MAGIC: &[u8; 4] = b"K2PV";
 const FORMAT: u8 = 1;
-const EXT: &str = "k2p";
+pub(super) const EXT: &str = "k2p";
 
 /// The cache's root.
 pub fn root() -> PathBuf {
@@ -104,11 +104,11 @@ pub fn doc_dir(key: &DocKey) -> PathBuf {
     space_dir(&key.space).join(&hex(&sha(&[key.space.as_bytes(), key.path.as_bytes()]))[..32])
 }
 
-fn container_id(container: &str) -> String {
+pub(super) fn container_id(container: &str) -> String {
     hex(&sha(&[container.as_bytes()]))[..16].to_string()
 }
 
-fn clean(s: &str) -> String {
+pub(super) fn clean(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' { c } else { '_' }).collect()
 }
 
@@ -184,7 +184,7 @@ pub enum Got {
 }
 
 /// Open one entry by name in a doc's folder (touching its time).
-fn open(blobs: &BlobStore, key: &DocKey, name: &str) -> Got {
+pub(super) fn open(blobs: &BlobStore, key: &DocKey, name: &str) -> Got {
     let path = doc_dir(key).join(name);
     let raw = match fs::read(&path) {
         Ok(b) => b,

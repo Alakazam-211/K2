@@ -94,13 +94,15 @@ impl PreviewRenderer for Deck {
                     title: c.title.clone(),
                     hidden: c.hidden,
                     digest: *c.render_hash.as_bytes(),
+                    extras: serde_json::Map::new(),
                 })
             })
             .collect();
         Ok(Listing { page: Some(Page { w: ix.page.0, h: ix.page.1, unit: "emu" }), containers })
     }
 
-    fn render(&self, src: &Source<'_>, container: &Container, width: Width, wall: Duration) -> Result<Image, Failed> {
+    /// Always opaque (the route refuses a transparent deck preview).
+    fn render(&self, src: &Source<'_>, container: &Container, width: Width, _look: super::Look, wall: Duration) -> Result<Image, Failed> {
         let Some(bin) = binary() else {
             return Err(Failed::new(FailCode::RendererError, format!("{BINARY_NAME} isn't installed beside the daemon")));
         };
@@ -134,6 +136,7 @@ impl PreviewRenderer for Deck {
                 fonts_substituted: r.meta.fonts.substituted.iter().map(|s| (s.requested.clone(), s.used.clone())).collect(),
                 without_modifiers: false,
                 render_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
+                extras: serde_json::Map::new(),
                 bytes: r.image,
             }),
             Err(f) => {

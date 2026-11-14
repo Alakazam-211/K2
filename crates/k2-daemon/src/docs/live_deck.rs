@@ -7,7 +7,8 @@
 //!   family: "deck", path, turn_idle_ms}`, then K2's deck extras: `mode:
 //!   "deck"`, `previews` (the containers at the head with their render
 //!   hashes: `{kind, rev, page, containers: [{key, position, title, hidden,
-//!   render_hash}]}`, or `null` when previews aren't available here), and
+//!   render_hash, ...the type's extras}]}`, or `null` when previews aren't
+//!   available here), and
 //!   `comments` (the snapshot of open threads: `{threads, next}`; live docs
 //!   carry no comments in kit v0.15.x, so it is empty until the kit adds
 //!   them, gap 29);
@@ -91,13 +92,16 @@ pub fn previews_value(s: &service::Snapshot) -> Value {
         .containers
         .iter()
         .map(|k| {
-            Value::obj([
-                ("key", Value::from(k.c.key.as_str())),
-                ("position", Value::from(k.c.position)),
-                ("title", Value::from(k.c.title.as_str())),
-                ("hidden", Value::from(k.c.hidden)),
-                ("render_hash", Value::from(k.hash.as_str())),
-            ])
+            let mut fields: Vec<(String, Value)> = vec![
+                ("key".into(), Value::from(k.c.key.as_str())),
+                ("position".into(), Value::from(k.c.position)),
+                ("title".into(), Value::from(k.c.title.as_str())),
+                ("hidden".into(), Value::from(k.c.hidden)),
+                ("render_hash".into(), Value::from(k.hash.as_str())),
+            ];
+            // The type's extras after them (a scene's bounds and camera display values; none for a slide).
+            fields.extend(preview::extras::wire_fields(&k.c.extras));
+            Value::Obj(fields)
         })
         .collect();
     Value::obj([

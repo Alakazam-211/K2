@@ -21,7 +21,16 @@
 //!   with the last image of that slide and width as `stale` when there is
 //!   one; or `{state: "failed", failed: {code}}`. A `hash` that isn't the
 //!   current one is served when cached (the hash names the bytes drawn),
-//!   else `404 preview_gone`: list again.
+//!   else `404 preview_gone`: list again. A container the doc already has
+//!   drawn under another address at the same hash (a renamed scene object)
+//!   is `ready` at once, its metadata saying `reused_from`.
+//!
+//! **`look`** (`opaque` or `transparent`; each type has its default: a deck
+//! opaque, a scene transparent, the 3D tab's one still for all its looks).
+//! A deck refuses `transparent`. Answers name `look` only when it is
+//! `transparent`. **Per-type extras** ride in each listed container (a
+//! scene object's `bounds`, a camera's `camera` display values) and in an
+//! image's metadata (a scene view's `camera`): [`super::extras`].
 //!
 //! The docs routes speak JSON (every transport, Connect included), so the
 //! image rides as base64 with its metadata, as Thread attachments do; a
@@ -35,8 +44,8 @@ use serde_json::{json, Value};
 use k2_mpc_base::session::{SessionError, Stay};
 
 use super::cache::{self, Got};
-use super::service::{self, Requested, SnapError, Snapshot};
-use super::Width;
+use super::service::{self, Keyed, Requested, SnapError, Snapshot};
+use super::{Look, Width};
 use crate::cli_response::CliResponse;
 use crate::docs::caller::refusal;
 use crate::docs::routes::{self, Call, OpenError};
@@ -77,6 +86,14 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
         (Ok(w), Ok(v)) => (w, v),
         (Err(r), _) | (_, Err(r)) => return r,
     };
+    let look = match c.input.str("look") {
+        None => renderer.default_look(),
+        Some(l) => match Look::parse(&l) {
+            Some(l) if renderer.draws(l) => l,
+            Some(l) => return routes::bad(format!("a {} preview isn't drawn {}", renderer.kind(), l.as_str())),
+            None => return routes::bad(format!("look must be opaque or transparent (got {l})")),
+        },
+    };
     let Some(blobs) = rt.blobs() else {
         return refusal(
             "503 Service Unavailable",
@@ -112,58 +129,80 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
         Err(SnapError::NoKey(e)) => return refusal("503 Service Unavailable", "previews_unavailable", format!("no cache key: {e}")),
     };
     match (c.input.str("container"), width) {
-        (None, _) => listing(&blobs, &snap, want),
-        (Some(container), Some(w)) => image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w),
+        (None, _) => listing(&blobs, &snap, want, look),
+        (Some(container), Some(w)) => image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w, look),
         (Some(_), None) => routes::bad("width is required with a container: thumb, thumb2x or full"),
     }
 }
 
-fn state_of(snap: &Snapshot, container: &str, hash: &str, w: Width) -> &'static str {
-    if cache::entry_exists(&snap.key, container, hash, w, &snap.build) {
+fn state_of(snap: &Snapshot, container: &str, hash: &str, w: Width, look: Look) -> &'static str {
+    if cache::entry_exists(&snap.key, container, hash, w, &look.cache_build(&snap.build)) {
         return "ready";
     }
-    if service::rendering(&snap.key, container, hash, w) {
+    if service::rendering(&snap.key, container, hash, w, look) {
         return "rendering";
     }
     "none"
+}
+
+/// One listed container: its address, place, title, keyed `render_hash`
+/// (never the raw digest), the state of each width in `look`, then the
+/// type's extras.
+pub fn container_json(snap: &Snapshot, k: &Keyed, look: Look) -> Value {
+    let mut previews = serde_json::Map::new();
+    for w in [Width::Thumb, Width::Full] {
+        previews.insert(w.as_str().into(), json!(state_of(snap, &k.c.key, &k.hash, w, look)));
+    }
+    let mut v = json!({
+        "key": k.c.key,
+        "position": k.c.position,
+        "title": k.c.title,
+        "hidden": k.c.hidden,
+        "render_hash": k.hash,
+        "previews": previews,
+    });
+    for (x, val) in &k.c.extras {
+        v[x.as_str()] = val.clone();
+    }
+    v
+}
+
+/// `look` in an answer: only when it isn't opaque.
+fn with_look(mut v: Value, look: Look) -> Value {
+    if let Some(l) = service::look_field(look) {
+        v["look"] = json!(l);
+    }
+    v
 }
 
 fn page_json(snap: &Snapshot) -> Value {
     snap.page.map_or(Value::Null, |p| json!({ "w": p.w, "h": p.h, "unit": p.unit }))
 }
 
-fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, want: Option<Width>) -> CliResponse {
+fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, want: Option<Width>, look: Look) -> CliResponse {
     let containers: Vec<Value> = snap
         .containers
         .iter()
         .map(|k| {
             if let Some(w) = want {
-                if !cache::entry_exists(&snap.key, &k.c.key, &k.hash, w, &snap.build) {
-                    service::request(blobs, snap, &k.c.key, w);
+                if !cache::entry_exists(&snap.key, &k.c.key, &k.hash, w, &look.cache_build(&snap.build)) {
+                    service::request(blobs, snap, &k.c.key, w, look);
                 }
             }
-            let mut previews = serde_json::Map::new();
-            for w in [Width::Thumb, Width::Full] {
-                previews.insert(w.as_str().into(), json!(state_of(snap, &k.c.key, &k.hash, w)));
-            }
-            json!({
-                "key": k.c.key,
-                "position": k.c.position,
-                "title": k.c.title,
-                "hidden": k.c.hidden,
-                "render_hash": k.hash,
-                "previews": previews,
-            })
+            container_json(snap, k, look)
         })
         .collect();
-    routes::ok(json!({
-        "kind": snap.renderer.kind(),
-        "rev": snap.rev,
-        "version": snap.version,
-        "page": page_json(snap),
-        "renderer": { "build": snap.build },
-        "containers": containers,
-    }))
+    routes::ok(with_look(
+        json!({
+            "kind": snap.renderer.kind(),
+            "rev": snap.rev,
+            "version": snap.version,
+            "page": page_json(snap),
+            "renderer": { "build": snap.build },
+            "containers": containers,
+        }),
+        look,
+    ))
 }
 
 fn with_image(state: &str, e: cache::Entry) -> Value {
@@ -175,7 +214,7 @@ fn with_image(state: &str, e: cache::Entry) -> Value {
     v
 }
 
-fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, container: &str, hash: Option<&str>, w: Width) -> CliResponse {
+fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, container: &str, hash: Option<&str>, w: Width, look: Look) -> CliResponse {
     let Some(current) = snap.container(container) else {
         return routes::with_exit(
             refusal("404 Not Found", "no_such_container", format!("no {container} in this doc now (list it again)")),
@@ -183,7 +222,8 @@ fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, contai
         );
     };
     let hash = hash.map(str::trim).filter(|h| !h.is_empty()).unwrap_or(&current.hash);
-    match cache::get(blobs, &snap.key, container, hash, w, &snap.build) {
+    let build = look.cache_build(&snap.build);
+    match cache::get(blobs, &snap.key, container, hash, w, &build) {
         Got::Hit(e) => return routes::ok(with_image("ready", e)),
         Got::KeyDestroyed | Got::Miss => {}
     }
@@ -193,8 +233,17 @@ fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, contai
             k2_mpc_base::tools::exit::NOT_FOUND,
         );
     }
-    match service::request(blobs, snap, container, w) {
-        Requested::Failed(code) => routes::ok(json!({
+    match service::request(blobs, snap, container, w, look) {
+        Requested::Reused { from } => match cache::get(blobs, &snap.key, container, hash, w, &build) {
+            Got::Hit(e) => routes::ok(with_image("ready", e)),
+            Got::KeyDestroyed | Got::Miss => {
+                k2_core::log_debug!("[docs/preview] the image reused from {from} went before it was read");
+                let mut r = routes::ok(with_look(rendering_body(snap, container, hash, w), look));
+                r.status = "202 Accepted";
+                r
+            }
+        },
+        Requested::Failed(code) => routes::ok(with_look(json!({
             "kind": snap.renderer.kind(),
             "container": container,
             "render_hash": hash,
@@ -203,28 +252,32 @@ fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, contai
             "page": page_json(snap),
             "state": "failed",
             "failed": { "code": code.as_str() },
-        })),
+        }), look)),
         Requested::NoContainer => routes::bad(format!("no {container} in this doc")),
         Requested::Rendering | Requested::Busy => {
-            let body = match cache::newest_other(blobs, &snap.key, container, hash, w, &snap.build) {
+            let body = match cache::newest_other(blobs, &snap.key, container, hash, w, &build) {
                 Some(e) => {
                     let mut v = with_image("stale", e);
                     v["current_hash"] = json!(hash);
                     v
                 }
-                None => json!({
-                    "kind": snap.renderer.kind(),
-                    "container": container,
-                    "render_hash": hash,
-                    "width": w.as_str(),
-                    "rev": snap.rev,
-                    "page": page_json(snap),
-                    "state": "rendering",
-                }),
+                None => with_look(rendering_body(snap, container, hash, w), look),
             };
             let mut r = routes::ok(body);
             r.status = "202 Accepted";
             r
         }
     }
+}
+
+fn rendering_body(snap: &Snapshot, container: &str, hash: &str, w: Width) -> Value {
+    json!({
+        "kind": snap.renderer.kind(),
+        "container": container,
+        "render_hash": hash,
+        "width": w.as_str(),
+        "rev": snap.rev,
+        "page": page_json(snap),
+        "state": "rendering",
+    })
 }

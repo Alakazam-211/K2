@@ -200,12 +200,15 @@ describe('Home chat view', () => {
     await act(async () => {
       h.frames?.({ type: 'typing', conv: '600', member: ALEX })
     })
-    expect((await screen.findByTestId('home-chat-typing')).textContent).toBe('Alex is typing…')
+    await waitFor(() => expect(screen.getByTestId('home-chat-typing').textContent).toBe('Alex is typing'))
+    expect(screen.getByTestId('home-chat-typing').hasAttribute('data-on')).toBe(true)
     // A live message from them clears it.
     await act(async () => {
       h.frames?.({ type: 'message', conv: '600', message: m('24', ALEX, 'done typing') })
     })
     await screen.findByText('done typing')
-    expect(screen.queryByTestId('home-chat-typing')).toBeNull()
+    // The line goes quiet; its slot stays (no height), so the box never moves.
+    expect(screen.getByTestId('home-chat-typing').hasAttribute('data-on')).toBe(false)
+    expect(screen.getByTestId('home-chat-typing').textContent).toBe('')
   })
 })

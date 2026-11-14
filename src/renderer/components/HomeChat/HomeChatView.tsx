@@ -69,7 +69,6 @@ import {
   rememberHomeChat,
   replyPreview,
   toggleReaction,
-  typingLine,
 } from '@/lib/home-chat/chat'
 import { noteHomeChatSend } from '@/lib/home-chat/stamp'
 import { useHomesStore } from '@/stores/homes'
@@ -83,6 +82,7 @@ import {
 } from '@/stores/home-chat'
 import { HomeChatMessageRow, JUMP_WASH_MS, type HomeChatRowActions } from './HomeChatMessageRow'
 import { HomeChatMembersSheet } from './HomeChatMembersSheet'
+import { HomeChatTyping } from './HomeChatTyping'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 
@@ -562,14 +562,9 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                 setReply(null)
               }
             }}
-            drawer={
-              // The activity bar's place: who is typing (§9), never agent work.
-              typingNames.length > 0 ? (
-                <div data-testid="home-chat-typing" aria-live="polite" style={{ padding: '2px 10px', fontSize: '0.75em', color: 'var(--zen-text-muted)' }}>
-                  {typingLine(typingNames)}
-                </div>
-              ) : undefined
-            }
+            // The activity bar's place: who is typing (§9), never agent work.
+            // Always there and of no height, so the box never moves.
+            drawer={<HomeChatTyping names={typingNames} />}
             above={
               <>
                 {jumpMiss && (

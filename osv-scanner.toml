@@ -197,30 +197,6 @@ id = "RUSTSEC-2026-0195"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Quadratic attribute check / NsReader allocation DoS. 0.38: k2-core thumbs.rs and k2-node-proto results.rs parse local or job-produced XML (no NsReader), and Tauri's plist reads XML at build time and, at runtime on the Mac, the app's own Info.plist; 0.39: wayland-scanner proc-macro at build time. Fix: quick-xml 0.41."
 
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0185"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
-
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0338"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
-
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0339"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
-
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0340"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
-
 # rsa 0.9.10 (k2-vault directly and via ssh-key 0.6.7)
 [[IgnoredVulns]]
 id = "RUSTSEC-2023-0071"

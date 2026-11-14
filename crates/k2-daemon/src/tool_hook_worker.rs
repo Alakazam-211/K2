@@ -322,6 +322,13 @@ pub fn classify(
                 resp.error_line()
             ),
         },
+        // Home chat (Sew HOME1): removing someone Sew never provisioned
+        // answers 422 member_not_provisioned: nothing to remove. The ledger
+        // takes it as done; the person sees no error.
+        422 if op == Op::AdminChannelMemberRemove && (code == "member_not_provisioned" || reason == "member_not_provisioned") => {
+            log_debug!("[home-chat] remove of {} from a channel: Sew never provisioned them; nothing to remove", row.subject_key);
+            Outcome::Done { status, body: resp.body_text(), reconcile: false }
+        }
         // SW-4: un-closing a room Sew already archived: it's archived.
         409 if op == Op::AdminRoomClosing && reason == reasons::CHANNEL_ARCHIVED => Outcome::Done {
             status,
@@ -1437,6 +1444,23 @@ mod tests {
                 "attempt {attempt}: {d}"
             );
         }
+    }
+
+    /// Sew HOME1: removing someone from a Home channel whom Sew never
+    /// provisioned (422 member_not_provisioned) is nothing to remove: done,
+    /// not blocked. Any other 422 on that op is not.
+    #[test]
+    fn a_channel_remove_of_an_unprovisioned_member_is_done() {
+        let r = row("admin_channel_member_remove", 0, "k");
+        for (code, reason) in [("member_not_provisioned", ""), ("invalid_state", "member_not_provisioned")] {
+            let out = classify(&cfg(), &r, Ok(&resp(422, &err(code, reason, "external_id"), "")), 1);
+            assert!(matches!(out, Outcome::Done { status: 422, reconcile: false, .. }), "{code}/{reason}: {out:?}");
+        }
+        let out = classify(&cfg(), &r, Ok(&resp(422, &err("validation_failed", "external_id", "external_id"), "")), 1);
+        assert!(!matches!(out, Outcome::Done { .. }), "{out:?}");
+        let add = row("admin_channel_member_add", 0, "k");
+        let out = classify(&cfg(), &add, Ok(&resp(422, &err("member_not_provisioned", "", "external_id"), "")), 1);
+        assert!(!matches!(out, Outcome::Done { .. }), "an add is not done: {out:?}");
     }
 
     #[test]

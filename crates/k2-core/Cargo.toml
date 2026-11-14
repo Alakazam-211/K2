@@ -245,8 +245,11 @@ p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithm
 # Ticket HTML brief (prd-ticket-html-brief-v1 H11/H34): the daemon cleans
 # an agent's brief on write. ammonia is MIT/Apache, built on html5ever.
 # html5ever is pinned to ammonia's major so the tokenizer the brief
-# text extract + removal check use is the same copy ammonia parses with.
-ammonia = "=4.2.1"
+# text extract + removal check use is the same copy ammonia parses with
+# (ammonia 4.2.5 still asks for html5ever ^0.40). 4.2.5 carries the
+# MathML/SVG mutation-XSS fix (RUSTSEC-2026-0533) and the CSS url() fixes
+# of 4.2.3/4.2.4 (RUSTSEC-2026-0373).
+ammonia = "=4.2.5"
 html5ever = "0.40"
 # Mobile dev (prd-mobile-dev-v1, 0.46.6): a minimal gRPC client for the
 # Android emulator's loopback controller (sim::android::grpc). Hand-written

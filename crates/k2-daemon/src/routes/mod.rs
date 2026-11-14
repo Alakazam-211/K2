@@ -15,6 +15,9 @@
 //! per-domain modules (`heartbeat_routes`, `db_routes`,
 //! `terminal_routes`, ...) — the dispatcher is just the spine.
 
+pub(crate) mod answer_probe;
+#[cfg(test)]
+mod answer_probe_tests;
 pub mod dispatcher;
 pub mod http;
 pub mod route_policy;

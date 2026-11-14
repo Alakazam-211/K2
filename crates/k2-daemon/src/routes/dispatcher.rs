@@ -1359,8 +1359,9 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
         }
         other => other,
     };
-    // A′: each request's pass fence lives in this connection's scope.
-    super::pass_gate::scope(crate::slow_request::scope(crate::response_wire::scope(async move {
+    // A′: each request's pass fence lives in this connection's scope; the
+    // unread-request probe ([`super::answer_probe`]) lives in it too.
+    super::pass_gate::scope(crate::slow_request::scope(crate::response_wire::scope(super::answer_probe::scope(async move {
         let mut requests_served: u32 = 0;
         loop {
             // Idle keep-alive wait: not request time (slow_request).
@@ -1369,6 +1370,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
             }
             super::pass_gate::set_fenced(false);
             crate::response_wire::reset();
+            super::answer_probe::start(&[]);
             let mut answered_head = Vec::new();
             let outcome =
                 crate::watch_tcp_in_place!(handle_one_request(&mut stream, &state, ingress, &mut answered_head));
@@ -1377,14 +1379,16 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                     // An arm that answered without consuming its request
                     // would get it answered again here, and the client's
                     // next request on this socket would read that answer.
-                    // Close instead: the client has its answer.
-                    if super::http::answered_request_still_unread(&stream, &answered_head).await {
+                    // Close instead: the client has its answer. (Seen right
+                    // before the answer went out, so the same request sent
+                    // again after it is never taken for the old one.)
+                    if super::answer_probe::answered_unread() {
                         let line = String::from_utf8_lossy(&answered_head);
                         let line = line.lines().next().unwrap_or("").split('?').next().unwrap_or("");
                         k2_core::log_debug!(
                             "[daemon/keep-alive] {line} was answered without reading its request; closing the connection"
                         );
-                        super::http::close_unread_request(&mut stream, answered_head.len()).await;
+                        super::answer_probe::close_unread_request(&mut stream, answered_head.len()).await;
                         return;
                     }
                     requests_served = requests_served.saturating_add(1);
@@ -1401,7 +1405,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                 }
             }
         }
-    })))
+    }))))
     .await
 }
 
@@ -1528,6 +1532,7 @@ async fn handle_one_request(
     }
     if let Some(end) = buf[..n].windows(4).position(|w| w == b"\r\n\r\n") {
         answered_head.extend_from_slice(&buf[..end + 4]);
+        super::answer_probe::start(answered_head);
     }
     let req = String::from_utf8_lossy(&buf[..n]);
     // LM4: a local reverse proxy is not "local".

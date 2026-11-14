@@ -1375,6 +1375,7 @@ pub(crate) async fn refuse_upgrade(stream: &mut TcpStream, resp: &str) {
     let status = head.lines().next().and_then(|l| l.split_once(' ')).map_or("", |(_, s)| s);
     crate::apps::audit::note_response(status, body);
     crate::slow_request::note_status(status);
+    super::answer_probe::before_answer(stream).await;
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
@@ -1434,6 +1435,7 @@ pub(crate) async fn send_response_with_cookie_and_location(
     // the result and bytes out (a no-op off a link).
     crate::apps::audit::note_response(&status, if status.starts_with("304") { "" } else { body });
     crate::slow_request::note_status(&status);
+    super::answer_probe::before_answer(stream).await;
     let _ = stream.write_all(&resp).await;
 }
 
@@ -1482,6 +1484,7 @@ pub(crate) async fn send_response_with_headers(
     let (status, resp) = wire_response(status, ct, body, extra);
     crate::apps::audit::note_response(&status, if status.starts_with("304") { "" } else { body });
     crate::slow_request::note_status(&status);
+    super::answer_probe::before_answer(stream).await;
     let _ = stream.write_all(&resp).await;
 }
 
@@ -1502,6 +1505,7 @@ pub(crate) async fn send_login_rate_limited(stream: &mut TcpStream) {
         crate::login_throttle::WINDOW_SECS,
         frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
+    super::answer_probe::before_answer(stream).await;
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
@@ -1559,58 +1563,6 @@ pub(crate) fn request_wants_close(headers_blob: &str) -> bool {
         }
     }
     false
-}
-
-/// The keep-alive loop's check after each answer: is the request it just
-/// answered (`head`, its request line and headers) still unread at the
-/// front of the socket?
-///
-/// The dispatcher only peeks a request head before routing, and each route
-/// arm consumes it. An arm that forgets leaves it there: the next loop pass
-/// answers it again, and again, and every later request the client sends on
-/// that socket reads one of those answers instead of its own (the
-/// `/cli/power/status` and `/cli/git-tools` bugs: Settings' update check
-/// got a git-tools body). The source ratchet in `dispatcher.rs` catches most
-/// such arms at build time; this catches any that slip past it, at run time.
-///
-/// Never waits: a peek that isn't ready at once means nothing is there.
-/// A client sends its next request only after it has read this answer, so
-/// bytes equal to the answered head right after the answer are that same
-/// request, not a new one.
-pub(crate) async fn answered_request_still_unread(stream: &TcpStream, head: &[u8]) -> bool {
-    if head.is_empty() {
-        return false;
-    }
-    let mut front = vec![0u8; head.len()];
-    match tokio::time::timeout(std::time::Duration::ZERO, stream.peek(&mut front)).await {
-        Ok(Ok(n)) => n == head.len() && front == head,
-        _ => false,
-    }
-}
-
-/// How long, and how much past the head, [`close_unread_request`] drains.
-const UNREAD_REQUEST_DRAIN_TIME: std::time::Duration = std::time::Duration::from_millis(200);
-const UNREAD_REQUEST_DRAIN_BYTES: usize = 64 * 1024;
-
-/// Close a socket whose answered request was left unread
-/// ([`answered_request_still_unread`]). The client already has its answer;
-/// its next request goes on a new connection. Reads the stale head (and up
-/// to [`UNREAD_REQUEST_DRAIN_BYTES`] of any body) before closing, so the
-/// close is a clean FIN, not a reset that could cost the client the answer
-/// it hasn't read yet.
-pub(crate) async fn close_unread_request(stream: &mut TcpStream, head_len: usize) {
-    let mut head = vec![0u8; head_len];
-    let _ = tokio::time::timeout(UNREAD_REQUEST_DRAIN_TIME, stream.read_exact(&mut head)).await;
-    let _ = stream.shutdown().await;
-    let deadline = tokio::time::Instant::now() + UNREAD_REQUEST_DRAIN_TIME;
-    let mut scratch = [0u8; 8 * 1024];
-    let mut drained = 0usize;
-    while drained < UNREAD_REQUEST_DRAIN_BYTES {
-        match tokio::time::timeout_at(deadline, stream.read(&mut scratch)).await {
-            Ok(Ok(n)) if n > 0 => drained += n,
-            _ => break,
-        }
-    }
 }
 
 /// Return `true` iff the request advertises a `Transfer-Encoding` whose
@@ -2883,85 +2835,6 @@ mod tests {
             params.is_empty(),
             "expected empty params, got: {params:?}",
         );
-    }
-
-    // ── answered_request_still_unread / close_unread_request ────────
-
-    /// A connected (client, server) pair on loopback.
-    async fn loopback_pair() -> (TcpStream, TcpStream) {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind loopback");
-        let addr = listener.local_addr().expect("listener addr");
-        let client = TcpStream::connect(addr).await.expect("connect loopback");
-        let (server, _) = listener.accept().await.expect("accept loopback");
-        (client, server)
-    }
-
-    /// Wait until the server can see `len` bytes (a peek, nothing read).
-    async fn wait_for_bytes(server: &TcpStream, len: usize) {
-        let mut probe = vec![0u8; len];
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let n = server.peek(&mut probe).await.expect("peek");
-            if n >= len {
-                return;
-            }
-            assert!(tokio::time::Instant::now() < deadline, "only {n} of {len} request bytes arrived");
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    }
-
-    const GIT_TOOLS_HEAD: &[u8] = b"GET /cli/git-tools?token=t HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
-
-    #[tokio::test]
-    async fn an_answered_request_left_unread_is_seen() {
-        let (mut client, server) = loopback_pair().await;
-        client.write_all(GIT_TOOLS_HEAD).await.expect("send request");
-        wait_for_bytes(&server, GIT_TOOLS_HEAD.len()).await;
-        assert!(
-            answered_request_still_unread(&server, GIT_TOOLS_HEAD).await,
-            "the head is still at the front of the socket"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_consumed_request_is_not_seen_and_the_check_never_waits() {
-        let (mut client, mut server) = loopback_pair().await;
-        client.write_all(GIT_TOOLS_HEAD).await.expect("send request");
-        wait_for_bytes(&server, GIT_TOOLS_HEAD.len()).await;
-        let mut buf = [0u8; 1024];
-        let n = server.read(&mut buf).await.expect("consume the head");
-        assert_eq!(n, GIT_TOOLS_HEAD.len());
-        let started = std::time::Instant::now();
-        assert!(!answered_request_still_unread(&server, GIT_TOOLS_HEAD).await, "nothing is left to read");
-        assert!(started.elapsed() < std::time::Duration::from_millis(100), "the check waited {:?}", started.elapsed());
-    }
-
-    #[tokio::test]
-    async fn a_different_request_at_the_front_is_not_the_answered_one() {
-        let (mut client, server) = loopback_pair().await;
-        let next = b"POST /cli/daemon/update/check?token=t HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
-        client.write_all(next).await.expect("send request");
-        wait_for_bytes(&server, next.len()).await;
-        assert!(!answered_request_still_unread(&server, GIT_TOOLS_HEAD).await);
-        assert!(!answered_request_still_unread(&server, b"").await, "an empty head is never checked");
-    }
-
-    /// The client gets the whole answer, then a clean end of stream: no
-    /// second copy of it, and no reset.
-    #[tokio::test]
-    async fn closing_an_unread_request_delivers_the_answer_then_eof() {
-        let (mut client, mut server) = loopback_pair().await;
-        client.write_all(GIT_TOOLS_HEAD).await.expect("send request");
-        wait_for_bytes(&server, GIT_TOOLS_HEAD.len()).await;
-        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
-        server.write_all(answer).await.expect("answer");
-        close_unread_request(&mut server, GIT_TOOLS_HEAD.len()).await;
-        let mut got = Vec::new();
-        tokio::time::timeout(std::time::Duration::from_secs(5), client.read_to_end(&mut got))
-            .await
-            .expect("the client sees the end of the stream")
-            .expect("a clean close, not a reset");
-        assert_eq!(got, answer, "{}", String::from_utf8_lossy(&got));
     }
 
     // ── request_wants_close: keep-alive break-out gate ──────────────

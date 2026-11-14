@@ -5,6 +5,27 @@ interface ConfirmDialogOptions {
   message: string
   confirmLabel?: string
   destructive?: boolean
+  /** The no-op button's words (default "Cancel"), e.g. "Keep it". */
+  cancelLabel?: string
+  /** The no-op is the default: it has focus, so Enter keeps things as they
+   *  are (for an action that can't be undone). */
+  safeDefault?: boolean
+}
+
+/** One answer of a `choose` dialog (besides Cancel). */
+export interface ConfirmChoice {
+  id: string
+  label: string
+  /** The answer Enter gives, drawn as the dialog's main button. */
+  primary?: boolean
+}
+
+interface ChooseDialogOptions {
+  title: string
+  message: string
+  /** Two (or more) real answers, in the order they show, left to right,
+   *  after Cancel. */
+  choices: ConfirmChoice[]
 }
 
 interface ConfirmDialogState {
@@ -13,51 +34,83 @@ interface ConfirmDialogState {
   message: string
   confirmLabel: string
   confirmDestructive: boolean
+  cancelLabel: string
+  safeDefault: boolean
   onResolve: ((confirmed: boolean) => void) | null
+  /** A `choose` dialog's answers (null: a plain confirm). */
+  choices: ConfirmChoice[] | null
+  onChoose: ((id: string | null) => void) | null
 
   confirm: (opts: ConfirmDialogOptions) => Promise<boolean>
+  /** A dialog with several real answers and a Cancel that is none of them:
+   *  resolves the picked choice's id, or null for Cancel (Esc, ×, a press
+   *  outside). For a question where Cancel must not mean either answer. */
+  choose: (opts: ChooseDialogOptions) => Promise<string | null>
   close: () => void
 }
 
-export const useConfirmDialogStore = create<ConfirmDialogState>((set, get) => ({
+/** The closed dialog. */
+export const CONFIRM_DIALOG_CLOSED = {
   isOpen: false,
   title: '',
   message: '',
   confirmLabel: 'Confirm',
   confirmDestructive: false,
+  cancelLabel: 'Cancel',
+  safeDefault: false,
   onResolve: null,
+  choices: null,
+  onChoose: null,
+} as const
 
-  confirm: (opts) => {
-    return new Promise<boolean>((resolve) => {
-      // Resolve any existing dialog as cancelled
-      const current = get()
-      if (current.isOpen && current.onResolve) {
-        current.onResolve(false)
-      }
-
-      set({
-        isOpen: true,
-        title: opts.title,
-        message: opts.message,
-        confirmLabel: opts.confirmLabel ?? 'Confirm',
-        confirmDestructive: opts.destructive ?? false,
-        onResolve: resolve
-      })
-    })
-  },
-
-  close: () => {
-    const { onResolve } = get()
-    if (onResolve) {
-      onResolve(false)
-    }
-    set({
-      isOpen: false,
-      title: '',
-      message: '',
-      confirmLabel: 'Confirm',
-      confirmDestructive: false,
-      onResolve: null
-    })
+export const useConfirmDialogStore = create<ConfirmDialogState>((set, get) => {
+  /** Any dialog already open is answered as cancelled. */
+  const cancelOpen = (): void => {
+    const current = get()
+    if (!current.isOpen) return
+    current.onResolve?.(false)
+    current.onChoose?.(null)
   }
-}))
+  return {
+    ...CONFIRM_DIALOG_CLOSED,
+
+    confirm: (opts) => {
+      return new Promise<boolean>((resolve) => {
+        cancelOpen()
+        set({
+          isOpen: true,
+          title: opts.title,
+          message: opts.message,
+          confirmLabel: opts.confirmLabel ?? 'Confirm',
+          confirmDestructive: opts.destructive ?? false,
+          cancelLabel: opts.cancelLabel ?? 'Cancel',
+          safeDefault: opts.safeDefault ?? false,
+          onResolve: resolve,
+          choices: null,
+          onChoose: null,
+        })
+      })
+    },
+
+    choose: (opts) => {
+      return new Promise<string | null>((resolve) => {
+        cancelOpen()
+        set({
+          ...CONFIRM_DIALOG_CLOSED,
+          isOpen: true,
+          title: opts.title,
+          message: opts.message,
+          choices: opts.choices,
+          onChoose: resolve,
+        })
+      })
+    },
+
+    close: () => {
+      const { onResolve, onChoose } = get()
+      onResolve?.(false)
+      onChoose?.(null)
+      set({ ...CONFIRM_DIALOG_CLOSED })
+    },
+  }
+})

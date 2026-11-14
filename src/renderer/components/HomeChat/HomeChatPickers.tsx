@@ -151,6 +151,24 @@ function sectionStatus(st: HomeChatHostState | undefined, needPeople: boolean): 
 
 // ── Add a person ──────────────────────────────────────────────────────
 
+/** §6.3's question when a person may already be on this Home from another
+ *  server: "Same person" keeps their one row, "Different person" adds a
+ *  second, and Cancel (Esc, ×, a press outside) does neither: it adds
+ *  nothing. Resolves 'same', 'different' or null. */
+export function askSamePerson(name: string, theirName: string, theirServer: string): Promise<'same' | 'different' | null> {
+  return useConfirmDialogStore
+    .getState()
+    .choose({
+      title: `Is ${name} the same person as ${theirName} on ${theirServer}?`,
+      message: `Same person keeps one row: ${theirName}'s row stays, and its menu's “Also on” switches servers. Different person adds a second row.`,
+      choices: [
+        { id: 'different', label: 'Different person' },
+        { id: 'same', label: 'Same person', primary: true },
+      ],
+    })
+    .then((id) => (id === 'same' || id === 'different' ? id : null))
+}
+
 /** The person rows of one server (people only: never agents or App users). */
 function listedPeople(st: HomeChatHostState | undefined): HomeChatPerson[] {
   return (st?.people?.people ?? []).filter((p) => /^(k2:owner|k2:connect:)/.test(p.ext))
@@ -213,12 +231,10 @@ export function AddPersonPanel({ home, onAddRow, onBack, autoFocus = true }: Hom
     }
     const match = matchesElsewhere(person, hostKey, rowsByHost)[0]
     if (match) {
-      const same = await useConfirmDialogStore.getState().confirm({
-        title: `Same person as ${match.person.displayName} on ${serverLabelFor(match.hostKey, hosts)}?`,
-        message: `Keep one row: ${match.person.displayName}'s row stays, and its menu's “Also on” switches servers. Cancel adds a second row, for two different people.`,
-        confirmLabel: 'Keep one row',
-      })
-      if (same) return
+      const answer = await askSamePerson(person.displayName, match.person.displayName, serverLabelFor(match.hostKey, hosts))
+      // Same person: their row stays (its "Also on" switches servers).
+      // Cancel: nothing at all. Only "Different person" adds a second row.
+      if (answer !== 'different') return
     }
     onAddRow({ kind: 'person', address, workspaceId: null, label: person.displayName })
   }

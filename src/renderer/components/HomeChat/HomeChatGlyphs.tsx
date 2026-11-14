@@ -14,6 +14,7 @@ import { HashIcon, LockIcon } from 'lucide-react'
 import { CHIP_INK_LIGHT, chipInitials, relativeLuminance, resolvePersonColor } from '@/components/Presence/PresenceChip'
 import { chamferCutFor } from '@/components/Thread/chamfer'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
+import type { PersonNames } from '@/lib/person-name'
 
 /** Black initials, where white would read worse. Pure black, not the
  *  presence chip's near-black: on a mid blue (the person colours' third) near-black and white
@@ -34,6 +35,8 @@ export function HomeChatPersonAvatar({
   name,
   picture = null,
   size = 32,
+  color: given = null,
+  names = null,
 }: {
   /** Their username on that server (their colour comes from it). */
   username: string
@@ -41,8 +44,12 @@ export function HomeChatPersonAvatar({
   name: string
   picture?: string | null
   size?: number
+  /** The daemon's colour for them when known (yours: `people/color`). */
+  color?: string | null
+  /** Their first and last name when known: the initials come from them. */
+  names?: PersonNames | null
 }): JSX.Element {
-  const color = resolvePersonColor(username || name)
+  const color = resolvePersonColor(username || name, given)
   const shape = { '--k2-ch-cut': `${chamferCutFor(size)}px`, '--k2-ch-bw': '0px', width: size, height: size } as CSSProperties
   if (picture) {
     return (
@@ -60,7 +67,7 @@ export function HomeChatPersonAvatar({
       data-home-chat-avatar="initials"
       style={{ ...shape, backgroundColor: color, color: personInk(color), fontSize: Math.round(size * (size >= 20 ? 0.4 : 0.5)) }}
     >
-      {chipInitials(name, size)}
+      {chipInitials(name, size, names)}
     </span>
   )
 }

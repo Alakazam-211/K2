@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react'
-import { useConfirmDialogStore } from '../../stores/confirm-dialog'
+import { CONFIRM_DIALOG_CLOSED, useConfirmDialogStore } from '../../stores/confirm-dialog'
 import { Button, DialogFrame, DialogScrim } from '@/components/ui'
 
 export default function ConfirmDialog(): React.JSX.Element | null {
@@ -9,41 +9,57 @@ export default function ConfirmDialog(): React.JSX.Element | null {
   const confirmLabel = useConfirmDialogStore((s) => s.confirmLabel)
   const confirmDestructive = useConfirmDialogStore((s) => s.confirmDestructive)
   const onResolve = useConfirmDialogStore((s) => s.onResolve)
+  const cancelLabel = useConfirmDialogStore((s) => s.cancelLabel)
+  const safeDefault = useConfirmDialogStore((s) => s.safeDefault)
+  const choices = useConfirmDialogStore((s) => s.choices)
+  const onChoose = useConfirmDialogStore((s) => s.onChoose)
   const close = useConfirmDialogStore((s) => s.close)
+
+  // A `choose` dialog: one of its answers (Cancel is none of them).
+  const handleChoice = useCallback(
+    (id: string) => {
+      onChoose?.(id)
+      useConfirmDialogStore.setState({ ...CONFIRM_DIALOG_CLOSED })
+    },
+    [onChoose],
+  )
 
   const handleConfirm = useCallback(() => {
     if (onResolve) {
       onResolve(true)
     }
-    useConfirmDialogStore.setState({
-      isOpen: false,
-      title: '',
-      message: '',
-      confirmLabel: 'Confirm',
-      confirmDestructive: false,
-      onResolve: null
-    })
+    useConfirmDialogStore.setState({ ...CONFIRM_DIALOG_CLOSED })
   }, [onResolve])
 
   const handleCancel = useCallback(() => {
     close()
   }, [close])
 
-  // Enter confirms. Esc, the × and a press outside cancel (DialogFrame onCancel).
+  // Enter confirms (a `choose` dialog: its primary answer, if it has one).
+  // Esc, the × and a press outside cancel (DialogFrame onCancel).
   useEffect(() => {
     if (!isOpen) return
 
     const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Enter') {
+      if (e.key !== 'Enter') return
+      // A safe default: Enter presses the focused button (the no-op).
+      if (safeDefault) return
+      if (choices) {
+        const primary = choices.find((c) => c.primary)
+        if (!primary) return
         e.preventDefault()
         e.stopPropagation()
-        handleConfirm()
+        handleChoice(primary.id)
+        return
       }
+      e.preventDefault()
+      e.stopPropagation()
+      handleConfirm()
     }
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [isOpen, handleConfirm])
+  }, [isOpen, handleConfirm, handleChoice, choices, safeDefault])
 
   if (!isOpen) return null
 
@@ -104,13 +120,32 @@ export default function ConfirmDialog(): React.JSX.Element | null {
             variant="ghost"
             size="md"
             className="leading-[1.4]"
+            autoFocus={safeDefault}
+            data-confirm-cancel=""
             onClick={(e) => {
               e.stopPropagation()
               handleCancel()
             }}
           >
-            Cancel
+            {cancelLabel}
           </Button>
+          {choices ? (
+            choices.map((c) => (
+              <Button
+                key={c.id}
+                variant={c.primary ? 'accent' : 'default'}
+                size="md"
+                className="leading-[1.4] font-medium"
+                data-confirm-choice={c.id}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleChoice(c.id)
+                }}
+              >
+                {c.label}
+              </Button>
+            ))
+          ) : (
           <Button
             variant={confirmDestructive ? 'danger-muted' : 'ghost'}
             size="md"
@@ -127,6 +162,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
           >
             {confirmLabel}
           </Button>
+          )}
         </div>
       </DialogFrame>
     </>

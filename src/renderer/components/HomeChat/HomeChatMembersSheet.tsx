@@ -41,6 +41,10 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
+import { fetchPersonName } from '@/components/Presence/person-name-api'
+import { fetchPersonColor } from '@/components/Presence/person-color-api'
+import { usePersonPicture } from '@/lib/person-pictures'
+import type { PersonNames } from '@/lib/person-name'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 
 const muted = 'text-[var(--color-text-muted)]'
@@ -51,6 +55,16 @@ const ROW = 'flex min-h-[44px] items-center gap-2.5 px-2 py-1.5'
 export function removeChatRowsEverywhere(address: string): void {
   const st = useHomesStore.getState()
   for (const h of st.homes) if (h.rows.some((r) => r.address === address)) st.removeRow(h.id, address)
+}
+
+/** The sheet's layer: under the confirm dialog's (99998/99999). */
+export const MEMBERS_SHEET_Z = 99990
+
+/** Delete's question names the channel as its row does: `#general`, or
+ *  a bare name for an invite-only one (its glyph is a lock). */
+export function deleteTitle(members: Pick<HomeChatMembers, 'name' | 'open'> | null): string {
+  if (!members) return 'Delete this channel?'
+  return `Delete ${members.open ? '#' : ''}${members.name}?`
 }
 
 /** A role as the sheet says it: Owner, Admin; a member says nothing. */
@@ -89,6 +103,24 @@ export function HomeChatMembersSheet({
   }, [reload, hostKey])
 
   const meExt = people?.me.ext ?? ''
+  // You aren't in your own people list: your names, colour and picture come
+  // from the server's own answers for you.
+  const [self, setSelf] = useState<{ login: string; names: PersonNames | null; color: string | null } | null>(null)
+  useEffect(() => {
+    let alive = true
+    void Promise.all([fetchPersonName(scope).catch(() => null), fetchPersonColor(scope).catch(() => null)]).then(([n, c]) => {
+      if (!alive || (!n && !c)) return
+      setSelf({
+        login: n?.person || c?.person || '',
+        names: n ? { firstName: n.firstName, lastName: n.lastName, displayName: n.displayName } : null,
+        color: c?.color ?? null,
+      })
+    })
+    return () => {
+      alive = false
+    }
+  }, [scope])
+  const selfPicture = usePersonPicture(self?.login ? scope : null, self?.login)
   const personOf = (ext: string): HomeChatPerson | undefined => people?.people.find((x) => x.ext === ext)
   const nameOf = (ext: string): string => {
     if (ext === meExt) return 'You'
@@ -139,10 +171,12 @@ export function HomeChatMembersSheet({
 
   const archive = async (): Promise<void> => {
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: `Delete ${members?.name ?? 'this channel'}?`,
-      message: 'It is archived: everyone keeps its history, read-only, and no one can post in it.',
+      title: deleteTitle(members),
+      message: 'No one can post in it again. Everyone in it keeps its history, read-only.',
       confirmLabel: 'Delete',
+      cancelLabel: 'Keep it',
       destructive: true,
+      safeDefault: true,
     })
     if (!ok) return
     await run(() => deleteHomeChatChannel(scope, target.conv))
@@ -152,8 +186,11 @@ export function HomeChatMembersSheet({
 
   return createPortal(
     <>
-      <DialogScrim data-home-chat-members-scrim="" />
+      {/* One layer under the app's dialogs, so its own questions (Leave?
+          Delete?) open over it. */}
+      <DialogScrim zIndex={MEMBERS_SHEET_Z - 1} data-home-chat-members-scrim="" />
       <DialogFrame
+        zIndex={MEMBERS_SHEET_Z}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -231,7 +268,18 @@ export function HomeChatMembersSheet({
                   const notes = [role, p.ext === members.creator ? 'Created it' : null, p.state === 'pending_add' ? 'Adding…' : null].filter(Boolean)
                   return (
                     <li key={p.ext} className={ROW} data-member={p.ext}>
-                      <HomeChatPersonAvatar username={usernameOf(p.ext)} name={person?.displayName ?? (p.ext === 'k2:owner' ? 'Owner' : nameOf(p.ext))} picture={person?.picture ?? null} size={28} />
+                      {p.ext === meExt ? (
+                        <HomeChatPersonAvatar
+                          username={self?.login || usernameOf(p.ext)}
+                          name={self?.names?.displayName || (p.ext === 'k2:owner' ? 'Owner' : 'You')}
+                          names={self?.names}
+                          color={self?.color}
+                          picture={selfPicture}
+                          size={28}
+                        />
+                      ) : (
+                        <HomeChatPersonAvatar username={usernameOf(p.ext)} name={person?.displayName ?? (p.ext === 'k2:owner' ? 'Owner' : nameOf(p.ext))} picture={person?.picture ?? null} size={28} />
+                      )}
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate type-name text-[var(--color-text-primary)]">{nameOf(p.ext)}</span>
                         {notes.length > 0 && (

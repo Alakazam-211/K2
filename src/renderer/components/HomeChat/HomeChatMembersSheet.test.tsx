@@ -20,6 +20,8 @@ vi.mock('@/lib/daemon-cli', () => ({
           { ext: 'k2:connect:cy', username: 'cy', displayName: 'Cy Lee', role: 'member', ready: true, memberId: '4' },
         ],
       }
+    if (route === 'people/name') return { person: 'owner', firstName: 'Rae', lastName: 'Lind', displayName: 'Rae Lind', names: {} }
+    if (route === 'people/color') return { palette: [], person: 'owner', color: '#3a87a8', chosen: '#3a87a8', colors: {} }
     if (route === 'home-chat/channels/members')
       return {
         conv: '700', slug: 'crit', state: 'active', name: 'design-crit', open: h.open, creator: 'k2:connect:ana', allowAgents: false,
@@ -33,7 +35,8 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { HomeChatMembersSheet, memberRoleLabel } from './HomeChatMembersSheet'
+import { HomeChatMembersSheet, MEMBERS_SHEET_Z, deleteTitle, memberRoleLabel } from './HomeChatMembersSheet'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { resetHomeChatForTests } from '@/stores/home-chat'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -77,7 +80,10 @@ describe('members sheet', () => {
   it('each person is an avatar row with their role, the maker and who is still being added', async () => {
     await open()
     const rows = [...screen.getByTestId('home-chat-member-list').querySelectorAll('li')]
-    expect(rows.map((r) => r.querySelector('[data-home-chat-avatar]')?.textContent)).toEqual(['O', 'AR', 'BO'])
+    // Yours: your own initials and colour (you aren't in your people list).
+    await waitFor(() => expect(rows[0].querySelector('[data-home-chat-avatar]')?.textContent).toBe('RL'))
+    expect(rows[0].querySelector<HTMLElement>('[data-home-chat-avatar]')!.style.backgroundColor).toBe('rgb(58, 135, 168)')
+    expect(rows.map((r) => r.querySelector('[data-home-chat-avatar]')?.textContent)).toEqual(['RL', 'AR', 'BO'])
     expect(rows.map((r) => r.querySelector('[data-member-role]')?.textContent ?? '')).toEqual(['Owner', 'Admin · Created it', 'Adding…'])
     // The avatar takes the agent avatar's shape (round in Glass, cut in Terminal).
     expect(rows[1].querySelector('[data-home-chat-avatar]')?.hasAttribute('data-k2-avatar')).toBe(true)
@@ -106,5 +112,30 @@ describe('members sheet', () => {
     expect(screen.getByTestId('home-chat-members').querySelector('[data-channel-glyph="hash"]')).not.toBeNull()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('Delete asks first, naming the channel, with Keep it as the safe default', async () => {
+    h.open = true
+    await open()
+    expect(deleteTitle({ name: 'general', open: true })).toBe('Delete #general?')
+    expect(deleteTitle({ name: 'crit', open: false })).toBe('Delete crit?')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('home-chat-delete'))
+    })
+    const st = useConfirmDialogStore.getState()
+    expect(st.isOpen).toBe(true)
+    // The question opens over the sheet: the sheet sits a layer below the app's dialogs.
+    const frame = screen.getByTestId('home-chat-members').closest<HTMLElement>('[data-k2-chamfer-float]')!
+    expect(Number(frame.style.zIndex)).toBe(MEMBERS_SHEET_Z)
+    expect(MEMBERS_SHEET_Z).toBeLessThan(99998)
+    expect(st.title).toBe('Delete #design-crit?')
+    expect(st.cancelLabel).toBe('Keep it')
+    expect(st.safeDefault).toBe(true)
+    expect(st.confirmDestructive).toBe(true)
+    // Keep it: nothing is deleted.
+    await act(async () => {
+      useConfirmDialogStore.getState().close()
+    })
+    expect(h.post).not.toHaveBeenCalledWith(expect.anything(), 'home-chat/channels/delete', expect.anything())
   })
 })

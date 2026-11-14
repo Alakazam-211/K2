@@ -203,12 +203,6 @@ id = "RUSTSEC-2023-0071"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "K2's only RSA private-key operation is k2-vault's ssh-agent signing (ssh_agent.rs AgentKey::sign): PKCS#1 v1.5 signatures, SHA-2 only, through rsa's try_sign_with_rng, which blinds the exponentiation with a fresh random factor and checks the result (rsa_decrypt_and_check). K2 does no RSA decryption, so Marvin's padding oracle has nothing to query, and ssh-key's own unblinded RSA signer is never called (RSA keys go through to_rsa). The agent socket serves same-uid peers only (SO_PEERCRED / getpeereid). A remote ssh server can time only signatures over a padded hash it can't choose, a burst of 60 and 240/min per (session, secret) by default; forwarded connections are refused by default (that check trusts the client's session-bind). No fixed rsa release exists: revisit when upstream's constant-time rewrite (rsa 0.10) ships."
 
-# rustls 0.22.4 (alias RUSTSEC-2026-0348)
-[[IgnoredVulns]]
-id = "GHSA-h2v8-394m-p7vv"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Brotli certificate decompression (RFC 8879), which rustls added in 0.23 behind the off-by-default brotli feature. rustls 0.22.4 has no certificate compression code at all (no CertDecompressor, no brotli dependency or feature), so the bug can't be there; osv's range simply starts at 0. 0.22.4 comes only via imap 3.0.0-alpha.15 (the newest imap) -> rustls-connector 0.19. K2's rustls 0.23 is 0.23.46, the fixed version. Fix: move imap off rustls-connector 0.19."
-
 # rustls-pemfile 2.2.0
 [[IgnoredVulns]]
 id = "RUSTSEC-2025-0134"

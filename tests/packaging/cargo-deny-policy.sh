@@ -57,6 +57,8 @@ want(s.get("allow-registry") == ["https://github.com/rust-lang/crates.io-index"]
 want(s.get("allow-git") == ["https://github.com/Alakazam-211/sew-crates", "https://github.com/Alakazam-211/str0m"],
      f"sources.allow-git = sew-crates and str0m exactly, got {s.get('allow-git')}")
 want(s.get("required-git-spec") == "rev", "sources.required-git-spec = rev")
+want(d.get("advisories", {}).get("unused-ignored-advisory") == "warn", "advisories.unused-ignored-advisory = warn (the per-tree note stays on)")
+want(l.get("unused-license-exception", "warn") == "warn", "the per-tree unused-exception note stays on")
 for e in d.get("advisories", {}).get("ignore", []):
     want(isinstance(e, dict) and len(str(e.get("reason", "")).strip()) >= 20, f"advisory ignore {e!r} has a written reason")
 for e in errs:
@@ -117,52 +119,69 @@ d="$(fixture newcrate)"
 printf 'cargo build --release --target "$T" -p k2-root-helper\ncargo build --release --target "$T" -p k2-new-worker\n' > "$d/scripts/ci/build-linux-bins.sh"
 refused "a release crate missing from SHIPPED" "builds -p k2-new-worker for release, but it is not in SHIPPED" "$d"
 
-echo "stale licence exceptions (cargo-deny output per tree, stubbed):"
+echo "stale exceptions and ignores (cargo-deny output per tree, stubbed):"
 # The shipped package names, from the script's SHIPPED list.
 pkgs=()
 while IFS= read -r p; do pkgs+=("$p"); done < <(sed -n '/^SHIPPED=(/,/^)/s/^ *"[^:]*:\([^"]*\)"$/\1/p' "$SCRIPT")
 [ "${#pkgs[@]}" = 12 ] && pass "12 shipped trees listed" || fail "shipped list" "got ${#pkgs[@]}: ${pkgs[*]}"
-printf '[licenses]\nallow = ["MIT"]\n\n[[licenses.exceptions]]\ncrate = "alpha"\nallow = ["CC0-1.0"]\n\n[[licenses.exceptions]]\ncrate = "beta"\nallow = ["MPL-2.0"]\n' > "$tmp/deny-ex.toml"
-# One tree output: a license-exception-not-encountered warning per crate named.
+A1=RUSTSEC-2099-0001
+A2=RUSTSEC-2099-0002
+printf '[advisories]\nignore = [\n    { id = "%s", reason = "a test ignore with a long enough reason" },\n    { id = "%s", reason = "a test ignore with a long enough reason" },\n]\n\n[licenses]\nallow = ["MIT"]\n\n[[licenses.exceptions]]\ncrate = "alpha"\nallow = ["CC0-1.0"]\n\n[[licenses.exceptions]]\ncrate = "beta"\nallow = ["MPL-2.0"]\n' "$A1" "$A2" > "$tmp/deny-ex.toml"
+# One tree output: the warning cargo-deny prints for each unused entry named
+# (a crate for an exception, a RUSTSEC id for an ignore).
 unused_log() {
     local c
     for c in "$@"; do
-        printf 'warning[license-exception-not-encountered]: license exception was not encountered\n    ┌─ /job/src/deny.toml:5:10\n    │\n  5 │ crate = "%s"\n    │          ━━━━━ unmatched license exception\n\n' "$c"
+        case "$c" in
+            RUSTSEC-*) printf 'warning[advisory-not-detected]: advisory was not encountered\n   ┌─ /job/src/deny.toml:3:13\n   │\n 3 │     { id = "%s", reason = "a test ignore with a long enough reason" },\n   │             ━━━━━━━━━━━━━━━━━ no crate matched advisory criteria\n\n' "$c" ;;
+            *) printf 'warning[license-exception-not-encountered]: license exception was not encountered\n    ┌─ /job/src/deny.toml:5:10\n    │\n  5 │ crate = "%s"\n    │          ━━━━━ unmatched license exception\n\n' "$c" ;;
+        esac
     done
     echo "advisories ok, bans ok, licenses ok, sources ok"
 }
-stale() {
+run_stale() { bash "$SCRIPT" stale "$tmp/$1" "$tmp/deny-ex.toml" 2>&1; }
+stale_case() {
     local name="$1" want="$2" rc=0 out
-    out="$(bash "$SCRIPT" stale-exceptions "$tmp/$name" "$tmp/deny-ex.toml" 2>&1)" || rc=$?
+    out="$(run_stale "$name")" || rc=$?
     if [ "$want" = ok ]; then
         [ "$rc" = 0 ] && pass "$name passes" || fail "$name" "rc=$rc $out"
     else
         [ "$rc" = 1 ] && [[ "$out" == *"$want"* ]] && pass "$name refused" || fail "$name not refused" "rc=$rc $out"
     fi
 }
-# Both used somewhere: alpha unused everywhere but the last tree, beta used only in the first.
+# Every entry used somewhere: alpha and A1 by the first tree only, beta and A2 by the last only.
 mkdir -p "$tmp/used"
 for i in "${!pkgs[@]}"; do
-    if [ "$i" = 0 ]; then unused_log alpha; elif [ "$i" = 11 ]; then unused_log beta; else unused_log alpha beta; fi > "$tmp/used/${pkgs[$i]}.log"
+    if [ "$i" = 0 ]; then unused_log beta "$A2"; elif [ "$i" = 11 ]; then unused_log alpha "$A1"; else unused_log alpha beta "$A1" "$A2"; fi > "$tmp/used/${pkgs[$i]}.log"
 done
-stale used ok
+stale_case used ok
 # alpha unused in every tree (beta still used once): alpha is stale, beta is not.
 mkdir -p "$tmp/stale"
 for i in "${!pkgs[@]}"; do
     if [ "$i" = 3 ]; then unused_log alpha; else unused_log alpha beta; fi > "$tmp/stale/${pkgs[$i]}.log"
 done
-stale stale 'exception for "alpha" is unused in all 12 shipped trees'
-rc=0; out="$(bash "$SCRIPT" stale-exceptions "$tmp/stale" "$tmp/deny-ex.toml" 2>&1)" || rc=$?
+stale_case stale 'exception for "alpha" is unused in all 12 shipped trees'
+out="$(run_stale stale)" || true
 [[ "$out" != *'"beta"'* ]] && pass "an exception one tree uses is not called stale" || fail "beta called stale" "$out"
+# A1 matches no tree (A2 matches one): A1 is stale, A2 is not.
+mkdir -p "$tmp/staleignore"
+for i in "${!pkgs[@]}"; do
+    if [ "$i" = 7 ]; then unused_log "$A1"; else unused_log "$A1" "$A2"; fi > "$tmp/staleignore/${pkgs[$i]}.log"
+done
+stale_case staleignore "the advisory ignore $A1 matches none of the 12 shipped trees"
+out="$(run_stale staleignore)" || true
+[[ "$out" != *"$A2"* ]] && pass "an ignore one tree matches is not called stale" || fail "$A2 called stale" "$out"
 # A tree with no output at all can't count as using anything.
 mkdir -p "$tmp/missing"
 cp "$tmp/used/"*.log "$tmp/missing/"
 rm "$tmp/missing/${pkgs[5]}.log"
-stale missing "no cargo-deny output for ${pkgs[5]}"
-# The warning in colour is still read.
+stale_case missing "no cargo-deny output for ${pkgs[5]}"
+# The warnings in colour are still read.
 mkdir -p "$tmp/colour"
-for p in "${pkgs[@]}"; do unused_log alpha | sed $'s/crate = /\e[1mcrate\e[0m = /' > "$tmp/colour/$p.log"; done
-stale colour 'exception for "alpha" is unused in all 12 shipped trees'
+for p in "${pkgs[@]}"; do unused_log alpha "$A2" | sed $'s/crate = /\e[1mcrate\e[0m = /; s/{ id = /{ \e[1mid\e[0m = /' > "$tmp/colour/$p.log"; done
+stale_case colour 'exception for "alpha" is unused in all 12 shipped trees'
+out="$(run_stale colour)" || true
+[[ "$out" == *"advisory ignore $A2 matches none"* ]] && pass "a coloured ignore warning is read" || fail "coloured ignore" "$out"
 
 echo ""
 echo "cargo-deny-policy: $pass passed, $fail failed"

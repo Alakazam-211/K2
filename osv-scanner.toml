@@ -66,7 +66,7 @@ reason = "Build time only (autoprefixer reads our own browserslist query); never
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0387"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Timing variability in constant-time ops; via p256 <- hpke in k2-core (sealed secret handoff). A remote timing attack would need many precise measurements of local HPKE ops. Fix needs crypto-bigint 0.7 via an elliptic-curve/p256 major bump."
+reason = "Timing variability in constant-time operations; via p256 0.13 <- hpke in k2-core, for end-to-end push sealing (HPKE seals only in production; crypto-bigint only decodes and range-checks; scalar multiplication is p256's; long-term P-256 keys sign through ring). ssh-key 0.6.7 holds p256 at 0.13 (ssh-key 0.7 is a release candidate): revisit when ssh-key 0.7 ships."
 
 # esbuild 0.19.12, esbuild 0.21.5
 [[IgnoredVulns]]
@@ -78,19 +78,19 @@ reason = "Dev server only (vite's esbuild, 0.19/0.21); never ships, localhost on
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0008"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unsound Buf deref / Remote::list / blame_buffer Signature; K2 calls none of these (grep: git_changes.rs uses status/diff only). Fix: git2 0.20+/0.21 (dependency-majors PRD)."
+reason = "Unsound Buf deref / Remote::list / blame_buffer Signature. Seven k2-core files use git2 (git.rs, git_changes.rs, git_notes.rs, git_tools.rs, turn_changes.rs, worktree_task.rs, deploy/build.rs); none calls the affected APIs. Fix: git2 0.20+/0.21 (dependency-majors PRD)."
 
 # git2 0.19.0
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0183"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unsound Buf deref / Remote::list / blame_buffer Signature; K2 calls none of these (grep: git_changes.rs uses status/diff only). Fix: git2 0.20+/0.21 (dependency-majors PRD)."
+reason = "Unsound Buf deref / Remote::list / blame_buffer Signature. Seven k2-core files use git2 (git.rs, git_changes.rs, git_notes.rs, git_tools.rs, turn_changes.rs, worktree_task.rs, deploy/build.rs); none calls the affected APIs. Fix: git2 0.20+/0.21 (dependency-majors PRD)."
 
 # git2 0.19.0
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0184"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unsound Buf deref / Remote::list / blame_buffer Signature; K2 calls none of these (grep: git_changes.rs uses status/diff only). Fix: git2 0.20+/0.21 (dependency-majors PRD)."
+reason = "Unsound Buf deref / Remote::list / blame_buffer Signature. Seven k2-core files use git2 (git.rs, git_changes.rs, git_notes.rs, git_tools.rs, turn_changes.rs, worktree_task.rs, deploy/build.rs); none calls the affected APIs. Fix: git2 0.20+/0.21 (dependency-majors PRD)."
 
 # glib 0.18.5
 [[IgnoredVulns]]
@@ -186,13 +186,13 @@ reason = "Unmaintained proc-macro helper (build time only), via i18n-embed-fl <-
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0194"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Quadratic attribute check / NsReader allocation DoS. 0.38: k2-core thumbs.rs and k2-node-proto results.rs parse local or job-produced XML (no NsReader), plus tauri's plist at build time; 0.39: wayland-scanner proc-macro at build time. Fix: quick-xml 0.41."
+reason = "Quadratic attribute check / NsReader allocation DoS. 0.38: k2-core thumbs.rs and k2-node-proto results.rs parse local or job-produced XML (no NsReader), and Tauri's plist reads XML at build time and, at runtime on the Mac, the app's own Info.plist; 0.39: wayland-scanner proc-macro at build time. Fix: quick-xml 0.41."
 
 # quick-xml 0.38.4, quick-xml 0.39.2
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0195"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Quadratic attribute check / NsReader allocation DoS. 0.38: k2-core thumbs.rs and k2-node-proto results.rs parse local or job-produced XML (no NsReader), plus tauri's plist at build time; 0.39: wayland-scanner proc-macro at build time. Fix: quick-xml 0.41."
+reason = "Quadratic attribute check / NsReader allocation DoS. 0.38: k2-core thumbs.rs and k2-node-proto results.rs parse local or job-produced XML (no NsReader), and Tauri's plist reads XML at build time and, at runtime on the Mac, the app's own Info.plist; 0.39: wayland-scanner proc-macro at build time. Fix: quick-xml 0.41."
 
 # quinn-proto 0.11.14
 [[IgnoredVulns]]
@@ -300,7 +300,7 @@ reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0382"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
+reason = "Real exposure, fix in progress: rustls-webpki 0.102.8 reaches the daemon through imap -> rustls-connector 0.19. The IMAP client's TLS moves to rustls 0.23 + webpki 0.103 (both in the lock), dropping imap's rustls-tls feature; this entry goes with that change, before 0.46.13 ships."
 
 # serde_with 3.18.0
 [[IgnoredVulns]]
@@ -312,7 +312,7 @@ reason = "KeyValueMap serialization panic on empty input; serde_with is used onl
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0215"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "unmaintained advisory only; reached through the vendored yrs fork, in maintenance mode and leaving text at the native switch"
+reason = "Unmaintained advisory only; reached through the vendored yrs fork (in the daemon, and in k2-export through k2-mpc-base), in maintenance mode and leaving text at the native switch."
 
 # source-map-js 1.2.1
 [[IgnoredVulns]]
@@ -354,7 +354,7 @@ reason = "Unmaintained (no known vulnerability); via fontdue in k2-core's termin
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0449"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained; via serde_yaml (deprecated) in k2-core for frontmatter/YAML the workspace owns. Replace serde_yaml (dependency PRD)."
+reason = "Unmaintained only (no known vulnerability), via serde_yaml 0.9 in k2-core. The input is hostile by design: cli_folder_trust/scan.rs reads skill and agent frontmatter from folders before they are trusted, and caps each read at 256 KiB per file (MAX_FILE_BYTES); workspace/launch_profile.rs is the other user. Replacing serde_yaml depends on a maintained YAML parser on the licence allowlist that reads the same nested frontmatter in both files (a new crate, so a Steward ruling first)."
 
 # uuid 3.4.0
 [[IgnoredVulns]]
@@ -438,7 +438,7 @@ reason = "ws 7.5.10 via codemirror-gdscript -> @open-rpc/client-js is Node-only;
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0371"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener). No known vulnerability. Revisit with zbus 6."
+reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener), and zbus is also a direct dependency of k2-deskd and kessel-video. No known vulnerability. Revisit with zbus 6."
 
 # zip 2.4.2, zip 4.6.1
 [[IgnoredVulns]]
@@ -486,10 +486,10 @@ reason = "zod 3.25.76 is listed in package.json dependencies but nothing in src/
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0370"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener). No known vulnerability. Revisit with zbus 6."
+reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener), and zbus is also a direct dependency of k2-deskd and kessel-video. No known vulnerability. Revisit with zbus 6."
 
 # zvariant_derive 5.10.0
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener). No known vulnerability. Revisit with zbus 6."
+reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener), and zbus is also a direct dependency of k2-deskd and kessel-video. No known vulnerability. Revisit with zbus 6."

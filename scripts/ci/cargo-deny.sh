@@ -8,9 +8,10 @@
 #                                            offline, then advisories bans licenses sources
 #                                            for each shipped crate (default: cargo-deny on PATH)
 #   scripts/ci/cargo-deny.sh ci <dir>        install <dir>, then check with it (checks.sh audit)
-#   scripts/ci/cargo-deny.sh stale-exceptions <logdir> [<deny.toml>]
-#                                            fail if a licence exception is unused in every
-#                                            tree's log in <logdir> (check runs it itself)
+#   scripts/ci/cargo-deny.sh stale <logdir> [<deny.toml>]
+#                                            fail if a licence exception or an advisory ignore
+#                                            is unused in every tree's log in <logdir>
+#                                            (check runs it itself)
 #
 # Scoping: one run per shipped crate (`--manifest-path <crate>/Cargo.toml`
 # makes that crate the only root of the graph), each with its default
@@ -30,10 +31,11 @@
 #     is in SHIPPED below, so a new shipped crate can't skip the gate.
 #     tests/packaging/cargo-deny-policy.sh tests both, and the policy itself.
 #
-# After the runs, check fails if a [[licenses.exceptions]] entry was unused
-# in all of the shipped trees (cargo-deny's license-exception-not-encountered
-# warning in every tree's output): a stale exception is removed, not kept.
-# One tree not using an exception is only that warning.
+# After the runs, check fails if a [[licenses.exceptions]] entry or an
+# [advisories] ignore was unused in all of the shipped trees (cargo-deny's
+# license-exception-not-encountered or advisory-not-detected warning in
+# every tree's output): a stale entry is removed, not kept. One tree not
+# using it is only that warning.
 #
 # check needs the internet (the RustSec database and crates.io).
 # scripts/ci/checks.sh audit runs install, then check.
@@ -178,7 +180,7 @@ check() {
         echo ""
         echo "── cargo deny: $pkg ($dir, default features) ──"
         # cargo-deny writes its findings to stderr: kept in order with the
-        # header above, and kept per tree for the stale-exception check
+        # header above, and kept per tree for the stale-entry check
         # (pipefail: the status is cargo-deny's). Each run fetches the
         # RustSec database (a no-op fetch after the first).
         if ! "$deny" --locked --manifest-path "$ROOT/$dir/Cargo.toml" --config "$ROOT/deny.toml" \
@@ -188,8 +190,8 @@ check() {
         fi
     done
     echo ""
-    if ! stale_exceptions "$logs" "$ROOT/deny.toml"; then
-        failed+=("stale licence exceptions")
+    if ! stale "$logs" "$ROOT/deny.toml"; then
+        failed+=("stale exceptions or ignores")
         rc=1
     fi
     rm -rf "$logs"
@@ -200,18 +202,26 @@ check() {
     echo "cargo-deny: ${#SHIPPED[@]} shipped crates pass advisories, bans, licenses and sources"
 }
 
-# stale_exceptions <logdir> <deny.toml>: <logdir> holds one cargo-deny
-# output per shipped tree (<package>.log). Fails when an exception's crate
-# is named by a license-exception-not-encountered warning in every log.
-stale_exceptions() {
+# stale <logdir> <deny.toml>: <logdir> holds one cargo-deny output per
+# shipped tree (<package>.log). Fails when a licence exception's crate is
+# named by a license-exception-not-encountered warning, or an advisory
+# ignore's id by an advisory-not-detected warning, in every log.
+stale() {
     local names=() s
     for s in "${SHIPPED[@]}"; do names+=("${s#*:}"); done
     python3 - "$1" "$2" "${names[*]}" <<'PY'
 import pathlib, re, sys, tomllib
 
 logdir, deny, names = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3].split()
-exceptions = [e["crate"] for e in tomllib.load(open(deny, "rb")).get("licenses", {}).get("exceptions", [])]
+policy = tomllib.load(open(deny, "rb"))
+exceptions = [e["crate"] for e in policy.get("licenses", {}).get("exceptions", [])]
+ignores = [e["id"] if isinstance(e, dict) else e for e in policy.get("advisories", {}).get("ignore", [])]
 ansi = re.compile(r"\x1b\[[0-9;]*m")
+# warning code -> what it quotes from deny.toml (`crate = "<name>"`, `id = "<id>"`).
+KINDS = {
+    "license-exception-not-encountered": re.compile(r'crate = "([^"]+)"'),
+    "advisory-not-detected": re.compile(r'id = "([^"]+)"'),
+}
 unused = {}
 errs = []
 for n in names:
@@ -220,26 +230,29 @@ for n in names:
         errs.append(f"no cargo-deny output for {n} ({f})")
         continue
     lines = [ansi.sub("", l) for l in f.read_text().splitlines()]
-    hit = set()
+    hit = {k: set() for k in KINDS}
     for i, line in enumerate(lines):
-        if "license-exception-not-encountered" not in line:
-            continue
-        # The warning quotes the deny.toml line: `crate = "<name>"`.
-        for later in lines[i + 1:i + 6]:
-            m = re.search(r'crate = "([^"]+)"', later)
-            if m:
-                hit.add(m.group(1))
-                break
+        for kind, quoted in KINDS.items():
+            if f"[{kind}]" not in line:
+                continue
+            for later in lines[i + 1:i + 6]:
+                m = quoted.search(later)
+                if m:
+                    hit[kind].add(m.group(1))
+                    break
     unused[n] = hit
 if not errs:
     for crate in exceptions:
-        if all(crate in unused[n] for n in names):
+        if all(crate in unused[n]["license-exception-not-encountered"] for n in names):
             errs.append(f'the licence exception for "{crate}" is unused in all {len(names)} shipped trees: remove it from {pathlib.Path(deny).name}')
+    for vid in ignores:
+        if all(vid in unused[n]["advisory-not-detected"] for n in names):
+            errs.append(f"the advisory ignore {vid} matches none of the {len(names)} shipped trees: remove it from {pathlib.Path(deny).name} (and its osv-scanner.toml entry if the lock no longer has it)")
 for e in errs:
-    print(f"cargo-deny stale-exceptions: {e}", file=sys.stderr)
+    print(f"cargo-deny stale: {e}", file=sys.stderr)
 if errs:
     sys.exit(1)
-print(f"cargo-deny stale-exceptions: each of the {len(exceptions)} licence exceptions is used by at least one of the {len(names)} shipped trees")
+print(f"cargo-deny stale: each of the {len(exceptions)} licence exceptions and {len(ignores)} advisory ignores is used by at least one of the {len(names)} shipped trees")
 PY
 }
 
@@ -247,7 +260,7 @@ case "${1:-}" in
     install) shift; install "$@" ;;
     offline) shift; offline "$@" ;;
     check) shift; check "$@" ;;
-    stale-exceptions) shift; stale_exceptions "${1:?usage: cargo-deny.sh stale-exceptions <logdir> [<deny.toml>]}" "${2:-$ROOT/deny.toml}" ;;
+    stale) shift; stale "${1:?usage: cargo-deny.sh stale <logdir> [<deny.toml>]}" "${2:-$ROOT/deny.toml}" ;;
     ci) shift; install "${1:?usage: cargo-deny.sh ci <dir>}"; check "$1/bin/cargo-deny" ;;
-    *) echo "usage: scripts/ci/cargo-deny.sh install <dir> | offline [<root>] | check [<cargo-deny>] | stale-exceptions <logdir> [<deny.toml>] | ci <dir>" >&2; exit 2 ;;
+    *) echo "usage: scripts/ci/cargo-deny.sh install <dir> | offline [<root>] | check [<cargo-deny>] | stale <logdir> [<deny.toml>] | ci <dir>" >&2; exit 2 ;;
 esac

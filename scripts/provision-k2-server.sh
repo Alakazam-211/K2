@@ -42,9 +42,11 @@
 #   K2_ROOT_HELPER_BIN absolute path to a built k2-root-helper binary.
 #                      Else beside this script (scripts/k2-root-helper), else
 #                      ../target/release/k2-root-helper from a
-#                      `cargo build -p k2-root-helper --release`, else the
+#                      `cargo build -p k2-root-helper --release` (a local
+#                      build must be the daemon's version), else the
 #                      signed GitHub release asset for the SAME version as the
-#                      installed daemon (install-root-helper.sh; v0.45.4+).
+#                      daemon. install-daemon.sh installs it in step 4
+#                      (through install-root-helper.sh); step 7a checks it.
 #                      Every box (bake and full provision) gets K2's one root
 #                      door so its agents can enable hosted mail and the db
 #                      sidecar without ops. A failure is a hard failure that
@@ -159,10 +161,11 @@ if [ "$NEED_FRPC" = 1 ]; then
 	rm -rf "$TMP"
 fi
 
-# ── 4. daemon binary (minisign-verified via install-daemon.sh) ───────
-# Root decides the version ONCE, here, and both the daemon (step 4) and
-# the mail helper (step 7a) use it. Root never executes the installed
-# daemon (it lives in the daemon user's writable home) to learn it.
+# ── 4. daemon binary + root helper (install-daemon.sh) ──────────────
+# Root decides the version ONCE, here: install-daemon.sh installs the
+# daemon AND the root helper at that version (step 7a only checks the
+# result). Root never executes the installed daemon (it lives in the
+# daemon user's writable home) to learn it.
 # Plain x.y.z only: it becomes part of download URLs.
 if [ -z "$K2_VERSION" ]; then
 	log "resolving the latest daemon release"
@@ -182,20 +185,28 @@ if [ ! -f "$INSTALLER" ]; then
 	curl -fsSL "$RAW_BASE/scripts/install-daemon.sh" -o "$INSTALLER"
 	chmod +x "$INSTALLER"
 fi
-# install-daemon.sh runs as ${K2_RUN_USER}, who may not be able to read the
-# script's own folder (e.g. scripts copied to /root/…). Stage a readable copy
-# in a fresh 0755 temp dir first; the bytes are unchanged.
-INSTALLER_STAGE="$(mktemp -d)"
-chmod 0755 "$INSTALLER_STAGE"
-install -m 0644 "$INSTALLER" "$INSTALLER_STAGE/install-daemon.sh"
-INSTALLER="$INSTALLER_STAGE/install-daemon.sh"
-log "installing k2-daemon (verified) as ${K2_RUN_USER}"
-sudo -u "$K2_RUN_USER" env \
-	K2_NO_SERVICE=1 \
-	K2_VERSION="$K2_VERSION" \
-	K2_BIN_DIR="$K2_HOME/.local/bin" \
-	HOME="$K2_HOME" \
-	sh "$INSTALLER"
+# The root helper's source: a local build wins (K2_ROOT_HELPER_BIN, beside
+# this script, ../target/release; it must be the daemon's version), else
+# install-daemon.sh installs the signed release asset of the same version.
+ROOT_HELPER_SRC=""
+if [ -n "${K2_ROOT_HELPER_BIN:-}" ]; then
+	[ -f "$K2_ROOT_HELPER_BIN" ] || die "root helper: K2_ROOT_HELPER_BIN is set but missing: $K2_ROOT_HELPER_BIN"
+	ROOT_HELPER_SRC="$K2_ROOT_HELPER_BIN"
+elif [ -f "$SCRIPT_DIR/k2-root-helper" ]; then
+	ROOT_HELPER_SRC="$SCRIPT_DIR/k2-root-helper"
+elif [ -f "$SCRIPT_DIR/../target/release/k2-root-helper" ]; then
+	ROOT_HELPER_SRC="$SCRIPT_DIR/../target/release/k2-root-helper"
+fi
+# Run as root with --user: the daemon's files are written as ${K2_RUN_USER}
+# (install-daemon.sh drops to that user for them), the root helper is
+# installed for this user, this unit, system scope, before the daemon is
+# swapped. A failure on either stops provisioning here.
+INSTALL_ARGS=(--user "$K2_RUN_USER" --no-service --version "$K2_VERSION"
+	--bin-dir "$K2_HOME/.local/bin" --unit "${K2_UNIT_NAME}.service" --scope system)
+[ -z "$ROOT_HELPER_SRC" ] || INSTALL_ARGS+=(--root-helper-file "$ROOT_HELPER_SRC")
+log "installing k2-daemon and the root helper (verified) for ${K2_RUN_USER}"
+sh "$INSTALLER" "${INSTALL_ARGS[@]}" \
+	|| die "install-daemon.sh failed (output above) — provisioning stopped. Fix it and re-run this script (idempotent)."
 
 # ── 5. k2 CLI ────────────────────────────────────────────────────────
 if [ -f "$SCRIPT_DIR/../cli/k2" ]; then
@@ -322,20 +333,20 @@ systemctl enable "$K2_UNIT_NAME" >/dev/null 2>&1
 # Every provisioned box comes up with K2's one root door already installed
 # (prd-k2-root-helper-v1 §11.2), so the customer's agents can set up hosted
 # mail and the Postgres sidecar without ops, and the daemon keeps the
-# helper current by itself (signed self-update). install-root-helper.sh
-# installs /usr/local/libexec/k2-root-helper root:root 0755, the one
-# sudoers line /etc/sudoers.d/k2-root-helper (visudo-checked, 0440) and
+# helper current by itself (signed self-update). Step 4's install-daemon.sh
+# installed it through install-root-helper.sh, before the daemon:
+# /usr/local/libexec/k2-root-helper root:root 0755, the one sudoers line
+# /etc/sudoers.d/k2-root-helper (visudo-checked, 0440) and
 # /etc/k2-root-helper/daemon.toml (who the daemon is: this user, this
-# unit, system scope). A local binary wins (K2_ROOT_HELPER_BIN, beside
-# this script, ../target/release); otherwise the installer fetches the
-# signed release asset for the SAME version as the daemon step 4 just
-# installed (assets ship from v0.45.4).
+# unit, system scope), from a local build (K2_ROOT_HELPER_BIN, beside this
+# script, ../target/release) or the signed release asset for the SAME
+# version as the daemon. This step checks that result (one install path
+# for provisioning and install-daemon.sh alone).
 # FAIL LOUD: any failure here stops provisioning (never skipped, never
-# warned past). This step installs the helper only: it does not enable
-# hosted mail, touch DNS, or write any other sudoers file.
-# K2_INSTALL_ROOT is install-root-helper.sh's DESTDIR-style prefix for the
-# hermetic tests (tests/cli/provision_mail_helper.sh); it is passed through
-# to the installer. Production leaves it empty.
+# warned past). This step does not enable hosted mail, touch DNS, or
+# write any sudoers file.
+# K2_INSTALL_ROOT is the DESTDIR-style prefix for the hermetic tests
+# (tests/cli/provision_mail_helper.sh). Production leaves it empty.
 ROOT_HELPER_PATH="${K2_INSTALL_ROOT:-}/usr/local/libexec/k2-root-helper"
 ROOT_HELPER_SUDOERS="${K2_INSTALL_ROOT:-}/etc/sudoers.d/k2-root-helper"
 ROOT_HELPER_TOML="${K2_INSTALL_ROOT:-}/etc/k2-root-helper/daemon.toml"
@@ -369,7 +380,7 @@ if [ "$(uname -s)" != "Linux" ]; then
 	log "root helper: skipped — Linux-only (this is $(uname -s))"
 	MAIL_HELPER_LINE="skipped (not Linux)"
 else
-	log "installing ${ROOT_HELPER_PATH}"
+	log "checking ${ROOT_HELPER_PATH}"
 	# The version is the one root resolved before step 4 (K2_VERSION),
 	# never read by running the daemon binary as root: it sits in the
 	# daemon user's writable home. Plain x.y.z only.
@@ -419,39 +430,31 @@ else
 		MAIL_HELPER_LINE="installed legacy k2-mail-helper (v${DAEMON_VERSION} predates the root helper)"
 		log "root helper: ${MAIL_HELPER_LINE}"
 	else
-	ROOT_HELPER_SRC=""
-	if [ -n "${K2_ROOT_HELPER_BIN:-}" ]; then
-		[ -f "$K2_ROOT_HELPER_BIN" ] || root_helper_die "K2_ROOT_HELPER_BIN is set but missing: $K2_ROOT_HELPER_BIN"
-		ROOT_HELPER_SRC="$K2_ROOT_HELPER_BIN"
-	elif [ -f "$SCRIPT_DIR/k2-root-helper" ]; then
-		ROOT_HELPER_SRC="$SCRIPT_DIR/k2-root-helper"
-	elif [ -f "$SCRIPT_DIR/../target/release/k2-root-helper" ]; then
-		ROOT_HELPER_SRC="$SCRIPT_DIR/../target/release/k2-root-helper"
-	fi
-	# The installer: the copy beside this script, else the signed release's
-	# own copy for the same version. Downloaded into a fresh root-only
-	# directory, never a fixed /tmp name another user could pre-create.
-	ROOT_HELPER_INSTALLER="$SCRIPT_DIR/install-root-helper.sh"
-	if [ ! -f "$ROOT_HELPER_INSTALLER" ]; then
-		ROOT_HELPER_TMP="$(mktemp -d)" || root_helper_die "mktemp failed"
-		ROOT_HELPER_INSTALLER="$ROOT_HELPER_TMP/install-root-helper.sh"
-		ROOT_HELPER_INSTALLER_URL="https://github.com/Alakazam-211/K2/releases/download/v${DAEMON_VERSION}/install-root-helper.sh"
-		log "fetching install-root-helper.sh (${ROOT_HELPER_INSTALLER_URL})"
-		curl -fsSL --retry 3 --retry-delay 2 "$ROOT_HELPER_INSTALLER_URL" -o "$ROOT_HELPER_INSTALLER" \
-			|| root_helper_die "could not download $ROOT_HELPER_INSTALLER_URL"
-	fi
-	ROOT_HELPER_ARGS=(--user "$K2_RUN_USER" --unit "${K2_UNIT_NAME}.service" --scope system)
-	if [ -n "$ROOT_HELPER_SRC" ]; then
-		bash "$ROOT_HELPER_INSTALLER" --file "$ROOT_HELPER_SRC" "${ROOT_HELPER_ARGS[@]}" \
-			|| root_helper_die "install-root-helper.sh --file $ROOT_HELPER_SRC failed (output above)"
-		MAIL_HELPER_LINE="installed (local build, daemon v${DAEMON_VERSION})"
+	# Step 4 installed it (install-daemon.sh, at the daemon's version):
+	# check the result here and never install a second time. A helper a
+	# package manager owns is left alone, as install-daemon.sh and the
+	# daemon's auto-heal leave it.
+	if [ -L "$ROOT_HELPER_PATH" ]; then
+		MAIL_HELPER_LINE="left alone (managed by the package manager)"
 	else
-		log "no local k2-root-helper — installing the signed v${DAEMON_VERSION} release asset"
-		bash "$ROOT_HELPER_INSTALLER" --version "$DAEMON_VERSION" "${ROOT_HELPER_ARGS[@]}" \
-			|| root_helper_die "install-root-helper.sh --version $DAEMON_VERSION failed (output above)"
-		MAIL_HELPER_LINE="installed (v${DAEMON_VERSION})"
+		verify_root_helper
+		# The build marker (read, never executed): the daemon's version or newer.
+		HELPER_VERSION="$(LC_ALL=C grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=' "$ROOT_HELPER_PATH" 2>/dev/null \
+			| head -n1 | sed 's/^K2_ROOT_HELPER_BUILD v=\([0-9.]*\) proto=$/\1/' || true)"
+		[[ "$HELPER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+			|| root_helper_die "$ROOT_HELPER_PATH carries no readable build marker"
+		IFS=. read -r _hv1 _hv2 _hv3 <<<"$HELPER_VERSION"
+		IFS=. read -r _dv1 _dv2 _dv3 <<<"$DAEMON_VERSION"
+		if [ "$_hv1" -lt "$_dv1" ] || { [ "$_hv1" -eq "$_dv1" ] && { [ "$_hv2" -lt "$_dv2" ] \
+			|| { [ "$_hv2" -eq "$_dv2" ] && [ "$_hv3" -lt "$_dv3" ]; }; }; }; then
+			root_helper_die "the root helper is v${HELPER_VERSION}, older than the daemon v${DAEMON_VERSION}"
+		fi
+		if [ -n "${ROOT_HELPER_SRC:-}" ]; then
+			MAIL_HELPER_LINE="installed (local build v${HELPER_VERSION}, daemon v${DAEMON_VERSION})"
+		else
+			MAIL_HELPER_LINE="installed (v${HELPER_VERSION})"
+		fi
 	fi
-	verify_root_helper
 	log "root helper: ${MAIL_HELPER_LINE}"
 	fi
 fi

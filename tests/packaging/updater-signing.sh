@@ -740,7 +740,7 @@ fi
 new_install() { # <manifest> [env…]: the fixture tree's install-daemon.sh (trusts U2/U3)
     local m="$1"; shift
     rm -rf "$tmp/ib"
-    env K2_MANIFEST_URL="file://$m" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_APP_ENGINE_PATH="$tmp/no-engine" "$@" \
+    env K2_MANIFEST_URL="file://$m" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 K2_APP_ENGINE_PATH="$tmp/no-engine" "$@" \
         sh "$SRC/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1
 }
 if new_install "$inst/dual.json" && cmp -s "$tmp/ib/k2-daemon" "$inst/$DA"; then
@@ -807,7 +807,7 @@ else
 fi
 grep -q "(0.46.6 and newer)" <(sh "$SRC/scripts/install-daemon.sh" --help 2>&1) && pass "install-daemon.sh --help names the cutover from K2_FIRST_U2_VERSION" || fail "install help cutover" ""
 rm -rf "$tmp/ib"
-if env K2_MANIFEST_URL="file://$inst/dual.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_APP_ENGINE_PATH="$tmp/no-engine" sh "$ROOT/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
+if env K2_MANIFEST_URL="file://$inst/dual.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 K2_APP_ENGINE_PATH="$tmp/no-engine" sh "$ROOT/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
     grep -q '^K2_DAEMON_PUBKEYS="RW' "$ROOT/scripts/install-daemon.sh" && pass "(this tree already has keys)" || fail "pre-ceremony installer" "installed with no keys"
 else
     grep -qE "trusts no update key|VERIFICATION FAILED" "$tmp/inst.out" && pass "this tree's install-daemon.sh refuses a release its keys didn't sign (pre-ceremony: trusts nothing)" || fail "pre-ceremony installer" "$(tail -3 "$tmp/inst.out")"

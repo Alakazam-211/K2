@@ -165,12 +165,12 @@ mkman "$inst/dual.json" 9.9.9 "$inst/$NA.sig2"
 mkman "$inst/u1as2.json" 9.9.9 "$inst/$NA.sig"
 mkman "$inst/ver.json" 9.9.10 "$inst/$NA.sig2"
 rm -rf "$tmp/ib"
-env K2_MANIFEST_URL="file://$inst/dual.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_APP_ENGINE_PATH="$tmp/no-engine" \
+env K2_MANIFEST_URL="file://$inst/dual.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 K2_APP_ENGINE_PATH="$tmp/no-engine" \
     sh "$SRC/scripts/install-daemon.sh" >"$tmp/i.out" 2>&1 && cmp -s "$tmp/ib/k2-daemon" "$inst/$NA" \
     && pass "install-daemon.sh installs the dual-signed release (real minisign, U2)" || fail "install-daemon" "$(tail -5 "$tmp/i.out")"
 for m in u1as2 ver; do
     rm -rf "$tmp/ib"
-    if env K2_MANIFEST_URL="file://$inst/$m.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_APP_ENGINE_PATH="$tmp/no-engine" \
+    if env K2_MANIFEST_URL="file://$inst/$m.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 K2_APP_ENGINE_PATH="$tmp/no-engine" \
         sh "$SRC/scripts/install-daemon.sh" >"$tmp/i.out" 2>&1; then
         fail "install-daemon $m" "installed"
     else

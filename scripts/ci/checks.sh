@@ -155,6 +155,7 @@ part_rust_test() {
     bash tests/cli/root_helper_cli.sh
     bash tests/cli/front_cli.sh
     bash tests/cli/provision_mail_helper.sh
+    bash tests/packaging/install-daemon-root-helper.sh
     bash tests/cli/daemon_unit_oompolicy.sh
     bash tests/cli/daemon_unit_runtime_dir.sh
     bash tests/cli/daemon_install_systemd_unit.sh

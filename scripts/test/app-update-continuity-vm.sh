@@ -124,7 +124,7 @@ t27-adopt-wait() {
 t15b-plain-restart() {
     local pid n tmp; pid="$(main_pid)"; n="$(deploy_count)"; tmp="$(mktemp)"
     loop_start "$tmp"
-    K2_NO_SERVICE=1 sh "$REPO/scripts/install-daemon.sh" ${K2UC_MANIFEST:+--manifest-url "$K2UC_MANIFEST"}
+    K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 sh "$REPO/scripts/install-daemon.sh" ${K2UC_MANIFEST:+--manifest-url "$K2UC_MANIFEST"}
     restart_daemon_like_the_fleet
     wait_for 60 "the App answers after the restart" serving
     local fails; fails="$(loop_stop "$tmp")"
@@ -177,7 +177,7 @@ t15a-rehost-on-update() {
     [ -n "${K2UC_NEXT_MANIFEST:-}" ] || die "set K2UC_NEXT_MANIFEST to the next candidate's daemon-latest.json"
     local tmp; tmp="$(mktemp)"
     loop_start "$tmp"
-    K2_NO_SERVICE=1 sh "$REPO/scripts/install-daemon.sh" --manifest-url "$K2UC_NEXT_MANIFEST"
+    K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 sh "$REPO/scripts/install-daemon.sh" --manifest-url "$K2UC_NEXT_MANIFEST"
     restart_daemon_like_the_fleet
     wait_for 900 "the re-host" bash -c "K2_TOKEN=$K2UC_TOKEN $CLI app history $APP --json | grep -q '\"kind\": *\"rehost\"'"
     sleep 10

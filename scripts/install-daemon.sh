@@ -11,6 +11,15 @@
 # checks sha256, drops it into a bin dir, and writes a supervisor unit
 # (systemd on Linux, launchd on macOS) so a crash respawns the daemon.
 #
+# Linux: it also installs (or updates) K2's root helper at the SAME version
+# as the daemon, before the daemon binary is swapped, through
+# install-root-helper.sh (the signed release asset, checked against the
+# root-helper keys). That step needs root: run as root it runs directly
+# (`--user <name>` installs the daemon for that user); run as a normal user
+# it asks `sudo` once. If it can't, the script stops non-zero and the daemon
+# is left as it was. A root helper a package manager owns is left alone.
+# macOS has no root helper.
+#
 # This is the self-contained twin of `k2 daemon install`. Keep the
 # two in sync (pubkey, platform detect, verify, service templates).
 #
@@ -34,7 +43,8 @@ K2_FIRST_U2_VERSION="0.46.6"
 
 # K2_* is canonical; K2SO_* still honored through the 0.x transition.
 K2_VERSION="${K2_VERSION:-${K2SO_VERSION:-}}"
-K2_BIN_DIR="${K2_BIN_DIR:-${K2SO_BIN_DIR:-$HOME/.local/bin}}"
+# Empty = ~/.local/bin of the daemon user (resolved after --user).
+K2_BIN_DIR="${K2_BIN_DIR:-${K2SO_BIN_DIR:-}}"
 K2_MANIFEST_URL="${K2_MANIFEST_URL:-${K2SO_MANIFEST_URL:-}}"
 K2_NO_SERVICE="${K2_NO_SERVICE:-${K2SO_NO_SERVICE:-0}}"
 K2_DRY_RUN="${K2_DRY_RUN:-${K2SO_DRY_RUN:-0}}"
@@ -43,6 +53,20 @@ K2_DAEMON_LABEL="dev.k2.daemon"
 # when it exists, the matching engine is staged beside the daemon for the
 # boot heal. Overridable for tests only.
 K2_APP_ENGINE_PATH="${K2_APP_ENGINE_PATH:-/usr/local/libexec/k2-app-engine}"
+# The root helper (Linux only; see usage). Env twins of the flags.
+K2_DAEMON_USER="${K2_DAEMON_USER:-}"
+K2_HELPER_UNIT="${K2_HELPER_UNIT:-}"
+K2_HELPER_SCOPE="${K2_HELPER_SCOPE:-}"
+K2_NO_ROOT_HELPER="${K2_NO_ROOT_HELPER:-0}"
+K2_ROOT_HELPER_FROM="${K2_ROOT_HELPER_FROM:-}"
+K2_ROOT_HELPER_FILE="${K2_ROOT_HELPER_FILE:-}"
+# Where install-root-helper.sh is fetched from when it isn't beside this
+# script (file:// works for a mirror).
+RELEASE_BASE="${K2_RELEASE_BASE:-https://github.com/Alakazam-211/K2/releases/download}"
+# DESTDIR-style prefix for the hermetic tests only (install-root-helper.sh
+# reads the same variable). Production leaves it empty.
+RH_PREFIX="${K2_INSTALL_ROOT:-}"
+RH_CANON="/usr/local/libexec/k2-root-helper"
 
 DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
 
@@ -51,6 +75,9 @@ usage() {
     sed "s/@FIRST_U2@/$K2_FIRST_U2_VERSION/g" >&2 <<'EOF'
 Usage: install-daemon.sh [--version x.y.z] [--bin-dir DIR]
                          [--manifest-url URL] [--no-service] [--dry-run]
+                         [--user NAME] [--unit UNIT] [--scope system|user]
+                         [--root-helper-from DIR] [--root-helper-file PATH]
+                         [--no-root-helper]
 
 Install the STANDALONE (headless, no-GUI) K2 daemon from a signed
 GitHub release, minisign-verified with the embedded K2 update keys
@@ -68,6 +95,28 @@ twins still honored):
   --manifest-url  override daemon-latest.json URL (supports file://)
   --no-service    skip the systemd/launchd supervisor unit
   --dry-run       print the plan; download/install nothing
+
+Linux only: before the daemon binary is replaced, the K2 root helper
+(/usr/local/libexec/k2-root-helper) is installed or updated to the
+daemon's version with install-root-helper.sh. That needs root: run as
+root, it runs directly; otherwise it asks sudo once. If it fails, the
+daemon is not installed and the exit code is non-zero.
+  --user NAME     the daemon user. As root: install the daemon for NAME
+                  (files written as NAME) and the root helper for NAME.
+                  Default: you. Env K2_DAEMON_USER
+  --unit UNIT     the daemon's systemd unit, for the helper's caller check
+                  (default: k2-daemon.service, or what the box's
+                  /etc/k2-root-helper/daemon.toml names for this user)
+  --scope S       system or user (default: user when this script writes the
+                  user unit; with --no-service, what daemon.toml names for
+                  this user, else system)
+  --root-helper-from DIR   use the signed k2-root-helper-linux-<arch> and its
+                  .sig from DIR, no network (default for a file:// manifest:
+                  the manifest's folder)
+  --root-helper-file PATH  use this local k2-root-helper build (it must be
+                  the daemon's version; a .sig beside it is checked)
+  --no-root-helper  leave the root helper alone, for a box where it is
+                  installed another way (env K2_NO_ROOT_HELPER=1)
 EOF
 }
 
@@ -78,12 +127,43 @@ while [ $# -gt 0 ]; do
         --manifest-url) K2_MANIFEST_URL="${2:-}"; shift 2 ;;
         --no-service)   K2_NO_SERVICE=1; shift ;;
         --dry-run)      K2_DRY_RUN=1; shift ;;
+        --user)         K2_DAEMON_USER="${2:-}"; shift 2 ;;
+        --unit)         K2_HELPER_UNIT="${2:-}"; shift 2 ;;
+        --scope)        K2_HELPER_SCOPE="${2:-}"; shift 2 ;;
+        --no-root-helper)   K2_NO_ROOT_HELPER=1; shift ;;
+        --root-helper-from) K2_ROOT_HELPER_FROM="${2:-}"; shift 2 ;;
+        --root-helper-file) K2_ROOT_HELPER_FILE="${2:-}"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *) echo "install-daemon.sh: unknown argument: $1" >&2; usage; exit 2 ;;
     esac
 done
 
 die() { echo "$@" >&2; exit 1; }
+
+# ── Daemon user ──────────────────────────────────────────────────────
+# Root with --user NAME installs for NAME: every file under NAME's home is
+# written as NAME (runuser), so root never writes through a path NAME
+# controls. The root helper step then runs as root directly.
+ME="$(id -un)"
+AS_USER=""
+DAEMON_USER="${K2_DAEMON_USER:-$ME}"
+if [ "$DAEMON_USER" != "$ME" ]; then
+    printf '%s' "$DAEMON_USER" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' \
+        || die "--user must be a plain user name (got '$DAEMON_USER')."
+    [ "$(id -u)" = "0" ] || die "--user $DAEMON_USER installs for another user, which needs root: sudo sh install-daemon.sh --user $DAEMON_USER ... (or leave --user out to install for $ME)."
+    [ "$(uname -s)" = "Linux" ] || die "--user is for Linux boxes."
+    command -v runuser >/dev/null 2>&1 || die "runuser (util-linux) is required for --user."
+    _home="$(getent passwd "$DAEMON_USER" 2>/dev/null | cut -d: -f6 || true)"
+    { [ -n "$_home" ] && [ -d "$_home" ]; } || die "User '$DAEMON_USER' does not exist or has no home directory."
+    HOME="$_home"
+    AS_USER="$DAEMON_USER"
+fi
+[ -n "$K2_BIN_DIR" ] || K2_BIN_DIR="$HOME/.local/bin"
+
+# as_user <cmd...>: run as the daemon user in root mode, else as is.
+as_user() {
+    if [ -n "$AS_USER" ]; then runuser -u "$AS_USER" -- "$@"; else "$@"; fi
+}
 
 # ── Platform detect ──────────────────────────────────────────────────
 detect_platform() {
@@ -245,6 +325,76 @@ else
     SVC_PATH="$HOME/.config/systemd/user/k2-daemon.service"
 fi
 
+# ── Root helper plan (Linux) ─────────────────────────────────────────
+# Who the helper serves (daemon.toml: user, unit, scope), where the signed
+# binary comes from, and which install-root-helper.sh installs it. Nothing
+# here needs root or the network.
+RH_ON=0
+if [ "${PLATFORM%%-*}" = "linux" ] && [ "$K2_NO_ROOT_HELPER" != "1" ]; then
+    RH_ON=1
+fi
+RH_PATH="$RH_PREFIX$RH_CANON"
+RH_TOML="$RH_PREFIX/etc/k2-root-helper/daemon.toml"
+RH_SUDOERS="$RH_PREFIX/etc/sudoers.d/k2-root-helper"
+RH_ASSET="k2-root-helper-linux-${PLATFORM#*-}"
+# rh_toml <key>: one `key = "value"` from the box's daemon.toml (0644).
+rh_toml() {
+    if [ -f "$RH_TOML" ] && [ ! -L "$RH_TOML" ] && [ -r "$RH_TOML" ]; then
+        sed -n "s/^$1 = \"\([^\"]*\)\"\$/\1/p" "$RH_TOML" | head -n1
+    fi
+}
+RH_TOML_USER="$(rh_toml user)"
+RH_TOML_UNIT="$(rh_toml unit)"
+RH_TOML_SCOPE="$(rh_toml scope)"
+RH_UNIT="$K2_HELPER_UNIT"
+RH_SCOPE="$K2_HELPER_SCOPE"
+if [ "$K2_NO_SERVICE" != "1" ]; then
+    # This script writes the user unit below: that is the daemon.
+    [ -n "$RH_UNIT" ] || RH_UNIT="k2-daemon.service"
+    [ -n "$RH_SCOPE" ] || RH_SCOPE="user"
+elif [ "$RH_TOML_USER" = "$DAEMON_USER" ]; then
+    # The caller supervises the daemon: keep what the box already names.
+    [ -n "$RH_UNIT" ] || RH_UNIT="$RH_TOML_UNIT"
+    [ -n "$RH_SCOPE" ] || RH_SCOPE="$RH_TOML_SCOPE"
+fi
+[ -n "$RH_UNIT" ] || RH_UNIT="k2-daemon.service"
+[ -n "$RH_SCOPE" ] || RH_SCOPE="system"
+case "$RH_UNIT" in *.service) ;; *) RH_UNIT="$RH_UNIT.service" ;; esac
+if [ "$RH_ON" = "1" ]; then
+    printf '%s' "$RH_UNIT" | grep -Eq '^[A-Za-z0-9@._-]{1,64}\.service$' \
+        || die "--unit must be a systemd unit name (got '$RH_UNIT')."
+    case "$RH_SCOPE" in system|user) ;; *) die "--scope must be system or user (got '$RH_SCOPE')." ;; esac
+    [ -z "$K2_ROOT_HELPER_FROM" ] || [ -z "$K2_ROOT_HELPER_FILE" ] \
+        || die "Pass --root-helper-from or --root-helper-file, not both."
+fi
+RH_FROM="$K2_ROOT_HELPER_FROM"
+if [ -z "$RH_FROM" ] && [ -z "$K2_ROOT_HELPER_FILE" ]; then
+    # A local manifest means no network: the helper sits beside it.
+    case "$MANIFEST_URL" in file://*) RH_FROM="$(dirname "${MANIFEST_URL#file://}")" ;; esac
+fi
+if [ -n "$K2_ROOT_HELPER_FILE" ]; then
+    RH_SRC="$K2_ROOT_HELPER_FILE"
+    RH_SRC_DESC="local build $RH_SRC"
+elif [ -n "$RH_FROM" ]; then
+    RH_SRC="$RH_FROM/$RH_ASSET"
+    RH_SRC_DESC="$RH_SRC + .sig (no network)"
+else
+    RH_SRC=""
+    RH_SRC_DESC="release v$MVER $RH_ASSET + .sig + .sha256"
+fi
+# install-root-helper.sh: beside this script, else in the --root-helper-from
+# folder, else (network) the same release's copy.
+RH_SELF_DIR=""
+if [ -f "$0" ]; then RH_SELF_DIR="$(cd "$(dirname "$0")" && pwd)"; fi
+if [ -n "$RH_SELF_DIR" ] && [ -f "$RH_SELF_DIR/install-root-helper.sh" ]; then
+    RH_INSTALLER="$RH_SELF_DIR/install-root-helper.sh"
+elif [ -n "$RH_FROM" ]; then
+    RH_INSTALLER="$RH_FROM/install-root-helper.sh"
+else
+    RH_INSTALLER="${RELEASE_BASE%/}/v$MVER/install-root-helper.sh"
+fi
+if [ "$(id -u)" = "0" ]; then RH_HOW="as root"; else RH_HOW="through sudo (one prompt)"; fi
+
 # ── Dry run ──────────────────────────────────────────────────────────
 if [ "$K2_DRY_RUN" = "1" ]; then
     echo "install-daemon.sh — DRY RUN (nothing downloaded or written)"
@@ -265,6 +415,13 @@ if [ "$K2_DRY_RUN" = "1" ]; then
         echo "  app engine:     (not in this manifest; the daemon's boot heal downloads it)"
     else
         echo "  app engine:     (none installed; nothing to stage)"
+    fi
+    if [ "$RH_ON" = "1" ]; then
+        echo "  root helper:    $RH_CANON v$MVER for $DAEMON_USER ($RH_UNIT, $RH_SCOPE scope), before the daemon"
+        echo "  helper source:  $RH_SRC_DESC"
+        echo "  helper install: $RH_INSTALLER, $RH_HOW"
+    elif [ "${PLATFORM%%-*}" = "linux" ]; then
+        echo "  root helper:    (skipped — --no-root-helper)"
     fi
     if [ "$K2_NO_SERVICE" = "1" ]; then
         echo "  service:        (skipped — --no-service)"
@@ -291,6 +448,9 @@ fi
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/k2-daemon-install.XXXXXX") || die "Failed to create temp dir."
 trap 'rm -rf "$TMP"' EXIT INT TERM
+# Root mode: the daemon user copies the verified files out of this
+# root-owned folder (readable, never writable by them).
+[ -z "$AS_USER" ] || chmod 0755 "$TMP"
 
 DL_BIN="$TMP/k2-daemon"
 DL_SIG="$TMP/k2-daemon.minisig"
@@ -330,13 +490,104 @@ if [ "$GOT_SHA" != "$SHA256" ]; then
     die "Refusing to install."
 fi
 
+# ── Root helper (Linux): installed or updated BEFORE the daemon swap ──
+# rh_marker_version <file>: the version in a root helper's build marker
+# (read, never executed).
+rh_marker_version() {
+    [ -f "$1" ] || return 0
+    LC_ALL=C grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "$1" 2>/dev/null \
+        | head -n1 | sed 's/^K2_ROOT_HELPER_BUILD v=\([0-9.]*\) .*/\1/' || true
+}
+# A package-owned helper: the canonical path is a link into the package's
+# own folder (the helper then reports packageOwned and the daemon never
+# updates it), or dpkg owns the path.
+rh_package_owned() {
+    [ -L "$RH_PATH" ] && return 0
+    command -v dpkg-query >/dev/null 2>&1 && dpkg-query -S "$RH_CANON" >/dev/null 2>&1 && return 0
+    return 1
+}
+# rh_door_ok: the daemon user's one sudoers line is in place (root reads
+# it; anyone else asks sudo without a prompt).
+rh_door_ok() {
+    if [ "$(id -u)" = "0" ]; then
+        [ -f "$RH_SUDOERS" ] && [ ! -L "$RH_SUDOERS" ] \
+            && [ "$(cat "$RH_SUDOERS")" = "$(printf '%s ALL=(root) NOPASSWD: %s\nDefaults:%s !requiretty' "$DAEMON_USER" "$RH_CANON" "$DAEMON_USER")" ]
+    else
+        command -v sudo >/dev/null 2>&1 && sudo -n -l "$RH_CANON" >/dev/null 2>&1
+    fi
+}
+rh_failed() {
+    echo "ROOT HELPER NOT INSTALLED: $1" >&2
+    echo "The daemon was not installed or changed. Fix that and re-run. As root one run installs both:" >&2
+    echo "  sudo sh install-daemon.sh --user $DAEMON_USER --version $MVER [--no-service]" >&2
+    echo "If a package or your own tooling manages the root helper, --no-root-helper skips this step." >&2
+    exit 1
+}
+root_helper_step() {
+    if [ "$RH_ON" != "1" ]; then
+        [ "${PLATFORM%%-*}" != "linux" ] || echo "Root helper: not touched (--no-root-helper)."
+        return 0
+    fi
+    if rh_package_owned; then
+        echo "Root helper: $RH_CANON is managed by your package manager; left alone."
+        return 0
+    fi
+    _have=""
+    [ -L "$RH_PATH" ] || _have="$(rh_marker_version "$RH_PATH")"
+    if [ -n "$_have" ] && ! version_lt "$_have" "$MVER" \
+        && [ "$RH_TOML_USER" = "$DAEMON_USER" ] && [ "$RH_TOML_UNIT" = "$RH_UNIT" ] \
+        && [ "$RH_TOML_SCOPE" = "$RH_SCOPE" ] && rh_door_ok; then
+        echo "Root helper: v$_have is installed for $DAEMON_USER ($RH_UNIT, $RH_SCOPE scope); nothing to change."
+        return 0
+    fi
+    if [ -n "$RH_SRC" ]; then
+        [ -f "$RH_SRC" ] || rh_failed "$RH_SRC was not found."
+        if [ -z "$K2_ROOT_HELPER_FILE" ] && [ ! -f "$RH_SRC.sig" ]; then
+            rh_failed "$RH_SRC.sig was not found; a root helper from $RH_FROM must carry its signature."
+        fi
+        _v="$(rh_marker_version "$RH_SRC")"
+        [ "$_v" = "$MVER" ] || rh_failed "$RH_SRC is v${_v:-unknown}, but the daemon is v$MVER; they must match."
+        set -- --file "$RH_SRC"
+    else
+        set -- --version "$MVER"
+    fi
+    set -- "$@" --user "$DAEMON_USER" --unit "$RH_UNIT" --scope "$RH_SCOPE"
+    case "$RH_INSTALLER" in
+        http://*|https://*|file://*)
+            ( fetch "$RH_INSTALLER" "$TMP/install-root-helper.sh" ) \
+                || rh_failed "could not download $RH_INSTALLER."
+            _inst="$TMP/install-root-helper.sh" ;;
+        *)
+            [ -f "$RH_INSTALLER" ] || rh_failed "no install-root-helper.sh beside this script or in $RH_FROM (every release ships one)."
+            _inst="$RH_INSTALLER" ;;
+    esac
+    command -v bash >/dev/null 2>&1 || rh_failed "bash is required to run install-root-helper.sh."
+    echo "Installing the K2 root helper v$MVER for $DAEMON_USER ($RH_UNIT, $RH_SCOPE scope; from $RH_SRC_DESC)..."
+    if [ "$(id -u)" = "0" ]; then
+        bash "$_inst" "$@" || rh_failed "install-root-helper.sh failed (its reason is above)."
+    else
+        command -v sudo >/dev/null 2>&1 || rh_failed "installing it needs root, and sudo is not installed."
+        echo "sudo asks for your password once, to install the root helper."
+        if [ -n "${K2_RELEASE_BASE:-}" ]; then
+            sudo env "K2_RELEASE_BASE=$K2_RELEASE_BASE" bash "$_inst" "$@"
+        else
+            sudo bash "$_inst" "$@"
+        fi || rh_failed "install-root-helper.sh through sudo failed (the reason is above). It needs an admin who may use sudo."
+    fi
+    _now="$(rh_marker_version "$RH_PATH")"
+    [ "$_now" = "$MVER" ] || rh_failed "after the install, $RH_CANON reports v${_now:-unknown}, not v$MVER."
+    echo "Root helper: v$MVER installed for $DAEMON_USER."
+}
+root_helper_step
+
 echo "Verified. Installing to $BIN_PATH ..."
-mkdir -p "$K2_BIN_DIR"
+[ -z "$AS_USER" ] || chmod 0644 "$DL_BIN"
+as_user mkdir -p "$K2_BIN_DIR"
 # Atomic rename — plain cp over a RUNNING daemon binary fails with
 # "Text file busy"; rename swaps the inode and re-runs converge.
-cp "$DL_BIN" "$BIN_PATH.new"
-chmod +x "$BIN_PATH.new"
-mv -f "$BIN_PATH.new" "$BIN_PATH"
+as_user cp "$DL_BIN" "$BIN_PATH.new"
+as_user chmod +x "$BIN_PATH.new"
+as_user mv -f "$BIN_PATH.new" "$BIN_PATH"
 
 # Stage the matching App engine (R3): sha256-checked; never fatal (the
 # daemon's boot heal downloads it when this didn't work).
@@ -344,11 +595,13 @@ if [ -n "$ENGINE_URL" ] && [ -n "$ENGINE_SHA" ]; then
     echo "Staging the App engine for v${MVER:-?}..."
     DL_ENG="$TMP/$ENGINE_KEY"
     if ( fetch "$ENGINE_URL" "$DL_ENG" ) 2>/dev/null && [ "$(sha256_of "$DL_ENG")" = "$ENGINE_SHA" ]; then
-        mkdir -p "$ENGINE_STAGE_DIR"
-        rm -f "$ENGINE_STAGE_DIR/$ENGINE_KEY.sig"
-        cp "$DL_ENG" "$ENGINE_STAGE_DIR/$ENGINE_KEY.part" && mv -f "$ENGINE_STAGE_DIR/$ENGINE_KEY.part" "$ENGINE_STAGE_DIR/$ENGINE_KEY"
+        [ -z "$AS_USER" ] || chmod 0644 "$DL_ENG"
+        as_user mkdir -p "$ENGINE_STAGE_DIR"
+        as_user rm -f "$ENGINE_STAGE_DIR/$ENGINE_KEY.sig"
+        as_user cp "$DL_ENG" "$ENGINE_STAGE_DIR/$ENGINE_KEY.part" && as_user mv -f "$ENGINE_STAGE_DIR/$ENGINE_KEY.part" "$ENGINE_STAGE_DIR/$ENGINE_KEY"
         if [ -n "$ENGINE_SIG" ] && ( fetch "$ENGINE_SIG" "$TMP/$ENGINE_KEY.sig" ) 2>/dev/null; then
-            cp "$TMP/$ENGINE_KEY.sig" "$ENGINE_STAGE_DIR/$ENGINE_KEY.sig"
+            [ -z "$AS_USER" ] || chmod 0644 "$TMP/$ENGINE_KEY.sig"
+            as_user cp "$TMP/$ENGINE_KEY.sig" "$ENGINE_STAGE_DIR/$ENGINE_KEY.sig"
             echo "Staged the App engine and its signature in $ENGINE_STAGE_DIR"
         else
             echo "Staged the App engine in $ENGINE_STAGE_DIR (signature not published yet; the daemon fetches it)"
@@ -360,8 +613,8 @@ fi
 
 if [ "$K2_NO_SERVICE" != "1" ]; then
     if [ "$SVC_KIND" = "systemd" ]; then
-        mkdir -p "$(dirname "$SVC_PATH")"
-        cat > "$SVC_PATH" <<EOF
+        as_user mkdir -p "$(dirname "$SVC_PATH")"
+        as_user sh -c 'cat > "$1"' sh "$SVC_PATH" <<EOF
 [Unit]
 Description=K2 standalone daemon
 After=network-online.target

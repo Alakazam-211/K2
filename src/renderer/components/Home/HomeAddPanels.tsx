@@ -699,3 +699,14 @@ export function useAddableAgents(
   )
   return { sources: built.sources, add }
 }
+
+/** A source's head: its name in small caps, its address (or "connected")
+ *  at the end. Shared with the Groups dialog's Agents segment. */
+export function AddSourceHead({ label, sub, sourceKey }: { label: string; sub: string; sourceKey: string }): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-2 px-2 pt-2.5 pb-1 select-none" data-add-source-head={sourceKey}>
+      <span className="flex-shrink-0 text-[length:var(--type-xs)] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">{label}</span>
+      <span className="ml-auto min-w-0 truncate text-[length:var(--type-xs)] text-[var(--color-text-muted)]">{sub}</span>
+    </div>
+  )
+}

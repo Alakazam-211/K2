@@ -309,6 +309,7 @@ export default function HomeGroupBar({
           currentId={currentId}
           initialId={editing.id}
           startOn={editing.from === 'header' ? 'list' : 'group'}
+          startTab={editing.from === 'header' ? 'agents' : 'icon'}
           onRename={onRename}
           onSetIcon={onSetIcon}
           onCreate={onCreate}

@@ -2,20 +2,34 @@
 // pane, or the whole dialog when it is one pane). At the top, fixed: its
 // name (saved as you type; an empty one saves as the next "Group N", shown
 // as the placeholder), "Most recent at the top" with its one-line
-// explanation (the app's Toggle), and the icon search. Under them the icon
-// grid scrolls in its own frame (`GroupIconPicker`). Delete is pinned to
-// the bottom: quiet, it asks once inline, and it is off on the last group
-// with the reason in words.
+// explanation (the app's Toggle), and a segmented control, Agents | Icon
+// (←/→ switch it):
+//   - Agents: which agents are in the group, as checkboxes, saved live
+//     (`GroupAgentsPane`, the same sources as Add to Home);
+//   - Icon: the icon search, Recent and the grid in its own frame
+//     (`GroupIconPicker`).
+// Delete is pinned to the bottom: quiet, it asks once inline, and it is off
+// on the last group with the reason in words.
 //
-// Presentational: every change goes out through a callback.
+// Presentational apart from the Agents segment, which reads the Homes store;
+// every other change goes out through a callback.
 
 import { useEffect, useId, useRef, useState } from 'react'
 import { CheckIcon, Trash2Icon } from 'lucide-react'
 import { Button, Input, Toggle } from '@/components/ui'
 import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { HOME_NAME_MAX } from '@/stores/homes'
+import { Segmented } from '@/components/ui/Segmented'
 import GroupIconPicker from './GroupIconPicker'
+import GroupAgentsPane from './GroupAgentsPane'
 import type { GroupBarItem } from './HomeGroupBar'
+
+/** The right pane's two segments. */
+export type GroupDetailTab = 'agents' | 'icon'
+export const GROUP_DETAIL_TABS: ReadonlyArray<{ value: GroupDetailTab; label: string }> = [
+  { value: 'agents', label: 'Agents' },
+  { value: 'icon', label: 'Icon' },
+]
 
 export interface GroupDetailPaneProps {
   group: GroupBarItem
@@ -29,6 +43,9 @@ export interface GroupDetailPaneProps {
   emptyNameFallback?(id: string): string
   /** Focus the name with its text selected (a group just added). */
   focusName?: boolean
+  /** The segment shown (the dialog keeps it as the selection changes). */
+  tab?: GroupDetailTab
+  onTab?(tab: GroupDetailTab): void
 }
 
 const LABEL = 'text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]'
@@ -44,6 +61,8 @@ export default function GroupDetailPane({
   onDelete,
   emptyNameFallback,
   focusName = false,
+  tab = 'icon',
+  onTab,
 }: GroupDetailPaneProps): React.JSX.Element {
   const [name, setName] = useState(group.name)
   const [confirming, setConfirming] = useState(false)
@@ -113,7 +132,21 @@ export default function GroupDetailPane({
         </div>
       </div>
 
-      <GroupIconPicker groupId={group.id} icon={group.icon} index={index} onSetIcon={onSetIcon} onPicked={() => setSaved(true)} />
+      <div className="flex-shrink-0 px-5 pb-2.5" data-group-detail-tabs="">
+        <Segmented
+          aria-label={`${group.name}: show`}
+          value={tab}
+          onChange={(t) => onTab?.(t)}
+          options={GROUP_DETAIL_TABS.map((t) => ({ value: t.value, label: t.label, buttonProps: { 'data-group-detail-tab': t.value } }))}
+          className="w-full"
+        />
+      </div>
+
+      {tab === 'agents' ? (
+        <GroupAgentsPane groupId={group.id} />
+      ) : (
+        <GroupIconPicker groupId={group.id} icon={group.icon} index={index} onSetIcon={onSetIcon} onPicked={() => setSaved(true)} />
+      )}
 
       <div className="flex min-h-12 flex-shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-5 py-2" data-group-delete-row="">
         {confirming ? (

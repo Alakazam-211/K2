@@ -25,7 +25,7 @@ import { DialogFrame, DialogScrim } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui'
 import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import GroupList from './GroupList'
-import GroupDetailPane from './GroupDetailPane'
+import GroupDetailPane, { type GroupDetailTab } from './GroupDetailPane'
 import { GROUP_DIALOG_LIST_PX, GROUP_DIALOG_MARGIN, GROUP_DIALOG_MAX, GROUP_DIALOG_TWO_PANE_MIN } from './group-bar-look'
 import type { GroupBarItem } from './HomeGroupBar'
 
@@ -37,6 +37,9 @@ export interface GroupEditModalProps {
   /** One pane only: open on the list (the header's "…") or on the group's
    *  page (an icon). Default `group`. */
   startOn?: 'list' | 'group'
+  /** The right pane's segment it opens on: Agents from "…", Icon from a
+   *  right-click on a group's icon. Default `icon`. */
+  startTab?: GroupDetailTab
   onRename(id: string, name: string): void
   onSetIcon(id: string, icon: string | null): void
   onCreate(): string | null
@@ -81,6 +84,7 @@ export default function GroupEditModal({
   currentId,
   initialId,
   startOn = 'group',
+  startTab = 'icon',
   onRename,
   onSetIcon,
   onCreate,
@@ -93,6 +97,7 @@ export default function GroupEditModal({
   const [selectedId, setSelectedId] = useState(initialId)
   const [justAdded, setJustAdded] = useState<string | null>(null)
   const [view, setView] = useState<'list' | 'group'>(startOn)
+  const [tab, setTab] = useState<GroupDetailTab>(startTab)
   const boxRef = useRef<HTMLDivElement>(null)
   const onePane = useOnePane(boxRef)
   // A deleted (or merged-away) selection falls back to the first group.
@@ -183,6 +188,8 @@ export default function GroupEditModal({
                   onDelete={onDelete}
                   emptyNameFallback={emptyNameFallback}
                   focusName={justAdded === selected.id}
+                  tab={tab}
+                  onTab={setTab}
                 />
               </div>
             )}

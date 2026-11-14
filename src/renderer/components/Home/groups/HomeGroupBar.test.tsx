@@ -19,6 +19,8 @@ import { GROUP_BAR_ICON_PX } from './GroupGlyph'
 import { centredScroll } from './group-bar-scroll'
 import { useHomeGroups } from './useHomeGroups'
 import { selectedHome, useHomesStore } from '@/stores/homes'
+import { useProjectsStore } from '@/stores/projects'
+import { pinnedRows } from '@/lib/home-row-order'
 
 const G: GroupBarItem[] = [
   { id: 'g1', name: 'Work', icon: 'briefcase', order: 0, recentFirst: true, pinned: ['a::s'] },
@@ -244,5 +246,97 @@ describe('the group row on the Homes store', () => {
     // A click on a group in the row still switches.
     fireEvent.click(groupButton('Group 3'))
     expect(selectedHome(useHomesStore.getState()).name).toBe('Group 3')
+  })
+})
+
+// K2 Design's Home nav: the right pane's Agents | Icon segments. "…" opens
+// on Agents; a right-click on an icon opens on Icon.
+describe('the Groups dialog: Agents | Icon', () => {
+  const proj = (id: string, name: string) =>
+    ({ id, name, handle: name.toLowerCase(), path: `/w/${name.toLowerCase()}`, color: '#61afef', iconUrl: null, workspaces: [] }) as never
+
+  beforeEach(() => {
+    useProjectsStore.setState({ projects: [proj('pc', 'Cortana'), proj('pn', 'Nova'), proj('pq', 'Quill')] } as never)
+    setHomeNames(['Home', 'Studio'])
+    const studio = useHomesStore.getState().homes[1]
+    act(() => {
+      useHomesStore.getState().selectHome(studio.id)
+      useHomesStore.getState().addRow(studio.id, { address: 'cortana::local', workspaceId: 'pc', label: 'Cortana' })
+      useHomesStore.getState().pinRow(studio.id, 'cortana::local')
+    })
+  })
+  afterEach(() => useProjectsStore.setState({ projects: [] } as never))
+
+  const segment = (name: string): HTMLElement => within(modal()).getByRole('radio', { name })
+  const check = (name: string): HTMLInputElement => within(modal()).getByRole('checkbox', { name: `${name} in Studio` }) as HTMLInputElement
+  const studio = () => useHomesStore.getState().homes[1]
+
+  it('"…" opens on Agents: every addable agent, ticked when in the group; ticking adds, unticking removes it and its pin', () => {
+    render(<Wired />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Studio)' }))
+    // Name and "Most recent at the top" stay at the top, then the segments.
+    const detail = modal().querySelector('[data-group-detail]') as HTMLElement
+    const name = detail.querySelector('[data-group-name-input]') as HTMLElement
+    const tabs = detail.querySelector('[data-group-detail-tabs]') as HTMLElement
+    const recent = detail.querySelector('[data-group-recent-first]') as HTMLElement
+    expect(name.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(recent.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(segment('Agents').getAttribute('aria-checked')).toBe('true')
+    expect(segment('Icon').getAttribute('aria-checked')).toBe('false')
+    expect(modal().querySelector('[data-group-icon-picker]')).toBeNull()
+    // Delete stays pinned at the bottom.
+    expect(detail.lastElementChild?.hasAttribute('data-group-delete-row')).toBe(true)
+
+    expect(modal().querySelector('[data-group-agents-count]')?.textContent).toBe('1 in Studio')
+    expect([check('Cortana').checked, check('Nova').checked, check('Quill').checked]).toEqual([true, false, false])
+
+    fireEvent.click(check('Nova'))
+    expect(studio().rows.map((r) => r.address)).toEqual(['cortana::local', 'nova::local'])
+    expect(check('Nova').checked).toBe(true)
+    expect(modal().querySelector('[data-group-agents-count]')?.textContent).toBe('2 in Studio')
+
+    // Unticking the pinned Cortana takes it out, pin and all.
+    expect(pinnedRows(studio()).map((r) => r.address)).toEqual(['cortana::local'])
+    fireEvent.click(check('Cortana'))
+    expect(studio().rows.map((r) => r.address)).toEqual(['nova::local'])
+    expect(pinnedRows(studio())).toEqual([])
+    expect(check('Cortana').checked).toBe(false)
+    // The other group is untouched.
+    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).not.toContain('nova::local')
+  })
+
+  it('the search narrows the list; the list is one tab stop and ↑/↓ move through it', () => {
+    render(<Wired />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Studio)' }))
+    const search = within(modal()).getByRole('searchbox', { name: 'Search agents for Studio' })
+    fireEvent.change(search, { target: { value: 'qui' } })
+    expect(within(modal()).getAllByRole('checkbox').map((c) => c.getAttribute('aria-label'))).toEqual(['Quill in Studio'])
+    fireEvent.change(search, { target: { value: '' } })
+    const boxes = within(modal()).getAllByRole('checkbox')
+    expect(boxes.map((b) => b.tabIndex)).toEqual([0, -1, -1])
+    fireEvent.keyDown(search, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(boxes[0])
+    fireEvent.keyDown(boxes[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(check('Nova'))
+    expect(within(modal()).getAllByRole('checkbox').map((b) => b.tabIndex)).toEqual([-1, 0, -1])
+    fireEvent.keyDown(check('Nova'), { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(check('Cortana'))
+  })
+
+  it('a right-click opens on Icon; ←/→ switch the segment, which stays as the selection changes', () => {
+    render(<Wired />)
+    fireEvent.contextMenu(groupButton('Studio'))
+    expect(segment('Icon').getAttribute('aria-checked')).toBe('true')
+    expect(modal().querySelector('[data-group-icon-search]')).not.toBeNull()
+    expect(modal().querySelector('[data-group-agents]')).toBeNull()
+    fireEvent.keyDown(segment('Icon'), { key: 'ArrowLeft' })
+    expect(segment('Agents').getAttribute('aria-checked')).toBe('true')
+    expect(modal().querySelector('[data-group-agents]')?.getAttribute('data-group-agents')).toBe(studio().id)
+    // Another group in the list keeps Agents.
+    const home = useHomesStore.getState().homes[0]
+    fireEvent.click(modal().querySelector(`[data-group-list-row="${home.id}"]`) as HTMLElement)
+    expect(modal().querySelector('[data-group-agents]')?.getAttribute('data-group-agents')).toBe(home.id)
+    fireEvent.keyDown(segment('Agents'), { key: 'ArrowRight' })
+    expect(segment('Icon').getAttribute('aria-checked')).toBe('true')
   })
 })

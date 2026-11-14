@@ -38,11 +38,11 @@ import { GroupGlyph } from './groups/GroupGlyph'
 import { useHomeGroups } from './groups/useHomeGroups'
 import { useHomeAddPickerStore } from './home-room'
 import {
+  AddSourceHead,
   SectionStatus,
   addableMatches,
   useAddableAgents,
   type AddableAgent,
-  type AddableSource,
   type HomeAvatarLookup,
 } from './HomeAddPanels'
 
@@ -139,15 +139,6 @@ function AgentRow({
         </span>
       )}
     </button>
-  )
-}
-
-function SourceHead({ source }: { source: AddableSource }): JSX.Element {
-  return (
-    <div className="flex items-center gap-2 px-2 pt-2.5 pb-1 select-none" data-add-source-head={source.key}>
-      <span className="flex-shrink-0 text-[length:var(--type-xs)] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">{source.label}</span>
-      <span className="ml-auto min-w-0 truncate text-[length:var(--type-xs)] text-[var(--color-text-muted)]">{source.sub}</span>
-    </div>
   )
 }
 
@@ -249,7 +240,7 @@ export function AddAgentsPanel({
         >
           {shown.map((s) => (
             <div key={s.key} role="group" aria-label={s.label} data-add-source={s.key}>
-              <SourceHead source={s} />
+              <AddSourceHead label={s.label} sub={s.sub} sourceKey={s.key} />
               {s.listing.kind !== 'ok' && (
                 <div data-add-source-status={s.listing.kind}>
                   <SectionStatus listing={s.listing} label={s.label} onRetry={s.retry} />

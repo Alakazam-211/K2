@@ -10,6 +10,10 @@ Two files hold the advisories CI lets through:
   .cargo/audit.toml   [advisories] ignore = [...], read by cargo audit (it
                       looks for .cargo/audit.toml, not a root audit.toml).
                       IDs only; each one must also be in osv-scanner.toml.
+  deny.toml           [advisories] ignore = [{ id, reason }], read by the
+                      app-wide cargo-deny gate (scripts/ci/cargo-deny.sh).
+                      Each entry carries its own reason, and its id must
+                      also be in osv-scanner.toml (the review-by date).
 
 Rules, each a failure:
   - every entry has an id, a reason of at least 20 characters, and an
@@ -17,13 +21,15 @@ Rules, each a failure:
   - ignoreUntil is after today (an expired entry fails here, and osv-scanner
     itself stops ignoring it on that date) and at most 90 days out;
   - no id twice;
-  - every cargo-audit id is in osv-scanner.toml.
+  - every cargo-audit id is in osv-scanner.toml;
+  - every cargo-deny ignore is a table with an id and a reason of at least
+    20 characters, no id twice, and the id is in osv-scanner.toml.
 
 To renew an entry: re-check reachability, update the reason if it changed,
 and move ignoreUntil (at most 90 days). To drop one: bump the dependency and
 delete the entry from both files.
 
-  python3 scripts/ci/audit-ignores.py check [--today YYYY-MM-DD] [--osv F] [--cargo F]
+  python3 scripts/ci/audit-ignores.py check [--today YYYY-MM-DD] [--osv F] [--cargo F] [--deny F]
 """
 
 import argparse
@@ -45,7 +51,7 @@ def as_date(v):
     return None
 
 
-def check(osv_path: Path, cargo_path: Path, today: dt.date) -> list[str]:
+def check(osv_path: Path, cargo_path: Path, deny_path: Path, today: dt.date) -> list[str]:
     errs: list[str] = []
     osv = tomllib.loads(osv_path.read_text())
     cargo = tomllib.loads(cargo_path.read_text())
@@ -83,6 +89,28 @@ def check(osv_path: Path, cargo_path: Path, today: dt.date) -> list[str]:
         cargo_seen.add(vid)
         if vid not in seen:
             errs.append(f"{cargo_path.name}: {vid} has no entry (reason, ignoreUntil) in {osv_path.name}")
+    deny = tomllib.loads(deny_path.read_text())
+    deny_ignore = deny.get("advisories", {}).get("ignore", [])
+    if not isinstance(deny_ignore, list):
+        errs.append(f"{deny_path.name}: advisories.ignore must be a list")
+        deny_ignore = []
+    deny_seen: set[str] = set()
+    for n, e in enumerate(deny_ignore, 1):
+        if not isinstance(e, dict):
+            errs.append(f"{deny_path.name} ignore {n} ({e!r}): must be {{ id = ..., reason = ... }} (a written reason)")
+            continue
+        vid = e.get("id")
+        if not isinstance(vid, str) or not vid.strip():
+            errs.append(f"{deny_path.name} ignore {n}: no id")
+            continue
+        if vid in deny_seen:
+            errs.append(f"{deny_path.name}: {vid} listed twice")
+        deny_seen.add(vid)
+        reason = e.get("reason")
+        if not isinstance(reason, str) or len(reason.strip()) < MIN_REASON:
+            errs.append(f"{deny_path.name}: {vid} needs a reason (at least {MIN_REASON} characters)")
+        if vid not in seen:
+            errs.append(f"{deny_path.name}: {vid} has no entry (reason, ignoreUntil) in {osv_path.name}")
     return errs
 
 
@@ -92,8 +120,9 @@ def main() -> int:
     ap.add_argument("--today", type=dt.date.fromisoformat, default=dt.datetime.now(dt.timezone.utc).date())
     ap.add_argument("--osv", type=Path, default=ROOT / "osv-scanner.toml")
     ap.add_argument("--cargo", type=Path, default=ROOT / ".cargo" / "audit.toml")
+    ap.add_argument("--deny", type=Path, default=ROOT / "deny.toml")
     a = ap.parse_args()
-    errs = check(a.osv, a.cargo, a.today)
+    errs = check(a.osv, a.cargo, a.deny, a.today)
     for e in errs:
         print(f"audit-ignores: {e}", file=sys.stderr)
     if errs:

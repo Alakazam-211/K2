@@ -35,7 +35,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { AddChannelPanel, AddPersonPanel, NewChannelPanel, chatServers, waitForChannelId } from './HomeChatPickers'
 import { HomeChatMembersSheet } from './HomeChatMembersSheet'
 import { resetHomeChatForTests } from '@/stores/home-chat'
-import { useHomesStore } from '@/stores/homes'
+import { useHomesStore, type HomeRow } from '@/stores/homes'
 import type { ConnectHost } from '@/stores/connect-host'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -96,9 +96,17 @@ function home() {
   return useHomesStore.getState().homes[0]
 }
 
+/** The sections are presentational: a pick reaches this callback, which
+ *  (as the Add to Home modal does) writes the row. */
+const picked: HomeRow[] = []
+function add(row: HomeRow): boolean {
+  picked.push(row)
+  return useHomesStore.getState().addRow(home().id, row)
+}
+
 describe('Add a person', () => {
   it('lists people only, says who is still being set up, and adds a person row', async () => {
-    render(<AddPersonPanel home={home()} onBack={() => undefined} />)
+    render(<AddPersonPanel home={home()} onAddRow={add} />)
     await screen.findByText('Alex')
     expect(screen.getByText('Rae')).toBeTruthy()
     expect(screen.queryByText('Atlas agent')).toBeNull()
@@ -120,7 +128,7 @@ describe('Add a person', () => {
       if (route === 'home-chat/status') return { ok: true, on: false, reason: 'mac', flags: {} }
       throw new Error(`unexpected GET ${route}`)
     })
-    render(<AddPersonPanel home={home()} onBack={() => undefined} />)
+    render(<AddPersonPanel home={home()} onAddRow={add} />)
     expect(await screen.findByText('No chat on this server (chat runs on Linux servers).')).toBeTruthy()
   })
 })
@@ -138,7 +146,7 @@ describe('the servers asked', () => {
 
 describe('channels', () => {
   it('Add a channel lists the server’s live channels and adds a channel row', async () => {
-    render(<AddChannelPanel home={home()} onBack={() => undefined} />)
+    render(<AddChannelPanel home={home()} onAddRow={add} />)
     await screen.findByText('general')
     expect(screen.queryByText('old')).toBeNull()
     await act(async () => {
@@ -165,7 +173,7 @@ describe('channels', () => {
       throw new Error(`unexpected GET ${route}`)
     })
     vi.useFakeTimers({ shouldAdvanceTime: true })
-    render(<NewChannelPanel home={home()} onBack={() => undefined} />)
+    render(<NewChannelPanel home={home()} onAddRow={add} />)
     const name = await screen.findByTestId('home-chat-new-channel-name')
     expect((screen.getByTestId('home-chat-invite-only') as HTMLInputElement).checked).toBe(true)
     await screen.findByText('Alex')

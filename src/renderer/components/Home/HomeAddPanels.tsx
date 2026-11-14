@@ -56,10 +56,6 @@ import { AgentListStatus, agentListStatusClass } from '@/components/ui/AgentList
 import { isWebClient } from '@/lib/is-web'
 import { addWorkspaceToHome, type ListedWorkspace } from '@/lib/add-to-home'
 import { agentLookColor } from '@/lib/agent-look'
-import { AddChannelPanel, AddPersonPanel, NewChannelPanel } from '@/components/HomeChat/HomeChatPickers'
-import { primaryScope } from '@/kessel/server-scope'
-import { HOME_CHAT_FEATURE } from '@/lib/home-chat/api'
-import { useStore } from 'zustand'
 
 /** A workspace as a server's `projects/list` sends it (lives with the add
  *  helper in lib/add-to-home.ts; re-exported for the picker's callers). */
@@ -212,23 +208,7 @@ function ThisServerList({
   )
 }
 
-type PickerMode = 'menu' | 'this' | 'server' | 'person' | 'new-channel' | 'channel'
-
-/** People and channels on Home (prd-home-people-channels-v1 S6): the
- *  picker offers them once any server this window knows says it has Home
- *  chat (`home-chat-v1` in `/boot-status`). */
-export function useHomeChatOffered(): boolean {
-  const pooled = useStore(hostPool.store, (s) =>
-    Object.values(s.entries).some((e) => e?.boot?.features?.includes(HOME_CHAT_FEATURE) ?? false),
-  )
-  let primary = false
-  try {
-    primary = primaryScope().serverSupports(HOME_CHAT_FEATURE)
-  } catch {
-    primary = false
-  }
-  return pooled || primary
-}
+type PickerMode = 'menu' | 'this' | 'server'
 
 /** The one Add Agent picker: This server, or From a server (desktop).
  *  `avatarFor` supplies a cached image for a row on another server when
@@ -246,7 +226,6 @@ export function AddAgentPicker({
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const [mode, setMode] = useState<PickerMode>('menu')
   const web = isWebClient()
-  const chat = useHomeChatOffered() && !web
   return (
     <div className={panelClass} role="dialog" aria-label="Add Agent">
       {mode === 'menu' && (
@@ -266,26 +245,6 @@ export function AddAgentPicker({
           )}
         </>
       )}
-      {mode === 'menu' && chat && (
-        <>
-          <div className={headClass} data-testid="home-add-chat-head">People and channels</div>
-          <button type="button" className={itemClass} data-testid="home-add-person" onClick={() => setMode('person')}>
-            <span className="truncate flex-1">Add a person</span>
-            <span className="flex-shrink-0 text-[var(--color-text-muted)]">›</span>
-          </button>
-          <button type="button" className={itemClass} data-testid="home-new-channel" onClick={() => setMode('new-channel')}>
-            <span className="truncate flex-1">New channel</span>
-            <span className="flex-shrink-0 text-[var(--color-text-muted)]">›</span>
-          </button>
-          <button type="button" className={itemClass} data-testid="home-add-channel" onClick={() => setMode('channel')}>
-            <span className="truncate flex-1">Add a channel</span>
-            <span className="flex-shrink-0 text-[var(--color-text-muted)]">›</span>
-          </button>
-        </>
-      )}
-      {mode === 'person' && <AddPersonPanel home={home} onBack={() => setMode('menu')} onAdded={onAdded} />}
-      {mode === 'new-channel' && <NewChannelPanel home={home} onBack={() => setMode('menu')} onAdded={onAdded} />}
-      {mode === 'channel' && <AddChannelPanel home={home} onBack={() => setMode('menu')} onAdded={onAdded} />}
       {mode === 'this' && <ThisServerList home={home} onBack={() => setMode('menu')} onAdded={onAdded} />}
       {mode === 'server' && (
         <FromServerList home={home} avatarFor={avatarFor} onBack={() => setMode('menu')} onAdded={onAdded} />

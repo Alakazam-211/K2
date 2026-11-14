@@ -1,5 +1,9 @@
 // People and channels on Home: the pickers (prd-home-people-channels-v1
-// §6, §7; slice S6). They open from the Add picker on Home's footer.
+// §6, §7; slice S6). They are the People and Channels sections of the one
+// Add to Home modal (`AddToHomeModal`), beside its Agents section. Each
+// section is presentational over the Home chat store: what a pick adds goes
+// out through `onAddRow` (the modal writes the Home row), so K2 Design can
+// restyle or rehouse them freely.
 //
 //   - Add a person: one list with a section per server you're signed in
 //     to, each asked with that server's own login (`/cli/home-chat/people`).
@@ -21,7 +25,7 @@
 
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
-import { useHomesStore, type Home } from '@/stores/homes'
+import type { Home, HomeRow } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { LOCAL_HOME_HOST, activeHomeHostKey, homeHostKey } from '@/lib/home-address'
 import { channelAddress, homeChatTarget, personAddress } from '@/lib/home-chat/address'
@@ -96,7 +100,16 @@ function useServersRead(servers: readonly ChatServer[], people: boolean): void {
   }, [keys, people])
 }
 
-function BackHead({ label, onBack }: { label: string; onBack: () => void }): JSX.Element {
+/** What every section takes: the Home it adds to, the add itself (true
+ *  when the row went on), and an optional back row (a menu that holds it). */
+export interface HomeChatSectionProps {
+  home: Home
+  onAddRow: (row: HomeRow) => boolean
+  onBack?: () => void
+}
+
+function BackHead({ label, onBack }: { label: string; onBack?: () => void }): JSX.Element | null {
+  if (!onBack) return null
   return (
     <button type="button" className={`${itemClass} ${headClass} normal-case flex-shrink-0`} onClick={onBack}>
       ‹ {label}
@@ -132,7 +145,7 @@ function listedPeople(st: HomeChatHostState | undefined): HomeChatPerson[] {
   return (st?.people?.people ?? []).filter((p) => /^(k2:owner|k2:connect:)/.test(p.ext))
 }
 
-export function AddPersonPanel({ home, onBack, onAdded }: { home: Home; onBack: () => void; onAdded?: (address: string) => void }): JSX.Element {
+export function AddPersonPanel({ home, onAddRow, onBack }: HomeChatSectionProps): JSX.Element {
   const servers = useChatServers()
   useServersRead(servers, true)
   const [query, setQuery] = useState('')
@@ -196,9 +209,7 @@ export function AddPersonPanel({ home, onBack, onAdded }: { home: Home; onBack: 
       })
       if (same) return
     }
-    if (useHomesStore.getState().addRow(home.id, { kind: 'person', address, workspaceId: null, label: person.displayName })) {
-      onAdded?.(address)
-    }
+    onAddRow({ kind: 'person', address, workspaceId: null, label: person.displayName })
   }
 
   return (
@@ -224,7 +235,7 @@ export function AddPersonPanel({ home, onBack, onAdded }: { home: Home; onBack: 
 
 type ChannelListing = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ok'; channels: HomeChatChannel[] }
 
-export function AddChannelPanel({ home, onBack, onAdded }: { home: Home; onBack: () => void; onAdded?: (address: string) => void }): JSX.Element {
+export function AddChannelPanel({ home, onAddRow, onBack }: HomeChatSectionProps): JSX.Element {
   const servers = useChatServers()
   useServersRead(servers, false)
   const [query, setQuery] = useState('')
@@ -290,7 +301,7 @@ export function AddChannelPanel({ home, onBack, onAdded }: { home: Home; onBack:
     const address = channelAddress(conv, hostKey)
     if (!c || !address) return
     // Joined when it opens (the daemon's `view`, HP-27).
-    if (useHomesStore.getState().addRow(home.id, { kind: 'channel', address, workspaceId: null, label: c.name })) onAdded?.(address)
+    onAddRow({ kind: 'channel', address, workspaceId: null, label: c.name })
   }
   return (
     <>
@@ -335,7 +346,8 @@ export async function waitForChannelId(
   return null
 }
 
-export function NewChannelPanel({ home, onBack, onAdded }: { home: Home; onBack: () => void; onAdded?: (address: string) => void }): JSX.Element {
+/** `onDone`: the channel is made and on the Home (the modal closes). */
+export function NewChannelPanel({ onAddRow, onBack, onDone }: HomeChatSectionProps & { onDone?: () => void }): JSX.Element {
   const servers = useChatServers()
   useServersRead(servers, true)
   const byHost = useHomeChatStore((s) => s.byHost)
@@ -363,11 +375,11 @@ export function NewChannelPanel({ home, onBack, onAdded }: { home: Home; onBack:
         return
       }
       const address = channelAddress(conv, server.key)
-      if (address && useHomesStore.getState().addRow(home.id, { kind: 'channel', address, workspaceId: null, label: name.trim() })) {
-        onAdded?.(address)
-      }
+      if (address) onAddRow({ kind: 'channel', address, workspaceId: null, label: name.trim() })
       setState({ kind: 'idle' })
-      onBack()
+      setName('')
+      setMembers(new Set())
+      onDone?.()
     } catch (e) {
       setState({ kind: 'error', line: daemonErrorText(e) || String(e) })
     }
@@ -445,7 +457,7 @@ export function NewChannelPanel({ home, onBack, onAdded }: { home: Home; onBack:
               ))
             )}
             {state.kind !== 'idle' && (
-              <p className={state.kind === 'error' ? 'text-[var(--color-status-needs-you)]' : 'text-[var(--color-text-muted)]'} data-testid="home-chat-new-channel-state">
+              <p className={state.kind === 'error' ? 'text-[var(--color-status-error-text)]' : 'text-[var(--color-text-muted)]'} data-testid="home-chat-new-channel-state">
                 {state.line}
               </p>
             )}

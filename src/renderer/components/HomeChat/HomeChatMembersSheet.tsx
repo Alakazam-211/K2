@@ -166,7 +166,7 @@ export function HomeChatMembersSheet({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[12px]">
         {error && (
-          <p className="mb-2 text-[11px] text-[var(--color-status-needs-you)]" data-testid="home-chat-members-error">
+          <p className="mb-2 text-[11px] text-[var(--color-status-error-text)]" data-testid="home-chat-members-error">
             {error}
           </p>
         )}

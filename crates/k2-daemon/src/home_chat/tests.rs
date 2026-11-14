@@ -367,6 +367,6 @@ fn members_take_a_conv_or_a_home_slug() {
         let r = routes::named_channel(&q(&[("slug", bad)])).unwrap_err();
         assert_eq!((r.status, r.code.as_str()), (400, "usage"), "{bad}");
     }
-    let r = routes::named_channel(&q(&[("conv", "not-an-id")])).unwrap_err();
+    let r = routes::named_channel(&q(&[("conv", "../600")])).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (400, "usage"));
 }

@@ -7,9 +7,15 @@
 //
 // Head: "Add to Home", then "Adds to <icon> <group>": it always adds to the
 // current group. A tab bar between that line and the search appears only
-// once there is more than one kind to add (`ADD_TO_HOME_SECTIONS`): today
-// only Agents, so none shows. Home chat adds People and Channels as
-// sections here.
+// once there is more than one kind to add (`addToHomeSections`): Agents,
+// and People and Channels once a server this window knows has Home chat
+// (prd-home-people-channels-v1 S6; `useHomeChatOffered`).
+//
+// People: everyone you share a server with (owner, admin, member and Voice
+// & Chat only logins), never App users, disabled logins or agents. Channels:
+// the channels you can see, or New channel. Their sections
+// (`components/HomeChat/HomeChatPickers`) hand a picked row to `onAddRow`;
+// the dialog adds it to the group and closes, as for an agent.
 //
 // Agents: one search ("Search agents...") over one list with a section per
 // source: this computer (the connected server), then each saved server
@@ -33,7 +39,10 @@ import { SearchField } from '@/components/ui/SearchField'
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
-import { selectedHome, useHomesStore, type Home } from '@/stores/homes'
+import { selectedHome, useHomesStore, type Home, type HomeRow } from '@/stores/homes'
+import { useHomeChatOffered } from '@/stores/home-chat'
+import { isWebClient } from '@/lib/is-web'
+import { AddChannelPanel, AddPersonPanel, NewChannelPanel } from '@/components/HomeChat/HomeChatPickers'
 import { GroupGlyph } from './groups/GroupGlyph'
 import { useHomeGroups } from './groups/useHomeGroups'
 import { useHomeAddPickerStore } from './home-room'
@@ -46,11 +55,20 @@ import {
   type HomeAvatarLookup,
 } from './HomeAddPanels'
 
-/** The kinds a Home holds. Home chat adds 'people' and 'channels'. */
-export type AddToHomeSection = 'agents'
+/** The kinds a Home holds. */
+export type AddToHomeSection = 'agents' | 'people' | 'channels'
 
-/** The sections in tab order. With one, there is no tab bar. */
-export const ADD_TO_HOME_SECTIONS: ReadonlyArray<{ id: AddToHomeSection; label: string }> = [{ id: 'agents', label: 'Agents' }]
+/** Every section in tab order. With one shown, there is no tab bar. */
+export const ADD_TO_HOME_SECTIONS: ReadonlyArray<{ id: AddToHomeSection; label: string }> = [
+  { id: 'agents', label: 'Agents' },
+  { id: 'people', label: 'People' },
+  { id: 'channels', label: 'Channels' },
+]
+
+/** The sections shown: People and Channels only where Home chat is on. */
+export function addToHomeSections(chat: boolean): ReadonlyArray<{ id: AddToHomeSection; label: string }> {
+  return chat ? ADD_TO_HOME_SECTIONS : ADD_TO_HOME_SECTIONS.filter((s) => s.id === 'agents')
+}
 
 /** The dialog's most, and its margins from the window (the Groups dialog's). */
 export const ADD_TO_HOME_MAX = { width: 560, height: 540 } as const
@@ -73,8 +91,11 @@ export interface AddToHomeModalProps {
   /** The section it opens on. */
   section?: AddToHomeSection
   onClose: () => void
-  /** An agent was added (its address). The dialog closes right after. */
+  /** A row was added (its address). The dialog closes right after. */
   onAdded?: (address: string) => void
+  /** A person or channel row picked (default: add it to `home`). True when
+   *  it went on the group. */
+  onAddRow?: (row: HomeRow) => boolean
   avatarFor?: HomeAvatarLookup
 }
 
@@ -262,15 +283,27 @@ export function AddAgentsPanel({
   )
 }
 
-export function AddToHomeModal({ home, index, icon, section = 'agents', onClose, onAdded, avatarFor }: AddToHomeModalProps): JSX.Element {
+export function AddToHomeModal({ home, index, icon, section = 'agents', onClose, onAdded, onAddRow, avatarFor }: AddToHomeModalProps): JSX.Element {
   const titleId = useId()
-  const [tab, setTab] = useState<AddToHomeSection>(section)
+  const sections = addToHomeSections(useHomeChatOffered() && !isWebClient())
+  const [picked, setTab] = useState<AddToHomeSection>(section)
+  const tab = sections.some((s) => s.id === picked) ? picked : 'agents'
+  const [channelMode, setChannelMode] = useState<'pick' | 'new'>('pick')
   const added = useCallback(
     (address: string) => {
       onAdded?.(address)
       onClose()
     },
     [onAdded, onClose],
+  )
+  // A person or channel: add one, then close (as for an agent).
+  const addRow = useCallback(
+    (row: HomeRow): boolean => {
+      const ok = onAddRow ? onAddRow(row) : useHomesStore.getState().addRow(home.id, row)
+      if (ok) added(row.address)
+      return ok
+    },
+    [onAddRow, home.id, added],
   )
   return createPortal(
     <>
@@ -296,10 +329,17 @@ export function AddToHomeModal({ home, index, icon, section = 'agents', onClose,
             <b className="min-w-0 truncate font-semibold text-[var(--color-text-primary)]">{home.name}</b>
           </p>
         </div>
-        {ADD_TO_HOME_SECTIONS.length > 1 && (
+        {sections.length > 1 && (
           <div role="tablist" className="flex flex-shrink-0 gap-1 px-5 pb-2.5" data-add-to-home-tabs="">
-            {ADD_TO_HOME_SECTIONS.map((s) => (
-              <button key={s.id} type="button" role="tab" aria-selected={tab === s.id} onClick={() => setTab(s.id)}>
+            {sections.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === s.id}
+                data-testid={`add-to-home-tab-${s.id}`}
+                onClick={() => setTab(s.id)}
+              >
                 {s.label}
               </button>
             ))}
@@ -307,6 +347,20 @@ export function AddToHomeModal({ home, index, icon, section = 'agents', onClose,
         )}
         <div className="flex min-h-0 flex-1 flex-col" data-add-to-home-panel={tab}>
           {tab === 'agents' && <AddAgentsPanel home={home} onAdded={added} onCancel={onClose} avatarFor={avatarFor} />}
+          {tab === 'people' && <AddPersonPanel home={home} onAddRow={addRow} />}
+          {tab === 'channels' && (
+            <>
+              <div role="tablist" className="flex flex-shrink-0 gap-2 px-5 pb-1.5 type-hint" data-add-channel-mode={channelMode}>
+                <button type="button" role="tab" aria-selected={channelMode === 'pick'} data-testid="add-to-home-channels-pick" onClick={() => setChannelMode('pick')}>
+                  Add a channel
+                </button>
+                <button type="button" role="tab" aria-selected={channelMode === 'new'} data-testid="add-to-home-channels-new" onClick={() => setChannelMode('new')}>
+                  New channel
+                </button>
+              </div>
+              {channelMode === 'pick' ? <AddChannelPanel home={home} onAddRow={addRow} /> : <NewChannelPanel home={home} onAddRow={addRow} />}
+            </>
+          )}
         </div>
       </DialogFrame>
     </>,

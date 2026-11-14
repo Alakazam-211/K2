@@ -13,13 +13,15 @@
 // one closes a Grok Bot chat and a remote room on Home; picking an agent
 // closes it.
 
-import { create } from 'zustand'
+import { create, useStore } from 'zustand'
 import { useEffect } from 'react'
+import { hostPool } from '@/lib/host-pool-instance'
 import { primaryScope, scopeForHost, type ServerScope } from '@/kessel/server-scope'
 import { homeRooms } from '@/stores/home-rooms'
 import { usePageViewStore } from '@/stores/page-view'
 import { closeGrokChat, useGrokBotsStore } from '@/stores/grokbots'
 import {
+  HOME_CHAT_FEATURE,
   fetchHomeChatPeople,
   fetchHomeChatStatus,
   fetchHomeChatSummary,
@@ -127,6 +129,21 @@ export const useHomeChatStore = create<HomeChatStore>((set, get) => ({
 useGrokBotsStore.subscribe((s, prev) => {
   if (s.open && s.open !== prev.open) useHomeChatStore.getState().closeChat()
 })
+
+/** Add to Home offers People and Channels once any server this window
+ *  knows says it has Home chat (`home-chat-v1` in `/boot-status`). */
+export function useHomeChatOffered(): boolean {
+  const pooled = useStore(hostPool.store, (s) =>
+    Object.values(s.entries).some((e) => e?.boot?.features?.includes(HOME_CHAT_FEATURE) ?? false),
+  )
+  let primary = false
+  try {
+    primary = primaryScope().serverSupports(HOME_CHAT_FEATURE)
+  } catch {
+    primary = false
+  }
+  return pooled || primary
+}
 
 /** Close the open Home chat (an agent or a Grok Bot was picked). */
 export function closeHomeChat(): void {

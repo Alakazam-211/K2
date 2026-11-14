@@ -458,10 +458,13 @@ function GetStartedSlot({
     let listAnim: Animation
     let buttonAnim: Animation
     try {
+      // The list's top line is part of its height: at no height it has no
+      // line either, so the fold neither starts nor ends with a 1px step.
+      const edge = (h: number): Keyframe => (h > 0 ? {} : { borderTopWidth: '0px' })
       listAnim = list.animate(
         showing
-          ? [{ height: px(from.list), opacity: 0 }, { opacity: 1, offset: 0.65 }, { height: px(listTo), opacity: 1 }]
-          : [{ height: px(from.list), opacity: 1 }, { opacity: 1, offset: 0.3 }, { height: px(listTo), opacity: 0 }],
+          ? [{ height: px(from.list), opacity: 0, ...edge(from.list) }, { opacity: 1, offset: 0.65 }, { height: px(listTo), opacity: 1 }]
+          : [{ height: px(from.list), opacity: 1 }, { opacity: 1, offset: 0.3 }, { height: px(listTo), opacity: 0, ...edge(listTo) }],
         timing,
       )
       buttonAnim = slot.animate(

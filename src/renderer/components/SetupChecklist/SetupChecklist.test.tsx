@@ -682,6 +682,9 @@ describe('the fold between the list and the Get started button', () => {
     // The list closes to nothing and fades out late; the button's room opens
     // and it fades in.
     expect(list.keyframes.at(-1)).toMatchObject({ height: '0px', opacity: 0 })
+    // At no height the list has no top line either: no 1px step at the end.
+    expect(list.keyframes.at(-1)).toMatchObject({ borderTopWidth: '0px' })
+    expect(list.keyframes[0]).not.toHaveProperty('borderTopWidth')
     expect(list.keyframes[1]).toMatchObject({ opacity: 1 })
     expect(button.keyframes[0]).toMatchObject({ height: '0px', opacity: 0 })
     expect(button.keyframes.at(-1)).toMatchObject({ opacity: 1 })
@@ -711,6 +714,9 @@ describe('the fold between the list and the Get started button', () => {
     const list = made.find((m) => m.el === checklist())!
     const button = made.find((m) => m.el.hasAttribute('data-setup-checklist-collapsed'))!
     expect(list.keyframes[0]).toMatchObject({ height: '0px', opacity: 0 })
+    // It opens from no line too, so the first frame doesn't step by 1px.
+    expect(list.keyframes[0]).toMatchObject({ borderTopWidth: '0px' })
+    expect(list.keyframes.at(-1)).not.toHaveProperty('borderTopWidth')
     expect(list.keyframes.at(-1)).toMatchObject({ opacity: 1 })
     expect(button.keyframes.at(-1)).toMatchObject({ height: '0px', opacity: 0 })
     // Without the Style's tokens, the fallback length.

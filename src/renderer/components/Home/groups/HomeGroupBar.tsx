@@ -25,6 +25,10 @@ export interface GroupBarItem {
   icon: string | null
   /** Position in the group list (0-based). */
   order: number
+  /** "Most recent at the top" is on: the bar marks the group. */
+  recentFirst: boolean
+  /** Its pinned rows' addresses, in pin order (at most 9). */
+  pinned: readonly string[]
 }
 
 /** Which group's card is open, and what it sits against (default: that
@@ -43,6 +47,15 @@ export interface HomeGroupBarProps {
   /** Make a group; returns its id (its card opens), or null. */
   onCreate(): string | null
   onDelete(id: string): void
+  /** "Most recent at the top" on or off (the card's Group settings). */
+  onSetRecentFirst(id: string, on: boolean): void
+  /** The groups in a new order (the card's Group settings). */
+  onReorderGroups(ids: string[]): void
+  /** Pins live on the agent rows (the Home nav's row menu and drag); the
+   *  bar only shows `pinned`. Here for one contract with the row list. */
+  onPin?(groupId: string, rowId: string): void
+  onUnpin?(groupId: string, rowId: string): void
+  onReorderPins?(groupId: string, rowIds: string[]): void
   swipe: SwipeProgress
   /** `vertical` in the collapsed rail. */
   orientation?: 'horizontal' | 'vertical'
@@ -68,6 +81,8 @@ export default function HomeGroupBar({
   onSetIcon,
   onCreate,
   onDelete,
+  onSetRecentFirst,
+  onReorderGroups,
   swipe,
   orientation = 'horizontal',
   editing: editingProp,
@@ -153,8 +168,10 @@ export default function HomeGroupBar({
               data-group-id={g.id}
               data-current={current ? '' : undefined}
               aria-label={g.name}
+              aria-description={g.recentFirst ? 'Most recent at the top' : undefined}
               aria-current={current ? 'true' : undefined}
-              title={chord ? `${g.name} (${chord})` : g.name}
+              data-recent-first={g.recentFirst ? '' : undefined}
+              title={`${chord ? `${g.name} (${chord})` : g.name}${g.recentFirst ? ' · Most recent at the top' : ''}`}
               className={`${ITEM} ${current ? ITEM_CURRENT : ITEM_REST}`}
               onClick={() => onSelect(g.id)}
               onContextMenu={(e) => {
@@ -183,6 +200,22 @@ export default function HomeGroupBar({
               }}
             >
               <GroupGlyph icon={g.icon} index={i} />
+              {g.recentFirst && (
+                // The "Recent first" mark: a small clock hand in the corner.
+                <svg
+                  aria-hidden="true"
+                  data-recent-first-mark=""
+                  className="pointer-events-none absolute right-0 top-0 h-2.5 w-2.5"
+                  viewBox="0 0 10 10"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.25}
+                  strokeLinecap="square"
+                >
+                  <circle cx="5" cy="5" r="4" />
+                  <path d="M5 2.75V5h1.75" />
+                </svg>
+              )}
               {current && (
                 <span
                   aria-hidden="true"
@@ -236,6 +269,11 @@ export default function HomeGroupBar({
           onSetIcon={onSetIcon}
           onDelete={onDelete}
           onClose={() => setEditing(null)}
+          groups={groups}
+          currentId={currentId}
+          onSetRecentFirst={onSetRecentFirst}
+          onReorderGroups={onReorderGroups}
+          onEditGroup={(id) => setEditing({ id, anchor: editingAnchor })}
         />
       )}
     </div>

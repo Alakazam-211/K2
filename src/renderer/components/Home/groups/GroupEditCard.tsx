@@ -2,7 +2,9 @@
 // press on touch, or the "…" beside the current group's name). It holds the
 // group's name (saved as you type), its icon (search, a Recent row, the
 // grid, or no icon for the numbered dot) and Delete (confirm once; never
-// the last group). Escape or a click outside closes it.
+// the last group), and "Group settings…" (every group: name, icon, "Most
+// recent at the top", order; `GroupSettingsList`). Escape or a click
+// outside closes it.
 //
 // Presentational: everything it changes goes out through its callbacks, so
 // K2 Design can restyle it without touching the logic (`useHomeGroups`).
@@ -17,6 +19,7 @@ import { HOME_NAME_MAX } from '@/stores/homes'
 import { groupIcon, searchGroupIcons, type GroupIconDef } from '@/lib/group-icons'
 import { readRecentGroupIcons, rememberGroupIcon } from '@/lib/group-icon-recents'
 import { GroupDot, GroupIconSvg } from './GroupGlyph'
+import GroupSettingsList from './GroupSettingsList'
 import type { GroupBarItem } from './HomeGroupBar'
 
 export interface GroupEditCardProps {
@@ -33,6 +36,13 @@ export interface GroupEditCardProps {
   onSetIcon(id: string, icon: string | null): void
   onDelete(id: string): void
   onClose(): void
+  /** For the "Group settings" view: every group, in order. */
+  groups: readonly GroupBarItem[]
+  currentId: string
+  onSetRecentFirst(id: string, on: boolean): void
+  onReorderGroups(ids: string[]): void
+  /** Show another group's card (from the settings list). */
+  onEditGroup(id: string): void
 }
 
 const CELL =
@@ -73,7 +83,13 @@ export default function GroupEditCard({
   onSetIcon,
   onDelete,
   onClose,
+  groups,
+  currentId,
+  onSetRecentFirst,
+  onReorderGroups,
+  onEditGroup,
 }: GroupEditCardProps): React.JSX.Element | null {
+  const [view, setView] = useState<'group' | 'settings'>('group')
   const menu = useAnchoredMenu<HTMLElement>({
     open: true,
     onClose,
@@ -125,6 +141,18 @@ export default function GroupEditCard({
         }
       }}
     >
+      {view === 'settings' ? (
+        <GroupSettingsList
+          groups={groups}
+          currentId={currentId}
+          onRename={onRename}
+          onSetRecentFirst={onSetRecentFirst}
+          onReorderGroups={onReorderGroups}
+          onEditGroup={(id) => (id === group.id ? setView('group') : onEditGroup(id))}
+          onBack={() => setView('group')}
+        />
+      ) : (
+      <>
       <label className="flex flex-col gap-1">
         <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Name</span>
         <input
@@ -188,6 +216,15 @@ export default function GroupEditCard({
         )}
       </div>
 
+      <button
+        type="button"
+        data-group-settings-open=""
+        className="w-full px-2 py-1 text-left text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] cursor-pointer"
+        onClick={() => setView('settings')}
+      >
+        Group settings…
+      </button>
+
       <div className="border-t border-[var(--color-border)] pt-2">
         {confirming ? (
           <div className="flex items-center gap-2" data-group-delete-confirm="">
@@ -221,6 +258,8 @@ export default function GroupEditCard({
           </button>
         )}
       </div>
+      </>
+      )}
     </div>,
   )
 }

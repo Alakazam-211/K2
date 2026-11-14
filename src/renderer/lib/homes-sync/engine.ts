@@ -22,7 +22,8 @@
 //   cursor  — the server cursor this device has caught up to.
 //   redirects — merged-away Home id → the Home it went into.
 //
-// What syncs: Home names, icons and order, rows and row order. What stays local:
+// What syncs: Home names, icons, "Most recent at the top" and order; rows,
+// row order, pins and the person's last send to each. What stays local:
 // the selected Home, expanded state, and label / workspaceId repairs
 // (`repairRows`), which would otherwise flip-flop between devices. A row's
 // label travels when the row is created; an address change (a handle
@@ -30,7 +31,7 @@
 
 import type { Home, HomeRow } from '@/stores/homes'
 import { GROUP_ICON_NAME_RE } from '@/lib/group-icon-name'
-import { assignOrders, compareOrder, orderBetween } from '@/lib/fractional-index'
+import { assignOrders, compareOrder, isValidOrder, orderBetween } from '@/lib/fractional-index'
 
 export interface WireHome {
   kind: 'home'
@@ -44,6 +45,8 @@ export interface WireHome {
   /** Home groups (0305): a Lucide icon name, null = none. Absent = this
    *  item doesn't say (an older server or device): the known icon stays. */
   icon?: string | null
+  /** "Most recent at the top" (0305). Absent: the known value stays. */
+  recentFirst?: boolean
 }
 
 export interface WireRow {
@@ -56,6 +59,12 @@ export interface WireRow {
   updatedAt: number
   deviceId?: string
   deleted?: boolean
+  /** Its key among the group's pins (0305), null = not pinned. Absent:
+   *  the known value stays. */
+  pinOrder?: string | null
+  /** The person's last send to it (epoch ms; the server keeps the newest).
+   *  Absent: the known value stays. */
+  lastMessagedAt?: number | null
 }
 
 export type WireItem = WireHome | WireRow
@@ -180,12 +189,14 @@ function localView(homes: readonly Home[], st: SyncState, ctx: AddressMap): View
   })
   homes.forEach((h, hi) => {
     const homeItem: WireHome = { kind: 'home', id: h.id, name: h.name, order: homeOrders[hi], updatedAt: 0 }
-    // The icon rides along when the Home has one, or as null when the
-    // known copy has one (a clear must say null: a left-out icon keeps the
-    // server's).
+    // A group field rides along when it is set here, or as its "off" value
+    // when the known copy had it set (a clear must be said: a left-out
+    // field keeps the server's).
     const icon = h.icon ?? null
     const known = st.known[`h|${h.id}`]
-    if (icon !== null || (known?.kind === 'home' && (known.icon ?? null) !== null)) homeItem.icon = icon
+    const knownHome = known?.kind === 'home' ? known : undefined
+    if (icon !== null || (knownHome?.icon ?? null) !== null) homeItem.icon = icon
+    if (h.recentFirst || knownHome?.recentFirst) homeItem.recentFirst = !!h.recentFirst
     items.set(`h|${h.id}`, homeItem)
     const seen = new Set<string>()
     const rows: Array<{ row: HomeRow; address: string }> = []
@@ -200,7 +211,7 @@ function localView(homes: readonly Home[], st: SyncState, ctx: AddressMap): View
       return isLive(k) ? k.order : null
     })
     rows.forEach(({ row, address }, ri) => {
-      items.set(`r|${h.id}|${address}`, {
+      const item: WireRow = {
         kind: 'row',
         homeId: h.id,
         address,
@@ -208,18 +219,36 @@ function localView(homes: readonly Home[], st: SyncState, ctx: AddressMap): View
         workspaceId: row.workspaceId,
         order: rowOrders[ri],
         updatedAt: 0,
-      })
+      }
+      const k = st.known[`r|${h.id}|${address}`]
+      const knownRow = k?.kind === 'row' ? k : undefined
+      const pin = row.pinOrder ?? null
+      if (pin !== null || (knownRow?.pinOrder ?? null) !== null) item.pinOrder = pin
+      const sent = row.lastMessagedAt ?? null
+      if (sent !== null || (knownRow?.lastMessagedAt ?? null) !== null) item.lastMessagedAt = sent
+      items.set(`r|${h.id}|${address}`, item)
     })
   })
   return { items }
 }
 
-/** Does a view item differ from the known one in what syncs? (Names, icons
- *  and order; never labels or workspace ids.) */
+/** Does a view item differ from the known one in what syncs? (Names, icons,
+ *  "Most recent at the top", pins, last sends and order; never labels or
+ *  workspace ids.) */
 function syncedFieldsDiffer(view: WireItem, known: WireItem): boolean {
   if (view.order !== known.order) return true
   if (view.kind === 'home' && known.kind === 'home') {
-    return view.name !== known.name || (view.icon ?? null) !== (known.icon ?? null)
+    return (
+      view.name !== known.name ||
+      (view.icon ?? null) !== (known.icon ?? null) ||
+      !!view.recentFirst !== !!known.recentFirst
+    )
+  }
+  if (view.kind === 'row' && known.kind === 'row') {
+    return (
+      (view.pinOrder ?? null) !== (known.pinOrder ?? null) ||
+      (view.lastMessagedAt ?? null) !== (known.lastMessagedAt ?? null)
+    )
   }
   return false
 }
@@ -264,8 +293,17 @@ export function diffLocal(homes: readonly Home[], prev: SyncState, ctx: EngineCt
 /** A newer server item that leaves out a field added later (an older
  *  server) keeps the known value, as the daemon does for an older client. */
 function keepOmitted(c: WireItem, known: WireItem | undefined): WireItem {
-  if (c.kind === 'home' && known?.kind === 'home' && c.icon === undefined && known.icon !== undefined) {
-    return { ...c, icon: known.icon }
+  if (c.kind === 'home' && known?.kind === 'home') {
+    const out: WireHome = { ...c }
+    if (c.icon === undefined && known.icon !== undefined) out.icon = known.icon
+    if (c.recentFirst === undefined && known.recentFirst !== undefined) out.recentFirst = known.recentFirst
+    return out
+  }
+  if (c.kind === 'row' && known?.kind === 'row') {
+    const out: WireRow = { ...c }
+    if (c.pinOrder === undefined && known.pinOrder !== undefined) out.pinOrder = known.pinOrder
+    if (c.lastMessagedAt === undefined && known.lastMessagedAt !== undefined) out.lastMessagedAt = known.lastMessagedAt
+    return out
   }
   return c
 }
@@ -358,14 +396,18 @@ export function buildLocal(st: SyncState, previous: readonly Home[], ctx: Addres
       if (seen.has(address)) continue
       seen.add(address)
       const hint = hints.get(address)
-      rows.push({
+      const row: HomeRow = {
         address,
         workspaceId: hint ? hint.workspaceId : w.workspaceId,
         label: hint ? hint.label : w.label,
-      })
+      }
+      if (w.pinOrder) row.pinOrder = w.pinOrder
+      if (typeof w.lastMessagedAt === 'number') row.lastMessagedAt = w.lastMessagedAt
+      rows.push(row)
     }
     const home: Home = { id: h.id, name: h.name ?? 'Home', rows }
     if (h.icon) home.icon = h.icon
+    if (h.recentFirst) home.recentFirst = true
     return home
   })
 }
@@ -426,6 +468,7 @@ export function firstSync(local: readonly Home[], pull: PullAnswer, prev: SyncSt
   }
   for (const h of local) {
     let target: string
+    let freshHome = false
     const seedMatch =
       !byName.has(nameKey(h.name)) && h.rows.length === 0 && !h.icon && SEED_NAMES.has(nameKey(h.name))
         ? pristineServerSeed()
@@ -447,13 +490,15 @@ export function firstSync(local: readonly Home[], pull: PullAnswer, prev: SyncSt
       target = h.id
       const item: WireHome = { kind: 'home', id: h.id, name: h.name, order: lastHomeOrder, updatedAt: ctx.now, deviceId: ctx.deviceId }
       if (h.icon) item.icon = h.icon
+      if (h.recentFirst) item.recentFirst = true
       add(item)
       byName.set(nameKey(h.name), h.id)
+      freshHome = true
     }
     for (const r of h.rows) {
       const address = ctx.toWire(r.address)
       if (isLive(st.known[`r|${target}|${address}`])) continue
-      add({
+      const row: WireRow = {
         kind: 'row',
         homeId: target,
         address,
@@ -462,7 +507,12 @@ export function firstSync(local: readonly Home[], pull: PullAnswer, prev: SyncSt
         order: orderBetween(lastRowOrder(target), null),
         updatedAt: ctx.now,
         deviceId: ctx.deviceId,
-      })
+      }
+      // Pins come along only with a group that is new to the server (a
+      // merged group keeps the server's pins and their limit of nine).
+      if (freshHome && r.pinOrder) row.pinOrder = r.pinOrder
+      if (typeof r.lastMessagedAt === 'number') row.lastMessagedAt = r.lastMessagedAt
+      add(row)
     }
   }
   return { state: st, changes }
@@ -511,6 +561,7 @@ export function parseWireItem(v: unknown): WireItem | null {
     if (deleted) item.deleted = true
     if (typeof o.mergedInto === 'string') item.mergedInto = o.mergedInto
     if (o.icon === null || (typeof o.icon === 'string' && GROUP_ICON_NAME_RE.test(o.icon))) item.icon = o.icon
+    if (typeof o.recentFirst === 'boolean') item.recentFirst = o.recentFirst
     return item
   }
   if (o.kind === 'row' && typeof o.homeId === 'string' && typeof o.address === 'string' && o.address.includes('::')) {
@@ -525,6 +576,10 @@ export function parseWireItem(v: unknown): WireItem | null {
       deviceId,
     }
     if (deleted) item.deleted = true
+    if (o.pinOrder === null || (typeof o.pinOrder === 'string' && isValidOrder(o.pinOrder))) item.pinOrder = o.pinOrder
+    if (o.lastMessagedAt === null || (typeof o.lastMessagedAt === 'number' && o.lastMessagedAt > 0)) {
+      item.lastMessagedAt = o.lastMessagedAt
+    }
     return item
   }
   return null

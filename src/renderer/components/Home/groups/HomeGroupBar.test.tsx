@@ -21,9 +21,9 @@ import { GROUP_ICON_RECENTS_KEY } from '@/lib/group-icon-recents'
 import { selectedHome, useHomesStore } from '@/stores/homes'
 
 const G: GroupBarItem[] = [
-  { id: 'g1', name: 'Work', icon: 'briefcase', order: 0 },
-  { id: 'g2', name: 'Play', icon: null, order: 1 },
-  { id: 'g3', name: 'Later', icon: 'not-a-lucide-icon', order: 2 },
+  { id: 'g1', name: 'Work', icon: 'briefcase', order: 0, recentFirst: true, pinned: ['a::s'] },
+  { id: 'g2', name: 'Play', icon: null, order: 1, recentFirst: false, pinned: [] },
+  { id: 'g3', name: 'Later', icon: 'not-a-lucide-icon', order: 2, recentFirst: false, pinned: [] },
 ]
 
 function props(over: Partial<HomeGroupBarProps> = {}): HomeGroupBarProps {
@@ -35,6 +35,8 @@ function props(over: Partial<HomeGroupBarProps> = {}): HomeGroupBarProps {
     onSetIcon: vi.fn(),
     onCreate: vi.fn(() => null),
     onDelete: vi.fn(),
+    onSetRecentFirst: vi.fn(),
+    onReorderGroups: vi.fn(),
     swipe: SWIPE_REST,
     ...over,
   }
@@ -113,7 +115,7 @@ describe('the group bar', () => {
   })
 
   it('with many groups the bar scrolls and brings the current group into view', () => {
-    const many = Array.from({ length: 14 }, (_, i) => ({ id: `m${i}`, name: `G${i}`, icon: null, order: i }))
+    const many = Array.from({ length: 14 }, (_, i) => ({ id: `m${i}`, name: `G${i}`, icon: null, order: i, recentFirst: false, pinned: [] }))
     const seen: string[] = []
     // jsdom has no scrollIntoView: record which element asked to be shown.
     const proto = HTMLElement.prototype as unknown as { scrollIntoView?: (o?: unknown) => void }

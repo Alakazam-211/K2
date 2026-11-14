@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react'
 import { nextGroupName, selectedHome, useHomesStore } from '@/stores/homes'
 import { HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
 import { useGroupSwipeStore } from '@/hooks/useGroupSwipe'
+import { pinnedRows } from '@/lib/home-row-order'
 import type { GroupBarItem, GroupEditing, HomeGroupBarProps } from './HomeGroupBar'
 
 export interface HomeGroups {
@@ -29,7 +30,15 @@ export function useHomeGroups(): HomeGroups {
   const [editing, setEditing] = useState<GroupEditing | null>(null)
 
   const groups = useMemo<GroupBarItem[]>(
-    () => homes.map((h, order) => ({ id: h.id, name: h.name, icon: h.icon ?? null, order })),
+    () =>
+      homes.map((h, order) => ({
+        id: h.id,
+        name: h.name,
+        icon: h.icon ?? null,
+        order,
+        recentFirst: !!h.recentFirst,
+        pinned: pinnedRows(h).map((r) => r.address),
+      })),
     [homes],
   )
   const index = Math.max(0, homes.findIndex((h) => h.id === current.id))
@@ -54,6 +63,21 @@ export function useHomeGroups(): HomeGroups {
     },
     onDelete: (id) => {
       useHomesStore.getState().deleteHome(id)
+    },
+    onSetRecentFirst: (id, on) => {
+      useHomesStore.getState().setRecentFirst(id, on)
+    },
+    onReorderGroups: (ids) => {
+      useHomesStore.getState().reorderHomes(ids)
+    },
+    onPin: (groupId, rowId) => {
+      useHomesStore.getState().pinRow(groupId, rowId)
+    },
+    onUnpin: (groupId, rowId) => {
+      useHomesStore.getState().unpinRow(groupId, rowId)
+    },
+    onReorderPins: (groupId, rowIds) => {
+      useHomesStore.getState().reorderPins(groupId, rowIds)
     },
   }
 

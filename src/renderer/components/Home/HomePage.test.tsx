@@ -883,12 +883,13 @@ describe('Home — the Agents page shell', () => {
     })
     expect(menu.items[0].map((i) => i.label)).toContain('Remove from Group 1')
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toEqual(['cortana::local', 'bee::b.k2.dev'])
-    // The connected row's menu is the workspace menu + remove.
+    // The connected row's menu is the workspace menu, Pin (with the ⌘N it
+    // will get) and remove.
     menu.next = null
     await act(async () => {
       fireEvent.contextMenu(rowOf('Cortana'))
     })
-    expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-remove'])
+    expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-pin', 'home-remove'])
   })
 
   it('From a server is one list with a section per saved server, minus the connected one (Q3)', async () => {

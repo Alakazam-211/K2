@@ -108,9 +108,18 @@ export class FakeHomeServer {
         superseded++
         continue
       }
-      // As the daemon: a left-out icon keeps the stored one, null clears.
-      if (item.kind === 'home' && item.icon === undefined) {
-        item.icon = ex?.item.kind === 'home' ? (ex.item.icon ?? null) : null
+      // As the daemon: a left-out field keeps the stored one, null clears,
+      // and the last send never moves back.
+      if (item.kind === 'home') {
+        const old = ex?.item.kind === 'home' ? ex.item : undefined
+        if (item.icon === undefined) item.icon = old?.icon ?? null
+        if (item.recentFirst === undefined) item.recentFirst = old?.recentFirst ?? false
+      } else {
+        const old = ex?.item.kind === 'row' ? ex.item : undefined
+        if (item.pinOrder === undefined) item.pinOrder = old?.pinOrder ?? null
+        const stored = old?.lastMessagedAt ?? null
+        if (item.lastMessagedAt === undefined) item.lastMessagedAt = stored
+        else if (item.lastMessagedAt !== null && stored !== null) item.lastMessagedAt = Math.max(item.lastMessagedAt, stored)
       }
       if (item.kind === 'home' && item.deleted && ex && !ex.item.deleted) {
         const others = [...this.items.values()].filter((s) => s.item.kind === 'home' && !s.item.deleted && itemKey(s.item) !== k)

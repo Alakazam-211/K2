@@ -21,6 +21,7 @@ import { useHomeAddPickerStore, useRowStatus } from './home-room'
 import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupChecklist'
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
 import HomeGroupBar from './groups/HomeGroupBar'
+import { displayRows } from '@/lib/home-row-order'
 import { useHomeGroups } from './groups/useHomeGroups'
 
 const RAIL_WIDTH = 48
@@ -104,7 +105,7 @@ export default function HomeIconRail(): React.JSX.Element {
       </button>
 
       <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full">
-        {home.rows.map((row) => (
+        {displayRows(home).map((row) => (
           <RailRow key={row.address} home={home} row={row} />
         ))}
       </div>

@@ -39,6 +39,10 @@ import { homeHostKey } from '@/lib/host-key'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { onSavedHostRekey } from '@/lib/connect-host-hooks'
 import { GROUP_ICON_NAME_RE } from '@/lib/group-icon-name'
+import { isValidOrder } from '@/lib/fractional-index'
+import { MAX_PINS, isPinned, pinKeys, pinnedRows } from '@/lib/home-row-order'
+import { onUserSend } from '@/lib/user-send-bus'
+import { createSendStamper } from '@/lib/home-row-stamp'
 
 export const HOMES_STORAGE_KEY = 'k2.homes.v1'
 export const HOMES_LAST_SELECTED_KEY = 'k2.homes.lastSelected'
@@ -71,6 +75,12 @@ export interface HomeRow {
   workspaceId: string | null
   /** Display name when the row was added / last repaired. */
   label: string
+  /** Home groups: its key among the group's pinned rows (fractional
+   *  index); absent = not pinned. Synced. */
+  pinOrder?: string
+  /** Home groups: the person's last send to this agent (epoch ms), for
+   *  "Most recent at the top". Synced; never set by an agent's message. */
+  lastMessagedAt?: number
 }
 
 export interface Home {
@@ -80,9 +90,15 @@ export interface Home {
   /** Home groups: a Lucide icon name (`lib/group-icons.ts`), synced like the
    *  name. Absent or null: the group bar draws a numbered dot. */
   icon?: string | null
+  /** Home groups: "Most recent at the top": unpinned rows sort by their
+   *  last send (`lib/home-row-order.ts`). Absent = manual order. Synced. */
+  recentFirst?: boolean
 }
 
 export { GROUP_ICON_NAME_RE }
+
+/** What `pinRow` did. `full`: the group already has MAX_PINS pins. */
+export type PinResult = 'pinned' | 'already' | 'full' | 'missing'
 
 export interface HomesDoc {
   version: 1
@@ -125,7 +141,9 @@ function isRow(v: unknown): v is HomeRow {
     typeof r.address === 'string' &&
     parseHomeAddress(r.address) !== null &&
     (r.workspaceId === null || typeof r.workspaceId === 'string') &&
-    typeof r.label === 'string'
+    typeof r.label === 'string' &&
+    (r.pinOrder === undefined || (typeof r.pinOrder === 'string' && isValidOrder(r.pinOrder))) &&
+    (r.lastMessagedAt === undefined || (typeof r.lastMessagedAt === 'number' && r.lastMessagedAt > 0))
   )
 }
 
@@ -137,6 +155,7 @@ function isHome(v: unknown): v is Home {
     h.id.length > 0 &&
     typeof h.name === 'string' &&
     (h.icon === undefined || h.icon === null || (typeof h.icon === 'string' && GROUP_ICON_NAME_RE.test(h.icon))) &&
+    (h.recentFirst === undefined || typeof h.recentFirst === 'boolean') &&
     Array.isArray(h.rows) &&
     h.rows.every(isRow)
   )
@@ -188,6 +207,22 @@ export interface HomesState {
   /** Set (a Lucide name) or clear (null) a Home's icon. False for a name
    *  that isn't storable or a Home that is gone. */
   setHomeIcon: (id: string, icon: string | null) => boolean
+  /** "Most recent at the top" on or off for a group. False when it's gone. */
+  setRecentFirst: (id: string, on: boolean) => boolean
+  /** Put the groups in this order (`ids` must be exactly the groups). */
+  reorderHomes: (ids: readonly string[]) => boolean
+  /** Pin a row at the end of the group's pins (at most MAX_PINS). */
+  pinRow: (homeId: string, address: string) => PinResult
+  unpinRow: (homeId: string, address: string) => boolean
+  /** Put a group's pinned rows in this order (`addresses` must be exactly
+   *  its pinned rows). */
+  reorderPins: (homeId: string, addresses: readonly string[]) => boolean
+  /** Put a group's rows in this manual order (`addresses` must be exactly
+   *  its rows). */
+  setRowOrder: (homeId: string, addresses: readonly string[]) => boolean
+  /** The person sent to the agent at `address`: stamp every row on it, in
+   *  every group (never moves a stamp back). Returns how many changed. */
+  stampRowsMessaged: (address: string, at: number) => number
   /** False for the last Home (never deleted) or an unknown id. */
   deleteHome: (id: string) => boolean
   /** False when the address is already on that Home (dedupe per Home). */
@@ -399,6 +434,125 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
         return true
       },
 
+      setRecentFirst: (id, on) => {
+        const home = get().homes.find((h) => h.id === id)
+        if (!home) return false
+        if (!!home.recentFirst === on) return true
+        const next = mapHome(id, (h) => {
+          const copy: Home = { ...h }
+          if (on) copy.recentFirst = true
+          else delete copy.recentFirst
+          return copy
+        })
+        if (!next) return false
+        commit(next)
+        return true
+      },
+
+      reorderHomes: (ids) => {
+        const homes = get().homes
+        if (ids.length !== homes.length || new Set(ids).size !== ids.length) return false
+        const byId = new Map(homes.map((h) => [h.id, h]))
+        const next: Home[] = []
+        for (const id of ids) {
+          const h = byId.get(id)
+          if (!h) return false
+          next.push(h)
+        }
+        if (next.every((h, i) => h === homes[i])) return true
+        commit(next)
+        return true
+      },
+
+      pinRow: (homeId, address) => {
+        const home = get().homes.find((h) => h.id === homeId)
+        const row = home?.rows.find((r) => r.address === address)
+        if (!home || !row) return 'missing'
+        if (isPinned(row)) return 'already'
+        const pins = pinnedRows(home)
+        if (pins.length >= MAX_PINS) return 'full'
+        const order = [...pins.map((r) => r.address), address]
+        const keys = pinKeys(order, (a) => home.rows.find((r) => r.address === a)?.pinOrder ?? null)
+        const next = mapHome(homeId, (h) => ({
+          ...h,
+          rows: h.rows.map((r) => (keys.has(r.address) && r.pinOrder !== keys.get(r.address) ? { ...r, pinOrder: keys.get(r.address) } : r)),
+        }))
+        if (!next) return 'missing'
+        commit(next)
+        return 'pinned'
+      },
+
+      unpinRow: (homeId, address) => {
+        const home = get().homes.find((h) => h.id === homeId)
+        const row = home?.rows.find((r) => r.address === address)
+        if (!row || !isPinned(row)) return false
+        const next = mapHome(homeId, (h) => ({
+          ...h,
+          rows: h.rows.map((r) => {
+            if (r.address !== address) return r
+            const copy: HomeRow = { ...r }
+            delete copy.pinOrder
+            return copy
+          }),
+        }))
+        if (!next) return false
+        commit(next)
+        return true
+      },
+
+      reorderPins: (homeId, addresses) => {
+        const home = get().homes.find((h) => h.id === homeId)
+        if (!home) return false
+        const pinned = new Set(pinnedRows(home).map((r) => r.address))
+        if (addresses.length !== pinned.size || !addresses.every((a) => pinned.has(a)) || new Set(addresses).size !== addresses.length) {
+          return false
+        }
+        const keys = pinKeys(addresses, (a) => home.rows.find((r) => r.address === a)?.pinOrder ?? null)
+        if (home.rows.every((r) => !keys.has(r.address) || r.pinOrder === keys.get(r.address))) return true
+        const next = mapHome(homeId, (h) => ({
+          ...h,
+          rows: h.rows.map((r) => (keys.has(r.address) ? { ...r, pinOrder: keys.get(r.address) } : r)),
+        }))
+        if (!next) return false
+        commit(next)
+        return true
+      },
+
+      setRowOrder: (homeId, addresses) => {
+        const home = get().homes.find((h) => h.id === homeId)
+        if (!home || addresses.length !== home.rows.length || new Set(addresses).size !== addresses.length) return false
+        const byAddress = new Map(home.rows.map((r) => [r.address, r]))
+        const rows: HomeRow[] = []
+        for (const a of addresses) {
+          const r = byAddress.get(a)
+          if (!r) return false
+          rows.push(r)
+        }
+        if (rows.every((r, i) => r === home.rows[i])) return true
+        const next = mapHome(homeId, (h) => ({ ...h, rows }))
+        if (!next) return false
+        commit(next)
+        return true
+      },
+
+      stampRowsMessaged: (address, at) => {
+        const key = address.trim().toLowerCase()
+        let changed = 0
+        const next = get().homes.map((h) => {
+          if (!h.rows.some((r) => r.address === key && (r.lastMessagedAt ?? 0) < at)) return h
+          return {
+            ...h,
+            rows: h.rows.map((r) => {
+              if (r.address !== key || (r.lastMessagedAt ?? 0) >= at) return r
+              changed++
+              return { ...r, lastMessagedAt: at }
+            }),
+          }
+        })
+        if (changed > 0) commit(next)
+        return changed
+      },
+
       deleteHome: (id) => {
         const { homes, selectedId } = get()
         if (homes.length <= 1) return false
@@ -460,7 +614,8 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
               // The new address is already on this Home — drop the stale row.
               continue
             }
-            rows.push({ ...fresh, address })
+            // A repaired row keeps its pin and last send.
+            rows.push({ ...r, ...fresh, address })
           }
           if (!homeChanged) return h
           changed = true
@@ -589,6 +744,15 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 }
 
 onSavedHostRekey((oldKey, newKey) => rekeyHomeRows(useHomesStore, oldKey, newKey))
+
+// Home groups: the person's sends stamp the agent's rows (rate-limited).
+onUserSend(
+  createSendStamper({
+    stamp: (address, at) => void useHomesStore.getState().stampRowsMessaged(address, at),
+    now: () => Date.now(),
+    schedule: (fn, ms) => setTimeout(fn, ms),
+  }),
+)
 
 /** The selected Home object (always defined). */
 export function selectedHome(s: Pick<HomesState, 'homes' | 'selectedId'>): Home {

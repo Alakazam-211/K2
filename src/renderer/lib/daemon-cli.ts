@@ -37,6 +37,7 @@ import { getPinnedAuthRecovery, notePoolRoleRefused } from '@/lib/pool-hooks'
 import { isRoleRequired } from '@/lib/voice-chat-only'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { recordCliTiming, type CliLane } from '@/lib/cli-timing'
+import { noteUserPost } from '@/lib/user-send-bus'
 
 /** A response plus its (already-consumed) body text. The body is read
  *  exactly once, up front, because BOTH the auth-failure classifier and the
@@ -534,7 +535,11 @@ export async function daemonCliPost<T = unknown>(
       body: body !== undefined ? JSON.stringify(body) : undefined,
     },
   }))
-  return parseDaemonResponse<T>(res, text)
+  const parsed = await parseDaemonResponse<T>(res, text)
+  // Home groups: a Thread post or card answer the server took is the
+  // person sending to that agent (`lib/user-send-bus.ts`).
+  noteUserPost(route, scope.hostKey, body)
+  return parsed
 }
 
 /**

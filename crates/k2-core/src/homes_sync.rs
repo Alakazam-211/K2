@@ -13,9 +13,14 @@
 //!
 //! **Items** (the wire shape the routes speak, camelCase):
 //! - Home: `{kind:"home", id, name, order, updatedAt, deleted?, mergedInto?,
-//!   icon?}` — `icon` is a Lucide icon name (`[a-z0-9-]{1,64}`) or null.
+//!   icon?, recentFirst?}` — `icon` is a Lucide icon name (`[a-z0-9-]{1,64}`)
+//!   or null; `recentFirst` sorts its unpinned rows by `lastMessagedAt`.
 //! - Row:  `{kind:"row", homeId, address:"handle::<serverId>", label,
-//!   workspaceId, order, updatedAt, deleted?}` — identity `(homeId, address)`.
+//!   workspaceId, order, updatedAt, deleted?, pinOrder?, lastMessagedAt?}` —
+//!   identity `(homeId, address)`. `pinOrder` is a fractional-index key among
+//!   the Home's pinned rows (null = not pinned; at most [`MAX_PINS`] per
+//!   Home); `lastMessagedAt` is the person's last send to that agent (epoch
+//!   ms; a push never moves it back).
 //!
 //! `order` is a fractional-index string (digits `0-9A-Za-z`, compared as
 //! plain strings, never ending in `0`), so two devices' moves merge without
@@ -26,10 +31,11 @@
 //! merged-away Home id as a redirect, so selections and Garden `seedHome`
 //! still resolve.
 //!
-//! **Fields an older client leaves out.** A field added after 0.46.1
-//! (`icon`, migration 0305) is optional on a push: left out, the stored
-//! value stays (an older device's rename must not wipe the icon a newer one
-//! set); JSON `null` clears it.
+//! **Fields an older client leaves out.** The fields added after 0.46.1
+//! (`icon`, `recentFirst`, `pinOrder`, `lastMessagedAt`, migration 0305) are
+//! optional on a push: left out, the stored value stays (an older device's
+//! rename must not wipe the icon or pins a newer one set); JSON `null` clears
+//! it (`recentFirst`: null is the same as left out).
 //!
 //! **Cursor.** Each person has a monotonic `seq`; every push that changes
 //! something bumps it once and stamps the changed items with it. A pull
@@ -70,6 +76,8 @@ pub const DEVICE_NAME_MAX: usize = 80;
 pub const PLATFORM_MAX: usize = 32;
 /// The longest Home icon name (a Lucide icon name, kebab-case).
 pub const ICON_MAX: usize = 64;
+/// The most pinned rows one Home may have (⌘1–9 opens them).
+pub const MAX_PINS: usize = 9;
 
 /// The fractional-index digits, in ASCII (= string compare) order.
 pub const ORDER_DIGITS: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -130,6 +138,12 @@ pub struct Item {
     pub merged_into: Option<String>,
     /// Home only: its Lucide icon name, None for none.
     pub icon: Option<String>,
+    /// Home only: unpinned rows sort by their last send, newest first.
+    pub recent_first: bool,
+    /// Row only: its key among the Home's pinned rows, None when not pinned.
+    pub pin_order: Option<String>,
+    /// Row only: the person's last send to it (epoch ms).
+    pub last_messaged_at: Option<i64>,
     /// The optional fields this push left out (an older client): each
     /// keeps the stored value. Always empty on an item read from storage.
     pub omitted: Omitted,
@@ -139,6 +153,9 @@ pub struct Item {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Omitted {
     pub icon: bool,
+    pub recent_first: bool,
+    pub pin_order: bool,
+    pub last_messaged_at: bool,
 }
 
 impl Item {
@@ -147,6 +164,19 @@ impl Item {
     fn keep_omitted(&mut self, existing: Option<&Item>) {
         if self.omitted.icon {
             self.icon = existing.and_then(|e| e.icon.clone());
+        }
+        if self.omitted.recent_first {
+            self.recent_first = existing.is_some_and(|e| e.recent_first);
+        }
+        if self.omitted.pin_order {
+            self.pin_order = existing.and_then(|e| e.pin_order.clone());
+        }
+        let stored_last = existing.and_then(|e| e.last_messaged_at);
+        if self.omitted.last_messaged_at {
+            self.last_messaged_at = stored_last;
+        } else if let (Some(new), Some(old)) = (self.last_messaged_at, stored_last) {
+            // A device that hadn't seen the newest send never moves it back.
+            self.last_messaged_at = Some(new.max(old));
         }
         self.omitted = Omitted::default();
     }
@@ -176,6 +206,7 @@ impl Item {
                 "id": self.home_id,
                 "name": self.name,
                 "icon": self.icon,
+                "recentFirst": self.recent_first,
                 "order": self.order,
                 "updatedAt": self.updated_at,
                 "deviceId": self.device_id,
@@ -186,6 +217,8 @@ impl Item {
                 "address": self.address,
                 "label": self.label.clone().unwrap_or_default(),
                 "workspaceId": self.workspace_id,
+                "pinOrder": self.pin_order,
+                "lastMessagedAt": self.last_messaged_at,
                 "order": self.order,
                 "updatedAt": self.updated_at,
                 "deviceId": self.device_id,
@@ -217,6 +250,11 @@ pub mod reason {
     pub const INVALID_DELETED: &str = "invalid_deleted";
     pub const INVALID_MERGED_INTO: &str = "invalid_merged_into";
     pub const INVALID_ICON: &str = "invalid_icon";
+    pub const INVALID_RECENT_FIRST: &str = "invalid_recent_first";
+    pub const INVALID_PIN_ORDER: &str = "invalid_pin_order";
+    pub const INVALID_LAST_MESSAGED_AT: &str = "invalid_last_messaged_at";
+    /// A pin past [`super::MAX_PINS`] on one Home.
+    pub const TOO_MANY_PINS: &str = "too_many_pins";
     pub const LAST_HOME: &str = "last_home";
 }
 
@@ -305,6 +343,17 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
                 Some(Value::String(s)) if valid_icon(s) => (Some(s.clone()), false),
                 Some(_) => return Err(reason::INVALID_ICON),
             };
+            let (recent_first, recent_first_omitted) = match o.get("recentFirst") {
+                None | Some(Value::Null) => (false, true),
+                Some(Value::Bool(b)) => (*b, false),
+                Some(_) => return Err(reason::INVALID_RECENT_FIRST),
+            };
+            if o.get("pinOrder").is_some_and(|m| !m.is_null()) {
+                return Err(reason::INVALID_PIN_ORDER);
+            }
+            if o.get("lastMessagedAt").is_some_and(|m| !m.is_null()) {
+                return Err(reason::INVALID_LAST_MESSAGED_AT);
+            }
             Ok(Item {
                 kind,
                 home_id: id.to_string(),
@@ -318,7 +367,15 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
                 deleted,
                 merged_into,
                 icon,
-                omitted: Omitted { icon: icon_omitted },
+                recent_first,
+                pin_order: None,
+                last_messaged_at: None,
+                omitted: Omitted {
+                    icon: icon_omitted,
+                    recent_first: recent_first_omitted,
+                    pin_order: false,
+                    last_messaged_at: false,
+                },
             })
         }
         Kind::Row => {
@@ -346,6 +403,24 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
             if o.get("icon").is_some_and(|m| !m.is_null()) {
                 return Err(reason::INVALID_ICON);
             }
+            if o.get("recentFirst").is_some_and(|m| !m.is_null()) {
+                return Err(reason::INVALID_RECENT_FIRST);
+            }
+            let (pin_order, pin_omitted) = match o.get("pinOrder") {
+                None => (None, true),
+                Some(Value::Null) => (None, false),
+                Some(Value::String(s)) if valid_order(s) => (Some(s.clone()), false),
+                Some(_) => return Err(reason::INVALID_PIN_ORDER),
+            };
+            let (last_messaged_at, last_omitted) = match o.get("lastMessagedAt") {
+                None => (None, true),
+                Some(Value::Null) => (None, false),
+                Some(Value::Number(n)) => match n.as_i64() {
+                    Some(t) if t > 0 && t <= now_ms + MAX_FUTURE_SKEW_MS => (Some(t), false),
+                    _ => return Err(reason::INVALID_LAST_MESSAGED_AT),
+                },
+                Some(_) => return Err(reason::INVALID_LAST_MESSAGED_AT),
+            };
             Ok(Item {
                 kind,
                 home_id: home_id.to_string(),
@@ -359,7 +434,15 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
                 deleted,
                 merged_into: None,
                 icon: None,
-                omitted: Omitted::default(),
+                recent_first: false,
+                pin_order,
+                last_messaged_at,
+                omitted: Omitted {
+                    icon: false,
+                    recent_first: false,
+                    pin_order: pin_omitted,
+                    last_messaged_at: last_omitted,
+                },
             })
         }
     }
@@ -368,7 +451,8 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
 // ── Storage ────────────────────────────────────────────────────────────
 
 const ITEM_COLS: &str =
-    "kind, home_id, address, name, label, workspace_id, ord, updated_at, device_id, deleted, merged_into, icon";
+    "kind, home_id, address, name, label, workspace_id, ord, updated_at, device_id, deleted, merged_into, icon, \
+     recent_first, pin_order, last_messaged_at";
 
 fn item_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
     let kind: String = r.get(0)?;
@@ -385,6 +469,9 @@ fn item_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
         deleted: r.get::<_, i64>(9)? != 0,
         merged_into: r.get(10)?,
         icon: r.get(11)?,
+        recent_first: r.get::<_, i64>(12)? != 0,
+        pin_order: r.get(13)?,
+        last_messaged_at: r.get(14)?,
         omitted: Omitted::default(),
     })
 }
@@ -405,6 +492,15 @@ fn person_seq(conn: &Connection, person: &str) -> rusqlite::Result<(i64, i64)> {
         })
         .optional()?
         .unwrap_or((0, 0)))
+}
+
+fn pinned_count_except(conn: &Connection, person: &str, home_id: &str, except_address: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM homes_items WHERE person = ?1 AND kind = 'row' AND home_id = ?2 \
+         AND deleted = 0 AND pin_order IS NOT NULL AND address != ?3",
+        params![person, home_id, except_address],
+        |r| r.get(0),
+    )
 }
 
 fn live_home_count_except(conn: &Connection, person: &str, except_id: &str) -> rusqlite::Result<i64> {
@@ -553,8 +649,10 @@ pub fn push(
             Err(reason) => rejected.push(Rejected { item: c.clone(), reason }),
         }
     }
-    // Live first, tombstones after; stable within each group.
-    parsed.sort_by_key(|i| i.deleted);
+    // Live first, tombstones after; within the live ones, pins last (so a
+    // batch that unpins one row and pins another never trips MAX_PINS);
+    // stable within each group.
+    parsed.sort_by_key(|i| (i.deleted, i.pin_order.is_some()));
 
     let tx = conn.unchecked_transaction()?;
     let (seq, mut floor) = person_seq(&tx, person)?;
@@ -571,6 +669,14 @@ pub fn push(
         }
         let mut item = item;
         item.keep_omitted(existing.as_ref());
+        let newly_pinned = item.kind == Kind::Row
+            && !item.deleted
+            && item.pin_order.is_some()
+            && !existing.as_ref().is_some_and(|e| !e.deleted && e.pin_order.is_some());
+        if newly_pinned && pinned_count_except(&tx, person, &item.home_id, &item.address)? >= MAX_PINS as i64 {
+            rejected.push(Rejected { item: item.to_json(), reason: reason::TOO_MANY_PINS });
+            continue;
+        }
         if item.kind == Kind::Home && item.deleted && existing.as_ref().is_some_and(|e| !e.deleted) {
             if live_home_count_except(&tx, person, &item.home_id)? == 0 {
                 rejected.push(Rejected { item: item.to_json(), reason: reason::LAST_HOME });
@@ -593,13 +699,14 @@ pub fn push(
         }
         tx.execute(
             "INSERT INTO homes_items (person, kind, home_id, address, name, label, workspace_id, ord, \
-               updated_at, device_id, deleted, merged_into, seq, icon) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+               updated_at, device_id, deleted, merged_into, seq, icon, recent_first, pin_order, last_messaged_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
              ON CONFLICT (person, kind, home_id, address) DO UPDATE SET \
                name = excluded.name, label = excluded.label, workspace_id = excluded.workspace_id, \
                ord = excluded.ord, updated_at = excluded.updated_at, device_id = excluded.device_id, \
                deleted = excluded.deleted, merged_into = excluded.merged_into, seq = excluded.seq, \
-               icon = excluded.icon",
+               icon = excluded.icon, recent_first = excluded.recent_first, pin_order = excluded.pin_order, \
+               last_messaged_at = excluded.last_messaged_at",
             params![
                 person,
                 item.kind.as_str(),
@@ -614,7 +721,10 @@ pub fn push(
                 item.deleted as i64,
                 item.merged_into,
                 next,
-                item.icon
+                item.icon,
+                item.recent_first as i64,
+                item.pin_order,
+                item.last_messaged_at
             ],
         )?;
         applied += 1;
@@ -1177,6 +1287,142 @@ mod tests {
         ok["icon"] = json!("a".repeat(ICON_MAX));
         assert!(push(&c, "owner", "d", &[ok], NOW).expect("ok").rejected.is_empty());
         assert!(valid_icon("gamepad-2") && valid_icon("house") && !valid_icon("House"));
+    }
+
+    fn row_of(conn: &Connection, person: &str, home: &str, addr: &str) -> Value {
+        live(conn, person)
+            .into_iter()
+            .find(|v| v["kind"] == "row" && v["homeId"] == home && v["address"] == addr)
+            .unwrap_or_else(|| panic!("no live row {home} {addr}"))
+    }
+
+    fn home_of(conn: &Connection, person: &str, id: &str) -> Value {
+        live(conn, person)
+            .into_iter()
+            .find(|v| v["kind"] == "home" && v["id"] == id)
+            .unwrap_or_else(|| panic!("no live Home {id}"))
+    }
+
+    #[test]
+    fn pins_recent_first_and_last_send_push_and_pull() {
+        let c = db();
+        let mut h = home("h1", "Work", "V", NOW);
+        h["recentFirst"] = json!(true);
+        let mut r = row("h1", "a::s", "V", NOW);
+        r["pinOrder"] = json!("V");
+        r["lastMessagedAt"] = json!(NOW - 5);
+        let res = push(&c, "owner", "laptop", &[h, r, row("h1", "b::s", "k", NOW)], NOW).expect("push");
+        assert!(res.rejected.is_empty(), "{:?}", res.rejected);
+        assert_eq!(home_of(&c, "owner", "h1")["recentFirst"], json!(true));
+        let a = row_of(&c, "owner", "h1", "a::s");
+        assert_eq!((a["pinOrder"].clone(), a["lastMessagedAt"].clone()), (json!("V"), json!(NOW - 5)));
+        let b = row_of(&c, "owner", "h1", "b::s");
+        assert_eq!((b["pinOrder"].clone(), b["lastMessagedAt"].clone()), (Value::Null, Value::Null));
+        // The incremental pull carries them.
+        let p = pull(&c, "owner", Some(0), None, NOW).expect("delta");
+        let j: Vec<Value> = p.changes.iter().map(Item::to_json).collect();
+        assert!(j.iter().any(|v| v["id"] == "h1" && v["recentFirst"] == true), "{j:?}");
+        assert!(j.iter().any(|v| v["address"] == "a::s" && v["pinOrder"] == "V" && v["lastMessagedAt"] == json!(NOW - 5)), "{j:?}");
+        // Unpin with null; switch recent-first off with false.
+        let mut r = row("h1", "a::s", "V", NOW + 1);
+        r["pinOrder"] = Value::Null;
+        let mut h = home("h1", "Work", "V", NOW + 1);
+        h["recentFirst"] = json!(false);
+        push(&c, "owner", "phone", &[r, h], NOW).expect("unpin");
+        assert_eq!(row_of(&c, "owner", "h1", "a::s")["pinOrder"], Value::Null);
+        assert_eq!(row_of(&c, "owner", "h1", "a::s")["lastMessagedAt"], json!(NOW - 5), "left out: kept");
+        assert_eq!(home_of(&c, "owner", "h1")["recentFirst"], json!(false));
+    }
+
+    #[test]
+    fn an_older_client_keeps_pins_recent_first_and_last_send() {
+        let c = db();
+        let mut h = home("h1", "Work", "V", NOW);
+        h["recentFirst"] = json!(true);
+        h["icon"] = json!("briefcase");
+        let mut r = row("h1", "a::s", "V", NOW);
+        r["pinOrder"] = json!("V");
+        r["lastMessagedAt"] = json!(NOW - 5);
+        push(&c, "owner", "new-client", &[h, r], NOW).expect("set");
+        // An older client renames the Home and moves the row: none of the new keys.
+        let old_home = home("h1", "Work stuff", "V", NOW + 10);
+        let old_row = row("h1", "a::s", "k", NOW + 10);
+        for k in ["icon", "recentFirst", "pinOrder", "lastMessagedAt"] {
+            assert!(old_home.get(k).is_none() && old_row.get(k).is_none());
+        }
+        let res = push(&c, "owner", "old-client", &[old_home, old_row], NOW).expect("old");
+        assert_eq!(res.applied, 2);
+        let h = home_of(&c, "owner", "h1");
+        assert_eq!((h["name"].clone(), h["recentFirst"].clone(), h["icon"].clone()), (json!("Work stuff"), json!(true), json!("briefcase")));
+        let a = row_of(&c, "owner", "h1", "a::s");
+        assert_eq!((a["order"].clone(), a["pinOrder"].clone(), a["lastMessagedAt"].clone()), (json!("k"), json!("V"), json!(NOW - 5)));
+        // A device that hadn't seen the newest send never moves it back.
+        let mut stale = row("h1", "a::s", "k", NOW + 20);
+        stale["lastMessagedAt"] = json!(NOW - 100);
+        push(&c, "owner", "stale", &[stale], NOW).expect("stale");
+        assert_eq!(row_of(&c, "owner", "h1", "a::s")["lastMessagedAt"], json!(NOW - 5));
+        let mut newer = row("h1", "a::s", "k", NOW + 30);
+        newer["lastMessagedAt"] = json!(NOW + 25);
+        push(&c, "owner", "phone", &[newer], NOW).expect("newer");
+        assert_eq!(row_of(&c, "owner", "h1", "a::s")["lastMessagedAt"], json!(NOW + 25));
+    }
+
+    #[test]
+    fn a_home_holds_at_most_nine_pins() {
+        let c = db();
+        push(&c, "owner", "d", &[home("h1", "Work", "V", NOW)], NOW).expect("home");
+        let pinned: Vec<Value> = (1..=MAX_PINS)
+            .map(|i| {
+                let mut r = row("h1", &format!("a{i}::s"), "V", NOW);
+                r["pinOrder"] = json!(format!("{i}"));
+                r
+            })
+            .collect();
+        assert!(push(&c, "owner", "d", &pinned, NOW).expect("nine").rejected.is_empty());
+        let mut tenth = row("h1", "a10::s", "V", NOW);
+        tenth["pinOrder"] = json!("a");
+        let res = push(&c, "owner", "d", &[tenth.clone()], NOW).expect("tenth");
+        assert_eq!(res.rejected.iter().map(|x| x.reason).collect::<Vec<_>>(), vec![reason::TOO_MANY_PINS]);
+        // Re-pinning (moving) a row that is already pinned is fine.
+        let mut moved = row("h1", "a3::s", "V", NOW + 1);
+        moved["pinOrder"] = json!("z");
+        assert!(push(&c, "owner", "d", &[moved], NOW).expect("move").rejected.is_empty());
+        // Unpin one and pin the tenth in one batch, in either order: it fits.
+        let mut un = row("h1", "a1::s", "V", NOW + 2);
+        un["pinOrder"] = Value::Null;
+        tenth["updatedAt"] = json!(NOW + 2);
+        let res = push(&c, "owner", "d", &[tenth, un], NOW).expect("swap");
+        assert!(res.rejected.is_empty(), "{:?}", res.rejected);
+        // Another Home has its own nine.
+        let mut other = row("h2", "a1::s", "V", NOW);
+        other["pinOrder"] = json!("V");
+        assert!(push(&c, "owner", "d", &[home("h2", "Play", "k", NOW), other], NOW).expect("h2").rejected.is_empty());
+    }
+
+    #[test]
+    fn bad_pins_recent_first_and_last_send_are_refused() {
+        let c = db();
+        let set = |mut v: Value, k: &str, x: Value| {
+            v[k] = x;
+            v
+        };
+        let cases = vec![
+            (set(home("h", "x", "V", NOW), "recentFirst", json!("yes")), reason::INVALID_RECENT_FIRST),
+            (set(row("h", "a::b", "V", NOW), "recentFirst", json!(true)), reason::INVALID_RECENT_FIRST),
+            (set(row("h", "a::b", "V", NOW), "pinOrder", json!("V0")), reason::INVALID_PIN_ORDER),
+            (set(row("h", "a::b", "V", NOW), "pinOrder", json!(3)), reason::INVALID_PIN_ORDER),
+            (set(home("h", "x", "V", NOW), "pinOrder", json!("V")), reason::INVALID_PIN_ORDER),
+            (set(row("h", "a::b", "V", NOW), "lastMessagedAt", json!(-1)), reason::INVALID_LAST_MESSAGED_AT),
+            (set(row("h", "a::b", "V", NOW), "lastMessagedAt", json!("today")), reason::INVALID_LAST_MESSAGED_AT),
+            (set(row("h", "a::b", "V", NOW), "lastMessagedAt", json!(NOW + MAX_FUTURE_SKEW_MS + 1)), reason::INVALID_LAST_MESSAGED_AT),
+            (set(home("h", "x", "V", NOW), "lastMessagedAt", json!(NOW)), reason::INVALID_LAST_MESSAGED_AT),
+        ];
+        let input: Vec<Value> = cases.iter().map(|(v, _)| v.clone()).collect();
+        let r = push(&c, "owner", "d", &input, NOW).expect("push");
+        assert_eq!(r.applied, 0);
+        let got: Vec<&str> = r.rejected.iter().map(|x| x.reason).collect();
+        let want: Vec<&str> = cases.iter().map(|(_, w)| *w).collect();
+        assert_eq!(got, want);
     }
 
     #[test]

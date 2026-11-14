@@ -61,6 +61,7 @@ import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Si
 import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameHeader from './groups/GroupNameHeader'
 import { useHomeGroups } from './groups/useHomeGroups'
+import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
 import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
@@ -164,6 +165,15 @@ export async function markHomeRowAllRead(target: HomeRowReadTarget, label: strin
   }
 }
 
+/** Pin / Unpin in a row's menu. A tenth pin is offered but off, saying why. */
+export function pinMenuItem(home: Home, row: HomeRow): ContextMenuItemDef {
+  if (isPinned(row)) return { id: 'home-unpin', label: 'Unpin' }
+  const full = pinnedRows(home).length >= MAX_PINS
+  return full
+    ? { id: 'home-pin', label: 'Pin', enabled: false, hint: `${MAX_PINS} pinned already` }
+    : { id: 'home-pin', label: 'Pin', shortcut: `⌘${pinnedRows(home).length + 1}` }
+}
+
 /** Right-click menu on a Home row (the Agents rows' menu idiom). */
 export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: HomeRow): Promise<void> {
   e.preventDefault()
@@ -184,10 +194,15 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   const roomOpen = homeRooms.store.getState().entries[row.address]
   if (roomOpen) items.push({ id: 'home-close-room', label: 'Close room' })
   if (items.length > 0) items.push({ id: 'home-sep', label: '', type: 'separator' })
+  items.push(pinMenuItem(home, row))
   items.push({ id: 'home-remove', label: `Remove from ${home.name}` })
 
   const clicked = await showContextMenu(items)
-  if (clicked === MARK_ALL_READ_MENU_ID && readTarget) {
+  if (clicked === 'home-pin') {
+    useHomesStore.getState().pinRow(home.id, row.address)
+  } else if (clicked === 'home-unpin') {
+    useHomesStore.getState().unpinRow(home.id, row.address)
+  } else if (clicked === MARK_ALL_READ_MENU_ID && readTarget) {
     void markHomeRowAllRead(readTarget, row.label)
   } else if (clicked === 'home-settings' && ws) {
     useSettingsStore.getState().openSettings('projects', ws.id)
@@ -416,11 +431,17 @@ export default function HomeSidebar(): React.JSX.Element {
 
   // ── Drag-to-reorder (shared with the Agents sidebar: same ghost, line, cursor) ──
   const rowDrag = useRowDragReorder<'home'>()
+  // Positions are as shown (pins first): a pinned row moves among the pins,
+  // an unpinned one among the unpinned (not at all with "Most recent at
+  // the top" on: that order is automatic).
   const dropHomeRow = useCallback((from: number, gap: number) => {
     const to = dropTargetIndex(from, gap)
     if (to === null) return
     const current = selectedHome(useHomesStore.getState())
-    useHomesStore.getState().moveRow(current.id, from, to)
+    const plan = planRowDrop(current, from, to)
+    if (!plan) return
+    if ('pins' in plan) useHomesStore.getState().reorderPins(current.id, plan.pins)
+    else useHomesStore.getState().setRowOrder(current.id, plan.rows)
   }, [])
 
   // Close the picker on outside click / Esc.
@@ -440,7 +461,8 @@ export default function HomeSidebar(): React.JSX.Element {
     }
   }, [pickerOpen, setPickerOpen])
 
-  const rows = home.rows
+  // Pins first, then the rest (manual or most recent first).
+  const rows = displayRows(home)
 
   return (
     <div className="relative flex flex-col h-full" data-home-sidebar="">
@@ -473,6 +495,7 @@ export default function HomeSidebar(): React.JSX.Element {
             <div
               key={row.address}
               data-home-row={row.address}
+              data-pinned={isPinned(row) ? '' : undefined}
               style={{ opacity: rowDrag.isDragging('home', idx) ? 0.4 : 1 }}
               onMouseDown={(e) =>
                 rowDrag.onRowMouseDown(e, {
@@ -489,7 +512,7 @@ export default function HomeSidebar(): React.JSX.Element {
               onMouseLeave={() => homeRowHoverPrefetch.leave()}
             >
               {rowDrag.showsDropLineAt('home', idx) && <RowDropLine />}
-              <HomeRowView home={home} row={row} index={idx} />
+              <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
               {idx < rows.length - 1 && !rowDrag.showsDropLineAt('home', idx + 1) && (
                 <div className="border-b border-[var(--color-border)]" />
               )}

@@ -8,6 +8,7 @@ import { getActiveBarItems } from '@/components/Sidebar/ActiveBar'
 import { openHomeRow } from '@/lib/home-open'
 import { homeRowOpenableNow } from '@/components/Home/home-room'
 import { homeSwitchDigit } from '@/lib/home-shortcuts'
+import { shortcutRows } from '@/lib/home-row-order'
 import { zenSelectRow, zenShownNow } from '@/lib/zen/zen-view'
 import { switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
 import { pageShortcutForEvent, runPageShortcut } from '@/lib/page-shortcuts'
@@ -22,7 +23,8 @@ import { isMacPlatform } from '@/lib/desktop-chrome'
  *
  * - Agents: unchanged. Cmd+N / Cmd+Option+N switch to the Nth pinned or
  *   active workspace (per Settings → shortcut layout).
- * - Home: Cmd+1–9 (and Cmd+0 for the tenth) selects Home row N, the same
+ * - Home: Cmd+1–9 opens the group's Nth pinned row; a group with no pins
+ *   keeps Cmd+1–9 (and Cmd+0 for the tenth) on row N as shown, the same
  *   as clicking it (answer Q5). A row that cannot open (no access, gone,
  *   another server on web) does nothing, as its click does.
  * - Home switcher (0.43.2): on Home, Cmd+Option+1–9 (HOME_SWITCH_BINDING;
@@ -101,7 +103,8 @@ export function useWorkspaceIndexShortcuts(): void {
       }
 
       if (usePageViewStore.getState().page === 'home') {
-        const row = selectedHome(useHomesStore.getState()).rows[targetIdx]
+        // The pinned rows in order; a group with no pins: its rows as shown.
+        const row = shortcutRows(selectedHome(useHomesStore.getState()))[targetIdx]
         if (row && homeRowOpenableNow(row)) openHomeRow(row)
         return
       }

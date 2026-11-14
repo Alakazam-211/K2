@@ -81,14 +81,15 @@ import {
   useHomeChatHost,
   useHomeChatStore,
 } from '@/stores/home-chat'
-import { HomeChatMessageRow, type HomeChatRowActions } from './HomeChatMessageRow'
+import { HomeChatMessageRow, JUMP_WASH_MS, type HomeChatRowActions } from './HomeChatMessageRow'
 import { HomeChatMembersSheet } from './HomeChatMembersSheet'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 
 const PAGE = 50
 const DELTA = 100
-const FLASH_MS = 1600
+/** How long a jumped-to message keeps its wash (it fades over JUMP_WASH_MS). */
+const FLASH_MS = JUMP_WASH_MS + 200
 
 /** The line above the box when a send fails: the reason, and that the text
  *  waits there (Enter sends it again with the same nonce, so never twice). */

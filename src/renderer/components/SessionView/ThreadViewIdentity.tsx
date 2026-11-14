@@ -195,6 +195,10 @@ export function ThreadViewIdentity({ name, addr, bar = false }: { name: string; 
       // text), plus a px so a fraction never shortens it.
       const nameW = nameEl.scrollWidth + 1
       const serverW = serverRef.current ? serverRef.current.scrollWidth + 1 : 0
+      // The object's own edge (a hairline, or Glass's half-pixel rim) sits
+      // inside its width too.
+      const ps = getComputedStyle(plate)
+      const edges = cssPx(ps.borderLeftWidth) + cssPx(ps.borderRightWidth)
       const oneLine = root.hasAttribute('data-compact')
       if (oneLine) {
         // In one line the name sits between the objects beside it.
@@ -202,14 +206,15 @@ export function ThreadViewIdentity({ name, addr, bar = false }: { name: string; 
         const gap = cssPx(getComputedStyle(grid).columnGap)
         const room =
           rowWidth - objectsWidth(column?.previousElementSibling ?? null) - objectsWidth(column?.nextElementSibling ?? null) - 2 * gap
-        const f = identityFit({ name: nameW, room, compact: true })
+        const f = identityFit({ name: nameW, room: room - edges, compact: true })
         root.setAttribute('data-fit', f.pad)
         unplate()
         nameEl.style.minWidth = `${Math.min(nameW, IDENTITY_NAME_MIN_PX)}px`
         return
       }
       nameEl.style.removeProperty('min-width')
-      const f = identityFit({ name: nameW, server: serverW, room: rowWidth })
+      const fitted = identityFit({ name: nameW, server: serverW, room: rowWidth - edges })
+      const f = { ...fitted, width: fitted.width + edges }
       // Centred under the picture, kept inside the row's edges (the picture
       // sits off-centre only when the row is out of room). Rects are window
       // px; offsetWidth over the rect's width turns them into CSS px at any
@@ -233,12 +238,21 @@ export function ThreadViewIdentity({ name, addr, bar = false }: { name: string; 
       root.style.setProperty('--k2-plate-mr', round(back - shift))
     }
     fit()
-    if (typeof ResizeObserver === 'undefined') return unfit
-    const ro = new ResizeObserver(fit)
-    ro.observe(grid)
-    ro.observe(root)
+    // A font that loads late changes the text's width but no box's size (a
+    // shortened name's box is its object's): fit again when it lands.
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    let live = true
+    void fonts?.ready.then(() => {
+      if (live) fit()
+    })
+    fonts?.addEventListener?.('loadingdone', fit)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit)
+    ro?.observe(grid)
+    ro?.observe(root)
     return () => {
-      ro.disconnect()
+      live = false
+      fonts?.removeEventListener?.('loadingdone', fit)
+      ro?.disconnect()
       unfit()
     }
   }, [bar, compact, name, server])

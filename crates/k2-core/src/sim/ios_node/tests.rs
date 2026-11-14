@@ -100,8 +100,16 @@ fn a_fake_node_session_end_to_end() {
     let mut frames = lane.frames(&d, FrameOpts { max_fps: 60, ..FrameOpts::default() }).unwrap();
     let f1 = frames.next_frame(Duration::from_secs(5)).unwrap().expect("a frame");
     assert!(matches!(&f1.data, FrameData::Jpeg(b) if b.starts_with(b"\xff\xd8")));
-    let f2 = frames.next_frame(Duration::from_secs(5)).unwrap().expect("the next frame after the ack");
-    assert!(f2.seq > f1.seq);
+    // The fake sends its next frame only after the server's ack, up to its
+    // budget of 3. The server's inbox is newest-wins, so a slow reader may
+    // skip one; the last frame always arrives, which takes both acks.
+    let mut last = f1.seq;
+    while last < 3 {
+        let f = frames.next_frame(Duration::from_secs(5)).unwrap().expect("the next frame after the ack");
+        assert!(f.seq > last, "frames arrive in order: {} after {last}", f.seq);
+        last = f.seq;
+    }
+    assert_eq!(last, 3, "every frame of the budget was sent, one per ack");
     drop(frames);
 
     lane.act(&d, &Action::OpenUrl { url: "https://web.app.k2.dev".into() }).unwrap();

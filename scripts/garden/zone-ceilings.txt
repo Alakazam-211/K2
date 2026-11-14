@@ -1,0 +1,75 @@
+# Rust code lines that still spell out k2.dev, per file: `<lines> <path>`.
+# Checked by scripts/garden/zone-gate.py. A file may not go over its
+# ceiling and a file that is not here may have none. Never raise one by
+# hand: call k2_core::hosts (crates/k2-client/src/hosts.rs).
+# Some rows stay for good: an id inside a signed statement (provenance.rs,
+# kessel-attest) or a crate that may not link k2-core (k2-node, k2-vault).
+
+12 crates/k2-daemon/src/tunnel_tls_listener.rs
+9 crates/k2-core/src/tunnel/failover.rs
+7 crates/k2-daemon/src/sew/voice.rs
+6 crates/k2-daemon/src/domains/acme.rs
+4 crates/k2-core/src/connections.rs
+4 crates/k2-core/src/federation/pairing.rs
+4 crates/k2-core/src/skin.rs
+4 crates/k2-daemon/src/apps/custom_domain_flow.rs
+4 crates/k2-daemon/src/domains/pending_watch.rs
+4 crates/k2-daemon/src/domains/routes.rs
+4 crates/k2-node/src/main_unix.rs
+4 src-tauri/src/commands/connect_hosts.rs
+3 crates/k2-core/src/tunnel/relay_list.rs
+3 crates/k2-core/src/tunnel/render.rs
+3 crates/k2-daemon/src/app_pairing/owner_routes.rs
+3 crates/k2-daemon/src/apps/relay_claims.rs
+3 crates/k2-daemon/src/domains/bind.rs
+3 crates/k2-daemon/src/mail/ptr.rs
+3 crates/k2-node-proto/src/provenance.rs
+3 crates/kessel-attest/src/statement.rs
+2 crates/k2-core/src/federation/dial.rs
+2 crates/k2-core/src/skin_door.rs
+2 crates/k2-core/src/tunnel/subdomains.rs
+2 crates/k2-daemon/src/apps/domains.rs
+2 crates/k2-daemon/src/apps/process_engine.rs
+2 crates/k2-daemon/src/federation_routes.rs
+2 crates/k2-daemon/src/publish_runtime.rs
+2 crates/k2-daemon/src/sew/supervisor.rs
+2 crates/k2-daemon/src/sew/voice_tunnel.rs
+2 crates/k2-node/src/enroll.rs
+1 crates/k2-core/src/app_templates/mod.rs
+1 crates/k2-core/src/app_updates/mod.rs
+1 crates/k2-core/src/product_feedback/mod.rs
+1 crates/k2-core/src/push/legacy_golden.rs
+1 crates/k2-core/src/push/mod.rs
+1 crates/k2-core/src/refusals/rows.rs
+1 crates/k2-core/src/skills/content.rs
+1 crates/k2-core/src/skin_app_pairing.rs
+1 crates/k2-core/src/sources/mod.rs
+1 crates/k2-core/src/sources/presets_cards.rs
+1 crates/k2-core/src/tunnel/cert_broker.rs
+1 crates/k2-core/src/tunnel/config.rs
+1 crates/k2-core/src/tunnel/confirmed_label.rs
+1 crates/k2-core/src/tunnel/connector.rs
+1 crates/k2-core/src/workspace/context_layers.rs
+1 crates/k2-core/src/workspace/skill_regen.rs
+1 crates/k2-daemon/src/app_pairing/guest_routes.rs
+1 crates/k2-daemon/src/apps/auth_routes.rs
+1 crates/k2-daemon/src/apps/custom_domains.rs
+1 crates/k2-daemon/src/apps/labels.rs
+1 crates/k2-daemon/src/apps/link_files.rs
+1 crates/k2-daemon/src/apps/updates_routes.rs
+1 crates/k2-daemon/src/clone_proposal_routes.rs
+1 crates/k2-daemon/src/compute_admin.rs
+1 crates/k2-daemon/src/connect_device_routes.rs
+1 crates/k2-daemon/src/dns/proxy.rs
+1 crates/k2-daemon/src/domains/renew.rs
+1 crates/k2-daemon/src/egress.rs
+1 crates/k2-daemon/src/mail/doctor.rs
+1 crates/k2-daemon/src/mail/profile.rs
+1 crates/k2-daemon/src/push_routes.rs
+1 crates/k2-daemon/src/routes/dispatcher.rs
+1 crates/k2-daemon/src/routes/http.rs
+1 crates/k2-daemon/src/sew/meet.rs
+1 crates/k2-daemon/src/sew/pro_gate.rs
+1 crates/k2-daemon/src/sql/supervisor.rs
+1 crates/k2-root-proto/src/podman.rs
+1 crates/k2-vault/src/hosts.rs

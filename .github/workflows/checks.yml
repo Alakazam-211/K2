@@ -150,6 +150,12 @@ jobs:
       - name: k2-home gate (PRD prd-k2so-cleanup-v1 §5)
         run: bash scripts/k2-home-gate.sh
 
+      - name: Zone gate (no new hard-coded k2.dev in Rust code)
+        run: python3 scripts/garden/zone-gate.py
+
+      - name: Zone gate on broken trees
+        run: bash tests/garden/zone-gate.sh
+
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh
 

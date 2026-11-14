@@ -66,9 +66,23 @@ const toBar = (edge: ScrollEdge): string => (edge === 'top' ? 'to top' : 'to bot
 const tintMix = (pct: number): string =>
   pct === 0 ? 'transparent' : `color-mix(in srgb, var(${SCROLL_EDGE_TINT_VAR}) ${pct}%, transparent)`
 
-/** The tint, from the bar inward ([% from the bar, % of the list's colour]). */
+/** How much of a band (% from the bar) is solid before the Thread's ramp
+ *  starts. Unlike the Thread's (which meets another surface), these bands
+ *  meet a bar of the same fill: below full strength at the bar, the blurred
+ *  rows showed as a haze that stopped in a straight line. 10% of 40px = 4px. */
+export const SCROLL_EDGE_LIP_PCT = 10
+
+/** A ramp with a solid lip at the bar: 100% for the lip, then the ramp
+ *  squeezed into the rest. */
+export function solidAtBar(stops: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
+  const rest = (100 - SCROLL_EDGE_LIP_PCT) / 100
+  return [[0, 100], ...stops.map(([at, pct]): [number, number] => [Math.round((SCROLL_EDGE_LIP_PCT + at * rest) * 10) / 10, pct])]
+}
+
+/** The tint, from the bar inward ([% from the bar, % of the list's colour]),
+ *  solid at the bar. */
 export function edgeTintCss(edge: ScrollEdge, stops: ReadonlyArray<readonly [number, number]>): string {
-  return `background: linear-gradient(${fromBar(edge)}, ${stops.map(([at, pct]) => `${tintMix(pct)} ${at}%`).join(', ')});`
+  return `background: linear-gradient(${fromBar(edge)}, ${solidAtBar(stops).map(([at, pct]) => `${tintMix(pct)} ${at}%`).join(', ')});`
 }
 
 const blurCss = (px: number, mask: string): string =>

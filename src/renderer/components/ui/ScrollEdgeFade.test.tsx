@@ -9,7 +9,9 @@ import { resolve } from 'node:path'
 import { act, cleanup, render } from '@testing-library/react'
 import {
   SCROLL_EDGE_CSS,
+  SCROLL_EDGE_LIP_PCT,
   SCROLL_EDGE_PX,
+  solidAtBar,
   SCROLL_EDGE_TINT_VAR,
   ScrollEdgeFrame,
   scrollEdges,
@@ -40,7 +42,7 @@ const globalsBody = (selector: string): string => {
 }
 /** [stop %, colour %] pairs of a `color-mix(…var(X) P%, transparent) A%` ramp. */
 const stopsOf = (body: string): Array<[number, number]> =>
-  Array.from(body.matchAll(/(?:color-mix\(in srgb, var\([^)]*\)\)? (\d+)%, transparent\)|transparent) (\d+)%/g)).map((m) => [
+  Array.from(body.matchAll(/(?:color-mix\(in srgb, var\([^)]*\)\)? (\d+)%, transparent\)|transparent) ([\d.]+)%/g)).map((m) => [
     Number(m[2]),
     m[1] == null ? 0 : Number(m[1]),
   ])
@@ -252,7 +254,7 @@ describe('the looks follow the Thread', () => {
       const rule = ruleFor(SCROLL_EDGE_CSS, `[data-scroll-edges] > [data-scroll-edge="${edge}"] > .k2-edge-tint {`)
       expect(rule.startsWith('[data-scroll-edges]')).toBe(true)
       expect(rule).toContain(`linear-gradient(${toward}, `)
-      expect(stopsOf(rule)).toEqual(SCRIM_TINT_STOPS)
+      expect(stopsOf(rule)).toEqual(solidAtBar(SCRIM_TINT_STOPS))
     }
   })
 
@@ -272,14 +274,21 @@ describe('the looks follow the Thread', () => {
     })
     expect(stopsOf(globalsBody('.k2-header-tint'))).toEqual(GLASS_TINT_STOPS)
     for (const edge of ['top', 'bottom']) {
-      expect(stopsOf(ruleFor(SCROLL_EDGE_CSS, `html[data-style="glass"] [data-scroll-edges] > [data-scroll-edge="${edge}"] > .k2-edge-tint {`))).toEqual(GLASS_TINT_STOPS)
+      expect(stopsOf(ruleFor(SCROLL_EDGE_CSS, `html[data-style="glass"] [data-scroll-edges] > [data-scroll-edge="${edge}"] > .k2-edge-tint {`))).toEqual(solidAtBar(GLASS_TINT_STOPS))
     }
     // Glass's no-blur fallback (data-frost="tile"): no layers, the Thread's heavier ramp.
     expect(SCROLL_EDGE_CSS).toContain('html[data-style="glass"][data-frost="tile"] [data-scroll-edges] > [data-scroll-edge] > [data-edge-blur] { display: none; }')
     expect(stopsOf(globalsBody('html[data-style="glass"][data-frost="tile"] .k2-header-tint:not([data-zen-root] *)'))).toEqual(GLASS_TINT_STOPS_TILE)
     for (const edge of ['top', 'bottom']) {
-      expect(stopsOf(ruleFor(SCROLL_EDGE_CSS, `html[data-style="glass"][data-frost="tile"] [data-scroll-edges] > [data-scroll-edge="${edge}"] > .k2-edge-tint {`))).toEqual(GLASS_TINT_STOPS_TILE)
+      expect(stopsOf(ruleFor(SCROLL_EDGE_CSS, `html[data-style="glass"][data-frost="tile"] [data-scroll-edges] > [data-scroll-edge="${edge}"] > .k2-edge-tint {`))).toEqual(solidAtBar(GLASS_TINT_STOPS_TILE))
     }
+  })
+
+  it('every band is solid for its outer 4px, then runs the Thread\'s ramp: no haze line where it meets the bar', () => {
+    expect(SCROLL_EDGE_LIP_PCT * SCROLL_EDGE_PX / 100).toBe(4)
+    expect(solidAtBar(GLASS_TINT_STOPS)).toEqual([[0, 100], [10, 85], [50.5, 55], [100, 0]])
+    expect(solidAtBar(SCRIM_TINT_STOPS)).toEqual([[0, 100], [10, 97], [59.5, 88], [100, 0]])
+    for (const rule of tintRules) expect(rule).toMatch(/, color-mix\(in srgb, var\(--k2-edge-tint\) 100%, transparent\) 0%, /)
   })
 
   it("every band tints with the list's own colour, never black, in every palette and both schemes", () => {

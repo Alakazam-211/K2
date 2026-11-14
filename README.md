@@ -128,7 +128,7 @@ Release: `cargo tauri build`.
 | **`k2` CLI** | Day-to-day surface for humans and agents |
 | **Stack** | Tauri v2 · React · Rust · SQLite |
 
-Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Architecture map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 

@@ -6,6 +6,7 @@
 // into one bar and follows every frame (an SVG path, no masks).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
+import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
 
 const masks = vi.hoisted(() => ({ result: { fill: 'data:fill', edge: 'data:edge', sheen: 'data:sheen', shadow: null } as unknown }))
 vi.mock('./floatMerge', async (orig) => ({
@@ -84,6 +85,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  resetAppZoomForTest()
   document.documentElement.removeAttribute('data-style')
 })
 
@@ -161,7 +163,9 @@ describe('Glass', () => {
   })
 
   it('measures through the app zoom: rects are window px, the layer is CSS px', () => {
-    ;(window as unknown as { __k2soZoom: number }).__k2soZoom = 1.75
+    // Zoom the way App.tsx does, so a rename of the window global can't
+    // leave this test zooming nothing.
+    applyAppZoomForTest(1.75)
     const z = (r: R): R => ({ x: r.x * 1.75, y: r.y * 1.75, w: r.w * 1.75, h: r.h * 1.75 })
     rects = Object.fromEntries(Object.entries(rects).map(([k, r]) => [k, z(r)]))
     render(<Row />)
@@ -169,7 +173,6 @@ describe('Glass', () => {
     const call = vi.mocked(renderMergeMasks).mock.calls[0][0]
     expect(call.plate.hy).toBeCloseTo(18)
     expect(call.scale).toBeCloseTo(1.75 * (window.devicePixelRatio || 1))
-    delete (window as unknown as { __k2soZoom?: number }).__k2soZoom
   })
 
   it('lets go of everything when it unmounts', () => {

@@ -67,6 +67,10 @@ pub const MAX_RESPONSE_LINE: usize = 8 << 20;
 /// current neutral (K2 Design picks the final one).
 pub const DEFAULT_BACKGROUND: [u8; 3] = [240, 240, 240];
 
+// Changing either default clay tone changes images the host has already
+// cached under the same renderer build: bump this crate's version in the
+// same commit (or fold the tones into the host's ".clay" cache tag).
+
 /// Clay shading's shell tone (floor, walls, ceiling) when the request names
 /// none: sRGB 138, 134, 128, a warm mid grey. Lit by the same lights, it
 /// stays well clear of the default background (sRGB 240).

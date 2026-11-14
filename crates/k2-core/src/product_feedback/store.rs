@@ -11,7 +11,9 @@
 //! States: `queued` → `sending` → `sent`; a retryable failure goes back to
 //! `queued` with a later `next_attempt_at`; a reject the intake understood
 //! is `refused` (never retried); 7 days of retrying is `failed` (Retry puts
-//! it back); a person can cancel a `queued` row. `sending` rows found at
+//! it back, and one that failed because the service couldn't be reached
+//! goes back by itself once the service answers: [`requeue_unreachable_failed`]);
+//! a person can cancel a `queued` row. `sending` rows found at
 //! boot go back to `queued`: the intake's idempotency key makes a resend
 //! harmless. Times are milliseconds.
 
@@ -413,33 +415,62 @@ pub const RESEND_BY_ITSELF: &[&str] = &[
 pub const RESEND_MAX_AGE_MS: i64 = KEEP_FINAL_MS;
 
 /// Whether a `failed` row with this `last_error` goes again by itself.
-pub fn resends_by_itself(_last_error: Option<&str>) -> bool {
-    false
+pub fn resends_by_itself(last_error: Option<&str>) -> bool {
+    // Stored as `<code>: <detail>`.
+    last_error
+        .and_then(|e| e.split_once(": "))
+        .is_some_and(|(code, _)| RESEND_BY_ITSELF.contains(&code))
+}
+
+/// `failed` rows that [`resends_by_itself`], created within
+/// [`RESEND_MAX_AGE_MS`] of `now`, oldest first.
+fn resendable_failed(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Row>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {COLS} FROM product_feedback_outbox WHERE state = 'failed' AND created_at >= ?1 \
+         ORDER BY created_at ASC, id ASC"
+    ))?;
+    let rows = stmt.query_map(params![now - RESEND_MAX_AGE_MS], from_row)?;
+    let mut out = Vec::new();
+    for r in rows {
+        let r = r?;
+        if resends_by_itself(r.last_error.as_deref()) {
+            out.push(r);
+        }
+    }
+    Ok(out)
 }
 
 /// The service answered: every `failed` row that [`resends_by_itself`] and
 /// was created within [`RESEND_MAX_AGE_MS`] goes back to `queued`, due now,
 /// with a fresh 7-day window (as Retry does). Returns their ids, oldest
-/// first.
-pub fn requeue_unreachable_failed(_conn: &Connection, _now: i64) -> rusqlite::Result<Vec<String>> {
-    Ok(Vec::new())
+/// first. They then go through the drain like any queued row.
+pub fn requeue_unreachable_failed(conn: &Connection, now: i64) -> rusqlite::Result<Vec<String>> {
+    atomically(conn, || {
+        let mut ids = Vec::new();
+        for r in resendable_failed(conn, now)? {
+            if retry(conn, &r.id, now)? {
+                ids.push(r.id);
+            }
+        }
+        Ok(ids)
+    })
 }
 
 /// The oldest `failed` row that would go again by itself: the drain sends
 /// it to learn whether the service answers yet.
-pub fn probe_candidate(_conn: &Connection, _now: i64) -> rusqlite::Result<Option<Row>> {
-    Ok(None)
+pub fn probe_candidate(conn: &Connection, now: i64) -> rusqlite::Result<Option<Row>> {
+    Ok(resendable_failed(conn, now)?.into_iter().next())
 }
 
 /// `failed` → `sending` for that probe. `updated_at` stays, so the 90-day
 /// prune still counts from when it failed.
-pub fn mark_probe_sending(_conn: &Connection, _id: &str) -> rusqlite::Result<bool> {
-    Ok(false)
+pub fn mark_probe_sending(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    set_state(conn, id, &["failed"], "state = 'sending'", &[])
 }
 
 /// The probe wasn't answered: `sending` → `failed`, as it was.
-pub fn mark_probe_failed(_conn: &Connection, _id: &str) -> rusqlite::Result<bool> {
-    Ok(false)
+pub fn mark_probe_failed(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    set_state(conn, id, &["sending"], "state = 'failed'", &[])
 }
 
 /// Delete final rows older than [`KEEP_FINAL_MS`]; clear the diagnostics

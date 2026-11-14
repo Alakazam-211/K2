@@ -37,7 +37,7 @@ Your name, login, workspace or agent name; files, screenshots, terminal output; 
 
 This server keeps every submission in its outbox and sends it to Alakazam when it can:
 
-- **queued** with a reason: offline, or K2's feedback service isn't reachable yet (`service_unreachable`, `relay_not_ready`). Nothing is lost and it retries by itself (30 s, doubling, up to every 2 hours): don't send it again. After 7 days of trying it is **failed**: `k2 send-feedback retry <id>` puts it back.
+- **queued** with a reason: offline, or K2's feedback service isn't reachable yet (`service_unreachable`, `relay_not_ready`). Nothing is lost and it retries by itself (30 s, doubling, up to every 2 hours): don't send it again. After 7 days of trying it is **failed**. One that failed because the service couldn't be reached goes again by itself: the server tries the oldest about once an hour, and the first time the service answers, all of them saved in the last 90 days go back in the queue and leave oldest first. `k2 send-feedback retry <id>` puts any failed one back at once, including one that failed for another reason (sending turned off, air-gap, no K2 Connect pairing).
 - **refused**: the service understood and said no (it names the code). Not retried, and retry doesn't apply: fix what it says and send a new one.
 - `k2 send-feedback cancel <id>` stops a queued one.
 

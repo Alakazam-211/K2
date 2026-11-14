@@ -11,7 +11,7 @@ k2 send-feedback "<text>" [--category bug|idea|praise|other] [--diagnostics | --
 k2 send-feedback - [flags]                 the text from stdin
 k2 send-feedback list [--state queued|sending|sent|failed|refused|cancelled] [--json]
 k2 send-feedback show <id> [--json]
-k2 send-feedback retry <id>                a failed one goes back in the queue
+k2 send-feedback retry <id>                a failed one goes back in the queue now
 k2 send-feedback cancel <id>               a queued one is not sent
 k2 send-feedback settings [--enabled on|off] [--agents on|off] [--agent-diagnostics on|off] [--json]
 
@@ -52,8 +52,13 @@ The plain output prints the id (pf_…) that show, retry and cancel take.
 This server keeps what you send in its outbox and sends it to Alakazam
 when it can. Offline, or while K2's feedback service isn't reachable yet,
 it waits as queued with the reason, and nothing is lost: don't send it
-again, check it with show. After 7 days of trying it is failed and retry
-puts it back. A refused one (the service said no; the reason names why)
+again, check it with show. After 7 days of trying it is failed. One that
+failed because the service couldn't be reached goes again by itself: this
+server tries the oldest about once an hour, and the first time the service
+answers, all of them saved in the last 90 days go back in the queue and
+leave oldest first. Retry puts any failed one back at once, including one
+that failed for another reason (sending turned off, air-gap, no K2
+Connect pairing). A refused one (the service said no; the reason names why)
 is not retried: fix what it says and send a new one. Rows are deleted 90
 days after they are sent, refused, cancelled or failed.
 

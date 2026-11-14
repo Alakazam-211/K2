@@ -20,7 +20,15 @@
 //!   `503 intake_paused`) → back to `queued`, the pass stops, and the next
 //!   one waits: 30 s doubling to 2 h, ±20 %, or the intake's
 //!   `retryAfterSecs`. After 7 days of that a row is `failed` (Retry puts
-//!   it back).
+//!   it back);
+//! - a row that failed because the service couldn't be reached (the codes
+//!   in [`store::RESEND_BY_ITSELF`], created within 90 days) goes again by
+//!   itself: while nothing else waits, the oldest one is sent as a probe at
+//!   most once an hour and stays `failed` if unanswered; the first time the
+//!   service answers anything (sent or refused), all of them go back to
+//!   `queued` with a fresh 7-day window and leave oldest first, a batch a
+//!   pass. A person's switch, air-gap, no K2 Connect pairing or a rejected
+//!   token stay `failed` until Retry.
 //!
 //! Every state change is a `product_feedback_status` event. What the drain
 //! last saw of the service is [`service_seen`] (the settings answer shows
@@ -48,6 +56,9 @@ const TICK_SECS: u64 = 60;
 const HOLD_RECHECK_MS: i64 = 60_000;
 /// Rows per pass.
 const BATCH: i64 = 20;
+/// A failed row that couldn't reach the service is sent again as a probe
+/// at most this often while nothing else is queued.
+const PROBE_EVERY_MS: i64 = 60 * 60_000;
 /// A cached token is used only while it has this long left.
 const TOKEN_MARGIN_MS: i64 = 30_000;
 
@@ -103,6 +114,8 @@ struct DrainState {
     token: Option<BoxToken>,
     seen: Option<ServiceSeen>,
     tunnel_was_up: bool,
+    /// No probe of a failed row before this.
+    next_probe_ms: i64,
 }
 
 fn state() -> &'static Mutex<DrainState> {
@@ -266,7 +279,7 @@ pub fn drain_once(urgent: bool) -> Pass {
         }
     };
     if due.is_empty() {
-        return Pass::Empty;
+        return probe_once(urgent, now);
     }
     if let Some(h) = hold() {
         let db = k2_core::db::shared();
@@ -290,7 +303,7 @@ pub fn drain_once(urgent: bool) -> Pass {
     }
     let (mut sent, mut refused, mut retried) = (0, 0, 0);
     for row in due {
-        match send_one(&row) {
+        match send_one(&row, false) {
             Applied::Sent => sent += 1,
             Applied::Refused => refused += 1,
             Applied::Retry => {
@@ -301,6 +314,71 @@ pub fn drain_once(urgent: bool) -> Pass {
         }
     }
     Pass::Ran { sent, refused, retried }
+}
+
+/// Nothing waits to go, but a row failed because the service couldn't be
+/// reached: send the oldest such row, at most once an hour and never inside
+/// the backoff, to learn whether the service answers yet. It stays `failed`
+/// unless the service answers; when it does, [`apply`] queues the rest
+/// again. Nothing goes while sending is held (air-gap, off, no Connect).
+fn probe_once(urgent: bool, now: i64) -> Pass {
+    let candidate = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match store::pending_count(&conn) {
+            Ok(0) => {}
+            Ok(_) => return Pass::Empty,
+            Err(e) => {
+                log_debug!("[product-feedback] pending count failed: {e}");
+                return Pass::Empty;
+            }
+        }
+        match store::probe_candidate(&conn, now) {
+            Ok(Some(r)) => r,
+            Ok(None) => return Pass::Empty,
+            Err(e) => {
+                log_debug!("[product-feedback] probe query failed: {e}");
+                return Pass::Empty;
+            }
+        }
+    };
+    if let Some(h) = hold() {
+        return Pass::Held(h.code());
+    }
+    {
+        let mut st = lock();
+        if now < st.hold_until_ms || (!urgent && now < st.next_try_ms) || now < st.next_probe_ms {
+            return Pass::BackingOff;
+        }
+        st.next_probe_ms = now + PROBE_EVERY_MS;
+    }
+    match send_one(&candidate, true) {
+        Applied::Sent => Pass::Ran { sent: 1, refused: 0, retried: 0 },
+        Applied::Refused => Pass::Ran { sent: 0, refused: 1, retried: 0 },
+        Applied::Retry => Pass::Ran { sent: 0, refused: 0, retried: 1 },
+        Applied::Skipped => Pass::Empty,
+    }
+}
+
+/// The service answered (sent or refused a row): the rows that failed
+/// because it couldn't be reached go back in the queue, oldest first, and
+/// the normal drain sends them, a batch a pass. One log line says how many.
+fn requeue_after_answer(conn: &rusqlite::Connection, now: i64) -> Vec<String> {
+    match store::requeue_unreachable_failed(conn, now) {
+        Ok(ids) => {
+            if !ids.is_empty() {
+                log_debug!(
+                    "[product-feedback] the feedback service answers again: {} failed row(s) queued to send again",
+                    ids.len()
+                );
+            }
+            ids
+        }
+        Err(e) => {
+            log_debug!("[product-feedback] queueing failed rows again failed: {e}");
+            Vec::new()
+        }
+    }
 }
 
 enum Applied {
@@ -350,12 +428,14 @@ fn load_shot(conn: &rusqlite::Connection, row: &Row) -> Option<Screenshot> {
     }
 }
 
-fn send_one(row: &Row) -> Applied {
+/// Send one row. `probe`: a `failed` row sent by [`probe_once`].
+fn send_one(row: &Row, probe: bool) -> Applied {
     let now = now_ms();
     let shot = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        match store::mark_sending(&conn, &row.id, now) {
+        let claimed = if probe { store::mark_probe_sending(&conn, &row.id) } else { store::mark_sending(&conn, &row.id, now) };
+        match claimed {
             Ok(true) => {}
             // Cancelled or taken meanwhile.
             _ => return Applied::Skipped,
@@ -374,16 +454,19 @@ fn send_one(row: &Row) -> Applied {
             other => other,
         },
     };
-    apply(row, outcome)
+    apply(row, outcome, probe)
 }
 
-fn apply(row: &Row, outcome: Outcome) -> Applied {
+/// What the answer does to the row. `probe`: an unanswered probe goes back
+/// to `failed` as it was, not to `queued`.
+fn apply(row: &Row, outcome: Outcome, probe: bool) -> Applied {
     let now = now_ms();
     let db = k2_core::db::shared();
     let conn = db.lock();
     match outcome {
         Outcome::Sent { remote_id, duplicate } => {
             let _ = store::mark_sent(&conn, &row.id, &remote_id, now);
+            let requeued = requeue_after_answer(&conn, now);
             drop(conn);
             let mut st = lock();
             st.consecutive_failures = 0;
@@ -394,14 +477,17 @@ fn apply(row: &Row, outcome: Outcome) -> Applied {
                 log_debug!("[product-feedback] {} was already received (duplicate)", row.id);
             }
             emit_row(&row.id, State::Sent, None);
+            emit_requeued(&requeued);
             Applied::Sent
         }
         Outcome::Refused { code, detail } => {
             let reason = format!("{code}: {detail}");
             let _ = store::mark_refused(&conn, &row.id, &reason, now);
+            let requeued = requeue_after_answer(&conn, now);
             drop(conn);
             lock().seen = Some(ServiceSeen { state: "ok", code: None, detail: None, at_ms: now });
             emit_row(&row.id, State::Refused, Some(&reason));
+            emit_requeued(&requeued);
             Applied::Refused
         }
         Outcome::Retry { code, detail, after_secs, .. } => {
@@ -424,12 +510,25 @@ fn apply(row: &Row, outcome: Outcome) -> Applied {
             st.seen = Some(ServiceSeen { state: seen_state, code: Some(code.clone()), detail: Some(detail.clone()), at_ms: now });
             drop(st);
             let reason = format!("{code}: {detail}");
+            if probe {
+                let _ = store::mark_probe_failed(&conn, &row.id);
+                drop(conn);
+                log_debug!("[product-feedback] probe {} not answered ({reason}); stays failed", row.id);
+                emit_row(&row.id, State::Failed, row.last_error.as_deref());
+                return Applied::Retry;
+            }
             let _ = store::mark_retry(&conn, &row.id, now + delay_ms, &reason, now);
             drop(conn);
             log_debug!("[product-feedback] {} not sent ({reason}); next try in {}s", row.id, delay_ms / 1000);
             emit_row(&row.id, State::Queued, Some(&reason));
             Applied::Retry
         }
+    }
+}
+
+fn emit_requeued(ids: &[String]) {
+    for id in ids {
+        emit_row(id, State::Queued, None);
     }
 }
 

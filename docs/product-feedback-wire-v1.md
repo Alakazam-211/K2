@@ -141,7 +141,13 @@ again).
 | another `4xx` (`400`, `403 box_blocked`, `413`, …) | **refused**, never retried |
 
 After 7 days of retrying a submission is **failed**; Retry (the Sent tab,
-`k2 send-feedback retry`) puts it back. Redirects are never followed.
+`k2 send-feedback retry`) puts it back. One that failed because the
+service couldn't be reached (`service_unreachable`, `relay_not_ready`,
+`intake_paused`, `rate_limited`) also goes back by itself: while nothing
+else is queued, your server sends the oldest one about once an hour (same
+`clientId`), and the first time the service answers, every such row from
+the last 90 days is queued again and sent oldest first. Redirects are never
+followed.
 
 ## Kept
 

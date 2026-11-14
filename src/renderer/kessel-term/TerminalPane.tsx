@@ -94,6 +94,7 @@ import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
+import { TerminalErrorBox, TerminalHeldLabel } from './terminalPaneStates'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { useTerminalRevealPresence } from '@/components/SessionView/threadReveal'
@@ -521,6 +522,9 @@ export interface TerminalPaneProps {
    * live grid before the first paint. Set by Projects tiles.
    */
   pauseHiddenPaint?: boolean
+  /** No spawn or attach until false (a pane not yet spawned; arming stays
+   *  one-way). The Thread paints meanwhile; the same pane attaches later. */
+  holdSpawn?: boolean
 }
 
 type Phase =
@@ -598,6 +602,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     showComposeBar = true,
     syncSizeOnShow = false,
     pauseHiddenPaint = false,
+    holdSpawn = false,
   } = props
   const sessionChrome = useSessionViewChrome()
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
@@ -1354,14 +1359,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const spawnEager = Boolean(
     command || knownSessionId || attachAgentName || sandbox || retainWhileHidden,
   )
-  const [spawnArmed, setSpawnArmed] = useState(() => spawnEager || isTabVisible)
+  const [spawnArmed, setSpawnArmed] = useState(() => !holdSpawn && (spawnEager || isTabVisible))
   useEffect(() => {
     // Arms on first-visible — and also when a hidden pane's props later
     // gain an eager marker (e.g. reconcile stamps a live session's
     // command/sessionId), so "session survives, tab reattaches" keeps
-    // working without the tab ever being viewed.
-    if (!spawnArmed && (spawnEager || isTabVisible)) setSpawnArmed(true)
-  }, [spawnArmed, spawnEager, isTabVisible])
+    // working without the tab ever being viewed. A held pane (`holdSpawn`)
+    // arms when its caller lets go.
+    if (!spawnArmed && !holdSpawn && (spawnEager || isTabVisible)) setSpawnArmed(true)
+  }, [spawnArmed, spawnEager, isTabVisible, holdSpawn])
 
   // ── Spawn effect (0.39.13: spawn ⊥ stream) ────────────────────
   //
@@ -5418,21 +5424,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   ])
 
   // ── Render ────────────────────────────────────────────────────
-  if (phase.kind === 'error') {
-    return (
-      <div
-        style={{
-          padding: 16,
-          color: '#ff6666',
-          fontFamily: 'monospace',
-          fontSize: 12,
-          whiteSpace: 'pre-wrap',
-        }}
-      >
-        Kessel: {phase.message}
-      </div>
-    )
-  }
+  const errorBox = phase.kind === 'error' ? <TerminalErrorBox message={phase.message} /> : null
+  // A failed spawn or attach is the terminal's, not the Thread's (it posts
+  // through the daemon; the session runs headless): see terminalPaneStates.
+  const overlayOnScreen = sessionChrome != null && (showThreadOverlay || showChatterOverlay)
+  if (errorBox && !overlayOnScreen) return errorBox
 
   const isReady = phase.kind === 'ready' || phase.kind === 'exited'
   const debugSessionId =
@@ -5698,6 +5694,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         )}
         </div>
       </div>
+      {holdSpawn && <TerminalHeldLabel />}
       {/* Passive-view affordance: this pane is watching a grid sized
           by another viewer (scaled down to fit). Styling matches the
           DEV badge above. */}
@@ -5894,10 +5891,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         ) : null
       }
       terminal={
-        <>
-          {grid}
-          {showSplit ? composePty() : null}
-        </>
+        errorBox ?? (
+          <>
+            {grid}
+            {showSplit ? composePty() : null}
+          </>
+        )
       }
       sharedTerminal={
         <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-testid="split-terminal-shared">

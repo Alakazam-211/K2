@@ -598,3 +598,104 @@ describe('files dropped or pasted on the terminal', () => {
     expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
   })
 })
+
+// The Thread and its message box don't wait on the terminal: the session
+// runs headless in the daemon, and a Thread post goes through the daemon's
+// Thread route. So nothing about the terminal's spawn or attach (held,
+// pending or failed) keeps the Thread from mounting, or remounts it.
+describe('the Thread paints first; the terminal attaches beside it', () => {
+  // The message box the Thread was last handed (the stub Thread doesn't draw it).
+  const threadCompose = (): Record<string, unknown> | null => {
+    const bar = h.threadProps.at(-1)?.composeBar as { props?: Record<string, unknown> } | null | undefined
+    return bar?.props ?? null
+  }
+  const failSpawn = (): void => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+      text: async () => 'bad request',
+    })) as unknown as typeof fetch
+  }
+
+  function held(value: SessionViewChromeValue, hold: boolean): React.JSX.Element {
+    return (
+      <TabVisibilityContext.Provider value={true}>
+        <SessionViewChromeContext.Provider value={value}>
+          <TerminalPane terminalId="pg-test" cwd="/tmp/ws" attachAgentName="proj-1" holdSpawn={hold} />
+        </SessionViewChromeContext.Provider>
+      </TabVisibilityContext.Provider>
+    )
+  }
+
+  it('held: the Thread and its message box are there, no spawn goes out, the terminal says it is loading', async () => {
+    const view = renderInRoom(room, held(chrome({ viewTab: 'thread' }), true))
+    expect(view.getByTestId('stub-thread')).toBeTruthy()
+    expect(threadCompose()?.sendDestination).toBe('thread')
+    expect(view.getByTestId('terminal-pane-held').textContent).toBe('Loading session…')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(SPAWN()).toBe(0)
+    expect(h.sockets.length).toBe(0)
+  })
+
+  it('let go: one spawn, the grid attaches in the same pane, and the Thread does not remount', async () => {
+    const view = renderInRoom(room, held(chrome({ viewTab: 'split' }), true))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(SPAWN()).toBe(0)
+    expect(h.threadMounts).toBe(1)
+    view.rerender(held(chrome({ viewTab: 'split' }), false))
+    await goReady()
+    expect(SPAWN()).toBe(1)
+    expect(h.sockets.length).toBe(1)
+    expect(view.queryByTestId('terminal-pane-held')).toBeNull()
+    expect(document.querySelector('[data-terminal-container]')).toBeTruthy()
+    expect(h.threadMounts).toBe(1)
+    // Still one spawn once settled: letting go never spawns twice.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(SPAWN()).toBe(1)
+  })
+
+  it('attach pending: the Thread and its message box are there while the spawn has not answered', async () => {
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch
+    const view = renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
+    await waitFor(() => expect(SPAWN()).toBe(1))
+    expect(view.getByTestId('stub-thread')).toBeTruthy()
+    expect(threadCompose()?.sendDestination).toBe('thread')
+    expect(view.queryByTestId('terminal-pane-error')).toBeNull()
+  })
+
+  it('attach failed: the Thread and its message box stay, and the error takes the terminal place', async () => {
+    failSpawn()
+    const view = renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
+    await waitFor(() => expect(view.getByTestId('terminal-pane-error').textContent).toContain('spawn 400: bad request'))
+    expect(view.getByTestId('stub-thread')).toBeTruthy()
+    expect(h.threadMounts).toBe(1)
+    // The message box is still handed to the Thread after the failure.
+    expect(threadCompose()?.sendDestination).toBe('thread')
+    // The error sits in the terminal's column (Thread view: the reveal), not over the Thread.
+    expect(view.getByTestId('stub-thread').contains(view.getByTestId('terminal-pane-error'))).toBe(false)
+    expect(SPAWN()).toBe(1)
+  })
+
+  it('attach failed in Split view: the Thread column stays beside the error', async () => {
+    failSpawn()
+    const view = renderInRoom(room, pane(chrome({ viewTab: 'split' })))
+    await waitFor(() => expect(view.getByTestId('terminal-pane-error')).toBeTruthy())
+    expect(view.getByTestId('session-split-left').contains(view.getByTestId('terminal-pane-error'))).toBe(true)
+    expect(view.getByTestId('session-split-right').contains(view.getByTestId('stub-thread'))).toBe(true)
+  })
+
+  it('attach failed in Terminal view: just the error, as before', async () => {
+    failSpawn()
+    const view = renderInRoom(room, pane(chrome({ viewTab: 'terminal' })))
+    await waitFor(() => expect(view.getByTestId('terminal-pane-error')).toBeTruthy())
+    expect(view.queryByTestId('stub-thread')).toBeNull()
+    expect(view.queryByTestId('session-split-columns')).toBeNull()
+  })
+})

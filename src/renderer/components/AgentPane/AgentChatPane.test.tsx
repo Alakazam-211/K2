@@ -93,6 +93,11 @@ const h = vi.hoisted(() => {
     })),
     stampAgentSessionId: vi.fn(),
     addTabToGroup: vi.fn(() => 'pane-should-not-exist'),
+    // On: the TerminalPane probe also draws the session view's Thread where
+    // the real pane draws it (its Thread column and the Thread's message
+    // box, `TerminalPane.tsx` render), so a test can see whether the Thread
+    // survives the terminal's attach.
+    threadInPane: { value: false },
   }
 })
 
@@ -133,31 +138,74 @@ vi.mock('@/stores/session-events', async () => {
   }
 })
 
-vi.mock('@/kessel-term/TerminalPane', () => ({
-  TerminalPane: (props: Record<string, unknown>) => {
-    h.terminalProps.current = props
-    // Count mounts so a test can detect a remount (key bump). Empty deps →
-    // fires once per mounted instance; a key-driven remount creates a new
-    // instance and fires again.
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useEffect(() => {
-      h.terminalMountCount.value += 1
-    }, [])
-    return (
-      <div
-        data-testid="terminal-pane"
-        data-attach={String(props.attachAgentName)}
-        data-command={props.command === undefined ? 'NONE' : String(props.command)}
-        data-args={props.args ? JSON.stringify(props.args) : 'NONE'}
-        data-sessionid={props.sessionId === undefined ? 'NONE' : String(props.sessionId)}
-        data-has-onexit={props.onChildExit ? 'yes' : 'no'}
-        data-retain={String(props.retainWhileHidden === true)}
-      >
-        <div data-testid="message-compose" data-compose-bar="" />
-      </div>
-    )
-  },
-}))
+vi.mock('@/kessel-term/TerminalPane', async () => {
+  const { useSessionViewChrome } = await import('@/components/SessionView/sessionViewChrome')
+  const { overlayViewer } = await import('@/components/SessionView/sessionViewTab')
+  const { SplitSessionColumns } = await import('@/components/SessionView/SplitSessionColumns')
+  const { ThreadOverlayColumn } = await import('@/components/SessionView/ThreadOverlayColumn')
+  const { TerminalComposeBar } = await import('@/components/Terminal/TerminalComposeBar')
+  return {
+    TerminalPane: (props: Record<string, unknown>) => {
+      h.terminalProps.current = props
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      const chrome = useSessionViewChrome()
+      // Count mounts so a test can detect a remount (key bump). Empty deps →
+      // fires once per mounted instance; a key-driven remount creates a new
+      // instance and fires again.
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      useEffect(() => {
+        h.terminalMountCount.value += 1
+      }, [])
+      const terminal = (
+        <div
+          data-testid="terminal-pane"
+          data-attach={String(props.attachAgentName)}
+          data-command={props.command === undefined ? 'NONE' : String(props.command)}
+          data-args={props.args ? JSON.stringify(props.args) : 'NONE'}
+          data-sessionid={props.sessionId === undefined ? 'NONE' : String(props.sessionId)}
+          data-has-onexit={props.onChildExit ? 'yes' : 'no'}
+          data-retain={String(props.retainWhileHidden === true)}
+          data-hold={String(props.holdSpawn === true)}
+        >
+          {props.holdSpawn === true ? 'Loading session…' : null}
+          <div data-testid="message-compose" data-compose-bar="" />
+        </div>
+      )
+      if (!h.threadInPane.value || !chrome) return terminal
+      const sides = { left: chrome.splitLeft, right: chrome.splitRight }
+      const { thread, hidePty } = overlayViewer(chrome.viewTab, sides)
+      const column = (
+        <ThreadOverlayColumn
+          addr={chrome.overlayAddr}
+          conversationId={chrome.conversationId}
+          active
+          composeBar={
+            <TerminalComposeBar
+              sessionId=""
+              draftId={String(props.attachAgentName)}
+              workspacePath={String(props.cwd)}
+              sendDestination="thread"
+            />
+          }
+          agentName={chrome.displayName || chrome.overlayAddr}
+          centreEmpty
+        />
+      )
+      return (
+        <SplitSessionColumns
+          showSplit={chrome.viewTab === 'split'}
+          hidePty={hidePty}
+          left={chrome.splitLeft}
+          right={chrome.splitRight}
+          terminal={terminal}
+          sharedTerminal={null}
+          renderView={(view) => (view === 'thread' ? column : null)}
+          single={thread ? column : null}
+        />
+      )
+    },
+  }
+})
 
 // Stores / libs the component graph touches at import-time.
 vi.mock('@/stores/projects', () => ({
@@ -290,6 +338,7 @@ beforeEach(() => {
   h.terminalProps.current = null
   h.terminalMountCount.value = 0
   h.activeIds.value = new Set()
+  h.threadInPane.value = false
 })
 
 function ensureBodies(): Array<Record<string, unknown>> {
@@ -1242,6 +1291,10 @@ describe('Continue in a new chat — pinned session switcher', () => {
 })
 
 describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () => {
+  // The probe draws the Thread where the real TerminalPane does.
+  beforeEach(() => {
+    h.threadInPane.value = true
+  })
   const handled = testRoom({
     tabs: useTabsStore,
     projects: [{ id: 'proj-1', path: '/ws', handle: 'sales', workspaces: [] } as never],
@@ -1263,7 +1316,8 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     h.daemonCliPost.mockImplementation(async (route: string) => {
       if (route === 'workspace/ensure-pinned-chat') {
         await gate
-        return mountEnsure()
+        // The conversation the pane was restored with (the usual case).
+        return mountEnsure({ claudeSessionId: 'claude-restored' })
       }
       return undefined
     })
@@ -1271,18 +1325,30 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     localStorage.setItem(sessionViewTabStorageKey('local', 'claude-restored'), 'thread')
     renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="claude-restored" />)
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('thread', expect.objectContaining({ addr: 'sales', limit: 25 })))
-    // The ensure has not answered: the terminal side still says so.
+    // The ensure has not answered: the terminal side still says so, in the
+    // pane that will attach (held: no spawn yet).
     expect(lastEnsureCall()).not.toBeNull()
-    expect(screen.queryByTestId('terminal-pane')).toBeNull()
-    expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy()
-    expect(screen.getByTestId('thread-overlay-pane')).toBeTruthy()
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('true')
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('NONE')
+    const thread = screen.getByTestId('thread-overlay-pane')
     expect(screen.getAllByText('Loading session…').length).toBeGreaterThan(0)
     // The room's list had the handle: no address round trip.
     expect(getRoutes()).not.toContain('sessions/list-for-workspace')
     expect(getRoutes()).not.toContain('workspace/handle')
+    const threadReads = (): number => getRoutes().filter((r) => r === 'thread').length
+    const readsBefore = threadReads()
     await act(async () => release())
-    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
-    expect(screen.queryByTestId('agent-session-ensuring')).toBeNull()
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-1')
+    // The same pane attaches and the same Thread stays: no remount, no
+    // second first-page read.
+    expect(h.terminalMountCount.value).toBe(1)
+    expect(screen.getByTestId('thread-overlay-pane')).toBe(thread)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(threadReads()).toBe(readsBefore)
+    expect(ensureBodies()).toHaveLength(1)
     localStorage.removeItem(sessionViewTabStorageKey('local', 'claude-restored'))
     h.daemonCliPost.mockImplementation(async () => mountEnsure())
   })
@@ -1296,14 +1362,15 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
       if (route === 'workspace/ensure-pinned-chat') {
         await gate
-        return mountEnsure()
+        // The conversation the pane was restored with (the usual case).
+        return mountEnsure({ claudeSessionId: 'claude-restored' })
       }
       if (route === 'thread/post') return { ok: true, id: 'p1', seq: 1, body: (body as { text: string }).text }
       return undefined
     })
     localStorage.setItem(sessionViewTabStorageKey('local', 'claude-restored'), 'thread')
     renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="claude-restored" />)
-    await waitFor(() => expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('true'))
     const slot = screen.getByTestId('agent-session-thread-compose-slot')
     const box = slot.querySelector('textarea') as HTMLTextAreaElement
     expect(box).not.toBeNull()
@@ -1320,9 +1387,14 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('thread/post', expect.objectContaining({ addr: 'sales', text: 'start on the pricing page', via: 'compose' })),
     )
-    expect(screen.queryByTestId('terminal-pane')).toBeNull()
+    // Sent with the terminal still held: the post never needed it.
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('true')
     await act(async () => release())
-    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    // The same box, still focused: the attach did not remount it.
+    expect(screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea')).toBe(box)
+    expect(document.activeElement).toBe(box)
+    expect(h.terminalMountCount.value).toBe(1)
     localStorage.clear()
     h.daemonCliPost.mockImplementation(async () => mountEnsure())
   })
@@ -1342,7 +1414,7 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     })
     renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('thread', expect.objectContaining({ addr: 'sales' })))
-    expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy()
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('true')
     const left = screen.getByTestId('session-split-left')
     const right = screen.getByTestId('session-split-right')
     expect(left.getAttribute('data-split-view')).toBe('terminal')
@@ -1353,7 +1425,9 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     // No Thread messages yet: the Thread's empty state, not a blank side.
     await waitFor(() => expect(right.querySelector('[data-testid="thread-overlay-empty"]')).not.toBeNull())
     await act(async () => release())
-    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    expect(left.textContent).not.toContain('Loading session…')
+    expect(h.terminalMountCount.value).toBe(1)
     h.daemonCliPost.mockImplementation(async () => mountEnsure())
     localStorage.clear()
   })
@@ -1421,14 +1495,84 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
       // Only the name is in both the bar and the Thread.
       expect(screen.getAllByTestId('thread-view-identity')).toHaveLength(2)
       expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
-      // Ready, the mocked terminal draws no columns: the bar stays whole, and
-      // no Thread column means no floats.
+      // Ready: the same columns, the bar whole and the floats where they were.
       await act(async () => release())
-      await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
       const after = screen.getByTestId('pinned-chat-header')
       expect(after.hasAttribute('data-split-bar')).toBe(true)
       expect(screen.getByLabelText('Refresh chat session')).toBeTruthy()
-      await waitFor(() => expect(screen.queryByTestId('thread-search-button')).toBeNull())
+      expect(screen.getByTestId('session-split-right').firstElementChild).toBe(floats)
+      expect(screen.getAllByTestId('thread-search-button')).toHaveLength(1)
+    } finally {
+      release()
+      h.daemonCliPost.mockImplementation(async () => mountEnsure())
+      localStorage.clear()
+    }
+  })
+
+  it('the first ensure\'s own SessionAdded, heard before its answer, does not remount the held pane', async () => {
+    localStorage.clear()
+    let release: () => void = () => {}
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        await pending
+        return mountEnsure()
+      }
+      return undefined
+    })
+    try {
+      renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
+      await waitFor(() => expect(h.terminalMountCount.value).toBe(1))
+      const thread = screen.getByTestId('thread-overlay-pane')
+      expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('true')
+      // The daemon registers the spawn (SessionAdded) before the ensure answers.
+      await act(async () => {
+        h.sessionHandlers.current!.onAdded!({ agent_name: 'proj-1', workspace_path: '/ws', session_id: 'sess-1' })
+      })
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+      await act(async () => release())
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20))
+      })
+      expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-1')
+      expect(h.terminalMountCount.value).toBe(1)
+      expect(screen.getByTestId('thread-overlay-pane')).toBe(thread)
+      expect(ensureBodies()).toHaveLength(1)
+    } finally {
+      release()
+      h.daemonCliPost.mockImplementation(async () => mountEnsure())
+      localStorage.clear()
+    }
+  })
+
+  it('a refresh (a respawn) still shows the Thread while it waits, then attaches the new session', async () => {
+    localStorage.clear()
+    renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    let release: () => void = () => {}
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        await pending
+        return mountEnsure({ sessionId: 'sess-2' })
+      }
+      return undefined
+    })
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Refresh chat session'))
+      })
+      await waitFor(() => expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy())
+      expect(screen.getByTestId('thread-overlay-pane')).toBeTruthy()
+      await act(async () => release())
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-2'))
+      expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false')
+      expect(lastEnsureCall()).toMatchObject({ forceRespawn: true })
     } finally {
       release()
       h.daemonCliPost.mockImplementation(async () => mountEnsure())

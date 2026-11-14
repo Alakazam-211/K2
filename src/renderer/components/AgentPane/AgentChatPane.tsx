@@ -847,6 +847,17 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const [phase, setPhase] = useState<Phase>({ kind: 'ensuring' })
   const phaseRef = useRef(phase)
   phaseRef.current = phase
+  // The first ensure (no session known yet, so no terminal attached): a view
+  // that shows the Thread renders the ready pane at once with its spawn held
+  // (TerminalPane `holdSpawn`). The Thread and its message box paint now,
+  // and when the ensure answers the same pane attaches: nothing remounts.
+  // The session runs headless in the daemon; the Thread never needed the
+  // terminal. Once a session has been attached, a later ensure (refresh,
+  // switch, continue) is a respawn and keeps its own body below.
+  const attachedOnceRef = useRef(false)
+  if (phase.kind === 'ready') attachedOnceRef.current = true
+  const firstEnsureRef = useRef(true)
+  firstEnsureRef.current = phase.kind === 'ensuring' && !attachedOnceRef.current
   const [refreshing, setRefreshing] = useState(false)
   // Bumped to force TerminalPane to re-attach (remount) after a daemon
   // respawn (refresh / dropdown switch / SessionAdded). The daemon kills
@@ -1123,6 +1134,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // 1–3s and reset the tab icon/label (the flicker). When the session
         // id matches what we're attached to, do nothing.
         if (event.session_id === attachedSessionIdRef.current) return
+        // The first ensure's own spawn, heard before its answer: no terminal
+        // is attached yet (a held pane, if any, attaches when it lets go),
+        // so there is nothing to remount.
+        const firstEnsure = firstEnsureRef.current
         attachedSessionIdRef.current = event.session_id
         const held = freshHoldProviderIdRef.current
         setPhase({
@@ -1130,7 +1145,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           sessionId: event.session_id,
           canonicalSessionId: held ?? event.session_id,
         })
-        setAttachNonce((n) => n + 1)
+        if (!firstEnsure) setAttachNonce((n) => n + 1)
       },
       onRemoved: (event) => {
         if (event.agent_name !== projectId) return
@@ -1449,7 +1464,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         </>
       )
     }
-    return (
+    if (attachedOnceRef.current) {
+      // A respawn (refresh, switch, continue): the Thread beside the
+      // terminal's "Loading session…" until the new session is known.
+      return (
       <>
       {continueDialog}
       <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
@@ -1468,10 +1486,13 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         </SplitColumnFloatsContext.Provider>
       </div>
       </>
-    )
+      )
+    }
   }
 
-  // phase.kind === 'ready'
+  // phase.kind === 'ready', or the first ensure with the Thread shown: the
+  // same pane, its spawn held until the ensure answers (see attachedOnceRef).
+  const holdSpawn = phase.kind === 'ensuring'
   return (
     <>
     {continueDialog}
@@ -1506,7 +1527,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           // R6/R18: pass ensure's session id as an eager marker. Live
           // knownSessionId is NOT attach-only (POST still command:null);
           // daemon R4+R5 remain the product. Defense-in-depth only.
-          sessionId={phase.sessionId}
+          sessionId={phase.kind === 'ready' ? phase.sessionId : undefined}
+          holdSpawn={holdSpawn}
           seedLabel={displayName}
           lockLabel={true}
           showComposeBar

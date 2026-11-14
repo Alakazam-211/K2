@@ -1,6 +1,6 @@
-# K2SO Architecture
+# K2 Architecture
 
-Technical architecture of K2SO, covering the system design, backend modules, frontend structure, IPC layer and database schema.
+Technical architecture of K2, covering the system design, backend modules, frontend structure, IPC layer and database schema.
 
 ## System Overview
 
@@ -89,8 +89,8 @@ All `#[tauri::command]` functions grouped by domain:
 - `state.rs` -- `AppState` struct holding `Mutex<Connection>`, `Mutex<TerminalManager>`.
 - `editors.rs` -- Detects installed editors (VS Code, Cursor, Zed, etc.) for "Open in Editor" functionality.
 - `menu.rs` -- Native macOS menu bar construction and event handling.
-- `window.rs` -- Saves/restores window position, size, and maximized state to `~/.k2so/window-state.json`.
-- `project_config.rs` -- Reads `.k2so.toml` per-project config files.
+- `window.rs` -- Saves/restores window position, size, and maximized state through the daemon's `/cli/window-state/get` and `/cli/window-state/set` routes.
+- `crates/k2-core/src/project_config.rs` -- Reads the per-project `config.json` and `config.local.json` from the workspace's dot directory.
 
 ## Frontend
 

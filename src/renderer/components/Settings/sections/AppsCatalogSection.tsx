@@ -390,6 +390,12 @@ function DeployCard({
     return () => clearTimeout(t)
   }, [entry.entry, address, workspace, job])
 
+  // Opening the card puts the keyboard in its first field.
+  const addressRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    addressRef.current?.focus()
+  }, [])
+
   // While the job runs, follow it; the daemon owns it either way. A missed
   // poll is retried on the next tick (the job lives on in the daemon).
   useEffect(() => {
@@ -449,6 +455,7 @@ function DeployCard({
           >
             <span className="flex items-center gap-2 min-w-0">
               <Input
+                ref={addressRef}
                 id={`catalog-address-${entry.entry}`}
                 data-testid="catalog-address"
                 value={address}
@@ -492,6 +499,7 @@ export function AppsCatalogSection(): React.JSX.Element {
   const [open, setOpen] = useState<string | null>(null)
   const [role, setRole] = useState<string | null>(null)
   const mounted = useRef(true)
+  const openers = useRef(new Map<string, HTMLButtonElement>())
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -606,9 +614,14 @@ export function AppsCatalogSection(): React.JSX.Element {
                 {isStaff ? (
                   <div className="flex-shrink-0">
                     <Button
+                      ref={(el) => {
+                        if (el) openers.current.set(e.entry, el)
+                        else openers.current.delete(e.entry)
+                      }}
                       variant={shown ? 'default' : running ? 'default' : 'accent'}
                       disabled={!running && !e.canDeploy}
                       aria-label={running ? `Show ${e.name}’s progress` : `Add ${e.name}`}
+                      aria-expanded={shown}
                       onClick={() => setOpen(shown ? null : e.entry)}
                       data-testid={`catalog-open-${e.entry}`}
                     >
@@ -633,7 +646,10 @@ export function AppsCatalogSection(): React.JSX.Element {
           initialJob={opened.jobs.find(isActive) ?? null}
           isOwner={isOwner}
           onClose={() => {
+            // Back to the row's button, so the keyboard doesn't fall to the top of Settings.
+            const back = openers.current.get(opened.entry)
             setOpen(null)
+            back?.focus()
             void refresh()
           }}
         />

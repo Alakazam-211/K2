@@ -208,6 +208,9 @@ describe('AppsCatalogSection', () => {
     expect(screen.getByRole('heading', { name: 'Deploy Hearth' })).toBeTruthy()
     expect(screen.getByText(/What you approve by deploying/)).toBeTruthy()
     expect(screen.getByText("Server service sew-api (Sew's client API: chat)")).toBeTruthy()
+    // Opening the card puts the keyboard in the address, and the row's button says it's open.
+    expect(document.activeElement).toBe(screen.getByTestId('catalog-address'))
+    expect(screen.getByTestId('catalog-open-sew/hearth').getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByTestId('catalog-address-checking')).toBeTruthy()
     const problem = await screen.findByTestId('catalog-address-problem', {}, { timeout: 2000 })
     expect(problem.textContent).toContain('used by the App hearth')
@@ -270,7 +273,7 @@ describe('AppsCatalogSection', () => {
     await waitFor(() => expect(h.posts.some((p) => p.route === 'app/catalog/retry' && p.body.job === 'sj-1')).toBe(true))
   })
 
-  it('a check that cannot run leaves Deploy open, and the next address clears it', async () => {
+  it('a check that cannot run leaves Deploy open; Cancel hands the keyboard back to the row', async () => {
     h.checkFails = true
     render(<AppsCatalogSection />)
     fireEvent.click(await screen.findByTestId('catalog-open-sew/hearth'))
@@ -285,6 +288,8 @@ describe('AppsCatalogSection', () => {
     expect(screen.getByTestId('catalog-address-ok').textContent).toContain('team.acme.example.test is free')
     fireEvent.click(screen.getByTestId('catalog-close'))
     expect(screen.queryByTestId('catalog-sheet')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByTestId('catalog-open-sew/hearth'))
+    expect(screen.getByTestId('catalog-open-sew/hearth').getAttribute('aria-expanded')).toBe('false')
   })
 
   it('names the state of each step in words, and a wait for rights without its question number', async () => {

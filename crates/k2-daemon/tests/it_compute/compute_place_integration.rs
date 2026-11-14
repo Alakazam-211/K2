@@ -1898,6 +1898,11 @@ async fn avoid_with_a_node_not_yours_is_a_note_not_an_error() {
     let kept = row(&job).ctl.any.expect("auto");
     assert_eq!(kept.avoid, vec!["q4na-vin".to_string(), "q4nc-vin".to_string()], "q4nc is kept too, in case it is granted later");
     assert_eq!(serde_json::to_value(&kept).unwrap()["avoidNames"], json!(["nosuchnode"]), "a name that is no node yet is kept as typed");
+    // The job shows what it avoids (its own node and the name as typed),
+    // never the node the workspace can't use: at submit and on get.
+    assert_eq!(j(&r)["job"]["avoid"], json!(["q4na-vin", "nosuchnode"]), "{}", r.body);
+    let g = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
+    assert_eq!(j(&g)["avoid"], json!(["q4na-vin", "nosuchnode"]), "{}", g.body);
 
     // Only notes: placed as if no --avoid was passed; the names still ride.
     let r = run(d.port, &agent, &me, json!({"avoid": ["q4nc-vin", "nosuchnode"], "memBytes": GB})).await;
@@ -1939,6 +1944,13 @@ fn named_node(id: &str, name: &str) {
     let labels = std::collections::BTreeMap::from([("os".to_string(), "linux".to_string())]);
     store::insert_pending_node(&conn, id, name, &format!("{id:0>64}"), "pem", &labels, "owner", "123456", 1).expect("node");
     store::confirm_node(&conn, id, "owner", 2).expect("confirm");
+}
+
+/// What `k2 compute get --json` says the job avoids.
+async fn avoid_shown(port: u16, token: &str, job: &str) -> Value {
+    let g = get(port, "/cli/compute/jobs/get", token, &format!("job={job}")).await;
+    assert_eq!(g.status, 200, "{}", g.body);
+    j(&g)["avoid"].clone()
 }
 
 /// An auto job of `ws` (as its agent) with `avoid`, queued on `on`.
@@ -1983,8 +1995,12 @@ async fn an_avoided_node_that_becomes_yours_later_is_still_never_picked() {
     // Z doesn't exist yet: avoided by the name it will have.
     let not_yet = submit_avoiding(d.port, &agent, &me, json!(["q5nc-vin", "q5nz-vin"]), "id-a5").await;
 
-    // The owner grants C to the workspace while they wait.
+    // The owner grants C to the workspace while they wait: from then on the
+    // job's own view names it.
+    assert_eq!(avoid_shown(d.port, &agent, &by_name).await, json!([]), "C isn't the workspace's yet");
     grant("id-c5", &me, None, 2);
+    assert_eq!(avoid_shown(d.port, &agent, &by_name).await, json!(["q5nc-vin"]));
+    assert_eq!(avoid_shown(d.port, &agent, &not_yet).await, json!(["q5nc-vin", "q5nz-vin"]), "the name as typed, too");
     let mut wrong: Vec<String> = Vec::new();
     // A retry after an interrupted attempt on A: never to C.
     {

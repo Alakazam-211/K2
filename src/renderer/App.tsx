@@ -70,6 +70,7 @@ import { initAppApprovalsEvents } from './stores/app-approvals'
 import { initProjectGroupEvents } from './stores/project-groups'
 import { startHomesSync } from './lib/homes-sync'
 import { startStashSync } from './lib/prompt-stash/sync'
+import { startChatCatchup } from './components/SessionView/chatCatchupRun'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { applyCmdL } from './stores/server-switcher'
@@ -428,6 +429,8 @@ function AppRoot(): React.JSX.Element {
   // stash-sync-v1 (0.46.7): the prompt stash syncs with this computer's
   // daemon too (records only; files stay on the device that saved them).
   useEffect(() => startStashSync(), [])
+  // Speed pass P3b: one Thread catch-up per server on launch and focus.
+  useEffect(() => startChatCatchup(), [])
 
   // #672 — open the single app-level Active-state subscription once at
   // boot, and re-run the snapshot + re-subscribe on a real host switch so

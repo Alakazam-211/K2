@@ -62,6 +62,11 @@ function remoteScope(host = 'rosson.k2.dev'): ServerScope {
   } as unknown as ServerScope
 }
 
+/** This computer's daemon: every feature, the delta among them. */
+function localScope(): ServerScope {
+  return { ...remoteScope('local'), id: 'host:local', isRemote: false, serverSupports: () => true } as unknown as ServerScope
+}
+
 function page(from: number, to: number, body = 'm'): { conversation_id: string; has_more: boolean; items: unknown[] } {
   const items = []
   for (let seq = from; seq <= to; seq++) {
@@ -130,6 +135,68 @@ describe('remote Thread view cache in the hook', () => {
     expect(result.current.items).toEqual([])
     answer(page(1, 1))
     await waitFor(() => expect(result.current.items).toHaveLength(1))
+  })
+
+  it('a Thread on this computer is cached too: its first frame paints the copy, with no read yet (speed pass P3b)', async () => {
+    const scope = localScope()
+    saveThreadView('local', 'k2', 'conv-1', page(1, 3, 'old').items as never)
+    // No network at all: every read hangs.
+    daemonCliGet.mockReturnValue(new Promise(() => {}))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const firstRenders: string[][] = []
+    const callsAtFirstRender: number[] = []
+    renderHook(() => {
+      const r = useOverlayThread({ scope, addr: 'k2', conversationId: 'conv-1', enabled: true, viewing: true })
+      if (firstRenders.length === 0) callsAtFirstRender.push(daemonCliGet.mock.calls.length)
+      firstRenders.push(r.items.map((it) => String(it.doc.body)))
+      return r
+    })
+    expect(firstRenders[0]).toEqual(['old1', 'old2', 'old3'])
+    expect(callsAtFirstRender).toEqual([0])
+    expect(markReadOnServer).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('a cached open asks the delta from the copy’s newest server seq (a pushed row never counts), not a page', async () => {
+    const scope = localScope()
+    const pushed = { ...page(4, 4, 'pushed').items[0], provisional: true }
+    saveThreadView('local', 'k2', 'conv-1', [...page(1, 3, 'old').items, pushed] as never)
+    daemonCliGet.mockImplementation(async (_s: unknown, route: string, p: Record<string, unknown>) => {
+      if (route !== 'thread') throw new Error(`unexpected ${route}`)
+      if (p.after_seq === undefined) throw new Error('a page read: the delta should have settled the open')
+      return {
+        conversation_id: 'conv-1',
+        after_seq: p.after_seq,
+        has_more: false,
+        items: page(4, 5, 'new').items,
+        changed: [{ ...page(2, 2).items[0], doc: { id: 't2', kind: 'text', from: 'k2', body: null, deleted: true } }],
+        removed: [],
+      }
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { result } = renderHook(() => useOverlayThread({ scope, addr: 'k2', conversationId: 'conv-1', enabled: true }))
+    await waitFor(() => expect(result.current.fromCache).toBe(false))
+    expect(daemonCliGet.mock.calls[0][2]).toMatchObject({ addr: 'k2', after_seq: 3 })
+    expect(result.current.items.map((it) => it.id)).toEqual(['t1', 't2', 't3', 't4', 't5'])
+    expect(result.current.items[1].doc.deleted).toBe(true)
+    // The server's copy confirmed the pushed row.
+    expect(result.current.items.every((it) => !it.provisional)).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('a cached open whose delta has more than a page reads the newest page instead (replacing the copy)', async () => {
+    const scope = localScope()
+    saveThreadView('local', 'k2', 'conv-1', page(1, 3, 'old').items as never)
+    daemonCliGet.mockImplementation(async (_s: unknown, route: string, p: Record<string, unknown>) => {
+      if (route !== 'thread') throw new Error(`unexpected ${route}`)
+      if (p.after_seq !== undefined) return { conversation_id: 'conv-1', after_seq: 3, has_more: true, items: page(4, 5).items, changed: [], removed: [] }
+      return { ...page(300, 302, 'newest'), conversation_id: 'conv-1' }
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { result } = renderHook(() => useOverlayThread({ scope, addr: 'k2', conversationId: 'conv-1', enabled: true }))
+    await waitFor(() => expect(result.current.items.map((it) => it.id)).toEqual(['t300', 't301', 't302']))
+    expect(daemonCliGet.mock.calls.map((c) => (c[2] as Record<string, unknown>).after_seq ?? 'page')).toEqual([3, 'page'])
+    warn.mockRestore()
   })
 
   it('a view opening during a prefetch of the same Thread waits for it: one GET', async () => {

@@ -36,6 +36,7 @@ import { ingestOverlayThreadItem, postThreadCompose, type OverlayThreadItem } fr
 import { setOverlayReconnectBaseForTests, useOverlayThread } from './useOverlayThread'
 import { primaryScope } from '@/kessel/server-scope'
 import { resetGridDialQueueForTests } from '@/lib/grid-dial-queue'
+import { listThreadViews, resetThreadViewCacheForTests } from './threadViewCache'
 
 // ── A fake daemon: one Thread, its seq counter, and the overlay sockets ──
 
@@ -145,7 +146,10 @@ function ids(items: OverlayThreadItem[]): string[] {
   return items.map((it) => it.id)
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Every test starts with no Thread copy in this window (the view cache
+  // holds local Threads too).
+  await resetThreadViewCacheForTests()
   server.conv = 'conv-1'
   server.rows = []
   server.seq = 0
@@ -874,5 +878,20 @@ describe('Thread sync: re-sync by delta (speed pass P3)', () => {
     focusLater()
     await waitFor(() => expect(server.catchUps).toEqual([0]))
     expect(ids(view.result.current.items)).toEqual(['a1', 'a2'])
+  })
+
+  it('a pushed row is provisional: the saved copy’s cursor stays the last server read until a read confirms it (P3b)', async () => {
+    write('a1', 'sales', 'hello')
+    const { view, sock } = await mountLive('conv-1')
+    act(() => sock.frame(write('a2', 'sales', 'pushed')))
+    expect(view.result.current.items.map((it) => [it.id, it.provisional ?? false])).toEqual([
+      ['a1', false],
+      ['a2', true],
+    ])
+    await waitFor(async () => expect((await listThreadViews('local')).map((m) => m.cursor)).toEqual([1]))
+    // A re-sync's delta carries a2: the server's copy confirms it.
+    focusLater()
+    await waitFor(() => expect(view.result.current.items[1].provisional).toBeUndefined())
+    await waitFor(async () => expect((await listThreadViews('local')).map((m) => m.cursor)).toEqual([2]))
   })
 })

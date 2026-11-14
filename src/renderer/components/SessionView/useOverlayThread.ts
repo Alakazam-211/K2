@@ -56,11 +56,17 @@
 //      (`useAutoMarkRead`, `stores/unread.ts`). A Home remote room's
 //      Thread is marked read on the room's server, for this window's login
 //      there (`markReadOnServer`; not on a view-only room).
-//   9. A remote Thread paints its last messages at once from the view
-//      cache (`threadViewCache.ts`, research-remote-thread-load-v1 Fix 4),
-//      then the snapshot replaces them. While only the cache is shown
-//      (`fromCache`), nothing is marked read. The first page read is shared
-//      with a read already on its way (`threadRead.ts`).
+//   9. A Thread (this computer's or another server's) paints its last
+//      messages from the view cache (`threadViewCache.ts`): in the first
+//      render from this window's memory, else as soon as IndexedDB answers.
+//      A copy is then brought up to date with a delta from its newest
+//      server seq (speed pass P3b, the phone's model); without a copy, or
+//      when the delta can't settle it, the newest page replaces it. Rows a
+//      push brought are `provisional` and never that cursor
+//      (`threadCacheMerge.ts`). While only the cache is shown (`fromCache`),
+//      nothing is marked read. The first page read is shared with a read
+//      already on its way (`threadRead.ts`). The catch-up
+//      (`chatCatchupRun.ts`) leaves an open Thread to this view.
 //  10. This window's unconfirmed sends (`threadOutbox.ts`, Fix 3) come back
 //      as `outbox`: pending bubbles to draw after `items`. One goes as soon
 //      as the server's copy is in `items` (matched by `clientMsgId`, or by
@@ -106,7 +112,9 @@ import { createViewingSender, windowIsLookedAt, type ViewingSender } from './thr
 import { useAutoMarkRead } from '@/stores/unread'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { applyThreadDelta, parseThreadDelta, THREAD_DELTA_PAGE } from './threadDelta'
-import { peekThreadView, readThreadView, saveThreadView } from './threadViewCache'
+import { peekThreadView, readThreadView, saveThreadView, type CachedThreadView } from './threadViewCache'
+import { newestSeq as cacheCursor } from './threadCacheMerge'
+import { markThreadOpen } from './chatCatchup'
 import { readThreadFirstPage } from './threadRead'
 import {
   kickOutbox,
@@ -220,14 +228,21 @@ export function useOverlayThread(opts: {
 } {
   const { scope, addr, conversationId, enabled } = opts
   const viewing = opts.viewing === true
-  const [items, setItems] = useState<OverlayThreadItem[]>([])
+  // §9: the first frame paints this window's copy (the memory LRU, read
+  // synchronously), before any effect or read.
+  const [firstPaint] = useState(() => {
+    if (!enabled || !addr.trim()) return null
+    const hit = peekThreadView(scope.hostKey, addr)
+    return hit && hit.items.length > 0 ? hit : null
+  })
+  const [items, setItems] = useState<OverlayThreadItem[]>(() => firstPaint?.items ?? [])
   const [resolvedConv, setResolvedConv] = useState(conversationId ?? '')
   const [error, setError] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
-  const [hasMore, setHasMore] = useState(false)
+  const [hasMore, setHasMore] = useState(() => firstPaint?.hasMore ?? false)
   const [loadingOlder, setLoadingOlder] = useState(false)
-  const [loaded, setLoaded] = useState(false)
-  const [fromCache, setFromCache] = useState(false)
+  const [loaded, setLoaded] = useState(() => firstPaint !== null)
+  const [fromCache, setFromCache] = useState(() => firstPaint !== null)
   /** The server's snapshot landed for the running view (what the cache saves). */
   const serverReadRef = useRef(false)
   const [turn, setTurn] = useState<ThreadTurn | null>(null)
@@ -513,7 +528,8 @@ export function useOverlayThread(opts: {
             setTurn((prev) => applyActivityFrame(prev, frame, receivedAt))
             return
           }
-          setItems((prev) => applyOverlayFrame(prev, frame, threadWindowFloor(prev, hasMoreRef.current)))
+          // A pushed row is provisional: never a cursor (threadCacheMerge).
+          setItems((prev) => applyOverlayFrame(prev, frame, threadWindowFloor(prev, hasMoreRef.current), { provisional: true }))
         }
         const lost = (): void => {
           if (ws !== sock) return
@@ -582,30 +598,76 @@ export function useOverlayThread(opts: {
     }
     const onBlur = (): void => viewingSender.update()
 
-    /** §9: a remote Thread's last messages, before the server answers. */
+    /** §9: a Thread's last messages, before the server answers. */
     function paintFromCache(): void {
-      if (!scope.isRemote) return
       const host = scope.hostKey
       const sent = addrRef.current
-      const show = (items: OverlayThreadItem[]): void => {
-        if (cancelled || snapshotIn || items.length === 0) return
-        setItems(items)
+      const show = (v: CachedThreadView): void => {
+        if (cancelled || snapshotIn || v.items.length === 0) return
+        setItems(v.items)
+        setHasMore(v.hasMore)
         setFromCache(true)
         setLoaded(true)
       }
       const hit = peekThreadView(host, sent)
       if (hit) {
-        show(hit.items)
+        show(hit)
         return
       }
       void readThreadView(host, sent).then((v) => {
-        if (v) show(v.items)
+        if (v) show(v)
       })
+    }
+
+    /** §9 (speed pass P3b): a cached copy is brought up to date with a
+     *  delta from its newest server seq (pushed rows never count) instead
+     *  of a page read. True when that settled the open; false: read the
+     *  newest page (no copy, no delta on the server, another conversation,
+     *  a gap past one page, or the delta failed). */
+    async function bootFromCache(sent: string): Promise<boolean> {
+      if (!scope.serverSupports('thread-delta-v1')) return false
+      const cached = peekThreadView(scope.hostKey, sent) ?? (await readThreadView(scope.hostKey, sent))
+      if (cancelled || !cached || !cached.conversationId) return false
+      const cursor = cacheCursor(cached.items)
+      if (cursor === null) return false
+      let raw: unknown
+      try {
+        raw = await daemonCliGet<unknown>(scope, 'thread', {
+          addr: sent,
+          after_seq: cursor,
+          limit: THREAD_DELTA_PAGE,
+          ...threadCardsParams(scope),
+        })
+      } catch (e) {
+        // The page read below says what is wrong (and shows it).
+        console.warn('[thread] cached open: delta failed:', e)
+        return false
+      }
+      if (cancelled) return true
+      const delta = parseThreadDelta(raw)
+      if (!delta || delta.hasMore || delta.conversation_id !== cached.conversationId) return false
+      snapshotIn = true
+      serverReadRef.current = true
+      setFromCache(false)
+      conv = delta.conversation_id
+      bootedConvRef.current = conv
+      syncCursor = Math.max(cursor, newestSeq(delta.items))
+      setItems(applyThreadDelta(cached.items, delta, cached.hasMore))
+      setHasMore(cached.hasMore)
+      setResolvedConv(conv)
+      setError(null)
+      setLoaded(true)
+      noteSnapshotAddress(raw)
+      noteMovedFrom(sent, raw)
+      await connect(() => syncCursor ?? cursor)
+      return true
     }
 
     async function boot(): Promise<void> {
       const sent = addrRef.current
       try {
+        if (await bootFromCache(sent)) return
+        if (cancelled) return
         const raw = await readThreadFirstPage(scope, sent)
         if (cancelled) return
         snapshotIn = true
@@ -691,7 +753,7 @@ export function useOverlayThread(opts: {
     return subscribeOverlayThreadLive((item) => {
       const conv = resolvedConv || conversationId || ''
       if (item.conversation_id && item.conversation_id !== conv) return
-      setItems((prev) => mergeThreadItems(prev, [item]))
+      setItems((prev) => mergeThreadItems(prev, [{ ...item, provisional: true }]))
     })
   }, [conversationId, resolvedConv, enabled])
 
@@ -790,7 +852,7 @@ export function useOverlayThread(opts: {
             ? overlayItemFromThreadPost(res as Record<string, unknown>, trimmed, sentAtSec)
             : null
         if (item) {
-          setItems((prev) => mergeThreadItems(prev, [item]))
+          setItems((prev) => mergeThreadItems(prev, [{ ...item, provisional: true }]))
           if (res.conversation_id) setResolvedConv(res.conversation_id)
         }
       } finally {
@@ -937,11 +999,19 @@ export function useOverlayThread(opts: {
   }, [reconciled, outboxEntries])
 
   // §9: what this view holds after the server's read goes to the view
-  // cache (remote only; coalesced there). Never the cache's own paint.
+  // cache (coalesced there; pushed rows keep their `provisional` mark, so
+  // the copy's cursor stays the last server read). Never the cache's own
+  // paint.
   useEffect(() => {
-    if (!enabled || !scope.isRemote || fromCache || !serverReadRef.current) return
-    saveThreadView(scope.hostKey, addrRef.current, resolvedConv, items)
-  }, [items, resolvedConv, fromCache, enabled, scope])
+    if (!enabled || fromCache || !serverReadRef.current) return
+    saveThreadView(scope.hostKey, addrRef.current, resolvedConv, items, Date.now(), { hasMore })
+  }, [items, hasMore, resolvedConv, fromCache, enabled, scope])
+
+  // The catch-up leaves an open Thread to this view's own re-sync.
+  useEffect(() => {
+    if (!enabled || !addr.trim()) return
+    return markThreadOpen(scope.hostKey, addr)
+  }, [enabled, scope, addr])
 
   // §8: read while looking (thread-read-v1). An effect, never render.
   // §9: never from the cache's paint (nothing stale counts as read).

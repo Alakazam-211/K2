@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ServerScope } from '@/kessel/server-scope'
-import { describe, expect, it, afterEach, vi } from 'vitest'
+import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { OVERLAY_PAGE_SIZE, OVERLAY_SEARCH_PAGE_SIZE, threadCardsParams } from './overlayThread'
 
@@ -52,6 +52,7 @@ vi.mock('@/kessel/daemon-ws', () => ({
 
 import { ingestOverlayThreadItem } from './overlayThread'
 import { useOverlayThread } from './useOverlayThread'
+import { resetThreadViewCacheForTests } from './threadViewCache'
 import { useOverlayChatter } from './useOverlayChatter'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -72,6 +73,12 @@ function pageItems(start: number, end: number, collection: 'thread' | 'chatter')
   }
   return items
 }
+
+// No Thread copy from an earlier test (the view cache holds local Threads
+// too).
+beforeEach(async () => {
+  await resetThreadViewCacheForTests()
+})
 
 describe('useOverlayThread paging', () => {
   afterEach(() => {

@@ -14,7 +14,17 @@
 //! read), its transform, its base colour, its sidedness and
 //! `modifiers_not_applied` (shown with the image). The renderer's build is
 //! not in it: the host keys its cache with it.
+//!
+//! **Bounds:** each object item also carries its mesh's local box
+//! ([`LocalBounds`], mesh space: the client applies the object's transform),
+//! read from the positions in the bytes; `approx` when the object's
+//! modifiers were not applied (the evaluated mesh may be larger). An empty
+//! mesh, or one with a non-finite position (which the renderer refuses), has
+//! none. Bounds are not in any digest.
 
+use serde::Serialize;
+
+use crate::camera::mesh_bounds;
 use crate::sha256::Sha256;
 use crate::scene::{self, Camera, Header, InputError, InputLimits, MeshInfo, Object, UpAxis};
 
@@ -65,8 +75,18 @@ impl Target {
     }
 }
 
+/// An object's mesh box in mesh-local coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LocalBounds {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    /// The object is drawn without its modifiers: its evaluated mesh (what
+    /// the file shows) may be larger than this base mesh's box.
+    pub approx: bool,
+}
+
 /// One previewed thing.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     /// Its address (`@scene`, `@cam:Camera`, `@obj:Cube`).
     pub key: String,
@@ -75,6 +95,9 @@ pub struct Item {
     pub target: Target,
     /// The raw digest of what it draws.
     pub digest: [u8; 32],
+    /// An object's mesh box (local; `None` for an empty mesh and for every
+    /// other item).
+    pub bounds: Option<LocalBounds>,
 }
 
 fn addressable(id: &str) -> bool {
@@ -159,21 +182,46 @@ fn view_digest(up: UpAxis, camera: Option<&Camera>, objects: &[&Object], mesh: &
 pub fn list(bytes: &[u8], lim: &InputLimits) -> Result<Vec<Item>, InputError> {
     let (h, ranges) = scene::layout(bytes, lim)?;
     let mesh: Vec<[u8; 32]> = h.meshes.iter().zip(&ranges).map(|(m, r)| mesh_digest(m, &bytes[r.clone()])).collect();
-    Ok(list_header(&h, &mesh))
+    // A mesh's box once, only for the meshes an object uses.
+    let mut boxes: Vec<Option<Option<([f32; 3], [f32; 3])>>> = vec![None; h.meshes.len()];
+    for o in &h.objects {
+        let mi = o.mesh as usize;
+        if boxes[mi].is_none() {
+            boxes[mi] = Some(local_box(&h.meshes[mi], &bytes[ranges[mi].clone()]));
+        }
+    }
+    let boxes: Vec<Option<([f32; 3], [f32; 3])>> = boxes.into_iter().map(Option::flatten).collect();
+    Ok(list_header(&h, &mesh, &boxes))
 }
 
-fn list_header(h: &Header, mesh: &[[u8; 32]]) -> Vec<Item> {
+/// The box of a mesh's positions (the first `12 * vertices` of its data);
+/// `None` when it has none or one isn't finite.
+fn local_box(m: &MeshInfo, data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
+    let n = m.vertices as usize * 12;
+    let positions: Vec<[f32; 3]> = data.get(..n)?.as_chunks::<12>().0.iter()
+        .map(|c| [f32::from_le_bytes([c[0], c[1], c[2], c[3]]), f32::from_le_bytes([c[4], c[5], c[6], c[7]]), f32::from_le_bytes([c[8], c[9], c[10], c[11]])])
+        .collect();
+    if !positions.iter().flatten().all(|v| v.is_finite()) {
+        return None;
+    }
+    // f32 in, f32 out: the f64 box holds the f32 values exactly.
+    let (lo, hi) = mesh_bounds(&positions)?;
+    Some(([lo[0] as f32, lo[1] as f32, lo[2] as f32], [hi[0] as f32, hi[1] as f32, hi[2] as f32]))
+}
+
+fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<([f32; 3], [f32; 3])>]) -> Vec<Item> {
     let all: Vec<&Object> = h.objects.iter().collect();
     let mut items = Vec::with_capacity(1 + h.cameras.len() + h.objects.len());
-    items.push(Item { key: "@scene".into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, None, &all, mesh) });
+    items.push(Item { key: "@scene".into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, None, &all, mesh), bounds: None });
     let mut used = std::collections::HashSet::new();
     for (i, c) in h.cameras.iter().enumerate() {
         let key = if addressable(&c.id) && used.insert(format!("@cam:{}", c.id)) { format!("@cam:{}", c.id) } else { format!("@cam#{i}") };
-        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Some(c), &all, mesh) });
+        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Some(c), &all, mesh), bounds: None });
     }
     for (i, o) in h.objects.iter().enumerate() {
         let key = if addressable(&o.id) && used.insert(format!("@obj:{}", o.id)) { format!("@obj:{}", o.id) } else { format!("@obj#{i}") };
-        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, None, &[o], mesh) });
+        let bounds = boxes[o.mesh as usize].map(|(min, max)| LocalBounds { min, max, approx: o.modifiers_not_applied });
+        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, None, &[o], mesh), bounds });
     }
     items
 }
@@ -262,6 +310,37 @@ mod tests {
         n.objects[0].hash = Some("y".into());
         n.objects[0].modifiers = vec!["MIRROR".into()];
         assert!(changed(&n).is_empty());
+    }
+
+    #[test]
+    fn each_object_lists_its_meshs_local_box() {
+        let mut s = testgen::grid_scene(2, false);
+        s.objects[3].modifiers = vec!["SUBSURF".into()];
+        s.objects[3].modifiers_not_applied = true;
+        // A third mesh with nothing in it, and an object using it.
+        s.meshes.push(crate::scene::Mesh { positions: Vec::new(), normals: None, indices: Vec::new(), hash: None });
+        s.objects.push(testgen::object("Empty", 2, [1.0; 3], testgen::identity(), None));
+        let items = list(&encode(&s), &InputLimits::default()).expect("list");
+        let cube = Some(LocalBounds { min: [-0.5; 3], max: [0.5; 3], approx: false });
+        let objects: Vec<&Item> = items.iter().filter(|i| matches!(i.target, Target::Object(_))).collect();
+        assert_eq!(objects.len(), 5);
+        assert_eq!(objects[0].bounds, cube, "mesh-local: the object's transform isn't in it");
+        assert_eq!(objects[2].bounds, cube, "a shared mesh: the same box");
+        let sphere = objects[1].bounds.expect("the sphere's box");
+        assert!(!sphere.approx && sphere.min[1] < 0.0 && sphere.max[1] > 0.0);
+        assert_eq!(objects[3].bounds.map(|b| b.approx), Some(true), "modifiers not applied: approximate");
+        assert_eq!(objects[4].bounds, None, "an empty mesh has no box");
+        assert!(items.iter().filter(|i| !matches!(i.target, Target::Object(_))).all(|i| i.bounds.is_none()));
+        // The exact f32 extremes, whatever the transform.
+        let mut t = testgen::cube_scene();
+        t.meshes[0].positions[0] = [-0.75, 0.1, 0.2];
+        t.objects[0].transform = testgen::placed([5.0, 6.0, 7.0], [3.0, 3.0, 3.0]);
+        let b = list(&encode(&t), &InputLimits::default()).expect("list")[1].bounds.expect("a box");
+        assert_eq!((b.min, b.max), ([-0.75, -0.5, -0.5], [0.5, 0.5, 0.5]));
+        // A non-finite position (the renderer refuses the scene): no box, and no panic.
+        let mut n = testgen::cube_scene();
+        n.meshes[0].positions[2][0] = f32::INFINITY;
+        assert_eq!(list(&encode(&n), &InputLimits::default()).expect("list")[1].bounds, None);
     }
 
     #[test]

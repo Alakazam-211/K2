@@ -855,6 +855,7 @@ pub fn plan_channels(conn: &Connection, busy: &HashSet<String>, now: i64) -> Res
                         kind: None,
                         private: None,
                         user_limit: None,
+                        members_can_leave: None,
                     });
                 }
                 Some(r) if r.channel_id.is_some() && r.state == CH_READY => {
@@ -868,6 +869,7 @@ pub fn plan_channels(conn: &Connection, busy: &HashSet<String>, now: i64) -> Res
                             kind: None,
                             private: None,
                             user_limit: None,
+                            members_can_leave: None,
                         });
                     }
                 }
@@ -881,6 +883,7 @@ pub fn plan_channels(conn: &Connection, busy: &HashSet<String>, now: i64) -> Res
                         kind: Some(c.kind.clone()),
                         private: Some(c.private),
                         user_limit: c.user_limit,
+                        members_can_leave: None,
                     });
                 }
             }
@@ -897,6 +900,7 @@ pub fn plan_channels(conn: &Connection, busy: &HashSet<String>, now: i64) -> Res
                         kind: None,
                         private: None,
                         user_limit: None,
+                        members_can_leave: None,
                     });
                 }
             }

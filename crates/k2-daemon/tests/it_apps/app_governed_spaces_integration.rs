@@ -342,6 +342,7 @@ async fn a_large_change_is_queued_by_sew_and_read_back_next_sweep() {
                 kind: Some("text".into()),
                 private: Some(true),
                 user_limit: None,
+                members_can_leave: None,
             })
             .collect(),
     };

@@ -1046,6 +1046,11 @@ pub struct ChannelOp {
     /// Voice: 0–99 (0 = no limit).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_limit: Option<u32>,
+    /// Sew 0.10.0 HOME1 (`channel_members_can_leave`): on `update` (by
+    /// `channel_id`) or `ensure`. A repeated `ensure` never changes it, so a
+    /// channel made before the flag gets it with `update`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members_can_leave: Option<bool>,
 }
 
 /// I6 body (1–200 ops).
@@ -1308,6 +1313,9 @@ pub mod channel_ops {
     pub const RENAME: &str = "rename";
     pub const ARCHIVE: &str = "archive";
     pub const UNARCHIVE: &str = "unarchive";
+    /// Sew 0.10.0 HOME1: change a channel's settings by id (K2 sends
+    /// `members_can_leave` only).
+    pub const UPDATE: &str = "update";
 }
 
 /// A voice channel (`ChannelOp.kind`). K2 never asks for `voice:video`.
@@ -2245,6 +2253,7 @@ mod tests {
                 kind: Some(CHANNEL_TYPE_VOICE.into()),
                 private: Some(false),
                 user_limit: Some(25),
+                members_can_leave: None,
             }],
         };
         assert_eq!(
@@ -2293,6 +2302,7 @@ mod tests {
             kind: (o == channel_ops::ENSURE).then(|| CHANNEL_TYPE_VOICE.into()),
             private: (o == channel_ops::ENSURE).then_some(false),
             user_limit: (o == channel_ops::ENSURE).then_some(25),
+            members_can_leave: None,
         };
         let ops = vec![
             op(channel_ops::ENSURE, "room-1", None, Some("Room 1")),

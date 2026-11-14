@@ -685,6 +685,7 @@ fn room_op(o: &str, slug: &str, channel_id: Option<&str>, name: Option<String>) 
         kind: ensure.then(|| sew_wire::CHANNEL_TYPE_VOICE.into()),
         private: ensure.then_some(false),
         user_limit: ensure.then_some(voice_rooms::ROOM_USER_LIMIT),
+        members_can_leave: None,
     }
 }
 

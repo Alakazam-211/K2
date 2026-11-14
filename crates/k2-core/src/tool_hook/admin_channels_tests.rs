@@ -283,3 +283,31 @@ fn deliver(op: &NewOp, answer: &str) {
     let ids = with(|c| outbox::enqueue(c, std::slice::from_ref(op), ACTOR, 10));
     hook::record_done(&ids[0], 200, answer).unwrap_or_else(|e| panic!("record_done: {e}"));
 }
+
+/// HOME1: Home channels made before Sew had `channel_members_can_leave` get
+/// it once with the bulk `update` op (a repeated `ensure` never sets it);
+/// one made with the flag already has it.
+#[test]
+fn members_can_leave_is_set_once_with_update_when_the_flag_shows() {
+    let _e = setup(&[]);
+    live_channel("c-aaaaaaaaaa", "9001", false, &[ALEX]);
+    assert!(plan_home(&HashSet::new(), &levels(&[ALEX])).is_empty(), "no flag: nothing");
+    hook::note_features_for_tests(&[features::SERVER_GOVERNED_SPACE, features::CHANNEL_MEMBERS_CAN_LEAVE]).unwrap();
+    let ops = plan_home(&HashSet::new(), &levels(&[ALEX]));
+    assert_eq!(ops.len(), 1, "{ops:?}");
+    assert_eq!(ops[0].op, Op::AdminChannelOps);
+    assert_eq!(ops[0].payload["ops"], json!([{"op": "update", "slug": "c-aaaaaaaaaa", "channel_id": "9001", "members_can_leave": true}]));
+    let (_, body) = wire(ops[0].op, &ops[0].payload.to_string()).unwrap().unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["ops"][0], json!({"op": "update", "channel_id": "9001", "members_can_leave": true}));
+    deliver(&ops[0], r#"{"results":[{"op":"update","channel_id":"9001"}]}"#);
+    assert!(with(|c| channel_by_slug(c, "c-aaaaaaaaaa")).unwrap().can_leave);
+    assert!(plan_home(&HashSet::new(), &levels(&[ALEX])).is_empty(), "set once");
+    // Made with the flag: the create carried it, no update follows.
+    let row = with(|c| request_create(c, "Later", false, ALEX, &[], 5));
+    let ops = plan_home(&HashSet::new(), &levels(&[ALEX]));
+    assert_eq!(ops[0].payload["members_can_leave"], json!(true));
+    deliver(&ops[0], &json!({"channel_id": "9200", "space_id": SPACE, "slug": row.slug, "name": "Later", "private": true, "created": true,
+        "added": [{"external_id": ALEX, "member_id": "41"}]}).to_string());
+    assert!(with(|c| channel_by_slug(c, &row.slug)).unwrap().can_leave);
+    assert!(plan_home(&HashSet::new(), &levels(&[ALEX])).is_empty());
+}

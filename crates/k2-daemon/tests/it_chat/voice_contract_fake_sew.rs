@@ -246,11 +246,12 @@ fn ensure(n: u32) -> sew_wire::ChannelOp {
         kind: Some(sew_wire::CHANNEL_TYPE_VOICE.into()),
         private: Some(false),
         user_limit: Some(25),
+        members_can_leave: None,
     }
 }
 
 fn by_id(op: &str, id: &str, name: Option<&str>) -> sew_wire::ChannelOp {
-    sew_wire::ChannelOp { op: op.into(), slug: None, channel_id: Some(id.into()), name: name.map(str::to_string), kind: None, private: None, user_limit: None }
+    sew_wire::ChannelOp { op: op.into(), slug: None, channel_id: Some(id.into()), name: name.map(str::to_string), kind: None, private: None, user_limit: None, members_can_leave: None }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

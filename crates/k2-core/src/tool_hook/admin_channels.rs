@@ -78,6 +78,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             creator_ext   TEXT NOT NULL,
             allow_agents  INTEGER NOT NULL DEFAULT 0,
             want_archive  INTEGER NOT NULL DEFAULT 0,
+            can_leave     INTEGER NOT NULL DEFAULT 0,
             state         TEXT NOT NULL CHECK (state IN ('pending','active','archived')),
             why           TEXT,
             created_at    INTEGER NOT NULL,
@@ -107,7 +108,17 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             PRIMARY KEY (person_ext, target_ext)
          );",
     )
-    .map_err(|e| format!("skin.db home channels schema: {e}"))
+    .map_err(|e| format!("skin.db home channels schema: {e}"))?;
+    // `can_leave` on a table an earlier build of this branch made.
+    let has: bool = conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('tool_admin_chat_channels') WHERE name = 'can_leave'", [], |r| r.get::<_, i64>(0))
+        .map_err(|e| format!("home channels columns: {e}"))?
+        > 0;
+    if !has {
+        conn.execute_batch("ALTER TABLE tool_admin_chat_channels ADD COLUMN can_leave INTEGER NOT NULL DEFAULT 0")
+            .map_err(|e| format!("home channels can_leave: {e}"))?;
+    }
+    Ok(())
 }
 
 // ── reads ────────────────────────────────────────────────────────────
@@ -124,6 +135,9 @@ pub struct ChannelRow {
     pub creator_ext: String,
     pub allow_agents: bool,
     pub want_archive: bool,
+    /// Sew holds `members_can_leave: true` for it (set at create or by
+    /// `update` once Sew has the flag).
+    pub can_leave: bool,
     pub state: String,
     pub why: Option<String>,
 }
@@ -136,7 +150,7 @@ impl ChannelRow {
 }
 
 const CH_SELECT: &str =
-    "SELECT slug, channel_id, name, want_name, open, creator_ext, allow_agents, want_archive, state, why FROM tool_admin_chat_channels";
+    "SELECT slug, channel_id, name, want_name, open, creator_ext, allow_agents, want_archive, state, why, can_leave FROM tool_admin_chat_channels";
 
 fn ch_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelRow> {
     Ok(ChannelRow {
@@ -150,6 +164,7 @@ fn ch_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelRow> {
         want_archive: r.get::<_, i64>(7)? != 0,
         state: r.get(8)?,
         why: r.get(9)?,
+        can_leave: r.get::<_, i64>(10)? != 0,
     })
 }
 
@@ -490,7 +505,7 @@ pub fn plan(
         let (Some(id), CH_ACTIVE) = (c.channel_id.as_deref(), c.state.as_str()) else { continue };
         let mut ops = Vec::new();
         if c.want_archive {
-            ops.push(ChannelOp { op: channel_ops::ARCHIVE.into(), slug: Some(c.slug.clone()), channel_id: Some(id.into()), name: None, kind: None, private: None, user_limit: None });
+            ops.push(ChannelOp { op: channel_ops::ARCHIVE.into(), slug: Some(c.slug.clone()), channel_id: Some(id.into()), name: None, kind: None, private: None, user_limit: None, members_can_leave: None });
         } else if c.want_name.as_deref().is_some_and(|w| w != c.name) {
             ops.push(ChannelOp {
                 op: channel_ops::RENAME.into(),
@@ -500,6 +515,20 @@ pub fn plan(
                 kind: None,
                 private: None,
                 user_limit: None,
+                members_can_leave: None,
+            });
+        }
+        // HOME1: a channel made before Sew had the flag gets it once.
+        if flags.channel_members_can_leave && !c.can_leave && !c.want_archive {
+            ops.push(ChannelOp {
+                op: channel_ops::UPDATE.into(),
+                slug: Some(c.slug.clone()),
+                channel_id: Some(id.into()),
+                name: None,
+                kind: None,
+                private: None,
+                user_limit: None,
+                members_can_leave: Some(true),
             });
         }
         if !ops.is_empty() {
@@ -632,9 +661,11 @@ pub fn after_done(conn: &Connection, id: &str, result: &str, now: i64) -> Result
             let Ok(a) = serde_json::from_str::<ChannelCreateResponse>(result) else {
                 return note_channel_why(conn, slug, "Sew's create answer could not be read", now);
             };
+            let can_leave = serde_json::from_str::<Value>(&row.payload_raw).is_ok_and(|p| p["members_can_leave"] == json!(true));
             conn.execute(
-                "UPDATE tool_admin_chat_channels SET channel_id = ?2, name = ?3, state = 'active', why = NULL, updated_at = ?4 WHERE slug = ?1",
-                params![slug, a.channel_id, a.name, now],
+                "UPDATE tool_admin_chat_channels SET channel_id = ?2, name = ?3, state = 'active', why = NULL, updated_at = ?4,
+                    can_leave = CASE WHEN ?5 THEN 1 ELSE can_leave END WHERE slug = ?1",
+                params![slug, a.channel_id, a.name, now, can_leave],
             )
             .map_err(|e| format!("home channel created: {e}"))?;
             let open = channel_by_slug(conn, slug)?.is_some_and(|c| c.open);
@@ -681,6 +712,10 @@ pub fn after_done(conn: &Connection, id: &str, result: &str, now: i64) -> Result
                         .execute("UPDATE tool_admin_chat_channels SET state = 'archived', why = NULL, updated_at = ?2 WHERE slug = ?1", params![slug, now])
                         .map(|_| ())
                         .map_err(|e| format!("home channel archived: {e}"))?,
+                    channel_ops::UPDATE if o.members_can_leave == Some(true) => conn
+                        .execute("UPDATE tool_admin_chat_channels SET can_leave = 1, why = NULL, updated_at = ?2 WHERE slug = ?1", params![slug, now])
+                        .map(|_| ())
+                        .map_err(|e| format!("home channel can leave: {e}"))?,
                     _ => {}
                 }
             }

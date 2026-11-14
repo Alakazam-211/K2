@@ -331,6 +331,55 @@ mod tests {
         assert_eq!(render_bytes(&input, &t, &c).expect_err("both").code, FailureCode::InvalidInput, "transparent with a background");
     }
 
+    /// A camera's display fields (active, lens, sensor, fit) draw nothing: the
+    /// same digests and the same bytes with or without them.
+    #[test]
+    fn camera_display_fields_change_no_digest_and_no_pixel() {
+        let a = testgen::camera_scene();
+        let mut b = a.clone();
+        b.cameras[0].active = Some(true);
+        b.cameras[0].lens_mm = Some(18.0);
+        b.cameras[0].sensor_mm = Some([23.5, 15.6]);
+        b.cameras[0].sensor_fit = Some(crate::scene::SensorFit::Vertical);
+        let views = vec![View::new(ViewSpec::Camera(0), 160), View::new(ViewSpec::Auto, 96), View::new(ViewSpec::Turntable(2), 64)];
+        let (ia, ib) = (encode(&a), encode(&b));
+        let digests = |x: &[u8]| -> Vec<[u8; 32]> { crate::digest::list(x, &InputLimits::default()).expect("list").iter().map(|i| i.digest).collect() };
+        assert_eq!(digests(&ia), digests(&ib));
+        let (ra, rb) = (render_bytes(&ia, &Request::new(views.clone()), &caps()).expect("a").0, render_bytes(&ib, &Request::new(views), &caps()).expect("b").0);
+        for (x, y) in ra.views.iter().zip(&rb.views) {
+            assert_eq!(x.1, y.1);
+            assert!(x.0.camera.is_some() && x.0.camera == y.0.camera);
+        }
+    }
+
+    /// A portrait sensor with `sensor_fit: "auto"` draws with exactly the
+    /// camera's `yfov` (fy = 1 / tan(yfov / 2)): the lens and sensor never
+    /// re-derive the field of view, so the bytes are the same camera's without
+    /// display fields.
+    #[test]
+    fn a_portrait_sensor_on_auto_fit_draws_with_exactly_its_yfov() {
+        let mut plain = testgen::camera_scene();
+        // What a pack would write for 50 mm on a 24 x 36 mm sensor, fitted to its longer side.
+        plain.cameras[0].yfov = (2.0 * (18.0f64 / 50.0).atan()) as f32;
+        plain.cameras[0].aspect = Some(2.0 / 3.0);
+        let mut portrait = plain.clone();
+        portrait.cameras[0].lens_mm = Some(50.0);
+        portrait.cameras[0].sensor_mm = Some([24.0, 36.0]);
+        portrait.cameras[0].sensor_fit = Some(crate::scene::SensorFit::Auto);
+        let yfov = portrait.cameras[0].yfov;
+        let want = (1.0 / crate::trig::tan(yfov as f64 * 0.5)) as f32;
+        assert!((want as f64 - 1.0 / (yfov as f64 * 0.5).tan()).abs() < 1e-5, "our tan is tan");
+        let f = crate::camera::frame(&portrait, &[0], ViewSpec::Camera(0), 2.0 / 3.0).expect("frame");
+        assert_eq!(f.fy.to_bits(), want.to_bits());
+        assert_eq!(f, crate::camera::frame(&plain, &[0], ViewSpec::Camera(0), 2.0 / 3.0).expect("frame"));
+        let views = vec![View::new(ViewSpec::Camera(0), 120)];
+        let a = render_bytes(&encode(&portrait), &Request::new(views.clone()), &caps()).expect("portrait").0;
+        let b = render_bytes(&encode(&plain), &Request::new(views), &caps()).expect("plain").0;
+        assert_eq!((a.views[0].0.width, a.views[0].0.height), (120, 180));
+        assert_eq!(a.views[0].0.camera.expect("a camera").fy.to_bits(), want.to_bits());
+        assert_eq!(a.views[0].1, b.views[0].1);
+    }
+
     #[test]
     fn png_and_webp_both_decode_to_a_valid_header() {
         let input = encode(&testgen::sphere_scene());

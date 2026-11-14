@@ -18,7 +18,8 @@
 //!               "double_sided": null, "transform": [16 floats, column-major], "hash": "…",
 //!               "modifiers": ["SUBSURF", "MIRROR"], "modifiers_not_applied": true}],
 //!  "cameras": [{"id": "Camera", "position": [7.4, -6.5, 5.3], "target": [0, 0, 0],
-//!               "up": [0, 0, 1], "yfov": 0.69, "aspect": 1.7778, "znear": 0.1}]}
+//!               "up": [0, 0, 1], "yfov": 0.69, "aspect": 1.7778, "znear": 0.1,
+//!               "active": true, "lens_mm": 50, "sensor_mm": [36, 24], "sensor_fit": "auto"}]}
 //! ```
 //!
 //! - **Meshes** (K2 Cores' v1 read): BASE meshes, triangulated by the pack,
@@ -32,7 +33,14 @@
 //!   and `modifiers_not_applied` says the mesh is drawn without them: the
 //!   response passes it through so the view can say "shown without modifiers".
 //! - **Cameras** (optional): `target` or `forward`, `up`, `yfov` in radians,
-//!   `aspect` width / height.
+//!   `aspect` width / height; the camera's name is its `id`. Four optional
+//!   display fields, as the file has them, absent from a v1 header
+//!   that predates them: `active` (the file's active camera; at most one
+//!   camera has `true`), `lens_mm` (focal length) and `sensor_mm` (`[w, h]`),
+//!   each finite and > 0, and `sensor_fit` (`"auto"`, `"horizontal"` or
+//!   `"vertical"`). They are shown with the camera, never drawn: `yfov` is
+//!   the only field that sets the view, whatever the lens, sensor or fit
+//!   say, and none of them is in a digest ([`crate::digest`]).
 //!
 //! **Bounds first.** The worker reads the 12-byte prefix and the header before
 //! any mesh data, and checks every count against [`InputLimits`] before it
@@ -72,6 +80,29 @@ pub enum UpAxis {
     Z,
 }
 
+/// How a camera's sensor fits the image (as the file has it; display only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorFit {
+    Auto,
+    Horizontal,
+    Vertical,
+}
+
+/// A camera's display values: shown with it, never drawn, in no digest.
+/// Each is left out of the JSON when absent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct CameraDisplay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_mm: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sensor_mm: Option<[f32; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sensor_fit: Option<SensorFit>,
+}
+
 /// A perspective camera in world space.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
@@ -91,6 +122,25 @@ pub struct Camera {
     pub aspect: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub znear: Option<f32>,
+    /// Display only (see [`CameraDisplay`]): the file's active camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    /// Display only: focal length, mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens_mm: Option<f32>,
+    /// Display only: sensor size `[w, h]`, mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_mm: Option<[f32; 2]>,
+    /// Display only: how the sensor fits the image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_fit: Option<SensorFit>,
+}
+
+impl Camera {
+    /// Its display values.
+    pub fn display(&self) -> CameraDisplay {
+        CameraDisplay { active: self.active, lens_mm: self.lens_mm, sensor_mm: self.sensor_mm, sensor_fit: self.sensor_fit }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -373,9 +423,24 @@ pub fn check_header(h: &Header, hlen: u64, input_len: u64, lim: &InputLimits) ->
             return Err(InputError::BadField { what: "object", at, why: "a modifier name is too long" });
         }
     }
+    let mut active = false;
     for (i, c) in h.cameras.iter().enumerate() {
         if c.id.len() > MAX_ID_BYTES {
             return Err(InputError::BadField { what: "camera", at: i as u32, why: "its id is too long" });
+        }
+        // The display fields: checked here, so the listing refuses what the renderer refuses.
+        let bad = |why: &'static str| Err(InputError::BadCamera { camera: i as u32, why });
+        if c.active == Some(true) {
+            if active {
+                return bad("a second active camera (at most one is active)");
+            }
+            active = true;
+        }
+        if c.lens_mm.is_some_and(|l| !(l.is_finite() && l > 0.0)) {
+            return bad("lens_mm must be finite and > 0");
+        }
+        if c.sensor_mm.is_some_and(|s| !s.iter().all(|v| v.is_finite() && *v > 0.0)) {
+            return bad("sensor_mm must be finite and > 0");
         }
     }
     let (dv, dt) = drawn_counts(&h.meshes, &h.objects);
@@ -672,6 +737,51 @@ mod tests {
         let plain = testgen::cube_scene();
         let d = decode(&encode(&plain), &InputLimits::default()).expect("decode");
         assert!(d.objects[0].modifiers.is_empty() && !d.objects[0].modifiers_not_applied);
+    }
+
+    #[test]
+    fn camera_display_fields_round_trip_and_a_v1_header_reads_without_them() {
+        let mut s = testgen::camera_scene();
+        s.cameras[0].active = Some(true);
+        s.cameras[0].lens_mm = Some(50.0);
+        s.cameras[0].sensor_mm = Some([36.0, 24.0]);
+        s.cameras[0].sensor_fit = Some(SensorFit::Auto);
+        let b = encode(&s);
+        assert_eq!(decode(&b, &InputLimits::default()).expect("decode"), s);
+        let text = String::from_utf8_lossy(&b[12..]).into_owned();
+        assert!(text.contains(r#""active":true,"lens_mm":50.0,"sensor_mm":[36.0,24.0],"sensor_fit":"auto""#), "{text}");
+        // Absent: none of them, and the JSON is what it was.
+        let plain = testgen::camera_scene();
+        let text = String::from_utf8_lossy(&encode(&plain)[12..]).into_owned();
+        assert!(!text.contains("active") && !text.contains("lens_mm") && !text.contains("sensor"), "{text}");
+        let j = r#"{"version":1,"meshes":[],"objects":[],"cameras":[{"id":"C","position":[0,0,5],"target":[0,0,0],"up":[0,1,0],"yfov":0.8}]}"#;
+        let c = &decode(&with_header(j, &[]), &InputLimits::default()).expect("v1").cameras[0];
+        assert_eq!(c.display(), CameraDisplay::default());
+        for (fit, want) in [("auto", SensorFit::Auto), ("horizontal", SensorFit::Horizontal), ("vertical", SensorFit::Vertical)] {
+            let j = format!(r#"{{"version":1,"meshes":[],"objects":[],"cameras":[{{"position":[0,0,5],"target":[0,0,0],"up":[0,1,0],"yfov":0.8,"sensor_fit":"{fit}"}}]}}"#);
+            assert_eq!(decode(&with_header(&j, &[]), &InputLimits::default()).expect("fit").cameras[0].sensor_fit, Some(want));
+        }
+    }
+
+    #[test]
+    fn camera_display_fields_are_checked_typed() {
+        let lim = InputLimits::default();
+        let cam = |extra: &str| format!(r#"{{"position":[0,0,5],"target":[0,0,0],"up":[0,1,0],"yfov":0.8{extra}}}"#);
+        let scene = |cams: &[String]| with_header(&format!(r#"{{"version":1,"meshes":[],"objects":[],"cameras":[{}]}}"#, cams.join(",")), &[]);
+        // One active camera, others false or absent: fine. Two: refused.
+        assert!(decode(&scene(&[cam(r#","active":false"#), cam(r#","active":true"#), cam("")]), &lim).is_ok());
+        let e = decode(&scene(&[cam(r#","active":true"#), cam(r#","active":false"#), cam(r#","active":true"#)]), &lim).unwrap_err();
+        assert!(matches!(e, InputError::BadCamera { camera: 2, .. }), "{e}");
+        assert_eq!(e.code(), "invalid_input");
+        for extra in [r#","lens_mm":0"#, r#","lens_mm":-50"#, r#","lens_mm":1e39"#, r#","sensor_mm":[36,0]"#, r#","sensor_mm":[-1,24]"#, r#","sensor_mm":[1e39,24]"#] {
+            let e = decode(&scene(&[cam(extra)]), &lim).unwrap_err();
+            assert!(matches!(e, InputError::BadCamera { camera: 0, .. }), "{extra}: {e}");
+        }
+        for extra in [r#","sensor_fit":"diagonal""#, r#","sensor_mm":[36]"#, r#","active":1"#] {
+            assert_eq!(decode(&scene(&[cam(extra)]), &lim).unwrap_err().code(), "invalid_input", "{extra}");
+        }
+        // The listing refuses them too (it reads the header only).
+        assert!(crate::digest::list(&scene(&[cam(r#","active":true"#), cam(r#","active":true"#)]), &lim).is_err());
     }
 
     #[test]

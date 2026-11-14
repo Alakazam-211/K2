@@ -247,6 +247,10 @@ pub fn camera_scene() -> Scene {
         yfov: 0.69,
         aspect: Some(16.0 / 9.0),
         znear: Some(0.1),
+        active: None,
+        lens_mm: None,
+        sensor_mm: None,
+        sensor_fit: None,
     });
     s
 }
@@ -286,6 +290,10 @@ pub fn degenerate_scenes() -> Vec<(&'static str, Scene)> {
         yfov: 1.6,
         aspect: None,
         znear: Some(0.001),
+        active: None,
+        lens_mm: None,
+        sensor_mm: None,
+        sensor_fit: None,
     });
     out.push(("camera-inside", inside));
     let mut away = cube_scene();
@@ -298,6 +306,10 @@ pub fn degenerate_scenes() -> Vec<(&'static str, Scene)> {
         yfov: 0.5,
         aspect: None,
         znear: None,
+        active: None,
+        lens_mm: None,
+        sensor_mm: None,
+        sensor_fit: None,
     });
     out.push(("camera-away", away));
     out

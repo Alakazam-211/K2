@@ -983,6 +983,10 @@ mod tests {
             yfov: 1.6,
             aspect: None,
             znear: Some(0.001),
+            active: None,
+            lens_mm: None,
+            sensor_mm: None,
+            sensor_fit: None,
         });
         let (img, st, _) = draw(&s, 80, 60, 2, 2, ViewSpec::Camera(0));
         assert_eq!(st.covered_px, 80 * 60, "every pixel shows a wall");
@@ -1021,6 +1025,10 @@ mod tests {
             yfov: 0.6,
             aspect: Some(2.0),
             znear: None,
+            active: None,
+            lens_mm: None,
+            sensor_mm: None,
+            sensor_fit: None,
         });
         let (img, st, _) = draw(&s, 200, 100, 2, 1, ViewSpec::Camera(0));
         assert!(st.culled > 0);
@@ -1056,6 +1064,10 @@ mod tests {
             yfov: 0.8,
             aspect: None,
             znear: None,
+            active: None,
+            lens_mm: None,
+            sensor_mm: None,
+            sensor_fit: None,
         };
         for order in [[0u32, 1], [1, 0]] {
             let s = Scene {

@@ -26,12 +26,16 @@
 //! modifiers were not applied (the evaluated mesh may be larger). An empty
 //! mesh, or one with a non-finite position (which the renderer refuses), has
 //! none. Bounds are not in any digest.
+//!
+//! **Cameras:** each camera item carries the camera's display values
+//! ([`CameraDisplay`]: `active`, `lens_mm`, `sensor_mm`, `sensor_fit`, each
+//! left out when the file has none). They draw nothing and are in no digest.
 
 use serde::Serialize;
 
 use crate::camera::{mesh_bounds, ViewSpec, TURNTABLE_FRAMES};
 use crate::sha256::Sha256;
-use crate::scene::{self, Camera, Header, InputError, InputLimits, MeshInfo, Object, UpAxis};
+use crate::scene::{self, Camera, CameraDisplay, Header, InputError, InputLimits, MeshInfo, Object, UpAxis};
 
 /// Longest id put in an address as is.
 pub const MAX_ADDRESS_ID: usize = 128;
@@ -109,6 +113,8 @@ pub struct Item {
     /// An object's mesh box (local; `None` for an empty mesh and for every
     /// other item).
     pub bounds: Option<LocalBounds>,
+    /// A camera's display values (`None` for every other item).
+    pub camera: Option<CameraDisplay>,
 }
 
 fn addressable(id: &str) -> bool {
@@ -233,21 +239,21 @@ fn local_box(m: &MeshInfo, data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
 fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<([f32; 3], [f32; 3])>]) -> Vec<Item> {
     let all: Vec<&Object> = h.objects.iter().collect();
     let mut items = Vec::with_capacity(1 + h.cameras.len() + h.objects.len() + TURNTABLE_FRAMES as usize);
-    items.push(Item { key: "@scene".into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, mesh), bounds: None });
+    items.push(Item { key: "@scene".into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, mesh), bounds: None, camera: None });
     let mut used = std::collections::HashSet::new();
     for (i, c) in h.cameras.iter().enumerate() {
         let key = if addressable(&c.id) && used.insert(format!("@cam:{}", c.id)) { format!("@cam:{}", c.id) } else { format!("@cam#{i}") };
-        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, mesh), bounds: None });
+        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, mesh), bounds: None, camera: Some(c.display()) });
     }
     for (i, o) in h.objects.iter().enumerate() {
         let key = if addressable(&o.id) && used.insert(format!("@obj:{}", o.id)) { format!("@obj:{}", o.id) } else { format!("@obj#{i}") };
         let bounds = boxes[o.mesh as usize].map(|(min, max)| LocalBounds { min, max, approx: o.modifiers_not_applied });
-        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], mesh), bounds });
+        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], mesh), bounds, camera: None });
     }
     for k in 0..TURNTABLE_FRAMES {
         let key = format!("@turntable:{k}");
         used.insert(key.clone());
-        items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, mesh), bounds: None });
+        items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, mesh), bounds: None, camera: None });
     }
     items
 }
@@ -396,6 +402,23 @@ mod tests {
         let mut n = testgen::cube_scene();
         n.meshes[0].positions[2][0] = f32::INFINITY;
         assert_eq!(list(&encode(&n), &InputLimits::default()).expect("list")[1].bounds, None);
+    }
+
+    #[test]
+    fn camera_items_carry_their_display_values_and_no_digest_sees_them() {
+        let a = testgen::camera_scene();
+        let mut b = a.clone();
+        b.cameras[0].active = Some(true);
+        b.cameras[0].lens_mm = Some(35.0);
+        b.cameras[0].sensor_mm = Some([36.0, 24.0]);
+        b.cameras[0].sensor_fit = Some(crate::scene::SensorFit::Horizontal);
+        let (la, lb) = (list(&encode(&a), &InputLimits::default()).expect("a"), list(&encode(&b), &InputLimits::default()).expect("b"));
+        assert_eq!(la.iter().map(|i| i.digest).collect::<Vec<_>>(), lb.iter().map(|i| i.digest).collect::<Vec<_>>());
+        assert_eq!(lb[1].camera, Some(b.cameras[0].display()));
+        assert_eq!(serde_json::to_string(&lb[1].camera).expect("json"), r#"{"active":true,"lens_mm":35.0,"sensor_mm":[36.0,24.0],"sensor_fit":"horizontal"}"#);
+        // Absent in the file: absent in the item.
+        assert_eq!(serde_json::to_string(&la[1].camera).expect("json"), "{}");
+        assert!(la.iter().chain(&lb).filter(|i| !matches!(i.target, Target::Camera(_))).all(|i| i.camera.is_none()));
     }
 
     #[test]

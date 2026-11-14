@@ -21,6 +21,12 @@ fn main() {
     modded.objects[0].modifiers = vec!["SUBSURF".into(), "MIRROR".into()];
     modded.objects[0].modifiers_not_applied = true;
     scenes.push(("modifiers", modded));
+    let mut display = testgen::camera_scene();
+    display.cameras[0].active = Some(true);
+    display.cameras[0].lens_mm = Some(50.0);
+    display.cameras[0].sensor_mm = Some([36.0, 24.0]);
+    display.cameras[0].sensor_fit = Some(k2_scenerender::scene::SensorFit::Auto);
+    scenes.push(("camera-display", display));
     for (name, s) in testgen::degenerate_scenes() {
         scenes.push((name, s));
     }

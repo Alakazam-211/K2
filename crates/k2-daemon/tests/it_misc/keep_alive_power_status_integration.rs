@@ -211,3 +211,36 @@ fn power_status_answers_once_on_a_keep_alive_socket() {
 
     assert_each_response_is_its_own(d.port, &session, "login session");
 }
+
+/// One GET, then a different request on the SAME keep-alive socket: the
+/// second must get its own answer. `first_is_its_own` checks the first.
+fn assert_next_request_gets_its_own_answer(
+    port: u16,
+    token: &str,
+    first: &str,
+    first_is_its_own: impl Fn(&serde_json::Value) -> bool,
+) {
+    let mut conn = Conn::open(port);
+    let (s, b) = conn.request("GET", &format!("{first}?token={token}"), None);
+    assert_eq!(s, 200, "{first}: {b}");
+    assert!(first_is_its_own(&json(&b, first)), "{first} body: {b}");
+
+    let (s, b) = conn.request("GET", &format!("/cli/feedback/waiting-count?token={token}"), None);
+    assert_eq!(s, 200, "after {first}: waiting-count: {b}");
+    assert!(
+        json(&b, "waiting-count")["count"].is_number(),
+        "the request after {first} on the same socket got another request's answer: {b}"
+    );
+}
+
+/// The same bug in two more arms: `GET /cli/git-tools` and `GET
+/// /cli/db-home` never consumed their request heads. Settings → General
+/// reads git-tools when it opens, so on a remote server the next request on
+/// that socket (Check for updates) got `{canInstall, gitError, gitPath,
+/// gitVersion, ...}` instead of its own answer.
+#[test]
+fn git_tools_and_db_home_answer_once_on_a_keep_alive_socket() {
+    let d = spawn_daemon();
+    assert_next_request_gets_its_own_answer(d.port, &d.owner, "/cli/git-tools", |v| v["state"].is_string());
+    assert_next_request_gets_its_own_answer(d.port, &d.owner, "/cli/db-home", |v| v["homeDb"].is_object());
+}

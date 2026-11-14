@@ -50,11 +50,14 @@ impl Deskd for FakeDeskd {
 }
 
 struct Env {
-    _home: k2_core::test_env::TempHome,
     _db: k2_core::db::TestDbGuard,
     _deskd: deskd::TestDeskd,
     _platform: PlatformGuard,
     fake: Arc<FakeDeskd>,
+    /// Last: fields drop in order, and the env lock must outlive the
+    /// process-wide guards above it, or the next test (waiting on the lock)
+    /// installs its own and then has them put back from under it.
+    _home: k2_core::test_env::TempHome,
 }
 
 fn env() -> Env {
@@ -525,11 +528,12 @@ use k2_core::desktop::virtual_desktop as vd;
 /// fake K2 Screens for `virtual` and `virtual:w1`, two workspaces (`w1`
 /// with "Allow a virtual desktop" on, `w2` off) and the switch on.
 struct VEnv {
-    _e: Env,
     rig: Rig,
     _m: TestManager,
     _p: PlatformGuard,
     screens: Vec<(Arc<FakeDeskd>, deskd::TestDesktopDeskd)>,
+    /// Last: it holds the env lock (see [`Env`]'s `_home`).
+    _e: Env,
 }
 
 impl VEnv {

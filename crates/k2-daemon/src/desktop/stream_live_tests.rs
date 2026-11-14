@@ -107,12 +107,15 @@ fn animate(display: &str, fps: u32) -> Proc {
 }
 
 struct Live {
-    _home: k2_core::test_env::TempHome,
     _deskd: deskd::TestDeskd,
     m: Arc<DeskdManager>,
     xvfb: Proc,
     display: String,
     olive: String,
+    /// Last: fields drop in order, and the env lock must outlive the
+    /// process-wide guards above it, or the next test (waiting on the lock)
+    /// installs its own and then has them put back from under it.
+    _home: k2_core::test_env::TempHome,
 }
 
 /// Xvfb at `w` x `h`, and K2 Screen on it the way the daemon starts it on a

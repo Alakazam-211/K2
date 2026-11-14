@@ -230,9 +230,12 @@ impl Deskd for Backend {
 }
 
 struct Env {
-    _home: k2_core::test_env::TempHome,
     _deskd: deskd::TestDeskd,
     fake: Arc<Fake>,
+    /// Last: fields drop in order, and the env lock must outlive the
+    /// process-wide guards above it, or the next test (waiting on the lock)
+    /// installs its own and then has them put back from under it.
+    _home: k2_core::test_env::TempHome,
 }
 
 fn env() -> Env {

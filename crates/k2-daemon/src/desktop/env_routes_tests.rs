@@ -44,13 +44,16 @@ impl Deskd for FakeScreen {
 /// ("scientist", switch on), `w2` ("atlas", switch on) and `w3` ("quill",
 /// switch off).
 struct E {
-    _home: k2_core::test_env::TempHome,
     _db: k2_core::db::TestDbGuard,
     _p: PlatformGuard,
     rig: Rig,
     _m: TestManager,
     _screens: Vec<deskd::TestDesktopDeskd>,
     _addr: AddressGuard,
+    /// Last: fields drop in order, and the env lock must outlive the
+    /// process-wide guards above it, or the next test (waiting on the lock)
+    /// installs its own and then has them put back from under it.
+    _home: k2_core::test_env::TempHome,
 }
 
 fn env() -> E {

@@ -272,6 +272,11 @@ fn dm_channels_are_kept_per_pair() {
     assert_eq!(with(|c| dm_channel(c, ALEX, SAM)).as_deref(), Some("777"));
     assert_eq!(with(|c| dm_channel(c, SAM, ALEX)), None, "the other side keeps its own");
     assert_eq!(with(|c| dm_target(c, ALEX, "777")).as_deref(), Some(SAM));
+    // Either side names the other, whoever opened it through K2.
+    assert_eq!(with(|c| dm_other(c, ALEX, "777")).as_deref(), Some(SAM));
+    assert_eq!(with(|c| dm_other(c, SAM, "777")).as_deref(), Some(ALEX));
+    assert_eq!(with(|c| dm_other(c, "k2:owner", "777")), None, "not one of the owner's");
+    assert_eq!(with(|c| dm_other(c, ALEX, "778")), None);
 }
 
 fn state_of(slug: &str, ext: &str) -> Option<String> {

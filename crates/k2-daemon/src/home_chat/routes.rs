@@ -241,7 +241,15 @@ fn summary(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
     let convs: Vec<String> = param(p, "convs").map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
     let h = follower::hold(&c.ext);
     let flag = flags().read_state_unread_count;
-    let rows = h.state.lock().unwrap_or_else(|e| e.into_inner()).summary(&convs, flag);
+    let mut rows = h.state.lock().unwrap_or_else(|e| e.into_inner()).summary(&convs, flag);
+    // A DM names its other person when K2 kept it (`with`), so a person row
+    // on Home finds its badge without opening the DM first.
+    for r in rows.iter_mut().filter(|r| r["kind"] == "dm") {
+        let conv = r["conv"].as_str().unwrap_or_default().to_string();
+        if let Some(other) = skin(|conn| ledger::dm_other(conn, &c.ext, &conv))? {
+            r["with"] = json!(other);
+        }
+    }
     let chat = match h.status() {
         "live" => "live",
         "connecting" => "connecting",

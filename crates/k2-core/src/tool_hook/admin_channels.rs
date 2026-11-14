@@ -432,6 +432,22 @@ pub fn dm_target(conn: &Connection, person: &str, channel_id: &str) -> Result<Op
         .map_err(|e| format!("home dm read: {e}"))
 }
 
+/// The other person of DM channel `channel_id` as `me` sees it, whichever of
+/// the two opened it through K2 (`None`: K2 never kept it). The summary names
+/// a DM's person by it, so a person row finds its badge without opening the DM.
+pub fn dm_other(conn: &Connection, me: &str, channel_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT target_ext FROM tool_home_chat_dms WHERE person_ext = ?1 AND channel_id = ?2
+         UNION ALL
+         SELECT person_ext FROM tool_home_chat_dms WHERE target_ext = ?1 AND channel_id = ?2
+         LIMIT 1",
+        params![me, channel_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| format!("home dm read: {e}"))
+}
+
 // ── planning ─────────────────────────────────────────────────────────
 
 /// What one plan queued (for the sweep's log).

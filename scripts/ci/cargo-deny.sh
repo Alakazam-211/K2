@@ -41,7 +41,9 @@
 # scripts/ci/checks.sh audit runs install, then check.
 #
 # A finding: fix the dependency (a lockfile bump in range, a feature off, a
-# replacement). A licence off the allowlist, a new git source or a new
+# replacement). A lock bump here re-points unrelated crates' windows-sys
+# (osv-scanner.toml's header says why): that re-pointing is its own gated
+# commit, never folded into a fix. A licence off the allowlist, a new git source or a new
 # exception goes to the Kessel Steward; an advisory K2 can't fix yet gets an
 # entry in osv-scanner.toml (reason, review date) and in deny.toml's ignore
 # list (scripts/ci/audit-ignores.py checks both). Never --all-features, and

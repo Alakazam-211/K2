@@ -11,6 +11,9 @@
 #
 # Review dates: 2026-12-05 where a lockfile-only bump fixes it (do the bump, delete the entry);
 # 2027-01-15 where it needs a major bump (the dependency-majors PRD, 0.46.5+) or upstream.
+# Lock bumps: `cargo update -p <crate>` on this lock also re-points about 15 unrelated crates'
+# windows-sys to older copies; the tokio/quinn bump kept only its own entries, so the next
+# ordinary `cargo update` brings that re-pointing back: make it its own gated commit.
 # Written 2026-10-24 from cargo-audit 0.22.2 + osv-scanner v2.6.0 (compute job 9b26630f) and
 # cargo tree -i / bun.lock reverse deps.
 
@@ -218,30 +221,6 @@ id = "RUSTSEC-2026-0340"
 ignoreUntil = 2026-12-05T00:00:00Z
 reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
 
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0342"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
-
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0523"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only, through reqwest's weak quinn?/ring feature (reqwest's http3 is off: no h3 in the lock), so it is never compiled into K2; cargo deny finds no quinn in any shipped crate's tree. Fix: refresh the lock (0.11.19)."
-
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0524"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only, through reqwest's weak quinn?/ring feature (reqwest's http3 is off: no h3 in the lock), so it is never compiled into K2; cargo deny finds no quinn in any shipped crate's tree. Fix: refresh the lock (0.11.19)."
-
-# quinn-udp 0.5.14
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0538"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only, through quinn, which reqwest's weak quinn?/ring feature keeps in the lock (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.5.16)."
-
 # rsa 0.9.10 (k2-vault directly and via ssh-key 0.6.7)
 [[IgnoredVulns]]
 id = "RUSTSEC-2023-0071"
@@ -337,12 +316,6 @@ reason = "vitest's worker pool, test runs only with our own options; never ships
 id = "GHSA-85c8-ppgw-ccpr"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "vitest's worker pool, test runs only with our own options; never ships. Fix: vitest 3+."
-
-# tokio 1.52.1
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0386"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "AsyncFd::new I/O-safety unsoundness; no K2 crate constructs AsyncFd (grep). Fix: tokio 1.53.3 (lockfile bump; 1.52.x has no patched release)."
 
 # ttf-parser 0.21.1
 [[IgnoredVulns]]

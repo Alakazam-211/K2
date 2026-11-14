@@ -94,8 +94,6 @@ ignore = [
     { id = "RUSTSEC-2026-0372", reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener), and zbus is also a direct dependency of k2-deskd and kessel-video. No known vulnerability. Revisit with zbus 6." },
     # rustls-webpki 0.102.8
     { id = "RUSTSEC-2026-0382", reason = "Real exposure, fix in progress: rustls-webpki 0.102.8 reaches the daemon through imap -> rustls-connector 0.19. The IMAP client's TLS moves to rustls 0.23 + webpki 0.103 (both in the lock), dropping imap's rustls-tls feature; this entry goes with that change, before 0.46.13 ships." },
-    # tokio 1.52.1
-    { id = "RUSTSEC-2026-0386", reason = "AsyncFd::new I/O-safety unsoundness; no K2 crate constructs AsyncFd (grep). Fix: tokio 1.53.3 (lockfile bump; 1.52.x has no patched release)." },
     # crypto-bigint 0.5.5
     { id = "RUSTSEC-2026-0387", reason = "Timing variability in constant-time operations; via p256 0.13 <- hpke in k2-core, for end-to-end push sealing (HPKE seals only in production; crypto-bigint only decodes and range-checks; scalar multiplication is p256's; long-term P-256 keys sign through ring). ssh-key 0.6.7 holds p256 at 0.13 (ssh-key 0.7 is a release candidate): revisit when ssh-key 0.7 ships." },
     # zip 2.4.2, zip 4.6.1

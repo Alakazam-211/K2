@@ -979,6 +979,41 @@ async fn cache_affinity_and_same_node_as() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(node_of(&r), "cb");
     assert_eq!(j(&r)["placement"]["code"], "queued_for_cache", "{}", r.body);
+    assert!(j(&r)["placement"]["why"].as_str().unwrap().starts_with("waits for its cache: holds cache fz · "), "{}", r.body);
+    // B2 (auto, on ca with an empty cache) starts and ends last: the cache
+    // still lives on cb, so the next --cache fz job waits for cb, not ca.
+    started("ca", 3600);
+    let home = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::cache_home(&conn, &me.id, "fz")
+    };
+    assert_eq!(home.as_deref(), Some("cb"), "an auto job that ran away from the cache doesn't move it");
+    // --cache-required pins the job to cb however long it waits there.
+    started("cb", 3600);
+    let r = run(d.port, OWNER, &me, json!({"cache": "fz", "cacheRequired": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "cb");
+    let v = j(&r);
+    assert_eq!(v["placement"]["mode"], "pinned", "{v}");
+    assert_eq!(v["placement"]["why"], "holds cache fz (--cache-required: the job waits for this node)", "{v}");
+    assert!(row(v["job"]["id"].as_str().unwrap()).ctl.any.is_none(), "a --cache-required job never moves");
+    // ... and refuses what can't reach cb, or comes without --cache.
+    let r = run(d.port, OWNER, &me, json!({"cache": "fz", "cacheRequired": true, "node": "ca"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().starts_with("--cache-required: cache fz is on cb, not ca."), "{}", r.body);
+    let r = run(d.port, OWNER, &me, json!({"cache": "fz", "cacheRequired": true, "avoid": ["cb"]})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().starts_with("--cache-required: cache fz is on cb, which your --avoid leaves out."), "{}", r.body);
+    let r = run(d.port, OWNER, &me, json!({"cacheRequired": true})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    // A standing --avoid of another node is fine with --cache-required.
+    let r = run(d.port, OWNER, &me, json!({"cache": "fz", "cacheRequired": true, "avoid": ["ca"]})).await;
+    assert_eq!((r.status, node_of(&r).as_str()), (200, "cb"), "{}", r.body);
+    // No node holds a new cache yet: placed as usual (auto).
+    let r = run(d.port, OWNER, &me, json!({"cache": "fresh", "cacheRequired": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["placement"]["mode"], "auto", "{}", r.body);
     // Acceptance 3: --same-node-as A pins to cb; another workspace's job
     // is not found.
     let r = run(d.port, OWNER, &me, json!({"sameNodeAs": &job_a[..8]})).await;

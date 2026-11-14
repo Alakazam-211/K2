@@ -2,7 +2,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
+    local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -45,6 +45,9 @@ cmd_compute_run() {
                 if ! [[ "$cache" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
                     echo "usage: --cache NAME (1–64 of a-z 0-9 . _ -, starting with a letter or digit)" >&2; exit 2
                 fi ;;
+            # --cache-required: run only on the node that holds the --cache
+            # (it waits there); without it the cache is only a preference.
+            --cache-required) cache_required=1; shift ;;
             # --gate = --tier ci (0.46.5; an older daemon only knows gate,
             # so both go in the body).
             --gate) gate=1; tier="ci"; shift ;;
@@ -289,7 +292,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
-        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
+        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_cacheRequired_b="${cache_required#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
         K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
@@ -676,7 +679,7 @@ cmd_compute_test() {
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only)
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
+            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan) pass+=("$1"); shift ;;
             --gpu=*) pass+=("$1"); shift ;;
             --gpu)
                 case "${2:-}" in

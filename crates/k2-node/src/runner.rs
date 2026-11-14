@@ -100,6 +100,19 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
     Ok(env)
 }
 
+/// The job-log line that says where cargo builds. Each job gets a fresh
+/// checkout, so the node points cargo at the slot's target dir (warm,
+/// kept between jobs) or the job's own, never `./target`; a script that
+/// looks for `./target/release/x` must use `$CARGO_TARGET_DIR` instead.
+/// `env` is the job's (the value it really gets); `fallback` is the dir
+/// the node chose, for an env without the name.
+pub fn target_dir_line(env: &[(String, String)], fallback: &Path) -> String {
+    let dir = env.iter().rev().find(|(k, _)| k == "CARGO_TARGET_DIR").map(|(_, v)| v.clone()).unwrap_or_else(|| fallback.display().to_string());
+    format!(
+        "CARGO_TARGET_DIR={dir}: cargo builds here, not in ./target, so binaries are at $CARGO_TARGET_DIR/debug/<name> or $CARGO_TARGET_DIR/release/<name> (--artifact target/... reads this dir too)"
+    )
+}
+
 /// Let git work in the job's own checkout. The checkout belongs to the
 /// node (its mirror's worktree), the job runs as the job user, so git
 /// refuses it as "dubious ownership" (k2n4, 2026-10-27). Trusted for this
@@ -393,6 +406,22 @@ mod tests {
         assert_eq!(get("CARGO_HOME"), "/n/cache/0123456789abcdef/cargo-home");
         assert_eq!(get("RUSTUP_HOME"), "/n/toolchains/rustup");
         assert!(!env.iter().any(|(_, v)| v == "/n/cache/sccache"), "no node-wide sccache any more");
+    }
+
+    /// The log says where cargo builds, from the env the job gets, so a
+    /// script needn't guess `./target`.
+    #[test]
+    fn target_dir_line_names_the_env_value() {
+        let home = PathBuf::from("/n");
+        let target = PathBuf::from("/n/cache/pk/slots/0/target");
+        let none = BTreeMap::new();
+        let mut i = inputs(&home, &none);
+        i.target_dir = &target;
+        let env = job_env(&i).unwrap();
+        let line = target_dir_line(&env, Path::new("/elsewhere"));
+        assert!(line.starts_with("CARGO_TARGET_DIR=/n/cache/pk/slots/0/target: cargo builds here, not in ./target"), "{line}");
+        assert!(line.contains("$CARGO_TARGET_DIR/release/<name>"), "{line}");
+        assert!(target_dir_line(&[], Path::new("/j/target")).starts_with("CARGO_TARGET_DIR=/j/target: "));
     }
 
     /// `--cache NAME`: the job finds its folder in `K2_JOB_CACHE`; without

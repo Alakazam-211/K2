@@ -2355,7 +2355,7 @@ fn servers_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manage
             "owner": node.owner_label,
             "shared": node.shared,
             "share": node.share,
-            "line": node.share.as_ref().map(share::share_line),
+            "line": node.share.as_ref().map(|v| share::share_line_on(v, node.os.as_deref() == Some("macos"))),
         }));
     }
     let want_refresh = params.get("refresh").is_some_and(|x| x == "1" || x == "true");

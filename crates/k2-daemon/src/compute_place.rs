@@ -1365,17 +1365,13 @@ fn skip_package_gaps(w: &Want, out: &mut CandReport) {
 
 // ── resume affinity and solo waits (CE-6, P2) ────────────────────────
 
-/// CE-6, CE-A15: the node that ran this workspace's most recent job with
-/// cache `name` (any end state; it started there, so the cache was made
-/// there). Only this workspace's rows (S3). `None` when no job used it.
+/// CE-6, CE-A15: the node that holds this workspace's cache `name`: where
+/// its jobs with that cache built it up ([`store::cache_home`]). An
+/// auto-placed job that ran elsewhere with an empty cache (its node was
+/// busy) doesn't move it; a pinned job does. Only this workspace's rows
+/// (S3). `None` when no job used it.
 pub fn cache_node(conn: &rusqlite::Connection, ws_id: &str, name: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT node_id FROM compute_jobs WHERE workspace_id = ?1 AND json_extract(plan_json, '$.cache') = ?2 \
-         AND started_at IS NOT NULL ORDER BY started_at DESC, created_at DESC LIMIT 1",
-        rusqlite::params![ws_id, name],
-        |r| r.get::<_, String>(0),
-    )
-    .ok()
+    store::cache_home(conn, ws_id, name)
 }
 
 /// CE-6: a `--cache` job waits on the busy node that holds its cache when
@@ -1846,7 +1842,7 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
             });
             let cache_here = w.cache.as_deref().filter(|_| c.holds_cache);
             let (code, what) = if let Some(name) = cache_here {
-                ("starts_now_cache", format!("cache {name} was here"))
+                ("starts_now_cache", format!("holds cache {name}"))
             } else if warm >= 2 {
                 ("starts_now_warm", "warm slot (this commit)".to_string())
             } else if warm == 1 {
@@ -3571,7 +3567,7 @@ mod tests {
         let ex = Explain { policy: V2, cands: &cands, skipped: &BTreeMap::new(), project_key: None, commit: None };
         let rec = placement_record(&held, Tier::Now, &w, &ex, 1);
         assert_eq!(rec.code, "starts_now_cache");
-        assert!(rec.why.starts_with("starts now · cache fz was here · "), "{}", rec.why);
+        assert!(rec.why.starts_with("starts now · holds cache fz · "), "{}", rec.why);
         assert_eq!(pick(V1, &[idle.clone(), held.clone()], &w).0, "a-idle", "v1: the 0.46.5 order");
         // Without --cache, holding one means nothing.
         assert_eq!(pick(V2, &[idle, held], &want(2)).0, "a-idle");

@@ -1035,6 +1035,36 @@ pub struct NewJob<'a> {
     pub ctl: JobCtl,
 }
 
+/// How many of a workspace's newest started `--cache NAME` jobs
+/// [`cache_home`] reads.
+const CACHE_HOME_WINDOW: i64 = 200;
+
+/// The node that holds a workspace's `--cache NAME` (CE-6): where its
+/// jobs with that cache built it up. Read oldest first over its newest
+/// [`CACHE_HOME_WINDOW`] started jobs on active nodes: the first job makes
+/// the home; a job pinned to a node (a node named, `--same-node-as`,
+/// `move --to`) moves it there; an auto-placed job that ran on another
+/// node (the home was busy, or `--avoid`ed) started with an empty cache
+/// there and leaves the home where it is. `None` when no such job ran.
+pub fn cache_home(conn: &Connection, ws_id: &str, name: &str) -> Option<String> {
+    let mut st = conn
+        .prepare(
+            "SELECT j.node_id, json_extract(j.plan_json, '$.k2ctl.any') IS NOT NULL FROM compute_jobs j \
+             JOIN compute_nodes n ON n.id = j.node_id AND n.state = 'active' \
+             WHERE j.workspace_id = ?1 AND json_extract(j.plan_json, '$.cache') = ?2 AND j.started_at IS NOT NULL \
+             ORDER BY j.started_at DESC, j.created_at DESC LIMIT ?3",
+        )
+        .ok()?;
+    let rows: Vec<(String, bool)> = st.query_map(params![ws_id, name, CACHE_HOME_WINDOW], |r| Ok((r.get(0)?, r.get(1)?))).ok()?.filter_map(Result::ok).collect();
+    let mut home: Option<String> = None;
+    for (node, auto) in rows.into_iter().rev() {
+        if home.is_none() || !auto {
+            home = Some(node);
+        }
+    }
+    home
+}
+
 pub fn insert_job(conn: &Connection, j: &NewJob<'_>) -> Result<JobRow, String> {
     let p = j.plan;
     let digest = p.digest()?;
@@ -1872,6 +1902,42 @@ mod tests {
         assert_eq!(grants(&c, Some("n1"), None).len(), 1);
         assert!(revoke_grant(&c, "n1", "ws").unwrap());
         assert!(!revoke_grant(&c, "n1", "ws").unwrap());
+    }
+
+    /// `--cache NAME`'s home: where the workspace's cache was built up.
+    /// An auto-placed job that ran elsewhere (its home was busy, or it
+    /// avoided it) started with an empty cache there, so it doesn't move
+    /// the home; a job pinned to a node does (someone chose it). Only
+    /// active nodes count, and only this workspace's jobs with this name.
+    #[test]
+    fn cache_home_ignores_auto_jobs_that_ran_away_from_it() {
+        let c = conn();
+        for (id, name) in [("n1", "a"), ("n2", "b"), ("n3", "c")] {
+            insert_pending_node(&c, id, name, &format!("fp-{id}"), "pem", &labels(), "o", "1", 1).unwrap();
+            confirm_node(&c, id, "o", 2).unwrap();
+        }
+        let auto = JobCtl { any: Some(AnyFilter::default()), ..Default::default() };
+        let mut seq = 0;
+        let mut run = |node: &str, ws: &str, cache: &str, ctl: &JobCtl, at: i64| {
+            seq += 1;
+            let mut p = plan(&format!("job{seq:029}"), node, ws);
+            p.cache = Some(cache.into());
+            let j = insert_job(&c, &NewJob { plan: &p, client_job_id: &format!("client-{seq:010}"), session_id: None, request_sha256: "h", detach: true, retry_interrupted: false, ctl: ctl.clone() }).unwrap();
+            set_job_state(&c, &j.id, JobState::Running, None, None, at).unwrap();
+        };
+        assert_eq!(cache_home(&c, "ws", "corpus"), None, "no job used it yet");
+        run("n1", "ws", "corpus", &auto, 100);
+        assert_eq!(cache_home(&c, "ws", "corpus").as_deref(), Some("n1"), "the first job makes it");
+        run("n2", "ws", "corpus", &auto, 200);
+        assert_eq!(cache_home(&c, "ws", "corpus").as_deref(), Some("n1"), "an auto job elsewhere started empty: the home stays");
+        run("n1", "ws", "corpus", &auto, 300);
+        run("n3", "other-ws", "corpus", &JobCtl::default(), 400);
+        run("n3", "ws", "other-name", &JobCtl::default(), 450);
+        assert_eq!(cache_home(&c, "ws", "corpus").as_deref(), Some("n1"), "another workspace's or name's jobs don't count");
+        run("n2", "ws", "corpus", &JobCtl::default(), 500);
+        assert_eq!(cache_home(&c, "ws", "corpus").as_deref(), Some("n2"), "a job pinned to a node moves the home there");
+        revoke_node(&c, "n2", "o", 600).unwrap();
+        assert_eq!(cache_home(&c, "ws", "corpus").as_deref(), Some("n1"), "a revoked node holds nothing any more");
     }
 
     #[test]

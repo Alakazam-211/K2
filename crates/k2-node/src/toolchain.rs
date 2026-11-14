@@ -1057,6 +1057,97 @@ pub fn tools_line(t: &BTreeMap<String, String>) -> String {
     }
 }
 
+/// Commands a job may call that a node doesn't always have, and the
+/// `--needs` that puts each on the job's PATH.
+const HINTED_TOOLS: &[(&str, &str)] = &[
+    ("python3", "python@3.12"),
+    ("python", "python@3.12"),
+    ("pip", "python@3.12"),
+    ("pip3", "python@3.12"),
+    ("uv", "uv"),
+    ("uvx", "uv"),
+    ("node", "node@22"),
+    ("npm", "node@22"),
+    ("npx", "node@22"),
+    ("pnpm", "pnpm"),
+    ("bun", "bun"),
+    ("bunx", "bun"),
+    ("deno", "deno"),
+    ("go", "go"),
+    ("java", "java"),
+    ("cmake", "cmake@3"),
+    ("cargo", "rust@stable"),
+    ("rustc", "rust@stable"),
+];
+
+/// Words that start (or end) a simple command without being its program.
+const PREFIX_WORDS: &[&str] = &["env", "time", "nice", "nohup", "exec", "then", "else", "elif", "do", "!", "if", "while", "until", "done", "fi", "esac"];
+
+/// The programs a job's command plainly calls, in order: `argv[0]`, or,
+/// for `sh`/`bash`/`zsh`/`dash -c SCRIPT`, the first word of each simple
+/// command in SCRIPT (split at `; & | ( ) { }`, newlines and backticks),
+/// past `VAR=value`, [`PREFIX_WORDS`] and bare numbers (`2>&1` splits at
+/// the `&`). A word with a `/` is an explicit
+/// path, not a PATH lookup, and is left out. A rough reading on purpose:
+/// it only decides whether to print a hint.
+pub fn commands_called(argv: &[String]) -> Vec<String> {
+    let Some(first) = argv.first() else { return Vec::new() };
+    let base = first.rsplit('/').next().unwrap_or(first);
+    let script = if matches!(base, "sh" | "bash" | "zsh" | "dash" | "ksh") {
+        argv.iter().position(|a| a.starts_with('-') && !a.starts_with("--") && a.contains('c')).and_then(|i| argv.get(i + 1)).cloned()
+    } else {
+        None
+    };
+    let text = script.unwrap_or_else(|| argv.join(" "));
+    let mut out = Vec::new();
+    for seg in text.split(|c: char| matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}' | '`' | '\n')) {
+        let word = seg
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c| c == '"' || c == '\''))
+            .filter(|w| !w.is_empty() && *w != "$")
+            .find(|w| !PREFIX_WORDS.contains(w) && !is_assignment(w) && !w.starts_with('-') && !w.bytes().all(|b| b.is_ascii_digit()));
+        if let Some(w) = word {
+            if !w.contains('/') && !w.starts_with('$') && !w.starts_with('<') && !w.starts_with('>') {
+                out.push(w.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn is_assignment(w: &str) -> bool {
+    w.split_once('=').is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !k.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// Does `--needs` already ask for what `need` (a [`HINTED_TOOLS`] value)
+/// names?
+fn need_asked(need: &str, explicit: &[Need]) -> bool {
+    let tool = need.split('@').next().unwrap_or(need);
+    explicit.iter().any(|n| match n {
+        Need::Tool { tool: t, .. } => t == tool,
+        Need::Rust { .. } => tool == "rust",
+        _ => false,
+    })
+}
+
+/// One line per tool the job's command calls that isn't on the job's PATH
+/// and wasn't asked for in `--needs` ("python3 isn't on this node's PATH
+/// for jobs; add --needs python@3.12"), each need named once. Printed at
+/// job start, before the command fails with `command not found`.
+pub fn missing_tool_hints(argv: &[String], env: &[(String, String)], explicit: &[Need]) -> Vec<String> {
+    let mut named: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    for cmd in commands_called(argv) {
+        let Some((_, need)) = HINTED_TOOLS.iter().find(|(t, _)| *t == cmd) else { continue };
+        if named.contains(need) || need_asked(need, explicit) || crate::sysinfo::which(&cmd, env).is_some() {
+            continue;
+        }
+        named.push(need);
+        out.push(format!("{cmd} isn't on this node's PATH for jobs; add --needs {need}"));
+    }
+    out
+}
+
 /// The LRU clock of the tool-cache cap, in the toolchains root.
 const LAST_USED_FILE: &str = "k2-last-used.json";
 
@@ -1310,6 +1401,58 @@ pub fn declared_in_repo(root: &Path) -> (Vec<(Need, String)>, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn argv(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The commands a job plainly calls: the program itself, or each
+    /// simple command of a `sh -c` script, past `VAR=x` and `env`/`time`.
+    #[test]
+    fn commands_called_reads_argv_and_shell_scripts() {
+        assert_eq!(commands_called(&argv(&["python3", "x.py"])), vec!["python3"]);
+        assert_eq!(commands_called(&argv(&["env", "A=1", "uv", "run", "t"])), vec!["uv"]);
+        let script = "set -o pipefail; CARGO_BUILD_JOBS=4 cargo test 2>&1 | tail -5 && (cd web && bun install) ; for f in a b; do python3 \"$f\"; done";
+        assert_eq!(commands_called(&argv(&["bash", "-c", script])), vec!["set", "cargo", "tail", "cd", "bun", "for", "python3"]);
+        assert_eq!(commands_called(&argv(&["sh", "-ec", "time npx vitest run"])), vec!["npx"]);
+        // An explicit path isn't a PATH lookup; `command -v x` only asks.
+        assert!(commands_called(&argv(&["bash", "-c", "/opt/py/bin/python3 x; command -v uv"])).iter().all(|c| c != "python3" && c != "uv"));
+        assert!(commands_called(&argv(&[])).is_empty());
+    }
+
+    /// A tool the command calls that the job's PATH lacks and `--needs`
+    /// didn't ask for gets one line naming the need; a present or asked
+    /// tool gets none, and one need is named once.
+    #[test]
+    fn missing_tool_hints_name_the_need() {
+        let d = crate::util::temp_dir("hints");
+        let bin = d.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for t in ["cargo", "sh"] {
+            let p = bin.join(t);
+            std::fs::write(&p, "#!/bin/sh\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let env = vec![("PATH".to_string(), bin.display().to_string())];
+        let cmd = argv(&["sh", "-c", "cargo build && python3 -m pip install x; pip3 list; uv sync; npx vitest; bunx tsc; node -v"]);
+        assert_eq!(
+            missing_tool_hints(&cmd, &env, &[]),
+            vec![
+                "python3 isn't on this node's PATH for jobs; add --needs python@3.12".to_string(),
+                "uv isn't on this node's PATH for jobs; add --needs uv".to_string(),
+                "npx isn't on this node's PATH for jobs; add --needs node@22".to_string(),
+                "bunx isn't on this node's PATH for jobs; add --needs bun".to_string(),
+            ]
+        );
+        // Asked for in --needs: no hint (the install puts it on the PATH).
+        let needs = needs::parse_all(&["python@3.12".to_string(), "uv".to_string(), "node@22".to_string(), "bun".to_string()]).unwrap();
+        assert!(missing_tool_hints(&cmd, &env, &needs).is_empty());
+        // cargo is missing on this PATH: rust@stable.
+        let no_cargo = vec![("PATH".to_string(), d.join("none").display().to_string())];
+        assert_eq!(missing_tool_hints(&argv(&["cargo", "test"]), &no_cargo, &[]), vec!["cargo isn't on this node's PATH for jobs; add --needs rust@stable".to_string()]);
+        assert!(missing_tool_hints(&argv(&["cargo", "test"]), &no_cargo, &needs::parse_all(&["rust@stable".to_string()]).unwrap()).is_empty());
+    }
 
     /// V76: a resolve in progress (long enough to be an install) holds the
     /// node queue; per toolchains root; gone when the resolve ends.

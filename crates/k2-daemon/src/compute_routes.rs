@@ -1857,6 +1857,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // `--cache NAME` (protocol 6): a folder on the node that outlives the
     // job. Never with secret env: a secret job keeps nothing between runs.
     let cache = cache_from(v)?;
+    // `--cache-required`: the job runs only on the node that holds its
+    // cache (pinned there, however long it waits); without it the cache is
+    // a preference.
+    if b(v, "cacheRequired") == Some(true) && cache.is_none() {
+        return Err(no(codes::BAD_REQUEST, 400, "--cache-required goes with --cache NAME: it makes the job wait for the node that holds that cache"));
+    }
+    let cache_pin = cache_pin(ws, v, cache.as_deref());
     // GPU jobs (0.46.11, `--gpu`): one GPU of the node, to this job alone.
     let gpu = gpu_from(v)?;
     // GPU jobs S6 (`--gpu-mem`): its GPU memory budget, only with `--gpu`.
@@ -1920,7 +1927,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // No node named = auto-placement, with or without `any` (CP-A2): K2
     // picks a granted node; `--any` is the same thing. `--same-node-as`
     // pins like a name (CE-6): the job never moves off that node.
-    let any = s(&v, "node").is_none() && s(&v, "sameNodeAs").is_none();
+    // `--cache-required` with a node holding the cache pins it there too.
+    let any = s(&v, "node").is_none() && s(&v, "sameNodeAs").is_none() && cache_pin.is_none();
     // `--now` (CE-17): start now or refuse; a Batch job waits for an idle
     // node by design.
     if b(&v, "now") == Some(true) && tier_ask == Tier::Batch {
@@ -1930,12 +1938,24 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // name that isn't one of this workspace's nodes is a note (0.46.12).
     let crate::compute_move::Avoid { ids: avoid, names: avoid_names, notes: avoid_notes } = crate::compute_move::avoid_from(who, v, &ws.id)?;
     let avoid_asked = v.get("avoid").and_then(|a| a.as_array()).is_some_and(|a| !a.is_empty());
-    if avoid_asked && !any {
-        return Err(crate::compute_move::avoid_with_pinned(s(&v, "node").unwrap_or("--same-node-as")));
-    }
     // `--only NODE` (0.46.9): the auto-placement allow list.
     let only = crate::compute_move::only_from(who, v, &ws.id)?;
-    if !only.is_empty() && !any {
+    // `--cache-required` pinned the job to the cache's node: a standing
+    // --avoid / --only list is fine unless it leaves that node out.
+    if let (Some(n), Some(name)) = (cache_pin.as_ref(), cache.as_deref()) {
+        if avoid.contains(&n.id) || (!only.is_empty() && !only.contains(&n.id)) {
+            let flag = if avoid.contains(&n.id) { "your --avoid" } else { "your --only list" };
+            return Err(no(
+                codes::BAD_REQUEST,
+                400,
+                format!("--cache-required: cache {name} is on {}, which {flag} leaves out. Drop --cache-required to run elsewhere with an empty cache, or let the job use {}", n.name, n.name),
+            ));
+        }
+    }
+    if avoid_asked && !any && cache_pin.is_none() {
+        return Err(crate::compute_move::avoid_with_pinned(s(&v, "node").unwrap_or("--same-node-as")));
+    }
+    if !only.is_empty() && !any && cache_pin.is_none() {
         return Err(no(codes::BAD_REQUEST, 400, "--only is for auto-placement; this job names a node, which pins it there. Leave the node off, or drop --only"));
     }
     let filter = store::AnyFilter {
@@ -3381,6 +3401,21 @@ fn pick_node(
         if b(v, "now") == Some(true) {
             pinned_now(who, ws, want, &n, now)?;
         }
+        // `--cache-required` with a node named: that node must hold it.
+        if let Some(name) = want.cache.as_deref().filter(|_| b(v, "cacheRequired") == Some(true)) {
+            let home = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                place::cache_node(&conn, &ws.id, name).and_then(|id| store::node_by_id(&conn, &id))
+            };
+            if let Some(h) = home.filter(|h| h.id != n.id) {
+                return Err(no(
+                    codes::BAD_REQUEST,
+                    400,
+                    format!("--cache-required: cache {name} is on {}, not {}. Leave the node off (K2 sends it to {}), or drop --cache-required to start an empty cache on {}", h.name, n.name, h.name, n.name),
+                ));
+            }
+        }
         let rec = place::pinned_record(&n.name, now);
         return Ok((n, rec));
     }
@@ -3393,6 +3428,18 @@ fn pick_node(
         // and caches are there). Pinned: it waits for that node.
         let mut rec = place::pinned_record(&n.name, now);
         rec.why = format!("same node as job {job} (--same-node-as)");
+        return Ok((n, rec));
+    }
+    // `--cache-required`: pinned to the node that holds the cache; it waits
+    // there however long. No node holds it yet: placed as usual (it starts
+    // empty there, and that node holds it from then on).
+    if let (Some(n), Some(name)) = (cache_pin(ws, v, want.cache.as_deref()), want.cache.as_deref()) {
+        crate::compute_allow::check_node(ws, &n, &format!("--cache-required (cache {name} is there): node"))?;
+        if b(v, "now") == Some(true) {
+            pinned_now(who, ws, want, &n, now)?;
+        }
+        let mut rec = place::pinned_record(&n.name, now);
+        rec.why = format!("holds cache {name} (--cache-required: the job waits for this node)");
         return Ok((n, rec));
     }
     let report = place::candidates_report(want, &[], now);
@@ -3475,7 +3522,7 @@ fn pick_node(
             }
             Some(n) if n.id == c.node.id => {
                 if tier != Tier::Now {
-                    cache_why = Some(format!("cache {name} was here"));
+                    cache_why = Some(format!("holds cache {name}"));
                 }
             }
             Some(n) if policy == compute::PlacementPolicy::V1 => {
@@ -3503,7 +3550,7 @@ fn pick_node(
                         };
                         cache_why = Some(format!("cache {name} isn't on this node (it was on {}, {state})", n.name));
                         warnings.push(format!(
-                            "--cache {name}: it was on {} ({state}); this job runs on {} with an empty cache there. To wait for it: --same-node-as <job> or name the node",
+                            "--cache {name}: it was on {} ({state}); this job runs on {} with an empty cache there. To wait for it: --cache-required (or name the node)",
                             n.name, c.node.name
                         ));
                     }
@@ -3537,7 +3584,7 @@ fn pick_node(
         let name = want.cache.as_deref().unwrap_or_default();
         let wait = c.wait_eta(want).map(|(e, basis)| format!("{} ({})", place::wait_words(e), if basis == "quote" { "quoted" } else { basis })).unwrap_or_default();
         rec.code = place::QUEUED_FOR_CACHE.into();
-        rec.why = format!("waits for its cache: cache {name} was on this node · about {wait} · it moves elsewhere only if the wait passes 15 min");
+        rec.why = format!("waits for its cache: holds cache {name} · about {wait} · it moves elsewhere only if the wait passes 15 min");
     } else if let Some(w) = cache_why {
         rec.why.push_str(&format!(" · {w}"));
     }
@@ -3580,6 +3627,16 @@ fn pinned_now(who: &Who, ws: &Ws, want: &crate::compute_place::Want, n: &store::
         Some(t) => Err(no(NOT_NOW, 409, format!("--now: {} can't start it now; its wait: {}. Run without --now to queue there", n.name, wait_line(c, t, &pinned)))),
         None => Err(no(NOT_NOW, 409, format!("--now: {} is paused, draining or unavailable right now. Run without --now to queue there", n.name))),
     }
+}
+
+/// `--cache-required` with no node named and no `--same-node-as`: the
+/// active node that holds this workspace's cache `name`, which the job is
+/// pinned to. `None` without the flag, or when no node holds it yet.
+fn cache_pin(ws: &Ws, v: &serde_json::Value, cache: Option<&str>) -> Option<store::NodeRow> {
+    let name = cache.filter(|_| b(v, "cacheRequired") == Some(true) && s(v, "node").is_none() && s(v, "sameNodeAs").is_none())?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    crate::compute_place::cache_node(&conn, &ws.id, name).and_then(|id| store::node_by_id(&conn, &id)).filter(|n| n.state == "active")
 }
 
 /// `--same-node-as <job>` (CE-6): one of this workspace's jobs, and the

@@ -270,6 +270,23 @@ pub fn human_eta(secs: u64) -> String {
 
 /// `running 1/1 · queued 2/10 · today 3.1 of 8 CPU-h · max 2h/job · 4 CPUs · 8 GB` (§4.2).
 pub fn share_line(v: &ShareView) -> String {
+    share_counts_line(v)
+}
+
+/// [`share_line`] for a node of a known OS (`nodes`, `info`), ending with
+/// the share's network when it isn't full. `macos`: a Mac keeps `no-lan` as `none`
+/// (Seatbelt can't tell the LAN from the internet), so it says so.
+pub fn share_line_on(v: &ShareView, macos: bool) -> String {
+    let net = match v.limits.network {
+        share::Network::On => "",
+        share::Network::NoLan if macos => " · network none (the share says no-lan, which a Mac can't keep: no DNS, no downloads)",
+        share::Network::NoLan => " · network no-lan (internet only)",
+        share::Network::None => " · network none (no DNS, no downloads)",
+    };
+    format!("{}{net}", share_counts_line(v))
+}
+
+fn share_counts_line(v: &ShareView) -> String {
     let l = &v.limits;
     format!(
         "running {}/{} · queued {}/{} · today {:.1} of {} CPU-h · max {}/job · {} CPUs · {} GB{}",
@@ -810,6 +827,15 @@ mod tests {
         with_disk.disk_used_bytes = Some(38 << 30);
         with_disk.limits.disk_gb = 40;
         assert!(share_line(&with_disk).ends_with(" · disk 38.0 of 40 GB"), "{}", share_line(&with_disk));
+        // A share without full network says so; a Mac keeps no-lan as none.
+        let mut closed = view(vec![], 1, 2);
+        closed.limits.network = share::Network::On;
+        assert_eq!(share_line_on(&closed, true), share_line(&closed), "full network adds nothing");
+        closed.limits.network = share::Network::NoLan;
+        assert!(share_line_on(&closed, false).ends_with(" · network no-lan (internet only)"), "{}", share_line_on(&closed, false));
+        assert!(share_line_on(&closed, true).ends_with(" · network none (the share says no-lan, which a Mac can't keep: no DNS, no downloads)"));
+        closed.limits.network = share::Network::None;
+        assert!(share_line_on(&closed, false).ends_with(" · network none (no DNS, no downloads)"));
         assert_eq!(human_eta(360), "~6m");
         assert_eq!(human_eta(3900), "~1h05m");
     }

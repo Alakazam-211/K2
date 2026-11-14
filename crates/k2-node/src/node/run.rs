@@ -257,6 +257,28 @@ pub fn with_host_env(mut env: Vec<(String, String)>, h: &k2_node_proto::host::Ho
     env
 }
 
+/// The job-log line for a job's network (`None` when it's full). Says
+/// which setting closed it (the node's policy, or the owner's share for
+/// this server) and what fails, so a missing DNS isn't a mystery.
+/// `mac_no_lan`: the share says `no-lan`, which a Mac can't keep (Seatbelt
+/// can't tell the LAN from the internet), so the job got `none`.
+pub fn network_line(network: Network, by_policy: bool, mac_no_lan: bool) -> Option<String> {
+    const FAILS: &str = "no DNS, so downloads from crates.io, npm, PyPI or GitHub fail";
+    match network {
+        Network::On => None,
+        Network::NoLan => Some("network: no-lan: this job reaches the internet but not the node's local network (the node owner's setting for this server)".into()),
+        Network::None if mac_no_lan => Some(format!(
+            "network: none: the node's owner set this server's share here to no-lan, and a Mac can't close only the local network, so this job has no network at all ({FAILS}). Run it on a Linux node (no-lan keeps the internet there), or ask the node's owner (k2-node servers limits <server> --network on)"
+        )),
+        Network::None if by_policy => Some(format!(
+            "network: none: this node's policy keeps jobs off the network, loopback only ({FAILS}). Its owner sets network in policy.toml; or run the job on another node"
+        )),
+        Network::None => Some(format!(
+            "network: none: the node's owner keeps this server's jobs off the network here, loopback only ({FAILS}). Run the job on another node, or ask the node's owner (k2-node servers limits <server> --network on)"
+        )),
+    }
+}
+
 /// CE-15 + loopback ports (0.46.7): the job's CPUs as thread-count hints
 /// (each only when the plan's env doesn't set it: a caller's `--env` or a
 /// controller's hint wins), `K2_JOB_CPUS`, and its own port block. R2
@@ -397,6 +419,15 @@ impl Node {
         let entry = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map_err(|r| (r.code, r.message))?;
         let n = policy.min(entry.network);
         Ok(if cfg!(target_os = "macos") && n == Network::NoLan { Network::None } else { n })
+    }
+
+    /// The job-log line for a job that starts with less than full network
+    /// (`None` for full): which setting closed it, and what fails.
+    fn job_network_line(&self, t: &Tenant, network: Network) -> Option<String> {
+        let policy = Network::of_policy(&self.local.lock().unwrap().policy.network);
+        let by_policy = t.is_owner() || self.dev_unwalled() || policy == network;
+        let mac_no_lan = cfg!(target_os = "macos") && !by_policy && network == Network::None && policy.min(crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map(|e| e.network).unwrap_or(Network::None)) == Network::NoLan;
+        network_line(network, by_policy, mac_no_lan)
     }
 
     /// May a job of `t` start behind this node's wall? Always for the
@@ -737,6 +768,9 @@ impl Node {
             let line = self.host.lock().unwrap().line();
             sys(&mut journal, &format!("host: {line}"));
         }
+        if let Some(line) = self.job_network_line(&t, network) {
+            sys(&mut journal, &line);
+        }
         // Toolchains: explicit needs (required) + what the repo declares
         // (best effort), installed into the node home, cached. The job's
         // packages fall under its server's package policy.
@@ -906,11 +940,18 @@ impl Node {
         }
         // CE-4: what the job's PATH really resolves to, before it starts.
         let mut tools_used = std::collections::BTreeMap::new();
+        let explicit_needs = k2_node_proto::needs::parse_all(&a.plan.needs).unwrap_or_default();
         if easy {
-            let explicit_needs = k2_node_proto::needs::parse_all(&a.plan.needs).unwrap_or_default();
             tools_used = crate::toolchain::tools_used(&env, &cwd, &explicit_needs).await;
             sys(&mut journal, &crate::toolchain::tools_line(&tools_used));
         }
+        // A tool the command calls that the job's PATH lacks: say which
+        // --needs brings it, before the command fails with "not found".
+        for hint in crate::toolchain::missing_tool_hints(&a.plan.argv, &env, &explicit_needs) {
+            sys(&mut journal, &hint);
+        }
+        // Where cargo builds: the slot's target dir, not ./target.
+        sys(&mut journal, &runner::target_dir_line(&env, &target));
         if stop.borrow().is_some() {
             let s = stop.borrow().clone().unwrap_or(StopReason { state: JobState::Cancelled, reason: "cancelled".into() });
             self.finish_job(&t, &a, Some(&dirs), s.state, Some(&s.reason), None, src_ran, None, Some(journal), lease, None).await;
@@ -2660,6 +2701,23 @@ pub(super) const WALK_MAX_DEPTH: u32 = 256;
 pub(super) mod tests {
     use super::*;
     use crate::cgroup::Cgroups;
+
+    /// A job that starts with less than full network says so in its log:
+    /// which setting closed it and that downloads fail; full network says
+    /// nothing.
+    #[test]
+    fn network_line_names_the_setting_and_what_fails() {
+        assert_eq!(network_line(Network::On, true, false), None);
+        assert_eq!(network_line(Network::On, false, false), None);
+        let mac = network_line(Network::None, false, true).unwrap();
+        assert!(mac.starts_with("network: none: the node's owner set this server's share here to no-lan, and a Mac can't close only the local network"), "{mac}");
+        assert!(mac.contains("no DNS") && mac.contains("crates.io") && mac.contains("--network on"), "{mac}");
+        let share = network_line(Network::None, false, false).unwrap();
+        assert!(share.starts_with("network: none: the node's owner keeps this server's jobs off the network here"), "{share}");
+        let policy = network_line(Network::None, true, false).unwrap();
+        assert!(policy.starts_with("network: none: this node's policy keeps jobs off the network") && policy.contains("policy.toml"), "{policy}");
+        assert!(network_line(Network::NoLan, false, false).unwrap().starts_with("network: no-lan: this job reaches the internet"));
+    }
 
     /// M8.2 (11-07 review): a secret job asked to run as a uid of its own,
     /// on an executor that starts the unit without one (an older or

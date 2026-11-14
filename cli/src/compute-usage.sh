@@ -132,11 +132,14 @@ Agents:
                                 installs, a cargo target). With --no-source too.
                                 Evicted when idle and the node needs the disk;
                                 never with --secret. k2 compute cache lists them.
-                                With no node named, K2 picks the node your last
-                                job with this cache ran on; when that node is busy
-                                it waits there if the wait is under 15 min, else
-                                it runs elsewhere with an empty cache and says so
-                                (--same-node-as JOB always waits)
+                                With no node named, K2 picks the node that holds
+                                the cache ("holds cache NAME"); when that node is
+                                busy it waits there if the wait is under 15 min,
+                                else it runs elsewhere with an empty cache and
+                                says so (that run doesn't move the cache's home)
+                 [--cache-required]  with --cache: run only on the node that holds
+                                the cache, however long it waits (pinned there).
+                                No node holds it yet: placed as usual
                  --mem 16G      always pass it: the memory the job needs (a cargo
                                 build, check or test of a big workspace like K2:
                                 24G; a smaller crate: 8G; a script: 1-2G). Left
@@ -244,6 +247,13 @@ Agents:
                   A package the node's owner hasn't approved: package_not_approved,
                   exit 3, and a request for it is filed (k2 compute node packages);
                   anything else is refused: tool_unsupported, exit 2)
+                 Without --needs a job has: sh, bash, git, curl, tar and the
+                 node's stable Rust (cargo, rustc, cargo-nextest) everywhere;
+                 python3 (often no pip), make, a C compiler on most nodes.
+                 node/npm/npx, bun, pip, uv, pnpm, go, java, deno need --needs
+                 (node@22, bun, python@3.12, uv, …). The log names a missing one
+                 at start; k2 study compute: WHAT A JOB HAS WITHOUT --needs.
+                 Cargo builds in $CARGO_TARGET_DIR (the log prints it), not ./target
                  -- <command…>
   k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]
                  a cargo-nextest suite split across nodes (nextest --partition),

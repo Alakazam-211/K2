@@ -224,11 +224,11 @@ set -e
 expect_eq "a --timeout over the grant is a bad request" "$rc" "2"
 expect_has "timeout_over_grant names the grant and the owner command" "$(cat "$SANDBOX/err")" "(grant: 2h/job, 2 parallel, 10 queued, 60 GB disk). Ask your owner: k2 compute grant mini --workspace"
 help="$(k2 compute --help)"
-for want in "k2 compute wait <job>..." "[--workspace WS]" "cancel <job> [--force]" "≤ the grant's max" "--wait [--failures] [--max-wait 9m]" "K2_COMPUTE_JOB"; do
+for want in "k2 compute wait <job>..." "[--workspace WS]" "cancel <job> [--force]" "≤ the grant's max" "--wait [--failures] [--max-wait 9m]" "K2_COMPUTE_JOB" "[--cache-required]" "Without --needs a job has"; do
     expect_has "--help lists $want" "$help" "$want"
 done
 study="$(k2 study compute)"
-for want in "K2_COMPUTE_JOB=<job id>" "CANCEL" "WORKTREES" "k2 compute wait <id>" "sh -ec" "rust@1.95.0+target:wasm32-unknown-unknown" "rust_target_unsupported"; do
+for want in "K2_COMPUTE_JOB=<job id>" "CANCEL" "WORKTREES" "k2 compute wait <id>" "sh -ec" "rust@1.95.0+target:wasm32-unknown-unknown" "rust_target_unsupported" "WHAT A JOB HAS WITHOUT --needs" "--cache-required"; do
     expect_has "study compute covers $want" "$study" "$want"
 done
 set +e
@@ -329,6 +329,16 @@ done
 expect_has "detached job done" "$(k2 compute get "$JOB")" ": done"
 expect_has "jobs lists it" "$(k2 compute jobs)" "$JOB"
 expect_has "logs" "$(k2 compute logs "$JOB")" "detached-done"
+expect_has "the log says where cargo builds" "$(k2 compute logs "$JOB")" ": cargo builds here, not in ./target"
+JOBT="$(k2 compute run mini --detach -- sh -c 'printf "%s\n" "$CARGO_TARGET_DIR"; deno --version || true')"
+for _ in $(seq 1 100); do
+    k2 compute get "$JOBT" | grep -q ": done" && break
+    sleep 0.2
+done
+tlog="$(k2 compute logs "$JOBT")"
+tdir="$(grep -v '^\[k2-node\]' <<<"$tlog" | grep '/' | head -1)"
+expect_has "the CARGO_TARGET_DIR line is the job's own value" "$tlog" "[k2-node] CARGO_TARGET_DIR=$tdir: "
+expect_has "a missing tool the command calls gets a --needs hint" "$tlog" "[k2-node] deno isn't on this node's PATH for jobs; add --needs deno"
 fails="$(k2 compute logs "$JOB" --failures)"
 expect_has "logs --failures keeps the failure line" "$fails" "test result: FAILED"
 case "$fails" in *detached-done*) bad "logs --failures drops other lines" ;; *) ok "logs --failures drops other lines" ;; esac

@@ -191,9 +191,15 @@ REPOS (0.46.6)
 CACHES (0.46.6)
   --cache NAME gives the job a folder that is still there next run on the
   same node: $K2_JOB_CACHE. Per workspace and NAME; works with --no-source.
-  Pin the node (name it) so the next run finds the cache there:
-    k2 compute run <node> --no-source --cache fuzz -- sh -c \
+  Leave the node off: K2 sends the job to the node that holds the cache
+  (the placed-on line says "holds cache NAME"). When that node is busy for
+  more than about 15 min, the job runs elsewhere with an empty cache and
+  says so; that run doesn't move the cache's home. To always wait for the
+  cache's node, add --cache-required (it pins the job there; when no node
+  holds the cache yet, the job is placed as usual):
+    k2 compute run --no-source --cache fuzz --cache-required -- sh -c \
       'cargo fuzz run parse -- -max_total_time=3600 "$K2_JOB_CACHE/corpus"'
+  Naming a node pins the job there, and the cache's home moves with it.
   For a cargo target dir you choose: CARGO_TARGET_DIR="$K2_JOB_CACHE/target"
   inside your command (--env can't set it).
   Caches stay on the node, count toward its disk limits and are evicted
@@ -609,7 +615,7 @@ CODES (0.46.7)
     released_auto          a pinned job you released with move --auto; it
                            waits here until another node can start it now.
     moved_to               you moved it with move --to (pinned there).
-    starts_now_cache       it starts now on the node where its --cache was.
+    starts_now_cache       it starts now on the node that holds its --cache.
     queued_for_cache       it waits on the busy node that holds its --cache,
                            because that wait is estimated under 15 min, rather
                            than starting cold elsewhere; after 15 min it may
@@ -727,6 +733,28 @@ TOOLCHAINS (what the job needs installed)
   rust-toolchain(.toml), .k2/compute.toml (needs = ["node@22"]).
   Repo files never ask for system packages; only an explicit --needs does.
   k2 compute info <node> lists tools already there (mise:node, …).
+
+WHAT A JOB HAS WITHOUT --needs
+  A job's PATH is the node's Rust, then the system's folders (on a Mac
+  also Homebrew's): a tool the node's people installed with mise or in a
+  home folder isn't on it. What that gives today:
+    always there       sh, bash, git, curl, tar; the node's stable Rust
+                       (cargo, rustc, cargo-nextest, clippy, rustfmt)
+    most nodes         make and a C compiler; python3 (the system's, often
+                       without pip); Ubuntu nodes: cmake, jq
+    needs --needs      node, npm, npx: node@22     bun, bunx: bun
+                       pip, a known python3: python@3.12   uv, uvx: uv
+                       pnpm   deno   go   java   zig   ninja   protoc
+                       cmake where it's missing: cmake@3
+                       another Rust: rust@1.99 (rust@stable is already there)
+  When in doubt, name it: a need that is already there costs nothing.
+  The job log's "tools:" line says what its PATH resolves to, and a job
+  whose command calls python3, pip, uv, node, npm, npx, bun, cargo, … that
+  isn't there gets a line before it starts: "python3 isn't on this node's
+  PATH for jobs; add --needs python@3.12".
+  Cargo builds in $CARGO_TARGET_DIR (the warm slot's target dir, kept
+  between jobs), not ./target: the log's CARGO_TARGET_DIR= line says
+  where, so use $CARGO_TARGET_DIR/release/<name> for built binaries.
 
 ENVIRONMENT (0.46.9: what each machine is, and its system packages)
   Every node says what it is. Look before you pick:

@@ -28210,11 +28210,14 @@ Agents:
                                 installs, a cargo target). With --no-source too.
                                 Evicted when idle and the node needs the disk;
                                 never with --secret. k2 compute cache lists them.
-                                With no node named, K2 picks the node your last
-                                job with this cache ran on; when that node is busy
-                                it waits there if the wait is under 15 min, else
-                                it runs elsewhere with an empty cache and says so
-                                (--same-node-as JOB always waits)
+                                With no node named, K2 picks the node that holds
+                                the cache ("holds cache NAME"); when that node is
+                                busy it waits there if the wait is under 15 min,
+                                else it runs elsewhere with an empty cache and
+                                says so (that run doesn't move the cache's home)
+                 [--cache-required]  with --cache: run only on the node that holds
+                                the cache, however long it waits (pinned there).
+                                No node holds it yet: placed as usual
                  --mem 16G      always pass it: the memory the job needs (a cargo
                                 build, check or test of a big workspace like K2:
                                 24G; a smaller crate: 8G; a script: 1-2G). Left
@@ -28322,6 +28325,13 @@ Agents:
                   A package the node's owner hasn't approved: package_not_approved,
                   exit 3, and a request for it is filed (k2 compute node packages);
                   anything else is refused: tool_unsupported, exit 2)
+                 Without --needs a job has: sh, bash, git, curl, tar and the
+                 node's stable Rust (cargo, rustc, cargo-nextest) everywhere;
+                 python3 (often no pip), make, a C compiler on most nodes.
+                 node/npm/npx, bun, pip, uv, pnpm, go, java, deno need --needs
+                 (node@22, bun, python@3.12, uv, …). The log names a missing one
+                 at start; k2 study compute: WHAT A JOB HAS WITHOUT --needs.
+                 Cargo builds in $CARGO_TARGET_DIR (the log prints it), not ./target
                  -- <command…>
   k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]
                  a cargo-nextest suite split across nodes (nextest --partition),
@@ -29593,7 +29603,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
+    local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -29636,6 +29646,9 @@ cmd_compute_run() {
                 if ! [[ "$cache" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
                     echo "usage: --cache NAME (1–64 of a-z 0-9 . _ -, starting with a letter or digit)" >&2; exit 2
                 fi ;;
+            # --cache-required: run only on the node that holds the --cache
+            # (it waits there); without it the cache is only a preference.
+            --cache-required) cache_required=1; shift ;;
             # --gate = --tier ci (0.46.5; an older daemon only knows gate,
             # so both go in the body).
             --gate) gate=1; tier="ci"; shift ;;
@@ -29880,7 +29893,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
-        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
+        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_cacheRequired_b="${cache_required#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
         K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
@@ -30267,7 +30280,7 @@ cmd_compute_test() {
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only)
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
+            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan) pass+=("$1"); shift ;;
             --gpu=*) pass+=("$1"); shift ;;
             --gpu)
                 case "${2:-}" in
@@ -61663,9 +61676,15 @@ REPOS (0.46.6)
 CACHES (0.46.6)
   --cache NAME gives the job a folder that is still there next run on the
   same node: $K2_JOB_CACHE. Per workspace and NAME; works with --no-source.
-  Pin the node (name it) so the next run finds the cache there:
-    k2 compute run <node> --no-source --cache fuzz -- sh -c \
+  Leave the node off: K2 sends the job to the node that holds the cache
+  (the placed-on line says "holds cache NAME"). When that node is busy for
+  more than about 15 min, the job runs elsewhere with an empty cache and
+  says so; that run doesn't move the cache's home. To always wait for the
+  cache's node, add --cache-required (it pins the job there; when no node
+  holds the cache yet, the job is placed as usual):
+    k2 compute run --no-source --cache fuzz --cache-required -- sh -c \
       'cargo fuzz run parse -- -max_total_time=3600 "$K2_JOB_CACHE/corpus"'
+  Naming a node pins the job there, and the cache's home moves with it.
   For a cargo target dir you choose: CARGO_TARGET_DIR="$K2_JOB_CACHE/target"
   inside your command (--env can't set it).
   Caches stay on the node, count toward its disk limits and are evicted
@@ -62081,7 +62100,7 @@ CODES (0.46.7)
     released_auto          a pinned job you released with move --auto; it
                            waits here until another node can start it now.
     moved_to               you moved it with move --to (pinned there).
-    starts_now_cache       it starts now on the node where its --cache was.
+    starts_now_cache       it starts now on the node that holds its --cache.
     queued_for_cache       it waits on the busy node that holds its --cache,
                            because that wait is estimated under 15 min, rather
                            than starting cold elsewhere; after 15 min it may
@@ -62199,6 +62218,28 @@ TOOLCHAINS (what the job needs installed)
   rust-toolchain(.toml), .k2/compute.toml (needs = ["node@22"]).
   Repo files never ask for system packages; only an explicit --needs does.
   k2 compute info <node> lists tools already there (mise:node, …).
+
+WHAT A JOB HAS WITHOUT --needs
+  A job's PATH is the node's Rust, then the system's folders (on a Mac
+  also Homebrew's): a tool the node's people installed with mise or in a
+  home folder isn't on it. What that gives today:
+    always there       sh, bash, git, curl, tar; the node's stable Rust
+                       (cargo, rustc, cargo-nextest, clippy, rustfmt)
+    most nodes         make and a C compiler; python3 (the system's, often
+                       without pip); Ubuntu nodes: cmake, jq
+    needs --needs      node, npm, npx: node@22     bun, bunx: bun
+                       pip, a known python3: python@3.12   uv, uvx: uv
+                       pnpm   deno   go   java   zig   ninja   protoc
+                       cmake where it's missing: cmake@3
+                       another Rust: rust@1.99 (rust@stable is already there)
+  When in doubt, name it: a need that is already there costs nothing.
+  The job log's "tools:" line says what its PATH resolves to, and a job
+  whose command calls python3, pip, uv, node, npm, npx, bun, cargo, … that
+  isn't there gets a line before it starts: "python3 isn't on this node's
+  PATH for jobs; add --needs python@3.12".
+  Cargo builds in $CARGO_TARGET_DIR (the warm slot's target dir, kept
+  between jobs), not ./target: the log's CARGO_TARGET_DIR= line says
+  where, so use $CARGO_TARGET_DIR/release/<name> for built binaries.
 
 ENVIRONMENT (0.46.9: what each machine is, and its system packages)
   Every node says what it is. Look before you pick:

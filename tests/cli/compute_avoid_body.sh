@@ -111,6 +111,15 @@ echo "== test: passes --avoid through =="
 "$K2" compute test --no-source --avoid k2n11-vin --avoid k2n1 -- -p x >/dev/null 2>&1 || true
 expect_eq "compute test --avoid" "$(last_avoid)" '/cli/compute/run ["k2n11-vin", "k2n1"]'
 
+echo "== --cache-required reaches the daemon =="
+last_cache() { tail -1 "$LOG" | python3 -c 'import json,sys; b=json.load(sys.stdin)["body"]; print(b.get("cache"), json.dumps(b.get("cacheRequired")))'; }
+"$K2" compute run --no-source --cache corpus --cache-required -- true >/dev/null 2>&1 || true
+expect_eq "run --cache-required" "$(last_cache)" 'corpus true'
+"$K2" compute run --no-source --cache corpus -- true >/dev/null 2>&1 || true
+expect_eq "no --cache-required: no key" "$(last_cache)" 'corpus null'
+"$K2" compute test --no-source --cache corpus --cache-required -- -p x >/dev/null 2>&1 || true
+expect_eq "compute test passes --cache-required" "$(last_cache)" 'corpus true'
+
 echo "== get: names what an auto job avoids =="
 out="$("$K2" compute get avoid1234 2>&1)"
 expect_has "the placement line names the avoided nodes" "$out" "placed on k2n12-vin (auto, v2): starts now · idle · 3 nodes fit · avoids k2n11-vin, z13flow"

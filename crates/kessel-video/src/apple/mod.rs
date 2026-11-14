@@ -47,6 +47,8 @@ mod camera;
 mod ffi;
 #[cfg(target_os = "ios")]
 mod ios;
+// Most of its helpers serve capture (notifications, the main queue).
+#[cfg_attr(not(feature = "apple"), allow(dead_code))]
 mod objc;
 pub(crate) mod pixel;
 #[cfg(all(feature = "apple", target_os = "macos"))]
@@ -60,7 +62,7 @@ const QOS_CLASS_USER_INITIATED: u32 = 0x19;
 // libSystem, which every macOS and iOS program links.
 extern "C" {
     fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
-    #[cfg(test)]
+    #[cfg(all(test, feature = "apple"))]
     fn qos_class_self() -> u32;
 }
 
@@ -77,7 +79,7 @@ pub(crate) fn set_media_thread_qos() {
 }
 
 /// The calling thread's QoS class (tests).
-#[cfg(test)]
+#[cfg(all(test, feature = "apple"))]
 pub(crate) fn current_qos() -> u32 {
     // SAFETY: reads the calling thread's QoS class; no arguments.
     unsafe { qos_class_self() }

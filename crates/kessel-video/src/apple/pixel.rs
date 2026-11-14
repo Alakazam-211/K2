@@ -408,6 +408,7 @@ pub unsafe fn pixel_buffer_frame(
 ///
 /// # Safety
 /// `pb` must be a live CVPixelBuffer.
+#[cfg_attr(not(feature = "apple"), allow(dead_code))]
 pub(crate) unsafe fn cpu_frame(
     pb: CVPixelBufferRef,
     capture_us: u64,
@@ -534,7 +535,7 @@ impl Pools {
     }
 
     /// The pools held, most recently used first (tests).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "apple"))]
     pub(crate) fn held(&self) -> Vec<(PoolKey, CFTypeRef)> {
         lock(&self.pools).iter().map(|(k, p)| (*k, p.0)).collect()
     }

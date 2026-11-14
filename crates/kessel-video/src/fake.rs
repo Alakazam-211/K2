@@ -1596,7 +1596,7 @@ pub(crate) mod tests {
         let mut dec = b.decoder(cfg, no_wake()).expect("dec");
         let mut out: Vec<VideoFrame> = Vec::new();
         let mut busy = 0;
-        let mut take = |dec: &mut Box<dyn VideoDecoder>, out: &mut Vec<VideoFrame>| {
+        let take = |dec: &mut Box<dyn VideoDecoder>, out: &mut Vec<VideoFrame>| {
             while let Some(r) = dec.poll() {
                 match r {
                     Ok(f) => out.push(f),

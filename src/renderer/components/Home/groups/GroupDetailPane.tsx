@@ -55,7 +55,7 @@ const LABEL = 'text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(-
 const SQUARE = { strokeWidth: K2_ICON_STROKE, strokeLinecap: 'square', strokeLinejoin: 'miter' } as const
 
 /** What a failed rename says, beside the field. */
-export const RENAME_FAILED_TEXT = 'Couldn’t save the name. The server didn’t answer, so your text is kept.'
+export const RENAME_FAILED_TEXT = 'Couldn’t save the name. Your text is kept here.'
 
 export default function GroupDetailPane({
   group,

@@ -521,7 +521,7 @@ describe('the Groups dialog on the Homes store: Undo and a failed rename', () =>
     expect(input.getAttribute('aria-invalid')).toBe('true')
     const err = modal().querySelector('[data-group-name-error]') as HTMLElement
     expect(err.getAttribute('role')).toBe('alert')
-    expect(err.textContent).toBe('Couldn’t save the name. The server didn’t answer, so your text is kept. Try again')
+    expect(err.textContent).toBe('Couldn’t save the name. Your text is kept here. Try again')
     expect(input.getAttribute('aria-describedby')).toBe(err.id)
     expect(modal().querySelector('[data-group-saved]')).toBeNull()
     // Still failing: still the error.

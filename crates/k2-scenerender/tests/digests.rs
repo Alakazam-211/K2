@@ -10,7 +10,7 @@
 //! update the table from this test's `[digest]` lines.
 
 use k2_scenerender::camera::{Framing, ViewSpec};
-use k2_scenerender::proto::{ImageFormat, Request, View};
+use k2_scenerender::proto::{Clay, ImageFormat, Request, View};
 use k2_scenerender::render::render_bytes;
 use k2_scenerender::sandbox::Caps;
 use k2_scenerender::scene::{encode, InputLimits, Scene};
@@ -20,7 +20,8 @@ use k2_scenerender::testgen;
 /// Made on x86_64 Linux (k2n10-vin, Intel, job 71bc4b0f) and matched, all 30, on aarch64
 /// macOS (k2n1-m4, Apple M4, job c4090b9e). The 27 transparent ones: made on k2n10-vin
 /// (job 9919a84e), the 30 above unchanged there. The 11 content-framing ones: made on
-/// k2-arch (x86_64, job d8bddba8).
+/// k2-arch (x86_64, job d8bddba8). The 13 clay ones: made on k2-arch (job 20f420f1). All 81
+/// matched on aarch64 macOS (k2n1-m4, job ffe2988a).
 const WANT: &[(&str, &str)] = &[
     ("cube-webp-320/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
     ("cube-webp-320/0", "5a8e7a89bef92a33281af63a775f1c297cd8dc99090f88b80d190b43eb91c9bc"),
@@ -92,6 +93,20 @@ const WANT: &[(&str, &str)] = &[
     ("empty-room/1", "951187c8b46deed6344fbd83ddfd3d9689446d27c5ec1561e0707774b80f7889"),
     ("small-object/k2scene1", "25c2e806f1c3b53fa889bd36b059c299f268474f77be3a63bbb0b3cd9a8441f6"),
     ("small-object/0", "4069b84340122fecbe49a99b012dd150790f7827c8b7972ade287ed10d9153cb"),
+    // Clay shading (two tones by class), bounds- and contents-framed, opaque and transparent.
+    ("interior-clay/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay/0", "396a83e58c4a54a92f70a14a1837948ff2a0d3bffb26c06a22e0722cccaf069c"),
+    ("interior-clay/1", "a645e958de4a677d3768dea51fb8c648184cd5dff5e7096ba59dc9086c5d0e35"),
+    ("interior-clay/2", "d051fce83a2bd47b7e75f84d06f292281e6d1019843efbebbd26316cbffc6203"),
+    ("interior-clay-alpha/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay-alpha/0", "4d2167db9532dfd44f31efef817076ed548013ddfe5225d8ce856352ec5d269c"),
+    ("interior-clay-alpha/1", "fde8e942f28bc4164d8e1367d22b4ee44ef4a8430421fca56dc9f116dda46c7f"),
+    ("interior-clay-tones/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay-tones/0", "ee3aa1b905e185a746619760dd2f7776f3f4a1ad778965dc2a7b586c16e5f08b"),
+    ("empty-room-clay/k2scene1", "5c87521c765dda93a8341896f22ac8f27ed0cdd2586dabad17e031b044377efc"),
+    ("empty-room-clay/0", "00ddd81edbb0ef3cf1d7add18a31cda44366710913db0f6b85855877eb55425c"),
+    ("small-object-clay/k2scene1", "25c2e806f1c3b53fa889bd36b059c299f268474f77be3a63bbb0b3cd9a8441f6"),
+    ("small-object-clay/0", "615441da2daffda32ea9249726a5e2231d15e3e750f6f895f0f202eca78aa0f9"),
 ];
 
 fn caps() -> Caps {
@@ -112,12 +127,18 @@ fn case(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>
 }
 
 fn case_with(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32, transparent: bool) {
+    case_clay(out, name, s, views, format, threads, transparent, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn case_clay(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32, transparent: bool, clay: Option<Clay>) {
     let input = encode(s);
     out.push((format!("{name}/k2scene1"), hex(&digest(&input))));
     let mut req = Request::new(views);
     req.format = format;
     req.threads = threads;
     req.transparent = transparent;
+    req.clay = clay;
     let (o, _) = render_bytes(&input, &req, &caps()).unwrap_or_else(|f| panic!("{name}: {} {}", f.code, f.detail));
     for (i, (_, img)) in o.views.iter().enumerate() {
         out.push((format!("{name}/{i}"), hex(&digest(img))));
@@ -163,6 +184,15 @@ fn the_digests_are_the_checked_in_ones() {
     case_with(&mut got, "interior-alpha", &testgen::interior_scene(), vec![contents(320)], ImageFormat::Webp, 2, true);
     case(&mut got, "empty-room", &testgen::empty_room_scene(), vec![auto(160), contents(160)], ImageFormat::Webp, 2);
     case(&mut got, "small-object", &testgen::small_object_scene(), vec![contents(240)], ImageFormat::Webp, 1);
+    // Clay: the interior bounds-framed, contents-framed and a turntable frame; transparent; the
+    // request's own tones; an all-shell room (every object the shell tone); one small object.
+    let clay = Some(Clay::default());
+    case_clay(&mut got, "interior-clay", &testgen::interior_scene(), vec![auto(320), contents(320), View::new(ViewSpec::Turntable(1), 200)], ImageFormat::Webp, 2, false, clay);
+    case_clay(&mut got, "interior-clay-alpha", &testgen::interior_scene(), vec![auto(320), contents(320)], ImageFormat::Png, 3, true, clay);
+    let tones = Some(Clay { shell: [92, 98, 110], contents: [236, 226, 204] });
+    case_clay(&mut got, "interior-clay-tones", &testgen::interior_scene(), vec![contents(240)], ImageFormat::Webp, 4, false, tones);
+    case_clay(&mut got, "empty-room-clay", &testgen::empty_room_scene(), vec![auto(160)], ImageFormat::Webp, 1, false, clay);
+    case_clay(&mut got, "small-object-clay", &testgen::small_object_scene(), vec![contents(240)], ImageFormat::Webp, 2, false, clay);
     for (k, v) in &got {
         eprintln!("[digest] (\"{k}\", \"{v}\"),");
     }
@@ -170,6 +200,7 @@ fn the_digests_are_the_checked_in_ones() {
     let find = |k: &str| got.iter().find(|g| g.0 == k).map(|g| g.1.clone());
     assert_eq!(find("empty-room/0"), find("empty-room/1"), "an all-shell room falls back to the bounds framing");
     assert_ne!(find("interior/0"), find("interior/1"));
+    assert_ne!(find("interior/0"), find("interior-clay/0"));
     let want: Vec<(String, String)> = WANT.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let differ: Vec<&str> = got.iter().zip(&want).filter(|(g, w)| g != w).map(|(g, _)| g.0.as_str()).collect();
     assert!(differ.is_empty() && got.len() == want.len(), "{} of {} differ ({} checked in): {differ:?}", differ.len(), got.len(), want.len());

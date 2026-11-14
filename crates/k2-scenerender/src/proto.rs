@@ -27,6 +27,10 @@
 //! absent, `"bounds"`, the auto view as it always was. Like the background,
 //! the framing is the request's, not the scene's: a host that asks for both
 //! keys its cache with it.
+//! `"clay": {}` shades every object in one neutral clay tone by its class
+//! instead of its base colour: shell darker, contents lighter ([`Clay`]; the
+//! tones may be given, `{"shell": [r, g, b], "contents": [r, g, b]}`, sRGB).
+//! Absent, objects keep their base colours. It is the request's too.
 //!
 //! **Response (stdout):** one line of JSON, the [`Response`], then, when `ok`,
 //! each view's image in order (`views[i].image_len` bytes each), then EOF.
@@ -62,6 +66,19 @@ pub const MAX_RESPONSE_LINE: usize = 8 << 20;
 /// The background when the request names none: sRGB 240, 240, 240, the
 /// current neutral (K2 Design picks the final one).
 pub const DEFAULT_BACKGROUND: [u8; 3] = [240, 240, 240];
+
+/// Clay shading's shell tone (floor, walls, ceiling) when the request names
+/// none: sRGB 138, 134, 128, a warm mid grey. Lit by the same lights, it
+/// stays well clear of the default background (sRGB 240).
+pub const CLAY_SHELL: [u8; 3] = [138, 134, 128];
+
+/// Clay shading's contents tone (furniture, props) when the request names
+/// none: sRGB 206, 202, 194, a warm light grey. Lit, a face gets between
+/// 0.22 of the tone in linear light (ambient alone, about sRGB 103) and
+/// about 0.99 of it (turned between both lights, about sRGB 205); a face
+/// turned to the key light gets 0.94 (sRGB 200, 196, 188). Lighter than the
+/// shell, short of the default background.
+pub const CLAY_CONTENTS: [u8; 3] = [206, 202, 194];
 
 /// The aspect when neither the view nor the camera gives one.
 pub const DEFAULT_ASPECT: f64 = 4.0 / 3.0;
@@ -144,6 +161,34 @@ impl ImageFormat {
     }
 }
 
+/// Clay shading: each object drawn in one of two neutral tones (sRGB) by its
+/// class ([`crate::contents`], the same rule as content framing) instead of
+/// its base colour, under the same lights; transparent images keep their
+/// coverage alpha. Either tone may be left out for its default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clay {
+    /// The shell's tone (a darker one): [`CLAY_SHELL`] when absent.
+    #[serde(default = "clay_shell")]
+    pub shell: [u8; 3],
+    /// The contents' tone (a lighter one): [`CLAY_CONTENTS`] when absent.
+    #[serde(default = "clay_contents")]
+    pub contents: [u8; 3],
+}
+
+fn clay_shell() -> [u8; 3] {
+    CLAY_SHELL
+}
+
+fn clay_contents() -> [u8; 3] {
+    CLAY_CONTENTS
+}
+
+impl Default for Clay {
+    fn default() -> Clay {
+        Clay { shell: CLAY_SHELL, contents: CLAY_CONTENTS }
+    }
+}
+
 /// One view to draw.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct View {
@@ -183,6 +228,9 @@ pub struct Request {
     /// RGBA images, alpha = coverage, colour straight; no `background` with it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub transparent: bool,
+    /// Clay shading in two tones by class; `None`: base colours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clay: Option<Clay>,
     /// Samples per axis (1-4); `None`: [`default_ssaa`] of each view's width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssaa: Option<u32>,
@@ -198,7 +246,7 @@ pub struct Request {
 
 impl Request {
     pub fn new(views: Vec<View>) -> Request {
-        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, transparent: false, ssaa: None, threads: 1, hostile: None }
+        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, transparent: false, clay: None, ssaa: None, threads: 1, hostile: None }
     }
 
     /// The line, newline included.
@@ -414,6 +462,18 @@ mod tests {
         let cl = c.line();
         assert!(String::from_utf8_lossy(&cl).contains(r#""framing":"contents""#));
         assert_eq!(Request::parse(&cl[..cl.len() - 1]).expect("parse"), c);
+        // Clay: off when absent (and off the line), defaults for the tones left out.
+        assert_eq!(m.clay, None);
+        assert!(!String::from_utf8_lossy(&line).contains("clay"));
+        let clay = |json: &str| Request::parse(format!(r#"{{"proto":1,"input_len":3,"views":[],"clay":{json}}}"#).as_bytes()).expect("clay").clay;
+        assert_eq!(clay("{}"), Some(Clay { shell: CLAY_SHELL, contents: CLAY_CONTENTS }));
+        assert_eq!(clay(r#"{"shell":[1,2,3]}"#), Some(Clay { shell: [1, 2, 3], contents: CLAY_CONTENTS }));
+        assert_eq!(clay(r#"{"shell":[1,2,3],"contents":[4,5,6]}"#), Some(Clay { shell: [1, 2, 3], contents: [4, 5, 6] }));
+        assert!(Request::parse(br#"{"proto":1,"input_len":3,"views":[],"clay":{"shell":[1,2,300]}}"#).is_err());
+        let mut k = r.clone();
+        k.clay = Some(Clay::default());
+        let kl = k.line();
+        assert_eq!(Request::parse(&kl[..kl.len() - 1]).expect("parse"), k);
         assert!(Request::parse(br#"{"proto":2,"input_len":3,"views":[]}"#).is_err());
         assert!(Request::parse(b"not json").is_err());
     }

@@ -1,10 +1,11 @@
 //! Stills of the generated interior scenes as PNG files, to look at a
 //! renderer change: each scene's auto view framed on every object's bounds
-//! and on its contents. In process (no sandbox), the bytes the worker draws.
+//! and on its contents, in base colours and in clay. In process (no
+//! sandbox), the bytes the worker draws.
 //! `cargo run -p k2-scenerender --example stills -- <dir> [width]`.
 
 use k2_scenerender::camera::{Framing, ViewSpec};
-use k2_scenerender::proto::{ImageFormat, Request, View};
+use k2_scenerender::proto::{Clay, ImageFormat, Request, View};
 use k2_scenerender::render::render_bytes;
 use k2_scenerender::sandbox::Caps;
 use k2_scenerender::scene::{encode, InputLimits};
@@ -19,17 +20,18 @@ fn main() {
     let scenes = [("interior", testgen::interior_scene()), ("small-object", testgen::small_object_scene()), ("empty-room", testgen::empty_room_scene())];
     for (name, s) in scenes {
         let input = encode(&s);
-        for framing in [Framing::Bounds, Framing::Contents] {
+        for (framing, clay) in [(Framing::Bounds, false), (Framing::Contents, false), (Framing::Bounds, true), (Framing::Contents, true)] {
             let mut req = Request::new(vec![View { framing, ..View::new(ViewSpec::Auto, width) }]);
             req.format = ImageFormat::Png;
             req.threads = 4;
+            req.clay = clay.then(Clay::default);
             let (out, _) = render_bytes(&input, &req, &caps).unwrap_or_else(|f| panic!("{name}: {} {}", f.code, f.detail));
             let (meta, png) = &out.views[0];
             let tag = match framing {
                 Framing::Bounds => "bounds",
                 Framing::Contents => "contents",
             };
-            let path = std::path::Path::new(&dir).join(format!("{name}-{tag}.png"));
+            let path = std::path::Path::new(&dir).join(format!("{name}-{tag}{}.png", if clay { "-clay" } else { "" }));
             std::fs::write(&path, png).expect("write a still");
             println!("{}: {}x{}, framing {:?}, camera shift {:?}", path.display(), meta.width, meta.height, meta.framing, meta.camera.map(|c| (c.shift_x, c.shift_y)));
         }

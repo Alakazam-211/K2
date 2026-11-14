@@ -197,19 +197,25 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
     let mut total = 0u64;
     for (vi, p) in plans.iter().enumerate() {
         let bad_view = |e: String| Failure::new(FailureCode::InvalidInput, format!("view {vi}: {e}"));
-        let (frame, framing) = match p.framing {
-            Framing::Bounds => (camera::frame(scene, &p.active, p.view, p.aspect).map_err(bad_view)?, None),
-            Framing::Contents => {
-                let classes = contents::classify(scene, &p.active);
-                let (f, m) = camera::frame_contents(scene, &p.active, &classes, p.aspect).map_err(bad_view)?;
+        // The classes, once, when the framing or the shading needs them.
+        let classes = (p.framing == Framing::Contents || req.clay.is_some()).then(|| contents::classify(scene, &p.active));
+        let (frame, framing) = match (p.framing, &classes) {
+            (Framing::Contents, Some(classes)) => {
+                let (f, m) = camera::frame_contents(scene, &p.active, classes, p.aspect).map_err(bad_view)?;
                 let count = m.left_out.len() as u64;
                 let mut left_out = m.left_out;
                 left_out.truncate(MAX_LEFT_OUT_LISTED);
                 (f, Some(FramingMeta { contents: m.contents, left_out_count: count, left_out, grown: m.grown }))
             }
+            _ => (camera::frame(scene, &p.active, p.view, p.aspect).map_err(bad_view)?, None),
         };
+        let shell: Vec<bool> = match (&req.clay, &classes) {
+            (Some(_), Some(c)) => (0..p.active.len()).map(|k| c.is_shell(k)).collect(),
+            _ => Vec::new(),
+        };
+        let clay = req.clay.map(|c| raster::Clay { shell: &shell, shell_srgb: c.shell, contents_srgb: c.contents });
         let params = raster::Params { width: p.width, height: p.height, ssaa: p.ssaa, threads, background_srgb: background, transparent: p.transparent };
-        let drawn = catch_unwind(AssertUnwindSafe(|| raster::render(scene, &p.active, &frame, &params)))
+        let drawn = catch_unwind(AssertUnwindSafe(|| raster::render_with(scene, &p.active, &frame, &params, clay.as_ref())))
             .map_err(|_| Failure::new(FailureCode::RendererError, format!("view {vi}: the rasterizer panicked")))?;
         let (img, stats) = drawn;
         let t1 = Instant::now();
@@ -264,7 +270,7 @@ pub fn render_bytes(input: &[u8], req: &Request, caps: &Caps) -> Result<(Output,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::View;
+    use crate::proto::{Clay, View};
     use crate::scene::{encode, InputLimits};
     use crate::testgen;
 
@@ -452,6 +458,76 @@ mod tests {
         let o = render_bytes(&input, &Request::new(vec![one]), &caps()).expect("one object").0;
         assert_eq!(o.views[0].0.objects, 1);
         assert_eq!(o.views[0].0.framing.as_ref().map(|f| f.contents), Some(true));
+    }
+
+    /// The scene with each object's base colour set to the linear value of its
+    /// class's clay tone: what clay shading must draw, byte for byte.
+    fn painted(s: &crate::scene::Scene, clay: Clay) -> crate::scene::Scene {
+        let all: Vec<u32> = (0..s.objects.len() as u32).collect();
+        let c = contents::classify(s, &all);
+        let mut p = s.clone();
+        for (k, o) in p.objects.iter_mut().enumerate() {
+            let t = if c.is_shell(k) { clay.shell } else { clay.contents };
+            o.base_color = [crate::srgb::to_linear(t[0]), crate::srgb::to_linear(t[1]), crate::srgb::to_linear(t[2]), 1.0];
+        }
+        p
+    }
+
+    /// Clay shading swaps each object's colour for its class's tone and
+    /// changes nothing else: the same bytes as the scene painted in those
+    /// tones, opaque and transparent (the same coverage alpha), on every
+    /// kind of view, with the default tones and with the request's own.
+    #[test]
+    fn clay_is_the_scene_painted_in_two_tones() {
+        let views = vec![
+            View::new(ViewSpec::Auto, 96),
+            View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 96) },
+            View::new(ViewSpec::Turntable(3), 64),
+            View { objects: Some(vec![0, 5, 6]), ..View::new(ViewSpec::Auto, 64) },
+        ];
+        let s = testgen::interior_scene();
+        for tones in [Clay::default(), Clay { shell: [60, 70, 80], contents: [250, 240, 200] }] {
+            for transparent in [false, true] {
+                let mut req = Request::new(views.clone());
+                req.transparent = transparent;
+                let plain = render_bytes(&encode(&painted(&s, tones)), &req, &caps()).expect("painted").0;
+                req.clay = Some(tones);
+                let clay = render_bytes(&encode(&s), &req, &caps()).expect("clay").0;
+                for (i, (a, b)) in plain.views.iter().zip(&clay.views).enumerate() {
+                    assert!(a.1 == b.1, "view {i}, transparent {transparent}, {tones:?}");
+                    assert_eq!((a.0.covered_px, a.0.camera, &a.0.framing), (b.0.covered_px, b.0.camera, &b.0.framing));
+                }
+            }
+        }
+        // (The object view classes its own three objects, the floor, the sofa and the table:
+        // the same classes as in the whole scene, so the painted scene matches it too.)
+        // Clay changes every image.
+        let base = render_bytes(&encode(&s), &Request::new(views.clone()), &caps()).expect("base").0;
+        let mut req = Request::new(views);
+        req.clay = Some(Clay::default());
+        let clay = render_bytes(&encode(&s), &req, &caps()).expect("clay").0;
+        assert!(base.views.iter().zip(&clay.views).all(|(a, b)| a.1 != b.1));
+    }
+
+    /// With clay off, nothing reads the classes: a request without it draws
+    /// the bytes it drew before clay existed (the checked-in digests hold
+    /// that), and naming the default tones is the same as `{}`.
+    #[test]
+    fn clay_off_draws_base_colours_and_default_tones_are_the_default() {
+        let input = encode(&testgen::interior_scene());
+        let views = vec![View::new(ViewSpec::Auto, 80)];
+        let mut a = Request::new(views.clone());
+        a.clay = Some(Clay::default());
+        let mut b = Request::new(views.clone());
+        b.clay = Some(Clay { shell: crate::proto::CLAY_SHELL, contents: crate::proto::CLAY_CONTENTS });
+        assert_eq!(render_bytes(&input, &a, &caps()).expect("a").0.views[0].1, render_bytes(&input, &b, &caps()).expect("b").0.views[0].1);
+        let off = render_bytes(&input, &Request::new(views), &caps()).expect("off").0;
+        let s = testgen::interior_scene();
+        let all: Vec<u32> = (0..s.objects.len() as u32).collect();
+        let f = camera::frame(&s, &all, ViewSpec::Auto, DEFAULT_ASPECT).expect("frame");
+        let p = raster::Params { width: 80, height: 60, ssaa: 4, threads: 1, background_srgb: DEFAULT_BACKGROUND, transparent: false };
+        let (img, _) = raster::render(&s, &all, &f, &p);
+        assert_eq!(off.views[0].1, crate::encode::encode(&img, ImageFormat::Webp).expect("webp"), "the base-colour rasterizer's bytes");
     }
 
     #[test]

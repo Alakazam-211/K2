@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::proto::{FailureCode, ImageFormat, Request, Response, Timings, View, ViewMeta, EXIT_OK, MAX_RESPONSE_LINE, PROTO};
+use crate::proto::{Clay, FailureCode, ImageFormat, Request, Response, Timings, View, ViewMeta, EXIT_OK, MAX_RESPONSE_LINE, PROTO};
 use crate::sandbox::{Args, Caps, SelfLimits};
 use crate::scene::InputLimits;
 
@@ -149,12 +149,14 @@ pub struct SceneRequest<'a> {
     pub transparent: bool,
     /// Samples per axis; `None`: by width.
     pub ssaa: Option<u32>,
+    /// Clay shading in two tones by class; `None`: base colours.
+    pub clay: Option<Clay>,
 }
 
 impl<'a> SceneRequest<'a> {
     /// `views` of `scene`, WebP, the default background and SSAA.
     pub fn new(scene: &'a [u8], views: Vec<View>) -> SceneRequest<'a> {
-        SceneRequest { scene, views, format: ImageFormat::Webp, background: None, transparent: false, ssaa: None }
+        SceneRequest { scene, views, format: ImageFormat::Webp, background: None, transparent: false, ssaa: None, clay: None }
     }
 }
 
@@ -236,6 +238,7 @@ pub fn render_with(bin: &Path, req: &SceneRequest<'_>, limits: &Limits, hostile:
         format: req.format,
         background: req.background,
         transparent: req.transparent,
+        clay: req.clay,
         ssaa: req.ssaa,
         threads: limits.threads.max(1),
         hostile: hostile.map(str::to_string),

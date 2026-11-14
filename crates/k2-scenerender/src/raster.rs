@@ -36,6 +36,10 @@
 //! **Lighting:** base colour x (ambient + key + fill), two directional lights fixed in view space
 //! (so every turntable frame is lit the same way). Smooth (Gouraud, perspective-correct) when the
 //! mesh has normals, flat otherwise.
+//!
+//! **Clay shading** ([`render_with`] and a [`Clay`]): each object's base colour is replaced by
+//! one of two tones, by whether it is shell; nothing else changes (the lights, the coverage
+//! alpha, the order of every operation).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -177,8 +181,24 @@ where
     });
 }
 
+/// Clay shading for [`render_with`]: one tone for the shell, one for the contents, in place of
+/// each object's base colour.
+#[derive(Clone, Copy, Debug)]
+pub struct Clay<'a> {
+    /// Per entry of `active`: shell (`true`) or not.
+    pub shell: &'a [bool],
+    /// The tones, sRGB (made linear through [`srgb::to_linear`]).
+    pub shell_srgb: [u8; 3],
+    pub contents_srgb: [u8; 3],
+}
+
 /// Render the active objects: opaque RGB8 on the background colour, or RGBA8 when transparent.
 pub fn render(scene: &Scene, active: &[u32], frame: &Frame, p: &Params) -> (Image, Stats) {
+    render_with(scene, active, frame, p, None)
+}
+
+/// [`render`], with each object in a clay tone instead of its base colour when `clay` is given.
+pub fn render_with(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&Clay>) -> (Image, Stats) {
     let s = p.ssaa.clamp(1, 4) as i64;
     let ws = p.width as i64 * s;
     let hs = p.height as i64 * s;
@@ -194,7 +214,7 @@ pub fn render(scene: &Scene, active: &[u32], frame: &Frame, p: &Params) -> (Imag
     let mut st = Stats::default();
 
     let t0 = Instant::now();
-    let (objs, vpos, vnor, vfix) = vertex_stage(scene, active, frame, &cam, p.threads);
+    let (objs, vpos, vnor, vfix) = vertex_stage(scene, active, frame, &cam, p.threads, clay);
     st.objects = objs.len() as u64;
     st.vertices = vpos.len() as u64;
     st.triangles = objs.iter().map(|o| o.tris).sum();
@@ -247,12 +267,14 @@ pub fn render(scene: &Scene, active: &[u32], frame: &Frame, p: &Params) -> (Imag
 
 type VertexOut = (Vec<Obj>, Vec<V3>, Vec<V3>, Vec<[i32; 2]>);
 
-fn vertex_stage(scene: &Scene, active: &[u32], frame: &Frame, cam: &Cam, threads: usize) -> VertexOut {
+fn vertex_stage(scene: &Scene, active: &[u32], frame: &Frame, cam: &Cam, threads: usize, clay: Option<&Clay>) -> VertexOut {
     let mut objs = Vec::with_capacity(active.len());
     let mut vb = 0usize;
     let mut tb = 0u64;
     let mut any_smooth = false;
-    for &oi in active {
+    let lin = |c: [u8; 3]| [srgb::to_linear(c[0]), srgb::to_linear(c[1]), srgb::to_linear(c[2])];
+    let tones = clay.map(|c| (c.shell, lin(c.shell_srgb), lin(c.contents_srgb)));
+    for (k, &oi) in active.iter().enumerate() {
         let o = &scene.objects[oi as usize];
         let m = &scene.meshes[o.mesh as usize];
         let smooth = m.normals.is_some();
@@ -262,7 +284,16 @@ fn vertex_stage(scene: &Scene, active: &[u32], frame: &Frame, cam: &Cam, threads
             tbase: tb,
             tris: m.indices.len() as u64,
             mesh: o.mesh as usize,
-            color: [o.base_color[0], o.base_color[1], o.base_color[2]],
+            color: match tones {
+                Some((shell, s, c)) => {
+                    if shell.get(k).copied().unwrap_or(false) {
+                        s
+                    } else {
+                        c
+                    }
+                }
+                None => [o.base_color[0], o.base_color[1], o.base_color[2]],
+            },
             cull: o.double_sided == Some(false),
             mirror: m3_det(&m4_from_f32(&o.transform)) < 0.0,
             smooth,

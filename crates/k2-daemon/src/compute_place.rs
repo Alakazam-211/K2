@@ -1860,23 +1860,14 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
             };
             (code, with_free(format!("starts now · {what}")), None)
         }
-        Tier::Busy => match c.wait_eta(w) {
-            Some((e, "quote")) => (
-                "queued_quoted_eta",
-                with_elsewhere(with_tools(format!("no node free now; shortest wait {} (quoted) · it moves if another frees up first", wait_words(e)))),
-                Some(e),
-            ),
-            Some((e, _)) => (
-                "queued_est_wait",
-                with_elsewhere(with_tools(format!("no node free now; shortest wait {} (estimate) · it moves if another frees up first", wait_words(e)))),
-                Some(e),
-            ),
-            None => (
-                "queued_least_busy",
-                with_elsewhere(with_tools(format!("no node free now; least busy ({} running, {} queued) · it moves if another frees up first", c.running_now(), c.queued))),
-                None,
-            ),
-        },
+        Tier::Busy => {
+            let (code, why, eta) = match c.wait_eta(w) {
+                Some((e, "quote")) => ("queued_quoted_eta", format!("no node free now; shortest wait {} (quoted) · it moves if another frees up first", wait_words(e)), Some(e)),
+                Some((e, _)) => ("queued_est_wait", format!("no node free now; shortest wait {} (estimate) · it moves if another frees up first", wait_words(e)), Some(e)),
+                None => ("queued_least_busy", format!("no node free now; least busy ({} running, {} queued) · it moves if another frees up first", c.running_now(), c.queued), None),
+            };
+            (code, with_elsewhere(with_tools(why)), eta)
+        }
         Tier::Offline => ("queued_offline_only", "no matching node is online; queued on the one seen most recently · it moves to the first that comes online".to_string(), None),
     };
     store::Placement {
@@ -3316,25 +3307,6 @@ mod tests {
         let rec = placement_record(&q[0], Tier::Busy, &want(2), &ex, 1);
         assert_eq!((rec.code.as_str(), rec.eta_secs, rec.starts_now), ("queued_quoted_eta", Some(330), Some(false)));
         assert_eq!(rec.why, "no node can start it now (it asks 2G): q (full: 2 of 2 jobs run); shortest wait ~6 min (quoted) · it moves if another frees up first");
-        // Every usable node short of the job's --cpus: their unreserved
-        // CPUs, best first (one node full of other servers' jobs marked).
-        let mut w8 = want(2);
-        w8.cpu_millis = Some(8000);
-        let mut a = cand("k2n7", 30, 32, 2, 4);
-        a.offer.caps.cpu_millis = 12_000;
-        a.offer.free.cpu_millis = 4_000;
-        let mut b = shared(cand("k2n10", 30, 32, 0, 4), None);
-        b.offer.running = 3;
-        b.offer.caps.cpu_millis = 12_000;
-        b.offer.free.cpu_millis = 0;
-        let busy = [a, b];
-        let ex = Explain { policy: V2, cands: &busy, skipped: &BTreeMap::new(), project_key: None, commit: None };
-        let rec = placement_record(&busy[0], Tier::Busy, &w8, &ex, 1);
-        assert_eq!(rec.code, "queued_least_busy", "{rec:?}");
-        assert_eq!(
-            rec.why,
-            "no node has 8 free CPUs now: k2n7 4/12, k2n10 0/12 (other servers' jobs) unreserved; least busy (2 running, 0 queued) · it moves if another frees up first"
-        );
         let rec = placement_record(&q[0], Tier::Offline, &want(2), &ex, 1);
         assert_eq!(rec.code, "queued_offline_only");
         // A pinned job's record.

@@ -440,4 +440,26 @@ mod tests {
         assert_eq!(elsewhere_words(&[off], &w, true), None);
         assert_eq!(elsewhere_words(&[], &w, true), None);
     }
+
+    /// The placement record of a job that waits says why no node it may
+    /// use starts it now, in place of "no node free now".
+    #[test]
+    fn a_waiting_placement_names_each_nodes_room() {
+        use crate::compute_place::{placement_record, Explain, Tier};
+        use std::collections::BTreeMap;
+        let mut w = want(2);
+        w.cpu_millis = Some(8000);
+        let mut a = cand("k2n7", 30, 32, 2, 4);
+        a.offer.caps.cpu_millis = 12_000;
+        a.offer.free.cpu_millis = 4_000;
+        let busy = [a, other_servers("k2n10", 12_000, 0, 3)];
+        let skipped = BTreeMap::new();
+        let ex = Explain { policy: k2_core::compute::PlacementPolicy::V2, cands: &busy, skipped: &skipped, project_key: None, commit: None };
+        let rec = placement_record(&busy[0], Tier::Busy, &w, &ex, 1);
+        assert_eq!(rec.code, "queued_least_busy", "{rec:?}");
+        assert_eq!(
+            rec.why,
+            "no node has 8 free CPUs now: k2n7 4/12, k2n10 0/12 (other servers' jobs) unreserved; least busy (2 running, 0 queued) · it moves if another frees up first"
+        );
+    }
 }

@@ -13,6 +13,15 @@ K2_CLI_VERSION="0.46.12"
 
 set -euo pipefail
 
+# The name this script was called by: k2, or k5 once a link of that name
+# exists. Anything else (a copy under another name, a test's path) counts
+# as k2. Nothing reads it yet; the notice that tells callers of k2 to use
+# k5 will.
+case "${0##*/}" in
+    k5) _K2_CALLED_AS="k5" ;;
+    *)  _K2_CALLED_AS="k2" ;;
+esac
+
 # Windows (Git Bash): `python3` is usually the Microsoft Store stub, and
 # Python there writes CRLF to pipes. Use whichever real Python 3 answers
 # (`python3`, `py -3`, `python`) and drop the CRs from its stdout, so every

@@ -55,12 +55,16 @@ export function groupNumeralPx(px: number): number {
   return px <= 8 ? 9 : 11
 }
 
-/** The Groups dialog: at most 720 × 540, kept 16 px from the window's sides
+/** The Groups dialog: at most 880 × 640, kept 16 px from the window's sides
  *  and 24 px from its top and bottom. Two panes need 640 px of width. */
-export const GROUP_DIALOG_MAX = { width: 720, height: 540 } as const
+export const GROUP_DIALOG_MAX = { width: 880, height: 640 } as const
 export const GROUP_DIALOG_MARGIN = { x: 16, y: 24 } as const
 export const GROUP_DIALOG_TWO_PANE_MIN = 640
 export const GROUP_DIALOG_LIST_PX = 220
+/** Both panes' footers (New group, Delete group): one height, border
+ *  included, with the line on top, so the two lines meet exactly. */
+export const GROUP_DIALOG_FOOT_PX = 45
+export const GROUP_DIALOG_FOOT_CLASS = 'box-border flex h-[45px] flex-shrink-0 items-center border-t border-[var(--color-border)]'
 
 export interface GroupDialogSize {
   width: number

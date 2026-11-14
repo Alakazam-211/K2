@@ -21,6 +21,7 @@ import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { HOME_NAME_MAX } from '@/stores/homes'
 import { Segmented } from '@/components/ui/Segmented'
 import GroupIconPicker from './GroupIconPicker'
+import { GROUP_DIALOG_FOOT_CLASS } from './group-bar-look'
 import GroupAgentsPane from './GroupAgentsPane'
 import type { GroupBarItem } from './HomeGroupBar'
 
@@ -132,13 +133,14 @@ export default function GroupDetailPane({
         </div>
       </div>
 
-      <div className="flex-shrink-0 px-5 pb-2.5" data-group-detail-tabs="">
+      {/* The segments hug their choices (People and Channels join later),
+          left-aligned, not the pane's width. */}
+      <div className="flex flex-shrink-0 justify-start px-5 pb-2.5" data-group-detail-tabs="">
         <Segmented
           aria-label={`${group.name}: show`}
           value={tab}
           onChange={(t) => onTab?.(t)}
           options={GROUP_DETAIL_TABS.map((t) => ({ value: t.value, label: t.label, buttonProps: { 'data-group-detail-tab': t.value } }))}
-          className="w-full"
         />
       </div>
 
@@ -148,7 +150,7 @@ export default function GroupDetailPane({
         <GroupIconPicker groupId={group.id} icon={group.icon} index={index} onSetIcon={onSetIcon} onPicked={() => setSaved(true)} />
       )}
 
-      <div className="flex min-h-12 flex-shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-5 py-2" data-group-delete-row="">
+      <div className={`${GROUP_DIALOG_FOOT_CLASS} gap-3 px-5`} data-group-delete-row="" data-group-dialog-foot="detail">
         {confirming ? (
           <div className="flex min-w-0 flex-1 items-center gap-3" data-group-delete-confirm="">
             <span className="min-w-0 flex-1 text-[11px] leading-[1.45] text-[var(--color-text-secondary)]">

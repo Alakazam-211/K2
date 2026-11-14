@@ -89,7 +89,7 @@ function GroupAgentsList({ home }: { home: Home }): React.JSX.Element {
   const toggle = (a: AddableAgent, on: boolean): void => {
     setFocusValue(a.value)
     if (on) add(a.value)
-    else useHomesStore.getState().removeRow(home.id, a.address)
+    else useHomesStore.getState().removeRow(home.id, a.rowAddress ?? a.address)
   }
 
   const move = (from: HTMLElement, dir: 1 | -1): void => {

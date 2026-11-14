@@ -37,6 +37,8 @@ import { hostPool } from '@/lib/host-pool-instance'
 import {
   LOCAL_HOME_HOST,
   activeHomeHostKey,
+  findWorkspaceForRow,
+  parseHomeAddress,
   homeAddress,
   homeHostKey,
   workspaceHandle,
@@ -587,6 +589,9 @@ export interface AddableAgent {
   avatar: AgentListAvatar
   /** Already a row on the Home asked about. */
   inGroup: boolean
+  /** That row's address (it may be an older one: a renamed handle the row
+   *  still finds by its workspace id, as the nav does); null when not in. */
+  rowAddress: string | null
   /** What the search reads besides the name: handle and path. */
   keywords: string[]
 }
@@ -629,16 +634,30 @@ export function useAddableAgents(
 
   const built = useMemo(() => {
     const values = new Map<string, { hostKey: string; w: ListedWorkspace }>()
-    const agentOf = (hostKey: string, w: ListedWorkspace, avatar: AgentListAvatar): AddableAgent | null => {
+    /** Each of `list`'s workspaces that a row of `home` on `hostKey` points
+     *  at → that row's address, matched the way the nav matches its rows
+     *  (`findWorkspaceForRow`: the handle, else the stored workspace id). */
+    const rowsFor = (hostKey: string, list: ListedWorkspace[]): Map<string, string> => {
+      const out = new Map<string, string>()
+      for (const r of home.rows) {
+        if (parseHomeAddress(r.address)?.host !== hostKey) continue
+        const w = findWorkspaceForRow(list, r)
+        if (w && !out.has(w.id)) out.set(w.id, r.address)
+      }
+      return out
+    }
+    const agentOf = (hostKey: string, w: ListedWorkspace, avatar: AgentListAvatar, rows: Map<string, string>): AddableAgent | null => {
       const handle = workspaceHandle(w)
       if (!handle) return null
       const value = `${w.id}@${hostKey}`
       const address = homeAddress(handle, hostKey)
       values.set(value, { hostKey, w })
-      return { value, name: w.name, handle, address, avatar, inGroup: onHome.has(address), keywords: [handle, w.path ?? ''] }
+      const rowAddress = rows.get(w.id) ?? (onHome.has(address) ? address : null)
+      return { value, name: w.name, handle, address, avatar, inGroup: rowAddress !== null, rowAddress, keywords: [handle, w.path ?? ''] }
     }
     const sources: AddableSource[] = []
     const here: AddableAgent[] = []
+    const hereRows = rowsFor(connectedKey, projects)
     for (const p of projects) {
       const a = agentOf(connectedKey, p, {
         kind: 'workspace',
@@ -649,7 +668,7 @@ export function useAddableAgents(
         iconUrl: p.iconUrl,
         // The connected server is the one `primaryScope()` asks.
         fetchIcon: true,
-      })
+      }, hereRows)
       if (a) here.push(a)
     }
     sources.push({
@@ -667,6 +686,7 @@ export function useAddableAgents(
         const agents: AddableAgent[] = []
         if (listing.kind === 'ok') {
           const sorted = [...listing.workspaces].sort((a, b) => a.name.localeCompare(b.name))
+          const serverRows = rowsFor(s.key, sorted)
           for (const w of sorted) {
             const handle = workspaceHandle(w)
             const address = handle ? homeAddress(handle, s.key) : null
@@ -680,7 +700,7 @@ export function useAddableAgents(
               id: w.id,
               iconUrl: listedIconUrl(w.iconUrl) ?? (address && avatarFor ? avatarFor(address) : null),
               fetchIcon: false,
-            })
+            }, serverRows)
             if (a) agents.push(a)
           }
         }
@@ -688,7 +708,7 @@ export function useAddableAgents(
       }
     }
     return { sources, values }
-  }, [projects, connectedKey, activeHost, onHome, servers, listings, load, avatarFor, web])
+  }, [projects, connectedKey, activeHost, home.rows, onHome, servers, listings, load, avatarFor, web])
 
   const add = useCallback(
     (value: string): string | null => {

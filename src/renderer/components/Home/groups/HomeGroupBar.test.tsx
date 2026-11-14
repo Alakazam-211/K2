@@ -305,6 +305,16 @@ describe('the Groups dialog: Agents | Icon', () => {
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).not.toContain('nova::local')
   })
 
+  it('a row the nav finds by its workspace id (an old handle) counts as in: ticked, and unticking removes that row', () => {
+    act(() => useHomesStore.getState().addRow(studio().id, { address: 'oldnova::local', workspaceId: 'pn', label: 'Nova' }))
+    render(<Wired />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Studio)' }))
+    expect([check('Cortana').checked, check('Nova').checked, check('Quill').checked]).toEqual([true, true, false])
+    expect(modal().querySelector('[data-group-agents-count]')?.textContent).toBe('2 in Studio')
+    fireEvent.click(check('Nova'))
+    expect(studio().rows.map((r) => r.address)).toEqual(['cortana::local'])
+  })
+
   it('the search narrows the list; the list is one tab stop and ↑/↓ move through it', () => {
     render(<Wired />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Studio)' }))

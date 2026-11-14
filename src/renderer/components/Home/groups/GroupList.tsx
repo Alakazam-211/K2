@@ -14,6 +14,7 @@ import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { GroupGlyph } from './GroupGlyph'
 import type { GroupBarItem } from './HomeGroupBar'
+import { GROUP_DIALOG_FOOT_CLASS } from './group-bar-look'
 
 export interface GroupListProps {
   groups: readonly GroupBarItem[]
@@ -176,7 +177,7 @@ export default function GroupList({
           {lineAt === groups.length && <DropLine />}
         </ul>
       </ScrollEdgeFrame>
-      <div className="flex-shrink-0 border-t border-[var(--color-border)] px-2 pb-2.5 pt-1.5">
+      <div className={`${GROUP_DIALOG_FOOT_CLASS} px-2`} data-group-dialog-foot="list">
         <button
           type="button"
           data-group-create=""

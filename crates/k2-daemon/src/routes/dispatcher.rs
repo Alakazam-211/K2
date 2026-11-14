@@ -8750,6 +8750,12 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // People and channels on Home (prd-home-people-channels-v1 S3): the
+        // family answers itself (dark, POST guards, the person check, WS).
+        p if crate::home_chat::routes::is_route(p) => {
+            crate::home_chat::serve(&mut *stream, &mut buf, p, &path, &query, is_post, bearer_token.as_deref(), state.token.as_str()).await;
+            return DispatchOutcome::Done;
+        }
         // WS /cli/voice/events (prd-voice-chat-only-members-v1 §6.3): only
         // `voice_rooms_changed`. Any live login (a Voice & Chat only one
         // included, the VoiceChat row) or the owner token; dark like the

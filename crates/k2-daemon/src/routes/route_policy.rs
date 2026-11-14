@@ -154,6 +154,30 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/cli/zen/remote/lib/fetch"),
     ("GET", "/cli/zen/remote/page"),
     ("GET", "/cli/zen/remote/sources-changes"),
+    // People and channels on Home (prd-home-people-channels-v1 HP-11):
+    // every Home chat route and its events socket; the handler takes a
+    // person's own login only and checks channel rights against K2's ledger.
+    ("POST", "/cli/home-chat/ack"),
+    ("GET", "/cli/home-chat/channels"),
+    ("POST", "/cli/home-chat/channels/add"),
+    ("POST", "/cli/home-chat/channels/allow-agents"),
+    ("POST", "/cli/home-chat/channels/create"),
+    ("POST", "/cli/home-chat/channels/delete"),
+    ("POST", "/cli/home-chat/channels/leave"),
+    ("GET", "/cli/home-chat/channels/members"),
+    ("POST", "/cli/home-chat/channels/remove"),
+    ("POST", "/cli/home-chat/channels/rename"),
+    ("POST", "/cli/home-chat/dm"),
+    ("GET", "/cli/home-chat/events"),
+    ("GET", "/cli/home-chat/messages"),
+    ("GET", "/cli/home-chat/people"),
+    ("POST", "/cli/home-chat/react"),
+    ("GET", "/cli/home-chat/reactors"),
+    ("POST", "/cli/home-chat/send"),
+    ("GET", "/cli/home-chat/status"),
+    ("GET", "/cli/home-chat/summary"),
+    ("POST", "/cli/home-chat/typing"),
+    ("POST", "/cli/home-chat/view"),
 ];
 
 /// `Public` rows a Voice & Chat only login's token may be presented on
@@ -189,6 +213,8 @@ mod rows_app;
 mod rows_compute;
 #[path = "policy/core.rs"]
 mod rows_core;
+#[path = "policy/home_chat.rs"]
+mod rows_home_chat;
 #[path = "policy/mail.rs"]
 mod rows_mail;
 #[path = "policy/sew.rs"]
@@ -206,8 +232,8 @@ mod rows_zen;
 /// compiled: a row out of order in its file, or a path listed twice, fails
 /// the build.
 pub const ROUTES: &[Route] = &MERGED;
-const PARTS: &[&[Route]] = &[rows_app::ROWS, rows_compute::ROWS, rows_core::ROWS, rows_mail::ROWS, rows_sew::ROWS, rows_skin::ROWS, rows_vault::ROWS, rows_zen::ROWS];
-const TOTAL: usize = rows_app::ROWS.len() + rows_compute::ROWS.len() + rows_core::ROWS.len() + rows_mail::ROWS.len() + rows_sew::ROWS.len() + rows_skin::ROWS.len() + rows_vault::ROWS.len() + rows_zen::ROWS.len();
+const PARTS: &[&[Route]] = &[rows_app::ROWS, rows_compute::ROWS, rows_core::ROWS, rows_home_chat::ROWS, rows_mail::ROWS, rows_sew::ROWS, rows_skin::ROWS, rows_vault::ROWS, rows_zen::ROWS];
+const TOTAL: usize = rows_app::ROWS.len() + rows_compute::ROWS.len() + rows_core::ROWS.len() + rows_home_chat::ROWS.len() + rows_mail::ROWS.len() + rows_sew::ROWS.len() + rows_skin::ROWS.len() + rows_vault::ROWS.len() + rows_zen::ROWS.len();
 const MERGED: [Route; TOTAL] = merge_rows(PARTS);
 
 /// The row files merged into one table sorted by path.
@@ -1679,8 +1705,9 @@ mod tests {
             VOICE_CHAT_ALLOWLIST.iter().map(|(m, p)| (m.to_string(), p.to_string())).collect();
         assert_eq!(list.len(), VOICE_CHAT_ALLOWLIST.len(), "the allowlist has a duplicate");
         assert_eq!(table, list, "VoiceChat rows in ROUTES vs VOICE_CHAT_ALLOWLIST");
-        // The PRD's 14 rows plus the reviewer shares (3 + 8 Garden reads).
-        assert_eq!(list.len(), 14 + 3 + 8);
+        // The PRD's 14 rows plus the reviewer shares (3 + 8 Garden reads),
+        // plus Home chat's 21 (prd-home-people-channels-v1 HP-11).
+        assert_eq!(list.len(), 14 + 3 + 8 + 21);
         for p in VOICE_CHAT_PUBLIC {
             let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
             assert!(

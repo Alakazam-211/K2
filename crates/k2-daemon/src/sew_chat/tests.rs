@@ -1481,3 +1481,7 @@ fn store_rows(p: &str) -> Vec<store::Access> {
 /// S31 K24: the delivery hub's verbs (same fake Sew and helpers).
 #[path = "tests_hub.rs"]
 mod hub_verbs;
+
+/// Sew chat is for people: the agent refusals of prd-home-people-channels-v1.
+#[path = "tests_home_gate.rs"]
+mod home_gate_verbs;

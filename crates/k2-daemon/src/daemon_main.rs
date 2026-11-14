@@ -2061,6 +2061,10 @@ async fn async_main() {
     // (holds nothing, sends nothing) while voice_rooms_preview is off.
     let _voice_occupancy_handle = crate::voice::occupancy::spawn();
 
+    // People and channels on Home: the held person sessions and their
+    // followers. Idle (holds nothing) while the homeChat switch is off.
+    crate::home_chat::follower::spawn();
+
     // Remote desktop (D6): the routes and the stream talk to the real
     // K2 Screen (k2-deskd); a switch left on starts it again.
     crate::desktop::managed::boot();

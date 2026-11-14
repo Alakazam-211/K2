@@ -301,6 +301,8 @@ impl FakeSew {
                 message_kind: None,
                 wake: None,
                 response: None,
+                reactions: Vec::new(),
+                reference: None,
             },
             mentions: mentions.iter().map(|m| m.to_string()).collect(),
             followers: [author.to_string()].into_iter().collect(),

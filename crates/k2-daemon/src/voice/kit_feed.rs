@@ -51,6 +51,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use super::bff::Refusal;
+use crate::sew::gateway;
 use super::kit_door::{self, call_as, dec, KitCtx, KitPerson, Out, RETRY_SECS};
 
 /// Reconnect: Sew's socket ended, or a check failed. A fresh READY follows.
@@ -293,13 +294,7 @@ fn sew_down(hint: &str) -> Out {
 }
 
 async fn next_frame(ws: &mut WebSocketStream<TcpStream>) -> Option<Value> {
-    loop {
-        match ws.next().await? {
-            Ok(Message::Text(t)) => return serde_json::from_str(&t).ok(),
-            Ok(Message::Close(_)) | Err(_) => return None,
-            Ok(_) => continue,
-        }
-    }
+    gateway::next_frame(ws).await
 }
 
 async fn open_upstream(ctx: &KitCtx, p: &KitPerson, sew_addr: &str) -> Result<Upstream, Out> {
@@ -313,36 +308,23 @@ async fn open_upstream(ctx: &KitCtx, p: &KitPerson, sew_addr: &str) -> Result<Up
         .and_then(|v| v.get("ticket").and_then(Value::as_str).map(str::to_string))
         .filter(|t| !t.is_empty())
         .ok_or_else(|| sew_down("Sew's ticket answer had no ticket"))?;
-    // Sew's loopback listener, never the URL in the answer.
+    // Sew's loopback listener, never the URL in the answer. The socket is
+    // K2's shared gateway client (`sew::gateway`, HP-37).
     let sa = kit_door::loopback(sew_addr).map_err(|e| sew_down(&e))?;
-    let tcp = TcpStream::connect(sa).await.map_err(|_| sew_down("K2 could not reach this server's Sew"))?;
-    let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{sa}/api/v1/gateway?v=1&encoding=json"), tcp)
-        .await
-        .map_err(|_| sew_down("Sew refused the event socket"))?;
-    let hello = next_frame(&mut ws).await.ok_or_else(|| sew_down("Sew closed the event socket"))?;
-    if hello.get("op").and_then(Value::as_u64) != Some(8) {
-        return Err(sew_down("Sew's event socket didn't say hello"));
-    }
-    let beat_ms = hello.pointer("/d/heartbeat_interval_ms").and_then(Value::as_u64).unwrap_or(30_000).clamp(1_000, 120_000);
-    let identify = json!({
-        "op": 2,
-        "d": {
-            "ticket": ticket,
-            "client": { "name": "k2-voice-door", "version": env!("CARGO_PKG_VERSION") },
-            "capabilities": 0,
-        },
-    });
-    ws.send(Message::Text(identify.to_string())).await.map_err(|_| sew_down("Sew closed the event socket"))?;
+    let gateway::Socket { mut ws, beat } = gateway::connect(sa).await.map_err(|e| match e {
+        gateway::OpenError::Unreachable => sew_down("K2 could not reach this server's Sew"),
+        gateway::OpenError::Refused => sew_down("Sew refused the event socket"),
+        gateway::OpenError::Closed => sew_down("Sew closed the event socket"),
+        gateway::OpenError::NoHello => sew_down("Sew's event socket didn't say hello"),
+    })?;
+    gateway::send(&mut ws, &gateway::identify(&ticket, "k2-voice-door")).await.map_err(|_| sew_down("Sew closed the event socket"))?;
     loop {
-        let f = next_frame(&mut ws).await.ok_or_else(|| sew_down("Sew closed the event socket before READY"))?;
-        match f.get("op").and_then(Value::as_u64) {
-            Some(0) if f.get("t").and_then(Value::as_str) == Some("ready") => {
-                let ready_s = f.get("s").and_then(Value::as_u64);
-                let ready = f.get("d").cloned().unwrap_or(Value::Null);
-                return Ok(Upstream { ws, ready, ready_s, beat: Duration::from_millis(beat_ms) });
-            }
-            Some(7) => return Err(sew_down("Sew refused the event session")),
-            _ => continue,
+        match gateway::started(&mut ws).await {
+            None => return Err(sew_down("Sew closed the event socket before READY")),
+            Some(gateway::Started::Ready { d, s }) => return Ok(Upstream { ws, ready: d, ready_s: s, beat }),
+            Some(gateway::Started::Invalid { .. }) => return Err(sew_down("Sew refused the event session")),
+            // Never sent a RESUME: keep reading.
+            Some(gateway::Started::Resumed) => continue,
         }
     }
 }

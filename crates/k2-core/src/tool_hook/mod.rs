@@ -1329,6 +1329,16 @@ pub fn sew_voice_features() -> Result<features::VoiceFeatures, String> {
     crate::skin::with_skin_conn(|conn| features::VoiceFeatures::read(conn, CHAT_KIND))
 }
 
+/// Sew 0.10.0's Home chat flags ([`features::HomeChatFeatures`]), from the
+/// one list the last status refresh recorded (all false before any sweep,
+/// or on a box without Sew).
+pub fn sew_home_chat_features() -> Result<features::HomeChatFeatures, String> {
+    if !skin_store_exists() {
+        return Ok(features::HomeChatFeatures::default());
+    }
+    crate::skin::with_skin_conn(|conn| features::HomeChatFeatures::read(conn, CHAT_KIND))
+}
+
 /// Sew 0.9.0's recording flags ([`features::RecordingFeatures`]), from the
 /// one list the last status refresh recorded (all false before any sweep,
 /// on a box without Sew, and on Sew 0.8.x).

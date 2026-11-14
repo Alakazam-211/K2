@@ -98,6 +98,7 @@ fn usable_channels(c: &Caller) -> R<Vec<Channel>> {
             Some(s) => rows.iter().any(|r| &r.space_id == s),
             None => dms_ok,
         })
+        .filter(|ch| super::home_gate::visible(c, &a, ch))
         .collect())
 }
 
@@ -193,6 +194,7 @@ fn follow(c: &Caller, body: &[u8], on: bool) -> R<Value> {
         let id = sew::sew_msg_id(to).ok_or_else(|| usage("a thread is msg_…"))?;
         let m = sew.message(&a, &id).map_err(sew_err)?;
         let ch = sew.channel(&a, &m.channel_id).map_err(sew_err)?;
+        super::home_gate::refuse_notifications(&ch)?;
         access_for(c, sew.as_ref(), &a, &ch)?;
         let root = m.reply_to.clone().unwrap_or(m.id.clone());
         sew.follow_thread(&a, &root, on).map_err(sew_err)?;
@@ -207,6 +209,7 @@ fn follow(c: &Caller, body: &[u8], on: bool) -> R<Value> {
     if ch.kind.is_dm() {
         return Err(usage("DMs always reach you; follow a Space channel (<space>/<channel>) or a thread (msg_…)"));
     }
+    super::home_gate::refuse_notifications(&ch)?;
     access_for(c, sew.as_ref(), &a, &ch)?;
     sew.follow_channel(&a, &ch.id, on).map_err(sew_err)?;
     let addr = sew::channel_addr(&ch);

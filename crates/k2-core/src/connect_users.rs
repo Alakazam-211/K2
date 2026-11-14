@@ -2064,6 +2064,13 @@ pub fn live_push_session_sids() -> Result<std::collections::HashSet<String>, Str
     Ok(live_sessions_at(Utc::now())?.0)
 }
 
+/// The usernames with at least one live login session right now (desktop,
+/// browser or paired phone): Home chat holds a person's Sew session only
+/// while this lists them (prd-home-people-channels-v1 HP-24). Read-only.
+pub fn live_session_usernames() -> Result<std::collections::HashSet<String>, String> {
+    Ok(live_sessions_at(Utc::now())?.1)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Brute-force lockout (persisted, per-username)
 // ─────────────────────────────────────────────────────────────────────

@@ -53,6 +53,7 @@ pub mod app_recordings;
 pub mod autosetup;
 pub mod box_backup;
 pub mod fetch;
+pub mod gateway;
 pub mod health;
 pub mod governed;
 pub mod home;

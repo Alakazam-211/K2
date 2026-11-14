@@ -27,6 +27,7 @@
 
 #[cfg(unix)]
 pub mod client;
+pub mod home_gate;
 pub mod hub;
 pub mod install;
 pub mod routes;

@@ -1314,6 +1314,10 @@ pub fn features() -> Vec<&'static str> {
     if crate::voice::occupancy::hosts_rooms() {
         out.push(FEATURE_VOICE_ROOMS);
     }
+    // People and channels on Home: on, Linux, Sew set up, K5 Space ready.
+    if let Some(k) = crate::home_chat::boot_status_key() {
+        out.push(k);
+    }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out

@@ -1083,6 +1083,27 @@ pub(crate) fn map_message(m: &PMessage, authors: &HashMap<String, MemberRef>) ->
         message_kind: None,
         wake: None,
         response: None,
+        reactions: m
+            .reactions
+            .iter()
+            .map(|r| super::sew::Reaction { emoji: emoji_text(&r.emoji), count: r.count, me: r.me })
+            .collect(),
+        reference: m.reference.as_ref().map(|r| super::sew::Reference {
+            message_id: r.message_id.to_string(),
+            kind: serde_json::to_value(r.kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
+        }),
+    }
+}
+
+/// A Sew emoji as text: the Unicode itself, or `:name:` for a custom one.
+fn emoji_text(e: &sew_client::proto::api::messages::Emoji) -> String {
+    match serde_json::to_value(e) {
+        Ok(v) => match (v["kind"].as_str(), v["value"].as_str(), v["name"].as_str()) {
+            (Some("unicode"), Some(u), _) => u.to_string(),
+            (_, _, Some(n)) => format!(":{n}:"),
+            _ => String::new(),
+        },
+        Err(_) => String::new(),
     }
 }
 

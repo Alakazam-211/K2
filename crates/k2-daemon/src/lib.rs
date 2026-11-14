@@ -70,6 +70,9 @@ pub mod voice_admin;
 // Voice rooms (preview), lane C: the voice BFF, occupancy feed, moderation
 // and `/cli/voice/*`.
 pub mod voice;
+// People and channels on Home (prd-home-people-channels-v1 S2/S3): held
+// person sessions, the Sew gateway follower and `/cli/home-chat/*`.
+pub mod home_chat;
 pub mod feedback_routes;
 pub mod federation_rosters;
 pub mod federation_routes;

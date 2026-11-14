@@ -85,6 +85,30 @@ fn base_message() -> Value {
     })
 }
 
+/// S0: reactions and an inline reply reference survive the mapping (K2
+/// used to drop both), and an inline reply is not a sub-thread.
+#[test]
+fn messages_keep_reactions_and_the_inline_reference() {
+    let mut v = base_message();
+    v["reactions"] = json!([
+        {"emoji": {"kind": "unicode", "value": "👍"}, "count": 3, "me": true},
+        {"emoji": {"kind": "custom", "id": "77", "name": "party"}, "count": 1, "me": false},
+    ]);
+    v["reference"] = json!({"kind": "reply", "message_id": "499", "channel_id": "301"});
+    let m = map_message(&pmessage(v), &HashMap::new());
+    assert_eq!(
+        m.reactions,
+        vec![
+            crate::sew_chat::sew::Reaction { emoji: "👍".into(), count: 3, me: true },
+            crate::sew_chat::sew::Reaction { emoji: ":party:".into(), count: 1, me: false },
+        ]
+    );
+    assert_eq!(m.reference, Some(crate::sew_chat::sew::Reference { message_id: "499".into(), kind: "reply".into() }));
+    assert_eq!(m.reply_to, None, "an inline reply is not a thread reply");
+    let m = map_message(&pmessage(base_message()), &HashMap::new());
+    assert!(m.reactions.is_empty() && m.reference.is_none());
+}
+
 #[test]
 fn messages_map_authors_threads_mentions_and_tombstones() {
     let mut authors = HashMap::new();

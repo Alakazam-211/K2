@@ -148,6 +148,30 @@ pub struct Message {
     pub message_kind: Option<String>,
     pub wake: Option<bool>,
     pub response: Option<serde_json::Value>,
+    /// Reaction counts per emoji (prd-home-people-channels-v1 S0; Sew
+    /// carries them on every message, K2 used to drop them).
+    pub reactions: Vec<Reaction>,
+    /// An inline reply or quote (`reference {message_id, kind}`), never a
+    /// sub-thread (that is [`Message::reply_to`]).
+    pub reference: Option<Reference>,
+}
+
+/// One emoji's reactions on a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reaction {
+    /// The Unicode emoji, or `:name:` for a custom one.
+    pub emoji: String,
+    pub count: u32,
+    /// The viewer reacted with it.
+    pub me: bool,
+}
+
+/// A message's inline reference to another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reference {
+    pub message_id: String,
+    /// `reply` | `quote` | `forward`.
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

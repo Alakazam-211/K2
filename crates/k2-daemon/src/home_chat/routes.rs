@@ -1,0 +1,606 @@
+//! `/cli/home-chat/*` (prd-home-people-channels-v1 §14.4; slice S3).
+//!
+//! Every route takes a person's own login on this server ([`super::people`]):
+//! the owner token, agent passports and App sessions get 403. Reads and
+//! posts go through the person's own held Sew session, so Sew checks what
+//! they may see and do. What mgmt does for them (make, add, remove, rename,
+//! archive) K2 checks first against its ledger (HP-19): any channel member
+//! adds people, Owner and Admins remove others, the creator or an Owner or
+//! Admin renames and deletes, only an Owner or Admin allows agents.
+//! Every POST route answers 405 to anything else. Dark (404
+//! `home_chat_off`) while the switch is off (the dispatcher answers that).
+
+use std::collections::HashMap;
+
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use k2_core::tool_hook::{self as hook, admin_channels as ledger};
+
+use super::follower::{self, op};
+use super::people::{self, Caller};
+use super::{deps, now_secs};
+use crate::cli_response::CliResponse;
+use crate::voice::bff::{sew_refusal, Refusal, SewAnswer};
+use crate::voice::routes::refuse;
+
+pub const EVENTS: &str = "/cli/home-chat/events";
+
+/// GET rows.
+pub const GET_ROUTES: &[&str] = &[
+    "/cli/home-chat/channels",
+    "/cli/home-chat/channels/members",
+    "/cli/home-chat/messages",
+    "/cli/home-chat/people",
+    "/cli/home-chat/reactors",
+    "/cli/home-chat/status",
+    "/cli/home-chat/summary",
+];
+
+/// POST-only rows (405 on anything else).
+pub const POST_ROUTES: &[&str] = &[
+    "/cli/home-chat/ack",
+    "/cli/home-chat/channels/add",
+    "/cli/home-chat/channels/allow-agents",
+    "/cli/home-chat/channels/create",
+    "/cli/home-chat/channels/delete",
+    "/cli/home-chat/channels/leave",
+    "/cli/home-chat/channels/remove",
+    "/cli/home-chat/channels/rename",
+    "/cli/home-chat/dm",
+    "/cli/home-chat/react",
+    "/cli/home-chat/send",
+    "/cli/home-chat/typing",
+    "/cli/home-chat/view",
+];
+
+/// Largest request body.
+pub const MAX_BODY: usize = 64 * 1024;
+
+pub fn is_route(p: &str) -> bool {
+    p == EVENTS || GET_ROUTES.contains(&p) || POST_ROUTES.contains(&p)
+}
+
+pub fn is_post_route(p: &str) -> bool {
+    POST_ROUTES.contains(&p)
+}
+
+type R<T> = Result<T, Refusal>;
+
+fn usage(hint: impl Into<String>) -> Refusal {
+    Refusal::new(400, "usage", hint)
+}
+
+fn internal(e: impl std::fmt::Display) -> Refusal {
+    Refusal::new(500, "internal", e.to_string())
+}
+
+/// The family is dark while the switch is off.
+pub fn dark() -> CliResponse {
+    refuse(&Refusal::new(
+        404,
+        "home_chat_off",
+        "people and channels on Home are off on this server (the owner turns them on: k2 settings set homeChat true, or K2_HOME_CHAT=1)",
+    ))
+}
+
+/// Run one route (blocking). `caller` is the classified request.
+pub fn handle(path: &str, caller: R<Caller>, is_post: bool, params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
+    if is_post_route(path) && !is_post {
+        return refuse(&Refusal::new(405, "method_not_allowed", "this route takes POST"));
+    }
+    let r = (|| {
+        let c = caller?;
+        if path == "/cli/home-chat/status" {
+            return status_route(&c);
+        }
+        let (on, reason) = super::status();
+        if !on {
+            return Err(Refusal::new(503, "chat_unavailable", format!("chat isn't available on this server ({})", reason.unwrap_or("unknown"))));
+        }
+        route(path, &c, params, body)
+    })();
+    match r {
+        Ok(v) => CliResponse::ok_json(v.to_string()),
+        Err(e) => refuse(&e),
+    }
+}
+
+fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &[u8]) -> R<Value> {
+    match path {
+        "/cli/home-chat/people" => Ok(json!({"ok": true, "people": people::list(c).map_err(internal)?})),
+        "/cli/home-chat/channels" => channels(c, p),
+        "/cli/home-chat/summary" => summary(c, p),
+        "/cli/home-chat/messages" => messages(c, p),
+        "/cli/home-chat/reactors" => reactors(c, p),
+        "/cli/home-chat/channels/members" => members(c, p),
+        "/cli/home-chat/dm" => dm(c, parse(body)?),
+        "/cli/home-chat/send" => send(c, parse(body)?),
+        "/cli/home-chat/react" => react(c, parse(body)?),
+        "/cli/home-chat/ack" => ack(c, parse(body)?),
+        "/cli/home-chat/typing" => typing(c, parse(body)?),
+        "/cli/home-chat/view" => view(c, parse(body)?),
+        "/cli/home-chat/channels/create" => create(c, parse(body)?),
+        "/cli/home-chat/channels/add" => add(c, parse(body)?),
+        "/cli/home-chat/channels/remove" => remove(c, parse(body)?),
+        "/cli/home-chat/channels/leave" => leave(c, parse(body)?),
+        "/cli/home-chat/channels/rename" => rename(c, parse(body)?),
+        "/cli/home-chat/channels/delete" => delete(c, parse(body)?),
+        "/cli/home-chat/channels/allow-agents" => allow_agents(c, parse(body)?),
+        _ => Err(Refusal::new(404, "not_found", "no such Home chat route")),
+    }
+}
+
+fn parse<T: for<'de> Deserialize<'de>>(body: &[u8]) -> R<T> {
+    let b = if body.iter().all(u8::is_ascii_whitespace) { b"{}".as_slice() } else { body };
+    serde_json::from_slice(b).map_err(|e| usage(format!("bad request body: {e}")))
+}
+
+fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> Option<&'a str> {
+    p.get(k).map(|s| s.trim()).filter(|s| !s.is_empty())
+}
+
+/// A Sew id from a request (digits only, so it can't steer a path).
+fn sew_id(raw: &str, what: &str) -> R<String> {
+    let t = raw.trim();
+    if hook::sew_wire::is_sew_id(t) {
+        Ok(t.to_string())
+    } else {
+        Err(usage(format!("{what} is a Sew id")))
+    }
+}
+
+fn skin<T>(f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>) -> R<T> {
+    k2_core::skin::with_skin_conn(f).map_err(internal)
+}
+
+/// One call to Sew as the person, on their held session; a 401 signs in
+/// again once.
+fn as_person(c: &Caller, method: &str, path: &str, body: Option<&Value>) -> R<SewAnswer> {
+    let h = follower::hold(&c.ext);
+    let d = deps();
+    let call = |tok: &str| match (method, body) {
+        ("GET", _) => d.sew.get(Some(tok), path),
+        (_, b) => d.sew.post(Some(tok), path, b.unwrap_or(&json!({}))),
+    };
+    let tok = h.token()?;
+    let a = call(&tok).map_err(super::sessions::unavailable)?;
+    if a.status != 401 {
+        return Ok(a);
+    }
+    h.forget_session();
+    let tok = h.token()?;
+    call(&tok).map_err(super::sessions::unavailable)
+}
+
+fn ok_or_refuse(a: SewAnswer) -> R<Value> {
+    if a.ok() {
+        Ok(a.body)
+    } else {
+        Err(sew_refusal(&a))
+    }
+}
+
+fn flags() -> k2_core::tool_hook::features::HomeChatFeatures {
+    (deps().flags)()
+}
+
+// ── reads ────────────────────────────────────────────────────────────
+
+fn status_route(c: &Caller) -> R<Value> {
+    let (on, reason) = super::status();
+    let chat = follower::get(&c.ext).map(|h| h.status());
+    Ok(json!({"ok": true, "on": on, "reason": reason, "flags": flags(), "chat": chat}))
+}
+
+fn k5_space() -> R<String> {
+    hook::admin_space_id().map_err(internal)?.ok_or_else(|| Refusal::new(503, "chat_unavailable", "the K5 Space isn't ready yet"))
+}
+
+/// The caller's visible K5 text channels (browse: joined or not, HP-27),
+/// with what K2's ledger knows of each.
+fn channels(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let space = k5_space()?;
+    let mut path = format!("/api/v1/spaces/{space}/channels?scope=browse&limit=100");
+    if let Some(after) = param(p, "after") {
+        path.push_str(&format!("&after={}", sew_id(after, "after")?));
+    }
+    if let Some(q) = param(p, "q") {
+        path.push_str(&format!("&q={}", hook::sew_wire::pct_path(q)));
+    }
+    let body = ok_or_refuse(as_person(c, "GET", &path, None)?)?;
+    let list = body.get("items").or_else(|| body.get("channels")).unwrap_or(&body);
+    let mut out = Vec::new();
+    for ch in list.as_array().into_iter().flatten() {
+        let kind = ch["type"].as_str().or_else(|| ch["kind"].as_str()).unwrap_or("text");
+        if kind != "text" {
+            continue; // voice rooms aren't Home channels
+        }
+        let id = match &ch["id"] {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => continue,
+        };
+        let row = skin(|conn| ledger::channel_by_id(conn, &id))?;
+        out.push(json!({
+            "conv": id, "name": ch["name"], "open": ch["visibility"] == "public",
+            "archived": ch["archived"].as_bool().unwrap_or(false) || row.as_ref().is_some_and(|r| r.state == ledger::CH_ARCHIVED),
+            "home": row.is_some(), "allowAgents": row.as_ref().is_some_and(|r| r.allow_agents),
+        }));
+    }
+    Ok(json!({"ok": true, "channels": out, "next": body.get("next").cloned().unwrap_or(Value::Null)}))
+}
+
+fn summary(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let convs: Vec<String> = param(p, "convs").map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
+    let h = follower::hold(&c.ext);
+    let flag = flags().read_state_unread_count;
+    let rows = h.state.lock().unwrap_or_else(|e| e.into_inner()).summary(&convs, flag);
+    let chat = match h.status() {
+        "live" => "live",
+        "connecting" => "connecting",
+        _ => "unavailable",
+    };
+    Ok(json!({"ok": true, "chat": chat, "convs": rows}))
+}
+
+/// A page of messages (newest last), with Sew's `reactions` and
+/// `reference` as they are. `since` (a channel seq) reads the channel's
+/// changes feed instead; `410 resync_required` answers the newest page with
+/// `resync: true` (§14.3).
+fn messages(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let conv = sew_id(param(p, "conv").ok_or_else(|| usage("name the conversation: conv"))?, "conv")?;
+    let limit: u32 = match param(p, "limit") {
+        Some(l) => l.parse().ok().filter(|n| (1..=100).contains(n)).ok_or_else(|| usage("limit is 1-100"))?,
+        None => 50,
+    };
+    if let Some(since) = param(p, "since") {
+        let since: u64 = since.parse().map_err(|_| usage("since is a channel seq"))?;
+        let a = as_person(c, "GET", &format!("/api/v1/channels/{conv}/changes?since={since}&limit={limit}"), None)?;
+        if a.status != 410 {
+            return Ok(json!({"ok": true, "conv": conv, "changes": ok_or_refuse(a)?}));
+        }
+        let page = ok_or_refuse(as_person(c, "GET", &format!("/api/v1/channels/{conv}/messages?limit={limit}"), None)?)?;
+        return Ok(json!({"ok": true, "conv": conv, "resync": true, "page": page}));
+    }
+    let mut path = format!("/api/v1/channels/{conv}/messages?limit={limit}");
+    if let Some(b) = param(p, "before") {
+        path.push_str(&format!("&before={}", sew_id(b, "before")?));
+    }
+    if let Some(a) = param(p, "after") {
+        path.push_str(&format!("&after={}", sew_id(a, "after")?));
+    }
+    let page = ok_or_refuse(as_person(c, "GET", &path, None)?)?;
+    Ok(json!({"ok": true, "conv": conv, "page": page}))
+}
+
+fn reactors(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let msg = sew_id(param(p, "msg").ok_or_else(|| usage("name the message: msg"))?, "msg")?;
+    let mut path = format!("/api/v1/messages/{msg}/reactors");
+    if let Some(e) = param(p, "emoji") {
+        path.push_str(&format!("?emoji={}", hook::sew_wire::pct_path(e)));
+    }
+    Ok(json!({"ok": true, "reactors": ok_or_refuse(as_person(c, "GET", &path, None)?)?}))
+}
+
+/// The ledger row of a Home channel by its Sew id.
+fn home_channel(conv: &str) -> R<ledger::ChannelRow> {
+    skin(|conn| ledger::channel_by_id(conn, conv))?.ok_or_else(|| Refusal::new(404, "channel_not_found", "no Home channel with that id on this server"))
+}
+
+/// May the caller see this channel (a member, or it is open)?
+fn sees(c: &Caller, ch: &ledger::ChannelRow) -> R<bool> {
+    Ok(ch.open || skin(|conn| ledger::is_member(conn, &ch.slug, &c.ext))?)
+}
+
+fn members(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let ch = home_channel(&sew_id(param(p, "conv").ok_or_else(|| usage("name the channel: conv"))?, "conv")?)?;
+    if !sees(c, &ch)? {
+        return Err(Refusal::new(404, "channel_not_found", "no Home channel with that id on this server"));
+    }
+    let list = skin(|conn| ledger::members_of(conn, &ch.slug))?;
+    Ok(json!({
+        "ok": true, "conv": ch.channel_id, "name": ch.desired_name(), "open": ch.open, "creator": ch.creator_ext,
+        "allowAgents": ch.allow_agents,
+        "people": list.iter().filter(|m| m.state != ledger::M_PENDING_REMOVE).map(|m| json!({"ext": m.external_id, "state": m.state})).collect::<Vec<_>>(),
+        // Agent grants are a later slice (S8): none yet.
+        "agents": [],
+    }))
+}
+
+// ── DMs, posts, reactions, read state ────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DmBody {
+    ext: String,
+}
+
+/// Open (or make) the DM with `ext`, keyed on Sew member ids (HP-29); the
+/// channel id is kept per (caller, target).
+fn dm(c: &Caller, b: DmBody) -> R<Value> {
+    let target = b.ext.trim().to_string();
+    if target == c.ext {
+        return Err(usage("a DM is with someone else"));
+    }
+    people::check_target(&target)?;
+    if let Some(conv) = skin(|conn| ledger::dm_channel(conn, &c.ext, &target))? {
+        return Ok(json!({"ok": true, "conv": conv, "created": false}));
+    }
+    let member = people::member_id(&target)?;
+    let body = ok_or_refuse(as_person(c, "POST", "/api/v1/dms", Some(&json!({"member_ids": [member]})))?)?;
+    let conv = match &body["id"] {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => return Err(super::sessions::unavailable("Sew's DM answer had no channel id")),
+    };
+    skin(|conn| ledger::set_dm_channel(conn, &c.ext, &target, &conv, now_secs()))?;
+    Ok(json!({"ok": true, "conv": conv, "created": true}))
+}
+
+/// A DM whose other side was disabled is read-only (HP-13).
+fn check_dm_writable(c: &Caller, conv: &str) -> R<()> {
+    if let Some(target) = skin(|conn| ledger::dm_target(conn, &c.ext, conv))? {
+        people::check_target(&target)?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SendBody {
+    conv: String,
+    text: String,
+    nonce: String,
+    #[serde(default)]
+    reply_to: Option<String>,
+}
+
+fn send(c: &Caller, b: SendBody) -> R<Value> {
+    let conv = sew_id(&b.conv, "conv")?;
+    if b.text.trim().is_empty() {
+        return Err(usage("text is empty"));
+    }
+    if b.nonce.is_empty() || b.nonce.len() > 64 {
+        return Err(usage("nonce is 1-64 characters (a retry sends the same one)"));
+    }
+    check_dm_writable(c, &conv)?;
+    let mut body = json!({"body": b.text, "nonce": b.nonce});
+    if let Some(r) = b.reply_to.as_deref() {
+        // D8: an inline reply reference, never a Sew sub-thread.
+        body["reference"] = json!({"message_id": sew_id(r, "replyTo")?, "kind": "reply"});
+    }
+    let m = ok_or_refuse(as_person(c, "POST", &format!("/api/v1/channels/{conv}/messages"), Some(&body))?)?;
+    Ok(json!({"ok": true, "message": m}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReactBody {
+    conv: String,
+    msg: String,
+    emoji: String,
+    on: bool,
+}
+
+fn react(c: &Caller, b: ReactBody) -> R<Value> {
+    let conv = sew_id(&b.conv, "conv")?;
+    let msg = sew_id(&b.msg, "msg")?;
+    let e = b.emoji.trim();
+    if e.is_empty() || e.chars().count() > 16 || e.chars().any(char::is_control) {
+        return Err(usage("emoji is one Unicode emoji"));
+    }
+    check_dm_writable(c, &conv)?;
+    let verb = if b.on { "add" } else { "remove" };
+    let m = ok_or_refuse(as_person(c, "POST", &format!("/api/v1/messages/{msg}/reactions/{verb}"), Some(&json!({"emoji": {"kind": "unicode", "value": e}})))?)?;
+    Ok(json!({"ok": true, "message": m}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConvBody {
+    conv: String,
+}
+
+fn ack(c: &Caller, b: ConvBody) -> R<Value> {
+    let conv = sew_id(&b.conv, "conv")?;
+    ok_or_refuse(as_person(c, "POST", &format!("/api/v1/channels/{conv}/ack"), Some(&json!({})))?)?;
+    Ok(json!({"ok": true}))
+}
+
+fn typing(c: &Caller, b: ConvBody) -> R<Value> {
+    let conv = sew_id(&b.conv, "conv")?;
+    if flags().http_typing {
+        ok_or_refuse(as_person(c, "POST", &format!("/api/v1/channels/{conv}/typing"), Some(&json!({})))?)?;
+        return Ok(json!({"ok": true, "via": "http"}));
+    }
+    let sent = follower::hold(&c.ext).send_gateway(op::TYPING, json!({"channel_id": conv}));
+    Ok(json!({"ok": true, "via": "gateway", "sent": sent}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewBody {
+    conv: String,
+    open: bool,
+}
+
+/// A client opened or closed a conversation: typing is subscribed for the
+/// open ones only (≤ 100 per scope); opening an open channel the person
+/// hasn't joined joins it (HP-27).
+fn view(c: &Caller, b: ViewBody) -> R<Value> {
+    let conv = sew_id(&b.conv, "conv")?;
+    let mut joined = false;
+    if b.open {
+        if let Some(ch) = skin(|conn| ledger::channel_by_id(conn, &conv))? {
+            if ch.open && ch.state == ledger::CH_ACTIVE && !skin(|conn| ledger::is_member(conn, &ch.slug, &c.ext))? {
+                ok_or_refuse(as_person(c, "POST", &format!("/api/v1/channels/{conv}/join"), Some(&json!({})))?)?;
+                skin(|conn| ledger::note_joined(conn, &ch.slug, &c.ext, now_secs()))?;
+                joined = true;
+            }
+        }
+    }
+    let h = follower::hold(&c.ext);
+    let scopes: HashMap<String, Vec<String>> = {
+        let mut st = h.state.lock().unwrap_or_else(|e| e.into_inner());
+        if b.open {
+            st.viewing.insert(conv.clone());
+        } else {
+            st.viewing.remove(&conv);
+        }
+        let mut by: HashMap<String, Vec<String>> = HashMap::new();
+        for v in &st.viewing {
+            let scope = st.convs.get(v).and_then(|x| x.space_id.clone()).unwrap_or_else(|| "dms".to_string());
+            by.entry(scope).or_default().push(v.clone());
+        }
+        by
+    };
+    for (scope, mut ids) in scopes {
+        ids.sort();
+        ids.truncate(100);
+        h.send_gateway(op::SUBSCRIBE, json!({"space_id": scope, "typing": ids}));
+    }
+    Ok(json!({"ok": true, "joined": joined}))
+}
+
+// ── channels over mgmt (K2 checks the caller first, HP-19) ───────────
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateBody {
+    name: String,
+    #[serde(default)]
+    open: bool,
+    #[serde(default)]
+    members: Vec<String>,
+}
+
+fn create(c: &Caller, b: CreateBody) -> R<Value> {
+    k2_core::home_chat::valid_channel_name(&b.name).map_err(usage)?;
+    if b.members.len() >= hook::sew_wire::CHANNEL_MEMBERS_MAX {
+        return Err(usage(format!("a new channel takes at most {} people; add the rest after", hook::sew_wire::CHANNEL_MEMBERS_MAX)));
+    }
+    let members: Vec<String> = b.members.iter().map(|m| m.trim().to_string()).collect();
+    for m in &members {
+        people::check_target(m)?;
+    }
+    let row = skin(|conn| ledger::request_create(conn, &b.name, b.open, &c.ext, &members, now_secs()))?;
+    hook::kick_reconcile();
+    Ok(json!({"ok": true, "slug": row.slug, "conv": row.channel_id, "state": row.state, "name": row.name, "open": row.open}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddBody {
+    conv: String,
+    ext: Vec<String>,
+}
+
+fn live_channel(conv: &str) -> R<ledger::ChannelRow> {
+    let ch = home_channel(&sew_id(conv, "conv")?)?;
+    if ch.state != ledger::CH_ACTIVE || ch.want_archive {
+        return Err(Refusal::new(409, "channel_archived", "that channel is archived: it is read-only"));
+    }
+    Ok(ch)
+}
+
+fn add(c: &Caller, b: AddBody) -> R<Value> {
+    let ch = live_channel(&b.conv)?;
+    if !skin(|conn| ledger::is_member(conn, &ch.slug, &c.ext))? {
+        return Err(Refusal::new(403, "not_a_member", "only people in a channel add others to it"));
+    }
+    let mut out = Vec::new();
+    for e in &b.ext {
+        let e = e.trim();
+        let outcome = match people::check_target(e) {
+            Ok(()) => skin(|conn| ledger::request_add(conn, &ch.slug, e, now_secs()))?.to_string(),
+            Err(r) => format!("refused: {}", r.code),
+        };
+        out.push(json!({"ext": e, "outcome": outcome}));
+    }
+    hook::kick_reconcile();
+    Ok(json!({"ok": true, "results": out}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveBody {
+    conv: String,
+    ext: String,
+}
+
+fn remove(c: &Caller, b: RemoveBody) -> R<Value> {
+    let ch = live_channel(&b.conv)?;
+    let target = b.ext.trim();
+    if target != c.ext && !c.is_admin() {
+        return Err(Refusal::new(403, "admin_required", "only the server's Owner or an Admin removes someone else; anyone may leave"));
+    }
+    if ch.open {
+        return Err(Refusal::new(409, "channel_open", "an open channel is open to everyone on this server: no one is removed from it"));
+    }
+    let was = skin(|conn| ledger::request_remove(conn, &ch.slug, target, now_secs()))?;
+    hook::kick_reconcile();
+    Ok(json!({"ok": true, "removed": was}))
+}
+
+fn leave(c: &Caller, b: ConvBody) -> R<Value> {
+    let ch = home_channel(&sew_id(&b.conv, "conv")?)?;
+    let conv = ch.channel_id.clone().unwrap_or_default();
+    if ch.open {
+        ok_or_refuse(as_person(c, "POST", &format!("/api/v1/channels/{conv}/leave"), Some(&json!({})))?)?;
+        skin(|conn| ledger::note_left(conn, &ch.slug, &c.ext))?;
+        return Ok(json!({"ok": true, "left": true}));
+    }
+    // K2 governs the Space: K2's own Leave removes over mgmt (HP-19).
+    let was = skin(|conn| ledger::request_remove(conn, &ch.slug, &c.ext, now_secs()))?;
+    hook::kick_reconcile();
+    Ok(json!({"ok": true, "left": was}))
+}
+
+/// The creator, or the server's Owner or an Admin who can see the channel.
+fn may_change(c: &Caller, ch: &ledger::ChannelRow) -> R<()> {
+    if ch.creator_ext == c.ext || (c.is_admin() && sees(c, ch)?) {
+        return Ok(());
+    }
+    Err(Refusal::new(403, "not_creator", "only the channel's creator, or the server's Owner or an Admin, renames or deletes it"))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenameBody {
+    conv: String,
+    name: String,
+}
+
+fn rename(c: &Caller, b: RenameBody) -> R<Value> {
+    let ch = live_channel(&b.conv)?;
+    may_change(c, &ch)?;
+    k2_core::home_chat::valid_channel_name(&b.name).map_err(usage)?;
+    skin(|conn| ledger::request_rename(conn, &ch.slug, &b.name, now_secs()))?;
+    hook::kick_reconcile();
+    Ok(json!({"ok": true}))
+}
+
+fn delete(c: &Caller, b: ConvBody) -> R<Value> {
+    let ch = live_channel(&b.conv)?;
+    may_change(c, &ch)?;
+    skin(|conn| ledger::request_archive(conn, &ch.slug, now_secs()))?;
+    hook::kick_reconcile();
+    Ok(json!({"ok": true, "archived": true}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AllowBody {
+    conv: String,
+    on: bool,
+}
+
+fn allow_agents(c: &Caller, b: AllowBody) -> R<Value> {
+    let ch = live_channel(&b.conv)?;
+    if !c.is_admin() || !sees(c, &ch)? {
+        return Err(Refusal::new(403, "admin_required", "only the server's Owner or an Admin allows agents in a channel"));
+    }
+    skin(|conn| ledger::set_allow_agents(conn, &ch.slug, b.on, now_secs()))?;
+    Ok(json!({"ok": true, "allowAgents": b.on}))
+}

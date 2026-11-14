@@ -279,6 +279,7 @@ struct ChannelSetBody {
 fn managed_channel(c: &Caller, a: &ActAs, to: &str) -> R<(sew::Channel, store::Access)> {
     let sew = backend()?;
     let ch = resolve_channel(sew.as_ref(), a, to)?;
+    super::home_gate::check(c, a, &ch)?;
     let slug = ch.space_slug.clone().ok_or_else(|| usage("a DM has no channel settings"))?;
     let row = manage_space(c, &slug)?;
     if ch.space_id.as_deref() != Some(row.space_id.as_str()) {

@@ -426,6 +426,9 @@ impl Poller {
                     self.notice(Notice::Reset("epoch_changed"));
                 } else {
                     c.after = c.after.max(next_after);
+                    // Sew chat is for people (D17, HP-31): nothing from a K5
+                    // channel and no DM from a box person reaches an agent.
+                    let entries: Vec<Delivery> = entries.into_iter().filter(super::home_gate::hub_keeps).collect();
                     let left = offer_to_waiters(&self.pid, entries);
                     if !left.is_empty() {
                         let (prefs, follows) = {

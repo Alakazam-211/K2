@@ -582,6 +582,9 @@ fn governing_space(sew: &dyn SewChat, a: &ActAs, ch: &Channel) -> R<Option<Strin
 
 /// The caller's access in the channel's Space (403 `not_granted` without).
 pub(crate) fn access_for(c: &Caller, sew: &dyn SewChat, a: &ActAs, ch: &Channel) -> R<store::Access> {
+    // Sew chat is for people: no DM with a box person, no K5 channel
+    // without a grant (prd-home-people-channels-v1 §13).
+    super::home_gate::check(c, a, ch)?;
     let space = governing_space(sew, a, ch)?;
     let row = match &space {
         Some(s) => {
@@ -677,7 +680,9 @@ fn channels(c: &Caller, params: &HashMap<String, String>) -> R<Value> {
     let mut out = Vec::new();
     for r in wanted {
         for ch in sew.channels(&a, Some(&r.space_id)).map_err(sew_err)? {
-            out.push(channel_json(&ch));
+            if super::home_gate::visible(c, &a, &ch) {
+                out.push(channel_json(&ch));
+            }
         }
     }
     Ok(json!({ "ok": true, "channels": out }))
@@ -699,6 +704,8 @@ pub(crate) fn message_json(m: &Message, ch: &Channel, me: &str) -> Value {
         "following": m.following,
         "mentionsMe": m.mentions_me,
         "mine": m.author_id == me,
+        "reactions": m.reactions.iter().map(|r| json!({"emoji": r.emoji, "count": r.count, "me": r.me})).collect::<Vec<_>>(),
+        "reference": m.reference.as_ref().map(|r| json!({"id": sew::wire_msg_id(&r.message_id), "kind": r.kind})),
     });
     if let Some(o) = &m.on_behalf_of {
         v["onBehalfOf"] = o.clone().into();
@@ -824,6 +831,7 @@ fn wait(c: &Caller, params: &HashMap<String, String>) -> R<Value> {
     need_any_access(c)?;
     let a = c.act_as(None);
     let ch = resolve_addr(sew.as_ref(), &a, raw)?;
+    super::home_gate::refuse_notifications(&ch)?;
     access_for(c, sew.as_ref(), &a, &ch)?;
     let me = sew.me(&a).map_err(sew_err)?;
     let _slot = WaitSlot::take(&c.project_id)?;
@@ -1299,6 +1307,8 @@ fn resolve_target(sew: &dyn SewChat, a: &ActAs, action: Action, to: &str) -> R<T
             if user.is_empty() || user.contains('/') {
                 return Err(usage("dm takes a K2 username: dm <user> \"text\""));
             }
+            // HP-31: never open (find-or-create) a DM with a box person.
+            super::home_gate::check_dm_target(sew, a, user)?;
             let channel = sew.open_dm(a, user).map_err(sew_err)?;
             Ok(Target { channel, target_id: None, message: None, root: None })
         }

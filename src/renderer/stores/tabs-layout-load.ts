@@ -8,7 +8,7 @@ import type { SerializedLayout } from './tabs'
 /** One workspace's stored layout, as the tabs store reads and saves it. */
 export interface StoredLayoutIO {
   /** `workspace-layouts/load?with_revision=1`. */
-  fetch(): Promise<{ layout: SerializedLayout | null; revision: number | undefined }>
+  read(): Promise<{ layout: SerializedLayout | null; revision: number | undefined }>
   /** `workspace-layouts/save` on `baseRevision` (none from an older daemon). */
   save(layout: SerializedLayout, baseRevision: number | undefined): Promise<{ revision?: number } | undefined>
   /** The save was refused because the layout changed since it was read (409). */
@@ -25,7 +25,7 @@ export async function saveOnStoredLayout(
   change: (stored: SerializedLayout) => SerializedLayout | null,
 ): Promise<{ layout: SerializedLayout; revision: number | undefined } | null> {
   for (let attempt = 0; attempt < io.maxAttempts; attempt++) {
-    const fetched = await io.fetch()
+    const fetched = await io.read()
     const next = change(fetched.layout ?? EMPTY_SERIALIZED_LAYOUT)
     if (!next) return null
     try {

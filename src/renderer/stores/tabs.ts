@@ -3063,7 +3063,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   async function parkApiTabInStoredLayout(key: string, projectId: string, workspaceId: string, tab: Tab): Promise<void> {
     if (readOnly) return
     const io = {
-      fetch: () => fetchLayoutWithRevision(projectId, workspaceId),
+      read: () => fetchLayoutWithRevision(projectId, workspaceId),
       save: (layout: SerializedLayout, base: number | undefined) =>
         daemonCliPost<{ revision?: number }>(scope, 'workspace-layouts/save', {
           projectId,

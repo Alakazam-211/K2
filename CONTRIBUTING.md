@@ -89,7 +89,6 @@ K2SO/
 │       ├── window.rs          # Window state save/restore
 │       └── project_config.rs  # Project config file parsing
 ├── resources/                 # Icons and static assets
-├── drizzle/                   # Migration definitions (reference)
 └── vite.config.ts             # Vite build config
 ```
 

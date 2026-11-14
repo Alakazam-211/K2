@@ -23,8 +23,6 @@ src-tauri/binaries/
 *.db
 *.db-journal
 *.db-wal
-# drizzle-kit's snapshot metadata lives next to the emitted SQL now.
-crates/k2so-core/drizzle_sql/meta/
 .claude/
 # Internal workspace dirs — agent data, internal PRDs/notes (licensing strategy,
 # monetization roadmap, tunnel decisions). NEVER published to the public K2 repo.

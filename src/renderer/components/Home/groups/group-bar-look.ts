@@ -56,11 +56,11 @@ export function groupNumeralPx(px: number): number {
 }
 
 /** The Groups dialog: up to 880 wide, kept 16 px from the window's sides,
- *  and 90% of the window's height (Rosson), centred. Two panes need 640 px
+ *  and 80% of the window's height (Rosson), centred. Two panes need 640 px
  *  of width. Only its lists and the icon grid scroll. */
 export const GROUP_DIALOG_MAX = { width: 880 } as const
 /** The dialog's height as a share of the window's (`--k2-vh`, zoom-aware). */
-export const GROUP_DIALOG_HEIGHT_SHARE = 0.9
+export const GROUP_DIALOG_HEIGHT_SHARE = 0.8
 export const GROUP_DIALOG_MARGIN = { x: 16, y: 24 } as const
 export const GROUP_DIALOG_TWO_PANE_MIN = 640
 export const GROUP_DIALOG_LIST_PX = 220

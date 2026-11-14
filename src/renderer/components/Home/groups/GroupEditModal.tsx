@@ -3,7 +3,7 @@
 // a group's icon in the bar, with that group selected, and from the "…"
 // beside the current group's name. K2's dialog shape (DialogScrim, then
 // DialogFrame's Surface: elevation 5, the box radius, cut in Terminal),
-// up to 880 wide, kept 16 px from the window's sides, and 90% of the
+// up to 880 wide, kept 16 px from the window's sides, and 80% of the
 // window's height (`groupDialogSize`).
 //
 // Two panes: the group list (`GroupList`, 220 px: select, reorder by drag or

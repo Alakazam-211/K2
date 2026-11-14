@@ -31,17 +31,17 @@ const G: GroupBarItem[] = [
 afterEach(() => cleanup())
 
 describe('the Groups dialog', () => {
-  it('is up to 880 wide and 90% of the window high, 16 px from the sides; one pane under 640 px', () => {
-    expect(groupDialogSize(1440, 900)).toEqual({ width: 880, height: 810, onePane: false })
-    expect(groupDialogSize(1100, 720)).toEqual({ width: 880, height: 648, onePane: false })
-    expect(groupDialogSize(800, 600)).toEqual({ width: 768, height: 540, onePane: false })
-    expect(groupDialogSize(1280, 560)).toEqual({ width: 880, height: 504, onePane: false })
-    expect(groupDialogSize(640, 560)).toEqual({ width: 608, height: 504, onePane: true })
+  it('is up to 880 wide and 80% of the window high, 16 px from the sides; one pane under 640 px', () => {
+    expect(groupDialogSize(1440, 900)).toEqual({ width: 880, height: 720, onePane: false })
+    expect(groupDialogSize(1100, 720)).toEqual({ width: 880, height: 576, onePane: false })
+    expect(groupDialogSize(800, 600)).toEqual({ width: 768, height: 480, onePane: false })
+    expect(groupDialogSize(1280, 560)).toEqual({ width: 880, height: 448, onePane: false })
+    expect(groupDialogSize(640, 560)).toEqual({ width: 608, height: 448, onePane: true })
     expect(groupDialogSize(672, 600).onePane).toBe(false)
     expect(groupDialogSize(671, 600).onePane).toBe(true)
-    expect(GROUP_DIALOG_HEIGHT_SHARE).toBe(0.9)
+    expect(GROUP_DIALOG_HEIGHT_SHARE).toBe(0.8)
     expect(GROUP_DIALOG_STYLE.width).toBe('min(880px, calc(var(--k2-vw) - 32px))')
-    expect(GROUP_DIALOG_STYLE.height).toBe('calc(var(--k2-vh) * 0.9)')
+    expect(GROUP_DIALOG_STYLE.height).toBe('calc(var(--k2-vh) * 0.8)')
   })
 
   it('is K2’s dialog shape with a Done button and no ×, its list 220 px', () => {

@@ -108,13 +108,16 @@ describe('the settings pane', () => {
     render(<GroupEditModal {...p} />)
     const grid = detail().querySelector('[data-group-icon-grid]') as HTMLElement
     expect(grid.className).not.toMatch(/max-h-/)
-    expect(grid.querySelectorAll('[data-group-icon-pick]').length).toBe(GROUP_ICONS.length + 1)
+    // Every curated icon in the grid; "No icon" leads the Recent row.
+    expect(grid.querySelectorAll('[data-group-icon-pick]').length).toBe(GROUP_ICONS.length)
+    const recentRow = detail().querySelector('[data-group-icon-recent]')?.parentElement as HTMLElement
+    expect(recentRow.querySelector('[data-group-icon-pick]')?.getAttribute('aria-label')).toBe('No icon (numbered dot)')
     expect(Array.from(detail().querySelectorAll('[data-group-icon-recent] [data-group-icon-pick]')).map((b) => b.getAttribute('data-group-icon-pick'))).toEqual(['rocket', 'house'])
     fireEvent.change(detail().querySelector('[data-group-icon-search]') as HTMLInputElement, { target: { value: 'rock' } })
     fireEvent.click(detail().querySelector('[data-group-icon-grid] [data-group-icon-pick="rocket"]') as HTMLElement)
     expect(p.onSetIcon).toHaveBeenLastCalledWith('g2', 'rocket')
     fireEvent.change(detail().querySelector('[data-group-icon-search]') as HTMLInputElement, { target: { value: '' } })
-    fireEvent.click(within(detail()).getByRole('button', { name: 'No icon (numbered dot)' }))
+    fireEvent.click(within(detail()).getByRole('gridcell', { name: 'No icon (numbered dot)' }))
     expect(p.onSetIcon).toHaveBeenLastCalledWith('g2', null)
   })
 
@@ -146,12 +149,12 @@ describe('the settings pane', () => {
     expect([del.disabled, del.title]).toEqual([true, 'The last group can’t be deleted'])
   })
 
-  it('a deleted selection falls back to the first group; the × closes', () => {
+  it('a deleted selection falls back to the first group; Done closes', () => {
     const p = props()
     const { rerender } = render(<GroupEditModal {...p} />)
     rerender(<GroupEditModal {...p} groups={[G[0], G[2]]} />)
     expect(detail().getAttribute('data-group-detail')).toBe('g1')
-    fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(p.onClose).toHaveBeenCalled()
   })
 })

@@ -289,6 +289,7 @@ export default function HomeGroupBar({
           groups={groups}
           currentId={currentId}
           initialId={editing.id}
+          startOn={editing.from === 'header' ? 'list' : 'group'}
           onRename={onRename}
           onSetIcon={onSetIcon}
           onCreate={onCreate}

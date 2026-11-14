@@ -1,21 +1,32 @@
-// Home groups: the All groups modal, centred on the window. It opens from a
-// right-click (or a long press, or the context-menu key) on a group's icon
-// in the bar, with that group selected, and from the "…" beside the
-// current group's name. The group list sits on one side (`GroupList`:
-// select, reorder by drag or ⌥↑/⌥↓, Add group); the selected group's
-// settings sit beside it (`GroupDetailPane`: name, "Most recent at the
-// top", the whole icon set, Delete). Esc, the × or a press outside close it.
+// Home groups: the Groups dialog, centred on the window (K2 Design's mock).
+// It opens from a right-click (or a long press, or the context-menu key) on
+// a group's icon in the bar, with that group selected, and from the "…"
+// beside the current group's name. K2's dialog shape (DialogScrim, then
+// DialogFrame's Surface: elevation 5, the box radius, cut in Terminal),
+// at most 720 × 540, kept 16 px from the window's sides and 24 px from its
+// top and bottom (`groupDialogSize`).
 //
-// Presentational: it holds only which group is selected; every change goes
-// out through the callbacks (`useHomeGroups`), so K2 Design can restyle it.
+// Two panes: the group list (`GroupList`, 220 px: select, reorder by drag or
+// ⌥↑/⌥↓, New group) and the selected group's settings (`GroupDetailPane`:
+// name, "Most recent at the top", icon search and grid, Delete). Below
+// 640 px of dialog width it is one pane that drills down: a right-click
+// lands on that group's page (a back arrow returns to the list); "…" lands
+// on the list. Done or Esc closes it; the bar puts focus back on what
+// opened it.
+//
+// Presentational: it holds only which group is selected and which pane
+// shows; every change goes out through the callbacks (`useHomeGroups`).
 // Portalled to <body>, so no frosted or transformed nav ancestor contains it.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { ArrowLeftIcon } from 'lucide-react'
 import { DialogFrame, DialogScrim } from '@/components/ui/Dialog'
-import { DialogCloseButton } from '@/components/ui/dialog-cancel'
+import { Button } from '@/components/ui'
+import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import GroupList from './GroupList'
 import GroupDetailPane from './GroupDetailPane'
+import { GROUP_DIALOG_LIST_PX, GROUP_DIALOG_MARGIN, GROUP_DIALOG_MAX, GROUP_DIALOG_TWO_PANE_MIN } from './group-bar-look'
 import type { GroupBarItem } from './HomeGroupBar'
 
 export interface GroupEditModalProps {
@@ -23,6 +34,9 @@ export interface GroupEditModalProps {
   currentId: string
   /** The group selected when it opens (the one right-clicked). */
   initialId: string
+  /** One pane only: open on the list (the header's "…") or on the group's
+   *  page (an icon). Default `group`. */
+  startOn?: 'list' | 'group'
   onRename(id: string, name: string): void
   onSetIcon(id: string, icon: string | null): void
   onCreate(): string | null
@@ -33,10 +47,40 @@ export interface GroupEditModalProps {
   onClose(): void
 }
 
+/** The dialog's box: the max size, clamped to the window less the margins. */
+export const GROUP_DIALOG_STYLE: React.CSSProperties = {
+  width: `min(${GROUP_DIALOG_MAX.width}px, calc(var(--k2-vw) - ${2 * GROUP_DIALOG_MARGIN.x}px))`,
+  height: `min(${GROUP_DIALOG_MAX.height}px, calc(var(--k2-vh) - ${2 * GROUP_DIALOG_MARGIN.y}px))`,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+}
+
+/** One pane below the breakpoint, measured on the dialog itself (so app
+ *  zoom and the window's size both count). Unmeasured (no layout): two. */
+function useOnePane(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [one, setOne] = useState(false)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const read = (): void => {
+      const w = el.offsetWidth
+      if (w > 0) setOne(w < GROUP_DIALOG_TWO_PANE_MIN)
+    }
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [ref])
+  return one
+}
+
 export default function GroupEditModal({
   groups,
   currentId,
   initialId,
+  startOn = 'group',
   onRename,
   onSetIcon,
   onCreate,
@@ -48,6 +92,9 @@ export default function GroupEditModal({
 }: GroupEditModalProps): React.ReactPortal {
   const [selectedId, setSelectedId] = useState(initialId)
   const [justAdded, setJustAdded] = useState<string | null>(null)
+  const [view, setView] = useState<'list' | 'group'>(startOn)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const onePane = useOnePane(boxRef)
   // A deleted (or merged-away) selection falls back to the first group.
   useEffect(() => {
     if (!groups.some((g) => g.id === selectedId) && groups.length > 0) setSelectedId(groups[0].id)
@@ -55,6 +102,29 @@ export default function GroupEditModal({
 
   const index = Math.max(0, groups.findIndex((g) => g.id === selectedId))
   const selected = groups[index]
+  const showList = !onePane || view === 'list'
+  const showGroup = !onePane || view === 'group'
+
+  // Focus starts in the selected group's name (or, on the one-pane list,
+  // its row), and moves there again when the pane changes.
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box || (showGroup && justAdded !== null && justAdded === selected?.id)) return
+    const target = showGroup
+      ? box.querySelector<HTMLInputElement>('[data-group-name-input]')
+      : box.querySelector<HTMLElement>('[data-group-list-row][tabindex="0"]')
+    if (!target) return
+    target.focus({ preventScroll: true })
+    if (target instanceof HTMLInputElement) target.setSelectionRange(target.value.length, target.value.length)
+    // Only on open and when the pane changes (a new group focuses its own
+    // name, selected, in GroupDetailPane).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onePane, view])
+
+  const select = (id: string): void => {
+    setSelectedId(id)
+    if (onePane) setView('group')
+  }
 
   return createPortal(
     <>
@@ -62,53 +132,86 @@ export default function GroupEditModal({
       <DialogFrame
         role="dialog"
         aria-modal="true"
-        aria-label="All groups"
+        aria-label="Groups"
         data-group-edit-modal=""
+        data-one-pane={onePane ? '' : undefined}
+        data-view={onePane ? view : 'two'}
         onCancel={onClose}
         closeButton="inline"
-        style={{
-          width: 720,
-          height: 560,
-          maxWidth: 'calc(var(--k2-vw) - 48px)',
-          maxHeight: 'calc(var(--k2-vh) - 64px)',
-          display: 'flex',
-          flexDirection: 'column',
+        style={GROUP_DIALOG_STYLE}
+        onKeyDown={(e) => {
+          // The group list is a listbox, which the app leaves Esc to
+          // (dialog-cancel): here Esc on it closes the dialog too.
+          if (e.key === 'Escape' && !e.defaultPrevented && e.target instanceof Element && e.target.closest('[data-group-list-rows]')) {
+            e.preventDefault()
+            onClose()
+          }
         }}
       >
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-          <div className="text-sm font-semibold text-[var(--color-text-primary)]">All groups</div>
-          <DialogCloseButton className="-mr-2" onClick={onClose} />
-        </div>
-        <div className="flex min-h-0 flex-1">
-          <div className="flex w-56 flex-shrink-0 flex-col border-r border-[var(--color-border)] p-2">
-            <GroupList
-              groups={groups}
-              currentId={currentId}
-              selectedId={selected?.id ?? ''}
-              onSelectGroup={setSelectedId}
-              onReorderGroups={onReorderGroups}
-              onCreate={() => {
-                const id = onCreate()
-                if (id) setJustAdded(id)
-                return id
-              }}
-            />
-          </div>
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4">
-            {selected && (
-              <GroupDetailPane
-                key={selected.id}
-                group={selected}
-                index={index}
-                canDelete={groups.length > 1}
-                onRename={onRename}
-                onSetIcon={onSetIcon}
-                onSetRecentFirst={onSetRecentFirst}
-                onDelete={onDelete}
-                emptyNameFallback={emptyNameFallback}
-                focusName={justAdded === selected.id}
-              />
+        <div ref={boxRef} className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1">
+            {showList && (
+              <div
+                className={`flex min-h-0 flex-shrink-0 flex-col ${onePane ? 'w-full' : 'border-r border-[var(--color-border)]'}`}
+                style={onePane ? undefined : { width: GROUP_DIALOG_LIST_PX }}
+              >
+                <GroupList
+                  groups={groups}
+                  currentId={currentId}
+                  selectedId={selected?.id ?? ''}
+                  drill={onePane}
+                  onSelectGroup={select}
+                  onReorderGroups={onReorderGroups}
+                  onCreate={() => {
+                    const id = onCreate()
+                    if (id) setJustAdded(id)
+                    return id
+                  }}
+                />
+              </div>
             )}
+            {showGroup && selected && (
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <GroupDetailPane
+                  key={selected.id}
+                  group={selected}
+                  index={index}
+                  canDelete={groups.length > 1}
+                  onRename={onRename}
+                  onSetIcon={onSetIcon}
+                  onSetRecentFirst={onSetRecentFirst}
+                  onDelete={onDelete}
+                  emptyNameFallback={emptyNameFallback}
+                  focusName={justAdded === selected.id}
+                />
+              </div>
+            )}
+          </div>
+          <div className="order-first flex h-[52px] flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] pl-5 pr-3" data-group-edit-head="">
+            {onePane && view === 'group' && selected ? (
+              <>
+                <button
+                  type="button"
+                  aria-label="Back to all groups"
+                  title="All groups"
+                  data-k2-focus=""
+                  data-group-edit-back=""
+                  className="-ml-3 flex h-[26px] w-[26px] flex-shrink-0 cursor-pointer items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-full"
+                  onClick={() => setView('list')}
+                >
+                  <ArrowLeftIcon size={K2_ICON_PX} strokeWidth={K2_ICON_STROKE} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true" />
+                </button>
+                <h2 className="m-0 min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--color-text-primary)]">{selected.name}</h2>
+              </>
+            ) : (
+              <h2 className="m-0 min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--color-text-primary)]">
+                Groups
+                <span className="ml-1.5 text-[11px] font-normal text-[var(--color-text-muted)]">{groups.length}</span>
+              </h2>
+            )}
+            <Button variant="accent" className="h-7 flex-shrink-0 !px-4 !py-0 text-[12px]" data-group-edit-done="" onClick={onClose}>
+              Done
+            </Button>
           </div>
         </div>
       </DialogFrame>

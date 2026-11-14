@@ -8,7 +8,8 @@
 //!
 //! What this module does, the way rustup and bun do it:
 //!
-//! 1. **Links** `~/.local/bin/k2` (and the `k2so` alias) at the bundled CLI,
+//! 1. **Links** `~/.local/bin/k2` (and refreshes a `k2so` alias an earlier
+//!    install left) at the bundled CLI,
 //!    re-pointing a link left at an old or moved bundle. `/usr/local/bin/k2`
 //!    is linked as well when that folder is already writable (as before).
 //! 2. **PATH:** when the person's login-shell PATH doesn't have
@@ -56,6 +57,14 @@ pub const OPT_OUT_FILE: &str = "cli-path-line-removed";
 
 /// The fish startup file K2 owns (the whole file is K2's block).
 const FISH_CONF: &str = "k2-cli.fish";
+
+/// The `k2so` alias at `path` is there (a file, or a link, even a broken
+/// one). Installs put `k2` alone on a machine that has no alias, and
+/// refresh one an earlier install made, so scripts that call `k2so` keep
+/// working.
+pub fn legacy_alias_present(path: &Path) -> bool {
+    path.exists() || path.is_symlink()
+}
 
 /// `~/.local/bin`, where K2 puts `k2` without admin.
 pub fn user_bin_dir(home: &Path) -> PathBuf {
@@ -619,21 +628,30 @@ impl HealReport {
     }
 }
 
-/// Link `~/.local/bin/k2` (+ `k2so`), link `/usr/local/bin/k2` when that
-/// folder is writable, and add the PATH block when new Terminal windows
-/// wouldn't find `k2` otherwise. Idempotent: a second run changes nothing.
+/// Link `~/.local/bin/k2`, link `/usr/local/bin/k2` when that folder is
+/// writable, and add the PATH block when new Terminal windows wouldn't find
+/// `k2` otherwise. A `k2so` alias is only refreshed where an earlier
+/// install left one ([`legacy_alias_present`]); a new install gets `k2`
+/// alone. Idempotent: a second run changes nothing.
 #[cfg(unix)]
 pub fn heal_at(home: &Path, input: &HealInput) -> Result<HealReport, String> {
     let bin = user_bin_dir(home);
     let user_link_path = bin.join(CLI_NAME);
     let user_link = ensure_link(&user_link_path, input.cli, true);
-    let user_legacy = input.legacy_shim.map(|shim| ensure_link(&bin.join(LEGACY_NAME), shim, true));
+    let user_alias = bin.join(LEGACY_NAME);
+    let user_legacy = input
+        .legacy_shim
+        .filter(|_| legacy_alias_present(&user_alias))
+        .map(|shim| ensure_link(&user_alias, shim, true));
 
     let (system_link, system_legacy) = match input.system_bin {
         Some(sys) if sys.is_dir() => {
             let link = ensure_link(&sys.join(CLI_NAME), input.cli, false);
+            let sys_alias = sys.join(LEGACY_NAME);
             let legacy = match (&link, input.legacy_shim) {
-                (l, Some(shim)) if l.is_ours() => Some(ensure_link(&sys.join(LEGACY_NAME), shim, false)),
+                (l, Some(shim)) if l.is_ours() && legacy_alias_present(&sys_alias) => {
+                    Some(ensure_link(&sys_alias, shim, false))
+                }
                 _ => None,
             };
             (Some(link), legacy)

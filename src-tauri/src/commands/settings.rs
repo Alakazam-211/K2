@@ -41,7 +41,8 @@ use tauri::Manager;
 
 /// Find a bundled cli/<name> script (production or development).
 /// 0.40.0: the CLI is `k2`; `k2so` remains as a deprecation shim that
-/// delegates to `k2` — both ship in cli/ and both get installed.
+/// delegates to `k2` — both ship in cli/; the alias is installed only where
+/// an earlier install left one.
 fn find_cli_script_named(name: &str) -> Option<PathBuf> {
     let exe_path = std::env::current_exe().ok()?;
     let exe_dir = exe_path.parent()?;
@@ -196,7 +197,8 @@ fn linux_user_cli_dest() -> Result<PathBuf, String> {
     Ok(home.join(".local/bin/k2"))
 }
 
-/// Copy the bundled CLI (and the k2so shim, when present) onto `dest`.
+/// Copy the bundled CLI onto `dest`, and refresh the `k2so` shim beside it
+/// only where an earlier install left one (a new install gets `k2` alone).
 #[cfg(target_os = "linux")]
 fn linux_write_cli(
     dest: &Path,
@@ -205,7 +207,10 @@ fn linux_write_cli(
 ) -> Result<(), String> {
     copy_cli_script(cli_script, dest)?;
     if let (Some(shim), Some(parent)) = (legacy_shim.as_ref(), dest.parent()) {
-        let _ = copy_cli_script(shim, &parent.join("k2so"));
+        let alias = parent.join("k2so");
+        if k2_client::cli_install::legacy_alias_present(&alias) {
+            let _ = copy_cli_script(shim, &alias);
+        }
     }
     Ok(())
 }
@@ -282,13 +287,16 @@ fn windows_cli_install(cli_script: &Path, legacy_shim: &Option<PathBuf>) -> Resu
         fs::copy(&runner, cli_dir.join("k2-widget-shot.mjs"))
             .map_err(|e| format!("copy the widget-shot runner to {}: {e}", cli_dir.display()))?;
     }
-    if let Some(shim) = legacy_shim {
+    // The `k2so` alias only where an earlier install left one.
+    let had_alias = k2_client::cli_install::legacy_alias_present(&cli_dir.join("k2so"))
+        || k2_client::cli_install::legacy_alias_present(&bin_dir.join("k2so.cmd"));
+    if let (Some(shim), true) = (legacy_shim, had_alias) {
         let _ = fs::copy(shim, cli_dir.join("k2so"));
     }
 
     let cmd_path = bin_dir.join("k2.cmd");
     write_windows_cli_cmd(&cmd_path, &dest_script)?;
-    if legacy_shim.is_some() {
+    if legacy_shim.is_some() && had_alias {
         let shim_script = cli_dir.join("k2so");
         if shim_script.exists() {
             let _ = write_windows_cli_cmd(&bin_dir.join("k2so.cmd"), &shim_script);
@@ -667,7 +675,8 @@ fn cli_install_now() -> Result<String, String> {
     }
 }
 
-/// macOS, optional: also link `/usr/local/bin/k2` (+ the k2so alias), with
+/// macOS, optional: also link `/usr/local/bin/k2` (and refresh a k2so alias
+/// an earlier install left there), with
 /// one admin prompt when the folder needs it. Never over a `k2` that isn't
 /// K2's. The ONLY admin prompt path; only from an explicit Settings click.
 #[tauri::command]
@@ -693,12 +702,14 @@ fn cli_install_system_now() -> Result<String, String> {
         if let ci::LinkState::Foreign { what } = ci::link_state(symlink_path, &cli_script) {
             return Err(format!("{CLI_SYMLINK_PATH} is {what}, not K2's, so K2 left it alone."));
         }
-        // The alias only over nothing or K2's own link.
+        // The alias only where an earlier install left one, and only over
+        // K2's own link: a new install gets `k2` alone.
         let legacy_shim = legacy_shim.filter(|shim| {
-            !matches!(
-                ci::link_state(Path::new(CLI_LEGACY_SYMLINK_PATH), shim),
-                ci::LinkState::Foreign { .. }
-            )
+            ci::legacy_alias_present(Path::new(CLI_LEGACY_SYMLINK_PATH))
+                && !matches!(
+                    ci::link_state(Path::new(CLI_LEGACY_SYMLINK_PATH), shim),
+                    ci::LinkState::Foreign { .. }
+                )
         });
 
         let bin_dir = symlink_path.parent().unwrap();
@@ -737,7 +748,7 @@ fn cli_install_system_now() -> Result<String, String> {
             .map(|shim| format!(" && ln -sf '{}' '{}'", shim.display(), CLI_LEGACY_SYMLINK_PATH))
             .unwrap_or_default();
         let script = format!(
-            "do shell script \"ln -sf '{}' '{}'{}\" with prompt \"K2 needs to install the k2 command-line tool (and the k2so compatibility alias) in /usr/local/bin.\" with administrator privileges",
+            "do shell script \"ln -sf '{}' '{}'{}\" with prompt \"K2 needs to install the k2 command-line tool in /usr/local/bin.\" with administrator privileges",
             cli_script.display(),
             CLI_SYMLINK_PATH,
             legacy_ln

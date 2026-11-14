@@ -189,7 +189,7 @@ fn ci_routes() -> Vec<(&'static str, &'static str)> {
         assert!(k2_daemon::compute_routes::is_ci_route(p), "{p} is a CI route");
         out.push((*p, if k2_daemon::compute_routes::is_post_route(p) { "POST" } else { "GET" }));
     }
-    assert_eq!(out.len(), 37, "14 `k2 ci` routes (release and evidence since 0.46.11, tests since the compute Blacksmith class T1, stats, monitors and monitor since O1, cache/trust and cache/trust/set since B2, provenance since build attestations S3) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
+    assert_eq!(out.len(), 38, "15 `k2 ci` routes (release and evidence since 0.46.11, tests since the compute Blacksmith class T1, stats, monitors and monitor since O1, cache/trust and cache/trust/set since B2, provenance since build attestations S3, setup since the signer setup file BA-46) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
     out
 }
 

@@ -569,7 +569,7 @@ pub(crate) mod test_sps {
 
     impl Writer {
         fn bit(&mut self, b: u32) {
-            if self.bits % 8 == 0 {
+            if self.bits.is_multiple_of(8) {
                 self.bytes.push(0);
             }
             if b & 1 == 1 {

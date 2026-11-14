@@ -28,12 +28,24 @@ type Side = 'left' | 'right'
 export const DRAWER_HEADER_BUTTON_CLASS =
   'no-drag relative flex h-full w-8 self-stretch flex-shrink-0 cursor-pointer items-center justify-center bg-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent-text)]'
 
+/** The 'glyph' shape: the same box (32px wide, the strip's full height, so
+ *  the hit target doesn't shrink), but no fill of its own and no box ring.
+ *  globals.css draws the hover fill and the focus ring as one small shape
+ *  round the glyph (`[data-k2-glyph-button]`, `--k2-glyph-hover-size`): a
+ *  circle in Glass, a chamfered square in Terminal. */
+export const GLYPH_HEADER_BUTTON_CLASS =
+  'no-drag relative isolate flex h-full w-8 self-stretch flex-shrink-0 cursor-pointer items-center justify-center bg-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] outline-none transition-colors'
+
 /** A drawer header icon button, for any strip that wants one (the Home
- *  nav's top row). `label` is its tooltip and accessible name. */
+ *  nav's top row). `label` is its tooltip and accessible name. `shape`:
+ *  'strip' (the default, the drawers' own) fills the whole box on hover;
+ *  'glyph' draws a small shape round the glyph instead (the Home top row's
+ *  "…" and «, which share it so they match exactly). */
 export const DrawerHeaderButton = forwardRef<
   HTMLButtonElement,
-  Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'aria-label'> & { label: string }
->(function DrawerHeaderButton({ label, className, children, ...rest }, ref) {
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'aria-label'> & { label: string; shape?: 'strip' | 'glyph' }
+>(function DrawerHeaderButton({ label, className, shape = 'strip', children, ...rest }, ref) {
+  const base = shape === 'glyph' ? GLYPH_HEADER_BUTTON_CLASS : DRAWER_HEADER_BUTTON_CLASS
   return (
     <button
       ref={ref}
@@ -41,7 +53,8 @@ export const DrawerHeaderButton = forwardRef<
       title={label}
       aria-label={label}
       data-drawer-header-button=""
-      className={className ? `${DRAWER_HEADER_BUTTON_CLASS} ${className}` : DRAWER_HEADER_BUTTON_CLASS}
+      data-k2-glyph-button={shape === 'glyph' ? '' : undefined}
+      className={className ? `${base} ${className}` : base}
       {...rest}
     >
       {children}

@@ -198,7 +198,7 @@ import { homeRooms } from '@/stores/home-rooms'
 import { HOME_NAV_EDGE_TINT, HOME_SETUP_SLOT_CLASS, otherRowOpenTitle } from './HomeSidebar'
 import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 import { NAV_COLLAPSE_GAP_PX } from '@/components/Sidebar/SidebarCollapseButton'
-import { DRAWER_HEADER_BUTTON_CLASS } from '@/components/Layout/DrawerTabBarToggle'
+import { DRAWER_HEADER_BUTTON_CLASS, GLYPH_HEADER_BUTTON_CLASS } from '@/components/Layout/DrawerTabBarToggle'
 import { __resetAddPickerListingsForTests } from './HomeAddPanels'
 import { ADD_TO_HOME_MARGIN, ADD_TO_HOME_MAX, ADD_TO_HOME_SHEET_BELOW_PX, ADD_TO_HOME_SIZE_CLASS } from './AddToHomeModal'
 import { useCommandPaletteStore } from '@/stores/command-palette'
@@ -1054,7 +1054,7 @@ describe('Home — the Agents page shell', () => {
     }
   })
 
-  it('the top row is the tab strip\'s height: name, count, then "…" and « as drawer header buttons', () => {
+  it('the top row is the tab strip\'s height: name, its count tag, then "…" and « as glyph-shaped drawer header buttons', () => {
     render(<Shell />)
     const home = useHomesStore.getState().homes[0]
     const row = homeSidebar().querySelector('[data-group-name-header]') as HTMLElement
@@ -1063,18 +1063,29 @@ describe('Home — the Agents page shell', () => {
     expect(row.className.split(/\s+/)).toContain(TAB_STRIP_HEIGHT)
     expect(row.className).toContain('border-b border-[var(--color-border)]')
     expect(row.className).not.toMatch(/min-h-|\bpy-|\bpt-|\bpb-/)
-    // Name (takes the room, truncates), count, then the two buttons, edge to edge.
+    // Name (truncates), its count tag right after it (never shrinks), then
+    // the two buttons, edge to edge.
     const name = row.querySelector('[data-group-name]') as HTMLElement
     expect(name.textContent).toBe(home.name)
-    expect(name.className).toMatch(/\bflex-1\b/)
+    expect(name.className).not.toMatch(/\bflex-1\b/)
     expect(name.className).toMatch(/\btruncate\b/)
-    expect(name.nextElementSibling?.getAttribute('data-group-count')).toBe('')
+    expect(name.className).toMatch(/\bmin-w-0\b/)
+    const tag = name.nextElementSibling as HTMLElement
+    expect(tag.getAttribute('data-group-count')).toBe('')
+    expect(tag.textContent).toBe(String(home.rows.length))
+    expect(tag.className.split(/\s+/)).toContain('flex-shrink-0')
+    expect(tag.className).toContain('bg-[var(--color-wash-2)]')
+    expect(tag.getAttribute('data-k2-chamfer')).toBe('chip')
     const buttons = Array.from(row.querySelectorAll(':scope > button'))
     expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([`Edit groups (${home.name})`, 'Collapse workspaces sidebar'])
+    // Both take the one small-shape variant: the same class, no box fill.
     for (const b of buttons) {
       expect(b.hasAttribute('data-drawer-header-button')).toBe(true)
-      expect(b.className).toContain(DRAWER_HEADER_BUTTON_CLASS)
+      expect(b.getAttribute('data-k2-glyph-button')).toBe('')
+      expect(b.className).toContain(GLYPH_HEADER_BUTTON_CLASS)
+      expect(b.className).not.toContain(DRAWER_HEADER_BUTTON_CLASS)
     }
+    expect(buttons[0].className.replace(/\s*-ml-2\b/, '')).toBe(buttons[1].className.replace(/\s*-ml-2\b/, ''))
     expect(buttons[1].className).toContain('-ml-2')
     // "…" opens the Groups dialog on the current group; « collapses the nav.
     fireEvent.click(buttons[0])

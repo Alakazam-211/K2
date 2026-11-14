@@ -1470,6 +1470,64 @@ html[data-style="terminal"] [data-k2-focus]:focus-visible:not([data-zen-root] *,
   clip-path: polygon(evenodd, var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut), var(--k2-ch-cut) 0, calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr)) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr)) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), var(--k2-ch-fr) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), var(--k2-ch-fr) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr));
 }
 
+/* Glyph buttons: DrawerHeaderButton's 'glyph' shape (the Home nav's top row,
+   "…" and «). The button keeps its whole box to click, but hover and keyboard
+   focus draw one small shape centred on the glyph, not a fill of the box.
+   Every glyph button takes the one size (--k2-glyph-hover-size, 28px at
+   density 1), so "…" and « match exactly.
+   - ::before is the hover fill, under the glyph: the button isolates
+     (`isolate`), so z-index -1 stays inside it. The fill is the list rows'
+     hover band (--color-row-hover, a wash of 1.2:1 or more on any ground):
+     the drawers' bg-elevated all but vanished on Veil's white nav (1.07:1).
+   - ::after is the keyboard focus ring on the same box: 2px of the accent as
+     text, which reads at 3:1 on every ground.
+   Glass rounds both into a circle (--radius-pill). Terminal squares them and
+   cuts the control's chamfer (--chamfer-control, chamferCutFor(28) = 5px),
+   the ring following the cut as the data-k2-focus ring does. Gardens never
+   match. */
+:root {
+  --k2-glyph-hover-size: calc(var(--spacing) * 7);
+}
+[data-k2-glyph-button]:not([data-zen-root] *, [data-k2-thread-zen] *)::before,
+[data-k2-glyph-button]:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--k2-glyph-hover-size);
+  height: var(--k2-glyph-hover-size);
+  margin: calc(var(--k2-glyph-hover-size) / -2) 0 0 calc(var(--k2-glyph-hover-size) / -2);
+  pointer-events: none;
+  border-radius: var(--radius-pill);
+}
+[data-k2-glyph-button]:not([data-zen-root] *, [data-k2-thread-zen] *)::before {
+  z-index: -1;
+  background: transparent;
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+[data-k2-glyph-button]:hover:not([data-zen-root] *, [data-k2-thread-zen] *)::before {
+  background: var(--color-row-hover);
+}
+[data-k2-glyph-button]:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
+  z-index: 1;
+}
+[data-k2-glyph-button]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
+  box-shadow: inset 0 0 0 2px var(--color-accent-text);
+}
+html[data-style="terminal"] [data-k2-glyph-button]:not([data-zen-root] *, [data-k2-thread-zen] *)::before {
+  --k2-ch-cut: var(--chamfer-control);
+  border-radius: 0;
+  clip-path: polygon(var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut));
+}
+html[data-style="terminal"] [data-k2-glyph-button]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
+  --k2-ch-cut: var(--chamfer-control);
+  --k2-ch-fr: 2px;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--color-accent-text);
+  clip-path: polygon(evenodd, var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut), var(--k2-ch-cut) 0, calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr)) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr)) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), var(--k2-ch-fr) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), var(--k2-ch-fr) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr));
+}
+
 /* Line-2 chips on agent rows (project tags, the Home machine chip) in K2's
    square Style: chamfered rectangles, like the presence chips and the
    Thread (Rosson 2026-10-16). The cut follows the Thread's rule for a 14px

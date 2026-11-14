@@ -1850,10 +1850,11 @@ async fn avoid_keeps_jobs_off_a_node_at_submit_on_moves_and_on_release() {
     compute_ws::test_detach("q2n12-vin");
 }
 
-/// `--avoid` with a node the caller can't use (0.46.12): an ungranted node
-/// is never picked anyway, so the ask is accepted with one note, and a
-/// name that matches no node at all gets the very same note: neither says
-/// whether an ungranted node exists. Same on `--plan` and `move --auto`.
+/// `--avoid` with a node the caller can't use: the ask is accepted with one
+/// note, and a name that matches no node at all gets the very same note:
+/// neither says whether an ungranted node exists. The ungranted node is
+/// still kept (silently) on the job's avoid list, in case it is granted
+/// while the job waits. Same on `--plan` and `move --auto`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn avoid_with_a_node_not_yours_is_a_note_not_an_error() {
     let env = setup();
@@ -1871,7 +1872,7 @@ async fn avoid_with_a_node_not_yours_is_a_note_not_an_error() {
     let _c = compute_ws::test_attach("q4nc-vin", offer(1, 30, 32, 0));
     hold_one_slot(d.port, "q4nb-vin", &me, 2).await;
     let agent = passport(&me);
-    let note = |t: &str| format!("--avoid {t}: not one of your nodes; nothing to avoid");
+    let note = avoid_note;
     let warns = |r: &Resp| -> Vec<String> {
         j(r)["warnings"].as_array().unwrap_or_else(|| panic!("no warnings: {}", r.body)).iter().map(|w| w.as_str().unwrap().to_string()).collect()
     };
@@ -1894,13 +1895,15 @@ async fn avoid_with_a_node_not_yours_is_a_note_not_an_error() {
     assert_eq!(avoid_notes(&r), vec![note("q4nc-vin"), note("nosuchnode")], "{}", r.body);
     let job = id_of(&r);
     assert_eq!(node_of(&r), "q4nb-vin", "never the avoided q4na, never the ungranted q4nc");
-    assert_eq!(row(&job).ctl.any.as_ref().map(|f| f.avoid.clone()), Some(vec!["q4na-vin".to_string()]), "only a node of yours is stored");
+    let kept = row(&job).ctl.any.expect("auto");
+    assert_eq!(kept.avoid, vec!["q4na-vin".to_string(), "q4nc-vin".to_string()], "q4nc is kept too, in case it is granted later");
+    assert_eq!(serde_json::to_value(&kept).unwrap()["avoidNames"], json!(["nosuchnode"]), "a name that is no node yet is kept as typed");
 
-    // Only notes: as if no --avoid was passed (auto-placed, nothing stored).
+    // Only notes: placed as if no --avoid was passed; the names still ride.
     let r = run(d.port, &agent, &me, json!({"avoid": ["q4nc-vin", "nosuchnode"], "memBytes": GB})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(node_of(&r), "q4na-vin", "{}", r.body);
-    assert_eq!(row(&id_of(&r)).ctl.any.as_ref().map(|f| f.avoid.clone()), Some(vec![]), "{}", r.body);
+    assert_eq!(row(&id_of(&r)).ctl.any.as_ref().map(|f| f.avoid.clone()), Some(vec!["q4nc-vin".to_string()]), "{}", r.body);
 
     // move --auto: the same notes, and the release goes ahead.
     let r = run(d.port, &agent, &me, json!({"node": "q4nb-vin", "memBytes": GB})).await;
@@ -1911,12 +1914,108 @@ async fn avoid_with_a_node_not_yours_is_a_note_not_an_error() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(warns(&r), vec![note("q4nc-vin"), note("nosuchnode")], "{}", r.body);
     assert!(row(&pinned).ctl.any.is_some(), "released to auto");
+    assert_eq!(j(&r)["filter"]["avoid"], json!([]), "the answer never names a node the workspace can't use: {}", r.body);
 
     // The owner sees every node: a name that is none is the same note.
     let r = run(d.port, OWNER, &me, json!({"plan": true, "avoid": ["nosuchnode"]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(avoid_notes(&r), vec![note("nosuchnode")], "{}", r.body);
     for n in ["q4na-vin", "q4nb-vin", "q4nc-vin"] {
+        compute_ws::test_detach(n);
+    }
+}
+
+/// The note for an `--avoid` name that isn't one of the caller's nodes
+/// (the same words for an ungranted node and for no node at all).
+fn avoid_note(t: &str) -> String {
+    format!("--avoid {t}: not one of your nodes now; if it becomes one, this job still never goes there")
+}
+
+/// An active (confirmed) node whose id is not its name, as on a real
+/// server (node ids are random; names are what people type).
+fn named_node(id: &str, name: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let labels = std::collections::BTreeMap::from([("os".to_string(), "linux".to_string())]);
+    store::insert_pending_node(&conn, id, name, &format!("{id:0>64}"), "pem", &labels, "owner", "123456", 1).expect("node");
+    store::confirm_node(&conn, id, "owner", 2).expect("confirm");
+}
+
+/// An auto job of `ws` (as its agent) with `avoid`, queued on `on`.
+async fn submit_avoiding(port: u16, agent: &str, ws: &Ws, avoid: Value, on: &str) -> String {
+    let r = run(port, agent, ws, json!({"avoid": avoid, "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), on, "{}", r.body);
+    id_of(&r)
+}
+
+/// `--avoid` holds for the job's whole life, also for a node that becomes
+/// the workspace's only after submit: granted while the job waits (the
+/// sweeper's move, a retry after an interrupted attempt), or enrolled
+/// later under a name the job avoids. Avoided by its full name (a node
+/// another server shares with this one) or by a start of it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_avoided_node_that_becomes_yours_later_is_still_never_picked() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "avl");
+    // A: this workspace's only node, one slot, held. C: a shared node
+    // another server owns, free, not granted to this workspace yet.
+    named_node("id-a5", "q5na-vin");
+    named_node("id-c5", "q5nc-vin");
+    grant("id-a5", &me, None, 2);
+    let _a = compute_ws::test_attach("id-a5", one_slot_full(1));
+    let mut c_offer = offer(1, 30, 32, 0);
+    c_offer.features.push(FEATURE_QUEUE.to_string());
+    c_offer.share = Some(shared_view());
+    let mut c = compute_ws::test_attach("id-c5", c_offer);
+    hold_one_slot(d.port, "id-a5", &me, 2).await;
+    let agent = passport(&me);
+
+    // Before C is granted, nothing names it back to the agent.
+    let r = run(d.port, &agent, &me, json!({"avoid": ["q5na-vin", "q5nc-vin"], "memBytes": GB})).await;
+    assert_eq!((r.status, code(&r)), (409, "avoid_leaves_no_node".to_string()), "{}", r.body);
+    assert!(!r.body.contains("q5nc"), "a refusal never names a node the workspace can't use: {}", r.body);
+
+    let by_name = submit_avoiding(d.port, &agent, &me, json!(["q5nc-vin"]), "id-a5").await;
+    let by_start = submit_avoiding(d.port, &agent, &me, json!(["q5nc"]), "id-a5").await;
+    let retried = submit_avoiding(d.port, &agent, &me, json!(["q5nc-vin"]), "id-a5").await;
+    // Z doesn't exist yet: avoided by the name it will have.
+    let not_yet = submit_avoiding(d.port, &agent, &me, json!(["q5nc-vin", "q5nz-vin"]), "id-a5").await;
+
+    // The owner grants C to the workspace while they wait.
+    grant("id-c5", &me, None, 2);
+    let mut wrong: Vec<String> = Vec::new();
+    // A retry after an interrupted attempt on A: never to C.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_job_state(&conn, &retried, k2_core::compute::proto::frames::JobState::Interrupted, Some("node_lost"), None, k2_core::compute::now())
+            .expect("interrupt");
+    }
+    assert!(k2_daemon::compute_place::after_attempt(&retried), "an interrupted attempt is retried");
+    // The sweeper's moves: A stays busy, C is free.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    for (what, job) in [("retry", &retried), ("mover, by full name", &by_name), ("mover, by a start of the name", &by_start), ("mover", &not_yet)] {
+        let at = row(job).node_id;
+        if at == "id-c5" {
+            wrong.push(format!("{what}: went to the avoided q5nc"));
+        }
+    }
+    if !assigns(&mut c).is_empty() {
+        wrong.push("a job was sent to the avoided q5nc".to_string());
+    }
+    // C goes offline; a new node Z (free) joins under a name one job avoids.
+    compute_ws::test_detach("id-c5");
+    named_node("id-z5", "q5nz-vin");
+    grant("id-z5", &me, None, 2);
+    let _z = compute_ws::test_attach("id-z5", offer(1, 30, 32, 0));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    if row(&not_yet).node_id == "id-z5" {
+        wrong.push("mover, a node that joined later: went to the avoided q5nz".to_string());
+    }
+    assert!(wrong.is_empty(), "--avoid was ignored: {wrong:?}");
+    for n in ["id-a5", "id-z5"] {
         compute_ws::test_detach(n);
     }
 }

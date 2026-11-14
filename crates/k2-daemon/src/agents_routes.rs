@@ -564,13 +564,21 @@ pub fn handle_agents_delegate(
 /// version flag (hermes) is installed with `version: null` and no error.
 /// `launches` says whether an agent launch runs that same file. See
 /// [`k2_core::terminal::cli_status`].
+///
+/// Speed pass P5: once a binary has been asked, the route answers at once
+/// from the last answer. `ageSecs` is how old the oldest answer served is;
+/// `refreshing: true` means one was past `cacheSecs` and is being asked
+/// again behind this answer. Only the first ask of a binary (or of a
+/// changed one) waits for its `--version`.
 pub fn handle_cli_status() -> CliResponse {
-    let tools = k2_core::terminal::cli_status::cli_status();
+    let report = k2_core::terminal::cli_status::cli_status_report();
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
             "cacheSecs": k2_core::terminal::cli_status::CACHE_TTL.as_secs(),
-            "tools": tools,
+            "ageSecs": report.age.as_secs(),
+            "refreshing": report.refreshing,
+            "tools": report.tools,
         })
         .to_string(),
     )

@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   body: null as unknown,
   /** Answers held back, served in order before `body`. */
   held: [] as Array<Promise<unknown>>,
+  /** Refresh POST answers held back, served in order before `body`. */
+  heldPosts: [] as Array<Promise<unknown>>,
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
@@ -23,7 +25,8 @@ vi.mock('@/lib/daemon-cli', () => ({
   },
   daemonCliPost: async (scope: unknown, route: string) => {
     h.posts.push({ scope, route })
-    return h.body
+    const held = h.heldPosts.shift()
+    return held ? await held : h.body
   },
 }))
 
@@ -50,6 +53,7 @@ import {
   startUsageCachePoll,
   usageCachePollHolds,
   usageEntryFor,
+  useSubscriptionUsageStore,
   type UsageTarget,
 } from './subscription-usage'
 import { useWindowFocusStore } from './window-focus'
@@ -96,6 +100,7 @@ beforeEach(() => {
   h.gets.length = 0
   h.posts.length = 0
   h.held.length = 0
+  h.heldPosts.length = 0
   h.body = doc(0.1)
   useWindowFocusStore.setState({ isFocused: true })
   resetSubscriptionUsageForTests()
@@ -237,3 +242,38 @@ describe('one poller per server (B32) and the push (B20)', () => {
     expect(usedOf('win')).toBe(0.33)
   })
 })
+
+// Speed pass P5: a daemon with `usage-refresh-async` answers the menu's
+// refresh with the saved numbers marked `refreshing`, checks behind them,
+// and announces `subscription_usage_changed` when the check ends.
+describe('the refresh never waits on a vendor (P5)', () => {
+  it('shows the saved numbers marked refreshing, then the new ones without the mark', async () => {
+    stop = startUsageCachePoll(target)
+    h.body = { ...(doc(0.4) as object), refreshing: true }
+    await useSubscriptionUsageStore.getState().refreshOnOpen(target)
+    expect(h.posts).toHaveLength(1)
+    expect(usedOf('win')).toBe(0.4)
+    expect(usageEntryFor('win')?.doc?.refreshing).toBe(true)
+    // The check ends: the daemon announces, the poller re-reads.
+    h.body = doc(0.5)
+    for (const fn of pushes) fn()
+    await settle()
+    expect(usedOf('win')).toBe(0.5)
+    expect(usageEntryFor('win')?.doc?.refreshing).toBeUndefined()
+  })
+
+  it('a refresh answer that lands after a newer read does not put the old numbers back', async () => {
+    let answerPost: (v: unknown) => void = () => {}
+    h.heldPosts.push(new Promise((r) => (answerPost = r)))
+    const opened = useSubscriptionUsageStore.getState().refreshOnOpen(target)
+    // The check ended and the read after it landed first.
+    h.body = doc(0.6)
+    await useSubscriptionUsageStore.getState().load(target, { fresh: true })
+    expect(usedOf('win')).toBe(0.6)
+    answerPost({ ...(doc(0.4) as object), refreshing: true })
+    await opened
+    expect(usedOf('win')).toBe(0.6)
+    expect(usageEntryFor('win')?.doc?.refreshing).toBeUndefined()
+  })
+})
+

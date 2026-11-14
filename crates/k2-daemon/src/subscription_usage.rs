@@ -24,6 +24,20 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 
+// Speed pass P5: the refresh route that answers at once, and the vendor
+// calls that run in parallel, each with its own timeout.
+#[path = "subscription_usage_refresh.rs"]
+mod refresh_async;
+pub use refresh_async::{handle_refresh_route, refresh_pending, FEATURE_REFRESH_ASYNC};
+use refresh_async::with_refreshing;
+#[cfg(test)]
+pub(crate) use refresh_async::wait_refresh_idle;
+#[path = "subscription_usage_parallel.rs"]
+mod parallel;
+use parallel::probe_and_write_mode;
+#[cfg(test)]
+use parallel::test_vendor_timeout_slot;
+
 /// Background probe period. The first tick waits one full interval;
 /// opening the menu is the cold-start probe.
 pub const PROBE_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -287,7 +301,7 @@ pub fn handle_get() -> CliResponse {
                 crate::usage_refresh::kick_if_reset_passed(id, rec);
             }
         }
-        return ok_value(&doc);
+        return ok_value(&with_refreshing(doc));
     }
     let path = cache_path();
     if !path.is_file() {
@@ -309,7 +323,8 @@ pub fn handle_get() -> CliResponse {
     ok_doc(&doc)
 }
 
-/// `POST /cli/usage/subscriptions/refresh`.
+/// `POST /cli/usage/subscriptions/refresh?wait=1` (and the callers that
+/// need the new numbers before they answer).
 /// A cache newer than 15 seconds is returned as-is. Otherwise the probe
 /// runs here — the caller must be off the connection task (`spawn_blocking`
 /// or the background loop). Concurrent callers share one probe (B19).
@@ -321,7 +336,7 @@ pub fn handle_refresh() -> CliResponse {
         crate::llm_accounts_runtime::spawn_adopt_live_logins();
         use crate::usage_refresh::{request_many, Why, PERSON_WAIT};
         request_many(&crate::usage_store::live_token_ids(), Why::Person, PERSON_WAIT);
-        return ok_value(&crate::usage_store::subscriptions_doc(Utc::now()));
+        return ok_value(&with_refreshing(crate::usage_store::subscriptions_doc(Utc::now())));
     }
     match refresh_shared(None) {
         Ok(doc) => ok_doc(&decorate_file(doc, Utc::now())),
@@ -337,7 +352,7 @@ pub fn refresh_shared(only: Option<&str>) -> Result<SubscriptionFile, String> {
             return Ok(doc);
         }
     }
-    probe_singleflight(io_for_probe().as_ref(), only, Mode::Manual)
+    probe_singleflight(io_for_probe(), only, Mode::Manual)
 }
 
 /// How long after boot the first probe may run (lets boot settle).
@@ -388,7 +403,7 @@ fn background_tick() -> bool {
         crate::usage_refresh::tick();
         return true;
     }
-    if let Err(e) = probe_singleflight(io_for_probe().as_ref(), None, Mode::Background) {
+    if let Err(e) = probe_singleflight(io_for_probe(), None, Mode::Background) {
         k2_core::log_debug!("[usage] subscription probe failed: {e}");
     }
     #[cfg(not(test))]
@@ -437,7 +452,7 @@ pub(crate) fn probe_live_row(name: &str) -> HarnessUsage {
 /// One probe at a time. A caller that waited on a probe which finished
 /// after it asked (covering what it wants) takes that result instead of
 /// starting another.
-fn probe_singleflight(io: &dyn UsageIo, only: Option<&str>, mode: Mode) -> Result<SubscriptionFile, String> {
+fn probe_singleflight(io: Arc<dyn UsageIo>, only: Option<&str>, mode: Mode) -> Result<SubscriptionFile, String> {
     let asked = Instant::now();
     let _gate = flight_gate().lock().unwrap_or_else(|p| p.into_inner());
     if let Some((done, done_only, res)) = flight_last().lock().unwrap_or_else(|p| p.into_inner()).clone() {
@@ -475,7 +490,7 @@ fn kick_background_probe() {
     #[cfg(not(test))]
     {
         let spawned = std::thread::Builder::new().name("usage-recheck".into()).spawn(|| {
-            if let Err(e) = probe_singleflight(io_for_probe().as_ref(), None, Mode::Background) {
+            if let Err(e) = probe_singleflight(io_for_probe(), None, Mode::Background) {
                 k2_core::log_debug!("[usage] re-check after a reset failed: {e}");
             }
             background_running().store(false, Ordering::SeqCst);
@@ -767,7 +782,7 @@ fn ok_value(v: &Value) -> CliResponse {
 }
 
 fn ok_doc(doc: &SubscriptionFile) -> CliResponse {
-    match serde_json::to_string(&served_doc_json(doc, Utc::now())) {
+    match serde_json::to_string(&with_refreshing(served_doc_json(doc, Utc::now()))) {
         Ok(body) => CliResponse::ok_json(body),
         Err(e) => CliResponse::internal_error(format!("subscriptions json: {e}")),
     }
@@ -848,7 +863,7 @@ fn read_cache_file() -> Result<SubscriptionFile, String> {
 /// Probe Claude, Codex, and Grok, then atomic-replace the cache.
 /// A failed read of an existing file does not truncate it.
 #[cfg(test)]
-fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
+fn probe_and_write(io: Arc<dyn UsageIo>) -> Result<SubscriptionFile, String> {
     probe_and_write_only(io, None)
 }
 
@@ -909,12 +924,12 @@ pub fn probe_now(harness: Option<&str>) -> Result<SubscriptionFile, String> {
     if airgap_on() {
         return Err(k2_core::airgap::TEACHING.to_string());
     }
-    probe_singleflight(io_for_probe().as_ref(), harness, Mode::Manual)
+    probe_singleflight(io_for_probe(), harness, Mode::Manual)
 }
 
 /// `only`: probe that harness and keep the others' rows as they are.
 #[cfg(test)]
-fn probe_and_write_only(io: &dyn UsageIo, only: Option<&str>) -> Result<SubscriptionFile, String> {
+fn probe_and_write_only(io: Arc<dyn UsageIo>, only: Option<&str>) -> Result<SubscriptionFile, String> {
     probe_and_write_mode(io, only, Mode::Manual)
 }
 
@@ -943,98 +958,6 @@ fn skip_reason(cached: Option<&HarnessUsage>, owner: Option<&str>, name: &str, m
         return Some("a running session reported it".into());
     }
     None
-}
-
-fn probe_and_write_mode(io: &dyn UsageIo, only: Option<&str>, mode: Mode) -> Result<SubscriptionFile, String> {
-    // Belt for any caller that missed the route/loop gate.
-    if airgap_on() {
-        return Err(k2_core::airgap::TEACHING.to_string());
-    }
-    probe_hits().fetch_add(1, Ordering::SeqCst);
-    let now_wall = SystemTime::now();
-    let now = Utc::now();
-    let previous = match load_cache() {
-        Loaded::Missing => SubscriptionFile {
-            harnesses: Vec::new(),
-        },
-        Loaded::Ready(doc) => doc,
-        Loaded::Unreadable(e) => return Err(e),
-    };
-    let cached = |name: &str| previous.harnesses.iter().find(|h| h.harness == name).cloned();
-    let mut rows = Vec::new();
-    for name in PROBED_HARNESSES {
-        if only.is_some_and(|o| o != name) {
-            if let Some(row) = cached(name) {
-                rows.push(row);
-            }
-            continue;
-        }
-        // This token's own call starts here, not at the top of the loop.
-        let measured = Utc::now();
-        let gen_before = wallet_generation(name);
-        let owner = gen_before.as_ref().map(|g| g.0.as_str());
-        if let Some(why) = skip_reason(cached(name).as_ref(), owner, name, mode, now) {
-            k2_core::log_debug!("[usage] {name}: not probed ({why})");
-            if let Some(row) = cached(name) {
-                rows.push(row);
-            }
-            continue;
-        }
-        // A failed check keeps THIS token's last reading: the token's own
-        // row when the wallet knows which token is live, else (no wallet
-        // entry) the cache row, only if it isn't some other token's.
-        let prev = match &gen_before {
-            Some((owner, _)) => wallet_row(owner).or_else(|| cached(name).filter(|r| r.account_id.as_deref() == Some(owner.as_str()))),
-            None => cached(name).filter(|r| r.account_id.is_none()),
-        };
-        let mut row = match name {
-            HARNESS_CLAUDE => probe_claude(io.claude_login(), |token| io.claude_get(token), prev.as_ref(), now_wall, now),
-            HARNESS_CODEX => probe_codex(io.codex(), prev.as_ref(), now),
-            _ => probe_grok(io.grok(), prev.as_ref(), now),
-        };
-        row.source = "probe".into();
-        note_outcome(name, &row, now);
-        let gen_after = wallet_generation(name);
-        match (&gen_before, &gen_after) {
-            (Some(b), Some(a)) if a == b => {
-                row.account_id = Some(b.0.clone());
-                // Not the default's reading while the live sign-in is known
-                // to be another account (LT-A6).
-                let other = k2_core::llm_accounts::Tool::parse(name).is_some_and(k2_core::llm_accounts::wallet::live_is_other_account);
-                if !other {
-                    record_on_wallet(&b.0, &row, measured);
-                }
-            }
-            (Some(_), _) => {
-                // A switch ran during the probe: the reading may be either
-                // token's. Show nothing as fresh; the switch re-checks.
-                k2_core::log_debug!("[usage] {name}: the server default changed during the check; reading dropped");
-                row = preserved(name, None, "", &row.plan, now, Some("the server default changed during the check".into()));
-            }
-            _ => {}
-        }
-        rows.push(row);
-    }
-    let mut doc = SubscriptionFile { harnesses: rows };
-    {
-        // A live feed may have written a newer reading while the probe ran
-        // (it held no lock): keep that one.
-        let _g = cache_lock();
-        if let Loaded::Ready(current) = load_cache() {
-            for row in &mut doc.harnesses {
-                let Some(cur) = current.harnesses.iter().find(|h| h.harness == row.harness) else { continue };
-                let cur_t = DateTime::parse_from_rfc3339(&cur.checked_at).ok();
-                let row_t = DateTime::parse_from_rfc3339(&row.checked_at).ok();
-                let newer = matches!((cur_t, row_t), (Some(c), Some(r)) if c > r) || (cur_t.is_some() && row_t.is_none());
-                if cur.source.starts_with("live") && newer && cur.account_id == row.account_id {
-                    *row = cur.clone();
-                }
-            }
-        }
-        write_cache(&doc)?;
-    }
-    crate::session_events::emit_subscription_usage_changed(only, None, "probe");
-    Ok(doc)
 }
 
 fn probe_claude(
@@ -2542,7 +2465,7 @@ pub(crate) mod tests {
         }
     }
 
-    struct PanicIo;
+    pub(crate) struct PanicIo;
 
     impl UsageIo for PanicIo {
         fn claude_login(&self) -> ClaudeLogin {
@@ -2603,12 +2526,16 @@ pub(crate) mod tests {
         // test that sets K2_AIRGAP.
         set_airgap(false);
         let _deny = k2_core::test_env::EnvVar::set("K2_SUBSCRIPTION_PROBE", "deny");
+        *test_vendor_timeout_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         f();
+        // A background refresh a test started must not outlive its home.
+        assert!(wait_refresh_idle(Duration::from_secs(60)), "a background refresh is still running");
+        *test_vendor_timeout_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         *test_airgap_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
     }
 
-    fn install(io: Arc<dyn UsageIo>) {
+    pub(super) fn install(io: Arc<dyn UsageIo>) {
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(io);
     }
 
@@ -2666,7 +2593,7 @@ pub(crate) mod tests {
     fn airgap_probe_and_write_refuses_before_any_io() {
         with_isolated(|| {
             set_airgap(true);
-            let err = probe_and_write(&PanicIo).expect_err("air-gap must refuse");
+            let err = probe_and_write(Arc::new(PanicIo)).expect_err("air-gap must refuse");
             assert_eq!(err, k2_core::airgap::TEACHING);
             assert_eq!(probe_hits().load(Ordering::SeqCst), 0);
         });
@@ -2763,7 +2690,7 @@ pub(crate) mod tests {
     }
 
     /// A seconds-shaped expiry still in the future on the machine running the test.
-    fn future_expiry_secs() -> i64 {
+    pub(crate) fn future_expiry_secs() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -2771,7 +2698,7 @@ pub(crate) mod tests {
             + 3600
     }
 
-    fn usage_body() -> String {
+    pub(crate) fn usage_body() -> String {
         r#"{"five_hour":{"utilization":10,"resets_at":"2026-09-26T20:00:00Z"},"seven_day":{"utilization":31,"resets_at":"2026-10-03T00:00:00Z"},"seven_day_oauth_apps":null,"limits":[{"kind":"weekly_scoped","percent":12,"resets_at":"2026-10-03T00:00:00Z","scope":{"model":{"display_name":"Opus","id":"claude-opus"}}}]}"#.into()
     }
 
@@ -2838,14 +2765,14 @@ pub(crate) mod tests {
     #[test]
     fn written_file_has_no_access_token() {
         with_isolated(|| {
-            let io = ScriptIo {
+            let io = Arc::new(ScriptIo {
                 login: token_login(Some(future_expiry_secs())),
                 body: Mutex::new(Ok(usage_body())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::NotSignedIn),
                 grok: Mutex::new(GrokOutcome::NotSignedIn),
-            };
-            let doc = probe_and_write(&io).expect("write");
+            });
+            let doc = probe_and_write(io.clone()).expect("write");
             assert_eq!(io.gets.load(Ordering::SeqCst), 1);
             let text = fs::read_to_string(cache_path()).expect("cache file");
             assert!(!text.contains("accessToken"), "{text}");
@@ -3227,14 +3154,14 @@ pub(crate) mod tests {
             assert!(!response.body.contains("gemini"), "{}", response.body);
             let on_disk = fs::read_to_string(cache_path()).expect("disk");
             assert!(on_disk.contains("gemini"), "GET must not rewrite the file");
-            let io = ScriptIo {
+            let io = Arc::new(ScriptIo {
                 login: token_login(Some(future_expiry_secs())),
                 body: Mutex::new(Ok(usage_body())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::NotSignedIn),
                 grok: Mutex::new(GrokOutcome::NotSignedIn),
-            };
-            let written = probe_and_write(&io).expect("probe");
+            });
+            let written = probe_and_write(io.clone()).expect("probe");
             assert_eq!(written.harnesses.len(), 3);
             assert!(written.harnesses.iter().all(|h| h.harness != "gemini"));
             let names: Vec<&str> = written
@@ -3363,14 +3290,14 @@ pub(crate) mod tests {
             write_cache(&doc).expect("seed");
             let before = fs::read(cache_path()).expect("seed bytes");
             assert!(!before.is_empty());
-            let io = ScriptIo {
+            let io = Arc::new(ScriptIo {
                 login: token_login(Some(future_expiry_secs())),
                 body: Mutex::new(Err("usage endpoint down".into())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::Failed),
                 grok: Mutex::new(GrokOutcome::Failed),
-            };
-            let written = probe_and_write(&io).expect("preserved write");
+            });
+            let written = probe_and_write(io.clone()).expect("preserved write");
             assert_eq!(io.gets.load(Ordering::SeqCst), 1);
             let text = fs::read_to_string(cache_path()).expect("cache");
             assert!(text.contains("keep-me-weekly"), "{text}");
@@ -3437,14 +3364,14 @@ pub(crate) mod tests {
             write_cache(&SubscriptionFile { harnesses: vec![old] }).expect("seed");
             // The check for the new default fails (429): the old account's
             // numbers must not appear as the new default's.
-            let failing = ScriptIo {
+            let failing = Arc::new(ScriptIo {
                 login: token_login(Some(future_expiry_secs())),
                 body: Mutex::new(Err("usage endpoint status 429".into())),
                 gets: AtomicUsize::new(0),
                 codex: Mutex::new(CodexOutcome::NotSignedIn),
                 grok: Mutex::new(GrokOutcome::NotSignedIn),
-            };
-            let doc = probe_and_write(&failing).expect("write");
+            });
+            let doc = probe_and_write(failing.clone()).expect("write");
             let claude = doc.harnesses.iter().find(|h| h.harness == HARNESS_CLAUDE).expect("claude");
             assert!(claude.windows.is_empty(), "another token's windows were shown: {claude:?}");
             assert_eq!(claude.checked_at, "", "never read for this token");
@@ -3455,7 +3382,7 @@ pub(crate) mod tests {
             assert_eq!(checked_live, None, "a failed check never stamps usage_checked_at");
             // A good reading lands on the live token only.
             let ok_io = signed_in_script();
-            let doc = probe_and_write(ok_io.as_ref()).expect("write");
+            let doc = probe_and_write(ok_io.clone()).expect("write");
             let claude = doc.harnesses.iter().find(|h| h.harness == HARNESS_CLAUDE).expect("claude");
             assert!(claude.error.is_none());
             assert_eq!(claude.account_id.as_deref(), Some("acc_live"));
@@ -3467,7 +3394,7 @@ pub(crate) mod tests {
             assert_eq!((json_old, checked_old), (None, None), "the idle token's row is untouched");
             // A later failure keeps THIS token's last good reading and time.
             *ok_io.body.lock().unwrap() = Err("usage endpoint status 500".into());
-            let doc = probe_and_write(ok_io.as_ref()).expect("write");
+            let doc = probe_and_write(ok_io.clone()).expect("write");
             let claude = doc.harnesses.iter().find(|h| h.harness == HARNESS_CLAUDE).expect("claude");
             let still_open: Vec<UsageWindow> = row.windows.iter().filter(|w| window_still_open(w, Utc::now())).cloned().collect();
             assert_eq!(claude.windows, still_open, "this token's own windows (closed ones dropped)");
@@ -3949,7 +3876,7 @@ pub(crate) mod tests {
     #[test]
     fn grok_not_signed_in_leaves_claude_and_codex_rows() {
         with_isolated(|| {
-            let io = ScriptIo {
+            let io = Arc::new(ScriptIo {
                 login: token_login(Some(future_expiry_secs())),
                 body: Mutex::new(Ok(usage_body())),
                 gets: AtomicUsize::new(0),
@@ -3963,8 +3890,8 @@ pub(crate) mod tests {
                     }],
                 }),
                 grok: Mutex::new(GrokOutcome::NotSignedIn),
-            };
-            let doc = probe_and_write(&io).expect("probe");
+            });
+            let doc = probe_and_write(io.clone()).expect("probe");
             let claude = doc
                 .harnesses
                 .iter()
@@ -4129,3 +4056,7 @@ pub(crate) mod tests {
         assert_eq!(chip_percent(&gemini, now), None, "only probed tools have a chip");
     }
 }
+
+#[cfg(test)]
+#[path = "subscription_usage_p5_tests.rs"]
+mod p5_tests;

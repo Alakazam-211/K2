@@ -45,6 +45,12 @@ interface SubscriptionUsageStore {
 
 const loadInflight = new Map<string, Promise<void>>()
 const epochs = new Map<string, number>()
+/** Requests are numbered as they start; an answer older than the one
+ *  already shown for a server is dropped. A refresh POST answers the saved
+ *  numbers marked `refreshing` (P5), and the read after the check ends may
+ *  land first: the slower, older answer must not put the mark back. */
+let requestSeq = 0
+const shownSeq = new Map<string, number>()
 
 function epochOf(key: string): number {
   return epochs.get(key) ?? 0
@@ -66,6 +72,7 @@ function dropEntry(key: string): void {
 export function resetSubscriptionUsageForTests(): void {
   for (const key of new Set([...epochs.keys(), ...loadInflight.keys()])) epochs.set(key, epochOf(key) + 1)
   loadInflight.clear()
+  shownSeq.clear()
   cachePollers.stopAll()
   useSubscriptionUsageStore.setState({ entries: {} })
 }
@@ -76,8 +83,10 @@ export function usageEntryFor(key: string): UsageEntry | null {
 }
 
 export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, get) => {
-  const write = (key: string, epoch: number, next: Partial<UsageEntry>): void => {
+  const write = (key: string, epoch: number, seq: number, next: Partial<UsageEntry>): void => {
     if (epoch !== epochOf(key)) return
+    if (seq < (shownSeq.get(key) ?? 0)) return
+    shownSeq.set(key, seq)
     set((s) => {
       const prev = s.entries[key] ?? { doc: null, error: null }
       return { entries: { ...s.entries, [key]: { ...prev, ...next } } }
@@ -91,12 +100,13 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
       const running = loadInflight.get(target.key)
       if (running) return opts?.fresh ? running.then(() => get().load(target)) : running
       const epoch = epochOf(target.key)
+      const seq = ++requestSeq
       const p = (async () => {
         try {
           const doc = parseSubscriptionDoc(await daemonCliGet<unknown>(target.scope, 'usage/subscriptions'))
-          write(target.key, epoch, { doc, error: null })
+          write(target.key, epoch, seq, { doc, error: null })
         } catch (e) {
-          write(target.key, epoch, { error: errorMessage(e) })
+          write(target.key, epoch, seq, { error: errorMessage(e) })
         } finally {
           if (epoch === epochOf(target.key)) loadInflight.delete(target.key)
         }
@@ -107,26 +117,31 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
 
     refreshOnOpen: async (target) => {
       const epoch = epochOf(target.key)
+      const seq = ++requestSeq
       try {
         // The daemon decides freshness (its once-a-minute gate holds for a
-        // room too); the menu only asks.
+        // room too); the menu only asks. A daemon with `usage-refresh-async`
+        // answers the saved numbers at once, `refreshing: true`, and sends
+        // `subscription_usage_changed` when its check ends (the poller
+        // re-reads then); an older one answers after its check.
         const post = scopeMayWrite(target.scope, REFRESH_ROUTE)
         const raw = post
           ? await daemonCliPost<unknown>(target.scope, REFRESH_ROUTE, {})
           : await daemonCliGet<unknown>(target.scope, 'usage/subscriptions')
-        write(target.key, epoch, { doc: parseSubscriptionDoc(raw), error: null })
+        write(target.key, epoch, seq, { doc: parseSubscriptionDoc(raw), error: null })
       } catch (e) {
-        write(target.key, epoch, { error: errorMessage(e) })
+        write(target.key, epoch, seq, { error: errorMessage(e) })
       }
     },
 
     refresh: async (target) => {
       const epoch = epochOf(target.key)
+      const seq = ++requestSeq
       try {
         const doc = parseSubscriptionDoc(await daemonCliPost<unknown>(target.scope, REFRESH_ROUTE, {}))
-        write(target.key, epoch, { doc, error: null })
+        write(target.key, epoch, seq, { doc, error: null })
       } catch (e) {
-        write(target.key, epoch, { error: errorMessage(e) })
+        write(target.key, epoch, seq, { error: errorMessage(e) })
       }
     },
   }

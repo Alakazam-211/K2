@@ -81,6 +81,15 @@ export interface SubscriptionDoc {
   harnesses: HarnessUsage[]
   /** The daemon is in air-gap mode: it does not check usage at all. */
   airgap?: true
+  /** The daemon is checking again behind these saved numbers (speed pass
+   *  P5). `subscription_usage_changed` follows when the check ends. Older
+   *  daemons never send it. */
+  refreshing?: true
+}
+
+/** True while the daemon checks again behind the numbers shown. */
+export function isRefreshing(doc: SubscriptionDoc | null | undefined): boolean {
+  return doc?.refreshing === true
 }
 
 /** True when the daemon said it skips the usage check for air-gap. */
@@ -201,7 +210,9 @@ export function parseSubscriptionDoc(raw: unknown): SubscriptionDoc {
     const row = parseHarness(h)
     if (row) harnesses.push(row)
   }
-  return raw.airgap === true ? { harnesses, airgap: true } : { harnesses }
+  const doc: SubscriptionDoc = raw.airgap === true ? { harnesses, airgap: true } : { harnesses }
+  if (raw.refreshing === true) doc.refreshing = true
+  return doc
 }
 
 export function visibleHarnesses(doc: SubscriptionDoc | null | undefined): HarnessUsage[] {

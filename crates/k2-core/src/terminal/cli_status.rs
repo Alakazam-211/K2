@@ -27,26 +27,30 @@
 //! | installed | true      | "2.0.14"  | "/…"   | null   |
 //! | broken    | true      | null      | "/…"   | "…"    |
 //!
-//! Probe answers (good or broken) are cached per binary for
-//! [`CACHE_TTL`], keyed by the canonical file and its size and mtime, so
-//! repeated Settings opens don't re-spawn processes and an update
-//! (a new file, or a symlink moved to a new version) is probed again.
-//! The harnesses are probed in parallel, so one request takes at most
-//! about one [`PROBE_TIMEOUT`].
+//! Probe answers (good or broken) are cached per binary, keyed by the
+//! canonical file and its size and mtime, so repeated Settings opens don't
+//! re-spawn processes and an update (a new file, or a symlink moved to a
+//! new version) is probed again. An answer older than [`CACHE_TTL`] is
+//! still served at once, with its age, and the binary is probed again in
+//! the background (speed pass P5): only a binary K2 has never asked (or a
+//! changed one) is probed while the request waits. The harnesses are
+//! probed in parallel, so that request takes at most about one
+//! [`PROBE_TIMEOUT`].
 //!
 //! The probe crosses the agent spawn guard first
 //! ([`super::agent_spawn_guard::resolve_program`]): a test build or a
 //! temp HOME never runs a real agent CLI, even just for `--version`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::agent_spawn_guard::GuardEnv;
 
-/// How long one probe answer is trusted for the same binary.
+/// How long one probe answer is trusted for the same binary. An older
+/// answer is still served, and re-checked behind it.
 pub const CACHE_TTL: Duration = Duration::from_secs(60);
 
 /// Hard cap on one `<bin> --version`.
@@ -76,20 +80,54 @@ struct Entry {
     answer: Result<String, String>,
 }
 
-/// Probe answers by canonical binary path.
+/// Probe answers by canonical binary path, and the binaries being
+/// re-checked in the background right now.
 pub struct ProbeCache {
     ttl: Duration,
-    entries: Mutex<HashMap<PathBuf, Entry>>,
+    entries: Arc<Mutex<HashMap<PathBuf, Entry>>>,
+    refreshing: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl ProbeCache {
     pub fn new(ttl: Duration) -> Self {
-        Self { ttl, entries: Mutex::new(HashMap::new()) }
+        Self {
+            ttl,
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            refreshing: Arc::new(Mutex::new(HashSet::new())),
+        }
     }
 
     pub fn ttl(&self) -> Duration {
         self.ttl
     }
+
+    /// A background re-check is running for some binary.
+    pub fn refreshing(&self) -> bool {
+        !self.refreshing.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+    }
+
+    /// Wait until no background re-check runs, up to `cap`. True when idle.
+    pub fn wait_idle(&self, cap: Duration) -> bool {
+        let deadline = Instant::now() + cap;
+        while self.refreshing() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+}
+
+/// What the route answers: every harness, how old the oldest served
+/// version answer is, and whether any is being re-checked behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliStatusReport {
+    pub tools: Vec<CliStatus>,
+    /// Age of the oldest answer served, 0 when every one is new.
+    pub age: Duration,
+    /// A served answer was past [`CACHE_TTL`]; a re-check is running.
+    pub refreshing: bool,
 }
 
 fn global_cache() -> &'static ProbeCache {
@@ -134,12 +172,18 @@ pub fn version_flag(program: &str) -> Option<&'static str> {
 /// Production entry: every launchable harness, on the spawn PATH, with
 /// the shared cache.
 pub fn cli_status() -> Vec<CliStatus> {
+    cli_status_report().tools
+}
+
+/// [`cli_status`] with the served answers' age and whether a re-check is
+/// running behind them (`GET /cli/agents/cli-status`).
+pub fn cli_status_report() -> CliStatusReport {
     let programs = launchable_harnesses();
     let path = super::ensure_cli::spawn_resolve_path();
     let launch = |program: &str| -> Option<PathBuf> {
         super::daemon_pty::preflight_program(program, &HashMap::new()).ok()
     };
-    cli_status_with(
+    cli_status_report_with(
         &programs,
         &path,
         &launch,
@@ -161,7 +205,19 @@ pub fn cli_status_with(
     timeout: Duration,
     guard: &GuardEnv,
 ) -> Vec<CliStatus> {
-    std::thread::scope(|s| {
+    cli_status_report_with(programs, search_path, launch, cache, timeout, guard).tools
+}
+
+/// [`cli_status_with`] plus the served answers' age and re-check state.
+pub fn cli_status_report_with(
+    programs: &[&str],
+    search_path: &str,
+    launch: &(dyn Fn(&str) -> Option<PathBuf> + Sync),
+    cache: &ProbeCache,
+    timeout: Duration,
+    guard: &GuardEnv,
+) -> CliStatusReport {
+    let rows: Vec<(CliStatus, Duration, bool)> = std::thread::scope(|s| {
         let handles: Vec<_> = programs
             .iter()
             .map(|program| s.spawn(move || one(program, search_path, launch, cache, timeout, guard)))
@@ -170,19 +226,27 @@ pub fn cli_status_with(
             .into_iter()
             .zip(programs)
             .map(|(h, program)| {
-                h.join().unwrap_or_else(|_| CliStatus {
-                    program: program.to_string(),
-                    installed: false,
-                    version: None,
-                    path: None,
-                    launches: false,
-                    error: Some("status check panicked".to_string()),
+                h.join().unwrap_or_else(|_| {
+                    let failed = CliStatus {
+                        program: program.to_string(),
+                        installed: false,
+                        version: None,
+                        path: None,
+                        launches: false,
+                        error: Some("status check panicked".to_string()),
+                    };
+                    (failed, Duration::ZERO, false)
                 })
             })
             .collect()
-    })
+    });
+    let age = rows.iter().map(|r| r.1).max().unwrap_or(Duration::ZERO);
+    let refreshing = rows.iter().any(|r| r.2);
+    CliStatusReport { tools: rows.into_iter().map(|r| r.0).collect(), age, refreshing }
 }
 
+/// One harness: its status, the age of the version answer served, and
+/// whether that answer is being re-checked behind it.
 fn one(
     program: &str,
     search_path: &str,
@@ -190,9 +254,9 @@ fn one(
     cache: &ProbeCache,
     timeout: Duration,
     guard: &GuardEnv,
-) -> CliStatus {
+) -> (CliStatus, Duration, bool) {
     let Some(found) = super::ensure_cli::find_installed(program, search_path) else {
-        return CliStatus {
+        let missing = CliStatus {
             program: program.to_string(),
             installed: false,
             version: None,
@@ -200,24 +264,30 @@ fn one(
             launches: false,
             error: None,
         };
+        return (missing, Duration::ZERO, false);
     };
     let launches = launch(program).is_some_and(|l| same_file(&l, &found));
-    let (version, error) = match version_flag(program) {
+    let (answer, age, refreshing) = match version_flag(program) {
         // No flag to ask: installed, version unknown, nothing wrong.
-        None => (None, None),
-        Some(flag) => match probe_cached(cache, &found, flag, search_path, timeout, guard) {
-            Ok(v) => (Some(v), None),
-            Err(e) => (None, Some(e)),
-        },
+        None => (Ok(None), Duration::ZERO, false),
+        Some(flag) => {
+            let got = probe_cached(cache, &found, flag, search_path, timeout, guard);
+            (got.answer.map(Some), got.age, got.refreshing)
+        }
     };
-    CliStatus {
+    let (version, error) = match answer {
+        Ok(v) => (v, None),
+        Err(e) => (None, Some(e)),
+    };
+    let status = CliStatus {
         program: program.to_string(),
         installed: true,
         version,
         path: Some(found.to_string_lossy().into_owned()),
         launches,
         error,
-    }
+    };
+    (status, age, refreshing)
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -230,6 +300,16 @@ fn fingerprint(p: &Path) -> Option<Fingerprint> {
     Some((m.len(), m.modified().ok()))
 }
 
+/// A version answer as served.
+struct Served {
+    answer: Result<String, String>,
+    age: Duration,
+    refreshing: bool,
+}
+
+/// The cached answer for this exact file, however old (an old one starts
+/// a background re-check and is served at once); a file never asked, or
+/// changed since, is probed while the caller waits.
 fn probe_cached(
     cache: &ProbeCache,
     bin: &Path,
@@ -237,18 +317,28 @@ fn probe_cached(
     search_path: &str,
     timeout: Duration,
     guard: &GuardEnv,
-) -> Result<String, String> {
+) -> Served {
     let key = dunce::canonicalize(bin).unwrap_or_else(|_| bin.to_path_buf());
     let Some(fp) = fingerprint(&key) else {
-        return Err(format!("can't read {}", key.display()));
+        let answer = Err(format!("can't read {}", key.display()));
+        return Served { answer, age: Duration::ZERO, refreshing: false };
     };
-    {
+    let stale = {
         let g = cache.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(e) = g.get(&key) {
-            if e.fp == fp && e.at.elapsed() < cache.ttl {
-                return e.answer.clone();
+        match g.get(&key) {
+            Some(e) if e.fp == fp => {
+                let age = e.at.elapsed();
+                if age < cache.ttl {
+                    return Served { answer: e.answer.clone(), age, refreshing: false };
+                }
+                Some((e.answer.clone(), age))
             }
+            _ => None,
         }
+    };
+    if let Some((answer, age)) = stale {
+        let refreshing = recheck_in_background(cache, bin, &key, fp, flag, search_path, timeout, guard);
+        return Served { answer, age, refreshing };
     }
     let answer = probe_version(bin, flag, search_path, timeout, guard);
     cache
@@ -256,7 +346,44 @@ fn probe_cached(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(key, Entry { fp, at: Instant::now(), answer: answer.clone() });
-    answer
+    Served { answer, age: Duration::ZERO, refreshing: false }
+}
+
+/// Start one background re-probe of `key` unless one is running. True
+/// when a re-check is running for it now.
+#[allow(clippy::too_many_arguments)]
+fn recheck_in_background(
+    cache: &ProbeCache,
+    bin: &Path,
+    key: &Path,
+    fp: Fingerprint,
+    flag: &str,
+    search_path: &str,
+    timeout: Duration,
+    guard: &GuardEnv,
+) -> bool {
+    if !cache.refreshing.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_path_buf()) {
+        return true;
+    }
+    let entries = cache.entries.clone();
+    let refreshing = cache.refreshing.clone();
+    let (bin, key, flag, search_path, guard) =
+        (bin.to_path_buf(), key.to_path_buf(), flag.to_string(), search_path.to_string(), guard.clone());
+    let done_key = key.clone();
+    let failed_key = key.clone();
+    let spawned = std::thread::Builder::new().name("cli-status-recheck".into()).spawn(move || {
+        let answer = probe_version(&bin, &flag, &search_path, timeout, &guard);
+        entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, Entry { fp, at: Instant::now(), answer });
+        refreshing.lock().unwrap_or_else(|e| e.into_inner()).remove(&done_key);
+    });
+    if spawned.is_err() {
+        cache.refreshing.lock().unwrap_or_else(|e| e.into_inner()).remove(&failed_key);
+        return false;
+    }
+    true
 }
 
 /// `<bin> <flag>` → the version it printed, or a short reason it didn't.
@@ -611,10 +738,14 @@ mod tests {
         assert_eq!(got[0].version.as_deref(), Some("1.1.0"));
         assert_eq!(runs(&bin, "claude"), 2);
 
-        // Past the TTL the same binary is probed again.
+        // Past the TTL the same binary is probed again, behind the served
+        // answer (the first ask of a new cache waits for its probe).
         let expired = ProbeCache::new(Duration::ZERO);
         status(&["claude"], &bin, &expired, ANSWERS);
-        status(&["claude"], &bin, &expired, ANSWERS);
+        assert_eq!(runs(&bin, "claude"), 3);
+        let got = status(&["claude"], &bin, &expired, ANSWERS);
+        assert_eq!(got[0].version.as_deref(), Some("1.1.0"), "the old answer is served");
+        assert!(expired.wait_idle(ANSWERS), "the re-check ends");
         assert_eq!(runs(&bin, "claude"), 4);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -698,6 +829,60 @@ mod tests {
             }
         );
         assert_eq!(runs(&bin, "hermes"), 0, "no version flag: never started");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Speed pass P5: once a binary has an answer, a later request never
+    /// waits on its `--version` again, even when the answer is old and the
+    /// binary now hangs. The old answer comes back with its age, and the
+    /// re-check runs behind it.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_answer_is_served_at_once_while_a_hung_recheck_runs() {
+        let _lock = crate::test_env::lock();
+        let (dir, bin) = bin_dir("swr");
+        fake(&bin, "claude", "echo 2.0.14");
+        let ttl = Duration::from_millis(200);
+        let cache = ProbeCache::new(ttl);
+        let path = bin.to_string_lossy().into_owned();
+        let launch = launch_here(bin.to_path_buf());
+        let first = cli_status_report_with(&["claude"], &path, &launch, &cache, ANSWERS, &open_guard());
+        assert_eq!(first.tools[0].version.as_deref(), Some("2.0.14"));
+        assert_eq!(first.age, Duration::ZERO, "a new answer");
+        assert!(!first.refreshing);
+
+        // The same file (size and mtime kept) now hangs on --version.
+        let claude = bin.join("claude");
+        let mtime = fs::metadata(&claude).unwrap().modified().unwrap();
+        let hang = "#!/bin/sh\nexec /bin/sleep 30\n";
+        let old_len = fs::metadata(&claude).unwrap().len() as usize;
+        assert!(hang.len() <= old_len, "the hanging script fits in the old size");
+        let padded = format!("{hang}{}", "#".repeat(old_len - hang.len()));
+        fs::write(&claude, padded).unwrap();
+        fs::File::options().write(true).open(&claude).unwrap().set_modified(mtime).unwrap();
+        std::thread::sleep(ttl + Duration::from_millis(50));
+
+        let hung_timeout = Duration::from_secs(3);
+        let started = Instant::now();
+        let second = cli_status_report_with(&["claude"], &path, &launch, &cache, hung_timeout, &open_guard());
+        let took = started.elapsed();
+        assert!(took < Duration::from_millis(200), "answered from the saved result in {took:?}");
+        assert_eq!(second.tools[0].version.as_deref(), Some("2.0.14"), "the saved answer");
+        assert!(second.age >= ttl, "marked with its age: {:?}", second.age);
+        assert!(second.refreshing, "a re-check runs behind it");
+
+        // A third request while that re-check hangs doesn't start another
+        // or wait either.
+        let started = Instant::now();
+        let third = cli_status_report_with(&["claude"], &path, &launch, &cache, hung_timeout, &open_guard());
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert!(third.refreshing);
+
+        assert!(cache.wait_idle(Duration::from_secs(30)), "the hung re-check times out");
+        let after = cli_status_report_with(&["claude"], &path, &launch, &cache, hung_timeout, &open_guard());
+        assert_eq!(after.tools[0].error.as_deref(), Some("--version timed out after 3s"), "{:?}", after.tools[0]);
+        // That read may itself have started a re-check (the TTL is short).
+        assert!(cache.wait_idle(Duration::from_secs(30)));
         let _ = fs::remove_dir_all(&dir);
     }
 }

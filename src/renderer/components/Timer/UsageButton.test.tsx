@@ -213,6 +213,23 @@ describe('UsageButton', () => {
     })
   })
 
+  // Speed pass P5: the menu's refresh answers the saved numbers at once,
+  // marked refreshing while the daemon checks behind them.
+  it('shows the saved numbers at once with a Refreshing… mark while the daemon checks', async () => {
+    const checkedAt = new Date(Date.now() - 20 * 60_000).toISOString()
+    h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))
+    h.daemonCliPost.mockResolvedValue({ ...claudeDoc(checkedAt), refreshing: true })
+    render(<UsageButton />)
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toContain('31%'))
+    fireEvent.click(screen.getByTestId('subscription-usage'))
+    const menu = await screen.findByTestId('subscription-usage-menu')
+    expect(menu.textContent).toContain('Weekly 31%')
+    const button = screen.getByTestId('subscription-usage-refresh') as HTMLButtonElement
+    await waitFor(() => expect(button.textContent).toBe('Refreshing…'))
+    expect(button.disabled).toBe(true)
+    expect(menu.textContent).toContain('20m ago')
+  })
+
   it('says nothing is signed in when no harness is signed in', async () => {
     const checkedAt = new Date().toISOString()
     h.daemonCliGet.mockResolvedValue({

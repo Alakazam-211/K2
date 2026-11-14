@@ -727,3 +727,33 @@ fn switch_off_keep_warm_still_probes_idle_tokens() {
     let entry = entry_of(&id).expect("entry");
     assert_eq!(crate::llm_accounts_runtime::keep_warm_usage_entries_for_tests(std::slice::from_ref(&entry)).len(), 1);
 }
+
+/// Speed pass P5 on the single-record path: the menu's refresh starts the
+/// checks and answers the saved record at once, `refreshing: true`; the
+/// reading lands after, and the mark clears.
+#[test]
+fn p5_the_refresh_route_answers_without_waiting_for_the_vendor() {
+    let _f = setup();
+    let id = add_token(Tool::Claude, "live");
+    make_live(Tool::Claude, &id, 1_000);
+    let vendor = Arc::new(FakeVendor::default());
+    install(vendor.clone());
+    let (entered, release) = hold_next(&vendor);
+
+    let started = Instant::now();
+    let r = su::handle_refresh_route("");
+    let took = started.elapsed();
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(took < Duration::from_millis(200), "answered in {took:?}");
+    let v: Value = serde_json::from_str(&r.body).expect("json");
+    assert_eq!(v["refreshing"], serde_json::json!(true), "{v}");
+    assert_eq!(stored_used(&id), None, "nothing read yet");
+
+    entered.recv_timeout(Duration::from_secs(10)).expect("the check started");
+    release.send(()).expect("release the vendor");
+    assert!(su::wait_refresh_idle(Duration::from_secs(30)), "the background check ends");
+    assert_eq!(stored_used(&id), Some(0.5), "the saved value is the new reading");
+    let v: Value = serde_json::from_str(&su::handle_get().body).expect("json");
+    assert_eq!(v["refreshing"], serde_json::json!(false), "{v}");
+    assert_eq!(vendor.live_calls.load(Ordering::SeqCst), 1);
+}

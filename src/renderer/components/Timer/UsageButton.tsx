@@ -11,6 +11,7 @@ import {
   asOfAgo,
   harnessName,
   isAirgapped,
+  isRefreshing,
   limitState,
   limitStateText,
   menuRows,
@@ -69,7 +70,7 @@ export default function UsageButton(): React.JSX.Element {
   const roomStatus = usePoolHostStatus(target.room ? target.key : null)
   const serverState = target.room ? roomServerState(roomStatus) : 'ok'
   const [open, setOpen] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
+  const [refreshAsked, setRefreshAsked] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   // The menu floats over the page on the app's popover layer (portalled to
   // <body>), so the top bar's frosted capsule can't trap it under the tiles.
@@ -157,6 +158,9 @@ export default function UsageButton(): React.JSX.Element {
   // The last read of the cache failed (the numbers shown may be old).
   const readFailed = serverState === 'ok' ? (entry?.error ?? null) : null
   const warn = serverState === 'ok' && !airgap && (readFailed !== null || rows.some(needsAttention))
+  // The daemon answers the saved numbers at once and checks behind them
+  // (P5); an older daemon answers only after its check (`refreshAsked`).
+  const refreshing = refreshAsked || (serverState === 'ok' && isRefreshing(doc))
   // A view-only room (an older server) only reads (Z16).
   const mayRefresh = serverState === 'ok' && scopeMayWrite(target.scope, 'usage/subscriptions/refresh')
   // Whose logins these are, when they aren't this computer's.
@@ -287,8 +291,8 @@ export default function UsageButton(): React.JSX.Element {
                     : undefined
               }
               onClick={() => {
-                setRefreshing(true)
-                void refresh(target).finally(() => setRefreshing(false))
+                setRefreshAsked(true)
+                void refresh(target).finally(() => setRefreshAsked(false))
               }}
             >
               {refreshing ? 'Refreshing…' : 'Refresh'}

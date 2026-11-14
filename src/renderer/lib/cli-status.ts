@@ -25,6 +25,11 @@ export interface CliStatusBody {
   ok: true
   /** How long the daemon trusts one `--version` answer. */
   cacheSecs: number
+  /** Age of the oldest answer served (newer daemons; speed pass P5). */
+  ageSecs?: number
+  /** An answer was older than `cacheSecs` and is being asked again behind
+   *  this one (newer daemons). */
+  refreshing?: boolean
   tools: CliStatus[]
 }
 

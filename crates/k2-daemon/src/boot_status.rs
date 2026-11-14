@@ -1275,6 +1275,9 @@ pub fn features() -> Vec<&'static str> {
     // The Compute Garden (catalog v49): the garden-local `compute.nodes`.
     out.push(crate::compute_garden::FEATURE);
     out.push(FEATURE_LLM_ACCOUNT_FOR);
+    // Speed pass P5: the usage refresh POST answers the saved numbers at
+    // once (`refreshing`, then `subscription_usage_changed`).
+    out.push(crate::subscription_usage::FEATURE_REFRESH_ASYNC);
     out.push(FEATURE_COMPANION_PAIRING);
     out.push(FEATURE_FILES_DOWNLOAD);
     // 0.46.9: resumable uploads, download tokens and the transfer door.
@@ -1478,6 +1481,7 @@ mod tests {
                 "app-resources-v1",
                 "compute-nodes-v1",
                 "llm-account-for-v1",
+                "usage-refresh-async",
                 "companion-pairing-v1",
                 "files-download-v1",
                 "transfers-v1",

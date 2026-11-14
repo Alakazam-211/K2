@@ -390,6 +390,19 @@ pub fn request_many(ids: &[String], why: Why, overall: Duration) -> Vec<(String,
         .collect()
 }
 
+/// Wait up to `overall` for the runs going now for `ids`. Never starts a
+/// run (the refresh route started them and answered without waiting).
+pub fn wait_running(ids: &[String], overall: Duration) {
+    let running: Vec<Arc<Flight>> = {
+        let map = flights().lock().unwrap_or_else(|p| p.into_inner());
+        ids.iter().filter_map(|id| map.get(id).cloned()).collect()
+    };
+    let deadline = Instant::now() + overall;
+    for flight in running {
+        flight.wait(Wait::For(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
 /// A served record with a window past its reset: one background re-check
 /// of that token, not waited on. Each token's 60 s gate keeps this cheap.
 pub fn kick_if_reset_passed(id: &str, record: &Value) {

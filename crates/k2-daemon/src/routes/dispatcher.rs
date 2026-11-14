@@ -6101,9 +6101,9 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }
-        // POST /cli/usage/subscriptions/refresh — probe off this connection.
-        // A cache newer than 15 seconds is returned without a probe.
-        // GET of this path is 405 in misc_routes.
+        // POST /cli/usage/subscriptions/refresh — answers the saved numbers
+        // at once and checks in the background (`?wait=1`: waits for the
+        // check, off this connection). GET of this path is 405 in misc_routes.
         "/cli/usage/subscriptions/refresh" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             if !super::http::token_ok(&query, state.token.as_str()) {
@@ -6118,7 +6118,9 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let joined = tokio::task::spawn_blocking(crate::subscription_usage::handle_refresh).await;
+            let q = query.to_string();
+            let joined =
+                tokio::task::spawn_blocking(move || crate::subscription_usage::handle_refresh_route(&q)).await;
             let result = match joined {
                 Ok(response) => response,
                 Err(_) => crate::cli_response::CliResponse::internal_error(

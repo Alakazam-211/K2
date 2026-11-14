@@ -45,6 +45,28 @@ pub struct Frame {
     pub near: f32,
 }
 
+impl Frame {
+    /// World-to-view, column-major, as f32: the f64 matrix the rasterizer composes with each
+    /// object's transform (in f64, then rounded to f32 once per object), itself rounded once.
+    pub fn view_f32(&self) -> [f32; 16] {
+        m4_to_f32(&self.view)
+    }
+
+    /// The projection, column-major, OpenGL's clip convention with an infinite far plane:
+    /// `x_clip = fx * x_view`, `y_clip = fy * y_view`, `z_clip = -z_view - 2 near`,
+    /// `w_clip = -z_view`; so NDC z is -1 on the near plane and tends to 1 far away. The
+    /// rasterizer draws exactly `x_clip / w_clip` and `y_clip / w_clip` with these f32 values
+    /// (it tests depth as 1/w, never NDC z). No lens shift yet (`[8]` and `[9]` are 0).
+    pub fn projection(&self) -> [f32; 16] {
+        [
+            self.fx, 0.0, 0.0, 0.0, //
+            0.0, self.fy, 0.0, 0.0, //
+            0.0, 0.0, -1.0, -1.0, //
+            0.0, 0.0, -2.0 * self.near, 0.0,
+        ]
+    }
+}
+
 pub fn mesh_bounds(positions: &[[f32; 3]]) -> Option<(D3, D3)> {
     let mut it = positions.iter();
     let first = d3(*it.next()?);

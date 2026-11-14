@@ -22,6 +22,9 @@
 //!
 //! **Response (stdout):** one line of JSON, the [`Response`], then, when `ok`,
 //! each view's image in order (`views[i].image_len` bytes each), then EOF.
+//! Each view's [`ViewMeta`] carries the camera it was drawn through
+//! ([`CameraMeta`]: view and projection matrices, the pixel mapping), left
+//! out only when one of its values isn't finite.
 //! The worker exits [`EXIT_OK`] after the images, [`EXIT_FAILED`] after a
 //! typed failure. Anything else (no line, a malformed one, fewer image bytes
 //! than announced, bytes after them) is a breach the host reports as
@@ -198,6 +201,51 @@ impl Request {
     }
 }
 
+/// The camera a view was drawn through, as the rasterizer used it (the
+/// f32 values themselves, not recomputed), so a client can line its own
+/// overlay or 3D up with the still.
+///
+/// World to pixel, for an image `width` x `height`:
+///
+/// ```text
+/// v    = view * [x, y, z, 1]                 (view space: the camera looks down -Z, +Y up)
+/// clip = proj * v = [fx * v.x + shift_x * w, fy * v.y + shift_y * w, -v.z - 2 near, w],  w = -v.z
+/// ndc  = clip.xy / w                         (in front of the eye: w >= near)
+/// px   = (ndc.x * 0.5 + 0.5) * width         (x right)
+/// py   = (0.5 - ndc.y * 0.5) * height        (y down)
+/// ```
+///
+/// `(px, py)` is continuous: pixel `(i, j)` covers `[i, i + 1) x [j, j + 1)`
+/// and its centre is `(i + 0.5, j + 0.5)`; NDC (-1, 1) is the image's top-left
+/// corner and (1, -1) its bottom-right. The rasterizer snaps `(px, py)` to
+/// 1/256 of a sample and covers the SSAA sample centres inside each triangle
+/// (top-left rule).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CameraMeta {
+    /// World-to-view, column-major 4x4 (the rasterizer's f64 matrix, rounded
+    /// to f32; it composes the f64 one with each object's transform).
+    pub view: [f32; 16],
+    /// Projection, column-major 4x4: OpenGL clip convention, infinite far
+    /// plane, the near plane below (see [`crate::camera::Frame::projection`]).
+    pub proj: [f32; 16],
+    /// x_clip = fx * x_view, y_clip = fy * y_view.
+    pub fx: f32,
+    pub fy: f32,
+    /// The near plane's distance (> 0): nearer is clipped.
+    pub near: f32,
+    /// Lens shift in NDC units (always 0 for now).
+    pub shift_x: f32,
+    pub shift_y: f32,
+}
+
+impl CameraMeta {
+    /// Every value finite (JSON has no infinity: a degenerate scene's camera
+    /// may not be).
+    pub fn is_finite(&self) -> bool {
+        self.view.iter().chain(&self.proj).chain(&[self.fx, self.fy, self.near, self.shift_x, self.shift_y]).all(|v| v.is_finite())
+    }
+}
+
 /// What the worker reports for one view.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewMeta {
@@ -205,6 +253,11 @@ pub struct ViewMeta {
     pub height: u32,
     pub ssaa: u32,
     pub image_len: u64,
+    /// The camera the view was drawn through; `None` when one of its values
+    /// isn't finite (a degenerate scene, say coordinates near f32's limit:
+    /// JSON has no infinity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraMeta>,
     /// Objects and triangles drawn (instancing expanded), and the pixels any covered.
     pub objects: u64,
     pub triangles: u64,
@@ -308,6 +361,31 @@ mod tests {
         assert_eq!(m.views[0].view, ViewSpec::Camera(2));
         assert!(Request::parse(br#"{"proto":2,"input_len":3,"views":[]}"#).is_err());
         assert!(Request::parse(b"not json").is_err());
+    }
+
+    #[test]
+    fn a_views_camera_crosses_the_wire_bit_for_bit() {
+        let s = crate::testgen::camera_scene();
+        let mut views = Vec::new();
+        for (spec, aspect) in [(ViewSpec::Camera(0), 16.0 / 9.0), (ViewSpec::Auto, 4.0 / 3.0), (ViewSpec::Turntable(5), 1.0)] {
+            let f = crate::camera::frame(&s, &[0], spec, aspect).expect("frame");
+            let camera = CameraMeta { view: f.view_f32(), proj: f.projection(), fx: f.fx, fy: f.fy, near: f.near, shift_x: 0.0, shift_y: 0.0 };
+            assert!(camera.is_finite());
+            views.push(ViewMeta { width: 10, height: 10, camera: Some(camera), ..ViewMeta::default() });
+        }
+        let r = Response { ok: true, code: None, detail: None, format: Some(ImageFormat::Webp), views: Some(views.clone()), ..Response::failed(FailureCode::TooLarge, "") };
+        let line = r.line();
+        let back = Response::parse(&line[..line.len() - 1]).expect("parse").views.expect("views");
+        let bits = |c: &CameraMeta| -> Vec<u32> { c.view.iter().chain(&c.proj).chain(&[c.fx, c.fy, c.near, c.shift_x, c.shift_y]).map(|x| x.to_bits()).collect() };
+        for (a, b) in views.iter().zip(&back) {
+            assert_eq!(bits(&a.camera.expect("sent")), bits(&b.camera.expect("received")));
+        }
+        let mut inf = views[0].camera.expect("a camera");
+        inf.view[12] = f32::INFINITY;
+        assert!(!inf.is_finite());
+        // A line without it (an older worker) still reads.
+        let old = br#"{"proto":1,"ok":true,"format":"webp","views":[{"width":1,"height":1,"ssaa":1,"image_len":0,"objects":0,"triangles":0,"covered_px":0,"without_modifiers":false,"vertex_ms":0,"bin_ms":0,"raster_ms":0,"encode_ms":0}]}"#;
+        assert_eq!(Response::parse(old).expect("old").views.expect("views")[0].camera, None);
     }
 
     #[test]

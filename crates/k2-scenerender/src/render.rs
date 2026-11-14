@@ -7,7 +7,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Instant;
 
 use crate::camera::{self, ViewSpec, TURNTABLE_FRAMES};
-use crate::proto::{FailureCode, ImageFormat, Request, Timings, ViewMeta, DEFAULT_ASPECT, DEFAULT_BACKGROUND};
+use crate::proto::{CameraMeta, FailureCode, ImageFormat, Request, Timings, ViewMeta, DEFAULT_ASPECT, DEFAULT_BACKGROUND};
 use crate::raster::{self, BAND_PX};
 use crate::sandbox::Caps;
 use crate::encode;
@@ -190,6 +190,7 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
             .map_err(|_| Failure::new(FailureCode::RendererError, format!("view {vi}: the rasterizer panicked")))?;
         let (img, stats) = drawn;
         let t1 = Instant::now();
+        let camera = CameraMeta { view: frame.view_f32(), proj: frame.projection(), fx: frame.fx, fy: frame.fy, near: frame.near, shift_x: 0.0, shift_y: 0.0 };
         let bytes = encode::encode(&img, req.format).map_err(|e| Failure::new(FailureCode::RendererError, format!("view {vi}: {e}")))?;
         drop(img);
         total = total.saturating_add(bytes.len() as u64);
@@ -201,6 +202,7 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
             height: p.height,
             ssaa: p.ssaa,
             image_len: bytes.len() as u64,
+            camera: Some(camera).filter(CameraMeta::is_finite),
             objects: stats.objects,
             triangles: stats.triangles,
             covered_px: stats.covered_px,

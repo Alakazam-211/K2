@@ -7,11 +7,11 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use k2_scenerender::camera::ViewSpec;
+use k2_scenerender::camera::{self, ViewSpec};
 use k2_scenerender::host::{self, Limits, SceneRequest};
-use k2_scenerender::proto::{FailureCode, ImageFormat, Request, View};
+use k2_scenerender::proto::{CameraMeta, FailureCode, ImageFormat, Request, View};
 use k2_scenerender::render;
-use k2_scenerender::scene::{encode, InputLimits};
+use k2_scenerender::scene::{encode, InputLimits, Scene};
 use k2_scenerender::testgen;
 
 fn bin() -> &'static Path {
@@ -97,6 +97,101 @@ fn a_background_is_a_request_parameter() {
     assert_eq!(explicit.views[0].1, grey.views[0].image, "the default is sRGB 240");
 }
 
+/// A PNG's pixels: (width, height, samples per pixel, bytes).
+fn decode_png(b: &[u8]) -> (u32, u32, usize, Vec<u8>) {
+    let mut r = png::Decoder::new(std::io::Cursor::new(b)).read_info().expect("a png");
+    let mut buf = vec![0; r.output_buffer_size().expect("its size")];
+    let info = r.next_frame(&mut buf).expect("its frame");
+    buf.truncate(info.buffer_size());
+    (info.width, info.height, info.color_type.samples(), buf)
+}
+
+fn mul(m: &[f32; 16], p: [f64; 4]) -> [f64; 4] {
+    let mut o = [0.0; 4];
+    for (r, v) in o.iter_mut().enumerate() {
+        *v = (0..4).map(|c| m[c * 4 + r] as f64 * p[c]).sum();
+    }
+    o
+}
+
+/// The drawn objects' mesh boxes (8 local corners each, through the object's
+/// transform), projected to pixels with a view's returned matrices: min x,
+/// min y, max x, max y (continuous, y down).
+fn projected_box(s: &Scene, objects: &[u32], cam: &CameraMeta, w: u32, h: u32) -> [f64; 4] {
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for &oi in objects {
+        let o = &s.objects[oi as usize];
+        let Some((lo, hi)) = camera::mesh_bounds(&s.meshes[o.mesh as usize].positions) else { continue };
+        for k in 0..8 {
+            let p = [if k & 1 == 0 { lo[0] } else { hi[0] }, if k & 2 == 0 { lo[1] } else { hi[1] }, if k & 4 == 0 { lo[2] } else { hi[2] }, 1.0];
+            let clip = mul(&cam.proj, mul(&cam.view, mul(&o.transform, p)));
+            assert!(clip[3] > 0.0, "a corner behind the eye");
+            let (nx, ny) = (clip[0] / clip[3], clip[1] / clip[3]);
+            let (px, py) = ((nx * 0.5 + 0.5) * w as f64, (0.5 - ny * 0.5) * h as f64);
+            b = [b[0].min(px), b[1].min(py), b[2].max(px), b[3].max(py)];
+        }
+    }
+    b
+}
+
+/// Every view's meta carries the camera it was drawn through: the
+/// rasterizer's own f32 values, through the worker's response. Projecting each
+/// drawn object's box with them bounds the covered pixels (within 1 px), and a
+/// cube's (a convex box) fits them tightly.
+#[test]
+fn every_still_carries_the_camera_that_drew_it() {
+    const MAGENTA: [u8; 3] = [255, 0, 255];
+    let cases: Vec<(&str, Scene, View, bool)> = vec![
+        ("cube", testgen::cube_scene(), View::new(ViewSpec::Auto, 320), true),
+        ("white-cube-turntable-7", testgen::white_cube_scene(), View::new(ViewSpec::Turntable(7), 200), true),
+        ("camera", testgen::camera_scene(), View::new(ViewSpec::Camera(0), 320), true),
+        ("camera-object", testgen::camera_scene(), View { view: ViewSpec::Auto, objects: Some(vec![0]), width: 160, aspect: Some(1.0) }, true),
+        ("grid-turntable-2", testgen::grid_scene(3, true), View::new(ViewSpec::Turntable(2), 200), false),
+        ("grid-turntable-5", testgen::grid_scene(3, false), View::new(ViewSpec::Turntable(5), 200), false),
+        ("grid-one-object", testgen::grid_scene(3, false), View { view: ViewSpec::Auto, objects: Some(vec![4]), width: 120, aspect: None }, false),
+        ("mirrored", testgen::mirrored_scene(), View::new(ViewSpec::Auto, 256), false),
+        ("sphere", testgen::sphere_scene(), View::new(ViewSpec::Auto, 200), false),
+    ];
+    for (name, s, view, tight) in cases {
+        let input = encode(&s);
+        let mut req = SceneRequest::new(&input, vec![view.clone()]);
+        req.format = ImageFormat::Png;
+        req.background = Some(MAGENTA);
+        let r = host::render(bin(), &req, &thumb()).unwrap_or_else(|f| panic!("{name}: {} {}", f.code, f.detail));
+        let m = &r.views[0].meta;
+        let cam = m.camera.unwrap_or_else(|| panic!("{name}: no camera"));
+        // The rasterizer's values, bit for bit (not recomputed from the matrices).
+        let active: Vec<u32> = view.objects.clone().unwrap_or_else(|| (0..s.objects.len() as u32).collect());
+        let plan = render::plan(&render::scene_counts(&s), &s.objects, &s.cameras, &Request::new(vec![view.clone()]), &thumb().args(1).caps).expect("the plan");
+        let f = camera::frame(&s, &active, view.view, plan[0].aspect).expect("the frame");
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
+        assert_eq!(bits(&[cam.fx, cam.fy, cam.near, cam.shift_x, cam.shift_y]), bits(&[f.fx, f.fy, f.near, 0.0, 0.0]), "{name}");
+        assert_eq!(bits(&cam.view), bits(&f.view_f32()), "{name}");
+        assert_eq!(bits(&cam.proj), bits(&f.projection()), "{name}");
+        assert_eq!((cam.proj[0], cam.proj[5], cam.proj[11], cam.proj[14], cam.proj[15]), (cam.fx, cam.fy, -1.0, -2.0 * cam.near, 0.0), "{name}");
+        let (w, h, n, px) = decode_png(&r.views[0].image);
+        assert_eq!((w, h, n), (m.width, m.height, 3));
+        let (mut x0, mut y0, mut x1, mut y1, mut count) = (u32::MAX, u32::MAX, 0u32, 0u32, 0u64);
+        for y in 0..h {
+            for x in 0..w {
+                let o = ((y * w + x) * 3) as usize;
+                if px[o..o + 3] != MAGENTA {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 0 && count <= m.covered_px, "{name}: {count} pixels drawn, {} covered", m.covered_px);
+        let b = projected_box(&s, &active, &cam, w, h);
+        eprintln!("[scenerender] camera {name}: covered [{x0}, {y0}, {x1}, {y1}], projected box [{:.2}, {:.2}, {:.2}, {:.2}]", b[0], b[1], b[2], b[3]);
+        let (x0, y0, x1, y1) = (x0 as f64, y0 as f64, x1 as f64, y1 as f64);
+        assert!(x0 >= b[0] - 1.0 && y0 >= b[1] - 1.0 && x1 <= b[2] + 1.0 && y1 <= b[3] + 1.0, "{name}: the covered pixels leave the projected box");
+        if tight {
+            assert!(x0 <= b[0].max(0.0) + 2.0 && y0 <= b[1].max(0.0) + 2.0 && x1 >= b[2].min(w as f64) - 2.0 && y1 >= b[3].min(h as f64) - 2.0, "{name}: a box's covered pixels fill its projection");
+        }
+    }
+}
+
 #[test]
 fn hostile_inputs_end_typed() {
     let good = encode(&testgen::cube_scene());
@@ -144,7 +239,11 @@ fn degenerate_scenes_render_or_refuse_typed() {
         let input = encode(&s);
         let view = if s.cameras.is_empty() { ViewSpec::Auto } else { ViewSpec::Camera(0) };
         match host::render(bin(), &SceneRequest::new(&input, vec![View::new(view, 48)]), &thumb()) {
-            Ok(r) => assert_eq!(r.views.len(), 1, "{name}"),
+            Ok(r) => {
+                assert_eq!(r.views.len(), 1, "{name}");
+                // A camera with a value past f32's range (the huge scene) isn't sent.
+                assert!(r.views[0].meta.camera.is_none_or(|c| c.is_finite()), "{name}");
+            }
             Err(f) => assert_ne!(f.code, FailureCode::RendererError, "{name}: {} | {}", f.detail, f.stderr),
         }
     }

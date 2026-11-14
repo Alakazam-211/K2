@@ -130,6 +130,12 @@ export const REPORTED_FEATURES = {
    *  doc comes back as a tombstone (`deleted`). With it, the message menu
    *  offers Delete message on your own posts; without it, no such row. */
   'thread-message-delete-v1': 'thread-message-delete-v1',
+  /** thread-delta-v1 (0.46.1): `GET /cli/thread?after_seq=N` answers the
+   *  rows after N plus `changed` (rows at or below N rewritten in place:
+   *  cards, deletes) and `removed`. With it, a Thread view re-syncs on
+   *  focus and reconnect by delta from its last read (`threadDelta.ts`);
+   *  without it, it re-reads its whole loaded window. */
+  'thread-delta-v1': 'thread-delta-v1',
   /** ticket-attachments-v1 (0.46.6, prd-ticket-attachments-v1): files on
    *  ticket messages. `show` comments carry `id` and `attachments`;
    *  `attachments` on `POST /cli/feedback/comment`; the door

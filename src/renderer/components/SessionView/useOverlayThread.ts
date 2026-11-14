@@ -15,10 +15,14 @@
 //      updates in place, and a frame is never dropped for having a lower
 //      seq than one this window already saw.
 //   4. The socket reconnects when it closes (daemon restart, network flap,
-//      the edge cutting it) with jittered backoff, then re-syncs the loaded
-//      window (`since_seq` = oldest loaded − 1, which also picks up card
-//      status changes). Window focus, `online` and the tab becoming visible
-//      re-sync too (a socket can sit half-open after sleep).
+//      the edge cutting it) with jittered backoff, then re-syncs. Window
+//      focus, `online` and the tab becoming visible re-sync too (a socket
+//      can sit half-open after sleep). A re-sync (and the gap catch-up of
+//      step 2) asks for the delta since this view's last server read
+//      (`after_seq`, thread-delta-v1, `threadDelta.ts`): new rows, rows
+//      changed in place (card status, deletes) and rows that left. On a
+//      server without it, or a delta past one page, it re-reads the loaded
+//      window (`since_seq` = oldest loaded − 1, `limit=0`).
 //   5. If the address now resolves to another conversation (the pinned
 //      Chat changed), the hook starts over on the new one.
 //   5a. A `moved` frame (Codex/Hermes adoption: the Thread moved from the
@@ -100,6 +104,8 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { createViewingSender, windowIsLookedAt, type ViewingSender } from './threadViewing'
 import { useAutoMarkRead } from '@/stores/unread'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { applyThreadDelta, parseThreadDelta, THREAD_DELTA_PAGE } from './threadDelta'
 import { peekThreadView, readThreadView, saveThreadView } from './threadViewCache'
 import { readThreadFirstPage } from './threadRead'
 import {
@@ -300,6 +306,11 @@ export function useOverlayThread(opts: {
     let catchUpChain: Promise<void> = Promise.resolve()
     /** `activity` frames received; a catch-up answer older than one is dropped. */
     let activityFrames = 0
+    /** vs-live SP-8: the newest seq of the last completed server read of
+     *  this Thread (snapshot, delta or full re-read), never a socket frame's.
+     *  The delta re-sync asks from here. null: no read yet, or the Thread
+     *  was renumbered (a move): the next re-sync reads the full way. */
+    let syncCursor: number | null = null
     const viewingSender = createViewingSender({
       send: (frame) => {
         if (!ws || ws.readyState !== 1) return false
@@ -316,24 +327,63 @@ export function useOverlayThread(opts: {
     })
     viewingSenderRef.current = viewingSender
 
-    /** `GET thread?since_seq=` merged by id. Serialized; never throws. */
-    function catchUp(since: number): Promise<void> {
+    /** The address now points at another conversation (the pinned Chat
+     *  changed): this socket is on the old one. Start over. */
+    function convMoved(answerConv: string): boolean {
+      if (answerConv && conv && answerConv !== conv) {
+        setEpoch((e) => e + 1)
+        return true
+      }
+      return false
+    }
+
+    /** One catch-up read merged by id. Serialized; never throws. `full`:
+     *  the plain re-read `GET thread?since_seq=<fullSince()>&limit=0` (a
+     *  move renumbered the rows). Otherwise, with a cursor and a server
+     *  that has it, the delta `GET thread?after_seq=<cursor>`; the plain
+     *  re-read again when the delta is past one page, isn't a delta (an
+     *  older daemon's page) or is refused (400). */
+    function catchUp(fullSince: () => number, full = false): Promise<void> {
       catchUpChain = catchUpChain.then(async () => {
         if (cancelled) return
         const sent = addrRef.current
         try {
+          const cursor = syncCursor
+          if (!full && cursor !== null && scope.serverSupports('thread-delta-v1')) {
+            let raw: unknown = null
+            try {
+              raw = await daemonCliGet<unknown>(scope, 'thread', {
+                addr: sent,
+                after_seq: cursor,
+                limit: THREAD_DELTA_PAGE,
+                ...threadCardsParams(scope),
+              })
+            } catch (e) {
+              // A route that refuses `after_seq` reads the plain way below.
+              if (!(e instanceof DaemonHttpError && e.status === 400)) throw e
+            }
+            if (cancelled) return
+            const delta = parseThreadDelta(raw)
+            if (delta && convMoved(delta.conversation_id)) return
+            if (delta && !delta.hasMore) {
+              noteSnapshotAddress(raw)
+              noteMovedFrom(sent, raw)
+              setItems((prev) => applyThreadDelta(prev, delta, hasMoreRef.current))
+              // A move meanwhile cleared the cursor: leave it cleared.
+              if (syncCursor !== null) syncCursor = Math.max(syncCursor, newestSeq(delta.items))
+              return
+            }
+          }
+          const since = fullSince()
           const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, since_seq: since, limit: 0, ...threadCardsParams(scope) })
           if (cancelled) return
           const snap = threadItemsFromSnapshot(raw)
-          if (snap.conversation_id && conv && snap.conversation_id !== conv) {
-            // The address points at another conversation now (the pinned
-            // Chat changed): this socket is on the old one. Start over.
-            setEpoch((e) => e + 1)
-            return
-          }
+          if (convMoved(snap.conversation_id)) return
           noteSnapshotAddress(raw)
           noteMovedFrom(sent, raw)
           setItems((prev) => mergeThreadItems(prev, snap.items))
+          // Every row after `since` came back, so the newest is the head.
+          syncCursor = snap.items.length > 0 ? newestSeq(snap.items) : (syncCursor ?? since)
         } catch (e) {
           // S4: an address that no longer resolves (older daemon after a
           // rename): the sidecar view looks its address up again.
@@ -367,8 +417,10 @@ export function useOverlayThread(opts: {
      *  the socket. Items stay on screen: the re-read merges by id. */
     function followMove(sock: WebSocket, to: string): void {
       if (cancelled) return
+      // The moved rows were renumbered: the cursor means nothing now.
+      syncCursor = null
       if (to === conv) {
-        void catchUp(0)
+        void catchUp(() => 0, true)
         void catchUpTurn()
         return
       }
@@ -386,7 +438,7 @@ export function useOverlayThread(opts: {
         retryTimer = null
       }
       backoffMs = reconnectBaseMs
-      void connect(() => 0)
+      void connect(() => 0, true)
     }
 
     function scheduleReconnect(): void {
@@ -399,8 +451,10 @@ export function useOverlayThread(opts: {
       }, delay)
     }
 
-    /** Open the overlay socket; on open, catch up from `sinceOnOpen()`. */
-    async function connect(sinceOnOpen: () => number): Promise<void> {
+    /** Open the overlay socket; on open, catch up (`catchUp`: the delta,
+     *  else the plain read from `sinceOnOpen()`; `full` forces the plain
+     *  read). */
+    async function connect(sinceOnOpen: () => number, full = false): Promise<void> {
       if (cancelled || !conv || connecting || (ws && ws.readyState <= 1)) return
       connecting = true
       try {
@@ -476,7 +530,7 @@ export function useOverlayThread(opts: {
           if (cancelled || ws !== sock) return
           backoffMs = reconnectBaseMs
           lastResyncAt = Date.now()
-          void catchUp(sinceOnOpen())
+          void catchUp(sinceOnOpen, full)
           void catchUpTurn()
           viewingSender.socketOpened()
           // The server is reachable again: unsent posts go now.
@@ -515,7 +569,7 @@ export function useOverlayThread(opts: {
       const now = Date.now()
       if (now - lastResyncAt < RESYNC_MIN_GAP_MS) return
       lastResyncAt = now
-      void catchUp(resyncSince(itemsRef.current))
+      void catchUp(() => resyncSince(itemsRef.current))
       void catchUpTurn()
     }
     const onVisibility = (): void => {
@@ -561,6 +615,7 @@ export function useOverlayThread(opts: {
         conv = snap.conversation_id || conversationId || ''
         bootedConvRef.current = conv
         const snapNewest = newestSeq(snap.items)
+        syncCursor = snapNewest
         setItems(snap.items)
         setHasMore(snap.has_more)
         setResolvedConv(conv)
@@ -587,7 +642,7 @@ export function useOverlayThread(opts: {
     resyncRef.current = () => {
       if (cancelled) return
       lastResyncAt = Date.now()
-      void catchUp(resyncSince(itemsRef.current))
+      void catchUp(() => resyncSince(itemsRef.current))
       void catchUpTurn()
     }
 

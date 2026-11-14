@@ -1896,7 +1896,8 @@ describe('Conversation widget', () => {
     // vs-live Z52: the resolved pinned Chat address, not the row handle.
     expect(
       h.calls
-        .filter((c) => c.route === 'thread' && c.hostKey === 'local' && c.data.since_seq === undefined)
+        // The snapshot only: not a catch-up (`since_seq`) nor a delta (`after_seq`).
+        .filter((c) => c.route === 'thread' && c.hostKey === 'local' && c.data.since_seq === undefined && c.data.after_seq === undefined)
         .map((c) => [c.hostKey, c.data.addr]),
     ).toEqual([['local', 'cortana-main']])
     const agentMsg = document.querySelector('[data-zen-message="a1"]')

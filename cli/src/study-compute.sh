@@ -173,12 +173,12 @@ RUN
   never put a key in --env. Use --secret (SECRETS below).
 
 REPOS (0.46.6)
-  The code is your workspace's repo, or the worktree you run from. A
-  workspace whose folder isn't a repo (several repos side by side):
+  The code is the repo you run from: the workspace's, a worktree of it, or
+  another repo inside the workspace (a note says so). Workspace not a repo:
     k2 compute run --repo k2-multiplayer-base --dirty -- cargo test
-  --repo DIR: a git repo inside the workspace, or a worktree of one (its
-  own HEAD). Run from inside one and K2 picks it for you. Never a folder
-  outside the workspace, through a link, or in .k2/ (repo_invalid, exit 2).
+  --repo DIR: a git repo inside the workspace, or a worktree of one. Never
+  one outside the workspace, through a link, or in .k2/ (repo_invalid,
+  exit 2): clone an outside repo in first (.worktrees/<name>, gitignored).
   Path dependencies on a sibling repo: ship it too, laid out as in the
   workspace, so ../k2-multiplayer-base works:
     k2 compute run --repo k2-multiplayer-markdown \

@@ -112,11 +112,11 @@ Agents:
                                 (yours, --repo's, or the worktree you're in);
                                 never for --with repos
                  [--repo DIR]   ship a git repo nested in the workspace (or a worktree
-                                of one) instead of the workspace's own: a multi-repo
-                                workspace whose root isn't a repo. DIR is relative to
-                                the workspace folder. Run from inside one (or from
-                                a worktree of one) and it's found for you. Same jail:
-                                inside the workspace, no '..', no link out, never .k2/
+                                of one) instead of the workspace's own. DIR is relative
+                                to the workspace folder. Run from inside one and it's
+                                found for you. Same jail: inside the workspace, no '..',
+                                no link out, never .k2/. A repo outside the workspace:
+                                clone it in first (.worktrees/<name>, gitignored)
                  [--with DIR[@SHA]]...  ship sibling repos too (up to 8): DIR is a repo
                                 or a worktree of one, relative to the workspace
                                 folder, at its HEAD (a worktree's own, unpushed

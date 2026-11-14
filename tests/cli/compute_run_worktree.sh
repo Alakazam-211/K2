@@ -51,6 +51,10 @@ class H(BaseHTTPRequestHandler):
         if "/cli/compute/run" in self.path:
             open(out + "/run.json", "wb").write(body)
         b = b'{"error":{"code":"stub","hint":"stub"}}'
+        try:
+            b = open(out + "/reply.json", "rb").read()
+        except FileNotFoundError:
+            pass
         self.send_response(400)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(b)))
@@ -105,6 +109,55 @@ mkdir -p "$WORK/plain"
 if run_from "$WORK/plain"; then
     expect_eq "no repoDir outside a repo" "$(field repoDir)" ""
 fi
+
+# Another repo cloned inside the workspace: the CLI names that clone (the
+# daemon ships it, not the workspace's repo), for run and test alike.
+OTHER="$WORK/other-src"
+mkdir -p "$OTHER"
+g -C "$OTHER" init -q
+echo o > "$OTHER/o.txt"
+g -C "$OTHER" add .
+g -C "$OTHER" commit -q -m o
+CLONE="$WS/.worktrees/other"
+g clone -q "$OTHER" "$CLONE"
+mkdir -p "$CLONE/pkg"
+
+echo "== compute run from another repo cloned inside the workspace =="
+if run_from "$CLONE/pkg"; then
+    expect_eq "repoDir is the clone" "$(real "$(field repoDir)")" "$(real "$CLONE")"
+    expect_eq "cwd is relative to the clone" "$(field cwd)" "pkg"
+fi
+
+echo "== compute test from the clone =="
+rm -f "$WORK/run.json"
+(
+    cd "$CLONE"
+    for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
+    K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=fake-token K2_PROJECT_PATH="$WS" \
+        "$K2_CLI" compute test --any >/dev/null 2>&1 || true
+)
+if [ -s "$WORK/run.json" ]; then
+    expect_eq "test: repoDir is the clone" "$(real "$(field repoDir)")" "$(real "$CLONE")"
+else
+    echo "  FAIL: compute test sent no run body" >&2; fail=$((fail + 1))
+fi
+
+echo "== a repo outside the workspace: the daemon's refusal reaches you, exit 2 =="
+cat > "$WORK/reply.json" <<'JSON'
+{"error":{"code":"repo_invalid","hint":"/x (the repo you're in) is outside the workspace; a job ships only code inside the workspace: clone the repo into it (e.g. /w/.worktrees/<name>, gitignored) and pass --repo .worktrees/<name>, or run from inside that clone"}}
+JSON
+rc=0
+err="$(
+    cd "$OTHER"
+    for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
+    K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=fake-token K2_PROJECT_PATH="$WS" \
+        "$K2_CLI" compute run --any -- true 2>&1 >/dev/null
+)" || rc=$?
+rm -f "$WORK/reply.json"
+expect_eq "outside: repoDir is the outside repo" "$(real "$(field repoDir)")" "$(real "$OTHER")"
+expect_eq "outside: exit 2" "$rc" "2"
+case "$err" in *repo_invalid*"--repo .worktrees/<name>"*) expect_eq "outside: the way in is printed" ok ok ;;
+    *) expect_eq "outside: the way in is printed" "$err" "repo_invalid … --repo .worktrees/<name>" ;; esac
 
 echo ""
 echo "compute_run_worktree: $pass passed, $fail failed"

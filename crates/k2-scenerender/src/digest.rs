@@ -84,7 +84,7 @@ impl Target {
         match self {
             Target::Scene => View::new(ViewSpec::Auto, width),
             Target::Camera(i) => View::new(ViewSpec::Camera(i), width),
-            Target::Object(i) => View { view: ViewSpec::Auto, objects: Some(vec![i]), width, aspect: None },
+            Target::Object(i) => View { objects: Some(vec![i]), ..View::new(ViewSpec::Auto, width) },
             Target::Turntable(k) => View::new(ViewSpec::Turntable(k), width),
         }
     }

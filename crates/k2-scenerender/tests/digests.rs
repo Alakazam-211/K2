@@ -9,7 +9,7 @@
 //! (bump the crate's version so caches don't serve the old images), then
 //! update the table from this test's `[digest]` lines.
 
-use k2_scenerender::camera::ViewSpec;
+use k2_scenerender::camera::{Framing, ViewSpec};
 use k2_scenerender::proto::{ImageFormat, Request, View};
 use k2_scenerender::render::render_bytes;
 use k2_scenerender::sandbox::Caps;
@@ -19,7 +19,8 @@ use k2_scenerender::testgen;
 
 /// Made on x86_64 Linux (k2n10-vin, Intel, job 71bc4b0f) and matched, all 30, on aarch64
 /// macOS (k2n1-m4, Apple M4, job c4090b9e). The 27 transparent ones: made on k2n10-vin
-/// (job 9919a84e), the 30 above unchanged there.
+/// (job 9919a84e), the 30 above unchanged there. The 11 content-framing ones: made on
+/// k2-arch (x86_64, job d8bddba8).
 const WANT: &[(&str, &str)] = &[
     ("cube-webp-320/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
     ("cube-webp-320/0", "5a8e7a89bef92a33281af63a775f1c297cd8dc99090f88b80d190b43eb91c9bc"),
@@ -79,6 +80,18 @@ const WANT: &[(&str, &str)] = &[
     ("degenerate-camera-inside-alpha/0", "f65d38be709861b700b7206a81b687b119e49bb1d0bf8467b76e349a740eb482"),
     ("terrain-200k-alpha/k2scene1", "9fe86ae3af59abeafd74a17458ecea65357a7d40a54549eb605c534094a0e789"),
     ("terrain-200k-alpha/0", "8446abc6adb8ac39056a7d8103b281e2b7e04a5fd947f41774d9ce0f784a6208"),
+    // Content framing (auto views fitted to the contents, a lens shift), on the interior scenes.
+    ("interior/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior/0", "0ed4575e66103f2ddb39a7a6b8d336c8cc178ee22bfa954cf35bb146b1041004"),
+    ("interior/1", "5604afb144e8e0ff199a89781a87e972807e13ea167dac5928487ceb229c1410"),
+    ("interior/2", "109d6ad23854809bf21b5b7e0dd64e6fd325b76c96a3cf8e8bf24f88e172d921"),
+    ("interior-alpha/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-alpha/0", "9d8f9f72213be3d23108ad467d263966f583a1422acd4573a405b2a3e827e936"),
+    ("empty-room/k2scene1", "5c87521c765dda93a8341896f22ac8f27ed0cdd2586dabad17e031b044377efc"),
+    ("empty-room/0", "951187c8b46deed6344fbd83ddfd3d9689446d27c5ec1561e0707774b80f7889"),
+    ("empty-room/1", "951187c8b46deed6344fbd83ddfd3d9689446d27c5ec1561e0707774b80f7889"),
+    ("small-object/k2scene1", "25c2e806f1c3b53fa889bd36b059c299f268474f77be3a63bbb0b3cd9a8441f6"),
+    ("small-object/0", "4069b84340122fecbe49a99b012dd150790f7827c8b7972ade287ed10d9153cb"),
 ];
 
 fn caps() -> Caps {
@@ -122,7 +135,7 @@ fn the_digests_are_the_checked_in_ones() {
     let turntable: Vec<View> = (0..8).map(|k| View::new(ViewSpec::Turntable(k), 160)).collect();
     case(&mut got, "grid-z-turntable", &testgen::grid_scene(5, true), turntable, ImageFormat::Webp, 2);
     case(&mut got, "mirrored", &testgen::mirrored_scene(), vec![auto(400)], ImageFormat::Webp, 1);
-    case(&mut got, "camera", &testgen::camera_scene(), vec![View::new(ViewSpec::Camera(0), 640), View { view: ViewSpec::Auto, objects: Some(vec![0]), width: 200, aspect: Some(1.0) }], ImageFormat::Webp, 4);
+    case(&mut got, "camera", &testgen::camera_scene(), vec![View::new(ViewSpec::Camera(0), 640), View { objects: Some(vec![0]), aspect: Some(1.0), ..View::new(ViewSpec::Auto, 200) }], ImageFormat::Webp, 4);
     for (name, s) in testgen::degenerate_scenes() {
         if name == "camera-inside" || name == "collapsed" {
             case(&mut got, &format!("degenerate-{name}"), &s, vec![View::new(if s.cameras.is_empty() { ViewSpec::Auto } else { ViewSpec::Camera(0) }, 120)], ImageFormat::Webp, 2);
@@ -136,17 +149,27 @@ fn the_digests_are_the_checked_in_ones() {
     let turntable: Vec<View> = (0..8).map(|k| View::new(ViewSpec::Turntable(k), 160)).collect();
     case_with(&mut got, "grid-z-turntable-alpha", &testgen::grid_scene(5, true), turntable, ImageFormat::Webp, 2, true);
     case_with(&mut got, "mirrored-alpha", &testgen::mirrored_scene(), vec![auto(400)], ImageFormat::Webp, 1, true);
-    case_with(&mut got, "camera-alpha", &testgen::camera_scene(), vec![View::new(ViewSpec::Camera(0), 640), View { view: ViewSpec::Auto, objects: Some(vec![0]), width: 200, aspect: Some(1.0) }], ImageFormat::Webp, 4, true);
+    case_with(&mut got, "camera-alpha", &testgen::camera_scene(), vec![View::new(ViewSpec::Camera(0), 640), View { objects: Some(vec![0]), aspect: Some(1.0), ..View::new(ViewSpec::Auto, 200) }], ImageFormat::Webp, 4, true);
     for (name, s) in testgen::degenerate_scenes() {
         if name == "camera-inside" || name == "collapsed" {
             case_with(&mut got, &format!("degenerate-{name}-alpha"), &s, vec![View::new(if s.cameras.is_empty() { ViewSpec::Auto } else { ViewSpec::Camera(0) }, 120)], ImageFormat::Webp, 2, true);
         }
     }
     case_with(&mut got, "terrain-200k-alpha", &testgen::large_scene(200_000), vec![auto(640)], ImageFormat::Webp, 4, true);
+    // Content framing: the interior bounds-framed, then contents-framed at 4:3 and 1:1; an
+    // all-shell room (falls back: the same bytes as its bounds view); one small object.
+    let contents = |w: u32| View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, w) };
+    case(&mut got, "interior", &testgen::interior_scene(), vec![auto(320), contents(320), View { aspect: Some(1.0), ..contents(240) }], ImageFormat::Webp, 3);
+    case_with(&mut got, "interior-alpha", &testgen::interior_scene(), vec![contents(320)], ImageFormat::Webp, 2, true);
+    case(&mut got, "empty-room", &testgen::empty_room_scene(), vec![auto(160), contents(160)], ImageFormat::Webp, 2);
+    case(&mut got, "small-object", &testgen::small_object_scene(), vec![contents(240)], ImageFormat::Webp, 1);
     for (k, v) in &got {
         eprintln!("[digest] (\"{k}\", \"{v}\"),");
     }
     eprintln!("[digest] {} digests on {} {}", got.len(), std::env::consts::ARCH, std::env::consts::OS);
+    let find = |k: &str| got.iter().find(|g| g.0 == k).map(|g| g.1.clone());
+    assert_eq!(find("empty-room/0"), find("empty-room/1"), "an all-shell room falls back to the bounds framing");
+    assert_ne!(find("interior/0"), find("interior/1"));
     let want: Vec<(String, String)> = WANT.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let differ: Vec<&str> = got.iter().zip(&want).filter(|(g, w)| g != w).map(|(g, _)| g.0.as_str()).collect();
     assert!(differ.is_empty() && got.len() == want.len(), "{} of {} differ ({} checked in): {differ:?}", differ.len(), got.len(), want.len());

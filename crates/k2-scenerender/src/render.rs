@@ -6,8 +6,9 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Instant;
 
-use crate::camera::{self, ViewSpec, TURNTABLE_FRAMES};
-use crate::proto::{CameraMeta, FailureCode, ImageFormat, Request, Timings, ViewMeta, DEFAULT_ASPECT, DEFAULT_BACKGROUND};
+use crate::camera::{self, Framing, ViewSpec, TURNTABLE_FRAMES};
+use crate::contents::{self, MAX_LEFT_OUT_LISTED};
+use crate::proto::{CameraMeta, FailureCode, FramingMeta, ImageFormat, Request, Timings, ViewMeta, DEFAULT_ASPECT, DEFAULT_BACKGROUND};
 use crate::raster::{self, BAND_PX};
 use crate::sandbox::Caps;
 use crate::encode;
@@ -45,6 +46,8 @@ pub struct Plan {
     pub without_modifiers: bool,
     /// RGBA (the request's `transparent`).
     pub transparent: bool,
+    /// How an auto view is fitted (bounds for every other view).
+    pub framing: Framing,
 }
 
 /// The images of a request.
@@ -85,6 +88,9 @@ pub fn plan(mesh_counts: &[(u64, u64)], objects: &[Object], cameras: &[Camera], 
             ViewSpec::Camera(i) if i as usize >= cameras.len() => return Err(bad(format!("camera {i} doesn't exist ({} cameras)", cameras.len()))),
             ViewSpec::Turntable(k) if k >= TURNTABLE_FRAMES => return Err(bad(format!("turntable frame {k}: there are {TURNTABLE_FRAMES}"))),
             _ => {}
+        }
+        if v.framing == Framing::Contents && v.view != ViewSpec::Auto {
+            return Err(bad("content framing is for the auto view only".into()));
         }
         let active: Vec<u32> = match &v.objects {
             Some(list) => {
@@ -138,7 +144,7 @@ pub fn plan(mesh_counts: &[(u64, u64)], objects: &[Object], cameras: &[Camera], 
         if ssaa > caps.max_ssaa {
             return Err(big(format!("ssaa {ssaa}, at most {}", caps.max_ssaa)));
         }
-        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without, transparent: req.transparent });
+        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without, transparent: req.transparent, framing: v.framing });
     }
     Ok(plans)
 }
@@ -190,13 +196,24 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
     let mut views = Vec::with_capacity(plans.len());
     let mut total = 0u64;
     for (vi, p) in plans.iter().enumerate() {
-        let frame = camera::frame(scene, &p.active, p.view, p.aspect).map_err(|e| Failure::new(FailureCode::InvalidInput, format!("view {vi}: {e}")))?;
+        let bad_view = |e: String| Failure::new(FailureCode::InvalidInput, format!("view {vi}: {e}"));
+        let (frame, framing) = match p.framing {
+            Framing::Bounds => (camera::frame(scene, &p.active, p.view, p.aspect).map_err(bad_view)?, None),
+            Framing::Contents => {
+                let classes = contents::classify(scene, &p.active);
+                let (f, m) = camera::frame_contents(scene, &p.active, &classes, p.aspect).map_err(bad_view)?;
+                let count = m.left_out.len() as u64;
+                let mut left_out = m.left_out;
+                left_out.truncate(MAX_LEFT_OUT_LISTED);
+                (f, Some(FramingMeta { contents: m.contents, left_out_count: count, left_out, grown: m.grown }))
+            }
+        };
         let params = raster::Params { width: p.width, height: p.height, ssaa: p.ssaa, threads, background_srgb: background, transparent: p.transparent };
         let drawn = catch_unwind(AssertUnwindSafe(|| raster::render(scene, &p.active, &frame, &params)))
             .map_err(|_| Failure::new(FailureCode::RendererError, format!("view {vi}: the rasterizer panicked")))?;
         let (img, stats) = drawn;
         let t1 = Instant::now();
-        let camera = CameraMeta { view: frame.view_f32(), proj: frame.projection(), fx: frame.fx, fy: frame.fy, near: frame.near, shift_x: 0.0, shift_y: 0.0 };
+        let camera = CameraMeta { view: frame.view_f32(), proj: frame.projection(), fx: frame.fx, fy: frame.fy, near: frame.near, shift_x: frame.shift_x, shift_y: frame.shift_y };
         let bytes = encode::encode(&img, req.format).map_err(|e| Failure::new(FailureCode::RendererError, format!("view {vi}: {e}")))?;
         drop(img);
         total = total.saturating_add(bytes.len() as u64);
@@ -209,6 +226,7 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
             ssaa: p.ssaa,
             image_len: bytes.len() as u64,
             camera: Some(camera).filter(CameraMeta::is_finite),
+            framing,
             objects: stats.objects,
             triangles: stats.triangles,
             covered_px: stats.covered_px,
@@ -270,7 +288,7 @@ mod tests {
             View::new(ViewSpec::Auto, 96),
             View::new(ViewSpec::Turntable(3), 64),
             View::new(ViewSpec::Camera(0), 80),
-            View { view: ViewSpec::Auto, objects: Some(vec![0]), width: 50, aspect: Some(1.0) },
+            View { objects: Some(vec![0]), aspect: Some(1.0), ..View::new(ViewSpec::Auto, 50) },
         ];
         let all = render_bytes(&input, &Request::new(views.clone()), &caps()).expect("all").0;
         assert_eq!(all.views.len(), 4);
@@ -292,8 +310,8 @@ mod tests {
         let input = encode(&s);
         let views = vec![
             View::new(ViewSpec::Auto, 32),
-            View { view: ViewSpec::Auto, objects: Some(vec![0]), width: 32, aspect: None },
-            View { view: ViewSpec::Auto, objects: Some(vec![1]), width: 32, aspect: None },
+            View { objects: Some(vec![0]), ..View::new(ViewSpec::Auto, 32) },
+            View { objects: Some(vec![1]), ..View::new(ViewSpec::Auto, 32) },
         ];
         let out = render_bytes(&input, &Request::new(views), &caps()).expect("render").0;
         assert_eq!(out.objects_without_modifiers, vec![1]);
@@ -309,11 +327,16 @@ mod tests {
         assert_eq!(code(vec![]), FailureCode::InvalidInput);
         assert_eq!(code(vec![View::new(ViewSpec::Camera(0), 32)]), FailureCode::InvalidInput, "no camera");
         assert_eq!(code(vec![View::new(ViewSpec::Turntable(8), 32)]), FailureCode::InvalidInput);
-        assert_eq!(code(vec![View { view: ViewSpec::Auto, objects: Some(vec![5]), width: 32, aspect: None }]), FailureCode::InvalidInput);
+        assert_eq!(code(vec![View { objects: Some(vec![5]), ..View::new(ViewSpec::Auto, 32) }]), FailureCode::InvalidInput);
         assert_eq!(code(vec![View::new(ViewSpec::Auto, 0)]), FailureCode::InvalidInput);
         assert_eq!(code(vec![View::new(ViewSpec::Auto, 4000)]), FailureCode::TooLarge);
-        assert_eq!(code(vec![View { view: ViewSpec::Auto, objects: None, width: 1000, aspect: Some(0.01) }]), FailureCode::TooLarge);
-        assert_eq!(code(vec![View { view: ViewSpec::Auto, objects: None, width: 10, aspect: Some(f32::NAN) }]), FailureCode::InvalidInput);
+        assert_eq!(code(vec![View { aspect: Some(0.01), ..View::new(ViewSpec::Auto, 1000) }]), FailureCode::TooLarge);
+        assert_eq!(code(vec![View { aspect: Some(f32::NAN), ..View::new(ViewSpec::Auto, 10) }]), FailureCode::InvalidInput);
+        // Content framing is for the auto view: refused on a turntable frame or a camera.
+        let contents = |spec: ViewSpec| View { framing: Framing::Contents, ..View::new(spec, 32) };
+        assert_eq!(code(vec![contents(ViewSpec::Turntable(2))]), FailureCode::InvalidInput);
+        assert_eq!(render_bytes(&encode(&testgen::camera_scene()), &Request::new(vec![contents(ViewSpec::Camera(0))]), &c).expect_err("camera").code, FailureCode::InvalidInput);
+        assert!(render_bytes(&input, &Request::new(vec![contents(ViewSpec::Auto)]), &c).is_ok());
         assert_eq!(code(vec![View::new(ViewSpec::Auto, 8); 65]), FailureCode::TooLarge, "too many views");
         let mut r = Request::new(vec![View::new(ViewSpec::Auto, 32)]);
         r.ssaa = Some(5);
@@ -380,6 +403,57 @@ mod tests {
         assert_eq!(a.views[0].1, b.views[0].1);
     }
 
+    /// Asking for bounds framing is asking for nothing: the same bytes and the
+    /// same meta as a view without the field, and no framing meta.
+    #[test]
+    fn bounds_framing_is_the_auto_view_as_it_was() {
+        let input = encode(&testgen::interior_scene());
+        let plain = render_bytes(&input, &Request::new(vec![View::new(ViewSpec::Auto, 96)]), &caps()).expect("plain").0;
+        let bounds = render_bytes(&input, &Request::new(vec![View { framing: Framing::Bounds, ..View::new(ViewSpec::Auto, 96) }]), &caps()).expect("bounds").0;
+        assert_eq!(plain.views[0].1, bounds.views[0].1);
+        assert_eq!(plain.views[0].0.camera, bounds.views[0].0.camera);
+        assert_eq!(plain.views[0].0.framing, None);
+        let cam = plain.views[0].0.camera.expect("a camera");
+        assert_eq!((cam.shift_x.to_bits(), cam.shift_y.to_bits()), (0, 0));
+    }
+
+    /// A content-framed view draws every object (the shell too), reports what
+    /// it left out of the frame, and falls back to the bounds framing (the
+    /// same bytes) when nothing is contents.
+    #[test]
+    fn content_framing_draws_everything_and_says_what_it_left_out() {
+        let contents = |w: u32| View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, w) };
+        let input = encode(&testgen::interior_scene());
+        let (c, b) = (
+            render_bytes(&input, &Request::new(vec![contents(96)]), &caps()).expect("contents").0,
+            render_bytes(&input, &Request::new(vec![View::new(ViewSpec::Auto, 96)]), &caps()).expect("bounds").0,
+        );
+        let (cm, bm) = (&c.views[0].0, &b.views[0].0);
+        assert_ne!(c.views[0].1, b.views[0].1);
+        assert_eq!(cm.objects, bm.objects, "every object drawn");
+        assert_eq!(cm.framing, Some(FramingMeta { contents: true, left_out_count: 4, left_out: vec![0, 1, 2, 3], grown: false }));
+        assert!(cm.covered_px > bm.covered_px, "closer in: more of the image covered");
+        let cam = cm.camera.expect("a camera");
+        assert!(cam.shift_x != 0.0 && cam.shift_y != 0.0);
+        // One small object: framed, with the room around it.
+        let small = render_bytes(&encode(&testgen::small_object_scene()), &Request::new(vec![contents(64)]), &caps()).expect("small").0;
+        assert_eq!(small.views[0].0.framing.as_ref().map(|f| (f.contents, f.grown, f.left_out.len())), Some((true, true, 4)));
+        // All shell, and no objects: the bounds framing's bytes, flagged.
+        for s in [testgen::empty_room_scene(), crate::scene::Scene { objects: Vec::new(), ..testgen::empty_room_scene() }] {
+            let input = encode(&s);
+            let c = render_bytes(&input, &Request::new(vec![contents(64)]), &caps()).expect("fallback").0;
+            let b = render_bytes(&input, &Request::new(vec![View::new(ViewSpec::Auto, 64)]), &caps()).expect("bounds").0;
+            assert_eq!(c.views[0].1, b.views[0].1);
+            assert_eq!(c.views[0].0.camera, b.views[0].0.camera);
+            assert_eq!(c.views[0].0.framing, Some(FramingMeta { contents: false, left_out_count: 0, left_out: vec![], grown: false }));
+        }
+        // An object view asking for it frames that object's own contents.
+        let one = View { objects: Some(vec![5]), ..contents(64) };
+        let o = render_bytes(&input, &Request::new(vec![one]), &caps()).expect("one object").0;
+        assert_eq!(o.views[0].0.objects, 1);
+        assert_eq!(o.views[0].0.framing.as_ref().map(|f| f.contents), Some(true));
+    }
+
     #[test]
     fn png_and_webp_both_decode_to_a_valid_header() {
         let input = encode(&testgen::sphere_scene());
@@ -403,7 +477,7 @@ mod tests {
 
     #[test]
     fn the_estimate_grows_with_the_work() {
-        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false, transparent: false };
+        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false, transparent: false, framing: Framing::Bounds };
         let small = estimate_bytes(1000, 100, &[p(320, 10)], 1, 1 << 30);
         let big = estimate_bytes(1000, 100, &[p(320, 1_000_000)], 1, 1 << 30);
         let two = estimate_bytes(1000, 100, &[p(320, 10), p(320, 10)], 1, 1 << 30);

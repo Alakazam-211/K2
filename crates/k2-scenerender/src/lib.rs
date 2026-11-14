@@ -6,9 +6,12 @@
 //!
 //! - [`scene`]: K2SCENE1, the neutral input the BLEND pack's mesh read hands
 //!   the host (bounded, typed; the renderer never reads `.blend`);
-//! - [`camera`], [`raster`]: the 3/4 auto view, the turntable, given cameras;
+//! - [`camera`], [`raster`]: the 3/4 auto view (fitted to every object, or
+//!   to the contents with a lens shift), the turntable, given cameras;
 //!   fixed-point edges, a z-buffer, near clipping, two-light Lambert plus
 //!   ambient (the clay look), SSAA, threads by fixed bands;
+//! - [`contents`]: which objects are shell (floor, walls) and which contents,
+//!   from world boxes alone;
 //! - [`srgb`], [`trig`], [`math`]: no libm on the render path, so the bytes are
 //!   the same on every CPU;
 //! - [`encode`]: WebP lossless (default) and PNG, opaque RGB or transparent
@@ -25,6 +28,7 @@
 //! the process that parses untrusted bytes.
 
 pub mod camera;
+pub mod contents;
 pub mod digest;
 pub mod encode;
 pub mod host;

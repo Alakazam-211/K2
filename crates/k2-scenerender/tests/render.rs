@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use k2_scenerender::camera::{self, ViewSpec};
+use k2_scenerender::camera::{self, Framing, ViewSpec};
 use k2_scenerender::host::{self, Limits, SceneRequest};
 use k2_scenerender::proto::{CameraMeta, FailureCode, ImageFormat, Request, View};
 use k2_scenerender::render;
@@ -145,10 +145,10 @@ fn every_still_carries_the_camera_that_drew_it() {
         ("cube", testgen::cube_scene(), View::new(ViewSpec::Auto, 320), true),
         ("white-cube-turntable-7", testgen::white_cube_scene(), View::new(ViewSpec::Turntable(7), 200), true),
         ("camera", testgen::camera_scene(), View::new(ViewSpec::Camera(0), 320), true),
-        ("camera-object", testgen::camera_scene(), View { view: ViewSpec::Auto, objects: Some(vec![0]), width: 160, aspect: Some(1.0) }, true),
+        ("camera-object", testgen::camera_scene(), View { objects: Some(vec![0]), aspect: Some(1.0), ..View::new(ViewSpec::Auto, 160) }, true),
         ("grid-turntable-2", testgen::grid_scene(3, true), View::new(ViewSpec::Turntable(2), 200), false),
         ("grid-turntable-5", testgen::grid_scene(3, false), View::new(ViewSpec::Turntable(5), 200), false),
-        ("grid-one-object", testgen::grid_scene(3, false), View { view: ViewSpec::Auto, objects: Some(vec![4]), width: 120, aspect: None }, false),
+        ("grid-one-object", testgen::grid_scene(3, false), View { objects: Some(vec![4]), ..View::new(ViewSpec::Auto, 120) }, false),
         ("mirrored", testgen::mirrored_scene(), View::new(ViewSpec::Auto, 256), false),
         ("sphere", testgen::sphere_scene(), View::new(ViewSpec::Auto, 200), false),
     ];
@@ -276,6 +276,89 @@ fn hostile_inputs_end_typed() {
     assert_eq!(f.code, FailureCode::TooLarge, "{}", f.detail);
     assert!(f.detail.contains("memory"), "{}", f.detail);
     eprintln!("[scenerender] memory refusal after {} ms: {}", started.elapsed().as_millis(), f.detail);
+}
+
+/// The world box of some objects (the union of each mesh box's 8 corners
+/// through its object's transform), projected to pixels with a view's
+/// returned matrices: min x, min y, max x, max y.
+fn projected_union(s: &Scene, objects: &[u32], cam: &CameraMeta, w: u32, h: u32) -> [f64; 4] {
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for &oi in objects {
+        let o = &s.objects[oi as usize];
+        let Some((a, b)) = camera::mesh_bounds(&s.meshes[o.mesh as usize].positions) else { continue };
+        for k in 0..8 {
+            let p = mul(&o.transform, [if k & 1 == 0 { a[0] } else { b[0] }, if k & 2 == 0 { a[1] } else { b[1] }, if k & 4 == 0 { a[2] } else { b[2] }, 1.0]);
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
+    }
+    let mut out = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for k in 0..8 {
+        let p = [if k & 1 == 0 { lo[0] } else { hi[0] }, if k & 2 == 0 { lo[1] } else { hi[1] }, if k & 4 == 0 { lo[2] } else { hi[2] }, 1.0];
+        let clip = mul(&cam.proj, mul(&cam.view, p));
+        assert!(clip[3] > 0.0, "a corner behind the eye");
+        let (px, py) = ((clip[0] / clip[3] * 0.5 + 0.5) * w as f64, (0.5 - clip[1] / clip[3] * 0.5) * h as f64);
+        out = [out[0].min(px), out[1].min(py), out[2].max(px), out[3].max(py)];
+    }
+    out
+}
+
+/// A content-framed still through the worker: its meta names the shell it
+/// left out of the frame, and the contents' box, projected with the returned
+/// camera (lens shift included), sits centred in the image inside the
+/// margin; the shell is still drawn around it.
+#[test]
+fn a_content_framed_still_centres_the_contents() {
+    const MAGENTA: [u8; 3] = [255, 0, 255];
+    let s = testgen::interior_scene();
+    let input = encode(&s);
+    for (w, aspect) in [(320u32, None), (240, Some(1.0f32)), (180, Some(9.0 / 16.0))] {
+        let view = View { framing: Framing::Contents, aspect, ..View::new(ViewSpec::Auto, w) };
+        let mut req = SceneRequest::new(&input, vec![view]);
+        req.format = ImageFormat::Png;
+        req.background = Some(MAGENTA);
+        let r = host::render(bin(), &req, &thumb()).expect("render");
+        let m = &r.views[0].meta;
+        let f = m.framing.clone().expect("the framing meta");
+        assert!(f.contents && f.left_out == [0, 1, 2, 3] && f.left_out_count == 4 && !f.grown, "{f:?}");
+        let cam = m.camera.expect("a camera");
+        assert!(cam.shift_x != 0.0 && cam.shift_y != 0.0, "a real lens shift");
+        assert_eq!((cam.proj[8], cam.proj[9]), (-cam.shift_x, -cam.shift_y));
+        let contents: Vec<u32> = (4..s.objects.len() as u32).collect();
+        let b = projected_union(&s, &contents, &cam, m.width, m.height);
+        let (wf, hf) = (m.width as f64, m.height as f64);
+        eprintln!("[scenerender] content-framed {}x{}: contents' box in px {b:?}, shift ({}, {})", m.width, m.height, cam.shift_x, cam.shift_y);
+        // Centred (to a hundredth of a pixel) and inside the margin (1/1.05 of the half-frame).
+        assert!((b[0] + b[2] - wf).abs() < 0.01 && (b[1] + b[3] - hf).abs() < 0.01, "{b:?}");
+        let (mx, my) = (wf * 0.5 * (1.0 - 1.0 / camera::AUTO_MARGIN), hf * 0.5 * (1.0 - 1.0 / camera::AUTO_MARGIN));
+        assert!(b[0] >= mx - 0.01 && b[2] <= wf - mx + 0.01 && b[1] >= my - 0.01 && b[3] <= hf - my + 0.01, "{b:?}");
+        // Tight on one axis: it reaches the margin there.
+        assert!((b[0] - mx).abs() < 0.01 || (b[1] - my).abs() < 0.01, "{b:?}");
+        // The shell is drawn around the contents, closer in: less background than the bounds
+        // framing shows at the same size.
+        let bg = |png: &[u8]| -> usize {
+            let (_, _, n, px) = decode_png(png);
+            assert_eq!(n, 3);
+            px.chunks(3).filter(|p| *p == MAGENTA).count()
+        };
+        let mut bounds = req.clone();
+        bounds.views[0].framing = Framing::Bounds;
+        let rb = host::render(bin(), &bounds, &thumb()).expect("bounds");
+        let (bc, bb) = (bg(&r.views[0].image), bg(&rb.views[0].image));
+        eprintln!("[scenerender] content-framed {}x{}: {bc} background pixels, bounds-framed {bb}", m.width, m.height);
+        assert!(bc < bb, "{bc} {bb}");
+        assert_eq!(r.views[0].meta.objects, rb.views[0].meta.objects, "every object drawn");
+    }
+    // Degenerate scenes framed on their contents: drawn or refused typed, never a crash.
+    let caps = thumb().args(1).caps;
+    for (name, s) in testgen::degenerate_scenes() {
+        let req = Request::new(vec![View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 40) }]);
+        if let Err(f) = render::render_bytes(&encode(&s), &req, &caps) {
+            assert_ne!(f.code, FailureCode::RendererError, "{name}: {}", f.detail);
+        }
+    }
 }
 
 #[test]

@@ -255,6 +255,137 @@ pub fn camera_scene() -> Scene {
     s
 }
 
+/// Axis-aligned boxes, each `(min, max)`, merged into one mesh with flat
+/// faces (split normals, counter-clockwise outward).
+pub fn boxes(parts: &[([f32; 3], [f32; 3])]) -> Mesh {
+    let unit = cube_flat_normals();
+    let mut m = Mesh { positions: Vec::new(), normals: Some(Vec::new()), indices: Vec::new(), hash: None };
+    for &(lo, hi) in parts {
+        let base = m.positions.len() as u32;
+        // The unit cube's corners are -0.5 and 0.5: each maps to lo or hi exactly.
+        m.positions.extend(unit.positions.iter().map(|p| {
+            let pick = |k: usize| if p[k] < 0.0 { lo[k] } else { hi[k] };
+            [pick(0), pick(1), pick(2)]
+        }));
+        if let (Some(n), Some(u)) = (m.normals.as_mut(), unit.normals.as_ref()) {
+            n.extend(u.iter().copied());
+        }
+        m.indices.extend(unit.indices.iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+    }
+    m
+}
+
+/// One object per mesh, in order, back faces culled.
+fn objects_of(parts: Vec<(&str, Mesh, [f32; 3], [f32; 16])>) -> Scene {
+    let mut meshes = Vec::new();
+    let mut objects = Vec::new();
+    for (id, mesh, color, t) in parts {
+        objects.push(object(id, meshes.len() as u32, color, t, Some(false)));
+        meshes.push(mesh);
+    }
+    scene(meshes, objects)
+}
+
+/// The room of the interior scenes (Y up, metres): a floor slab 6 x 5 m
+/// under y = 0 and three walls 2.7 m high and 0.15 m thick (back, left,
+/// right), open to the front.
+fn room_shell() -> Vec<(&'static str, Mesh, [f32; 3], [f32; 16])> {
+    let wall = [0.86, 0.84, 0.80];
+    vec![
+        ("Floor", boxes(&[([-3.0, -0.1, -2.5], [3.0, 0.0, 2.5])]), [0.55, 0.42, 0.30], identity()),
+        ("Wall.Back", boxes(&[([-3.0, 0.0, -2.5], [3.0, 2.7, -2.35])]), wall, identity()),
+        ("Wall.Left", boxes(&[([-3.0, 0.0, -2.35], [-2.85, 2.7, 2.5])]), wall, identity()),
+        ("Wall.Right", boxes(&[([2.85, 0.0, -2.35], [3.0, 2.7, 2.5])]), wall, identity()),
+    ]
+}
+
+/// A furnished room, for content framing: the shell of [`room_shell`] (a
+/// floor slab and three walls, objects 0 to 3), then a big flat rug (3 x
+/// 2.4 m, 2 cm thick), a sofa, a coffee table with a vase on it, a chair, a
+/// floor lamp and a ceiling fan.
+pub fn interior_scene() -> Scene {
+    let mut parts = room_shell();
+    parts.push(("Rug", boxes(&[([-1.5, 0.0, -1.2], [1.5, 0.02, 1.2])]), [0.62, 0.22, 0.20], identity()));
+    parts.push((
+        "Sofa",
+        boxes(&[
+            ([-1.1, 0.0, -2.2], [1.1, 0.45, -1.3]),
+            ([-1.1, 0.45, -2.2], [1.1, 0.9, -1.95]),
+            ([-1.1, 0.45, -1.95], [-0.9, 0.65, -1.3]),
+            ([0.9, 0.45, -1.95], [1.1, 0.65, -1.3]),
+        ]),
+        [0.25, 0.35, 0.55],
+        identity(),
+    ));
+    let leg = |x: f32, z: f32, h: f32| ([x - 0.03, 0.0, z - 0.03], [x + 0.03, h, z + 0.03]);
+    parts.push((
+        "Table",
+        boxes(&[([-0.6, 0.42, -0.4], [0.6, 0.46, 0.4]), leg(-0.5, -0.3, 0.42), leg(0.5, -0.3, 0.42), leg(-0.5, 0.3, 0.42), leg(0.5, 0.3, 0.42)]),
+        [0.45, 0.30, 0.18],
+        identity(),
+    ));
+    parts.push(("Vase", sphere(24, 12), [0.30, 0.55, 0.45], placed([0.2, 0.66, 0.0], [0.12, 0.2, 0.12])));
+    parts.push((
+        "Chair",
+        boxes(&[([1.4, 0.42, 0.6], [1.9, 0.47, 1.1]), ([1.85, 0.47, 0.6], [1.9, 0.95, 1.1]), leg(1.45, 0.65, 0.42), leg(1.85, 0.65, 0.42), leg(1.45, 1.05, 0.42), leg(1.85, 1.05, 0.42)]),
+        [0.70, 0.55, 0.30],
+        identity(),
+    ));
+    parts.push((
+        "Lamp",
+        boxes(&[([-2.5, 0.0, -2.0], [-2.2, 0.04, -1.7]), ([-2.37, 0.04, -1.87], [-2.33, 1.5, -1.83]), ([-2.55, 1.5, -2.05], [-2.15, 1.8, -1.65])]),
+        [0.90, 0.85, 0.60],
+        identity(),
+    ));
+    parts.push((
+        "CeilingFan",
+        boxes(&[
+            ([-0.03, 2.4, -0.03], [0.03, 2.7, 0.03]),
+            ([-0.12, 2.33, -0.12], [0.12, 2.42, 0.12]),
+            ([-0.75, 2.36, -0.08], [0.75, 2.38, 0.08]),
+            ([-0.08, 2.36, -0.75], [0.08, 2.38, 0.75]),
+        ]),
+        [0.35, 0.35, 0.35],
+        identity(),
+    ));
+    objects_of(parts)
+}
+
+/// An empty box room: a floor, a ceiling and four walls, nothing inside
+/// (every object is shell).
+pub fn empty_room_scene() -> Scene {
+    let c = [0.86, 0.84, 0.80];
+    objects_of(vec![
+        ("Floor", boxes(&[([-3.0, -0.1, -2.5], [3.0, 0.0, 2.5])]), c, identity()),
+        ("Ceiling", boxes(&[([-3.0, 2.7, -2.5], [3.0, 2.8, 2.5])]), c, identity()),
+        ("Wall.Back", boxes(&[([-3.0, 0.0, -2.5], [3.0, 2.7, -2.35])]), c, identity()),
+        ("Wall.Front", boxes(&[([-3.0, 0.0, 2.35], [3.0, 2.7, 2.5])]), c, identity()),
+        ("Wall.Left", boxes(&[([-3.0, 0.0, -2.35], [-2.85, 2.7, 2.35])]), c, identity()),
+        ("Wall.Right", boxes(&[([2.85, 0.0, -2.35], [3.0, 2.7, 2.35])]), c, identity()),
+    ])
+}
+
+/// The interior's room with one 10 cm cube on the floor and nothing else.
+pub fn small_object_scene() -> Scene {
+    let mut parts = room_shell();
+    parts.push(("Cube", boxes(&[([0.45, 0.0, 0.25], [0.55, 0.1, 0.35])]), [0.8, 0.3, 0.2], identity()));
+    objects_of(parts)
+}
+
+/// A room modelled as one closed box (object 0, 6 x 2.7 x 5 m) with `n`
+/// cubes inside it.
+pub fn enclosed_scene(n: u32) -> Scene {
+    let mut parts = vec![("Room", boxes(&[([-3.0, 0.0, -2.5], [3.0, 2.7, 2.5])]), [0.86, 0.84, 0.80], identity())];
+    for i in 0..n {
+        let x = -2.0 + 1.2 * i as f32;
+        parts.push(("Box", boxes(&[([x, 0.0, -0.4], [x + 0.8, 0.8, 0.4])]), [0.3, 0.5, 0.8], identity()));
+    }
+    let mut s = objects_of(parts);
+    // The room is seen from outside: draw both sides.
+    s.objects[0].double_sided = None;
+    s
+}
+
 /// Degenerate and hostile scenes that must render (or refuse) without a
 /// crash: no objects; an empty mesh; zero-area and collapsed triangles;
 /// huge coordinates; a zero-scale object; a camera inside the geometry.

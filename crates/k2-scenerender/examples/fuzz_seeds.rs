@@ -27,6 +27,8 @@ fn main() {
     display.cameras[0].sensor_mm = Some([36.0, 24.0]);
     display.cameras[0].sensor_fit = Some(k2_scenerender::scene::SensorFit::Auto);
     scenes.push(("camera-display", display));
+    scenes.push(("interior", testgen::interior_scene()));
+    scenes.push(("empty-room", testgen::empty_room_scene()));
     for (name, s) in testgen::degenerate_scenes() {
         scenes.push((name, s));
     }

@@ -22,12 +22,19 @@
 //! background; `"transparent": true` draws RGBA with coverage alpha instead
 //! (straight colour, see [`crate::raster`]), and refuses a `background`.
 //! Absent, both give the opaque default, byte for byte the same as before.
+//! An auto view may ask `"framing": "contents"`: fitted to the contents, not
+//! to the room around them ([`crate::camera::Framing`], [`crate::contents`]);
+//! absent, `"bounds"`, the auto view as it always was. Like the background,
+//! the framing is the request's, not the scene's: a host that asks for both
+//! keys its cache with it.
 //!
 //! **Response (stdout):** one line of JSON, the [`Response`], then, when `ok`,
 //! each view's image in order (`views[i].image_len` bytes each), then EOF.
 //! Each view's [`ViewMeta`] carries the camera it was drawn through
 //! ([`CameraMeta`]: view and projection matrices, the pixel mapping), left
-//! out only when one of its values isn't finite.
+//! out only when one of its values isn't finite. A view that asked for content
+//! framing also carries [`FramingMeta`]: whether the contents were framed and
+//! which objects were left out of the frame.
 //! The worker exits [`EXIT_OK`] after the images, [`EXIT_FAILED`] after a
 //! typed failure. Anything else (no line, a malformed one, fewer image bytes
 //! than announced, bytes after them) is a breach the host reports as
@@ -35,7 +42,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::camera::ViewSpec;
+use crate::camera::{Framing, ViewSpec};
 
 /// The protocol version. The host refuses a response with another.
 pub const PROTO: u64 = 1;
@@ -149,11 +156,15 @@ pub struct View {
     /// Width / height; else the camera's, else 4:3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aspect: Option<f32>,
+    /// How an auto view is fitted (`bounds` when absent). `contents` is
+    /// refused on a turntable frame or a camera view.
+    #[serde(default, skip_serializing_if = "Framing::is_bounds")]
+    pub framing: Framing,
 }
 
 impl View {
     pub fn new(view: ViewSpec, width: u32) -> View {
-        View { view, objects: None, width, aspect: None }
+        View { view, objects: None, width, aspect: None, framing: Framing::Bounds }
     }
 }
 
@@ -239,7 +250,8 @@ pub struct CameraMeta {
     pub fy: f32,
     /// The near plane's distance (> 0): nearer is clipped.
     pub near: f32,
-    /// Lens shift in NDC units (always 0 for now).
+    /// Lens shift in NDC units, added to x and y after the divide by w: 0
+    /// except for a content-framed view, where it centres the contents.
     pub shift_x: f32,
     pub shift_y: f32,
 }
@@ -250,6 +262,24 @@ impl CameraMeta {
     pub fn is_finite(&self) -> bool {
         self.view.iter().chain(&self.proj).chain(&[self.fx, self.fy, self.near, self.shift_x, self.shift_y]).all(|v| v.is_finite())
     }
+}
+
+/// What content framing did for one view (only on a view that asked for it).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FramingMeta {
+    /// The contents were framed. `false`: no object is contents (none at all,
+    /// or every one is shell), so the view fell back to the bounds framing.
+    pub contents: bool,
+    /// How many drawn objects were left out of the frame (the shell): drawn,
+    /// but not fitted.
+    pub left_out_count: u64,
+    /// Their indices in the scene's objects, ascending, at most
+    /// [`crate::contents::MAX_LEFT_OUT_LISTED`] of them.
+    pub left_out: Vec<u32>,
+    /// The contents were smaller than the least frame (a fraction of the
+    /// scene, [`crate::contents::MIN_FRAME_FRACTION`]), so the frame shows
+    /// some of the room around them.
+    pub grown: bool,
 }
 
 /// What the worker reports for one view.
@@ -264,6 +294,9 @@ pub struct ViewMeta {
     /// JSON has no infinity).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraMeta>,
+    /// What content framing did; `None` unless the view asked for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framing: Option<FramingMeta>,
     /// Objects and triangles drawn (instancing expanded), and the pixels any covered.
     pub objects: u64,
     pub triangles: u64,
@@ -356,7 +389,7 @@ mod tests {
 
     #[test]
     fn a_request_round_trips_and_takes_defaults() {
-        let mut r = Request::new(vec![View::new(ViewSpec::Auto, 320), View { view: ViewSpec::Turntable(3), objects: Some(vec![1, 2]), width: 640, aspect: Some(1.0) }]);
+        let mut r = Request::new(vec![View::new(ViewSpec::Auto, 320), View { view: ViewSpec::Turntable(3), objects: Some(vec![1, 2]), width: 640, aspect: Some(1.0), framing: Framing::Bounds }]);
         r.input_len = 99;
         r.background = Some([10, 20, 30]);
         let line = r.line();
@@ -373,6 +406,14 @@ mod tests {
         assert!(String::from_utf8_lossy(&tl).contains(r#""transparent":true"#));
         assert_eq!(Request::parse(&tl[..tl.len() - 1]).expect("parse"), t);
         assert_eq!(m.views[0].view, ViewSpec::Camera(2));
+        // Bounds framing is the default and stays off the line; contents round-trips.
+        assert_eq!(m.views[0].framing, Framing::Bounds);
+        assert!(!String::from_utf8_lossy(&line).contains("framing"));
+        let mut c = r.clone();
+        c.views[0].framing = Framing::Contents;
+        let cl = c.line();
+        assert!(String::from_utf8_lossy(&cl).contains(r#""framing":"contents""#));
+        assert_eq!(Request::parse(&cl[..cl.len() - 1]).expect("parse"), c);
         assert!(Request::parse(br#"{"proto":2,"input_len":3,"views":[]}"#).is_err());
         assert!(Request::parse(b"not json").is_err());
     }
@@ -383,10 +424,18 @@ mod tests {
         let mut views = Vec::new();
         for (spec, aspect) in [(ViewSpec::Camera(0), 16.0 / 9.0), (ViewSpec::Auto, 4.0 / 3.0), (ViewSpec::Turntable(5), 1.0)] {
             let f = crate::camera::frame(&s, &[0], spec, aspect).expect("frame");
-            let camera = CameraMeta { view: f.view_f32(), proj: f.projection(), fx: f.fx, fy: f.fy, near: f.near, shift_x: 0.0, shift_y: 0.0 };
+            let camera = CameraMeta { view: f.view_f32(), proj: f.projection(), fx: f.fx, fy: f.fy, near: f.near, shift_x: f.shift_x, shift_y: f.shift_y };
             assert!(camera.is_finite());
             views.push(ViewMeta { width: 10, height: 10, camera: Some(camera), ..ViewMeta::default() });
         }
+        // A content-framed view: a real lens shift, and what it left out.
+        let room = crate::testgen::interior_scene();
+        let all: Vec<u32> = (0..room.objects.len() as u32).collect();
+        let (f, m) = crate::camera::frame_contents(&room, &all, &crate::contents::classify(&room, &all), 4.0 / 3.0).expect("contents");
+        assert!(m.contents && f.shift_x != 0.0 && f.shift_y != 0.0);
+        let camera = CameraMeta { view: f.view_f32(), proj: f.projection(), fx: f.fx, fy: f.fy, near: f.near, shift_x: f.shift_x, shift_y: f.shift_y };
+        let framing = FramingMeta { contents: true, left_out_count: m.left_out.len() as u64, left_out: m.left_out, grown: m.grown };
+        views.push(ViewMeta { width: 10, height: 10, camera: Some(camera), framing: Some(framing.clone()), ..ViewMeta::default() });
         let r = Response { ok: true, code: None, detail: None, format: Some(ImageFormat::Webp), views: Some(views.clone()), ..Response::failed(FailureCode::TooLarge, "") };
         let line = r.line();
         let back = Response::parse(&line[..line.len() - 1]).expect("parse").views.expect("views");
@@ -394,6 +443,9 @@ mod tests {
         for (a, b) in views.iter().zip(&back) {
             assert_eq!(bits(&a.camera.expect("sent")), bits(&b.camera.expect("received")));
         }
+        assert_eq!(back[3].framing, Some(framing));
+        assert!(back[..3].iter().all(|v| v.framing.is_none()));
+        assert!(!String::from_utf8_lossy(&Response { views: Some(views[..3].to_vec()), ..r.clone() }.line()).contains("framing"), "absent unless asked");
         let mut inf = views[0].camera.expect("a camera");
         inf.view[12] = f32::INFINITY;
         assert!(!inf.is_finite());

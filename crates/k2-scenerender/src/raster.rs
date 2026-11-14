@@ -24,6 +24,11 @@
 //! the bytes are the same for any thread count. Edge functions are exact integers (i64), with a
 //! top-left fill rule (watertight). Floats use only `+ - * / sqrt` in a fixed order, no FMA.
 //!
+//! **Lens shift** ([`Frame::shift_x`], a content-framed view's off-axis projection): clip x is
+//! `fx * x + shift_x * w` (y likewise), everywhere clip x is formed (projection, guard band,
+//! clipping), so the clipper and the fill rule see one frustum. Unshifted, the shift terms are
+//! not evaluated at all: the arithmetic is the same as before the shift existed.
+//!
 //! **Faces:** `double_sided == Some(false)` culls back faces (glTF's default); unknown or true
 //! draws both sides, lighting the back with the flipped normal (two-sided lighting). Winding
 //! follows glTF: counter-clockwise is front, flipped when the object transform mirrors.
@@ -109,6 +114,9 @@ struct Cam {
     near: f32,
     sx: f32,
     sy: f32,
+    /// The lens shift, and whether there is one.
+    shift: [f32; 2],
+    shifted: bool,
 }
 
 struct Obj {
@@ -174,7 +182,15 @@ pub fn render(scene: &Scene, active: &[u32], frame: &Frame, p: &Params) -> (Imag
     let s = p.ssaa.clamp(1, 4) as i64;
     let ws = p.width as i64 * s;
     let hs = p.height as i64 * s;
-    let cam = Cam { fx: frame.fx, fy: frame.fy, near: frame.near, sx: (ws * ONE) as f32, sy: (hs * ONE) as f32 };
+    let cam = Cam {
+        fx: frame.fx,
+        fy: frame.fy,
+        near: frame.near,
+        sx: (ws * ONE) as f32,
+        sy: (hs * ONE) as f32,
+        shift: [frame.shift_x, frame.shift_y],
+        shifted: frame.shift_x != 0.0 || frame.shift_y != 0.0,
+    };
     let mut st = Stats::default();
 
     let t0 = Instant::now();
@@ -349,8 +365,7 @@ fn project(v: V3, cam: &Cam) -> [i32; 2] {
     if !(w >= cam.near) {
         return [NEEDS_CLIP, 0];
     }
-    let x = v[0] * cam.fx;
-    let y = v[1] * cam.fy;
+    let (x, y) = clip_xy(v, w, cam);
     let g = GUARD * w;
     if !(x.abs() <= g && y.abs() <= g) {
         return [NEEDS_CLIP, 0];
@@ -407,9 +422,23 @@ fn sample_bbox(pts: &[[i32; 2]], ws: i64, hs: i64) -> Option<(i64, i64, i64, i64
 /// A clip-space vertex: x, y, w, then linear r, g, b.
 type CV = [f32; 6];
 
+/// Clip x and y of a view-space point whose clip w is `w` (= -z): the one place they are formed.
+#[inline]
+fn clip_xy(v: V3, w: f32, cam: &Cam) -> (f32, f32) {
+    let x = v[0] * cam.fx;
+    let y = v[1] * cam.fy;
+    if cam.shifted {
+        (x + cam.shift[0] * w, y + cam.shift[1] * w)
+    } else {
+        (x, y)
+    }
+}
+
 #[inline]
 fn clip_of(v: V3, cam: &Cam) -> [f32; 3] {
-    [v[0] * cam.fx, v[1] * cam.fy, -v[2]]
+    let w = -v[2];
+    let (x, y) = clip_xy(v, w, cam);
+    [x, y, w]
 }
 
 /// The homogeneous determinant of (x, y, w): > 0 when the triangle is counter-clockwise as seen

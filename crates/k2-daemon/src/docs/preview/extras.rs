@@ -23,9 +23,11 @@
 //!   when cut short). Ids are passed through as the file has them and may
 //!   repeat across indexes. The pixels hold indexes, so a rename changes
 //!   only the table: the host gives a current image's table the ids the
-//!   listing has now ([`current_ids`]). A push lists the objects only up to
-//!   [`PUSH_IDS_MAX`] bytes of JSON ([`ids_for_push`]); the route always
-//!   has the whole table.
+//!   listing has now ([`current_ids`]), and when an object is renamed in
+//!   place, the scene and camera views' current images are pushed again
+//!   with their tables named anew (`service`'s head move). A push lists the
+//!   objects only up to [`PUSH_IDS_MAX`] bytes of JSON ([`ids_for_push`]);
+//!   the route always has the whole table.
 //!
 //! None of it is a digest: raw digests stay on the host, the client sees
 //! keyed `render_hash`es only (rendering-data contract Item 1).
@@ -141,15 +143,9 @@ pub fn current_ids<'a>(ids: &mut J, view: &Container, listing: impl IntoIterator
         Some(_) => None,
         None => return,
     };
-    let by_index: HashMap<u32, &str> = match own {
+    let by_index = match own {
         Some(_) => HashMap::new(),
-        None => listing
-            .into_iter()
-            .filter_map(|c| match Target::from_locator(&c.locator) {
-                Some(Target::Object(i)) => Some((i, c.title.as_str())),
-                _ => None,
-            })
-            .collect(),
+        None => object_ids(listing),
     };
     for e in objects {
         let index = e.get("index").and_then(J::as_u64).and_then(|i| u32::try_from(i).ok());
@@ -157,6 +153,26 @@ pub fn current_ids<'a>(ids: &mut J, view: &Container, listing: impl IntoIterator
             e["id"] = json!(id);
         }
     }
+}
+
+/// The listed id of each object of a scene, by its index (empty for a
+/// listing without objects, a deck's).
+pub fn object_ids<'a>(listing: impl IntoIterator<Item = &'a Container>) -> HashMap<u32, &'a str> {
+    listing
+        .into_iter()
+        .filter_map(|c| match Target::from_locator(&c.locator) {
+            Some(Target::Object(i)) => Some((i, c.title.as_str())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether `view`'s id table is named from the listing's objects by index
+/// (the scene and a camera view, [`current_ids`]), so renaming an object
+/// in place renames it. An object view's table names the view itself, and
+/// a renamed object is another address.
+pub fn named_by_listing(view: &Container) -> bool {
+    matches!(Target::from_locator(&view.locator), Some(t) if !matches!(t, Target::Object(_)))
 }
 
 /// A scene listing item's extras: `bounds` for an object with a box,

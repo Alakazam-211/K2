@@ -722,6 +722,174 @@ fn a_rename_reuses_the_id_image_and_its_table_names_the_new_id() {
     });
 }
 
+// ── 7. Objects renamed in place: the tables pushed again ─────────────
+
+/// Draw `container` at `w` in `look` and read its `ready` off `sub`.
+fn draw_now(blobs: &Arc<BlobStore>, s: &Arc<Snapshot>, sub: &Subscription, container: &str, w: Width, look: Look) -> serde_json::Value {
+    assert_eq!(service::request(blobs, s, container, w, look), Requested::Rendering, "{container}");
+    assert!(matches!(next(sub, "rendering"), HostEvent::PreviewRendering { .. }), "{container}");
+    serde_json::from_str(&frame(&next(sub, "ready"))).expect("json")
+}
+
+/// Every event `sub` has now, then none within 300 ms (no worker started).
+fn pushed_now(sub: &Subscription) -> Vec<HostEvent> {
+    let mut v: Vec<HostEvent> = sub.rx.try_iter().collect();
+    if let Ok(late) = sub.rx.recv_timeout(Duration::from_millis(300)) {
+        v.push(late);
+    }
+    v
+}
+
+const PLACE: &str = "@scene 9 scene\n@cam:Main 4 c0\n@obj:Chair 5 o0\n@obj:Lamp 6 o1\n@turntable:0 7 t0";
+
+/// An object renamed in place: the scene and camera views keep their
+/// address and render hash, so nothing is drawn; each of their cached
+/// images is pushed `ready` once more with the new id in its table, and the
+/// renamed object's own view is reused under its new address.
+#[test]
+fn a_rename_pushes_the_scene_and_camera_tables_again_without_a_render() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("renamed-in-place.blend");
+        let a = snap(&blobs, &key, 1, PLACE);
+        let sub = host_events::subscribe(&key);
+        let views = [
+            ("@scene", Width::Thumb, Look::Opaque),
+            ("@scene", Width::Full, Look::Transparent),
+            ("@cam:Main", Width::Thumb2x, Look::Transparent),
+            ("@obj:Lamp", Width::Thumb, Look::Transparent),
+            ("@turntable:0", Width::Thumb, Look::Transparent),
+        ];
+        let mut at = std::collections::HashMap::new();
+        for (c, w, l) in views {
+            let r = draw_now(&blobs, &a, &sub, c, w, l);
+            at.insert(format!("{c} {}", w.as_str()), r["rendered_at_ms"].clone());
+        }
+
+        let b = snap(&blobs, &key, 2, &PLACE.replace("@obj:Lamp", "@obj:Light"));
+        service::head_moved(&blobs, &a, &b);
+        let evs = pushed_now(&sub);
+        assert!(evs.iter().all(|e| matches!(e, HostEvent::PreviewReady { state: "ready", .. })), "no worker ran: {evs:?}");
+        let frames: Vec<serde_json::Value> = evs.iter().map(|e| serde_json::from_str(&frame(e)).expect("json")).collect();
+        let renamed = json!([{ "index": 0, "id": "Chair" }, { "index": 1, "id": "Light" }]);
+
+        // The object's own view: reused under its new address, as before.
+        let obj: Vec<&serde_json::Value> = frames.iter().filter(|f| f["container"] == "@obj:Light").collect();
+        assert_eq!(obj.len(), 1, "{frames:?}");
+        assert_eq!((obj[0]["reused_from"].clone(), obj[0]["ids"]["objects"].clone()), (json!("@obj:Lamp"), json!([{ "index": 1, "id": "Light" }])));
+
+        // The scene and the camera: once per cached (width, look), same hash, the new name.
+        let mut again: Vec<(String, String, Option<String>)> = Vec::new();
+        for f in frames.iter().filter(|f| f["container"] != "@obj:Light") {
+            let c = f["container"].as_str().expect("a container");
+            let hash = &b.container(c).expect("listed").hash;
+            assert_eq!(hash, &a.container(c).expect("listed").hash, "{c}: a rename keeps the hash");
+            assert_eq!((f["render_hash"].clone(), f["state"].clone(), f["rev"].clone()), (json!(hash), json!("ready"), json!(2)), "{f}");
+            assert_eq!(f["ids"]["objects"], renamed, "{f}");
+            assert_eq!(f["ids"]["count"], json!(2), "{f}");
+            let w = f["width"].as_str().expect("a width");
+            assert_eq!(f["rendered_at_ms"], at[&format!("{c} {w}")], "{c} {w}: the image is the one drawn then");
+            assert_eq!((f["render_ms"].clone(), f["camera"].clone()), (json!(7), json!({ "fx": 1.5 })), "the image's own fields");
+            assert!(f.get("reused_from").is_none(), "{f}");
+            again.push((c.to_string(), w.to_string(), f["look"].as_str().map(str::to_string)));
+        }
+        again.sort();
+        assert_eq!(
+            again,
+            [
+                ("@cam:Main".to_string(), "thumb2x".to_string(), Some("transparent".to_string())),
+                ("@scene".to_string(), "full".to_string(), Some("transparent".to_string())),
+                ("@scene".to_string(), "thumb".to_string(), None),
+            ],
+            "the turntable frame has no table; nothing else was cached"
+        );
+        // A ready as every older client reads it: the old fields first, in order.
+        let f = frame(evs.iter().find(|e| matches!(e, HostEvent::PreviewReady { container, width: "thumb", .. } if container == "@scene")).expect("the scene's thumb"));
+        let hash = &b.container("@scene").expect("scene").hash;
+        assert!(
+            f.starts_with(&format!(r#"{{"type":"preview_ready","container":"@scene","render_hash":"{hash}","width":"thumb","state":"ready","failed":null,"rev":2,"rendered_at_ms":{},"render_ms":7,"without_modifiers":true,"camera":{{"fx":1.5}},"ids":{{"#, at["@scene thumb"])),
+            "{f}"
+        );
+
+        // The cache keeps the ids it was drawn with; the route names them as now.
+        let Got::Hit(e) = cache::get(&blobs, &key, "@scene", hash, Width::Thumb, "fake-1") else { panic!("cached") };
+        assert_eq!(e.meta["ids"]["objects"][1]["id"], json!("Lamp"));
+        assert_eq!(body(route::image(&blobs, &b, "@scene", None, Width::Thumb, Look::Opaque, false))["ids"]["objects"], renamed);
+        assert!(pushed_now(&sub).is_empty(), "the route drew nothing");
+
+        // A head move that renames nothing pushes nothing: the same listing,
+        // a camera added, an object added that the tables don't list.
+        let c = snap(&blobs, &key, 3, &PLACE.replace("@obj:Lamp", "@obj:Light"));
+        service::head_moved(&blobs, &b, &c);
+        assert!(pushed_now(&sub).is_empty(), "nothing renamed");
+        let d = snap(&blobs, &key, 4, &format!("{}\n@cam:Side 3 c1\n@obj:Vase 2 o2", PLACE.replace("@obj:Lamp", "@obj:Light")));
+        service::head_moved(&blobs, &c, &d);
+        assert!(pushed_now(&sub).is_empty(), "the tables are as they were");
+
+        // Renamed again: pushed again, from the names the last listing gave.
+        let e = snap(&blobs, &key, 5, &format!("{}\n@cam:Side 3 c1\n@obj:Vase 2 o2", PLACE.replace("@obj:Lamp", "@obj:Lantern")));
+        service::head_moved(&blobs, &d, &e);
+        let again: Vec<serde_json::Value> = pushed_now(&sub).iter().map(|e| serde_json::from_str(&frame(e)).expect("json")).collect();
+        let views: Vec<&serde_json::Value> = again.iter().filter(|f| f["container"] == "@scene" || f["container"] == "@cam:Main").collect();
+        assert_eq!(views.len(), 3, "{again:?}");
+        assert!(views.iter().all(|f| f["ids"]["objects"][1]["id"] == "Lantern" && f["rev"] == 5), "{again:?}");
+        assert_eq!(again.len(), 4, "and the object's own view reused: {again:?}");
+    });
+}
+
+/// Only an image cached at the view's current hash is pushed: none for a
+/// view not drawn, or drawn only at a hash it has no longer.
+#[test]
+fn a_rename_pushes_nothing_for_an_image_not_cached_at_the_current_hash() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("renamed-uncached.blend");
+        let a = snap(&blobs, &key, 1, PLACE);
+        let sub = host_events::subscribe(&key);
+        draw_now(&blobs, &a, &sub, "@scene", Width::Thumb, Look::Transparent);
+        // The scene moved on (its hash is another now; the camera was never drawn), then an object renamed.
+        let b = snap(&blobs, &key, 2, &PLACE.replace("@scene 9", "@scene 8"));
+        let c = snap(&blobs, &key, 3, &PLACE.replace("@scene 9", "@scene 8").replace("@obj:Chair", "@obj:Seat"));
+        assert_ne!(b.container("@scene").expect("scene").hash, a.container("@scene").expect("scene").hash);
+        service::head_moved(&blobs, &b, &c);
+        assert!(pushed_now(&sub).is_empty(), "nothing cached at the current hash, nothing drawn");
+    });
+}
+
+/// A deck's slides have no id tables: a retitled slide pushes nothing.
+#[test]
+fn a_deck_never_gets_an_id_table_push() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("retitled.pptx");
+        let slides = |titles: [&str; 2]| {
+            Arc::new(Snapshot {
+                key: key.clone(),
+                rev: 1,
+                version: None,
+                renderer: &deck::DECK,
+                build: deck::DECK.build(),
+                page: None,
+                containers: titles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| Keyed {
+                        c: Container { key: format!("@sld:{}", 256 + i), position: i as u32 + 1, title: t.to_string(), hidden: false, digest: [i as u8; 32], locator: (i + 1).to_string(), extras: Default::default() },
+                        hash: format!("h{i}"),
+                    })
+                    .collect(),
+                bytes: Arc::new(Vec::new()),
+            })
+        };
+        let (a, b) = (slides(["Intro", "Plan"]), slides(["Overview", "Plan"]));
+        let meta = json!({ "container": "@sld:256", "render_hash": "h0", "rendered_at_ms": 1, "ids": { "objects": [{ "index": 0, "id": "Intro" }] } });
+        cache::put(&blobs, &key, "@sld:256", "h0", Width::Thumb, &deck::DECK.build(), &meta, b"PIXELS").expect("cached");
+        let sub = host_events::subscribe(&key);
+        service::head_moved(&blobs, &a, &b);
+        assert!(pushed_now(&sub).is_empty(), "a deck is untouched");
+    });
+}
+
 /// The real worker when it is built (cargo build -p k2-scenerender --bins).
 fn built_worker() -> Option<std::path::PathBuf> {
     std::env::current_exe()

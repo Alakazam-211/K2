@@ -32,7 +32,9 @@
 //!   or camera: a scene's digest leaves ids out) is answered from that
 //!   image at once, `preview_ready` with `reused_from`, no worker run; its
 //!   id image comes along, its table named as the listing is now
-//!   ([`with_current_ids`]).
+//!   ([`with_current_ids`]). The scene and camera views keep their address
+//!   and hash when an object is renamed: their current images are pushed
+//!   `ready` again with the new ids ([`push_renamed_ids`]), nothing drawn.
 //! - **Looks** ([`super::Look`]): a job is per look as well as per width;
 //!   a transparent image is cached under its own name.
 //! - **Purge.** [`doc_purged`], [`space_removed`], [`doc_moved`] and
@@ -167,16 +169,71 @@ pub fn head(
     let file = session.file_now(conn).map_err(SnapError::Session)?;
     let snap = Arc::new(list(blobs, renderer, key, file.version, None, file.bytes)?);
     if let Some(prev) = prev {
-        for k in dirty(&prev, &snap) {
-            for look in Look::ALL.into_iter().filter(|l| renderer.draws(*l)) {
-                for w in reuse::widths_to_redraw(&prev, k, &look.cache_build(&snap.build)) {
-                    request(blobs, &snap, &k.c.key, w, look);
-                }
-            }
-        }
+        head_moved(blobs, &prev, &snap);
     }
     remember(snap.clone());
     Ok(snap)
+}
+
+/// What a doc's head moving from `prev` to `snap` sets off: its dirty
+/// containers drawn again at the widths already looked at (or reused,
+/// [`reuse`]), then the scene and camera views' id tables pushed with the
+/// objects' new ids ([`push_renamed_ids`]).
+pub fn head_moved(blobs: &Arc<BlobStore>, prev: &Snapshot, snap: &Arc<Snapshot>) {
+    for k in dirty(prev, snap) {
+        for look in Look::ALL.into_iter().filter(|l| snap.renderer.draws(*l)) {
+            for w in reuse::widths_to_redraw(prev, k, &look.cache_build(&snap.build)) {
+                request(blobs, snap, &k.c.key, w, look);
+            }
+        }
+    }
+    push_renamed_ids(blobs, prev, snap);
+}
+
+/// Objects renamed in place. A scene's digest leaves ids out, so the views
+/// that draw every object (the scene and the cameras) keep their address
+/// and render hash: nothing is drawn, and a client holding one of their id
+/// tables would keep the old ids. Each of their images cached at the view's
+/// current hash whose table names an object differently from `prev`'s
+/// listing is pushed `ready` again, at once: the same container, render
+/// hash, width, look and fields (its `rendered_at_ms` is when it was
+/// drawn), at `snap`'s rev, its `ids` named as the listing is now. The same
+/// render hash says the pixels are the ones the client has. The cache keeps
+/// the ids it was drawn with: the listing names a current image wherever it
+/// is answered ([`with_current_ids`]).
+fn push_renamed_ids(blobs: &BlobStore, prev: &Snapshot, snap: &Snapshot) {
+    if extras::object_ids(prev.containers.iter().map(|k| &k.c)) == extras::object_ids(snap.containers.iter().map(|k| &k.c)) {
+        return;
+    }
+    for k in &snap.containers {
+        let Some(p) = prev.container(&k.c.key).filter(|p| p.hash == k.hash) else { continue };
+        if !snap.renderer.draws_ids(&k.c) || !extras::named_by_listing(&k.c) {
+            continue;
+        }
+        for look in Look::ALL.into_iter().filter(|l| snap.renderer.draws(*l)) {
+            let build = look.cache_build(&snap.build);
+            for w in Width::ALL {
+                let cache::Got::Hit(e) = cache::get(blobs, &snap.key, &k.c.key, &k.hash, w, &build) else { continue };
+                let (mut was, mut now) = (e.meta.clone(), e.meta);
+                with_current_ids(prev, p, &mut was);
+                with_current_ids(snap, k, &mut now);
+                if now.get("ids").is_none() || was.get("ids") == now.get("ids") {
+                    continue;
+                }
+                host_events::publish(HostEvent::PreviewReady {
+                    key: snap.key.clone(),
+                    container: k.c.key.clone(),
+                    render_hash: k.hash.clone(),
+                    width: w.as_str(),
+                    state: "ready",
+                    failed: None,
+                    rev: snap.rev,
+                    rendered_at_ms: now["rendered_at_ms"].as_u64().unwrap_or(0),
+                    extras: ready_fields(&now),
+                });
+            }
+        }
+    }
 }
 
 /// A cut version's snapshot, through `conn` (the kit checks history).

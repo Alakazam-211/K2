@@ -37,6 +37,15 @@ import { primaryScope } from '@/kessel/server-scope'
 import { setAgentDisplayName } from '@/lib/workspace-agent'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
 import { mobileTabIndexValue } from '@/lib/workspace-tab-settings'
+// Speed pass P4: the last list per server login, painted at once on start.
+import {
+  peekProjectsList,
+  projectsListCacheKey,
+  projectsListTag,
+  readProjectsList,
+  saveProjectsList,
+  type StoredProjectsList,
+} from '@/lib/projects-list-cache'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -179,6 +188,47 @@ export function activateProject(projectId: string): void {
  *  switch can't overwrite real values with the user's pre-restore
  *  selection. See panels.ts for the longer rationale. */
 let hasLoadedFromDaemon = false
+
+/** Speed pass P4: the sidebar shows the stored copy of the list and no read
+ *  has landed yet. Its rows are not confirmed, so nothing destructive runs
+ *  on them (`removeProject` refuses until the read lands). */
+let showingStoredCopy = false
+
+/** Test-only: back to "no list has landed from this server yet". */
+export function _resetProjectsLoadedForTests(): void {
+  hasLoadedFromDaemon = false
+  showingStoredCopy = false
+}
+
+/** Where this window's server login keeps its stored list. */
+function projectsListStore(): { key: string; hostKey: string } {
+  const active = useConnectHostStore.getState().activeHost
+  const hostKey = activeHostKey(active)
+  const login = active === 'local' ? '' : (active.username ?? '')
+  return { key: projectsListCacheKey(hostKey, login), hostKey }
+}
+
+/** The server answers `projects/list` with an ETag and a 304 when the tag
+ *  it is asked with still matches (`projects-etag`). */
+function serverHasProjectsEtag(): boolean {
+  try {
+    return primaryScope().serverSupports('projects-etag')
+  } catch {
+    return false
+  }
+}
+
+/** A `304 Not Modified` from the daemon (`daemonCliGet` throws it as a
+ *  non-2xx answer carrying the status). */
+function isNotModified(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { status?: unknown }).status === 304
+}
+
+/** Store the list just read (with the tag the daemon gives it) for the next
+ *  start. Old daemons' lists without nested workspaces are not stored. */
+function rememberProjectsList(key: string, hostKey: string, rows: ProjectWithWorkspaces[]): void {
+  void projectsListTag(rows).then((tag) => saveProjectsList(key, hostKey, rows, tag))
+}
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_*`
@@ -414,11 +464,36 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     const fetchHostKey = activeHostKey(useConnectHostStore.getState().activeHost)
     const hostUnchanged = (): boolean =>
       activeHostKey(useConnectHostStore.getState().activeHost) === fetchHostKey
+    const listStore = projectsListStore()
     try {
+      // Speed pass P4: the list this window (or, on the first load, this
+      // computer) last stored for this server login. On the first load it
+      // is painted at once, before the server answers; the read below then
+      // replaces it. Its tag asks the server "changed?": a 304 has no body.
+      let stored: StoredProjectsList<ProjectWithWorkspaces> | null = peekProjectsList<ProjectWithWorkspaces>(listStore.key)
+      if (!stored && !hasLoadedFromDaemon) stored = await readProjectsList<ProjectWithWorkspaces>(listStore.key)
+      if (!hostUnchanged()) return
+      if (stored && !hasLoadedFromDaemon && get().projects.length === 0 && stored.projects.length > 0) {
+        set({ projects: stored.projects })
+        showingStoredCopy = true
+      }
+      const askTag = stored?.tag && serverHasProjectsEtag() ? stored.tag : null
+
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase Project/Workspace response shapes match the
       // Rust structs' `#[serde(rename_all = "camelCase")]` so no remap.
-      const projectListRaw = await daemonCliGet<Array<Project & { workspaces?: unknown }>>(primaryScope(), 'projects/list')
+      let projectListRaw: Array<Project & { workspaces?: unknown }> | null
+      let unchanged = false
+      try {
+        projectListRaw = askTag
+          ? await daemonCliGet<Array<Project & { workspaces?: unknown }>>(primaryScope(), 'projects/list', { if_none_match: askTag })
+          : await daemonCliGet<Array<Project & { workspaces?: unknown }>>(primaryScope(), 'projects/list')
+      } catch (err) {
+        if (!askTag || !stored || !isNotModified(err)) throw err
+        // 304: the stored list is exactly what the server holds.
+        projectListRaw = stored.projects
+        unchanged = true
+      }
       // Daemon data is host-aware: a host swap (or an older/odd remote) can
       // return a non-array body (null, an error envelope, a {…}-wrapper). The
       // rest of the renderer treats `projects` / `workspaces` as arrays
@@ -433,6 +508,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       let projectsWithWorkspaces: ProjectWithWorkspaces[]
       if (projectsListEmbedsWorkspaces(projectList)) {
         projectsWithWorkspaces = projectList
+        if (!unchanged && hostUnchanged()) rememberProjectsList(listStore.key, listStore.hostKey, projectList)
       } else {
         projectsWithWorkspaces = await Promise.all(
           projectList.map(async (project) => {
@@ -461,6 +537,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         return next
       })
       set({ projects: merged })
+      showingStoredCopy = false
 
       // If active project was deleted (e.g. in another window), clear selection
       const state = get()
@@ -564,7 +641,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // now allow their `settingsUpdate` calls. Host-guarded: a stale
       // fetch must not unlock writes the NEW host's baseline hasn't
       // earned (the switch reset this gate to false on purpose).
-      if (hostUnchanged()) hasLoadedFromDaemon = true
+      if (hostUnchanged()) {
+        hasLoadedFromDaemon = true
+        // Speed pass P4: the other workspaces' layouts load now, after the
+        // list and the shown workspace's own layout (not in the first load).
+        // Optional call: test doubles of the tabs store may not have it.
+        useTabsStore.getState().requestWorkspaceLayoutsLoad?.()
+      }
     } catch (err) {
       console.error('[projects] fetchProjects failed:', err)
       // Never keep another host's list. A failed remote N+1 (timeout,
@@ -573,6 +656,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // empty — not the previous box.
       if (hostUnchanged() && !hasLoadedFromDaemon) {
         set({ projects: [], activeProjectId: null, activeWorkspaceId: null })
+        showingStoredCopy = false
       }
     }
   },
@@ -630,6 +714,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   removeProject: async (id: string) => {
+    // Speed pass P4: a row painted from the stored copy is not confirmed
+    // until the server's list lands.
+    if (showingStoredCopy) {
+      throw new Error('The workspace list is still loading from the server; try again in a moment.')
+    }
     let removed = false
     try {
       const tabsStore = useTabsStore.getState()
@@ -1089,6 +1178,7 @@ onAgentIdentityChanged(primaryScope(), applyAgentIdentityChanged)
 
 onActiveHostChange(() => {
   hasLoadedFromDaemon = false
+  showingStoredCopy = false
   // #672 — reset the activate dedup so the restore against the NEW host
   // re-POSTs projects/activate for the landed-on workspace (a different
   // daemon must see the activation fresh).

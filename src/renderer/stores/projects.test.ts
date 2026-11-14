@@ -134,8 +134,16 @@ import {
   scheduleProjectsRefreshFromSync,
   applyAgentIdentityChanged,
   _resetProjectsChangedSyncForTests,
+  _resetProjectsLoadedForTests,
   type ProjectWithWorkspaces,
 } from './projects'
+import {
+  peekProjectsList,
+  projectsListCacheKey,
+  projectsListTag,
+  resetProjectsListCacheForTests,
+  saveProjectsList,
+} from '@/lib/projects-list-cache'
 
 function mkProject(id: string): Record<string, unknown> {
   return {
@@ -193,6 +201,7 @@ describe('projects store — Plan B host-aware migration', () => {
     callOrder.length = 0
     resetStore()
     _resetProjectsChangedSyncForTests()
+    void resetProjectsListCacheForTests()
   })
 
   afterEach(() => {
@@ -787,6 +796,92 @@ describe('projects store — Plan B host-aware migration', () => {
     await Promise.resolve()
     expect(ensurePinnedMock).toHaveBeenCalledWith('off', '/tmp/p-ap2')
     expect(callOrder).toEqual(['restore', 'ensure'])
+  })
+
+  // ── Speed pass P4: paint from the stored list, ask "changed?" ─────────
+
+  const LOCAL_LIST_KEY = projectsListCacheKey('local', '')
+  const row = (id: string): Record<string, unknown> => ({ ...mkProject(id), workspaces: [mkWorkspace(`${id}-w`, id)] })
+  const ids = (): string[] => useProjectsStore.getState().projects.map((p) => p.id)
+
+  it('P4: the first load paints the stored list at once, then the read replaces it and is stored', async () => {
+    saveProjectsList(LOCAL_LIST_KEY, 'local', [row('p-old')], null)
+    _resetProjectsLoadedForTests()
+    let answer: (rows: unknown) => void = () => {}
+    daemonCliGet.mockImplementation((route: string) => {
+      if (route === 'projects/list') return new Promise((resolve) => (answer = resolve))
+      throw new Error(`unexpected GET ${route}`)
+    })
+
+    const done = useProjectsStore.getState().fetchProjects()
+    // Painted from the stored copy before the server answered.
+    await vi.waitFor(() => expect(daemonCliGet).toHaveBeenCalledTimes(1))
+    expect(ids()).toEqual(['p-old'])
+    // No tag stored: a plain read.
+    expect(daemonCliGet).toHaveBeenCalledWith('projects/list')
+
+    answer([row('p-new')])
+    await done
+    expect(ids()).toEqual(['p-new'])
+    expect(useProjectsStore.getState().activeProjectId).toBe('p-new')
+    // Stored for the next start, with the tag the daemon would send.
+    await vi.waitFor(() => expect(peekProjectsList(LOCAL_LIST_KEY)?.projects).toEqual([row('p-new')]))
+    expect(peekProjectsList(LOCAL_LIST_KEY)?.tag).toBe(await projectsListTag([row('p-new')]))
+  })
+
+  it('P4: with a stored tag the read asks "changed?"; a 304 keeps the stored list as the answer', async () => {
+    const rows = [row('p-same')]
+    const tag = await projectsListTag(rows)
+    expect(tag).toMatch(/^W\/"[0-9a-f]{32}"$/)
+    saveProjectsList(LOCAL_LIST_KEY, 'local', rows, tag)
+    _resetProjectsLoadedForTests()
+    daemonCliGet.mockImplementation((route: string) => {
+      if (route === 'projects/list') return Promise.reject(Object.assign(new Error('daemon /cli/projects/list 304'), { status: 304 }))
+      throw new Error(`unexpected GET ${route}`)
+    })
+
+    await useProjectsStore.getState().fetchProjects()
+
+    expect(daemonCliGet).toHaveBeenCalledWith('projects/list', { if_none_match: tag })
+    expect(ids()).toEqual(['p-same'])
+    // The 304 counts as a landed read: the last-session restore ran.
+    expect(useProjectsStore.getState().activeProjectId).toBe('p-same')
+  })
+
+  it('P4: a later refresh asks with the tag of the list it holds and applies a changed list', async () => {
+    _resetProjectsLoadedForTests()
+    daemonCliGet.mockResolvedValueOnce([row('p-a')])
+    await useProjectsStore.getState().fetchProjects()
+    await vi.waitFor(() => expect(peekProjectsList(LOCAL_LIST_KEY)?.tag).toBeTruthy())
+    const tag = peekProjectsList(LOCAL_LIST_KEY)?.tag
+
+    daemonCliGet.mockResolvedValueOnce([row('p-a'), row('p-b')])
+    await useProjectsStore.getState().fetchProjects()
+    expect(daemonCliGet).toHaveBeenLastCalledWith('projects/list', { if_none_match: tag })
+    expect(ids()).toEqual(['p-a', 'p-b'])
+  })
+
+  it('P4: stored rows are not confirmed: no removal until the read lands, and a failed first read still shows empty', async () => {
+    saveProjectsList(LOCAL_LIST_KEY, 'local', [row('p-ghost')], null)
+    _resetProjectsLoadedForTests()
+    let fail: (e: Error) => void = () => {}
+    daemonCliGet.mockImplementation((route: string) => {
+      if (route === 'projects/list') return new Promise((_, reject) => (fail = reject))
+      throw new Error(`unexpected GET ${route}`)
+    })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const done = useProjectsStore.getState().fetchProjects()
+    await vi.waitFor(() => expect(ids()).toEqual(['p-ghost']))
+    // Removing a row nobody confirmed yet is refused.
+    await expect(useProjectsStore.getState().removeProject('p-ghost')).rejects.toThrow(/still loading/)
+    expect(daemonCliPost).not.toHaveBeenCalledWith('projects/delete', expect.anything())
+
+    // The read fails: as before, a server with no landed list shows empty.
+    fail(new Error('connection refused'))
+    await done
+    expect(ids()).toEqual([])
+    errSpy.mockRestore()
   })
 
   it('a failed mutation does NOT emit sync', async () => {

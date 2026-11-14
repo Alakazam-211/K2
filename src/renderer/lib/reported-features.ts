@@ -200,6 +200,12 @@ export const REPORTED_FEATURES = {
    *  `voice:record`. Settings → User Access offers "Record" only for a
    *  server that lists it. */
   'app-voice-record-v1': 'app-voice-record-v1',
+  /** Speed pass P4 (`crates/k2-daemon/src/response_wire.rs`): `GET
+   *  /cli/projects/list` carries an ETag and answers 304 with no body to a
+   *  matching `If-None-Match` header or `if_none_match` query parameter.
+   *  The projects store sends its stored list's tag only to a server with
+   *  it. */
+  'projects-etag': 'projects-etag',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

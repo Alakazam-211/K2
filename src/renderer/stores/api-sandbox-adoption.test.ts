@@ -50,6 +50,8 @@ const cli = vi.hoisted(() => ({
   getImpl: (async (route: string) =>
     route === 'workspace-layouts/load' ? null : []) as (route: string, params?: unknown) => Promise<unknown>,
   listSessionsImpl: (async () => [] as unknown[]) as () => Promise<unknown>,
+  posts: [] as Array<{ route: string; body: unknown }>,
+  postImpl: (async () => ({})) as (route: string, body?: unknown) => Promise<unknown>,
 }))
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
@@ -58,7 +60,7 @@ vi.mock('@/lib/daemon-cli', async () => {
       if (route === 'sessions/list-for-workspace') return cli.listSessionsImpl()
       return cli.getImpl(route, params)
     })),
-    daemonCliPost: primaryOnly(vi.fn(async () => ({}))),
+    daemonCliPost: primaryOnly(vi.fn(async (route: string, body?: unknown) => cli.postImpl(route, body))),
   }
 })
 vi.mock('@/lib/daemon-reconnect', () => ({ onDaemonConnected: vi.fn() }))
@@ -186,6 +188,12 @@ function resetStore(): void {
   ev.removed = []
   ev.hello = []
   cli.listSessionsImpl = async () => []
+  cli.getImpl = async (route: string) => (route === 'workspace-layouts/load' ? null : [])
+  cli.posts = []
+  cli.postImpl = async (route: string, body?: unknown) => {
+    cli.posts.push({ route, body })
+    return {}
+  }
   mem.clear()
   // Default: no projects index → ephemeral/unknown paths still land on active strip.
   registerProjectsPathIndex(() => [])
@@ -194,7 +202,7 @@ function resetStore(): void {
 beforeEach(resetStore)
 
 describe('adoptApiSandboxSession — workspace routing (Ledger sales pilot)', () => {
-  it('does NOT append a sales host-session into the Julie-focused strip', () => {
+  it('does NOT append a sales host-session into the Julie-focused strip', async () => {
     registerProjectsPathIndex(() => [
       {
         id: 'proj-julie',
@@ -224,7 +232,9 @@ describe('adoptApiSandboxSession — workspace routing (Ledger sales pilot)', ()
 
     // Focused Julie strip stays empty.
     expect(useTabsStore.getState().tabs).toHaveLength(0)
-    // Cell is parked on sales layout (not active this session).
+    // Cell is parked on sales layout (not active this session). Its layout
+    // was not cached, so it is read first (with its revision), then saved.
+    await vi.waitFor(() => expect(useTabsStore.getState().workspaceLayouts['proj-sales:ws-sales']).toBeTruthy())
     const salesLayout = useTabsStore.getState().workspaceLayouts['proj-sales:ws-sales']
     expect(salesLayout).toBeTruthy()
     expect(salesLayout!.tabs?.length).toBe(1)
@@ -234,6 +244,51 @@ describe('adoptApiSandboxSession — workspace routing (Ledger sales pilot)', ()
     const json = JSON.stringify(salesLayout)
     expect(json).toContain('api-owner-sales-sess')
     void attach
+  })
+
+  it('a never-opened workspace whose layout is not cached yet keeps its saved tabs (read with its revision, saved on that base)', async () => {
+    registerProjectsPathIndex(() => [
+      { id: 'proj-julie', path: '/home/k2/AI Projects/Julie', primaryWorkspaceId: 'ws-julie' },
+      { id: 'proj-sales', path: '/home/k2/AI Projects/sales', primaryWorkspaceId: 'ws-sales' },
+    ])
+    useTabsStore.setState({
+      activeProjectId: 'proj-julie',
+      activeWorkspaceId: 'ws-julie',
+      activeWorkspaceKey: 'proj-julie:ws-julie',
+      tabs: [],
+      workspaceLayouts: {},
+    })
+    const saved = { version: 2, tabs: [{ id: 'tab-keep', title: 'Keep me' }], activeTabId: 'tab-keep' }
+    cli.getImpl = async (route: string) =>
+      route === 'workspace-layouts/load' ? { layoutJson: JSON.stringify(saved), revision: 7 } : []
+    cli.postImpl = async (route: string, body?: unknown) => {
+      cli.posts.push({ route, body })
+      return route === 'workspace-layouts/save' ? { success: true, revision: 8 } : {}
+    }
+
+    const e = apiHostEvent({ workspace_path: '/home/k2/AI Projects/sales', agent_name: 'api-owner-sales-2', session_id: 'sess-sales-2' })
+    expect(adoptApiSandboxSession(e)).toBe(true)
+
+    await vi.waitFor(() => expect(cli.posts.filter((p) => p.route === 'workspace-layouts/save')).toHaveLength(1))
+    const body = cli.posts.find((p) => p.route === 'workspace-layouts/save')!.body as {
+      projectId: string
+      workspaceId: string
+      layoutJson: string
+      baseRevision?: number
+    }
+    expect(body.projectId).toBe('proj-sales')
+    expect(body.workspaceId).toBe('ws-sales')
+    // Saved on the revision it read, never a blind overwrite.
+    expect(body.baseRevision).toBe(7)
+    const layout = JSON.parse(body.layoutJson) as { tabs: Array<{ id?: string }> }
+    // The saved tab is still there, with the new cell after it.
+    expect(layout.tabs).toHaveLength(2)
+    expect(layout.tabs[0].id).toBe('tab-keep')
+    expect(body.layoutJson).toContain('api-owner-sales-2')
+    // The cached copy is the saved one.
+    await vi.waitFor(() => expect(useTabsStore.getState().workspaceLayouts['proj-sales:ws-sales']?.tabs).toHaveLength(2))
+    // The focused strip is untouched.
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
   })
 
   it('appends onto the focused strip when that workspace owns the path', () => {

@@ -236,7 +236,7 @@ describe('#625 host-switch resets per-machine UI session state', () => {
     expect(mem.dismissed.size).toBe(0)
   })
 
-  it('resets hasLoadedWorkspaceSessions + re-invokes loadWorkspaceSessionsFromDb', () => {
+  it('resets hasLoadedWorkspaceSessions; the new server layouts load once asked (speed pass P4)', async () => {
     const loadSpy = vi.spyOn(
       useTabsStore.getState(),
       'loadWorkspaceSessionsFromDb',
@@ -249,14 +249,19 @@ describe('#625 host-switch resets per-machine UI session state', () => {
 
     useConnectHostStore.getState().selectHost(makeRemoteHost())
 
-    // Module gate reset so the reconnect-retry path will fire again, and
-    // the loader was re-invoked against the NEW host.
+    // Module gate reset so the reconnect-retry path will fire again. The
+    // full layouts map is not part of the new server's first load: nothing
+    // is fetched at the switch itself…
     expect(__hasLoadedWorkspaceSessionsForTests()).toBe(false)
-    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expect(loadSpy).not.toHaveBeenCalled()
     // Local-keyed session state cleared.
     expect(useTabsStore.getState().backgroundWorkspaces).toEqual({})
     expect(useTabsStore.getState().workspaceLayouts).toEqual({})
     expect(useTabsStore.getState().activeWorkspaceKey).toBeNull()
+    // …it loads, against the NEW host, once the projects store asks (its
+    // list for the new server has landed).
+    useTabsStore.getState().requestWorkspaceLayoutsLoad()
+    await vi.waitFor(() => expect(loadSpy).toHaveBeenCalled())
   })
 
   it('clears the window server’s activity rows and live sessions on a host change', () => {

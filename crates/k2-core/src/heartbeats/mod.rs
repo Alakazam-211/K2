@@ -58,6 +58,9 @@ mod reminder_tick_tests;
 // App heartbeats surface: not-found, instructions writer, change rows.
 #[cfg(test)]
 mod change_tests;
+// A missing or unreadable WAKEUP.md never turns a heartbeat off.
+#[cfg(test)]
+mod wakeup_wait_tests;
 
 /// AH13 — error prefix for a heartbeat name that is not in the workspace.
 /// Routes map an error starting with this to `404 no_such_heartbeat`.

@@ -67,7 +67,8 @@ export function homeSelection(home: Home): HomeSelection {
 /** One step of an entry: true when the entry is settled (done). */
 export function trySelectTopHomeRow(): boolean {
   const home = selectedHome(useHomesStore.getState())
-  const top = home.rows[0]
+  // People and channels never open by themselves: the top agent row does.
+  const top = home.rows.find((r) => !r.kind)
   if (!top) return true
   const selection = homeSelection(home)
   if (selection === 'selected') return true

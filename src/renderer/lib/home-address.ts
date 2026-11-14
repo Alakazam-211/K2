@@ -53,6 +53,8 @@ export function workspaceHandle(p: { handle?: string | null; name: string }): st
 export interface HomeRowRef {
   address: string
   workspaceId: string | null
+  /** A person or channel row (prd-home-people-channels-v1) is never a workspace. */
+  kind?: string
 }
 
 /** Find the workspace a row points at in one server's list. Handle wins
@@ -62,6 +64,7 @@ export function findWorkspaceForRow<P extends { id: string; handle?: string | nu
   workspaces: P[],
   row: HomeRowRef,
 ): P | null {
+  if (row.kind) return null
   const parsed = parseHomeAddress(row.address)
   if (!parsed) return null
   const byHandle = workspaces.find((w) => workspaceHandle(w) === parsed.handle)

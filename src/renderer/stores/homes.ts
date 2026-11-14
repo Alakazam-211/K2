@@ -43,6 +43,7 @@ import { isValidOrder } from '@/lib/fractional-index'
 import { MAX_PINS, isPinned, pinKeys, pinnedRows } from '@/lib/home-row-order'
 import { onUserSend } from '@/lib/user-send-bus'
 import { createSendStamper } from '@/lib/home-row-stamp'
+import { addressFitsKind, homeRowKind } from '@/lib/home-chat/address'
 
 export const HOMES_STORAGE_KEY = 'k2.homes.v1'
 export const HOMES_LAST_SELECTED_KEY = 'k2.homes.lastSelected'
@@ -69,6 +70,11 @@ export function nextGroupName(homes: readonly { name: string }[]): string {
 export const DEFAULT_HOME_NAME = nextGroupName([])
 
 export interface HomeRow {
+  /** People and channels on Home (prd-home-people-channels-v1 §5): a
+   *  `person` row (`<external id>::host`, the DM with them there) or a
+   *  `channel` row (`<Sew channel id>::host`). Absent: an agent row. Synced
+   *  (migration 0306); a row's identity is its kind and address. */
+  kind?: 'person' | 'channel'
   /** `handle::host`, lowercase — the row key. */
   address: string
   /** `projects.id` on that host — rename-repair hint, not identity. */
@@ -138,8 +144,10 @@ function isRow(v: unknown): v is HomeRow {
   if (!v || typeof v !== 'object') return false
   const r = v as Record<string, unknown>
   return (
+    (r.kind === undefined || r.kind === 'person' || r.kind === 'channel') &&
     typeof r.address === 'string' &&
     parseHomeAddress(r.address) !== null &&
+    addressFitsKind(homeRowKind(r as { kind?: string }), r.address) &&
     (r.workspaceId === null || typeof r.workspaceId === 'string') &&
     typeof r.label === 'string' &&
     (r.pinOrder === undefined || (typeof r.pinOrder === 'string' && isValidOrder(r.pinOrder))) &&
@@ -221,8 +229,14 @@ export interface HomesState {
    *  its rows). */
   setRowOrder: (homeId: string, addresses: readonly string[]) => boolean
   /** The person sent to the agent at `address`: stamp every row on it, in
-   *  every group (never moves a stamp back). Returns how many changed. */
+   *  every group (never moves a stamp back). Returns how many changed. A
+   *  person's or channel's address is stamped by their own sends in Home
+   *  chat only (never by a message they received). */
   stampRowsMessaged: (address: string, at: number) => number
+  /** Put `row` in the place of the row at `address` on a Home (a person's
+   *  "Also on" server switch): same position, pin and last send. False when
+   *  the old row is gone or the new address is already on that Home. */
+  replaceRow: (homeId: string, address: string, row: HomeRow) => boolean
   /** False for the last Home (never deleted) or an unknown id. */
   deleteHome: (id: string) => boolean
   /** False when the address is already on that Home (dedupe per Home). */
@@ -553,6 +567,25 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
         return changed
       },
 
+      replaceRow: (homeId, address, row) => {
+        const home = get().homes.find((h) => h.id === homeId)
+        const next = row.address.trim().toLowerCase()
+        if (!home || !parseHomeAddress(next) || !addressFitsKind(homeRowKind(row), next)) return false
+        const idx = home.rows.findIndex((r) => r.address === address)
+        if (idx < 0) return false
+        if (next !== address && home.rows.some((r) => r.address === next)) return false
+        const old = home.rows[idx]
+        const merged: HomeRow = { ...row, address: next }
+        if (old.pinOrder !== undefined) merged.pinOrder = old.pinOrder
+        if (old.lastMessagedAt !== undefined) merged.lastMessagedAt = old.lastMessagedAt
+        const rows = [...home.rows]
+        rows[idx] = merged
+        const mapped = mapHome(homeId, (h) => ({ ...h, rows }))
+        if (!mapped) return false
+        commit(mapped)
+        return true
+      },
+
       deleteHome: (id) => {
         const { homes, selectedId } = get()
         if (homes.length <= 1) return false
@@ -567,7 +600,7 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
 
       addRow: (homeId, row) => {
         const address = row.address.trim().toLowerCase()
-        if (!parseHomeAddress(address)) return false
+        if (!parseHomeAddress(address) || !addressFitsKind(homeRowKind(row), address)) return false
         const home = get().homes.find((h) => h.id === homeId)
         if (!home || home.rows.some((r) => r.address === address)) return false
         const next = mapHome(homeId, (h) => ({ ...h, rows: [...h.rows, { ...row, address }] }))
@@ -682,6 +715,8 @@ export function repairHomeRowsFromList(
 ): void {
   const list = [...workspaces]
   store.getState().repairRows((row) => {
+    // People and channels are not workspaces: never repaired from a list.
+    if (row.kind) return null
     const p = parseHomeAddress(row.address)
     if (!p || p.host !== hostKey) return null
     const ws = findWorkspaceForRow(list, row)

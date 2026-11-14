@@ -23,7 +23,7 @@ export function homesSyncBadgeView(s: HomesSyncStatus): HomesSyncBadgeView | nul
   const tone: HomesSyncBadgeTone =
     s.phase === 'removed' || s.phase === 'error'
       ? 'problem'
-      : s.phase === 'offline' || s.pending > 0
+      : s.phase === 'offline' || s.pending > 0 || (s.localOnly ?? 0) > 0
         ? 'paused'
         : 'ok'
   const glyph = s.serverLabel === 'This computer' ? 'computer' : (s.serverLabel.trim()[0] ?? '?').toUpperCase()

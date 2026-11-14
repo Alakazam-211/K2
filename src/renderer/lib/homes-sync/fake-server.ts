@@ -7,7 +7,7 @@
 // the truth for the real server.
 
 import type { HomesSyncTransport } from './runner'
-import { itemKey, beats, type WireItem } from './engine'
+import { itemKey, beats, type WireItem, type WireRow } from './engine'
 
 export class HttpLikeError extends Error {
   readonly status: number
@@ -32,6 +32,10 @@ export class FakeHomeServer {
   online = true
   supported = true
   pushes = 0
+  /** The item kinds this server keeps (0306 added person and channel); an
+   *  older server refuses the rest one item at a time (`invalid_kind`) and
+   *  its pulls list no kinds. */
+  kinds: string[] | null = ['home', 'row', 'person', 'channel']
 
   constructor(serverId = 'aaaaaaaaaaaaaaaa') {
     this.serverId = serverId
@@ -80,6 +84,7 @@ export class FakeHomeServer {
       ok: true,
       person: 'owner',
       serverId: this.serverId,
+      ...(this.kinds ? { kinds: [...this.kinds] } : {}),
       cursor: this.seq,
       full,
       changes: changes.map((c) => ({ ...c })),
@@ -102,6 +107,10 @@ export class FakeHomeServer {
     const rejected: Array<{ item: WireItem; reason: string }> = []
     for (const raw of ordered) {
       const item = { ...raw, deviceId } as WireItem
+      if (!(this.kinds ?? ['home', 'row']).includes(item.kind)) {
+        rejected.push({ item, reason: 'invalid_kind' })
+        continue
+      }
       const k = itemKey(item)
       const ex = this.items.get(k)
       if (ex && !beats(item, ex.item)) {
@@ -115,7 +124,7 @@ export class FakeHomeServer {
         if (item.icon === undefined) item.icon = old?.icon ?? null
         if (item.recentFirst === undefined) item.recentFirst = old?.recentFirst ?? false
       } else {
-        const old = ex?.item.kind === 'row' ? ex.item : undefined
+        const old = ex && ex.item.kind !== 'home' ? ex.item : undefined
         if (item.pinOrder === undefined) item.pinOrder = old?.pinOrder ?? null
         const stored = old?.lastMessagedAt ?? null
         if (item.lastMessagedAt === undefined) item.lastMessagedAt = stored
@@ -143,7 +152,7 @@ export class FakeHomeServer {
       id: h.id,
       name: h.name,
       rows: live
-        .filter((i): i is Extract<WireItem, { kind: 'row' }> => i.kind === 'row' && i.homeId === h.id)
+        .filter((i): i is WireRow => i.kind !== 'home' && i.homeId === h.id)
         .sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0))
         .map((r) => r.address),
     }))

@@ -17,6 +17,7 @@ import {
   type SyncState,
   type WireHome,
   type WireItem,
+  type WireRow,
 } from './engine'
 import { FakeHomeServer } from './fake-server'
 
@@ -245,7 +246,7 @@ describe('homes-sync engine: pins, "Most recent at the top" and last sends', () 
     ]
     const server: WireItem = { kind: 'home', id: 'srv', name: 'Work', order: 'V', updatedAt: 5, deviceId: 'older' }
     const { changes } = firstSync(local, pull([server], 1, { full: true }), emptySyncState('new'), ctx('new', 100))
-    const rows = changes.filter((c): c is Extract<WireItem, { kind: 'row' }> => c.kind === 'row')
+    const rows = changes.filter((c): c is WireRow => c.kind === 'row')
     expect(rows.map((r) => [r.homeId, r.address, r.pinOrder ?? 'none', r.lastMessagedAt ?? 'none'])).toEqual([
       ['loc-new', 'a::s', 'V', 3],
       ['srv', 'b::s', 'none', 'none'],

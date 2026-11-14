@@ -9,7 +9,15 @@
 // Wire items (the contract K2 Companion speaks too):
 //   Home: {kind:'home', id, name, order, updatedAt, deleted?, mergedInto?}
 //   Row:  {kind:'row', homeId, address:'handle::<serverId>', label,
-//          workspaceId, order, updatedAt, deleted?}   identity (homeId, address)
+//          workspaceId, order, updatedAt, deleted?}   identity (kind, homeId, address)
+//   Person / channel rows (migration 0306, prd-home-people-channels-v1 §5):
+//          the row's fields with kind 'person' (`<external id>::<serverId>`)
+//          or 'channel' (`<Sew channel id>::<serverId>`).
+// A kind this build doesn't know is dropped on read (`parseWireItem`): it is
+// never drawn and never tombstoned, so an older device leaves a newer one's
+// rows alone. An older home server refuses people and channels one item at a
+// time (`invalid_kind`): those rows stay on this device (`localOnly`) and go
+// again once a pull lists their kind in `kinds`.
 // Last writer wins per item on (updatedAt, deviceId as a string); on a full
 // tie a tombstone wins. `order` is a fractional-index key
 // (`lib/fractional-index.ts`).
@@ -49,8 +57,11 @@ export interface WireHome {
   recentFirst?: boolean
 }
 
+/** The wire kinds of a Home row: an agent (`row`), a person, a channel. */
+export type WireRowKind = 'row' | 'person' | 'channel'
+
 export interface WireRow {
-  kind: 'row'
+  kind: WireRowKind
   homeId: string
   address: string
   label: string
@@ -86,10 +97,16 @@ export interface SyncState {
   /** The server removed this device (410): no sync until "Sync again". */
   removed: boolean
   lastSyncAt: number | null
+  /** Person and channel rows an older home server refused (`invalid_kind`):
+   *  kept on this device only, sent again once its pull lists their kind. */
+  localOnly: Record<string, true>
 }
 
 /** A pull answer (`GET /cli/me/homes`). */
 export interface PullAnswer {
+  /** The item kinds the server keeps (`kinds`); absent from an older
+   *  server: `home` and `row` only. */
+  kinds?: readonly string[]
   cursor: number
   full: boolean
   changes: WireItem[]
@@ -129,11 +146,35 @@ export function emptySyncState(deviceId: string): SyncState {
     redirects: {},
     removed: false,
     lastSyncAt: null,
+    localOnly: {},
   }
 }
 
+const ROW_KEY_PREFIX: Record<WireRowKind, string> = { row: 'r', person: 'p', channel: 'c' }
+
+/** A row's item key: its kind, Home and address (an agent and a channel may
+ *  share an address: two items). */
+export function rowItemKey(kind: WireRowKind, homeId: string, address: string): string {
+  return `${ROW_KEY_PREFIX[kind]}|${homeId}|${address}`
+}
+
 export function itemKey(i: WireItem): string {
-  return i.kind === 'home' ? `h|${i.id}` : `r|${i.homeId}|${i.address}`
+  return i.kind === 'home' ? `h|${i.id}` : rowItemKey(i.kind, i.homeId, i.address)
+}
+
+/** Is `kind` one of a Home row's wire kinds? */
+export function isWireRowKind(kind: unknown): kind is WireRowKind {
+  return kind === 'row' || kind === 'person' || kind === 'channel'
+}
+
+/** A local row's wire kind (`kind` absent = an agent). */
+export function wireKindOf(row: Pick<HomeRow, 'kind'>): WireRowKind {
+  return row.kind === 'person' || row.kind === 'channel' ? row.kind : 'row'
+}
+
+/** The pull lists a kind as kept (an older server lists none). */
+function serverKeeps(pull: Pick<PullAnswer, 'kinds'>, kind: string): boolean {
+  return (pull.kinds ?? ['home', 'row']).includes(kind)
 }
 
 /** Last writer wins: `updatedAt`, then `deviceId` (string compare), then a
@@ -199,20 +240,21 @@ function localView(homes: readonly Home[], st: SyncState, ctx: AddressMap): View
     if (h.recentFirst || knownHome?.recentFirst) homeItem.recentFirst = !!h.recentFirst
     items.set(`h|${h.id}`, homeItem)
     const seen = new Set<string>()
-    const rows: Array<{ row: HomeRow; address: string }> = []
+    const rows: Array<{ row: HomeRow; address: string; key: string }> = []
     for (const r of h.rows) {
       const address = ctx.toWire(r.address)
-      if (seen.has(address)) continue
-      seen.add(address)
-      rows.push({ row: r, address })
+      const key = rowItemKey(wireKindOf(r), h.id, address)
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push({ row: r, address, key })
     }
     const rowOrders = assignOrders(rows.length, (i) => {
-      const k = st.known[`r|${h.id}|${rows[i].address}`]
+      const k = st.known[rows[i].key]
       return isLive(k) ? k.order : null
     })
-    rows.forEach(({ row, address }, ri) => {
+    rows.forEach(({ row, address, key }, ri) => {
       const item: WireRow = {
-        kind: 'row',
+        kind: wireKindOf(row),
         homeId: h.id,
         address,
         label: row.label,
@@ -220,13 +262,13 @@ function localView(homes: readonly Home[], st: SyncState, ctx: AddressMap): View
         order: rowOrders[ri],
         updatedAt: 0,
       }
-      const k = st.known[`r|${h.id}|${address}`]
-      const knownRow = k?.kind === 'row' ? k : undefined
+      const k = st.known[key]
+      const knownRow = k && k.kind !== 'home' ? k : undefined
       const pin = row.pinOrder ?? null
       if (pin !== null || (knownRow?.pinOrder ?? null) !== null) item.pinOrder = pin
       const sent = row.lastMessagedAt ?? null
       if (sent !== null || (knownRow?.lastMessagedAt ?? null) !== null) item.lastMessagedAt = sent
-      items.set(`r|${h.id}|${address}`, item)
+      items.set(key, item)
     })
   })
   return { items }
@@ -244,7 +286,7 @@ function syncedFieldsDiffer(view: WireItem, known: WireItem): boolean {
       !!view.recentFirst !== !!known.recentFirst
     )
   }
-  if (view.kind === 'row' && known.kind === 'row') {
+  if (view.kind !== 'home' && known.kind !== 'home') {
     return (
       (view.pinOrder ?? null) !== (known.pinOrder ?? null) ||
       (view.lastMessagedAt ?? null) !== (known.lastMessagedAt ?? null)
@@ -260,7 +302,13 @@ function queue(st: SyncState, item: WireItem): void {
 }
 
 function clone(st: SyncState): SyncState {
-  return { ...st, known: { ...st.known }, outbox: { ...st.outbox }, redirects: { ...st.redirects } }
+  return {
+    ...st,
+    known: { ...st.known },
+    outbox: { ...st.outbox },
+    redirects: { ...st.redirects },
+    localOnly: { ...(st.localOnly ?? {}) },
+  }
 }
 
 /**
@@ -299,7 +347,7 @@ function keepOmitted(c: WireItem, known: WireItem | undefined): WireItem {
     if (c.recentFirst === undefined && known.recentFirst !== undefined) out.recentFirst = known.recentFirst
     return out
   }
-  if (c.kind === 'row' && known?.kind === 'row') {
+  if (c.kind !== 'home' && known && known.kind !== 'home') {
     const out: WireRow = { ...c }
     if (c.pinOrder === undefined && known.pinOrder !== undefined) out.pinOrder = known.pinOrder
     if (c.lastMessagedAt === undefined && known.lastMessagedAt !== undefined) out.lastMessagedAt = known.lastMessagedAt
@@ -316,10 +364,22 @@ function keepOmitted(c: WireItem, known: WireItem | undefined): WireItem {
  */
 export function applyPull(prev: SyncState, pull: PullAnswer, now: number): SyncState {
   const st = clone(prev)
+  // Rows an older server refused go again once it keeps their kind.
+  for (const k of Object.keys(st.localOnly)) {
+    const item = st.known[k]
+    if (!item || item.deleted) {
+      delete st.localOnly[k]
+      continue
+    }
+    if (serverKeeps(pull, item.kind)) {
+      delete st.localOnly[k]
+      st.outbox[k] = item
+    }
+  }
   if (pull.full) {
     const present = new Set(pull.changes.map(itemKey))
     for (const [k, known] of Object.entries(st.known)) {
-      if (present.has(k) || st.outbox[k]) continue
+      if (present.has(k) || st.outbox[k] || st.localOnly[k]) continue
       if (isLive(known)) delete st.known[k]
     }
   }
@@ -341,7 +401,11 @@ export function applyPull(prev: SyncState, pull: PullAnswer, now: number): SyncS
 }
 
 /** A push answered: drop the sent items that are still the queued version. */
-export function ackPush(prev: SyncState, sent: readonly WireItem[], rejected: ReadonlyArray<{ item: unknown }>): {
+export function ackPush(
+  prev: SyncState,
+  sent: readonly WireItem[],
+  rejected: ReadonlyArray<{ item: unknown; reason?: unknown }>,
+): {
   state: SyncState
   needsFullPull: boolean
 } {
@@ -356,11 +420,26 @@ export function ackPush(prev: SyncState, sent: readonly WireItem[], rejected: Re
   let needsFullPull = false
   for (const r of rejected) {
     const item = r.item as Partial<WireItem> | null
-    if (!item || (item.kind !== 'home' && item.kind !== 'row')) continue
+    if (!item || (item.kind !== 'home' && !isWireRowKind(item.kind))) continue
+    const k =
+      item.kind === 'home'
+        ? `h|${(item as WireHome).id}`
+        : rowItemKey(item.kind as WireRowKind, (item as WireRow).homeId, (item as WireRow).address)
+    if (item.kind !== 'home' && item.kind !== 'row' && r.reason === 'invalid_kind') {
+      // An older home server: the row stays here, unsynced (a refused
+      // tombstone just goes: there is nothing on the server to delete).
+      delete st.outbox[k]
+      if (st.known[k] && !st.known[k].deleted) st.localOnly[k] = true
+      else {
+        delete st.known[k]
+        delete st.localOnly[k]
+      }
+      continue
+    }
     needsFullPull = true
-    const k = item.kind === 'home' ? `h|${(item as WireHome).id}` : `r|${(item as WireRow).homeId}|${(item as WireRow).address}`
     delete st.known[k]
     delete st.outbox[k]
+    delete st.localOnly[k]
   }
   return { state: st, needsFullPull }
 }
@@ -377,10 +456,15 @@ export function buildLocal(st: SyncState, previous: readonly Home[], ctx: Addres
   if (homes.length === 0) return null
   homes.sort((a, b) => compareOrder(a.order, b.order) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   const hints = new Map<string, HomeRow>()
-  for (const h of previous) for (const r of h.rows) if (!hints.has(r.address)) hints.set(r.address, r)
+  for (const h of previous) {
+    for (const r of h.rows) {
+      const hk = `${wireKindOf(r)}|${r.address}`
+      if (!hints.has(hk)) hints.set(hk, r)
+    }
+  }
   const rowsByHome = new Map<string, WireRow[]>()
   for (const i of Object.values(st.known)) {
-    if (i.kind !== 'row' || i.deleted) continue
+    if (i.kind === 'home' || i.deleted) continue
     const list = rowsByHome.get(i.homeId) ?? []
     list.push(i)
     rowsByHome.set(i.homeId, list)
@@ -393,14 +477,16 @@ export function buildLocal(st: SyncState, previous: readonly Home[], ctx: Addres
     const rows: HomeRow[] = []
     for (const w of wire) {
       const address = ctx.fromWire(w.address)
-      if (seen.has(address)) continue
-      seen.add(address)
-      const hint = hints.get(address)
+      const hk = `${w.kind}|${address}`
+      if (seen.has(hk)) continue
+      seen.add(hk)
+      const hint = hints.get(hk)
       const row: HomeRow = {
         address,
         workspaceId: hint ? hint.workspaceId : w.workspaceId,
         label: hint ? hint.label : w.label,
       }
+      if (w.kind !== 'row') row.kind = w.kind
       if (w.pinOrder) row.pinOrder = w.pinOrder
       if (typeof w.lastMessagedAt === 'number') row.lastMessagedAt = w.lastMessagedAt
       rows.push(row)
@@ -434,6 +520,7 @@ export function firstSync(local: readonly Home[], pull: PullAnswer, prev: SyncSt
     serverId: pull.serverId,
     removed: false,
     lastSyncAt: ctx.now,
+    localOnly: {},
   }
   for (const c of pull.changes) if (!c.deleted) st.known[itemKey(c)] = c
   const changes: WireItem[] = []
@@ -450,7 +537,7 @@ export function firstSync(local: readonly Home[], pull: PullAnswer, prev: SyncSt
   const lastRowOrder = (homeId: string): string | null => {
     let last: string | null = null
     for (const i of Object.values(st.known)) {
-      if (i.kind === 'row' && i.homeId === homeId && !i.deleted && (last === null || i.order > last)) last = i.order
+      if (i.kind !== 'home' && i.homeId === homeId && !i.deleted && (last === null || i.order > last)) last = i.order
     }
     return last
   }
@@ -497,9 +584,9 @@ export function firstSync(local: readonly Home[], pull: PullAnswer, prev: SyncSt
     }
     for (const r of h.rows) {
       const address = ctx.toWire(r.address)
-      if (isLive(st.known[`r|${target}|${address}`])) continue
+      if (isLive(st.known[rowItemKey(wireKindOf(r), target, address)])) continue
       const row: WireRow = {
-        kind: 'row',
+        kind: wireKindOf(r),
         homeId: target,
         address,
         label: r.label,
@@ -536,6 +623,7 @@ export function parseSyncState(raw: string | null): SyncState | null {
       redirects: v.redirects && typeof v.redirects === 'object' ? v.redirects : {},
       removed: v.removed === true,
       lastSyncAt: typeof v.lastSyncAt === 'number' ? v.lastSyncAt : null,
+      localOnly: v.localOnly && typeof v.localOnly === 'object' ? { ...v.localOnly } : {},
     }
   } catch {
     return null
@@ -564,9 +652,9 @@ export function parseWireItem(v: unknown): WireItem | null {
     if (typeof o.recentFirst === 'boolean') item.recentFirst = o.recentFirst
     return item
   }
-  if (o.kind === 'row' && typeof o.homeId === 'string' && typeof o.address === 'string' && o.address.includes('::')) {
+  if (isWireRowKind(o.kind) && typeof o.homeId === 'string' && typeof o.address === 'string' && o.address.includes('::')) {
     const item: WireRow = {
-      kind: 'row',
+      kind: o.kind,
       homeId: o.homeId,
       address: o.address,
       label: typeof o.label === 'string' ? o.label : '',
@@ -600,6 +688,7 @@ export function parsePullAnswer(v: unknown): PullAnswer {
   }
   const device = o.device as { deviceId?: unknown; syncing?: unknown } | undefined
   return {
+    kinds: Array.isArray(o.kinds) ? o.kinds.filter((k): k is string => typeof k === 'string') : ['home', 'row'],
     cursor: o.cursor,
     full: o.full === true,
     changes: o.changes.map(parseWireItem).filter((i): i is WireItem => i !== null),

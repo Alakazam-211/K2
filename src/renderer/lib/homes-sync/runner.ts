@@ -62,6 +62,9 @@ export interface HomesSyncStatus {
   phase: HomesSyncPhase
   /** Changes waiting to reach the home server. */
   pending: number
+  /** People and channel rows the home server refused as unknown kinds (an
+   *  older K2): kept on this device only until it updates. */
+  localOnly: number
   lastSyncAt: number | null
   /** The home server: always this computer's daemon on the desktop. */
   serverLabel: string
@@ -78,6 +81,7 @@ export interface HomesSyncControl {
 export const INITIAL_STATUS: HomesSyncStatus = {
   phase: 'off',
   pending: 0,
+  localOnly: 0,
   lastSyncAt: null,
   serverLabel: 'This computer',
   serverId: null,
@@ -199,6 +203,7 @@ export class HomesSyncRunner {
     this.status = {
       ...this.status,
       pending: Object.keys(s.outbox).length,
+      localOnly: Object.keys(s.localOnly ?? {}).length,
       lastSyncAt: s.lastSyncAt,
       serverId: s.serverId,
       deviceId: s.deviceId,
@@ -376,7 +381,7 @@ export class HomesSyncRunner {
       const sent = Object.values(st.outbox)
       let fullNext = false
       if (sent.length) {
-        const ans = (await this.d.transport.push(st.deviceId, sent)) as { rejected?: Array<{ item: unknown }> }
+        const ans = (await this.d.transport.push(st.deviceId, sent)) as { rejected?: Array<{ item: unknown; reason?: unknown }> }
         const acked = ackPush(this.load(), sent, Array.isArray(ans?.rejected) ? ans.rejected : [])
         fullNext = acked.needsFullPull
         this.save(acked.state)
@@ -509,6 +514,10 @@ export function statusLine(s: HomesSyncStatus): string {
   const where = s.serverLabel
   switch (s.phase) {
     case 'synced':
+      if (s.localOnly > 0) {
+        const n = s.localOnly
+        return `Homes sync with ${where} · Not synced: ${n} ${n === 1 ? 'person or channel' : 'people and channels'} (your home server needs K2 0.46.13 or later)`
+      }
       return s.pending > 0 ? `Homes sync with ${where} · ${s.pending} waiting` : `Homes sync with ${where}`
     case 'syncing':
       return `Homes sync with ${where} · syncing…`

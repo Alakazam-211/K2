@@ -39,7 +39,16 @@ vi.mock('@/lib/daemon-cli', async () => {
       if (route === 'app/catalog/check-address') {
         if (h.checkFails) throw new Error('the tunnel config could not be read')
         if (h.taken && params?.address === 'chat') {
-          return { ok: false, app: 'hearth-2', error: { code: 'address_taken', hint: "'chat' is used by the App hearth.", suggestion: 'hearth-2-chat' } }
+          return {
+            ok: false,
+            app: 'hearth-2',
+            error: {
+              code: 'address_taken',
+              hint: "'chat' is used by the App hearth. Pick another address (suggested: hearth-2-chat): k2 app install --catalog sew/hearth --address hearth-2-chat",
+              text: "'chat' is already used by the App hearth. Try hearth-2-chat instead",
+              suggestion: 'hearth-2-chat',
+            },
+          }
         }
         return { ok: true, app: 'hearth', address: { kind: 'label', label: params?.address, url: `https://${params?.address}.acme.example.test` }, tier: { pro: true } }
       }
@@ -61,7 +70,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { AppsCatalogSection, nothingPublished } from './AppsCatalogSection'
-import { isActive, stepLabel, waitText, type CatalogJob } from './app-catalog-api'
+import { isActive, plainText, stepLabel, waitText, type CatalogJob } from './app-catalog-api'
 
 function project(id: string, name: string): ProjectWithWorkspaces {
   return { id, name, path: `/ws/${name}`, color: '#22c55e', iconUrl: null, handle: name, workspaces: [] } as unknown as ProjectWithWorkspaces
@@ -89,7 +98,7 @@ const HEARTH = {
   entry: 'sew/hearth',
   name: 'Hearth',
   publisher: { id: 'sew', name: 'Sew', source: 'https://github.com/Alakazam-211/sew-web' },
-  summary: "Chat and voice for your community, on this box's Sew.",
+  summary: "Chat and voice for your community, on this server's chat.",
   license: 'MIT OR Apache-2.0',
   verified: 'Verified by K2',
   family: 'chat',
@@ -97,8 +106,8 @@ const HEARTH = {
   onePerBox: false,
   version: '0.2.4',
   variant: 'k2',
-  willDo: ["Runs a web App on this box, in K2's guarded wall", 'Joins voice and video calls'],
-  approves: [{ kind: 'boxService', name: 'sew-api', why: "Sew's client API: chat" }],
+  willDo: ['Runs as a web App on this server, in its own protected space', 'Joins voice and video calls'],
+  approves: [{ kind: 'boxService', name: 'sew-api', why: 'This App can talk to the chat service on this server, for chat' }],
   canDeploy: true,
   reasons: [],
   alreadyDeployed: null,
@@ -113,6 +122,7 @@ const MEET_BLOCKED = {
   family: 'meet',
   defaultAddress: { label: 'meet', url: null },
   version: null,
+  verified: null,
   canDeploy: false,
   reasons: [{ code: 'catalog_not_pinned', text: 'no version of Meet is pinned in this K2 yet' }],
 }
@@ -139,12 +149,21 @@ describe('helpers', () => {
     expect(stepLabel('sew_setup')).toBe('Chat setup')
     expect(isActive(job('waiting', 'approve'))).toBe(true)
     expect(isActive(job('done', 'ready'))).toBe(false)
-    const w = job('waiting', 'address', { waiting: { reason: 'waiting_sew_rights', question: 'Q13', requests: [], hint: 'turn it on' } })
-    // The server's hint and the open question's number stay out of the words.
+    const w = job('waiting', 'address', { waiting: { reason: 'waiting_sew_rights', requests: [], text: 'turn it on', hint: 'k2 agent access set ws chat_manage on' } })
+    // The server's words and its command stay out of the sheet's own words.
     expect(waitText(w)).toContain('Waiting for permission to set up chat and voice')
-    expect(waitText(w)).not.toContain('Q13')
     expect(waitText(w)).not.toContain('turn it on')
+    expect(waitText(w)).not.toContain('k2 agent')
     expect(waitText(job('running', 'check'))).toBeNull()
+  })
+
+  it('reads the plain sentence, never the command alone', () => {
+    // A server that splits its words: the sentence, even when the command is there too.
+    expect(plainText({ text: 'Couldn’t download it', hint: 'k2 app catalog retry sj-1' })).toBe('Couldn’t download it')
+    expect(plainText({ text: null, hint: 'k2 app catalog retry sj-1' })).toBeNull()
+    // An older server sent only the sentence, as `hint`.
+    expect(plainText({ hint: 'github.com timed out' })).toBe('github.com timed out')
+    expect(plainText(null)).toBeNull()
   })
 })
 
@@ -153,7 +172,10 @@ describe('AppsCatalogSection', () => {
     render(<AppsCatalogSection />)
     await screen.findByTestId('catalog-entry-sew/hearth')
     expect(screen.getByRole('heading', { level: 2, name: 'Add an App' })).toBeTruthy()
-    expect(screen.getAllByText(/Verified by K2/, { selector: 'span' }).length).toBe(2)
+    // Only the entry with a pinned, published version shows the badge.
+    expect(screen.getAllByTestId('catalog-verified')).toHaveLength(1)
+    expect(screen.getByTestId('catalog-entry-sew/hearth').querySelector('[data-testid="catalog-verified"]')?.textContent).toBe('Verified by K2')
+    expect(screen.getByTestId('catalog-entry-sew/meet').querySelector('[data-testid="catalog-verified"]')).toBeNull()
     expect(screen.getByTestId('catalog-reason').textContent).toBe('Its first version comes with a K2 update.')
     const meet = screen.getByTestId('catalog-entry-sew/meet')
     expect(meet.querySelector('[data-testid="catalog-state"]')?.textContent).toContain('Not published yet')
@@ -166,6 +188,7 @@ describe('AppsCatalogSection', () => {
     const hearthBlocked = {
       ...HEARTH,
       version: null,
+      verified: null,
       canDeploy: false,
       reasons: [{ code: 'catalog_not_pinned', text: 'no version of Hearth is pinned in this K2 yet' }],
     }
@@ -184,6 +207,7 @@ describe('AppsCatalogSection', () => {
     expect((screen.getByTestId('catalog-open-sew/hearth') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByTestId('catalog-open-sew/meet') as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByTestId('catalog-sheet')).toBeNull()
+    expect(screen.queryAllByTestId('catalog-verified')).toHaveLength(0)
   })
 
   it('Apps off and an older server each get a sentence, not an error', async () => {
@@ -207,13 +231,14 @@ describe('AppsCatalogSection', () => {
     expect((screen.getByTestId('catalog-address') as HTMLInputElement).value).toBe('chat')
     expect(screen.getByRole('heading', { name: 'Deploy Hearth' })).toBeTruthy()
     expect(screen.getByText(/What you approve by deploying/)).toBeTruthy()
-    expect(screen.getByText("Server service sew-api (Sew's client API: chat)")).toBeTruthy()
+    expect(screen.getByText('This App can talk to the chat service on this server, for chat (sew-api)')).toBeTruthy()
     // Opening the card puts the keyboard in the address, and the row's button says it's open.
     expect(document.activeElement).toBe(screen.getByTestId('catalog-address'))
     expect(screen.getByTestId('catalog-open-sew/hearth').getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByTestId('catalog-address-checking')).toBeTruthy()
     const problem = await screen.findByTestId('catalog-address-problem', {}, { timeout: 2000 })
-    expect(problem.textContent).toContain('used by the App hearth')
+    expect(problem.textContent).toContain('already used by the App hearth. Try hearth-2-chat instead.')
+    expect(problem.textContent).not.toContain('k2 app')
     expect((screen.getByTestId('catalog-deploy') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByTestId('catalog-use-suggestion'))
     expect((screen.getByTestId('catalog-address') as HTMLInputElement).value).toBe('hearth-2-chat')
@@ -227,14 +252,17 @@ describe('AppsCatalogSection', () => {
   })
 
   it('follows the job, and the owner approves a held request with a vault confirm', async () => {
-    h.job = job('waiting', 'approve', { waiting: { reason: 'waiting_approval', question: null, requests: ['req-1'], hint: 'waiting for the owner' } })
+    h.job = job('waiting', 'approve', { waiting: { reason: 'waiting_approval', requests: ['req-1'], text: 'Waiting for the owner', hint: 'k2 app approve req-1' } })
     h.entries = [{ ...HEARTH, jobs: [h.job] }]
     render(<AppsCatalogSection />)
     const open = await screen.findByTestId('catalog-open-sew/hearth')
     expect(open.textContent).toBe('Show progress')
     fireEvent.click(open)
     await screen.findByTestId('catalog-waiting')
-    h.job = job('done', 'ready', { next: ['Invite people: k2 app user invite hearth <email>'] })
+    h.job = job('done', 'ready', {
+      next: ['Invite people: k2 app user invite hearth <email>'],
+      nextSteps: [{ text: 'Invite people to Hearth from Settings → Apps → Hearth → People.', hint: 'k2 app user invite hearth <email>' }],
+    })
     await act(async () => {
       fireEvent.click(screen.getByTestId('catalog-approve'))
     })
@@ -244,6 +272,9 @@ describe('AppsCatalogSection', () => {
     expect(h.posts[2].body).toMatchObject({ request: 'req-1', confirmToken: 'tok-1' })
     expect(screen.getByTestId('catalog-done').textContent).toContain('chat.acme.example.test')
     expect(screen.getByRole('link', { name: 'chat.acme.example.test' }).getAttribute('href')).toBe('https://chat.acme.example.test')
+    // What to do next, in words: never the command.
+    expect(screen.getByTestId('catalog-done').textContent).toContain('Next: Invite people to Hearth from Settings → Apps → Hearth → People.')
+    expect(screen.getByTestId('catalog-done').textContent).not.toContain('k2 app')
   })
 
   it('a member sees the catalog but no Add button; a failed retryable step offers Retry', async () => {
@@ -254,7 +285,9 @@ describe('AppsCatalogSection', () => {
     expect(screen.queryByTestId('catalog-open-sew/hearth')).toBeNull()
     cleanup()
     h.role = 'admin'
-    h.job = job('failed', 'download', { error: { code: 'download_failed', hint: 'github.com timed out', retry: true } })
+    h.job = job('failed', 'download', {
+      error: { code: 'download_failed', text: 'Couldn’t download hearth-k2-0.2.4.tar.gz: github.com timed out', hint: 'k2 app catalog retry sj-1', retry: true },
+    })
     h.entries = [{ ...HEARTH, jobs: [] }]
     render(<AppsCatalogSection />)
     fireEvent.click(await screen.findByTestId('catalog-open-sew/hearth'))
@@ -265,8 +298,9 @@ describe('AppsCatalogSection', () => {
     expect(screen.queryByTestId('catalog-approve')).toBeNull()
     const failed = screen.getByTestId('catalog-failed')
     expect(failed.textContent).toContain('The deploy stopped at Download.')
-    expect(failed.textContent).toContain('The server said: github.com timed out.')
+    expect(failed.textContent).toContain('The server said: Couldn’t download hearth-k2-0.2.4.tar.gz: github.com timed out.')
     expect(failed.textContent).not.toContain('download_failed')
+    expect(failed.textContent).not.toContain('k2 app')
     expect(screen.getByTestId('catalog-steps').querySelector('[data-step="download"]')?.textContent).toContain('Failed')
     h.job = job('running', 'download')
     fireEvent.click(screen.getByTestId('catalog-retry'))
@@ -292,8 +326,10 @@ describe('AppsCatalogSection', () => {
     expect(screen.getByTestId('catalog-open-sew/hearth').getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('names the state of each step in words, and a wait for rights without its question number', async () => {
-    h.job = job('waiting', 'address', { waiting: { reason: 'waiting_sew_rights', question: 'Q13', requests: [], hint: 'k2 agent access set <workspace> chat_manage on' } })
+  it('names the state of each step in words, and a wait for rights without its command', async () => {
+    h.job = job('waiting', 'address', {
+      waiting: { reason: 'waiting_sew_rights', requests: [], text: 'Setting up Hearth needs a permission', hint: 'k2 agent access set <workspace> chat_manage on' },
+    })
     h.entries = [{ ...HEARTH, jobs: [h.job] }]
     render(<AppsCatalogSection />)
     fireEvent.click(await screen.findByTestId('catalog-open-sew/hearth'))
@@ -302,7 +338,6 @@ describe('AppsCatalogSection', () => {
     expect(steps.querySelector('[data-step="address"]')?.textContent).toContain('Waiting')
     expect(steps.querySelector('[data-step="deploy"]')?.textContent).toBe('Deploy')
     const wait = screen.getByTestId('catalog-waiting')
-    expect(wait.textContent).not.toContain('Q13')
     expect(wait.textContent).not.toContain('k2 agent')
     expect(screen.queryByTestId('catalog-approve')).toBeNull()
   })

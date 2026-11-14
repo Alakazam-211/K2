@@ -6,7 +6,8 @@ k2 study suite-apps — one-click suite Apps (Sew's Hearth and Meet)
 WHAT IT IS
   A suite App is an App from a known publisher that K2 deploys in one step.
   The catalog is compiled into this K2 release: each version is pinned by
-  sha256 and by K2's own hash of the stored files ("Verified by K2"). A new
+  sha256 and by K2's own hash of the stored files ("Verified by K2", shown
+  only once a version is pinned; until then "verified" is null). A new
   version arrives with a K2 update; moving an installed App to it is a later
   K2. After deploy it is an ordinary App: every k2 app verb, rollback,
   audit, domains and users apply. Hearth comes in "looks" (front ends); this

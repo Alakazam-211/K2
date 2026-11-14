@@ -31,6 +31,8 @@ verified by K2: each version is pinned by sha256 inside this K2 release.
 Entries: sew/hearth (chat.<box>.k2.dev), sew/meet (meet.<box>.k2.dev, one per box).
 A K2 address needs K2 Connect Pro (pro_required). Your own domain: deploy first,
 then k2 app domain add <app> <host>.
+--json: each reason, wait and error has "text" (plain words for people) and "hint"
+(the command to run, or null); a done job's "next" lines carry the commands.
 Exit: 0 done; 1 the job failed (its error has the fix); 2 not done: the job waits
 and goes on by itself, OR the command needs changing (address taken: use the
 suggestion) — the JSON's "error"/"waiting" says which; 3 refused.
@@ -80,17 +82,25 @@ if st == "done":
         print("next: %s" % line)
 elif st == "failed":
     e = j.get("error") or {}
-    print("failed at %s: %s" % (j.get("step"), json.dumps({"error": e.get("code"), "hint": e.get("hint")})))
-    if e.get("retry"):
-        print("retry: k2 app catalog retry %s" % j.get("id"))
+    # text = the plain sentence, hint = the command (an older daemon sent
+    # only hint, the sentence with its command).
+    text = e.get("text") or e.get("hint") or ""
+    cmd = e.get("hint") if "text" in e else None
+    print("failed at %s (%s): %s" % (j.get("step"), e.get("code"), text))
+    if cmd:
+        print("run: %s" % cmd)
+    elif e.get("retry"):
+        print("run: k2 app catalog retry %s" % j.get("id"))
 elif st == "waiting":
     w = j.get("waiting") or {}
-    q = (" (open question %s)" % w["question"]) if w.get("question") else ""
-    print("waiting at %s: %s%s" % (j.get("step"), w.get("reason"), q))
+    print("waiting at %s: %s" % (j.get("step"), w.get("reason")))
     if w.get("requests"):
         print("  request(s): %s" % ", ".join(w["requests"]))
-    if w.get("hint"):
-        print("  %s" % w["hint"])
+    text = w.get("text") or w.get("hint")
+    if text:
+        print("  %s" % text)
+    if "text" in w and w.get("hint"):
+        print("  run: %s" % w["hint"])
     print("The job waits in the daemon and goes on by itself; check: k2 app catalog job %s" % j.get("id"))
 else:
     print("still %s at %s; check: k2 app catalog job %s" % (st, j.get("step"), j.get("id")))
@@ -175,7 +185,9 @@ if p.get("setup"):
     print("Sew setup: %s" % ", ".join(p["setup"]))
 print("Steps: %s" % " → ".join(p.get("steps", [])))
 for w in p.get("waits", []):
-    print("It will wait at: %s (open question %s): %s" % (w["reason"], w.get("question"), w.get("hint")))
+    print("It will wait at: %s: %s" % (w["reason"], w.get("text") or w.get("hint")))
+    if w.get("text") and w.get("hint"):
+        print("  run: %s" % w["hint"])
 print("Pro: %s" % v.get("tier"))
 f = p.get("files") or {}
 print("File: %s/%s sha256 %s" % (f.get("tag"), f.get("file"), f.get("sha256")))
@@ -238,7 +250,7 @@ v = json.load(sys.stdin)
 for e in v.get("entries", []):
     a = e.get("defaultAddress") or {}
     ver = e.get("version") or "not pinned yet"
-    print("%-12s %-7s %-14s %s  (%s, %s)" % (e["entry"], e["name"], ver, a.get("url") or (a.get("label", "") + ".<box>.k2.dev"), e.get("verified"), e.get("license")))
+    print("%-12s %-7s %-14s %s  (%s, %s)" % (e["entry"], e["name"], ver, a.get("url") or (a.get("label", "") + ".<box>.k2.dev"), e.get("verified") or "not verified yet: nothing pinned", e.get("license")))
     print("             %s" % e.get("summary", ""))
     if e.get("alreadyDeployed"):
         print("             already deployed as %s (one per box)" % e["alreadyDeployed"])
@@ -246,6 +258,8 @@ for e in v.get("entries", []):
         print("             ready: k2 app install --catalog %s" % e["entry"])
     for r in e.get("reasons", []):
         print("             can'\''t yet: %s (%s)" % (r.get("text"), r.get("code")))
+        if r.get("hint"):
+            print("               run: %s" % r["hint"])
     for i in e.get("installed", []):
         print("             installed: %s %s (%s)" % (i["app"], i["version"], i["variant"]))
 print("Trust: %s" % v.get("trust"))
@@ -260,16 +274,18 @@ import json, sys
 e = json.load(sys.stdin)
 a = e.get("defaultAddress") or {}
 print("%s — %s (%s)" % (e["name"], e["summary"], e["entry"]))
-print("  publisher %s · licence %s · %s" % (e["publisher"]["name"], e["license"], e["verified"]))
+print("  publisher %s · licence %s · %s" % (e["publisher"]["name"], e["license"], e.get("verified") or "not verified yet: nothing pinned"))
 print("  installs as App %s · default address %s%s" % (e["installId"], a.get("url") or a.get("label"), " · one per box" if e.get("onePerBox") else ""))
 print("  version %s (pinned: %s)" % (e.get("version") or "none yet", ", ".join(e.get("versions") or []) or "none"))
 print("  it will:")
 for line in e.get("willDo", []):
     print("    - %s" % line)
 for x in e.get("approves", []):
-    print("  deploying approves %s %s" % ("box service" if x["kind"] == "boxService" else "cap", x["name"]))
+    print("  deploying approves %s %s%s" % ("box service" if x["kind"] == "boxService" else "cap", x["name"], (": " + x["why"]) if x.get("why") else ""))
 for r in e.get("reasons", []):
     print("  can'\''t yet: %s (%s)" % (r.get("text"), r.get("code")))
+    if r.get("hint"):
+        print("    run: %s" % r["hint"])
 '
             ;;
         check)
@@ -333,7 +349,8 @@ k2 study suite-apps — one-click suite Apps (Sew's Hearth and Meet)
 WHAT IT IS
   A suite App is an App from a known publisher that K2 deploys in one step.
   The catalog is compiled into this K2 release: each version is pinned by
-  sha256 and by K2's own hash of the stored files ("Verified by K2"). A new
+  sha256 and by K2's own hash of the stored files ("Verified by K2", shown
+  only once a version is pinned; until then "verified" is null). A new
   version arrives with a K2 update; moving an installed App to it is a later
   K2. After deploy it is an ordinary App: every k2 app verb, rollback,
   audit, domains and users apply. Hearth comes in "looks" (front ends); this

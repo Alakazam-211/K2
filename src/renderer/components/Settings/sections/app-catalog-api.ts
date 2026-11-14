@@ -10,7 +10,16 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 
-export interface CatalogReason {
+/** The daemon's words come in two parts: `text`, a plain sentence for
+ *  people, and `hint`, the command an agent runs (null when there is none).
+ *  People never see the command. A server older than this split sent only
+ *  `hint`, the sentence with its command. */
+export interface Worded {
+  text?: string | null
+  hint?: string | null
+}
+
+export interface CatalogReason extends Worded {
   code: string
   text: string
 }
@@ -37,9 +46,12 @@ export interface CatalogJob {
   step: string
   state: 'running' | 'waiting' | 'failed' | 'done'
   steps: CatalogStep[]
-  waiting?: { reason: string | null; question: string | null; requests: string[]; hint: string | null }
-  error?: { code: string; hint: string | null; retry: boolean }
+  waiting?: { reason: string | null; requests: string[] } & Worded
+  error?: { code: string; retry: boolean } & Worded
+  /** The CLI's lines, each with its command. */
   next?: string[]
+  /** What to do next: `text` for people, `hint` the command apart. */
+  nextSteps?: Array<{ text: string; hint: string | null }>
 }
 
 export interface CatalogEntry {
@@ -48,7 +60,9 @@ export interface CatalogEntry {
   publisher: { id: string; name: string; source: string }
   summary: string
   license: string
-  verified: string
+  /** "Verified by K2" only once a pinned, published version exists; null
+   *  until then (no badge). */
+  verified: string | null
   family: string
   defaultAddress: { label: string; url: string | null }
   onePerBox: boolean
@@ -67,7 +81,7 @@ export interface AddressCheck {
   ok: boolean
   app: string
   address?: { kind: string; label: string; url: string | null }
-  error?: { code: string; hint: string; suggestion?: string; holder?: string }
+  error?: { code: string; hint: string; text?: string; suggestion?: string; holder?: string }
   tier?: { pro: boolean | null; hint?: string }
 }
 
@@ -101,6 +115,14 @@ export function waitText(job: CatalogJob): string | null {
     default:
       return 'Waiting for the server. The deploy goes on by itself.'
   }
+}
+
+/** The plain sentence of a daemon's words: `text` when the server splits
+ *  them, else (an older server) its `hint`. Never the command alone. */
+export function plainText(w: Worded | null | undefined): string | null {
+  if (!w) return null
+  if (w.text !== undefined) return w.text ?? null
+  return w.hint ?? null
 }
 
 export function isActive(job: CatalogJob | null | undefined): boolean {

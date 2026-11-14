@@ -9,7 +9,7 @@ use k2_core::suite::{codes as sc, testkit};
 use serde_json::json;
 
 use super::*;
-use crate::apps::catalog_job::tests::{agent, catalog_with, facts, fx, seed, set_switches, write_tarball, Fake, WS};
+use crate::apps::catalog_job::tests::{agent, assert_plain, catalog_with, facts, fx, seed, set_switches, write_tarball, Fake, WS};
 
 fn hearth_cat(fx: &crate::apps::catalog_job::tests::Fx) -> (Catalog, Fake) {
     let s = seed("hearth", "0.2.4", "k2", testkit::K2_CAPS, &["sew-api", "sew-signal"], testkit::COMMIT);
@@ -196,7 +196,7 @@ fn the_box_must_be_able_to_run_it() {
     fa.sew = Ok(("standalone".into(), None));
     let e = install_with(&Who::Owner, &json!({ "entry": "sew/hearth", "workspace": WS, "dryRun": true }), &c, &fa, &f).unwrap_err();
     assert_eq!(e.code, sc::VARIANT_MISMATCH, "only the k2 variant is pinned");
-    fa.sew = Err(("sew_not_installed", "Needs chat hosting".into()));
+    fa.sew = Err(Why::new("sew_not_installed", "Needs chat hosting", Some("k2 hostchat enable")));
     assert_eq!(install_with(&Who::Owner, &json!({ "entry": "sew/hearth", "workspace": WS }), &c, &fa, &f).unwrap_err().code, "sew_not_installed");
     let mut fa = facts();
     fa.linux = false;
@@ -241,7 +241,12 @@ fn an_agent_needs_build_and_run_apps() {
     f.manage_sew.store(false, Ordering::SeqCst);
     let v = install_with(&agent(), &json!({ "entry": "sew/hearth", "dryRun": true }), &c, &facts(), &f).unwrap();
     assert_eq!(v["plan"]["workspace"], WS);
-    assert_eq!(v["plan"]["waits"][0]["question"], "Q13", "the dry run names the wait ahead");
+    let w = &v["plan"]["waits"][0];
+    assert_eq!(w["reason"], jobs::WAIT_SEW_RIGHTS, "the dry run names the wait ahead: {v}");
+    assert!(w["text"].as_str().unwrap().contains("Manage Chat / Voice Hosting"), "{w}");
+    assert_eq!(w["hint"], format!("k2 agent access set {WS} chat_manage on"), "{w}");
+    assert!(w.get("question").is_none(), "no open question is ever named: {w}");
+    assert_plain(&v);
 }
 
 /// A15: the route shapes, POST-only writes, and every route answers
@@ -304,4 +309,145 @@ fn retry_resumes_a_retryable_failure_only() {
     let j = super::super::catalog_job::advance(&f, &id).unwrap();
     assert_eq!(j.state, jobs::STATE_DONE, "{j:?}");
     assert_eq!(retry(&Who::Owner, &json!({ "job": id })).unwrap_err().code, "not_retryable");
+}
+
+/// The badge: "Verified by K2" only on an entry with a pinned, published
+/// version whose files K2 checks by sha256. The compiled catalog pins
+/// nothing yet, so it shows no badge (`verified: null`).
+#[test]
+fn verified_by_k2_shows_only_on_a_pinned_published_version() {
+    let fx = fx();
+    let (c, _f) = hearth_cat(&fx);
+    let v = list(&Who::Owner, &c, &facts()).unwrap();
+    assert_eq!(v["entries"][0]["verified"], "Verified by K2", "{v}");
+    assert!(c.entries[0].verified());
+    // The same entry with nothing pinned: no badge.
+    let mut bare = c.clone();
+    bare.entries[0].versions.clear();
+    assert!(!bare.entries[0].verified());
+    let v = list(&Who::Owner, &bare, &facts()).unwrap();
+    assert_eq!(v["entries"][0]["verified"], J::Null, "{v}");
+    // And the compiled catalog today (Hearth and Meet not published yet).
+    let real = k2_core::suite::catalog().unwrap();
+    let v = list(&Who::Owner, real, &facts()).unwrap();
+    for e in v["entries"].as_array().unwrap() {
+        assert!(e["version"].is_null(), "{e}");
+        assert_eq!(e["verified"], J::Null, "an unpublished entry shows no badge: {e}");
+    }
+}
+
+/// A catalog reason is a plain sentence for people plus, apart, the
+/// command for agents; nothing a person reads names a command.
+#[test]
+fn a_reason_is_a_sentence_and_its_command_apart() {
+    let fx = fx();
+    let (c, f) = hearth_cat(&fx);
+    let mut fa = facts();
+    fa.sew = Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Chat / Voice", Some("k2 hostchat enable")));
+    fa.pro = Some(false);
+    fa.linux = false;
+    let v = list(&Who::Owner, &c, &fa).unwrap();
+    let reasons = v["entries"][0]["reasons"].as_array().unwrap().clone();
+    let codes: Vec<&str> = reasons.iter().map(|r| r["code"].as_str().unwrap()).collect();
+    assert_eq!(codes, vec!["needs_linux", "sew_not_installed", sc::PRO_REQUIRED], "{v}");
+    for r in &reasons {
+        let text = r["text"].as_str().unwrap();
+        assert!(!text.contains("k2 ") && !text.contains("(Sew)"), "a command or jargon in the people's words: {text}");
+    }
+    assert_eq!(reasons[1]["hint"], "k2 hostchat enable");
+    assert_eq!(reasons[0]["hint"], J::Null);
+    assert_plain(&v);
+    // The same reason as a refusal: the CLI's hint keeps the command, and
+    // the plain sentence rides along.
+    let e = install_with(&Who::Owner, &json!({ "entry": "sew/hearth", "workspace": WS }), &c, &Facts { linux: true, ..fa }, &f).unwrap_err();
+    assert_eq!(e.code, "sew_not_installed");
+    assert!(e.hint.contains("k2 hostchat enable"), "{}", e.hint);
+    assert_eq!(e.extra.unwrap()["text"], "Needs chat hosting on this server: turn it on in Settings → Chat / Voice");
+}
+
+/// What deploying approves, in words about what the App may then do; no
+/// "client API", no "guarded wall", and each line says why.
+#[test]
+fn what_deploying_approves_is_in_plain_words() {
+    let fx = fx();
+    let (c, f) = hearth_cat(&fx);
+    let v = dry(&c, &f, json!({ "entry": "sew/hearth" })).unwrap();
+    let approves = v["plan"]["approves"].as_array().unwrap();
+    assert_eq!(approves.len(), 2 + testkit::K2_CAPS.len(), "{v}");
+    for a in approves {
+        let why = a["why"].as_str().unwrap_or_else(|| panic!("every line says why: {a}"));
+        assert!(why.starts_with("This App") || why.starts_with("People signed in to this App"), "{why}");
+        for jargon in ["client API", "signalling", "guarded", "wall", "Seed", "Sew"] {
+            assert!(!why.contains(jargon), "{jargon} in {why}");
+        }
+    }
+    let sew_api = approves.iter().find(|a| a["name"] == "sew-api").unwrap();
+    assert_eq!(sew_api["why"], "This App can talk to the chat service on this server, for chat");
+    for line in v["plan"]["willDo"].as_array().unwrap() {
+        let line = line.as_str().unwrap();
+        assert!(!line.contains("guarded wall") && !line.contains("Sew's"), "{line}");
+    }
+    assert_plain(&v);
+}
+
+/// No catalog, address check or install answer ever carries an internal
+/// reference (a review id, a PRD name, an open question), whatever state
+/// it is in: the compiled catalog, a pinned one, a taken address, a dry
+/// run, a started job, a failed one.
+#[test]
+fn no_catalog_or_install_answer_carries_an_internal_reference() {
+    let fx = fx();
+    let call = |path: &str, params: &[(&str, &str)]| {
+        let p: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let r = super::super::routes::handle(path, Who::Owner, b"", &p);
+        serde_json::from_str::<J>(&r.body).unwrap()
+    };
+    for v in [
+        call(LIST, &[]),
+        call(SHOW, &[("entry", "sew/hearth")]),
+        call(SHOW, &[("entry", "sew/meet")]),
+        call(CHECK_ADDRESS, &[("entry", "sew/hearth"), ("address", "skin"), ("workspace", WS)]),
+    ] {
+        assert_plain(&v);
+    }
+    let (c, f) = hearth_cat(&fx);
+    assert_plain(&list(&Who::Owner, &c, &facts()).unwrap());
+    let mut show_params = HashMap::new();
+    show_params.insert("entry".to_string(), "sew/hearth".to_string());
+    assert_plain(&show(&Who::Owner, &c, &show_params, &facts()).unwrap());
+    assert_plain(&dry(&c, &f, json!({ "entry": "sew/hearth" })).unwrap());
+    // A failed download: a sentence, and the retry command apart.
+    *f.fetch_err.lock().unwrap() = Some(crate::sew::fetch::FetchError::Unreachable("github.com timed out".into()));
+    let v = install_with(&Who::Owner, &json!({ "entry": "sew/hearth", "workspace": WS }), &c, &facts(), &f).unwrap();
+    assert_plain(&v);
+    let id = v["job"]["id"].as_str().unwrap().to_string();
+    let j = super::super::catalog_job::advance(&f, &id).unwrap();
+    let jv = super::super::catalog_job::job_view(&j);
+    assert_eq!(jv["error"]["code"], "download_failed");
+    let text = jv["error"]["text"].as_str().unwrap();
+    assert!(!text.contains("k2 ") && !text.contains(&id), "{text}");
+    assert_eq!(jv["error"]["hint"], format!("k2 app catalog retry {id}"));
+    assert_eq!(jv["error"]["retry"], true);
+    assert_plain(&jv);
+    let mut jp = HashMap::new();
+    jp.insert("id".to_string(), id.clone());
+    assert_plain(&job_route(&Who::Owner, &jp).unwrap());
+    assert_plain(&list(&Who::Owner, &c, &facts()).unwrap());
+    // A taken address: the plain sentence for people, the command for the CLI.
+    installed("hearth");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        jobs::label_bind(&conn, &jobs::SuiteLabel { label: "chat".into(), app_id: "hearth".into(), front_port: 40999, bound_at: 1, bound_by: "owner".into() }).unwrap();
+    }
+    let mut p = HashMap::new();
+    p.insert("entry".to_string(), "sew/hearth".to_string());
+    p.insert("address".to_string(), "chat".to_string());
+    p.insert("workspace".to_string(), WS.to_string());
+    let v = check_address(&Who::Owner, &c, &p, &facts()).unwrap();
+    assert_eq!(v["error"]["code"], sc::ADDRESS_TAKEN, "{v}");
+    let text = v["error"]["text"].as_str().unwrap();
+    assert!(!text.contains("k2 ") && !text.contains("--address"), "{text}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("--address auto"), "{v}");
+    assert_plain(&v);
 }

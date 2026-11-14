@@ -68,18 +68,54 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
 pub(crate) struct Facts {
     pub linux: bool,
     /// Sew: its identity (`k2` | `standalone`) and version, or why not.
-    pub sew: Result<(String, Option<String>), (&'static str, String)>,
+    pub sew: Result<(String, Option<String>), Why>,
     /// The cached Pro reading (`None` = unknown; never a network call).
     pub pro: Option<bool>,
+}
+
+/// Why something can't happen (yet), in two parts: `text`, a plain
+/// sentence for people (Settings, the phone, the web), and `hint`, the
+/// command an agent or the CLI runs, when there is one. People never see
+/// the command; agents get both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Why {
+    pub code: &'static str,
+    pub text: String,
+    pub hint: Option<String>,
+}
+
+impl Why {
+    pub(crate) fn new(code: &'static str, text: impl Into<String>, hint: Option<&str>) -> Why {
+        Why { code, text: text.into(), hint: hint.map(str::to_string) }
+    }
+
+    /// `{code, text, hint}` (a catalog reason).
+    pub(crate) fn json(&self) -> J {
+        json!({ "code": self.code, "text": self.text, "hint": self.hint })
+    }
+
+    /// The same as a refusal: its `hint` is the sentence with the command
+    /// (the CLI's and agents' line), and `text` rides along for people.
+    pub(crate) fn refusal(&self, status: u16) -> Refusal {
+        let hint = match &self.hint {
+            Some(cmd) => format!("{} ({cmd})", self.text),
+            None => self.text.clone(),
+        };
+        let mut r = no(self.code, status, hint);
+        r.extra = Some(json!({ "text": self.text }));
+        r
+    }
 }
 
 impl Facts {
     pub(crate) fn live() -> Facts {
         let sew = match crate::sew::store::load() {
-            None => Err(("sew_not_installed", "Needs chat hosting (Sew) on this box: turn it on in Settings → Chat Hosting (k2 hostchat enable)".to_string())),
-            Some(r) if r.status == "removed" => Err(("sew_not_installed", "Chat hosting (Sew) was uninstalled here: k2 hostchat enable brings it back".to_string())),
+            None => Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Chat / Voice", Some("k2 hostchat enable"))),
+            Some(r) if r.status == "removed" => {
+                Err(Why::new("sew_not_installed", "Chat hosting was removed from this server: turn it on again in Settings → Chat / Voice", Some("k2 hostchat enable")))
+            }
             Some(r) if !matches!(r.status.as_str(), "running" | "degraded") => {
-                Err(("sew_not_running", format!("Chat hosting (Sew) is {} on this box: k2 hostchat status", r.status)))
+                Err(Why::new("sew_not_running", format!("Chat hosting isn't running on this server (it is {})", r.status.replace('_', " ")), Some("k2 hostchat status")))
             }
             Some(r) => Ok((crate::sew::supervisor::row_provider(&r), r.installed_version.clone())),
         };
@@ -93,26 +129,32 @@ impl Facts {
 }
 
 
-fn reasons(e: &Entry, f: &Facts) -> Vec<J> {
+/// Why this box can't deploy `e` now; empty = it can.
+pub(crate) fn reasons(e: &Entry, f: &Facts) -> Vec<Why> {
     let mut out = Vec::new();
     if !f.linux {
-        out.push(json!({ "code": "needs_linux", "text": "Needs a Linux box: Sew, the chat server it uses, runs on Linux only" }));
+        out.push(Why::new("needs_linux", "Needs a Linux server: the chat server it uses runs only on Linux", None));
     }
     match &f.sew {
-        Err((code, text)) => out.push(json!({ "code": code, "text": text })),
+        Err(why) => out.push(why.clone()),
         Ok((identity, _)) => {
             if let Ok(v) = e.version(None) {
                 if suite::pick_variant(v, identity, None).is_err() {
-                    out.push(json!({ "code": sc::VARIANT_MISMATCH, "text": format!("No {identity}-identity variant of {} {} is pinned", e.name, v.version) }));
+                    out.push(Why::new(
+                        sc::VARIANT_MISMATCH,
+                        format!("{} {} has no build for the way this server's chat signs people in ({identity} sign-in)", e.name, v.version),
+                        None,
+                    ));
                 }
             }
         }
     }
     if let Err((code, text)) = e.version(None) {
-        out.push(json!({ "code": code, "text": text }));
+        out.push(Why::new(code, text, None));
     }
     if f.pro == Some(false) {
-        out.push(json!({ "code": sc::PRO_REQUIRED, "text": format!("{}.<your box>.k2.dev needs K2 Connect Pro (https://k2.dev/dashboard)", e.default_label) }));
+        let at = url_of(&e.default_label).map(|u| u.trim_start_matches("https://").to_string()).unwrap_or_else(|| format!("{}.<your server>.k2.dev", e.default_label));
+        out.push(Why::new(sc::PRO_REQUIRED, format!("An address like {at} needs K2 Connect Pro: see https://k2.dev/dashboard"), None));
     }
     out
 }
@@ -134,25 +176,46 @@ fn active_jobs() -> R<Vec<JobRow>> {
     jobs::active(&conn).map_err(db_err)
 }
 
+/// What approving a box service lets the App do, in plain words. A box
+/// service is a door from the App's walled space to one service on this
+/// box's loopback: `sew-api` reaches Sew's client API (chat), `sew-signal`
+/// Sew's voice signalling (calls).
+pub(crate) fn box_service_why(name: &str) -> String {
+    match name {
+        "sew-api" => "This App can talk to the chat service on this server, for chat".into(),
+        "sew-signal" => "This App can talk to the call service on this server, for voice and video calls".into(),
+        other => format!("This App can reach the {other} service on this server"),
+    }
+}
+
+/// What approving a cap lets the App do. An App's chat caps are the most
+/// its signed-in people's chat passes may do through it (their own roles
+/// still apply).
+pub(crate) fn cap_why(cap: &str) -> String {
+    match cap {
+        "chat:read" => "People signed in to this App may read chat through it".into(),
+        "chat:post" => "People signed in to this App may post in chat through it".into(),
+        "voice:join" => "People signed in to this App may join voice calls through it".into(),
+        "voice:video" => "People signed in to this App may turn on video in calls".into(),
+        other => format!("This App may {}", crate::permission::actions::app_login::cap_words(other)),
+    }
+}
+
 /// What deploying it does and approves (R3 parts 1 and 4), from the pin.
 fn will_do(e: &Entry, pin: Option<&Pin>) -> (Vec<String>, Vec<J>) {
     let mut lines = e.explain.clone();
     let mut approves = Vec::new();
     if let Some(p) = pin {
         if p.variant == suite::VARIANT_K2 {
-            lines.push("People sign in with their App logins on this box".into());
+            lines.push("People sign in with their logins for this App on this server".into());
         } else {
-            lines.push("People sign in with this box's Sew logins".into());
+            lines.push("People sign in with this server's own chat logins".into());
         }
         for b in &p.seed.box_services {
-            approves.push(json!({ "kind": "boxService", "name": b, "why": match b.as_str() {
-                "sew-api" => "Sew's client API: chat",
-                "sew-signal" => "The voice engine's signalling: calls",
-                _ => "the Seed asks for it",
-            }}));
+            approves.push(json!({ "kind": "boxService", "name": b, "why": box_service_why(b) }));
         }
         for c in &p.seed.caps {
-            approves.push(json!({ "kind": "cap", "name": c }));
+            approves.push(json!({ "kind": "cap", "name": c, "why": cap_why(c) }));
         }
     }
     (lines, approves)
@@ -162,7 +225,7 @@ fn entry_json(e: &Entry, f: &Facts) -> R<J> {
     let v = e.version(None).ok();
     let pin = v.and_then(|v| f.sew.as_ref().ok().and_then(|(id, _)| suite::pick_variant(v, id, None).ok()).and_then(|(name, _)| Pin::of(e, v, name)));
     let (lines, approves) = will_do(e, pin.as_ref());
-    let reasons = reasons(e, f);
+    let reasons: Vec<J> = reasons(e, f).iter().map(Why::json).collect();
     let installed: Vec<J> = lineage_of(&e.entry)?.iter().map(|l| json!({ "app": l.app_id, "version": l.version, "variant": l.variant, "verified": !l.forked })).collect();
     let jobs: Vec<J> = active_jobs()?.iter().filter(|j| j.entry == e.entry).map(job::job_view).collect();
     let one_taken = e.one_per_box && (!installed.is_empty() || !jobs.is_empty());
@@ -172,7 +235,9 @@ fn entry_json(e: &Entry, f: &Facts) -> R<J> {
         "publisher": e.publisher,
         "summary": e.summary,
         "license": e.license,
-        "verified": "Verified by K2",
+        // Only an entry with a pinned, published version whose files K2
+        // checks by sha256; `null` until then (no badge).
+        "verified": e.verified().then_some(suite::VERIFIED_WORDS),
         "family": e.family,
         "defaultAddress": { "label": e.default_label, "url": url_of(&e.default_label) },
         "onePerBox": e.one_per_box,
@@ -269,7 +334,10 @@ fn taken_refusal(e: &Entry, label: &str, holder: String, install_id: &str, ws: &
             e.entry
         ),
     );
-    r.extra = Some(json!({ "holder": holder, "suggestion": sug, "address": label }));
+    // `text`: the same in plain words for people (Settings shows it; the
+    // suggestion has its own button there).
+    let text = format!("'{label}' is already used by {holder}. Try {sug} instead");
+    r.extra = Some(json!({ "holder": holder, "suggestion": sug, "address": label, "text": text }));
     r
 }
 
@@ -332,7 +400,7 @@ fn install_id(e: &Entry, asked: Option<&str>) -> R<String> {
                 return Err(no(code, 400, msg));
             }
             if k2_root_proto::apps::AppId::parse(&id).is_none() {
-                return Err(no(codes::APP_ID_INVALID, 400, format!("App id '{id}' doesn't fit the guarded engine (at most 32 characters, no '--')")));
+                return Err(no(codes::APP_ID_INVALID, 400, format!("App id '{id}' is too long or has '--' in it: at most 32 characters")));
             }
             if busy(&id) {
                 return Err(no(codes::APP_EXISTS, 409, format!("App id '{id}' is taken on this box (k2 app list)")));
@@ -381,9 +449,9 @@ pub(crate) fn install_with(who: &Who, v: &J, cat: &Catalog, f: &Facts, h: &dyn H
         ));
     }
     if !f.linux {
-        return Err(no("needs_linux", 409, "Needs a Linux box: Sew, the chat server it uses, runs on Linux only"));
+        return Err(Why::new("needs_linux", "Needs a Linux server: the chat server it uses runs only on Linux", None).refusal(409));
     }
-    let (identity, sew_version) = f.sew.clone().map_err(|(c, h)| no(c, 409, h))?;
+    let (identity, sew_version) = f.sew.clone().map_err(|w| w.refusal(409))?;
     let version = e.version(s(v, "version")).map_err(|(c, h)| no(c, 409, h))?;
     let (variant, _) = suite::pick_variant(version, &identity, s(v, "variant")).map_err(|(c, h)| no(c, 409, h))?;
     let pin = Pin::of(e, version, variant).ok_or_else(|| no(sc::VARIANT_MISMATCH, 409, "no such variant"))?;
@@ -411,7 +479,8 @@ pub(crate) fn install_with(who: &Who, v: &J, cat: &Catalog, f: &Facts, h: &dyn H
     let (lines, approves) = will_do(e, Some(&pin));
     let mut waits = Vec::new();
     if (addr.kind == jobs::ADDRESS_SUITE_LABEL || !pin.setup.is_empty()) && !h.may_manage_sew(who) {
-        waits.push(json!({ "reason": jobs::WAIT_SEW_RIGHTS, "question": "Q13", "hint": "binding a suite label and Sew setup are Manage Chat / Voice Hosting today" }));
+        let (text, hint) = job::sew_rights_wait(&e.name, &ws.id);
+        waits.push(json!({ "reason": jobs::WAIT_SEW_RIGHTS, "text": text, "hint": hint }));
     }
     let plan = json!({
         "entry": e.entry,

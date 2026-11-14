@@ -324,6 +324,64 @@ fn a_hearth_install_runs_every_step_to_ready() {
     let v = job_view(&j);
     assert_eq!(v["state"], "done");
     assert!(v["next"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("k2 app user invite hearth")), "{v}");
+    // People read a sentence; the command rides apart for agents.
+    let steps = v["nextSteps"].as_array().unwrap();
+    assert_eq!(steps.len(), v["next"].as_array().unwrap().len(), "{v}");
+    let invite = &steps[0];
+    assert_eq!(invite["text"], "Invite people to Hearth from Settings → Apps → Hearth → People.", "{v}");
+    assert_eq!(invite["hint"], "k2 app user invite hearth <email>", "{v}");
+    for st in steps {
+        let text = st["text"].as_str().unwrap();
+        assert!(!text.contains("k2 ") && !text.contains("<email>") && !text.contains("--"), "a command in the people's words: {text}");
+        assert!(st["hint"].as_str().unwrap().starts_with("k2 "), "{st}");
+    }
+    assert_plain(&v);
+}
+
+/// A string a person reads never carries an internal reference: a review
+/// id (`vs-live A4`), a PRD name or an open question (`Q13`), or a
+/// requirement / step id (`R27`, `S3`, `A12`, `AT5`).
+pub(crate) fn internal_ref(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    for bad in ["vs-live", "prd-", "prd "] {
+        if lower.contains(bad) {
+            return Some(bad.to_string());
+        }
+    }
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|w| {
+            let letters: String = w.chars().take_while(char::is_ascii_uppercase).collect();
+            let digits = &w[letters.len()..];
+            matches!(letters.as_str(), "A" | "AT" | "Q" | "R" | "S" | "H") && !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+        })
+        .map(str::to_string)
+}
+
+/// Every string anywhere in `v` is free of internal references.
+pub(crate) fn assert_plain(v: &J) {
+    fn walk(v: &J, at: &str) {
+        match v {
+            J::String(s) => {
+                if let Some(r) = internal_ref(s) {
+                    panic!("{at}: {s:?} carries the internal reference {r:?}");
+                }
+            }
+            J::Array(a) => a.iter().enumerate().for_each(|(i, x)| walk(x, &format!("{at}[{i}]"))),
+            J::Object(m) => m.iter().for_each(|(k, x)| walk(x, &format!("{at}.{k}"))),
+            _ => {}
+        }
+    }
+    walk(v, "$");
+}
+
+#[test]
+fn the_internal_reference_check_catches_what_it_should() {
+    for bad in ["the owner (vs-live A4)", "see prd-one-click-suite-apps-v1", "open question Q13", "R27 says", "PRD 3"] {
+        assert!(internal_ref(bad).is_some(), "{bad}");
+    }
+    for ok in ["Hearth 0.2.4", "K2 Connect Pro", "sha256 abc", "chat.your-server.k2.dev", "E2E", "Settings → Apps"] {
+        assert_eq!(internal_ref(ok), None, "{ok}");
+    }
 }
 
 // ── refusals that install nothing ────────────────────────────────────
@@ -341,7 +399,7 @@ fn a_changed_byte_is_refused_and_nothing_is_installed() {
     let j = advance(&f, &id).unwrap();
     assert_eq!(j.state, jobs::STATE_FAILED);
     assert_eq!(j.error_code.as_deref(), Some(suite::codes::CATALOG_MISMATCH), "{:?}", j.error_hint);
-    assert!(j.error_hint.as_deref().unwrap().contains("(sha256)"), "{:?}", j.error_hint);
+    assert!(j.error_hint.as_deref().unwrap().contains("(sha256:"), "{:?}", j.error_hint);
     assert_eq!(f.installs.load(Ordering::SeqCst), 0);
     assert!(!app_exists("hearth"), "no App row");
     // The fetch's own pin check (a download that isn't the pinned file).
@@ -370,7 +428,8 @@ fn a_manifest_that_disagrees_with_the_catalog_is_refused() {
     let id = start(&c, &f, &Who::Owner, json!({}));
     let j = advance(&f, &id).unwrap();
     assert_eq!(j.error_code.as_deref(), Some(suite::codes::CATALOG_MISMATCH));
-    assert!(j.error_hint.as_deref().unwrap().starts_with("catalog_mismatch (caps)"), "{:?}", j.error_hint);
+    assert!(j.error_hint.as_deref().unwrap().contains("(caps:"), "{:?}", j.error_hint);
+    assert!(j.error_hint.as_deref().unwrap().ends_with("so nothing was installed"), "{:?}", j.error_hint);
     assert_eq!(f.installs.load(Ordering::SeqCst), 0);
     assert!(!app_exists("hearth"));
     // build.json naming another commit is refused the same way.
@@ -383,7 +442,7 @@ fn a_manifest_that_disagrees_with_the_catalog_is_refused() {
     }
     let id = start(&c, &f, &Who::Owner, json!({}));
     let j = advance(&f, &id).unwrap();
-    assert!(j.error_hint.as_deref().unwrap().starts_with("catalog_mismatch (build.json)"), "{:?}", j.error_hint);
+    assert!(j.error_hint.as_deref().unwrap().contains("(build.json:"), "{:?}", j.error_hint);
 }
 
 /// A12: the stored Seed's tree hash must be the pinned `seedHash`.
@@ -398,7 +457,7 @@ fn a_stored_tree_that_isnt_the_pinned_seed_hash_is_refused() {
     let id = start(&c, &f, &Who::Owner, json!({}));
     let j = advance(&f, &id).unwrap();
     let hint = j.error_hint.clone().unwrap();
-    assert!(hint.starts_with("catalog_mismatch (seedHash)") && hint.contains(&real), "{hint}");
+    assert!(hint.contains("(seedHash:") && hint.contains(&real), "{hint}");
     assert_eq!(f.installs.load(Ordering::SeqCst), 0);
 }
 
@@ -468,19 +527,29 @@ fn waiting_states_name_their_question_and_clear_by_themselves() {
     let id = start(&c, &f, &agent(), json!({}));
     let j = advance(&f, &id).unwrap();
     assert_eq!((j.state.as_str(), j.step.as_str()), (jobs::STATE_WAITING, jobs::STEP_ADDRESS));
-    assert_eq!((j.wait_reason.as_deref(), j.wait_question.as_deref()), (Some(jobs::WAIT_SEW_RIGHTS), Some("Q13")));
-    assert!(j.wait_hint.as_deref().unwrap().contains("chat_manage"), "{:?}", j.wait_hint);
+    assert_eq!((j.wait_reason.as_deref(), j.wait_question.as_deref()), (Some(jobs::WAIT_SEW_RIGHTS), None), "no open question is ever named");
     assert!(f.pointed.lock().unwrap().is_empty(), "nothing bound while waiting");
     let v = job_view(&j);
     assert_eq!(v["waiting"]["reason"], jobs::WAIT_SEW_RIGHTS);
+    // The person reads which permission; the agent gets the command.
+    let text = v["waiting"]["text"].as_str().unwrap();
+    assert!(text.contains("Manage Chat / Voice Hosting") && !text.contains("k2 ") && !text.contains("chat_manage"), "{text}");
+    assert_eq!(v["waiting"]["hint"], format!("k2 agent access set {WS} chat_manage on"), "{v}");
+    assert!(v["waiting"].get("question").is_none(), "{v}");
+    assert_plain(&v);
     // Still waiting on the next pass.
     assert_eq!(advance(&f, &id).unwrap().state, jobs::STATE_WAITING);
     // The owner turns Manage Sew on: the job goes on, to the held deploy.
     f.manage_sew.store(true, Ordering::SeqCst);
     let j = advance(&f, &id).unwrap();
     assert_eq!((j.state.as_str(), j.step.as_str()), (jobs::STATE_WAITING, jobs::STEP_APPROVE), "{j:?}");
-    assert_eq!((j.wait_reason.as_deref(), j.wait_question.as_deref()), (Some(jobs::WAIT_APPROVAL), Some("Q5")));
+    assert_eq!((j.wait_reason.as_deref(), j.wait_question.as_deref()), (Some(jobs::WAIT_APPROVAL), None));
     assert_eq!(j.wait_requests, vec!["req-caps"]);
+    let v = job_view(&j);
+    let text = v["waiting"]["text"].as_str().unwrap();
+    assert!(text.contains("Settings → App Approvals") && !text.contains("k2 "), "{text}");
+    assert_eq!(v["waiting"]["hint"], "k2 app approve req-caps", "{v}");
+    assert_plain(&v);
     assert_eq!(f.deploys.lock().unwrap().len(), 1, "one deploy filed the request");
     // Approved, but the replay hasn't started: pending, never a second deploy.
     f.requests.lock().unwrap().insert("req-caps".into(), "approved".into());
@@ -581,7 +650,8 @@ fn meet_setup_waits_for_manage_sew() {
     let id = start_meet(&c, &f, &agent(), json!({ "address": "team-meet" }));
     f.manage_sew.store(false, Ordering::SeqCst);
     let j = advance(&f, &id).unwrap();
-    assert_eq!((j.step.as_str(), j.wait_reason.as_deref(), j.wait_question.as_deref()), (jobs::STEP_SEW_SETUP, Some(jobs::WAIT_SEW_RIGHTS), Some("Q13")));
+    assert_eq!((j.step.as_str(), j.wait_reason.as_deref(), j.wait_question.as_deref()), (jobs::STEP_SEW_SETUP, Some(jobs::WAIT_SEW_RIGHTS), None));
+    assert_plain(&job_view(&j));
     assert_eq!(*f.attached.lock().unwrap(), vec!["team-meet"], "an ordinary label needs no Manage Sew");
     assert!(f.mgmt.lock().unwrap().is_empty(), "no Sew call while waiting");
 }
@@ -597,7 +667,11 @@ fn a_bound_meetings_space_stops_the_job_unless_a_person_rebinds() {
     let id = start_meet(&c, &f, &Who::Owner, json!({}));
     let j = advance(&f, &id).unwrap();
     assert_eq!(j.error_code.as_deref(), Some("meet_space_bound"), "{j:?}");
-    assert!(j.error_hint.as_deref().unwrap().contains("--rebind-meet"));
+    let v = job_view(&j);
+    let text = v["error"]["text"].as_str().unwrap();
+    assert!(text.contains("only the owner") && !text.contains("--rebind-meet"), "{text}");
+    assert_eq!(v["error"]["hint"], "k2 app install --catalog sew/meet --rebind-meet", "{v}");
+    assert_plain(&v);
     // An earlier install's job recorded the Space, and its App is gone.
     {
         let h = k2_core::db::shared();

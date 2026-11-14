@@ -40,6 +40,38 @@ fn the_compiled_catalog_is_well_formed() {
     assert!(c.entry("sew/mail").is_none());
 }
 
+/// "Verified by K2" needs a pinned, published version whose files carry a
+/// sha256 and a tree hash. Nothing is pinned in the compiled catalog yet,
+/// so neither entry is verified.
+#[test]
+fn verified_needs_a_pinned_version() {
+    let mut c = catalog().unwrap().clone();
+    for e in &c.entries {
+        assert!(e.versions.is_empty() || e.verified(), "{}", e.entry);
+        if e.versions.is_empty() {
+            assert!(!e.verified(), "{}: nothing published, nothing verified", e.entry);
+        }
+    }
+    let e = c.entries.iter_mut().find(|e| e.entry == "sew/hearth").unwrap();
+    e.versions.push(testkit::version("hearth", "0.2.4", "k2", b"t", &"a".repeat(64), testkit::K2_CAPS, &["sew-api"], &[]));
+    assert!(e.verified());
+    assert_eq!(VERIFIED_WORDS, "Verified by K2");
+}
+
+/// What the catalog says it will do is in plain words: no K2-internal
+/// names (the guarded wall, Seeds, Sew's own terms) and no internal refs.
+#[test]
+fn the_catalog_says_what_it_does_in_plain_words() {
+    let c = catalog().unwrap();
+    for e in &c.entries {
+        for line in e.explain.iter().chain([&e.summary]) {
+            for jargon in ["guarded", "wall", "Seed", "Sew", "box", "vs-live", "PRD"] {
+                assert!(!line.contains(jargon), "{}: {jargon} in {line:?}", e.entry);
+            }
+        }
+    }
+}
+
 /// R27: an unknown setup step fails the catalog, so an older K2 never
 /// half-installs a newer entry.
 #[test]
@@ -141,6 +173,9 @@ fn a_manifest_that_disagrees_is_a_named_mismatch() {
     let e = agree(&p, &m, Some(&b)).unwrap_err();
     assert_eq!(e.field, "caps");
     assert!(e.hint().starts_with("catalog_mismatch (caps)"), "{}", e.hint());
+    // People read the same without the code.
+    assert!(e.text().starts_with("The downloaded files aren't exactly what this K2 release pinned (caps: "), "{}", e.text());
+    assert!(!e.text().contains(codes::CATALOG_MISMATCH), "{}", e.text());
     let m = manifest_of(testkit::manifest("hearth", "0.2.5", "k2", testkit::K2_CAPS, &["sew-api", "sew-signal"]));
     assert_eq!(agree(&p, &m, Some(&b)).unwrap_err().field, "version");
     let m = manifest_of(testkit::manifest("hearth", "0.2.4", "k2", testkit::K2_CAPS, &["sew-api"]));

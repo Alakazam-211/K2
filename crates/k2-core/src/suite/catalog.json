@@ -6,12 +6,12 @@
       "entry": "sew/hearth",
       "name": "Hearth",
       "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-web" },
-      "summary": "Chat and voice for your community, on this box's Sew.",
+      "summary": "Chat and voice for your community, on this server's chat.",
       "explain": [
-        "Runs a web App on this box, in K2's guarded wall",
-        "Uses this box's chat server, and reads and posts as whoever is signed in",
+        "Runs as a web App on this server, in its own protected space",
+        "Uses this server's chat, reading and posting as whoever is signed in",
         "Joins voice and video calls",
-        "Keeps sign-in sessions in one file on this box"
+        "Keeps sign-in sessions in one file on this server"
       ],
       "family": "chat",
       "defaultLabel": "chat",
@@ -27,13 +27,13 @@
       "entry": "sew/meet",
       "name": "Meet",
       "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-web" },
-      "summary": "Video meetings with guest links, on this box's Sew.",
+      "summary": "Video meetings with guest links, on this server's chat.",
       "explain": [
-        "Runs a web App on this box, in K2's guarded wall",
-        "Uses this box's chat server for meeting chat and the lobby",
+        "Runs as a web App on this server, in its own protected space",
+        "Uses this server's chat for meeting chat and the lobby",
         "Joins voice and video calls",
-        "Keeps sign-in sessions in one file on this box",
-        "Binds Sew's Meetings Space to this App and turns meetings on"
+        "Keeps sign-in sessions in one file on this server",
+        "Gives this App the chat server's Meetings space and turns meetings on"
       ],
       "family": "meet",
       "defaultLabel": "meet",

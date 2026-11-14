@@ -334,7 +334,18 @@ impl Catalog {
     }
 }
 
+/// The badge a verified entry shows (Settings, `k2 app catalog`).
+pub const VERIFIED_WORDS: &str = "Verified by K2";
+
 impl Entry {
+    /// "Verified by K2" holds only when a version is pinned in this K2 and
+    /// every file it would install carries a pinned sha256 and tree hash
+    /// that the job checks. An entry with nothing published yet has nothing
+    /// to verify, so it never shows the badge.
+    pub fn verified(&self) -> bool {
+        self.version(None).is_ok_and(|v| !v.variants.is_empty() && v.variants.values().all(|p| hex64(&p.sha256) && hex64(&p.seed_hash)))
+    }
+
     /// The version to deploy: the one asked for, else `stable`, else the
     /// newest. `Err((code, hint))`.
     pub fn version(&self, asked: Option<&str>) -> Result<&Version, (&'static str, String)> {
@@ -406,6 +417,10 @@ impl Mismatch {
     }
     pub fn hint(&self) -> String {
         format!("{} ({}): {}; nothing was installed", codes::CATALOG_MISMATCH, self.field, self.detail)
+    }
+    /// The same in plain words for people (the install job's failure text).
+    pub fn text(&self) -> String {
+        format!("The downloaded files aren't exactly what this K2 release pinned ({}: {}), so nothing was installed", self.field, self.detail)
     }
 }
 

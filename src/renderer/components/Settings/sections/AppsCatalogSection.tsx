@@ -4,7 +4,8 @@
 // card groups. A thin client over the daemon:
 //
 // - The catalog card (R2): one row per entry: name, publisher, the version
-//   and "Verified by K2", the address it takes; whether this box can run it
+//   and "Verified by K2" (only when the server says a pinned, published
+//   version is verified), the address it takes; whether this box can run it
 //   now and, if not, why. Until Sew publishes the Seeds, no version is pinned
 //   in this K2, and the pane says so in words instead of offering a Deploy
 //   that would fail.
@@ -45,6 +46,7 @@ import {
   fetchCatalog,
   fetchJob,
   isActive,
+  plainText,
   retryJob,
   startInstall,
   stepLabel,
@@ -124,9 +126,11 @@ export function addressSuffix(a: { label: string; url: string | null }): string 
   return host && host.startsWith(`${a.label}.`) ? host.slice(a.label.length) : null
 }
 
-/** One line of what deploying approves, in the page's words. */
+/** One line of what deploying approves: what the App may then do, in the
+ *  server's plain words, with the name it goes by after it. */
 export function approvalWords(a: { kind: string; name: string; why?: string }): string {
-  return `${a.kind === 'boxService' ? 'Server service' : 'Permission'} ${a.name}${a.why ? ` (${a.why})` : ''}`
+  if (a.why) return `${a.why} (${a.name})`
+  return `${a.kind === 'boxService' ? 'Server service' : 'Permission'} ${a.name}`
 }
 
 /** Under the address: checking, free, taken (with the server's suggestion),
@@ -149,7 +153,7 @@ function AddressCheckLine({ check, onUse }: { check: AddressCheck | null; onUse:
         <p className="type-hint text-[var(--color-status-error-soft)] flex flex-wrap items-center gap-x-1.5" data-testid="catalog-address-problem">
           <span className="inline-flex items-center gap-1.5">
             <StatusDot tone="error" />
-            {trimReason(check.error.hint)}.
+            {trimReason(check.error.text ?? check.error.hint)}.
           </span>
           {suggestion ? (
             <LinkButton onClick={() => onUse(suggestion)} testId="catalog-use-suggestion">
@@ -296,9 +300,9 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
             )}
             .
           </p>
-          {(job.next ?? []).map((line) => (
-            <p key={line} className="mt-1">
-              Next: {line}
+          {(job.nextSteps ?? []).map((n) => (
+            <p key={n.text} className="mt-1">
+              Next: {serverWords(n.text)}
             </p>
           ))}
         </Callout>
@@ -307,8 +311,8 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
         <Callout tone="warn" className="type-hint" role="status" data-testid="catalog-waiting">
           <p>{waitText(job)}</p>
           {requests.length > 0 && !isOwner ? <p className="mt-1">The owner can approve it here or in App Approvals.</p> : null}
-          {job.waiting?.reason !== 'waiting_approval' && job.waiting?.reason !== 'waiting_sew_rights' && job.waiting?.hint ? (
-            <p className={SETTING_SERVER_REASON}>The server said: {trimReason(job.waiting.hint)}.</p>
+          {job.waiting?.reason !== 'waiting_approval' && job.waiting?.reason !== 'waiting_sew_rights' && plainText(job.waiting) ? (
+            <p className={SETTING_SERVER_REASON}>The server said: {trimReason(plainText(job.waiting) ?? '')}.</p>
           ) : null}
           {requests.length > 0 && isOwner ? (
             <Button className="mt-2" variant="accent" disabled={busy} onClick={() => void approve()} data-testid="catalog-approve">
@@ -323,7 +327,7 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
             The deploy stopped at {stepLabel(job.step)}.{' '}
             {job.error?.retry ? 'You can try again from that step.' : 'Close this, fix what the server says, and deploy again.'}
           </p>
-          {job.error?.hint ? <p className={SETTING_SERVER_REASON}>The server said: {trimReason(job.error.hint)}.</p> : null}
+          {plainText(job.error) ? <p className={SETTING_SERVER_REASON}>The server said: {trimReason(plainText(job.error) ?? '')}.</p> : null}
           {job.error?.retry ? (
             <Button className="mt-2" disabled={busy} onClick={() => void retry()} data-testid="catalog-retry">
               {busy ? 'Starting again…' : 'Try again'}
@@ -595,8 +599,12 @@ export function AppsCatalogSection(): React.JSX.Element {
                   <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`} data-testid="catalog-publisher">
                     <span>By {e.publisher.name}</span>
                     {e.version ? <span>· {e.version}</span> : null}
-                    <span aria-hidden="true">·</span>
-                    <VerifiedMark>{e.verified}</VerifiedMark>
+                    {e.verified ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <VerifiedMark>{e.verified}</VerifiedMark>
+                      </>
+                    ) : null}
                   </p>
                   <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`} data-testid="catalog-state">
                     <span className="inline-flex items-center gap-1.5">

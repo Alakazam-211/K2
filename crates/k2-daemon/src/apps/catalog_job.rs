@@ -30,7 +30,11 @@
 //! - **Sew setup** (Meet: `meet init` with the App's service id, the Space
 //!   recorded in `tool_app_spaces`, `meetings.enabled`) and binding a suite
 //!   label are Manage Sew acts today (A4). Without it the job waits
-//!   (`waiting_sew_rights`, Q13).
+//!   (`waiting_sew_rights`).
+//! - **Words.** A wait or a failure keeps one plain sentence for people
+//!   (`text`); the command an agent runs (`hint`) is worked out from the
+//!   code when the job is shown ([`wait_command`], [`error_command`]), so
+//!   people never read a command and no internal reference ever ships.
 //! - **Healthy** is the deploy's own health gate (`/healthz`); **Ready**
 //!   probes the instance's `/readyz` on loopback and checks it names the
 //!   app, version, variant and commit the catalog pinned (Sew's step 7).
@@ -232,7 +236,7 @@ pub(crate) fn pro_refusal(msg: &str) -> Refusal {
         "pro_check_failed"
     };
     let hint = if code == sc::PRO_REQUIRED {
-        format!("a K2 address like chat.<your box>.k2.dev needs K2 Connect Pro on this box (https://k2.dev/dashboard). ({msg})")
+        "An address like chat.<your server>.k2.dev needs K2 Connect Pro on this server: see https://k2.dev/dashboard".to_string()
     } else {
         msg.to_string()
     };
@@ -311,14 +315,16 @@ enum Out {
     Next(Option<String>),
     /// Not yet (a deploy starting, a probe answering 503): next tick.
     Pending,
-    /// A named wait (R4): why, the open question it hangs on, the held
-    /// requests it watches, and what the person does.
-    Wait { reason: &'static str, question: Option<&'static str>, requests: Vec<String>, hint: String },
-    Fail { code: String, hint: String },
+    /// A named wait (R4): why, the held requests it watches, and what
+    /// happens next in plain words (the command is [`wait_command`]'s).
+    Wait { reason: &'static str, requests: Vec<String>, text: String },
+    /// A failure: its code and a plain sentence (the command, when there is
+    /// one, is [`error_command`]'s).
+    Fail { code: String, text: String },
 }
 
-fn fail(code: &str, hint: impl Into<String>) -> Out {
-    Out::Fail { code: code.to_string(), hint: hint.into() }
+fn fail(code: &str, text: impl Into<String>) -> Out {
+    Out::Fail { code: code.to_string(), text: text.into() }
 }
 
 fn load(id: &str) -> R<JobRow> {
@@ -387,28 +393,28 @@ pub(crate) fn advance(h: &dyn Hooks, id: &str) -> R<JobRow> {
                 }
                 return Ok(j);
             }
-            Out::Wait { reason, question, requests, hint } => {
+            Out::Wait { reason, requests, text } => {
                 let first = j.state != jobs::STATE_WAITING || j.wait_reason.as_deref() != Some(reason);
                 j.state = jobs::STATE_WAITING.into();
                 j.wait_reason = Some(reason.into());
-                j.wait_question = question.map(str::to_string);
+                j.wait_question = None;
                 j.wait_requests = requests;
-                j.wait_hint = Some(hint);
+                j.wait_hint = Some(text);
                 j.updated_at = now;
                 save(&j)?;
                 if first {
-                    audit(&j, &who, &format!("suite.install.{}.waiting", j.step), json!({ "reason": reason, "question": question, "requests": j.wait_requests }));
+                    audit(&j, &who, &format!("suite.install.{}.waiting", j.step), json!({ "reason": reason, "requests": j.wait_requests }));
                 }
                 return Ok(j);
             }
-            Out::Fail { code, hint } => {
+            Out::Fail { code, text } => {
                 j.state = jobs::STATE_FAILED.into();
                 j.error_code = Some(code.clone());
-                j.error_hint = Some(hint.clone());
+                j.error_hint = Some(text.clone());
                 j.finished_at = Some(now);
                 j.updated_at = now;
                 save(&j)?;
-                audit(&j, &who, "suite.install.failed", json!({ "code": code, "hint": hint }));
+                audit(&j, &who, "suite.install.failed", json!({ "code": code, "text": text }));
                 return Ok(j);
             }
         }
@@ -431,7 +437,7 @@ fn front_of(app: &store::AppRow) -> Option<u16> {
 
 /// The held requests a job watches: `None` = none pending (approved ones
 /// are dropped); else the wait or the failure.
-fn requests_gate(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Option<Out> {
+fn requests_gate(h: &dyn Hooks, j: &mut JobRow) -> Option<Out> {
     if j.wait_requests.is_empty() {
         return None;
     }
@@ -441,9 +447,9 @@ fn requests_gate(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Option<Out> {
             Some(k2_core::app_grace::requests::STATUS_APPROVED) => {}
             Some(k2_core::app_grace::requests::STATUS_PENDING) => pending.push(r.clone()),
             Some(other) => {
-                return Some(fail("approval_denied", format!("request {r} is {other}: nothing more is deployed. Ask again with k2 app install --catalog {}", j.entry)))
+                return Some(fail("approval_denied", format!("The approval request {r} was {other}, so nothing more was deployed. To try again, deploy it again")))
             }
-            None => return Some(fail("approval_missing", format!("request {r} is gone (k2 app approvals)"))),
+            None => return Some(fail("approval_missing", format!("The approval request {r} is gone, so the deploy can't go on"))),
         }
     }
     if pending.is_empty() {
@@ -452,17 +458,14 @@ fn requests_gate(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Option<Out> {
     }
     // TODO(Q5): for verified catalog entries, may a switch-1 agent's Sew
     // core pre-approve the preset box services sew-api / sew-signal? Until
-    // Rosson answers, the owner approves them in person (switch 2 already
+    // that is decided, the owner approves them in person (switch 2 already
     // opens them itself, A8).
-    let question = (!is_person(who)).then_some("Q5");
     Some(Out::Wait {
         reason: jobs::WAIT_APPROVAL,
-        question,
         requests: pending.clone(),
-        hint: format!(
-            "waiting for the owner to approve {} (Settings → Apps → Approvals, or k2 app approve {} from a terminal outside K2); the job goes on by itself once approved",
-            pending.join(", "),
-            pending[0]
+        text: format!(
+            "Waiting for the owner to approve what this App uses (request {}). The owner approves it in Settings → App Approvals; the deploy goes on by itself once it's approved",
+            pending.join(", ")
         ),
     })
 }
@@ -474,7 +477,7 @@ fn run_step(h: &dyn Hooks, j: &mut JobRow, pin: &Pin, who: &Who, now: i64) -> Ou
         jobs::STEP_INSTALL => step_install(h, j, who),
         jobs::STEP_ADDRESS => step_address(h, j, who),
         jobs::STEP_DEPLOY => step_deploy(h, j, pin, who),
-        jobs::STEP_APPROVE => step_approve(h, j, who, now),
+        jobs::STEP_APPROVE => step_approve(h, j, now),
         jobs::STEP_SEW_SETUP => step_sew_setup(h, j, pin, who),
         jobs::STEP_HEALTHY => step_healthy(h, j, now),
         jobs::STEP_READY => step_ready(h, j, pin, now),
@@ -493,14 +496,14 @@ fn step_download(h: &dyn Hooks, j: &mut JobRow, pin: &Pin) -> Out {
             let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if len != pin.seed.size {
                 let _ = std::fs::remove_file(&path);
-                return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("size", format!("{} is {len} bytes, the catalog pins {}", f.name, pin.seed.size)).hint());
+                return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("size", format!("{} is {len} bytes, the catalog pins {}", f.name, pin.seed.size)).text());
             }
             j.options["tarball"] = json!(path.to_string_lossy());
             Out::Next(Some(f.name.clone()))
         }
-        Err(FetchError::Mismatch(m)) => fail(sc::CATALOG_MISMATCH, format!("{} (sha256): {m}", sc::CATALOG_MISMATCH)),
+        Err(FetchError::Mismatch(m)) => fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("sha256", m).text()),
         Err(FetchError::Refused(m)) => fail("download_refused", m),
-        Err(e) => fail("download_failed", format!("{e}. Retry: k2 app catalog retry {}. {}", j.id, f.by_hand("k2 app install --catalog <entry> --file"))),
+        Err(e) => fail("download_failed", format!("Couldn't download {}: {e}. Try again in a little while", f.name)),
     }
 }
 
@@ -511,7 +514,7 @@ fn step_check(j: &mut JobRow, pin: &Pin) -> Out {
     // The file again: nothing may change it between the steps.
     match suite::unpack::sha256_file(&tarball) {
         Ok(got) if got == pin.seed.sha256 => {}
-        Ok(got) => return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("sha256", format!("{} has sha256 {got}, the catalog pins {}", pin.seed.file, pin.seed.sha256)).hint()),
+        Ok(got) => return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("sha256", format!("{} has sha256 {got}, the catalog pins {}", pin.seed.file, pin.seed.sha256)).text()),
         Err(e) => return fail("download_failed", e),
     }
     let tmp = deploy::seeds_dir().join(format!(".tmp-suite-{}", uuid::Uuid::new_v4().simple()));
@@ -524,20 +527,20 @@ fn step_check(j: &mut JobRow, pin: &Pin) -> Out {
 
 fn check_unpacked(tarball: &std::path::Path, tmp: &std::path::Path, j: &mut JobRow, pin: &Pin) -> Out {
     if let Err(e) = suite::unpack::unpack_tar_gz(tarball, tmp, suite::unpack::Limits::seed()) {
-        return fail(sc::UNPACK_REFUSED, format!("{}: {e}; nothing was installed", pin.seed.file));
+        return fail(sc::UNPACK_REFUSED, format!("K2 refused to unpack {}: {e}. Nothing was installed", pin.seed.file));
     }
     if let Err((f, d)) = suite::unpack::verify_sums(tmp) {
-        return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("SHA256SUMS", format!("{f}: {d}")).hint());
+        return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("SHA256SUMS", format!("{f}: {d}")).text());
     }
     let manifest = match std::fs::read_to_string(tmp.join(deploy::manifest::MANIFEST_FILE)).map_err(|e| e.to_string()).and_then(|t| {
         deploy::manifest::parse(&t).map_err(|e| format!("{}:{}: {}", e.line, e.column, e.message))
     }) {
         Ok(m) => m,
-        Err(e) => return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("manifest", e).hint()),
+        Err(e) => return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("manifest", e).text()),
     };
     let build = std::fs::read_to_string(tmp.join("build.json")).ok().and_then(|t| serde_json::from_str::<J>(&t).ok());
     if let Err(m) = suite::agree(pin, &manifest, build.as_ref()) {
-        return fail(sc::CATALOG_MISMATCH, m.hint());
+        return fail(sc::CATALOG_MISMATCH, m.text());
     }
     let built = {
         let db = k2_core::db::shared();
@@ -546,12 +549,12 @@ fn check_unpacked(tarball: &std::path::Path, tmp: &std::path::Path, j: &mut JobR
     };
     let built = match built {
         Ok(b) => b,
-        Err(f) => return fail(f.code, format!("k2 app validate refused the Seed: {}", f.message)),
+        Err(f) => return fail(f.code, format!("K2's checks refused the downloaded App: {}", f.message)),
     };
     if built.seed.hash != pin.seed.seed_hash {
         return fail(
             sc::CATALOG_MISMATCH,
-            suite::Mismatch::new("seedHash", format!("the stored Seed is {}, the catalog pins {}", built.seed.hash, pin.seed.seed_hash)).hint(),
+            suite::Mismatch::new("seedHash", format!("the stored Seed is {}, the catalog pins {}", built.seed.hash, pin.seed.seed_hash)).text(),
         );
     }
     j.seed_hash = Some(built.seed.hash.clone());
@@ -559,7 +562,7 @@ fn check_unpacked(tarball: &std::path::Path, tmp: &std::path::Path, j: &mut JobR
 }
 
 fn step_install(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Out {
-    if let Some(o) = requests_gate(h, j, who) {
+    if let Some(o) = requests_gate(h, j) {
         return o;
     }
     let lineage = {
@@ -573,7 +576,7 @@ fn step_install(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Out {
         let ours = lineage.as_ref().is_some_and(|l| l.job_id == j.id)
             || (lineage.is_none() && app.owner_workspace == j.workspace_id && app.created_at >= j.created_at);
         if !ours {
-            return fail("app_exists", format!("an App '{}' already exists on this box; install with another --id", j.app_id));
+            return fail("app_exists", format!("An App called '{}' already exists on this server; deploy it again under another App id", j.app_id));
         }
         return record_lineage(j, "already installed");
     }
@@ -585,7 +588,7 @@ fn step_install(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Out {
                 return fail("install_held", v["hint"].as_str().unwrap_or("the install is held for the owner").to_string());
             }
             j.wait_requests = vec![rid];
-            requests_gate(h, j, who).unwrap_or(Out::Pending)
+            requests_gate(h, j).unwrap_or(Out::Pending)
         }
         Ok(_) => record_lineage(j, "installed"),
         Err(r) => fail(r.code, r.hint),
@@ -627,8 +630,16 @@ pub(crate) fn suite_label_holder(label: &str) -> Option<String> {
     held.or_else(|| (label == crate::sew::meet::MEET_LABEL).then(crate::sew::meet::bound_live).flatten().map(|(a, _)| a))
 }
 
-const SEW_RIGHTS_HINT: &str = "this step is \"Manage Chat / Voice Hosting\" today (vs-live A4): the owner turns it on for this workspace \
-     (k2 agent access set <workspace> chat_manage on), or deploys from Settings → Apps → Add an App; the job goes on by itself then";
+/// The wait for "Manage Chat / Voice Hosting" (binding a suite label, Sew
+/// setup): the plain sentence and the command that ends it.
+pub(crate) fn sew_rights_wait(what: &str, workspace: &str) -> (String, String) {
+    (
+        format!(
+            "Setting up {what} on this server's chat needs the \"Manage Chat / Voice Hosting\" permission. The owner can give it to the agent that looks after this App, or deploy it from Settings → Apps → Add an App; the deploy goes on by itself then"
+        ),
+        format!("k2 agent access set {workspace} chat_manage on"),
+    )
+}
 
 fn step_address(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Out {
     let Some(app) = app_row(&j.app_id) else { return fail("app_not_found", format!("App '{}' is gone", j.app_id)) };
@@ -641,16 +652,16 @@ fn step_address(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Out {
         // its closed Sew steps) without Manage Sew? Until Rosson answers, a
         // caller without it waits here.
         if !h.may_manage_sew(who) {
-            return Out::Wait { reason: jobs::WAIT_SEW_RIGHTS, question: Some("Q13"), requests: vec![], hint: format!("binding {}.<your box>.k2.dev: {SEW_RIGHTS_HINT}", j.address) };
+            return Out::Wait { reason: jobs::WAIT_SEW_RIGHTS, requests: vec![], text: sew_rights_wait(&app_words(j), &j.workspace_id).0 };
         }
         if let Some(other) = suite_label_holder(&j.address) {
-            return fail(sc::ADDRESS_TAKEN, format!("'{}' is bound to the App {other}", j.address));
+            return fail(sc::ADDRESS_TAKEN, format!("The address '{}' already belongs to the App {other}", j.address));
         }
         if let Err(r) = h.pro_check() {
             return fail(r.code, r.hint);
         }
         if let Err(e) = h.point_suite_label(&j.address, Some(front)) {
-            return fail("address_failed", format!("{}.<your box>.k2.dev could not be pointed at {}: {e}", j.address, j.app_id));
+            return fail("address_failed", format!("The address {}.<your server>.k2.dev couldn't be pointed at {}: {e}", j.address, j.app_id));
         }
         let rec = jobs::SuiteLabel { label: j.address.clone(), app_id: j.app_id.clone(), front_port: front as i64, bound_at: deploy::now(), bound_by: j.actor.clone() };
         let bound = {
@@ -659,7 +670,7 @@ fn step_address(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Out {
             jobs::label_bind(&conn, &rec)
         };
         if let Err(holder) = bound {
-            return fail(sc::ADDRESS_TAKEN, format!("'{}' is bound to the App {holder}", j.address));
+            return fail(sc::ADDRESS_TAKEN, format!("The address '{}' already belongs to the App {holder}", j.address));
         }
         return Out::Next(Some(format!("{} → front port {front}", j.address)));
     }
@@ -715,8 +726,8 @@ fn step_deploy(h: &dyn Hooks, j: &mut JobRow, pin: &Pin, who: &Who) -> Out {
     }
 }
 
-fn step_approve(h: &dyn Hooks, j: &mut JobRow, who: &Who, now: i64) -> Out {
-    if let Some(o) = requests_gate(h, j, who) {
+fn step_approve(h: &dyn Hooks, j: &mut JobRow, now: i64) -> Out {
+    if let Some(o) = requests_gate(h, j) {
         return o;
     }
     if j.deployment_id.is_none() {
@@ -724,7 +735,7 @@ fn step_approve(h: &dyn Hooks, j: &mut JobRow, who: &Who, now: i64) -> Out {
         match h.deployment(&j.app_id, None, &seed) {
             Some(d) => j.deployment_id = Some(d.id),
             None if now - j.step_started_at > REPLAY_DEADLINE => {
-                return fail("deploy_not_replayed", "the approval went through but no deploy of the Seed started; retry: k2 app deploy <app> <seed>")
+                return fail("deploy_not_replayed", "The approval went through, but no deploy of the App started after it")
             }
             None => return Out::Pending,
         }
@@ -744,8 +755,8 @@ pub(crate) fn sew_app_id_ok(id: &str) -> bool {
 
 fn mgmt_fail(what: &str, e: MgmtError) -> Out {
     match e {
-        MgmtError::Status(c, b) => fail("sew_refused", format!("Sew answered {c} to {what}: {b}")),
-        other => fail("sew_unreachable", format!("{what}: {other}")),
+        MgmtError::Status(c, b) => fail("sew_refused", format!("The chat server refused {what} ({c}): {b}")),
+        other => fail("sew_unreachable", format!("The chat server didn't answer {what}: {other}")),
     }
 }
 
@@ -757,7 +768,7 @@ fn step_sew_setup(h: &dyn Hooks, j: &mut JobRow, pin: &Pin, who: &Who) -> Out {
     // for its own App, the Space record, meetings.enabled) without Manage
     // Sew? Until Rosson answers, a caller without it waits here.
     if !h.may_manage_sew(who) {
-        return Out::Wait { reason: jobs::WAIT_SEW_RIGHTS, question: Some("Q13"), requests: vec![], hint: format!("{}'s Sew setup: {SEW_RIGHTS_HINT}", pin.name) };
+        return Out::Wait { reason: jobs::WAIT_SEW_RIGHTS, requests: vec![], text: sew_rights_wait(&pin.name, &j.workspace_id).0 };
     }
     let Some(app) = app_row(&j.app_id) else { return fail("app_not_found", format!("App '{}' is gone", j.app_id)) };
     let app_id = app.service_id.to_ascii_lowercase();
@@ -808,7 +819,7 @@ fn meet_init(h: &dyn Hooks, j: &JobRow, app_id: &str) -> Result<String, Out> {
     let v = match first {
         Ok(v) => v,
         Err(MgmtError::Status(409, b)) if b.contains("slug_taken") => {
-            return Err(fail("meet_slug_taken", format!("a Space that isn't hidden holds the slug `meetings`; the owner decides in Sew (Sew said: {b})")))
+            return Err(fail("meet_slug_taken", format!("Another chat space already uses the name 'meetings'; the owner decides what to do with it in the chat server (it said: {b})")))
         }
         Err(MgmtError::Status(409, b)) => {
             let rebind = j.options.get("rebindMeet").and_then(J::as_bool) == Some(true);
@@ -821,13 +832,16 @@ fn meet_init(h: &dyn Hooks, j: &JobRow, app_id: &str) -> Result<String, Out> {
                     h.sew_mgmt("POST", MGMT_MEET_INIT, &body).map_err(|e| mgmt_fail("meet init", e))?
                 }
                 (true, None) => {
-                    return Err(fail("meet_space_bound", format!("Sew's Meetings Space belongs to another App and this box knows of no earlier Meet install to release it from; release it in Sew. Sew said: {b}")))
+                    return Err(fail(
+                        "meet_space_bound",
+                        format!("The chat server's Meetings space belongs to another App, and this server knows of no earlier Meet to release it from; release it in the chat server (it said: {b})"),
+                    ))
                 }
                 (false, _) => {
                     return Err(fail(
                         "meet_space_bound",
                         format!(
-                            "Sew's Meetings Space is bound to another App (a removed Meet install keeps it read-only). It is never re-bound on its own: the owner runs this install again with --rebind-meet, which releases it from the removed install first. Sew said: {b}"
+                            "The chat server's Meetings space still belongs to a removed Meet, which keeps it read-only. K2 never moves it on its own: only the owner can, by deploying Meet again and choosing to release it (it said: {b})"
                         ),
                     ))
                 }
@@ -860,7 +874,7 @@ fn step_healthy(h: &dyn Hooks, j: &mut JobRow, now: i64) -> Out {
     match d.result.as_str() {
         store::RESULT_LIVE => Out::Next(Some(format!("live on port {}", d.port.map(|p| p.to_string()).unwrap_or_else(|| "?".into())))),
         store::RESULT_PENDING | store::RESULT_STARTING if now - j.step_started_at <= HEALTHY_DEADLINE => Out::Pending,
-        r => fail("deploy_failed", format!("deployment {} is {r}: {} (k2 app logs {})", d.id, d.error.unwrap_or_default(), j.app_id)),
+        r => fail("deploy_failed", format!("The deploy ({}) ended {r}: {}. The App's logs say more", d.id, d.error.unwrap_or_default())),
     }
 }
 
@@ -873,13 +887,16 @@ fn step_ready(h: &dyn Hooks, j: &mut JobRow, pin: &Pin, now: i64) -> Out {
     match h.readyz(port, &pin.health.ready) {
         Ok((200, v)) => match suite::health_mismatch(pin, &v) {
             None => Out::Next(Some(format!("{} answers {}", pin.health.ready, pin.version))),
-            Some(m) => fail("version_mismatch", format!("{} answered, but {m}: the version deployed isn't the one installed", pin.health.ready)),
+            Some(m) => fail("version_mismatch", format!("The App answered, but the version running isn't the one K2 installed ({m})")),
         },
         Ok((code, _)) if late => fail(
             "not_ready",
-            format!("{} still answers {code} after {} minutes: a held box service keeps it waiting (k2 app approvals), or Sew is down (k2 hostchat status). Retry: k2 app catalog retry {}", pin.health.ready, READY_DEADLINE / 60, j.id),
+            format!(
+                "The App still isn't ready after {} minutes (it answers {code}): something it uses may still wait for the owner's approval, or chat hosting is down",
+                READY_DEADLINE / 60
+            ),
         ),
-        Err(e) if late => fail("not_ready", format!("{}: {e}. Retry: k2 app catalog retry {}", pin.health.ready, j.id)),
+        Err(e) if late => fail("not_ready", format!("The App didn't answer whether it is ready: {e}")),
         _ => Out::Pending,
     }
 }
@@ -932,24 +949,90 @@ pub(crate) fn forget_app(app_id: &str) -> Vec<String> {
 
 // ── the view ─────────────────────────────────────────────────────────
 
+/// One thing to do once the job is done (R5, A10): `text` for people (where
+/// in Settings), `hint` the command an agent runs, and `line`, the CLI's
+/// older one-line form (`next`).
+pub(crate) struct NextStep {
+    pub text: String,
+    pub hint: String,
+    pub line: String,
+}
+
+/// The App as people see it in Settings → Apps: its name, with the App id
+/// when that isn't simply the name.
+fn app_words(j: &JobRow) -> String {
+    let name = serde_json::from_str::<Pin>(&j.pin_json).map(|p| p.name).unwrap_or_else(|_| j.app_id.clone());
+    if name.eq_ignore_ascii_case(&j.app_id) {
+        name
+    } else {
+        format!("{name} ({})", j.app_id)
+    }
+}
+
 /// What a person does next once the job is done (R5, A10).
-fn next_lines(j: &JobRow) -> Vec<String> {
+pub(crate) fn next_steps(j: &JobRow) -> Vec<NextStep> {
+    let app = app_words(j);
     let mut out = vec![];
     if j.variant == suite::VARIANT_K2 {
-        out.push(format!("Invite people: k2 app user invite {} <email>", j.app_id));
+        let cmd = format!("k2 app user invite {} <email>", j.app_id);
+        out.push(NextStep { text: format!("Invite people to {app} from Settings → Apps → {app} → People."), line: format!("Invite people: {cmd}"), hint: cmd });
         // TODO(Q14): offer "Let this App give chat to its users"
         // (guests-chat) at deploy, and the default member role (A10). Until
-        // Rosson answers, each person also needs chat and a role by hand.
-        out.push(format!("Give each person chat: k2 app user chat {} <user> member --app (and a role whose room line has the chat caps)", j.app_id));
+        // that is decided, each person also needs chat and a role by hand.
+        let cmd = format!("k2 app user chat {} <user> member --app", j.app_id);
+        out.push(NextStep {
+            text: format!("Each person also needs chat turned on in {app}, with a role that includes chat. The agent that looks after {app} can do this for you."),
+            line: format!("Give each person chat: {cmd} (and a role whose room line has the chat caps)"),
+            hint: cmd,
+        });
     } else {
-        out.push("Invite people: k2 hostchat users invite <email> (this Sew signs people in itself)".into());
+        let cmd = "k2 hostchat users invite <email>".to_string();
+        out.push(NextStep {
+            text: "Invite people to this server's chat: it signs people in itself. The agent that looks after chat hosting can send the invites.".into(),
+            line: format!("Invite people: {cmd} (this Sew signs people in itself)"),
+            hint: cmd,
+        });
     }
     if j.entry == "sew/hearth" {
         // TODO(Q6): an owner-only card "Make Hearth this box's home client"
-        // for deploys the owner didn't click. Today: Settings by hand.
-        out.push("The owner can make it this box's home client in Settings → Chat Hosting".into());
+        // for deploys the owner didn't click. Today: by hand.
+        let cmd = format!("k2 hostchat home client {}", j.app_id);
+        out.push(NextStep {
+            text: format!("The owner can make {app} this server's main chat app, so it shows every chat space a person is in."),
+            line: format!("The owner can make it this box's home client: {cmd}"),
+            hint: cmd,
+        });
     }
     out
+}
+
+/// The command that ends a wait, for agents and the CLI (people read the
+/// wait's `text`).
+pub(crate) fn wait_command(j: &JobRow) -> Option<String> {
+    match j.wait_reason.as_deref()? {
+        jobs::WAIT_APPROVAL => j.wait_requests.first().map(|r| format!("k2 app approve {r}")),
+        jobs::WAIT_SEW_RIGHTS => Some(sew_rights_wait("", &j.workspace_id).1),
+        _ => None,
+    }
+}
+
+/// The command that moves a failed job on, for agents and the CLI (people
+/// read the error's `text` and use the Try again button).
+pub(crate) fn error_command(j: &JobRow) -> Option<String> {
+    let code = j.error_code.as_deref()?;
+    if RETRYABLE.contains(&code) {
+        return Some(format!("k2 app catalog retry {}", j.id));
+    }
+    match code {
+        "approval_denied" => Some(format!("k2 app install --catalog {}", j.entry)),
+        "approval_missing" => Some("k2 app approvals".into()),
+        "app_exists" => Some(format!("k2 app install --catalog {} --id <another-id>", j.entry)),
+        "version_mismatch" => Some(format!("k2 app logs {}", j.app_id)),
+        "meet_space_bound" => Some(format!("k2 app install --catalog {} --rebind-meet", j.entry)),
+        "deploy_not_replayed" => j.seed_hash.as_ref().map(|seed| format!("k2 app deploy {} {seed}", j.app_id)),
+        "sew_not_running" | "sew_unreachable" => Some("k2 hostchat status".into()),
+        _ => None,
+    }
 }
 
 pub(crate) fn job_view(j: &JobRow) -> J {
@@ -988,15 +1071,21 @@ pub(crate) fn job_view(j: &JobRow) -> J {
         "updatedAt": j.updated_at,
         "finishedAt": j.finished_at,
     });
+    // Waits and failures: `text` is the plain sentence for people, `hint`
+    // the command for agents (or null).
     if j.state == jobs::STATE_WAITING {
-        v["waiting"] = json!({ "reason": j.wait_reason, "question": j.wait_question, "requests": j.wait_requests, "hint": j.wait_hint });
+        v["waiting"] = json!({ "reason": j.wait_reason, "requests": j.wait_requests, "text": j.wait_hint, "hint": wait_command(j) });
     }
     if j.state == jobs::STATE_FAILED {
         let code = j.error_code.clone().unwrap_or_default();
-        v["error"] = json!({ "code": code, "hint": j.error_hint, "retry": RETRYABLE.contains(&code.as_str()) });
+        v["error"] = json!({ "code": code, "text": j.error_hint, "hint": error_command(j), "retry": RETRYABLE.contains(&code.as_str()) });
     }
     if j.state == jobs::STATE_DONE {
-        v["next"] = json!(next_lines(j));
+        let next = next_steps(j);
+        // `next`: the CLI's lines, each with its command (agents read these);
+        // `nextSteps`: a plain sentence for people plus the command apart.
+        v["next"] = json!(next.iter().map(|n| n.line.clone()).collect::<Vec<_>>());
+        v["nextSteps"] = json!(next.iter().map(|n| json!({ "text": n.text, "hint": n.hint })).collect::<Vec<_>>());
     }
     v
 }

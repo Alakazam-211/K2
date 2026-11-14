@@ -38,6 +38,7 @@
 //!   the main DB, so they cannot share the skin.db transaction: they call
 //!   [`kick_reconcile`] and the sweep fixes the drift.
 
+pub mod admin_channels;
 pub mod admin_space;
 pub mod app_space;
 pub mod avatar;
@@ -146,6 +147,17 @@ pub enum Op {
     /// Voice rooms (SW-4): close a room (`POST /mgmt/v1/channels/{id}/closing`),
     /// subject `admin:room:<channel id>`, after the rooms queue.
     AdminRoomClosing,
+    /// Home chat ([`admin_channels`]): make a Home channel in the K5 Space
+    /// (`POST /mgmt/v1/channels/create`), subject `admin:chan:<slug>`.
+    AdminChannelCreate,
+    /// Home chat: rename or archive one Home channel (`channels/bulk`),
+    /// subject `admin:chan:<slug>`.
+    AdminChannelOps,
+    /// Home chat (Sew `channel_member_add_remove`): add one person to a
+    /// Home channel, on the person's member queue.
+    AdminChannelMemberAdd,
+    /// Home chat: remove one person from a Home channel.
+    AdminChannelMemberRemove,
 }
 
 impl Op {
@@ -173,6 +185,10 @@ impl Op {
             Op::AdminMemberLevel => "admin_member_level",
             Op::AdminRooms => "admin_rooms",
             Op::AdminRoomClosing => "admin_room_closing",
+            Op::AdminChannelCreate => "admin_channel_create",
+            Op::AdminChannelOps => "admin_channel_ops",
+            Op::AdminChannelMemberAdd => "admin_channel_member_add",
+            Op::AdminChannelMemberRemove => "admin_channel_member_remove",
         }
     }
 
@@ -200,6 +216,10 @@ impl Op {
             "admin_member_level" => Op::AdminMemberLevel,
             "admin_rooms" => Op::AdminRooms,
             "admin_room_closing" => Op::AdminRoomClosing,
+            "admin_channel_create" => Op::AdminChannelCreate,
+            "admin_channel_ops" => Op::AdminChannelOps,
+            "admin_channel_member_add" => Op::AdminChannelMemberAdd,
+            "admin_channel_member_remove" => Op::AdminChannelMemberRemove,
             _ => return None,
         })
     }
@@ -207,7 +227,7 @@ impl Op {
     /// The ops the worker delivers. S28's session revoke joined in 0.46.1
     /// (plan B7: "S28 adds its op to `Op::DELIVERED`"); K31's App Space
     /// membership ops ride the same worker.
-    pub const DELIVERED: [Op; 22] = [
+    pub const DELIVERED: [Op; 26] = [
         Op::Provision,
         Op::Update,
         Op::Deprovision,
@@ -230,6 +250,10 @@ impl Op {
         Op::AdminMemberLevel,
         Op::AdminRooms,
         Op::AdminRoomClosing,
+        Op::AdminChannelCreate,
+        Op::AdminChannelOps,
+        Op::AdminChannelMemberAdd,
+        Op::AdminChannelMemberRemove,
     ];
 
     /// K31's App Space membership ops.
@@ -1251,6 +1275,8 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
         let (home_ops, mut ops): (Vec<NewOp>, Vec<NewOp>) =
             home::plan(&tx, &busy)?.into_iter().partition(|o| o.op == Op::HomeClient);
         ops.extend(policy::plan(&tx, &busy)?);
+        // Sew 0.10.0: agents open no DM with a box person (HP-31).
+        ops.extend(policy::plan_agent_dm(&tx, &busy)?);
         // Sew 0.9.0: the recording org policies a person asked for.
         ops.extend(recording::plan_policies(&tx, &busy)?);
         let mut n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
@@ -1272,6 +1298,16 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
         kick();
     }
     Ok(n)
+}
+
+/// Record what Sew's policies show for `agents.dm_with_box_people` (the
+/// sweep's policy read; HP-31).
+pub fn note_agent_dm_policy(body: &serde_json::Value) -> Result<(), String> {
+    if !skin_store_exists() {
+        return Ok(());
+    }
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| policy::note_agent_dm(conn, policy::agent_dm_in(body).as_ref(), now))
 }
 
 /// Did the box's Sew report `flag` in its last status ([`features`])?
@@ -1567,7 +1603,7 @@ pub fn admin_space_note_preview_off() {
 /// off. Only with the preview on, chat enabled and a Sew that takes the
 /// server Space. Call OUTSIDE any skin.db closure. Returns how many.
 pub fn ensure_admin_connect_grants(people: &[admin_space::ConnectPerson]) -> Result<usize, String> {
-    if !crate::voice_preview::enabled() || !skin_store_exists() {
+    if !crate::home_chat::k5_space_wanted() || !skin_store_exists() {
         return Ok(0);
     }
     let missing: Vec<String> = crate::skin::with_skin_conn(|conn| {
@@ -2298,6 +2334,8 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
         if admin_space::after_done(conn, id, result, now)? {
             kick_reconcile();
         }
+        // Home chat: a channel made or changed, a person in or out.
+        admin_channels::after_done(conn, id, result, now)?;
         // Sew 0.5.0: an unbind waiting for its Space's member removes can
         // go once they are delivered.
         let removed = conn
@@ -2445,7 +2483,9 @@ pub fn record_blocked(id: &str, status: Option<u16>, error: &str) -> Result<(), 
     crate::skin::with_skin_conn(|conn| {
         outbox::mark_blocked(conn, id, status.map(i64::from), error, now)?;
         // Voice rooms: a blocked Admin Space create blocks the Space.
-        admin_space::after_blocked(conn, id, error, now)
+        admin_space::after_blocked(conn, id, error, now)?;
+        // Home chat: the channel or member notes why.
+        admin_channels::after_blocked(conn, id, error, now)
     })
 }
 

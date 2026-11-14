@@ -50,6 +50,17 @@ pub const K2_MANAGED_FIELDS: [&str; 4] = ["display_name", "title", "pronouns", "
 /// Outbox subject of the `policy_set` row.
 pub const SUBJECT: &str = "policy:identity.managed_fields";
 
+/// Sew 0.10.0 (`agents_dm_with_box_people`): the install policy that lets
+/// an agent open a DM with a box person (`k2:owner`, `k2:connect:`). K2
+/// sets it **false** once Sew reports the flag (prd-home-people-channels-v1
+/// §13.2, HP-31): Sew chat is for people. Sew's policy refuses only opening
+/// a new DM; K2's own `dm_not_for_agents` gate refuses every agent action on
+/// such a DM either way. K2 never touches `agents.allowed_in_dms`: it is
+/// install-wide and would also cut App people's agent DMs.
+pub const AGENT_DM: &str = "agents.dm_with_box_people";
+/// Outbox subject of the agent DM `policy_set` row.
+pub const SUBJECT_AGENT_DM: &str = "policy:agents.dm_with_box_people";
+
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -153,6 +164,11 @@ pub fn after_done(conn: &Connection, row_id: &str, result: &str, now: i64) -> Re
     if op.as_deref().and_then(Op::parse) != Some(Op::PolicySet) {
         return Ok(());
     }
+    if let Ok(v) = serde_json::from_str::<Value>(result) {
+        if let Some(seen) = v.get("policies").and_then(|p| p.get(AGENT_DM)) {
+            note_agent_dm(conn, Some(seen), now)?;
+        }
+    }
     match managed_fields_in(result.as_bytes()) {
         Ok(seen) => note(conn, seen.as_ref(), now),
         Err(e) => {
@@ -160,6 +176,54 @@ pub fn after_done(conn: &Connection, row_id: &str, result: &str, now: i64) -> Re
             Ok(())
         }
     }
+}
+
+/// The `agents.dm_with_box_people` value in a `{"policies": {...}}` body
+/// (`None` = absent, Sew's default `true`).
+pub fn agent_dm_in(body: &Value) -> Option<Value> {
+    body.get("policies").unwrap_or(body).get(AGENT_DM).filter(|v| !v.is_null()).cloned()
+}
+
+/// Record what Sew showed for `agents.dm_with_box_people` (K2's value is
+/// `false`; absent is Sew's default, `true`).
+pub fn note_agent_dm(conn: &Connection, seen: Option<&Value>, now: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO tool_sew_policy (key, seen, is_k2, seen_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(key) DO UPDATE SET seen = excluded.seen, is_k2 = excluded.is_k2, seen_at = excluded.seen_at",
+        params![AGENT_DM, seen.map(Value::to_string), (seen == Some(&Value::Bool(false))) as i64, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("sew policy write: {e}"))
+}
+
+/// Did Sew last show `agents.dm_with_box_people: false`? `None` = not read
+/// on this install.
+pub fn agent_dm_is_k2(conn: &Connection) -> Result<Option<bool>, String> {
+    conn.query_row("SELECT is_k2 FROM tool_sew_policy WHERE key = ?1", params![AGENT_DM], |r| r.get::<_, i64>(0))
+        .optional()
+        .map(|o| o.map(|v| v != 0))
+        .map_err(|e| format!("sew policy read: {e}"))
+}
+
+/// The sweep: one `policy_set {agents.dm_with_box_people: false}` when Sew
+/// has the flag, K2 read the policy on this install and it isn't false yet.
+pub fn plan_agent_dm(conn: &Connection, busy: &std::collections::HashSet<String>) -> Result<Vec<NewOp>, String> {
+    if !features::has(conn, CHAT_KIND, features::AGENTS_DM_WITH_BOX_PEOPLE)? || busy.contains(SUBJECT_AGENT_DM) {
+        return Ok(Vec::new());
+    }
+    if agent_dm_is_k2(conn)? != Some(false) {
+        return Ok(Vec::new());
+    }
+    Ok(vec![NewOp {
+        tool: CHAT_KIND,
+        op: Op::PolicySet,
+        subject_key: SUBJECT_AGENT_DM.to_string(),
+        payload: json!({ "changes": { AGENT_DM: false } }),
+        grant_id: None,
+        grant_rev: None,
+        cause: Cause::Reconcile,
+        after_subject: None,
+    }])
 }
 
 /// A new Sew install: K2 hasn't read its policy yet.
@@ -170,6 +234,32 @@ pub fn forget(conn: &Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// HP-31: with Sew's flag, K2 sets `agents.dm_with_box_people` false once
+    /// it has read the policy, and stops once Sew shows false. Without the
+    /// flag nothing is sent. `agents.allowed_in_dms` is never in the body.
+    #[test]
+    fn agent_dm_policy_is_set_false_only_with_the_flag() {
+        let c = Connection::open_in_memory().unwrap();
+        ensure_schema(&c).unwrap();
+        features::ensure_schema(&c).unwrap();
+        let busy = std::collections::HashSet::new();
+        note_agent_dm(&c, None, 1).unwrap();
+        assert!(plan_agent_dm(&c, &busy).unwrap().is_empty(), "no flag: nothing");
+        features::note(&c, CHAT_KIND, &[features::AGENTS_DM_WITH_BOX_PEOPLE.to_string()], 2).unwrap();
+        let ops = plan_agent_dm(&c, &busy).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload, json!({"changes": {"agents.dm_with_box_people": false}}));
+        assert!(!ops[0].payload.to_string().contains("allowed_in_dms"));
+        let busy_now: std::collections::HashSet<String> = [SUBJECT_AGENT_DM.to_string()].into();
+        assert!(plan_agent_dm(&c, &busy_now).unwrap().is_empty(), "one row at a time");
+        note_agent_dm(&c, agent_dm_in(&json!({"policies": {"agents.dm_with_box_people": true}})).as_ref(), 3).unwrap();
+        assert_eq!(plan_agent_dm(&c, &busy).unwrap().len(), 1, "true: set again");
+        note_agent_dm(&c, agent_dm_in(&json!({"policies": {"agents.dm_with_box_people": false}})).as_ref(), 4).unwrap();
+        assert!(plan_agent_dm(&c, &busy).unwrap().is_empty(), "false: done");
+        forget(&c).unwrap();
+        assert!(plan_agent_dm(&c, &busy).unwrap().is_empty(), "a new install: read first");
+    }
 
     #[test]
     fn k2s_set_is_compared_as_a_set() {

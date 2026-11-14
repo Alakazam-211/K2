@@ -514,6 +514,15 @@ pub struct AppSettings {
     /// created and nothing changes.
     #[serde(default)]
     pub voice_rooms_preview: bool,
+    /// People and channels on Home (prd-home-people-channels-v1 §14.5,
+    /// HP-1): the `/cli/home-chat/*` routes, the daemon's held person
+    /// sessions and the `home-chat-v1` feature. It also brings the K5 Space
+    /// up without the voice rooms preview (voice rooms still wait for that).
+    /// Persisted mirror of `K2_HOME_CHAT`; [`crate::home_chat::enabled`] is
+    /// true when EITHER is set. Owner only. Default MUST stay OFF while it
+    /// is being built.
+    #[serde(default)]
+    pub home_chat: bool,
     /// Board files preview (prd-board-tab-v1): the `/cli/board/file/*` routes
     /// and the `board-file-v1` feature. Owner only, off by default. Dogfood
     /// only: it doesn't turn on for customers until held edits survive a restart.
@@ -1293,6 +1302,7 @@ impl Default for AppSettings {
             usage_single_record: false,
             ci_preview: false,
             voice_rooms_preview: false,
+            home_chat: false,
             board_file_preview: false,
             setup_checklist: false,
             kessel_first_run: false,

@@ -53,7 +53,9 @@ fn space_name() -> String {
 /// the default-Space switch. `None` with the preview off (nothing is
 /// created and nothing changes).
 pub fn prepare() -> Result<Option<Facts>, String> {
-    if !k2_core::voice_preview::enabled() {
+    // HP-1: Home chat brings the K5 Space up too (rooms still wait for the
+    // voice rooms preview).
+    if !k2_core::home_chat::k5_space_wanted() {
         return Ok(None);
     }
     let connect = Facts::load_connect()?;
@@ -85,6 +87,7 @@ pub fn prepare() -> Result<Option<Facts>, String> {
     };
     Ok(Some(Facts {
         enabled: true,
+        rooms: k2_core::voice_preview::enabled(),
         name: space_name(),
         hosting: hosting_now(),
         count: k2_core::app_settings::load().voice_rooms_count,

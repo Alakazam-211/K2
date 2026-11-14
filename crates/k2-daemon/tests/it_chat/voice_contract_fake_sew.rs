@@ -129,6 +129,7 @@ async fn sw1_create_once_then_server_space_exists_names_it() {
         private: false,
         kind: Some(sew_wire::CHANNEL_TYPE_VOICE.into()),
         members: vec![],
+        members_can_leave: None,
     };
     let r = env.post(sew_wire::MGMT_CHANNELS_CREATE, serde_json::to_value(&body).unwrap()).await;
     let c: sew_wire::ChannelCreateResponse = serde_json::from_str(&r.body_text()).unwrap_or_else(|e| panic!("{e}: {}", r.body_text()));
@@ -219,7 +220,7 @@ async fn sw1_members_and_levels_box_users_and_agents_only() {
     let r = env
         .post(
             &sew_wire::member_channels_path(&id, &ext),
-            serde_json::to_value(sew_wire::ServerMemberChannelsRequest { channel_ids: vec![], level: "moderator".into() }).unwrap(),
+            serde_json::to_value(sew_wire::ServerMemberChannelsRequest { channel_ids: Some(vec![]), level: "moderator".into() }).unwrap(),
         )
         .await;
     assert_eq!(r.status, 200, "{}", r.body_text());

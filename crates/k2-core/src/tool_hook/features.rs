@@ -87,6 +87,71 @@ pub const RECORDING_REQUIRED: &str = "recording_required";
 /// `spaces/{id}/recordings`) and the App feed (`apps/{id}/recordings/changes`).
 pub const MGMT_RECORDING_READS: &str = "mgmt_recording_reads";
 
+// ── Sew 0.10.0 (people and channels on Home, HOME1) ───────────────────
+
+/// mgmt `POST /mgmt/v1/channels/{id}/members/add` and `/members/remove`, by
+/// external id. Without it K2 sends the person's whole private-channel list
+/// with their level (the full-list sync).
+pub const CHANNEL_MEMBER_ADD_REMOVE: &str = "channel_member_add_remove";
+/// `members_can_leave` on mgmt channel create. K2 sets it on every Home
+/// channel; K2's own Leave removes over mgmt either way.
+pub const CHANNEL_MEMBERS_CAN_LEAVE: &str = "channel_members_can_leave";
+/// `POST /api/v1/channels/{id}/typing` (a person's session; act-as too).
+/// Without it a person's typing goes as gateway op 10.
+pub const HTTP_TYPING: &str = "http_typing";
+/// `ReadState.unread_count` (capped at 99 = "99+"). Without it a channel
+/// shows a dot and a DM its `mention_count`.
+pub const READ_STATE_UNREAD_COUNT: &str = "read_state_unread_count";
+/// The member-channels sync takes a level alone: `channel_ids` absent keeps
+/// the person's list. Without it every level change carries the full list
+/// (`[]` would remove the person from every private channel).
+pub const MEMBER_CHANNELS_LEVEL_ONLY: &str = "member_channels_level_only";
+/// The install policy `agents.dm_with_box_people`: when K2 sets it false,
+/// Sew refuses opening a new DM between an agent and a box person. K2's own
+/// `dm_not_for_agents` refusal holds with or without it.
+pub const AGENTS_DM_WITH_BOX_PEOPLE: &str = "agents_dm_with_box_people";
+
+/// Sew 0.10.0's Home flags, read together from ONE feature list (like
+/// [`VoiceFeatures`]). Each Home chat path turns on from its field here,
+/// never from a version.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeChatFeatures {
+    /// [`CHANNEL_MEMBER_ADD_REMOVE`].
+    pub channel_member_add_remove: bool,
+    /// [`CHANNEL_MEMBERS_CAN_LEAVE`].
+    pub channel_members_can_leave: bool,
+    /// [`HTTP_TYPING`].
+    pub http_typing: bool,
+    /// [`READ_STATE_UNREAD_COUNT`].
+    pub read_state_unread_count: bool,
+    /// [`MEMBER_CHANNELS_LEVEL_ONLY`].
+    pub member_channels_level_only: bool,
+    /// [`AGENTS_DM_WITH_BOX_PEOPLE`].
+    pub agents_dm_with_box_people: bool,
+}
+
+impl HomeChatFeatures {
+    /// From a feature list as Sew reported it (any order; unknown flags
+    /// ignored).
+    pub fn from_flags<S: AsRef<str>>(flags: &[S]) -> HomeChatFeatures {
+        let has = |f: &str| flags.iter().any(|x| x.as_ref() == f);
+        HomeChatFeatures {
+            channel_member_add_remove: has(CHANNEL_MEMBER_ADD_REMOVE),
+            channel_members_can_leave: has(CHANNEL_MEMBERS_CAN_LEAVE),
+            http_typing: has(HTTP_TYPING),
+            read_state_unread_count: has(READ_STATE_UNREAD_COUNT),
+            member_channels_level_only: has(MEMBER_CHANNELS_LEVEL_ONLY),
+            agents_dm_with_box_people: has(AGENTS_DM_WITH_BOX_PEOPLE),
+        }
+    }
+
+    /// From the list the last status refresh recorded for `kind` (one read).
+    pub fn read(conn: &Connection, kind: &str) -> Result<HomeChatFeatures, String> {
+        Ok(HomeChatFeatures::from_flags(&list(conn, kind)?))
+    }
+}
+
 /// Sew 0.9.0's four recording flags, read together from ONE feature list
 /// (like [`VoiceFeatures`]). Gates read these fields, never versions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]

@@ -2963,13 +2963,20 @@ fn server_member_channels_one(s: &mut State, path: &str, body: &str) -> (u16, St
         Ok(r) => r,
         Err(e) => return bad_body(s, "member channels (server)", e, body),
     };
-    if req.channel_ids.len() > sew_wire::MEMBER_CHANNELS_MAX {
+    // Sew 0.10.0 HOME1: `channel_ids` may be left out (level only) once
+    // Sew reports `member_channels_level_only`; before it, left out is 400.
+    let ids: Vec<String> = match req.channel_ids {
+        Some(ids) => ids,
+        None if has_flag(s, "member_channels_level_only") => Vec::new(),
+        None => return bad_body(s, "member channels (server)", "channel_ids is required", body),
+    };
+    if ids.len() > sew_wire::MEMBER_CHANNELS_MAX {
         return bad_body(s, "member channels (server)", "channel_ids ≤ 5000", body);
     }
     if let Err(e) = require_server_space(s, space) {
         return e;
     }
-    match server_member_item(s, space, &ext, &req.channel_ids, &req.level) {
+    match server_member_item(s, space, &ext, &ids, &req.level) {
         Ok(v) => (200, v.to_string()),
         Err((st, code, reason, field)) => err(st, code, "refused", json!({"reason": reason, "field": field})),
     }

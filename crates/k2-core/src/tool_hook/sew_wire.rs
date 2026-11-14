@@ -1207,12 +1207,19 @@ pub const LEVEL_MODERATOR: &str = "moderator";
 pub const SERVER_LEVELS: [&str; 2] = [LEVEL_MEMBER, LEVEL_MODERATOR];
 
 /// SW-1 single level sync in a `server` Space: I4's body with `app_id`
-/// omitted (`POST /mgmt/v1/spaces/{id}/members/{ext}/channels`). The
-/// Admin Space has no private channels, so K2 sends `channel_ids: []`.
+/// omitted (`POST /mgmt/v1/spaces/{id}/members/{ext}/channels`).
+///
+/// `channel_ids` is the person's WHOLE private-channel list: `[]` removes
+/// them from every private channel in the Space (Sew, HP-3). So a level
+/// change carries K2's ledger list (`Some`), and once Sew reports
+/// `member_channels_level_only` it carries none (`None`: absent on the
+/// wire, the list is kept). K2 never sends `[]` for a level change of a
+/// person in a private channel ([`super::admin_channels`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerMemberChannelsRequest {
-    pub channel_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_ids: Option<Vec<String>>,
     pub level: String,
 }
 
@@ -1251,6 +1258,37 @@ pub struct ServerChannelCreateRequest {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<String>,
+    /// Sew 0.10.0 (`channel_members_can_leave`): members may leave this
+    /// channel from Sew's own apps. Sent only with the flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members_can_leave: Option<bool>,
+}
+
+/// Sew 0.10.0 (`channel_member_add_remove`): `POST
+/// /mgmt/v1/channels/{id}/members/add`, by external id [unverified: the
+/// field names follow Sew's other mgmt member calls until 0.10.0's
+/// sew-proto is diffed].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelMembersAddRequest {
+    pub external_ids: Vec<String>,
+}
+
+/// Sew 0.10.0: `POST /mgmt/v1/channels/{id}/members/remove`, by external id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelMemberRemoveRequest {
+    pub external_id: String,
+}
+
+/// `POST /mgmt/v1/channels/{id}/members/add`.
+pub fn channel_members_add_path(channel_id: &str) -> String {
+    format!("/mgmt/v1/channels/{}/members/add", pct_path(channel_id))
+}
+
+/// `POST /mgmt/v1/channels/{id}/members/remove`.
+pub fn channel_members_remove_path(channel_id: &str) -> String {
+    format!("/mgmt/v1/channels/{}/members/remove", pct_path(channel_id))
 }
 
 /// I6 op kinds K2 sends for rooms.
@@ -2164,14 +2202,20 @@ mod tests {
             private: false,
             kind: Some(CHANNEL_TYPE_VOICE.into()),
             members: vec![],
+            members_can_leave: None,
         };
         assert_eq!(
             serde_json::to_value(&create).unwrap(),
             serde_json::json!({"space_id": "77", "slug": "room-1", "name": "Room 1", "private": false, "type": "voice"})
         );
 
-        let lv = ServerMemberChannelsRequest { channel_ids: vec![], level: LEVEL_MODERATOR.into() };
-        assert_eq!(serde_json::to_value(&lv).unwrap(), serde_json::json!({"channel_ids": [], "level": "moderator"}));
+        let lv = ServerMemberChannelsRequest { channel_ids: Some(vec!["9".into()]), level: LEVEL_MODERATOR.into() };
+        assert_eq!(serde_json::to_value(&lv).unwrap(), serde_json::json!({"channel_ids": ["9"], "level": "moderator"}));
+        // HOME1 level only: `channel_ids` absent on the wire, never `[]`.
+        let only = ServerMemberChannelsRequest { channel_ids: None, level: LEVEL_MEMBER.into() };
+        assert_eq!(serde_json::to_value(&only).unwrap(), serde_json::json!({"level": "member"}));
+        let parsed: ServerMemberChannelsRequest = serde_json::from_str(r#"{"level":"member"}"#).unwrap();
+        assert_eq!(parsed.channel_ids, None);
         assert!(serde_json::from_str::<ServerMemberChannelsRequest>(r#"{"app_id":"a","channel_ids":[],"level":"member"}"#).is_err());
         let bulk = ServerMemberChannelsBulkRequest {
             items: vec![MemberChannelsItem { external_id: ExternalId::K2Owner, channel_ids: vec![], level: LEVEL_MODERATOR.into() }],

@@ -34,9 +34,11 @@
 //! closing (`admin:room:<channel id>`, after the rooms queue).
 //!
 //! **Dark by default.** [`plan`] does nothing unless the voice rooms
-//! preview is on ([`crate::voice_preview::enabled`]), the chat target is
-//! enabled, and Sew reports `server_governed_space` (and, for rooms,
-//! `voice_channel_closing`).
+//! preview or Home chat is on ([`crate::home_chat::k5_space_wanted`],
+//! HP-1), the chat target is enabled, and Sew reports
+//! `server_governed_space`. Rooms also need the voice rooms preview itself
+//! and `voice_channel_closing`. Home channels ride the same plan
+//! ([`super::admin_channels`]).
 //!
 //! Tables live in `skin.db` (idempotent DDL like `tool_outbox`), so this
 //! needs no main-DB migration.
@@ -67,7 +69,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::features::VoiceFeatures;
+use super::admin_channels;
+use super::features::{HomeChatFeatures, VoiceFeatures};
 use super::sew_wire::{
     self, channel_ops, ChannelClosingRequest, ChannelOp, ChannelsBulkResponse, ExternalId,
     ServerChannelsBulkRequest, ServerMemberChannelsRequest, ServerSpaceCreateRequest,
@@ -209,7 +212,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
                 .map_err(|e| format!("admin space column {col}: {e}"))?;
         }
     }
-    Ok(())
+    // Home channels (prd-home-people-channels-v1 §7.4) ride this Space.
+    admin_channels::ensure_schema(conn)
 }
 
 // ── facts from outside skin.db ───────────────────────────────────────
@@ -228,8 +232,11 @@ pub struct ConnectPerson {
 /// What the sweep knows from outside skin.db (read before the skin lock).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facts {
-    /// [`crate::voice_preview::enabled`].
+    /// [`crate::home_chat::k5_space_wanted`]: the voice rooms preview or
+    /// Home chat (HP-1).
     pub enabled: bool,
+    /// [`crate::voice_preview::enabled`]: rooms are planned only with it.
+    pub rooms: bool,
     /// The Space's name: the server's display name, else its label.
     pub name: String,
     pub hosting: Hosting,
@@ -464,6 +471,8 @@ pub struct Summary {
     /// `voice_channel_closing`). `tier_unknown`: no plan reading yet, so the
     /// rooms were left as they are.
     pub rooms_dormant: Option<String>,
+    /// Home channels' ops ([`admin_channels::plan`]).
+    pub home: admin_channels::Summary,
 }
 
 fn enabled_chat_grant(conn: &Connection, subject_kind: &str, subject_id: &str) -> Result<bool, String> {
@@ -511,8 +520,11 @@ fn op(o: Op, subject: String, payload: Value, after: Option<String>) -> NewOp {
     }
 }
 
-fn level_op(space: &str, ext: &str, level: &str) -> Result<NewOp, String> {
-    let body = ServerMemberChannelsRequest { channel_ids: Vec::new(), level: level.to_string() };
+/// A level sync for `ext`. HP-3: it carries the person's whole private
+/// channel list from K2's ledger (Sew's `[]` would remove them from every
+/// private channel), or no list once Sew takes a level alone.
+fn level_op(conn: &Connection, flags: &HomeChatFeatures, space: &str, ext: &str, level: &str) -> Result<NewOp, String> {
+    let body: ServerMemberChannelsRequest = admin_channels::level_body(conn, flags, ext, level)?;
     Ok(op(Op::AdminMemberLevel, member_subject(space, ext), serde_json::to_value(body).map_err(|e| e.to_string())?, None))
 }
 
@@ -566,8 +578,17 @@ pub fn plan(conn: &Connection, facts: &Facts, busy: &HashSet<String>, now: i64) 
             return Ok((out, s));
         }
     };
-    plan_members(conn, facts, &space_id, busy, now, &mut out, &mut s)?;
-    plan_rooms(conn, facts, &flags, &space_id, busy, now, &mut out, &mut s)?;
+    let home = HomeChatFeatures::read(conn, CHAT_KIND)?;
+    plan_members(conn, facts, &home, &space_id, busy, now, &mut out, &mut s)?;
+    let levels = desired_members(conn, facts)?;
+    s.home = admin_channels::plan(conn, &space_id, &home, &levels, busy, now, &mut out)?;
+    if facts.rooms {
+        plan_rooms(conn, facts, &flags, &space_id, busy, now, &mut out, &mut s)?;
+    } else {
+        // Home chat alone: rooms wait for the voice rooms preview, and the
+        // ones there are left as they are.
+        s.rooms_dormant = Some("preview_off".into());
+    }
     Ok((out, s))
 }
 
@@ -581,9 +602,11 @@ fn space_name(name: &str) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_members(
     conn: &Connection,
     facts: &Facts,
+    home: &HomeChatFeatures,
     space: &str,
     busy: &HashSet<String>,
     now: i64,
@@ -613,12 +636,12 @@ fn plan_members(
                 external_ids: vec![ExternalId::parse(ext)?],
             };
             out.push(op(Op::AdminMemberAdd, subject.clone(), serde_json::to_value(body).map_err(|e| e.to_string())?, Some(ext.clone())));
-            out.push(level_op(space, ext, level)?);
+            out.push(level_op(conn, home, space, ext, level)?);
             put_member(conn, ext, PENDING_ADD, None, Some(level), now)?;
             s.adds += 1;
             s.levels += 1;
         } else if row.and_then(|r| r.level.as_deref()) != Some(*level) {
-            out.push(level_op(space, ext, level)?);
+            out.push(level_op(conn, home, space, ext, level)?);
             conn.execute(
                 "UPDATE tool_admin_members SET want_level = ?2, updated_at = ?3 WHERE external_id = ?1",
                 params![ext, level, now],
@@ -1092,7 +1115,7 @@ fn relink(conn: &Connection, old_space: &str, now: i64) -> Result<(), String> {
     )
     .map_err(|e| format!("admin rooms relink: {e}"))?;
     conn.execute("DELETE FROM tool_admin_members", []).map_err(|e| format!("admin members relink: {e}"))?;
-    Ok(())
+    admin_channels::relink(conn, &why, now)
 }
 
 /// A purge or a new Sew install: the Space K2 holds is checked before

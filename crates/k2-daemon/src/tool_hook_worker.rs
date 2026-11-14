@@ -466,6 +466,11 @@ fn path_for(op: Op) -> &'static str {
         Op::AdminMemberLevel => "/mgmt/v1/spaces/{space_id}/members/{external_id}/channels",
         Op::AdminRooms => sew_wire::MGMT_CHANNELS_BULK,
         Op::AdminRoomClosing => "/mgmt/v1/channels/{channel_id}/closing",
+        // Home chat: the channel id is in the row ([`hook::admin_channels::wire`]).
+        Op::AdminChannelCreate => sew_wire::MGMT_CHANNELS_CREATE,
+        Op::AdminChannelOps => sew_wire::MGMT_CHANNELS_BULK,
+        Op::AdminChannelMemberAdd => "/mgmt/v1/channels/{channel_id}/members/add",
+        Op::AdminChannelMemberRemove => "/mgmt/v1/channels/{channel_id}/members/remove",
     }
 }
 
@@ -934,6 +939,16 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                         continue;
                     }
                 }
+            } else if let Some(w) = hook::admin_channels::wire(op, &row.payload_raw) {
+                // Home chat: the row keeps the channel id beside Sew's body.
+                match w {
+                    Ok((path, body)) => client.post(&path, &body, &row.idem_key, &row.actor).await,
+                    Err(e) => {
+                        let id = row.id.clone();
+                        blocking(move || hook::record_blocked(&id, None, &e)).await?;
+                        continue;
+                    }
+                }
             } else {
                 let path = hook::home::path_for(op, &row.subject_key)
                     .or_else(|| hook::admin_space::path_for(op, &row.subject_key))
@@ -1187,10 +1202,16 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
     // policies K2 keeps in step with what a person asked for.
     let managed = status.features.iter().any(|f| f == hook::features::K2_MANAGED_AVATAR);
     let recording = status.features.iter().any(|f| f == hook::features::APP_RECORDING);
+    // Sew 0.10.0: K2 sets `agents.dm_with_box_people` false (HP-31).
+    let agent_dm = status.features.iter().any(|f| f == hook::features::AGENTS_DM_WITH_BOX_PEOPLE);
     let mut recording_policies: Option<Value> = None;
-    let policy_read = if managed || recording {
+    let mut agent_dm_policies: Option<Value> = None;
+    let policy_read = if managed || recording || agent_dm {
         match policy_read(client).await {
             Ok((v, body)) => {
+                if agent_dm {
+                    agent_dm_policies = Some(body.clone());
+                }
                 if recording {
                     recording_policies = Some(body);
                 }
@@ -1224,6 +1245,11 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         // Decision 13: each chat App's signalling origin, then the settings
         // Sew's feature flags say it takes (never by version).
         crate::sew::home::refresh_origins();
+        if let Some(body) = &agent_dm_policies {
+            if let Err(e) = hook::note_agent_dm_policy(body) {
+                log_debug!("[home-chat] agent DM policy: {e}");
+            }
+        }
         if let Some(body) = &recording_policies {
             if let Err(e) = hook::note_recording_policies(body) {
                 log_debug!("[recording] policies: {e}");

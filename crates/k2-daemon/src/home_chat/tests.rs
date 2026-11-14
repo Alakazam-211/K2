@@ -32,6 +32,12 @@ struct FakeApi {
     calls: Mutex<Vec<(String, String, Option<String>, Value)>>,
     /// Path → (status, body) overrides.
     answers: Mutex<HashMap<String, (u16, Value)>>,
+    /// `Idempotency-Key` of every keyed POST, in order.
+    keys: Mutex<Vec<String>>,
+    /// The next keyed POST fails like a dropped connection (after it is recorded).
+    net_fail_once: std::sync::atomic::AtomicBool,
+    /// Each renew takes this long (to race two renews).
+    renew_delay_ms: std::sync::atomic::AtomicU64,
 }
 
 impl FakeApi {
@@ -62,6 +68,15 @@ impl SewApi for FakeApi {
     }
     fn get(&self, bearer: Option<&str>, path: &str) -> Result<SewAnswer, String> {
         Ok(self.reply("GET", bearer, path, &Value::Null))
+    }
+    fn post_keyed(&self, bearer: Option<&str>, path: &str, body: &Value, key: &str) -> Result<SewAnswer, String> {
+        self.keys.lock().unwrap().push(key.to_string());
+        std::thread::sleep(Duration::from_millis(self.renew_delay_ms.load(Ordering::SeqCst)));
+        if self.net_fail_once.swap(false, Ordering::SeqCst) {
+            self.calls.lock().unwrap().push(("POST".into(), path.into(), bearer.map(str::to_string), body.clone()));
+            return Err("connection reset".into());
+        }
+        Ok(self.reply("POST", bearer, path, body))
     }
 }
 
@@ -285,4 +300,57 @@ fn home_chat_rows_are_on_the_voice_chat_allowlist() {
     for p in routes::GET_ROUTES.iter().chain([&routes::EVENTS]) {
         assert!(VOICE_CHAT_ALLOWLIST.contains(&("GET", *p)), "{p}");
     }
+}
+
+/// Sew's renew contract: Bearer the current token and a fresh pass with the
+/// SAME sid as the opening pass; the new token is used at once; two renews
+/// at the same time make one call; a retry after a network error sends the
+/// same Idempotency-Key; any 401 from renew falls back to `/auth/k2`.
+#[test]
+fn renew_follows_sews_contract() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    let api = Arc::new(FakeApi::default());
+    set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    // No runtime here: hold() starts no follower, so only these calls renew.
+    let h = follower::hold(ALEX);
+    assert_eq!(h.token().unwrap(), "sews_first.x");
+    let now = super::now_secs();
+
+    // Two renews race (each Sew call takes 200 ms): one call, one answer.
+    api.renew_delay_ms.store(200, Ordering::SeqCst);
+    let (a, b) = (h.clone(), h.clone());
+    let t1 = std::thread::spawn(move || a.renew_now(now));
+    let t2 = std::thread::spawn(move || b.renew_now(now));
+    let (r1, r2) = (t1.join().unwrap().unwrap(), t2.join().unwrap().unwrap());
+    assert_eq!((r1.as_str(), r2.as_str()), ("sews_renewed.x", "sews_renewed.x"));
+    let renews = api.calls_to(super::sessions::AUTH_RENEW);
+    assert_eq!(renews.len(), 1, "single-flighted: {renews:?}");
+    assert_eq!(renews[0].0.as_deref(), Some("sews_first.x"), "Bearer the current token");
+    assert_eq!(h.token().unwrap(), "sews_renewed.x", "the new token is used straight away");
+    let opening = api.calls_to(super::sessions::AUTH_K2)[0].1["pass"].as_str().unwrap().to_string();
+    let renewing = renews[0].1["pass"].as_str().unwrap().to_string();
+    assert_eq!(opening, renewing, "the same sub and sid as the opening pass (the fake pass names both)");
+    assert!(renewing.contains(":hc_"), "{renewing}");
+    api.renew_delay_ms.store(0, Ordering::SeqCst);
+
+    // A network error: the retry carries the same key (and the same pass).
+    api.keys.lock().unwrap().clear();
+    api.net_fail_once.store(true, Ordering::SeqCst);
+    h.renew_now(now).expect("the retry succeeds");
+    let keys = api.keys.lock().unwrap().clone();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert_eq!(keys[0], keys[1], "same Idempotency-Key on the retry");
+    assert!(keys[0].starts_with("k2hc-renew-"));
+    let tries = api.calls_to(super::sessions::AUTH_RENEW);
+    assert_eq!(tries[tries.len() - 1].1, tries[tries.len() - 2].1, "same body on the retry");
+
+    // Any 401 from renew: a fresh /auth/k2.
+    api.answer(super::sessions::AUTH_RENEW, 401, json!({"error": {"code": "session_expired"}}));
+    let signins = api.calls_to(super::sessions::AUTH_K2).len();
+    assert_eq!(h.renew_now(now).unwrap(), "sews_first.x", "signed in again");
+    assert_eq!(api.calls_to(super::sessions::AUTH_K2).len(), signins + 1);
+    assert_eq!(h.token().unwrap(), "sews_first.x");
+    follower::release_all();
+    set_deps(None);
 }

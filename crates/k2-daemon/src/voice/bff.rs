@@ -274,6 +274,13 @@ pub trait SewApi: Send + Sync {
         let _ = bearer;
         Err(format!("{path}: this Sew client sends no GET"))
     }
+    /// POST with an `Idempotency-Key` (Home chat's session renew: a retry
+    /// after a network error sends the same key and gets the same answer).
+    /// A fake that never renews answers this.
+    fn post_keyed(&self, bearer: Option<&str>, path: &str, body: &Value, idempotency_key: &str) -> Result<SewAnswer, String> {
+        let _ = (bearer, body, idempotency_key);
+        Err(format!("{path}: this Sew client sends no keyed POST"))
+    }
 }
 
 /// The real client: Sew's loopback client listener (`sew::ops::client_addr`).
@@ -317,6 +324,20 @@ impl SewApi for HttpSew {
     fn post(&self, bearer: Option<&str>, path: &str, body: &Value) -> Result<SewAnswer, String> {
         let url = format!("http://{}{path}", crate::sew::ops::client_addr());
         let mut req = http()?.post(&url).header("content-type", "application/json").body(body.to_string());
+        if let Some(b) = bearer {
+            req = req.bearer_auth(b);
+        }
+        let r = req.send().map_err(|e| format!("{path}: {e}"))?;
+        answer_of(path, r)
+    }
+
+    fn post_keyed(&self, bearer: Option<&str>, path: &str, body: &Value, idempotency_key: &str) -> Result<SewAnswer, String> {
+        let url = format!("http://{}{path}", crate::sew::ops::client_addr());
+        let mut req = http()?
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("idempotency-key", idempotency_key)
+            .body(body.to_string());
         if let Some(b) = bearer {
             req = req.bearer_auth(b);
         }

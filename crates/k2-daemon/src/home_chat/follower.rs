@@ -63,6 +63,8 @@ pub struct Held {
     pub ext: String,
     pub state: Mutex<PersonState>,
     pub session: Mutex<Option<Session>>,
+    /// One renew at a time for this person (Sew renews a session once).
+    renewing: Mutex<()>,
     /// `connecting` | `live` | `unavailable`.
     pub status: Mutex<&'static str>,
     /// Frames for the person's client sockets.
@@ -81,6 +83,7 @@ impl Held {
             ext: ext.to_string(),
             state: Mutex::new(PersonState::default()),
             session: Mutex::new(None),
+            renewing: Mutex::new(()),
             status: Mutex::new("connecting"),
             events: broadcast::channel(256).0,
             out: Mutex::new(None),
@@ -120,6 +123,36 @@ impl Held {
                 st.me = s.member_id.clone();
             }
         }
+        *self.session.lock().unwrap_or_else(|p| p.into_inner()) = Some(s);
+        Ok(t)
+    }
+
+    /// Renew the held session now (blocking) and switch to the new token at
+    /// once; returns it. Single-flighted: a caller that waited while another
+    /// renewed the same session gets that result and never renews it again.
+    /// Any 401 from Sew's renew falls back to a fresh sign-in.
+    pub fn renew_now(&self, now: i64) -> Result<String, Refusal> {
+        let cur = self
+            .session
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .ok_or_else(|| sessions::unavailable("no session to renew"))?;
+        let _one = self.renewing.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(s) = self.session.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            if s.token != cur.token {
+                return Ok(s.token.clone());
+            }
+        }
+        let s = match sessions::renew(&self.ext, &cur, now, &sessions::renew_key()) {
+            Ok(s) => s,
+            Err(r) if r.status == 401 => {
+                k2_core::log_debug!("[home-chat] {}: renew answered 401 {}; signing in again", self.ext, r.code);
+                sessions::sign_in(&self.ext, now)?
+            }
+            Err(r) => return Err(r),
+        };
+        let t = s.token.clone();
         *self.session.lock().unwrap_or_else(|p| p.into_inner()) = Some(s);
         Ok(t)
     }
@@ -495,11 +528,9 @@ async fn connect_once(h: &Arc<Held>, token: &str, resume: bool) -> Ended {
                 if !cur.renew_due(now) || now < renew_after {
                     continue;
                 }
-                let ext = h.ext.clone();
-                match blocking(move || sessions::renew(&ext, &cur, now)).await {
-                    Some(Ok(s)) => {
-                        let t = s.token.clone();
-                        *h.session.lock().unwrap_or_else(|p| p.into_inner()) = Some(s);
+                let h2 = h.clone();
+                match blocking(move || h2.renew_now(now)).await {
+                    Some(Ok(t)) => {
                         // HP-28: the socket keeps going on the renewed login.
                         if write.send(Message::Text(gateway::reauth(&t).to_string())).await.is_err() {
                             break Ended::Again { resume: true };

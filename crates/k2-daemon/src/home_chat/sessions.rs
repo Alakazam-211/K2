@@ -12,12 +12,20 @@
 //! - every mint is audited as `chat-pass`, outcome `home-chat`;
 //! - never person proof (`chat_pass::mint`).
 //!
-//! **Renew (HP-28).** A session lasts an hour. About [`RENEW_BEFORE_SECS`]
-//! before `expires_at` the daemon mints a fresh pass and calls `POST
-//! /api/v1/auth/renew` on the live session; the old token stays good for
-//! 60 s and the follower swaps the new one onto its websocket (op 11
-//! REAUTH), so the socket never drops. A failed renew retries with backoff;
-//! at expiry the daemon signs in again with `auth/k2`.
+//! **Renew (HP-28; Sew's contract).** A session lasts an hour. About
+//! [`RENEW_BEFORE_SECS`] before `expires_at` the daemon mints a fresh pass
+//! (same sub, the same `hc_` sid as the pass that opened the session, no App
+//! claim, no caps) and calls `POST /api/v1/auth/renew` with `Authorization:
+//! Bearer <current token>` and `{"pass"}`. Sew answers a NEW token (the old
+//! one keeps working 60 s): K2 switches to it at once and the follower swaps
+//! it onto its websocket (op 11 REAUTH), so the socket never drops.
+//! - Each session renews once, so renews are single-flighted per person
+//!   ([`super::follower::Held::renew_now`]).
+//! - A retry after a network error sends the same `Idempotency-Key` (and the
+//!   same pass), so it gets the same answer.
+//! - ANY 401 from renew (`session_expired`: renewed already or expired;
+//!   `unauthenticated`: a pass that doesn't match) falls back to a fresh
+//!   `POST /api/v1/auth/k2`.
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -121,16 +129,29 @@ pub fn sign_in(ext: &str, now: i64) -> Result<Session, Refusal> {
     session_of(&a, "", now)
 }
 
-/// Renew `cur` (`POST /api/v1/auth/renew` with a fresh pass, on the live
-/// session). The login continues: same member, new token and expiry.
-pub fn renew(ext: &str, cur: &Session, now: i64) -> Result<Session, Refusal> {
+/// Renew `cur` (`POST /api/v1/auth/renew`, Bearer the current token, a
+/// fresh pass, `Idempotency-Key` `key`). A network error is retried once
+/// with the same key and pass. The login continues: same member, a new
+/// token and expiry. A 401 comes back as is (the caller signs in again).
+pub fn renew(ext: &str, cur: &Session, now: i64, key: &str) -> Result<Session, Refusal> {
     let d = deps();
-    let pass = mint(&d, ext)?;
-    let a = d.sew.post(Some(&cur.token), AUTH_RENEW, &json!({ "pass": pass })).map_err(unavailable)?;
+    let body = json!({ "pass": mint(&d, ext)? });
+    let a = match d.sew.post_keyed(Some(&cur.token), AUTH_RENEW, &body, key) {
+        Ok(a) => a,
+        Err(e) => {
+            k2_core::log_debug!("[home-chat] renew for {ext}: {e}; retrying with the same key");
+            d.sew.post_keyed(Some(&cur.token), AUTH_RENEW, &body, key).map_err(unavailable)?
+        }
+    };
     if !a.ok() {
         return Err(sew_refusal(&a));
     }
     session_of(&a, &cur.member_id, now)
+}
+
+/// A fresh renew's `Idempotency-Key`.
+pub fn renew_key() -> String {
+    format!("k2hc-renew-{}", uuid::Uuid::new_v4().simple())
 }
 
 /// End the held session in Sew (by its sid, through S27's outbox).

@@ -38,7 +38,7 @@ want(sorted(l.get("allow", [])) == sorted([
 want(l.get("confidence-threshold") == 0.93, f"licenses.confidence-threshold = 0.93, got {l.get('confidence-threshold')}")
 # The crate-scoped exceptions the Steward ruled, exactly: no version pins, no others.
 ruled = {
-    "to_method": ["CC0-1.0"], "notify": ["CC0-1.0"], "tiny-keccak": ["CC0-1.0"],
+    "notify": ["CC0-1.0"], "tiny-keccak": ["CC0-1.0"],
     "cssparser": ["MPL-2.0"], "cssparser-macros": ["MPL-2.0"], "selectors": ["MPL-2.0"],
     "dtoa-short": ["MPL-2.0"], "option-ext": ["MPL-2.0"],
 }
@@ -116,6 +116,53 @@ refused "a lock entry without its rev" "Cargo.lock foo 0.1.0: git source not loc
 d="$(fixture newcrate)"
 printf 'cargo build --release --target "$T" -p k2-root-helper\ncargo build --release --target "$T" -p k2-new-worker\n' > "$d/scripts/ci/build-linux-bins.sh"
 refused "a release crate missing from SHIPPED" "builds -p k2-new-worker for release, but it is not in SHIPPED" "$d"
+
+echo "stale licence exceptions (cargo-deny output per tree, stubbed):"
+# The shipped package names, from the script's SHIPPED list.
+pkgs=()
+while IFS= read -r p; do pkgs+=("$p"); done < <(sed -n '/^SHIPPED=(/,/^)/s/^ *"[^:]*:\([^"]*\)"$/\1/p' "$SCRIPT")
+[ "${#pkgs[@]}" = 12 ] && pass "12 shipped trees listed" || fail "shipped list" "got ${#pkgs[@]}: ${pkgs[*]}"
+printf '[licenses]\nallow = ["MIT"]\n\n[[licenses.exceptions]]\ncrate = "alpha"\nallow = ["CC0-1.0"]\n\n[[licenses.exceptions]]\ncrate = "beta"\nallow = ["MPL-2.0"]\n' > "$tmp/deny-ex.toml"
+# One tree output: a license-exception-not-encountered warning per crate named.
+unused_log() {
+    local c
+    for c in "$@"; do
+        printf 'warning[license-exception-not-encountered]: license exception was not encountered\n    ┌─ /job/src/deny.toml:5:10\n    │\n  5 │ crate = "%s"\n    │          ━━━━━ unmatched license exception\n\n' "$c"
+    done
+    echo "advisories ok, bans ok, licenses ok, sources ok"
+}
+stale() {
+    local name="$1" want="$2" rc=0 out
+    out="$(bash "$SCRIPT" stale-exceptions "$tmp/$name" "$tmp/deny-ex.toml" 2>&1)" || rc=$?
+    if [ "$want" = ok ]; then
+        [ "$rc" = 0 ] && pass "$name passes" || fail "$name" "rc=$rc $out"
+    else
+        [ "$rc" = 1 ] && [[ "$out" == *"$want"* ]] && pass "$name refused" || fail "$name not refused" "rc=$rc $out"
+    fi
+}
+# Both used somewhere: alpha unused everywhere but the last tree, beta used only in the first.
+mkdir -p "$tmp/used"
+for i in "${!pkgs[@]}"; do
+    if [ "$i" = 0 ]; then unused_log alpha; elif [ "$i" = 11 ]; then unused_log beta; else unused_log alpha beta; fi > "$tmp/used/${pkgs[$i]}.log"
+done
+stale used ok
+# alpha unused in every tree (beta still used once): alpha is stale, beta is not.
+mkdir -p "$tmp/stale"
+for i in "${!pkgs[@]}"; do
+    if [ "$i" = 3 ]; then unused_log alpha; else unused_log alpha beta; fi > "$tmp/stale/${pkgs[$i]}.log"
+done
+stale stale 'exception for "alpha" is unused in all 12 shipped trees'
+rc=0; out="$(bash "$SCRIPT" stale-exceptions "$tmp/stale" "$tmp/deny-ex.toml" 2>&1)" || rc=$?
+[[ "$out" != *'"beta"'* ]] && pass "an exception one tree uses is not called stale" || fail "beta called stale" "$out"
+# A tree with no output at all can't count as using anything.
+mkdir -p "$tmp/missing"
+cp "$tmp/used/"*.log "$tmp/missing/"
+rm "$tmp/missing/${pkgs[5]}.log"
+stale missing "no cargo-deny output for ${pkgs[5]}"
+# The warning in colour is still read.
+mkdir -p "$tmp/colour"
+for p in "${pkgs[@]}"; do unused_log alpha | sed $'s/crate = /\e[1mcrate\e[0m = /' > "$tmp/colour/$p.log"; done
+stale colour 'exception for "alpha" is unused in all 12 shipped trees'
 
 echo ""
 echo "cargo-deny-policy: $pass passed, $fail failed"

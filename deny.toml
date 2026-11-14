@@ -104,10 +104,14 @@ ignore = [
 # The Kessel licence allowlist. A dual (OR) licence passes when one of its
 # options is here. Anything not here is rejected, including MPL-2.0, GPL,
 # LGPL, CC0, OFL-1.1 and Ubuntu-font-1.0. The crate-scoped exceptions below
-# are the only way past it: CC0-1.0 for to_method, notify and tiny-keccak;
-# MPL-2.0 for cssparser, cssparser-macros, selectors, dtoa-short and
-# option-ext. Each covers that crate only (all versions); any other MPL or
-# CC0 crate is still a finding.
+# are the only way past it: CC0-1.0 for notify and tiny-keccak; MPL-2.0
+# for cssparser, cssparser-macros, selectors, dtoa-short and option-ext.
+# Each covers that crate only (all versions); any other MPL or CC0 crate is
+# still a finding. An exception no shipped tree uses fails the gate
+# (scripts/ci/cargo-deny.sh): remove it rather than let it linger. The
+# CC0-1.0 exception for to_method belongs to the video worker, which K2
+# doesn't ship yet: it stays in that worker's own crate policy and comes
+# back here when the worker lands.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -125,11 +129,6 @@ confidence-threshold = 0.93
 # One policy for twelve crate trees: a licence on the list that one tree
 # doesn't use is expected, not a finding.
 unused-allowed-license = "allow"
-
-# CC0-1.0 for the crate `to_method` only, not globally.
-[[licenses.exceptions]]
-crate = "to_method"
-allow = ["CC0-1.0"]
 
 # Rosson 11-03, Tauri's five; unmodified, source on crates.io
 [[licenses.exceptions]]

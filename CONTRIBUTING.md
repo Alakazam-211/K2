@@ -99,6 +99,7 @@ A feature is a daemon route first. The CLI, the desktop app and the web client a
 2. **Policy row.** Every `/cli/*` route needs a row in the route policy table (`ROUTES` in `crates/k2-daemon/src/routes/route_policy.rs`). The rows live in `crates/k2-daemon/src/routes/policy/`, one file per busy area and `core.rs` for the rest, each sorted by path. A row gives the method and the lowest login role, for example `get("/cli/fs/read-binary", Member)`. A route with no row is refused for logins, and the test `every_cli_route_literal_is_in_the_policy_table` fails.
 3. **Logic.** Put it in `crates/k2-daemon` or `crates/k2-core`, never in `src-tauri/` or the renderer.
 4. **CLI verb.** Add the command to a part under `cli/src/` (a new part is also listed in `cli/src/ORDER`), wire it in `cli/src/router.sh`, then run `bash scripts/build-cli.sh`. Never edit `cli/k2`: the next build undoes it.
+   A new verb also needs its schema entry, which is what `k2 --schema` prints: add it to `cli/src/schema/<noun>.entries` (`build-cli.sh` checks each of those files). The explorer catalog `src/shared/cli-catalog.generated.json` is generated from it by `bash scripts/regen.sh`; never edit it by hand.
 5. **Renderer.** Call the route with `daemonCliGet` or `daemonCliPost` from `src/renderer/lib/daemon-cli.ts` and render the answer. No logic here.
 
 Add a Tauri command in `src-tauri/src/commands/` only for connection or OS work.
@@ -166,8 +167,9 @@ Existing viewers:
 ### Rust
 - Run `cargo fmt` before committing.
 - Run `cargo clippy` and address warnings.
-- Use `Result<T, String>` for Tauri command return types.
-- Follow the existing pattern of `#[tauri::command]` functions in `src-tauri/src/commands/` (connection and OS work only; logic lives in the daemon).
+- A route handler follows the daemon's pattern: the handler sits in its area's `*_routes.rs` file in `crates/k2-daemon/src/`, and the arm in `routes/dispatcher.rs` only matches the path and calls it.
+- A route that changes something answers POST only: call `require_post` (in `routes/http.rs`) before doing the work.
+- Add a `#[tauri::command]` in `src-tauri/src/commands/` only for connection or OS work, and use `Result<T, String>` for its return type.
 
 ### TypeScript
 - Use TypeScript strict mode (see `tsconfig.web.json`).
@@ -179,6 +181,6 @@ Existing viewers:
 
 1. Fork the repo and create a feature branch from `main`.
 2. Make your changes following the code style guidelines above.
-3. Run `cargo fmt`, `cargo clippy`, and `bun run typecheck` before pushing.
+3. Run `cargo fmt`, `cargo clippy`, `cargo test` for the crate you touched (for example `cargo test -p k2-core`; the `k2-daemon` tests run under `cargo nextest run -p k2-daemon`), and `bun run typecheck` before pushing.
 4. Open a PR against `main` with a clear description of what changed and why.
 5. Keep PRs focused -- one feature or fix per PR.

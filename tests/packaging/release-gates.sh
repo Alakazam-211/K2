@@ -135,8 +135,8 @@ done
     && "$(runs ok cargo-linux)" == *"--avoid k2-arch"* ]] && pass "cargo-linux: a Linux x86 node, the pinned Rust, -D warnings, never k2-arch" || fail "cargo-linux" "$(runs ok cargo-linux)"
 [[ "$(runs ok cargo-macos)" == *"--needs rust@1.98.7,cmake@3"* && "$(runs ok cargo-macos)" == *"RUSTFLAGS='-D warnings' cargo check --workspace --all-targets"* \
     && "$(runs ok cargo-macos)" == *"k2_mac_build_env"* && "$(runs ok cargo-macos)" == *"--mem 8G --env CARGO_BUILD_JOBS=1 "* ]] && pass "cargo-macos: the pinned Rust, the mac build env, -D warnings, one crate at a time in 8 GB" || fail "cargo-macos" "$(runs ok cargo-macos)"
-[[ "$(runs ok ratchet)" == *"bash scripts/ci/k2-node-mac-tests.sh check && bash scripts/ci/k2-daemon-mac-tests.sh check && bash scripts/garden/ratchet.sh"* ]] \
-    && pass "ratchet: the two Mac test list checks, then the ratchet, in one job" || fail "ratchet job's command" "$(runs ok ratchet)"
+[[ "$(runs ok ratchet)" == *"bash scripts/ci/k2-node-mac-tests.sh check && bash scripts/ci/k2-daemon-mac-tests.sh check && python3 scripts/garden/zone-gate.py && bash scripts/garden/ratchet.sh"* ]] \
+    && pass "ratchet: the two Mac test list checks, the zone gate, then the ratchet, in one job" || fail "ratchet job's command" "$(runs ok ratchet)"
 printf '%s\n' "$out" | grep -q "Tests  12255 passed | 2 skipped (12257)" && pass "vitest's line shows its test result" || fail "vitest result" "$out"
 printf '%s\n' "$out" | grep -qE "Gates: 6 passed in [0-9]+m[0-9]{2}s wall-clock" && pass "a wall-clock summary" || fail "summary" "$out"
 grep -qE "^k2 (compute run|compute nodes|compute get|compute logs|compute wait|compute --help)" "$tmp/calls-ok" && ! grep -qE "^k2 (msg|thread|release)" "$tmp/calls-ok" \
@@ -204,15 +204,24 @@ mkdir -p "$co/scripts/ci" "$co/scripts/garden"
 for f in ci/k2-node-mac-tests.sh ci/k2-daemon-mac-tests.sh garden/ratchet.sh; do
     printf '#!/usr/bin/env bash\necho "RAN %s $*" >> "$STUB_CALLS"\ncase ",${STUB_BREAK:-}," in *,%s,*) echo "%s: broken" >&2; exit 1 ;; esac\n[ %s = garden/ratchet.sh ] && echo "ratchet: ok."\nexit 0\n' "$f" "$f" "$f" "$f" > "$co/scripts/$f"
 done
+# The zone gate is run with python3, so its stub is Python.
+cat > "$co/scripts/garden/zone-gate.py" <<'PY'
+import os, sys
+me = "garden/zone-gate.py"
+with open(os.environ["STUB_CALLS"], "a") as f:
+    f.write("RAN %s %s\n" % (me, " ".join(sys.argv[1:])))
+if me in os.environ.get("STUB_BREAK", "").split(","):
+    sys.exit(me + ": broken")
+PY
 ran() { grep '^RAN ' "$tmp/calls-$1" | cut -d' ' -f2- | tr '\n' '|' || true; }
 rc="$(lib_run loc-ok 'k2rg_local ratchet')"
-[ "$rc" = 0 ] && [ "$(ran loc-ok)" = "ci/k2-node-mac-tests.sh check|ci/k2-daemon-mac-tests.sh check|garden/ratchet.sh |" ] && grep -q '^ratchet: ok\.$' "$tmp/out-loc-ok" \
-    && pass "all three run, in order, each list script with 'check'" || fail "loc-ok rc=$rc ran=$(ran loc-ok)" "$(cat "$tmp/out-loc-ok")"
-for broken in ci/k2-node-mac-tests.sh ci/k2-daemon-mac-tests.sh; do
+[ "$rc" = 0 ] && [ "$(ran loc-ok)" = "ci/k2-node-mac-tests.sh check|ci/k2-daemon-mac-tests.sh check|garden/zone-gate.py |garden/ratchet.sh |" ] && grep -q '^ratchet: ok\.$' "$tmp/out-loc-ok" \
+    && pass "all four run, in order, each list script with 'check'" || fail "loc-ok rc=$rc ran=$(ran loc-ok)" "$(cat "$tmp/out-loc-ok")"
+for broken in ci/k2-node-mac-tests.sh ci/k2-daemon-mac-tests.sh garden/zone-gate.py; do
     # Called the way a caller with a fallback would: set -e is off inside.
     rc="$(lib_run loc-bad 'rc=0; k2rg_local ratchet || rc=$?; exit "$rc"' STUB_BREAK="$broken")"
     [ "$rc" = 1 ] && ! grep -q 'RAN garden/ratchet.sh' "$tmp/calls-loc-bad" && ! grep -q '^ratchet: ok' "$tmp/out-loc-bad" \
-        && pass "a broken list ($broken) fails the gate before the ratchet, even under ||" || fail "loc-bad $broken rc=$rc ran=$(ran loc-bad)" "$(cat "$tmp/out-loc-bad")"
+        && pass "a failing check ($broken) fails the gate before the ratchet, even under ||" || fail "loc-bad $broken rc=$rc ran=$(ran loc-bad)" "$(cat "$tmp/out-loc-bad")"
 done
 rc="$(lib_run loc-rat 'rc=0; k2rg_local ratchet || rc=$?; exit "$rc"' STUB_BREAK=garden/ratchet.sh)"
 [ "$rc" = 1 ] && pass "a failing ratchet still fails the gate" || fail "loc-rat rc=$rc" "$(cat "$tmp/out-loc-rat")"

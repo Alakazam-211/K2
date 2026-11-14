@@ -51,6 +51,17 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     v["running"] = active.into();
     v["nodeRunning"] = offer.as_ref().map(|o| o.running).into();
     v["nodeQueued"] = serde_json::Value::Null;
+    // The node's room for every server (live offer only): its running
+    // jobs, this server's and other servers' counts, and whether it is
+    // full, so "running 0/3" in this server's share never reads as an idle
+    // node. Counts only: other servers' jobs are never named.
+    v["room"] = match offer.as_ref().filter(|_| online) {
+        Some(o) => {
+            let r = share::node_room(o, active as u32);
+            serde_json::json!({"running": r.running, "parallelMax": o.parallel_max, "thisServer": r.this_server, "otherServers": r.other_servers, "full": r.full, "busy": r.busy()})
+        }
+        None => serde_json::Value::Null,
+    };
     // CE-8: idle CPU beside unreserved CPU ("8 idle, 0 unreserved").
     v["idleCpuMillis"] = idle_cpu_millis(&n.id, offer.as_ref()).into();
     // Protocol 7 (§4.3): what the node is, and its short column
@@ -822,6 +833,21 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
     }))
 }
 
+/// A follower's wait line (an attached `run`, `logs --follow`): a waiting
+/// auto job's line also says why no other node can start it now, in
+/// node-wide numbers (`queue.elsewhere`; the sweeper moves it as soon as
+/// one can). A pinned job's line stays as it is.
+pub(crate) fn with_elsewhere(j: &store::JobRow, q: &mut serde_json::Value) {
+    if j.ctl.any.is_none() || !q.is_object() {
+        return;
+    }
+    let Some(e) = crate::compute_place::why_not::not_now(j, compute::now()).line else { return };
+    if let Some(l) = q.get("line").and_then(|l| l.as_str()).map(str::to_string) {
+        q["line"] = format!("{l} · {e}").into();
+    }
+    q["elsewhere"] = e.into();
+}
+
 /// A node's name for a line (its id when it's gone).
 fn node_name_of(node_id: &str) -> String {
     let db = k2_core::db::shared();
@@ -1281,9 +1307,11 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
         with_queue(who, &j, &mut v, &compute_ws::decision_for(&j.node_id));
     }
     // A waiting auto job: why each other node of its workspace can't start
-    // it now (node full, its grant, room, …), in its move note.
-    if let Some(mv) = v.get_mut("move") {
-        crate::compute_place::why_not::annotate(&j, mv, compute::now());
+    // it now (node full, its grant, room, …), in its move note, and the
+    // one-line summary on its wait (`wait.elsewhere`).
+    let elsewhere = v.get_mut("move").and_then(|mv| crate::compute_place::why_not::annotate(&j, mv, compute::now()));
+    if let Some(wait) = v.get_mut("wait").filter(|w| w.is_object()) {
+        wait["elsewhere"] = elsewhere.into();
     }
     if matches!(j.state.as_str(), "running" | "finishing") {
         v["stall"] = stall_json(&j);

@@ -122,6 +122,9 @@ pub(crate) fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_j
             } else if row.node_queued {
                 out["queue"] = out["job"]["queue"].clone();
             }
+            if let Some(q) = out.get_mut("queue") {
+                crate::compute_views::with_elsewhere(&row, q);
+            }
             return Ok(out);
         }
         compute_ws::wait_change(seen, deadline - now);

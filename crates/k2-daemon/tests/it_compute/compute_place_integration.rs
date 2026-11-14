@@ -740,7 +740,11 @@ async fn a_shared_nodes_other_server_counts_and_a_move_rewrites_the_record() {
         ("s-solo", Some("queued_est_wait"), Some(false), Some(1800)),
         "{first}"
     );
-    assert!(first["why"].as_str().unwrap().starts_with("no node free now; shortest wait ~30 min (estimate)"), "{first}");
+    // Why no node starts it now, in the node's own numbers (the mini is
+    // offline, so only the solo node is named).
+    let why = first["why"].as_str().unwrap();
+    assert!(why.starts_with("no node can start it now (it asks 1G): s-solo (full: "), "{first}");
+    assert!(why.contains("; shortest wait ~30 min (estimate)"), "{first}");
     assert_eq!((row(&auto).state.as_str(), row(&pinned).state.as_str()), ("queued", "queued"));
     compute_ws::test_detach("s-solo");
     let mut back = roomy.clone();
@@ -2099,4 +2103,115 @@ async fn rust_targets_place_only_where_rustup_can_add_them() {
     for n in ["t-new", "t-old", "t-sys"] {
         compute_ws::test_detach(n);
     }
+}
+
+// ── room for every server, and why no other node fits ────────────────
+
+/// A node's offer with `free` of `cpus` CPU millis unreserved and
+/// `running` jobs of 4 slots.
+fn cpu_offer(rev: u64, cpus: u64, free: u64, running: u32) -> Offer {
+    let mut o = offer(rev, 30, 32, running);
+    o.caps.cpu_millis = cpus;
+    o.free.cpu_millis = free;
+    o
+}
+
+/// `k2 compute nodes`: a shared node whose CPUs other servers' jobs
+/// reserve says so for every viewer (all servers' room, whose jobs fill
+/// it, by count only), though this server runs nothing there; a node with
+/// room has no mark.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nodes_show_a_node_full_of_other_servers_jobs() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "room");
+    for n in ["r-shared", "r-solo"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let mut full = cpu_offer(1, 12_000, 0, 3);
+    full.features.push(FEATURE_QUEUE.to_string());
+    full.share = Some(shared_view());
+    let _a = compute_ws::test_attach("r-shared", full);
+    let _b = compute_ws::test_attach("r-solo", cpu_offer(1, 12_000, 12_000, 0));
+    let agent = passport(&me);
+    let r = get(d.port, "/cli/compute/nodes", &agent, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    let node = |name: &str| v["nodes"].as_array().unwrap().iter().find(|n| n["name"] == name).cloned().unwrap_or_else(|| panic!("no {name}: {v}"));
+    let shared = node("r-shared");
+    assert_eq!(
+        shared["room"],
+        json!({"running": 3, "parallelMax": 4, "thisServer": 0, "otherServers": 3, "full": true, "busy": "other_servers"}),
+        "{shared}"
+    );
+    assert_eq!(shared["share"]["line"].as_str().map(|l| l.starts_with("running 0/")), Some(true), "this server's share alone reads empty: {shared}");
+    assert_eq!(shared["mine"]["running"], 0, "{shared}");
+    let solo = node("r-solo");
+    assert_eq!(solo["room"], json!({"running": 0, "parallelMax": 4, "thisServer": 0, "otherServers": 0, "full": false, "busy": null}), "{solo}");
+    // Counts only: no other server's label, job or workspace in the room.
+    let text = shared["room"].to_string();
+    assert!(!text.contains("other.k2.dev"), "{text}");
+    compute_ws::test_detach("r-shared");
+    compute_ws::test_detach("r-solo");
+}
+
+/// An auto job waits on one node for CPUs; its wait names why no other
+/// node fits (that node's own numbers). Then the other node frees, and
+/// only it: the next sweep moves the job there, with nothing new from the
+/// node it waited on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_auto_job_moves_when_another_node_frees_and_says_why_until_then() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "elsewhere");
+    for n in ["e-a", "e-b"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let mut a = compute_ws::test_attach("e-a", cpu_offer(1, 12_000, 4_000, 2));
+    let mut b = compute_ws::test_attach("e-b", cpu_offer(1, 12_000, 0, 3));
+    let agent = passport(&me);
+    let r = run(d.port, &agent, &me, json!({"cpus": 8})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = id_of(&r);
+    let first = node_of(&r);
+    let (other, other_free) = if first == "e-a" { ("e-b", "0/12") } else { ("e-a", "4/12") };
+    assert_eq!(row(&job).state, "queued", "no node has 8 CPUs free");
+    let p = j(&r)["placement"].clone();
+    assert_eq!(p["startsNow"], false, "{p}");
+    // The placement says why no node fits, best first, in their numbers.
+    let why = p["why"].as_str().unwrap();
+    assert!(why.starts_with("no node has 8 free CPUs now: e-a 4/12, e-b 0/12 unreserved; "), "{why}");
+    assert!(why.ends_with("it moves if another frees up first"), "{why}");
+    assert!(assigns(&mut a).is_empty() && assigns(&mut b).is_empty());
+
+    // get: the move note and wait.elsewhere name the other node and why.
+    let g = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
+    assert_eq!(g.status, 200, "{}", g.body);
+    let gv = j(&g);
+    let line = format!("no other node has 8 free CPUs now: {other} {other_free} unreserved");
+    assert_eq!(gv["wait"]["elsewhere"].as_str(), Some(line.as_str()), "{gv}");
+    assert_eq!(gv["move"]["elsewhere"].as_str(), Some(line.as_str()), "{gv}");
+    let note = gv["move"]["note"].as_str().unwrap();
+    assert!(note.starts_with("K2 moves it when another node can start it now; ") && note.contains(&line), "{note}");
+
+    // A sweep with nothing new: it stays.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(row(&job).node_id, first, "nothing freed yet");
+
+    // The other node's jobs end (its offer is the only event): the next
+    // sweep moves the job there, and that node starts it.
+    compute_ws::test_frame(other, Frame::Offer(cpu_offer(2, 12_000, 12_000, 0)));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    let moved = row(&job);
+    assert_eq!(moved.node_id, other, "{moved:?}");
+    let rec = moved.ctl.placement.clone().expect("a record");
+    assert_eq!(rec.code, "moved_node_busy", "{rec:?}");
+    assert!(rec.why.starts_with(&format!("moved from {first}: {other} can start it now")), "{}", rec.why);
+    let (to, from) = if other == "e-a" { (&mut a, &mut b) } else { (&mut b, &mut a) };
+    assert!(assigns(to).contains(&job), "{other} runs it");
+    assert!(assigns(from).is_empty(), "{first} never got it");
+    compute_ws::test_detach("e-a");
+    compute_ws::test_detach("e-b");
 }

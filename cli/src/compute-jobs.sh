@@ -400,10 +400,11 @@ wt = j.get("wait") or {}
 st = j.get("state") or "?"
 key = "%s|%s|%s" % (st, q.get("position"), q.get("waitReason") or q.get("reason"))
 term = st in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown")
+elsewhere = (" · " + wt["elsewhere"]) if wt.get("elsewhere") else ""
 if st == "queued" and q.get("line"):
-    line = "%s %s" % (j.get("short"), q["line"])
+    line = "%s %s%s" % (j.get("short"), q["line"], elsewhere)
 elif st == "queued" and wt.get("words"):
-    line = "%s queued: %s" % (j.get("short"), wt["words"])
+    line = "%s queued: %s%s" % (j.get("short"), wt["words"], elsewhere)
 elif st == "queued" and q:
     line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), j.get("node"), q.get("position"),
         (" of %s" % q["of"]) if q.get("of") else "", q.get("reason"))
@@ -583,17 +584,26 @@ for n in rows:
         parts.append("held: %s (%s)" % (w.get("code"), w.get("message")))
     if st.get("unavailable"):
         parts.append("unavailable: " + ",".join(st["unavailable"]))
-    # 0.46.7 (CE-7): the same counts as `nodes`, and whose they are.
+    # The same counts as `nodes`, and whose they are: runs = the node
+    # itself (jobs of every server); those of other servers only counted.
     mine = n.get("mine") if isinstance(n.get("mine"), dict) else None
-    parts.append("run %d/%s%s" % (len(st.get("running") or []), st.get("parallelMax") if st.get("parallelMax") is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else ""))
-    parts.append("queued %d%s" % (len(st.get("queued") or []), (" (yours %d)" % mine.get("queued", 0)) if mine else ""))
-    if n.get("nodeRunning") is not None and n["nodeRunning"] != len(st.get("running") or []):
-        parts.append("node runs %d%s" % (n["nodeRunning"], (" of %s: full" % st["parallelMax"]) if st.get("parallelMax") and n["nodeRunning"] >= st["parallelMax"] else ""))
+    yours = lambda k: (", yours %d" % mine.get(k, 0)) if mine else ""
+    room = n.get("room") if isinstance(n.get("room"), dict) else None
+    busy = {"other_servers": "busy (other servers)", "servers": "busy (this and other servers)", "this_server": "busy (this server)"}.get((room or {}).get("busy") or "")
+    if busy:
+        parts.append(busy)
+    par = st.get("parallelMax") if st.get("parallelMax") is not None else "?"
+    if room:
+        others = (", other servers %d" % room["otherServers"]) if room.get("otherServers") else ""
+        parts.append("runs %d/%s (this server %d%s%s)" % (room.get("running", 0), par, len(st.get("running") or []), yours("running"), others))
+    else:
+        parts.append("this server runs %d (of %s slots%s)" % (len(st.get("running") or []), par, yours("running")))
+    parts.append("queued %d (this server%s)" % (len(st.get("queued") or []), yours("queued")))
     f, c = st.get("free") or {}, st.get("caps") or {}
     if f:
-        # CE-8: unreserved (not reserved by K2 jobs) beside idle.
+        # CE-8: unreserved (not reserved by K2 jobs of any server) beside idle.
         idle = (" · idle ~%s" % cores(st["idleCpuMillis"])) if st.get("idleCpuMillis") is not None else ""
-        parts.append("cpu %s/%s unreserved%s" % (cores(f.get("cpuMillis")), cores(c.get("cpuMillis")), idle))
+        parts.append("all servers: cpu %s/%s unreserved%s" % (cores(f.get("cpuMillis")), cores(c.get("cpuMillis")), idle))
         parts.append("mem %.1f/%s free" % ((f.get("memBytes") or 0) / (1 << 30), gb(c.get("memBytes"))))
     if st.get("load"):
         parts.append("load " + " ".join("%.1f" % x for x in st["load"]))
@@ -607,7 +617,7 @@ for n in rows:
         parts.append(s)
     print("  ".join(parts))
     if (n.get("share") or {}).get("line"):
-        print("    your share: " + n["share"]["line"])
+        print("    your share (jobs of this server only): " + n["share"]["line"])
     # 0.46.6: the line tag (CI, P, B) and the --why of a Priority job.
     tag = lambda j: ({"ci": "CI ", "priority": "P  ", "batch": "B  "}.get(j.get("tier") or "", ""))
     pwhy = lambda j: ("\n      why: %s%s" % (j["tierWhy"], (" (%s)" % j["submitter"]) if j.get("submitter") else "")) if j.get("tierWhy") else ""

@@ -651,14 +651,25 @@ WHY HASN'T IT STARTED? (0.46.7)
     "your workspace runs 3 of 3 here (its grant)"
         your grant's --max-parallel.
   A message can name more than one of these at once.
-  "unreserved" CPU (k2 compute nodes: cpu 0/12 unreserved · idle ~8) is
-  what running K2 jobs haven't reserved; "idle" is what the OS sees unused.
-  8 idle and 0 unreserved means reserved CPU that isn't busy: smaller
-  --cpus on your jobs lets more run.
-  Counts, whose they are: run 3/3 (yours 2) · queued 2 (yours 1) · node
-  runs 5 = 3 jobs from this server running there (of 3 slots), 2 of them
-  your workspace's; 2 waiting (1 yours); the node runs 5 in all (other
-  servers' jobs too). k2 compute status shows the same numbers.
+  A job K2 placed (no node named) also says why no other node takes it,
+  in each node's own numbers, best first:
+    "no other node has 8 free CPUs now: k2n10 0/12 (other servers' jobs),
+     k2n11 2.4/14.4 unreserved"
+  K2 checks every node every 5 seconds and moves the job to the first one
+  that can start it, whichever node's job ended.
+  "unreserved" CPU (k2 compute nodes: all servers: cpu 0/12 unreserved ·
+  idle ~8) is what running K2 jobs of every server haven't reserved;
+  "idle" is what the OS sees unused. 8 idle and 0 unreserved means
+  reserved CPU that isn't busy: smaller --cpus on your jobs lets more run.
+  Counts, whose they are: runs 5/6 (this server 3, yours 2, other servers
+  2) · queued 2 (this server, yours 1) = the node runs 5 jobs in all (of 6
+  slots): 3 from this server, 2 of them your workspace's, 2 from other
+  servers; this server has 2 waiting there (1 yours). "busy (other
+  servers)" first on the line: the node has no room now and only other
+  servers' jobs fill it (their jobs are counted, never named). A node's
+  "your share (jobs of this server only): running 0/3" counts only this
+  server's jobs, so it never means the node is idle. k2 compute status
+  shows the same numbers.
 
 TIMES (0.46.7)
   startedAt, endedAt and durationSecs are the NODE's own times when its

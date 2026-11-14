@@ -13,7 +13,15 @@
 //!   free says which reason holds it (node full with other servers' jobs,
 //!   this workspace's grant there, too little free memory, …).
 //!
-//! Only granted node names and node-wide numbers, as placement shows (S2).
+//! - "Elsewhere" ([`elsewhere_words`]): one line on why no other node can
+//!   start the job now, in node-wide numbers ("no other node has 8 free
+//!   CPUs now: k2n10 0/12 (other servers' jobs), k2n11 2.4/14.4
+//!   unreserved"), for the placement record, `get` and a follower's wait
+//!   line. The sweeper checks every node on each pass (every 5 s), so the
+//!   job moves as soon as any of them can start it.
+//!
+//! Only granted node names and node-wide numbers, as placement shows (S2);
+//! other servers' jobs only as a count.
 
 use k2_core::compute::proto::refusal;
 use k2_core::compute::share::{self, pending};
@@ -168,18 +176,29 @@ fn first_reason(c: &Cand, w: &Want) -> Option<(&'static str, String)> {
     None
 }
 
+/// Why other nodes can't take a waiting auto job now ([`not_now`]).
+#[derive(Debug, Default)]
+pub struct Elsewhere {
+    /// Each other candidate node and its reason, by name.
+    pub list: Vec<NotNow>,
+    /// The granted nodes placement leaves out (offline, too small, …).
+    pub left_out: Option<String>,
+    /// [`elsewhere_words`] over the other nodes.
+    pub line: Option<String>,
+}
+
 /// Each other node granted to the job's workspace that could take it, and
 /// why it can't start it now (or that it can); then one line for the
-/// granted nodes placement leaves out (offline, too small, …). Empty for
-/// a pinned job or one already moving.
-pub fn not_now(j: &JobRow, now: i64) -> (Vec<NotNow>, Option<String>) {
+/// granted nodes placement leaves out (offline, too small, …), and the
+/// one-line summary. Empty for a pinned job or one already moving.
+pub fn not_now(j: &JobRow, now: i64) -> Elsewhere {
     if j.ctl.any.is_none() || j.reason.as_deref() == Some(pending::WITHDRAW) {
-        return (Vec::new(), None);
+        return Elsewhere::default();
     }
-    let Some(plan) = j.plan() else { return (Vec::new(), None) };
+    let Some(plan) = j.plan() else { return Elsewhere::default() };
     let w = Want::of_job(j, &plan);
     let report = candidates_report(&w, std::slice::from_ref(&j.node_id), now);
-    let mut out: Vec<NotNow> = report
+    let mut list: Vec<NotNow> = report
         .cands
         .iter()
         .map(|c| {
@@ -187,33 +206,132 @@ pub fn not_now(j: &JobRow, now: i64) -> (Vec<NotNow>, Option<String>) {
             NotNow { node: c.node.name.clone(), code, words }
         })
         .collect();
-    out.sort_by(|a, b| a.node.cmp(&b.node));
+    list.sort_by(|a, b| a.node.cmp(&b.node));
     let total: u32 = report.skipped.values().sum();
     let left_out = (total > 0).then(|| report.skipped.iter().map(|(k, n)| skip_words(k, *n, &w)).collect::<Vec<_>>().join(", "));
-    (out, left_out)
+    let line = elsewhere_words(&report.cands, &w, true);
+    Elsewhere { list, left_out, line }
 }
 
 /// `k2 compute get`: add the other nodes' reasons to a waiting auto job's
-/// `move` block (`notNow`, `leftOut`) and to its note, so the one line the
-/// CLI prints says why it stays.
-pub fn annotate(j: &JobRow, mv: &mut serde_json::Value, now: i64) {
+/// `move` block (`notNow`, `leftOut`, `elsewhere`) and to its note, so the
+/// one line the CLI prints says why it stays. Returns the summary line.
+pub fn annotate(j: &JobRow, mv: &mut serde_json::Value, now: i64) -> Option<String> {
     if mv.get("auto").and_then(|a| a.as_bool()) != Some(true) || mv.get("moving").and_then(|m| m.as_bool()) == Some(true) {
-        return;
+        return None;
     }
-    let (list, left_out) = not_now(j, now);
+    let e = not_now(j, now);
     let mut note = mv.get("note").and_then(|n| n.as_str()).unwrap_or_default().to_string();
-    if list.is_empty() {
+    if e.list.is_empty() {
         note.push_str("; no other node of yours can take it");
+    } else if let Some(line) = &e.line {
+        // No other node can start it now: their numbers, in one line.
+        note.push_str(&format!("; {line}"));
     } else {
-        let parts: Vec<String> = list.iter().map(|n| format!("{} ({})", n.node, n.words)).collect();
+        let parts: Vec<String> = e.list.iter().map(|n| format!("{} ({})", n.node, n.words)).collect();
         note.push_str(&format!("; other nodes: {}", parts.join("; ")));
     }
-    if let Some(l) = &left_out {
+    if let Some(l) = &e.left_out {
         note.push_str(&format!("; left out: {l}"));
     }
     mv["note"] = note.into();
-    mv["notNow"] = list.iter().map(NotNow::json).collect::<Vec<_>>().into();
-    mv["leftOut"] = left_out.into();
+    mv["notNow"] = e.list.iter().map(NotNow::json).collect::<Vec<_>>().into();
+    mv["leftOut"] = e.left_out.into();
+    mv["elsewhere"] = e.line.clone().into();
+    e.line
+}
+
+/// How many nodes [`elsewhere_words`] names before "(+N more)".
+const ELSEWHERE_SHOWN: usize = 4;
+
+/// What a node lacks for the job, in its own numbers.
+struct Short<'a> {
+    c: &'a Cand,
+    words: String,
+    cpu_free: u64,
+    mem_free: u64,
+    cpu_short: bool,
+    mem_short: bool,
+    slots_full: bool,
+}
+
+/// "4" or "4.5" (GB, the number only).
+fn gbn(b: u64) -> String {
+    let s = format!("{:.1}", b as f64 / (1u64 << 30) as f64);
+    s.strip_suffix(".0").map(str::to_string).unwrap_or(s)
+}
+
+/// "other servers' jobs" when only other servers' jobs run on `c` (a
+/// shared node; a count, never whose).
+fn others_mark(c: &Cand) -> Option<&'static str> {
+    let room = share::node_room(&c.offer, c.load.total());
+    (room.other_servers > 0 && room.this_server == 0).then_some("other servers' jobs")
+}
+
+/// One line on why no node (`other`: no OTHER node) can start the job now,
+/// over `cands` (the online ones that can give its `--needs`), best first,
+/// in node-wide numbers: "no other node has 8 free CPUs now: k2n10 0/12
+/// (other servers' jobs), k2n11 2.4/14.4 unreserved". `None` when one of
+/// them can start it now (the sweeper moves it there on its next pass) or
+/// none is online.
+pub fn elsewhere_words(cands: &[Cand], w: &Want, other: bool) -> Option<String> {
+    let mut rows: Vec<Short<'_>> = Vec::new();
+    for c in cands.iter().filter(|c| c.online && movable(c, w)) {
+        let (_, words) = reason(c, w)?;
+        let (mem_free, cpu_free) = c.free_now();
+        // A job without --cpus reserves the node's CPUs ÷ its slots there.
+        let default_cpu = (c.offer.caps.cpu_millis > 0 && c.offer.parallel_max > 0).then(|| c.offer.caps.cpu_millis / u64::from(c.offer.parallel_max));
+        let want_cpu = w.cpu_millis.or(default_cpu);
+        rows.push(Short {
+            c,
+            words,
+            cpu_free,
+            mem_free,
+            cpu_short: want_cpu.is_some_and(|x| x > cpu_free),
+            mem_short: w.mem_on(&c.offer).is_some_and(|m| m > mem_free),
+            slots_full: !c.node_slot_free(),
+        });
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    rows.sort_by(|a, b| b.cpu_free.cmp(&a.cpu_free).then(b.mem_free.cmp(&a.mem_free)).then(a.c.node.name.cmp(&b.c.node.name)));
+    let none = if other { "no other node" } else { "no node" };
+    let more = if rows.len() > ELSEWHERE_SHOWN { format!(" (+{} more)", rows.len() - ELSEWHERE_SHOWN) } else { String::new() };
+    let shown = &rows[..rows.len().min(ELSEWHERE_SHOWN)];
+    let mark = |c: &Cand| others_mark(c).map(|m| format!(" ({m})")).unwrap_or_default();
+    // Every node is short of the CPUs the job asks for.
+    if let Some(cpu) = w.cpu_millis.filter(|_| rows.iter().all(|r| r.cpu_short)) {
+        let list: Vec<String> = shown.iter().map(|r| format!("{} {}/{}{}", r.c.node.name, cpus(r.cpu_free), cpus(r.c.offer.caps.cpu_millis), mark(r.c))).collect();
+        return Some(format!("{none} has {} free CPUs now: {} unreserved{more}", cpus(cpu), list.join(", ")));
+    }
+    // Every node is short of the memory it asks for.
+    if let Some(mem) = w.mem_bytes.filter(|_| !w.mem_defaulted && rows.iter().all(|r| r.mem_short)) {
+        let list: Vec<String> = shown.iter().map(|r| format!("{} {}/{} GB{}", r.c.node.name, gbn(r.mem_free), gbn(r.c.offer.caps.mem_bytes), mark(r.c))).collect();
+        return Some(format!("{none} has {} of memory free now: {} free{more}", mem_words(mem), list.join(", ")));
+    }
+    // Mixed: each node's own limit.
+    let ask: Vec<String> = [w.cpu_millis.map(|c| format!("{} CPUs", cpus(c))), w.mem_bytes.filter(|_| !w.mem_defaulted).map(mem_words)].into_iter().flatten().collect();
+    let ask = if ask.is_empty() { String::new() } else { format!(" (it asks {})", ask.join(", ")) };
+    let list: Vec<String> = shown
+        .iter()
+        .map(|r| {
+            let what = if r.slots_full {
+                format!("full: {} of {} jobs run", r.c.running_now(), r.c.offer.parallel_max)
+            } else if r.cpu_short {
+                format!("cpu {}/{} unreserved", cpus(r.cpu_free), cpus(r.c.offer.caps.cpu_millis))
+            } else if r.mem_short {
+                format!("mem {}/{} GB free", gbn(r.mem_free), gbn(r.c.offer.caps.mem_bytes))
+            } else {
+                r.words.clone()
+            };
+            match others_mark(r.c) {
+                Some(m) => format!("{} ({what}; {m})", r.c.node.name),
+                None => format!("{} ({what})", r.c.node.name),
+            }
+        })
+        .collect();
+    Some(format!("{none} can start it now{ask}: {}{more}", list.join(", ")))
 }
 
 #[cfg(test)]
@@ -270,5 +388,56 @@ mod tests {
         let mut o = cand("off", 30, 32, 0, 2);
         o.online = false;
         assert_eq!(reason(&o, &want(2)).map(|r| r.0), Some(OFFLINE));
+    }
+
+    /// A node of `cpus` CPUs with `free` unreserved, shared, its jobs all
+    /// other servers' (`running` of 4 slots).
+    fn other_servers(name: &str, cpus: u64, free: u64, running: u32) -> Cand {
+        let mut c = shared(cand(name, 30, 32, 0, 4), None);
+        c.offer.running = running;
+        c.offer.caps.cpu_millis = cpus;
+        c.offer.free.cpu_millis = free;
+        c
+    }
+
+    /// The best candidates first, in each node's own numbers; other
+    /// servers' jobs only as a mark; nothing when one can start it now.
+    #[test]
+    fn elsewhere_names_the_best_candidates_and_why_none_fits() {
+        let mut w = want(2);
+        w.cpu_millis = Some(8000);
+        // The field case: k2n10's CPUs all reserved by other servers'
+        // jobs (this server's share there runs nothing), k2n11 and k2n12
+        // with 2.4 of 14.4 free.
+        let set = vec![other_servers("k2n12", 14_400, 2_400, 2), other_servers("k2n10", 12_000, 0, 3), other_servers("k2n11", 14_400, 2_400, 2)];
+        assert_eq!(
+            elsewhere_words(&set, &w, true).as_deref(),
+            Some("no other node has 8 free CPUs now: k2n11 2.4/14.4 (other servers' jobs), k2n12 2.4/14.4 (other servers' jobs), k2n10 0/12 (other servers' jobs) unreserved")
+        );
+        // A node that can start it: no line (the sweeper moves it there).
+        let mut roomy = set.clone();
+        roomy.push(other_servers("k2n9", 16_000, 9_000, 1));
+        assert_eq!(elsewhere_words(&roomy, &w, true), None);
+        // Mixed limits: each node says its own, with the job's ask.
+        let mut slots = cand("full", 30, 32, 2, 2);
+        slots.offer.free.cpu_millis = 8_000;
+        let mut mem = cand("small", 1, 32, 0, 4);
+        mem.offer.free.cpu_millis = 8_000;
+        let mixed = vec![other_servers("k2n10", 12_000, 0, 3), slots, mem];
+        assert_eq!(
+            elsewhere_words(&mixed, &w, false).as_deref(),
+            Some("no node can start it now (it asks 8 CPUs, 2G): full (full: 2 of 2 jobs run), small (mem 1/32 GB free), k2n10 (cpu 0/12 unreserved; other servers' jobs)")
+        );
+        // Memory alone, five nodes: four named, "+1 more".
+        let five: Vec<Cand> = (1..=5).map(|i| cand(&format!("m{i}"), i, 32, 0, 4)).collect();
+        assert_eq!(
+            elsewhere_words(&five, &want(24), true).as_deref(),
+            Some("no other node has 24G of memory free now: m5 5/32 GB, m4 4/32 GB, m3 3/32 GB, m2 2/32 GB free (+1 more)")
+        );
+        // Offline nodes and none at all: nothing to say.
+        let mut off = cand("off", 30, 32, 0, 4);
+        off.online = false;
+        assert_eq!(elsewhere_words(&[off], &w, true), None);
+        assert_eq!(elsewhere_words(&[], &w, true), None);
     }
 }

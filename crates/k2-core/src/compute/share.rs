@@ -443,6 +443,60 @@ fn cpun(m: u64) -> String {
     cpus1(m).trim_end_matches(" CPUs").to_string()
 }
 
+// ── a node's room for every server (`k2 compute nodes`) ──────────────
+
+/// Under this much unreserved CPU a node counts as full.
+pub const FULL_UNDER_CPU_MILLIS: u64 = 1000;
+/// Under this much free memory a node counts as full.
+pub const FULL_UNDER_MEM_BYTES: u64 = 1 << 30;
+
+/// A node's room for every server's jobs, from its offer (which counts
+/// them all) beside this server's own started jobs there. Counts and
+/// totals only: another server's jobs are never named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeRoom {
+    /// Jobs running on the node, every server's.
+    pub running: u32,
+    /// This server's started jobs there.
+    pub this_server: u32,
+    /// Other servers' jobs running there (a shared node only; 0 on a node
+    /// this server alone uses).
+    pub other_servers: u32,
+    /// No typical job fits now: every slot runs a job, or under one CPU is
+    /// unreserved, or under 1 GB of memory is free.
+    pub full: bool,
+}
+
+impl NodeRoom {
+    /// Whose jobs fill a full node: `other_servers` (only theirs),
+    /// `this_server` (only ours), `servers` (both). `None`: not full.
+    pub fn busy(&self) -> Option<&'static str> {
+        if !self.full {
+            None
+        } else if self.other_servers > 0 && self.this_server == 0 {
+            Some("other_servers")
+        } else if self.other_servers > 0 {
+            Some("servers")
+        } else {
+            Some("this_server")
+        }
+    }
+}
+
+/// [`NodeRoom`] of the node behind `offer`; `this_server` = this server's
+/// started jobs there.
+pub fn node_room(offer: &Offer, this_server: u32) -> NodeRoom {
+    let slots_full = offer.parallel_max > 0 && offer.running >= offer.parallel_max;
+    let cpu_full = offer.caps.cpu_millis > 0 && offer.free.cpu_millis < FULL_UNDER_CPU_MILLIS;
+    let mem_full = offer.caps.mem_bytes > 0 && offer.free.mem_bytes < FULL_UNDER_MEM_BYTES;
+    NodeRoom {
+        running: offer.running,
+        this_server,
+        other_servers: if is_shared(offer) { offer.running.saturating_sub(this_server) } else { 0 },
+        full: slots_full || cpu_full || mem_full,
+    }
+}
+
 // ── the owner's mirror of a node's servers (0216) ────────────────────
 
 /// One server on a node this server owns (`compute_node_servers`).
@@ -644,6 +698,57 @@ mod tests {
         assert_eq!(offer_role(&o), Some(Role::Owner), "only the owner's session gets admin (V52)");
         o.share = Some(view(vec![], 0, 0));
         assert_eq!(offer_role(&o), Some(Role::Tenant), "the share view wins");
+    }
+
+    /// A shared node whose CPUs other servers' jobs reserve is full, and
+    /// says whose jobs fill it, though this server runs nothing there (its
+    /// share reads "running 0/3"). Counts only.
+    #[test]
+    fn node_room_says_a_node_is_full_of_other_servers_jobs() {
+        use crate::compute::proto::frames::{Availability, Caps, Control, Free};
+        let mut o = Offer {
+            share: Some(view(vec![], 0, 0)),
+            revision: 1,
+            control: Control::Active,
+            control_by: None,
+            control_at: None,
+            availability: Availability { ok: true, reasons: vec![] },
+            caps: Caps { cpu_millis: 12_000, mem_bytes: 52 << 30, disk_budget_bytes: 1 << 40, hard: true, gpus: 0 },
+            free: Free { cpu_millis: 0, mem_bytes: 20 << 30, disk_free_bytes: 1 << 40, gpus: 0 },
+            slots: vec![],
+            running: 3,
+            parallel_max: 4,
+            refusal: None,
+            labels: Default::default(),
+            tools: Default::default(),
+            protocol: crate::compute::proto::PROTOCOL,
+            boot_id: "b".into(),
+            ledger_id: "l".into(),
+            node_version: "0.46.12".into(),
+            features: vec![share::FEATURE_QUEUE.into()],
+            host: None,
+            pkg: None,
+            sim: None,
+        };
+        let r = node_room(&o, 0);
+        assert_eq!(r, NodeRoom { running: 3, this_server: 0, other_servers: 3, full: true }, "no CPU unreserved, a slot still free");
+        assert_eq!(r.busy(), Some("other_servers"));
+        assert_eq!(node_room(&o, 1).busy(), Some("servers"), "both servers' jobs fill it");
+        // Room again: not full, whoever runs there.
+        o.free.cpu_millis = 2_400;
+        assert_eq!(node_room(&o, 0).busy(), None);
+        // Every slot runs a job: full.
+        o.running = 4;
+        assert!(node_room(&o, 0).full);
+        // Little memory left: full.
+        o.running = 1;
+        o.free.mem_bytes = 512 << 20;
+        assert_eq!(node_room(&o, 0).busy(), Some("other_servers"));
+        // A node only this server uses: nobody else's jobs, whatever runs.
+        o.share = None;
+        o.features.clear();
+        let r = node_room(&o, 0);
+        assert_eq!((r.other_servers, r.busy()), (0, Some("this_server")));
     }
 
     #[test]

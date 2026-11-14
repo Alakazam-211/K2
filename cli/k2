@@ -28957,22 +28957,31 @@ def node_line(n):
     # free memory = the smaller of cap minus reserved and what the OS has.
     # 0.46.7 (CE-8): idle CPU (what the OS sees free) beside unreserved.
     idle = (" · idle ~%s" % cores(n["idleCpuMillis"])) if n.get("idleCpuMillis") is not None else ""
-    res = ("cpu %s/%s unreserved%s  mem %.1f/%s free  disk %s" % (
-        cores(free.get("cpu_millis")), cores(caps.get("cpu_millis")), idle,
+    # The room is that of the node, for every server: CPUs no running job
+    # of any server reserved, memory free, and (when full) whose jobs fill
+    # it. Jobs of other servers are only counted, never named. (No
+    # apostrophes in here: this Python sits in single quotes.)
+    room = n.get("room") if isinstance(n.get("room"), dict) else None
+    busy = {"other_servers": "busy (other servers) · ", "servers": "busy (this and other servers) · ", "this_server": "busy (this server) · "}.get((room or {}).get("busy") or "", "")
+    res = ("%sall servers: cpu %s/%s unreserved%s  mem %.1f/%s free  disk %s" % (
+        busy, cores(free.get("cpu_millis")), cores(caps.get("cpu_millis")), idle,
         (free.get("mem_bytes") or 0) / (1 << 30), gb(caps.get("mem_bytes")), gb(free.get("disk_free_bytes")))) if o else "-"
     par = o.get("parallelMax")
-    # 0.46.7 (CE-7): whose each count is. run/queued = jobs of this server
-    # there (every workspace); yours = this workspace only; node runs = the
-    # count of the node itself (other servers included).
+    # Whose each count is: runs = the node itself (jobs of every server),
+    # then this server, your workspace and other servers. queued = jobs
+    # of this server waiting there (yours = this workspace only).
     mine = n.get("mine") if isinstance(n.get("mine"), dict) else None
-    run = "run %d/%s%s" % (n.get("running", 0), par if par is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else "")
-    queued = "queued %d%s" % (n.get("queued", 0), (" (yours %d)" % mine.get("queued", 0)) if mine else "")
-    nr = n.get("nodeRunning")
-    node_runs = (" · node runs %d%s" % (nr, (" of %s: full" % par) if par and nr >= par else "")) if nr is not None and nr != n.get("running", 0) else ""
+    yours = lambda k: (", yours %d" % mine.get(k, 0)) if mine else ""
+    if room:
+        others = (", other servers %d" % room["otherServers"]) if room.get("otherServers") else ""
+        run = "runs %d/%s (this server %d%s%s)" % (room.get("running", 0), par if par is not None else "?", n.get("running", 0), yours("running"), others)
+    else:
+        run = "this server runs %d (of %s slots%s)" % (n.get("running", 0), par if par is not None else "?", yours("running"))
+    queued = "queued %d (this server%s)" % (n.get("queued", 0), yours("queued"))
     g = n.get("grant")
     grant = ("  grant %s/job %s parallel %s queued%s" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"), " ci" if g.get("allowCi") else "")) if isinstance(g, dict) else ""
     reboot = "  reboot pending" if n.get("rebootPending") else ""
-    return "%-14s %-19s %-24s %-64s %s · %s%s%s%s  seen %s%s" % (n["name"], os_arch, status[:24], res, run, queued, tier_counts(n.get("queueTiers")), node_runs, grant, ago(n.get("lastSeen")), reboot)
+    return "%-14s %-19s %-24s %-64s  %s · %s%s%s  seen %s%s" % (n["name"], os_arch, status[:24], res, run, queued, tier_counts(n.get("queueTiers")), grant, ago(n.get("lastSeen")), reboot)
 def tier_counts(t, bare=False):
     # Tiers (0.46.5): `CI 1 · P 0 · N 3`; nothing when none are queued.
     if not isinstance(t, dict) or not any(t.get(k) for k in ("ci", "priority", "normal", "batch")):
@@ -29023,7 +29032,9 @@ def share_lines(n):
         head += "   clock skew %+ds (node vs this server)" % s["skewSecs"]
     out = ["%-14s %s" % ("", head)]
     if s.get("line"):
-        out.append("%-14s your share: %s" % ("", s["line"]))
+        # The jobs of this server against the limits of its share, not
+        # the load of the node (the node line above has that, all servers).
+        out.append("%-14s your share (jobs of this server only): %s" % ("", s["line"]))
     if s.get("priority") is False:
         out.append("%-14s your --tier priority runs as Normal here (its owner has not set priority=true for this server)" % "")
     return out
@@ -30769,10 +30780,11 @@ wt = j.get("wait") or {}
 st = j.get("state") or "?"
 key = "%s|%s|%s" % (st, q.get("position"), q.get("waitReason") or q.get("reason"))
 term = st in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown")
+elsewhere = (" · " + wt["elsewhere"]) if wt.get("elsewhere") else ""
 if st == "queued" and q.get("line"):
-    line = "%s %s" % (j.get("short"), q["line"])
+    line = "%s %s%s" % (j.get("short"), q["line"], elsewhere)
 elif st == "queued" and wt.get("words"):
-    line = "%s queued: %s" % (j.get("short"), wt["words"])
+    line = "%s queued: %s%s" % (j.get("short"), wt["words"], elsewhere)
 elif st == "queued" and q:
     line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), j.get("node"), q.get("position"),
         (" of %s" % q["of"]) if q.get("of") else "", q.get("reason"))
@@ -30952,17 +30964,26 @@ for n in rows:
         parts.append("held: %s (%s)" % (w.get("code"), w.get("message")))
     if st.get("unavailable"):
         parts.append("unavailable: " + ",".join(st["unavailable"]))
-    # 0.46.7 (CE-7): the same counts as `nodes`, and whose they are.
+    # The same counts as `nodes`, and whose they are: runs = the node
+    # itself (jobs of every server); those of other servers only counted.
     mine = n.get("mine") if isinstance(n.get("mine"), dict) else None
-    parts.append("run %d/%s%s" % (len(st.get("running") or []), st.get("parallelMax") if st.get("parallelMax") is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else ""))
-    parts.append("queued %d%s" % (len(st.get("queued") or []), (" (yours %d)" % mine.get("queued", 0)) if mine else ""))
-    if n.get("nodeRunning") is not None and n["nodeRunning"] != len(st.get("running") or []):
-        parts.append("node runs %d%s" % (n["nodeRunning"], (" of %s: full" % st["parallelMax"]) if st.get("parallelMax") and n["nodeRunning"] >= st["parallelMax"] else ""))
+    yours = lambda k: (", yours %d" % mine.get(k, 0)) if mine else ""
+    room = n.get("room") if isinstance(n.get("room"), dict) else None
+    busy = {"other_servers": "busy (other servers)", "servers": "busy (this and other servers)", "this_server": "busy (this server)"}.get((room or {}).get("busy") or "")
+    if busy:
+        parts.append(busy)
+    par = st.get("parallelMax") if st.get("parallelMax") is not None else "?"
+    if room:
+        others = (", other servers %d" % room["otherServers"]) if room.get("otherServers") else ""
+        parts.append("runs %d/%s (this server %d%s%s)" % (room.get("running", 0), par, len(st.get("running") or []), yours("running"), others))
+    else:
+        parts.append("this server runs %d (of %s slots%s)" % (len(st.get("running") or []), par, yours("running")))
+    parts.append("queued %d (this server%s)" % (len(st.get("queued") or []), yours("queued")))
     f, c = st.get("free") or {}, st.get("caps") or {}
     if f:
-        # CE-8: unreserved (not reserved by K2 jobs) beside idle.
+        # CE-8: unreserved (not reserved by K2 jobs of any server) beside idle.
         idle = (" · idle ~%s" % cores(st["idleCpuMillis"])) if st.get("idleCpuMillis") is not None else ""
-        parts.append("cpu %s/%s unreserved%s" % (cores(f.get("cpuMillis")), cores(c.get("cpuMillis")), idle))
+        parts.append("all servers: cpu %s/%s unreserved%s" % (cores(f.get("cpuMillis")), cores(c.get("cpuMillis")), idle))
         parts.append("mem %.1f/%s free" % ((f.get("memBytes") or 0) / (1 << 30), gb(c.get("memBytes"))))
     if st.get("load"):
         parts.append("load " + " ".join("%.1f" % x for x in st["load"]))
@@ -30976,7 +30997,7 @@ for n in rows:
         parts.append(s)
     print("  ".join(parts))
     if (n.get("share") or {}).get("line"):
-        print("    your share: " + n["share"]["line"])
+        print("    your share (jobs of this server only): " + n["share"]["line"])
     # 0.46.6: the line tag (CI, P, B) and the --why of a Priority job.
     tag = lambda j: ({"ci": "CI ", "priority": "P  ", "batch": "B  "}.get(j.get("tier") or "", ""))
     pwhy = lambda j: ("\n      why: %s%s" % (j["tierWhy"], (" (%s)" % j["submitter"]) if j.get("submitter") else "")) if j.get("tierWhy") else ""
@@ -62060,14 +62081,25 @@ WHY HASN'T IT STARTED? (0.46.7)
     "your workspace runs 3 of 3 here (its grant)"
         your grant's --max-parallel.
   A message can name more than one of these at once.
-  "unreserved" CPU (k2 compute nodes: cpu 0/12 unreserved · idle ~8) is
-  what running K2 jobs haven't reserved; "idle" is what the OS sees unused.
-  8 idle and 0 unreserved means reserved CPU that isn't busy: smaller
-  --cpus on your jobs lets more run.
-  Counts, whose they are: run 3/3 (yours 2) · queued 2 (yours 1) · node
-  runs 5 = 3 jobs from this server running there (of 3 slots), 2 of them
-  your workspace's; 2 waiting (1 yours); the node runs 5 in all (other
-  servers' jobs too). k2 compute status shows the same numbers.
+  A job K2 placed (no node named) also says why no other node takes it,
+  in each node's own numbers, best first:
+    "no other node has 8 free CPUs now: k2n10 0/12 (other servers' jobs),
+     k2n11 2.4/14.4 unreserved"
+  K2 checks every node every 5 seconds and moves the job to the first one
+  that can start it, whichever node's job ended.
+  "unreserved" CPU (k2 compute nodes: all servers: cpu 0/12 unreserved ·
+  idle ~8) is what running K2 jobs of every server haven't reserved;
+  "idle" is what the OS sees unused. 8 idle and 0 unreserved means
+  reserved CPU that isn't busy: smaller --cpus on your jobs lets more run.
+  Counts, whose they are: runs 5/6 (this server 3, yours 2, other servers
+  2) · queued 2 (this server, yours 1) = the node runs 5 jobs in all (of 6
+  slots): 3 from this server, 2 of them your workspace's, 2 from other
+  servers; this server has 2 waiting there (1 yours). "busy (other
+  servers)" first on the line: the node has no room now and only other
+  servers' jobs fill it (their jobs are counted, never named). A node's
+  "your share (jobs of this server only): running 0/3" counts only this
+  server's jobs, so it never means the node is idle. k2 compute status
+  shows the same numbers.
 
 TIMES (0.46.7)
   startedAt, endedAt and durationSecs are the NODE's own times when its

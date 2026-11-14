@@ -257,22 +257,31 @@ def node_line(n):
     # free memory = the smaller of cap minus reserved and what the OS has.
     # 0.46.7 (CE-8): idle CPU (what the OS sees free) beside unreserved.
     idle = (" · idle ~%s" % cores(n["idleCpuMillis"])) if n.get("idleCpuMillis") is not None else ""
-    res = ("cpu %s/%s unreserved%s  mem %.1f/%s free  disk %s" % (
-        cores(free.get("cpu_millis")), cores(caps.get("cpu_millis")), idle,
+    # The room is that of the node, for every server: CPUs no running job
+    # of any server reserved, memory free, and (when full) whose jobs fill
+    # it. Jobs of other servers are only counted, never named. (No
+    # apostrophes in here: this Python sits in single quotes.)
+    room = n.get("room") if isinstance(n.get("room"), dict) else None
+    busy = {"other_servers": "busy (other servers) · ", "servers": "busy (this and other servers) · ", "this_server": "busy (this server) · "}.get((room or {}).get("busy") or "", "")
+    res = ("%sall servers: cpu %s/%s unreserved%s  mem %.1f/%s free  disk %s" % (
+        busy, cores(free.get("cpu_millis")), cores(caps.get("cpu_millis")), idle,
         (free.get("mem_bytes") or 0) / (1 << 30), gb(caps.get("mem_bytes")), gb(free.get("disk_free_bytes")))) if o else "-"
     par = o.get("parallelMax")
-    # 0.46.7 (CE-7): whose each count is. run/queued = jobs of this server
-    # there (every workspace); yours = this workspace only; node runs = the
-    # count of the node itself (other servers included).
+    # Whose each count is: runs = the node itself (jobs of every server),
+    # then this server, your workspace and other servers. queued = jobs
+    # of this server waiting there (yours = this workspace only).
     mine = n.get("mine") if isinstance(n.get("mine"), dict) else None
-    run = "run %d/%s%s" % (n.get("running", 0), par if par is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else "")
-    queued = "queued %d%s" % (n.get("queued", 0), (" (yours %d)" % mine.get("queued", 0)) if mine else "")
-    nr = n.get("nodeRunning")
-    node_runs = (" · node runs %d%s" % (nr, (" of %s: full" % par) if par and nr >= par else "")) if nr is not None and nr != n.get("running", 0) else ""
+    yours = lambda k: (", yours %d" % mine.get(k, 0)) if mine else ""
+    if room:
+        others = (", other servers %d" % room["otherServers"]) if room.get("otherServers") else ""
+        run = "runs %d/%s (this server %d%s%s)" % (room.get("running", 0), par if par is not None else "?", n.get("running", 0), yours("running"), others)
+    else:
+        run = "this server runs %d (of %s slots%s)" % (n.get("running", 0), par if par is not None else "?", yours("running"))
+    queued = "queued %d (this server%s)" % (n.get("queued", 0), yours("queued"))
     g = n.get("grant")
     grant = ("  grant %s/job %s parallel %s queued%s" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"), " ci" if g.get("allowCi") else "")) if isinstance(g, dict) else ""
     reboot = "  reboot pending" if n.get("rebootPending") else ""
-    return "%-14s %-19s %-24s %-64s %s · %s%s%s%s  seen %s%s" % (n["name"], os_arch, status[:24], res, run, queued, tier_counts(n.get("queueTiers")), node_runs, grant, ago(n.get("lastSeen")), reboot)
+    return "%-14s %-19s %-24s %-64s  %s · %s%s%s  seen %s%s" % (n["name"], os_arch, status[:24], res, run, queued, tier_counts(n.get("queueTiers")), grant, ago(n.get("lastSeen")), reboot)
 def tier_counts(t, bare=False):
     # Tiers (0.46.5): `CI 1 · P 0 · N 3`; nothing when none are queued.
     if not isinstance(t, dict) or not any(t.get(k) for k in ("ci", "priority", "normal", "batch")):
@@ -323,7 +332,9 @@ def share_lines(n):
         head += "   clock skew %+ds (node vs this server)" % s["skewSecs"]
     out = ["%-14s %s" % ("", head)]
     if s.get("line"):
-        out.append("%-14s your share: %s" % ("", s["line"]))
+        # The jobs of this server against the limits of its share, not
+        # the load of the node (the node line above has that, all servers).
+        out.append("%-14s your share (jobs of this server only): %s" % ("", s["line"]))
     if s.get("priority") is False:
         out.append("%-14s your --tier priority runs as Normal here (its owner has not set priority=true for this server)" % "")
     return out

@@ -1276,7 +1276,11 @@ async fn the_mover_skips_a_node_full_of_other_servers_jobs_and_says_why() {
     assert_eq!(not_now.len(), 1, "{mv}");
     assert_eq!((not_now[0]["node"].as_str(), not_now[0]["code"].as_str()), (Some("fl-b"), Some("node_full")), "{mv}");
     let note = mv["note"].as_str().expect("note");
-    assert!(note.contains("fl-b (full: it runs 2 of 2 jobs"), "{note}");
+    // One line, in fl-b's own numbers; other servers' jobs only counted.
+    let line = "no other node can start it now (it asks 1G): fl-b (full: 2 of 2 jobs run; other servers' jobs)";
+    assert!(note.contains(line), "{note}");
+    assert_eq!(mv["elsewhere"].as_str(), Some(line), "{mv}");
+    assert_eq!(j(&r)["wait"]["elsewhere"].as_str(), Some(line), "{}", r.body);
     // A slot frees on B: the mover asks for it back now.
     compute_ws::test_frame("fl-b", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 0)))));
     k2_daemon::compute_place::sweep(now + 1);

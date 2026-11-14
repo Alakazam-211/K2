@@ -1264,21 +1264,32 @@ pub struct ServerChannelCreateRequest {
     pub members_can_leave: Option<bool>,
 }
 
-/// Sew 0.10.0 (`channel_member_add_remove`): `POST
-/// /mgmt/v1/channels/{id}/members/add`, by external id [unverified: the
-/// field names follow Sew's other mgmt member calls until 0.10.0's
-/// sew-proto is diffed].
+/// Sew 0.10.0 HOME1 (`channel_member_add_remove`): one person into or out of
+/// a channel, `POST /mgmt/v1/channels/{id}/members/add` and `/members/remove`,
+/// both with this body. `app_id` names an App's Space; K2's server Space
+/// leaves it out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChannelMembersAddRequest {
-    pub external_ids: Vec<String>,
+pub struct ChannelMemberChangeRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    pub external_id: String,
 }
 
-/// Sew 0.10.0: `POST /mgmt/v1/channels/{id}/members/remove`, by external id.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChannelMemberRemoveRequest {
+/// The answer to a single add or remove, read leniently. `changed` is false
+/// when the person was already in (add) or already out (remove).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelMemberChangeResponse {
+    #[serde(default)]
+    pub channel_id: String,
+    #[serde(default)]
+    pub space_id: String,
+    #[serde(default)]
     pub external_id: String,
+    #[serde(default)]
+    pub member_id: String,
+    #[serde(default)]
+    pub changed: bool,
 }
 
 /// `POST /mgmt/v1/channels/{id}/members/add`.

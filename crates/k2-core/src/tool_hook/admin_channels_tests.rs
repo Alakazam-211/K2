@@ -173,9 +173,12 @@ fn single_add_and_remove_with_the_flag() {
     assert_eq!(ops[0].subject_key, member_subject(SPACE, SAM));
     let (path, body) = wire(ops[0].op, &ops[0].payload.to_string()).expect("a member row").expect("wire");
     assert_eq!(path, "/mgmt/v1/channels/9001/members/add");
-    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"external_ids": [SAM]}));
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"external_id": SAM}), "HOME1's body, no app_id");
     assert!(ops.iter().all(|o| o.op != Op::AdminMemberLevel), "no full list with the flag");
-    deliver(&ops[0], r#"{"ok":true}"#);
+    let answer = json!({"channel_id": "9001", "space_id": SPACE, "external_id": SAM, "member_id": "42", "changed": true});
+    let parsed: sew_wire::ChannelMemberChangeResponse = serde_json::from_value(answer.clone()).unwrap();
+    assert!(parsed.changed && parsed.member_id == "42");
+    deliver(&ops[0], &answer.to_string());
     assert_eq!(state_of("c-aaaaaaaaaa", SAM).as_deref(), Some(M_IN));
     with(|c| request_remove(c, "c-aaaaaaaaaa", SAM, 6));
     let ops = plan_home(&HashSet::new(), &levels(&[ALEX, SAM]));
@@ -184,7 +187,7 @@ fn single_add_and_remove_with_the_flag() {
     let (path, body) = wire(ops[0].op, &ops[0].payload.to_string()).unwrap().unwrap();
     assert_eq!(path, "/mgmt/v1/channels/9001/members/remove");
     assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"external_id": SAM}));
-    deliver(&ops[0], r#"{"ok":true}"#);
+    deliver(&ops[0], &json!({"channel_id": "9001", "space_id": SPACE, "external_id": SAM, "member_id": "42", "changed": true}).to_string());
     assert_eq!(state_of("c-aaaaaaaaaa", SAM), None);
 }
 

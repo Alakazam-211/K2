@@ -43,7 +43,7 @@ use serde_json::{json, Value};
 use super::admin_space::{member_subject, parse_member_subject};
 use super::features::HomeChatFeatures;
 use super::sew_wire::{
-    self, channel_ops, ChannelCreateResponse, ChannelMemberRemoveRequest, ChannelMembersAddRequest, ChannelOp, ChannelsBulkResponse,
+    self, channel_ops, ChannelCreateResponse, ChannelMemberChangeRequest, ChannelOp, ChannelsBulkResponse,
     ServerChannelCreateRequest, ServerChannelsBulkRequest, ServerMemberChannelsRequest,
 };
 use super::{outbox, Cause, NewOp, Op, CHAT_KIND};
@@ -567,13 +567,15 @@ fn plan_members(
                 if busy.contains(&subject) || !levels.contains_key(&ext) {
                     continue;
                 }
-                let (o, body) = if state == M_PENDING_ADD {
+                let o = if state == M_PENDING_ADD {
                     s.member_adds += 1;
-                    (Op::AdminChannelMemberAdd, to_value(&ChannelMembersAddRequest { external_ids: vec![ext.clone()] })?)
+                    Op::AdminChannelMemberAdd
                 } else {
                     s.member_removes += 1;
-                    (Op::AdminChannelMemberRemove, to_value(&ChannelMemberRemoveRequest { external_id: ext.clone() })?)
+                    Op::AdminChannelMemberRemove
                 };
+                // HOME1: the same body both ways; no `app_id` in K2's server Space.
+                let body = to_value(&ChannelMemberChangeRequest { app_id: None, external_id: ext.clone() })?;
                 out.push(new_op(o, subject, json!({ "channel_id": id, "body": body })));
             } else {
                 full_list = true;

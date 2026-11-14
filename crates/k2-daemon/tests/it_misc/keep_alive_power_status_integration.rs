@@ -244,3 +244,19 @@ fn git_tools_and_db_home_answer_once_on_a_keep_alive_socket() {
     assert_next_request_gets_its_own_answer(d.port, &d.owner, "/cli/git-tools", |v| v["state"].is_string());
     assert_next_request_gets_its_own_answer(d.port, &d.owner, "/cli/db-home", |v| v["homeDb"].is_object());
 }
+
+/// The same request again on the same keep-alive socket (a poll, a retry,
+/// the same put twice) is a new request, not the last one left unread: each
+/// gets its own answer and the socket stays open. The unread-request check
+/// once looked after the answer, where the client's next identical request
+/// can already be waiting, and closed the socket on it with no answer.
+#[test]
+fn the_same_request_again_on_one_socket_is_answered_every_time() {
+    let d = spawn_daemon();
+    let mut conn = Conn::open(d.port);
+    for i in 0..300 {
+        let (s, b) = conn.request("GET", &format!("/cli/feedback/waiting-count?token={}", d.owner), None);
+        assert_eq!(s, 200, "request {i}: {b}");
+        assert!(json(&b, "waiting-count")["count"].is_number(), "request {i}: {b}");
+    }
+}

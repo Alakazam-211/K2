@@ -36,6 +36,27 @@ fn set_server(status: Option<&str>) {
     }
 }
 
+/// Presence counts every inbox on the server, so these tests need a server
+/// that holds only what they add: a database of their own. The test's
+/// in-process daemon runs on this runtime, and every runtime thread (and
+/// this one) reads that database instead of the process-wide test DB other
+/// mail tests share.
+fn on_own_db<F: std::future::Future>(test: F) -> F::Output {
+    let db = k2_core::db::scoped_for_test();
+    let handle = db.handle();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .on_thread_start(move || k2_core::db::set_thread_scoped_handle_for_test(handle.clone()))
+        .build()
+        .expect("the test's runtime");
+    let out = rt.block_on(test);
+    // Every runtime thread stops before this thread's DB slot is restored.
+    drop(rt);
+    drop(db);
+    out
+}
+
 fn login(user: &str, role: k2_core::connect_users::Role) -> String {
     k2_core::connect_users::add_user(user, "correct-horse-battery-staple-1").expect("add user");
     k2_core::connect_users::set_role(user, role).expect("set role");
@@ -45,47 +66,49 @@ fn login(user: &str, role: k2_core::connect_users::Role) -> String {
 /// A bare server answers false/false/0; hosting follows the mail_server
 /// row (on while installed and not disabled); a Voice & Chat only login
 /// and a bad token are refused.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn presence_is_false_on_a_bare_server_and_hosting_follows_the_server_row() {
-    let _home = k2_core::test_env::TempHome::new();
-    let _mail = crate::mail::mail_server_test_lock();
-    let _row = crate::mail::MailServerRowCleanup;
-    let d = test_harness::start(OWNER).await;
-    block(|| {
-        set_server(None);
-        {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            conn.execute("DELETE FROM mail_external_inboxes", []).expect("no linked inboxes");
-        }
-        let member = login("prmember", k2_core::connect_users::Role::Member);
-        let admin = login("pradmin", k2_core::connect_users::Role::Admin);
-        for token in [OWNER, member.as_str(), admin.as_str()] {
-            assert_eq!(answer(&presence(d.port, token)), (false, false, 0), "bare server");
-        }
+#[test]
+fn presence_is_false_on_a_bare_server_and_hosting_follows_the_server_row() {
+    on_own_db(async {
+        let _home = k2_core::test_env::TempHome::new();
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let d = test_harness::start(OWNER).await;
+        block(|| {
+            set_server(None);
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute("DELETE FROM mail_external_inboxes", []).expect("no linked inboxes");
+            }
+            let member = login("prmember", k2_core::connect_users::Role::Member);
+            let admin = login("pradmin", k2_core::connect_users::Role::Admin);
+            for token in [OWNER, member.as_str(), admin.as_str()] {
+                assert_eq!(answer(&presence(d.port, token)), (false, false, 0), "bare server");
+            }
 
-        for status in ["running", "installing", "degraded", "stopped", "error"] {
-            set_server(Some(status));
-            let (hosting, linked, _) = answer(&presence(d.port, &member));
-            assert!(hosting, "hosting is on while the server is {status}");
-            assert!(!linked);
-        }
-        set_server(Some("disabled"));
-        assert_eq!(answer(&presence(d.port, OWNER)), (false, false, 0), "disabled = off");
-        set_server(Some("running"));
-        assert!(answer(&presence(d.port, OWNER)).0);
-        set_server(None);
-        assert!(!answer(&presence(d.port, OWNER)).0, "uninstalled = off");
+            for status in ["running", "installing", "degraded", "stopped", "error"] {
+                set_server(Some(status));
+                let (hosting, linked, _) = answer(&presence(d.port, &member));
+                assert!(hosting, "hosting is on while the server is {status}");
+                assert!(!linked);
+            }
+            set_server(Some("disabled"));
+            assert_eq!(answer(&presence(d.port, OWNER)), (false, false, 0), "disabled = off");
+            set_server(Some("running"));
+            assert!(answer(&presence(d.port, OWNER)).0);
+            set_server(None);
+            assert!(!answer(&presence(d.port, OWNER)).0, "uninstalled = off");
 
-        let voice = login("prvoice", k2_core::connect_users::Role::VoiceChat);
-        let v = presence(d.port, &voice);
-        assert_eq!(v.status, 403, "{}", v.body);
-        assert_eq!(json(&v)["error"], "role_required", "{}", v.body);
-        let none = presence(d.port, "not-a-token");
-        assert_eq!(none.status, 403, "{}", none.body);
+            let voice = login("prvoice", k2_core::connect_users::Role::VoiceChat);
+            let v = presence(d.port, &voice);
+            assert_eq!(v.status, 403, "{}", v.body);
+            assert_eq!(json(&v)["error"], "role_required", "{}", v.body);
+            let none = presence(d.port, "not-a-token");
+            assert_eq!(none.status, 403, "{}", none.body);
 
-        let post = http(d.port, "POST", &format!("/cli/mail/reader/presence?token={}", enc(OWNER)), Some("{}"));
-        assert_eq!(post.status, 405, "presence is a GET: {}", post.body);
+            let post = http(d.port, "POST", &format!("/cli/mail/reader/presence?token={}", enc(OWNER)), Some("{}"));
+            assert_eq!(post.status, 405, "presence is a GET: {}", post.body);
+        });
     });
 }
 
@@ -93,57 +116,59 @@ async fn presence_is_false_on_a_bare_server_and_hosting_follows_the_server_row()
 /// rule; an agent is refused; unlinking the last one turns it false and
 /// tells clients (`mail_changed`, `inboxes-changed`). Nothing is logged and
 /// the mail engine is never asked.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_linked_inbox_alone_shows_mail_and_unlinking_the_last_one_is_heard() {
-    let fx = Fx::start().await;
-    block(|| {
-        // Hosting off: only the fixture's linked inbox is left.
-        set_server(None);
-        let audit_before = fx.audit().len();
-        let gets_before = fx.email_gets();
+#[test]
+fn a_linked_inbox_alone_shows_mail_and_unlinking_the_last_one_is_heard() {
+    on_own_db(async {
+        let fx = Fx::start().await;
+        block(|| {
+            // Hosting off: only the fixture's linked inbox is left.
+            set_server(None);
+            let audit_before = fx.audit().len();
+            let gets_before = fx.email_gets();
 
-        // The Owner and an Admin see all three inboxes; a Member none; pat
-        // their own hosted mailbox (the linked one records no linker).
-        assert_eq!(answer(&presence(fx.d.port, OWNER)), (false, true, 3));
-        assert_eq!(answer(&presence(fx.d.port, &fx.admin)), (false, true, 3));
-        assert_eq!(answer(&presence(fx.d.port, &fx.member)), (false, true, 0));
-        assert_eq!(answer(&presence(fx.d.port, &fx.pat)), (false, true, 1));
+            // The Owner and an Admin see all three inboxes; a Member none; pat
+            // their own hosted mailbox (the linked one records no linker).
+            assert_eq!(answer(&presence(fx.d.port, OWNER)), (false, true, 3));
+            assert_eq!(answer(&presence(fx.d.port, &fx.admin)), (false, true, 3));
+            assert_eq!(answer(&presence(fx.d.port, &fx.member)), (false, true, 0));
+            assert_eq!(answer(&presence(fx.d.port, &fx.pat)), (false, true, 1));
 
-        // An agent passport: 403 owner_only.
-        let sid = k2_core::session::SessionId::new();
-        let pp = crate::session_token::mint_session_token(
-            &sid,
-            &sid.to_string(),
-            crate::session_token::HookPrincipal {
-                workspace_uuid: fx.ws_id.clone(),
-                agent_address: "presence-agent".to_string(),
-            },
-            crate::session_token::CredMode::ApiKey,
-            crate::session_token::Provider::Anthropic,
-        );
-        let a = presence(fx.d.port, &pp);
-        assert_eq!(a.status, 403, "{}", a.body);
-        assert_eq!(json(&a)["error"]["code"], "owner_only", "{}", a.body);
+            // An agent passport: 403 owner_only.
+            let sid = k2_core::session::SessionId::new();
+            let pp = crate::session_token::mint_session_token(
+                &sid,
+                &sid.to_string(),
+                crate::session_token::HookPrincipal {
+                    workspace_uuid: fx.ws_id.clone(),
+                    agent_address: "presence-agent".to_string(),
+                },
+                crate::session_token::CredMode::ApiKey,
+                crate::session_token::Provider::Anthropic,
+            );
+            let a = presence(fx.d.port, &pp);
+            assert_eq!(a.status, 403, "{}", a.body);
+            assert_eq!(json(&a)["error"]["code"], "owner_only", "{}", a.body);
 
-        assert_eq!(fx.audit().len(), audit_before, "presence opens no inbox, so it logs none");
-        assert_eq!(fx.email_gets(), gets_before, "presence never asks the mail engine");
+            assert_eq!(fx.audit().len(), audit_before, "presence opens no inbox, so it logs none");
+            assert_eq!(fx.email_gets(), gets_before, "presence never asks the mail engine");
 
-        // Unlink the last linked inbox: presence turns false, and the bus
-        // carries the refetch signal.
-        let mut rx = crate::session_events::subscribe();
-        crate::mail::external::remove_inbox_with(&MemSecrets::default(), &NoHttp, &fx.linked_addr)
-            .expect("unlink the linked inbox");
-        let mut heard = false;
-        while let Ok(ev) = rx.try_recv() {
-            if let crate::session_events::SessionEvent::MailChanged { reason } = ev {
-                if reason == "inboxes-changed" {
-                    heard = true;
+            // Unlink the last linked inbox: presence turns false, and the bus
+            // carries the refetch signal.
+            let mut rx = crate::session_events::subscribe();
+            crate::mail::external::remove_inbox_with(&MemSecrets::default(), &NoHttp, &fx.linked_addr)
+                .expect("unlink the linked inbox");
+            let mut heard = false;
+            while let Ok(ev) = rx.try_recv() {
+                if let crate::session_events::SessionEvent::MailChanged { reason } = ev {
+                    if reason == "inboxes-changed" {
+                        heard = true;
+                    }
                 }
             }
-        }
-        assert!(heard, "unlinking an inbox emits mail_changed (inboxes-changed)");
-        assert_eq!(answer(&presence(fx.d.port, OWNER)), (false, false, 2), "the hosted rows are still listed");
-        assert_eq!(answer(&presence(fx.d.port, &fx.member)), (false, false, 0));
+            assert!(heard, "unlinking an inbox emits mail_changed (inboxes-changed)");
+            assert_eq!(answer(&presence(fx.d.port, OWNER)), (false, false, 2), "the hosted rows are still listed");
+            assert_eq!(answer(&presence(fx.d.port, &fx.member)), (false, false, 0));
+        });
     });
 }
 

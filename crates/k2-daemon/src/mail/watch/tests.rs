@@ -68,8 +68,18 @@ impl Poller for FakePoller {
     }
 }
 
-fn home() -> k2_core::test_env::StubHome {
-    k2_core::test_env::StubHome::new("mail-watch-")
+/// A stub HOME and a database of the test's own. The tests reuse fixed
+/// addresses and workspace ids, and `run_cycle` reads every watched inbox,
+/// so on the process-wide test DB they would see each other's rows (and
+/// other mail tests' rows). Everything here runs on the test's thread.
+struct TestHome {
+    _db: k2_core::db::TestDbGuard,
+    _home: k2_core::test_env::StubHome,
+}
+
+fn home() -> TestHome {
+    let home = k2_core::test_env::StubHome::new("mail-watch-");
+    TestHome { _db: k2_core::db::scoped_for_test(), _home: home }
 }
 
 fn workspace(id: &str) -> (String, String) {

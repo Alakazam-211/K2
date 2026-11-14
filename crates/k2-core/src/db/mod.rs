@@ -209,6 +209,16 @@ pub fn with_scoped_handle<T>(handle: Arc<ReentrantMutex<Connection>>, f: impl Fn
     out
 }
 
+/// Test-only: make `handle` THIS thread's scoped DB for the rest of the
+/// thread's life, with nothing restored. Only for threads that end with the
+/// test, such as a test's own tokio runtime (`on_thread_start`), so an
+/// in-process daemon serving that test reads the test's own DB. A test
+/// thread itself uses [`scoped_for_test`], whose guard restores the slot.
+#[cfg(any(test, feature = "test-util"))]
+pub fn set_thread_scoped_handle_for_test(handle: Arc<ReentrantMutex<Connection>>) {
+    SCOPED.with(|s| *s.borrow_mut() = Some(handle));
+}
+
 /// A fresh in-memory connection, migrated + seeded like the shared one.
 #[cfg(any(test, feature = "test-util"))]
 fn fresh_test_connection() -> Connection {

@@ -13,7 +13,6 @@ const CHIP_STYLE = {
   alignItems: 'center',
   gap: 4,
   padding: '1px 8px',
-  borderRadius: 999,
   fontSize: '0.8em',
   lineHeight: 1.6,
   cursor: 'pointer',
@@ -54,6 +53,7 @@ export function HomeChatReactionChips({
           key={r.emoji}
           type="button"
           data-testid="home-chat-reaction"
+          className="rounded-[var(--radius-pill)]"
           data-emoji={r.emoji}
           data-me={r.me ? '' : undefined}
           aria-pressed={r.me}
@@ -100,13 +100,15 @@ export function HomeChatReactionPicker({
     onPick(e)
     onClose()
   }
-  const cell = { width: 28, height: 28, fontSize: 18, borderRadius: 6, cursor: 'pointer', background: 'none', border: 'none' } as const
+  const cell = { width: 28, height: 28, fontSize: 18, cursor: 'pointer', background: 'none', border: 'none' } as const
+  const cellClass = 'rounded-[calc(var(--radius-box)/2)]'
   return (
     <div
       ref={ref}
       role="dialog"
       aria-label="Add a reaction"
       data-testid="home-chat-reaction-picker"
+      className="rounded-[var(--radius-field-multiline)] [box-shadow:var(--shadow-3)]"
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.stopPropagation()
@@ -120,15 +122,13 @@ export function HomeChatReactionPicker({
         marginBottom: 4,
         padding: 6,
         minWidth: 220,
-        borderRadius: 10,
         border: '1px solid var(--zen-border)',
         background: 'var(--zen-surface-raised, var(--color-bg-elevated))',
-        boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
       }}
     >
       <div className="flex" style={{ gap: 2 }} data-testid="home-chat-quick-reactions">
         {QUICK_REACTIONS.map((e) => (
-          <button key={e} type="button" aria-label={`React ${e}`} data-emoji={e} style={cell} onClick={() => pick(e)}>
+          <button key={e} type="button" aria-label={`React ${e}`} data-emoji={e} className={cellClass} style={cell} onClick={() => pick(e)}>
             {e}
           </button>
         ))}
@@ -146,8 +146,8 @@ export function HomeChatReactionPicker({
         placeholder="Search emoji"
         aria-label="Search emoji"
         data-testid="home-chat-emoji-search"
-        className="w-full bg-transparent focus:outline-none"
-        style={{ marginTop: 6, padding: '4px 6px', fontSize: 12, border: '1px solid var(--zen-border)', borderRadius: 6, color: 'var(--zen-text)' }}
+        className="w-full rounded-[calc(var(--radius-box)/2)] bg-transparent focus:outline-none"
+        style={{ marginTop: 6, padding: '4px 6px', fontSize: 12, border: '1px solid var(--zen-border)', color: 'var(--zen-text)' }}
       />
       {q.trim() !== '' && (
         <div className="flex flex-wrap" style={{ gap: 2, marginTop: 4, maxHeight: 140, overflowY: 'auto' }} data-testid="home-chat-emoji-results">
@@ -155,7 +155,7 @@ export function HomeChatReactionPicker({
             <span style={{ fontSize: 11, color: 'var(--zen-text-muted)', padding: 4 }}>No emoji match</span>
           ) : (
             found.map((e) => (
-              <button key={e} type="button" aria-label={`React ${e}`} data-emoji={e} style={cell} onClick={() => pick(e)}>
+              <button key={e} type="button" aria-label={`React ${e}`} data-emoji={e} className={cellClass} style={cell} onClick={() => pick(e)}>
                 {e}
               </button>
             ))

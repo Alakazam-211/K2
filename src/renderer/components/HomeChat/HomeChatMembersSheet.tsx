@@ -126,7 +126,7 @@ export function HomeChatMembersSheet({
       role="dialog"
       aria-label="Channel members"
       data-testid="home-chat-members"
-      className="absolute right-3 top-12 z-40 flex max-h-[70%] w-72 flex-col border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl"
+      className="absolute right-3 top-12 z-40 flex max-h-[70%] w-72 flex-col border border-[var(--color-border)] bg-[var(--color-bg)] [box-shadow:var(--shadow-3)]"
       onKeyDown={(e) => {
         if (e.key === 'Escape') onClose()
       }}

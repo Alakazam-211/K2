@@ -129,13 +129,12 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
       data-home-chat-message=""
       data-mine={mine ? '' : undefined}
       data-flash={flash ? '' : undefined}
-      className="group relative flex flex-col"
+      className="group relative flex flex-col rounded-[calc(var(--radius-box)/2)]"
       style={{
         alignItems: mine ? 'flex-end' : 'flex-start',
         minWidth: 0,
         transition: 'background-color 600ms',
         background: flash ? 'color-mix(in srgb, var(--zen-accent) 14%, transparent)' : undefined,
-        borderRadius: 8,
       }}
       {...(m.deleted ? {} : gestures)}
     >
@@ -162,12 +161,11 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
       {!m.deleted && (
         <div
           data-home-chat-actions=""
-          className="pointer-events-none absolute flex opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+          className="pointer-events-none absolute flex rounded-[calc(var(--radius-box)/2)] opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
           style={{
             top: -10,
             [mine ? 'left' : 'right']: 0,
             gap: 0,
-            borderRadius: 8,
             border: '1px solid var(--zen-border)',
             background: 'var(--zen-surface-raised, var(--color-bg-elevated))',
           }}

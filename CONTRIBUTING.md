@@ -91,35 +91,75 @@ K2/
 └── vite.config.ts             # Vite build config
 ```
 
+## How to Add a Feature or Command
+
+A feature is a daemon route first. The CLI, the desktop app and the web client all call the same route, so the logic is written once.
+
+1. **Route.** Add the handler in `crates/k2-daemon/src/` (most areas have a file of their own, such as `activity_routes.rs`) and match its `/cli/...` path in `crates/k2-daemon/src/routes/dispatcher.rs`. Keep the dispatcher arm thin: it is one of the biggest files, and `scripts/garden/ratchet.sh` fails if it grows.
+2. **Policy row.** Every `/cli/*` route needs a row in the route policy table (`ROUTES` in `crates/k2-daemon/src/routes/route_policy.rs`). The rows live in `crates/k2-daemon/src/routes/policy/`, one file per busy area and `core.rs` for the rest, each sorted by path. A row gives the method and the lowest login role, for example `get("/cli/fs/read-binary", Member)`. A route with no row is refused for logins, and the test `every_cli_route_literal_is_in_the_policy_table` fails.
+3. **Logic.** Put it in `crates/k2-daemon` or `crates/k2-core`, never in `src-tauri/` or the renderer.
+4. **CLI verb.** Add the command to a part under `cli/src/` (a new part is also listed in `cli/src/ORDER`), wire it in `cli/src/router.sh`, then run `bash scripts/build-cli.sh`. Never edit `cli/k2`: the next build undoes it.
+5. **Renderer.** Call the route with `daemonCliGet` or `daemonCliPost` from `src/renderer/lib/daemon-cli.ts` and render the answer. No logic here.
+
+Add a Tauri command in `src-tauri/src/commands/` only for connection or OS work.
+
+Checks to run before you open a PR:
+
+```bash
+bash scripts/garden/ratchet.sh                      # the biggest source files only get smaller
+bash scripts/build-cli.sh --check                   # cli/k2 is the join of its parts
+node scripts/gen-cli-explorer-catalog.mjs --check   # the CLI explorer catalog is current
+bash scripts/regen.sh --check                       # every generated file is current (runs the two above and more; needs cargo)
+bash scripts/private-docs-gate.sh                   # no private docs in the public tree
+bun run typecheck
+bun run test                                        # vitest
+```
+
+`scripts/ci/checks.sh` lists everything CI runs.
+
 ## How to Add a New Agent Preset
 
-Agent presets are CLI commands that launch in a terminal. Built-in presets are seeded in `src-tauri/src/db/mod.rs` in the `seed_agent_presets` function.
+Agent presets are CLI commands that launch in a terminal. The built-in ones are the `BUILT_IN_AGENT_PRESETS` list in `crates/k2-core/src/db/mod.rs`. `seed_agent_presets` inserts each entry at startup when no built-in row with that label exists, so it never overwrites a preset a user has changed.
 
 To add a new built-in preset:
 
-1. Add an entry to the `presets` array in `seed_agent_presets()`:
+1. Add an entry to `BUILT_IN_AGENT_PRESETS`. Its shape is `(id, label, command, icon, sort_order)`:
 
-```rust
-("unique-uuid-here", "Agent Name", "cli-command --flags", "emoji", sort_order),
-```
+   ```rust
+   ("unique-uuid-here", "Agent Name", "cli-command --flags", "", 13),
+   ```
 
-2. If the agent has a custom icon, add an SVG to `resources/agent-icons/` and reference it in the frontend's `AgentIcon` component.
+   The label must be unique: it is the key the seed matches on. No SQL migration is needed.
+2. Optional: add a row for the label to `BUILT_IN_PRESET_METADATA` in the same file. Leave it out when you have not checked the values; a missing row means "unknown".
+3. Update the count in the test `seed_agent_presets_creates_expected_entries`.
+4. If the agent has its own icon, add an SVG to `src/renderer/assets/llm-icons/` and a rule to `LOBE_ICON_RULES` in `src/renderer/components/AgentIcon/AgentIcon.tsx`. Note its source and licence in `NOTICE.md` in that folder.
 
-3. Users can also add custom presets through the Settings UI without code changes.
+Users can also add custom presets in the app without code changes.
 
 ## How to Add a New Document Viewer
 
-Document viewers live in `src/renderer/components/FileViewerPane/`. The component dispatches on file extension.
+Document viewers live in `src/renderer/components/FileViewerPane/`. `fileCategory.ts` maps a file extension to a category, and `FileViewerPane.tsx` renders the viewer for that category.
 
-1. Add a new viewer component in `FileViewerPane/` (e.g., `CsvViewer.tsx`).
-2. Update the file extension dispatch logic in the main `FileViewerPane` component to route your extension to the new viewer.
-3. If the file format needs a parser, add the npm dependency to `package.json`.
-4. If binary file reading is needed, use the `fs_read_binary_file` Tauri command.
+1. Add a viewer component in `FileViewerPane/` (e.g., `EpubViewer.tsx`).
+2. In `fileCategory.ts`, add the category to `FileCategory`, add its extension list, and return it from `getFileCategory`. Set its default mode in `getDefaultViewMode`. If the viewer reads bytes and not text, add the category to `isBinaryPreviewCategory`.
+3. In `FileViewerPane.tsx`, load the component with `lazy()` like the other viewers and add a branch for the category.
+4. Get the file from the daemon, never from a Tauri command or the local disk: the file may be on another server. A text viewer takes the `content` that `FileViewerPane` already loaded (see `CsvViewer.tsx`). A binary viewer calls `loadHostBinary(scope, filePath)` from `src/renderer/lib/load-host-binary.ts`, which reads the `fs/read-binary` route (see `ModelViewer.tsx`).
+5. If the format needs a parser, add the npm dependency to `package.json`.
+6. Add the new extension to `FileViewerPane.category.test.ts`.
 
 Existing viewers:
 - **Markdown** -- `react-markdown` with `remark-gfm`
-- **PDF** -- `pdfjs-dist`
-- **DOCX** -- `mammoth`
+- **PDF** -- `PDFViewer.tsx`, `pdfjs-dist`
+- **DOCX** -- `DocxViewer.tsx`, `mammoth`
+- **CSV and TSV** -- `CsvViewer.tsx`
+- **Images** -- `ImageViewer.tsx`
+- **Audio and video** -- `MediaViewer.tsx`
+- **Zip archives** -- `ZipViewer.tsx`
+- **Mermaid and other diagram sources** -- `DiagramViewer.tsx`, `mermaid`
+- **DXF drawings** -- `DxfViewer.tsx`, `dxf-parser`
+- **3D models** -- `ModelViewer.tsx`, `three`
+- **Board files** -- `BoardFilePane.tsx`
+- **Code and plain text** -- `CodeEditor.tsx`
 
 ## Code Style
 

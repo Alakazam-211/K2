@@ -366,9 +366,9 @@ fn fast() -> Limits {
 }
 
 /// One viewer over a real socket (`ingress` is the label the dispatcher
-/// would give; the socket itself is loopback). `Err` = the HTTP status of
-/// a refusal before the upgrade.
-async fn open(t: &str, ingress: &str, extra: &[(&str, &str)], limits: Limits) -> Result<(Client, tokio::task::JoinHandle<()>), u16> {
+/// would give; the socket itself is loopback). `Err` = the HTTP status and
+/// body of a refusal before the upgrade.
+async fn open(t: &str, ingress: &str, extra: &[(&str, &str)], limits: Limits) -> Result<(Client, tokio::task::JoinHandle<()>), (u16, String)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let mut p = params(&[("ticket", t), ("codecs", "h264,jpeg"), ("win", "3")]);
@@ -381,13 +381,13 @@ async fn open(t: &str, ingress: &str, extra: &[(&str, &str)], limits: Limits) ->
     });
     match tokio_tungstenite::connect_async(format!("ws://{addr}/cli/desktop/stream")).await {
         Ok((c, _)) => Ok((c, server)),
-        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => Err(r.status().as_u16()),
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => Err((r.status().as_u16(), String::from_utf8_lossy(r.body().as_deref().unwrap_or_default()).into_owned())),
         Err(e) => panic!("connect: {e}"),
     }
 }
 
 async fn viewer(name: &str, session: &str, extra: &[(&str, &str)], limits: Limits) -> Client {
-    open(&ticket_for(name, session), "lan", extra, limits).await.unwrap_or_else(|s| panic!("{name} refused with {s}")).0
+    open(&ticket_for(name, session), "lan", extra, limits).await.unwrap_or_else(|(s, body)| panic!("{name} refused with {s}: {body}")).0
 }
 
 /// What arrives next: a text message, a frame (acked, so the window never
@@ -785,8 +785,8 @@ fn kick_disable_and_disconnect_at_the_screen_close_viewers() {
         let t = ticket_for("olive", &olive);
         let (c, _s) = open(&t, "lan", &[], fast()).await.expect("first use");
         drop(c);
-        assert_eq!(open(&t, "lan", &[], fast()).await.err(), Some(401));
-        assert_eq!(open(&ticket_for("olive", &olive), "loopback", &[], fast()).await.err(), Some(403), "same machine");
+        assert_eq!(open(&t, "lan", &[], fast()).await.err().map(|e| e.0), Some(401));
+        assert_eq!(open(&ticket_for("olive", &olive), "loopback", &[], fast()).await.err().map(|e| e.0), Some(403), "same machine");
     });
 }
 

@@ -53,16 +53,16 @@ pub const PRODUCT_VERSION: &str = env!("K2_PRODUCT_VERSION");
 /// `k2_node_proto::PROTOCOL` (a test pins them together).
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=10 os=linux arch=x86_64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=11 os=linux arch=x86_64;");
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=10 os=linux arch=aarch64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=11 os=linux arch=aarch64;");
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=10 os=macos arch=x86_64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=11 os=macos arch=x86_64;");
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=10 os=macos arch=aarch64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=11 os=macos arch=aarch64;");
 
 /// The build commit marker (vs-live V8; `build.rs`): `c=` 40 hex, or
 /// `none` for a build without `K2_NODE_BUILD_COMMIT`. Exactly once in the

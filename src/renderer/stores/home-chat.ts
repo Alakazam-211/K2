@@ -82,6 +82,7 @@ export const useHomeChatStore = create<HomeChatStore>((set, get) => ({
   openChat: (target) => {
     if (usePageViewStore.getState().page === 'home') homeRooms.showPrimary()
     closeGrokChat()
+    watchGrokChats()
     set({ open: target })
   },
   closeChat: () => {
@@ -125,10 +126,17 @@ export const useHomeChatStore = create<HomeChatStore>((set, get) => ({
     }),
 }))
 
-// A Grok Bot chat taking the main area closes the Home chat.
-useGrokBotsStore.subscribe((s, prev) => {
-  if (s.open && s.open !== prev.open) useHomeChatStore.getState().closeChat()
-})
+// A Grok Bot chat taking the main area closes the Home chat. Watched from
+// the first Home chat opened (not at load, so suites that stand in for the
+// Grok Bots store never meet it).
+let watchingGrok = false
+function watchGrokChats(): void {
+  if (watchingGrok) return
+  watchingGrok = true
+  useGrokBotsStore.subscribe((s, prev) => {
+    if (s.open && s.open !== prev.open) useHomeChatStore.getState().closeChat()
+  })
+}
 
 /** Add to Home offers People and Channels once any server this window
  *  knows says it has Home chat (`home-chat-v1` in `/boot-status`). */

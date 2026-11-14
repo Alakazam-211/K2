@@ -1,0 +1,166 @@
+    {
+      "name": "connect",
+      "usage": "k2 connect <login|status|logout> ...",
+      "description": "Pair a purchased k2.dev subdomain to this device: account login (Supabase email/password or --token JWT), pick subdomain, write tunnel config, start tunnel. Nested Pro subdomains stay under k2 publish.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "connect login",
+      "usage": "k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]",
+      "description": "Sign in to k2.dev, list purchased subdomains, bind tunnel token via POST /cli/tunnel/config, start tunnel. Password is never stored (only ~/.k2/connect-account.json access/refresh tokens, 0600).",
+      "args": [],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Account email (prompted if omitted)."},
+        {"name": "--token", "arg": "jwt", "description": "Access JWT instead of email/password (scripted)."},
+        {"name": "--subdomain", "arg": "label", "description": "Skip the interactive picker."}
+      ]
+    },
+    {
+      "name": "connect status",
+      "usage": "k2 connect status",
+      "description": "Show account session + paired subdomain + live tunnel status when the daemon is up.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "connect logout",
+      "usage": "k2 connect logout",
+      "description": "Clear ~/.k2/connect-account.json. Does not unpair the tunnel (use k2 tunnel release --confirm).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "users",
+      "usage": "k2 users [list|add|set-role|share|set-password|audit|unlock] ...",
+      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin (temporary unless --keep-password) at member or voice_chat (Voice & Chat only), or owner/admin by a set-role after; set-role changes a role; share sets what a voice_chat login may use; set-password resets someone's password (owner only, temporary unless --keep-password); audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only); unlock clears a box login lock without changing the password.",
+      "args": [],
+      "flags": [
+        {"name": "--tail", "arg": "N", "description": "audit: how many records (1..1000, default 50)."},
+        {"name": "--json", "arg": null, "description": "list: {ok,users:[{username,role,disabled,wasViewer,canClone,createdAt,firstName,lastName,displayName,mustChangePassword,shares}]}; unlock: daemon body; audit: raw JSON {events,tail,path}."}
+      ]
+    },
+    {
+      "name": "users unlock",
+      "usage": "k2 users unlock <username> [--json]",
+      "description": "Clear a box login lock without changing the password. Exit 0 when no lock is present. Does not create a user.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,username,cleared}."}
+      ]
+    },
+    {
+      "name": "users add",
+      "usage": "k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]... [--fixed-password|--no-fixed-password] [--force] [--password-stdin] [--keep-password]",
+      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). member and voice_chat are made at that role in the add; owner/admin are set by set-role after it. voice_chat (Voice & Chat only) joins voice rooms and uses only what is shared with it: --share-agent (their own conversation with that agent; its memory is shared by every login and its own Thread, so a dedicated demo agent only) and --share-garden (a Garden, read-only on a phone). A voice_chat password is fixed and kept unless --no-fixed-password.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--role", "arg": "role", "description": "owner | admin | member | voice_chat (there is no viewer role)"},
+        {"name": "--share-agent", "arg": "agent", "description": "voice_chat only: an agent address whose Thread it may read and post in (repeat)."},
+        {"name": "--share-garden", "arg": "garden", "description": "voice_chat only: a Garden id or name it may view read-only (repeat)."},
+        {"name": "--share-source", "arg": "name", "description": "voice_chat only: a data source a shared Garden may show (repeat)."},
+        {"name": "--fixed-password", "arg": null, "description": "The person can't change the password (a login many people share, e.g. a store reviewer). The default for --role voice_chat, whose password is also kept (not temporary)."},
+        {"name": "--no-fixed-password", "arg": null, "description": "voice_chat: the person may change the password (still kept, not temporary)."},
+        {"name": "--force", "arg": null, "description": "Share an agent that isn't a dedicated demo agent anyway (warnings printed)."},
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
+        {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the first sign-in."}
+      ]
+    },
+    {
+      "name": "users set-role",
+      "usage": "k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]",
+      "description": "Change a login's role (POST /cli/users/set-role). The owner changes any role; an Admin only member <-> voice_chat. Into or out of voice_chat applies at once with no sign-out (and moving someone to voice_chat ends their paired phones); other changes sign the person out. Exit 3 when refused.",
+      "args": [{"name": "username", "required": true}, {"name": "role", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "users share",
+      "usage": "k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--source <name>]... [--force] [--clear] [--json]",
+      "description": "What a Voice & Chat only (voice_chat) login may use besides voice rooms: agents by address (a dedicated demo agent only; the person gets their own conversation with it, delivered as a guest), Gardens by id or name (read-only on a phone) and data sources by name. With flags it REPLACES the list (POST /cli/users/set-shares, Admin or owner); without, it shows it.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "agent", "description": "An agent address (repeat)."},
+        {"name": "--garden", "arg": "garden", "description": "A Garden id or name (repeat)."},
+        {"name": "--source", "arg": "name", "description": "A data source name (repeat)."},
+        {"name": "--force", "arg": null, "description": "Share a non-demo agent anyway (warnings printed)."},
+        {"name": "--clear", "arg": null, "description": "Share nothing."},
+        {"name": "--json", "arg": null, "description": "{ok,username,shares:{agents,gardens}}."}
+      ]
+    },
+    {
+      "name": "users set-password",
+      "usage": "k2 users set-password <username> [--password-stdin] [--keep-password]",
+      "description": "Reset someone's password (POST /cli/users/set-password; owner token or an Owner login). Signs them out everywhere. Temporary (they choose their own at the next sign-in) unless --keep-password; a reset of the owner's own linked login is kept. Exit 3 when refused.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
+        {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the next sign-in."}
+      ]
+    },
+    {
+      "name": "users pair-phone",
+      "usage": "k2 users pair-phone [--user <login>] [--json] [--invert]",
+      "description": "Make a one-time pairing code (10 minutes) plus a QR for the K2 Companion phone app (POST /cli/auth/device/pair-code). The owner token pairs as --user, else as the login linked to the owner; a login pairs only as itself and types its password again. Never from a browser. Exit 3 when refused.",
+      "args": [],
+      "flags": [
+        {"name": "--user", "arg": "login", "description": "The login the phone signs in as (owner token only)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,code,user,expiresAt,expiresInSecs,host,pairUrl,qr}."},
+        {"name": "--invert", "arg": null, "description": "Draw the QR for a light-background terminal."}
+      ]
+    },
+    {
+      "name": "users phones",
+      "usage": "k2 users phones [--json]",
+      "description": "List paired phones (GET /cli/auth/devices): the owner token or an Owner login sees everyone's, any other login its own. Also shows the login a new code pairs as.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,devices[],pairAs}."}
+      ]
+    },
+    {
+      "name": "users unpair-phone",
+      "usage": "k2 users unpair-phone <id> [--json]",
+      "description": "End one paired phone (POST /cli/auth/device/revoke). The owner token or an Owner login may end anyone's, any other login its own. The phone then gets device_session_ended and must pair again.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,revoked,username}."}
+      ]
+    },
+    {
+      "name": "users set-can-clone",
+      "usage": "k2 users set-can-clone <username> on|off",
+      "description": "Settings → Admin Access → Can clone (POST /cli/users/set-can-clone, owner only). Defaults on; Owners can always clone.",
+      "args": [{"name": "username", "required": true}, {"name": "on|off", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "clone",
+      "usage": "k2 clone <preview|to|from|here|proposals|approve|deny|propose|withdraw> ...",
+      "description": "Copy an agent (workspace, chat history, Thread, chosen vault secrets) to another server, this computer or a second copy here. People clone (clone gate: owner, or a login with Can clone; the personal-computer switch for pulls); agents propose and a person approves. Never prints a secret value. Exit 0 ok, 2 bad usage, 3 refused/unreachable.",
+      "args": [],
+      "flags": [
+        {"name": "--no-threads", "arg": null, "description": "Leave the Thread behind (default: bring it)."},
+        {"name": "--threads-since", "arg": "N", "description": "Only the last N days of Thread."},
+        {"name": "--copy", "arg": "NAMES", "description": "Secrets to copy (Owner/Admin confirm)."},
+        {"name": "--blank", "arg": "NAMES", "description": "Secrets to leave blank (a card on the clone's Thread)."},
+        {"name": "--skip", "arg": "NAMES", "description": "Secrets to skip."},
+        {"name": "--own", "arg": null, "description": "My own server: keep given-by-a-person marks."},
+        {"name": "--live-only", "arg": null, "description": "Only the newest chat transcript."},
+        {"name": "--env-files", "arg": null, "description": "Also send .env files as files (asks to confirm)."},
+        {"name": "--dest", "arg": "DIR", "description": "Parent folder on the target."},
+        {"name": "--host", "arg": "HOST", "description": "preview: a remote server."},
+        {"name": "--token", "arg": "TOKEN", "description": "Remote token (else connect-tokens.json / $K2_REMOTE_TOKEN)."},
+        {"name": "--yes", "arg": null, "description": "Don't ask; defaults and flags as given."},
+        {"name": "--json", "arg": null, "description": "Names, choices and counts as JSON."}
+      ]
+    },
+    {
+      "name": "clone propose",
+      "usage": "k2 clone propose --to <host|here> [--no-threads] [--threads-since N] [--copy A,B] [--blank C] [--skip D] [--dest DIR] --why \"…\"",
+      "description": "Agents: hold a clone of your own workspace for a person (POST /cli/clone-proposal/new). Posts one Thread line for your human; you get a k2 msg when they approve, deny or it expires (7 days). k2 clone proposals --mine, k2 clone withdraw <id>.",
+      "args": [],
+      "flags": [
+        {"name": "--to", "arg": "HOST|here", "description": "Where the clone goes."},
+        {"name": "--why", "arg": "TEXT", "description": "Why, for your human (required for agents)."}
+      ]
+    },

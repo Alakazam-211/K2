@@ -1,0 +1,873 @@
+    {
+      "name": "app",
+      "usage": "k2 app <user|role|grant|token|hydra|front-door> ...",
+      "description": "Guests, roles, grants, and tokens for apps on this box (caps + rooms). Not a host — use k2 publish. Not desktop updates (k2 update --app). Separate from Connect users. Leftover: k2 skin.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app validate",
+      "usage": "k2 app validate [<name>] [--dir <path>] [--json]",
+      "description": "Parse every JS/TS file and inline script of a published App's folder (or a workspace folder) with oxc and run the leak lints. Never runs the code. file:line:col per finding, each with a suggestion. Exit 0 no errors, 1 errors.",
+      "args": [{"name": "name", "required": false}],
+      "flags": [
+        {"name": "--dir", "arg": "path", "description": "A folder in this workspace instead of a published App."},
+        {"name": "--json", "arg": null, "description": "{ok, status, target, dir, files, errors, warnings, skipped}."}
+      ]
+    },
+    {
+      "name": "app db connect",
+      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json]",
+      "description": "Connect an App to a Postgres database on this box, end to end: create one for it (--new; again is the same one) or pick one its workspace owns or was granted (--db); give the App its own login (never the agent's); grant it DATABASE_URL and, on its own workspace's database, DATABASE_MIGRATE_URL (env secrets, never printed); open its database door; re-host it; check it from inside the App (select 1 as the App). --major takes any major K2 runs here (k2 app db status lists them); a major or cluster this box doesn't run is refused (app_db_cluster_missing, exit 3), never installed. An agent missing a switch, or connecting another workspace's database, gets ONE held card naming each switch by its Settings name (exit 2; run its Ask with: line). Exit 0 PASS (or the check skipped: not running), 1 FAIL or usage, 2 held, 3 refused.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--new", "arg": null, "description": "A new database for this App."},
+        {"name": "--major", "arg": "N", "description": "With --new: the Postgres major (default: the box's)."},
+        {"name": "--cluster", "arg": "NAME", "description": "With --new: a named cluster of this workspace (k2 db clusters)."},
+        {"name": "--name", "arg": "DB", "description": "With --new: the database's name."},
+        {"name": "--db", "arg": "name|id", "description": "An existing database its workspace owns or was granted (k2 db list)."},
+        {"name": "--as", "arg": "NAME_URL", "description": "The env name (default DATABASE_URL; the migrator's becomes NAME_MIGRATE_URL)."},
+        {"name": "--no-migrate-url", "arg": null, "description": "Don't grant DATABASE_MIGRATE_URL."},
+        {"name": "--wait", "arg": null, "description": "When held, wait for the owner's answer (--timeout, default 10m), then print the result."},
+        {"name": "--json", "arg": null, "description": "{app, as, kind, db, cluster, major, roles[], secrets[], doorOpen, check: {ok, version, latencyMs, step, error, appOutput[]}, checkedAt, rehost}; held: {status: held, request, switches[]}."}
+      ]
+    },
+    {
+      "name": "app db status",
+      "usage": "k2 app db status <app-id> [--json]",
+      "description": "An App's databases: each name (DATABASE_URL, --as) with its database, major, cluster, login, door and last check; its connect cards waiting for the owner; the Postgres majors K2 runs here. Never a URL.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{app, kind, running, postgres, majors, connections[], pending[]}."}
+      ]
+    },
+    {
+      "name": "app db check",
+      "usage": "k2 app db check <app-id> [--as NAME_URL] [--json]",
+      "description": "The live check again, no card needed: log in as the App's own login from inside the App (the daemon for a process App) and run select 1 and version(). FAIL names the step (no_url, no_door, door_refused, auth_failed, db_missing, app_not_running, rehost_failed, exec_failed) and shows the App's last output lines. Exit 0 PASS, 1 FAIL.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--as", "arg": "NAME_URL", "description": "Which connection (default DATABASE_URL)."},
+        {"name": "--json", "arg": null, "description": "The connect answer's shape."}
+      ]
+    },
+    {
+      "name": "app db disconnect",
+      "usage": "k2 app db disconnect <app-id> [--as NAME_URL] [--drop-roles] [--json]",
+      "description": "Take the database away from the App, at once and with no card: its login stops (NOLOGIN), its open sessions end, its door refuses it, its secrets go, and it is re-hosted. The database is never dropped. --drop-roles also drops the App's roles where they own nothing.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--as", "arg": "NAME_URL", "description": "Which connection (default DATABASE_URL)."},
+        {"name": "--drop-roles", "arg": null, "description": "Drop the App's roles too."},
+        {"name": "--json", "arg": null, "description": "{app, as, db, roles, rolesDropped, secrets, doorOpen, sessionsCut, rehost}."}
+      ]
+    },
+    {
+      "name": "app status",
+      "usage": "k2 app status <app-id> [--no-checks] [--public] [--json]",
+      "description": "How an App is doing in one answer: deploy, health, its host.checks, errors in the last hour, resources, door, hosts, phone, the update feed, and next: one exact command per red or yellow item. Exit 0 green, 1 red, 2 yellow, 3 refused. App output is never printed.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--no-checks", "arg": null, "description": "Show the host.checks run recorded when the live deploy switched in; run none now."},
+        {"name": "--public", "arg": null, "description": "Run host.checks through the App's public URL (TLS and the relay), not on this machine."},
+        {"name": "--json", "arg": null, "description": "{schema: 1, verdict, deploy, health, checks, errors, resources, door, hosts, phone, updates, next}."}
+      ]
+    },
+    {
+      "name": "explain",
+      "usage": "k2 explain [<id>] [--json]",
+      "description": "What an App refusal id means (the error field a refused k2 app command prints), the fix, who fixes it, the exit code. With no id: every id by area. No daemon. Exit 4 for an unknown id.",
+      "args": [{"name": "id", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{id, area, http, exit, what, fix, who, askable, status, aliases}."}
+      ]
+    },
+    {
+      "name": "capabilities",
+      "usage": "k2 capabilities [--node <name>] [--json]",
+      "description": "What this server can do for Apps before you try: engines, protocols, ports, domains, simulators, Postgres, mail, push keys (set or not), the update feed, limits, and the compute nodes your workspace may use. Each no row names the reason, the fix and the refusal id.",
+      "args": [],
+      "flags": [
+        {"name": "--node", "arg": "name", "description": "Only that compute node's row."},
+        {"name": "--json", "arg": null, "description": "{schema: 1, box: [...], compute: [...], doctor}; a row is {cap, ok, detail, missing?: {reason, fix, code}}."}
+      ]
+    },
+    {
+      "name": "approve",
+      "usage": "k2 approve request --payload <file> [--to <login>] [--wait] [--out <file>] [--json] | k2 approve status [<id>] [--out <file>] [--json] | k2 approve cancel <id>",
+      "description": "Signed approvals: ask a person to approve the exact bytes a relying party wrote (K2-SIGNED-APPROVAL-1, a zero byte, strict JSON, at most 16 KB). They read it and approve on their own phone (Face ID or passcode); the phone signs the bytes and you get an approval record for the relying party, which checks the signature with keys it trusts. K2 only carries the bytes; you can never answer. Needs the approve.request permission (an Owner or Admin: k2 approve agents <workspace> on). Without --to you ask the person you work for; anyone else must allow you first. At most 3 waiting, 20 asks an hour; answer_by at most 60 minutes away. Exit 0 asked/approved, 1 declined/expired/cancelled, 2 bad request, 3 refused. POST /cli/approve/request.",
+      "args": [],
+      "flags": [
+        {"name": "--payload", "arg": "file", "description": "request: the payload file, sent byte for byte."},
+        {"name": "--to", "arg": "login", "description": "request: the person to ask (default: the person you work for)."},
+        {"name": "--wait", "arg": null, "description": "request: wait until approved, declined or expired."},
+        {"name": "--out", "arg": "file", "description": "request --wait / status <id>: write the approval record there once approved."},
+        {"name": "--json", "arg": null, "description": "The request as JSON: {id, state, person, kind, rp, nonce, answerBy, device, record, card}."}
+      ]
+    },
+    {
+      "name": "send-feedback",
+      "usage": "k2 send-feedback \"<text>\" [--category bug|idea|praise|other] [--diagnostics | --diagnostics-preview] [--yes] [--json]",
+      "description": "Tell Alakazam Labs, K2's makers, about K2 itself (a bug, an idea, praise); not for asking your human (k2 tickets ask). Sent: the category, the text with vault values taken out, person or agent, the client and the K2/OS versions; never your name, workspace, files, chats or tokens. The server keeps it in an outbox and sends it when it can (queued with the reason while K2's feedback service isn't reachable yet). Agents: while the owner keeps agents on, 1 in any 60 s and 3 in any 24 h per workspace, 10 in any 24 h for the server; no contact email. Text from stdin with -. Subcommands: list [--state S], show <id>, retry <id>, cancel <id>, settings. POST /cli/product-feedback/send. Exit 3 when refused, nothing saved (disabled, agents_off, agent_limit, diagnostics_need_owner, needs_connect, airgap). Not k2 feedback (that asks your human). k2 study send-feedback.",
+      "args": [{"name": "text", "required": true, "description": "What to tell Alakazam Labs (1 to 20,000 bytes); - reads stdin."}],
+      "flags": [
+        {"name": "--category", "arg": "bug|idea|praise|other", "description": "Default other."},
+        {"name": "--diagnostics", "arg": null, "description": "Also send details about K2 on this computer (versions, settings on, counts, recent errors, the end of K2's log; secrets and names taken out), printed first and asked about. An agent needs the owner's agentDiagnostics (diagnostics_need_owner)."},
+        {"name": "--diagnostics-preview", "arg": null, "description": "Print those details; send nothing."},
+        {"name": "--yes", "arg": null, "description": "Answer yes to the --diagnostics question (scripts; needed with no terminal)."},
+        {"name": "--json", "arg": null, "description": "The outbox row: {id, state, category, text, senderKind, client, error, errorMessage, nextAttemptAt, sentAt, remoteId, hasDiagnostics}."}
+      ]
+    },
+    {
+      "name": "app sdk add",
+      "usage": "k2 app sdk add <app-folder> [--sew] [--json]",
+      "description": "Copy @k2/server (this K2's version) into <app-folder>/vendor/ and add \"@k2/server\": \"file:vendor/k2-server-<version>.tgz\" to its package.json (made when missing); then npm install and import { fromEnv } from '@k2/server'. --sew also copies @sew/client, voice, channel, e2ee and bff (Sew 0.5.0+ on this box), pins their links in npm overrides and prints the npm i line for their registry deps and peers. Idempotent; never runs npm or uses the network; writes only vendor/ and package.json. POST /cli/app/sdk/add {folder, sew}. Owner, Admin, a K2 terminal, or the App's agent with Build and run Apps (its own workspace's folders).",
+      "args": [{"name": "app-folder", "required": true, "description": "The App's folder (the one you deploy)."}],
+      "flags": [
+        {"name": "--sew", "arg": null, "description": "Also Sew's client packages (chat, voice, video)."},
+        {"name": "--json", "arg": null, "description": "{folder, vendored[], removed[], packageJson, overrides[], peers, external, install, sew}."}
+      ]
+    },
+    {
+      "name": "app sdk status",
+      "usage": "k2 app sdk status <app-folder> [--json]",
+      "description": "What <app-folder>/vendor/ holds against what this box carries: current, older, newer, missing. GET /cli/app/sdk/status?folder=.",
+      "args": [{"name": "app-folder", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{folder, box, packages[]}."}]
+    },
+    {
+      "name": "app sdk kit",
+      "usage": "k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]",
+      "description": "Keep Sew's App kit on this box for k2 app sdk add --sew (only the Sew version this K2 pins, checked against its pinned sha256). POST /cli/app/sdk/kit {path}.",
+      "args": [{"name": "path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{version, sha256, packages[]}."}]
+    },
+    {
+      "name": "app init",
+      "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name> | --app <app>] [--voice] [--dry-run] [--json]",
+      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). Every tauri run also writes the store files (src-tauri/PrivacyInfo.xcprivacy, src-tauri/Info.ios.plist with the scene manifest iOS 27 requires and the export answer), src-tauri/src/k2_http.rs (one HTTP client) and the README's store and user-data sections, and prints the Cargo lines (Tauri 2.12.5+, K2's patched wry) and Android lines it lacks. With --voice: the mic and camera keys, background audio, src-tauri/src/k2_voice.rs (media for the App's own origin only) and the first window's call settings. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
+      "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
+      "flags": [
+        {"name": "--template", "arg": "tauri|static|node-api", "description": "What to write."},
+        {"name": "--name", "arg": "name", "description": "The App name (default: the folder's name)."},
+        {"name": "--app", "arg": "app", "description": "tauri only: a thin shell over this App, already on this box, instead of a new <name>-web."},
+        {"name": "--voice", "arg": null, "description": "tauri only: what calls in the webview need: the mic and camera keys (macOS, iOS), k2_voice.rs (media for the App's own origin), the first window's call settings; the Android lines are printed."},
+        {"name": "--dry-run", "arg": null, "description": "Print every file and change; write nothing."},
+        {"name": "--json", "arg": null, "description": "{template, folder, name, files[{path, action, note, content?}], next[], notes[], applied?}."}
+      ]
+    },
+    {
+      "name": "app doctor store",
+      "usage": "k2 app doctor --store [<folder>] [--voice | --no-voice] [--json]",
+      "description": "Is a Tauri App's repo ready for App Store and Play review? Checks Tauri 2.12.5+ and K2's patched wry (Cargo.lock or Cargo.toml), the iOS privacy manifest (its reasons, and that the iOS target includes it), UIApplicationSceneManifest (iOS 27), ITSAppUsesNonExemptEncryption, and with calls the usage strings, background audio, the macOS mic entitlement and the Android permissions. Prints each problem with its fix; only reads. Exit 1 on an error. POST /cli/app/doctor/store {folder, voice}. Who: as k2 app init.",
+      "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
+      "flags": [
+        {"name": "--store", "arg": null, "description": "Check a Tauri repo for the stores (without it, k2 app doctor checks this box for Apps)."},
+        {"name": "--voice", "arg": null, "description": "Check calls too (default: when the repo has them)."},
+        {"name": "--no-voice", "arg": null, "description": "Skip the call checks."},
+        {"name": "--json", "arg": null, "description": "{folder, voice, voiceWhy, tauri, tao, wry, findings[{id, level, platform, path, problem, fix}], passed[], notes[], ok}."}
+      ]
+    },
+    {
+      "name": "app links",
+      "usage": "k2 app links <app> | k2 app links set <app> [--ios ID]… [--android PKG:SHA256[,…]]… [--path P]… [--drop P]… | off <app> | check <app> [--json]",
+      "description": "Open-in-app links for an App's own iOS and Android apps: K2 serves the AASA and assetlinks.json on the App's hosts, with or without phone pairing. A path may carry a query pattern (/messages?addr=*). A path already set is removed only with --drop (refused link_path_dropped otherwise). Apps K2 doesn't front (host.clientIp: false) are refused needs_k2_front. GET /cli/app/links?app=, POST /cli/app/links/set|off|check {app, ios, android, paths, drop}. The owner, an Admin or the App's agent with Build and run Apps; check is the owner's.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--ios", "arg": "TEAMID.bundle.id", "description": "An iOS app id (repeat)."},
+        {"name": "--android", "arg": "package:SHA256[,SHA256]", "description": "An Android package and its signing fingerprints (repeat)."},
+        {"name": "--path", "arg": "path", "description": "A path the apps open, optionally ?name=pattern (repeat; at most 20)."},
+        {"name": "--drop", "arg": "path", "description": "Remove a path that was set before, on purpose (repeat)."},
+        {"name": "--json", "arg": null, "description": "{app, appId, name, state, served, hosts[], ios[], android[], paths[{spec, path, query, since}], pairing, warnings?}."}
+      ]
+    },
+    {
+      "name": "app auth",
+      "usage": "k2 app auth [<app>] | k2 app auth door on|off [<app>] | k2 app auth origins <app> [--origin O]… [--clear] [--json]",
+      "description": "The sign-in door: an App's own page posts passwords to K2 at /.k2/auth/* on the App's host and gets a one-time code its server swaps (k2.auth.exchange). door on|off with no app is the server's switch (the owner; it starts off); with an app, that App only. origins lists extra page origins (a bundled Tauri page). k2 study auth-pages.",
+      "args": [{"name": "app", "required": false}],
+      "flags": [
+        {"name": "--origin", "arg": "origin", "description": "origins: one page origin, such as tauri://localhost (repeat; replaces the list)."},
+        {"name": "--clear", "arg": null, "description": "origins: empty the list."},
+        {"name": "--json", "arg": null, "description": "{box{on, stored, envOverride, door}, app?{app, appId, name, door, appOff, origins[], pairingOrigins[], hosts[], labelHasDoor}, warnings?}."}
+      ]
+    },
+    {
+      "name": "app updates push",
+      "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--evidence <ci release run>] [--no-wait] [--json]",
+      "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "stable, beta or [a-z][a-z0-9-] up to 20."},
+        {"name": "--version", "arg": "semver", "description": "Strict SemVer 2.0.0 (1.4.1, 1.4.0-build.42)."},
+        {"name": "--artifact", "arg": "platform=file", "description": "Tauri v2 platform key and its archive (.app.tar.gz, .AppImage, .deb, .rpm, .msi, .exe, .nsis.zip, …). Repeat per platform."},
+        {"name": "--sig", "arg": "platform=file.sig", "description": "The signature file when it isn't <file>.sig."},
+        {"name": "--notes-file", "arg": "file", "description": "Release notes (up to 16 KiB)."},
+        {"name": "--drop-platform", "arg": "platform", "description": "Stop serving a platform the channel's current release has."},
+        {"name": "--no-wait", "arg": null, "description": "Return while uploading (exit 2)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates ls",
+      "usage": "k2 app updates ls <app> [--channel <name>] [--release <id|version>] [--json]",
+      "description": "Channels and their versions, every release with its files (download links, sizes, upload state), active users and the updater URLs to put in tauri.conf.json. GET /cli/app/updates.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "Only this channel's releases."},
+        {"name": "--release", "arg": "id|version", "description": "Only this release."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates key",
+      "usage": "k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>] [--json]",
+      "description": "Show or set the App's updater PUBLIC key (the .pub content tauri signer generate wrote; tauri.conf.json plugins.updater.pubkey). A secret key is refused. Changing it after the App has releases is held for the owner. GET /cli/app/updates/key, POST /cli/app/updates/key/set.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--set", "arg": "pubkey", "description": "The public key text."},
+        {"name": "--set-file", "arg": "file.pub", "description": "Read the public key from a file."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates token",
+      "usage": "k2 app updates token <app> [--file <path> | --stdin] [--json]",
+      "description": "Keep the App's download-host token (k2dl_…, minted by K2 Web) in the vault, read from a file or stdin, never an argument; without --file/--stdin, show whether one is set (fingerprint only). POST /cli/app/updates/token/set, GET /cli/app/updates/token.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--file", "arg": "path", "description": "Read the token from this file."},
+        {"name": "--stdin", "arg": null, "description": "Read the token from stdin."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates promote",
+      "usage": "k2 app updates promote <app> --from <channel> --to <channel> [--version <v>] [--drop-platform] [--json]",
+      "description": "Point a channel at a release that is already uploaded (default: --from's current one). No re-upload; forward only. POST /cli/app/updates/promote.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "channel", "description": "Where the release is now."},
+        {"name": "--to", "arg": "channel", "description": "The channel to move."},
+        {"name": "--version", "arg": "v", "description": "A specific uploaded release."},
+        {"name": "--drop-platform", "arg": null, "description": "Allow the release to serve fewer platforms than --to's current one."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates rollback",
+      "usage": "k2 app updates rollback <app> --channel <name> --to <version> [--json]",
+      "description": "Point a channel back at an older release it served. Tauri installs only newer versions by default, so people already on the bad version stay on it; ship a higher version to fix them. POST /cli/app/updates/rollback.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "The channel to move back."},
+        {"name": "--to", "arg": "version", "description": "An older release the channel served."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates pull",
+      "usage": "k2 app updates pull <app> --version <version> [--json]",
+      "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). A download host that can (k2dl 1.4.0+) stops serving its files too; an older one keeps them. POST /cli/app/updates/pull.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--version", "arg": "version", "description": "The release to pull."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates stats",
+      "usage": "k2 app updates stats <app> [--days 30] [--json]",
+      "description": "Downloads per version from the download host (unavailable when it doesn't answer, never zero) and update checks per day, platform and version from this box. GET /cli/app/updates/stats.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--days", "arg": "N", "description": "Window in days (1-366, default 30)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates fleet",
+      "usage": "k2 app updates fleet [--json]",
+      "description": "Every App's channels, release counts and check-ins on this box, aggregate only. The owner and Admins. GET /cli/app/updates/fleet.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app user add",
+      "usage": "k2 app user add <username> [--email e] [--password-stdin | --temp-password] [--app <app> [--role R]]",
+      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Optional guest email, used for invites and password resets."},
+        {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."},
+        {"name": "--temp-password", "arg": null, "description": "K2 makes a password and prints it once; the person chooses their own at first sign-in."},
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. No box login. Agents: one of their own workspace's Apps."},
+        {"name": "--role", "arg": "role", "description": "With --app: the role on that App (host-wide or tagged for that App)."}
+      ]
+    },
+    {
+      "name": "app user invite",
+      "usage": "k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]",
+      "description": "Mail a person a one-time link to set their own password for one App (no password ever goes in the mail). A new person needs --email and is made App-only (that App's grant, no box login). The owner, or an agent with \"manage Apps\" for its own workspace's Apps: an agent's invite leaves from its workspace's address under its email sending mode (off: exit 3; approval: held, the link's clock starts when it is sent). No mail path: an agent is refused, the owner gets the link once. Links expire (invites 72 h by default; k2 app login settings).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (service id, App id or <workspace>/<name>)."},
+        {"name": "--email", "arg": "e", "description": "The new person's email (an existing person uses their stored email)."},
+        {"name": "--role", "arg": "R", "description": "With a new person: the role on that App."},
+        {"name": "--from", "arg": "address", "description": "Owner only: the hosted address to send from (agents always use their workspace's)."},
+        {"name": "--json", "arg": null, "description": "{ok, username, app, delivered: sent|held|returned, sentTo, from, expiresAt, link (returned only)}."}
+      ]
+    },
+    {
+      "name": "app user reset",
+      "usage": "k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]",
+      "description": "An agent with the App-users switch: K2 mails the person the App's reset link, to the email on the login (never shown to the agent; starting it ties nobody); --revoke takes back unused links. The owner, or an admin for App-only users: a one-time reset link on K2's own page. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). The stored email is refused for anyone an agent or App key set up (any tie: it could have chosen the address) and for an email from before 0.46.4 you haven't set since: use --to or --code. The front door must be https and no App's domain. An owner reset link lives 24 h (K2's, never the App's setting).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "Whose set-password page and link life to use (default: the App the person uses)."},
+        {"name": "--revoke", "arg": null, "description": "Take back this login's unused links on the App."},
+        {"name": "--to", "arg": "email", "description": "Mail it here instead; becomes their email when used."},
+        {"name": "--code", "arg": null, "description": "Show the link once instead of mailing it."},
+        {"name": "--from", "arg": "address", "description": "The hosted address to send from."},
+        {"name": "--json", "arg": null, "description": "{ok, username, app, delivered, sentTo, expiresAt, link (returned only)}."}
+      ]
+    },
+    {
+      "name": "app login settings",
+      "usage": "k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--invite-subject <s>] [--invite-body-file <f>] [--reset-subject <s>] [--reset-body-file <f>] [--max-devices <n>] [--default <field>] [--json]",
+      "description": "An App's invite and reset links: how long they live (15m to 30d; invites 72h and resets 24h by default), its own set-password page (else the box front door's /reset), and its own subject and body ({app} {name} {username} {sender} {expires}; K2 always adds the link and the safety line itself). The owner, or the App's own agent with \"...manage them end to end\". No flags: show them. Also: k2 app invite-settings.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--invite-ttl", "arg": "dur", "description": "Invite link life (15m to 30d)."},
+        {"name": "--reset-ttl", "arg": "dur", "description": "Reset link life (15m to 30d)."},
+        {"name": "--set-password-url", "arg": "url", "description": "The App's set-password page (https, no #fragment)."},
+        {"name": "--invite-subject", "arg": "text", "description": "The App's invite subject."},
+        {"name": "--invite-body-file", "arg": "file", "description": "The App's invite body (plain text)."},
+        {"name": "--reset-subject", "arg": "text", "description": "The App's reset subject."},
+        {"name": "--reset-body-file", "arg": "file", "description": "The App's reset body (plain text)."},
+        {"name": "--max-devices", "arg": "n", "description": "Devices one person may keep signed in to this App (1 to 20; default 20)."},
+        {"name": "--default", "arg": "field", "description": "Put one field back to K2's (repeatable)."},
+        {"name": "--json", "arg": null, "description": "{ok, app, settings, maxDevices}."}
+      ]
+    },
+    {
+      "name": "app profile settings",
+      "usage": "k2 app profile settings <app> [--names on|off] [--image on|off] [--json]",
+      "description": "May an App's people change their own full and display names and their picture (both on by default). The owner or an Admin; the App's own agent with \"manage its Apps' users\" may only turn them off, for its own workspace's Apps. No flags: show them. See k2 study app-profile.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--names", "arg": "on|off", "description": "People may change their names."},
+        {"name": "--image", "arg": "on|off", "description": "People may set and clear their picture."},
+        {"name": "--json", "arg": null, "description": "{ok, settings}."}
+      ]
+    },
+    {
+      "name": "app set",
+      "usage": "k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>] [--client-logs-days <days>] [--json]",
+      "description": "An App's account deletion mode and grace period, and how long K2 keeps its client logs. No flags: show them. The owner or an Admin; the App's own agent with \"manage its Apps' users\". See k2 study app-account-deletion.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--account-deletion", "arg": "request|immediate", "description": "request (default): sign out and turn access off, delete after the grace period or when completed; immediate: delete at once."},
+        {"name": "--deletion-grace", "arg": "days", "description": "Days a request waits (1 to 90; default 30)."},
+        {"name": "--client-logs-days", "arg": "days", "description": "Days K2 keeps client log bundles (1 to 90; default 14)."},
+        {"name": "--json", "arg": null, "description": "{ok, app, accountDeletion, clientLogs}."}
+      ]
+    },
+    {
+      "name": "app account-deletion",
+      "usage": "k2 app account-deletion <app> [--json] | complete <app> <request|user> | cancel <app> <request|user>",
+      "description": "People's own account deletion requests in an App: list them, complete one now, or cancel one (their access comes back). The owner or an Admin; the App's own agent with \"manage its Apps' users\". See k2 study app-account-deletion.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The answer as JSON."}
+      ]
+    },
+    {
+      "name": "app user show",
+      "usage": "k2 app user show <username> --app <app> [--json]",
+      "description": "Owner only. A person's profile in one App: full name (a self-set one shows the username beside it), display name, email, picture hash, role there, last sign-in, sessions and the App's profile settings.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (required)."},
+        {"name": "--json", "arg": null, "description": "The raw profile JSON."}
+      ]
+    },
+    {
+      "name": "app user image",
+      "usage": "k2 app user image <username> --clear",
+      "description": "Owner only. Remove a person's profile picture (every App shows the same one).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--clear", "arg": null, "description": "Remove it (required)."}
+      ]
+    },
+    {
+      "name": "app user sessions",
+      "usage": "k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all] [--json]",
+      "description": "The owner, or the App's own agent with \"Let this agent manage its Apps' users\" (never a box login). A person's signed-in browsers and devices in one App (coarse client label, never an IP); --revoke ends one (an id from the list), --revoke-all every one in that App, and their chat session with it.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (required)."},
+        {"name": "--revoke", "arg": "id", "description": "End one session or device sign-in."},
+        {"name": "--revoke-all", "arg": null, "description": "End every one in that App."},
+        {"name": "--json", "arg": null, "description": "{ok, sessions} or {ok, ended}."}
+      ]
+    },
+    {
+      "name": "app user email",
+      "usage": "k2 app user email <username> [--email e]",
+      "description": "Set or clear an app guest email. Omit or empty --email clears. Needed to mint a password-reset token.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Guest email. Omit or empty clears."}
+      ]
+    },
+    {
+      "name": "app user agent",
+      "usage": "k2 app user agent <username> <workspace> | k2 app user agent <username> --clear",
+      "description": "Owner only. Mark an app guest login as the agent of one workspace (handle or id), or clear the mark. Brokered db calls from a marked login stamp actor kind agent (k2.actor_kind()), so person-only policies refuse it.",
+      "args": [{"name": "username", "required": true}, {"name": "workspace", "required": false}],
+      "flags": [
+        {"name": "--clear", "arg": null, "description": "Clear the mark (a person again). Alias --no-agent."}
+      ]
+    },
+    {
+      "name": "app user full-name",
+      "usage": "k2 app user full-name <username> [--name <text>]",
+      "description": "Set or clear an app guest full name. Omit or empty --name clears. Not a secret.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "text", "description": "Full name. Omit or empty clears."}
+      ]
+    },
+    {
+      "name": "app user password",
+      "usage": "k2 app user password <username> --password-stdin",
+      "description": "Set or clear an app K2-login password. Empty stdin clears (cannot K2-login; static k2skn_ still works).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin."}
+      ]
+    },
+    {
+      "name": "app user unlock",
+      "usage": "k2 app user unlock <username> [--json]",
+      "description": "Clear an app guest login lock without changing the password. Exit 0 when no lock is present. Does not create a principal.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,username,cleared}."}
+      ]
+    },
+    {
+      "name": "app user list",
+      "usage": "k2 app user list",
+      "description": "List app principals as username  full name|—  role|—  rooms|—  email|— (no secrets).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app user remove",
+      "usage": "k2 app user remove <username>",
+      "description": "Remove an app principal and their login sessions. Platform tokens survive.",
+      "args": [{"name": "username", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app user rooms",
+      "usage": "k2 app user rooms <username> --agent sales [--app <app>]",
+      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. Signed-in people get the change at their next request. --app sets the rooms of that guest's role-less grant on one App, creating it if missing (the owner, or an agent for its own workspace's Apps).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. Agents: one of their own workspace's Apps."}
+      ]
+    },
+    {
+      "name": "app user role",
+      "usage": "k2 app user role <username> <role>",
+      "description": "Assign an app role to a guest. Not Connect owner/admin/member. Re-assign replaces. Signed-in guests get it at their next request.",
+      "args": [
+        {"name": "username", "required": true},
+        {"name": "role", "required": true}
+      ],
+      "flags": []
+    },
+    {
+      "name": "app user unassign",
+      "usage": "k2 app user unassign <username>",
+      "description": "Clear the assigned app role. Restores Thread-only + current default rooms on live sessions.",
+      "args": [{"name": "username", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app role",
+      "usage": "k2 app role <create|list|room|paths|update|remove> ...",
+      "description": "Named bundles of scopes + agents for app guests. Not Connect roles. Not a platform-token role.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app role create",
+      "usage": "k2 app role create <name> [--agent sales] [--app <app>]",
+      "description": "Create an app role. --agent optional (0 = Thread dark). Name charset is the same as usernames; Connect owner/admin/member (and the retired viewer) are rejected. --app tags the role for one App: it can only be used on that App's grants.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable; 0 allowed)."},
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>."}
+      ]
+    },
+    {
+      "name": "app role list",
+      "usage": "k2 app role list",
+      "description": "List app roles (name + caps + rooms; no secrets).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app role room",
+      "usage": "k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read] | --clear",
+      "description": "Add/replace functions on one room. Omit --caps = Thread-only. --clear drops that room.",
+      "args": [
+        {"name": "role", "required": true},
+        {"name": "handle", "required": true}
+      ],
+      "flags": [
+        {"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."},
+        {"name": "--clear", "arg": null, "description": "Drop that room from the role."}
+      ]
+    },
+    {
+      "name": "app role paths",
+      "usage": "k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] | --clear",
+      "description": "Folder path scope on one room line of a role (room-scope R3). Replaces the line's folders; unlisted folders are refused with the missing-cap 403. Works on any room the role holds and for agent logins alike.",
+      "args": [
+        {"name": "role", "required": true},
+        {"name": "room", "required": true}
+      ],
+      "flags": [
+        {"name": "--read", "arg": "list", "description": "Comma-separated room-relative folders to list and read."},
+        {"name": "--write", "arg": "list", "description": "Comma-separated folders to write (and read)."},
+        {"name": "--upload", "arg": "list", "description": "Comma-separated drop folders: files:upload adds files there (each person in their own subfolder), never lists or reads them."},
+        {"name": "--upload-dir", "arg": "folder", "description": "Default upload folder (inside a --write or --upload folder when folders are listed)."},
+        {"name": "--download", "arg": "list", "description": "Comma-separated folders or single files files:download may save without files:read. Adding entries is person-only; omitted = the stored entries stay; alone it changes only the entries."},
+        {"name": "--no-download", "arg": null, "description": "Clear the line's download entries."},
+        {"name": "--clear", "arg": null, "description": "Back to the whole room."}
+      ]
+    },
+    {
+      "name": "app role update",
+      "usage": "k2 app role update <name> [--agent … | --clear]",
+      "description": "Update a role. --clear empties rooms. Always rewrites live sessions of assigned guests (never platform tokens).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
+        {"name": "--clear", "arg": null, "description": "Empty rooms (Thread dark)."}
+      ]
+    },
+    {
+      "name": "app role remove",
+      "usage": "k2 app role remove <name>",
+      "description": "Remove an unassigned app role. Assigned roles 400 until guests are unassigned.",
+      "args": [{"name": "name", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app grant",
+      "usage": "k2 app grant <list|add|set|role|rm|copy-host|hooks> ...",
+      "description": "Owner-only grants. kind=app is a login on one App (host = the box login): a role, or Thread-only rooms. Since 0.45.5 a login needs the grant for that App and its pass reaches only that App's rooms. Other kinds store a scope and no role (recorded, not enforced). Revoke deletes the grant, keeps the role, and ends that App's live logins.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app grant chat-key",
+      "usage": "k2 app grant <app> --kind chat-key [--caps \"…\"] [--max-level member|moderator|admin] [--uploads on|off] [--max N] [--revoke] [--json]",
+      "description": "An App's chat key (Sew 0.6.0+; GET|POST /cli/app/chat-key): K2 signs chat passes for the App's own users with no chat grant per person, up to --max people (default 500). The key never reaches the App. Turning it on or widening it (caps, --max, uploads on, a higher level) is the owner in person with a vault confirm; an Admin within the defaults; admin level the owner only. Narrowing and --revoke: the owner, an Admin or the App's own agent with Build and run Apps. An agent asks on a permission card (k2 permission request apps.chat-key app=<app> --why \"...\") when cards are on. Refused: host, the home-client App (home_client_cannot_govern), a standalone Sew, a Sew without app_governed_spaces (sew_feature_missing).",
+      "args": [
+        {"name": "app", "required": true}
+      ],
+      "flags": [
+        {"name": "--caps", "arg": "\"chat:read chat:post …\"", "description": "The ceiling of every pass (within the App's approved manifest chat caps; chat:read always)."},
+        {"name": "--max-level", "arg": "member|moderator|admin", "description": "The highest level the App may give a person (default moderator; admin is the owner's)."},
+        {"name": "--uploads", "arg": "on|off", "description": "Whether its users may upload files (and start recordings)."},
+        {"name": "--max", "arg": "N", "description": "People the App may have in chat through the key (default 500, at most 10,000)."},
+        {"name": "--revoke", "arg": null, "description": "Turn the key off now and end the App's chat sessions."}
+      ]
+    },
+    {
+      "name": "app recording",
+      "usage": "k2 app recording <app> [--json] | k2 app recording <app> set [--start-level none|admin|moderator|member] [--audio-max-days N|org] [--required on|off] [--server-read on|off] [--json]",
+      "description": "Recording in an App's calls (Sew 0.9.0; GET /cli/app/recording, POST /cli/app/recording/set). All off by default and each person still consents for themselves. No flags: what K2 wants, whether Sew has it (delivered), the App's Spaces and their locks. Down or off: the owner, an Admin or the App's own agent. A higher start level or longer keep days (never above the server's recording.audio_max_days): the owner or an Admin in person, with a confirm. --required on and --server-read on: the owner only, in person; an agent asks on a card (k2 permission request apps.recording app=<app> server-read=on --why \"...\"). Refused: the home client (home_client_cannot_govern), a Sew without app_recording (sew_feature_missing). k2 study app-recording.",
+      "args": [
+        {
+          "name": "app",
+          "required": true
+        }
+      ],
+      "flags": [
+        {
+          "name": "--start-level",
+          "arg": "none|admin|moderator|member",
+          "description": "The lowest chat level that may start a recording (none = nobody, the default)."
+        },
+        {
+          "name": "--audio-max-days",
+          "arg": "N|org",
+          "description": "Keep audio N days (1 to 3650, at most the server's limit); org = the server's limit."
+        },
+        {
+          "name": "--required",
+          "arg": "on|off",
+          "description": "Record every call with two or more people (on: the owner only)."
+        },
+        {
+          "name": "--server-read",
+          "arg": "on|off",
+          "description": "Let the App's own server read its recordings and transcripts (on: the owner only)."
+        },
+        {
+          "name": "--json",
+          "arg": null,
+          "description": "The daemon's JSON."
+        }
+      ]
+    },
+    {
+      "name": "app chat",
+      "usage": "k2 app chat <app> [--json]",
+      "description": "Read-only (GET /cli/sew/app-chat): what K2 keeps in step for an App's chat. The chat key and its level ceiling; each Space bound to the App and who governs it (sew or app); its channels (the manifest's chat block, and channels the App made with chat.channels) with Sew's ids; each App user's private channels, level and last sync (synced, pending, queued, or held with the reason: banned in that Space, deactivated in chat, the Space at the App's member limit in chat, an unknown channel); box users leaving before the switch to app. Who sees which channel is the App's: its manifest's chat block (deploy to change it) and its own chat.setChannels calls; no k2 verb edits it.",
+      "args": [
+        {"name": "app", "required": true}
+      ],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "app grant list",
+      "usage": "k2 app grant list",
+      "description": "List grants (subject, kind, target, role or scope). Owner only.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app grant add",
+      "usage": "k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]",
+      "description": "Create a grant. kind=app takes --role (role id or name) or --room (repeatable; Thread-only rooms, or --scope as a JSON array), not both; --target is host, a published service id, or <workspace>/<name> (unknown Apps 400). Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). kind=chat creates the chat account (Chat / Voice Hosting must be enabled; Linux): --target optional (sew); principal --subject may be a username, scope member (default) or guest; workspace --subject may be a handle, scope coworker or assistant:<username|owner>. Roles and channels are set in Sew. Owner only.",
+      "args": [],
+      "flags": [
+        {"name": "--subject-kind", "arg": "principal|workspace", "description": "Who the grant is for."},
+        {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
+        {"name": "--kind", "arg": "app|mailbox|database|cli|chat", "description": "What is granted. app is a login on one App; chat is a chat account (Chat / Voice Hosting)."},
+        {"name": "--target", "arg": "id", "description": "App (host, service id, or <workspace>/<name>), mailbox, database, or cli target id."},
+        {"name": "--role", "arg": "role", "description": "Role id or name (kind=app)."},
+        {"name": "--room", "arg": "handle", "description": "Thread-only room for a role-less kind=app grant (repeatable)."},
+        {"name": "--scope", "arg": "text", "description": "Scope string. Required when kind is not app."}
+      ]
+    },
+    {
+      "name": "app grant rm",
+      "usage": "k2 app grant rm --id <id> | --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>",
+      "description": "Revoke a grant. The role stays. A kind=app grant's live logins on that App end.",
+      "args": [],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "Grant id."},
+        {"name": "--subject-kind", "arg": "principal|workspace", "description": "Who the grant is for."},
+        {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
+        {"name": "--kind", "arg": "kind", "description": "Grant kind."},
+        {"name": "--target", "arg": "id", "description": "Target id."}
+      ]
+    },
+    {
+      "name": "app grant role",
+      "usage": "k2 app grant role <grant-id> --role <role>",
+      "description": "Give an App login (a kind=app grant) another role in place (0.46.5). The grant keeps its id and on/off; its live logins stay signed in and are rewritten to the new role's rooms (a guest tied to an agent stays inside its tie). The role must be box-wide or that App's (the add rule). A rooms-only grant becomes role-backed. The box login (host) also sets the guest's role, like k2 app user role. Same role again changes nothing. Owner only, like add.",
+      "args": [{"name": "grant-id", "required": true}],
+      "flags": [
+        {"name": "--role", "arg": "role", "description": "Role id or name (required)."}
+      ]
+    },
+    {
+      "name": "app grant set",
+      "usage": "k2 app grant set --id <grant-id> --scope <scope>",
+      "description": "Change a chat grant's scope: member <-> guest, or re-pin an assistant. coworker <-> assistant is refused (delete and add again). Owner only.",
+      "args": [],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "Grant id."},
+        {"name": "--scope", "arg": "scope", "description": "member|guest (principal) or coworker|assistant:<person> (workspace)."}
+      ]
+    },
+    {
+      "name": "app grant hooks",
+      "usage": "k2 app grant hooks [status|log|retry|skip|reconcile|target] ...",
+      "description": "Grant hooks: status shows targets, outbox counts, blocked and held rows; log lists outbox rows (--subject <ext id>, --limit N); retry <id> re-arms a blocked row or a pending row that failed; skip <id> drops a blocked row and reconciles; reconcile sweeps now; target chat --on|--off [--socket P] [--token-file P]. The actor on a row is reported by K2, not proof a person acted. Owner only.",
+      "args": [{"name": "action", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."},
+        {"name": "--subject", "arg": "ext id", "description": "log: one subject, e.g. k2:principal:<uuid>."},
+        {"name": "--limit", "arg": "N", "description": "log: 1-500 rows (default 50)."}
+      ]
+    },
+    {
+      "name": "app grant copy-host",
+      "usage": "k2 app grant copy-host <app> [--dry-run] [--json]",
+      "description": "Give everyone who has the box login the same access on one App (their role when it is host-wide or that App's, else their rooms). A grant already on that App wins (even a disabled one); a role tagged for another App is skipped. Use after publishing an App (it starts with nobody) or before a BFF starts sending app on login. The owner copies at once; an agent's call (its own workspace's App) is one held request listing exactly the logins, approved by the owner from a card on its Thread or Settings → App Approvals (exit 2); the approval copies exactly those, or nothing if the list changed.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--dry-run", "arg": null, "description": "Show who would be copied; write nothing."},
+        {"name": "--json", "arg": null, "description": "Print the daemon body {app,dryRun,added,keptExisting,skippedOtherAppRole}."}
+      ]
+    },
+    {
+      "name": "app grant guests-rooms",
+      "usage": "k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke] [--json]",
+      "description": "The owner; or the App's own agent with \"Let this agent manage its Apps' users\" (with it off, one held request with a card for the owner, exit 2) (RS-A15, 0.46.1; 0.46.4). That agent doesn't need this to give people rooms. Lets <app>'s own code read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--kind", "arg": "guests-rooms", "description": "The grant kind."},
+        {"name": "--room", "arg": "handle", "description": "A room the App may hand its guests (repeatable)."},
+        {"name": "--revoke", "arg": null, "description": "Take the grant back: the App's code can't hand out more; rooms already on a login or role stay."},
+        {"name": "--json", "arg": null, "description": "Print the daemon body."}
+      ]
+    },
+    {
+      "name": "app guest rooms",
+      "usage": "k2 app guest rooms <app> <user> [set <room,room,...|->] [--json]",
+      "description": "Read or set one guest's rooms on <app> (RS-A15). The owner acts with owner rights (any room); an agent acts on its own workspace's App only while the owner's guests-rooms grant stands, and only within it. Never above the guest's role (a role guest keeps its role's rooms). Idempotent (the same rooms are a no-op), 60 calls a minute per App, every change audited with before and after. Other Apps' guests and unknown names are the same not_found.",
+      "args": [{"name": "app", "required": true}, {"name": "user", "required": true}],
+      "flags": [
+        {"name": "set", "arg": "rooms", "description": "Comma-separated handles or ids; - for no rooms."},
+        {"name": "--json", "arg": null, "description": "Print AppGuestRooms {ok,app,username,rooms,roomHandles,role,enabled,changed}."}
+      ]
+    },
+    {
+      "name": "app guest ceiling",
+      "usage": "k2 app guest ceiling <app> [--json]",
+      "description": "What <app> may hand its guests (app.rooms, 0.46.4): its own room, whether the owner granted guests-rooms, the grant's rooms and the ceiling guests.setRooms enforces (empty without the grant). The owner: any App; an agent: its own workspace's App. Reads only.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print AppRooms {ok,app,ownRoom,granted,grantedAt,grantRooms,ceiling} plus appInfo."}
+      ]
+    },
+    {
+      "name": "app guest list",
+      "usage": "k2 app guest list <app> [--limit N] [--cursor <user>] [--json]",
+      "description": "<app>'s own guests by username with their rooms on it, role, on/off and agent mark (guests.list, 0.46.4). Never the owner, a Connect login or another App's guest. The owner: any App; an agent: its own workspace's App while the owner's guests-rooms grant stands. One page counts against the App's 60 calls a minute.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "Guests per page (default 100, at most 500)."},
+        {"name": "--cursor", "arg": "user", "description": "The previous page's nextCursor."},
+        {"name": "--json", "arg": null, "description": "Print AppGuestList {ok,app,guests,nextCursor}."}
+      ]
+    },
+    {
+      "name": "app wallet",
+      "usage": "k2 app wallet settings <app> [--on|--off] [--fallback on|off] | people [<app>] | remove <item-id> | personal-agent <app> <user> <workspace> | personal-agent --clear <workspace> | personal-agents [--json]",
+      "description": "App users' personal wallets (0.46.3): each App user keeps their own LLM subscriptions and API keys from the App (wallet.* verbs); their subscription runs only their own personal agent. The owner (or an Admin) turns an App's wallet on, sets its fallback to the company plan, sees each item's existence, label and status (never a secret, link or code), force-removes (deleted, not Trash) and marks personal agents. An agent of the App's own workspace with switch 2 may set the fallback only. Each person's subscription runs only their own agent; check that your plan's terms allow the way your App uses it.",
+      "args": [{"name": "subcommand", "required": true}],
+      "flags": [
+        {"name": "--on", "arg": null, "description": "settings: the App's users may use their wallet."},
+        {"name": "--off", "arg": null, "description": "settings: turn the App's wallet off."},
+        {"name": "--fallback", "arg": "on|off", "description": "settings: run a personal agent on the company plan when its person's subscription can't be used (default off = it doesn't start)."},
+        {"name": "--clear", "arg": null, "description": "personal-agent: the workspace is no longer anyone's personal agent."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's JSON."}
+      ]
+    },
+    {
+      "name": "app hydra",
+      "usage": "k2 app hydra [on|off] [--json]",
+      "description": "OIDC issuer sidecar (Linux leftover). Still owner even when Agent-tab Apps is on.",
+      "args": [{"name": "action", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "app front-door",
+      "usage": "k2 app front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]",
+      "description": "Optional Caddy path-filter (not required to host an app). Host the UI with k2 publish on any nested label; see k2 study apps.",
+      "args": [{"name": "mode", "required": false}],
+      "flags": [
+        {"name": "--url", "arg": "URL", "description": "Optional public URL."},
+        {"name": "--hint", "arg": "TEXT", "description": "Optional operator hint."},
+        {"name": "--ui-port", "arg": "N", "description": "Optional same-origin UI reverse-proxy port."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "app token",
+      "usage": "k2 app token <create|list|revoke|rooms> ...",
+      "description": "Mint/list/revoke platform k2skn_ capability passes (thread:read / thread:post / files:read / files:write). Secret shown once. List is platform-only (hides login sessions). Leftover: k2 skin-token.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app token create",
+      "usage": "k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]",
+      "description": "Mint a platform k2skn_ pass. Name is a label (vercel), not a guest. Raw secret printed once. Default caps: thread:read + thread:post (never silent-add files).",
+      "args": [],
+      "flags": [
+        {"name": "--name", "arg": "label", "description": "Platform label (^[a-z0-9_-]{2,}$; not owner). Unique among live platform tokens."},
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle to grant (repeatable; ≥1 required)."},
+        {"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."}
+      ]
+    },
+    {
+      "name": "app token list",
+      "usage": "k2 app token list",
+      "description": "List platform k2skn_ tokens (name + prefix + caps, never the secret). Hides login sessions.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app token rooms",
+      "usage": "k2 app token rooms <id> --agent sales | --clear",
+      "description": "Set rooms on a platform token. --clear empties rooms (Thread dark, keep secret).",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
+        {"name": "--clear", "arg": null, "description": "Empty rooms (Thread dark)."}
+      ]
+    },
+    {
+      "name": "app token revoke",
+      "usage": "k2 app token revoke <id>",
+      "description": "Revoke a platform app pass. Next GET / overlay is 401.",
+      "args": [{"name": "id", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app members",
+      "usage": "k2 app members [<room>] [--app <app-id>|host|all] [--json]",
+      "description": "Who holds a grant on a room (room-scope R9): guests and agent logins with their role and caps, from grants, not presence. Connect logins are one line, admins of this box. Owner and admins: any room; an agent: its own room. GET /cli/app/members.",
+      "args": [{"name": "room", "required": false}],
+      "flags": [
+        {"name": "--app", "arg": "app-id", "description": "Only that App's grants (host = the box login; all = every App)."},
+        {"name": "--json", "arg": null, "description": "{ok, workspace, room, namesHidden, admins, count, members:[{username, displayName, kind, role, app, caps}]}."}
+      ]
+    },
+    {
+      "name": "app room-names",
+      "usage": "k2 app room-names <room> hide|show",
+      "description": "Owner, outside K2: hide (or show) guests' names from Apps in that room's member list. The owner and Gardens still see them. POST /cli/app/room-names.",
+      "args": [{"name": "room", "required": true}, {"name": "mode", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app self",
+      "usage": "k2 app self <app-id> [--json]",
+      "description": "An App's live Seed, health and when its live deployment went live (room-scope R16; an agent: its own workspace's Apps). GET /cli/app/self.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{ok, app, workspace, liveSeed, health, state, deployment, deployedAt}."}]
+    },
+    {
+      "name": "app usage",
+      "usage": "k2 app usage <app-id> [--hours N] [--json]",
+      "description": "An App's quotas, live connections and per-call counts from its own audit (room-scope R16). GET /cli/app/usage.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--hours", "arg": "N", "description": "The window, 1-720 hours (default 24)."},
+        {"name": "--json", "arg": null, "description": "{ok, app, hours, quotas, live, totals, verbs:[{verb, route, calls, denied}]}."}
+      ]
+    },

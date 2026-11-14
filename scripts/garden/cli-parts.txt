@@ -57,6 +57,7 @@ compute-node	@fn cmd_compute_node
 compute-access	@fn cmd_compute_grant
 compute-local-trust	@fn cmd_compute_local
 compute-command	@fn cmd_compute
+compute-provenance	k2 compute receipt | provenance | verify
 llm	k2 llm tokens — LLM subscriptions and API tokens
 sources	k2 sources (Garden v3 data sources; contract-sources-v1 §7)
 vault	k2 vault (prd-k2-vault-v1 §14)

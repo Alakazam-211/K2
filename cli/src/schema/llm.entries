@@ -1,0 +1,131 @@
+    {
+      "name": "llm tokens list",
+      "usage": "k2 llm tokens list [--tool <tool>] [--json]",
+      "description": "This server's LLM tokens per tool: subscriptions (claude, codex, grok) and API tokens; * marks the server default. Alias: k2 llm accounts. Read-only from K2 terminals.",
+      "args": [],
+      "flags": [
+        {"name": "--tool", "arg": "tool", "description": "Only this tool."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "llm tokens status",
+      "usage": "k2 llm tokens status <tool> <label|id> [--json]",
+      "description": "One token: state, plan, usage.",
+      "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
+    },
+    {
+      "name": "usage tokens",
+      "usage": "k2 usage tokens [--workspace PATH|--here] [--outside] [--harness H] [--login ID] [--model M] [--since 7d] [--until T] [--by workspace|model|login|harness] [--tz ZONE] [--json]",
+      "description": "Token usage on this server: totals, estimated API-equivalent cost (not your bill), days in your zone, and a breakdown. Owner and Admin; an agent sees its own workspace.",
+      "args": [],
+      "flags": [
+        {"name": "--workspace", "arg": "path", "description": "One workspace (cwds inside it count)."},
+        {"name": "--here", "arg": null, "description": "This workspace."},
+        {"name": "--outside", "arg": null, "description": "Only usage outside every workspace."},
+        {"name": "--harness", "arg": "harness", "description": "claude, codex, or grok."},
+        {"name": "--login", "arg": "id", "description": "One login (LLM token id)."},
+        {"name": "--model", "arg": "model", "description": "One model."},
+        {"name": "--since", "arg": "time", "description": "7d, 24h, 90m, RFC3339, or unix ms."},
+        {"name": "--until", "arg": "time", "description": "Exclusive upper bound."},
+        {"name": "--by", "arg": "group", "description": "workspace, model, login, or harness."},
+        {"name": "--tz", "arg": "zone", "description": "IANA zone for days (default: this computer's)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "usage turns",
+      "usage": "k2 usage turns [--limit N] [--workspace PATH|--here] [--harness H] [--login ID] [--since T] [--before CURSOR] [--json]",
+      "description": "The newest model requests first, with tokens and estimated cost.",
+      "args": [],
+      "flags": [
+        {"name": "--limit", "arg": "n", "description": "1-200 (default 50)."},
+        {"name": "--before", "arg": "cursor", "description": "Older page (the cursor the last page printed)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "usage limits",
+      "usage": "k2 usage limits [--refresh] [--tool claude|codex|grok] [--login ID] [--json]",
+      "description": "Every login's subscription windows (% used, resets, freshness; live from running sessions when they report). --refresh re-checks (not from K2 terminals).",
+      "args": [],
+      "flags": [
+        {"name": "--refresh", "arg": null, "description": "Re-check now (one check at a time)."},
+        {"name": "--tool", "arg": "tool", "description": "One tool."},
+        {"name": "--login", "arg": "id", "description": "One login."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "llm tokens usage",
+      "usage": "k2 llm tokens usage [--json]",
+      "description": "Usage per token (the server default's shared row; other subscriptions' last probe).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
+    },
+    {
+      "name": "llm tokens add",
+      "usage": "k2 llm tokens add <tool> <label> [--device]",
+      "description": "Add a subscription with the tool's own sign-in; prints the page and code, reads a pasted code from stdin. Not from K2 terminals.",
+      "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
+      "flags": [{"name": "--device", "arg": null, "description": "Sign in from another device (device code where the tool has one)."}]
+    },
+    {
+      "name": "llm tokens switch",
+      "usage": "k2 llm tokens switch <tool> <label>",
+      "description": "Use this token as the server default. Affects every chat that uses Server default on this server. Admin or Owner only (a Member login is refused with admin_required). Not from K2 terminals.",
+      "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "llm tokens next",
+      "usage": "k2 llm tokens next <tool>",
+      "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Never automatic. Admin or Owner only (a Member login is refused with admin_required).",
+      "args": [{"name": "tool", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "llm tokens add-key",
+      "usage": "k2 llm tokens add-key <tool> <label>",
+      "description": "Add an API token (claude, codex, grok, gemini). The key is read from stdin, billed per token, never shown again. Not from K2 terminals.",
+      "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "llm tokens pin",
+      "usage": "k2 llm tokens pin --workspace <ws>|--session <key> <tool> <label>",
+      "description": "Use this token for a workspace or one chat. Chat token > workspace token > Server default. Not from K2 terminals.",
+      "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Use it for a workspace (its agent, sidecars, heartbeats, tabs)."},
+        {"name": "--session", "arg": "key", "description": "Use it for one chat (its session key)."}
+      ]
+    },
+    {
+      "name": "llm tokens unpin",
+      "usage": "k2 llm tokens unpin --workspace <ws>|--session <key> <tool>",
+      "description": "Back to Server default for that workspace or chat.",
+      "args": [{"name": "tool", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "The workspace."},
+        {"name": "--session", "arg": "key", "description": "The chat (session key)."}
+      ]
+    },
+    {
+      "name": "llm tokens pins",
+      "usage": "k2 llm tokens pins [--json]",
+      "description": "Every workspace and chat with its own token (read-only; works from K2 terminals).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
+    },
+    {
+      "name": "llm tokens for",
+      "usage": "k2 llm tokens for <agent> [--refresh] [--json]",
+      "description": "The token one chat runs on (a workspace's pinned chat, or a sidecar ws/2) and why: set for the chat, set for its workspace, the token its conversation started on, or the server default. Shows that token's usage as the top-bar chip computes it. A running chat shows the token it started on. Read-only from K2 terminals.",
+      "args": [{"name": "agent", "required": true}],
+      "flags": [
+        {"name": "--refresh", "arg": null, "description": "Re-read that token's usage first (people only; at most once a minute per token)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON (GET /cli/llm/accounts/for)."}
+      ]
+    },

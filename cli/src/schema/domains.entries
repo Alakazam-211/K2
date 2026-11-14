@@ -1,0 +1,125 @@
+    {
+      "name": "dns access",
+      "usage": "k2 dns access [--json]",
+      "description": "DNS manage capability probe for this workspace (allowed?, record types, zones summary). Toggle-off returns allowed:false without dialing the control plane. Exit 3 when gated: Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON capability envelope."}]
+    },
+    {
+      "name": "dns list",
+      "usage": "k2 dns list [--json]",
+      "description": "List DNS zones for the connected K2 account. Requires DNS manage allowed for this workspace (else exit 3).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON zones list."}]
+    },
+    {
+      "name": "dns records",
+      "usage": "k2 dns records <domain> [--json]",
+      "description": "List records for a zone. Pass the domain; the daemon resolves the zone id. Gated when DNS manage is off (exit 3).",
+      "args": [{"name": "domain", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON records list."}]
+    },
+    {
+      "name": "dns record add",
+      "usage": "k2 dns record add <domain> <type> <name> <value> [--ttl N] [--priority N] [--json]",
+      "description": "Insert a user-managed DNS record. Allowed types: A AAAA CNAME TXT MX SRV CAA (NS refused). Domain resolves to a zone server-side. POST mutation; prefer UDS when available.",
+      "args": [
+        {"name": "domain", "required": true},
+        {"name": "type", "required": true},
+        {"name": "name", "required": true},
+        {"name": "value", "required": true}
+      ],
+      "flags": [
+        {"name": "--ttl", "arg": "N", "description": "TTL seconds (default 300 server-side)."},
+        {"name": "--priority", "arg": "N", "description": "Priority/prio for MX/SRV."},
+        {"name": "--json", "arg": null, "description": "JSON response."}
+      ]
+    },
+    {
+      "name": "dns record remove",
+      "usage": "k2 dns record remove <record-id> [--json]",
+      "description": "Delete a user-managed DNS record by id (from k2 dns records). Automation-managed rows are refused.",
+      "args": [{"name": "record-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "dns verify",
+      "usage": "k2 dns verify <domain> [--json]",
+      "description": "On-demand DNS delegation check for a zone domain. Requires DNS manage allowed (else exit 3).",
+      "args": [{"name": "domain", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON verification result."}]
+    },
+    {
+      "name": "dns",
+      "usage": "k2 dns <access|list|records|record|verify> ...",
+      "description": "Manage DNS records for K2 Connect zones (toggle-gated). access/list/records/record add|remove/verify. Exit 3 when off — Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage. Not for nested *.k2.dev (publish) or tunnel. ID/locked tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
+    },
+    {
+      "name": "domain list",
+      "usage": "k2 domain list [--json]",
+      "description": "List custom domains attached to this server. Agents need dns_manage. Not k2 hostmail domain. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON inventory."}]
+    },
+    {
+      "name": "domain add",
+      "usage": "k2 domain add <apex> [--json]",
+      "description": "Attach an apex to this server (idempotent). Does not transfer NS. Owner/admin; agents exit 3.",
+      "args": [{"name": "apex", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "domain remove",
+      "usage": "k2 domain remove <apex> [--json]",
+      "description": "Detach an apex (cascades hostnames). Owner/admin; agents exit 3.",
+      "args": [{"name": "apex", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "domain refresh",
+      "usage": "k2 domain refresh [<apex>] [--json]",
+      "description": "Check now with k2.dev (re-bind) so a pending_ns domain flips to active once its nameservers point at k2.dev. The server also re-checks pending domains by itself. No apex = every pending domain. Owner/admin; agents exit 3.",
+      "args": [{"name": "apex", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "domain name add",
+      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--external] [--json]",
+      "description": "Add a hostname under an attached apex. dns_manage (same as k2 cert issue). Apex add stays owner.",
+      "args": [{"name": "hostname", "required": true}],
+      "flags": [
+        {"name": "--role", "arg": "mail|publish|direct|other|app:<name>", "description": "Role (default other). app:<name> binds the hostname to that App or published service: it is in K2_APP_ORIGIN/K2_APP_ORIGINS from its next start once K2 serves it (live), or with --external."},
+        {"name": "--external", "arg": null, "description": "With --role app:<name>: your own web server serves this name, not K2's front; an origin of the App from its next start (k2 app domain --help)."},
+        {"name": "--json", "arg": null, "description": "JSON response."}
+      ]
+    },
+    {
+      "name": "domain name remove",
+      "usage": "k2 domain name remove <hostname> [--json]",
+      "description": "Remove a hostname from this server's inventory. dns_manage.",
+      "args": [{"name": "hostname", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "domain",
+      "usage": "k2 domain <list|add|remove|refresh|name> ...",
+      "description": "Attach custom domains to THIS server. Apex add/remove is owner; hostname add/remove is dns_manage. Not k2 hostmail domain. Not a nameserver cutover. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
+    },
+    {
+      "name": "cert list",
+      "usage": "k2 cert list [--json]",
+      "description": "List cert state for attached hostnames. Not k2 hostmail cert. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON inventory."}]
+    },
+    {
+      "name": "cert",
+      "usage": "k2 cert <list|issue|renew> ...",
+      "description": "Certificates for hostnames attached on THIS server: list, issue, renew. A role-mail hostname goes into the mail server too; only the primary mail host is its default certificate. Not k2 hostmail cert. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },

@@ -1,0 +1,163 @@
+    {
+      "name": "tunnel",
+      "usage": "k2 tunnel [...]",
+      "description": "K2 Connect tunnel — expose this daemon at https://<user>.k2.dev.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "tunnel disable",
+      "usage": "k2 tunnel disable",
+      "description": "Pause the tunnel, PERSISTED on disk — survives daemon restarts, reboots, and orphaned daemons. Identity/subdomain untouched; undo with 'k2 tunnel enable'.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "tunnel enable",
+      "usage": "k2 tunnel enable [--subdomain <s>] [--no-auto-start]",
+      "description": "Undo 'k2 tunnel disable' (persisted), turn auto-start on (the tunnel comes back after a daemon restart or reboot), and bring the tunnel up when a subdomain is paired.",
+      "args": [],
+      "flags": [{"name": "--subdomain", "arg": "s", "description": "Override the stored subdomain label."}, {"name": "--no-auto-start", "arg": null, "description": "Leave auto-start off (the tunnel does not come back by itself after a restart)."}]
+    },
+    {
+      "name": "tunnel switch",
+      "usage": "k2 tunnel switch <subdomain> [--token <t>] [--start|--no-start]",
+      "description": "Move this device to another subdomain without a daemon restart: binds the new name and moves the encrypted listener, its certificate and renewer, nested routes and frpc. Rolls back to the old name if any step fails.",
+      "args": [{"name": "subdomain", "required": true, "description": "The new subdomain label."}],
+      "flags": [{"name": "--token", "arg": "t", "description": "The new subdomain's tunnel token (not needed to re-run the switch for the current name)."}, {"name": "--start", "arg": null, "description": "Start the tunnel on the new name (default: keep it running if it was)."}, {"name": "--no-start", "arg": null, "description": "Only bind the new name."}]
+    },
+    {
+      "name": "tunnel release",
+      "usage": "k2 tunnel release --confirm",
+      "description": "DESTRUCTIVE: unpair THIS DEVICE from its subdomain — deletes the local tunnel identity. K2 Connect is told only when this device's tunnel is connected (it holds the name); otherwise it is local only. The account keeps the subdomain. Not a pause; that is 'k2 tunnel disable'.",
+      "args": [],
+      "flags": [{"name": "--confirm", "arg": null, "description": "Required — the release cannot be undone on this device."}]
+    },
+    {
+      "name": "tunnel forget",
+      "usage": "k2 tunnel forget --confirm",
+      "description": "Forget this device's tunnel locally (tunnel.json, frpc.toml, certificate) and tell K2 Connect NOTHING. For stale config from a migrated or cloned machine whose subdomain another box holds.",
+      "args": [],
+      "flags": [{"name": "--confirm", "arg": null, "description": "Required."}]
+    },
+    {
+      "name": "tunnel subdomains",
+      "usage": "k2 tunnel subdomains [--json]",
+      "description": "Daemon-cached nested-subdomain routing map (label -> internal target + attributed workspace). Read-only; distinct from 'k2 publish subdomain list' (control plane).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw JSON pass-through ({primary, targets: {label: {target, projectId}}})."}]
+    },
+    {
+      "name": "publish",
+      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|visibility|open|sessions|subdomain> ...",
+      "description": "Host a daemon-owned process for this workspace (run/start/stop/rm/ps/logs) and manage nested Connect subdomains (status, subdomain create/list/point/rm/claim/unclaim). Default run creates a nested URL; --no-tunnel is local only. status is Connect plan, not process inventory (use ps).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output where supported (ps/run/start/stop/status)."}]
+    },
+    {
+      "name": "publish run",
+      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--probe-timeout <dur>] [--dev [--idle <dur>] [--mem <n>] [--cpus <n>]] [--json]",
+      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin only keeps a site already on it running (new ones: skin_retired; a folder of files is an App, k2 app init --template static). Not k2 app (guests/roles/tokens). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c). Mutually exclusive with --skin."},
+        {"name": "--skin", "arg": "dir", "description": "Keeps a site already on --skin running. A new name is refused (skin_retired): a folder of files is an App, k2 app init --template static. Optional dir = its static files; omit = its bundled UI. Mutually exclusive with --cmd/--cwd. Not k2 app (guests/roles/tokens)."},
+        {"name": "--port", "arg": "n", "description": "Required listen port."},
+        {"name": "--dev", "arg": null, "description": "Run a dev server from the live folder, with hot reload through the site's address. Private until shared. Not walled, so an agent's first one waits for the owner. With --cmd only. k2 study publish-dev."},
+        {"name": "--idle", "arg": "dur", "description": "With --dev: stop after this long with no visits (default 60m, 5m to 24h; off for the owner and Admins). The next visit starts it again."},
+        {"name": "--mem", "arg": "n", "description": "With --dev: memory cap on Linux (default 4G). ps shows what applied."},
+        {"name": "--cpus", "arg": "n", "description": "With --dev: CPU cap on Linux (default 2). ps shows what applied."},
+        {"name": "--probe-timeout", "arg": "dur", "description": "How long the service may take to open --port (default 15s, at most 15m; 90s, 10m, 1500ms; 'default' resets). Saved on the service for start/restart/boot. Status reads starting (waiting for port N, time left); with a tunnel the nested URL is published only once the port answers, and the run is rolled back if it never does."},
+        {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
+        {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace). For --cmd only."},
+        {"name": "--json", "arg": null, "description": "JSON service object on stdout."}
+      ]
+    },
+    {
+      "name": "publish visibility",
+      "usage": "k2 publish visibility <name> [private|pin|public] [--reason <why>] [--pin-days N] [--yes] [--dev-is-public] [--json]",
+      "description": "Who may open a site: private (the owner and Admins, after K2 checks who they are), pin (K2 asks for the PIN first; give it on stdin or type it when asked, never as a flag) or public (needs --reason, and an owner or Admin). A new site is private. No mode: show it. An agent can make a site private; for pin or public K2 puts a card on its Thread (exit 2). k2 study publish-visibility.",
+      "args": [{"name": "name", "required": true}, {"name": "mode", "required": false}],
+      "flags": [
+        {"name": "--reason", "arg": "why", "description": "Why it is public. Required for public; shown in ps --long and Settings."},
+        {"name": "--pin-days", "arg": "n", "description": "How long a PIN sign-in lasts: 1 to 30 days (default 7)."},
+        {"name": "--yes", "arg": null, "description": "Confirm with no terminal: moving a public site behind K2's check, or public dev."},
+        {"name": "--dev-is-public", "arg": null, "description": "Required to make a dev server public. Owner or Admin only."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "publish open",
+      "usage": "k2 publish open <name> [--path <p>] [--no-browser] [--json]",
+      "description": "A one-time link (60 seconds, once) to a private site, for a browser outside K2. Owner and Admins only; an agent is refused (person_only) and tests on the local port.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--path", "arg": "p", "description": "Where the link lands on the site."},
+        {"name": "--no-browser", "arg": null, "description": "Print the link instead of opening it."},
+        {"name": "--json", "arg": null, "description": "JSON {url, expiresAt}."}
+      ]
+    },
+    {
+      "name": "publish sessions",
+      "usage": "k2 publish sessions <name> [--revoke-all] [--json]",
+      "description": "Who is signed in to a private or PIN site. --revoke-all ends every session.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--revoke-all", "arg": null, "description": "End every session on this site."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "publish frame",
+      "usage": "k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]",
+      "description": "Owner only. Which other sites may put a --skin App in a frame. Default: the App itself and K2's own windows (frame-ancestors 'self' tauri://localhost http://tauri.localhost). --allow adds https origins (at most 8); --none refuses every frame; --reset goes back to the default. Restarts the App if running. Bad origin exits 2; an agent passport exits 3 (owner_only). --cmd Apps set their own header: k2 study publish-framing.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--allow", "arg": "origin", "description": "Add an origin (https://host[:port]; http:// only for localhost). Repeatable. No wildcards, no paths."},
+        {"name": "--none", "arg": null, "description": "Refuse every frame, K2's own windows too (X-Frame-Options: DENY)."},
+        {"name": "--reset", "arg": null, "description": "Back to the default."},
+        {"name": "--json", "arg": null, "description": "JSON {ok, service, restarted} on stdout."}
+      ]
+    },
+    {
+      "name": "publish start",
+      "usage": "k2 publish start <name> [--json]",
+      "description": "Start a saved published service (uses stored --cmd/--port/--cwd). Do not pass them again.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON service object on stdout."}]
+    },
+    {
+      "name": "publish stop",
+      "usage": "k2 publish stop <name> [--json]",
+      "description": "Stop a published service (kill the process). Nested URL stays until start or rm.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON service object on stdout."}]
+    },
+    {
+      "name": "publish rm",
+      "usage": "k2 publish rm <name> [--keep-hostname]",
+      "description": "Stop and forget a published service. Also removes the nested URL unless --keep-hostname. Distinct from 'k2 publish subdomain rm' (hostname only; does not kill a process).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--keep-hostname", "arg": null, "description": "Leave the nested URL in place after forgetting the process."}]
+    },
+    {
+      "name": "publish ps",
+      "usage": "k2 publish ps [--json]",
+      "description": "List hosted processes for THIS workspace (running/stopped, port, URL if any). Not Connect plan — that is 'k2 publish status'.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON {services:[...]} on stdout."}]
+    },
+    {
+      "name": "publish logs",
+      "usage": "k2 publish logs <name> [--tail]",
+      "description": "Dump that process's log file (last N lines on GET). --tail follows.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--tail", "arg": null, "description": "Follow the log file."}]
+    },
+    {
+      "name": "publish subdomain claim",
+      "usage": "k2 publish subdomain claim <label>",
+      "description": "Adopt an existing nested subdomain label for the CURRENT workspace (daemon-local attribution; 'unclaim' drops it). create/point/rm stamp attribution automatically.",
+      "args": [{"name": "label", "required": true}],
+      "flags": []
+    },

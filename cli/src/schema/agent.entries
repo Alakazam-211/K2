@@ -1,0 +1,384 @@
+    {
+      "name": "connections",
+      "usage": "k2 connections <list|add|remove> [<target>] [--json] [--users]",
+      "description": "Manage/list the workspaces this one is connected to (the yellow pages used for name addressing).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Machine-readable output."},
+        {"name": "--users", "arg": null, "description": "Also list humans on this host and their roles. Do not k2 msg those names."}
+      ]
+    },
+    {
+      "name": "connections list",
+      "usage": "k2 connections list [--json] [--users]",
+      "description": "List connected workspace-agents. --users also prints humans on this host (do not k2 msg those names).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Machine-readable peer JSON. Combined with --users, adds a users array (username/role/disabled only)."},
+        {"name": "--users", "arg": null, "description": "Also list humans on this host and their roles. Do not k2 msg those names."}
+      ]
+    },
+    {
+      "name": "workspace trust status",
+      "usage": "k2 workspace trust status [<folder>] [--json]",
+      "description": "Folder trust: what K2 found in a folder before letting AI tools trust it (settings that run commands or send logins elsewhere), and its state: clean, trusted, always, pending, undecided, changed or denied. No folder: every workspace. See k2 study folder-trust.",
+      "args": [{"name": "folder", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
+    },
+    {
+      "name": "workspace trust request",
+      "usage": "k2 workspace trust request <folder> --why \"…\"",
+      "description": "Ask the owner to trust a folder that has risky settings: presents the Thread card (Trust it / Always trust this folder / Don't trust). It only asks; deciding (k2 workspace trust <folder> --yes|--always|--no) is the owner's, and an agent gets exit 3.",
+      "args": [{"name": "folder", "required": true}],
+      "flags": [{"name": "--why", "arg": "text", "description": "One line for the owner: why you need AI tools there."}]
+    },
+    {
+      "name": "agent hire",
+      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--take-app <app> [--brief <file>]] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>); --dry-run is the review, and only --launch starts it (it then says hello). Re-running converges (changed:false). An agent hires only from its main session, with \"Let this agent hire agents\" on (hire_off / main_only, exit 3). Exit codes: 0 ok, 1 refused or error, 2 bad usage, 3 not allowed, 4 not found. Templates step by step: k2 study agent-templates.",
+      "args": [{"name": "dir", "required": false}],
+      "flags": [
+        {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
+        {"name": "--agent", "arg": "preset", "description": "Which agent PROGRAM this workspace launches (preset id/label/command token; see k2 preset list). Must exist and be enabled. Without it, spawns fall through to the global default and ultimately Claude."},
+        {"name": "--template", "arg": "id", "description": "An agent template id (k2 agent template list: general, lead, developer, app-owner, designer, researcher, reviewer, writer, support, ops; old ids worker, manager, qa still work). Writes only what's missing, never the agent's own files; one template per agent; suggests permissions, grants none. Mutually exclusive with --persona (both = exit 2)."},
+        {"name": "--param", "arg": "key=value", "description": "A value the template asks for (repeatable; k2 agent template show <id> lists them), e.g. about=\"the billing service\"."},
+        {"name": "--answer", "arg": "question-id=text", "description": "Answer one of the template's first-conversation questions at hire (repeatable; k2 agent template show <id> lists the ids and questions). Written into the agent's ROLE.md or a starter wiki note. Leave out what you can't answer: the agent asks its person the rest on its first start. An unknown id = exit 2, naming the valid ids."},
+        {"name": "--persona", "arg": "file.md", "description": "Use this file as the agent's persona (copied to <dir>/.k2/agent/ROLE.md)."},
+        {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 (default: custom). 'off' also sets enabled=false."},
+        {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
+        {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
+        {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
+        {"name": "--focus-group", "arg": "group", "description": "Assign the workspace to a Focus Group (name or id). none/off clears. Unknown group = exit 4."},
+        {"name": "--color", "arg": "hex|rgb", "description": "Workspace color as #rrggbb, #rgb, rgb(r,g,b), or r,g,b. Not limited to the GUI swatches."},
+        {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, browser:pack, manager:pack, kessel:pack, connections|heartbeats|skills|users:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
+        {"name": "--db-access", "arg": "off|read|write", "description": "Create-only passport for k2 db create (default off). List/dsn/store work when this workspace owns a DB or has a grant. Does not mint a database — hire calls k2 db create separately."},
+        {"name": "--take-app", "arg": "app", "description": "After the hire, offer this App to the new agent and accept it for it (k2 study app-handover). Reported as its own step."},
+        {"name": "--brief", "arg": "file", "description": "With --take-app: your notes for the new agent about the App (markdown, at most 64 KiB)."},
+        {"name": "--no-wiki", "arg": null, "description": "Skip seeding .k2/wiki/Home.md + _Index.md on first register (wiki is seeded by default)."},
+        {"name": "--no-agents-md", "arg": null, "description": "Skip planting cwd AGENTS.md on first register (generated by default for new agents). Compose still writes .k2/AGENTS.md."},
+        {"name": "--fanout", "arg": null, "description": "Opt in to leftover harness fan-out (CLAUDE.md, GEMINI.md, AGENT.md, …). Off by default."},
+        {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning. A template agent says hello on its Thread the first time it starts (this --launch, a later one, or the app), once. Without --launch nothing starts."},
+        {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
+        {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
+      ]
+    },
+    {
+      "name": "agent template list",
+      "usage": "k2 agent template list [--all] [--json]",
+      "description": "The agent types you can hire (agent templates): K2's built-ins, General first, then templates saved on this server. --all adds K2's system templates (hired by id only). Hire one with k2 agent hire --template <id> --name <name>.",
+      "args": [],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Include system templates."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, templates: [{id, version, name, summary, kind, aliases, author, origin, hash}], problems}."}
+      ]
+    },
+    {
+      "name": "agent template show",
+      "usage": "k2 agent template show <id> [--files] [--json]",
+      "description": "What one agent template gives a new agent: charter, params (--param key=value on hire), its first-conversation questions (ids and questions; --answer id=text on hire), starter wiki notes, context layers, suggested permissions (suggestions only; nothing is granted) and its hello. Old ids work: worker, manager, qa. Unknown id = exit 4.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--files", "arg": null, "description": "Print every file of the template."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, template}."}
+      ]
+    },
+    {
+      "name": "agent template save",
+      "usage": "k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]",
+      "description": "Save an agent's setup as a new template to hire from: its charter (ROLE.md), context layers, the skills it made (not K2's), heartbeats, tool, and the permission switches now on (as suggestions). Wiki notes only with --wiki. Never Threads, transcripts, vault secrets, mail, sign-ins, .env files or connections. A secret-shaped string (token, API key, private key) is refused naming the file and line. The same --id again writes its next version; another author's id or a K2 id is refused. An agent saves its own workspace only. Exit codes: 0 ok, 1 refused (id_taken, id_reserved, secret_found, too_large), 2 bad usage, 3 not allowed, 4 not found.",
+      "args": [{"name": "ws", "required": true}],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "The new template id (a-z, 0-9, -; at most 40)."},
+        {"name": "--name", "arg": "name", "description": "Its name in the list (default: the agent's name)."},
+        {"name": "--summary", "arg": "text", "description": "One line on what it is for (default: none)."},
+        {"name": "--wiki", "arg": "note", "description": "Take this wiki note too (repeatable; none by default)."},
+        {"name": "--dry-run", "arg": null, "description": "List every file it would write; write nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, dryRun, id, version, author, path, hash, files: [{path, bytes}], catalog, suggest, tool, heartbeats, skipped: [{what, name, why}]}."}
+      ]
+    },
+    {
+      "name": "agent template add",
+      "usage": "k2 agent template add <dir> [--dry-run] [--json]",
+      "description": "Install a template folder (template.toml, ROLE.md, wiki/, context/, skills/) into this server's library as its id's next version, with you as its author. Same checks as save (paths, no symlinks, sizes, secrets, ids). An agent adds only from a folder inside its own workspace.",
+      "args": [{"name": "dir", "required": true}],
+      "flags": [
+        {"name": "--dry-run", "arg": null, "description": "Check it and show what would be installed; write nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (the same shape as save)."}
+      ]
+    },
+    {
+      "name": "agent template remove",
+      "usage": "k2 agent template remove <id> [--version N] [--json]",
+      "description": "Remove a saved template: every version, or one with --version. An agent removes only templates it saved (else exit 3). K2's built-ins and their old ids can't be removed.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--version", "arg": "N", "description": "Remove only this version."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, id, removed, remaining}."}
+      ]
+    },
+    {
+      "name": "agent template diff",
+      "usage": "k2 agent template diff <ws> | <id> <vA> <vB> [--json]",
+      "description": "With <ws>: what k2 agent template upgrade would do to that agent, file by file, with the lines that change; writes nothing. With <id> <vA> <vB>: two versions of a saved template, file by file. An agent diffs its own workspace only.",
+      "args": [{"name": "ws|id", "required": true}, {"name": "vA", "required": false}, {"name": "vB", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output: the upgrade report ({ok, dryRun, workspace, id, name, from, to, changed, rows: [{step, target, status, reason, proposed, diff}], note}), or {ok, id, from, to, files: [{path, status, diff}]}."}
+      ]
+    },
+    {
+      "name": "agent template upgrade",
+      "usage": "k2 agent template upgrade <ws> [--dry-run] [--json]",
+      "description": "Move an agent to its template's newest version. A file the agent never changed is replaced; one it changed is kept and the new text lands beside it as <file>.proposed; one it deleted stays deleted. In ROLE.md only the K2:MANAGED block is replaced. New notes, layers, skills and context are added; new heartbeats and suggested permissions are only listed. Never changes permissions, tool, model, name or connections. The agent gets one inbox note. K2's built-ins upgrade by themselves when K2 updates; a saved template only with this command. An agent upgrades its own workspace only. Exit 4 when the workspace wasn't made from a template.",
+      "args": [{"name": "ws", "required": true}],
+      "flags": [
+        {"name": "--dry-run", "arg": null, "description": "Show every row (with line diffs); write nothing. The same as diff <ws>."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, dryRun, workspace, id, name, from, to, changed, rows, note}."}
+      ]
+    },
+    {
+      "name": "agent conf",
+      "usage": "k2 agent conf [<name>] [--json]",
+      "description": "Show all of an agent's settings: name, path, mode, enabled, persona, connections (always mutual), project memberships (PoC marked), live status. Default: the agent in the current directory (exit 4 if unregistered).",
+      "args": [{"name": "name", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Single JSON object: {ok,name,path,mode,enabled,personaPath,connections,projects,live}."}]
+    },
+    {
+      "name": "agent get",
+      "usage": "k2 agent get <name> <key> [--json]",
+      "description": "Print a single setting's value, bare on stdout (script-friendly). Keys: mode | enabled | name | path | persona | projects (persona prints the charter file content; projects prints the agent's project names, one per line).",
+      "args": [{"name": "name", "required": true}, {"name": "key", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Wrap the value in a JSON object instead."}]
+    },
+    {
+      "name": "agent access",
+      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage on|off [--json]",
+      "description": "One switch for one workspace's agent. chat_manage: \"Manage Chat / Voice Hosting\" (it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps; on also makes its own chat account, as a coworker, if it has none; off keeps it). chat_refresh: \"Let this agent refresh its pinned chat\". agents_hire: \"Let this agent hire agents\" (its main session may run k2 agent hire). agents_manage: \"Let this agent manage its sidecars\" (its main session may open and stop its sidecars). The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
+    },
+    {
+      "name": "agent set",
+      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--dry-run] [--json]",
+      "description": "Change one or more settings in a single call (hire's SETTINGS flags plus project membership; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 ('off' also sets enabled=false)."},
+        {"name": "--enabled", "arg": "bool", "description": "true | false (false pauses without changing mode; survives daemon restarts)."},
+        {"name": "--name", "arg": "new-name", "description": "Rename the agent (display name; the directory does not move)."},
+        {"name": "--persona", "arg": "file.md", "description": "Replace the persona with this file's contents (previous persona backed up automatically)."},
+        {"name": "--add-project", "arg": "project", "description": "Add the agent to a project (name or id, repeatable). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
+        {"name": "--remove-project", "arg": "project", "description": "Remove the agent from a project (membership only, repeatable). Removing the current PoC is refused (poc_successor_required, exit 1) until 'k2 project poc' names a successor."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would change; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
+      ]
+    },
+    {
+      "name": "agent list",
+      "usage": "k2 agent list [--json]",
+      "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path. Scripts use --json, never the table (names and paths can contain spaces).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[{name,id,handle,mode,enabled,live,sessionId,backend,ptydAdopted,path}]}."}]
+    },
+    {
+      "name": "agent retire",
+      "usage": "k2 agent retire <name> [--archive-to <dir>] [--force] [--dry-run] [--json]",
+      "description": "Safely decommission an agent: deregister, unwire connections, remove project memberships, ARCHIVE the folder (never deletes). REFUSES (exit 3) on uncommitted/unpushed git work or likely secrets; --force overrides. A project's Point of Contact cannot be retired at all (poc_of_projects, NOT force-overridable) — reassign with 'k2 project poc' first.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--archive-to", "arg": "dir", "description": "Where to move the folder (default: ~/.k2/archive/<name>-<date>/)."},
+        {"name": "--force", "arg": null, "description": "Override the safety guards."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would happen; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "agent identity",
+      "usage": "k2 agent identity [<agent>] [--color <hex|rgb>] [--image <file.png|jpg|webp> | --clear-image] [--name <name>] [--json]",
+      "description": "Show (no flags) or change an agent's picture, color and name. From an agent's own session: <agent> defaults to itself and may only be itself; only --color, --image and --clear-image (agents can't rename themselves; ask your owner). Owners and Connect logins reach any agent and may set --name. The daemon checks the picture's bytes (PNG/JPEG/WebP, at most 2 MiB, shrunk to 256 px; SVG refused). Agent writes are rate limited per agent. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found. Leftover spelling: k2 workspace set-agent-identity.",
+      "args": [{"name": "agent", "required": false, "description": "Agent name, handle or path. Omitted: yourself (agent session) or the agent in the current directory."}],
+      "flags": [
+        {"name": "--color", "arg": "hex|rgb", "description": "#rrggbb, #rgb, rgb(r,g,b) or r,g,b."},
+        {"name": "--image", "arg": "file", "description": "PNG, JPEG or WebP, at most 2 MiB. SVG is refused."},
+        {"name": "--clear-image", "arg": null, "description": "Remove the picture."},
+        {"name": "--name", "arg": "name", "description": "Display name. Owners only; refused from an agent's session."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (handle, displayName, color, image, canEditIdentity, canEditHandle; plus ok/changed on a change)."}
+      ]
+    },
+    {
+      "name": "agent restart",
+      "usage": "k2 agent restart <name> [--harness <harness>] [--dry-run] [--json]",
+      "description": "Restart an agent's pinned chat session on the same conversation (resume), so it re-reads its charter and .mcp.json. Reports the old and new session ids. Sidecar tabs are not touched.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--harness", "arg": "harness", "description": "For an agent that has never had a chat: the LLM CLI to start it on (claude, codex, grok, ...). On a server that has never had a pinned chat, restart without it exits 1 (harness_choice_needed) and starts nothing. Ignored once the agent has a chat."},
+        {"name": "--dry-run", "arg": null, "description": "Show which session would restart; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (ok, oldSessionId, sessionId, conversationId)."}
+      ]
+    },
+    {
+      "name": "agent harness",
+      "usage": "k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--model <id>] [--dry-run] [--json]",
+      "description": "Move a workspace's pinned chat (the one heartbeats, Threads and k2 msg go to) to another harness: claude, codex, grok, gemini, cursor, pi or hermes. Changing the workspace's default agent only changes NEW chats; this moves the existing pinned chat. K2 ends the current pinned chat, starts a new one on <harness> with a summary of the recent conversation, and points heartbeats, Threads and messages at it. The old chat stays in Chat history. Already on <harness>: nothing changes, unless you name a --model. A person runs it (owner, Admin, or a person in a K2 shell tab); an agent can't move its own pinned chat (exit 3: ask your person, or with permission cards on, k2 permission request agent.harness-switch harness=<harness>). Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [
+        {"name": "workspace", "required": true, "description": "Workspace handle, name or path."},
+        {"name": "harness", "required": true, "description": "claude, codex, grok, gemini, cursor, pi or hermes."}
+      ],
+      "flags": [
+        {"name": "--full", "arg": null, "description": "Seed the new chat with the whole old conversation (default: the recent part)."},
+        {"name": "--notes-file", "arg": "path", "description": "Extra handover notes for the new chat."},
+        {"name": "--model", "arg": "id", "description": "Start the new chat on this model, even if the preset names another. On the same harness it starts a new chat with the summary. This start only: a later resume uses the preset or workspace model again."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would move; change nothing."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (switched, alreadyOn, fromHarness, harness, sessionId, oldChatInHistory, ownSessionHeartbeats)."}
+      ]
+    },
+    {
+      "name": "agent refresh",
+      "usage": "k2 agent refresh [<workspace>] [--note <text> | --notes-file <path>] [--full] [--dry-run] [--json]",
+      "description": "Start a new pinned chat on the same harness that carries on from the current one, for a long chat that has gone stale. K2 ends the current chat at once (anything running in it stops), starts a new one with the same launch options, and sends it a summary and your note when it is ready. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new one; sidecars keep running. A person runs it for any workspace (owner, Admin, or a person in a K2 shell tab). An agent's main session may run it for its own workspace with \"Can refresh its own pinned chat\" on; otherwise exit 3, and with permission cards on the refusal ends with the k2 permission request chat.refresh line. Read k2 study chat-refresh. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [
+        {"name": "workspace", "required": false, "description": "Workspace handle, name or path. Default: this workspace."}
+      ],
+      "flags": [
+        {"name": "--note", "arg": "text", "description": "A note for the new chat: what you were doing and what's next. At most 32,000 characters."},
+        {"name": "--notes-file", "arg": "path", "description": "The note, from a file."},
+        {"name": "--full", "arg": null, "description": "Summarize a longer part of the old chat (default: the recent part)."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would happen, and if a person has to allow it; change nothing. It keeps no note and gives no line to ask with."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (refreshed, harness, sessionId, fromSessionId, messageDelivered, handoffPath, oldChatInHistory, ownSessionHeartbeats)."}
+      ]
+    },
+    {
+      "name": "agent context",
+      "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|catalog> [args] [--json]",
+      "description": "Day-2 management of the always-on AGENTS.md context management stack: pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found.",
+      "args": [{"name": "subcommand", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable JSON (daemon body; mutations include ok/layer/regen)."}]
+    },
+    {
+      "name": "agent context list",
+      "usage": "k2 agent context list [--json]",
+      "description": "List system (pinned) layers with on/off state plus optional layers (order, enabled, path, missing).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw {pinned,layers,...} from GET /cli/context/layers."}]
+    },
+    {
+      "name": "agent context add",
+      "usage": "k2 agent context add <path|catalog-id> [--label name] [--json]",
+      "description": "Add an optional layer by workspace-relative path or catalog id (see `k2 agent context catalog`: wiki:*, subagents:pack, browser:pack, manager:pack, kessel:pack, *:roster, …). Regenerates AGENTS.md.",
+      "args": [{"name": "path_or_catalog", "required": true}],
+      "flags": [
+        {"name": "--label", "arg": "name", "description": "Optional display label for the layer."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "agent context remove",
+      "usage": "k2 agent context remove <id|path> [--json]",
+      "description": "Remove an optional layer by id or path (does not delete the file on disk). Regenerates AGENTS.md.",
+      "args": [{"name": "id_or_path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context on",
+      "usage": "k2 agent context on <id|path|pinned:agent|agent|…> [--json]",
+      "description": "Enable a layer. Works for optional layers and system layers: pinned:agent|pinned:project|pinned:tooling (aliases agent|project|tooling). Regenerates AGENTS.md.",
+      "args": [{"name": "id_or_path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context off",
+      "usage": "k2 agent context off <id|path|pinned:agent|agent|…> [--json]",
+      "description": "Disable a layer (optional stays in stack; system layers use include flags). Accepts pinned:agent|project|tooling and short aliases. Regenerates AGENTS.md.",
+      "args": [{"name": "id_or_path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context move",
+      "usage": "k2 agent context move <id|path> <n|up|down|top|bottom> [--json]",
+      "description": "Reorder an optional layer: absolute 0-based position n, or direction up|down|top|bottom.",
+      "args": [{"name": "id_or_path", "required": true}, {"name": "position_or_direction", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context show",
+      "usage": "k2 agent context show [--outline] [--json]",
+      "description": "Preview the composed AGENTS.md (or section outline with --outline).",
+      "args": [],
+      "flags": [
+        {"name": "--outline", "arg": null, "description": "Section headings only (outline=1)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "agent context regen",
+      "usage": "k2 agent context regen [--json]",
+      "description": "Force-compose .k2/AGENTS.md from the current layer stack.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context catalog",
+      "usage": "k2 agent context catalog [--json]",
+      "description": "List the host context catalog (built-in path seeds, static packs, live rosters, plus user packs under ~/.k2/context/catalog/packs). Library vs stack: this lists the library; `k2 agent context add <id>` stacks a pack on a workspace. Author new packs in Settings → Context Catalog.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (full metadata: kind, recommended, author, version, tags, description)."}]
+    },
+    {
+      "name": "preset list",
+      "usage": "k2 preset list [--json]",
+      "description": "The agent-preset roster: every launchable agent program this server knows (built-ins + custom), with enabled/source and declared metadata (danger flags, env, readiness).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,presets:[...]} (raw preset rows incl. metadata columns)."}]
+    },
+    {
+      "name": "preset show",
+      "usage": "k2 preset show <preset> [--json]",
+      "description": "One preset in full: command, enabled, source, declared danger-flags/env/readiness. <preset> = id, label (case-insensitive), or command first-token.",
+      "args": [{"name": "preset", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "preset add",
+      "usage": "k2 preset add --id <slug> --command '<argv string>' [--label <l>] [--icon <e>] [--danger-flag <f>]... [--env K=V]... [--readiness <v>] [--json]",
+      "description": "Add a CUSTOM agent preset (owner/admin only). Declared --danger-flag values are kept on API host-session spawns by default (api_skip_permissions ON); opt out per workspace to strip them. --env is staged into the agent's process at spawn; --readiness = 'bracketed-paste' | 'settle:<ms>'. See docs/agent-contract.md.",
+      "args": [],
+      "flags": [
+        {"name": "--id", "arg": "slug", "description": "Preset id (1-64 chars: letters, digits, . _ -) — the stable handle hire --agent references."},
+        {"name": "--command", "arg": "argv", "description": "Full launch command string, quote-aware."},
+        {"name": "--label", "arg": "label", "description": "Display label (default: the id)."},
+        {"name": "--icon", "arg": "emoji", "description": "Icon for Settings/pickers."},
+        {"name": "--danger-flag", "arg": "flag", "description": "Declare ONE of the agent's own auto-approve flags (repeatable)."},
+        {"name": "--env", "arg": "K=V", "description": "Env var staged at spawn (repeatable; values never logged)."},
+        {"name": "--readiness", "arg": "v", "description": "'bracketed-paste' | 'settle:<ms>' (1..600000)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "preset set",
+      "usage": "k2 preset set <preset> [--command '<argv>'] [--label <l>] [--icon <e>] [--enable|--disable] [--danger-flag <f>]... [--env K=V]... [--readiness <v>] [--inject-flow '<json>'] [--clear-danger-flags] [--clear-env] [--clear-readiness] [--clear-inject-flow] [--json]",
+      "description": "Edit a preset (custom or built-in; built-in metadata is editable). Only passed flags change; --danger-flag/--env REPLACE the stored set wholesale; --clear-* resets a metadata column to undeclared.",
+      "args": [{"name": "preset", "required": true}],
+      "flags": [
+        {"name": "--command", "arg": "argv", "description": "Replace the launch command string."},
+        {"name": "--label", "arg": "label", "description": "Rename."},
+        {"name": "--icon", "arg": "emoji", "description": "Change the icon."},
+        {"name": "--enable", "arg": null, "description": "Enable the preset."},
+        {"name": "--disable", "arg": null, "description": "Disable (the default-agent resolver skips disabled presets)."},
+        {"name": "--danger-flag", "arg": "flag", "description": "Replace the declared auto-approve flags (repeatable)."},
+        {"name": "--env", "arg": "K=V", "description": "Replace the spawn env (repeatable)."},
+        {"name": "--readiness", "arg": "v", "description": "'bracketed-paste' | 'settle:<ms>'."},
+        {"name": "--inject-flow", "arg": "json", "description": "Replace the submit-keys flow (JSON array of {key, waitMs}; keys paste|esc|space|return)."},
+        {"name": "--clear-danger-flags", "arg": null, "description": "Clear back to undeclared (fail-closed floor)."},
+        {"name": "--clear-env", "arg": null, "description": "Clear the spawn env."},
+        {"name": "--clear-readiness", "arg": null, "description": "Clear back to the default injection profile."},
+        {"name": "--clear-inject-flow", "arg": null, "description": "Reset submit keys to the default paste/return/return."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "preset remove",
+      "usage": "k2 preset remove <preset> [--json]",
+      "description": "Delete a CUSTOM preset (built-ins can only be disabled, never deleted). Owner/admin only.",
+      "args": [{"name": "preset", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },

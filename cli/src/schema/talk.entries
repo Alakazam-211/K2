@@ -1,0 +1,156 @@
+    {
+      "name": "thread",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"] | k2 thread delete <addr> <seq|id> [--json]",
+      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); withdraw your own card only when it is obsolete (k2 thread withdraw <addr> <card-id>; void is the old name). A person may dismiss a card without answering: you get a [thread:<addr>] dismissed card <id> turn, which means not needed now (never a yes, no or denial). Closed cards stay on the Thread as Dismissed or Withdrawn. A person may delete a message they sent (k2 thread delete; people only): you get one [thread:<addr>] line saying so; never repeat, store or act on what it said. Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
+      "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
+        {"name": "--limit", "arg": "N", "description": "Read page size (daemon default 25, max 500)."},
+        {"name": "--all", "arg": null, "description": "Read the full overlay (unbounded)."},
+        {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
+        {"name": "--seq", "arg": "N", "description": "Read exactly message N (the [N] in a read; a person's `↩ #N` reply names it), whole. Alone: no text, --file, --limit, --all or --before-seq."},
+        {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
+        {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
+        {"name": "--options", "arg": "a,b,c", "description": "Choice labels (comma list; \\, = literal comma). Mix with --option is 400."},
+        {"name": "--option", "arg": "label", "description": "Repeatable choice label. Mix with --options is 400."},
+        {"name": "--allow-custom", "arg": null, "description": "Allow a free-text answer on the choice card."},
+        {"name": "--expires", "arg": "2h|3d|90m|secs", "description": "How long the choice card stays open (default 7 days). Talking never shortens it."},
+        {"name": "--no-expiry", "arg": null, "description": "Keep the choice card open until answered, dismissed or withdrawn."},
+        {"name": "--why", "arg": "text", "description": "withdraw/dismiss: one-line reason (at most 200 characters) shown on the closed card and told to the agent."},
+        {"name": "--name", "arg": "NAME", "description": "Required for secret. Vault key. Never printed."},
+        {"name": "--prompt", "arg": "text", "description": "Optional secret field prompt."},
+        {"name": "--dest", "arg": "vault", "description": "Secret destination. vault only."}
+      ]
+    },
+    {
+      "name": "browser note",
+      "usage": "k2 browser note --url <page-url> [--workspace <ws>] [--selector css] [--html-file f] [--text t] [--title t] [--intent change|question] [--json] \"what to change\" | k2 browser redeliver <threadItemId> [--workspace <ws>]",
+      "description": "Design mode: file a page note like a Design tab's Send (POST /cli/browser/notes). ONE Thread item, delivered once to the workspace's pinned Chat. The daemon strips the URL query/hash and cleans + clamps the HTML. Agents post on their own workspace only. delivered:false = in the Thread, not yet in the Chat: redeliver it (never posts twice). See k2 study design.",
+      "args": [{"name": "text", "required": true, "description": "The note (what to change, or a question)."}],
+      "flags": [
+        {"name": "--url", "arg": "url", "description": "The page (http/https). Required."},
+        {"name": "--workspace", "arg": "ws", "description": "Target workspace; an agent defaults to its own."},
+        {"name": "--selector", "arg": "css", "description": "The element's CSS selector."},
+        {"name": "--html-file", "arg": "file", "description": "The element's HTML (cleaned and clamped to 4 KB by the daemon)."},
+        {"name": "--text", "arg": "text", "description": "The element's visible text."},
+        {"name": "--title", "arg": "text", "description": "The page title."},
+        {"name": "--intent", "arg": "change|question", "description": "Default change."},
+        {"name": "--json", "arg": null, "description": "JSON reply {ok, threadItemId, delivered, targetSessionId, addr, notes}."}
+      ]
+    },
+    {
+      "name": "ci",
+      "usage": "k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB] [--cpus N] [--timeout 1h] [--branches a,b/*] [--remote R] [--statuses-token NAME] [--force] [-- <cmd…>] | k2 ci run [<rev>] [--check a,b] [--ref B] [--tier ci|standard] [--wait] [--json] | k2 ci status [<run|commit|branch>] [--json] | k2 ci logs <run|commit|branch> [--check NAME] [--failures] | k2 ci tests [--check NAME] [--flaky|--slow|--failing|--quarantined] [--days 30] [--limit N] [--json] | k2 ci stats [--check NAME] [--branch B] [--days 14] [--json] | k2 ci monitors [--json] | k2 ci monitor add <name> --kind fail-streak|slow|queue-wait|new-flaky [--branch B] [--check C] [--count N] [--over 1.5x|10m] [--cooldown 6h] [--to <workspace>|thread[:<addr>]] | k2 ci monitor mute <name> --for 1d|off | k2 ci monitor rm <name> | k2 ci watch [on|off] [--remote R] [--branches a,b/*] [--poll S] [--tier ci|standard] [--max-inflight N] [--skip-current] | k2 ci freeze --until <3d|time> [--why text] | k2 ci freeze off | k2 ci release <version> [<rev>|--sha C] [--build a,b] [--plan] [--only-keys fp,fp] [--wait] [--json] | k2 ci evidence <run> --out <dir> [--no-files] [--reported FILE] [--json] | k2 ci setup --plan --out FILE [<rev>] [--json]",
+      "description": "CI on K2 Compute, run by the daemon: .k2/ci.toml (committed; read at each commit) lists [checks.<name>]; each is one compute job on the commit (--tier ci, --supersede ci/<branch>/<check>) carrying the workspace's own grants. watch on: the daemon polls the remote and checks every new tip; run: one commit now (--wait: exit 0 passed, 1 failed). GitHub commit statuses <context>/<check> with the [statuses] token from the workspace vault. release: [release] builds on the workspace's seat as one set (a dual build's L1 and V1 on nodes that differ per the owner's node roster; seat_degraded / no_independent_nodes, exit 3); evidence: once it passed, the evidence bundle v2 and every job's files for the signer (signing is a person's, at the signer). setup --plan: the signer setup file (controller, the node owner's roster key and roster, .k2/signer.toml filled in) for a person to apply at the signing machine. tests: the history of the checks' JUnit (flaky, failing, slowest, quarantined; names are data). stats: per check, run time and queue wait p50/p95, failure and flaky rates, CPU-hours, cache hit rate. monitor: a message (facts only) when a branch fails N runs in a row, a check gets slow, a check job waits too long, or a test turns flaky; each ended run also sends one [ci] message (check jobs send no [compute] note). Agents: their own workspace, with Allow compute nodes on. See k2 study ci.",
+      "args": [{"name": "verb", "required": true, "description": "init | run | status | logs | tests | stats | monitors | monitor | watch | freeze | release | evidence | setup"}],
+      "flags": [
+        {"name": "--check", "arg": "NAME|a,b", "description": "init: the check's name (default test); run: only these checks; logs, tests, stats: one check; monitor add: the check it watches."},
+        {"name": "--tier", "arg": "ci|standard", "description": "CI tier (default; the grant needs --ci) or Standard."},
+        {"name": "--wait", "arg": null, "description": "run, release: wait for the verdict (exit 0 passed, 1 failed or error)."},
+        {"name": "--plan", "arg": null, "description": "release: where each job would go; nothing submitted. setup: prepare the signer setup file (changes nothing)."}, {"name": "--only-keys", "arg": "fp,fp", "description": "release: only seat nodes with these node keys (the ones your signer accepted; its preflight lists them)."},
+        {"name": "--out", "arg": "dir|file", "description": "evidence: write the bundle and fetch each job's files into <dir>/<label>/. setup: the setup file a person applies at the signing machine (k2-signer-admin apply-setup)."}, {"name": "--reported", "arg": "file", "description": "evidence: also carry each job's copy of this file (dist/build-info.json) in the bundle, for a signer policy that checks it."},
+        {"name": "--branches", "arg": "a,b/*", "description": "watch on / init: branch names or prefix/*."},
+        {"name": "--skip-current", "arg": null, "description": "watch on: start at the next push."},
+        {"name": "--flaky|--slow|--failing|--quarantined", "arg": null, "description": "tests: one list (default: flaky, failing and slowest together)."},
+        {"name": "--days", "arg": "N", "description": "tests: the window (default 30, 1-365); stats: (default 14, 1-90)."},
+        {"name": "--branch", "arg": "B", "description": "stats: one branch; monitor add --kind fail-streak: the branch it watches."},
+        {"name": "--kind", "arg": "fail-streak|slow|queue-wait|new-flaky", "description": "monitor add: what to watch."},
+        {"name": "--count", "arg": "N", "description": "monitor add --kind fail-streak: runs in a row (default 3, 1-20)."},
+        {"name": "--over", "arg": "1.5x|10m", "description": "monitor add: slow's ratio to the 14-day p50 (default 1.5x); queue-wait's wait (default 10m)."},
+        {"name": "--cooldown", "arg": "6h", "description": "monitor add: at most one message per this (default 6h, 5m-7d)."},
+        {"name": "--to", "arg": "<workspace>|thread[:<addr>]", "description": "monitor add: where the message goes (default this workspace; agents: their own workspace or Thread only)."},
+        {"name": "--for", "arg": "1d|off", "description": "monitor mute: how long (at most 30d); off unmutes."},
+        {"name": "--force", "arg": null, "description": "init: replace an existing .k2/ci.toml."},
+        {"name": "--workspace", "arg": "ws", "description": "People: the workspace (default: this folder's). Agents: their own only."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "msg",
+      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…]",
+      "description": "Send to another workspace agent. For files use --inbox-wake (copy + knock, preferred) or --inbox-silent (copy only). Live text is SHORT, one line. Not k2 mail. Spawns the agent if needed. Federated live AND tray: agent::host over the same federation plane (connected peer is the gate, not a Connect token). Wire form fp::ws::agent is k2 fed send only.",
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live and tray both use federation)"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
+      "flags": [
+        {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
+        {"name": "--summary", "arg": "text", "description": "One line saying what you need or what you did, for people (Chatter, the Projects view, phones, k2 inbox list). Pass it for anything longer than ~3 lines; over ~600 characters without one prints a hint. Never injected: the agent gets the whole message."},
+        {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
+        {"name": "--session", "arg": "id", "description": "A conversation in this workspace by id (k2 sessions --past; 6+ characters) instead of an address: whoever holds it gets the message; a past one is reopened (same history) with the message as its first turn."},
+        {"name": "--inbox-silent", "arg": null, "description": "Land a durable tray package under peer .k2/inbox/ (one or more file paths, or --title/--body). Multi-file → one package. Does NOT notify."},
+        {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Accepts multiple paths as one package. Preferred tray mode."},
+        {"name": "--inbox", "arg": null, "description": "Hard error — use --inbox-silent or --inbox-wake."},
+        {"name": "--title", "arg": "text", "description": "Title override for tray package (with --inbox-silent|--inbox-wake)."},
+        {"name": "--body", "arg": "text", "description": "Cover brief. With files, prepended to the tray package (not XOR). Without files, legacy compose body."}
+      ]
+    },
+    {
+      "name": "talk",
+      "usage": "k2 talk <workspace> [\"text\"] [--read-only] [--answer <N>|--respond <y|n>] [--scout] [--answers <a,b,c>] [--from <name>] [--lines N] [--agent <name>] [--command \"<text>\"]",
+      "description": "BETA. Fused read+send. Reads the peer's live screen FIRST (so you can't inject into a HITL blind), then delivers via msg. --answer/--respond DRIVE a single HITL; --scout surfaces a whole multi-Q form, --answers drives it (N digits + submit) in one call.",
+      "args": [{"name": "workspace", "required": true}, {"name": "text", "required": false}],
+      "flags": [
+        {"name": "--read-only", "arg": null, "description": "Read + judge only; send nothing (aliases: --dry-run, --peek)."},
+        {"name": "--answer", "arg": "N", "description": "BETA (act-returns-state). Send key <N> to the resolved session, then re-read + print the resulting screen. Best-effort; no option validation."},
+        {"name": "--respond", "arg": "y|n", "description": "BETA. Alias of --answer for a y/n confirm: maps y->1, n->2 (standard 1.Yes/2.No ordering); a number passes through. Sends the key, then re-reads."},
+        {"name": "--scout", "arg": null, "description": "BETA (GH#69). Surface a WHOLE multi-question AskUserQuestion form in one call: walks it with arrow keys only (non-destructive), captures every question, returns focus to Q1 unmodified."},
+        {"name": "--answers", "arg": "a,b,c", "description": "BETA (GH#69). Answer a form on Q1: send each digit (auto-advances), then a final 1 to submit; re-read + print outcome. Warns if count != N (still proceeds)."},
+        {"name": "--from", "arg": "name", "description": "Sender identity for the [from <name>] prefix (forwarded to msg)."},
+        {"name": "--lines", "arg": "N", "description": "Lines of the peer's screen to read first. Default 50."},
+        {"name": "--agent", "arg": "name", "description": "Read/target a specific agent's session in the workspace."},
+        {"name": "--command", "arg": "text", "description": "Slash-command prepended to the delivered message (forwarded to msg)."}
+      ]
+    },
+    {
+      "name": "read",
+      "usage": "k2 read <workspace> [--lines N] [--agent <name>]",
+      "description": "Read another workspace's LIVE terminal (last N lines of plain text). Peek before you inject, or diagnose a stuck agent.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50."},
+        {"name": "--agent", "arg": "name", "description": "Read a specific agent's session (default: workspace primary)."}
+      ]
+    },
+    {
+      "name": "terminal write",
+      "usage": "k2 terminal write <terminal-id|workspace> [--agent <name>] \"message\"",
+      "description": "Raw bytes to a PTY. Accepts a session UUID (back-compat) OR a workspace NAME (resolved to its live session, GH#8). Power-user escape hatch under msg/talk routing.",
+      "args": [{"name": "terminal-id|workspace", "required": true}, {"name": "message", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "name", "description": "Select a specific agent's session when addressing by workspace name."}
+      ]
+    },
+    {
+      "name": "terminal read",
+      "usage": "k2 terminal read <terminal-id> [--lines N]",
+      "description": "Read a PTY's screen by session id (the by-id complement to 'k2 read <workspace>').",
+      "args": [{"name": "terminal-id", "required": true}],
+      "flags": [{"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50."}]
+    },
+    {
+      "name": "terminal spawn",
+      "usage": "k2 terminal spawn --agent <name> --command \"<cmd>\" [--cwd <dir>] [--title <t>]",
+      "description": "Spawn a new session for an agent and surface it to any attached UI.",
+      "args": [],
+      "flags": [
+        {"name": "--agent", "arg": "name", "description": "Agent name (session key)."},
+        {"name": "--command", "arg": "cmd", "description": "Command to run (default shell)."},
+        {"name": "--cwd", "arg": "dir", "description": "Working directory (default: project path)."},
+        {"name": "--title", "arg": "t", "description": "Display title for the UI pane."}
+      ]
+    },
+    {
+      "name": "inbox",
+      "usage": "k2 inbox [list|read|compose|move|archive] ...",
+      "description": "YOUR tray (receive/triage). Others send files with k2 msg --inbox-wake. Cannot send a file. Default shows new arrivals; compose/move/archive manage items. Not email, not live chat.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "review",
+      "usage": "k2 review <approve|reject|feedback> <agent> [--reason <r>] [--message <m>]",
+      "description": "Review an agent's proposed work: approve (merge), reject (--reason), or send feedback (--message).",
+      "args": [{"name": "agent", "required": true}],
+      "flags": [
+        {"name": "--reason", "arg": "r", "description": "Rejection reason (with reject)."},
+        {"name": "--message", "arg": "m", "description": "Feedback text (with feedback)."}
+      ]
+    },

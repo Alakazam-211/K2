@@ -1,0 +1,291 @@
+    {
+      "name": "wiki",
+      "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
+      "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain. Hosting is being rebuilt on the K2 runtime; public chat is unavailable.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output where supported (status/index/note/publish/unpublish)."},
+        {"name": "--port", "arg": "N", "description": "Preferred localhost port for serve on / publish."},
+        {"name": "--label", "arg": "LABEL", "description": "Nested subdomain label for publish (default: workspace basename slug)."},
+        {"name": "--workspace", "arg": "project", "description": "Workspace path/name/uuid (alias: --project or trailing [project])."}
+      ]
+    },
+    {
+      "name": "wiki status",
+      "usage": "k2 wiki status [--json] [project]",
+      "description": "Local serve state (enabled/port/url) + published label + note count. publicChatEnabled is always false (chat unavailable).",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable object."}]
+    },
+    {
+      "name": "wiki index",
+      "usage": "k2 wiki index [--json] [project]",
+      "description": "Full wiki graph index (nodes + wikilinks) from the daemon indexer.",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw WikiIndex JSON."}]
+    },
+    {
+      "name": "wiki note",
+      "usage": "k2 wiki note <id> [--json] [project]",
+      "description": "Fetch one note body by stable id (wiki-relative path, e.g. Home.md).",
+      "args": [{"name": "id", "required": true}, {"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Full note object including body."}]
+    },
+    {
+      "name": "wiki seed",
+      "usage": "k2 wiki seed [project]",
+      "description": "Create seed Home.md + _Index.md under .k2/wiki/ when missing.",
+      "args": [{"name": "project", "required": false}],
+      "flags": []
+    },
+    {
+      "name": "wiki serve",
+      "usage": "k2 wiki serve on|off [--port N] [project]",
+      "description": "Start/stop the read-only localhost wiki site (binds 127.0.0.1 only).",
+      "args": [{"name": "on|off", "required": true}, {"name": "project", "required": false}],
+      "flags": [{"name": "--port", "arg": "N", "description": "Preferred port when turning on."}]
+    },
+    {
+      "name": "wiki chat",
+      "usage": "k2 wiki chat off [project]",
+      "description": "Public chat is unavailable until it returns on the K2 runtime. `on` exits 3 (public_chat_unavailable); `off` turns it off.",
+      "args": [{"name": "off", "required": true}, {"name": "project", "required": false}],
+      "flags": []
+    },
+    {
+      "name": "wiki publish",
+      "usage": "k2 wiki publish [--label LABEL] [project]",
+      "description": "Turn serve ON and create/point a nested subdomain to 127.0.0.1:port (or print the k2 publish subdomain command).",
+      "args": [{"name": "project", "required": false}],
+      "flags": [
+        {"name": "--label", "arg": "LABEL", "description": "Nested subdomain label (default: workspace basename slug)."},
+        {"name": "--port", "arg": "N", "description": "Preferred local port before publish."},
+        {"name": "--json", "arg": null, "description": "JSON summary of label/target/port."}
+      ]
+    },
+    {
+      "name": "wiki unpublish",
+      "usage": "k2 wiki unpublish [project]",
+      "description": "Turn serve OFF and print how to remove the nested subdomain (notes are kept).",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON summary with rm hint."}]
+    },
+    {
+      "name": "zen",
+      "usage": "k2 zen <garden|theme|widget|validate|inspect|reload|reset|history|doctor|path|sync|news|guide> ...",
+      "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; widgets/<name>/ custom widgets; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. Widgets in your own Gardens need no permissions. Exit 3 when Zen isn't set up here.",
+      "args": [],
+      "flags": [
+        {"name": "--garden", "arg": "name|id", "description": "A Garden's page (gardens/<id>.toml) instead of zen.toml."},
+        {"name": "--theme", "arg": "name", "description": "A theme bundle (themes/<name>/theme.toml) instead of zen.toml."},
+        {"name": "--widget", "arg": "name", "description": "validate/history/reset: a custom widget folder (widgets/<name>/)."},
+        {"name": "--file", "arg": "zen.toml|gardens/<id>.toml|themes/<name>/theme.toml", "description": "Name the file directly."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen garden",
+      "usage": "k2 zen garden <list|new <name> [--texting] [--at <n>]|rename <garden> <name>|delete <garden>|reorder <garden> <position>|template <garden> texting|blank [--force]|lock <garden>|unlock <garden>> [--json]",
+      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; template turns a Garden into the texting page (the default) or an empty one, same id, name and place, keeping the old file in .history/; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one; lock and unlock are for the person only (agents exit 3), and a locked Garden refuses agent changes with exit 3 (garden_locked). access <garden> shows the Garden's list of agents who may edit it (or whether you may), ask asks the person, add|remove <agent> are the person's; history <garden> is its History (k2 study garden-access). <garden> is an id or a name.",
+      "args": [{"name": "garden", "required": false}, {"name": "name|position", "required": false}],
+      "flags": [
+        {"name": "--texting", "arg": null, "description": "new: start from the texting template (k2.texting@1) instead of the empty one (k2.blank@1)."},
+        {"name": "--at", "arg": "n", "description": "new: 1-based position (default: the end)."},
+        {"name": "--force", "arg": null, "description": "template: go ahead when the Garden's file has its own layout, widgets or theme tables (they are kept in .history/)."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen inspect",
+      "usage": "k2 zen inspect <file.k2garden | folder> [--json]",
+      "description": "Static review of a Garden bundle (zip) or folder you received, before anything is added: widgets and their caps/libs, every K2 verb called, network and escape attempts, URLs, obfuscation signals, parse and leak findings. Never runs the code. Everything quoted is untrusted, escaped and capped. Exit 0 report printed, 1 unreadable.",
+      "args": [{"name": "path", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{untrusted, notice, source, summary, widgets, verbs, k2Members, libraries, network, urls, obfuscation, findings, files, refused, truncated}."}
+      ]
+    },
+    {
+      "name": "zen widget errors",
+      "usage": "k2 zen widget errors <name> [--since <seq>] [--follow] [--json] | k2 zen widget errors <name> --clear [--all] [--json]",
+      "description": "Runtime errors your widget hit in a Zen window (uncaught errors and rejections, and bridge refusals such as not_bound), newest last, each with a suggestion and the version (bundle hash) that hit it. A refused sources.* call names its source address when a placement's config (or the manifest) names it; any other address is withheld. --follow keeps printing new ones. Each error says whether validate counts it (0.46.3): only a placed widget's errors on its saved version from the last 24 h count; the rest are marked old. --clear drops the ones that no longer count (an older version's, an unplaced widget's, older than 24 h), --clear --all every error; the person or any local agent, audited. Exit 0 none counted, 1 some (or the widget is unknown).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--since", "arg": "seq", "description": "Only errors after this sequence number."},
+        {"name": "--follow", "arg": null, "description": "Keep watching (Ctrl+C stops)."},
+        {"name": "--clear", "arg": null, "description": "Drop the logged errors validate no longer counts (ready marks and the sequence stay)."},
+        {"name": "--all", "arg": null, "description": "--clear: drop every logged error, counted or not."},
+        {"name": "--json", "arg": null, "description": "{widget, hash, placed, errors: [{seq, at, hash, current, counted, staleReason?, message, stack, kind, class, code, line, address?, addressWithheld?, redacted?, suggestion}], last}; --clear: {widget, cleared, left, all}."}
+      ]
+    },
+    {
+      "name": "zen validate",
+      "usage": "k2 zen validate [--garden <name|id> [--from <file>|-] | --theme <name> | --widget <name> [--sign] [--types[=all]] | --dir <folder> [--as <name>] | --file <file>] [--strict] [--json]",
+      "description": "Validate Zen files without changing what Zen shows: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. --dir checks a STAGED widget folder anywhere on disk (code as text, images/fonts too) exactly like a widget folder, and --garden <g> --from <file> a staged Garden page; neither writes anything. A check never signs (0.46.1): --widget --sign signs a clean version as the caller. Runtime errors (0.46.3) fail only for a widget a Garden places, on its saved version, from the last 24 h; an unplaced widget's or older ones are warnings (k2 zen widget errors <name> --clear drops them). With no target it reports each widget: where it is placed and its runtime state. Exit 0 ok (and 'pending': a placed widget whose saved version has not run in a Zen window yet), 1 errors (including a placed widget's recent runtime errors), 2 usage or, with --strict, pending or old runtime errors, 3 Zen not set up / Garden locked.",
+      "args": [],
+      "flags": [
+        {"name": "--dir", "arg": "folder", "description": "A staged widget folder outside ~/.k2: checked by the daemon, nothing written, Zen needn't be set up. Never pending."},
+        {"name": "--as", "arg": "name", "description": "--dir: the widget name to check as (default: manifest.json's id, else the folder name)."},
+        {"name": "--from", "arg": "file|-", "description": "--garden: a staged page checked against that Garden; never written."},
+        {"name": "--sign", "arg": null, "description": "--widget: when clean, sign this version as you (or this agent) for its Garden data calls. --no-sign is accepted and does nothing."},
+        {"name": "--strict", "arg": null, "description": "Exit 2 while a placed widget's saved version hasn't run yet (pending), or while old runtime errors are logged (not confirmed clean); without it both exit 0."},
+        {"name": "--types", "arg": null, "description": "--widget only: also type-check its scripts against k2.d.ts with tsc-rs (K2_TSC_RS or tsc-rs on PATH; K2_TS_CHECKER=tsc7 uses tsgo). Warnings only; lines without k2. are counted, --types=all lists them."},
+        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime: {hash, placed, placements, ran, errorsSinceSave, staleErrors, note}, types, signed?}; no target adds {widgets: [{widget, placements, placed, ran, failing, stale, status}], staleRuntime}; --dir adds {widget, staged, manifest, bundleHash}."}
+      ]
+    },
+    {
+      "name": "zen widget delete",
+      "usage": "k2 zen widget delete <name> [--json]",
+      "description": "Delete a custom widget that no Garden places (0.46.5). While any Garden places it, K2 refuses with widget_placed and names those Gardens (exit 1): take it off each Garden's page first. Its code is kept as a history snapshot and the whole folder (images, fonts) beside it; the answer prints the undo, k2 zen reset --widget <name> --to <snapshot>. Its data and last good version stay. The person, or an agent with \"Manage Gardens and data sources\" (Garden access on: as for put; a widget placed nowhere is open); any other agent gets person_only (exit 3). K2's built-in widgets can't be deleted. Exit 0 deleted, 1 refused, 2 usage, 3 not allowed / Zen not set up, 4 no such widget.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, deleted, widget, file, snapshot, undo}; refused: {error: widget_placed, widget, gardens: [{id, name}], message}."}
+      ]
+    },
+    {
+      "name": "zen widget put",
+      "usage": "k2 zen widget put <name> <file> --from <path>|- [--note \"…\"] [--json] | k2 zen widget put [<name>] --dir <folder> [--prune] [--note \"…\"] [--json]",
+      "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person, or an agent on the list of every Garden that places the widget, writes (in the Garden's History); any other agent is refused with garden_access_needed (exit 3) and K2 asks the person with a garden.access card. Nothing is proposed (proposals are retired: k2 study garden-changes). K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written, 1 refused, 2 usage, 3 not on the Garden's list / locked / Zen not set up, 4 no such widget.",
+      "args": [{"name": "name", "required": false}, {"name": "file", "required": false}],
+      "flags": [
+        {"name": "--from", "arg": "path|-", "description": "One code file's new text (- reads stdin)."},
+        {"name": "--dir", "arg": "folder", "description": "The whole staged folder; <name> defaults to manifest.json's id, else the folder name."},
+        {"name": "--prune", "arg": null, "description": "--dir: also remove code files, images and fonts the folder doesn't have (never README or dotfiles)."},
+        {"name": "--note", "arg": "text", "description": "One paragraph for whoever reviews a proposal."},
+        {"name": "--json", "arg": null, "description": "One file: {ok, widget, file, changed, hash, validate} or {proposed, proposal}. --dir: {ok, widget, file, changed, written, unchanged, removed, kept, validate} or {proposed, proposals, message}."}
+      ]
+    },
+    {
+      "name": "zen widget preview",
+      "usage": "k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json] | k2 zen widget preview --dir <folder> [<name>] --shot <png> [--theme dark|light] [--width N] [--height N] [--zen-theme <name>] [--data <file.json>] [--libs <dir>] [--wait-ms N] [--config key=value]... [--json] | k2 zen widget preview --clear [--json]",
+      "description": "Try a staged widget folder in Zen without touching the person's Gardens: K2 writes it as widgets/preview-<name>/ (manifest id renamed) and places it alone on K2's own \"Widget preview\" Garden (made the first time; each preview replaces the last). --config sets the placement's config (a card that reads data sources takes sources=a,b). It has its own empty store; its runtime errors are k2 zen widget errors preview-<name>. --clear removes the preview Garden and every preview-* widget. The person, or any agent in a K2 terminal (it never touches the person's Gardens). --shot <png> (0.46.3) renders the folder headless instead, with nobody at a Zen window: checked and bundled as Zen would, in K2's real widget frame on a Garden canvas, its calls answered by a stand-in bridge with sample data (or --data fixtures), drawn in WebKit at 2x; it writes only the PNG, any local agent may shoot, and Zen needn't be set up. Needs Node.js and Playwright's WebKit (npm install -g playwright && npx playwright install webkit). Exit 0 previewed, cleared or shot (the widget said ready), 1 refused (errors) or the shot widget threw / never said ready (PNG still written), 2 usage, 3 needs a person / Zen not set up / no Node or Playwright WebKit.",
+      "args": [{"name": "name", "required": false}],
+      "flags": [
+        {"name": "--dir", "arg": "folder", "description": "The staged folder (checked first)."},
+        {"name": "--config", "arg": "key=value", "description": "The preview placement's config; repeatable (up to 16 keys)."},
+        {"name": "--clear", "arg": null, "description": "Remove the preview Garden and every preview-* widget."},
+        {"name": "--shot", "arg": "png", "description": "Render headless to this PNG instead of placing the preview; writes nothing else."},
+        {"name": "--theme", "arg": "dark|light", "description": "--shot: the Garden's scheme (default: the Zen theme's own, else light)."},
+        {"name": "--zen-theme", "arg": "name", "description": "--shot: a built-in Zen theme (basic, paper, midnight, haunted, glass; default basic)."},
+        {"name": "--width", "arg": "N", "description": "--shot: width in CSS pixels, 120 to 2400 (default 420)."},
+        {"name": "--height", "arg": "N", "description": "--shot: height in CSS pixels, 120 to 2400 (default 360)."},
+        {"name": "--data", "arg": "file.json", "description": "--shot: fixtures for the stand-in bridge: keys \"<verb> <first arg>\" or \"<verb>\", and \"store\"."},
+        {"name": "--libs", "arg": "dir", "description": "--shot: K2's zen-lib folder for a widget with requires.libs (found by itself in a K2 checkout)."},
+        {"name": "--wait-ms", "arg": "N", "description": "--shot: settle time after the widget says ready (default 400)."},
+        {"name": "--json", "arg": null, "description": "{ok, widget, preview, garden: {id, name}, placement, config, written, validate, page, open}; with --clear {ok, garden, removed}; with --shot {ok, png, ready, errors, refusals, calls, width, height, scheme, ms}."}
+      ]
+    },
+    {
+      "name": "zen reload",
+      "usage": "k2 zen reload [--json]",
+      "description": "Re-read ~/.k2/zen now (the daemon also watches it) and print current errors.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, changed, errors, warnings}."}
+      ]
+    },
+    {
+      "name": "zen reset",
+      "usage": "k2 zen reset [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--to <snapshot>] [--json]",
+      "description": "Keep the current file as a snapshot, then restore a snapshot or clear your changes (a Garden goes back to its template's stub; an override of a built-in theme is removed; --widget restores a widget's code files, never its assets). Never touches gardens.json, active.json or widget grants.",
+      "args": [],
+      "flags": [
+        {"name": "--to", "arg": "snapshot", "description": "Snapshot name from k2 zen history (default: the empty stub / K2's theme)."}
+      ]
+    },
+    {
+      "name": "zen history",
+      "usage": "k2 zen history [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]",
+      "description": "The last 20 good versions of each Zen file, newest first, including deleted Gardens (by id).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, keep, files:[{file, exists, snapshots, garden?, deleted?}]}."}
+      ]
+    },
+    {
+      "name": "zen doctor",
+      "usage": "k2 zen doctor [--json]",
+      "description": "Check the Zen folder, Garden list, templates, files, watcher and history on this computer.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, setUp, path, checks}."}
+      ]
+    },
+    {
+      "name": "zen theme",
+      "usage": "k2 zen theme <list|next|prev|set <name>|new <name>> [--garden <name|id>] [--json]",
+      "description": "The active Zen theme (one for this computer, plus an optional pick per Garden). list shows K2's built-in themes and yours; next/prev cycle them; set picks one (exit 1 and the list on an unknown name); new copies a theme into ~/.k2/zen/themes/<name>/ to edit.",
+      "args": [{"name": "name", "required": false}],
+      "flags": [
+        {"name": "--garden", "arg": "name|id", "description": "list/next/prev/set: that Garden's own pick instead of the computer's."},
+        {"name": "--clear", "arg": null, "description": "set --garden <name> --clear: the Garden follows the computer's theme again."},
+        {"name": "--from", "arg": "theme", "description": "new: the theme to copy (default: K2's theme of that name, else basic)."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen widget",
+      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade|board-lite]|list|show <name>|errors <name>|put …|apply --from <folder>|preview --dir <folder>> [--json]",
+      "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement (and whether the runaway guard paused its posting); show <name> adds the caps it runs with, the reach note (0.46.1: a widget that reads sources keeps thread:post and store:write when its manifest asks for them) and the source addresses each placement reads; errors <name> [--since <seq>] [--follow] lists its runtime errors (class, code and line only for a widget that reads data sources). A widget in your own Garden can talk to your agents right away: no grant, no review. k2 zen widget grant and revoke only say so. The helpers a widget can call: k2 zen guide api.",
+      "args": [{"name": "name|garden", "required": false}, {"name": "placement", "required": false}],
+      "flags": [
+        {"name": "--from", "arg": "k2:diary|hello|arcade|board-lite", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
+        {"name": "--widget", "arg": "name", "description": "revoke: every placement of this widget."},
+        {"name": "--ask", "arg": null, "description": "sign: ask the person to sign this version (K2's zen.sign card on your Thread, with the manifest changes in plain words) instead of signing it."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen path",
+      "usage": "k2 zen path",
+      "description": "Print the Zen folder (~/.k2/zen on the daemon's computer).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "zen sync",
+      "usage": "k2 zen sync [--json] | k2 zen sync <garden> on|off|preview|undo|keep-previous [--page|--theme] [--json]",
+      "description": "Whether each Garden's page and theme sync with K2's defaults or are its own copy (prd-zen-garden-sync-defaults-v1). No arguments: every Garden's state, its own changes and whether K2's default changed since its copy. on/off/undo/keep-previous are the person's (an agent gets 403 zen_local_only: ask the person, Settings → Gardens); preview prints the Garden as if synced and writes nothing.",
+      "args": [{"name": "garden", "required": false}, {"name": "on|off|preview|undo|keep-previous", "required": false}],
+      "flags": [
+        {"name": "--page", "arg": null, "description": "Only the page part (template, prop defaults, frame)."},
+        {"name": "--theme", "arg": null, "description": "Only the theme part (the built-in layers under the Garden's theme)."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen links",
+      "usage": "k2 zen links [<garden>] [--json] | k2 zen links forget <garden> <site>",
+      "description": "The sites each Garden opens in the person's browser without asking (k2.open from a widget, 0.46.4): the person chose Always on K2's own card. Agents can read the list; only the person changes it (forget is refused inside a K2 terminal: run it outside K2).",
+      "args": [{"name": "garden|forget", "required": false}, {"name": "site", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Daemon JSON."}]
+    },
+    {
+      "name": "zen news",
+      "usage": "k2 zen news [--json] | k2 zen news seen [<id>... | --all] [--json]",
+      "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up; notices of a one-time change K2 made, like 0.46.4 moving the data cards to @3 and listing the Gardens it left) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read.",
+      "args": [{"name": "seen", "required": false}, {"name": "id", "required": false}],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "seen: every unseen item."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen agents-order",
+      "usage": "k2 zen agents-order [<garden>] [--json]",
+      "description": "The person's order and pins in each Garden's Agents widget on this computer (they drag rows and pin agents in Zen; per Garden, never synced). Read only: agents can read it and never set it. order sits on top of the widget's own order; pins, once set, replace the agents' workspace pins in that Garden's pin grid.",
+      "args": [{"name": "garden", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Daemon JSON: {ok, gardens: [{id, name, order, pins, updatedAt}]}."}
+      ]
+    },
+    {
+      "name": "zen guide",
+      "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
+      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, phone, themes, sync, examples, undo, safe-mode, api, services, libs), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
+      "args": [{"name": "topic|example", "required": false}, {"name": "name", "required": false}],
+      "flags": [
+        {"name": "--toml", "arg": null, "description": "example <name>: print only the Garden file, ready for > ~/.k2/zen/gardens/<id>.toml."},
+        {"name": "--list", "arg": null, "description": "example: bare example names, one per line."},
+        {"name": "--json", "arg": null, "description": "{id, title, body} (an example adds toml; the index adds topics)."}
+      ]
+    },

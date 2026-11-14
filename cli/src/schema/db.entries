@@ -1,0 +1,239 @@
+    {
+      "name": "db create",
+      "usage": "k2 db create [--id <client-id>] [--db-access off|read|write] [--json]",
+      "description": "Mint a Postgres database for this workspace and answer its name and a loopback DSN for the agent role WITHOUT the password (fetch the full DSN with k2 db dsn --db <name>). No --id and no --name: the workspace's default database (ws_<project_id>), made once. A new --id makes another database (ws_<project_id>_<id>); the same --id answers the one it made, and with --major on another major it exits 3 (major_mismatch). --db-access persists the create-only passport (default off). Owner always; agent only if db_agent_access=write. List/dsn/store do not need this flag when the workspace owns a DB or has a grant. Never returns superuser. Cap: 25 ACTIVE databases per workspace by default (k2 db cap; drop frees one; test DBs don't count).",
+      "args": [],
+      "flags": [
+        {"name": "--id", "arg": "client-id", "description": "Your key for this database: a new key makes a new database, the same key answers the one it made."},
+        {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
+        {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--cluster", "arg": "name", "description": "Create in this workspace's named cluster (k2 db cluster create) instead of a main one. Needs \"Allow this agent to manage Postgres versions\" for an agent; with --major, it must be the cluster's major. Not with --test."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cap",
+      "usage": "k2 db cap [<n>|default] [--workspace <ws>] [--json]",
+      "description": "How many ACTIVE databases a workspace (its agent) may hold: 25 by default, 0 = unlimited; test databases don't count. With no number anyone may read it. Setting it is the owner's only (the owner token, or a person signed in to this server): an agent's own terminal is refused with exit 3, so an agent asks its human instead. default goes back to 25.",
+      "args": [{"name": "n", "required": false}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid (default: this one). Alias --project."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db clusters",
+      "usage": "k2 db clusters [--health] [--json]",
+      "description": "The Postgres clusters on this box: each major's main cluster (the first on 5432, the rest 5433-5449), the named clusters K2 made (17/feedback), and any cluster made outside K2 (recorded foreign: K2 never touches it). How many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check). --health adds, for each K2 cluster (never a foreign one), its connections, each database's size and the WAL archive's counters: what a monitor reads.",
+      "args": [],
+      "flags": [
+        {"name": "--health", "arg": null, "description": "Connections, database sizes and the WAL archiver for each K2 cluster."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster create",
+      "usage": "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] [--json]",
+      "description": "Make a named Postgres cluster (17/feedback) beside each major's main one, through the root helper (protocol 15; no root session): for one database that needs a cluster to itself, such as point-in-time restore or its own restarts. It runs in K2's band (5433-5449, never 5432; without --port the first free one), loopback only, with K2's settings and RAM cap, and belongs to this workspace: only it creates databases there (k2 db create --cluster <name>). The name is the box's: 2-24 of a-z, 0-9 and _, starting with a letter, never main, and never one any cluster already has, so a cluster made outside K2 is never taken over. --wal-archive copies every finished WAL segment to /var/lib/postgresql/k2-wal/<major>-<name> for a backup to ship and prune. The owner, or an agent with \"Allow this agent to manage Postgres versions\" (exit 3 otherwise). K2 never removes a cluster.",
+      "args": [{"name": "major", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "name", "description": "The cluster's name (required)."},
+        {"name": "--port", "arg": "port", "description": "A free port in 5433-5449 (default: the first free one)."},
+        {"name": "--wal-archive", "arg": null, "description": "Archive WAL into the cluster's spool (archive_mode on, archive_timeout 300 s)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster restart",
+      "usage": "k2 db cluster restart <name> [--json]",
+      "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Allow this agent to manage Postgres versions\" for its own workspace's cluster.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db upgrade",
+      "usage": "k2 db upgrade <db>|--app <id> [--all-workspace-dbs]|--all [--to 17] [--check] [--live [--replica-identity-full]] [--switch] [--abort] [--status] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json] | k2 db upgrade --prepare-live <major>",
+      "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Allow this agent to manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. --live (owner, 0.46.4) copies by logical replication while the database keeps serving, then --switch (writes pause a few seconds, Apps re-hosted) or --abort (free); --prepare-live <major> makes an older cluster logical with one restart. Exit 0 done, 3 refused (nothing changed), 1 failed.",
+      "args": [{"name": "db", "required": false}],
+      "flags": [
+        {"name": "--app", "arg": "id", "description": "The App's own database: the one its DATABASE_URL names, else its workspace's default."},
+        {"name": "--all-workspace-dbs", "arg": null, "description": "With --app when K2 can't tell its database: every database of its workspace."},
+        {"name": "--all", "arg": null, "description": "Owner: every K2 database below --to, one at a time; stops at the first failure."},
+        {"name": "--to", "arg": "major", "description": "Target major (default: the highest supported one every App on the database allows, else 17). Upward only, supported majors only."},
+        {"name": "--check", "arg": null, "description": "Read-only report (ok / warn / refuse per line); with --live, the live move's report."},
+        {"name": "--live", "arg": null, "description": "Owner (0.46.4): copy by logical replication while the database keeps serving; schema changes wait (at most 7 days). Returns once copying starts."},
+        {"name": "--switch", "arg": null, "description": "Owner: cut a streaming live move over (writes pause a few seconds; Apps re-hosted on the new major)."},
+        {"name": "--abort", "arg": null, "description": "Owner: end a live move before its switch; the database never stopped."},
+        {"name": "--status", "arg": null, "description": "The database's live move and latest moves (read-only)."},
+        {"name": "--replica-identity-full", "arg": null, "description": "Owner, with --live: REPLICA IDENTITY FULL on tables without a primary key (slower updates on them)."},
+        {"name": "--prepare-live", "arg": "major", "description": "Owner: allow live moves out of an older cluster (one restart; every database on it pauses about 5-15 s)."},
+        {"name": "--rollback", "arg": null, "description": "Back to the kept old copy (needs --yes)."},
+        {"name": "--yes", "arg": null, "description": "Confirms a rollback (writes since the move are not carried back)."},
+        {"name": "--forget-old", "arg": null, "description": "Owner: drop the kept old copy and its dump (24 h after the move)."},
+        {"name": "--force-now", "arg": null, "description": "Owner, with --forget-old: skip the 24 h wait."},
+        {"name": "--now", "arg": null, "description": "Owner: skip the 60 s notice."},
+        {"name": "--allow-adopted", "arg": null, "description": "Owner: move out of a cluster set up outside K2."},
+        {"name": "--acknowledge-failed", "arg": null, "description": "Owner: clear a failed move's block after fixing it."},
+        {"name": "--no-wait", "arg": null, "description": "Start the move and return (GET /cli/db/upgrade?db= shows progress)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db default-major",
+      "usage": "k2 db default-major <major> [--json]",
+      "description": "Owner: pin the Postgres major k2 db create uses without --major. New boxes start on 17; an existing box keeps its current major until the owner moves it here (an agent with the Postgres versions switch may only suggest it). Unsupported or past-EOL majors exit 3. Agents exit 3.",
+      "args": [{"name": "major", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db status",
+      "usage": "k2 db status [--health] [--json]",
+      "description": "Postgres sidecar status: supported, state, pg major (the 5432 cluster), clusters (one per major), each database's major, upgradeAvailable, defaultMajor, listen, port (5432 unless catalog says otherwise). JSON includes publishHint: off-box *.k2.dev is k2 publish subdomain create <label> --target localhost:<port> (port already listening). Not a static-IP feature. No k2 db expose.",
+      "args": [],
+      "flags": [
+        {"name": "--health", "arg": null, "description": "Probe SELECT 1 / unit."},
+        {"name": "--json", "arg": null, "description": "JSON output (includes port + publishHint)."}
+      ]
+    },
+    {
+      "name": "db grant",
+      "usage": "k2 db grant <workspace> --db <id|name> --level read|write [--relation schema.name …] [--manage] [--json]",
+      "description": "Grant another workspace read or write on a database via THEIR Postgres role (never superuser). Owner or can_manage. Cross-workspace only — the owning workspace already has manage/write. --manage lets the grantee grant/revoke others. Repeating --relation replaces the stored fence (it does not append). Omit it to restore the broad grant.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "id|name", "description": "Database id or name from k2 db list."},
+        {"name": "--level", "arg": "read|write", "description": "read = SELECT; write = DML."},
+        {"name": "--relation", "arg": "schema.name", "description": "One relation on the fence. Repeat to name more. A bare name is public.<name>. Replaces the stored list."},
+        {"name": "--manage", "arg": null, "description": "Allow the grantee to grant/revoke others."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db revoke",
+      "usage": "k2 db revoke <workspace> --db <id|name> [--json]",
+      "description": "Remove a workspace's grant on a database. Owner or can_manage. Idempotent.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "id|name", "description": "Database id or name from k2 db list."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db bind",
+      "usage": "k2 db bind --role <pg_role> [--db <id|name>] [--json]",
+      "description": "Owner/admin: set the Postgres role this workspace's assistant uses (default ws_<id>_agent). Does not mint RLS at spawn and never prints a DSN or password. Agents exit 3.",
+      "args": [],
+      "flags": [
+        {"name": "--role", "arg": "pg_role", "description": "Existing PG role name, or empty default."},
+        {"name": "--db", "arg": "id|name", "description": "Database id or name (default: this workspace)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db dsn",
+      "usage": "k2 db dsn [--db <name|id>] [--reveal | --ref [--as NAME]] [--test [--actor migrator]] [--json] [--workspace <ws>]",
+      "description": "The DSN of this workspace's Postgres LOGIN on the unscoped DB (its default: the oldest one it owns, else the first grant), or with --db on one database by name, id or create --id (owned or granted). Since 0.46.11 it prints NO password (dsnHasPassword: false and a dsnHint): --reveal prints the full DSN on purpose, k2 db run -- <cmd> hands it to a command without printing it, --ref keeps it in the vault. A script that did psql \"$(k2 db dsn)\" now fails auth: use k2 db run. --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
+      "args": [],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (k2 db list). Not with --test or --actor."},
+        {"name": "--reveal", "arg": null, "description": "Print the full DSN, password included (keep it out of chats, logs, notes and git)."},
+        {"name": "--ref", "arg": null, "description": "Keep it in the vault and print its k2v:// reference: DATABASE_URL (the default database), DATABASE_URL_<NAME> with --db, or --as NAME."},
+        {"name": "--as", "arg": "NAME", "description": "With --ref: the reference's name."},
+        {"name": "--test", "arg": null, "description": "The test database's agent DSN (--actor migrator: its migrator's)."},
+        {"name": "--json", "arg": null, "description": "JSON output ({name, dsn (no password), dsnHasPassword, dsnHint}, or {ref, name})."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
+        {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
+      ]
+    },
+    {
+      "name": "db run",
+      "usage": "k2 db run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>",
+      "description": "Run one command with the database's DSN in its environment as DATABASE_URL (or --as NAME), the way k2 vault run hands a secret: never on argv, never printed. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
+      "args": [{"name": "command", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (default: the workspace's default)."},
+        {"name": "--test", "arg": null, "description": "The test database (--actor migrator: as its migrator)."},
+        {"name": "--as", "arg": "NAME", "description": "The env name (default DATABASE_URL)."}
+      ]
+    },
+    {
+      "name": "db list",
+      "usage": "k2 db list [--json] [--workspace <ws>]",
+      "description": "The databases this workspace owns (active and test) and the ones granted to it, never dropped ones. --json: {databases: [{id, name, status, cap: {used, cap}, …}], cap}; the top-level cap is the workspace's limit (k2 db cap shows and sets it).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."}
+      ]
+    },
+    {
+      "name": "db migrate",
+      "usage": "k2 db migrate [--dir .k2/db/migrations] [--db <name|id>] [--json]",
+      "description": "Apply SQL migrations as the database's migrator ({db}_migrator), in order. Files are numbered: NNNN_name.sql (0001_users.sql, 0002_orders.sql); anything else (init.sql, an empty file) is a loud usage error. An unchanged file already applied is skipped; a rewritten applied file is refused (checksum_mismatch). After each file K2 grants USAGE, table DML and sequences on every migrator-owned schema to the agent (and so to every App connected with k2 app db connect). Never CREATE ROLE or FORCE ROW LEVEL SECURITY in a migration (usage).",
+      "args": [],
+      "flags": [
+        {"name": "--dir", "arg": "path", "description": "Workspace-relative folder of NNNN_name.sql files (default .k2/db/migrations)."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{applied: [...], discovered, noop}."}
+      ]
+    },
+    {
+      "name": "db dump",
+      "usage": "k2 db dump [--out .k2/db/dumps/<ts>.dump] [--db <name|id>] [--json]",
+      "description": "pg_dump (custom format) of a database this workspace owns into a workspace-relative file, plus a grants sidecar (who was granted what; never a secret). Default: .k2/db/dumps/<timestamp>.dump.",
+      "args": [],
+      "flags": [
+        {"name": "--out", "arg": "path", "description": "Workspace-relative output file (no .., no absolute path)."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{path}."}
+      ]
+    },
+    {
+      "name": "db restore",
+      "usage": "k2 db restore <file> [--db <name|id>] [--json]",
+      "description": "pg_restore a workspace-relative dump into a database this workspace owns, with the pg_restore of that database's major, then replays the grants sidecar. Refusals (--json prints {error: {code, hint}} on stderr): usage (a path outside the workspace, with .., or absolute; exit 2), not_found (no such file or database; exit 1), not_ready (Postgres not running, or the database is moving to another major; exit 1), engine (pg_restore failed: the hint has its error; exit 1).",
+      "args": [{"name": "file", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{restored}."}
+      ]
+    },
+    {
+      "name": "db drop",
+      "usage": "k2 db drop --yes [--db <name|id>] [--test] [--json]",
+      "description": "Drop a live database this workspace owns (default: its default database) and its own roles; --test drops only the test database (404 if none). Frees one slot of the cap. Apps connected to it are told; their door refuses it from then.",
+      "args": [],
+      "flags": [
+        {"name": "--yes", "arg": null, "description": "Required: there is no undo."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns."},
+        {"name": "--test", "arg": null, "description": "The test database only."},
+        {"name": "--json", "arg": null, "description": "{dropped}."}
+      ]
+    },
+    {
+      "name": "store put",
+      "usage": "k2 store put <name> --id <id> --json '{…}' [--workspace <ws>]",
+      "description": "Put a JSON document into a named JSONB collection in this workspace DB. Works when you own a DB or have a write grant — does not need db_agent_access. --workspace/--project selects that workspace's LOGIN (owner token; cell stamp pins).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "Document id."},
+        {"name": "--json", "arg": "object", "description": "Document JSON."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
+        {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
+      ]
+    },
+    {
+      "name": "store list",
+      "usage": "k2 store list [--json] [--workspace <ws>]",
+      "description": "List JSONB collections in this workspace DB. --workspace/--project selects that workspace's LOGIN (owner token; cell stamp pins).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
+        {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
+      ]
+    },

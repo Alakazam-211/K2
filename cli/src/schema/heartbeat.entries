@@ -1,0 +1,140 @@
+    {
+      "name": "heartbeat",
+      "usage": "k2 heartbeat",
+      "description": "List this workspace's active heartbeat schedules (named scheduled wakes; = 'heartbeat schedule list'). Some people call these routines, scheduled tasks or cron jobs. --help anywhere prints usage and never mutates.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "heartbeat remind",
+      "usage": "k2 heartbeat remind \"<text>\" (--in 45m|--at 13:00|--on 2026-10-30 [--at 09:00]) [--tz Area/City] [--name n] [--file path] [--session pinned|own] [--json]",
+      "description": "Set a one-time wake (a reminder): a heartbeat that fires once and goes away. Short form: k2 remind. Also list [--all], show <n>, snooze <n> <when>, cancel <n>. A past time is refused (exit 2). Fires once across restarts and sleep; up to 24 hours late with a late stamp, then it finishes as missed and tells the owner. POST /cli/heartbeat/reminder/add.",
+      "args": [{"name": "text", "required": true}],
+      "flags": [
+        {"name": "--in", "arg": "duration", "description": "s m h d w, combined (1h30m). At least 1 minute, at most 365 days."},
+        {"name": "--at", "arg": "time", "description": "13:00 (next one), 2026-10-30T09:00, or an RFC 3339 instant."},
+        {"name": "--on", "arg": "date", "description": "A date; 09:00 unless --at gives the time."},
+        {"name": "--tz", "arg": "zone", "description": "IANA zone. Default: the owner's timezone, else this computer's clock."},
+        {"name": "--name", "arg": "n", "description": "Default: r-<6 chars>."},
+        {"name": "--file", "arg": "path", "description": "A file in this workspace the reminder points the agent to."},
+        {"name": "--session", "arg": "pinned|own", "description": "Where it lands. Default: the pinned chat."},
+        {"name": "--json", "description": "Raw JSON."}
+      ]
+    },
+    {
+      "name": "heartbeat schedule",
+      "usage": "k2 heartbeat schedule <add|list|remove|unarchive|edit|rename|enable|disable> [...]",
+      "description": "CRUD on named heartbeats. add/edit take --name <n> plus a spec: --daily|--weekly|--monthly|--yearly|--hourly with --time HH:MM / --days / --months / --every N --unit minutes|hours / --start / --end. Values are validated: weekly --days = mon..sun, monthly/yearly --days = 1-31, --months = jan..dec (3-letter). Unknown sub-verbs, spec flags, or bad values are usage errors (exit 2), never writes. edit may pass only --instructions/--instructions-file to rewrite the WAKEUP.md without touching the schedule.",
+      "args": [{"name": "subcommand", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "n", "description": "Heartbeat name (add/edit)."},
+        {"name": "--instructions", "arg": "text", "description": "With add/edit: write the WAKEUP.md (the job that runs on fire)."},
+        {"name": "--instructions-file", "arg": "path", "description": "With add/edit: read the WAKEUP.md content from a file."},
+        {"name": "--archived", "arg": null, "description": "With list: show archived heartbeats instead of active."},
+        {"name": "--json", "arg": null, "description": "With list (and list --archived): dump the raw JSON array, no table."},
+        {"name": "--purge", "arg": null, "description": "With remove: hard-delete row + folder (default is soft-archive)."}
+      ]
+    },
+    {
+      "name": "heartbeat signal",
+      "usage": "k2 heartbeat signal <fire|wakeup|wake> [<name>]",
+      "description": "One-shot triggers: 'fire <n>' runs a heartbeat now (skips the schedule window; a DISABLED heartbeat is refused unless --force); 'wakeup <n>' prints its WAKEUP.md (--path-only for the path, --edit to open your editor); 'wake' auto-wakes the manager, no name needed.",
+      "args": [{"name": "subcommand", "required": true}, {"name": "name", "required": false}],
+      "flags": [
+        {"name": "--force", "arg": null, "description": "With fire: fire even if the heartbeat is disabled."},
+        {"name": "--path-only", "arg": null, "description": "With wakeup: print the absolute WAKEUP.md path only."},
+        {"name": "--edit", "arg": null, "description": "With wakeup: open the WAKEUP.md in your editor."}
+      ]
+    },
+    {
+      "name": "heartbeat session",
+      "usage": "k2 heartbeat session <name> [--pinned | --auto | --set <session-id|workspace/handle> [--provider <p>]]",
+      "description": "Show or set where a heartbeat's wake message lands: the workspace pinned chat (--pinned), the heartbeat's own session minted fresh on the next fire (--auto), or a specific saved provider session (--set + --provider). With no flags, prints the current target.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--pinned", "arg": null, "description": "Deliver into the workspace pinned chat session."},
+        {"name": "--auto", "arg": null, "description": "Own session - a new one is minted on the next fire."},
+        {"name": "--set", "arg": "session-id", "description": "Deliver into this saved session (must exist on disk; requires --provider)."},
+        {"name": "--provider", "arg": "p", "description": "Provider owning the saved session: claude, grok, cursor, gemini, pi, codex, or hermes."}
+      ]
+    },
+    {
+      "name": "heartbeat restart",
+      "usage": "k2 heartbeat restart <name> [--workspace <ws>] [--json]",
+      "description": "Stop a heartbeat's own session and forget its saved conversation, so the next fire starts a new session on the token a new chat here would use (the workspace's pinned token, else the server default). For a session stuck on a usage limit, signed out, or on an old token. The schedule and WAKEUP.md stay. Nothing fires now (k2 heartbeat signal fire <name> to fire at once). hb:<name> works too. A chosen session (heartbeat session --set) is kept; --auto lets K2 start its own. An agent may restart its own workspace's heartbeats with no switch. Exit 0 ok, 1 error (no such heartbeat), 2 bad usage or not a heartbeat name, 3 refused (another workspace), 4 workspace not found.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Another workspace's heartbeat (handle, name or path; people only)."},
+        {"name": "--json", "arg": null, "description": "The daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "heartbeat show",
+      "usage": "k2 heartbeat show <name> [--workspace <ws>] [--json]",
+      "description": "One heartbeat's full details (schedule, enabled, last fire, saved session).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Another workspace's heartbeat (handle, name or path; people only, an agent reads its own)."},
+        {"name": "--json", "arg": null, "description": "Raw row for scripting."}
+      ]
+    },
+    {
+      "name": "heartbeat status",
+      "usage": "k2 heartbeat status <name> [--limit N]",
+      "description": "Recent fire history for one heartbeat.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--limit", "arg": "N", "description": "Fires to show (default 10)."}]
+    },
+    {
+      "name": "heartbeat log",
+      "usage": "k2 heartbeat log [--limit N]",
+      "description": "Recent scheduler decisions for this workspace (why heartbeats did or didn't fire).",
+      "args": [],
+      "flags": [{"name": "--limit", "arg": "N", "description": "Entries to show."}]
+    },
+    {
+      "name": "workspace",
+      "usage": "k2 workspace <list|resources|...> [...]",
+      "description": "Workspace registry, status, and Files-drawer resources (list|add|remove).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "activity",
+      "usage": "k2 activity [<limit>] [--limit N] [--agent <name>] [--json]",
+      "description": "Show the cross-workspace activity feed (date and time, agent, event). Daemon errors exit 1.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]
+    },
+    {
+      "name": "glossary",
+      "usage": "k2 glossary [term]",
+      "description": "Look up a K2 glossary term.",
+      "args": [{"name": "term", "required": false}],
+      "flags": []
+    },
+    {
+      "name": "whats-new",
+      "usage": "k2 whats-new",
+      "description": "Show release notes for recent versions.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "update",
+      "usage": "k2 update [--app|--cli|--list]",
+      "description": "Update the K2 app or this CLI.",
+      "args": [],
+      "flags": [
+        {"name": "--app", "arg": null, "description": "Update the desktop app (default)."},
+        {"name": "--cli", "arg": null, "description": "Update this CLI script."},
+        {"name": "--list", "arg": null, "description": "List available versions."}
+      ]
+    },
+    {
+      "name": "daemon",
+      "usage": "k2 daemon <status|start|stop|restart|survive|log|install|uninstall> [...]",
+      "description": "Manage the local (or, with --host, a remote) K2 daemon.",
+      "args": [],
+      "flags": []
+    },

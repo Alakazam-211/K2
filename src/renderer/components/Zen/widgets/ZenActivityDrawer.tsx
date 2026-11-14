@@ -564,11 +564,14 @@ export function ZenActivityDrawer({
             overflow: 'hidden',
             color: 'var(--zen-text)',
             background: ZEN_DRAWER_EAR_FILL,
-            border: '1px solid var(--zen-border)',
+            // Longhands only: on the box the tab has no bottom edge. Mixed
+            // with a shorthand, a tone change re-set `borderStyle` alone,
+            // which brought the bottom edge back (3px, the text colour):
+            // the white line Rosson saw along the tab (2026-11-14).
+            borderColor: 'var(--zen-border)',
             borderStyle: display.tone === 'unverifiable' ? 'dashed' : 'solid',
-            ...(attached
-              ? { borderBottom: 'none', borderRadius: `${ZEN_EAR_RADIUS} ${ZEN_EAR_RADIUS} 0 0` }
-              : { borderRadius: ZEN_EAR_RADIUS }),
+            borderWidth: attached ? '1px 1px 0' : '1px',
+            borderRadius: attached ? `${ZEN_EAR_RADIUS} ${ZEN_EAR_RADIUS} 0 0` : ZEN_EAR_RADIUS,
             ...chamferVars({
               cut: attached ? [CHAMFER_CUT.drawer, CHAMFER_CUT.drawer, 0, 0] : CHAMFER_CUT.drawer,
               fill: ZEN_DRAWER_EAR_FILL,

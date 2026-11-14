@@ -79,7 +79,7 @@ export const STEP_LABELS: ReadonlyArray<[string, string]> = [
   ['address', 'Address'],
   ['deploy', 'Deploy'],
   ['approve', 'Approve'],
-  ['sew_setup', 'Sew setup'],
+  ['sew_setup', 'Chat setup'],
   ['healthy', 'Healthy'],
   ['ready', 'Ready'],
 ]
@@ -88,16 +88,19 @@ export function stepLabel(step: string): string {
   return STEP_LABELS.find(([id]) => id === step)?.[1] ?? step
 }
 
-/** A wait in words (R4): the reason, and the open question it hangs on. */
+/** A wait in words (R4): what it waits for and who moves it on. The
+ *  server's own hint (CLI steps, open questions) stays out of the sheet for
+ *  the waits it names here. */
 export function waitText(job: CatalogJob): string | null {
   if (job.state !== 'waiting' || !job.waiting) return null
-  const why =
-    job.waiting.reason === 'waiting_approval'
-      ? 'Waiting for the owner to approve'
-      : job.waiting.reason === 'waiting_sew_rights'
-        ? 'Waiting for "Manage Chat / Voice Hosting"'
-        : 'Waiting'
-  return job.waiting.hint ? `${why}: ${job.waiting.hint}` : why
+  switch (job.waiting.reason) {
+    case 'waiting_approval':
+      return 'Waiting for the owner to approve what this App uses. The deploy goes on by itself once it’s approved.'
+    case 'waiting_sew_rights':
+      return 'Waiting for permission to set up chat and voice. The owner can turn on Chat / Voice Hosting for the agent that looks after it, or deploy it themselves; the deploy goes on by itself then.'
+    default:
+      return 'Waiting for the server. The deploy goes on by itself.'
+  }
 }
 
 export function isActive(job: CatalogJob | null | undefined): boolean {

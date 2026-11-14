@@ -22,7 +22,7 @@
 // daemon repeats every check at deploy.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Callout, Input } from '@/components/ui'
+import { Button, Callout, Input, Spinner } from '@/components/ui'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -38,7 +38,7 @@ import {
   SettingsGroup,
   SettingsLoadState,
 } from '../controls/SettingControls'
-import { AppMonogram, PaneHeader, StatusDot, type DotTone } from './apps-ui'
+import { AppMonogram, LinkButton, PaneHeader, StatusDot, serverWords, type DotTone } from './apps-ui'
 import {
   STEP_LABELS,
   checkAddress,
@@ -47,9 +47,11 @@ import {
   isActive,
   retryJob,
   startInstall,
+  stepLabel,
   waitText,
   type AddressCheck,
   type CatalogEntry,
+  type CatalogReason,
   type CatalogJob,
 } from './app-catalog-api'
 import { approveWithConfirm } from './AppHandoverSheet'
@@ -80,6 +82,108 @@ export function nothingPublished(entries: CatalogEntry[]): boolean {
   return entries.length > 0 && entries.every((e) => e.reasons.some((r) => r.code === NOT_PINNED))
 }
 
+/** The reasons every entry shares (two or more entries): the pane says each
+ *  once, above the card, instead of under every row. */
+export function sharedReasons(entries: CatalogEntry[]): CatalogReason[] {
+  if (entries.length < 2) return []
+  return entries[0].reasons.filter((r) => entries.every((e) => e.reasons.some((x) => x.code === r.code)))
+}
+
+/** `https://chat.acme.example` → `chat.acme.example`. */
+export function hostOf(url: string | null | undefined): string | null {
+  if (!url) return null
+  return url.replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '') || null
+}
+
+/** A reason in the page's words: not-published in our own sentence, the
+ *  rest the server's, with its names in the page's words. */
+function reasonWords(r: CatalogReason): string {
+  if (r.code === NOT_PINNED) return 'Its first version comes with a K2 update.'
+  const t = serverWords(r.text).trim().replace(/[.\s]+$/, '')
+  return `${t.charAt(0).toUpperCase()}${t.slice(1)}.`
+}
+
+/** "Hearth", "Hearth and Meet", "Hearth, Meet and Lens". */
+function namesOf(entries: CatalogEntry[]): string {
+  const n = entries.map((e) => e.name)
+  return n.length < 2 ? (n[0] ?? '') : `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`
+}
+
+/** The code the pane gives an address check that couldn't run at all. */
+const CHECK_FAILED = 'check_failed'
+
+/** A server's reason, ready for "The server said: …." */
+function trimReason(text: string): string {
+  return serverWords(text).trim().replace(/[.\s]+$/, '')
+}
+
+/** What follows the App's own label in its address (`.acme.example`), when
+ *  the server has a public address at all. */
+export function addressSuffix(a: { label: string; url: string | null }): string | null {
+  const host = hostOf(a.url)
+  return host && host.startsWith(`${a.label}.`) ? host.slice(a.label.length) : null
+}
+
+/** One line of what deploying approves, in the page's words. */
+export function approvalWords(a: { kind: string; name: string; why?: string }): string {
+  return `${a.kind === 'boxService' ? 'Server service' : 'Permission'} ${a.name}${a.why ? ` (${a.why})` : ''}`
+}
+
+/** Under the address: checking, free, taken (with the server's suggestion),
+ *  or a check that couldn't run. Read out politely as it changes. */
+function AddressCheckLine({ check, onUse }: { check: AddressCheck | null; onUse: (label: string) => void }): React.JSX.Element {
+  const suggestion = check?.error?.suggestion
+  return (
+    <div aria-live="polite">
+      {check == null ? (
+        <p className={`${SETTING_ROW_HINT} flex items-center gap-1.5`} data-testid="catalog-address-checking">
+          <Spinner />
+          Checking the address…
+        </p>
+      ) : check.error?.code === CHECK_FAILED ? (
+        <div data-testid="catalog-address-unchecked">
+          <p className="type-hint text-[var(--color-status-warn-text)]">Couldn’t check the address. You can still deploy: the server checks it then.</p>
+          <p className={SETTING_SERVER_REASON}>The server said: {trimReason(check.error.hint)}.</p>
+        </div>
+      ) : check.error ? (
+        <p className="type-hint text-[var(--color-status-error-soft)] flex flex-wrap items-center gap-x-1.5" data-testid="catalog-address-problem">
+          <span className="inline-flex items-center gap-1.5">
+            <StatusDot tone="error" />
+            {trimReason(check.error.hint)}.
+          </span>
+          {suggestion ? (
+            <LinkButton onClick={() => onUse(suggestion)} testId="catalog-use-suggestion">
+              Use {suggestion}
+            </LinkButton>
+          ) : null}
+        </p>
+      ) : check.address ? (
+        <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`} data-testid="catalog-address-ok">
+          <span className="inline-flex items-center gap-1.5">
+            <StatusDot tone="ok" />
+            {hostOf(check.address.url) ?? check.address.label} is free
+          </span>
+          {check.tier?.hint ? <span>· {check.tier.hint}</span> : null}
+        </p>
+      ) : (
+        <span />
+      )}
+    </div>
+  )
+}
+
+/** "Verified by K2" with its check mark. */
+function VerifiedMark({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <span className="inline-flex items-center gap-1" data-testid="catalog-verified">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3 flex-shrink-0 text-[var(--color-status-ok-soft)]">
+        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+      </svg>
+      {children}
+    </span>
+  )
+}
+
 function entryState(e: CatalogEntry): { tone: DotTone; words: string } {
   if (e.jobs.some(isActive)) return { tone: 'warn', words: 'Deploying' }
   if (e.alreadyDeployed) return { tone: 'ok', words: `Deployed as ${e.alreadyDeployed}` }
@@ -96,7 +200,7 @@ function ListRow({ label, lines }: { label: string; lines: string[] }): React.JS
       <ul className="list-disc ml-5 mt-1 space-y-0.5">
         {lines.map((l) => (
           <li key={l} className="type-hint text-[var(--color-text-secondary)]">
-            {l}
+            {serverWords(l)}
           </li>
         ))}
       </ul>
@@ -104,20 +208,34 @@ function ListRow({ label, lines }: { label: string; lines: string[] }): React.JS
   )
 }
 
+/** A step's state in words and colour. The dot is never the only sign. */
+function stepLook(state: string, needsOwner: boolean): { tone: DotTone; words: string | null; text: string } {
+  switch (state) {
+    case 'done':
+      return { tone: 'ok', words: 'Done', text: 'text-[var(--color-text-secondary)]' }
+    case 'running':
+      return { tone: 'warn', words: 'In progress', text: 'text-[var(--color-text-secondary)]' }
+    case 'waiting':
+      return { tone: 'warn', words: needsOwner ? 'Needs approval' : 'Waiting', text: 'text-[var(--color-status-warn-text)]' }
+    case 'failed':
+      return { tone: 'error', words: 'Failed', text: 'text-[var(--color-status-error-soft)]' }
+    default:
+      return { tone: 'idle', words: null, text: '' }
+  }
+}
+
 function StepList({ job }: { job: CatalogJob }): React.JSX.Element {
+  const needsOwner = job.waiting?.reason === 'waiting_approval'
   return (
-    <ol className="space-y-1" data-testid="catalog-steps">
+    <ol className="space-y-1.5 max-w-sm" aria-label="Steps" data-testid="catalog-steps">
       {STEP_LABELS.map(([id, label]) => {
-        const s = job.steps.find((x) => x.step === id)
-        const state = s?.state ?? 'todo'
-        const tone: DotTone = state === 'done' ? 'ok' : state === 'failed' ? 'error' : state === 'todo' ? 'idle' : 'warn'
+        const state = job.steps.find((x) => x.step === id)?.state ?? 'todo'
+        const look = stepLook(state, needsOwner)
         return (
-          <li key={id} className="flex items-start gap-2" data-step={id} data-state={state}>
-            <StatusDot tone={tone} className="mt-1.5" />
-            <span className={state === 'todo' ? 'type-hint text-[var(--color-text-muted)]' : 'type-hint text-[var(--color-text-primary)]'}>
-              {label}
-              {s?.note ? <span className="ml-2 text-[var(--color-text-secondary)]">{s.note}</span> : null}
-            </span>
+          <li key={id} className="flex items-center gap-2.5" data-step={id} data-state={state}>
+            {state === 'running' ? <Spinner /> : <StatusDot tone={look.tone} className="mx-[3px]" />}
+            <span className={`type-hint flex-1 min-w-0 ${state === 'todo' ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-primary)]'}`}>{label}</span>
+            {look.words ? <span className={`type-hint flex-shrink-0 ${look.text}`}>{look.words}</span> : null}
           </li>
         )
       })}
@@ -127,7 +245,7 @@ function StepList({ job }: { job: CatalogJob }): React.JSX.Element {
 
 function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolean; onChanged: (j: CatalogJob) => void }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ what: string; why: string } | null>(null)
   const requests = job.waiting?.reason === 'waiting_approval' ? job.waiting.requests : []
 
   const approve = async (): Promise<void> => {
@@ -143,7 +261,7 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
       }
       onChanged(await fetchJob(job.id))
     } catch (e) {
-      setError(daemonErrorText(e))
+      setError({ what: 'Couldn’t approve it.', why: daemonErrorText(e) })
     } finally {
       setBusy(false)
     }
@@ -155,13 +273,13 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
     try {
       onChanged(await retryJob(job.id))
     } catch (e) {
-      setError(daemonErrorText(e))
+      setError({ what: 'Couldn’t start it again.', why: daemonErrorText(e) })
     } finally {
       setBusy(false)
     }
   }
 
-  const where = job.address.url ?? `${job.address.label}.<this server>.k2.dev`
+  const host = hostOf(job.address.url)
   return (
     <div className="px-4 py-3 space-y-3" data-testid="catalog-job" data-state={job.state}>
       <StepList job={job} />
@@ -170,12 +288,13 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
           <p>
             {job.app} is live at{' '}
             {job.address.url ? (
-              <a href={job.address.url} target="_blank" rel="noreferrer" className="underline">
-                {job.address.url}
+              <a href={job.address.url} target="_blank" rel="noreferrer" data-k2-focus="" className="relative underline underline-offset-2">
+                {host}
               </a>
             ) : (
-              where
+              job.address.label
             )}
+            .
           </p>
           {(job.next ?? []).map((line) => (
             <p key={line} className="mt-1">
@@ -185,12 +304,15 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
         </Callout>
       ) : null}
       {job.state === 'waiting' ? (
-        <Callout tone="info" className="type-hint" role="status" data-testid="catalog-waiting">
+        <Callout tone="warn" className="type-hint" role="status" data-testid="catalog-waiting">
           <p>{waitText(job)}</p>
-          {job.waiting?.question ? <p className="mt-1">Open question {job.waiting.question} for the owner.</p> : null}
+          {requests.length > 0 && !isOwner ? <p className="mt-1">The owner can approve it here or in App Approvals.</p> : null}
+          {job.waiting?.reason !== 'waiting_approval' && job.waiting?.reason !== 'waiting_sew_rights' && job.waiting?.hint ? (
+            <p className={SETTING_SERVER_REASON}>The server said: {trimReason(job.waiting.hint)}.</p>
+          ) : null}
           {requests.length > 0 && isOwner ? (
             <Button className="mt-2" variant="accent" disabled={busy} onClick={() => void approve()} data-testid="catalog-approve">
-              Approve
+              {busy ? 'Approving…' : 'Approve'}
             </Button>
           ) : null}
         </Callout>
@@ -198,19 +320,22 @@ function JobRows({ job, isOwner, onChanged }: { job: CatalogJob; isOwner: boolea
       {job.state === 'failed' ? (
         <Callout tone="error" className="type-hint" role="alert" data-testid="catalog-failed">
           <p>
-            {job.error?.code}: {job.error?.hint}
+            The deploy stopped at {stepLabel(job.step)}.{' '}
+            {job.error?.retry ? 'You can try again from that step.' : 'Close this, fix what the server says, and deploy again.'}
           </p>
+          {job.error?.hint ? <p className={SETTING_SERVER_REASON}>The server said: {trimReason(job.error.hint)}.</p> : null}
           {job.error?.retry ? (
             <Button className="mt-2" disabled={busy} onClick={() => void retry()} data-testid="catalog-retry">
-              Retry
+              {busy ? 'Starting again…' : 'Try again'}
             </Button>
           ) : null}
         </Callout>
       ) : null}
       {error ? (
-        <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-          {error}
-        </p>
+        <div role="alert">
+          <p className="type-hint text-[var(--color-status-error-soft)]">{error.what}</p>
+          <p className={SETTING_SERVER_REASON}>The server said: {trimReason(error.why)}.</p>
+        </div>
       ) : null}
     </div>
   )
@@ -245,16 +370,21 @@ function DeployCard({
     }
   }, [])
 
-  // The live address check (R13): debounced, a hint only.
+  // The live address check (R13): debounced, a hint only. A new address or
+  // agent clears the last answer at once, so a stale "is free" never shows
+  // while the next check runs; an answer for an older value is dropped.
+  const checkSeq = useRef(0)
   useEffect(() => {
     if (job) return
+    const n = ++checkSeq.current
+    setCheck(null)
     const t = setTimeout(() => {
       void checkAddress(entry.entry, address, workspace)
         .then((c) => {
-          if (alive.current) setCheck(c)
+          if (alive.current && checkSeq.current === n) setCheck(c)
         })
         .catch((e) => {
-          if (alive.current) setCheck({ ok: false, app: '', error: { code: 'check_failed', hint: daemonErrorText(e) } })
+          if (alive.current && checkSeq.current === n) setCheck({ ok: false, app: '', error: { code: CHECK_FAILED, hint: daemonErrorText(e) } })
         })
     }, CHECK_DEBOUNCE_MS)
     return () => clearTimeout(t)
@@ -286,7 +416,11 @@ function DeployCard({
     }
   }
 
-  const suggestion = check?.error?.suggestion
+  const suffix = addressSuffix(entry.defaultAddress)
+  // The server said the address won't do: Deploy waits for a better one. A
+  // check that couldn't run at all is no answer, so Deploy stays open (the
+  // server checks again when it deploys).
+  const refused = check?.ok === false && check.error?.code !== CHECK_FAILED
   return (
     <SettingsGroup
       card
@@ -294,7 +428,7 @@ function DeployCard({
       hint={
         job
           ? 'The deploy runs on the server: closing Settings doesn’t stop it, and its progress shows here again when you come back.'
-          : 'Check the address and who looks after it, then deploy. The server repeats every check when it deploys.'
+          : 'Check the address and who looks after it, then deploy. The server checks everything again when it deploys.'
       }
       action={
         <Button variant="ghost" onClick={onClose} data-testid="catalog-close">
@@ -310,28 +444,10 @@ function DeployCard({
         <>
           <SettingRow
             label={<label htmlFor={`catalog-address-${entry.entry}`}>Address</label>}
-            hint="Your own domain goes on after it deploys, on the App’s Domains."
-            below={
-              check?.error ? (
-                <p className="type-hint text-[var(--color-status-error-soft)]" data-testid="catalog-address-problem">
-                  {check.error.hint}
-                  {suggestion ? (
-                    <>
-                      {' '}
-                      <button type="button" className="underline" onClick={() => setAddress(suggestion)} data-testid="catalog-use-suggestion">
-                        Use {suggestion}
-                      </button>
-                    </>
-                  ) : null}
-                </p>
-              ) : check?.address ? (
-                <p className="type-hint text-[var(--color-text-secondary)]" data-testid="catalog-address-ok">
-                  {check.address.url ?? check.address.label} is free{check.tier?.hint ? ` · ${check.tier.hint}` : ''}
-                </p>
-              ) : undefined
-            }
+            hint="Where people open it. You can add your own domain on the App’s page after it deploys."
+            below={<AddressCheckLine check={check} onUse={setAddress} />}
           >
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-2 min-w-0">
               <Input
                 id={`catalog-address-${entry.entry}`}
                 data-testid="catalog-address"
@@ -339,7 +455,7 @@ function DeployCard({
                 onChange={(e) => setAddress(e.target.value)}
                 className="w-40"
               />
-              <span className="type-hint text-[var(--color-text-secondary)]">.&lt;this server&gt;.k2.dev</span>
+              {suffix ? <span className="type-hint text-[var(--color-text-secondary)] truncate">{suffix}</span> : null}
             </span>
           </SettingRow>
           <SettingRow label="Looked after by" hint="The agent whose App this becomes.">
@@ -352,20 +468,16 @@ function DeployCard({
               menuAlign="right"
             />
           </SettingRow>
-          {entry.approves.length > 0 ? (
-            <ListRow
-              label="What you approve by deploying"
-              lines={entry.approves.map((a) => `${a.kind === 'boxService' ? `Box service ${a.name}` : `Cap ${a.name}`}${a.why ? `: ${a.why}` : ''}`)}
-            />
-          ) : null}
-          <div className="px-4 py-3 flex flex-wrap items-center gap-2">
-            <Button variant="accent" disabled={busy || !workspace || check?.ok === false} onClick={() => void deploy()} data-testid="catalog-deploy">
+          {entry.approves.length > 0 ? <ListRow label="What you approve by deploying" lines={entry.approves.map(approvalWords)} /> : null}
+          <div className="px-4 py-3">
+            <Button variant="accent" disabled={busy || !workspace || refused} onClick={() => void deploy()} data-testid="catalog-deploy">
               {busy ? 'Starting…' : 'Deploy'}
             </Button>
             {error ? (
-              <p role="alert" className="type-hint text-[var(--color-status-error-soft)]" data-testid="catalog-error">
-                {error}
-              </p>
+              <div role="alert" className="mt-2" data-testid="catalog-error">
+                <p className="type-hint text-[var(--color-status-error-soft)]">Couldn’t start the deploy.</p>
+                <p className={SETTING_SERVER_REASON}>The server said: {trimReason(error)}.</p>
+              </div>
             ) : null}
           </div>
         </>
@@ -411,6 +523,7 @@ export function AppsCatalogSection(): React.JSX.Element {
   const isStaff = role === 'owner' || role === 'admin'
   const entries = load.kind === 'ready' ? load.entries : []
   const opened = entries.find((e) => e.entry === open) ?? null
+  const shared = sharedReasons(entries)
 
   const state =
     load.kind === 'loading' ? (
@@ -445,12 +558,17 @@ export function AppsCatalogSection(): React.JSX.Element {
       <PaneHeader
         title="Add an App"
         testId="catalog-header"
-        hint="Apps K2 deploys in one step: download, check, install, address, deploy and approve, as one job on this server. Each version is pinned inside this K2 release and verified by K2."
+        hint="Apps from known publishers, set up on this server in one step. K2 checks every version before it installs it."
       />
-      {load.kind === 'ready' && nothingPublished(entries) ? (
-        <Callout tone="info" className="type-hint" role="status" data-testid="catalog-not-published">
-          Hearth and Meet aren’t published yet. Their first versions arrive with a K2 update once Sew publishes them, so there is
-          nothing to deploy here until then.
+      {shared.length > 0 ? (
+        <Callout tone="info" className="type-hint space-y-1" role="status" data-testid={nothingPublished(entries) ? 'catalog-not-published' : 'catalog-shared-reasons'}>
+          {shared.map((r) => (
+            <p key={r.code}>
+              {r.code === NOT_PINNED
+                ? `${namesOf(entries)} aren’t published yet. Their first versions come with a K2 update; until then there’s nothing to add here.`
+                : reasonWords(r)}
+            </p>
+          ))}
         </Callout>
       ) : null}
       <SettingsGroup card title="Suite Apps" hint="From known publishers. After it deploys, each one is an ordinary App you can manage on its own page." state={state}>
@@ -458,32 +576,32 @@ export function AppsCatalogSection(): React.JSX.Element {
           const running = e.jobs.find(isActive) ?? null
           const st = entryState(e)
           const shown = open === e.entry
+          const own = e.reasons.filter((r) => !shared.some((s) => s.code === r.code))
           return (
             <div key={e.entry} className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`catalog-entry-${e.entry}`}>
-              <div className="flex items-start justify-between gap-6">
-                <div className="flex items-start gap-3 min-w-0 flex-1">
-                  <AppMonogram name={e.name} />
-                  <div className="min-w-0">
-                    <div className="type-name text-[var(--color-text-primary)]">
-                      {e.name}
-                      <span className="ml-2 type-hint text-[var(--color-text-secondary)]">
-                        by {e.publisher.name}
-                        {e.version ? ` · ${e.version}` : ''} · {e.verified}
-                      </span>
-                    </div>
-                    <p className={SETTING_ROW_HINT}>{e.summary}</p>
-                    <p className={`${SETTING_ROW_HINT} flex items-start gap-1.5`} data-testid="catalog-state">
-                      <StatusDot tone={st.tone} className="mt-1" />
-                      <span>
-                        {st.words} · {e.defaultAddress.url ?? `${e.defaultAddress.label}.<this server>.k2.dev`}
-                      </span>
+              <div className="flex items-start gap-3">
+                <AppMonogram name={e.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="type-name text-[var(--color-text-primary)]">{e.name}</div>
+                  <p className={SETTING_ROW_HINT}>{e.summary}</p>
+                  <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`} data-testid="catalog-publisher">
+                    <span>By {e.publisher.name}</span>
+                    {e.version ? <span>· {e.version}</span> : null}
+                    <span aria-hidden="true">·</span>
+                    <VerifiedMark>{e.verified}</VerifiedMark>
+                  </p>
+                  <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`} data-testid="catalog-state">
+                    <span className="inline-flex items-center gap-1.5">
+                      <StatusDot tone={st.tone} />
+                      {st.words}
+                    </span>
+                    <span>· {hostOf(e.defaultAddress.url) ?? e.defaultAddress.label}</span>
+                  </p>
+                  {own.map((r) => (
+                    <p key={r.code} className={SETTING_SERVER_REASON} data-testid="catalog-reason" data-code={r.code}>
+                      {reasonWords(r)}
                     </p>
-                    {e.reasons.map((r) => (
-                      <p key={r.code} className={SETTING_SERVER_REASON} data-testid="catalog-reason" data-code={r.code}>
-                        {r.text}
-                      </p>
-                    ))}
-                  </div>
+                  ))}
                 </div>
                 {isStaff ? (
                   <div className="flex-shrink-0">

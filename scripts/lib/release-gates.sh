@@ -29,7 +29,8 @@
 #                   the two Mac test lists match the test files
 #                   (scripts/ci/k2-node-mac-tests.sh check and
 #                   k2-daemon-mac-tests.sh check), no new hard-coded
-#                   k2.dev in Rust code (scripts/garden/zone-gate.py),
+#                   k2.dev in Rust or renderer code (scripts/garden/
+#                   zone-gate.py, once per area),
 #                   then scripts/garden/ratchet.sh: the biggest source
 #                   files may only get smaller.
 # Each job's command runs under set -euo pipefail, and a gate passes only
@@ -78,7 +79,7 @@ K2RG_GATES_ALL="vitest cargo-linux cargo-macos typecheck-web vite-build-web ratc
 # last: its "ratchet: ok." is the line the gate's log must end with. Joined
 # with &&, so a list check that fails stops the gate there even where the
 # caller has set -e switched off (k2rg_local ... || ...).
-K2RG_NO_BUILD_CHECKS="bash scripts/ci/k2-node-mac-tests.sh check && bash scripts/ci/k2-daemon-mac-tests.sh check && python3 scripts/garden/zone-gate.py && bash scripts/garden/ratchet.sh"
+K2RG_NO_BUILD_CHECKS="bash scripts/ci/k2-node-mac-tests.sh check && bash scripts/ci/k2-daemon-mac-tests.sh check && python3 scripts/garden/zone-gate.py && python3 scripts/garden/zone-gate.py --area renderer && bash scripts/garden/ratchet.sh"
 K2RG_STATE=""
 K2RG_SHA=""
 K2RG_KIND=""

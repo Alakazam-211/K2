@@ -23667,7 +23667,9 @@ if d.get("ok") is not True:
     else:
         sys.stderr.write(str(err)+"\n")
     sys.exit(2)
-print(d.get("id",""))
+# The number names the card in the answer line: chose "<option>" on card #<seq>.
+seq=d.get("seq")
+print("%s  card #%s" % (d.get("id",""), seq) if seq is not None else d.get("id",""))
 '
     rc=$?
     if [[ $rc -eq 0 ]]; then
@@ -24091,6 +24093,12 @@ and App guests get 403, and nobody posts there (message the bot from its chat).
 
 Post and continue; you get a later turn when they answer. Do not --wait. Do not
 emit widget JSON.
+
+ask prints "<card-id>  card #<seq>" (--json: id and seq). The seq is the [N] a
+read shows, and the answer names it, with the start of the prompt (60 characters):
+  [thread:<addr>] chose "<option>" on card #<seq> ("<start of the prompt>")
+A settings card says what it is about instead: chose "<option>" on card #<seq> for
+<subject>. A secret card names its secret: secret NAME set on card #<seq> → k2v://…
 
 A card stays open until the person taps it (or dismisses it), you withdraw it, or
 its time frame runs out (choice cards: 7 days unless --expires / --no-expiry; secret

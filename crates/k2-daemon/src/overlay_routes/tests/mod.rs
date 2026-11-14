@@ -1874,7 +1874,7 @@ fn ask_returns_immediately_pending_then_tap_injects() {
     assert!(
         injects
             .iter()
-            .any(|l| l == &format!("[from {owner}] [thread:{handle}] chose Go")),
+            .any(|l| l == &format!("[from {owner}] [thread:{handle}] chose \"Go\" on card #{} (\"Ship it?\")", answered["seq"])),
         "async inject must fire after tap, from the owner who tapped; got {injects:?}"
     );
     assert_eq!(answered_doc_by(&handle, &id), owner_answered_by_json());
@@ -2274,7 +2274,7 @@ fn card_answers_inject_and_record_the_real_answerer() {
     assert_eq!(g.status, "200 OK", "{}", g.body);
     let injects = recorded_injects();
     assert!(
-        injects.iter().any(|l| l == &format!("[guest {guest_name}] [thread:{handle}] chose GuestGo")),
+        injects.iter().any(|l| l == &format!("[guest {guest_name}] [thread:{handle}] chose \"GuestGo\" on card #{} (\"Ship?\")", json_body(&g)["seq"])),
         "a guest's answer has a guest's stamp: {injects:?}"
     );
     assert!(!injects.iter().any(|l| l.contains("spoofed-owner")), "body from is never used: {injects:?}");
@@ -2292,7 +2292,7 @@ fn card_answers_inject_and_record_the_real_answerer() {
     assert_eq!(u.status, "200 OK", "{}", u.body);
     let injects = recorded_injects();
     assert!(
-        injects.iter().any(|l| l == &format!("[from {user}] [thread:{handle}] chose UserGo")),
+        injects.iter().any(|l| l == &format!("[from {user}] [thread:{handle}] chose \"UserGo\" on card #{} (\"Ship?\")", json_body(&u)["seq"])),
         "Connect user's answer must say [from <login>]: {injects:?}"
     );
     assert_eq!(answered_doc_by(&handle, &u_card), serde_json::json!({"kind": "user", "login": user}));
@@ -2308,7 +2308,7 @@ fn card_answers_inject_and_record_the_real_answerer() {
     assert_eq!(o.status, "200 OK", "{}", o.body);
     let injects = recorded_injects();
     assert!(
-        injects.iter().any(|l| l == &format!("[from {owner}] [thread:{handle}] chose OwnerGo")),
+        injects.iter().any(|l| l == &format!("[from {owner}] [thread:{handle}] chose \"OwnerGo\" on card #{} (\"Ship?\")", json_body(&o)["seq"])),
         "owner answer keeps the owner's name: {injects:?}"
     );
     assert_eq!(answered_doc_by(&handle, &o_card), owner_answered_by_json());
@@ -2450,7 +2450,7 @@ fn secret_card_answer_goes_to_the_vault_and_never_in_json() {
     );
     let injects = recorded_injects();
     assert!(
-        injects.iter().any(|l| l.contains(&format!("[thread:{handle}] secret API_TOKEN set → k2v://ws/{handle}/API_TOKEN (fetch; api.x.ai)"))),
+        injects.iter().any(|l| l.contains(&format!("[thread:{handle}] secret API_TOKEN set on card #{} → k2v://ws/{handle}/API_TOKEN (fetch; api.x.ai)", set_body["seq"]))),
         "set inject: {injects:?}"
     );
     assert!(injects.iter().all(|l| !l.contains(secret_val)), "inject must never carry secret bytes: {injects:?}");

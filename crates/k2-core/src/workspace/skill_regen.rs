@@ -514,6 +514,7 @@ Text and ask prompts render markdown (**bold**, lists, `code`, fences, links).
 
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
 Post and continue; you get a later turn when they answer. Do not `--wait`. Do not emit widget JSON.
+`k2 thread ask` prints `<card-id>  card #<seq>`; the answer names that card: `[thread:<addr>] chose "<option>" on card #<seq> ("<start of the prompt>")`.
 A card stays open until the person taps or dismisses it, or you withdraw it. People may discuss a card before answering:
 keep it open, answer their questions in prose, and never treat their prose as the card's answer.
 Withdraw your own card only when the question is truly obsolete (`k2 thread withdraw`), or post a new card if the options changed.

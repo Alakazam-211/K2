@@ -340,7 +340,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 57 (0.46.13): the Study topics list names ci-release, ci-stats
 /// and agent-templates, as `k2 study` does.
 /// Bumped to 58 (0.46.13): the list names provenance too.
-pub const SKILL_VERSION_WORKSPACE: u32 = 58;
+/// Bumped to 59 (0.46.13): `k2 thread ask` prints the card's number, and a
+/// card's answer names it (`chose "<option>" on card #<seq> ("…")`).
+pub const SKILL_VERSION_WORKSPACE: u32 = 59;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

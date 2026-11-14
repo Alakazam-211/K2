@@ -3221,9 +3221,15 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         None => String::new(),
     };
     let told = format!("{}{}{}{}{}", file_delivery.as_ref().map_or("", |(_, words)| words.as_str()), session_only, same_name, shares, server_share);
-    let inject_line = format!(
-        "secret {} set → {} ({}{}{}). Use: {}{}{}{}",
-        m.name,
+    // Everyone on the Thread reads the card: a session's id stays off it.
+    let card_reference = (m.scope.kind != k2_vault::ScopeKind::Session).then(|| reference.clone());
+    let mut cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", card_reference, String::new(), card_actor_author(params, session_author)) {
+        Ok(cb) => cb,
+        Err(e) => return error_json("409 Conflict", "card_not_pending", e),
+    };
+    cb.inject_line = format!(
+        "secret {} set on {} → {} ({}{}{}). Use: {}{}{}{}",
+        m.name, overlay::card_echo::card_number(cb.seq),
         reference,
         m.default_delivery,
         sends,
@@ -3240,12 +3246,6 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         replaced,
         told,
     );
-    // Everyone on the Thread reads the card: a session's id stays off it.
-    let card_reference = (m.scope.kind != k2_vault::ScopeKind::Session).then(|| reference.clone());
-    let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", card_reference, inject_line, card_actor_author(params, session_author)) {
-        Ok(cb) => cb,
-        Err(e) => return error_json("409 Conflict", "card_not_pending", e),
-    };
     let from = card_actor_from(params, resolved, session_author);
     note_card_reader(params, session_author, &cb);
     fire_card_callbacks(resolved, &from, vec![cb.clone()], true);
@@ -3917,7 +3917,7 @@ fn answer_action_card(
     ) {
         Ok(mut cb) => {
             // The agent is told what the card was about, not only the choice.
-            cb.inject_line = crate::action_card_echo::answer_line(&action, &answer);
+            cb.inject_line = crate::action_card_echo::answer_line(&action, &answer, cb.seq, &choice.prompt);
             // The card keeps what the action did (`choice.action.result`,
             // whose `message` every client shows under the chosen option),
             // and the frame that goes out carries it.

@@ -7,6 +7,7 @@
 
 pub mod approval;
 pub mod attachments;
+pub mod card_echo;
 pub mod catalog;
 pub mod doc;
 pub mod options;
@@ -896,7 +897,7 @@ pub fn answer_card(
         choice.answer = Some(answer.to_string());
         choice.answered_by = by;
         choice.answered_at = Some(doc::now_secs());
-        format!("chose {answer}")
+        card_echo::choice_answer_line(item.seq, &choice.prompt, answer)
     } else if doc.is_pending_secret() {
         // K2 vault (prd-k2-vault-v1 §10.1): the daemon stores the value in
         // the vault and then calls [`mark_secret`]. Nothing here writes a
@@ -1707,7 +1708,7 @@ mod tests {
             cb.doc.choice.as_ref().expect("choice").answer.as_deref(),
             Some("Go")
         );
-        assert_eq!(cb.inject_line, "chose Go");
+        assert_eq!(cb.inject_line, format!("chose \"Go\" on card #{} (\"Ship it?\")", item.seq), "the answer names its card");
         let answered = cb.doc.choice.as_ref().expect("choice");
         assert_eq!(answered.answered_by, Some(PostAuthor::guest("g1")), "who tapped is on the card");
         assert!(answered.answered_at.is_some_and(|t| t > 0), "when they tapped: {answered:?}");

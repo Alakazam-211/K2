@@ -93,7 +93,8 @@ fn a_basic_card_shows_seals_and_needs_the_echo() {
     let injects = recorded_injects();
     assert!(
         injects.iter().any(|l| l.contains(&format!(
-            "[thread:{handle}] secret HETZNER_ROBOT set → k2v://ws/{handle}/HETZNER_ROBOT (fetch, sent as a Basic login (user:password); robot-ws.your-server.de)"
+            "[thread:{handle}] secret HETZNER_ROBOT set on card #{} → k2v://ws/{handle}/HETZNER_ROBOT (fetch, sent as a Basic login (user:password); robot-ws.your-server.de)",
+            json_body(&set)["seq"]
         ))),
         "set line names how it is sent: {injects:?}"
     );

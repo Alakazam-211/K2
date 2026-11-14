@@ -1028,7 +1028,8 @@ fn the_answer_the_agent_is_sent_names_the_folder() {
 
     let ok = tap(&addr, &card, TRUST_IT, "owner");
     assert_eq!(ok.status, "200 OK", "{}", ok.body);
-    let want = format!("[thread:{addr}] chose \"{TRUST_IT}\" for {subject}");
+    let seq = serde_json::from_str::<serde_json::Value>(&ok.body).unwrap()["seq"].as_i64().expect("the answer's seq");
+    let want = format!("[thread:{addr}] chose \"{TRUST_IT}\" on card #{seq} for {subject}");
     let injects = crate::overlay_routes::recorded_injects();
     let line = injects
         .iter()

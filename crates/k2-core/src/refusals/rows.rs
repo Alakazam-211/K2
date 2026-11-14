@@ -146,6 +146,8 @@ pub(super) const ROWS: &[Refusal] = &[
         "Ask again."),
     r("request_not_found", "approvals", 404, Who::Agent, "No App request with that id.",
         "List them: k2 app approvals --all"),
+    r("role_room_failed", "approvals", 409, Who::Agent, "The owner approved a room line on a role of your App, but writing it was refused (the room or its caps no longer fit). The reason comes with the refusal.",
+        "Read the reason, fix what it names, then ask again: k2 app role room <role> <room> --caps … (or --clear)."),
     r("too_many_pending", "approvals", 429, Who::Agent, "Too many requests like this already wait for the owner.",
         "Withdraw one (k2 app deny <id>) or wait for the owner. Yours: k2 app approvals"),
     r("vault_confirm_required", "approvals", 403, Who::Owner, "This needs a fresh owner confirm (Touch ID, the login or the vault password). A confirm works once, within 60 seconds.",

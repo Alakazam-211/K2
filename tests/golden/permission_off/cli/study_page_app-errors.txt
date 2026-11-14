@@ -169,6 +169,9 @@ APPROVALS (held requests the owner answers)
       fix: Ask again.
   request_not_found (exit 3)
       fix: List them: k2 app approvals --all
+  role_room_failed (exit 3)
+      fix: Read the reason, fix what it names, then ask again: k2 app role
+      room <role> <room> --caps … (or --clear).
   too_many_pending (exit 3)
       fix: Withdraw one (k2 app deny <id>) or wait for the owner. Yours: k2
       app approvals

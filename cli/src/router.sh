@@ -511,6 +511,11 @@ case "${1:-help}" in
                 echo "  stop" >&2
                 echo "    Quit the daemon. This ENDS its agent sessions. macOS: launchctl unload;" >&2
                 echo "    Linux: systemctl [--user] stop <unit>; Windows: POST /cli/daemon/stop." >&2
+                echo "  stop --keep-agents" >&2
+                echo "    Linux under systemd: a maintenance stop. The daemon stops, its agents keep" >&2
+                echo "    running and the next k2 daemon start takes them back (as a restart does)." >&2
+                echo "    Until then their k2 commands fail. A system unit: run the sudo systemctl" >&2
+                echo "    stop it prints within 2 minutes." >&2
                 echo "" >&2
                 echo "  restart [--sessions] [--host <base-url>] [--token <token>] [--wait]" >&2
                 echo "    Default: restart the LOCAL daemon (macOS launchctl kickstart, Linux" >&2

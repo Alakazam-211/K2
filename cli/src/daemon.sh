@@ -23,13 +23,43 @@ _daemon_stdout_log="$K2_HOME/daemon.stdout.log"
 # for 120 s, deleted on read), so a supervisor's SIGTERM is known to be a
 # stop and not a restart.
 _daemon_write_stop_intent() {
-    local by="${1:-cli}" dir="$K2_HOME/run" now tmp
+    local by="${1:-cli}" name="${2:-stop-intent}" dir="$K2_HOME/run" now tmp
     now=$(date +%s)
     mkdir -p "$dir" 2>/dev/null || return 1
     chmod 700 "$dir" 2>/dev/null || true
-    tmp="$dir/stop-intent.json.tmp.$$"
+    tmp="$dir/$name.json.tmp.$$"
     ( umask 077; printf '{"by":"%s","at":%s,"nonce":"%s-%s"}\n' "$by" "$now" "$$" "$now" > "$tmp" ) || return 1
-    mv -f "$tmp" "$dir/stop-intent.json"
+    mv -f "$tmp" "$dir/$name.json"
+}
+
+# `k2 daemon stop --keep-agents` (Linux under systemd): a maintenance stop.
+# The daemon stops; agents keep running in k2-ptyd and the next start adopts
+# them, as after a restart. Needs the unit's KillMode=process (K2's units
+# have it; with another, agents never ran in ptyd and end anyway).
+_daemon_stop_keeping_agents() {
+    if [ "$(_daemon_os)" != "linux" ]; then
+        echo '{"error":"usage","hint":"--keep-agents is for Linux under systemd; on this machine k2 daemon restart keeps agents"}' >&2
+        exit 2
+    fi
+    local su scope unit
+    su=$(_daemon_linux_unit) || su=""
+    if [ -z "$su" ]; then
+        echo '{"error":"usage","hint":"--keep-agents needs the daemon'"'"'s systemd unit (none found); k2 daemon restart keeps agents"}' >&2
+        exit 2
+    fi
+    scope=${su%% *}; unit=${su#* }
+    rm -f "$K2_HOME/run/stop-intent.json"
+    _daemon_write_stop_intent cli keep-intent || { echo "daemon stop: could not write $K2_HOME/run/keep-intent.json" >&2; exit 1; }
+    if _daemon_systemctl "$scope" stop "$unit"; then
+        echo "Daemon stopped ($unit). Its agents keep running; they can't reach K2 until it starts again: k2 daemon start."
+        return 0
+    fi
+    if [ "$scope" = "system" ]; then
+        echo "Stopping a system unit needs root. Within 2 minutes: sudo systemctl stop $unit (agents are kept)." >&2
+    else
+        rm -f "$K2_HOME/run/keep-intent.json"
+    fi
+    exit 1
 }
 
 # OS family for the daemon lifecycle verbs: macos | linux | windows.
@@ -241,6 +271,17 @@ cmd_daemon_start() {
 # Quitting the daemon ENDS its agent sessions (prd-k2-ptyd-v1 L2); use
 # `k2 daemon restart` to keep them running.
 cmd_daemon_stop() {
+    local keep=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --keep-agents) keep=1; shift ;;
+            *) echo "{\"error\":\"usage\",\"hint\":\"k2 daemon stop [--keep-agents]\"}" >&2; exit 2 ;;
+        esac
+    done
+    if [ "$keep" = "1" ]; then
+        _daemon_stop_keeping_agents
+        return $?
+    fi
     case "$(_daemon_os)" in
         linux)
             local su scope unit

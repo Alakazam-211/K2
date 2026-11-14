@@ -9,8 +9,17 @@
 //! 2. a fresh stop intent `<K2 home>/run/stop-intent.json` (written by the
 //!    menu-bar "Quit daemon", `k2 daemon stop`, the desktop red button…;
 //!    honoured for 120 s, deleted on read) → end;
-//! 3. Linux under systemd: the unit's queued job is a `stop` → end;
-//! 4. anything else (SIGTERM with no stop intent, a crash) → keep (L5).
+//! 3. a fresh keep intent `<K2 home>/run/keep-intent.json` (written by
+//!    `k2 daemon stop --keep-agents` on Linux: a maintenance stop, then a
+//!    start; same window, deleted on read) → keep, though it is a stop;
+//! 4. Linux under systemd: the unit's queued job is a `stop` → end;
+//! 5. anything else (SIGTERM with no stop intent, a crash) → keep (L5).
+//!
+//! A kept agent outlives a stop only because the unit runs with
+//! `KillMode=process` (ptyd is never in-process otherwise, P46): systemd
+//! then signals the daemon alone, and the next daemon adopts the sessions
+//! as after a restart. Until it starts, the agents run with no daemon to
+//! answer their `k2` calls.
 //!
 //! **End**: every ptyd session's token is revoked and the session is
 //! unregistered (its vault dir goes), then ptyd ends whatever is left and
@@ -124,9 +133,23 @@ pub fn write_intent(by: &str) -> std::io::Result<()> {
 
 /// Read and delete the stop intent; `Some(by)` when it is fresh.
 pub fn take_intent() -> Option<String> {
-    let path = intent_path();
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let _ = std::fs::remove_file(&path);
+    take_intent_at(&intent_path())
+}
+
+/// `<K2 home>/run/keep-intent.json`: the next stop keeps agents running
+/// (`k2 daemon stop --keep-agents`).
+pub fn keep_intent_path() -> PathBuf {
+    k2_core::paths::k2_home().join("run").join("keep-intent.json")
+}
+
+/// Read and delete the keep intent; `Some(by)` when it is fresh.
+pub fn take_keep_intent() -> Option<String> {
+    take_intent_at(&keep_intent_path())
+}
+
+fn take_intent_at(path: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let _ = std::fs::remove_file(path);
     intent_fresh(&raw, now_secs())
 }
 
@@ -176,15 +199,17 @@ pub fn decide() -> Decision {
             None
         }
     };
-    decide_from(STOP_FLAG.load(Ordering::SeqCst), QUIT_FLAG.load(Ordering::SeqCst), take_intent, systemd_job)
+    decide_from(STOP_FLAG.load(Ordering::SeqCst), QUIT_FLAG.load(Ordering::SeqCst), take_intent, take_keep_intent, systemd_job)
 }
 
-/// Pure part of [`decide`]. The stop intent and the systemd job are only
-/// looked up when the flags haven't decided (reading the intent deletes it).
+/// Pure part of [`decide`]. The intents and the systemd job are only
+/// looked up when what comes before hasn't decided (reading an intent
+/// deletes it).
 pub fn decide_from(
     stop_flag: bool,
     quit_flag: bool,
     intent: impl FnOnce() -> Option<String>,
+    keep_intent: impl FnOnce() -> Option<String>,
     systemd_job: impl FnOnce() -> Option<String>,
 ) -> Decision {
     if stop_flag {
@@ -193,6 +218,10 @@ pub fn decide_from(
     }
     if let Some(by) = intent() {
         return Decision { plan: ExitPlan::EndAgents(format!("stop intent ({by})")), quit: true };
+    }
+    if let Some(by) = keep_intent() {
+        // A maintenance stop: the daemon goes, its agents stay for the next one.
+        return Decision { plan: ExitPlan::KeepAgents(format!("stop keeping agents ({by})")), quit: true };
     }
     if let Some(job) = systemd_job() {
         if job == "stop" {
@@ -528,32 +557,48 @@ mod tests {
 
     #[test]
     fn stop_route_and_stop_intent_are_quits() {
-        let d = decide_from(true, true, || panic!("flags decide first"), || panic!("flags decide first"));
+        let d = decide_from(true, true, || panic!("flags decide first"), || panic!("flags decide first"), || panic!("flags decide first"));
         assert_eq!(d.plan, ExitPlan::EndAgents("stop requested".into()));
         assert!(d.quit);
 
-        let d = decide_from(false, false, || Some("menubar".to_string()), || panic!("intent decides first"));
+        let d = decide_from(false, false, || Some("menubar".to_string()), || panic!("intent decides first"), || panic!("intent decides first"));
         assert_eq!(d.plan, ExitPlan::EndAgents("stop intent (menubar)".into()));
         assert!(d.quit);
 
-        let d = decide_from(false, false, none, || Some("stop".to_string()));
+        let d = decide_from(false, false, none, none, || Some("stop".to_string()));
         assert_eq!(d.plan, ExitPlan::EndAgents("systemd stop job".into()));
         assert!(d.quit);
+    }
+
+    /// `k2 daemon stop --keep-agents`: a quit that keeps agents, over the
+    /// systemd stop job; a stop intent or the stop route still end them.
+    #[test]
+    fn a_keep_intent_keeps_agents_through_a_systemd_stop() {
+        let d = decide_from(false, false, none, || Some("cli".to_string()), || panic!("the keep intent decides first"));
+        assert_eq!(d.plan, ExitPlan::KeepAgents("stop keeping agents (cli)".into()));
+        assert!(d.quit, "the daemon is not coming back on its own");
+        let d = decide_from(false, false, || Some("cli".to_string()), || panic!("a stop intent decides first"), none);
+        assert_eq!(d.plan, ExitPlan::EndAgents("stop intent (cli)".into()));
+        let d = decide_from(true, true, || panic!("flags decide first"), || panic!("flags decide first"), none);
+        assert_eq!(d.plan, ExitPlan::EndAgents("stop requested".into()));
+        // No keep intent: a systemd stop still ends them.
+        let d = decide_from(false, false, none, none, || Some("stop".to_string()));
+        assert_eq!(d.plan, ExitPlan::EndAgents("systemd stop job".into()));
     }
 
     #[test]
     fn restarts_are_not_quits() {
         // `restart?end_agents=1` ends agents but the daemon comes back.
-        let d = decide_from(true, false, || panic!("flags decide first"), || panic!("flags decide first"));
+        let d = decide_from(true, false, || panic!("flags decide first"), || panic!("flags decide first"), || panic!("flags decide first"));
         assert_eq!(d.plan, ExitPlan::EndAgents("restart ending agents".into()));
         assert!(!d.quit);
 
         // kickstart -k, an update, a crash: SIGTERM with no stop intent.
-        let d = decide_from(false, false, none, none);
+        let d = decide_from(false, false, none, none, none);
         assert_eq!(d.plan, ExitPlan::KeepAgents("restart (no stop intent)".into()));
         assert!(!d.quit);
 
-        let d = decide_from(false, false, none, || Some("restart".to_string()));
+        let d = decide_from(false, false, none, none, || Some("restart".to_string()));
         assert_eq!(d.plan, ExitPlan::KeepAgents("systemd restart job".into()));
         assert!(!d.quit);
     }

@@ -427,7 +427,8 @@ fn no_mac_node_is_unusable_and_teaches() {
     let lane = IosNodeLane::new(Arc::new(NoNodes));
     let p = lane.probe();
     assert!(!p.usable && !p.ready);
-    assert!(p.detail.as_deref().unwrap().contains("Add a Mac mini as a compute node"), "{p:?}");
+    let detail = p.detail.as_deref().unwrap();
+    assert!(detail.contains("as a compute node") && detail.contains("`k2 compute node add <name>`") && detail.contains("`k2 study compute`") && detail.contains("`sudo k2-node setup --sim`"), "{p:?}");
     let e = lane.boot(&req(None)).unwrap_err();
     assert_eq!((e.code(), e.http_status()), ("sim_lane_unavailable", 409));
     assert_eq!(crate::sim::manager::SimError::from(e).exit, 3);

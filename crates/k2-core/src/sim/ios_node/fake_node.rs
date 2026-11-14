@@ -261,7 +261,19 @@ impl FakeNode {
         let (slot2, me) = (slot.clone(), Arc::downgrade(self));
         let raw = Box::new(move |bytes: Vec<u8>| -> bool {
             let Some(me) = me.upgrade() else { return false };
-            let Some(st) = slot2.lock().unwrap().clone() else { return false };
+            // The server may send the moment its side of the handshake
+            // finishes, before this thread has stored the node's half (a
+            // real socket buffers that write). Wait for it, briefly.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let st = loop {
+                if let Some(st) = slot2.lock().unwrap().clone() {
+                    break st;
+                }
+                if std::time::Instant::now() > deadline {
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
             if st.dead.load(std::sync::atomic::Ordering::SeqCst) {
                 return false;
             }

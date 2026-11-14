@@ -13,7 +13,8 @@
 #               needs cargo-nextest: run-checks.sh asks for it)
 #   audit       cargo audit + osv-scanner over Cargo.lock and bun.lock,
 #               pinned tools, the allow-list rules and a canary (checks.yml
-#               audit; prd-security-sweep-0464-v1 SS14)
+#               audit; prd-security-sweep-0464-v1 SS14), and cargo deny:
+#               the root deny.toml against every shipped crate
 #   all         the four, in that order
 #
 # Network: web (bun install) and audit (crates.io for cargo-audit, the
@@ -60,6 +61,7 @@ part_web() {
     step "macOS test run script (stubbed)";        bash tests/garden/mac-tests.sh
     step "Embedded Python compiles (cli/k2, tests, scripts)"; bash tests/check-embedded-python.sh
     step "Rust pin (rust-toolchain.toml)";         bash tests/packaging/rust-pin.sh
+    step "cargo-deny policy and git pins (no cargo)"; bash tests/packaging/cargo-deny-policy.sh
     step "release.sh compute mode (stubbed)";      bash tests/packaging/release-compute-mode.sh
     step "Linux build gate on K2 Compute (stubbed)"; bash tests/packaging/linux-gate.sh
     step "Release gates on K2 Compute (stubbed)";  bash tests/packaging/release-gates.sh
@@ -106,13 +108,20 @@ part_rust_check() {
 # on yanked versions: a yanked version has no advisory ID to allow-list. It
 # still prints them (2026-10-24: clipboard-win 5.4.1 via arboard on
 # Windows); bump those with the dependency PRD.
+#
+# cargo deny: the app-wide policy (the root deny.toml: the Kessel licence
+# allowlist, RustSec, git sources) against every crate K2 ships, each with
+# its default features, on Cargo.lock. scripts/ci/cargo-deny.sh holds the
+# shipped-crate list and says how it is scoped.
 part_audit() {
     step "advisory allow-list rules";              python3 scripts/ci/audit-ignores.py check
     step "install cargo-audit (pinned)";           cargo install cargo-audit --locked --version =0.22.2 --root target/audit-tools
     step "install osv-scanner (pinned, sha256)";   bash scripts/ci/install-osv-scanner.sh target/audit-tools
+    step "install cargo-deny (pinned)";            bash scripts/ci/cargo-deny.sh install target/audit-tools
     step "scanners catch a known advisory";        bash tests/packaging/audit-canary.sh target/audit-tools
     step "cargo audit";                            target/audit-tools/bin/cargo-audit audit --deny unmaintained --deny unsound --file Cargo.lock
     step "osv-scanner";                            target/audit-tools/osv-scanner scan source --lockfile bun.lock --lockfile Cargo.lock --config osv-scanner.toml
+    step "cargo deny (deny.toml, shipped crates)"; bash scripts/ci/cargo-deny.sh check target/audit-tools/bin/cargo-deny
 }
 
 part_rust_test() {

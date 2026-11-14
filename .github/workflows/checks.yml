@@ -121,6 +121,12 @@ jobs:
       - name: Rust pin (rust-toolchain.toml)
         run: bash tests/packaging/rust-pin.sh
 
+      # The app-wide cargo-deny policy (deny.toml) holds the Kessel
+      # Steward's rulings, every git dependency is pinned by full sha, and
+      # every crate a release builds is under the gate. No cargo.
+      - name: cargo-deny policy and git pins (no cargo)
+        run: bash tests/packaging/cargo-deny-policy.sh
+
       # release.sh K2_LINUX_BUILDS=compute (stage 1): pre-flight vs the repo
       # variable, fatal before the tag, the tree check before the push,
       # staging, and the workflows' LINUX_BUILDS switch (checks.yml stays manual).
@@ -377,6 +383,8 @@ jobs:
   # osv-scanner release, the RustSec database, osv.dev).
   # cargo audit denies unmaintained and unsound too, but not yanked
   # versions (no advisory ID to allow-list; they still print).
+  # cargo deny runs the app-wide policy (deny.toml); its advisory ignores
+  # carry their reasons and are in osv-scanner.toml too.
   audit:
     name: cargo audit + osv-scanner
     runs-on: ubuntu-latest
@@ -398,6 +406,9 @@ jobs:
       - name: Install osv-scanner (pinned, sha256-checked)
         run: bash scripts/ci/install-osv-scanner.sh target/audit-tools
 
+      - name: Install cargo-deny (pinned)
+        run: bash scripts/ci/cargo-deny.sh install target/audit-tools
+
       - name: Scanners still catch a known advisory (canary)
         run: bash tests/packaging/audit-canary.sh target/audit-tools
 
@@ -406,3 +417,10 @@ jobs:
 
       - name: osv-scanner (bun.lock + Cargo.lock)
         run: target/audit-tools/osv-scanner scan source --lockfile bun.lock --lockfile Cargo.lock --config osv-scanner.toml
+
+      # The app-wide policy (root deny.toml: Kessel licence allowlist,
+      # RustSec, git sources) against every shipped crate, each with its
+      # default features (the release builds' features, never
+      # --all-features). scripts/ci/cargo-deny.sh lists the crates.
+      - name: cargo deny (deny.toml, shipped crates)
+        run: bash scripts/ci/cargo-deny.sh check target/audit-tools/bin/cargo-deny

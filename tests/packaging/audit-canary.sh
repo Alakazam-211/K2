@@ -5,8 +5,11 @@
 # T14). Without this, a scanner that silently checks nothing (no database,
 # a parser change) would look green.
 #
-# <tooldir> holds bin/cargo-audit and osv-scanner (checks.sh audit installs
-# them). The fixture lock is written to a temp dir at run time, so no
+# cargo deny, with the root deny.toml, must fail on the same advisory and on
+# a licence off the allowlist.
+#
+# <tooldir> holds bin/cargo-audit, bin/cargo-deny and osv-scanner (checks.sh
+# audit installs them). The fixture lock is written to a temp dir at run time, so no
 # vulnerable lockfile is checked in. Needs the internet (RustSec database,
 # osv.dev). The allow-list rules are tested offline at the end. No skips.
 set -euo pipefail
@@ -60,8 +63,29 @@ rc=0; out="$("$OSV" scan source --lockfile "$tmp/lock/Cargo.lock" --config "$tmp
 rc=0; out="$("$OSV" scan source --lockfile "$tmp/lock/Cargo.lock" --config "$tmp/expired.toml" 2>&1)" || rc=$?
 [ "$rc" = 1 ] && pass "an expired entry doesn't" || fail "osv-scanner expired ignore" "rc=$rc $out"
 
+echo "cargo deny (the root deny.toml):"
+CARGO_DENY="$T/bin/cargo-deny"
+if [ -x "$CARGO_DENY" ]; then
+    # A throwaway crate on the same smallvec, checked with the app's policy.
+    mkdir -p "$tmp/deny/src"
+    : > "$tmp/deny/src/lib.rs"
+    printf '[package]\nname = "deny-canary"\nversion = "0.1.0"\nedition = "2021"\nlicense = "MIT"\npublish = false\n\n[dependencies]\nsmallvec = "=1.6.0"\n\n[workspace]\n' > "$tmp/deny/Cargo.toml"
+    rc=0; out="$("$CARGO_DENY" --manifest-path "$tmp/deny/Cargo.toml" --config "$ROOT/deny.toml" check advisories 2>&1)" || rc=$?
+    [ "$rc" != 0 ] && [[ "$out" == *"$ADV"* ]] && pass "fails on $ADV" || fail "cargo deny missed $ADV" "rc=$rc $out"
+    # A licence off the allowlist (the crate's own) is rejected.
+    sed -i.bak 's/^license = "MIT"$/license = "GPL-3.0-only"/' "$tmp/deny/Cargo.toml"
+    rc=0; out="$("$CARGO_DENY" --manifest-path "$tmp/deny/Cargo.toml" --config "$ROOT/deny.toml" check licenses 2>&1)" || rc=$?
+    [ "$rc" != 0 ] && [[ "$out" == *"GPL-3.0-only"* ]] && pass "rejects a licence off the allowlist" || fail "cargo deny licence" "rc=$rc $out"
+else
+    fail "no $CARGO_DENY" "scripts/ci/cargo-deny.sh install $T first"
+fi
+
 echo "allow-list rules (scripts/ci/audit-ignores.py, offline):"
-check() { python3 "$ROOT/scripts/ci/audit-ignores.py" check --today 2026-10-24 --osv "$tmp/$1.osv.toml" --cargo "$tmp/$1.cargo.toml" 2>&1; }
+# A case without its own deny.toml gets one with no ignores.
+check() {
+    [ -f "$tmp/$1.deny.toml" ] || printf '[advisories]\nignore = []\n' > "$tmp/$1.deny.toml"
+    python3 "$ROOT/scripts/ci/audit-ignores.py" check --today 2026-10-24 --osv "$tmp/$1.osv.toml" --cargo "$tmp/$1.cargo.toml" --deny "$tmp/$1.deny.toml" 2>&1
+}
 entry() { printf '[[IgnoredVulns]]\nid = "%s"\nignoreUntil = %s\nreason = "%s"\n\n' "$1" "$2" "$3"; }
 R="not reachable: the crate is only used by the build script"
 entry RUSTSEC-2026-0001 2026-12-01T00:00:00Z "$R" > "$tmp/good.osv.toml"
@@ -87,6 +111,18 @@ bad_case nodate "needs ignoreUntil"
 bad_case twice "listed twice"
 cp "$tmp/good.osv.toml" "$tmp/orphan.osv.toml"; printf '[advisories]\nignore = ["RUSTSEC-2026-0002"]\n' > "$tmp/orphan.cargo.toml"
 bad_case orphan "RUSTSEC-2026-0002 has no entry"
+# deny.toml (the cargo-deny gate): each ignore a table with its own reason,
+# and in the ledger.
+for c in denyok denybare denynoreason denyorphan; do cp "$tmp/good.osv.toml" "$tmp/$c.osv.toml"; cp "$tmp/good.cargo.toml" "$tmp/$c.cargo.toml"; done
+printf '[advisories]\nignore = [{ id = "RUSTSEC-2026-0001", reason = "%s" }]\n' "$R" > "$tmp/denyok.deny.toml"
+rc=0; out="$(check denyok)" || rc=$?
+[ "$rc" = 0 ] && pass "a deny.toml ignore with a reason, in the ledger, passes" || fail "deny.toml good ignore" "rc=$rc $out"
+printf '[advisories]\nignore = ["RUSTSEC-2026-0001"]\n' > "$tmp/denybare.deny.toml"
+bad_case denybare "a written reason"
+printf '[advisories]\nignore = [{ id = "RUSTSEC-2026-0001", reason = "later" }]\n' > "$tmp/denynoreason.deny.toml"
+bad_case denynoreason "RUSTSEC-2026-0001 needs a reason"
+printf '[advisories]\nignore = [{ id = "RUSTSEC-2026-0002", reason = "%s" }]\n' "$R" > "$tmp/denyorphan.deny.toml"
+bad_case denyorphan "deny.toml: RUSTSEC-2026-0002 has no entry"
 
 echo ""
 echo "audit-canary: $pass passed, $fail failed"

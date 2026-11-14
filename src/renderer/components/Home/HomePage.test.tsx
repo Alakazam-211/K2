@@ -722,7 +722,7 @@ describe('Home — the Agents page shell', () => {
     const cortana = within(picker).getByRole('option', { name: /Cortana/ })
     expect(cortana.getAttribute('aria-disabled')).toBe('true')
     expect(cortana.getAttribute('data-row-state')).toBe('checked')
-    expect(cortana.getAttribute('title')).toBe('Already on Home')
+    expect(cortana.getAttribute('title')).toBe('Already on Group 1')
     const nova = within(picker).getByRole('option', { name: /Nova/ })
     expect(nova.getAttribute('data-row-state')).toBe('pickable')
     // Clicking the checked row does nothing (Q4).
@@ -885,7 +885,7 @@ describe('Home — the Agents page shell', () => {
     await act(async () => {
       fireEvent.contextMenu(rowOf('Cee'))
     })
-    expect(menu.items[0].map((i) => i.label)).toContain('Remove from Home')
+    expect(menu.items[0].map((i) => i.label)).toContain('Remove from Group 1')
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toEqual(['cortana::local', 'bee::b.k2.dev'])
     // The connected row's menu is the workspace menu + remove.
     menu.next = null

@@ -46,8 +46,22 @@ export const HOMES_WINDOW_SELECTED_KEY = 'k2.homes.windowSelected'
 /** homes-sync-v1: the sync runner's state (cursor, outbox, redirects). */
 export const HOMES_SYNC_STORAGE_KEY = 'k2.homes.sync.v1'
 
-export const DEFAULT_HOME_NAME = 'Home'
 export const HOME_NAME_MAX = 60
+
+/**
+ * The default name for a new Home: "Group N" with the smallest N >= 1 that
+ * no Home is named exactly (trimmed, case-insensitive). Only defaults use
+ * it; Homes that already have a name keep it.
+ */
+export function nextGroupName(homes: readonly { name: string }[]): string {
+  const taken = new Set(homes.map((h) => h.name.trim().toLowerCase()))
+  let n = 1
+  while (taken.has(`group ${n}`)) n++
+  return `Group ${n}`
+}
+
+/** The first-run Home's name. */
+export const DEFAULT_HOME_NAME = nextGroupName([])
 
 export interface HomeRow {
   /** `handle::host`, lowercase — the row key. */
@@ -282,7 +296,7 @@ function pickSelected(homes: Home[], env: HomesEnv, redirects: Record<string, st
 
 export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesState>> {
   // Boot: a storage error → in-memory seed (never written back until a
-  // change); first run (key absent) → seed one empty "Home" and save it;
+  // change); first run (key absent) → seed one empty "Group 1" and save it;
   // unreadable data → in-memory seed, left on disk untouched.
   const read = safeGet(env.local, HOMES_STORAGE_KEY)
   let initial: Home[]

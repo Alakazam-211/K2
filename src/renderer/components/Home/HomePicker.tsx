@@ -6,10 +6,10 @@
 // (a user-named tab per Home would have no width limit). Create, rename,
 // and delete live in the same menu. The last Home cannot be deleted.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
-import { useHomesStore, selectedHome, HOME_NAME_MAX } from '@/stores/homes'
+import { useHomesStore, selectedHome, nextGroupName, HOME_NAME_MAX } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { Button, Input } from '@/components/ui'
 import { ShortcutIndexBadge } from '@/components/Sidebar/Sidebar'
@@ -28,6 +28,9 @@ export default function HomePicker(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<Mode>('menu')
   const [draft, setDraft] = useState('')
+  const draftRef = useRef<HTMLInputElement>(null)
+  // A new Home's field starts on the next free "Group N".
+  const suggested = nextGroupName(homes)
   // Portalled and fixed to the picker: the sidebar's scroller
   // (Layout's `overflow-y-auto`) can't cut it off. Outside click / Escape close.
   const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose: () => setOpen(false) })
@@ -36,8 +39,13 @@ export default function HomePicker(): React.JSX.Element {
     if (!open) setMode('menu')
   }, [open])
 
+  // The suggested name starts selected: typing replaces it, Enter accepts it.
+  useEffect(() => {
+    if (mode === 'create') draftRef.current?.select()
+  }, [mode])
+
   const startCreate = (): void => {
-    setDraft('')
+    setDraft(suggested)
     setMode('create')
   }
   const startRename = (): void => {
@@ -164,11 +172,12 @@ export default function HomePicker(): React.JSX.Element {
                 {mode === 'create' ? 'New Home name' : 'Rename Home'}
               </label>
               <Input
+                ref={draftRef}
                 autoFocus
                 value={draft}
                 maxLength={HOME_NAME_MAX}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="Home"
+                placeholder={mode === 'create' ? suggested : current.name}
               />
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={() => setMode('menu')}>

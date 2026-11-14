@@ -16,6 +16,7 @@ import {
   resolveHomeId,
   followHomeRedirects,
   parseHomeRedirects,
+  nextGroupName,
   type KeyValueStorage,
   type HomeRow,
 } from './homes'
@@ -69,12 +70,12 @@ function storageEvent(key: string | null, newValue: string | null): Event {
 }
 
 describe('homes store — first run, CRUD, last Home', () => {
-  it('first run seeds one empty "Home" and saves it', () => {
+  it('first run seeds one empty "Group 1" and saves it', () => {
     const local = new MemStorage()
     const s = createHomesStore({ local, session: new MemStorage(), newId: ids() })
-    expect(s.getState().homes).toEqual([{ id: 'h1', name: 'Home', rows: [] }])
+    expect(s.getState().homes).toEqual([{ id: 'h1', name: 'Group 1', rows: [] }])
     expect(s.getState().selectedId).toBe('h1')
-    expect(stored(local)).toEqual({ version: 1, homes: [{ id: 'h1', name: 'Home', rows: [] }] })
+    expect(stored(local)).toEqual({ version: 1, homes: [{ id: 'h1', name: 'Group 1', rows: [] }] })
   })
 
   it('create selects the new Home; rename trims; empty names are refused', () => {
@@ -91,7 +92,7 @@ describe('homes store — first run, CRUD, last Home', () => {
     expect(s.getState().renameHome('h2', 'Ops')).toBe(true)
     expect(s.getState().renameHome('h2', '')).toBe(false)
     expect(s.getState().renameHome('nope', 'X')).toBe(false)
-    expect(stored(local).homes.map((h) => h.name)).toEqual(['Home', 'Ops'])
+    expect(stored(local).homes.map((h) => h.name)).toEqual(['Group 1', 'Ops'])
   })
 
   it('the last Home cannot be deleted; deleting the selected one selects a neighbour', () => {
@@ -110,6 +111,39 @@ describe('homes store — first run, CRUD, last Home', () => {
     expect(s.getState().homes.map((h) => h.id)).toEqual(['h2'])
     expect(s.getState().deleteHome('h2')).toBe(false)
     expect(stored(local).homes.map((h) => h.id)).toEqual(['h2'])
+  })
+})
+
+describe('default Home names — "Group N"', () => {
+  const named = (...names: string[]): { name: string }[] => names.map((name) => ({ name }))
+
+  it('is "Group 1" when no Home is named Group N', () => {
+    expect(nextGroupName([])).toBe('Group 1')
+    expect(nextGroupName(named('Home', 'Ops'))).toBe('Group 1')
+  })
+
+  it('takes the smallest free N, filling gaps', () => {
+    expect(nextGroupName(named('Group 1'))).toBe('Group 2')
+    expect(nextGroupName(named('Group 1', 'Group 2', 'Group 3'))).toBe('Group 4')
+    expect(nextGroupName(named('Group 1', 'Group 3'))).toBe('Group 2')
+    expect(nextGroupName(named('Group 2', 'Group 3'))).toBe('Group 1')
+  })
+
+  it('compares case-insensitively', () => {
+    expect(nextGroupName(named('group 1', 'GROUP 2'))).toBe('Group 3')
+  })
+
+  it('counts only names that are exactly Group N', () => {
+    expect(nextGroupName(named('Group 1 old', 'My Group 1', 'Group 01', 'Group1', 'Group'))).toBe('Group 1')
+  })
+
+  it('a Home already named "Home" keeps its name at boot (no migration)', () => {
+    const local = new MemStorage()
+    const doc = JSON.stringify({ version: 1, homes: [{ id: 'old', name: 'Home', rows: [] }] })
+    local.setItem(HOMES_STORAGE_KEY, doc)
+    const s = createHomesStore({ local, session: new MemStorage(), newId: ids() })
+    expect(s.getState().homes).toEqual([{ id: 'old', name: 'Home', rows: [] }])
+    expect(local.getItem(HOMES_STORAGE_KEY)).toBe(doc)
   })
 })
 
@@ -241,7 +275,7 @@ describe('homes store — storage trouble', () => {
   it('a storage error falls back to an in-memory seed that still works', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const s = createHomesStore({ local: new ThrowingStorage(), session: new ThrowingStorage(), newId: ids() })
-    expect(s.getState().homes).toEqual([{ id: 'h1', name: 'Home', rows: [] }])
+    expect(s.getState().homes).toEqual([{ id: 'h1', name: 'Group 1', rows: [] }])
     expect(s.getState().addRow('h1', row('a::local'))).toBe(true)
     expect(s.getState().createHome('Two')).toBe('h2')
     expect(s.getState().selectedId).toBe('h2')
@@ -254,7 +288,7 @@ describe('homes store — storage trouble', () => {
     const local = new MemStorage()
     local.setItem(HOMES_STORAGE_KEY, JSON.stringify({ version: 2, homes: [{ id: 'x' }] }))
     const s = createHomesStore({ local, session: new MemStorage(), newId: ids() })
-    expect(s.getState().homes).toEqual([{ id: 'h1', name: 'Home', rows: [] }])
+    expect(s.getState().homes).toEqual([{ id: 'h1', name: 'Group 1', rows: [] }])
     expect(local.getItem(HOMES_STORAGE_KEY)).toBe(JSON.stringify({ version: 2, homes: [{ id: 'x' }] }))
     warn.mockRestore()
   })

@@ -111,12 +111,12 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     await lap.runner.syncNow()
     // Union by name; nothing deleted; Atlas is one row.
     expect(server.view().map((h) => [h.name, h.rows])).toEqual([
-      ['Home', [`atlas::${SID}`, `nova::${SID}`]],
+      ['Group 1', [`atlas::${SID}`, `nova::${SID}`]],
       ['Work', []],
       ['Errands', []],
     ])
-    expect(names(phone)).toEqual(['Home', 'Work', 'Errands'])
-    expect(names(lap)).toEqual(['Home', 'Work', 'Errands'])
+    expect(names(phone)).toEqual(['Group 1', 'Work', 'Errands'])
+    expect(names(lap)).toEqual(['Group 1', 'Work', 'Errands'])
     expect(lap.store.getState().homes[0].rows.map((r) => r.address)).toEqual(['atlas::local', 'nova::local'])
     expect(phone.store.getState().homes[0].rows.map((r) => r.address)).toEqual(['atlas::rosson.k2.dev', 'nova::rosson.k2.dev'])
     // The phone's old Home id redirects to the surviving one: its selection followed.
@@ -141,7 +141,7 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     phone.runner.start()
     await phone.runner.syncNow()
     await lap.runner.syncNow()
-    expect(names(phone)).toEqual(['Home'])
+    expect(names(phone)).toEqual(['Group 1'])
     const id = lap.store.getState().homes[0].id
     // Both rename "offline" (before syncing); the phone's is later.
     lap.store.getState().renameHome(id, 'Laptop name')
@@ -206,7 +206,7 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     expect(phone.status().pending).toBe(2)
     expect(statusLine(phone.status())).toMatch(/Sync paused · 2 changes waiting/)
     // The local copy renders regardless.
-    expect(names(phone)).toEqual(['Home', 'Phone offline'])
+    expect(names(phone)).toEqual(['Group 1', 'Phone offline'])
 
     // Meanwhile the laptop (online) adds a Home and a row.
     lap.store.getState().createHome('Laptop online')
@@ -219,7 +219,7 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     await lap.runner.syncNow()
     expect(phone.status().phase).toBe('synced')
     expect(phone.status().pending).toBe(0)
-    const want = ['Home', 'Laptop online', 'Phone offline']
+    const want = ['Group 1', 'Laptop online', 'Phone offline']
     expect([...names(lap)].sort()).toEqual(want)
     expect([...names(phone)].sort()).toEqual(want)
     expect(lap.store.getState().homes[0].rows.map((r) => r.address).sort()).toEqual(['atlas::local', 'nova::local'])
@@ -236,15 +236,15 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     const phone = device(server, 'phone', phoneMap)
     phone.runner.start()
     await phone.runner.syncNow()
-    expect(names(phone)).toEqual(['Home', 'Work'])
+    expect(names(phone)).toEqual(['Group 1', 'Work'])
     const work = lap.store.getState().homes[1].id
     lap.store.getState().deleteHome(work)
     await lap.runner.syncNow()
     await phone.runner.syncNow()
-    expect(names(phone)).toEqual(['Home'])
+    expect(names(phone)).toEqual(['Group 1'])
     // The phone re-pushing a stale view can't bring it back.
     await phone.runner.syncNow()
-    expect(server.view().map((h) => h.name)).toEqual(['Home'])
+    expect(server.view().map((h) => h.name)).toEqual(['Group 1'])
   })
 
   it('device removal: 410 stops sync (status removed); "Sync again" re-registers and re-runs the union', async () => {
@@ -259,7 +259,7 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     phone.store.getState().createHome('After removal')
     await phone.runner.syncNow()
     expect(phone.status().phase).toBe('removed')
-    expect(server.view().map((h) => h.name)).toEqual(['Home'])
+    expect(server.view().map((h) => h.name)).toEqual(['Group 1'])
     expect(parseSyncState(phone.local.getItem(HOMES_SYNC_STORAGE_KEY))?.removed).toBe(true)
     // The frame alone also marks it (another device id is ignored).
     phone.runner.onDeviceRemoved('someone-else')
@@ -269,7 +269,7 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     await phone.runner.syncNow()
     expect(phone.status().phase).toBe('synced')
     expect(server.devices.get('dev-phone')?.removed).toBe(false)
-    expect(server.view().map((h) => h.name)).toEqual(['Home', 'After removal'])
+    expect(server.view().map((h) => h.name)).toEqual(['Group 1', 'After removal'])
   })
 
   it('"Stop syncing" leaves the server’s device list and keeps the Homes; nothing is sent until it starts again', async () => {
@@ -283,10 +283,10 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     await lap.runner.syncNow()
     expect(lap.status().phase).toBe('off')
     expect(server.pushes).toBe(pushes)
-    expect(names(lap)).toEqual(['Home', 'Local only'])
+    expect(names(lap)).toEqual(['Group 1', 'Local only'])
     startSyncing(lap.local)
     await lap.runner.syncNow()
-    expect(server.view().map((h) => h.name)).toEqual(['Home', 'Local only'])
+    expect(server.view().map((h) => h.name)).toEqual(['Group 1', 'Local only'])
   })
 
   it('a server without homes-sync-v1: unsupported, nothing sent, the Homes untouched', async () => {
@@ -296,7 +296,7 @@ describe('Homes sync runner (desktop store ⇄ home server)', () => {
     await lap.runner.syncNow()
     expect(lap.status().phase).toBe('unsupported')
     expect(server.devices.size).toBe(0)
-    expect(names(lap)).toEqual(['Home'])
+    expect(names(lap)).toEqual(['Group 1'])
   })
 
   it('homes_changed with our own cursor does not pull again', async () => {

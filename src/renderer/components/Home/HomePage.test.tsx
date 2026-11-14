@@ -187,6 +187,7 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
+import { parseFirstRunDoc, resetFirstRunForTests, useFirstRunStore } from '@/stores/first-run'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { __seedActivityForTests } from '@/stores/activity'
 import { __resetHostPoolForTests, hostPool } from '@/lib/host-pool-instance'
@@ -843,7 +844,8 @@ describe('Home — the Agents page shell', () => {
       const groupRow = homeSidebar().querySelector('[data-home-group-row]') as HTMLElement
       expect(groupRow.contains(bar)).toBe(true)
       expect(groupRow.className).not.toContain('border')
-      expect(groupRow.nextElementSibling).toBe(homeSidebar().querySelector('[data-nav-footer]'))
+      // Setup finished: nothing between the group icons and the bottom bar.
+      expect(groupRow.parentElement?.nextElementSibling).toBe(homeSidebar().querySelector('[data-nav-footer]'))
       expect(groupRow.parentElement?.className).not.toContain('border')
       expect(Array.from(bar.querySelectorAll('[data-group-id]')).map((b) => b.getAttribute('aria-keyshortcuts'))).toEqual([
         'Alt+Meta+1',
@@ -852,6 +854,47 @@ describe('Home — the Agents page shell', () => {
       ])
     } finally {
       for (const id of extra) if (id) useHomesStore.getState().deleteHome(id)
+    }
+  })
+
+  it('Get started sits under the group icons, above the bottom bar, as the button and as the open list', () => {
+    const setDoc = (over: Record<string, unknown>): void => {
+      const doc = parseFirstRunDoc({
+        enabled: true,
+        hidden: false,
+        finished: false,
+        rows: [
+          { id: 'llm_sign_in', state: 'todo', opens: 'llm_sign_in' },
+          { id: 'tunnel', state: 'todo', opens: 'tunnel' },
+        ],
+        ...over,
+      })
+      act(() => useFirstRunStore.setState({ entries: { [primaryScope().id]: { doc, error: null } } }))
+    }
+    try {
+      setDoc({ hidden: true })
+      render(<Shell />)
+      const nav = homeSidebar()
+      const footer = nav.querySelector('[data-home-footer]') as HTMLElement
+      const bottomBar = nav.querySelector('[data-nav-footer]') as HTMLElement
+      // The button: group icons, then Get started, then the bottom bar.
+      const button = nav.querySelector('[data-setup-checklist-collapsed]') as HTMLElement
+      expect(within(button).getByTestId('setup-get-started')).toBeTruthy()
+      expect(footer.nextElementSibling).toBe(button)
+      expect(button.nextElementSibling).toBe(bottomBar)
+      expect(footer.contains(nav.querySelector('[data-home-group-row]'))).toBe(true)
+      // The button's own padding is the gap above the bottom bar.
+      expect(bottomBar.className).toContain('[[data-setup-checklist-collapsed]+&]:pt-0')
+      // The open list sits in the same place, still a child of the nav's
+      // column (its 45% cap is of the nav).
+      setDoc({})
+      const list = nav.querySelector('[data-setup-checklist]') as HTMLElement
+      expect(list.parentElement).toBe(nav)
+      expect(list.className).toContain('max-h-[45%]')
+      expect(footer.nextElementSibling).toBe(list)
+      expect(list.nextElementSibling).toBe(bottomBar)
+    } finally {
+      resetFirstRunForTests()
     }
   })
 

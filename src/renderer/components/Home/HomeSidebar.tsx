@@ -586,19 +586,29 @@ export default function HomeSidebar(): React.JSX.Element {
       </GroupSwipeStrip>
       </div>
 
-      {/* Setup checklist (renders nothing while off, hidden or finished) */}
-      <SetupChecklist />
-
-      {/* The footer, with no divider: the group icons on their own row, then
-          Add Agent + collapse the nav (the Add Workspace bar). The list's own
-          bottom edge fade (ScrollEdgeFrame) runs out just above them, only
-          while there is more below. (Zen Mode is the window's top-bar
+      {/* The footer, with no divider: the group icons on their own row,
+          then Get started (the setup checklist; nothing while it is off,
+          hidden or finished), then Add Agent + collapse the nav (the Add
+          Workspace bar). The list's own bottom edge fade (ScrollEdgeFrame)
+          runs out just above them, only while there is more below. The
+          checklist stays a child of the nav's column, so its open list keeps
+          its cap of 45% of the nav. (Zen Mode is the window's top-bar
           toggle, prd-zen-gardens-v1 G5/G6.) */}
-      <div className="flex flex-col gap-2 px-3 pb-3 pt-1" data-home-footer="">
+      <div className="flex flex-col px-3 pt-1" data-home-footer="">
         <div className="flex justify-center no-drag" data-home-group-row="">
           <HomeGroupBar {...groups.bar} />
         </div>
-      <div ref={barRef} className="relative flex flex-col gap-2" data-nav-footer="">
+      </div>
+
+      <SetupChecklist />
+
+      {/* 8px under the group icons (the footer's gap); the Get started
+          button's own padding is that gap when it sits between them. */}
+      <div
+        ref={barRef}
+        className="relative flex flex-col gap-2 px-3 pb-3 pt-2 [[data-setup-checklist-collapsed]+&]:pt-0"
+        data-nav-footer=""
+      >
         {pickerOpen && <AddAgentPicker home={home} />}
         <div className={NAV_FOOTER_ROW_CLASS}>
           <NavFooterButton
@@ -610,7 +620,6 @@ export default function HomeSidebar(): React.JSX.Element {
           />
           <SidebarCollapseButton footer />
         </div>
-      </div>
       </div>
     </div>
   )

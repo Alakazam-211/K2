@@ -3,8 +3,9 @@
 // frame (codec byte 2), decoded here with WebCodecs (`VideoDecoder`; H.264
 // is configured with no `description`, which means Annex B).
 //
-//  - `probeDecoders()` / `decodeSupport()`: what this webview can decode.
-//    H.264 is what VideoToolbox sends (WKWebView 16.4+, WebView2 and
+//  - `probeDecoders()` / `decodeSupport()`: what this webview can decode,
+//    asked with a `DecodeProbe` (the stream's by default; a file player
+//    passes its own strings, AV1 among them). H.264 is what VideoToolbox sends (WKWebView 16.4+, WebView2 and
 //    Chromium say yes); VP8 is a Linux host's software encode. WebKitGTK
 //    builds without WebCodecs say no to both and the viewer stays on JPEG.
 //    A pane offers only what the probe found (`offerCodecs`, R13).
@@ -26,17 +27,51 @@
 import { withLowLatencyVui } from './h264-vui'
 import type { DecodeSupport, VideoCodec } from './stream-wire'
 
-/** The parts of a WebCodecs `VideoFrame` we use. */
+/** A WebCodecs `VideoPixelFormat` (`I420`, `NV12`, `BGRA`, ...). A string,
+ *  so a format this file doesn't name still passes through. */
+export type VideoPixelFormatLike = string
+
+/** Where one plane landed in a `copyTo` buffer (WebCodecs `PlaneLayout`). */
+export interface PlaneLayoutLike {
+  offset: number
+  stride: number
+}
+
+/** The `copyTo` / `allocationSize` options we use (WebCodecs
+ *  `VideoFrameCopyToOptions`; `rect` and `layout` left out). */
+export interface VideoFrameCopyToOptionsLike {
+  /** Convert while copying (e.g. `RGBA`); omitted: the frame's own format. */
+  format?: VideoPixelFormatLike
+}
+
+/** The parts of a WebCodecs `VideoFrame` we use. `format`, `allocationSize`
+ *  and `copyTo` read the decoded planes (e.g. to hash a frame in YUV); they
+ *  are optional because the stream only draws frames, and a decoder that
+ *  can't expose its planes (a GPU-only frame) reports `format: null`. */
 export interface VideoFrameLike {
   readonly timestamp: number
   readonly displayWidth: number
   readonly displayHeight: number
+  /** The pixel layout `copyTo` gives by default, or null when the frame's
+   *  memory can't be read. */
+  readonly format?: VideoPixelFormatLike | null
+  /** Bytes `copyTo` needs for these options. */
+  allocationSize?(options?: VideoFrameCopyToOptionsLike): number
+  /** Copy the planes into `destination`; resolves to each plane's layout. */
+  copyTo?(destination: ArrayBuffer | ArrayBufferView, options?: VideoFrameCopyToOptionsLike): Promise<PlaneLayoutLike[]>
   close(): void
 }
 
 export interface VideoDecoderConfigLike {
   codec: string
   optimizeForLatency?: boolean
+  /** Codec setup out of band: an `avcC` box body (H.264 in MP4, which also
+   *  means the chunks are length-prefixed, not Annex B) or an `av1C` body.
+   *  Omitted: H.264 is Annex B with SPS and PPS in band (the stream). */
+  description?: ArrayBuffer | ArrayBufferView
+  /** The coded picture size, when the container gives it. */
+  codedWidth?: number
+  codedHeight?: number
 }
 
 export interface VideoDecoderLike {
@@ -92,6 +127,30 @@ export const H264_PROBE_CODECS: readonly string[] = ['avc1.640C1F', 'avc1.4D401F
 /** VP8 has one codec string. */
 export const VP8_PROBE_CODECS: readonly string[] = ['vp8']
 
+/** What a decode probe asks `isConfigSupported` about. Each family is
+ *  supported when any of its strings is (asked in order, stopping at the
+ *  first yes unless `everyString`). */
+export interface DecodeProbe {
+  h264: readonly string[]
+  vp8: readonly string[]
+  /** AV1 strings (e.g. `av01.0.08M.08`). Omitted: AV1 isn't asked about and
+   *  the result has no `av01`. */
+  av01?: readonly string[]
+  /** Sent with every config asked about. Omitted: left out of the config. */
+  optimizeForLatency?: boolean
+  /** Ask every string, not just up to the first yes, and report each in the
+   *  result's `byCodec` (for a capability readout). */
+  everyString?: boolean
+}
+
+/** The live stream's probe: its two H.264 strings and VP8, low latency, first
+ *  yes wins. The Mobile tab and the remote desktop use this. */
+export const STREAM_DECODE_PROBE: DecodeProbe = {
+  h264: H264_PROBE_CODECS,
+  vp8: VP8_PROBE_CODECS,
+  optimizeForLatency: true,
+}
+
 /** Set to "jpeg" to keep this webview's streams on JPEG (a debugging switch). */
 export const CODEC_PREF_KEY = 'k2.stream.codec'
 /** The Mobile tab's switch from before the engine module; still read. */
@@ -106,34 +165,68 @@ function jpegPinned(): boolean {
   }
 }
 
-async function anySupported(codecs: WebCodecsLike, list: readonly string[]): Promise<boolean> {
-  for (const codec of list) {
-    if (await codecs.isConfigSupported({ codec, optimizeForLatency: true })) return true
-  }
-  return false
+function probeConfig(codec: string, probe: DecodeProbe): VideoDecoderConfigLike {
+  return probe.optimizeForLatency === undefined ? { codec } : { codec, optimizeForLatency: probe.optimizeForLatency }
 }
 
-/** Ask `isConfigSupported` for each video codec (H.264 first, then VP8).
- *  `jpeg` is the caller's: whether it has a JPEG decode path. */
-export async function probeDecoders(codecs: WebCodecsLike | null, jpeg: boolean): Promise<DecodeSupport> {
-  if (!codecs) return { h264: false, vp8: false, jpeg }
-  const h264 = await anySupported(codecs, H264_PROBE_CODECS)
-  const vp8 = await anySupported(codecs, VP8_PROBE_CODECS)
-  return { h264, vp8, jpeg }
+async function anySupported(codecs: WebCodecsLike, list: readonly string[], probe: DecodeProbe, seen: Record<string, boolean> | null): Promise<boolean> {
+  let any = false
+  for (const codec of list) {
+    const yes = await codecs.isConfigSupported(probeConfig(codec, probe))
+    if (seen) seen[codec] = yes
+    any ||= yes
+    if (any && !seen) return true
+  }
+  return any
+}
+
+/** Every family the probe asks about reported unsupported. */
+function noVideo(jpeg: boolean, probe: DecodeProbe): DecodeSupport {
+  const out: DecodeSupport = { h264: false, vp8: false, jpeg }
+  if (probe.av01) out.av01 = false
+  if (probe.everyString) out.byCodec = {}
+  return out
+}
+
+/** Ask `isConfigSupported` for each video codec (H.264 first, then VP8, then
+ *  AV1 when the probe lists it). `jpeg` is the caller's: whether it has a
+ *  JPEG decode path. The default probe is the live stream's. */
+export async function probeDecoders(codecs: WebCodecsLike | null, jpeg: boolean, probe: DecodeProbe = STREAM_DECODE_PROBE): Promise<DecodeSupport> {
+  if (!codecs) return noVideo(jpeg, probe)
+  const seen: Record<string, boolean> | null = probe.everyString ? {} : null
+  const h264 = await anySupported(codecs, probe.h264, probe, seen)
+  const vp8 = await anySupported(codecs, probe.vp8, probe, seen)
+  const out: DecodeSupport = { h264, vp8, jpeg }
+  if (probe.av01) out.av01 = await anySupported(codecs, probe.av01, probe, seen)
+  if (seen) out.byCodec = seen
+  return out
 }
 
 let cachedSupport: Promise<DecodeSupport> | null = null
+let cachedByProbe = new WeakMap<DecodeProbe, Promise<DecodeSupport>>()
 
-/** What this thread can decode (probed once; the JPEG pin turns video off). */
-export function decodeSupport(codecs: WebCodecsLike | null = browserWebCodecs()): Promise<DecodeSupport> {
+/** What this thread can decode, probed once per probe. The default probe is
+ *  the live stream's, and only it obeys the JPEG pin (a switch for streams,
+ *  not for players of files). */
+export function decodeSupport(codecs: WebCodecsLike | null = browserWebCodecs(), probe: DecodeProbe = STREAM_DECODE_PROBE): Promise<DecodeSupport> {
   const jpeg = typeof (globalThis as { createImageBitmap?: unknown }).createImageBitmap === 'function'
-  if (jpegPinned() || !codecs) return Promise.resolve({ h264: false, vp8: false, jpeg })
-  if (!cachedSupport) cachedSupport = probeDecoders(codecs, jpeg)
-  return cachedSupport
+  if (probe === STREAM_DECODE_PROBE) {
+    if (jpegPinned() || !codecs) return Promise.resolve(noVideo(jpeg, probe))
+    if (!cachedSupport) cachedSupport = probeDecoders(codecs, jpeg)
+    return cachedSupport
+  }
+  if (!codecs) return Promise.resolve(noVideo(jpeg, probe))
+  let p = cachedByProbe.get(probe)
+  if (!p) {
+    p = probeDecoders(codecs, jpeg, probe)
+    cachedByProbe.set(probe, p)
+  }
+  return p
 }
 
 export function resetVideoSupportForTests(): void {
   cachedSupport = null
+  cachedByProbe = new WeakMap()
 }
 
 /** Split an Annex B stream into NAL units (3- or 4-byte start codes). */

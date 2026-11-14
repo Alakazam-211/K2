@@ -195,12 +195,24 @@ export function readBinaryFrame(buf: ArrayBuffer): BinaryRead {
   }
 }
 
+/** A video codec family a decode probe can ask about. `h264` and `vp8` are
+ *  also wire codecs (K2SV); `av01` (AV1) is only ever probed, for players
+ *  that read files rather than the stream. */
+export type ProbeFamily = VideoCodec | 'av01'
+
 /** What this webview (or the player worker) can decode (`stream-video.ts`'s
- *  probe). */
+ *  probe). `h264`, `vp8` and `jpeg` are always reported and are what
+ *  `offerCodecs` reads. The rest appear only when the caller's probe asked
+ *  for them, so the stream's probe reports exactly the three it always did. */
 export interface DecodeSupport {
   h264: boolean
   vp8: boolean
   jpeg: boolean
+  /** AV1: present only when the probe listed `av01` strings. */
+  av01?: boolean
+  /** Each codec string asked about and what `isConfigSupported` said:
+   *  present only when the probe asked for every string (`everyString`). */
+  byCodec?: Readonly<Record<string, boolean>>
 }
 
 /** The `codecs=` list: what the source speaks (`want`, in preference

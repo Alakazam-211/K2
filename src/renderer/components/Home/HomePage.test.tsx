@@ -1027,6 +1027,9 @@ describe('Home — the Agents page shell', () => {
     render(<Shell />)
     const field = within(homeSidebar()).getByRole('textbox', { name: 'Search workspaces (⌘K)' }) as HTMLInputElement
     expect(field.placeholder).toBe('Search workspaces…')
+    // Room for the ⌘K hint; a placeholder too long for the field ends in "…".
+    expect(field.style.paddingRight).toBe('40px')
+    expect(field.style.textOverflow).toBe('ellipsis')
     expect(field.getAttribute('aria-haspopup')).toBe('dialog')
     expect(field.getAttribute('aria-keyshortcuts')).toBe('Meta+K')
     expect(homeSidebar().querySelector('[data-home-palette-kbd]')?.textContent).toBe('⌘K')
@@ -1096,13 +1099,14 @@ describe('Home — the Agents page shell', () => {
     expect(useSidebarStore.getState().isCollapsed).toBe(false)
   })
 
-  it('Add to Home is 560 × 540 at most, 16px from the sides and 24px from the top and bottom, a sheet under 640px across', () => {
+  it('Add to Home is 560 × 540 at most, 16px from the sides and 24px from the top and bottom, a full sheet under 640px across', () => {
     expect(ADD_TO_HOME_MAX).toEqual({ width: 560, height: 540 })
     expect(ADD_TO_HOME_MARGIN).toEqual({ x: 16, y: 24 })
     expect(ADD_TO_HOME_SHEET_BELOW_PX).toBe(640)
     expect(ADD_TO_HOME_SIZE_CLASS.split(' ')).toEqual([
       `w-[min(${ADD_TO_HOME_MAX.width}px,calc(var(--k2-vw)-${2 * ADD_TO_HOME_MARGIN.x}px))]`,
       `h-[min(${ADD_TO_HOME_MAX.height}px,calc(var(--k2-vh)-${2 * ADD_TO_HOME_MARGIN.y}px))]`,
+      `max-[${ADD_TO_HOME_SHEET_BELOW_PX + 2 * ADD_TO_HOME_MARGIN.x - 1}px]:w-[calc(var(--k2-vw)-${2 * ADD_TO_HOME_MARGIN.x}px)]`,
       `max-[${ADD_TO_HOME_SHEET_BELOW_PX + 2 * ADD_TO_HOME_MARGIN.x - 1}px]:h-[calc(var(--k2-vh)-${2 * ADD_TO_HOME_MARGIN.y}px)]`,
     ])
     render(<Shell />)

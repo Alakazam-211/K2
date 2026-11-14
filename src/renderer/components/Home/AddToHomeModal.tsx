@@ -60,10 +60,10 @@ export const ADD_TO_HOME_SHEET_BELOW_PX = 640
 
 /** Width and height: the most, clamped to the window less the margins;
  *  under `ADD_TO_HOME_SHEET_BELOW_PX` of room across (a window under 672px),
- *  the full height. Literal classes, so Tailwind sees them; a test keeps
+ *  a sheet: the window's full width and height less the margins. Literal classes, so Tailwind sees them; a test keeps
  *  them in step with the numbers above. */
 export const ADD_TO_HOME_SIZE_CLASS =
-  'w-[min(560px,calc(var(--k2-vw)-32px))] h-[min(540px,calc(var(--k2-vh)-48px))] max-[671px]:h-[calc(var(--k2-vh)-48px)]'
+  'w-[min(560px,calc(var(--k2-vw)-32px))] h-[min(540px,calc(var(--k2-vh)-48px))] max-[671px]:w-[calc(var(--k2-vw)-32px)] max-[671px]:h-[calc(var(--k2-vh)-48px)]'
 
 export interface AddToHomeModalProps {
   home: Home

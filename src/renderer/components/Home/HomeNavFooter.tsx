@@ -22,8 +22,10 @@ import { useHomeAddPickerStore } from './home-room'
 export const NAV_PALETTE_PLACEHOLDER = 'Search workspaces…'
 export const NAV_PALETTE_LABEL = 'Search workspaces (⌘K)'
 
-/** The footer field's height: the footer row's (32px), not the standalone 36px. */
-const FIELD_STYLE = { '--control-search-height': '32px', paddingRight: 40 } as React.CSSProperties
+/** The footer field's height: the footer row's (32px), not the standalone
+ *  36px; room on the right for the ⌘K hint, and a placeholder that ends in
+ *  an ellipsis where it doesn't fit. */
+export const NAV_PALETTE_FIELD_STYLE = { '--control-search-height': '32px', paddingRight: 40, textOverflow: 'ellipsis' } as React.CSSProperties
 
 /** Open the palette from `field`, with `text`; when it closes and nothing
  *  else took focus, focus comes back to `field`. */
@@ -57,7 +59,7 @@ export function NavPaletteField({ className }: { className?: string }): React.JS
         spellCheck={false}
         escapeClears={false}
         className="w-full"
-        style={FIELD_STYLE}
+        style={NAV_PALETTE_FIELD_STYLE}
         data-home-palette-input=""
         onChange={(e) => {
           const text = e.target.value

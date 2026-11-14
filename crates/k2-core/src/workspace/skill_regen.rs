@@ -2205,7 +2205,7 @@ mod tests {
             "k2-cli skill must not teach a thrd alias"
         );
         assert!(
-            !body.contains("k2 msg"),
+            !body.contains("k2so msg"),
             "k2-cli skill must not use the legacy `k2so` CLI prefix",
         );
         // W1 (0.40.30): the API read-back contract is part of the k2 CLI

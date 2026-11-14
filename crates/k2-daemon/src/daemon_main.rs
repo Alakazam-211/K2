@@ -1717,6 +1717,9 @@ async fn async_main() {
 
     boot_status::set_ready();
     boot_clock.ready();
+    if let Err(e) = crate::rt::spawn("boot-after-ready", after_ready_workspace_pass) {
+        log_debug!("[daemon] the after-ready workspace pass did not start: {e}");
+    }
     log_debug!("[daemon] boot complete — phase=ready");
     // 0.46.9: Thread and project chat deliveries a restart left queued go
     // back on their agents' lanes (the journal, migration 0267). After
@@ -2527,38 +2530,32 @@ async fn run_heartbeat_port_watchdog(
 fn run_workspace_unification_sweep() {
     use k2_core::migrations::unification_0_37_0 as unification;
 
-    let projects = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match k2_core::db::schema::Project::list(&conn) {
-            Ok(rows) => rows,
-            Err(e) => {
-                log_debug!("[daemon/unification] WARN: list projects: {e}");
-                return;
-            }
-        }
-    };
-
+    let Some(plan) = sweep_plan(SWEEP_UNIFICATION, "1".into(), "daemon/unification") else { return };
+    let projects = &plan.owed;
     if projects.is_empty() {
         return;
     }
 
     let total = projects.len();
+    let mut swept: Vec<String> = Vec::new();
     let mut migrated = 0usize;
     let mut already_done = 0usize;
     let mut errors = 0usize;
-    for project in &projects {
+    for project in projects {
         if !std::path::Path::new(&project.path).exists() {
             // Workspace path no longer on disk (deleted folder, ejected
-            // drive). Don't fail the sweep on this.
+            // drive). Don't fail the sweep on this; it is owed next boot.
             continue;
         }
+        note_sweep_pass();
         match unification::run_unification(&project.path, &project.agent_mode) {
             Ok(outcome) if outcome.already_done => {
                 already_done += 1;
+                swept.push(project.path.clone());
             }
             Ok(outcome) => {
                 migrated += 1;
+                swept.push(project.path.clone());
                 log_debug!(
                     "[daemon/unification] migrated {} ({}): primary={:?} templates={} archived={} merged={} conflicts={}",
                     project.name,
@@ -2603,7 +2600,8 @@ fn run_workspace_unification_sweep() {
     // point at .k2so/heartbeats/, so any file at the agent-relative
     // path is "orphaned" — the runtime can't find it on a fire.
     // Sweep moves them into place once at boot.
-    migrate_orphaned_agent_heartbeats();
+    migrate_orphaned_agent_heartbeats(projects);
+    plan.done(&swept);
 
     // (Pre-0.39.0d: `archive_legacy_unification_dirs()` ran here to
     // sweep pre-0.37.0 `.k2so/agents/` + `.k2so/agent/heartbeats/`
@@ -2806,23 +2804,12 @@ fn run_enable_fanout_for_enabled_agents_migration() {
 /// safe to run every boot and also converts any `.k2so/` workspace a user
 /// clones/adds after this release.
 fn run_migrate_k2so_dot_dirs() {
-    let project_paths: Vec<String> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match k2_core::db::schema::Project::list(&conn) {
-            Ok(rows) => rows.into_iter().map(|p| p.path).collect(),
-            Err(e) => {
-                log_debug!(
-                    "[daemon/dotdir] WARN: list projects: {e}; skipping .k2so->.k2 cutover"
-                );
-                return;
-            }
-        }
-    };
+    let Some(plan) = sweep_plan(SWEEP_DOT_DIR, "1".into(), "daemon/dotdir") else { return };
+    let project_paths: Vec<String> = plan.owed.iter().map(|p| p.path.clone()).collect();
+    let mut swept: Vec<String> = Vec::new();
 
     let mut renamed = 0usize;
     let mut symlinks = 0usize;
-    let mut temps_swept = 0usize;
     for path in &project_paths {
         let root = std::path::Path::new(path);
         // Skip the daemon's RELATIVE pseudo-projects (`_broadcast`,
@@ -2831,8 +2818,11 @@ fn run_migrate_k2so_dot_dirs() {
         if !root.is_absolute() || !root.exists() {
             continue;
         }
+        note_sweep_pass();
         let outcome =
             k2_core::workspace::dot_dir_migration::migrate_workspace_dot_dir(root);
+        // A `.k2so` + `.k2` conflict is left for the owner; it is owed again.
+        let conflict = outcome.skipped.as_deref().is_some_and(|r| r.starts_with("both"));
         if outcome.renamed {
             renamed += 1;
             symlinks += outcome.symlinks_repointed;
@@ -2848,23 +2838,18 @@ fn run_migrate_k2so_dot_dirs() {
                 log_debug!("[daemon/dotdir] WARN: {} : {}", path, reason);
             }
         }
-        // Tempfile hygiene runs for EVERY workspace every boot (idempotent),
-        // not just freshly-renamed ones: reap atomic-write tempfiles a prior
-        // hard-kill orphaned under `.k2/`. Git-ignore state is intentionally
-        // left to the behavior-preserving twin (`rewrite_gitignore_dot_dir`) —
-        // `.k2/` is ignored only where `.k2so/` already was.
-        temps_swept +=
-            k2_core::workspace::dot_dir_migration::ensure_dot_dir_hygiene(root);
+        if !conflict {
+            swept.push(path.clone());
+        }
+        // Tempfile hygiene (reap atomic-write tempfiles a hard kill left
+        // under `.k2/`) still runs for every workspace every boot, after
+        // ready: `after_ready_workspace_pass`.
     }
+    plan.done(&swept);
     if renamed > 0 {
         log_debug!(
             "[daemon/dotdir] 0.40.4 cutover: renamed {renamed} workspace(s) \
              .k2so -> .k2 ({symlinks} symlink(s) re-pointed)"
-        );
-    }
-    if temps_swept > 0 {
-        log_debug!(
-            "[daemon/dotdir] hygiene: swept {temps_swept} orphaned tempfile(s)"
         );
     }
 }
@@ -2878,22 +2863,18 @@ fn run_migrate_legacy_slug_dirs() {
         }
     };
 
-    let project_paths: Vec<String> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match k2_core::db::schema::Project::list(&conn) {
-            Ok(rows) => rows.into_iter().map(|p| p.path).collect(),
-            Err(e) => {
-                log_debug!("[daemon/gh25] WARN: list projects: {e}; skipping legacy-slug migration");
-                return;
-            }
-        }
-    };
+    let Some(plan) = sweep_plan(SWEEP_LEGACY_SLUG, "1".into(), "daemon/gh25") else { return };
+    // Real workspaces only: the audit sentinels (`_orphan`, `_broadcast`) have
+    // a bare token for a path.
+    let project_paths: Vec<String> =
+        plan.owed.iter().map(|p| p.path.clone()).filter(|p| std::path::Path::new(p).is_absolute()).collect();
     if project_paths.is_empty() {
         return;
     }
+    project_paths.iter().for_each(|_| note_sweep_pass());
 
     let report = k2_core::clone::migrate_legacy_slug_dirs(&home, &project_paths);
+    plan.done(&project_paths);
     if report.migrated.is_empty() {
         return;
     }
@@ -2940,22 +2921,16 @@ fn run_repair_cloned_session_paths() {
         }
     };
 
-    let project_paths: Vec<String> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match k2_core::db::schema::Project::list(&conn) {
-            Ok(rows) => rows.into_iter().map(|p| p.path).collect(),
-            Err(e) => {
-                log_debug!("[daemon/gh23] WARN: list projects: {e}; skipping repair");
-                return;
-            }
-        }
-    };
+    let Some(plan) = sweep_plan(SWEEP_CLONE_PATHS, "1".into(), "daemon/gh23") else { return };
+    let project_paths: Vec<String> =
+        plan.owed.iter().map(|p| p.path.clone()).filter(|p| std::path::Path::new(p).is_absolute()).collect();
     if project_paths.is_empty() {
         return;
     }
+    project_paths.iter().for_each(|_| note_sweep_pass());
 
     let report = k2_core::clone::repair_cloned_session_paths(&home, &project_paths);
+    plan.done(&project_paths);
     if report.repaired.is_empty() {
         return;
     }
@@ -3096,28 +3071,19 @@ fn run_workspace_legacy_migrations_sweep() {
     // point under short aliases that mirror the pre-split call sites
     // below. (Renamed from skill_writer in 0.39.0.)
     use k2_core::workspace::migrations as workspace;
-    use k2_core::workspace::skill_regen::ensure_all_skills_up_to_date;
-
-    let projects = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match k2_core::db::schema::Project::list(&conn) {
-            Ok(rows) => rows,
-            Err(e) => {
-                log_debug!("[daemon/migrations] WARN: list projects: {e}");
-                return;
-            }
-        }
-    };
-
+    // The template upgrade and the charter check follow K2's own version, so
+    // a K2 update sweeps every workspace again.
+    let version = format!("1+{}", env!("CARGO_PKG_VERSION"));
+    let Some(plan) = sweep_plan(SWEEP_WORKSPACE_LEGACY, version, "daemon/migrations") else { return };
+    let projects = &plan.owed;
     if projects.is_empty() {
         return;
     }
-
     let total = projects.len();
+    let mut swept: Vec<String> = Vec::new();
     let mut work_to_inbox_runs = 0usize;
     let mut skills_consolidation_runs = 0usize;
-    for project in &projects {
+    for project in projects {
         // Skip the audit-bucket sentinel rows seeded by
         // `db::seed_audit_sentinels`. Their "path" is a bare token,
         // not a real filesystem path; the migration helpers would
@@ -3130,6 +3096,8 @@ fn run_workspace_legacy_migrations_sweep() {
         if !project_path.exists() {
             continue;
         }
+        note_sweep_pass();
+        swept.push(project.path.clone());
 
         workspace::migrate_filenames_to_uppercase(&project.path);
         workspace::detect_interrupted_regen(&project.path);
@@ -3175,7 +3143,8 @@ fn run_workspace_legacy_migrations_sweep() {
             Ok(_) => {}
             Err(e) => log_debug!("[daemon/migrations] agent template upgrade on {}: {}", project.path, e),
         }
-        ensure_all_skills_up_to_date(&project.path);
+        // `ensure_all_skills_up_to_date` runs after ready, for every
+        // workspace: `after_ready_workspace_pass`.
         // GH #40: say so loudly when the regen above could not leave the
         // agent a readable charter (foreign dangling link, write failure).
         for p in k2_core::workspace::onboarding::root_charter_problems(&project.path) {
@@ -3238,8 +3207,106 @@ fn run_workspace_legacy_migrations_sweep() {
             }
         }
     }
+    plan.done(&swept);
     log_debug!(
         "[daemon/migrations] swept {total} workspace(s) for legacy heartbeat + SKILL migrations; work→inbox ran on {work_to_inbox_runs}; skills-consolidation ran on {skills_consolidation_runs}"
+    );
+}
+
+// ── Boot sweep marks (speed pass P7) ────────────────────────────────
+
+const SWEEP_UNIFICATION: &str = "unification";
+const SWEEP_DOT_DIR: &str = "k2so-dot-dir";
+const SWEEP_LEGACY_SLUG: &str = "legacy-slug-dirs";
+const SWEEP_CLONE_PATHS: &str = "clone-session-paths";
+const SWEEP_WORKSPACE_LEGACY: &str = "workspace-legacy";
+
+/// A boot sweep's work for this boot: the registered workspaces it has not
+/// covered at its version ([`k2_core::boot_sweeps`]).
+struct SweepPlan {
+    sweep: &'static str,
+    version: String,
+    registered: Vec<String>,
+    owed: Vec<k2_core::db::schema::Project>,
+}
+
+impl SweepPlan {
+    /// Record the paths this boot covered.
+    fn done(&self, swept: &[String]) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = k2_core::boot_sweeps::record(&conn, self.sweep, &self.version, swept, &self.registered) {
+            log_debug!("[daemon/boot-sweep] WARN: {}: recording what was swept: {e}", self.sweep);
+        }
+    }
+}
+
+fn sweep_plan(sweep: &'static str, version: String, tag: &str) -> Option<SweepPlan> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let projects = match k2_core::db::schema::Project::list(&conn) {
+        Ok(rows) => rows,
+        Err(e) => {
+            log_debug!("[{tag}] WARN: list projects: {e}");
+            return None;
+        }
+    };
+    let registered: Vec<String> = projects.iter().map(|p| p.path.clone()).collect();
+    let owed: std::collections::HashSet<String> =
+        k2_core::boot_sweeps::pending(&conn, sweep, &version, &registered).into_iter().collect();
+    // The audit sentinels (`_orphan`, `_broadcast`) are never swept, so they
+    // are never owed either.
+    let owed = projects
+        .into_iter()
+        .filter(|p| owed.contains(&p.path) && !k2_core::db::AUDIT_SENTINEL_IDS.contains(&p.id.as_str()))
+        .collect();
+    Some(SweepPlan { sweep, version, registered, owed })
+}
+
+thread_local! {
+    /// Workspaces the boot sweeps on this thread worked on (tests count them).
+    static SWEEP_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn note_sweep_pass() {
+    SWEEP_PASSES.with(|c| c.set(c.get() + 1));
+}
+
+/// Per-workspace boot sweep passes on this thread so far.
+pub fn boot_sweep_passes() -> usize {
+    SWEEP_PASSES.with(|c| c.get())
+}
+
+/// After ready, for every workspace on every boot: refresh its SKILL.md and
+/// reap atomic-write tempfiles a hard kill left under `.k2/`. Both ran in the
+/// boot sweeps before ready; neither is something a route waits for.
+pub fn after_ready_workspace_pass() {
+    let paths: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::db::schema::Project::list(&conn) {
+            Ok(rows) => rows.into_iter().map(|p| p.path).collect(),
+            Err(e) => {
+                log_debug!("[daemon/after-ready] WARN: list projects: {e}");
+                return;
+            }
+        }
+    };
+    let t0 = Instant::now();
+    let mut temps_swept = 0usize;
+    let mut refreshed = 0usize;
+    for path in &paths {
+        let root = std::path::Path::new(path);
+        if !root.is_absolute() || !root.exists() {
+            continue;
+        }
+        temps_swept += k2_core::workspace::dot_dir_migration::ensure_dot_dir_hygiene(root);
+        k2_core::workspace::skill_regen::ensure_all_skills_up_to_date(path);
+        refreshed += 1;
+    }
+    log_debug!(
+        "[daemon/after-ready] refreshed skills on {refreshed} workspace(s), swept {temps_swept} orphaned tempfile(s) in {}ms",
+        t0.elapsed().as_millis()
     );
 }
 
@@ -3255,18 +3322,9 @@ fn run_workspace_legacy_migrations_sweep() {
 /// orphan dir is preserved as `<name>.orphaned` (renamed aside, never
 /// deleted; diverging contents log a loud warning). Already-archived
 /// `*.orphaned` dirs are skipped so re-boots are no-ops.
-fn migrate_orphaned_agent_heartbeats() {
-    let projects = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match k2_core::db::schema::Project::list(&conn) {
-            Ok(rows) => rows,
-            Err(_) => return,
-        }
-    };
-
+fn migrate_orphaned_agent_heartbeats(projects: &[k2_core::db::schema::Project]) {
     let mut moved = 0usize;
-    for project in &projects {
+    for project in projects {
         if !std::path::Path::new(&project.path).exists() {
             continue;
         }
@@ -3395,6 +3453,10 @@ fn generate_token() -> String {
 // Inline unit tests — boot-only helpers
 // ─────────────────────────────────────────────────────────────────────
 //
+#[cfg(test)]
+#[path = "daemon_main_sweep_tests.rs"]
+mod sweep_tests;
+
 // All HTTP/dispatch tests now live alongside their code (token_ok,
 // project_param, parse_params under `routes::http::tests`;
 // dispatch_unit6_post under `routes::dispatcher::tests`). What's left

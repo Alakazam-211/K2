@@ -42,6 +42,7 @@ pub fn log_timestamp() -> String {
 
 // Pause and log rate for accept loops out of descriptors or memory.
 pub mod accept_backoff;
+pub mod boot_sweeps;
 pub mod active;
 // S17: agent sessions in their own memory budget inside the daemon's unit.
 pub mod agents_leaf;

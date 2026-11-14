@@ -293,9 +293,6 @@ fn sew_down(hint: &str) -> Out {
     Out::Refuse(Refusal::new(503, "voice_unavailable", hint).retry(RETRY_SECS))
 }
 
-async fn next_frame(ws: &mut WebSocketStream<TcpStream>) -> Option<Value> {
-    gateway::next_frame(ws).await
-}
 
 async fn open_upstream(ctx: &KitCtx, p: &KitPerson, sew_addr: &str) -> Result<Upstream, Out> {
     // K2's own ticket: safe to ask again on a fresh session after a 401.

@@ -196,6 +196,7 @@ pub fn by_area() -> BTreeMap<&'static str, Vec<&'static Refusal>> {
 /// The areas, in the order `k2 explain` lists them.
 pub const AREAS: &[(&str, &str)] = &[
     ("deploy", "validate, build, deploy, rollback"),
+    ("catalog", "suite Apps from K2's catalog: k2 app catalog, install --catalog"),
     ("runtime", "the App engine, the box, health"),
     ("access", "who may do what: switches, owners, workspaces"),
     ("approvals", "held requests the owner answers"),

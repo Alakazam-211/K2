@@ -51,6 +51,15 @@ pub(super) const ROWS: &[Refusal] = &[
         "Build one and use the hash it prints: k2 app build <folder>"),
     r("uninstall_drops_access", "deploy", 409, Who::Agent, "Uninstalling the App would drop who may use it (logins, roles, chat, shared secrets); a reinstall is a new App and gets none of it back. The refusal lists what.",
         "To add a public URL, don't reinstall: k2 app expose <app-id> --tunnel. To uninstall anyway: k2 app uninstall <app-id> --drop-access"),
+    // ── catalog (k2 app catalog, k2 app install --catalog) ──
+    r("custom_domain_later", "catalog", 400, Who::Agent, "A catalog App can't take your own domain at install yet: it deploys on a K2 address first.",
+        "Install it without the domain, then add yours: k2 app domain add <app-id> <host>"),
+    r("job_corrupt", "catalog", 500, Who::K2, "An install job's stored record can't be read (its pin, or something a step needs, is missing), so K2 can't go on with it.",
+        "Start the install again: k2 app install --catalog <entry>. If it happens again, report it."),
+    r("job_not_found", "catalog", 404, Who::Agent, "No install job by that id, or none your workspace can see.",
+        "List the install jobs you can see: k2 app catalog job"),
+    r("not_retryable", "catalog", 409, Who::Agent, "Only a failed job whose step can be tried again (the refusal names those steps) takes a retry; this one is still running, done, or failed another way.",
+        "See the job and its fix: k2 app catalog job <job-id>. If it failed for good, start a new install: k2 app install --catalog <entry>"),
     // ── runtime ──
     // `k2 app config --db-raw on`, a database grant or a DATABASE_URL for a
     // container App (apps::reach): no approval or re-host opens the door.

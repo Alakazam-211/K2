@@ -79,6 +79,19 @@ DEPLOY (validate, build, deploy, rollback)
       fix: To add a public URL, don't reinstall: k2 app expose <app-id>
       --tunnel. To uninstall anyway: k2 app uninstall <app-id> --drop-access
 
+CATALOG (suite Apps from K2's catalog: k2 app catalog, install --catalog)
+  custom_domain_later (exit 2)
+      fix: Install it without the domain, then add yours: k2 app domain add
+      <app-id> <host>
+  job_corrupt (exit 3)
+      fix: Start the install again: k2 app install --catalog <entry>. If it
+      happens again, report it.
+  job_not_found (exit 3)
+      fix: List the install jobs you can see: k2 app catalog job
+  not_retryable (exit 3)
+      fix: See the job and its fix: k2 app catalog job <job-id>. If it
+      failed for good, start a new install: k2 app install --catalog <entry>
+
 RUNTIME (the App engine, the box, health)
   app_db_door_missing (exit 3)
       fix: The owner updates the engine (k2 app engine install), then

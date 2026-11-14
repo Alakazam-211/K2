@@ -29,8 +29,10 @@
 //!   sent and refused and cancelled delete the picture from the box, a
 //!   failed attempt keeps it and Retry resends the same bytes.
 //! - rows that failed because the service couldn't be reached go again by
-//!   themselves once it answers (the oldest is the probe), oldest first;
-//!   a person's switch or a row older than 90 days stays failed.
+//!   themselves once it answers: the intake's `GET /health` says `open`
+//!   (no answer or `paused` change nothing; at most once an hour; never
+//!   under air-gap or with sending off), or it answers a send; oldest
+//!   first; a person's switch or a row older than 90 days stays failed.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -992,11 +994,36 @@ fn fail_row(id: &str, days_ago: i64, error: &str) {
     assert_eq!(n, 1, "{id} exists");
 }
 
+const HEALTH_OPEN: &str = r#"{"db":true,"intake":"open","ok":true}"#;
+const HEALTH_PAUSED: &str = r#"{"db":true,"intake":"paused","ok":true}"#;
+
+/// An intake whose `/health` answers `health` and whose submissions answer
+/// `submit`.
+fn intake_answers(
+    health: (u16, &'static str),
+    submit: impl Fn(&Req) -> (u16, String) + Send + 'static,
+) -> impl Fn(&Req) -> (u16, String) + Send + 'static {
+    move |r: &Req| if r.path == "/health" { (health.0, health.1.to_string()) } else { submit(r) }
+}
+
+fn health_checks(intake: &Fake) -> usize {
+    intake.requests().iter().filter(|r| r.method == "GET" && r.path == "/health").count()
+}
+
+fn submissions(intake: &Fake) -> Vec<String> {
+    intake
+        .requests()
+        .iter()
+        .filter(|r| r.path == "/v1/submissions")
+        .map(|r| r.header("Idempotency-Key").expect("key").to_string())
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_rows_go_again_by_themselves_once_the_service_answers() {
     let e = setup(true);
     let port = e.port;
-    // A probe only goes while nothing else is queued.
+    // The health check is only asked while nothing else is queued.
     empty_outbox();
 
     // Five rows saved while the service wasn't there.
@@ -1016,27 +1043,40 @@ async fn failed_rows_go_again_by_themselves_once_the_service_answers() {
     fail_row(&third, 10, "intake_paused: maintenance");
     fail_row(&off, 15, "disabled: Sending feedback to K2 is turned off on this server");
     fail_row(&old, 91, "service_unreachable: connection refused");
+    let sent_before = submissions(&e.intake).len();
 
-    // Still unreachable: the oldest one goes as a probe and stays failed.
+    // No answer from /health: nothing changes, and no row is used to ask.
     drain::reset_for_tests();
-    let n = e.intake.requests().len();
-    assert_eq!(drain_now(), Pass::Ran { sent: 0, refused: 0, retried: 1 });
-    let probes = e.intake.requests();
-    assert_eq!(probes.len(), n + 1, "one probe");
-    assert_eq!(probes.last().unwrap().header("Idempotency-Key"), Some(oldest.as_str()), "the oldest goes first");
+    assert_eq!(drain_now(), Pass::Probed { health: "down", requeued: 0 });
+    assert_eq!(health_checks(&e.intake), 1, "one GET /health");
+    assert_eq!(submissions(&e.intake).len(), sent_before, "no row sent to ask");
     for id in [&oldest, &second, &third, &off, &old] {
+        let it = show(port, OWNER, id);
+        assert_eq!((it["state"].clone(), it["attempts"].clone()), (json!("failed"), json!(40)), "{id}: {it}");
+    }
+    // At most once an hour.
+    assert_eq!(drain_now(), Pass::BackingOff, "no second health check at once");
+    assert_eq!(health_checks(&e.intake), 1);
+
+    // Up but paused: hold off, nothing queued again.
+    e.intake.set(intake_answers((200, HEALTH_PAUSED), |_| (502, "bad gateway".into())));
+    drain::reset_for_tests();
+    assert_eq!(drain_now(), Pass::Probed { health: "paused", requeued: 0 });
+    assert_eq!(health_checks(&e.intake), 2);
+    for id in [&oldest, &second, &third] {
         assert_eq!(show(port, OWNER, id)["state"], json!("failed"), "{id}");
     }
-    // The probe waits before it goes again.
-    assert_eq!(drain_now(), Pass::BackingOff, "no second probe at once");
+    let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", OWNER), None);
+    assert_eq!(v["service"]["state"], json!("paused"), "{v}");
+    assert_eq!(drain_now(), Pass::BackingOff, "paused keeps the hourly cadence");
 
-    // The service answers: the probe is sent, and the rest that failed for
-    // the service being unreachable are queued again with a fresh window.
-    e.intake.set(intake_created);
+    // Open: the rows that failed because the service couldn't be reached are
+    // queued again with a fresh window; the health check itself sends nothing.
+    e.intake.set(intake_answers((200, HEALTH_OPEN), intake_created));
     drain::reset_for_tests();
-    assert_eq!(drain_now(), Pass::Ran { sent: 1, refused: 0, retried: 0 });
-    assert_eq!(show(port, OWNER, &oldest)["state"], json!("sent"));
-    for id in [&second, &third] {
+    assert_eq!(drain_now(), Pass::Probed { health: "open", requeued: 3 });
+    assert_eq!(submissions(&e.intake).len(), sent_before, "the health check sends no row");
+    for id in [&oldest, &second, &third] {
         let it = show(port, OWNER, id);
         assert_eq!((it["state"].clone(), it["attempts"].clone()), (json!("queued"), json!(0)), "{id}: {it}");
     }
@@ -1044,18 +1084,60 @@ async fn failed_rows_go_again_by_themselves_once_the_service_answers() {
     assert_eq!(show(port, OWNER, &old)["state"], json!("failed"), "older than 90 days");
 
     // They go through the normal drain, oldest first.
-    let n = e.intake.requests().len();
-    assert_eq!(drain_now(), Pass::Ran { sent: 2, refused: 0, retried: 0 });
-    let keys: Vec<String> = e.intake.requests()[n..].iter().map(|r| r.header("Idempotency-Key").unwrap().to_string()).collect();
-    assert_eq!(keys, vec![second.clone(), third.clone()]);
-    for id in [&second, &third] {
+    assert_eq!(drain_now(), Pass::Ran { sent: 3, refused: 0, retried: 0 });
+    assert_eq!(submissions(&e.intake)[sent_before..].to_vec(), vec![oldest.clone(), second.clone(), third.clone()]);
+    for id in [&oldest, &second, &third] {
         assert_eq!(show(port, OWNER, id)["state"], json!("sent"), "{id}");
     }
-    assert_eq!(drain_now(), Pass::Empty, "nothing else goes by itself");
-    assert_eq!(show(port, OWNER, &off)["state"], json!("failed"));
+    let checks = health_checks(&e.intake);
+    drain::reset_for_tests();
+    assert_eq!(drain_now(), Pass::Empty, "nothing left that goes by itself: no health check");
+    assert_eq!(health_checks(&e.intake), checks);
+    assert_eq!(show(port, OWNER, &off)["attempts"], json!(40));
 
     // Retry by hand still works for the rest.
     let (s, v) = call(port, "POST", &q("/cli/product-feedback/retry", OWNER), Some(json!({"id": off})));
     assert_eq!((s, v["state"].clone()), (200, json!("queued")), "{v}");
     wait_row(port, OWNER, &off, "sent after retry", |it| it["state"] == json!("sent"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_real_answer_to_a_send_also_requeues_and_air_gap_or_off_asks_nothing() {
+    let e = setup(true);
+    let port = e.port;
+    empty_outbox();
+
+    e.intake.set(|_| (502, "bad gateway".into()));
+    let (_, v) = send(port, OWNER, json!({"text": "stranded"}));
+    let stranded = v["id"].as_str().unwrap().to_string();
+    wait_row(port, OWNER, &stranded, "tried once", |it| it["error"] == json!("service_unreachable"));
+    fail_row(&stranded, 12, "service_unreachable: connection refused");
+
+    // Air-gap: no health check at all.
+    e.intake.set(intake_answers((200, HEALTH_OPEN), intake_created));
+    drain::reset_for_tests();
+    {
+        let _airgap = EnvVar::set("K2_AIRGAP", "1");
+        assert_eq!(drain_now(), Pass::Held("airgap"));
+    }
+    // Sending turned off: none either.
+    let (s, _) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"enabled": false})));
+    assert_eq!(s, 200);
+    assert_eq!(drain_now(), Pass::Held("disabled"));
+    assert_eq!(health_checks(&e.intake), 0, "nothing asked while held");
+    assert_eq!(show(port, OWNER, &stranded)["state"], json!("failed"));
+    let (s, _) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"enabled": true})));
+    assert_eq!(s, 200);
+
+    // A new send the intake takes: the stranded row is queued again too,
+    // without a health check.
+    let (s, v) = send(port, OWNER, json!({"text": "fresh"}));
+    assert_eq!(s, 200, "{v}");
+    let fresh = v["id"].as_str().unwrap().to_string();
+    wait_row(port, OWNER, &fresh, "sent", |it| it["state"] == json!("sent"));
+    let it = wait_row(port, OWNER, &stranded, "queued again", |it| it["state"] != json!("failed"));
+    assert_eq!(it["attempts"], json!(0), "a fresh window: {it}");
+    assert_eq!(health_checks(&e.intake), 0);
+    assert_eq!(drain_now(), Pass::Ran { sent: 1, refused: 0, retried: 0 });
+    assert_eq!(show(port, OWNER, &stranded)["state"], json!("sent"));
 }

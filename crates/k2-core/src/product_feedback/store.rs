@@ -456,6 +456,12 @@ pub fn requeue_unreachable_failed(conn: &Connection, now: i64) -> rusqlite::Resu
     })
 }
 
+/// Whether any `failed` row would go again by itself: only then is the
+/// intake's health check worth asking.
+pub fn has_resendable_failed(_conn: &Connection, _now: i64) -> rusqlite::Result<bool> {
+    Ok(false)
+}
+
 /// The oldest `failed` row that would go again by itself: the drain sends
 /// it to learn whether the service answers yet.
 pub fn probe_candidate(conn: &Connection, now: i64) -> rusqlite::Result<Option<Row>> {
@@ -844,11 +850,7 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(
-            probe_candidate(&c, now).unwrap().map(|r| r.id),
-            Some("pf_r0".to_string()),
-            "the oldest one is the probe"
-        );
+        assert!(has_resendable_failed(&c, now).unwrap(), "the health check is worth asking");
         let ids = requeue_unreachable_failed(&c, now).unwrap();
         assert_eq!(ids, ["pf_r0", "pf_r1", "pf_r2", "pf_r3"].map(String::from).to_vec());
         for id in &ids {
@@ -863,7 +865,7 @@ mod tests {
         let due_ids: Vec<String> = due(&c, now, 10).unwrap().into_iter().map(|r| r.id).collect();
         assert_eq!(due_ids, ids, "and they go oldest first");
         assert!(requeue_unreachable_failed(&c, now).unwrap().is_empty(), "once");
-        assert_eq!(probe_candidate(&c, now).unwrap(), None);
+        assert!(!has_resendable_failed(&c, now).unwrap());
     }
 
     #[test]
@@ -879,7 +881,7 @@ mod tests {
         assert!(mark_refused(&c, "pf_k6", "bad_category: no", now - 1).unwrap());
         insert(&c, &new("pf_k7", "owner", "person"), now - 86_400_000).unwrap();
         assert!(cancel(&c, "pf_k7", now - 1).unwrap());
-        assert_eq!(probe_candidate(&c, now).unwrap(), None);
+        assert!(!has_resendable_failed(&c, now).unwrap(), "no health check for these");
         assert!(requeue_unreachable_failed(&c, now).unwrap().is_empty());
         for id in ["pf_k1", "pf_k2", "pf_k3", "pf_k4", "pf_k5"] {
             assert_eq!(get(&c, id).unwrap().unwrap().state, State::Failed, "{id}");
@@ -897,30 +899,10 @@ mod tests {
         let now = 400 * 86_400_000;
         failed_row(&c, "pf_old", now - RESEND_MAX_AGE_MS - 1, "service_unreachable: timeout");
         failed_row(&c, "pf_edge", now - RESEND_MAX_AGE_MS, "service_unreachable: timeout");
-        assert_eq!(probe_candidate(&c, now).unwrap().map(|r| r.id), Some("pf_edge".to_string()));
+        assert!(has_resendable_failed(&c, now).unwrap());
         assert_eq!(requeue_unreachable_failed(&c, now).unwrap(), vec!["pf_edge".to_string()]);
         assert_eq!(get(&c, "pf_old").unwrap().unwrap().state, State::Failed);
-    }
-
-    #[test]
-    fn a_probe_goes_from_failed_and_comes_back_failed_as_it_was() {
-        let c = db();
-        let now = 200 * 86_400_000;
-        failed_row(&c, "pf_p1", now - 86_400_000, "service_unreachable: timeout");
-        let before = get(&c, "pf_p1").unwrap().unwrap();
-        assert!(!mark_probe_failed(&c, "pf_p1").unwrap(), "only from sending");
-        assert!(mark_probe_sending(&c, "pf_p1").unwrap());
-        assert!(!mark_probe_sending(&c, "pf_p1").unwrap(), "only from failed");
-        assert_eq!(get(&c, "pf_p1").unwrap().unwrap().state, State::Sending);
-        assert!(mark_probe_failed(&c, "pf_p1").unwrap());
-        assert_eq!(get(&c, "pf_p1").unwrap().unwrap(), before, "nothing else changed: the prune still counts from the failure");
-        // A queued row is never a probe.
-        insert(&c, &new("pf_p2", "owner", "person"), now).unwrap();
-        assert!(!mark_probe_sending(&c, "pf_p2").unwrap());
-        // An answered probe is sent from sending, as any row is.
-        assert!(mark_probe_sending(&c, "pf_p1").unwrap());
-        assert!(mark_sent(&c, "pf_p1", "remote-p1", now).unwrap());
-        assert_eq!(get(&c, "pf_p1").unwrap().unwrap().state, State::Sent);
+        assert!(!has_resendable_failed(&c, now).unwrap(), "the old one alone asks nothing");
     }
 
     #[test]

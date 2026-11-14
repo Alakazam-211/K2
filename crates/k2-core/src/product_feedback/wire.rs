@@ -49,6 +49,40 @@ pub const E_RATE_LIMITED: &str = "rate_limited";
 pub const E_PAUSED: &str = "intake_paused";
 pub const E_TOKEN: &str = "token_rejected";
 
+/// The intake's health check: `GET <intake>/health`, no auth.
+pub const HEALTH_PATH: &str = "/health";
+
+/// What the health check said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Health {
+    /// `200` with `intake: "open"`: submissions are taken.
+    Open,
+    /// `200` with `intake: "paused"`: up, but not taking submissions.
+    Paused,
+    /// No answer, another status, or a body that isn't the health answer.
+    Down(String),
+}
+
+impl Health {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Health::Open => "open",
+            Health::Paused => "paused",
+            Health::Down(_) => "down",
+        }
+    }
+}
+
+/// Read a health answer. Pure.
+pub fn classify_health(_status: u16, _body: &str) -> Health {
+    Health::Down(String::new())
+}
+
+/// Ask the intake at `endpoint` whether it takes submissions.
+pub fn get_health(_endpoint: &str) -> Health {
+    Health::Down(String::new())
+}
+
 /// A row's picture as it goes out: the stored bytes and the meta.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screenshot {
@@ -472,6 +506,47 @@ mod tests {
         assert!(matches!(classify(400, r#"{"code":"bad_category"}"#, None), Outcome::Refused { ref code, .. } if code == "bad_category"));
         assert!(matches!(classify(403, r#"{"code":"box_blocked"}"#, None), Outcome::Refused { ref code, .. } if code == "box_blocked"));
         assert!(matches!(classify(413, "", None), Outcome::Refused { ref code, .. } if code == "http_413"));
+    }
+
+    #[test]
+    fn health_answers() {
+        assert_eq!(classify_health(200, r#"{"db":true,"intake":"open","ok":true}"#), Health::Open);
+        assert_eq!(classify_health(200, r#"{"db":true,"intake":"paused","ok":true}"#), Health::Paused);
+        for (s, b) in [
+            (200, "<html>portal</html>"),
+            (200, r#"{"ok":true}"#),
+            (200, r#"{"intake":"closed"}"#),
+            (404, "not found"),
+            (502, r#"{"intake":"open"}"#),
+            (503, r#"{"intake":"paused"}"#),
+        ] {
+            assert!(matches!(classify_health(s, b), Health::Down(ref d) if !d.is_empty()), "{s} {b}");
+        }
+        assert_eq!(Health::Open.label(), "open");
+        assert_eq!(Health::Paused.label(), "paused");
+        assert_eq!(Health::Down("x".into()).label(), "down");
+    }
+
+    #[test]
+    fn health_is_asked_at_the_configured_intake_with_a_get_and_no_auth() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = s.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let body = r#"{"db":true,"intake":"open","ok":true}"#;
+            write!(s, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            req
+        });
+        assert_eq!(get_health(&format!("http://127.0.0.1:{port}/")), Health::Open);
+        let req = seen.join().unwrap();
+        assert!(req.starts_with("GET /health HTTP/1.1\r\n"), "{req}");
+        assert!(!req.to_ascii_lowercase().contains("authorization:"), "no auth: {req}");
+        // Nobody listening any more: down, with a reason.
+        assert!(matches!(get_health(&format!("http://127.0.0.1:{port}")), Health::Down(ref d) if !d.is_empty()));
     }
 
     #[test]

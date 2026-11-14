@@ -236,6 +236,10 @@ pub enum Pass {
     Held(&'static str),
     BackingOff,
     Ran { sent: usize, refused: usize, retried: usize },
+    /// Nothing waited to go; the intake's health check said `health`
+    /// (`open`, `paused`, `down`) and `requeued` failed rows went back in
+    /// the queue.
+    Probed { health: &'static str, requeued: usize },
 }
 
 /// A new row: drain now, off the caller's thread, past the exponential

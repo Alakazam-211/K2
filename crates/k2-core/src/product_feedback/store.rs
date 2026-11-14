@@ -458,25 +458,8 @@ pub fn requeue_unreachable_failed(conn: &Connection, now: i64) -> rusqlite::Resu
 
 /// Whether any `failed` row would go again by itself: only then is the
 /// intake's health check worth asking.
-pub fn has_resendable_failed(_conn: &Connection, _now: i64) -> rusqlite::Result<bool> {
-    Ok(false)
-}
-
-/// The oldest `failed` row that would go again by itself: the drain sends
-/// it to learn whether the service answers yet.
-pub fn probe_candidate(conn: &Connection, now: i64) -> rusqlite::Result<Option<Row>> {
-    Ok(resendable_failed(conn, now)?.into_iter().next())
-}
-
-/// `failed` → `sending` for that probe. `updated_at` stays, so the 90-day
-/// prune still counts from when it failed.
-pub fn mark_probe_sending(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
-    set_state(conn, id, &["failed"], "state = 'sending'", &[])
-}
-
-/// The probe wasn't answered: `sending` → `failed`, as it was.
-pub fn mark_probe_failed(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
-    set_state(conn, id, &["sending"], "state = 'failed'", &[])
+pub fn has_resendable_failed(conn: &Connection, now: i64) -> rusqlite::Result<bool> {
+    Ok(!resendable_failed(conn, now)?.is_empty())
 }
 
 /// Delete final rows older than [`KEEP_FINAL_MS`]; clear the diagnostics

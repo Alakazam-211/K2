@@ -54,9 +54,9 @@ when it can. Offline, or while K2's feedback service isn't reachable yet,
 it waits as queued with the reason, and nothing is lost: don't send it
 again, check it with show. After 7 days of trying it is failed. One that
 failed because the service couldn't be reached goes again by itself: this
-server tries the oldest about once an hour, and the first time the service
-answers, all of them saved in the last 90 days go back in the queue and
-leave oldest first. Retry puts any failed one back at once, including one
+server checks about once an hour whether the service is taking feedback
+again (it sends nothing to check), and once it is, all of them saved in
+the last 90 days go back in the queue and leave oldest first. Retry puts any failed one back at once, including one
 that failed for another reason (sending turned off, air-gap, no K2
 Connect pairing). A refused one (the service said no; the reason names why)
 is not retried: fix what it says and send a new one. Rows are deleted 90

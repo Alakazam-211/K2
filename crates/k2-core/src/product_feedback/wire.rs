@@ -15,6 +15,10 @@
 //!    [`Screenshot`] as `screenshot` (prd-feedback-screenshot-v1 §6.1, at
 //!    most [`MAX_BODY_WITH_SCREENSHOT`]) and the attempt waits up to
 //!    [`SCREENSHOT_TIMEOUT`].
+//! 3. **Health** ([`get_health`]): `GET <intake>/health`, no auth; answer
+//!    `200 {db, intake: "open" | "paused", ok}`. Asked only while rows that
+//!    failed for the service being unreachable wait and nothing else is
+//!    queued.
 //!
 //! Redirects are never followed (an intake must not steer the box to
 //! another host). Before the intake or the relay route exists, both answer
@@ -74,13 +78,38 @@ impl Health {
 }
 
 /// Read a health answer. Pure.
-pub fn classify_health(_status: u16, _body: &str) -> Health {
-    Health::Down(String::new())
+pub fn classify_health(status: u16, body: &str) -> Health {
+    if status != 200 {
+        return Health::Down(format!("the feedback service health check answered {status}"));
+    }
+    let intake = serde_json::from_str::<J>(body)
+        .ok()
+        .and_then(|v| v.get("intake").and_then(J::as_str).map(str::to_string));
+    match intake.as_deref() {
+        Some("open") => Health::Open,
+        Some("paused") => Health::Paused,
+        Some(other) => Health::Down(format!("the feedback service health check said intake {other}")),
+        None => Health::Down("the feedback service health check answered without an intake state".into()),
+    }
 }
 
-/// Ask the intake at `endpoint` whether it takes submissions.
-pub fn get_health(_endpoint: &str) -> Health {
-    Health::Down(String::new())
+/// Ask the intake at `endpoint` (the same base the submissions go to)
+/// whether it takes submissions: `GET <endpoint>/health`, no auth, no
+/// redirects.
+pub fn get_health(endpoint: &str) -> Health {
+    let url = format!("{}{HEALTH_PATH}", endpoint.trim_end_matches('/'));
+    let http = match client() {
+        Ok(c) => c,
+        Err(e) => return Health::Down(e),
+    };
+    match http.get(&url).send() {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let text = resp.text().unwrap_or_default();
+            classify_health(status, &text)
+        }
+        Err(e) => Health::Down(short_transport_error(&e)),
+    }
 }
 
 /// A row's picture as it goes out: the stored bytes and the meta.

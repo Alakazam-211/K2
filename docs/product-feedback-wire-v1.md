@@ -143,11 +143,14 @@ again).
 After 7 days of retrying a submission is **failed**; Retry (the Sent tab,
 `k2 send-feedback retry`) puts it back. One that failed because the
 service couldn't be reached (`service_unreachable`, `relay_not_ready`,
-`intake_paused`, `rate_limited`) also goes back by itself: while nothing
-else is queued, your server sends the oldest one about once an hour (same
-`clientId`), and the first time the service answers, every such row from
-the last 90 days is queued again and sent oldest first. Redirects are never
-followed.
+`intake_paused`, `rate_limited`) also goes back by itself. While such rows
+wait and nothing else is queued, your server asks `GET <intake>/health`
+(no auth, nothing of yours in it) at most once an hour, and never under
+air-gap or with sending turned off. `200 {"intake": "open"}` queues every
+such row from the last 90 days again, sent oldest first; `"paused"` waits
+for the next hour; no answer or another status changes nothing. A real
+answer to a send (sent or refused) queues them again too. Redirects are
+never followed.
 
 ## Kept
 

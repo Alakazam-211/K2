@@ -616,6 +616,60 @@ describe('Home — the Agents page shell', () => {
     expect(cUrls.every((u) => u === 'https://c.k2.dev/boot-status')).toBe(true)
   })
 
+  it('a row that says Sign in opens the sign-in for THAT server, as the room\'s Sign in button does', async () => {
+    useRemoteRoomsPreviewStore.setState({ enabled: true })
+    const signInForManagement = vi.fn()
+    const pickHost = vi.fn()
+    useConnectHostStore.setState({ signInForManagement, pickHost })
+    try {
+      render(<Shell />)
+      expect(rowOf('Cee').querySelector('[data-row-action]')?.textContent).toBe('Sign in')
+      await act(async () => {
+        fireEvent.click(rowOf('Cee').querySelector('[data-row-action]') as Element)
+      })
+      expect(signInForManagement).toHaveBeenCalledTimes(1)
+      expect(signInForManagement.mock.calls[0][0]).toMatchObject({ id: 'c', hostname: 'c.k2.dev' })
+      // Non-switching: the window stays on its own server, the room is Cee's.
+      expect(pickHost).not.toHaveBeenCalled()
+      expect(homeRooms.store.getState().shown).toBe('cee::c.k2.dev')
+
+      // A row with a login (Bee) opens its room and never asks to sign in.
+      await act(async () => {
+        fireEvent.click(rowOf('Bee'))
+      })
+      expect(homeRooms.store.getState().shown).toBe('bee::b.k2.dev')
+      expect(signInForManagement).toHaveBeenCalledTimes(1)
+    } finally {
+      await act(async () => {
+        await homeRooms.closeAll()
+      })
+    }
+  })
+
+  it('the collapsed rail: a Sign in row\'s icon opens the sign-in for that server too', async () => {
+    useRemoteRoomsPreviewStore.setState({ enabled: true })
+    useSidebarStore.setState({ isCollapsed: true })
+    const signInForManagement = vi.fn()
+    const pickHost = vi.fn()
+    useConnectHostStore.setState({ signInForManagement, pickHost })
+    try {
+      render(<Shell />)
+      const icon = document.querySelector('[data-home-rail-row="cee::c.k2.dev"]')
+      if (!(icon instanceof HTMLElement)) throw new Error('no rail icon for Cee')
+      expect(icon.getAttribute('data-row-status')).toBe('sign-in')
+      await act(async () => {
+        fireEvent.click(icon)
+      })
+      expect(signInForManagement).toHaveBeenCalledTimes(1)
+      expect(signInForManagement.mock.calls[0][0]).toMatchObject({ id: 'c', hostname: 'c.k2.dev' })
+      expect(pickHost).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => {
+        await homeRooms.closeAll()
+      })
+    }
+  })
+
   // agent-unread-tickets-v1 (0.46.4): a remote row draws your unread /
   // waiting and the agent's tickets from its server's summary, only when
   // that server reports the feature.

@@ -16,7 +16,6 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useCommandPaletteStore } from '@/stores/command-palette'
 import { isWebClient } from '@/lib/is-web'
 import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/home-address'
-import { openHomeRow } from '@/lib/home-open'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { ProjectIcon } from '@/components/Sidebar/IconRail'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
@@ -28,7 +27,7 @@ import { NAV_PALETTE_LABEL } from './HomeNavFooter'
 import { AddToHomeHost } from './AddToHomeModal'
 import { useHomeAddPickerStore, useRowStatus } from './home-room'
 import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupChecklist'
-import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
+import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu, openOtherHomeRow } from './HomeSidebar'
 import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameFlash from './groups/GroupNameFlash'
 import { displayRows, isPinned } from '@/lib/home-row-order'
@@ -49,7 +48,7 @@ function OtherRowIcon({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
         status.kind === 'offline' || status.kind === 'not-found' ? ' opacity-60' : ''
       }`}
       onClick={() => {
-        if (canOpen) openHomeRow(row)
+        if (canOpen) openOtherHomeRow(row, status.kind)
       }}
       onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
       title={title}

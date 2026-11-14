@@ -65,6 +65,7 @@ import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
 import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
 import { HomeAddButton, HomeNavFooterRow } from './HomeNavFooter'
 import { AddToHomeHost } from './AddToHomeModal'
+import { roomFailureActions } from './room/RoomFailure'
 import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
 import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
 import { GrokBotHomeRow } from '@/components/GrokBots/GrokBotRows'
@@ -243,6 +244,18 @@ export function otherRowOpenTitle(
   return `Open ${label} from ${where} here`
 }
 
+/** A click on a row on another server (the nav row or its rail icon).
+ *  A row that says "Sign in" runs the same action as the room's Sign in
+ *  button: the non-switching sign-in for THIS row's server. Opening the
+ *  room alone only showed its banner, or nothing when that room was
+ *  already on screen. A window switch (`pickHost`) signs in on its own. */
+export function openOtherHomeRow(row: HomeRow, kind: RowStatus['kind']): void {
+  const opened = openHomeRow(row)
+  if (kind !== 'sign-in' || opened !== 'room') return
+  const host = parseHomeAddress(row.address)?.host
+  if (host) roomFailureActions(host).signIn()
+}
+
 /** A row that does not paint as a live Agents row. */
 function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: number }): React.JSX.Element {
   const { status, place, onConnected } = useRowStatus(row)
@@ -313,7 +326,7 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
       color={color}
       dimmed={status.kind === 'offline' || status.kind === 'not-found'}
       onClick={() => {
-        if (canOpen) openHomeRow(row)
+        if (canOpen) openOtherHomeRow(row, status.kind)
       }}
       onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
       title={title}

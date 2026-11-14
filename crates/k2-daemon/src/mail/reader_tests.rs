@@ -250,11 +250,29 @@ async fn t3_every_open_is_its_own_row_with_the_reason() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn t4_a_member_opens_only_their_own_mailbox() {
     let fx = Fx::start().await;
+    // Another person's hosted mailbox in the same workspace: pat must not
+    // see it, though the Owner does.
+    let rae_addr = format!("rae@{}", fx.domain);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, owner_project_id, \
+             status, created_at, primary_level, primary_can_manage, primary_can_delete, person_mailbox, \
+             person_principal) VALUES (?1, ?2, 'dom-oa0', 'acc-rae', ?3, 'active', 100, 'send', 1, 1, 1, ?4)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), rae_addr, fx.ws_id, format!("rae-{}", fx.pat_name)],
+        )
+        .expect("seed another person's mailbox");
+    }
     block(|| {
+        let everyone = rget(&fx, OWNER, "inboxes", &[]);
+        assert!(addresses(&everyone).contains(&rae_addr), "the Owner sees the other person's mailbox: {}", everyone.body);
         let pat = rget(&fx, &fx.pat, "inboxes", &[]);
         assert_eq!(pat.status, 200, "{}", pat.body);
         assert_eq!(addresses(&pat), vec![fx.person_addr.clone()], "{}", pat.body);
+        assert_eq!(json(&pat)["count"], 1, "{}", pat.body);
         assert_eq!(json(&pat)["inboxes"][0]["own"], true);
+        assert_eq!(json(&pat)["inboxes"][0]["person"], serde_json::json!(fx.pat_name));
         assert_eq!(json(&pat)["viewer"]["opensAny"], false);
         let other = rget(&fx, &fx.member, "inboxes", &[]);
         assert_eq!(other.status, 200, "{}", other.body);
@@ -263,7 +281,7 @@ async fn t4_a_member_opens_only_their_own_mailbox() {
 
         let mut failures = Vec::new();
         for (who, token) in [("member", fx.member.as_str()), ("pat", fx.pat.as_str())] {
-            for addr in [&fx.agent_addr, &fx.linked_addr] {
+            for addr in [&fx.agent_addr, &fx.linked_addr, &rae_addr] {
                 for route in ["messages", "folders"] {
                     let a = rget(&fx, token, route, &[("inbox", addr)]);
                     let g = rget(&fx, token, route, &[("inbox", &fx.ghost_addr)]);
@@ -348,7 +366,7 @@ async fn t6_a_linked_inbox_is_its_linkers_own() {
     block(|| {
         let before = rget(&fx, &fx.pat, "inboxes", &[]);
         assert!(!addresses(&before).contains(&fx.linked_addr), "nobody on record: not pat's: {}", before.body);
-        set_linked_by(&fx, Some("pat"));
+        set_linked_by(&fx, Some(fx.pat_name.as_str()));
         let after = rget(&fx, &fx.pat, "inboxes", &[]);
         assert!(addresses(&after).contains(&fx.linked_addr), "pat linked it: {}", after.body);
         let row = json(&after)["inboxes"]
@@ -359,7 +377,7 @@ async fn t6_a_linked_inbox_is_its_linkers_own() {
             .cloned()
             .expect("the linked inbox");
         assert_eq!(row["own"], true);
-        assert_eq!(row["person"], "pat");
+        assert_eq!(row["person"], serde_json::json!(fx.pat_name));
         assert_eq!(row["kind"], "person");
         let other = rget(&fx, &fx.member, "inboxes", &[]);
         assert!(!addresses(&other).contains(&fx.linked_addr), "still not another Member's: {}", other.body);

@@ -340,7 +340,7 @@ async fn d6_a_member_cant_see_another_persons_drafts() {
         let first = &json(&own)["messages"][0];
         assert_eq!(first["draft"], true, "{first}");
         assert_eq!(first["author"]["kind"], "person", "{first}");
-        assert_eq!(first["author"]["name"], "pat", "{first}");
+        assert_eq!(first["author"]["name"], serde_json::json!(fx.pat_name), "{first}");
 
         let ghost = "d_00000000000000000000000000000000";
         let fold = |s: &str| s.replace(&id, "<D>").replace(ghost, "<D>");

@@ -121,7 +121,12 @@ pub(crate) struct Fx {
     pub(crate) member: String,
     pub(crate) admin: String,
     pub(crate) owner_login: String,
+    /// pat's Connect login token.
     pub(crate) pat: String,
+    /// pat's username, the person on pat's mailbox. Unique per fixture:
+    /// the test DB is shared by the whole test process, so a fixed name
+    /// would make another test's mailbox for the same name "pat's own" too.
+    pub(crate) pat_name: String,
 }
 
 impl Fx {
@@ -141,6 +146,7 @@ impl Fx {
         let person_addr = format!("pat@{domain}");
         let ghost_addr = format!("ghost@{domain}");
         let linked_addr = format!("pat.linked{short}@gmail.example");
+        let pat_name = format!("pat-{short}");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -156,7 +162,7 @@ impl Fx {
                 rusqlite::params![format!("http://127.0.0.1:{}", fake.port)],
             )
             .expect("mail_server row");
-            for (addr, acct, person) in [(&agent_addr, "acc-agent", None), (&person_addr, "acc-pat", Some("pat"))] {
+            for (addr, acct, person) in [(&agent_addr, "acc-agent", None), (&person_addr, "acc-pat", Some(pat_name.as_str()))] {
                 conn.execute(
                     "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, owner_project_id, \
                      status, created_at, primary_level, primary_can_manage, primary_can_delete, person_mailbox, \
@@ -186,7 +192,7 @@ impl Fx {
             ("oa0member", k2_core::connect_users::Role::Member),
             ("oa0admin", k2_core::connect_users::Role::Admin),
             ("oa0owner", k2_core::connect_users::Role::Owner),
-            ("pat", k2_core::connect_users::Role::Member),
+            (pat_name.as_str(), k2_core::connect_users::Role::Member),
         ] {
             k2_core::connect_users::add_user(user, "correct-horse-battery-staple-1").expect("add user");
             k2_core::connect_users::set_role(user, role).expect("set role");
@@ -214,7 +220,13 @@ impl Fx {
             admin: sessions[1].clone(),
             owner_login: sessions[2].clone(),
             pat: sessions[3].clone(),
+            pat_name,
         }
+    }
+
+    /// pat's actor label in the access log.
+    pub(crate) fn pat_actor(&self) -> String {
+        format!("user:{}", self.pat_name)
     }
 
     pub(crate) fn get(&self, token: &str, route: &str, query: &[(&str, &str)]) -> Resp {
@@ -295,6 +307,25 @@ impl Fx {
             .replace(&self.linked_addr, "<ADDR>")
             .replace("out_oa0_person", "<OUT>")
             .replace("out_oa0_ghost", "<OUT>")
+    }
+}
+
+/// The fixture's inboxes leave the shared test DB with it
+/// (while it still holds the mail lock), so no later fixture lists them.
+impl Drop for Fx {
+    fn drop(&mut self) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let gone = conn
+            .execute("DELETE FROM mail_addresses WHERE owner_project_id = ?1", rusqlite::params![self.ws_id])
+            .and_then(|_| {
+                conn.execute("DELETE FROM mail_external_inboxes WHERE owner_project_id = ?1", rusqlite::params![self.ws_id])
+            });
+        if let Err(e) = gone {
+            if !std::thread::panicking() {
+                panic!("remove the fixture's inboxes: {e}");
+            }
+        }
     }
 }
 
@@ -563,7 +594,7 @@ async fn the_person_opens_their_own_mailbox() {
         let r = fx.read(&fx.pat, &fx.person_tok);
         assert_eq!(r.status, 200, "pat reads their own mail: {}", r.body);
         assert_eq!(json(&r)["message"]["subject"], "pat private mail");
-        let rows = fx.rows_for("user:pat", &fx.person_addr, "read");
+        let rows = fx.rows_for(&fx.pat_actor(), &fx.person_addr, "read");
         assert_eq!(rows.len(), 1, "{:?}", fx.audit());
         assert_eq!(rows[0]["own"], 1);
         assert_eq!(rows[0]["outcome"], "ok");

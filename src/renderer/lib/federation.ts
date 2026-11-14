@@ -24,6 +24,7 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { ZONE_SUFFIX } from '@/lib/hosts'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -754,7 +755,7 @@ async function pairV2(
  *  Real Connect hosts (`rpm.k2.dev`) stay intact. */
 function stripAccidentalLanK2Dev(host: string): string {
   const h = host.trim()
-  const SUFFIX = '.k2.dev'
+  const SUFFIX = ZONE_SUFFIX
   if (!h.toLowerCase().endsWith(SUFFIX)) return h
   const stem = h.slice(0, h.length - SUFFIX.length)
   if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(stem)) return stem
@@ -794,7 +795,7 @@ function findSavedHost(host: string) {
  *  literal `agent::host` we record. Off-zone hosts fall back to the daemon's
  *  self-reported subdomain (then the raw host). LAN IPv4:port stays as-is. */
 function subdomainForHost(host: string, reported: string): string {
-  const SUFFIX = '.k2.dev'
+  const SUFFIX = ZONE_SUFFIX
   const h = stripAccidentalLanK2Dev(host).trim()
   if (h.toLowerCase().endsWith(SUFFIX)) return h.slice(0, h.length - SUFFIX.length)
   return reported || h

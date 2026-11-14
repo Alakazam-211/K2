@@ -21,13 +21,14 @@
 
 import { daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
+import { DASHBOARD_URL, ZONE } from '@/lib/hosts'
 
 /** The daemon route that performs Connect control-plane calls with the
  *  vault-held tunnel token. INTEGRATOR: confirm this name against the
  *  daemon route when both land on main. */
 export const CONNECT_PROXY_ROUTE = 'connect/proxy'
 
-export const SUBDOMAIN_HOST = 'k2.dev'
+export const SUBDOMAIN_HOST = ZONE
 
 /** Box-level front doors, never a publish target. Same set as
  *  `k2_core::skin::RESERVED_NESTED_LABELS` and the CLI's
@@ -134,7 +135,7 @@ export function removeRequest(label: string): ConnectProxyRequest {
 
 // ── Error text (the CLI's `_connect_subdomain_render` table) ─────────────
 
-export const PLAN_DASHBOARD_URL = 'https://k2.dev/dashboard'
+export const PLAN_DASHBOARD_URL = DASHBOARD_URL
 
 export const CONTROL_PLANE_MESSAGES: Record<string, string> = {
   bad_label: 'Invalid label (use lowercase letters, digits, and dashes).',

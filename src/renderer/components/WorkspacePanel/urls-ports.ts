@@ -1,4 +1,5 @@
 import { thisMachine } from '@/lib/desktop-words'
+import { ZONE } from '@/lib/hosts'
 // Published drawer + K2 Connect settings — pure derivation logic, split
 // from the components so it's unit-testable without React/DOM.
 //
@@ -16,7 +17,7 @@ import { thisMachine } from '@/lib/desktop-words'
 /** The canonical K2 Connect subdomain suffix — mirrors
  *  `k2_core::tunnel::config::SUBDOMAIN_HOST`. Fallback only; a live
  *  `public_url` always wins. */
-export const SUBDOMAIN_HOST = 'k2.dev'
+export const SUBDOMAIN_HOST = ZONE
 
 /** One nested target after normalization: the internal endpoint plus the
  *  attributed workspace's `projects.id` (null = unattributed). Mirrors the

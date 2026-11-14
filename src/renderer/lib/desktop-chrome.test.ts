@@ -127,7 +127,9 @@ describe('logo menu vs dashboard', () => {
     expect(mark).toContain('className="relative flex-shrink-0 no-drag"')
     expect(mark).toContain('<AppMenuPanel')
     expect(mark).toContain('className="h-4 w-4"')
-    expect(mark).toContain('https://k2.dev/dashboard')
+    // The dashboard address itself is pinned in lib/hosts.test.ts.
+    expect(mark).toContain("import { DASHBOARD_URL } from '@/lib/hosts'")
+    expect(mark).toContain('openUrl(DASHBOARD_URL)')
     expect(mark).toContain('logoOpensAppMenu')
     expect(panel).toContain('absolute left-0 top-full')
     expect(panel).not.toMatch(/className="[^"]*\brelative\b/)

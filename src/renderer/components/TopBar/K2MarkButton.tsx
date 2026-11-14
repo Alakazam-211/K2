@@ -4,8 +4,7 @@ import k2Logo from '../../assets/k2-logo.png'
 import { desktopOsFromNavigator, logoOpensAppMenu, showsK2Mark, type DesktopOs } from '@/lib/desktop-chrome'
 import { isWebClient } from '@/lib/is-web'
 import AppMenuPanel from './AppMenuPanel'
-
-const DASHBOARD_URL = 'https://k2.dev/dashboard'
+import { DASHBOARD_URL } from '@/lib/hosts'
 
 /**
  * 16×16 K2 mark. Hosted web opens the dashboard.

@@ -460,8 +460,14 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     // move <id> --auto releases it) or auto (K2 may move it while queued).
     v["pinned"] = (j.ctl.any.is_none() && j.ctl.shards.is_empty()).into();
     // An auto job: the nodes it `--avoid`s, as its workspace may see them.
+    // The raw filter (`ctl.any.avoid`) keeps nodes the workspace isn't
+    // granted, silently: only its own nodes' ids are shown there.
     if let Some(f) = j.ctl.any.as_ref() {
         v["avoid"] = crate::compute_move::avoid_shown(f, &j.workspace_id).into();
+        let mine = granted_node_ids(&j.workspace_id);
+        if let Some(raw) = v.pointer_mut("/ctl/any/avoid") {
+            *raw = f.avoid.iter().filter(|id| mine.contains(id)).cloned().collect::<Vec<_>>().into();
+        }
     }
     // A waiting job explains whether K2 may move it, and how its last
     // tries went (bounces, next try).

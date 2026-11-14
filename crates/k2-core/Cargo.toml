@@ -71,6 +71,9 @@ k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
 # `CertificateParams::not_after` is a `time::OffsetDateTime`. `time` is already
 # in the tree transitively (x509-parser / rcgen), so this adds no new crate.
 time = { version = "0.3", features = ["std"] }
+# Tests count the SQL statements a read runs (`Connection::trace_v2`): the
+# projects list must cost the same number of statements for 5 rows as for 200.
+rusqlite = { version = "0.41", features = ["bundled", "hooks", "trace"] }
 
 [dependencies]
 # The thin client's half (paths, process bootstrap, launchd + bundle

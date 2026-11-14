@@ -1461,6 +1461,95 @@ mod tests {
         delete_project("embed-empty-proj");
     }
 
+    /// The SQL statements one `projects_list_with_workspaces()` runs on a
+    /// database holding `projects` workspaces of 3 rows each, counted on the
+    /// connection itself (every statement SQLite starts, whoever starts it).
+    /// Paths are fresh per call, so the agent display name cache is cold.
+    fn list_statement_count(projects: usize) -> usize {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut conn = rusqlite::Connection::open(":memory:").expect("open");
+        db::run_migrations(&conn).expect("migrations");
+        let run = uuid::Uuid::new_v4();
+        for i in 0..projects {
+            let id = format!("count-{i}");
+            conn.execute(
+                "INSERT INTO projects (id, path, name, color, agent_mode, pinned, tab_order) \
+                 VALUES (?1, ?2, ?3, '#123456', 'off', 0, ?4)",
+                rusqlite::params![id, format!("/tmp/k2-list-count-{run}-{i}"), format!("p{i}"), i as i64],
+            )
+            .expect("project");
+            for w in 0..3 {
+                Workspace::create(&conn, &format!("{id}-w{w}"), &id, None, "branch", Some("main"), "w", w, None)
+                    .expect("workspace");
+            }
+        }
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let seen = count.clone();
+        conn.trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(move |e: rusqlite::trace::TraceEvent<'_>| {
+                if let rusqlite::trace::TraceEvent::Stmt(..) = e {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
+            }),
+        )
+        .expect("trace");
+        let handle = std::sync::Arc::new(parking_lot::ReentrantMutex::new(conn));
+        let listed = db::with_scoped_handle(handle, || projects_list_with_workspaces().expect("list ok"));
+        assert_eq!(listed.len(), projects, "every seeded project is listed");
+        assert!(
+            listed.iter().all(|p| p.workspaces.len() == 3),
+            "every project carries its 3 workspaces"
+        );
+        count.load(Ordering::SeqCst)
+    }
+
+    /// The projects list costs the same statements for 200 projects as for
+    /// 5: the projects read (its main select and the per-switch maps) plus
+    /// ONE workspaces read. It was one workspaces read per project, plus a
+    /// name lookup per project whose display name cache was cold.
+    #[test]
+    fn projects_list_statement_count_does_not_grow_with_projects() {
+        let small = list_statement_count(5);
+        let large = list_statement_count(200);
+        assert_eq!(small, large, "statements for 5 projects ({small}) vs 200 ({large})");
+        assert!(large <= 6, "the projects list runs {large} statements; want at most 6");
+    }
+
+    /// Workspaces keep their per-project order (by `tab_order`) when read in
+    /// one pass, and a project with none still gets an empty list.
+    #[test]
+    fn projects_list_keeps_workspace_order_per_project() {
+        let _scoped_db = db::scoped_for_test();
+        ensure_project("order-a", "/tmp/k2-order-a", "A");
+        ensure_project("order-b", "/tmp/k2-order-b", "B");
+        ensure_project("order-empty", "/tmp/k2-order-empty", "E");
+        {
+            let db = db::shared();
+            let conn = db.lock();
+            for (id, project, order) in
+                [("b-2", "order-b", 2), ("a-1", "order-a", 1), ("b-0", "order-b", 0), ("a-0", "order-a", 0)]
+            {
+                Workspace::create(&conn, id, project, None, "branch", Some("main"), id, order, None)
+                    .expect("workspace");
+            }
+        }
+        let listed = projects_list_with_workspaces().expect("list ok");
+        let ids = |pid: &str| -> Vec<String> {
+            listed
+                .iter()
+                .find(|p| p.project.id == pid)
+                .unwrap_or_else(|| panic!("{pid} listed"))
+                .workspaces
+                .iter()
+                .map(|w| w.id.clone())
+                .collect()
+        };
+        assert_eq!(ids("order-a"), vec!["a-0", "a-1"]);
+        assert_eq!(ids("order-b"), vec!["b-0", "b-2"]);
+        assert!(ids("order-empty").is_empty());
+    }
+
     /// Every `projects/list` row carries `agentDisplayName`: the same name
     /// `GET /cli/workspace/agent-display-name` gives for its path (the
     /// persona's `display_name:`, else the folder's registry name), so a

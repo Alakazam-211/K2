@@ -95,6 +95,12 @@ import {
   normalizeSerializedLayout,
 } from '@/lib/layout-merge'
 import { assertScopeMayPost, primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { createBackgroundLayoutsLoad, saveOnStoredLayout, withTabsAppended } from './tabs-layout-load'
+import {
+  isApiSandboxSessionSurfaced,
+  tabIsDropCandidateForApiSessionRemoval,
+  tabMatchesApiSession,
+} from './tabs-api-sessions'
 
 /** Project path → id (+ primary workspace) for host-session tab routing.
  *  Ledger sales pilot: api- SessionAdded must park under the event's
@@ -1202,11 +1208,8 @@ export interface TabsState {
    *  ordering race against the pinned-tab ensure. */
   loadLayoutForWorkspace: (projectId: string, workspaceId: string, cwd: string) => Promise<void>
   loadWorkspaceSessionsFromDb: () => Promise<void>
-  /** Speed pass P4: load every workspace's layout (`load-all`) in the
-   *  background, once, after the caller's turn. The projects store asks
-   *  when its list has landed and the shown workspace has read its own
-   *  layout, so the full map is never part of the first load. A no-op in
-   *  a pinned room, while a load is waiting, or once one has landed. */
+  /** Speed pass P4: `load-all` in the background once the projects list has
+   *  landed (`tabs-layout-load.ts`). A no-op in a pinned room or once loaded. */
   requestWorkspaceLayoutsLoad: () => void
   /** @deprecated Use loadWorkspaceSessionsFromDb instead */
   loadWorkspaceLayoutsFromSettings: () => Promise<void>
@@ -2493,77 +2496,6 @@ function isPaneGroupSurfaced(
 // stored session id, and the de-dupe below keys on sessionId — a leftover
 // zombie tab would swallow the new SessionAdded.
 
-/** True when a terminal item attached to (or spawned as) `agentName`, or
- *  carrying `sessionId`, is ALREADY surfaced in any tab across all groups.
- *  The de-dupe guard for API-spawned adoption: the window that already adopted
- *  this cell (or a re-delivered event) must NOT create a second tab. Mirrors
- *  the AgentChatPane remount-guard's identity check (session_id) + the
- *  `isPaneGroupSurfaced` "already represented" check, matched on the attach
- *  agent_name since the API cell has no `tab-`-shaped paneGroupId. */
-function tabMatchesApiSession(tab: Tab, agentName: string, sessionId: string): boolean {
-  for (const pg of tab.paneGroups.values()) {
-    for (const item of pg.items) {
-      if (item.type !== 'terminal') continue
-      const d = item.data as TerminalItemData
-      if (d.attachAgentName === agentName) return true
-      if (sessionId && d.sessionId === sessionId) return true
-    }
-  }
-  return false
-}
-
-function isApiSandboxSessionSurfaced(
-  state: {
-    tabs: Tab[]
-    extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }>
-    backgroundWorkspaces?: Record<string, WorkspaceTabSnapshot>
-  },
-  agentName: string,
-  sessionId: string,
-): boolean {
-  for (const tab of state.tabs) {
-    if (tabMatchesApiSession(tab, agentName, sessionId)) return true
-  }
-  for (const group of state.extraGroups) {
-    for (const tab of group.tabs) {
-      if (tabMatchesApiSession(tab, agentName, sessionId)) return true
-    }
-  }
-  // Also de-dupe against parked (non-active workspace) strips — host-session
-  // adopt may place cells there so the focused workspace is not polluted.
-  if (state.backgroundWorkspaces) {
-    for (const snap of Object.values(state.backgroundWorkspaces)) {
-      for (const tab of snap.tabs) {
-        if (tabMatchesApiSession(tab, agentName, sessionId)) return true
-      }
-      for (const group of snap.extraGroups) {
-        for (const tab of group.tabs) {
-          if (tabMatchesApiSession(tab, agentName, sessionId)) return true
-        }
-      }
-    }
-  }
-  return false
-}
-
-/** True when removing the tab is safe under the API-session reaper path.
- *  Skip pinned/system tabs and any tab that isn't a pure attach to this
- *  `api-…` agent (splits / agent panes / file viewers keep their own
- *  lifecycle — same invariant as `tabIsDropCandidateForSessionRemoval`). */
-function tabIsDropCandidateForApiSessionRemoval(tab: Tab, agentName: string): boolean {
-  if (tab.isSystemAgent) return false
-  if (tab.paneGroups.size !== 1) return false
-  const pg = [...tab.paneGroups.values()][0]
-  if (!pg) return false
-  if (pg.items.length === 0) return false
-  for (const item of pg.items) {
-    if (item.type !== 'terminal') return false
-    const d = item.data as TerminalItemData
-    if (d.attachAgentName !== agentName) return false
-  }
-  return true
-}
-
 /** P3c (D2) + host-sessions — adopt an API-spawned session into a new cockpit
  *  tab. Returns true when a tab was adopted, false when ignored (no backend
  *  label, or already surfaced — the de-dupe). Exported for unit testing.
@@ -2785,11 +2717,10 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
    *  focus-groups/projects do because workspace layout writes are user-
    *  driven (tab open/close/move) rather than side-effects of UI mount. */
   let hasLoadedWorkspaceSessions = false
-  /** Speed pass P4: the background layouts load was asked for on this
-   *  server (the reconnect retry only runs after that), and one is waiting
-   *  or running. */
-  let workspaceLayoutsWanted = false
-  let workspaceLayoutsScheduled = false
+  const backgroundLayouts = createBackgroundLayoutsLoad(
+    () => store.getState().loadWorkspaceSessionsFromDb(),
+    () => hasLoadedWorkspaceSessions,
+  )
 
   // Tabs whose pending FileViewerPane unmount-flush must be SKIPPED (the user
   // chose Discard). In-memory module state — deliberately NOT in zustand store
@@ -3126,64 +3057,41 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     await runLayoutSaveJob(key, job, attempt)
   }
 
-  /** Add an adopted API-session tab to a workspace whose layout this window
-   *  does not hold: read it with its revision, append, save on that base (a
-   *  409 reads again), then hold the saved layout. If the workspace is shown
-   *  meanwhile, the tab goes on its strip instead. */
+  /** An adopted API-session tab for a workspace whose layout is not held
+   *  here: added on the stored layout's revision (never a layout of this one
+   *  tab over saved ones); on the strip if the workspace is shown meanwhile. */
   async function parkApiTabInStoredLayout(key: string, projectId: string, workspaceId: string, tab: Tab): Promise<void> {
     if (readOnly) return
+    const io = {
+      fetch: () => fetchLayoutWithRevision(projectId, workspaceId),
+      save: (layout: SerializedLayout, base: number | undefined) =>
+        daemonCliPost<{ revision?: number }>(scope, 'workspace-layouts/save', {
+          projectId,
+          workspaceId,
+          layoutJson: JSON.stringify(layout),
+          ...(base !== undefined ? { baseRevision: base } : {}),
+        }),
+      isConflict: isLayoutRevisionConflict,
+      maxAttempts: LAYOUT_CONFLICT_MAX_ATTEMPTS,
+    }
     await runInLayoutLane(key, async () => {
       try {
-        await parkApiTabAttempts(key, projectId, workspaceId, tab)
+        const alone = serializeSnapshot({ tabs: [tab], extraGroups: [], splitCount: 1, activeGroupIndex: 0, activeTabId: null })
+        const saved = await saveOnStoredLayout(io, (stored) => {
+          if (store.getState().activeWorkspaceKey !== key) return withTabsAppended(stored, alone)
+          store.setState((st) => ({ tabs: [...st.tabs, tab] }))
+          return null
+        })
+        if (!saved) return
+        if (saved.revision !== undefined) layoutRevisions.set(key, saved.revision)
+        if (saved.revision !== undefined) cacheRevisions.set(key, saved.revision)
+        setAckedLayout(key, saved.layout)
+        store.setState((st) => ({ workspaceLayouts: { ...st.workspaceLayouts, [key]: saved.layout } }))
       } catch (err) {
         // The session stays live: the workspace adopts it when it is opened.
         console.error(`[tabs] api-session park failed for ${key}:`, err)
       }
     })
-  }
-
-  async function parkApiTabAttempts(key: string, projectId: string, workspaceId: string, tab: Tab): Promise<void> {
-    for (let attempt = 0; attempt < LAYOUT_CONFLICT_MAX_ATTEMPTS; attempt++) {
-      const fetched = await fetchLayoutWithRevision(projectId, workspaceId)
-      if (store.getState().activeWorkspaceKey === key) {
-        store.setState((s) => ({ tabs: [...s.tabs, tab] }))
-        return
-      }
-      const remote = fetched.layout ?? EMPTY_SERIALIZED_LAYOUT
-      const alone = serializeSnapshot({
-        tabs: [tab],
-        extraGroups: [],
-        splitCount: 1,
-        activeGroupIndex: 0,
-        activeTabId: null,
-      })
-      const next: SerializedLayout = remote.tabs?.length
-        ? { ...remote, tabs: [...remote.tabs, ...(alone.tabs ?? [])] }
-        : alone
-      let res: { success?: boolean; revision?: number } | undefined
-      try {
-        res = await daemonCliPost<{ success?: boolean; revision?: number }>(scope, 'workspace-layouts/save', {
-          projectId,
-          workspaceId,
-          layoutJson: JSON.stringify(next),
-          ...(fetched.revision !== undefined ? { baseRevision: fetched.revision } : {}),
-        })
-      } catch (err) {
-        if (isLayoutRevisionConflict(err)) continue
-        throw err
-      }
-      if (typeof res?.revision === 'number') {
-        layoutRevisions.set(key, res.revision)
-        cacheRevisions.set(key, res.revision)
-      } else {
-        layoutRevisions.delete(key)
-        cacheRevisions.delete(key)
-      }
-      setAckedLayout(key, next)
-      store.setState((s) => ({ workspaceLayouts: { ...s.workspaceLayouts, [key]: next } }))
-      return
-    }
-    throw new Error(`layout for ${key} kept changing elsewhere`)
   }
 
   async function parkFileTab(projectId: string, workspaceId: string, filePath: string): Promise<FileTabOpenResult> {
@@ -6571,10 +6479,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
         )
         if (scope.connectionKey !== loadConnectionKey) return
         const layouts: Record<string, SerializedLayout> = {}
-        // Speed pass P4: this load runs in the background, after the shown
-        // workspace read its own layout. A layout this window already holds
-        // (read with its revision, or edited since) is newer than its row
-        // here: keep it and its revision.
+        // Speed pass P4: a layout already held here is newer than its row.
         const held = get().workspaceLayouts
         for (const session of sessions) {
           const rowKey = `${session.projectId}:${session.workspaceId}`
@@ -6600,17 +6505,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     },
 
     requestWorkspaceLayoutsLoad: () => {
-      if (!isPrimary) return
-      workspaceLayoutsWanted = true
-      if (hasLoadedWorkspaceSessions || workspaceLayoutsScheduled) return
-      workspaceLayoutsScheduled = true
-      setTimeout(() => {
-        void get()
-          .loadWorkspaceSessionsFromDb()
-          .finally(() => {
-            workspaceLayoutsScheduled = false
-          })
-      }, 0)
+      if (isPrimary) backgroundLayouts.request()
     },
 
     /** @deprecated Use loadWorkspaceSessionsFromDb instead */
@@ -8376,10 +8271,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     // selection map so a stale local-host selection can't be matched against a
     // remote-host workspace's tabs. (Mirrors the other per-machine resets.)
     resetSelectedTabs()
-    // Speed pass P4: the NEW server's layouts load once its projects list
-    // has landed (the projects store asks), not with the first load.
-    workspaceLayoutsWanted = false
-    workspaceLayoutsScheduled = false
+    // Speed pass P4: the NEW server's layouts load once its list has landed.
+    backgroundLayouts.reset()
   }
 
   // Auto-save: subscribe to tab structure changes and persist to the room's
@@ -8470,19 +8363,11 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       window.addEventListener('beforeunload', closeSockets)
     }
 
-    // Speed pass P4: every workspace's layout is NOT fetched at creation.
-    // The shown workspace reads its own (`loadLayoutForWorkspace`, the
-    // `workspace-layouts/load` miss path), and the rest load in the
-    // background once the projects list has landed
-    // (`requestWorkspaceLayoutsLoad`). A layout save for a workspace whose
-    // layout is not held here reads it first (`placeApiAdoptedTab`,
-    // `parkFileTab`), so nothing is written over an unread layout.
-
-    // Phase 2.5 fix (finding #547): retry the layouts load on daemon
-    // (re)connect when an earlier load failed. Only once the load was
-    // asked for: a (re)connect is not a reason to fetch every layout.
+    // Speed pass P4: no `load-all` at creation; see `requestWorkspaceLayoutsLoad`.
+    // Phase 2.5 fix (finding #547): retry a failed layouts load on daemon
+    // (re)connect, once it was asked for.
     onDaemonConnected(() => {
-      if (!workspaceLayoutsWanted || hasLoadedWorkspaceSessions) return
+      if (!backgroundLayouts.wanted() || hasLoadedWorkspaceSessions) return
       void store.getState().loadWorkspaceSessionsFromDb()
     })
 

@@ -238,6 +238,11 @@ struct Env {
 fn env() -> Env {
     let home = k2_core::test_env::TempHome::new();
     k2_core::db::init_for_tests();
+    // Under `cargo test` these tests share one process (the env lock runs
+    // them one at a time): start once the last one's viewers are let go,
+    // its event pump (bound to its fake) has stopped and its session
+    // (display, lease, local hold) is forgotten.
+    settle_for_test(CONSOLE, Duration::from_secs(10)).unwrap_or_else(|e| panic!("the last test's desktop stream is still open: {e}"));
     let fake = Fake::new();
     let guard = deskd::set_for_test(Arc::new(Backend(fake.clone())));
     store::enable(CONSOLE, true, "owner").expect("switch on");
@@ -644,6 +649,28 @@ fn take_and_hand_back_control() {
         let ev = audit_events();
         assert!(ev.iter().any(|(e, w)| e == "control_taken" && w == "login:olive"), "{ev:?}");
         assert!(ev.iter().any(|(e, w)| e == "control_handed_back" && w == "login:ada"), "{ev:?}");
+    });
+}
+
+/// A serve dropped before it returns (an aborted or shut-down connection
+/// task) still lets its viewer go: out of the registry and the session,
+/// the lease freed with held input released, the disconnect line written.
+#[test]
+fn a_viewer_whose_serve_is_dropped_is_let_go() {
+    let e = env();
+    let olive = login("olive", Role::Owner);
+    rt().block_on(async {
+        let (mut o, server) = open(&ticket_for("olive", &olive), "lan", &[], fast()).await.expect("let in");
+        assert_eq!(t_is(&mut o, "hello").await["mode"], "control");
+        let _ = frame(&mut o).await;
+        server.abort();
+        assert!(server.await.expect_err("aborted").is_cancelled(), "the serve was dropped, not finished");
+        assert_eq!(viewers::count(CONSOLE), 0, "out of the registry");
+        let fake = e.fake.clone();
+        wait_for("release when the dropped controller left", || fake.releases.lock().unwrap().contains(&ReleaseReason::ViewerClosed)).await;
+        assert!(audit_events().iter().any(|(ev, who)| ev == "disconnect" && who == "login:olive"), "the disconnect line");
+        let mut next = viewer("olive", &olive, &[], fast()).await;
+        assert_eq!(t_is(&mut next, "hello").await["mode"], "control", "the lease was freed");
     });
 }
 

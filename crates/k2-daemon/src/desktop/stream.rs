@@ -945,13 +945,23 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
         display: display.to_string(),
         since: 0,
     };
+    let now = Instant::now();
+    let ctx = Arc::new(Ctx {
+        desktop: a.desktop.clone(),
+        viewer: viewer.clone(),
+        username: a.username.clone(),
+        user_id: a.user_id.clone(),
+        session: a.session.clone(),
+        deskd: a.deskd.clone(),
+        ingress: ingress.clone(),
+        clock: Mutex::new(Clock { started: now, last_input: now, hidden_since: None, control: (a.may_control, now), last_refusal_log: None }),
+    });
     viewers::register(info, Arc::new(PushClose(push_tx.clone())));
     // A virtual desktop counts its viewers' presence (LD-24): joining is
     // present; an Owner's or Admin's presence wakes it.
     if k2_core::desktop::virtual_desktop::is_virtual(&a.desktop) {
         super::virtual_desktop::manager().viewer_joined(&a.desktop, &viewer, &a.username, matches!(a.role, Role::Owner | Role::Admin));
     }
-    let now = Instant::now();
     let took = with_session(&a.desktop, |s| {
         s.members.insert(viewer.clone(), Member { name: a.username.clone(), owner: a.role == Role::Owner, push: push_tx.clone() });
         if start_mode == Mode::Control {
@@ -984,16 +994,6 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
         .await;
     }
 
-    let ctx = Arc::new(Ctx {
-        desktop: a.desktop.clone(),
-        viewer: viewer.clone(),
-        username: a.username.clone(),
-        user_id: a.user_id.clone(),
-        session: a.session.clone(),
-        deskd: a.deskd.clone(),
-        ingress: ingress.clone(),
-        clock: Mutex::new(Clock { started: now, last_input: now, hidden_since: None, control: (a.may_control, now), last_refusal_log: None }),
-    });
     let hooks = hooks(&ctx, &a, display, mode, push_tx.clone(), push_rx, &owner_token, limits);
     let source = {
         let (deskd, list) = (a.deskd.clone(), a.displays.clone());
@@ -1161,6 +1161,34 @@ fn recheck(ctx: &Arc<Ctx>, limits: Limits) -> Verdict {
         lease_changed(&ctx.desktop, &ctx.deskd, c, why);
     }
     Verdict::Keep
+}
+
+/// Tests: wait (at most `within`) until nothing of `desktop`'s viewers is
+/// left (none registered, no session member, its event pump stopped, its
+/// capture ended), then forget its session (display, lease, local hold,
+/// cursor) as a fresh daemon has none. The hub, the registry and the
+/// sessions are process-wide; tests in one process run one after another.
+/// `Err` says what is still there.
+#[cfg(test)]
+pub(crate) fn settle_for_test(desktop: &str, within: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + within;
+    loop {
+        let viewers_left = viewers::count(desktop);
+        let hub = crate::stream::hub_for(&SourceKey::Desktop { desktop: desktop.to_string() }).is_some();
+        let session = {
+            let mut m = sessions().lock().unwrap_or_else(|p| p.into_inner());
+            let busy = m.get(desktop).map(|s| (s.members.len(), s.pump)).unwrap_or((0, false));
+            if viewers_left == 0 && !hub && busy == (0, false) {
+                m.remove(desktop);
+                return Ok(());
+            }
+            busy
+        };
+        if Instant::now() >= deadline {
+            return Err(format!("{desktop}: {viewers_left} viewer(s) registered, {} session member(s), event pump running: {}, capture running: {hub}", session.0, session.1));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The socket ended: out of the registry and the session, the lease freed

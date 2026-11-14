@@ -121,6 +121,7 @@ fn live(w: u32, h: u32) -> Live {
     let bin = std::env::var("DESKD_LIVE_BIN").expect("DESKD_LIVE_BIN: a built k2-deskd");
     let home = k2_core::test_env::TempHome::new();
     k2_core::db::init_for_tests();
+    settle_for_test(CONSOLE, Duration::from_secs(10)).unwrap_or_else(|e| panic!("the last test's desktop stream is still open: {e}"));
     let (xvfb, display) = xvfb(w, h);
     let (d, bus) = (display.clone(), std::env::var("DBUS_SESSION_BUS_ADDRESS").ok());
     let env = move || {

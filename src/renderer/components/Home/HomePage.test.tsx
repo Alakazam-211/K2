@@ -196,6 +196,7 @@ import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewS
 import { homeRooms } from '@/stores/home-rooms'
 import { HOME_NAV_EDGE_TINT, otherRowOpenTitle } from './HomeSidebar'
 import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
+import { NAV_COLLAPSE_GAP_PX } from '@/components/Sidebar/SidebarCollapseButton'
 import { DRAWER_HEADER_BUTTON_CLASS } from '@/components/Layout/DrawerTabBarToggle'
 import { __resetAddPickerListingsForTests } from './HomeAddPanels'
 import { ADD_TO_HOME_MARGIN, ADD_TO_HOME_MAX, ADD_TO_HOME_SHEET_BELOW_PX, ADD_TO_HOME_SIZE_CLASS } from './AddToHomeModal'
@@ -924,6 +925,15 @@ describe('Home — the Agents page shell', () => {
       expect(footer.contains(nav.querySelector('[data-home-group-row]'))).toBe(true)
       // The button's own padding is the gap above the bottom bar.
       expect(bottomBar.className).toContain('[[data-setup-checklist-collapsed]+&]:pt-0')
+      // One gap from the icons to Get started's top edge in both states,
+      // NAV_COLLAPSE_GAP_PX (8px = Tailwind's 2): the button's section pads
+      // its fill down by it (py-2) and the icon row adds nothing; the open
+      // list starts with its line, so the icon row pads by it instead.
+      expect(NAV_COLLAPSE_GAP_PX).toBe(8)
+      expect((button.firstElementChild as HTMLElement).className.split(/\s+/)).toContain('py-2')
+      expect(footer.className.split(/\s+/)).toContain('has-[+[data-setup-checklist]]:pb-2')
+      expect(footer.className).not.toMatch(/(^|\s)pb-/)
+      expect(button.matches('[data-setup-checklist]')).toBe(false)
       // The open list sits in the same place, still a child of the nav's
       // column (its 45% cap is of the nav).
       setDoc({})
@@ -932,6 +942,10 @@ describe('Home — the Agents page shell', () => {
       expect(list.className).toContain('max-h-[45%]')
       expect(footer.nextElementSibling).toBe(list)
       expect(list.nextElementSibling).toBe(bottomBar)
+      // The open list's top edge is its line (border-t), so the icon row's
+      // has-[+[data-setup-checklist]] padding is the whole gap.
+      expect(list.matches('[data-setup-checklist]')).toBe(true)
+      expect(list.className.split(/\s+/)).toContain('border-t')
     } finally {
       resetFirstRunForTests()
     }

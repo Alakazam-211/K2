@@ -593,7 +593,11 @@ export default function HomeSidebar(): React.JSX.Element {
           checklist stays a child of the nav's column, so its open list keeps
           its cap of 45% of the nav. (Zen Mode is the window's top-bar
           toggle, prd-zen-gardens-v1 G5/G6.) */}
-      <div className="flex flex-col px-3 pt-1" data-home-footer="">
+      {/* The same 8px (NAV_COLLAPSE_GAP_PX) from the icons to Get started's
+          top edge either way: the button's own padding gives it; the open
+          list (or the set-up line) starts with its line, so the row gives
+          it here. The fold between them keeps that edge where it is. */}
+      <div className="flex flex-col px-3 pt-1 has-[+[data-setup-checklist]]:pb-2" data-home-footer="">
         <div className="flex justify-center no-drag" data-home-group-row="">
           <HomeGroupBar {...groups.bar} />
         </div>

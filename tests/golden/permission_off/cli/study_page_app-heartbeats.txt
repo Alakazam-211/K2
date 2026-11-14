@@ -90,6 +90,10 @@ WAIT REASONS (waitReason → meaning → reference copy)
                            "invalid schedule: <detail>"
   wakeup_empty             WAKEUP.md has no instructions. Stays enabled.
                            "waiting: WAKEUP.md is empty"
+  wakeup_waiting           WAKEUP.md is missing or can't be read. Stays enabled; each
+                           due fire is skipped and retried until it can be read.
+                           waitDetail = since when, how many fires skipped, why.
+                           "waiting: WAKEUP.md missing, K2 keeps retrying"
   no_agent                 The workspace has no agent to wake.
                            "waiting: no agent in this workspace"
   no_project               The workspace folder is gone.
@@ -98,7 +102,9 @@ WAIT REASONS (waitReason → meaning → reference copy)
                            "disabled"
   disabled:failures        Turned off after 5 failed fires.
                            "disabled: repeated failures"
-  disabled:wakeup_missing  Turned off: WAKEUP.md was deleted.
+  disabled:wakeup_missing  Turned off by an older K2 when WAKEUP.md could not be
+                           read. K2 no longer does this; such rows stay off until
+                           turned on.
                            "disabled: WAKEUP.md missing"
   disabled:wakeup_empty    Old auto-disable relabelled (the file was only empty).
                            "disabled: WAKEUP.md is empty"

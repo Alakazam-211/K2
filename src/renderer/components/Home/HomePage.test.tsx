@@ -198,6 +198,8 @@ import { HOME_NAV_EDGE_TINT, otherRowOpenTitle } from './HomeSidebar'
 import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 import { DRAWER_HEADER_BUTTON_CLASS } from '@/components/Layout/DrawerTabBarToggle'
 import { __resetAddPickerListingsForTests } from './HomeAddPanels'
+import { ADD_TO_HOME_MARGIN, ADD_TO_HOME_MAX, ADD_TO_HOME_SHEET_BELOW_PX, ADD_TO_HOME_SIZE_CLASS } from './AddToHomeModal'
+import { useCommandPaletteStore } from '@/stores/command-palette'
 import { HOME_AGENT_COLORS_KEY, useHomeAvatarStore } from '@/lib/home-avatars'
 
 // jsdom has neither CSS.escape nor scrollIntoView; the picker's list uses
@@ -701,89 +703,95 @@ describe('Home — the Agents page shell', () => {
     expect(menu.items[0].map((i) => i.id)).not.toContain('mark-all-read')
   })
 
-  it('Add Agent is the one bottom button; its picker has This server and From a server', () => {
+  it('the bottom row is the ⌘K field and +; + opens Add to Home on the current group, one list per source', async () => {
     render(<Shell />)
-    const bar = screen.getByText('Add Agent').closest('div')
-    if (!bar) throw new Error('no bottom bar')
-    // The bar: Add Agent alone (« is in the top row).
-    expect(Array.from(bar.querySelectorAll(':scope > button, :scope > [data-nav-collapse-slot] > button')).map((b) => b.textContent?.trim() || b.getAttribute('aria-label'))).toEqual([
-      'Add Agent',
-    ])
-    expect(homeSidebar().querySelector('[data-nav-footer] [data-nav-collapse]')).toBeNull()
+    const home = useHomesStore.getState().homes[0]
+    const row = homeSidebar().querySelector('[data-home-footer-row]') as HTMLElement
+    expect(within(homeSidebar()).queryByText('Add Agent')).toBeNull()
+    const field = within(row).getByRole('textbox', { name: 'Search workspaces (⌘K)' })
+    const plus = within(row).getByRole('button', { name: 'Add to Home' })
+    expect(field.compareDocumentPosition(plus) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(plus.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(row.className).toContain('gap-2')
 
-    const addButton = screen.getByText('Add Agent').closest('button')
-    if (!addButton) throw new Error('no Add Agent button')
-    expect(addButton.getAttribute('aria-haspopup')).toBe('dialog')
-    fireEvent.click(addButton)
-    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
-    expect(within(picker).getByText('This server')).toBeTruthy()
-    expect(within(picker).getByText('From a server')).toBeTruthy()
-
-    fireEvent.click(within(picker).getByText('This server'))
-    expect(picker.textContent).toContain('Agents on This computer')
-    // T2.3: an agent already on this Home stays in the list, checked.
-    const cortana = within(picker).getByRole('option', { name: /Cortana/ })
+    fireEvent.click(plus)
+    const dialog = screen.getByRole('dialog', { name: 'Add to Home' })
+    expect(dialog.hasAttribute('data-add-to-home-modal')).toBe(true)
+    const addsTo = dialog.querySelector('[data-add-to]') as HTMLElement
+    expect(addsTo.firstChild?.textContent).toBe('Adds to')
+    expect(addsTo.querySelector('b')?.textContent).toBe(home.name)
+    // The group's own glyph (here its number), not read aloud.
+    expect(addsTo.querySelector('[aria-hidden="true"]')?.textContent).toBe('1')
+    // One kind to add: no tab bar.
+    expect(within(dialog).queryByRole('tablist')).toBeNull()
+    // A section per source: this computer (connected), then each saved server.
+    const groups = within(dialog).getAllByRole('group')
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['This computer', 'Box B', 'Box C'])
+    expect(groups[0].querySelector('[data-add-source-head]')?.textContent).toBe('This computerconnected')
+    // An agent already in the group says so and can't be picked.
+    const cortana = within(groups[0]).getByRole('option', { name: /Cortana/ })
     expect(cortana.getAttribute('aria-disabled')).toBe('true')
-    expect(cortana.getAttribute('data-row-state')).toBe('checked')
-    expect(cortana.getAttribute('title')).toBe('Already on Group 1')
-    const nova = within(picker).getByRole('option', { name: /Nova/ })
-    expect(nova.getAttribute('data-row-state')).toBe('pickable')
-    // Clicking the checked row does nothing (Q4).
+    expect(cortana.querySelector('[data-add-in-group]')?.textContent).toBe(`In ${home.name}`)
     fireEvent.click(cortana)
-    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toEqual([
-      'cortana::local',
-      'bee::b.k2.dev',
-      'cee::c.k2.dev',
-    ])
+    expect(screen.getByRole('dialog', { name: 'Add to Home' })).toBe(dialog)
+    // Picking adds to the current group, closes, and gives focus back to +.
+    const nova = within(groups[0]).getByRole('option', { name: /Nova/ })
+    expect(nova.getAttribute('aria-disabled')).toBeNull()
+    expect(nova.querySelector('[data-add-go]')?.textContent).toBe('Add')
     fireEvent.click(nova)
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('nova::local')
-    // The picker stays open and Nova is now checked.
-    expect(screen.getByRole('dialog', { name: 'Add Agent' })).toBe(picker)
-    expect(within(picker).getByRole('option', { name: /Nova/ }).getAttribute('data-row-state')).toBe('checked')
+    expect(screen.queryByRole('dialog', { name: 'Add to Home' })).toBeNull()
+    expect(document.activeElement).toBe(plus)
+    // The new row gets a brief wash.
+    expect(homeSidebar().querySelector('[data-home-row="nova::local"]')?.hasAttribute('data-just-added')).toBe(true)
   })
 
-  it('This server search matches name, path and handle; ↓ Enter adds; Esc closes (T2.3, P26, P35)', async () => {
+  it('Add to Home: the search matches name, path and handle; ↓ skips taken agents; Esc closes (T2.3, P26, P35)', async () => {
     render(<Shell />)
-    fireEvent.click(screen.getByText('Add Agent'))
-    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
-    fireEvent.click(within(picker).getByText('This server'))
-    const input = within(picker).getByRole('combobox')
-    const listbox = within(picker).getByRole('listbox')
-    expect(input.getAttribute('aria-controls')).toBe(listbox.id)
-    const shown = (): string[] => within(picker).queryAllByRole('option').map((o) => o.textContent ?? '')
+    const plus = within(homeSidebar()).getByRole('button', { name: 'Add to Home' })
+    fireEvent.click(plus)
+    const dialog = screen.getByRole('dialog', { name: 'Add to Home' })
+    const input = within(dialog).getByRole('textbox', { name: 'Search agents' })
+    expect((input as HTMLInputElement).placeholder).toBe('Search agents...')
+    const shown = (): string[] =>
+      within(within(dialog).getByRole('group', { name: 'This computer' })).queryAllByRole('option').map((o) => o.getAttribute('aria-label') ?? '')
 
     fireEvent.change(input, { target: { value: '/w/nov' } })
-    expect(shown()).toEqual(['NNovanova'])
+    expect(shown()).toEqual(['Nova, add to Group 1'])
     fireEvent.change(input, { target: { value: 'cortana' } })
-    expect(shown()).toEqual(['CCortanacortana'])
+    expect(shown()).toEqual(['Cortana, already in Group 1'])
     fireEvent.change(input, { target: { value: 'zzz' } })
-    expect(shown()).toEqual([])
-    expect(picker.textContent).toContain('No agents match')
+    expect(within(dialog).queryByRole('group', { name: 'This computer' })).toBeNull()
+    expect(dialog.querySelector('[data-add-empty]')?.textContent).toBe('No agents match “zzz”')
 
-    // The search box takes focus when the list opens.
+    // The search box takes focus when it opens.
     await act(async () => {
       await new Promise((r) => requestAnimationFrame(() => r(null)))
     })
     expect(document.activeElement).toBe(input)
 
-    // Arrow keys skip the checked Cortana: ↓ lands on Nova.
+    // ↓ skips the taken Cortana and lands on Nova; the list is one tab stop.
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.keyDown(input, { key: 'ArrowDown' })
-    fireEvent.keyDown(input, { key: 'Enter' })
-    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('nova::local')
+    const nova = within(dialog).getByRole('option', { name: /Nova/ })
+    expect(document.activeElement).toBe(nova)
+    expect(nova.tabIndex).toBe(0)
+    expect(within(dialog).getByRole('option', { name: /Cortana/ }).tabIndex).toBe(-1)
 
-    // Esc in the search box reaches the sidebar's listener and closes.
-    fireEvent.keyDown(input, { key: 'Escape' })
-    expect(screen.queryByRole('dialog', { name: 'Add Agent' })).toBeNull()
+    // Esc closes it, and focus goes back to +.
+    fireEvent.keyDown(nova, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Add to Home' })).toBeNull()
+    expect(document.activeElement).toBe(plus)
+    expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).not.toContain('nova::local')
   })
 
-  it('Zen shown (here: the chord, no click on Home) closes the open picker (P31, G6)', async () => {
+  it('Zen shown (here: the chord, no click on Home) closes Add to Home (P31, G6)', async () => {
     const { toggleZenFromEscape, exitZen } = await import('@/lib/zen/zen-view')
     const { zenAvailable } = await import('@/lib/zen/zen-platform')
     if (!zenAvailable()) throw new Error('Zen is not available in this test environment')
     render(<Shell />)
-    fireEvent.click(screen.getByText('Add Agent'))
-    expect(screen.getByRole('dialog', { name: 'Add Agent' })).toBeTruthy()
+    fireEvent.click(within(homeSidebar()).getByRole('button', { name: 'Add to Home' }))
+    expect(screen.getByRole('dialog', { name: 'Add to Home' })).toBeTruthy()
     try {
       await act(async () => {
         toggleZenFromEscape()
@@ -986,23 +994,113 @@ describe('Home — the Agents page shell', () => {
     expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-pin', 'home-remove'])
   })
 
-  it('From a server is one list with a section per saved server, minus the connected one (Q3)', async () => {
+  it('the ⌘K field is the palette\'s entry: a click or typing opens it, the text carried over; it never filters', () => {
     render(<Shell />)
-    fireEvent.click(screen.getByText('Add Agent'))
-    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
-    fireEvent.click(within(picker).getByText('From a server'))
-    const groups = within(picker).getAllByRole('group')
-    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Box B', 'Box C'])
-    expect(within(picker).queryByText('This computer')).toBeNull()
+    const field = within(homeSidebar()).getByRole('textbox', { name: 'Search workspaces (⌘K)' }) as HTMLInputElement
+    expect(field.placeholder).toBe('Search workspaces…')
+    expect(field.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(field.getAttribute('aria-keyshortcuts')).toBe('Meta+K')
+    expect(homeSidebar().querySelector('[data-home-palette-kbd]')?.textContent).toBe('⌘K')
+    const rowsBefore = homeSidebar().querySelectorAll('[data-home-row]').length
+    fireEvent.click(field)
+    expect(useCommandPaletteStore.getState()).toMatchObject({ isOpen: true, prefill: '' })
+    act(() => useCommandPaletteStore.getState().close())
+    fireEvent.change(field, { target: { value: 'n' } })
+    expect(useCommandPaletteStore.getState()).toMatchObject({ isOpen: true, prefill: 'n' })
+    // The field itself keeps no text and filters nothing.
+    expect(field.value).toBe('')
+    expect(homeSidebar().querySelectorAll('[data-home-row]').length).toBe(rowsBefore)
+    act(() => useCommandPaletteStore.getState().close())
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect(useCommandPaletteStore.getState().isOpen).toBe(true)
+    act(() => useCommandPaletteStore.getState().close())
+  })
+
+  it('tab order: …, «, the list, the group bar, search, +', () => {
+    render(<Shell />)
+    const nav = homeSidebar()
+    const order = [
+      nav.querySelector('[data-group-edit-open]'),
+      nav.querySelector('[data-group-name-header] [data-nav-collapse]'),
+      nav.querySelector('[data-testid="home-nav-list"]'),
+      nav.querySelector('[data-home-group-bar]'),
+      nav.querySelector('[data-home-palette-input]'),
+      nav.querySelector('[data-home-add-open="footer"]'),
+    ]
+    for (const el of order) expect(el).not.toBeNull()
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+  })
+
+  it('the rail: « then … at the top; one search (the palette) then + at the bottom; + opens Add to Home', () => {
+    useSidebarStore.setState({ isCollapsed: true })
+    render(<Shell />)
+    const rail = document.querySelector('[data-home-rail]') as HTMLElement
+    const top = rail.querySelector('[data-home-rail-top]') as HTMLElement
+    expect(Array.from(top.querySelectorAll('button')).map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Open workspaces sidebar',
+      'Edit groups (Group 1)',
+    ])
+    const bottom = rail.querySelector('[data-home-rail-bottom]') as HTMLElement
+    expect(Array.from(bottom.querySelectorAll('button')).map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Search workspaces (⌘K)',
+      'Add to Home',
+    ])
+    // One search entry only, below the group icons.
+    expect(rail.querySelectorAll('[aria-label="Search workspaces (⌘K)"], [title="Search Workspaces (⌘K)"]').length).toBe(1)
+    const bar = rail.querySelector('[data-home-group-bar]') as HTMLElement
+    expect(bar.compareDocumentPosition(bottom) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(within(bottom).getByRole('button', { name: 'Search workspaces (⌘K)' }))
+    expect(useCommandPaletteStore.getState().isOpen).toBe(true)
+    act(() => useCommandPaletteStore.getState().close())
+    // + opens Add to Home right here, without opening the nav.
+    const plus = within(bottom).getByRole('button', { name: 'Add to Home' })
+    fireEvent.click(plus)
+    expect(screen.getByRole('dialog', { name: 'Add to Home' })).toBeTruthy()
+    expect(useSidebarStore.getState().isCollapsed).toBe(true)
+    fireEvent.click(screen.getByTestId('dialog-close'))
+    expect(screen.queryByRole('dialog', { name: 'Add to Home' })).toBeNull()
+    expect(document.activeElement).toBe(plus)
+    // « opens the nav.
+    fireEvent.click(within(top).getByRole('button', { name: 'Open workspaces sidebar' }))
+    expect(useSidebarStore.getState().isCollapsed).toBe(false)
+  })
+
+  it('Add to Home is 560 × 540 at most, 16px from the sides and 24px from the top and bottom, a sheet under 640px across', () => {
+    expect(ADD_TO_HOME_MAX).toEqual({ width: 560, height: 540 })
+    expect(ADD_TO_HOME_MARGIN).toEqual({ x: 16, y: 24 })
+    expect(ADD_TO_HOME_SHEET_BELOW_PX).toBe(640)
+    expect(ADD_TO_HOME_SIZE_CLASS.split(' ')).toEqual([
+      `w-[min(${ADD_TO_HOME_MAX.width}px,calc(var(--k2-vw)-${2 * ADD_TO_HOME_MARGIN.x}px))]`,
+      `h-[min(${ADD_TO_HOME_MAX.height}px,calc(var(--k2-vh)-${2 * ADD_TO_HOME_MARGIN.y}px))]`,
+      `max-[${ADD_TO_HOME_SHEET_BELOW_PX + 2 * ADD_TO_HOME_MARGIN.x - 1}px]:h-[calc(var(--k2-vh)-${2 * ADD_TO_HOME_MARGIN.y}px)]`,
+    ])
+    render(<Shell />)
+    fireEvent.click(within(homeSidebar()).getByRole('button', { name: 'Add to Home' }))
+    const surface = screen.getByRole('dialog', { name: 'Add to Home' })
+    for (const c of ADD_TO_HOME_SIZE_CLASS.split(' ')) expect(surface.className).toContain(c)
+  })
+
+  it('Add to Home lists each saved server in its own section, minus the connected one (Q3)', async () => {
+    render(<Shell />)
+    fireEvent.click(within(homeSidebar()).getByRole('button', { name: 'Add to Home' }))
+    const dialog = screen.getByRole('dialog', { name: 'Add to Home' })
+    const groups = within(dialog).getAllByRole('group')
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['This computer', 'Box B', 'Box C'])
     // B lists with its own login; Bee is already on this Home.
-    await waitFor(() => expect(within(groups[0]).getAllByRole('option').length).toBe(2))
-    const bee = within(groups[0]).getByRole('option', { name: /Bee/ })
-    expect(bee.getAttribute('data-row-state')).toBe('checked')
-    fireEvent.click(within(groups[0]).getByRole('option', { name: /Quill/ }))
+    await waitFor(() => expect(within(groups[1]).getAllByRole('option').length).toBe(2))
+    const bee = within(groups[1]).getByRole('option', { name: /Bee/ })
+    expect(bee.getAttribute('aria-disabled')).toBe('true')
+    // C has no login: it asks for one.
+    expect(groups[2].querySelector('[data-add-source-status]')?.getAttribute('data-add-source-status')).toBe('signin')
+    fireEvent.click(within(groups[1]).getByRole('option', { name: /Quill/ }))
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('quill::b.k2.dev')
+    expect(screen.queryByRole('dialog', { name: 'Add to Home' })).toBeNull()
     // No request for C's agents: it has no login.
     expect(fetchMock.mock.calls.map((c) => c[0]).filter((u) => u.startsWith('https://c.k2.dev/cli/'))).toEqual([])
   })
+
 })
 
 // Rosson 2026-10-30: an agent on another server keeps its own color (the
@@ -1080,22 +1178,21 @@ describe('the color of a row on another server', () => {
     expect(rowOf('Bee').innerHTML).not.toContain('evil.example')
   })
 
-  it('Add Agent from a server paints each agent in its listed color, and the added row keeps it', async () => {
+  it('Add to Home paints each agent from a server in its listed color, and the added row keeps it', async () => {
     render(<Shell />)
-    fireEvent.click(screen.getByText('Add Agent'))
-    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
-    fireEvent.click(within(picker).getByText('From a server'))
-    const groups = within(picker).getAllByRole('group')
-    await waitFor(() => expect(within(groups[0]).getAllByRole('option').length).toBe(2))
-    expect(fillOf(within(groups[0]).getByRole('option', { name: /Quill/ }))).toBe('rgb(101, 67, 33)')
-    fireEvent.click(within(groups[0]).getByRole('option', { name: /Quill/ }))
+    fireEvent.click(within(homeSidebar()).getByRole('button', { name: 'Add to Home' }))
+    const dialog = screen.getByRole('dialog', { name: 'Add to Home' })
+    const box = within(dialog).getByRole('group', { name: 'Box B' })
+    await waitFor(() => expect(within(box).getAllByRole('option').length).toBe(2))
+    expect(fillOf(within(box).getByRole('option', { name: /Quill/ }))).toBe('rgb(101, 67, 33)')
+    fireEvent.click(within(box).getByRole('option', { name: /Quill/ }))
     await waitFor(() => expect(useHomeAvatarStore.getState().colors['quill::b.k2.dev']).toBe('#654321'))
-    // The picker still lists Quill too: find the Home row by its shell.
     const quillRow = Array.from(homeSidebar().querySelectorAll('[data-agent-row]')).find((r) =>
       r.textContent?.includes('Quill'),
     )
     expect(fillOf(quillRow ?? null)).toBe('rgb(101, 67, 33)')
   })
+
 })
 
 // Rosson 2026-10-16: "When going to home, if there is no agent selected,

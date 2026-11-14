@@ -193,3 +193,44 @@ describe('Cmd+K elsewhere', () => {
     expect(active().projectId).toBe('pc')
   })
 })
+
+describe('the palette from the Home nav (K2 Design: the ⌘K field)', () => {
+  const sections = (): string[] => Array.from(document.querySelectorAll('[data-palette-section]')).map((el) => el.textContent ?? '')
+  const projectsShown = (): string[] =>
+    Array.from(document.querySelectorAll('[data-palette-project]')).map((el) => el.getAttribute('data-palette-project') ?? '')
+
+  it('on Home, the current group’s agents rank first, under “In <group>”, then the rest', () => {
+    useProjectsStore.setState({ projects: [project('pc', 'cee'), project('pa', 'alpha'), project('pb', 'bee')] } as never)
+    usePageViewStore.getState().setPage('home')
+    act(() => useCommandPaletteStore.getState().open())
+    expect(sections()).toEqual(['In Home', 'Workspaces'])
+    expect(projectsShown()).toEqual(['pa', 'pb', 'pc'])
+    // Enter picks the first: an agent of this group.
+    fireEvent.keyDown(screen.getByPlaceholderText(/Search workspaces/), { key: 'Enter' })
+    expect(active().projectId).toBe('pa')
+  })
+
+  it('off Home nothing ranks: one Workspaces list in its own order', () => {
+    useProjectsStore.setState({ projects: [project('pc', 'cee'), project('pa', 'alpha'), project('pb', 'bee')] } as never)
+    act(() => useCommandPaletteStore.getState().open())
+    expect(sections()).toEqual(['Workspaces'])
+    expect(projectsShown()).toEqual(['pc', 'pa', 'pb'])
+  })
+
+  it('opens with the text the field carried over, the caret after it', async () => {
+    usePageViewStore.getState().setPage('home')
+    act(() => useCommandPaletteStore.getState().open('be'))
+    const input = screen.getByPlaceholderText(/Search workspaces/) as HTMLInputElement
+    expect(input.value).toBe('be')
+    expect(projectsShown()).toEqual(['pb'])
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(document.activeElement).toBe(input)
+    expect([input.selectionStart, input.selectionEnd]).toEqual([2, 2])
+    // Closing drops the text: the next open (⌘K) starts empty.
+    act(() => useCommandPaletteStore.getState().close())
+    act(() => useCommandPaletteStore.getState().toggle())
+    expect((screen.getByPlaceholderText(/Search workspaces/) as HTMLInputElement).value).toBe('')
+  })
+})

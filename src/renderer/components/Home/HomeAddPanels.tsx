@@ -46,6 +46,7 @@ import { groupWorkspacesForFilter } from '@/components/Feedback/WorkspaceFilterD
 import {
   SearchableAgentList,
   tokenAndMatch,
+  type AgentListAvatar,
   type AgentListRow,
   type AgentListSection,
 } from '@/components/ui/SearchableAgentList'
@@ -305,13 +306,13 @@ function createLimiter(limit: number): <T>(fn: () => Promise<T>) => Promise<T> {
   }
 }
 
-interface ServerChoice {
+export interface ServerChoice {
   key: string
   label: string
   sub: string
 }
 
-function SectionStatus({
+export function SectionStatus({
   listing,
   label,
   onRetry,
@@ -354,22 +355,20 @@ function SectionStatus({
   }
 }
 
-function FromServerList({
-  home,
-  avatarFor,
-  onBack,
-  onAdded,
-}: {
-  home: Home
-  avatarFor?: HomeAvatarLookup
-  onBack: () => void
-  onAdded?: (address: string) => void
-}): React.JSX.Element {
+/** The saved servers a Home can add from (the switcher list, plus This
+ *  computer when the window is on a remote), minus the connected one and
+ *  any Voice & Chat only server, with each one's listing: loaded when it
+ *  first shows, re-listed when its token changes, memoised for
+ *  `LISTING_MEMO_MS`, at most `LISTING_CONCURRENCY` at once. Shared by the
+ *  Add Agent picker's From a server and Add to Home. */
+export function useSavedServerListings(enabled = true): {
+  servers: ServerChoice[]
+  listings: Record<string, ServerListing>
+  load: (key: string, force: boolean) => void
+} {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hosts = useConnectHostStore((s) => s.hosts)
   const connectedKey = activeHomeHostKey(activeHost)
-  const onHome = useOnHome(home)
-  const [query, setQuery] = useState('')
   const [listings, setListings] = useState<Record<string, ServerListing>>({})
   const limiter = useRef(createLimiter(LISTING_CONCURRENCY))
   const seq = useRef(new Map<string, number>())
@@ -379,6 +378,7 @@ function FromServerList({
   // This computer first, then the rest by label.
   const servers = useMemo((): ServerChoice[] => {
     const out: ServerChoice[] = []
+    if (!enabled) return out
     if (connectedKey !== LOCAL_HOME_HOST) out.push({ key: LOCAL_HOME_HOST, label: 'This computer', sub: 'local' })
     const seen = new Set(out.map((s) => s.key))
     const sorted = [...hosts].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
@@ -391,7 +391,7 @@ function FromServerList({
       out.push({ key, label: h.label, sub: hostDisplayAddress(h) })
     }
     return out
-  }, [hosts, connectedKey])
+  }, [hosts, connectedKey, enabled])
 
   useEffect(() => {
     alive.current = true
@@ -482,6 +482,24 @@ function FromServerList({
     }
   }, [hosts, servers, load])
 
+  return { servers, listings, load }
+}
+
+function FromServerList({
+  home,
+  avatarFor,
+  onBack,
+  onAdded,
+}: {
+  home: Home
+  avatarFor?: HomeAvatarLookup
+  onBack: () => void
+  onAdded?: (address: string) => void
+}): React.JSX.Element {
+  const onHome = useOnHome(home)
+  const [query, setQuery] = useState('')
+  const { servers, listings, load } = useSavedServerListings()
+
   const valueMap = useRef(new Map<string, { hostKey: string; w: ListedWorkspace }>())
   const hasQuery = query.trim().length > 0
   const sections = useMemo((): AgentListSection[] => {
@@ -554,4 +572,130 @@ function FromServerList({
       )}
     </>
   )
+}
+
+// ── Every addable agent, one list (Add to Home, the Groups dialog) ─────────
+
+/** One agent a Home can hold, from any server this computer can list. */
+export interface AddableAgent {
+  /** Unique across sources: `<workspace id>@<host key>`. */
+  value: string
+  name: string
+  handle: string
+  /** Its Home row address (`handle::host`). */
+  address: string
+  avatar: AgentListAvatar
+  /** Already a row on the Home asked about. */
+  inGroup: boolean
+  /** What the search reads besides the name: handle and path. */
+  keywords: string[]
+}
+
+/** One server's agents (or why there are none to show). */
+export interface AddableSource {
+  key: string
+  /** "This computer" (or the connected server's name), or a saved server's. */
+  label: string
+  /** "connected", or the saved server's address. */
+  sub: string
+  connected: boolean
+  /** The connected server is always `ok`. */
+  listing: ServerListing
+  retry: () => void
+  agents: AddableAgent[]
+}
+
+/** Every token of `query` is in the name, handle or path (any order,
+ *  ignoring case): the pickers' own search (`tokenAndMatch`). */
+export function addableMatches(a: AddableAgent, query: string): boolean {
+  return tokenAndMatch({ value: a.value, label: a.name, avatar: a.avatar, state: 'pickable', keywords: a.keywords }, query)
+}
+
+/** Today's Add Agent sources as one list: the connected server's agents
+ *  (in the projects store's order), then each saved server's (desktop),
+ *  each agent marked when it is already on `home`. `add(value)` puts one
+ *  on `home` through the shared helper and returns its address. */
+export function useAddableAgents(
+  home: Home,
+  avatarFor?: HomeAvatarLookup,
+): { sources: AddableSource[]; add: (value: string) => string | null } {
+  const activeHost = useConnectHostStore((s) => s.activeHost)
+  const projects = useProjectsStore((s) => s.projects)
+  const connectedKey = activeHomeHostKey(activeHost)
+  const onHome = useOnHome(home)
+  const web = isWebClient()
+  // The web page has no saved servers to list (From a server is desktop only).
+  const { servers, listings, load } = useSavedServerListings(!web)
+
+  const built = useMemo(() => {
+    const values = new Map<string, { hostKey: string; w: ListedWorkspace }>()
+    const agentOf = (hostKey: string, w: ListedWorkspace, avatar: AgentListAvatar): AddableAgent | null => {
+      const handle = workspaceHandle(w)
+      if (!handle) return null
+      const value = `${w.id}@${hostKey}`
+      const address = homeAddress(handle, hostKey)
+      values.set(value, { hostKey, w })
+      return { value, name: w.name, handle, address, avatar, inGroup: onHome.has(address), keywords: [handle, w.path ?? ''] }
+    }
+    const sources: AddableSource[] = []
+    const here: AddableAgent[] = []
+    for (const p of projects) {
+      const a = agentOf(connectedKey, p, {
+        kind: 'workspace',
+        path: p.path,
+        name: p.name,
+        color: p.color,
+        id: p.id,
+        iconUrl: p.iconUrl,
+        // The connected server is the one `primaryScope()` asks.
+        fetchIcon: true,
+      })
+      if (a) here.push(a)
+    }
+    sources.push({
+      key: connectedKey,
+      label: connectedServerLabel(activeHost),
+      sub: 'connected',
+      connected: true,
+      listing: { kind: 'ok', workspaces: [] },
+      retry: () => undefined,
+      agents: here,
+    })
+    if (!web) {
+      for (const s of servers) {
+        const listing = listings[s.key] ?? { kind: 'loading' }
+        const agents: AddableAgent[] = []
+        if (listing.kind === 'ok') {
+          const sorted = [...listing.workspaces].sort((a, b) => a.name.localeCompare(b.name))
+          for (const w of sorted) {
+            const handle = workspaceHandle(w)
+            const address = handle ? homeAddress(handle, s.key) : null
+            const a = agentOf(s.key, w, {
+              kind: 'workspace',
+              // Its own cache key: ProjectAvatar caches by path, and this
+              // path means nothing on the connected server.
+              path: `home-add:${s.key}:${w.path ?? w.id}`,
+              name: w.name,
+              color: agentLookColor(w.color) ?? PICKER_OTHER_SERVER_COLOR,
+              id: w.id,
+              iconUrl: listedIconUrl(w.iconUrl) ?? (address && avatarFor ? avatarFor(address) : null),
+              fetchIcon: false,
+            })
+            if (a) agents.push(a)
+          }
+        }
+        sources.push({ key: s.key, label: s.label, sub: s.sub, connected: false, listing, retry: () => load(s.key, true), agents })
+      }
+    }
+    return { sources, values }
+  }, [projects, connectedKey, activeHost, onHome, servers, listings, load, avatarFor, web])
+
+  const add = useCallback(
+    (value: string): string | null => {
+      const hit = built.values.get(value)
+      return hit ? addTo(home, hit.hostKey, hit.w) : null
+    },
+    [built, home],
+  )
+  return { sources: built.sources, add }
 }

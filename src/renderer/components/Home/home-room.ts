@@ -69,11 +69,23 @@ export function useHomeRoomSelected(): boolean {
   }, [onHome, home.rows, activeProjectId, projects, connectedKey, remoteShown])
 }
 
-/** Open state of the Add Agent picker. The collapsed rail's + opens it
- *  after expanding the sidebar, so it is not component-local. */
-export const useHomeAddPickerStore = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({
+/** Open state of Add to Home (the nav's +, the rail's +, the empty
+ *  group's +), not component-local: the rail and the nav both open it, and
+ *  Zen closes it. `opener` is the control that opened it (focus goes back
+ *  there on close); `justAdded` is the row it added last, washed briefly in
+ *  the list. */
+export const useHomeAddPickerStore = create<{
+  open: boolean
+  opener: HTMLElement | null
+  justAdded: string | null
+  setOpen: (open: boolean, opener?: HTMLElement | null) => void
+  setJustAdded: (address: string | null) => void
+}>((set) => ({
   open: false,
-  setOpen: (open) => set({ open }),
+  opener: null,
+  justAdded: null,
+  setOpen: (open, opener = null) => set(open ? { open, opener } : { open: false }),
+  setJustAdded: (justAdded) => set({ justAdded }),
 }))
 
 /** Where a row lives, for the row's machine chip. `null` = the connected

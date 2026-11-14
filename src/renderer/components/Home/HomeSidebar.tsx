@@ -6,8 +6,8 @@
 // their 1–9 numbers and ⌘1–9 still opens them; ⌘K stays on the keyboard,
 // the menus and the rails), the row list, the group icons right under it
 // (one per group, no divider, `groups/HomeGroupBar`), Get started, and
-// the bottom bar: ONE button in the Add Workspace spot — Add Agent. Add
-// Agent opens one picker with This server and From a server.
+// the bottom bar: the ⌘K field (the command palette's entry) and + (Add to
+// Home on the current group, `AddToHomeModal`).
 //
 // Rows:
 //   - A row on the connected server paints as the Agents row itself
@@ -23,7 +23,7 @@
 //     the floor up to that). Off, or below the floor, it switches this
 //     window's server (H15) and lands on Home.
 
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
@@ -54,7 +54,6 @@ import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
-import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
 import { RowDropLine, dropTargetIndex, useRowDragReorder, type RowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import HomeGroupBar from './groups/HomeGroupBar'
@@ -64,7 +63,8 @@ import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
 import { useRowFlip } from './groups/useRowFlip'
 import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
 import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
-import { AddAgentPicker } from './HomeAddPanels'
+import { HomeNavFooterRow } from './HomeNavFooter'
+import { AddToHomeHost } from './AddToHomeModal'
 import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
 import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
 import { GrokBotHomeRow } from '@/components/GrokBots/GrokBotRows'
@@ -442,6 +442,8 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
   // "Most recent at the top" is on (K2 Design's mock).
   const agentsCaption = pinCount > 0 || !!home.recentFirst
   const lineAt = (gap: number): boolean => !!drag?.reorder.showsDropLineAt('home', gap)
+  // The row Add to Home just added: a brief wash, so it's easy to find.
+  const justAdded = useHomeAddPickerStore((s) => s.justAdded)
   return (
     <>
       {pinCount > 0 && <HomeRowCaption kind="pinned" />}
@@ -451,6 +453,8 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
           key={row.address}
           {...(drag ? { 'data-home-row': row.address } : { 'data-home-row-preview': row.address })}
           data-pinned={isPinned(row) ? '' : undefined}
+          data-just-added={drag && justAdded === row.address ? '' : undefined}
+          className={drag && justAdded === row.address ? 'bg-[var(--color-row-hover)]' : undefined}
           style={drag ? { opacity: drag.reorder.isDragging('home', idx) ? 0.4 : 1 } : undefined}
           onMouseDown={
             drag
@@ -505,9 +509,6 @@ function HomeRowsPreview({ home }: { home: Home }): React.JSX.Element {
 
 export default function HomeSidebar(): React.JSX.Element {
   const home = useHomesStore(selectedHome)
-  const pickerOpen = useHomeAddPickerStore((s) => s.open)
-  const setPickerOpen = useHomeAddPickerStore((s) => s.setOpen)
-  const barRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const groups = useHomeGroups()
 
@@ -525,23 +526,6 @@ export default function HomeSidebar(): React.JSX.Element {
     if ('pins' in plan) useHomesStore.getState().reorderPins(current.id, plan.pins)
     else useHomesStore.getState().setRowOrder(current.id, plan.rows)
   }, [])
-
-  // Close the picker on outside click / Esc.
-  useEffect(() => {
-    if (!pickerOpen) return
-    const onDown = (e: MouseEvent): void => {
-      if (barRef.current && e.target instanceof Node && !barRef.current.contains(e.target)) setPickerOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setPickerOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [pickerOpen, setPickerOpen])
 
   // Pins first, then the rest (manual or most recent first).
   const rows = displayRows(home)
@@ -587,7 +571,8 @@ export default function HomeSidebar(): React.JSX.Element {
 
       {/* The footer, with no divider: the group icons on their own row,
           then Get started (the setup checklist; nothing while it is off,
-          hidden or finished), then Add Agent (« is in the top row). The list's own bottom edge fade (ScrollEdgeFrame)
+          hidden or finished), then the ⌘K field and + (« is in the top
+          row). The list's own bottom edge fade (ScrollEdgeFrame)
           runs out just above them, only while there is more below. The
           checklist stays a child of the nav's column, so its open list keeps
           its cap of 45% of the nav. (Zen Mode is the window's top-bar
@@ -601,23 +586,16 @@ export default function HomeSidebar(): React.JSX.Element {
       <SetupChecklist />
 
       {/* 8px under the group icons (the footer's gap); the Get started
-          button's own padding is that gap when it sits between them. */}
+          button's own padding is that gap when it sits between them. The
+          row: the ⌘K field (the command palette's entry) and + (Add to
+          Home). */}
       <div
-        ref={barRef}
         className="relative flex flex-col gap-2 px-3 pb-3 pt-2 [[data-setup-checklist-collapsed]+&]:pt-0"
         data-nav-footer=""
       >
-        {pickerOpen && <AddAgentPicker home={home} />}
-        <div className={NAV_FOOTER_ROW_CLASS}>
-          <NavFooterButton
-            label="Add Agent"
-            icon={<NavFooterPlus />}
-            onClick={() => setPickerOpen(!pickerOpen)}
-            aria-expanded={pickerOpen}
-            aria-haspopup="dialog"
-          />
-        </div>
+        <HomeNavFooterRow />
       </div>
+      <AddToHomeHost />
     </div>
   )
 }

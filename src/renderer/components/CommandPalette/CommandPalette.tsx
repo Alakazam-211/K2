@@ -7,6 +7,7 @@ import { useFocusGroupsStore } from '../../stores/focus-groups'
 import { useSidebarStore } from '../../stores/sidebar'
 import { focusedRoom } from '../../stores/window-room'
 import { openAgent } from '@/lib/page-selection'
+import { useCurrentHomeGroup } from './current-home-group'
 import { webFeatures } from '@/web/features'
 import ProjectAvatar from '../Sidebar/ProjectAvatar'
 
@@ -26,6 +27,8 @@ interface ProjectResult {
   color: string
   focusGroupId: string | null
   iconUrl?: string | null
+  /** On Home: the agent is in the current group (they rank first). */
+  inGroup?: boolean
 }
 
 /** Browser-pane arc — the ONLY manual way to mint a browser tab (every
@@ -70,17 +73,24 @@ export default function CommandPalette(): React.JSX.Element | null {
 
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const group = useCurrentHomeGroup()
+  const groupIds = group.ids
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // Reset state when opening
+  // Reset state when opening, with any text an entry field carried over
+  // (the Home nav's search field), the caret after it.
   useEffect(() => {
     if (isOpen) {
-      setQuery('')
+      const prefill = useCommandPaletteStore.getState().prefill
+      setQuery(prefill)
       setSelectedIndex(0)
       // Focus input after mount
       requestAnimationFrame(() => {
-        inputRef.current?.focus()
+        const input = inputRef.current
+        if (!input) return
+        input.focus()
+        input.setSelectionRange(input.value.length, input.value.length)
       })
     }
   }, [isOpen])
@@ -139,10 +149,13 @@ export default function CommandPalette(): React.JSX.Element | null {
       }
     }
 
-    // Projects
-    const matchingProjects = projects.filter(
+    // Projects. On Home, the current group's agents first.
+    const matching = projects.filter(
       (p) => fuzzyMatch(p.name, q) || fuzzyMatch(p.path, q)
     )
+    const matchingProjects = groupIds.size > 0
+      ? [...matching.filter((p) => groupIds.has(p.id)), ...matching.filter((p) => !groupIds.has(p.id))]
+      : matching
     for (const p of matchingProjects) {
       items.push({
         type: 'project',
@@ -151,12 +164,13 @@ export default function CommandPalette(): React.JSX.Element | null {
         path: p.path,
         color: p.color,
         focusGroupId: p.focusGroupId,
-        iconUrl: p.iconUrl
+        iconUrl: p.iconUrl,
+        inGroup: groupIds.has(p.id)
       })
     }
 
     return items
-  }, [query, focusGroups, projects, focusGroupsEnabled])
+  }, [query, focusGroups, projects, focusGroupsEnabled, groupIds])
 
   // Clamp selected index when results change
   useEffect(() => {
@@ -405,18 +419,27 @@ export default function CommandPalette(): React.JSX.Element | null {
             </>
           )}
 
-          {/* Projects section */}
+          {/* Projects section: on Home, "In <group>" first, then the rest */}
           {projectResults.length > 0 && (
             <>
-              <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                Workspaces
-              </div>
               {projectResults.map((result, i) => {
                 const globalIndex = projectIndexOffset + i
                 const isSelected = globalIndex === selectedIndex
-                return (
+                const head =
+                  i === 0 || projectResults[i - 1].inGroup !== result.inGroup ? (
+                    <div
+                      key={`proj-head-${result.inGroup ? 'group' : 'all'}`}
+                      className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]"
+                      data-palette-section={result.inGroup ? 'group' : 'workspaces'}
+                    >
+                      {result.inGroup ? `In ${group.name}` : 'Workspaces'}
+                    </div>
+                  ) : null
+                return [
+                  head,
                   <div
                     key={`proj-${result.id}`}
+                    data-palette-project={result.id}
                     className="flex items-center gap-3 px-4 py-2 cursor-pointer"
                     style={{
                       background: isSelected ? 'var(--color-accent)' : 'transparent',
@@ -443,7 +466,7 @@ export default function CommandPalette(): React.JSX.Element | null {
                       </span>
                     </div>
                   </div>
-                )
+                ]
               })}
             </>
           )}

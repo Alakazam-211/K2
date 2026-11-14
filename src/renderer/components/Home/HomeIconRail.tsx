@@ -1,5 +1,6 @@
-// Home on the Agents shell — the collapsed rail. Same chrome as the Agents
-// `IconRail` (48px, command palette, + then the collapse button), with
+// Home on the Agents shell — the collapsed rail (48px). At the top, « (open
+// the nav) then … (the Groups dialog); at the bottom, the one search (the
+// command palette) then + (Add to Home), as the nav's footer; between them
 // the Home roster as icons. A connected-server row is the Agents rail icon
 // itself (`ProjectIcon`); a row on another server is the same 32px button
 // with its letter avatar. Above the bottom buttons, the group bar stands
@@ -19,7 +20,12 @@ import { openHomeRow } from '@/lib/home-open'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { ProjectIcon } from '@/components/Sidebar/IconRail'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
-import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
+import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
+import { NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
+import { EllipsisIcon, SearchIcon } from 'lucide-react'
+import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
+import { NAV_PALETTE_LABEL } from './HomeNavFooter'
+import { AddToHomeHost } from './AddToHomeModal'
 import { useHomeAddPickerStore, useRowStatus } from './home-room'
 import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupChecklist'
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
@@ -110,6 +116,11 @@ function RailRowsPreview({ home }: { home: Home }): React.JSX.Element {
   )
 }
 
+/** A rail button (the mock's rail control): 32 × 32, no fill at rest and
+ *  muted ink; the row hover and secondary ink on hover; round in Glass. */
+export const RAIL_BUTTON_CLASS =
+  'no-drag flex h-8 w-8 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-secondary)] [[data-style=glass]_&]:rounded-[var(--radius-selector)]'
+
 export default function HomeIconRail(): React.JSX.Element {
   const home = useHomesStore(selectedHome)
   const groups = useHomeGroups()
@@ -121,19 +132,32 @@ export default function HomeIconRail(): React.JSX.Element {
       data-home-rail=""
       data-group-swipe-zone=""
     >
-      <button
-        data-material="frost"
-        data-frost-shape="round"
-        data-nav-control=""
-        className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors mb-1"
-        onClick={() => useCommandPaletteStore.getState().toggle()}
-        title="Search Workspaces (⌘K)"
-      >
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-      </button>
+      {/* Top: « (open the nav), then … (the Groups dialog) beneath it. */}
+      <div className="flex flex-shrink-0 flex-col items-center gap-0.5 mb-1" data-home-rail-top="">
+        <button
+          type="button"
+          data-k2-focus=""
+          data-home-rail-open=""
+          className={RAIL_BUTTON_CLASS}
+          onClick={() => useSidebarStore.getState().expand()}
+          title="Open workspaces sidebar"
+          aria-label="Open workspaces sidebar"
+        >
+          <DoubleChevron direction="right" className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          data-k2-focus=""
+          data-group-edit-open=""
+          className={RAIL_BUTTON_CLASS}
+          onClick={() => groups.editCurrent()}
+          title={`Edit groups (${groups.current.name})`}
+          aria-label={`Edit groups (${groups.current.name})`}
+          aria-haspopup="dialog"
+        >
+          <EllipsisIcon size={K2_ICON_PX} strokeWidth={K2_ICON_STROKE} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true" focusable="false" />
+        </button>
+      </div>
 
       <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden" data-home-rail-stage="" data-group-swipe-stage="">
         <GroupSwipeStrip variant="rail" renderIncoming={(g) => <RailRowsPreview home={g} />}>
@@ -151,23 +175,36 @@ export default function HomeIconRail(): React.JSX.Element {
           <GroupNameFlash id={groups.current.id} name={groups.current.name} />
         </div>
         <SetupChecklistRailButton />
-        <button
-          data-material="frost"
-          data-frost-shape="round"
-          data-nav-control=""
-          className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
-          onClick={() => {
-            useSidebarStore.getState().expand()
-            useHomeAddPickerStore.getState().setOpen(true)
-          }}
-          title="Add Agent"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-        </button>
-        <SidebarCollapseButton />
+        {/* Bottom: the one search (the command palette), then + (Add to Home). */}
+        <div className="flex flex-col items-center gap-0.5 mt-1" data-home-rail-bottom="">
+          <button
+            type="button"
+            data-k2-focus=""
+            data-home-rail-search=""
+            className={RAIL_BUTTON_CLASS}
+            onClick={() => useCommandPaletteStore.getState().toggle()}
+            title={NAV_PALETTE_LABEL}
+            aria-label={NAV_PALETTE_LABEL}
+            aria-haspopup="dialog"
+            aria-keyshortcuts="Meta+K"
+          >
+            <SearchIcon size={K2_ICON_PX} strokeWidth={K2_ICON_STROKE} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true" focusable="false" />
+          </button>
+          <button
+            type="button"
+            data-k2-focus=""
+            data-home-add-open="rail"
+            className={RAIL_BUTTON_CLASS}
+            onClick={(e) => useHomeAddPickerStore.getState().setOpen(true, e.currentTarget)}
+            title="Add to Home"
+            aria-label="Add to Home"
+            aria-haspopup="dialog"
+          >
+            <NavFooterPlus />
+          </button>
+        </div>
       </div>
+      <AddToHomeHost />
     </div>
   )
 }

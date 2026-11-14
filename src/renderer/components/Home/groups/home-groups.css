@@ -31,6 +31,14 @@ html:not([data-style="terminal"]) [data-home-group-bar] [data-group-id][data-k2-
 [data-group-bar-frame][data-fade-start] > [data-group-bar-fade="start"],
 [data-group-bar-frame][data-fade-end] > [data-group-bar-fade="end"] { visibility: visible; }
 
+/* The overflow chevrons at the bar's ends (up/down in the rail): only while
+   the groups don't fit (data-overflow on the bar, group-bar-scroll), each
+   only while more groups sit that way. Hidden, not removed, when there are
+   none that way, so the row never shifts as you page. */
+[data-home-group-bar]:not([data-overflow]) > [data-group-bar-chevron] { display: none; }
+[data-home-group-bar][data-overflow]:not([data-more-start]) > [data-group-bar-chevron="start"],
+[data-home-group-bar][data-overflow]:not([data-more-end]) > [data-group-bar-chevron="end"] { visibility: hidden; }
+
 /* The swipe's colours: the accent leaves the current icon and reaches the
    one the swipe heads to in step with it (`--group-swipe-progress`, set
    in a rAF by group-bar-ink, gliding with the strip on release). While a

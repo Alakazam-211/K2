@@ -55,7 +55,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
-import { RowDropLine, dropTargetIndex, useRowDragReorder, type RowDragReorder } from '@/components/Sidebar/row-drag-reorder'
+import { RowDropGap, dropTargetIndex, useRowDragReorder, type RowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameHeader from './groups/GroupNameHeader'
 import { useHomeGroups } from './groups/useHomeGroups'
@@ -179,7 +179,7 @@ export function pinMenuItem(home: Home, row: HomeRow): ContextMenuItemDef {
   if (isPinned(row)) return { id: 'home-unpin', label: 'Unpin' }
   const full = pinnedRows(home).length >= MAX_PINS
   return full
-    ? { id: 'home-pin', label: 'Pin', enabled: false, hint: `Up to ${MAX_PINS} pins` }
+    ? { id: 'home-pin', label: 'Pin', enabled: false, hint: `Up to ${MAX_PINS} pins. Unpin one first.` }
     : { id: 'home-pin', label: 'Pin', shortcut: `⌘${pinnedRows(home).length + 1}` }
 }
 
@@ -462,14 +462,21 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
   // "Pinned" over the pins; "Agents" over the rest once there are pins or
   // "Most recent at the top" is on (K2 Design's mock).
   const agentsCaption = pinCount > 0 || !!home.recentFirst
-  const lineAt = (gap: number): boolean => !!drag?.reorder.showsDropLineAt('home', gap)
+  // A drag opens a gap the row's height where it will land (the shared
+  // drag's opt-in gap, not the Agents nav's line), between the rows.
+  const gapAt = (gap: number): boolean => !!drag?.reorder.showsDropGapAt('home', gap)
+  const dropGap = (key: string): React.JSX.Element => <RowDropGap key={key} size={drag?.reorder.dragSize('home') ?? 0} />
+  const draggingPin = rows.some((r, i) => isPinned(r) && !!drag?.reorder.isDragging('home', i))
   // The row Add to Home just added: a brief wash, so it's easy to find.
   const justAdded = useHomeAddPickerStore((s) => s.justAdded)
   return (
     <>
       {pinCount > 0 && <HomeRowCaption kind="pinned" />}
       {rows.map((row, idx) => [
+        // At the pins' end, a pin's gap sits above "Agents", any other row's below it.
+        gapAt(idx) && draggingPin && idx === pinCount ? dropGap(`gap-${row.address}`) : null,
         agentsCaption && idx === pinCount ? <HomeRowCaption key="agents-caption" kind="agents" recentFirst={!!home.recentFirst} /> : null,
+        gapAt(idx) && !(draggingPin && idx === pinCount) ? dropGap(`gap-${row.address}`) : null,
         <div
           key={row.address}
           {...(drag ? { 'data-home-row': row.address } : { 'data-home-row-preview': row.address })}
@@ -494,14 +501,13 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
           onMouseEnter={drag && !isHomeChatRow(row) ? () => homeRowHoverPrefetch.enter(row.address) : undefined}
           onMouseLeave={drag ? () => homeRowHoverPrefetch.leave() : undefined}
         >
-          {lineAt(idx) && <RowDropLine />}
           <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
-          {idx < rows.length - 1 && idx !== pinCount - 1 && !lineAt(idx + 1) && (
+          {idx < rows.length - 1 && idx !== pinCount - 1 && !gapAt(idx + 1) && (
             <div className="border-b border-[var(--color-border)]" />
           )}
         </div>,
       ])}
-      {lineAt(rows.length) && <RowDropLine />}
+      {gapAt(rows.length) && dropGap('gap-end')}
     </>
   )
 }

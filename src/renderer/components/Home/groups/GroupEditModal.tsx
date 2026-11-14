@@ -14,8 +14,14 @@
 // on the list. Done or Esc closes it; the bar puts focus back on what
 // opened it.
 //
-// Presentational: it holds only which group is selected and which pane
-// shows; every change goes out through the callbacks (`useHomeGroups`).
+// After a delete, "<Name> deleted." with Undo sits at the foot of the group
+// list until the dialog closes (or the next delete); Undo puts the group
+// back in its old place (`onRestore`). One pane, a delete returns to the
+// list, where that line is.
+//
+// Presentational: it holds only which group is selected, which pane shows
+// and the last delete; every change goes out through the callbacks
+// (`useHomeGroups`).
 // Portalled to <body>, so no frosted or transformed nav ancestor contains it.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -24,10 +30,10 @@ import { ArrowLeftIcon } from 'lucide-react'
 import { DialogFrame, DialogScrim } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui'
 import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
-import GroupList from './GroupList'
+import GroupList, { type GroupListUndo } from './GroupList'
 import GroupDetailPane, { type GroupDetailTab } from './GroupDetailPane'
 import { GROUP_DIALOG_HEIGHT_SHARE, GROUP_DIALOG_LIST_PX, GROUP_DIALOG_MARGIN, GROUP_DIALOG_MAX, GROUP_DIALOG_TWO_PANE_MIN } from './group-bar-look'
-import type { GroupBarItem } from './HomeGroupBar'
+import type { GroupBarItem, GroupRenameResult } from './HomeGroupBar'
 
 export interface GroupEditModalProps {
   groups: readonly GroupBarItem[]
@@ -40,10 +46,12 @@ export interface GroupEditModalProps {
   /** The right pane's segment it opens on: Agents from "…", Icon from a
    *  right-click on a group's icon. Default `icon`. */
   startTab?: GroupDetailTab
-  onRename(id: string, name: string): void
+  onRename(id: string, name: string): GroupRenameResult
   onSetIcon(id: string, icon: string | null): void
   onCreate(): string | null
   onDelete(id: string): void
+  /** Undo the last delete (the group and its old index). Left out: no Undo. */
+  onRestore?(group: GroupBarItem, index: number): boolean
   onSetRecentFirst(id: string, on: boolean): void
   onReorderGroups(ids: string[]): void
   emptyNameFallback?(id: string): string
@@ -89,6 +97,7 @@ export default function GroupEditModal({
   onSetIcon,
   onCreate,
   onDelete,
+  onRestore,
   onSetRecentFirst,
   onReorderGroups,
   emptyNameFallback,
@@ -98,6 +107,8 @@ export default function GroupEditModal({
   const [justAdded, setJustAdded] = useState<string | null>(null)
   const [view, setView] = useState<'list' | 'group'>(startOn)
   const [tab, setTab] = useState<GroupDetailTab>(startTab)
+  // The last delete, for Undo (until the dialog closes).
+  const [undo, setUndo] = useState<{ group: GroupBarItem; index: number } | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const onePane = useOnePane(boxRef)
   // A deleted (or merged-away) selection falls back to the first group.
@@ -130,6 +141,42 @@ export default function GroupEditModal({
     setSelectedId(id)
     if (onePane) setView('group')
   }
+
+  // Focus goes to Undo once its line is drawn (the Delete button is gone).
+  const focusUndo = useRef(false)
+  useEffect(() => {
+    if (!focusUndo.current || !undo) return
+    focusUndo.current = false
+    boxRef.current?.querySelector<HTMLElement>('[data-group-undo-button]')?.focus()
+  }, [undo, view])
+
+  const del = (id: string): void => {
+    const at = groups.findIndex((g) => g.id === id)
+    if (at < 0) return
+    const group = groups[at]
+    onDelete(id)
+    if (!onRestore) return
+    setUndo({ group, index: at })
+    focusUndo.current = true
+    if (onePane) setView('list')
+  }
+
+  const listUndo: GroupListUndo | undefined = undo
+    ? {
+        name: undo.group.name,
+        onUndo: () => {
+          if (!onRestore?.(undo.group, undo.index)) return
+          setUndo(null)
+          setSelectedId(undo.group.id)
+          // Focus lands on the group, back in the list.
+          requestAnimationFrame(() =>
+            Array.from(boxRef.current?.querySelectorAll<HTMLElement>('[data-group-list-row]') ?? [])
+              .find((el) => el.dataset.groupListRow === undo.group.id)
+              ?.focus(),
+          )
+        },
+      }
+    : undefined
 
   return createPortal(
     <>
@@ -167,6 +214,7 @@ export default function GroupEditModal({
                   drill={onePane}
                   onSelectGroup={select}
                   onReorderGroups={onReorderGroups}
+                  undo={listUndo}
                   onCreate={() => {
                     const id = onCreate()
                     if (id) setJustAdded(id)
@@ -185,7 +233,7 @@ export default function GroupEditModal({
                   onRename={onRename}
                   onSetIcon={onSetIcon}
                   onSetRecentFirst={onSetRecentFirst}
-                  onDelete={onDelete}
+                  onDelete={del}
                   emptyNameFallback={emptyNameFallback}
                   focusName={justAdded === selected.id}
                   tab={tab}

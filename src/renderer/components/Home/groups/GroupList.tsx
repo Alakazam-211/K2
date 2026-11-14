@@ -3,8 +3,10 @@
 // with its bare 12 px glyph (the accent for the current group), its name
 // and its agent count. One tab stop: arrows move, Enter / Space / a click
 // selects (and, one pane, opens the group's page), ⌥↑ / ⌥↓ move the focused
-// group, and so does a drag (the row lifts to 40% and a line marks where it
-// lands). "New group" at the bottom makes the next "Group N".
+// group, and so does a drag (the row stays at 40% and the list opens a gap
+// the row's height where it will land, so no row hides under it). "New
+// group" at the bottom makes the next "Group N"; after a delete, "<Name>
+// deleted." with Undo sits just above it.
 //
 // Presentational: changes go out through callbacks (`useHomeGroups`).
 
@@ -29,6 +31,14 @@ export interface GroupListProps {
   onReorderGroups(ids: string[]): void
   /** Make a group; returns its id (the dialog selects it). */
   onCreate(): string | null
+  /** The last delete, offered back until the dialog closes. */
+  undo?: GroupListUndo
+}
+
+export interface GroupListUndo {
+  /** The deleted group's name. */
+  name: string
+  onUndo(): void
 }
 
 /** `ids` with the one at `from` moved to `to`. */
@@ -43,8 +53,13 @@ const ROW =
   'relative flex h-[34px] w-full cursor-pointer items-center gap-2.5 px-2.5 text-left text-[12px] text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-[calc(var(--radius-box)/2)]'
 const ROW_SELECTED = 'bg-[var(--color-wash-2)] font-semibold text-[var(--color-text-primary)]'
 
-function DropLine(): React.JSX.Element {
-  return <li aria-hidden="true" role="presentation" data-group-drop-line="" className="relative z-[4] mx-1.5 -my-px h-0.5 list-none bg-[var(--color-text-primary)]" />
+/** A row's height, the gap's when the dragged row can't be measured. */
+const ROW_PX = 34
+
+/** The gap a dragged group will land in: the row's height, empty. It takes
+ *  the drag over it, so the gap holds while the pointer is in it. */
+function DropGap({ size, onDragOver, onDrop }: { size: number; onDragOver(e: React.DragEvent): void; onDrop(e: React.DragEvent): void }): React.JSX.Element {
+  return <li aria-hidden="true" role="presentation" data-group-drop-gap="" className="list-none" style={{ height: size }} onDragOver={onDragOver} onDrop={onDrop} />
 }
 
 export default function GroupList({
@@ -55,9 +70,11 @@ export default function GroupList({
   onSelectGroup,
   onReorderGroups,
   onCreate,
+  undo,
 }: GroupListProps): React.JSX.Element {
   const ids = groups.map((g) => g.id)
   const [dragId, setDragId] = useState<string | null>(null)
+  const [dragSize, setDragSize] = useState(ROW_PX)
   const [overAt, setOverAt] = useState<number | null>(null)
   const [activeId, setActiveId] = useState(selectedId)
   const listRef = useRef<HTMLUListElement>(null)
@@ -73,9 +90,28 @@ export default function GroupList({
   }, [active])
 
   const dragFrom = dragId ? ids.indexOf(dragId) : -1
-  // The line sits where the row would land: above the hovered row when
+  // The gap opens where the row would land: above the hovered row when
   // moving up, below it when moving down.
-  const lineAt = dragId !== null && overAt !== null && overAt !== dragFrom ? (overAt > dragFrom ? overAt + 1 : overAt) : null
+  const gapAt = dragId !== null && overAt !== null && overAt !== dragFrom ? (overAt > dragFrom ? overAt + 1 : overAt) : null
+  const dropAt = (at: number): void => {
+    setOverAt(null)
+    if (!dragId || at === ids.indexOf(dragId)) return
+    onReorderGroups(moveId(ids, ids.indexOf(dragId), at))
+    setDragId(null)
+  }
+  const gap = (key: string): React.JSX.Element => (
+    <DropGap
+      key={key}
+      size={dragSize}
+      onDragOver={(e) => {
+        if (dragId) e.preventDefault()
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        if (overAt !== null) dropAt(overAt)
+      }}
+    />
+  )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-group-list="">
@@ -85,7 +121,7 @@ export default function GroupList({
             const selected = g.id === selectedId
             const lit = selected && !drill
             return [
-              lineAt === i ? <DropLine key={`line-${g.id}`} /> : null,
+              gapAt === i ? gap(`gap-${g.id}`) : null,
               <li
                 key={g.id}
                 role="option"
@@ -105,6 +141,7 @@ export default function GroupList({
                 }}
                 onDragStart={(e) => {
                   setDragId(g.id)
+                  setDragSize(e.currentTarget.offsetHeight || ROW_PX)
                   e.dataTransfer?.setData('text/plain', g.id)
                 }}
                 onDragEnd={() => {
@@ -118,10 +155,7 @@ export default function GroupList({
                 }}
                 onDrop={(e) => {
                   e.preventDefault()
-                  setOverAt(null)
-                  if (!dragId || dragId === g.id) return
-                  onReorderGroups(moveId(ids, ids.indexOf(dragId), i))
-                  setDragId(null)
+                  dropAt(i)
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -174,9 +208,23 @@ export default function GroupList({
               </li>,
             ]
           })}
-          {lineAt === groups.length && <DropLine />}
+          {gapAt === groups.length && gap('gap-end')}
         </ul>
       </ScrollEdgeFrame>
+      {undo && (
+        <div role="status" className="flex flex-shrink-0 items-center gap-2 border-t border-[var(--color-border)] py-1.5 pl-4 pr-2 type-hint text-[var(--color-text-secondary)]" data-group-undo="">
+          <span className="min-w-0 flex-1 truncate">{undo.name} deleted.</span>
+          <button
+            type="button"
+            data-group-undo-button=""
+            data-k2-focus=""
+            className="no-drag flex h-7 flex-shrink-0 cursor-pointer items-center px-2 text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-[var(--radius-pill)]"
+            onClick={undo.onUndo}
+          >
+            Undo
+          </button>
+        </div>
+      )}
       <div className={`${GROUP_DIALOG_FOOT_CLASS} px-2`} data-group-dialog-foot="list">
         <button
           type="button"

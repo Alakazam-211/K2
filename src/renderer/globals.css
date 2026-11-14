@@ -1331,6 +1331,17 @@ html:not([data-style="terminal"]) input.k2-focus:is([type="date"], [type="time"]
   outline: 2px solid var(--color-accent-text);
   outline-offset: 2px;
 }
+/* A field the form marks wrong (aria-invalid, <Input>'s FIELD_INVALID): in
+   Terminal the error colour is its whole edge, the cuts too, focused or not
+   (keyboard focus keeps the 2px band, in the error colour). FIELD_INVALID's
+   classes sit in the Tailwind layer, which the cut rules above outrank. */
+html[data-style="terminal"] :is(input, textarea)[data-k2-chamfer][aria-invalid="true"]:not([type="checkbox"], [type="radio"], [type="range"]):not([data-zen-root] *, [data-k2-thread-zen] *) {
+  --k2-ch-edge: var(--color-status-error-text);
+  border-color: var(--color-status-error-text);
+}
+html[data-style="terminal"] :is(input, textarea)[data-k2-chamfer][aria-invalid="true"]:not([type="checkbox"], [type="radio"], [type="range"]):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  box-shadow: inset 0 0 0 1px var(--color-status-error-text);
+}
 input[data-k2-empty]::-webkit-datetime-edit-day-field,
 input[data-k2-empty]::-webkit-datetime-edit-month-field,
 input[data-k2-empty]::-webkit-datetime-edit-year-field,

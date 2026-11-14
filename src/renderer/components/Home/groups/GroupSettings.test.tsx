@@ -7,6 +7,7 @@
 // last group). Also Pin / Unpin in a row's menu and the rail's name flash.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -36,7 +37,7 @@ function props(over: Partial<GroupEditModalProps> = {}): GroupEditModalProps {
     groups: G,
     currentId: 'g1',
     initialId: 'g2',
-    onRename: vi.fn(),
+    onRename: vi.fn(() => 'saved' as const),
     onSetIcon: vi.fn(),
     onCreate: vi.fn(() => null),
     onDelete: vi.fn(),
@@ -99,6 +100,26 @@ describe('the list pane', () => {
     expect(p.onReorderGroups).toHaveBeenLastCalledWith(['g3', 'g1', 'g2'])
     expect(moveId(['a', 'b', 'c'], 0, 2)).toEqual(['b', 'c', 'a'])
   })
+
+  it('a drag opens a gap the row’s height where it will land, not a line over a row', () => {
+    const p = props()
+    render(<GroupEditModal {...p} />)
+    fireEvent.dragStart(row('g3'))
+    // Its own place: no gap.
+    fireEvent.dragOver(row('g3'))
+    expect(document.querySelector('[data-group-drop-gap]')).toBeNull()
+    fireEvent.dragOver(row('g1'))
+    const gap = document.querySelector('[data-group-drop-gap]') as HTMLElement
+    expect(gap.nextElementSibling).toBe(row('g1'))
+    expect(gap.style.height).toBe('34px')
+    expect(gap.getAttribute('aria-hidden')).toBe('true')
+    expect(document.querySelector('[data-group-drop-line]')).toBeNull()
+    // Dropped on the gap itself, it lands there.
+    fireEvent.dragOver(gap)
+    fireEvent.drop(gap)
+    expect(p.onReorderGroups).toHaveBeenLastCalledWith(['g3', 'g1', 'g2'])
+    expect(document.querySelector('[data-group-drop-gap]')).toBeNull()
+  })
 })
 
 describe('the settings pane', () => {
@@ -149,6 +170,71 @@ describe('the settings pane', () => {
     expect([del.disabled, del.title]).toEqual([true, 'The last group can’t be deleted'])
   })
 
+  it('after a delete, "<Name> deleted." and Undo at the foot of the list, which restores it at its old index', () => {
+    const onRestore = vi.fn((_g: GroupBarItem, _i: number) => true)
+    function Owner(): React.JSX.Element {
+      const [groups, setGroups] = useState<GroupBarItem[]>(G)
+      return (
+        <GroupEditModal
+          {...props()}
+          groups={groups}
+          onDelete={(id) => setGroups((gs) => gs.filter((g) => g.id !== id))}
+          onRestore={(g, i) => {
+            onRestore(g, i)
+            setGroups((gs) => [...gs.slice(0, i), g, ...gs.slice(i)])
+            return true
+          }}
+        />
+      )
+    }
+    render(<Owner />)
+    fireEvent.click(detail().querySelector('[data-group-delete]') as HTMLElement)
+    fireEvent.click(detail().querySelector('[data-group-delete-yes]') as HTMLElement)
+    expect(document.querySelector('[data-group-list-row="g2"]')).toBeNull()
+    const line = document.querySelector('[data-group-undo]') as HTMLElement
+    expect(line.textContent).toBe('Play deleted.Undo')
+    // It sits under the list, above New group.
+    const create = document.querySelector('[data-group-create]') as HTMLElement
+    expect(line.compareDocumentPosition(create) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect((document.querySelector('[data-group-list-rows]') as HTMLElement).compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(line.querySelector('[data-group-undo-button]') as HTMLElement)
+    expect(onRestore).toHaveBeenCalledWith(G[1], 1)
+    expect(Array.from(document.querySelectorAll('[data-group-list-row]')).map((el) => el.getAttribute('data-group-list-row'))).toEqual(['g1', 'g2', 'g3'])
+    expect(document.querySelector('[data-group-undo]')).toBeNull()
+    expect(detail().getAttribute('data-group-detail')).toBe('g2')
+  })
+
+  it('no onRestore, no Undo line', () => {
+    const p = props()
+    render(<GroupEditModal {...p} />)
+    fireEvent.click(detail().querySelector('[data-group-delete]') as HTMLElement)
+    fireEvent.click(detail().querySelector('[data-group-delete-yes]') as HTMLElement)
+    expect(document.querySelector('[data-group-undo]')).toBeNull()
+  })
+
+  it('a rename that fails (or throws) shows at the field with Try again; a save clears it', () => {
+    let result: 'saved' | 'failed' | 'throw' = 'failed'
+    const onRename = vi.fn(() => {
+      if (result === 'throw') throw new Error('offline')
+      return result
+    })
+    render(<GroupEditModal {...props({ onRename, initialId: 'g1' })} />)
+    const name = detail().querySelector('[data-group-name-input]') as HTMLInputElement
+    fireEvent.change(name, { target: { value: 'Work 2' } })
+    expect([name.value, name.getAttribute('aria-invalid')]).toEqual(['Work 2', 'true'])
+    // The shared field's error edge (FIELD_INVALID), not a look of its own.
+    expect(name.className).toContain('aria-[invalid=true]:border-[var(--color-status-error-text)]')
+    expect(detail().querySelector('[data-group-name-error]')?.textContent).toContain('Couldn’t save the name.')
+    result = 'throw'
+    fireEvent.click(detail().querySelector('[data-group-name-retry]') as HTMLElement)
+    expect(onRename).toHaveBeenLastCalledWith('g1', 'Work 2')
+    expect(detail().querySelector('[data-group-name-error]')).not.toBeNull()
+    result = 'saved'
+    fireEvent.click(detail().querySelector('[data-group-name-retry]') as HTMLElement)
+    expect(detail().querySelector('[data-group-name-error]')).toBeNull()
+    expect(detail().querySelector('[data-group-saved]')).not.toBeNull()
+  })
+
   it('a deleted selection falls back to the first group; Done closes', () => {
     const p = props()
     const { rerender } = render(<GroupEditModal {...p} />)
@@ -174,7 +260,7 @@ describe('Pin / Unpin in a row’s menu', () => {
     expect(pinMenuItem(home(2), home(2).rows[3])).toEqual({ id: 'home-pin', label: 'Pin', shortcut: '⌘3' })
     expect(pinMenuItem(home(2), home(2).rows[0])).toEqual({ id: 'home-unpin', label: 'Unpin' })
     const full = home(MAX_PINS)
-    expect(pinMenuItem(full, full.rows[MAX_PINS])).toEqual({ id: 'home-pin', label: 'Pin', enabled: false, hint: 'Up to 9 pins' })
+    expect(pinMenuItem(full, full.rows[MAX_PINS])).toEqual({ id: 'home-pin', label: 'Pin', enabled: false, hint: 'Up to 9 pins. Unpin one first.' })
   })
 })
 

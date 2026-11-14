@@ -888,6 +888,38 @@ describe('Home — the Agents page shell', () => {
     }
   })
 
+  it('a row drag opens a gap the row’s height where it will land (no line over a row), and drops there', () => {
+    const ROW = 40
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const rows = Array.from(document.querySelectorAll('[data-home-row]'))
+      const own = this.closest('[data-home-row]')
+      const i = own ? rows.indexOf(own) : -1
+      const top = i < 0 ? 0 : i * ROW
+      return { top, height: ROW, bottom: top + ROW, left: 0, right: 240, width: 240, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    })
+    try {
+      render(<Shell />)
+      const cee = rowOf('Cee')
+      fireEvent.mouseDown(cee, { button: 0, clientX: 10, clientY: 100 })
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 10 })
+      const gap = homeSidebar().querySelector('[data-row-drop-gap]') as HTMLElement
+      expect(gap.style.height).toBe(`${ROW}px`)
+      expect(gap.nextElementSibling?.getAttribute('data-home-row')).toBe('cortana::local')
+      // A sibling between the rows, never inside one (the gap reading measures rows).
+      expect(gap.closest('[data-home-row]')).toBeNull()
+      expect(homeSidebar().querySelector('[data-row-drop-line]')).toBeNull()
+      // Back over its own place: no gap.
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 95 })
+      expect(homeSidebar().querySelector('[data-row-drop-gap]')).toBeNull()
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 10 })
+      fireEvent.mouseUp(document)
+      expect(homeSidebar().querySelector('[data-row-drop-gap]')).toBeNull()
+      expect(useHomesStore.getState().homes[0].rows.map((r) => r.label)).toEqual(['Cee', 'Cortana', 'Bee'])
+    } finally {
+      rect.mockRestore()
+    }
+  })
+
   it('rows 1–9 carry the pinned area badge (Cmd+N order); no ⌘ 1-9 hint; each Home its ⌥⌘N', () => {
     const home = useHomesStore.getState().homes[0]
     // 3 rows from beforeEach (connected Cortana, Bee, Cee) + Nova + 7 more on

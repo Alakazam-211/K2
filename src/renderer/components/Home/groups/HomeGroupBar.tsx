@@ -12,7 +12,12 @@
 //   - the app's focus ring round the target (cut in Terminal, a circle in
 //     Glass, home-groups.css);
 //   - with more groups than fit it scrolls (edge fades, the current group
-//     centred); the rail shows at most five and scrolls past that.
+//     centred); the rail shows at most five and scrolls past that. While
+//     they don't fit, a chevron at each end (up/down in the rail) shows
+//     while more groups sit that way and pages the bar: pointer only, out
+//     of the tab order (group-bar-scroll, home-groups.css);
+//   - one tab stop, the current group: ←/→ (↑/↓ in the rail), Home and End
+//     move focus through every group and scroll it into view.
 // A click switches. A right-click, a long press on touch, or the
 // context-menu key (Shift F10) on an icon opens the Groups dialog
 // (`GroupEditModal`) with that group selected; the nav header's "…" opens
@@ -32,6 +37,8 @@
 // meanwhile, and the bar centres between the two.
 
 import { useEffect, useRef, useState } from 'react'
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from 'lucide-react'
+import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { SWIPE_COMMIT_AT, type SwipeProgress } from '@/lib/group-swipe'
 import { useGroupSwipeStore } from '@/hooks/useGroupSwipe'
 import { GroupGlyph } from './GroupGlyph'
@@ -45,7 +52,7 @@ import {
   GROUP_BAR_TARGET_VAR,
   GROUP_RAIL_MAX_PX,
 } from './group-bar-look'
-import { useGroupBarScroll } from './group-bar-scroll'
+import { pageBar, revealInBar, useGroupBarScroll } from './group-bar-scroll'
 import { GROUP_SWIPE_PROGRESS_VAR, useGroupSwipeInk } from './group-bar-ink'
 import GroupBarTip from './GroupBarTip'
 import GroupEditModal from './GroupEditModal'
@@ -74,15 +81,23 @@ export interface GroupEditing {
   from?: 'icon' | 'header'
 }
 
+/** A rename's outcome: `failed` when the name could not be saved (the
+ *  Groups dialog keeps the text, edges the field and offers Try again). */
+export type GroupRenameResult = 'saved' | 'failed'
+
 export interface HomeGroupBarProps {
   groups: readonly GroupBarItem[]
   currentId: string
   onSelect(id: string): void
-  onRename(id: string, name: string): void
+  /** Save a name; returns whether it saved (or throws, read as failed). */
+  onRename(id: string, name: string): GroupRenameResult
   onSetIcon(id: string, icon: string | null): void
   /** Make a group; returns its id (the dialog selects it), or null. */
   onCreate(): string | null
   onDelete(id: string): void
+  /** Undo a delete: the group back at `index`, with its id, rows, pins and
+   *  icon. Returns whether it came back. Left out, the dialog offers no Undo. */
+  onRestore?(group: GroupBarItem, index: number): boolean
   /** "Most recent at the top" on or off. */
   onSetRecentFirst(id: string, on: boolean): void
   /** The groups in a new order. */
@@ -114,6 +129,11 @@ const ITEM =
   'no-drag relative flex h-[var(--k2-group-target)] w-[var(--k2-group-target)] flex-shrink-0 items-center justify-center cursor-pointer focus:outline-none transition-colors duration-[var(--motion-duration-fast)] ease-[var(--motion-ease-standard)]'
 const ITEM_REST = 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
 const ITEM_CURRENT = 'text-[var(--color-accent-text)]'
+/** A chevron: bare and muted like the icons, the target's height across the
+ *  bar (20 px along it). Shown only while the groups overflow. */
+const CHEVRON =
+  'no-drag flex flex-shrink-0 cursor-pointer items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors duration-[var(--motion-duration-fast)] ease-[var(--motion-ease-standard)]'
+const CHEVRON_PX = 12
 
 /** The group a swipe would land on (no wrap), or null. */
 export function swipeTargetId(groups: readonly GroupBarItem[], currentId: string, swipe: SwipeProgress): string | null {
@@ -149,6 +169,7 @@ export default function HomeGroupBar({
   onSetIcon,
   onCreate,
   onDelete,
+  onRestore,
   onSetRecentFirst,
   onReorderGroups,
   swipe: swipeProp,
@@ -199,10 +220,41 @@ export default function HomeGroupBar({
     if (was) requestAnimationFrame(() => returnFocus(rootRef.current, was, currentId))
   }
 
+  // Keyboard focus along the row: the target is focused without the
+  // browser's own scroll (which would move the nav too), then the bar
+  // scrolls it fully into view.
+  const focusItem = (to: HTMLElement | undefined): void => {
+    if (!to) return
+    to.focus({ preventScroll: true })
+    if (frameRef.current && scrollerRef.current) revealInBar(frameRef.current, scrollerRef.current, to, vertical)
+  }
+  const items = (): HTMLElement[] => Array.from(rootRef.current?.querySelectorAll<HTMLElement>('[data-group-id]') ?? [])
   const focusSibling = (from: HTMLElement, delta: number): void => {
-    const items = Array.from(rootRef.current?.querySelectorAll<HTMLElement>('[data-group-id]') ?? [])
-    const i = items.indexOf(from)
-    items[Math.min(items.length - 1, Math.max(0, i + delta))]?.focus()
+    const all = items()
+    const i = all.indexOf(from)
+    focusItem(all[Math.min(all.length - 1, Math.max(0, i + delta))])
+  }
+  const page = (dir: -1 | 1): void => {
+    setTip(null)
+    if (frameRef.current && scrollerRef.current) pageBar(frameRef.current, scrollerRef.current, vertical, dir)
+  }
+  const chevron = (dir: -1 | 1): React.JSX.Element => {
+    const Icon = vertical ? (dir < 0 ? ChevronUpIcon : ChevronDownIcon) : dir < 0 ? ChevronLeftIcon : ChevronRightIcon
+    return (
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        title={dir < 0 ? 'Earlier groups' : 'More groups'}
+        data-group-bar-chevron={dir < 0 ? 'start' : 'end'}
+        className={`${CHEVRON} ${vertical ? 'h-5 w-[var(--k2-group-target)]' : 'h-[var(--k2-group-target)] w-5'}`}
+        // Pointer only: a press never takes focus from the group that has it.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => page(dir)}
+      >
+        <Icon size={CHEVRON_PX} strokeWidth={K2_ICON_STROKE} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true" />
+      </button>
+    )
   }
 
   const tipGroup = tip && !editing && !swipe ? groups.find((g) => g.id === tip.id) : undefined
@@ -220,6 +272,7 @@ export default function HomeGroupBar({
       style={{ ...inkStyle, [GROUP_BAR_ICON_VAR]: `${iconPx}px`, [GROUP_BAR_GAP_VAR]: `${GROUP_BAR_GAP_PX}px`, [GROUP_BAR_TARGET_VAR]: `${GROUP_BAR_TARGET_PX}px` } as React.CSSProperties}
       className={`flex min-w-0 justify-center ${vertical ? 'w-full flex-col items-center' : 'h-[var(--k2-group-target)] w-full flex-row items-center'}`}
     >
+      {chevron(-1)}
       <div
         ref={frameRef}
         data-group-bar-frame=""
@@ -247,6 +300,8 @@ export default function HomeGroupBar({
                 data-swipe-role={headingId ? (current ? 'from' : g.id === headingId ? 'to' : undefined) : undefined}
                 data-recent-first={g.recentFirst ? '' : undefined}
                 data-k2-focus=""
+                // One tab stop, the current group; the arrows reach the rest.
+                tabIndex={current ? 0 : -1}
                 aria-label={g.name}
                 aria-description={g.recentFirst ? 'Most recent at the top' : undefined}
                 aria-keyshortcuts={chord ? chordToAria(chord) : undefined}
@@ -278,6 +333,10 @@ export default function HomeGroupBar({
                   if (e.key === back || e.key === fwd) {
                     e.preventDefault()
                     focusSibling(e.currentTarget, e.key === fwd ? 1 : -1)
+                  } else if (e.key === 'Home' || e.key === 'End') {
+                    e.preventDefault()
+                    const all = items()
+                    focusItem(e.key === 'Home' ? all[0] : all[all.length - 1])
                   } else if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
                     e.preventDefault()
                     open(g.id)
@@ -292,6 +351,7 @@ export default function HomeGroupBar({
         <span aria-hidden="true" data-group-bar-fade="start" />
         <span aria-hidden="true" data-group-bar-fade="end" />
       </div>
+      {chevron(1)}
 
       {tip && tipGroup && (
         <GroupBarTip
@@ -314,6 +374,7 @@ export default function HomeGroupBar({
           onSetIcon={onSetIcon}
           onCreate={onCreate}
           onDelete={onDelete}
+          onRestore={onRestore}
           onSetRecentFirst={onSetRecentFirst}
           onReorderGroups={onReorderGroups}
           emptyNameFallback={emptyNameFallback}

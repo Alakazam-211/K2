@@ -1,7 +1,8 @@
 // Home groups: the selected group's page in the Groups dialog (the right
 // pane, or the whole dialog when it is one pane). At the top, fixed: its
 // name (saved as you type; an empty one saves as the next "Group N", shown
-// as the placeholder), "Most recent at the top" with its one-line
+// as the placeholder; a save that fails keeps the text, edges the field in
+// the error colour and says so beside it, with Try again), "Most recent at the top" with its one-line
 // explanation (the app's Toggle), and a segmented control, Agents | Icon
 // (←/→ switch it):
 //   - Agents: which agents are in the group, as checkboxes, saved live
@@ -23,7 +24,7 @@ import { Segmented } from '@/components/ui/Segmented'
 import GroupIconPicker from './GroupIconPicker'
 import { GROUP_DIALOG_FOOT_CLASS } from './group-bar-look'
 import GroupAgentsPane from './GroupAgentsPane'
-import type { GroupBarItem } from './HomeGroupBar'
+import type { GroupBarItem, GroupRenameResult } from './HomeGroupBar'
 
 /** The right pane's two segments. */
 export type GroupDetailTab = 'agents' | 'icon'
@@ -37,7 +38,8 @@ export interface GroupDetailPaneProps {
   /** The group's 0-based position (its dot's number). */
   index: number
   canDelete: boolean
-  onRename(id: string, name: string): void
+  /** Save the name: `failed` (or a throw) shows the error at the field. */
+  onRename(id: string, name: string): GroupRenameResult
   onSetIcon(id: string, icon: string | null): void
   onSetRecentFirst(id: string, on: boolean): void
   onDelete(id: string): void
@@ -51,6 +53,9 @@ export interface GroupDetailPaneProps {
 
 const LABEL = 'text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]'
 const SQUARE = { strokeWidth: K2_ICON_STROKE, strokeLinecap: 'square', strokeLinejoin: 'miter' } as const
+
+/** What a failed rename says, beside the field. */
+export const RENAME_FAILED_TEXT = 'Couldn’t save the name. The server didn’t answer, so your text is kept.'
 
 export default function GroupDetailPane({
   group,
@@ -68,6 +73,7 @@ export default function GroupDetailPane({
   const [name, setName] = useState(group.name)
   const [confirming, setConfirming] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [nameFailed, setNameFailed] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const keepRef = useRef<HTMLButtonElement>(null)
   const delRef = useRef<HTMLButtonElement>(null)
@@ -82,6 +88,17 @@ export default function GroupDetailPane({
   useEffect(() => {
     if (confirming) keepRef.current?.focus()
   }, [confirming])
+
+  const saveName = (text: string): void => {
+    let ok: boolean
+    try {
+      ok = onRename(group.id, text) !== 'failed'
+    } catch {
+      ok = false
+    }
+    setNameFailed(!ok)
+    setSaved(ok)
+  }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-group-detail={group.id}>
@@ -106,13 +123,28 @@ export default function GroupDetailPane({
           autoComplete="off"
           spellCheck={false}
           data-group-name-input=""
+          aria-invalid={nameFailed || undefined}
+          aria-describedby={nameFailed ? `${uid}-name-error` : undefined}
           className="h-7 w-full"
           onChange={(e) => {
             setName(e.target.value)
-            onRename(group.id, e.target.value)
-            setSaved(true)
+            saveName(e.target.value)
           }}
         />
+        {nameFailed && (
+          <div id={`${uid}-name-error`} role="alert" className="mt-1.5 text-[length:var(--type-xs)] leading-[1.45] text-[var(--color-status-error-text)]" data-group-name-error="">
+            {RENAME_FAILED_TEXT}{' '}
+            <button
+              type="button"
+              data-k2-focus=""
+              data-group-name-retry=""
+              className="no-drag inline-flex h-[22px] cursor-pointer items-center px-1.5 text-[var(--color-text-primary)] underline hover:bg-[var(--color-row-hover)] focus:outline-none [[data-style=glass]_&]:rounded-[var(--radius-pill)]"
+              onClick={() => saveName(name)}
+            >
+              Try again
+            </button>
+          </div>
+        )}
         <div className="mb-3 mt-2.5 flex items-center gap-4">
           <div className="min-w-0 flex-1">
             <span id={recentId} className="block text-[12px] font-medium text-[var(--color-text-primary)]">
@@ -127,7 +159,7 @@ export default function GroupDetailPane({
             data-group-recent-first={group.id}
             onChange={(on) => {
               onSetRecentFirst(group.id, on)
-              setSaved(true)
+              if (!nameFailed) setSaved(true)
             }}
           />
         </div>
@@ -147,7 +179,7 @@ export default function GroupDetailPane({
       {tab === 'agents' ? (
         <GroupAgentsPane groupId={group.id} />
       ) : (
-        <GroupIconPicker groupId={group.id} icon={group.icon} index={index} onSetIcon={onSetIcon} onPicked={() => setSaved(true)} />
+        <GroupIconPicker groupId={group.id} icon={group.icon} index={index} onSetIcon={onSetIcon} onPicked={() => !nameFailed && setSaved(true)} />
       )}
 
       <div className={`${GROUP_DIALOG_FOOT_CLASS} gap-3 px-5`} data-group-delete-row="" data-group-dialog-foot="detail">

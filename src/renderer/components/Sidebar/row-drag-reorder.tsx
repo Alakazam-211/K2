@@ -5,6 +5,12 @@
 // gap it will land in. A press that never passes the threshold stays a
 // click; a press that did drag never fires the row's click.
 //
+// Opt-in (Home's nav, K2 Design round mp-4): instead of the line, the list
+// opens an empty gap the dragged row's height where it will land
+// (`showsDropGapAt`, `dragSize`, <RowDropGap>), so no row sits under the
+// line. The gap goes between the rows, never inside a row the gap reading
+// (`rowSelector`) measures. The Agents sidebar keeps the line.
+//
 // Only the gesture lives here. What a drop writes is the caller's: Home
 // moves a row in this device's Home (localStorage), the Agents nav writes
 // the daemon's canonical workspace order (`projects/reorder`).
@@ -100,10 +106,16 @@ export interface RowDragReorder<Z extends string> {
   showsDropLineAt: (zone: Z, gap: number) => boolean
   /** Any drag in progress in this list. */
   draggingIn: (zone: Z) => boolean
+  /** Open a gap in this gap of this list: the drop would move the row
+   *  (not its own slot, either side of it). For lists that opt in to the
+   *  gap instead of the line. */
+  showsDropGapAt: (zone: Z, gap: number) => boolean
+  /** The dragged row's height (px) in this list, for its gap; 0 when none. */
+  dragSize: (zone: Z) => number
 }
 
 export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
-  const [drag, setDrag] = useState<{ zone: Z; index: number } | null>(null)
+  const [drag, setDrag] = useState<{ zone: Z; index: number; size: number } | null>(null)
   const [dropGap, setDropGap] = useState<number | null>(null)
   const suppressClickRef = useRef(false)
   const endRef = useRef<(() => void) | null>(null)
@@ -116,6 +128,7 @@ export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
     endRef.current?.()
     const startX = e.clientX
     const startY = e.clientY
+    const size = e.currentTarget instanceof HTMLElement ? e.currentTarget.getBoundingClientRect().height : 0
     let started = false
     let gap: number | null = null
 
@@ -131,7 +144,7 @@ export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
     const onMove = (ev: MouseEvent): void => {
       if (!started && passedRowDragThreshold(ev.clientX - startX, ev.clientY - startY)) {
         started = true
-        setDrag({ zone: start.zone, index: start.index })
+        setDrag({ zone: start.zone, index: start.index, size })
         document.body.style.cursor = 'grabbing'
         document.body.style.userSelect = 'none'
       }
@@ -169,10 +182,18 @@ export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
     isDragging: (zone, index) => drag !== null && drag.zone === zone && drag.index === index,
     showsDropLineAt: (zone, gap) => drag !== null && drag.zone === zone && dropGap === gap,
     draggingIn: (zone) => drag !== null && drag.zone === zone,
+    showsDropGapAt: (zone, gap) => drag !== null && drag.zone === zone && dropGap === gap && dropTargetIndex(drag.index, gap) !== null,
+    dragSize: (zone) => (drag !== null && drag.zone === zone ? drag.size : 0),
   }
 }
 
 /** The 2px accent line in the gap a dragged row will land in. */
 export function RowDropLine(): React.JSX.Element {
   return <div className="h-[2px] bg-[var(--color-accent)] mx-3" data-row-drop-line="" />
+}
+
+/** The empty gap a dragged row will land in, its own height (the opt-in
+ *  alternative to the line). */
+export function RowDropGap({ size }: { size: number }): React.JSX.Element {
+  return <div aria-hidden="true" data-row-drop-gap="" style={{ height: size }} />
 }

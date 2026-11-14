@@ -16,9 +16,9 @@ vi.mock('@tauri-apps/api/event', () => ({
 import HomeGroupBar, { type GroupBarItem, type HomeGroupBarProps } from './HomeGroupBar'
 import GroupNameHeader from './GroupNameHeader'
 import { GROUP_BAR_ICON_PX } from './GroupGlyph'
-import { centredScroll } from './group-bar-scroll'
+import { barOverflows, centredScroll, pagedScroll, revealScroll } from './group-bar-scroll'
 import { useHomeGroups } from './useHomeGroups'
-import { selectedHome, useHomesStore } from '@/stores/homes'
+import { HOMES_STORAGE_KEY, selectedHome, useHomesStore } from '@/stores/homes'
 import { useProjectsStore } from '@/stores/projects'
 import { pinnedRows } from '@/lib/home-row-order'
 
@@ -117,6 +117,18 @@ describe('the group icon row', () => {
     expect(work.getAttribute('aria-description')).toBe('Most recent at the top')
   })
 
+  it('is one tab stop, the current group; Home and End reach the ends', () => {
+    render(<HomeGroupBar {...props({ currentId: 'g2' })} />)
+    expect(['Work', 'Play', 'Later'].map((n) => groupButton(n).tabIndex)).toEqual([-1, 0, -1])
+    groupButton('Play').focus()
+    fireEvent.keyDown(groupButton('Play'), { key: 'End' })
+    expect(document.activeElement).toBe(groupButton('Later'))
+    fireEvent.keyDown(groupButton('Later'), { key: 'Home' })
+    expect(document.activeElement).toBe(groupButton('Work'))
+    // Moving focus doesn't move the tab stop: it stays on the current group.
+    expect(groupButton('Work').tabIndex).toBe(-1)
+  })
+
   it('arrow keys move focus along the row', () => {
     render(<HomeGroupBar {...props()} />)
     groupButton('Work').focus()
@@ -147,6 +159,89 @@ describe('the group icon row', () => {
     expect(centredScroll(0, 20, 160, 14 * 20)).toBe(0)
     expect(centredScroll(13 * 20, 20, 160, 14 * 20)).toBe(120)
     expect(centredScroll(40, 20, 160, 100)).toBe(0)
+  })
+})
+
+// Overflow (round mp-4): chevrons at the bar's ends while the groups don't
+// fit, each while more groups sit that way; they page the bar and are out of
+// the tab order. jsdom has no layout, so the bar's sizes are stubbed: 12
+// groups of 20 px (240) in a 200 px bar whose scroller shows 160.
+describe('the bar with more groups than fit', () => {
+  const twelve = Array.from({ length: 12 }, (_, i) => ({ id: `t${i}`, name: `T${i}`, icon: null, order: i, recentFirst: false, pinned: [] }))
+  const stubLayout = (barPx: number): void => {
+    const size = (el: HTMLElement, axis: 'w' | 'scroll'): number | undefined => {
+      if (el.hasAttribute('data-group-bar-scroller')) return axis === 'scroll' ? 240 : Math.min(240, barPx - 40)
+      if (el.hasAttribute('data-home-group-bar')) return barPx
+      return undefined
+    }
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return size(this, 'w') ?? 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return size(this, 'scroll') ?? 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get').mockImplementation(function (this: HTMLElement) {
+      const id = this.dataset.groupId
+      return id ? Number(id.slice(1)) * 20 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.groupId ? 20 : 0
+    })
+  }
+  afterEach(() => vi.restoreAllMocks())
+
+  const bar = (): HTMLElement => screen.getByRole('toolbar', { name: 'Groups' })
+  const chevron = (end: 'start' | 'end'): HTMLElement => bar().querySelector(`[data-group-bar-chevron="${end}"]`) as HTMLElement
+  const scroller = (): HTMLElement => bar().querySelector('[data-group-bar-scroller]') as HTMLElement
+
+  it('the sums: overflow against the whole bar, a page is the visible extent, focus reveals', () => {
+    expect(barOverflows(240, 200)).toBe(true)
+    expect(barOverflows(240, 240)).toBe(false)
+    expect(pagedScroll(0, 160, 240, 1)).toBe(80)
+    expect(pagedScroll(80, 160, 240, -1)).toBe(0)
+    expect(revealScroll(200, 20, 0, 160)).toBe(60)
+    expect(revealScroll(20, 20, 60, 160)).toBe(20)
+    expect(revealScroll(100, 20, 60, 160)).toBe(60)
+  })
+
+  it('shows a chevron only towards more groups; a click pages; neither is a tab stop', () => {
+    stubLayout(200)
+    render(<HomeGroupBar {...props({ groups: twelve, currentId: 't0' })} />)
+    expect(bar().hasAttribute('data-overflow')).toBe(true)
+    expect([bar().hasAttribute('data-more-start'), bar().hasAttribute('data-more-end')]).toEqual([false, true])
+    for (const end of ['start', 'end'] as const) {
+      expect(chevron(end).tabIndex).toBe(-1)
+      expect(chevron(end).getAttribute('aria-hidden')).toBe('true')
+    }
+    expect(chevron('end').getAttribute('title')).toBe('More groups')
+    fireEvent.click(chevron('end'))
+    expect(scroller().scrollLeft).toBe(80)
+    expect([bar().hasAttribute('data-more-start'), bar().hasAttribute('data-more-end')]).toEqual([true, false])
+    fireEvent.click(chevron('start'))
+    expect(scroller().scrollLeft).toBe(0)
+  })
+
+  it('a wide bar fits every group: no overflow, no chevrons', () => {
+    stubLayout(400)
+    render(<HomeGroupBar {...props({ groups: twelve, currentId: 't0' })} />)
+    expect(bar().hasAttribute('data-overflow')).toBe(false)
+  })
+
+  it('End on the bar focuses the last group and scrolls it into view', () => {
+    stubLayout(200)
+    render(<HomeGroupBar {...props({ groups: twelve, currentId: 't0' })} />)
+    groupButton('T0').focus()
+    fireEvent.keyDown(groupButton('T0'), { key: 'End' })
+    expect(document.activeElement).toBe(groupButton('T11'))
+    expect(scroller().scrollLeft).toBe(80)
+    fireEvent.keyDown(groupButton('T11'), { key: 'Home' })
+    expect(scroller().scrollLeft).toBe(0)
+  })
+
+  it('the rail: up and down chevrons', () => {
+    render(<HomeGroupBar {...props({ groups: twelve, currentId: 't0', orientation: 'vertical' })} />)
+    expect(chevron('start').querySelector('svg')?.getAttribute('class')).toContain('lucide-chevron-up')
+    expect(chevron('end').querySelector('svg')?.getAttribute('class')).toContain('lucide-chevron-down')
   })
 })
 
@@ -360,5 +455,84 @@ describe('the Groups dialog: Agents | Icon', () => {
     expect(modal().querySelector('[data-group-agents]')?.getAttribute('data-group-agents')).toBe(home.id)
     fireEvent.keyDown(segment('Agents'), { key: 'ArrowRight' })
     expect(segment('Icon').getAttribute('aria-checked')).toBe('true')
+  })
+})
+
+// Round mp-4: Undo after a delete, and a rename that fails, on the store.
+describe('the Groups dialog on the Homes store: Undo and a failed rename', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('a delete shows "<Name> deleted." with Undo; Undo puts it back as it was, in its place, current again', () => {
+    setHomeNames(['Home', 'Errands', 'Later'])
+    const st = useHomesStore.getState()
+    const errands = st.homes[1]
+    act(() => {
+      st.selectHome(errands.id)
+      st.addRow(errands.id, { address: 'atlas::local', workspaceId: null, label: 'Atlas' })
+      st.pinRow(errands.id, 'atlas::local')
+      st.setHomeIcon(errands.id, 'shopping-cart')
+    })
+    const before = useHomesStore.getState().homes[1]
+    render(<Wired />)
+    fireEvent.contextMenu(groupButton('Errands'))
+    fireEvent.click(modal().querySelector('[data-group-delete]') as HTMLElement)
+    fireEvent.click(modal().querySelector('[data-group-delete-yes]') as HTMLElement)
+    // The nav behind already shows it gone.
+    expect(useHomesStore.getState().homes.map((h) => h.name)).toEqual(['Home', 'Later'])
+    expect(within(screen.getByRole('toolbar', { name: 'Groups' })).queryByRole('button', { name: 'Errands' })).toBeNull()
+    const line = modal().querySelector('[data-group-undo]') as HTMLElement
+    expect(line.getAttribute('role')).toBe('status')
+    expect(line.textContent).toBe('Errands deleted.Undo')
+    expect(document.activeElement).toBe(line.querySelector('[data-group-undo-button]'))
+    fireEvent.click(line.querySelector('[data-group-undo-button]') as HTMLElement)
+    const homes = useHomesStore.getState().homes
+    expect(homes.map((h) => h.name)).toEqual(['Home', 'Errands', 'Later'])
+    expect(homes[1]).toEqual(before)
+    expect(pinnedRows(homes[1]).map((r) => r.address)).toEqual(['atlas::local'])
+    expect(selectedHome(useHomesStore.getState()).id).toBe(errands.id)
+    expect(modal().querySelector('[data-group-undo]')).toBeNull()
+  })
+
+  it('Undo lasts until the dialog closes', () => {
+    setHomeNames(['Home', 'Errands'])
+    render(<Wired />)
+    fireEvent.contextMenu(groupButton('Errands'))
+    fireEvent.click(modal().querySelector('[data-group-delete]') as HTMLElement)
+    fireEvent.click(modal().querySelector('[data-group-delete-yes]') as HTMLElement)
+    expect(modal().querySelector('[data-group-undo]')).not.toBeNull()
+    fireEvent.click(modal().querySelector('[data-group-edit-done]') as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Home)' }))
+    expect(modal().querySelector('[data-group-undo]')).toBeNull()
+  })
+
+  it('a rename whose save fails keeps the text, edges the field and offers Try again', () => {
+    setHomeNames(['Home', 'Errands'])
+    render(<Wired />)
+    fireEvent.contextMenu(groupButton('Errands'))
+    const input = modal().querySelector('[data-group-name-input]') as HTMLInputElement
+    const real = Storage.prototype.setItem
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === HOMES_STORAGE_KEY) throw new Error('QuotaExceededError')
+      real.call(this, key, value)
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    fireEvent.change(input, { target: { value: 'Shopping' } })
+    expect(input.value).toBe('Shopping')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    const err = modal().querySelector('[data-group-name-error]') as HTMLElement
+    expect(err.getAttribute('role')).toBe('alert')
+    expect(err.textContent).toBe('Couldn’t save the name. The server didn’t answer, so your text is kept. Try again')
+    expect(input.getAttribute('aria-describedby')).toBe(err.id)
+    expect(modal().querySelector('[data-group-saved]')).toBeNull()
+    // Still failing: still the error.
+    fireEvent.click(err.querySelector('[data-group-name-retry]') as HTMLElement)
+    expect(modal().querySelector('[data-group-name-error]')).not.toBeNull()
+    // Storage works again: Try again saves it.
+    write.mockRestore()
+    fireEvent.click(modal().querySelector('[data-group-name-retry]') as HTMLElement)
+    expect(modal().querySelector('[data-group-name-error]')).toBeNull()
+    expect(input.hasAttribute('aria-invalid')).toBe(false)
+    expect(JSON.parse(localStorage.getItem(HOMES_STORAGE_KEY) ?? '{}').homes[1].name).toBe('Shopping')
+    warn.mockRestore()
   })
 })

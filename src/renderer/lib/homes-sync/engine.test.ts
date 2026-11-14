@@ -92,6 +92,20 @@ describe('homes-sync engine', () => {
     expect(skewed.changes[0].updatedAt).toBe(105)
   })
 
+  it('an undone delete (the same Home back, same id) queues it live again, newer than its tombstone', () => {
+    let st = merged('lap')
+    const two = home('h2', 'Errands', ['atlas::local'])
+    st = diffLocal([home('h1', 'Home'), two], st, ctx(laptop, 'lap', 100)).state
+    const del = diffLocal([home('h1', 'Home')], st, ctx(laptop, 'lap', 101))
+    const tomb = del.changes.find((c) => itemKey(c) === 'h|h2')
+    expect(tomb?.deleted).toBe(true)
+    const back = diffLocal([home('h1', 'Home'), two], del.state, ctx(laptop, 'lap', 101))
+    const live = Object.fromEntries(back.changes.map((c) => [itemKey(c), c]))
+    expect(live['h|h2']?.deleted).toBeUndefined()
+    expect(live[`r|h2|atlas::${SID}`]?.deleted).toBeUndefined()
+    expect(beats(live['h|h2'], tomb as WireItem)).toBe(true)
+  })
+
   it('applyPull: newer server items replace (and drop a beaten local edit); older ones lose to the queued edit', () => {
     let st = merged('lap')
     st = diffLocal([home('h1', 'Laptop name')], st, ctx(laptop, 'lap', 100)).state

@@ -7,15 +7,17 @@
 //
 // K2 Design's contract (home-groups notes): groups {id, name, icon, order,
 // pinned, recentFirst}, currentId, swipe {progress, direction} | null, and
-// onSelect, onRename (an empty name is saved as the next unused "Group N"),
-// onSetIcon, onCreate → id, onDelete (refused for the last group), onPin,
+// onSelect, onRename (an empty name is saved as the next unused "Group N";
+// returns `failed` when the save failed), onSetIcon, onCreate → id, onDelete
+// (refused for the last group), onRestore (the dialog's Undo: the deleted
+// group as it was, back in its place, current again if it was), onPin,
 // onUnpin, onReorderPins, onSetRecentFirst, onReorderGroups. The swipe is
 // not passed through here: the bar reads it from `useGroupSwipeStore`
 // itself, so a swipe never re-renders the nav. Also here: each agent's last
 // send by the person (`lastMessagedAt`), and this computer's recent icons.
 
-import { useMemo, useState } from 'react'
-import { cleanHomeName, nextGroupName, selectedHome, useHomesStore } from '@/stores/homes'
+import { useMemo, useRef, useState } from 'react'
+import { cleanHomeName, nextGroupName, selectedHome, useHomesStore, type Home } from '@/stores/homes'
 import { HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
 import { pinnedRows } from '@/lib/home-row-order'
 import { readRecentGroupIcons } from '@/lib/group-icon-recents'
@@ -47,6 +49,9 @@ export function useHomeGroups(): HomeGroups {
   const homes = useHomesStore((s) => s.homes)
   const current = useHomesStore(selectedHome)
   const [editing, setEditing] = useState<GroupEditing | null>(null)
+  // Groups deleted here, as they were, for the dialog's Undo (by id; the
+  // dialog offers Undo only until it closes).
+  const deleted = useRef(new Map<string, { home: Home; wasCurrent: boolean }>())
 
   const groups = useMemo<GroupBarItem[]>(
     () =>
@@ -78,7 +83,7 @@ export function useHomeGroups(): HomeGroups {
     onSelect: (id) => useHomesStore.getState().selectHome(id),
     onRename: (id, name) => {
       const st = useHomesStore.getState()
-      st.renameHome(id, cleanHomeName(name) ?? emptyNameFallback(st.homes, id))
+      return st.renameHome(id, cleanHomeName(name) ?? emptyNameFallback(st.homes, id)) === 'saved' ? 'saved' : 'failed'
     },
     onSetIcon: (id, icon) => {
       useHomesStore.getState().setHomeIcon(id, icon)
@@ -88,7 +93,18 @@ export function useHomeGroups(): HomeGroups {
       return st.createHome(nextGroupName(st.homes))
     },
     onDelete: (id) => {
-      useHomesStore.getState().deleteHome(id)
+      const st = useHomesStore.getState()
+      const home = st.homes.find((h) => h.id === id)
+      if (home && st.deleteHome(id)) deleted.current.set(id, { home, wasCurrent: st.selectedId === id })
+    },
+    onRestore: (group, index) => {
+      const kept = deleted.current.get(group.id)
+      if (!kept) return false
+      const st = useHomesStore.getState()
+      if (!st.restoreHome(kept.home, index)) return false
+      deleted.current.delete(group.id)
+      if (kept.wasCurrent) st.selectHome(group.id)
+      return true
     },
     onSetRecentFirst: (id, on) => {
       useHomesStore.getState().setRecentFirst(id, on)

@@ -106,6 +106,11 @@ export { GROUP_ICON_NAME_RE }
 /** What `pinRow` did. `full`: the group already has MAX_PINS pins. */
 export type PinResult = 'pinned' | 'already' | 'full' | 'missing'
 
+/** A rename's outcome: `saved`; `unsaved` (the new name is in this window
+ *  but writing `k2.homes.v1` failed, so it is not kept); `refused` (an
+ *  empty name or a Home that is gone: nothing changed). */
+export type RenameResult = 'saved' | 'unsaved' | 'refused'
+
 export interface HomesDoc {
   version: 1
   homes: Home[]
@@ -210,8 +215,9 @@ export interface HomesState {
   selectHome: (id: string) => void
   /** Create an empty Home and select it. Null when the name is empty. */
   createHome: (name: string) => string | null
-  /** False when the name is empty or the Home is gone. */
-  renameHome: (id: string, name: string) => boolean
+  /** `refused` when the name is empty or the Home is gone; `unsaved` when
+   *  the name took here but the write to storage failed. */
+  renameHome: (id: string, name: string) => RenameResult
   /** Set (a Lucide name) or clear (null) a Home's icon. False for a name
    *  that isn't storable or a Home that is gone. */
   setHomeIcon: (id: string, icon: string | null) => boolean
@@ -239,6 +245,11 @@ export interface HomesState {
   replaceRow: (homeId: string, address: string, row: HomeRow) => boolean
   /** False for the last Home (never deleted) or an unknown id. */
   deleteHome: (id: string) => boolean
+  /** Undo a delete: put `home` (as it was: id, name, icon, rows, pins)
+   *  back at `index` (clamped). Saved and synced like a new Home (the sync
+   *  sees the id live again, newer than its tombstone). The selection stays.
+   *  False when a Home with that id is already here or it isn't valid. */
+  restoreHome: (home: Home, index: number) => boolean
   /** False when the address is already on that Home (dedupe per Home). */
   addRow: (homeId: string, row: HomeRow) => boolean
   removeRow: (homeId: string, address: string) => void
@@ -383,19 +394,20 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
   const syncRead = safeGet(env.local, HOMES_SYNC_STORAGE_KEY)
   const initialRedirects = syncRead.ok ? parseHomeRedirects(syncRead.value) : {}
 
-  const persist = (homes: Home[]): void => {
+  const persist = (homes: Home[]): boolean =>
     safeSet(env.local, HOMES_STORAGE_KEY, JSON.stringify({ version: 1, homes } satisfies HomesDoc))
-  }
   const rememberSelection = (id: string): void => {
     safeSet(env.session, HOMES_WINDOW_SELECTED_KEY, id)
     safeSet(env.local, HOMES_LAST_SELECTED_KEY, id)
   }
 
   return create<HomesState>((set, get) => {
-    const commit = (homes: Home[], selectedId?: string): void => {
+    /** Apply and save. False when the save failed (the change stays in
+     *  this window, as every change does when storage is broken). */
+    const commit = (homes: Home[], selectedId?: string): boolean => {
       const sel = selectedId ?? get().selectedId
       set({ homes, selectedId: homes.some((h) => h.id === sel) ? sel : homes[0].id })
-      persist(homes)
+      return persist(homes)
     }
     const mapHome = (id: string, fn: (h: Home) => Home): Home[] | null => {
       if (!get().homes.some((h) => h.id === id)) return null
@@ -425,11 +437,10 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
 
       renameHome: (id, name) => {
         const clean = cleanHomeName(name)
-        if (!clean) return false
+        if (!clean) return 'refused'
         const next = mapHome(id, (h) => ({ ...h, name: clean }))
-        if (!next) return false
-        commit(next)
-        return true
+        if (!next) return 'refused'
+        return commit(next) ? 'saved' : 'unsaved'
       },
 
       setHomeIcon: (id, icon) => {
@@ -595,6 +606,15 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
         const sel = selectedId === id ? next[Math.max(0, idx - 1)].id : selectedId
         commit(next, sel)
         if (sel !== selectedId) rememberSelection(sel)
+        return true
+      },
+
+      restoreHome: (home, index) => {
+        const { homes } = get()
+        if (!isHome(home) || !cleanHomeName(home.name) || homes.some((h) => h.id === home.id)) return false
+        const next = [...homes]
+        next.splice(Math.max(0, Math.min(next.length, Math.trunc(index))), 0, home)
+        commit(next)
         return true
       },
 

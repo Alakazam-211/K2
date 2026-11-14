@@ -222,7 +222,7 @@ describe('the group bar during a swipe', () => {
         groups={G}
         currentId="g1"
         onSelect={noop}
-        onRename={noop}
+        onRename={() => 'saved'}
         onSetIcon={noop}
         onCreate={() => null}
         onDelete={noop}

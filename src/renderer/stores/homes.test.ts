@@ -89,9 +89,9 @@ describe('homes store — first run, CRUD, last Home', () => {
     expect(s.getState().createHome('   ')).toBeNull()
     expect(s.getState().homes).toHaveLength(2)
 
-    expect(s.getState().renameHome('h2', 'Ops')).toBe(true)
-    expect(s.getState().renameHome('h2', '')).toBe(false)
-    expect(s.getState().renameHome('nope', 'X')).toBe(false)
+    expect(s.getState().renameHome('h2', 'Ops')).toBe('saved')
+    expect(s.getState().renameHome('h2', '')).toBe('refused')
+    expect(s.getState().renameHome('nope', 'X')).toBe('refused')
     expect(stored(local).homes.map((h) => h.name)).toEqual(['Group 1', 'Ops'])
   })
 
@@ -111,6 +111,49 @@ describe('homes store — first run, CRUD, last Home', () => {
     expect(s.getState().homes.map((h) => h.id)).toEqual(['h2'])
     expect(s.getState().deleteHome('h2')).toBe(false)
     expect(stored(local).homes.map((h) => h.id)).toEqual(['h2'])
+  })
+
+  it('a rename whose save fails says so: the name takes here, but it is not kept', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const local = new MemStorage()
+    const s = createHomesStore({ local, session: new MemStorage(), newId: ids() })
+    const set = vi.spyOn(local, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    expect(s.getState().renameHome('h1', 'Ops')).toBe('unsaved')
+    expect(s.getState().homes[0].name).toBe('Ops')
+    set.mockRestore()
+    expect(stored(local).homes[0].name).toBe('Group 1')
+    // Try again, once storage works.
+    expect(s.getState().renameHome('h1', 'Ops')).toBe('saved')
+    expect(stored(local).homes[0].name).toBe('Ops')
+    warn.mockRestore()
+  })
+
+  it('restoreHome undoes a delete: the same id, rows, pins and icon, in its old place, saved', () => {
+    const local = new MemStorage()
+    const s = createHomesStore({ local, session: new MemStorage(), newId: ids() })
+    s.getState().createHome('Two')
+    s.getState().createHome('Three')
+    s.getState().selectHome('h1')
+    s.getState().addRow('h2', row('a::local'))
+    s.getState().addRow('h2', row('b::local'))
+    s.getState().pinRow('h2', 'b::local')
+    s.getState().setHomeIcon('h2', 'briefcase')
+    const before = s.getState().homes[1]
+    expect(s.getState().deleteHome('h2')).toBe(true)
+    expect(s.getState().homes.map((h) => h.id)).toEqual(['h1', 'h3'])
+    expect(s.getState().restoreHome(before, 1)).toBe(true)
+    expect(s.getState().homes.map((h) => h.id)).toEqual(['h1', 'h2', 'h3'])
+    expect(s.getState().homes[1]).toEqual(before)
+    expect(s.getState().selectedId).toBe('h1')
+    expect(stored(local).homes[1]).toEqual(before)
+    // Once only; an out-of-range place lands at the end.
+    expect(s.getState().restoreHome(before, 1)).toBe(false)
+    expect(s.getState().deleteHome('h2')).toBe(true)
+    expect(s.getState().restoreHome(before, 99)).toBe(true)
+    expect(s.getState().homes.map((h) => h.id)).toEqual(['h1', 'h3', 'h2'])
+    expect(s.getState().restoreHome({ ...before, id: 'h9', name: '  ' }, 0)).toBe(false)
   })
 })
 

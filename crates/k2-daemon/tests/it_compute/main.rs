@@ -19,6 +19,7 @@ mod ci_integration;
 mod ci_release_integration;
 mod ci_preview_gate_integration;
 mod compute_admin_integration;
+mod compute_attempts_integration;
 #[cfg(unix)]
 mod compute_admin_node_e2e;
 mod compute_git_integration;

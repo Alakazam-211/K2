@@ -20,9 +20,8 @@
 //!      again, it is the same live doc.
 //!   6. A removed workspace takes its previews with it (the sweep).
 //!
-//! The worker binary must be built first (`cargo build -p k2-deckrender`):
-//! the test finds it beside its own `target/` folder and fails loudly
-//! without it.
+//! The test builds the worker binary itself (`cargo build -p k2-deckrender`
+//! into its own target dir) and fails loudly when that build fails.
 //!
 //! ISOLATION: one test (the docs runtime is process-wide), temp HOME.
 
@@ -155,17 +154,15 @@ async fn next_frame(ws: &mut Ws, what: &str) -> J {
     }
 }
 
-/// The worker binary beside this test's `target/<profile>/`.
+/// The worker binary, built for this test (`cargo build -p k2-deckrender`).
 fn deckrender_bin() -> std::path::PathBuf {
-    let exe = std::env::current_exe().expect("test exe");
-    let profile_dir = exe.parent().and_then(|deps| deps.parent()).expect("target/<profile>");
-    let bin = profile_dir.join(k2_deckrender::proto::BINARY_NAME);
-    assert!(bin.is_file(), "build the worker first (cargo build -p k2-deckrender): no {}", bin.display());
-    bin
+    k2_core::test_env::built_workspace_bin("k2-deckrender", k2_deckrender::proto::BINARY_NAME)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_live_deck_previews_only_its_dirty_slides_headless() {
+    // Before HOME moves: a build here needs cargo's real homes.
+    let worker = deckrender_bin();
     let tmp = std::env::temp_dir().join(format!("k2-docs-preview-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
     std::fs::create_dir_all(tmp.join(".k2")).expect("home");
     let tmp = tmp.canonicalize().expect("canonical home");
@@ -175,7 +172,7 @@ async fn a_live_deck_previews_only_its_dirty_slides_headless() {
             std::env::remove_var(k);
         }
     }
-    std::env::set_var(k2_daemon::docs::preview::deck::ENV_BIN, deckrender_bin());
+    std::env::set_var(k2_daemon::docs::preview::deck::ENV_BIN, worker);
 
     let daemon = test_harness::start(OWNER).await;
     let port = daemon.port;

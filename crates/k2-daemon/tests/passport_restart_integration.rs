@@ -15,8 +15,9 @@
 //! that token over the agent's `K2_HOOK_SOCK` and `K2_PORT` on agent verbs, and
 //! runs the real `k2` CLI with that env.
 //!
-//! Needs the ptyd binaries: `cargo build -p k2-ptyd --bins`, or set
-//! `K2_PTYD_BIN` / `K2_PTYD_TEST_AGENT`. Missing binaries fail loudly.
+//! Needs the ptyd binaries: `K2_PTYD_BIN` / `K2_PTYD_TEST_AGENT`, else the
+//! test builds them (`cargo build -p k2-ptyd --bins` into its own target
+//! dir). A failed build fails loudly.
 // k2-ptyd is Unix-only until its Windows port.
 #![cfg(unix)]
 
@@ -48,13 +49,11 @@ fn input(env: &str) -> Option<PathBuf> {
         .cloned()
 }
 
+/// `env`'s file (read before the clear), else built with
+/// `cargo build -p k2-ptyd --bins`.
 fn bin(env: &str, name: &str) -> PathBuf {
-    let p = input(env).unwrap_or_else(|| {
-        // target/<profile>/deps/<test>-<hash> → target/<profile>/<name>
-        let exe = std::env::current_exe().expect("current_exe");
-        exe.parent().and_then(|d| d.parent()).map(|d| d.join(name)).expect("target dir")
-    });
-    assert!(p.is_file(), "{name} not found at {} — run `cargo build -p k2-ptyd --bins` first or set {env}", p.display());
+    let p = input(env).unwrap_or_else(|| k2_core::test_env::built_workspace_bin("k2-ptyd", name));
+    assert!(p.is_file(), "{env}={} is not a file", p.display());
     p
 }
 

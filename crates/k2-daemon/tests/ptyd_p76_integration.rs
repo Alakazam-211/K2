@@ -7,9 +7,9 @@
 //! in-process (ptyd never launched) when the owner sets `terminal.ptyd =
 //! off`.
 //!
-//! Needs the `k2-ptyd` binary: run as
-//! `cargo build -p k2-ptyd --bin k2-ptyd && cargo test -p k2-daemon --test ptyd_p76_integration`
-//! or set `K2_PTYD_BIN`. A missing binary fails loudly. The test removes
+//! Needs the `k2-ptyd` binary: `K2_PTYD_BIN`, else the test builds it
+//! (`cargo build -p k2-ptyd --bins` into its own target dir). A failed
+//! build fails loudly. The test removes
 //! every `K2_*` / `K2SO_*` var and uses a temp `HOME`; it never touches the
 //! real `~/.k2` or a running daemon's ptyd.
 // k2-ptyd is Unix-only until its Windows port (0.47: ConPTY, named pipe, Job Objects).
@@ -22,13 +22,9 @@ use k2_core::db::init_for_tests;
 use k2_daemon::canonical_session::ensure_canonical_session;
 use k2_daemon::v2_session_map;
 
+/// `K2_PTYD_BIN`, else built with `cargo build -p k2-ptyd --bins`.
 fn ptyd_bin() -> PathBuf {
-    if let Some(p) = std::env::var_os("K2_PTYD_BIN") {
-        return PathBuf::from(p);
-    }
-    // target/<profile>/deps/ptyd_p76_integration-<hash> → target/<profile>/k2-ptyd
-    let exe = std::env::current_exe().expect("current_exe");
-    exe.parent().and_then(|d| d.parent()).map(|d| d.join("k2-ptyd")).expect("target dir")
+    k2_core::test_env::workspace_bin("K2_PTYD_BIN", "k2-ptyd", "k2-ptyd")
 }
 
 /// macOS: libproc, not `ps` (setuid, so it can't run under a sandbox).
@@ -86,11 +82,6 @@ fn session_for(key: &str) -> std::sync::Arc<k2_core::terminal::daemon_pty::Daemo
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn canonical_chat_and_heartbeat_spawns_land_on_ptyd_unless_the_owner_turned_it_off() {
     let bin = ptyd_bin();
-    assert!(
-        bin.is_file(),
-        "k2-ptyd binary not found at {} — run `cargo build -p k2-ptyd --bin k2-ptyd` first or set K2_PTYD_BIN",
-        bin.display()
-    );
     for k in std::env::vars().map(|(k, _)| k).filter(|k| k.starts_with("K2_") || k.starts_with("K2SO_")).collect::<Vec<_>>() {
         std::env::remove_var(k);
     }

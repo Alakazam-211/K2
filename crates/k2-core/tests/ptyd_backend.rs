@@ -1,9 +1,8 @@
 //! `DaemonPtySession` on the k2-ptyd backend (PRD prd-k2-ptyd-v1 S2).
 //!
-//! Needs the `k2-ptyd` binary: run as
-//! `cargo build -p k2-ptyd --bin k2-ptyd && cargo test -p k2-core --test ptyd_backend`
-//! or set `K2_PTYD_BIN`. A missing
-//! binary fails loudly. This binary sets `K2_PTYD=1` and a temp `HOME` for
+//! Needs the `k2-ptyd` binaries: `K2_PTYD_BIN`, else this test builds them
+//! (`cargo build -p k2-ptyd --bins` into its own target dir,
+//! `k2_core::test_env::built_workspace_bin`). A failed build fails loudly. This binary sets `K2_PTYD=1` and a temp `HOME` for
 //! itself only; it never touches the real `~/.k2`.
 
 #![cfg(unix)]
@@ -18,12 +17,7 @@ static SETUP: Once = Once::new();
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn ptyd_bin() -> PathBuf {
-    if let Some(p) = std::env::var_os("K2_PTYD_BIN") {
-        return PathBuf::from(p);
-    }
-    let exe = std::env::current_exe().unwrap();
-    // target/<profile>/deps/ptyd_backend-<hash> → target/<profile>/k2-ptyd
-    exe.parent().and_then(|d| d.parent()).map(|d| d.join("k2-ptyd")).unwrap()
+    k2_core::test_env::workspace_bin("K2_PTYD_BIN", "k2-ptyd", "k2-ptyd")
 }
 
 fn setup() -> std::sync::MutexGuard<'static, ()> {
@@ -32,8 +26,9 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
         Err(p) => p.into_inner(),
     };
     SETUP.call_once(|| {
+        // Both before HOME moves below: a build here needs cargo's real homes.
         let bin = ptyd_bin();
-        assert!(bin.is_file(), "k2-ptyd binary not found at {} — run `cargo build -p k2-ptyd --bin k2-ptyd` first or set K2_PTYD_BIN", bin.display());
+        test_agent_bin();
         let home = PathBuf::from(format!("/tmp/k2pb-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".k2")).unwrap();
@@ -371,11 +366,9 @@ fn ptyd_death_ends_sessions_without_spinning_and_ptyd_relaunches() {
     s2.kill();
 }
 
-/// `k2-ptyd-test-agent` next to `k2-ptyd` (`cargo build -p k2-ptyd --bins`).
+/// `k2-ptyd-test-agent`, built with `k2-ptyd` (`cargo build -p k2-ptyd --bins`).
 fn test_agent_bin() -> PathBuf {
-    let bin = ptyd_bin().with_file_name("k2-ptyd-test-agent");
-    assert!(bin.is_file(), "k2-ptyd-test-agent not found at {} — run `cargo build -p k2-ptyd --bins` first", bin.display());
-    bin
+    k2_core::test_env::built_workspace_bin("k2-ptyd", "k2-ptyd-test-agent")
 }
 
 /// Removes this test's debug-only knobs again, also on a panic, so no

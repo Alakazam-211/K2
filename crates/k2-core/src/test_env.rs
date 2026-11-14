@@ -600,6 +600,92 @@ pub fn sh_shim_exe() -> PathBuf {
     );
 }
 
+/// A program from another package of this workspace that a test starts
+/// (`k2-ptyd`, `k2-ptyd-test-agent`, `k2-deckrender`, `k2-scenerender`):
+/// the file `env` names when it is set and not empty, else
+/// [`built_workspace_bin`].
+pub fn workspace_bin(env: &str, package: &str, bin: &str) -> PathBuf {
+    if let Some(p) = std::env::var_os(env).filter(|v| !v.is_empty()) {
+        let p = PathBuf::from(p);
+        assert!(p.is_file(), "{env}={} is not a file", p.display());
+        return p;
+    }
+    built_workspace_bin(package, bin)
+}
+
+/// Builds `package`'s binaries for this test and returns `bin`'s path.
+///
+/// Cargo builds another package's binaries for a test only when something
+/// asks it to: `CARGO_BIN_EXE_*` covers the test's own package, and neither
+/// `cargo test -p k2-daemon` nor `cargo nextest run` builds `k2-ptyd`. So
+/// this runs `cargo build -p <package> --bins` into the target dir and
+/// profile this test binary was built in (`<target>/<profile>/deps/<test>`
+/// → `<target>/<profile>/<bin>`), once per test process and package, and
+/// takes the program from there. It works the same in a fresh target dir,
+/// in a `CARGO_TARGET_DIR` elsewhere (a compute job's cache) and under
+/// nextest's one process per test; when the program is current the build
+/// does nothing, and an older build's copy is never used as it is.
+///
+/// A failed build, or a program the build didn't make, panics with what
+/// went wrong; nothing is skipped.
+pub fn built_workspace_bin(package: &str, bin: &str) -> PathBuf {
+    // Env lock first, then BUILT: a test holding the env lock may call this.
+    // Holding it also keeps HOME (cargo's and rustup's homes) steady.
+    let _env = lock();
+    static BUILT: std::sync::Mutex<Vec<(String, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+    let mut built = BUILT.lock().unwrap_or_else(|p| p.into_inner());
+    let profile_dir = match built.iter().find(|(p, _)| p == package) {
+        Some((_, dir)) => dir.clone(),
+        None => {
+            let dir = build_workspace_bins(package);
+            built.push((package.to_string(), dir.clone()));
+            dir
+        }
+    };
+    let p = profile_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
+    assert!(p.is_file(), "`cargo build -p {package} --bins` made no {}", p.display());
+    p
+}
+
+fn build_workspace_bins(package: &str) -> PathBuf {
+    let exe = std::env::current_exe().expect("test binary path");
+    let deps = exe.parent().expect("test binary dir");
+    assert!(
+        deps.file_name() == Some(OsStr::new("deps")),
+        "{} is not in a cargo target dir's <profile>/deps/, so there is nowhere to build {package} for it",
+        exe.display()
+    );
+    let profile_dir = deps.parent().expect("<profile> dir");
+    let target_dir = profile_dir.parent().expect("target dir");
+    let profile = profile_dir.file_name().and_then(OsStr::to_str).expect("profile dir name");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let mut cmd = crate::bg_proc::command(&cargo);
+    cmd.args(["build", "--locked", "--quiet", "-p", package, "--bins", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(target_dir);
+    match profile {
+        // `cargo test`'s `test` profile writes to `debug/` too.
+        "debug" => {}
+        "release" => {
+            cmd.arg("--release");
+        }
+        other => {
+            cmd.args(["--profile", other]);
+        }
+    }
+    let out = cmd.output().unwrap_or_else(|e| panic!("run {} to build {package}: {e}", Path::new(&cargo).display()));
+    assert!(
+        out.status.success(),
+        "`cargo build -p {package} --bins --target-dir {}` for this test failed ({}):\n{}",
+        target_dir.display(),
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    profile_dir.to_path_buf()
+}
+
 /// A program that exits 0 at once, whatever its arguments (`/usr/bin/true`
 /// on macOS, `/bin/true` on Linux, a written `exit 0` script on Windows,
 /// kept in a per-process temp dir).

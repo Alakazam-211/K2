@@ -21,9 +21,9 @@
 //!
 //! Then `POST /cli/daemon/stop` (L2, P52): the agent and ptyd are gone.
 //!
-//! Needs the ptyd binaries: `cargo build -p k2-ptyd --bins` (k2-ptyd and
-//! k2-ptyd-test-agent next to this test's target dir), or set
-//! `K2_PTYD_BIN` / `K2_PTYD_TEST_AGENT`. Missing binaries fail loudly.
+//! Needs k2-ptyd and k2-ptyd-test-agent: `K2_PTYD_BIN` /
+//! `K2_PTYD_TEST_AGENT`, else the test builds them (`cargo build -p k2-ptyd
+//! --bins` into its own target dir). A failed build fails loudly.
 //! Never touches the real `~/.k2`, the keychain, a running daemon or its
 //! ptyd: everything lives under the scratch HOME and only pids this test
 //! started are killed.
@@ -40,12 +40,6 @@ use std::time::{Duration, Instant};
 /// was built with `K2_PTYD_EMBED`: the daemon must launch its embedded
 /// k2-ptyd from `~/.k2/bin/ptyd/`, and the harness proves it.
 const EMBEDDED: bool = option_env!("K2_PTYD_EMBED").is_some();
-
-fn target_dir_bin(name: &str) -> PathBuf {
-    // target/<profile>/deps/ptyd_survival_integration-<hash> → target/<profile>/<name>
-    let exe = std::env::current_exe().expect("current_exe");
-    exe.parent().and_then(|d| d.parent()).map(|d| d.join(name)).expect("target dir")
-}
 
 /// The harness inputs from the environment (`K2_PTYD_BIN`,
 /// `K2_PTYD_TEST_AGENT`, `K2_PTYD_PRELAUNCH_BIN`), read ONCE before the
@@ -65,9 +59,11 @@ fn input(env: &str) -> Option<PathBuf> {
         .cloned()
 }
 
+/// `env`'s file (read before the clear), else built with
+/// `cargo build -p k2-ptyd --bins`.
 fn bin(env: &str, name: &str) -> PathBuf {
-    let p = input(env).unwrap_or_else(|| target_dir_bin(name));
-    assert!(p.is_file(), "{name} not found at {} — run `cargo build -p k2-ptyd --bins` first or set {env}", p.display());
+    let p = input(env).unwrap_or_else(|| k2_core::test_env::built_workspace_bin("k2-ptyd", name));
+    assert!(p.is_file(), "{env}={} is not a file", p.display());
     p
 }
 

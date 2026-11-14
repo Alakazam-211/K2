@@ -7,9 +7,9 @@
 //! (resize) and input go through the reconnected owner afterwards, and
 //! nothing unsolicited reached the agent's stdin (P75).
 //!
-//! Needs the binaries: `cargo build -p k2-ptyd --bins` (k2-ptyd and
-//! k2-ptyd-test-agent next to this test's target dir), or set
-//! `K2_PTYD_BIN` / `K2_PTYD_TEST_AGENT`. Missing binaries fail loudly.
+//! Needs k2-ptyd and k2-ptyd-test-agent: `K2_PTYD_BIN` /
+//! `K2_PTYD_TEST_AGENT`, else the test builds them (`cargo build -p k2-ptyd
+//! --bins` into its own target dir). A failed build fails loudly.
 //! Uses a temp `HOME`; never touches the real `~/.k2` or a running daemon.
 // k2-ptyd is Unix-only until its Windows port (0.47: ConPTY, named pipe, Job Objects).
 #![cfg(unix)]
@@ -21,13 +21,9 @@ use std::time::{Duration, Instant};
 use k2_core::terminal::daemon_pty::{DaemonPtyConfig, DaemonPtySession};
 use k2_core::terminal::ptyd::client;
 
+/// `env`'s file, else built with `cargo build -p k2-ptyd --bins`.
 fn bin(env: &str, name: &str) -> PathBuf {
-    let p = std::env::var_os(env).map(PathBuf::from).unwrap_or_else(|| {
-        let exe = std::env::current_exe().expect("current_exe");
-        exe.parent().and_then(|d| d.parent()).map(|d| d.join(name)).expect("target dir")
-    });
-    assert!(p.is_file(), "{name} not found at {} — run `cargo build -p k2-ptyd --bins` first or set {env}", p.display());
-    p
+    k2_core::test_env::workspace_bin(env, "k2-ptyd", name)
 }
 
 fn alive(pid: i32) -> bool {

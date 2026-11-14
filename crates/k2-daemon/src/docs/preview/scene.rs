@@ -393,18 +393,11 @@ mod tests {
         }
     }
 
-    /// The real worker when it is built (cargo build -p k2-scenerender):
-    /// beside this test binary's folder, or K2_SCENERENDER_BIN.
+    /// The real worker: K2_SCENERENDER_BIN, else built for this test
+    /// (cargo build -p k2-scenerender into its own target dir).
     #[test]
-    fn a_container_renders_through_the_worker_when_it_is_built() {
-        let built = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().and_then(|d| d.parent()).map(|d| d.join(BINARY_NAME)))
-            .filter(|p| p.is_file());
-        let Some(bin) = built.or_else(|| std::env::var_os(ENV_BIN).map(PathBuf::from)) else {
-            eprintln!("[docs/preview] k2-scenerender not built; skipping the worker render");
-            return;
-        };
+    fn a_container_renders_through_the_real_worker() {
+        let bin = k2_core::test_env::workspace_bin(ENV_BIN, "k2-scenerender", BINARY_NAME);
         let mut s = scene_with_camera();
         s.objects[1].modifiers = vec!["SUBSURF".into()];
         s.objects[1].modifiers_not_applied = true;

@@ -21,13 +21,18 @@
 //! - **The push** ([`super::super::host_events`]), on the doc's sockets: a
 //!   render starting is `preview_rendering`; one landing is `preview_ready`
 //!   with `state: "ready"`, its `render_ms` and `without_modifiers` (and a
-//!   scene view's `camera`); one failing is `preview_ready` with `state:
-//!   "failed"` and its code. An older client that knows only
-//!   `preview_ready` reads it as it always did.
+//!   scene view's `camera` and id table, `ids`); one failing is
+//!   `preview_ready` with `state: "failed"` and its code. An older client
+//!   that knows only `preview_ready` reads it as it always did.
+//! - **Id images** ([`super::extras`]): an image that comes with one has it
+//!   cached first, as its own entry beside the image ([`cache::ids_build`]),
+//!   so a cached image always had its id image written with it.
 //! - **Name-only changes** ([`super::reuse`]): a container whose render
 //!   hash the doc already has drawn under another address (a renamed object
 //!   or camera: a scene's digest leaves ids out) is answered from that
-//!   image at once, `preview_ready` with `reused_from`, no worker run.
+//!   image at once, `preview_ready` with `reused_from`, no worker run; its
+//!   id image comes along, its table named as the listing is now
+//!   ([`with_current_ids`]).
 //! - **Looks** ([`super::Look`]): a job is per look as well as per width;
 //!   a transparent image is cached under its own name.
 //! - **Purge.** [`doc_purged`], [`space_removed`], [`doc_moved`] and
@@ -369,19 +374,16 @@ fn draw(job: &Job) -> Result<(), FailCode> {
     let rendered_at_ms = host::now_ms();
     let mut ready = Vec::new();
     let outcome = match result {
-        Ok(img) => {
-            let meta = meta_json(&job.snap, &job.container.key, hash, w, look, &img, rendered_at_ms);
-            match cache::put(&job.blobs, key, &job.container.key, hash, w, &look.cache_build(&job.snap.build), &meta, &img.bytes) {
-                Ok(()) => {
-                    ready = ready_fields(&meta);
-                    Ok(())
-                }
-                Err(e) => {
-                    log_debug!("[docs/preview] WARN: caching a preview of {}: {e}", host::key_label(key));
-                    Err(FailCode::RendererError)
-                }
+        Ok(img) => match store(&job.blobs, &job.snap, &job.container.key, hash, w, look, &img, rendered_at_ms) {
+            Ok(meta) => {
+                ready = ready_fields(&meta);
+                Ok(())
             }
-        }
+            Err(e) => {
+                log_debug!("[docs/preview] WARN: caching a preview of {}: {e}", host::key_label(key));
+                Err(FailCode::RendererError)
+            }
+        },
         Err(f) => {
             log_debug!("[docs/preview] {} {} at {}: {} ({})", host::key_label(key), job.container.key, w.as_str(), f.code.as_str(), f.detail);
             Err(f.code)
@@ -401,6 +403,20 @@ fn draw(job: &Job) -> Result<(), FailCode> {
     outcome
 }
 
+/// Cache an image drawn of `container` at `width` in `look` from `snap`,
+/// its id image first (beside it, [`cache::ids_build`]), so a cached image
+/// always has its id image written. Returns the image's metadata.
+#[allow(clippy::too_many_arguments)]
+pub fn store(blobs: &BlobStore, snap: &Snapshot, container: &str, hash: &str, width: Width, look: Look, img: &super::Image, rendered_at_ms: u64) -> Result<serde_json::Value, String> {
+    let meta = meta_json(snap, container, hash, width, look, img, rendered_at_ms);
+    let build = look.cache_build(&snap.build);
+    if let Some(ids) = &img.ids {
+        cache::put(blobs, &snap.key, container, hash, width, &cache::ids_build(&build), &ids_entry_meta(&meta), ids)?;
+    }
+    cache::put(blobs, &snap.key, container, hash, width, &build, &meta, &img.bytes)?;
+    Ok(meta)
+}
+
 /// A look as the frames and the metadata name it: left out for opaque (what
 /// every older answer was), `"transparent"` otherwise.
 pub fn look_field(look: Look) -> Option<&'static str> {
@@ -413,7 +429,8 @@ fn look_fields(look: Look) -> Vec<(String, k2_mpc_base::errors::Value)> {
 
 /// The fields a `ready` push carries after the old ones, from the image's
 /// metadata: `render_ms`, `without_modifiers`, then what is there of
-/// `look`, `reused_from` and `camera`.
+/// `look`, `reused_from`, `camera` and `ids` (its objects listed only up to
+/// [`extras::PUSH_IDS_MAX`]).
 pub fn ready_fields(meta: &serde_json::Value) -> Vec<(String, k2_mpc_base::errors::Value)> {
     use k2_mpc_base::errors::Value;
     let mut f = vec![
@@ -425,7 +442,40 @@ pub fn ready_fields(meta: &serde_json::Value) -> Vec<(String, k2_mpc_base::error
             f.push((k.to_string(), extras::to_wire(v)));
         }
     }
+    if let Some(v) = meta.get("ids") {
+        f.push(("ids".to_string(), extras::to_wire(&extras::ids_for_push(v))));
+    }
     f
+}
+
+/// The metadata of an image's id image entry, from the image's: what names
+/// it (kind, container, render hash, width, look, rev, size, when it was
+/// drawn, `reused_from`), `layer: "ids"`, and its format. Its table stays in
+/// the image's metadata only.
+pub fn ids_entry_meta(meta: &serde_json::Value) -> serde_json::Value {
+    let mut v = serde_json::Map::new();
+    for k in ["kind", "container", "render_hash", "width", "look", "rev", "size", "render_ms", "rendered_at_ms", "reused_from"] {
+        if let Some(x) = meta.get(k) {
+            v.insert(k.to_string(), x.clone());
+        }
+    }
+    v.insert("layer".into(), serde_json::json!(extras::IDS_LAYER));
+    v.insert("format".into(), serde_json::json!("png"));
+    v.insert("mime".into(), serde_json::json!("image/png"));
+    serde_json::Value::Object(v)
+}
+
+/// `meta` (an image of `k`'s) with its id table named as `snap` lists the
+/// objects now, when it is `k`'s current image: a rename changes no render
+/// hash, so a cached image may carry ids from before it. An image at
+/// another hash keeps the ids it was drawn with.
+pub fn with_current_ids(snap: &Snapshot, k: &Keyed, meta: &mut serde_json::Value) {
+    if meta.get("render_hash").and_then(serde_json::Value::as_str) != Some(k.hash.as_str()) {
+        return;
+    }
+    if let Some(ids) = meta.get_mut("ids") {
+        extras::current_ids(ids, &k.c, snap.containers.iter().map(|x| &x.c));
+    }
 }
 
 /// The metadata kept with an image and answered with it (contract Item 8's

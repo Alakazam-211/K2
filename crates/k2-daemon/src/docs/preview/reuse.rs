@@ -9,7 +9,10 @@
 //! doc has one at the same render hash, width and look under another
 //! address, that image is copied under the new address (its metadata saying
 //! `reused_from`, the address it came from) and `preview_ready` is pushed at
-//! once: no worker runs.
+//! once: no worker runs. An image's id image comes along with it (without
+//! it the container is drawn), and its id table is named as the listing is
+//! now ([`service::with_current_ids`]): the pixels hold object indexes, so
+//! they stay right; only the ids in the table change.
 //!
 //! The render hash names the bytes drawn (the contract: a digest covers
 //! everything a drawing reads), so two addresses with one hash draw the same
@@ -68,14 +71,31 @@ pub fn try_reuse(blobs: &Arc<BlobStore>, snap: &Snapshot, k: &Keyed, width: Widt
     }
     let entry = same_hash_entry(blobs, &snap.key, &k.c.key, &k.hash, width, &build)?;
     let from = entry.meta.get("container")?.as_str()?.to_string();
+    let ids = match entry.meta.get("ids") {
+        Some(_) => match cache::get(blobs, &snap.key, &from, &k.hash, width, &cache::ids_build(&build)) {
+            Got::Hit(e) => Some(e),
+            Got::Miss | Got::KeyDestroyed => return None,
+        },
+        None => None,
+    };
     let now = host::now_ms();
-    let mut meta = entry.meta;
-    meta["container"] = serde_json::json!(k.c.key);
-    meta["rev"] = serde_json::json!(snap.rev);
-    meta["render_ms"] = serde_json::json!(0);
-    meta["rendered_at_ms"] = serde_json::json!(now);
-    meta["reused_from"] = serde_json::json!(from);
-    if let Err(e) = cache::put(blobs, &snap.key, &k.c.key, &k.hash, width, &build, &meta, &entry.image) {
+    let follow = |mut meta: serde_json::Value| {
+        meta["container"] = serde_json::json!(k.c.key);
+        meta["rev"] = serde_json::json!(snap.rev);
+        meta["render_ms"] = serde_json::json!(0);
+        meta["rendered_at_ms"] = serde_json::json!(now);
+        meta["reused_from"] = serde_json::json!(from);
+        meta
+    };
+    let mut meta = follow(entry.meta);
+    service::with_current_ids(snap, k, &mut meta);
+    let put = || -> Result<(), String> {
+        if let Some(ids) = ids {
+            cache::put(blobs, &snap.key, &k.c.key, &k.hash, width, &cache::ids_build(&build), &follow(ids.meta), &ids.image)?;
+        }
+        cache::put(blobs, &snap.key, &k.c.key, &k.hash, width, &build, &meta, &entry.image)
+    };
+    if let Err(e) = put() {
         log_debug!("[docs/preview] WARN: reusing a preview of {}: {e}; drawing it", host::key_label(&snap.key));
         return None;
     }

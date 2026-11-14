@@ -6,7 +6,9 @@
 //! is 32 hex of sha256 of the doc key, and it moves with the doc on a
 //! rename; `<entry>` is `<container: 16 hex>-<render hash>-<width>-<renderer
 //! build>`. The cache key is the contract's `(doc, container, render_hash,
-//! width, renderer build)`.
+//! width, renderer build)`. A scene view's id image is an entry of its own
+//! beside its image, under the image's build plus `.idimg` ([`ids_build`]):
+//! sealed, trimmed and moved the same way, and never taken for an image.
 //!
 //! **Sealed at rest.** Each entry is ChaCha20-Poly1305 under the space's
 //! host cache key (`BlobStore::host_cache_key(space, LABEL)`, kit v0.15.0),
@@ -115,6 +117,12 @@ pub(super) fn clean(s: &str) -> String {
 /// An entry's file name.
 pub fn entry_name(container: &str, hash: &str, width: Width, build: &str) -> String {
     format!("{}-{}-{}-{}.{EXT}", container_id(container), clean(hash), width.as_str(), clean(build))
+}
+
+/// The build an image's id image is cached under, beside the image's own
+/// entry (`build` is the image's, its look included).
+pub fn ids_build(build: &str) -> String {
+    format!("{build}.idimg")
 }
 
 /// One cached preview: the metadata the route answers with, and the image.

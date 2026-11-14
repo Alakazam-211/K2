@@ -16,7 +16,7 @@
 //! | `mod.rs` | the per-type interface ([`PreviewRenderer`]), the registry ([`renderer_for`]), the shared types |
 //! | [`deck`] | `.pptx` slides: the pptx pack's view index, drawn by `k2-deckrender` (one process per render) |
 //! | [`scene`] | live BLEND scenes: the pack's mesh read (K2SCENE1; not in K2 yet), cameras and objects drawn by `k2-scenerender` (one process per request) |
-//! | [`extras`] | what a listing and an image carry besides the image (a scene's bounds, cameras, turntable titles), in the client's shapes |
+//! | [`extras`] | what a listing and an image carry besides the image (a scene's bounds, cameras, turntable titles, id tables), in the client's shapes |
 //! | [`reuse`] | a renamed container answered from the image its render hash already has, without a render |
 //! | [`cache`] | the sealed on-disk cache, its cap, and the purge hooks' file side |
 //! | [`service`] | per-doc index memo, dirty detection, the render queue and slots, the host time cap, `preview_ready` |
@@ -224,8 +224,14 @@ pub struct Image {
     pub without_modifiers: bool,
     pub render_ms: u32,
     /// What the type reports with the image, kept in its metadata and sent
-    /// with `preview_ready` (a scene view's camera; empty for a slide).
+    /// with `preview_ready` (a scene view's camera and id table; empty for a
+    /// slide).
     pub extras: serde_json::Map<String, serde_json::Value>,
+    /// A scene view's id image (PNG: which object is under each pixel; its
+    /// table is `extras["ids"]`), cached beside the image and served by the
+    /// route's `layer=ids`. `None` for a slide and for a view drawn without
+    /// one.
+    pub ids: Option<Vec<u8>>,
 }
 
 /// Files a renderer may read besides the doc itself, resolved by the host
@@ -267,6 +273,10 @@ pub trait PreviewRenderer: Send + Sync {
     /// Whether it can draw this look.
     fn draws(&self, look: Look) -> bool {
         look == Look::Opaque
+    }
+    /// Whether `container`'s images come with an id image ([`Image::ids`]).
+    fn draws_ids(&self, _container: &Container) -> bool {
+        false
     }
     /// The containers of `bytes`, with their raw digests. Runs in the
     /// daemon on bytes the live pack already holds (bounded by the pack's

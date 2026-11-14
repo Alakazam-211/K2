@@ -1,6 +1,8 @@
 //! The 3D tab's host side: what a scene's listing and images carry to the
 //! client, transparent stills, the turntable's titles, the preview events
-//! on the docs socket, and a rename answered from the cache.
+//! on the docs socket, a rename answered from the cache, and the id images
+//! (asked for, keyed, cached beside their images, served, and named as the
+//! doc is now after a rename).
 //!
 //! The service tests draw with [`Fake`], a renderer that runs no process and
 //! logs every render, so "no worker run" is a count.
@@ -13,8 +15,9 @@ use k2_mpc_base::errors::Value;
 use k2_mpc_base::store::DocKey;
 use k2_scenerender::camera::{Framing, ViewSpec};
 use k2_scenerender::digest::Target as SceneTarget;
+use base64::Engine as _;
 use k2_scenerender::host::SceneRequest;
-use k2_scenerender::proto::{Ao, CameraMeta, Clay, ImageFormat, Request, ViewMeta, AO_RADIUS, AO_STRENGTH, CLAY_CONTENTS, CLAY_SHELL, PROTO, VERSION};
+use k2_scenerender::proto::{Ao, CameraMeta, Clay, IdEntry, IdsMeta, ImageFormat, Request, ViewMeta, AO_RADIUS, AO_STRENGTH, BINARY_NAME, CLAY_CONTENTS, CLAY_SHELL, PROTO, VERSION};
 use k2_scenerender::scene::{encode, SensorFit};
 use k2_scenerender::testgen;
 use serde_json::json;
@@ -43,9 +46,33 @@ fn hex(b: &[u8]) -> String {
 
 // ── A renderer that draws nothing and counts ─────────────────────────
 
-/// Lists one container per line, `<address> <digest byte>`; draws every
-/// address ending `:fail` as a timeout, the rest as the same small image.
+/// Lists one container per line, `<address> <digest byte>`, optionally
+/// with a scene locator after them (`scene`, `o<i>`, `t<k>`: then an
+/// `@obj:` address's title is its id); draws every address ending `:fail`
+/// as a timeout, the rest as the same small image. A container with a
+/// locator the scene renderer gives ids to also gets [`FAKE_IDS`] and a
+/// table of the listed objects it shows (an object view: itself; any other:
+/// every object with an `o<i>` locator).
 struct Fake;
+
+/// The fake's id image.
+const FAKE_IDS: &[u8] = b"IDPNG";
+
+/// A fake listing's lines: (address, digest byte, locator).
+fn fake_lines(text: &str) -> Vec<(&str, u8, Option<&str>)> {
+    text.lines()
+        .map(|line| {
+            let mut w = line.split(' ');
+            let key = w.next().expect("an address");
+            let d = w.next().expect("<address> <digest byte>").parse::<u8>().expect("a digest byte");
+            (key, d, w.next())
+        })
+        .collect()
+}
+
+fn fake_title(key: &str, locator: Option<&str>) -> String {
+    locator.and(key.strip_prefix("@obj:")).unwrap_or_default().to_string()
+}
 
 static FAKE: Fake = Fake;
 
@@ -74,33 +101,49 @@ impl PreviewRenderer for Fake {
     fn draws(&self, _look: Look) -> bool {
         true
     }
+    fn draws_ids(&self, c: &Container) -> bool {
+        scene::SCENE.draws_ids(c)
+    }
     fn list(&self, bytes: &[u8]) -> Result<Listing, Failed> {
         let text = std::str::from_utf8(bytes).expect("a fake listing is text");
-        let containers = text
-            .lines()
+        let containers = fake_lines(text)
+            .into_iter()
             .enumerate()
-            .map(|(i, line)| {
-                let (key, d) = line.split_once(' ').expect("<address> <digest byte>");
-                Container {
-                    key: key.into(),
-                    position: i as u32 + 1,
-                    title: String::new(),
-                    hidden: false,
-                    digest: [d.parse::<u8>().expect("a digest byte"); 32],
-                    locator: key.into(),
-                    extras: Default::default(),
-                }
+            .map(|(i, (key, d, locator))| Container {
+                key: key.into(),
+                position: i as u32 + 1,
+                title: fake_title(key, locator),
+                hidden: false,
+                digest: [d; 32],
+                locator: locator.unwrap_or(key).into(),
+                extras: Default::default(),
             })
             .collect();
         Ok(Listing { page: None, containers })
     }
-    fn render(&self, _src: &Source<'_>, c: &Container, width: Width, look: Look, _wall: Duration) -> Result<Image, Failed> {
+    fn render(&self, src: &Source<'_>, c: &Container, width: Width, look: Look, _wall: Duration) -> Result<Image, Failed> {
         drawn().lock().unwrap_or_else(|p| p.into_inner()).push((c.key.clone(), look));
         if c.key.ends_with(":fail") {
             return Err(Failed::new(FailCode::Timeout, "the fake's timeout"));
         }
         let mut extras = serde_json::Map::new();
         extras.insert("camera".into(), json!({ "fx": 1.5 }));
+        let mut ids = None;
+        if self.draws_ids(c) {
+            let own = SceneTarget::from_locator(&c.locator);
+            let objects: Vec<IdEntry> = fake_lines(std::str::from_utf8(src.doc).expect("text"))
+                .into_iter()
+                .filter_map(|(key, _, locator)| match locator.and_then(SceneTarget::from_locator) {
+                    Some(t @ SceneTarget::Object(i)) if !matches!(own, Some(SceneTarget::Object(_))) || own == Some(t) => {
+                        Some(IdEntry { index: i, id: fake_title(key, locator) })
+                    }
+                    _ => None,
+                })
+                .collect();
+            let meta = ViewMeta { ids: Some(IdsMeta { image_len: FAKE_IDS.len() as u64, count: objects.len() as u64, objects }), ..Default::default() };
+            extras.extend(extras::scene_view(&meta));
+            ids = Some(FAKE_IDS.to_vec());
+        }
         Ok(Image {
             bytes: b"PIXELS".to_vec(),
             mime: "image/webp",
@@ -111,6 +154,7 @@ impl PreviewRenderer for Fake {
             without_modifiers: true,
             render_ms: 7,
             extras,
+            ids,
         })
     }
 }
@@ -288,6 +332,7 @@ fn wire(r: &SceneRequest<'_>) -> String {
     line.background = r.background;
     line.clay = r.clay;
     line.ao = r.ao;
+    line.ids = r.ids;
     String::from_utf8(line.line()).expect("utf-8")
 }
 
@@ -349,7 +394,7 @@ fn objects_cameras_and_turntable_frames_ask_for_clay_and_occlusion_on_their_own_
 #[test]
 fn clay_occlusion_and_the_scene_views_framing_are_in_the_cache_key() {
     let build = scene::SCENE.build();
-    assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay.ao"));
+    assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay.ao.ids"));
     let plain = format!("scenerender-p{PROTO}-{VERSION}");
     let clay_only = format!("{plain}.clay");
     for look in Look::ALL {
@@ -357,8 +402,8 @@ fn clay_occlusion_and_the_scene_views_framing_are_in_the_cache_key() {
         assert_ne!(name(&build), name(&plain), "{look:?}: never an image drawn without clay");
         assert_ne!(name(&build), name(&clay_only), "{look:?}: never an image drawn in clay without occlusion");
     }
-    assert_eq!(Look::Opaque.cache_build(&build), format!("{plain}.clay.ao"));
-    assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.ao.rgba"));
+    assert_eq!(Look::Opaque.cache_build(&build), format!("{plain}.clay.ao.ids"));
+    assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.ao.ids.rgba"));
     assert_ne!(Look::Transparent.cache_build(&build), Look::Transparent.cache_build(&clay_only));
 
     // A scene of one object: the renderer's digest of `@scene` and of that
@@ -470,5 +515,260 @@ fn a_renamed_container_is_ready_at_once_from_the_cache_without_a_render() {
         assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }));
         next(&sub, "ready");
         assert_eq!(renders_of("@obj:New").len(), 2);
+    });
+}
+
+// ── 6. Id images ─────────────────────────────────────────────────────
+
+#[test]
+fn the_scene_objects_and_cameras_ask_for_ids_and_the_turntable_frames_dont() {
+    let bytes = encode(&scene_with_display_fields());
+    let mut targets = vec![(SceneTarget::Scene, true), (SceneTarget::Object(0), true), (SceneTarget::Object(3), true), (SceneTarget::Camera(0), true)];
+    targets.extend((0..8).map(|k| (SceneTarget::Turntable(k), false)));
+    for (t, asks) in targets {
+        assert_eq!(scene::wants_ids(t), asks, "{t:?}");
+        for look in Look::ALL {
+            for w in Width::ALL {
+                let r = scene::request_for(&bytes, t, w, look);
+                assert_eq!(r.ids, asks, "{t:?} {look:?} {w:?}");
+                let text = wire(&r);
+                assert_eq!(text.contains(r#""ids":true"#), asks, "{t:?} {look:?}: {text}");
+                assert_eq!(text.contains(r#""ids""#), asks, "{t:?} {look:?}: off the line when not asked: {text}");
+                assert_eq!(Request::parse(text.trim_end().as_bytes()).expect("parse").ids, asks, "{t:?} {look:?}");
+                // Nothing else changes with it.
+                assert_eq!((r.clay, r.ao, r.transparent), (Some(Clay::default()), Some(Ao::default()), look == Look::Transparent));
+            }
+        }
+    }
+    // The listing's containers say the same (the route's `layer=ids` goes by it): all but the 8 frames.
+    let l = scene::list_k2scene(&bytes).expect("a listing");
+    for c in &l.containers {
+        assert_eq!(scene::SCENE.draws_ids(c), !c.key.starts_with("@turntable:"), "{}", c.key);
+    }
+    assert_eq!(l.containers.iter().filter(|c| !scene::SCENE.draws_ids(c)).count(), 8);
+    assert!(l.containers.iter().all(|c| !deck::DECK.draws_ids(c)), "a deck draws none");
+}
+
+/// Ids are keyed in the build (`.ids` after `.clay.ao`): no image cached
+/// before the views asked for them is served. The id image is an entry of
+/// its own beside the image, never found as an image.
+#[test]
+fn ids_are_in_the_cache_key_and_the_id_image_has_an_entry_of_its_own() {
+    let build = scene::SCENE.build();
+    let before = format!("scenerender-p{PROTO}-{VERSION}.clay.ao");
+    assert_eq!(build, format!("{before}.ids"));
+    for look in Look::ALL {
+        let name = |b: &str| cache::entry_name("@scene", "ab12", Width::Thumb, b);
+        assert_ne!(name(&look.cache_build(&build)), name(&look.cache_build(&before)), "{look:?}: never an image drawn without its id image");
+        let ids = name(&cache::ids_build(&look.cache_build(&build)));
+        assert_ne!(ids, name(&look.cache_build(&build)), "{look:?}");
+        // Not in the image's slot (trimmed, re-drawn and reused by that suffix).
+        assert!(!ids.ends_with(&format!("-thumb-{}.{}", look.cache_build(&build), cache::EXT)), "{look:?}: {ids}");
+    }
+    assert_eq!(cache::ids_build(&Look::Transparent.cache_build(&build)), format!("{before}.ids.rgba.idimg"));
+}
+
+#[test]
+fn an_id_table_rides_after_the_camera_and_a_push_lists_it_within_its_bound() {
+    let shared = "2O2Fr$t4X7Zf8NOew3FLOH";
+    let m = IdsMeta {
+        image_len: 77,
+        count: 4,
+        objects: vec![
+            IdEntry { index: 0, id: shared.into() },
+            IdEntry { index: 3, id: shared.into() },
+            IdEntry { index: 4, id: shared.to_lowercase() },
+            IdEntry { index: 9, id: " Wall \"A\" ".into() },
+        ],
+    };
+    let cam = CameraMeta { view: testgen::identity(), proj: testgen::identity(), fx: 1.0, fy: 1.0, near: 0.1, shift_x: 0.0, shift_y: 0.0 };
+    let x = extras::scene_view(&ViewMeta { camera: Some(cam), ids: Some(m.clone()), ..Default::default() });
+    assert_eq!(
+        x["ids"],
+        json!({ "layer": "ids", "image_len": 77, "count": 4, "objects": [
+            { "index": 0, "id": shared }, { "index": 3, "id": shared }, { "index": 4, "id": shared.to_lowercase() }, { "index": 9, "id": " Wall \"A\" " }
+        ] }),
+        "ids as they are: repeated, case and spaces kept"
+    );
+    assert!(x.contains_key("camera"));
+    assert!(!extras::scene_view(&ViewMeta { ids: None, ..Default::default() }).contains_key("ids"), "no ids asked, no table");
+    // On the socket, after the camera.
+    let fields = service::ready_fields(&serde_json::Value::Object(x.clone()));
+    let names: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(names, ["render_ms", "without_modifiers", "camera", "ids"]);
+    assert_eq!(extras::ids_for_push(&x["ids"]), x["ids"], "a table within the bound goes whole");
+    // Past the bound a push sends the count alone (the route has the table).
+    let big = IdsMeta { image_len: 9, count: 5_000, objects: (0..5_000).map(|i| IdEntry { index: i, id: "x".repeat(300) }).collect() };
+    let full = extras::ids_meta(&big);
+    assert!(serde_json::to_vec(&full["objects"]).expect("json").len() > extras::PUSH_IDS_MAX);
+    let pushed = extras::ids_for_push(&full);
+    assert_eq!(pushed, json!({ "layer": "ids", "image_len": 9, "count": 5_000, "objects": [] }));
+}
+
+fn body(r: crate::cli_response::CliResponse) -> serde_json::Value {
+    serde_json::from_str(&r.body).expect("a JSON answer")
+}
+
+fn b64(v: &serde_json::Value) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD.decode(v["base64"].as_str().expect("base64")).expect("decodes")
+}
+
+#[test]
+fn a_scene_image_carries_its_id_table_and_its_id_image_is_served_beside_it() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("ids.blend");
+        let s = snap(&blobs, &key, 1, "@scene 9 scene\n@obj:Chair 5 o0\n@obj:Lamp 6 o1\n@turntable:0 7 t0");
+        let sub = host_events::subscribe(&key);
+        assert_eq!(service::request(&blobs, &s, "@scene", Width::Full, Look::Transparent), Requested::Rendering);
+        next(&sub, "rendering");
+        let ready = frame(&next(&sub, "ready"));
+        let table = json!({ "layer": "ids", "image_len": 5, "count": 2, "objects": [{ "index": 0, "id": "Chair" }, { "index": 1, "id": "Lamp" }] });
+        let v: serde_json::Value = serde_json::from_str(&ready).expect("json");
+        assert_eq!((v["camera"].clone(), v["ids"].clone()), (json!({ "fx": 1.5 }), table.clone()), "{ready}");
+        assert!(ready.find(r#""camera""#) < ready.find(r#""ids""#), "after the camera: {ready}");
+
+        // Cached: the table in the image's metadata, the id image in its own entry.
+        let hash = s.container("@scene").expect("scene").hash.clone();
+        let build = Look::Transparent.cache_build("fake-1");
+        let Got::Hit(img) = cache::get(&blobs, &key, "@scene", &hash, Width::Full, &build) else { panic!("the image") };
+        assert_eq!((img.image.as_slice(), img.meta["ids"].clone()), (&b"PIXELS"[..], table.clone()));
+        let Got::Hit(ids) = cache::get(&blobs, &key, "@scene", &hash, Width::Full, &cache::ids_build(&build)) else { panic!("the id image") };
+        assert_eq!(ids.image, FAKE_IDS);
+        assert_eq!(
+            (ids.meta["layer"].clone(), ids.meta["mime"].clone(), ids.meta["container"].clone(), ids.meta["render_hash"].clone(), ids.meta["look"].clone()),
+            (json!("ids"), json!("image/png"), json!("@scene"), json!(hash), json!("transparent"))
+        );
+        assert!(ids.meta.get("ids").is_none() && ids.meta.get("camera").is_none(), "the table stays with the image: {}", ids.meta);
+
+        // The route: the image's answer carries the table; `layer=ids` answers the id image.
+        let a = body(route::image(&blobs, &s, "@scene", None, Width::Full, Look::Transparent, false));
+        assert_eq!((a["state"].clone(), a["ids"].clone(), b64(&a)), (json!("ready"), table.clone(), b"PIXELS".to_vec()));
+        let i = body(route::image(&blobs, &s, "@scene", Some(&hash), Width::Full, Look::Transparent, true));
+        assert_eq!((i["state"].clone(), i["layer"].clone(), i["format"].clone(), b64(&i)), (json!("ready"), json!("ids"), json!("png"), FAKE_IDS.to_vec()));
+        assert_eq!(i["size"], a["size"], "at the still's size");
+        // Another look has its own (not drawn yet).
+        assert_eq!(route::image(&blobs, &s, "@scene", None, Width::Full, Look::Opaque, true).status, "202 Accepted");
+        next(&sub, "rendering");
+        next(&sub, "ready");
+
+        // A turntable frame has neither.
+        assert_eq!(service::request(&blobs, &s, "@turntable:0", Width::Thumb, Look::Transparent), Requested::Rendering);
+        next(&sub, "rendering");
+        let t = frame(&next(&sub, "ready"));
+        assert!(t.contains(r#""camera":{"fx":1.5}"#) && !t.contains(r#""ids""#), "{t}");
+        let r = route::image(&blobs, &s, "@turntable:0", None, Width::Thumb, Look::Transparent, true);
+        assert_eq!(r.status, "404 Not Found");
+        assert!(r.body.contains("no_id_image"), "{}", r.body);
+        assert!(body(route::image(&blobs, &s, "@turntable:0", None, Width::Thumb, Look::Transparent, false)).get("ids").is_none());
+
+        // A cached image whose id image went (the cap) is drawn again when it is asked for.
+        std::fs::remove_file(cache::doc_dir(&key).join(cache::entry_name("@scene", &hash, Width::Full, &cache::ids_build(&build)))).expect("remove");
+        let r = route::image(&blobs, &s, "@scene", None, Width::Full, Look::Transparent, true);
+        assert_eq!((r.status, body(r)["state"].clone()), ("202 Accepted", json!("rendering")), "never a stale id image");
+        assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }), "drawn again");
+        next(&sub, "ready");
+        assert_eq!(b64(&body(route::image(&blobs, &s, "@scene", None, Width::Full, Look::Transparent, true))), FAKE_IDS);
+    });
+}
+
+/// A rename changes no render hash: the renamed object's image and id image
+/// are reused, and every current image's table names the objects as the doc
+/// does now (the pixels hold indexes, which stay right).
+#[test]
+fn a_rename_reuses_the_id_image_and_its_table_names_the_new_id() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("rename-ids.blend");
+        let a = snap(&blobs, &key, 1, "@scene 9 scene\n@obj:Before 5 o0\n@obj:Other 6 o1");
+        let sub = host_events::subscribe(&key);
+        for c in ["@obj:Before", "@scene"] {
+            assert_eq!(service::request(&blobs, &a, c, Width::Thumb, Look::Opaque), Requested::Rendering);
+            next(&sub, "rendering");
+            next(&sub, "ready");
+        }
+
+        // Before renamed After: reused, its table names After, its id image came along.
+        let b = snap(&blobs, &key, 2, "@scene 9 scene\n@obj:After 5 o0\n@obj:Other 6 o1");
+        let new = b.container("@obj:After").expect("renamed").clone();
+        assert_eq!(service::request(&blobs, &b, "@obj:After", Width::Thumb, Look::Opaque), Requested::Reused { from: "@obj:Before".into() });
+        let f: serde_json::Value = serde_json::from_str(&frame(&next(&sub, "ready at once"))).expect("json");
+        assert_eq!((f["reused_from"].clone(), f["ids"]["objects"].clone()), (json!("@obj:Before"), json!([{ "index": 0, "id": "After" }])), "{f}");
+        assert!(renders_of("@obj:After").is_empty(), "no worker ran");
+        let Got::Hit(e) = cache::get(&blobs, &key, "@obj:After", &new.hash, Width::Thumb, "fake-1") else { panic!("cached under the new address") };
+        assert_eq!(e.meta["ids"]["objects"], json!([{ "index": 0, "id": "After" }]), "stored as it is now");
+        let Got::Hit(i) = cache::get(&blobs, &key, "@obj:After", &new.hash, Width::Thumb, &cache::ids_build("fake-1")) else { panic!("the id image came along") };
+        assert_eq!((i.image.as_slice(), i.meta["container"].clone(), i.meta["reused_from"].clone()), (FAKE_IDS, json!("@obj:After"), json!("@obj:Before")));
+        let r = body(route::image(&blobs, &b, "@obj:After", None, Width::Thumb, Look::Opaque, false));
+        assert_eq!(r["ids"]["objects"], json!([{ "index": 0, "id": "After" }]));
+        assert_eq!(b64(&body(route::image(&blobs, &b, "@obj:After", None, Width::Thumb, Look::Opaque, true))), FAKE_IDS);
+
+        // The scene view keeps its address and hash: its cached image is answered named as now, without a render.
+        let r = body(route::image(&blobs, &b, "@scene", None, Width::Thumb, Look::Opaque, false));
+        assert_eq!(r["ids"]["objects"], json!([{ "index": 0, "id": "After" }, { "index": 1, "id": "Other" }]));
+        assert!(sub.rx.recv_timeout(Duration::from_millis(300)).is_err(), "nothing drawn");
+
+        // An object added before it, and it renamed again: its view's hash is the same, so it is
+        // reused; the index in the image stays (the pixels hold it) and names the object itself.
+        let c = snap(&blobs, &key, 3, "@scene 8 scene\n@obj:Added 3 o0\n@obj:Again 5 o1\n@obj:Other 6 o2");
+        let Requested::Reused { from } = service::request(&blobs, &c, "@obj:Again", Width::Thumb, Look::Opaque) else { panic!("reused") };
+        assert!(from == "@obj:After" || from == "@obj:Before", "{from}");
+        let f: serde_json::Value = serde_json::from_str(&frame(&next(&sub, "ready at once"))).expect("json");
+        assert_eq!(f["ids"]["objects"], json!([{ "index": 0, "id": "Again" }]), "{f}");
+        // The scene's image from before (another hash now) keeps the names it was drawn with.
+        let old_scene = a.container("@scene").expect("scene").hash.clone();
+        let r = body(route::image(&blobs, &c, "@scene", Some(&old_scene), Width::Thumb, Look::Opaque, false));
+        assert_eq!(r["ids"]["objects"], json!([{ "index": 0, "id": "Before" }, { "index": 1, "id": "Other" }]));
+    });
+}
+
+/// The real worker when it is built (cargo build -p k2-scenerender --bins).
+fn built_worker() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().and_then(|d| d.parent()).map(|d| d.join(BINARY_NAME)))
+        .filter(|p| p.is_file())
+        .or_else(|| std::env::var_os(scene::ENV_BIN).map(std::path::PathBuf::from))
+}
+
+#[test]
+fn the_workers_id_image_round_trips_through_the_cache_when_it_is_built() {
+    let Some(bin) = built_worker() else {
+        eprintln!("[docs/preview] k2-scenerender not built; skipping the worker's id image");
+        return;
+    };
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("worker-ids.blend");
+        let bytes = encode(&scene_with_display_fields());
+        let l = scene::list_k2scene(&bytes).expect("a listing");
+        let secret = *blobs.host_cache_key(&key.space, service::HASH_LABEL).expect("the cache key").secret_bytes();
+        let snap = Arc::new(Snapshot {
+            key: key.clone(),
+            rev: 1,
+            version: None,
+            renderer: &scene::SCENE,
+            build: scene::SCENE.build(),
+            page: l.page,
+            containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
+            bytes: Arc::new(bytes.clone()),
+        });
+        let titles: Vec<&str> = l.containers.iter().filter(|c| c.key.starts_with("@obj:")).map(|c| c.title.as_str()).collect();
+        for (c, w) in [("@scene", Width::Thumb), ("@obj:Item.002", Width::Thumb), ("@cam:Camera", Width::Thumb2x)] {
+            let k = snap.container(c).expect("listed");
+            let img = scene::render_k2scene_with(&bin, &bytes, &k.c, w, Look::Transparent, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{c}: {f:?}"));
+            let png = img.ids.clone().expect("an id image");
+            service::store(&blobs, &snap, c, &k.hash, w, Look::Transparent, &img, 1).expect("cached");
+            let a = body(route::image(&blobs, &snap, c, None, w, Look::Transparent, false));
+            assert_eq!(a["ids"], img.extras["ids"], "{c}: the table as drawn (nothing renamed)");
+            let objects = a["ids"]["objects"].as_array().expect("objects");
+            assert!(!objects.is_empty() && objects.iter().all(|e| titles.contains(&e["id"].as_str().expect("an id"))), "{c}: {objects:?}");
+            let i = body(route::image(&blobs, &snap, c, None, w, Look::Transparent, true));
+            assert_eq!(b64(&i), png, "{c}: the id image back as drawn");
+            assert_eq!(i["size"], a["size"], "{c}");
+        }
+        let t = snap.container("@turntable:3").expect("a frame");
+        let img = scene::render_k2scene_with(&bin, &bytes, &t.c, Width::Thumb, Look::Transparent, Duration::from_secs(60)).expect("a frame");
+        assert!(img.ids.is_none() && !img.extras.contains_key("ids"), "a turntable frame is drawn without");
     });
 }

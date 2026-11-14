@@ -40,9 +40,19 @@
 //!   request's, not the scene's), so the host keys them: clay and occlusion
 //!   in the renderer's [`build`](PreviewRenderer::build) (every view has
 //!   both), the framing in the scene view's digest ([`keyed_digest`]).
+//! - **Ids for picking.** The scene, object and camera views also ask for
+//!   an id image ([`wants_ids`]: which object is under each pixel, so the
+//!   client can pick and hover in a still); the turntable frames don't
+//!   (nothing is picked there). The id image is cached beside its image
+//!   and the route serves it with `layer=ids`; its table rides with the
+//!   image. The build carries `.ids` for every view, turntable frames
+//!   included: which views ask follows from the view alone, and the views
+//!   that can share a render hash (an object and its renamed or identical
+//!   twin) all ask, so unlike the framing it needs no per-view key; the
+//!   turntable frames are only drawn once more under the new build.
 //! - **What rides along** ([`super::extras`]): each object's local box,
 //!   each camera's display values, the turntable frames' titles, and with
-//!   each image the camera that drew it.
+//!   each image the camera that drew it and its id table.
 //!
 //! **Which worker** (the k2-deckrender order): `K2_SCENERENDER_BIN` in a
 //! debug build only (tests), else `k2-scenerender` beside the daemon (`K2
@@ -113,6 +123,16 @@ pub fn framing_for(target: Target) -> Framing {
     }
 }
 
+/// Whether the 3D tab asks for `target`'s id image: the scene, an object
+/// and a camera are picked in; a turntable frame isn't (it saves the id
+/// image's time and memory).
+pub fn wants_ids(target: Target) -> bool {
+    match target {
+        Target::Scene | Target::Camera(_) | Target::Object(_) => true,
+        Target::Turntable(_) => false,
+    }
+}
+
 /// The digest a container is keyed by: the renderer's digest of what it
 /// draws, and for a view not on the bounds framing, that framing too. The
 /// renderer's digest leaves the request's framing out, so without this a
@@ -160,10 +180,21 @@ pub fn limits_for(width: Width, wall: Duration) -> Limits {
     l
 }
 
+/// [`limits_for`] for `req`: with an id image, the worker's output cap
+/// (which counts it with the still) has room for both, and each is held to
+/// the width's cap on its own after the render.
+pub fn limits_for_request(req: &SceneRequest<'_>, width: Width, wall: Duration) -> Limits {
+    let mut l = limits_for(width, wall);
+    if req.ids {
+        l.max_output_bytes = Limits::for_width(width.px()).max_output_bytes.min(width.max_bytes().saturating_mul(2));
+    }
+    l
+}
+
 /// The worker's request for one view in `look`: WebP; transparent with no
 /// background, or opaque on the renderer's own neutral; in clay with the
 /// default tones and with ambient occlusion on its default settings, framed
-/// as [`framing_for`] says.
+/// as [`framing_for`] says, with its id image when [`wants_ids`].
 pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> SceneRequest<'_> {
     let mut view = target.view(width.px());
     view.framing = framing_for(target);
@@ -173,6 +204,7 @@ pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> 
     req.transparent = look == Look::Transparent;
     req.clay = Some(Clay::default());
     req.ao = Some(Ao::default());
+    req.ids = wants_ids(target);
     req
 }
 
@@ -191,11 +223,17 @@ pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, wi
     };
     let req = request_for(k2scene, target, width, look);
     let started = std::time::Instant::now();
-    match host::render(bin, &req, &limits_for(width, wall)) {
+    match host::render(bin, &req, &limits_for_request(&req, width, wall)) {
         Ok(mut r) => {
             let Some(v) = r.views.pop() else {
                 return Err(Failed::new(FailCode::RendererError, "the worker drew no view"));
             };
+            let cap = width.max_bytes();
+            for (what, len) in [("image", Some(v.image.len())), ("id image", v.ids.as_ref().map(Vec::len))] {
+                if let Some(len) = len.filter(|&n| n as u64 > cap) {
+                    return Err(Failed::new(FailCode::TooLarge, format!("the {what} is {len} bytes, over the {cap} kept at this width")));
+                }
+            }
             Ok(Image {
                 mime: match r.format {
                     ImageFormat::Webp => "image/webp",
@@ -211,6 +249,7 @@ pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, wi
                 without_modifiers: v.meta.without_modifiers,
                 render_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
                 extras: extras::scene_view(&v.meta),
+                ids: v.ids,
                 bytes: v.image,
             })
         }
@@ -228,11 +267,13 @@ impl PreviewRenderer for SceneRenderer {
         "scene"
     }
 
-    /// The worker's protocol and version, then `.clay.ao`: every view is
-    /// drawn in clay with ambient occlusion, so no image drawn in base
-    /// colours or without occlusion is ever served.
+    /// The worker's protocol and version, then `.clay.ao.ids`: every view
+    /// is drawn in clay with ambient occlusion, and every view that is
+    /// picked in comes with its id image ([`wants_ids`]), so no image drawn
+    /// in base colours, without occlusion or without its id image is ever
+    /// served.
     fn build(&self) -> String {
-        format!("scenerender-p{PROTO}-{VERSION}.clay.ao")
+        format!("scenerender-p{PROTO}-{VERSION}.clay.ao.ids")
     }
 
     /// No doc yet: a live BLEND doc needs the pack's mesh read and its tier
@@ -248,6 +289,10 @@ impl PreviewRenderer for SceneRenderer {
 
     fn draws(&self, _look: Look) -> bool {
         true
+    }
+
+    fn draws_ids(&self, container: &Container) -> bool {
+        Target::from_locator(&container.locator).is_some_and(wants_ids)
     }
 
     fn list(&self, bytes: &[u8]) -> Result<Listing, Failed> {
@@ -338,6 +383,14 @@ mod tests {
         assert_eq!(t2.threads, 1);
         let f = limits_for(Width::Full, Duration::from_secs(3));
         assert_eq!((f.threads, f.wall, f.memory_bytes, f.max_output_bytes), (4, Duration::from_secs(3), 1 << 30, Width::Full.max_bytes()));
+        // With an id image the worker's cap has room for both (each is held to the width's cap after).
+        let bytes = encode(&scene_with_camera());
+        for w in Width::ALL {
+            let with = request_for(&bytes, Target::Scene, w, Look::Transparent);
+            let without = request_for(&bytes, Target::Turntable(0), w, Look::Transparent);
+            assert_eq!(limits_for_request(&with, w, Duration::from_secs(20)).max_output_bytes, 2 * w.max_bytes(), "{w:?}");
+            assert_eq!(limits_for_request(&without, w, Duration::from_secs(20)), limits_for(w, Duration::from_secs(20)), "{w:?}");
+        }
     }
 
     /// The real worker when it is built (cargo build -p k2-scenerender):
@@ -363,7 +416,20 @@ mod tests {
             assert_eq!(&img.bytes[..4], b"RIFF");
             assert_eq!(img.without_modifiers, without, "{}", c.key);
             assert!(img.extras["camera"]["proj"].as_array().is_some_and(|p| p.len() == 16), "{}: the camera that drew it", c.key);
+            // The scene, objects and cameras come with an id image at the still's size and its table; turntable frames don't.
+            assert_eq!(img.ids.is_some(), SCENE.draws_ids(c), "{}", c.key);
+            assert_eq!(img.extras.contains_key("ids"), SCENE.draws_ids(c), "{}", c.key);
+            if let Some(ids) = &img.ids {
+                assert_eq!(&ids[..8], b"\x89PNG\r\n\x1a\n", "{}", c.key);
+                assert_eq!((u32::from_be_bytes(ids[16..20].try_into().expect("4")), u32::from_be_bytes(ids[20..24].try_into().expect("4"))), (320, height), "{}: IHDR", c.key);
+                let t = &img.extras["ids"];
+                assert_eq!((t["layer"].clone(), t["image_len"].clone()), (serde_json::json!("ids"), serde_json::json!(ids.len())), "{}", c.key);
+                assert!(t["count"].as_u64().is_some_and(|n| n >= 1 && n == t["objects"].as_array().map_or(0, Vec::len) as u64), "{}: {t}", c.key);
+            }
         }
+        // An object's view shows that object alone, named as the file names it.
+        let o = render_k2scene_with(&bin, &bytes, &l.containers[2], Width::Thumb, Look::Opaque, Duration::from_secs(60)).expect("object");
+        assert_eq!(o.extras["ids"]["objects"], serde_json::json!([{ "index": 0, "id": "Item.000" }]));
         // Transparent: a lossless WebP whose header says it has alpha.
         let t = render_k2scene_with(&bin, &bytes, &l.containers[0], Width::Thumb, Look::Transparent, Duration::from_secs(60)).expect("transparent");
         assert_eq!(&t.bytes[12..16], b"VP8L");

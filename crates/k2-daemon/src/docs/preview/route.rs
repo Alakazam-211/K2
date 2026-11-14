@@ -24,13 +24,22 @@
 //!   else `404 preview_gone`: list again. A container the doc already has
 //!   drawn under another address at the same hash (a renamed scene object)
 //!   is `ready` at once, its metadata saying `reused_from`.
+//! - the same with `layer=ids`: the image's id image (a scene, object or
+//!   camera view's: which object is under each pixel), as base64 with
+//!   `layer: "ids"`, `format: "png"` and the image's naming fields; its
+//!   table is in the image's metadata (`ids`). `ready`, `rendering` (never
+//!   with a stale one), `failed` or `404 preview_gone` as above, and `404
+//!   no_id_image` for a container drawn without one. A cached image whose
+//!   id image went (the cap) is drawn again.
 //!
 //! **`look`** (`opaque` or `transparent`; each type has its default: a deck
 //! opaque, a scene transparent, the 3D tab's one still for all its looks).
 //! A deck refuses `transparent`. Answers name `look` only when it is
 //! `transparent`. **Per-type extras** ride in each listed container (a
 //! scene object's `bounds`, a camera's `camera` display values) and in an
-//! image's metadata (a scene view's `camera`): [`super::extras`].
+//! image's metadata (a scene view's `camera` and `ids`): [`super::extras`].
+//! A current image's id table names the objects as the doc does now
+//! ([`service::with_current_ids`]).
 //!
 //! The docs routes speak JSON (every transport, Connect included), so the
 //! image rides as base64 with its metadata, as Thread attachments do; a
@@ -45,7 +54,7 @@ use k2_mpc_base::session::{SessionError, Stay};
 
 use super::cache::{self, Got};
 use super::service::{self, Keyed, Requested, SnapError, Snapshot};
-use super::{Look, Width};
+use super::{extras, Look, Width};
 use crate::cli_response::CliResponse;
 use crate::docs::caller::refusal;
 use crate::docs::routes::{self, Call, OpenError};
@@ -85,6 +94,11 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
     let (width, want) = match (bucket("width"), bucket("want")) {
         (Ok(w), Ok(v)) => (w, v),
         (Err(r), _) | (_, Err(r)) => return r,
+    };
+    let ids = match c.input.str("layer").as_deref().map(str::trim) {
+        None => false,
+        Some(extras::IDS_LAYER) => true,
+        Some(l) => return routes::bad(format!("layer must be {} (or left out for the image; got {l})", extras::IDS_LAYER)),
     };
     let look = match c.input.str("look") {
         None => renderer.default_look(),
@@ -130,7 +144,7 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
     };
     match (c.input.str("container"), width) {
         (None, _) => listing(&blobs, &snap, want, look),
-        (Some(container), Some(w)) => image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w, look),
+        (Some(container), Some(w)) => image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w, look, ids),
         (Some(_), None) => routes::bad("width is required with a container: thumb, thumb2x or full"),
     }
 }
@@ -214,17 +228,42 @@ fn with_image(state: &str, e: cache::Entry) -> Value {
     v
 }
 
-fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, container: &str, hash: Option<&str>, w: Width, look: Look) -> CliResponse {
+/// A cached image (or with `ids`, its id image) as answered: a current
+/// image's id table named as the doc is now.
+fn answer(snap: &Snapshot, current: &Keyed, mut e: cache::Entry, ids: bool) -> Value {
+    if !ids {
+        service::with_current_ids(snap, current, &mut e.meta);
+    }
+    with_image("ready", e)
+}
+
+/// The image of `container` at `w` in `look` (with `ids`, its id image):
+/// the route's second answer.
+pub(super) fn image(
+    blobs: &Arc<k2_mpc_base::blob::BlobStore>,
+    snap: &Arc<Snapshot>,
+    container: &str,
+    hash: Option<&str>,
+    w: Width,
+    look: Look,
+    ids: bool,
+) -> CliResponse {
     let Some(current) = snap.container(container) else {
         return routes::with_exit(
             refusal("404 Not Found", "no_such_container", format!("no {container} in this doc now (list it again)")),
             k2_mpc_base::tools::exit::NOT_FOUND,
         );
     };
+    if ids && !snap.renderer.draws_ids(&current.c) {
+        return routes::with_exit(
+            refusal("404 Not Found", "no_id_image", format!("{container} is drawn without an id image")),
+            k2_mpc_base::tools::exit::NOT_FOUND,
+        );
+    }
     let hash = hash.map(str::trim).filter(|h| !h.is_empty()).unwrap_or(&current.hash);
-    let build = look.cache_build(&snap.build);
+    let build = if ids { cache::ids_build(&look.cache_build(&snap.build)) } else { look.cache_build(&snap.build) };
     match cache::get(blobs, &snap.key, container, hash, w, &build) {
-        Got::Hit(e) => return routes::ok(with_image("ready", e)),
+        Got::Hit(e) => return routes::ok(answer(snap, current, e, ids)),
         Got::KeyDestroyed | Got::Miss => {}
     }
     if hash != current.hash {
@@ -235,7 +274,7 @@ fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, contai
     }
     match service::request(blobs, snap, container, w, look) {
         Requested::Reused { from } => match cache::get(blobs, &snap.key, container, hash, w, &build) {
-            Got::Hit(e) => routes::ok(with_image("ready", e)),
+            Got::Hit(e) => routes::ok(answer(snap, current, e, ids)),
             Got::KeyDestroyed | Got::Miss => {
                 k2_core::log_debug!("[docs/preview] the image reused from {from} went before it was read");
                 let mut r = routes::ok(with_look(rendering_body(snap, container, hash, w), look));
@@ -255,7 +294,8 @@ fn image(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, contai
         }), look)),
         Requested::NoContainer => routes::bad(format!("no {container} in this doc")),
         Requested::Rendering | Requested::Busy => {
-            let body = match cache::newest_other(blobs, &snap.key, container, hash, w, &build) {
+            let stale = if ids { None } else { cache::newest_other(blobs, &snap.key, container, hash, w, &build) };
+            let body = match stale {
                 Some(e) => {
                     let mut v = with_image("stale", e);
                     v["current_hash"] = json!(hash);

@@ -137,6 +137,7 @@ impl PreviewRenderer for Deck {
                 without_modifiers: false,
                 render_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
                 extras: serde_json::Map::new(),
+                ids: None,
                 bytes: r.image,
             }),
             Err(f) => {

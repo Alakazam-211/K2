@@ -23,15 +23,16 @@ fn preset_homes(tool: Tool) -> Vec<PathBuf> {
         return Vec::new();
     };
     let var = tool.home_env_var();
-    let raw: Vec<String> = {
-        let conn = db.lock();
+    // A pure read on a read-only connection: a session start's login step
+    // comes here and must not wait behind a slow writer (speed pass P8).
+    let raw: Vec<String> = db.read(|conn| {
         let Ok(mut st) = conn.prepare("SELECT env FROM agent_presets WHERE env LIKE '%' || ?1 || '%'") else {
             return Vec::new();
         };
         st.query_map([var], |r| r.get::<_, String>(0))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
-    };
+    });
     raw.into_iter()
         .filter_map(|json| {
             let env: serde_json::Value = serde_json::from_str(&json).ok()?;
@@ -86,8 +87,19 @@ pub fn files(tool: Tool, name: &str) -> Vec<PathBuf> {
     unique_real(homes(tool).into_iter().map(|h| h.join(name)).filter(|p| p.is_file()))
 }
 
+thread_local! {
+    /// Project-folder scans [`holds`] made on this thread (tests count them).
+    static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Project-folder scans on this thread so far (tests).
+pub fn folder_scans() -> usize {
+    SCANS.with(|c| c.get())
+}
+
 /// Does this home hold the conversation in a project folder?
 fn holds(home: &Path, root: &str, conversation_id: &str) -> bool {
+    SCANS.with(|c| c.set(c.get() + 1));
     let Ok(dirs) = std::fs::read_dir(home.join(root)) else {
         return false;
     };
@@ -110,6 +122,21 @@ pub fn conversation_home_elsewhere(tool: Tool, conversation_id: &str, to: &Path)
         return None;
     }
     homes(tool).into_iter().find(|h| h != to && holds(h, root, conversation_id))
+}
+
+/// [`conversation_home_elsewhere`] for a resume started in `cwd`. Claude
+/// keeps a conversation in its cwd's own project folder, so that one file is
+/// looked at first: when `to` holds it there, the answer is `None` at once,
+/// with no scan of every project folder of every home (speed pass P8: this
+/// ran on every resumed session start). Anything else takes the full search.
+pub fn conversation_home_elsewhere_from(tool: Tool, conversation_id: &str, to: &Path, cwd: Option<&Path>) -> Option<PathBuf> {
+    if let (Tool::Claude, Some(cwd), Some(root)) = (tool, cwd, pins::conversation_root(tool)) {
+        let folder = to.join(root).join(crate::chat_history::claude_project_hash(&cwd.to_string_lossy()));
+        if std::fs::symlink_metadata(folder.join(format!("{conversation_id}.jsonl"))).is_ok() {
+            return None;
+        }
+    }
+    conversation_home_elsewhere(tool, conversation_id, to)
 }
 
 #[cfg(test)]
@@ -255,5 +282,47 @@ mod tests {
         std::fs::create_dir_all(&live).unwrap();
         assert_eq!(conversation_home_elsewhere(Tool::Claude, sid, &live), Some(slot.clone()));
         assert_eq!(conversation_home_elsewhere(Tool::Claude, sid, &slot), None, "already there");
+    }
+
+    #[test]
+    fn a_resume_in_its_own_folder_scans_nothing() {
+        let home = TempHome::new();
+        crate::db::init_for_tests();
+        let project = "/fixture/homes-fast";
+        let sid = "dddddddd-4444-4444-8444-444444444444";
+        let live = home.path().join(".claude");
+        claude_file(&live, project, sid);
+        // Many other project folders, as a busy machine has.
+        for i in 0..50 {
+            std::fs::create_dir_all(live.join("projects").join(format!("-other-{i}"))).unwrap();
+        }
+        let before = folder_scans();
+        assert_eq!(conversation_home_elsewhere_from(Tool::Claude, sid, &live, Some(Path::new(project))), None);
+        assert_eq!(folder_scans(), before, "found in its own folder: no scan");
+        // The full search, for comparison, scans.
+        assert_eq!(conversation_home_elsewhere(Tool::Claude, sid, &live), None);
+        assert!(folder_scans() > before);
+    }
+
+    #[test]
+    fn a_resume_whose_history_is_elsewhere_still_finds_it() {
+        let home = TempHome::new();
+        crate::db::init_for_tests();
+        let project = "/fixture/homes-fast-carry";
+        let sid = "eeeeeeee-5555-4555-8555-555555555555";
+        let slot = store::slot_dir(Tool::Claude, "acct-fast");
+        claude_file(&slot, project, sid);
+        let live = home.path().join(".claude");
+        std::fs::create_dir_all(&live).unwrap();
+        assert_eq!(
+            conversation_home_elsewhere_from(Tool::Claude, sid, &live, Some(Path::new(project))),
+            Some(slot.clone()),
+            "not in the live home's folder: the full search finds the slot"
+        );
+        assert_eq!(
+            conversation_home_elsewhere_from(Tool::Claude, sid, &live, Some(Path::new("/fixture/elsewhere"))),
+            Some(slot),
+            "a cwd that doesn't match still finds it"
+        );
     }
 }

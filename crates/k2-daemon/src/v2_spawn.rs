@@ -81,10 +81,10 @@ pub(crate) fn passport_agent_address(agent_name: &str, cwd: &str) -> String {
     }
 }
 
+/// A pure read on a read-only connection, so a session start does not wait
+/// behind a slow writer for its first step (speed pass P8).
 fn project_id_for_cwd(cwd: &str) -> Option<String> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)
+    k2_core::db::read(|conn| k2_core::workspace::agent_identity::resolve_project_id(conn, cwd))
 }
 
 /// Handler for `POST /cli/sessions/v2/spawn`.

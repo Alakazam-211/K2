@@ -1304,7 +1304,7 @@ pub fn apply_spawn_login(
     if resume && login.carry.is_none() {
         if let Some(cid) = conversation.as_deref().filter(|c| k2_core::llm_accounts::pins::valid_conversation_id(c)) {
             let to = login.home.clone().unwrap_or_else(|| store::live_home(tool).0);
-            if let Some(from) = k2_core::session_homes::conversation_home_elsewhere(tool, cid, &to) {
+            if let Some(from) = k2_core::session_homes::conversation_home_elsewhere_from(tool, cid, &to, cwd) {
                 login.carry = Some(k2_core::llm_accounts::pins::Carry { conversation_id: cid.to_string(), from, to });
             }
         }

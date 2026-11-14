@@ -527,7 +527,7 @@ pub fn av1_sequence_header_obu(level: u8, w_minus_1: u32, h_minus_1: u32) -> Vec
     put(0, 1); // separate_uv_delta_q
     put(0, 1); // film_grain_params_present
     put(1, 1); // trailing one bit
-    while bits.len() % 8 != 0 {
+    while !bits.len().is_multiple_of(8) {
         bits.push(false);
     }
     let payload: Vec<u8> = bits.chunks(8).map(|c| c.iter().fold(0u8, |a, &b| (a << 1) | b as u8)).collect();

@@ -412,10 +412,9 @@ impl Av1SequenceHeader {
         let reduced = b.bit()?;
         let mut timing_info = None;
         let mut operating_points = 1u8;
-        let seq_level_idx_0;
         let mut seq_tier_0 = false;
-        if reduced {
-            seq_level_idx_0 = b.bits(5)? as u8;
+        let seq_level_idx_0 = if reduced {
+            b.bits(5)? as u8
         } else {
             let timing_present = b.bit()?;
             let mut decoder_model_present = false;
@@ -455,8 +454,8 @@ impl Av1SequenceHeader {
                     b.bits(4)?;
                 }
             }
-            seq_level_idx_0 = level0;
-        }
+            level0
+        };
         let wbits = b.bits(4)? + 1;
         let hbits = b.bits(4)? + 1;
         let max_frame_width = b.bits(wbits)? as u64 + 1;

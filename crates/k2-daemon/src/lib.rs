@@ -363,6 +363,8 @@ pub mod compute_trust;
 pub mod compute_advertise;
 // A workspace's compute node list (0.46.8): `k2 compute allow-nodes`.
 pub mod compute_allow;
+// `--cache-required`: a job pinned to the node that holds its cache.
+pub mod compute_cache_pin;
 // Git access for compute jobs (0.46.9, GH#78): `k2 compute git-access`.
 pub mod compute_git;
 // `k2 ci` (0.46.10, C6a): CI on compute: the routes and the watch loop.

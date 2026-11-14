@@ -206,7 +206,8 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   items.push(pinMenuItem(home, row))
   items.push({ id: 'home-remove', label: `Remove from ${home.name}` })
 
-  const clicked = await showContextMenu(items)
+  // On Glass a clear frost: the list shows through, blurred (K2 Design).
+  const clicked = await showContextMenu(items, { look: 'clear' })
   if (clicked === 'home-pin') {
     useHomesStore.getState().pinRow(home.id, row.address)
   } else if (clicked === 'home-unpin') {

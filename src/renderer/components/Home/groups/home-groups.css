@@ -73,6 +73,17 @@ html[data-style="glass"] [data-group-float] {
 }
 html[data-style="glass"] [data-group-float="peek"] { border-radius: 14px; }
 
+/* Terminal: the small floats (the bar's name tip, the swipe's peek) are cut
+   like the top bar's (data-k2-chamfer, globals.css); their shadow is the
+   wrapper's drop-shadow (data-k2-chamfer-float), since a box-shadow can't
+   follow a cut. */
+html[data-style="terminal"] [data-group-float][data-k2-chamfer] { box-shadow: none; }
+
+/* Terminal: the Home rows' status dot (the live square) is round, as in
+   K2 Design's mock. Only the Home nav and rail set it; everywhere else the
+   square keeps --radius-status. */
+html[data-style="terminal"] :is([data-home-sidebar], [data-home-rail]):not([data-zen-root] *) { --k2-live-square-radius: 50%; }
+
 /* The dialog list's selected row: a 2px edge in Terminal. */
 html[data-style="terminal"] [data-group-list-row][aria-selected="true"]:not([data-one-pane] *)::before {
   content: '';

@@ -86,10 +86,11 @@ vi.mock('@/components/ChatHistory/ChatHistory', () => ({
   default: ({ projectPath }: { projectPath: string }) => <div data-testid="drawer-history" data-root={projectPath} />,
 }))
 vi.mock('@/components/WorkspacePanel/WorkspacePanel', () => ({ default: () => <div data-testid="drawer-workspace" /> }))
-const menu = vi.hoisted(() => ({ next: null as string | null, items: [] as { id: string; label: string }[][] }))
+const menu = vi.hoisted(() => ({ next: null as string | null, items: [] as { id: string; label: string }[][], options: [] as unknown[] }))
 vi.mock('@/lib/context-menu', () => ({
-  showContextMenu: vi.fn(async (items: { id: string; label: string }[]) => {
+  showContextMenu: vi.fn(async (items: { id: string; label: string }[], options?: unknown) => {
     menu.items.push(items)
+    menu.options.push(options)
     return menu.next
   }),
 }))
@@ -759,6 +760,17 @@ describe('Home — the Agents page shell', () => {
     expect(rowOf('Bee').querySelector('[data-unread-waiting]')?.getAttribute('data-unread-waiting')).toBe('1')
     menu.next = null
     post.mockImplementation((async () => ({})) as unknown as typeof daemonCliPost)
+  })
+
+  it('a row’s right-click menu asks for the clear look (frosted over the list in Glass)', async () => {
+    render(<Shell />)
+    menu.items = []
+    menu.options = []
+    menu.next = null
+    await act(async () => {
+      fireEvent.contextMenu(rowOf('Cortana'))
+    })
+    expect(menu.options[0]).toEqual({ look: 'clear' })
   })
 
   it('remote row: no Mark all as read from a server without thread-read-all-v1', async () => {

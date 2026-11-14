@@ -1,4 +1,4 @@
-import { useContextMenuStore, type ContextMenuItemDef } from '../stores/context-menu'
+import { useContextMenuStore, type ContextMenuItemDef, type ContextMenuOptions } from '../stores/context-menu'
 
 // Track the last known mouse position so we can show the menu
 // at the right coordinates even when called from async code.
@@ -27,9 +27,11 @@ if (typeof window !== 'undefined') {
 /**
  * Show a custom context menu at the current mouse position.
  * Returns a promise that resolves to the selected item id, or null if dismissed.
+ * `options.look` 'clear': on Glass the list under it shows through, blurred.
  */
 export function showContextMenu(
-  items: ContextMenuItemDef[]
+  items: ContextMenuItemDef[],
+  options?: ContextMenuOptions
 ): Promise<string | null> {
-  return useContextMenuStore.getState().show(lastMouseX, lastMouseY, items)
+  return useContextMenuStore.getState().show(lastMouseX, lastMouseY, items, options)
 }

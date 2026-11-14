@@ -5,8 +5,11 @@
 // 24 px from its top and bottom, one pane below 640 px, Done and no ×.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DIALOG_EDGE_TINT } from '@/components/ui/ScrollEdgeFade'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -14,7 +17,8 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-import { type GroupBarItem } from './HomeGroupBar'
+import HomeGroupBar, { type GroupBarItem } from './HomeGroupBar'
+import { NavPaletteField } from '../HomeNavFooter'
 import GroupEditModal, { GROUP_DIALOG_STYLE } from './GroupEditModal'
 import { GROUP_DIALOG_FOOT_CLASS, GROUP_DIALOG_FOOT_PX, GROUP_DIALOG_HEIGHT_SHARE, groupDialogSize } from './group-bar-look'
 
@@ -93,5 +97,44 @@ describe('the Groups dialog', () => {
       expect(header.className).toContain('z-[2]')
     }
     check('group-icon-frame')
+  })
+})
+
+// Round mp-4 looks: Terminal's real text field, the cut floats, the dot.
+const here = dirname(fileURLToPath(import.meta.url))
+const homeCss = readFileSync(join(here, 'home-groups.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+
+describe('Terminal looks (round mp-4)', () => {
+  it('the name and both of the dialog’s searches are K2’s cut Terminal field (the control chamfer)', () => {
+    render(<GroupEditModal groups={G} currentId="g1" initialId="g2" onRename={vi.fn(() => 'saved' as const)} onSetIcon={vi.fn()} onCreate={vi.fn(() => null)} onDelete={vi.fn()} onSetRecentFirst={vi.fn()} onReorderGroups={vi.fn()} onClose={vi.fn()} />)
+    const m = document.querySelector('[data-group-edit-modal]') as HTMLElement
+    const name = m.querySelector('[data-group-name-input]') as HTMLElement
+    expect(name.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(name.className).toContain('k2-focus')
+    const iconSearch = m.querySelector('[data-group-icon-search]') as HTMLElement
+    expect([iconSearch.getAttribute('data-k2-chamfer'), iconSearch.hasAttribute('data-k2-search')]).toEqual(['control', true])
+    // The Agents search is the same shared SearchField (it needs the Homes
+    // store, so it is checked where that is wired).
+    expect(readFileSync(join(here, 'GroupAgentsPane.tsx'), 'utf8')).toMatch(/<SearchField\b/)
+  })
+
+  it('the nav footer’s ⌘K field is the same cut field', () => {
+    render(<NavPaletteField />)
+    const field = document.querySelector('[data-home-palette-field] input') as HTMLElement
+    expect(field.getAttribute('data-k2-chamfer')).toBe('control')
+  })
+
+  it('the bar’s tip is cut (the control chamfer) inside a drop-shadow wrapper', () => {
+    render(<HomeGroupBar groups={G} currentId="g1" onSelect={vi.fn()} onRename={vi.fn(() => 'saved' as const)} onSetIcon={vi.fn()} onCreate={vi.fn(() => null)} onDelete={vi.fn()} onSetRecentFirst={vi.fn()} onReorderGroups={vi.fn()} swipe={null} />)
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Play' }))
+    const tip = document.querySelector('[data-group-bar-tip]') as HTMLElement
+    expect(tip.getAttribute('data-k2-chamfer-float')).toBe('menu')
+    const box = tip.querySelector('[data-group-float="tip"]') as HTMLElement
+    expect(box.getAttribute('data-k2-chamfer')).toBe('control')
+  })
+
+  it('the CSS: a cut float drops its box-shadow; the Home rows’ dot is round in Terminal only, never in a Garden', () => {
+    expect(homeCss).toContain('html[data-style="terminal"] [data-group-float][data-k2-chamfer] { box-shadow: none; }')
+    expect(homeCss).toContain('html[data-style="terminal"] :is([data-home-sidebar], [data-home-rail]):not([data-zen-root] *) { --k2-live-square-radius: 50%; }')
   })
 })

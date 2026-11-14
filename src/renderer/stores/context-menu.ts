@@ -49,15 +49,23 @@ export function isSelectableItem(item: ContextMenuItemDef): boolean {
  */
 export { clientToCssPx }
 
+/** How a menu looks. `clear`: on Glass, the list under it shows through,
+ *  blurred (FLOAT_CLEAR, components/ui/float-material.ts). */
+export interface ContextMenuOptions {
+  look?: 'clear'
+}
+
 interface ContextMenuState {
   isOpen: boolean
+  /** The open menu's look (`showContextMenu`'s options). */
+  look: ContextMenuOptions['look'] | null
   x: number
   y: number
   items: ContextMenuItemDef[]
   onSelect: ((id: string | null) => void) | null
   focusedIndex: number
 
-  show: (x: number, y: number, items: ContextMenuItemDef[]) => Promise<string | null>
+  show: (x: number, y: number, items: ContextMenuItemDef[], options?: ContextMenuOptions) => Promise<string | null>
   /** Swap rows on an open menu. Leaves `isOpen` and `onSelect` alone. */
   replaceItems: (items: ContextMenuItemDef[]) => void
   close: () => void
@@ -67,13 +75,14 @@ interface ContextMenuState {
 
 export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
   isOpen: false,
+  look: null,
   x: 0,
   y: 0,
   items: [],
   onSelect: null,
   focusedIndex: -1,
 
-  show: (x, y, items) => {
+  show: (x, y, items, options) => {
     return new Promise<string | null>((resolve) => {
       // Close any existing menu first
       const current = get()
@@ -86,6 +95,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
         x: clientToCssPx(x),
         y: clientToCssPx(y),
         items,
+        look: options?.look ?? null,
         onSelect: resolve,
         focusedIndex: -1
       })
@@ -104,6 +114,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
     }
     set({
       isOpen: false,
+      look: null,
       items: [],
       onSelect: null,
       focusedIndex: -1

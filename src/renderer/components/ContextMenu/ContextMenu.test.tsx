@@ -37,6 +37,20 @@ describe('the right-click menu', () => {
     expect(screen.getByRole('button', { name: 'Project settings' })).toBeTruthy()
   })
 
+  it('the clear look (the Home nav’s agent menu) marks the box; it closes back to the default', () => {
+    render(<ContextMenu />)
+    act(() => {
+      void useContextMenuStore.getState().show(40, 40, [{ id: 'pin', label: 'Pin' }], { look: 'clear' })
+    })
+    const box = document.querySelector<HTMLElement>('[data-context-menu]')
+    expect(box?.hasAttribute('data-float-clear')).toBe(true)
+    expect(box?.getAttribute('data-material')).toBe('frost')
+    expect(box?.getAttribute('data-k2-chamfer')).toBe('surface')
+    act(() => useContextMenuStore.getState().close())
+    open()
+    expect(document.querySelector('[data-context-menu]')?.hasAttribute('data-float-clear')).toBe(false)
+  })
+
   it('a submenu is the same surface', () => {
     render(<ContextMenu />)
     open()

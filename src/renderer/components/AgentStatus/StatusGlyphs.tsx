@@ -154,7 +154,10 @@ export function StatusGlyph({ status, size = STATUS_SLOT_PX }: { status: AgentSt
 }
 
 /** The live-session square: solid green = live (using RAM), solid grey at
- *  50% = reaped. Differs from the grey in value too (colour-blind safe). */
+ *  50% = reaped. Differs from the grey in value too (colour-blind safe).
+ *  Its corners follow `--radius-status` unless a surface sets
+ *  `--k2-live-square-radius` (the Home nav's rows: a round dot in Terminal,
+ *  K2 Design round mp-4; home-groups.css). */
 export function LiveSquare({ live, size = LIVE_SQUARE_PX }: { live: boolean; size?: number }): React.JSX.Element {
   return (
     <i
@@ -166,7 +169,7 @@ export function LiveSquare({ live, size = LIVE_SQUARE_PX }: { live: boolean; siz
         height: size,
         flex: 'none',
         background: live ? 'var(--color-status-ok)' : 'var(--color-text-muted)',
-        borderRadius: 'var(--radius-status, 0px)',
+        borderRadius: 'var(--k2-live-square-radius, var(--radius-status, 0px))',
         opacity: live ? 1 : 0.5,
       }}
     />

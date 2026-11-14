@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useLayoutEffect, useState } from 'react'
-import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
+import { FLOAT_CLEAR, floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { BetaTag, Tag } from '@/components/ui/Tag'
 import { KeyCombo } from '@/components/KeySymbol'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
@@ -265,6 +265,7 @@ export default function ContextMenu(): React.JSX.Element | null {
   const x = useContextMenuStore((s) => s.x)
   const y = useContextMenuStore((s) => s.y)
   const items = useContextMenuStore((s) => s.items)
+  const look = useContextMenuStore((s) => s.look)
   const focusedIndex = useContextMenuStore((s) => s.focusedIndex)
   const close = useContextMenuStore((s) => s.close)
   const selectItem = useContextMenuStore((s) => s.selectItem)
@@ -434,7 +435,7 @@ export default function ContextMenu(): React.JSX.Element | null {
           animation: 'context-menu-fade-in 50ms ease-out',
         }}
       >
-      <div data-context-menu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} {...MENU_LIST} className={PANEL_CLASS} style={PANEL_STYLE}>
+      <div data-context-menu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} {...(look === 'clear' ? FLOAT_CLEAR : null)} {...MENU_LIST} className={PANEL_CLASS} style={PANEL_STYLE}>
         {items.map((item, index) => {
           if (item.type === 'separator' || item.type === 'heading' || item.type === 'note') {
             return <StaticRow key={item.id || `sep-${index}`} item={item} index={index} />

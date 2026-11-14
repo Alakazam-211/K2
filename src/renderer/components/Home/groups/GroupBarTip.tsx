@@ -2,7 +2,9 @@
 // rail): the group's name and its ⌥⌘N, and on keyboard focus how to edit
 // groups. The icon's own label already says all of it, so the tip is only
 // for the eye (aria-hidden). Portalled, kept 8 px inside the window, and
-// it claims its box over a live Browser page (lib/browser-overlay).
+// it claims its box over a live Browser page (lib/browser-overlay). In
+// Terminal it is cut like the top bar's floats (the control chamfer; its
+// shadow on a wrapper, since a box-shadow can't follow a cut).
 
 import { useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -48,14 +50,16 @@ export default function GroupBarTip({ anchor, name, chord, keyboard, vertical }:
     <div
       ref={ref}
       aria-hidden="true"
-      data-group-float="tip"
       data-group-bar-tip=""
-      className="pointer-events-none fixed z-[1000] flex items-center gap-2 whitespace-nowrap px-2 py-1 text-[11px] text-[var(--color-text-primary)]"
+      data-k2-chamfer-float="menu"
+      className="pointer-events-none fixed z-[1000]"
       style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999 }}
     >
-      <span>{name}</span>
-      {chord && <span className="text-[var(--color-text-secondary)]">{chord}</span>}
-      {keyboard && <span className="text-[var(--color-text-secondary)]">· Shift F10 edits groups</span>}
+      <div data-group-float="tip" data-k2-chamfer="control" className="flex items-center gap-2 whitespace-nowrap px-2 py-1 text-[11px] text-[var(--color-text-primary)]">
+        <span>{name}</span>
+        {chord && <span className="text-[var(--color-text-secondary)]">{chord}</span>}
+        {keyboard && <span className="text-[var(--color-text-secondary)]">· Shift F10 edits groups</span>}
+      </div>
     </div>,
     document.body,
   )

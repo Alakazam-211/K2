@@ -89,22 +89,26 @@ function useStripMotion(ref: React.RefObject<HTMLDivElement | null>, groupId: st
 }
 
 /** The incoming group's glyph and name at the leading edge of its rows
- *  (the glyph alone in the rail). */
+ *  (the glyph alone in the rail). A card: cut in Terminal like the top
+ *  bar's floats (the surface chamfer; its shadow on the wrapper, since a
+ *  box-shadow can't follow a cut), rounded in Glass. */
 function GroupSwipePeek({ variant, group, index, sign }: { variant: 'nav' | 'rail'; group: Home; index: number; sign: number }): React.JSX.Element {
   const edge = sign > 0 ? 'left' : 'right'
   return (
     <div
-      data-group-float="peek"
       data-group-swipe-peek={group.id}
-      className={`pointer-events-none absolute top-[38%] z-20 flex min-w-0 max-w-[calc(100%-16px)] items-center gap-2 ${variant === 'rail' ? 'p-1.5' : 'px-3 py-2'}`}
+      data-k2-chamfer-float=""
+      className="pointer-events-none absolute top-[38%] z-20 flex min-w-0 max-w-[calc(100%-16px)]"
       style={{ [edge]: variant === 'rail' ? 2 : 8 }}
     >
-      <span className="flex-shrink-0 text-[var(--color-text-secondary)]">
-        <GroupGlyph icon={group.icon ?? null} index={index} />
-      </span>
-      {variant === 'nav' && (
-        <span className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{group.name}</span>
-      )}
+      <div data-group-float="peek" data-k2-chamfer="surface" className={`flex min-w-0 items-center gap-2 ${variant === 'rail' ? 'p-1.5' : 'px-3 py-2'}`}>
+        <span className="flex-shrink-0 text-[var(--color-text-secondary)]">
+          <GroupGlyph icon={group.icon ?? null} index={index} />
+        </span>
+        {variant === 'nav' && (
+          <span className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{group.name}</span>
+        )}
+      </div>
     </div>
   )
 }

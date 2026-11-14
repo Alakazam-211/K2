@@ -35,6 +35,14 @@ export function floatMaterial(
   }
 }
 
+/** A clear float: on Glass, a frosted menu that lets what is under it show
+ *  through, blurred (an 86% fill over a 24 px blur, styles/glass/
+ *  overrides.css), where the other frosted menus are near solid (97% over
+ *  48 px). For a menu over a list it belongs to, like the Home nav's agent
+ *  menu (K2 Design round mp-4). Does nothing outside Glass, or where Glass
+ *  falls back to tiles. */
+export const FLOAT_CLEAR = { 'data-float-clear': '' } as const
+
 /** What holds a menu's rows: the menu box itself, or its list under a
  *  search field. It pads the rows in from the menu's edge by --inset-menu,
  *  so a lit row never reaches the edge or its rounded or cut corners

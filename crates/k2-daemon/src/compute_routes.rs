@@ -4458,6 +4458,10 @@ fn local_disable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
 }
 
 #[cfg(test)]
+#[path = "compute_caller_repo_tests.rs"]
+mod caller_repo_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4562,13 +4566,13 @@ mod tests {
         // From the main checkout, or no repoDir (older CLI): the main HEAD.
         assert_eq!(commit_for(serde_json::json!({ "repoDir": r.to_str().expect("utf8") })).0, main_head);
         assert_eq!(commit_for(serde_json::json!({})).0, main_head);
-        // A repo outside the workspace: refused as a source, with a note.
+        // A repo outside the workspace: refused, never the workspace's code
+        // instead (compute_caller_repo_tests has the rest).
         let other = d.join("other");
         std::fs::create_dir_all(&other).expect("mkdir");
         git(&other, &["init", "-q"]);
-        let (c, w) = commit_for(serde_json::json!({ "repoDir": other.to_str().expect("utf8") }));
-        assert_eq!(c, main_head);
-        assert!(w.iter().any(|x| x.contains("outside the workspace")), "{w:?}");
+        let e = source_for(&ws, &serde_json::json!({ "repoDir": other.to_str().expect("utf8") }), &d.join("unused.dirty.tar"), &mut vec![]).err();
+        assert_eq!(e.map(|e| e.code), Some(REPO_INVALID));
         let _ = std::fs::remove_dir_all(&d);
     }
 

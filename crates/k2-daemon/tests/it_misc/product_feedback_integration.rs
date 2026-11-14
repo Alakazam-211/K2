@@ -273,6 +273,15 @@ fn setup(paired: bool) -> Env {
     Env { _home: home, relay, intake, _vars: vars, port: d.port, _d: d }
 }
 
+/// The tests in this binary share one database and run one at a time (the
+/// env lock): a test that counts what is pending starts from an empty
+/// outbox, not what an earlier test left.
+fn empty_outbox() {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute_batch("DELETE FROM product_feedback_screenshots; DELETE FROM product_feedback_outbox;").unwrap();
+}
+
 fn send(port: u16, tok: &str, body: J) -> (u16, J) {
     call(port, "POST", &q("/cli/product-feedback/send", tok), Some(body))
 }
@@ -287,6 +296,7 @@ async fn a_send_waits_for_the_service_then_goes_with_the_box_token() {
     );
     let e = setup(true);
     let port = e.port;
+    empty_outbox();
     let mut events = k2_daemon::session_events::subscribe();
 
     // The service isn't there yet: the relay has no assert route.
@@ -567,10 +577,16 @@ async fn needs_connect_disabled_and_airgap() {
     let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", OWNER), None);
     assert_eq!((v["canSend"].clone(), v["why"].clone()), (json!(false), json!("needs_connect")), "{v}");
     assert!(v["message"].as_str().unwrap().contains("hello@alakazamlabs.com"), "{v}");
+    // The tests in this binary share one database: count, don't expect empty.
+    let outbox_rows = || -> i64 {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM product_feedback_outbox", [], |r| r.get(0)).unwrap()
+    };
+    let before = outbox_rows();
     let (s, v) = send(port, OWNER, json!({"text": "unpaired"}));
     assert_eq!((s, v["error"].clone()), (409, json!("needs_connect")), "{v}");
-    let (_, v) = call(port, "GET", &q("/cli/product-feedback/list", OWNER), None);
-    assert_eq!(v["items"], json!([]), "nothing stored: {v}");
+    assert_eq!(outbox_rows(), before, "nothing stored");
 
     seed_tunnel();
     let (s, _) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"enabled": false})));
@@ -980,6 +996,8 @@ fn fail_row(id: &str, days_ago: i64, error: &str) {
 async fn failed_rows_go_again_by_themselves_once_the_service_answers() {
     let e = setup(true);
     let port = e.port;
+    // A probe only goes while nothing else is queued.
+    empty_outbox();
 
     // Five rows saved while the service wasn't there.
     e.intake.set(|_| (502, "bad gateway".into()));

@@ -755,7 +755,7 @@ struct Upload {
     by: String,
 }
 
-type DbHandle = Arc<parking_lot::ReentrantMutex<rusqlite::Connection>>;
+type DbHandle = Arc<k2_core::db::DbLock>;
 
 impl Upload {
     /// The background half: each file once, then the channel, then the

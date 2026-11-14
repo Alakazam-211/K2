@@ -1410,7 +1410,7 @@ mod tests {
     use super::*;
     use rusqlite::params;
 
-    fn conn() -> std::sync::Arc<parking_lot::ReentrantMutex<Connection>> {
+    fn conn() -> std::sync::Arc<crate::db::DbLock> {
         crate::db::init_for_tests()
     }
 
@@ -2512,7 +2512,7 @@ mod tests {
 mod delete_tests {
     use super::*;
 
-    fn conn() -> std::sync::Arc<parking_lot::ReentrantMutex<Connection>> {
+    fn conn() -> std::sync::Arc<crate::db::DbLock> {
         crate::db::init_for_tests()
     }
 

@@ -6,7 +6,7 @@ use super::*;
 use crate::overlay::{self, doc::OverlayDoc, PostAuthor};
 use rusqlite::params;
 
-fn dbh() -> std::sync::Arc<parking_lot::ReentrantMutex<Connection>> {
+fn dbh() -> std::sync::Arc<crate::db::DbLock> {
     crate::db::init_for_tests()
 }
 

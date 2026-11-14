@@ -29,7 +29,7 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-type Db = std::sync::Arc<parking_lot::ReentrantMutex<rusqlite::Connection>>;
+type Db = std::sync::Arc<k2_core::db::DbLock>;
 
 /// One delivery's journal row (or none, when the write failed). It keeps
 /// the database it was written to: the lane runs on another thread.

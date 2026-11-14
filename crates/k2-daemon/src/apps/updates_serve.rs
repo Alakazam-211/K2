@@ -70,7 +70,7 @@ pub fn refresh(app_id: &str) {
 
 /// [`refresh`] from a given DB handle (the upload thread carries the
 /// request's handle).
-pub fn refresh_from(db: &Arc<parking_lot::ReentrantMutex<rusqlite::Connection>>, app_id: &str) {
+pub fn refresh_from(db: &Arc<k2_core::db::DbLock>, app_id: &str) {
     let f = {
         let conn = db.lock();
         feed::load(&conn, app_id)

@@ -24,6 +24,7 @@ pub mod awareness_ws;
 pub mod board_core;
 pub mod board_file;
 pub mod board_routes;
+pub mod boot_phases;
 pub mod boot_status;
 /// `k2 capabilities` (prd-tauri-core-0467-v1 TC-17).
 pub mod capabilities;
@@ -270,6 +271,7 @@ pub mod cell_server;
 pub mod slow_request;
 // gzip for JSON that leaves this machine; ETag/304 on the projects list.
 pub mod response_wire;
+pub mod spawn_steps;
 // The daemon's own stdout/stderr log files rotate at 50 MB (3 kept).
 pub mod stderr_log;
 pub mod cell_uds;

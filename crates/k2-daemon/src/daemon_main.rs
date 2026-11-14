@@ -1228,6 +1228,7 @@ async fn async_main() {
     // multi-second migration sweep on this thread can't starve it — the
     // runtime is multi-threaded.
     boot_status::set_migrating("Starting up…");
+    let mut boot_clock = crate::boot_phases::BootClock::start();
     // Now, not on the first connection: building it needs descriptors, and
     // failing to panics the accept loop that asked.
     let _ = crate::handoff::splice_handle();
@@ -1303,11 +1304,13 @@ async fn async_main() {
     // Synchronous only: no `.await` while the scope is held.
     let boot_trash = k2_core::safe_delete::BootTrashScope::enter();
 
+    boot_clock.phase("hand-off listeners and trash scope");
     // 0.37.0 workspace–agent unification migration. Per-workspace,
     // sentinel-gated, idempotent. See
     // `.k2so/prds/workspace-agent-unification.md` and
     // `k2_core::migrations::unification_0_37_0`.
     run_workspace_unification_sweep();
+    boot_clock.phase("workspace unification sweep");
 
     // Phase 2 Unit 7b — boot-time per-workspace legacy migrations +
     // SKILL.md refresh. Each helper is idempotent: archive_orphan
@@ -1324,8 +1327,10 @@ async fn async_main() {
     // regen) sees the `.k2/` layout. Idempotent; skips workspaces that
     // already have `.k2/`.
     run_migrate_k2so_dot_dirs();
+    boot_clock.phase("k2so dot dirs");
 
     run_workspace_legacy_migrations_sweep();
+    boot_clock.phase("legacy migrations sweep");
 
     let deferred_boot_trash = boot_trash.finish();
     if !deferred_boot_trash.is_empty() {
@@ -1344,6 +1349,7 @@ async fn async_main() {
     // dir. Runs BEFORE the #23 repair below so the migrated files get their
     // embedded cwd repaired in the SAME boot. Idempotent + non-fatal.
     run_migrate_legacy_slug_dirs();
+    boot_clock.phase("legacy slug dirs");
 
     // GH#23 (0.39.40) self-heal — repair workspaces Clone-to'd on
     // 0.39.38/0.39.39 before the unpack-time embedded-path rewrite landed.
@@ -1355,12 +1361,14 @@ async fn async_main() {
     // they match), and fully non-fatal. Runs every boot — cheap on clean
     // installs, self-correcting for affected ones.
     run_repair_cloned_session_paths();
+    boot_clock.phase("cloned session paths");
 
     // 0.46.0 (a clone carries its Threads, CL5): a clone's imported main
     // Thread that waited for a pinned Chat settles onto the pin once one
     // is known (also settled on resolve and on every pin write). Cheap
     // (indexed on pending rows) and non-fatal.
     run_settle_imported_threads();
+    boot_clock.phase("imported threads");
 
     // 0.39.0 K2 Connect prep: `legacy_agent_types_v1` migration moved
     // from `src-tauri/src/lib.rs` (where it ran only on Tauri startup).
@@ -1368,12 +1376,14 @@ async fn async_main() {
     // vocabulary frontmatter rewrite without Tauri ever booting. Gated
     // by the `code_migrations` table so it's a one-shot pass per DB.
     run_legacy_agent_types_v1_migration();
+    boot_clock.phase("agent types migration");
 
     // 0.39.0 sidebar polish — auto-pin every workspace that was in
     // agent mode pre-0.39.0, so the retirement of the auto-promote-to-
     // top behavior doesn't make users think their agents disappeared.
     // Gated by `code_migrations` so it's a one-shot pass per DB.
     run_auto_pin_existing_agents_migration();
+    boot_clock.phase("auto pin agents");
 
     // 0.39.1 correction — the 0.39.0 ship of the above migration had
     // an over-broad filter that pinned manager/coordinator/pod
@@ -1383,6 +1393,7 @@ async fn async_main() {
     // 0.39.1 installs (where the corrected filter pinned only
     // agent + custom from the start).
     run_correct_auto_pin_filter_migration();
+    boot_clock.phase("auto pin filter");
 
     // W0 (0.46.0) security heal — agent-backed public wiki chat is
     // disabled. Every boot: any workspace still opted in is switched off,
@@ -1405,6 +1416,7 @@ async fn async_main() {
         }
     }
 
+    boot_clock.phase("wiki public chat heal");
     // Canonical-agents feature — harness fan-out is OFF by default and is
     // applied ONLY by the per-workspace, user-confirmed checkbox. This
     // migration is now NEUTERED (no-op): it used to bulk-opt every
@@ -1415,6 +1427,7 @@ async fn async_main() {
     // former global "default for new agents" flag was removed entirely;
     // turning a workspace into an agent does nothing to its fan-out marker.
     run_enable_fanout_for_enabled_agents_migration();
+    boot_clock.phase("fan-out migration");
 
     // Phase 2 Unit 4 — workspace_layouts one-shot migration moved
     // from `src-tauri/src/lib.rs::migrate_workspace_layouts_to_db`.
@@ -1424,12 +1437,14 @@ async fn async_main() {
     // boot (the key is gone). Running daemon-side means a remote
     // daemon (K2 Connect) picks it up without Tauri being present.
     k2_core::db_ops::migrate_workspace_layouts_to_db();
+    boot_clock.phase("layouts to database");
 
     // 0.34.0 Phase 3.1 — register the daemon-side InjectProvider +
     // WakeProvider so awareness::egress can actually reach live
     // sessions. Before this, signals to live targets landed in the
     // bus + activity_feed but never in the target's PTY.
     providers::register_all();
+    boot_clock.phase("providers");
 
     // 0.45.1 (quiet-gate PRD §6.1): a crashed cell or a killed daemon can
     // leave `inet k2sandbox_<uid>` egress tables behind, and an old-style
@@ -1468,12 +1483,14 @@ async fn async_main() {
         Err(e) => log_debug!("[daemon] settings: removing the old Companion block failed: {e}"),
     }
 
+    boot_clock.phase("sandbox tables, event sink and settings scrub");
     // Phase 3.1 F3 — boot-time pending-live replay. Previous
     // 0.37.5 migration: legacy `<sanitized_pid>_<agent>/` queue dirs
     // (pre-0.37.5 keying) merged into bare `<sanitized_pid>/`. MUST
     // run BEFORE replay_all so the in-memory `pending_state` counter
     // is built from the post-migration shape. Idempotent.
     pending_live::migrate_legacy_dirs_to_bare_pid();
+    boot_clock.phase("pending-live folders");
 
     // 0.38.0 — heal corrupt `workspace_layouts.layout_json` rows
     // written by pre-0.38.0 builds whose mount-time sync:tabs-request
@@ -1482,6 +1499,7 @@ async fn async_main() {
     // so it's a one-shot pass. See `workspace_layouts_dedup` for
     // signature derivation and unit tests.
     workspace_layouts_dedup::run_once();
+    boot_clock.phase("layouts dedup");
 
     // 0.38.0 — migrate `version: 1` layouts to v2 (metadata-only for
     // daemon-backed tabs). Independent code_migrations marker
@@ -1489,21 +1507,25 @@ async fn async_main() {
     // re-run independently in future versions. Renderer also performs
     // the same migration on read (`tabs.ts::migrateLayoutToV2`).
     workspace_layouts_dedup::run_v2_emit_once();
+    boot_clock.phase("layouts v2 emit");
 
     // Workspace Resources — one-shot INSERT OR IGNORE of every
     // isPinnedFile file-viewer path from workspace_layouts
     // (prd-workspace-resources-v1 R8). Never unpins tabs.
     workspace_resources_migrate::run_once();
+    boot_clock.phase("workspace resources");
 
     // 0.45.1 — fork tabs (`--resume <id> --fork-session`) opened before
     // this build claimed the source workspace's conversation id. Give
     // each its own pane key and split its Thread rows out (TR20).
     // One-shot, gated by a code_migrations marker; logs each re-key.
     k2_core::fork_tab_repair::run_once();
+    boot_clock.phase("fork tab repair");
 
     // A8 H2 — one-shot: agents the old `k2 agent hire` named "AGENT.md" /
     // "ROLE.md" (both name stores) go back to their folder name.
     agent_name_repair_migrate::run_once();
+    boot_clock.phase("agent name repair");
 
     // daemon-run may have queued signals for offline agents that
     // never got injected (daemon crashed before the session came
@@ -1526,6 +1548,7 @@ async fn async_main() {
         }
     }
 
+    boot_clock.phase("pending-live replay");
     // Phase 3.2 G1 — harness watchdog. Tails session_map + the
     // session registry, logs + emits watchdog SemanticEvent frames
     // when sessions go idle past configured thresholds, and
@@ -1594,6 +1617,7 @@ async fn async_main() {
     // exactly while voice runs the tunnel tier with the preview on, and tells
     // Sew and the voice BFF when the lane is down, §6.6 M11).
     crate::sew::media_path::spawn();
+    boot_clock.phase("watchdog, mail, sql and sew start");
 
     // Files-drawer multi-writer live refresh — recursive watcher over
     // every registered project root. Agent shell writes and other
@@ -1622,6 +1646,7 @@ async fn async_main() {
     // Zen Mode (Z12/Z61): watch `~/.k2/zen/` only when this computer has
     // set Zen up; otherwise the first `page/ensure` starts it.
     zen_watch::start_at_boot();
+    boot_clock.phase("file watchers, docs and zen");
 
     // heartbeat.port watchdog — see `run_heartbeat_port_watchdog` docs.
     // The daemon takes over `~/.k2so/heartbeat.port` whenever Tauri
@@ -1658,6 +1683,7 @@ async fn async_main() {
     // thread-read-v1: every known person starts fully read (the owner was
     // seen by migration 0190; Connect users are seen here, once).
     crate::read_routes::boot();
+    boot_clock.phase("activity, overlay and read state");
     // Garden access (0.46.3): an install's first boot runs the upgrade pass
     // (grandfathered editors with "added automatically at upgrade" History
     // lines) before any route answers, so nobody sees empty lists first.
@@ -1676,14 +1702,17 @@ async fn async_main() {
     // boot overdue fire and every reattaching client see them. Bounded to
     // 10 s (the rest are retried in the background). No-op without ptyd.
     crate::ptyd_adopt::b1();
+    boot_clock.phase("garden access, permission default, ptyd adopt");
 
     // Mobile dev: register the device lanes before `ready`, so the first
     // `/boot-status` a client reads as ready already lists `mobile-sim-v1`
     // where a lane can run (`sim_routes::start` below runs later in boot).
     // Cheap: no probe runs here.
     crate::sim_routes::register_lanes();
+    boot_clock.phase("sim lanes");
 
     boot_status::set_ready();
+    boot_clock.ready();
     log_debug!("[daemon] boot complete — phase=ready");
     // 0.46.9: Thread and project chat deliveries a restart left queued go
     // back on their agents' lanes (the journal, migration 0267). After

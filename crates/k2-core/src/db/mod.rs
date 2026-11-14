@@ -1,14 +1,15 @@
 pub mod home_switch;
+pub mod lock;
 pub mod schema;
 
-use parking_lot::ReentrantMutex;
+pub use lock::{DbGuard, DbLock};
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 /// Process-wide SQLite handle. Populated exactly once by
 /// [`init_database`] during app startup and accessed from any thread via
-/// [`shared`]. The `Arc<ReentrantMutex<Connection>>` shape means `AppState.db`
+/// [`shared`]. The `Arc<DbLock>` shape means `AppState.db`
 /// and every ad-hoc command-handler/HTTP-thread caller can clone the
 /// same handle — there is only one physical connection (and therefore
 /// only one write lock queue) for the lifetime of the process.
@@ -21,7 +22,7 @@ use std::sync::{Arc, OnceLock};
 /// paths are rare in K2SO (most work is write-heavy: agent sessions,
 /// work items, heartbeats). When that changes, swap this for an
 /// `r2d2::Pool<SqliteConnectionManager>` — the public API stays the same.
-static SHARED: OnceLock<Arc<ReentrantMutex<Connection>>> = OnceLock::new();
+static SHARED: OnceLock<Arc<DbLock>> = OnceLock::new();
 
 /// Open a SQLite connection with K2SO's standard resilience + performance
 /// PRAGMAs.
@@ -93,7 +94,7 @@ pub fn open_private_with_resilience(path: &Path) -> Result<Connection> {
 /// The returned `Arc` is cheap to clone but the lock must be acquired
 /// before each SQL operation. Hold the lock for the duration of a
 /// transaction block, then drop the guard to release the write queue.
-pub fn shared() -> Arc<ReentrantMutex<Connection>> {
+pub fn shared() -> Arc<DbLock> {
     #[cfg(any(test, feature = "test-util"))]
     if let Some(scoped) = scoped_handle() {
         return scoped;
@@ -115,7 +116,7 @@ pub fn shared() -> Arc<ReentrantMutex<Connection>> {
 /// initialized (lib tests in downstream crates that never called
 /// `init_database`). Callers that can fall back (inject flow) use this
 /// instead of panicking.
-pub fn try_shared() -> Option<Arc<ReentrantMutex<Connection>>> {
+pub fn try_shared() -> Option<Arc<DbLock>> {
     #[cfg(any(test, feature = "test-util"))]
     if let Some(scoped) = scoped_handle() {
         return Some(scoped);
@@ -134,12 +135,12 @@ pub fn try_shared() -> Option<Arc<ReentrantMutex<Connection>>> {
 
 #[cfg(any(test, feature = "test-util"))]
 thread_local! {
-    static SCOPED: std::cell::RefCell<Option<Arc<ReentrantMutex<Connection>>>> =
+    static SCOPED: std::cell::RefCell<Option<Arc<DbLock>>> =
         const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(any(test, feature = "test-util"))]
-fn scoped_handle() -> Option<Arc<ReentrantMutex<Connection>>> {
+fn scoped_handle() -> Option<Arc<DbLock>> {
     SCOPED.with(|s| s.borrow().clone())
 }
 
@@ -148,8 +149,8 @@ fn scoped_handle() -> Option<Arc<ReentrantMutex<Connection>>> {
 #[cfg(any(test, feature = "test-util"))]
 #[must_use = "the scoped DB is uninstalled when the guard drops"]
 pub struct TestDbGuard {
-    handle: Arc<ReentrantMutex<Connection>>,
-    prev: Option<Arc<ReentrantMutex<Connection>>>,
+    handle: Arc<DbLock>,
+    prev: Option<Arc<DbLock>>,
     // Thread-local slot: the guard must drop on the thread that made it.
     _not_send: std::marker::PhantomData<*const ()>,
 }
@@ -158,7 +159,7 @@ pub struct TestDbGuard {
 impl TestDbGuard {
     /// The scoped connection (the same one `shared()` returns on this
     /// thread). Pass it explicitly to code that runs on other threads.
-    pub fn handle(&self) -> Arc<ReentrantMutex<Connection>> {
+    pub fn handle(&self) -> Arc<DbLock> {
         self.handle.clone()
     }
 }
@@ -185,7 +186,7 @@ impl Drop for TestDbGuard {
 #[cfg(any(test, feature = "test-util"))]
 pub fn scoped_for_test() -> TestDbGuard {
     let conn = fresh_test_connection();
-    let handle = Arc::new(ReentrantMutex::new(conn));
+    let handle = Arc::new(DbLock::new(conn));
     let prev = SCOPED.with(|s| s.borrow_mut().replace(handle.clone()));
     TestDbGuard { handle, prev, _not_send: std::marker::PhantomData }
 }
@@ -193,7 +194,7 @@ pub fn scoped_for_test() -> TestDbGuard {
 /// Test-only: the scoped DB of THIS thread, if any. For code under test
 /// that hands work to its own thread and must carry the test's DB with it.
 #[cfg(any(test, feature = "test-util"))]
-pub fn scoped_handle_for_test() -> Option<Arc<ReentrantMutex<Connection>>> {
+pub fn scoped_handle_for_test() -> Option<Arc<DbLock>> {
     scoped_handle()
 }
 
@@ -202,7 +203,7 @@ pub fn scoped_handle_for_test() -> Option<Arc<ReentrantMutex<Connection>>> {
 /// For code under test that hands work to a long-lived thread (the App push
 /// worker) and must read the test's own DB there.
 #[cfg(any(test, feature = "test-util"))]
-pub fn with_scoped_handle<T>(handle: Arc<ReentrantMutex<Connection>>, f: impl FnOnce() -> T) -> T {
+pub fn with_scoped_handle<T>(handle: Arc<DbLock>, f: impl FnOnce() -> T) -> T {
     let prev = SCOPED.with(|s| s.borrow_mut().replace(handle));
     let out = f();
     SCOPED.with(|s| *s.borrow_mut() = prev);
@@ -215,7 +216,7 @@ pub fn with_scoped_handle<T>(handle: Arc<ReentrantMutex<Connection>>, f: impl Fn
 /// in-process daemon serving that test reads the test's own DB. A test
 /// thread itself uses [`scoped_for_test`], whose guard restores the slot.
 #[cfg(any(test, feature = "test-util"))]
-pub fn set_thread_scoped_handle_for_test(handle: Arc<ReentrantMutex<Connection>>) {
+pub fn set_thread_scoped_handle_for_test(handle: Arc<DbLock>) {
     SCOPED.with(|s| *s.borrow_mut() = Some(handle));
 }
 
@@ -249,7 +250,7 @@ fn fresh_test_connection() -> Connection {
 /// invariant that only test contexts can acquire an in-memory DB
 /// without first calling `init_database()`.
 #[cfg(any(test, feature = "test-util"))]
-pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
+pub fn init_for_tests() -> Arc<DbLock> {
     if let Some(scoped) = scoped_handle() {
         return scoped;
     }
@@ -257,7 +258,7 @@ pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
         return handle.clone();
     }
     let conn = fresh_test_connection();
-    let handle = Arc::new(ReentrantMutex::new(conn));
+    let handle = Arc::new(DbLock::new(conn));
     match SHARED.set(handle.clone()) {
         Ok(()) => handle,
         Err(_) => SHARED.get().expect("SHARED populated").clone(),
@@ -376,7 +377,7 @@ fn pick_dual_real_db(new: &std::path::Path, old: &std::path::Path) -> std::path:
 ///
 /// Safe to call exactly once per process. A second call returns the
 /// already-initialized handle (tests that reuse the binary hit this).
-pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
+pub fn init_database() -> Result<Arc<DbLock>> {
     init_home_database(&home_switch::SwitchOpts {
         defer: None,
         by: format!("k2-core {}", env!("CARGO_PKG_VERSION")),
@@ -389,7 +390,7 @@ pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
 /// the second call in a process).
 pub fn init_home_database(
     opts: &home_switch::SwitchOpts,
-) -> Result<(Arc<ReentrantMutex<Connection>>, Option<home_switch::SwitchReport>)> {
+) -> Result<(Arc<DbLock>, Option<home_switch::SwitchReport>)> {
     // Fast path for tests that re-invoke the init (or if somewhere in
     // startup accidentally re-initializes): just clone the existing
     // handle rather than opening another connection.
@@ -426,6 +427,7 @@ pub fn init_home_database(
     }
     let db_path = report.path.clone();
     let conn = open_private_with_resilience(&db_path)?;
+    crate::log_debug!("{}", durability_line(&conn));
 
     // Self-heal: clean orphan rows whose parent `projects` row was
     // deleted under earlier versions where FK enforcement was off
@@ -446,13 +448,39 @@ pub fn init_home_database(
     seed_audit_sentinels(&conn)?;
     crate::workspace::handle::backfill_workspace_handles(&conn);
 
-    let handle = Arc::new(ReentrantMutex::new(conn));
+    let handle = Arc::new(DbLock::new(conn));
     // Race-free publish: whoever wins gets their handle stored, losers
     // drop theirs and return the winner's. In practice only one thread
     // calls init_database during startup.
     match SHARED.set(handle.clone()) {
         Ok(()) => Ok((handle, Some(report))),
         Err(_) => Ok((SHARED.get().expect("SHARED just populated").clone(), Some(report))),
+    }
+}
+
+/// The main database's journal mode and `synchronous` level, logged once at
+/// open: `[db] main database: journal_mode=wal synchronous=2 (FULL)`. A read
+/// that fails shows as `?`.
+pub fn durability_line(conn: &Connection) -> String {
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap_or_else(|_| "?".to_string());
+    let sync = conn.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0));
+    let sync = match sync {
+        Ok(n) => format!("{n} ({})", synchronous_name(n)),
+        Err(_) => "?".to_string(),
+    };
+    format!("[db] main database: journal_mode={} synchronous={sync}", mode.to_ascii_lowercase())
+}
+
+/// SQLite's name for a `PRAGMA synchronous` value.
+pub fn synchronous_name(n: i64) -> &'static str {
+    match n {
+        0 => "OFF",
+        1 => "NORMAL",
+        2 => "FULL",
+        3 => "EXTRA",
+        _ => "unknown",
     }
 }
 

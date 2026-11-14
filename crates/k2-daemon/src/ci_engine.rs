@@ -221,7 +221,7 @@ fn now() -> i64 {
     k2_core::compute::now()
 }
 
-fn db() -> Arc<parking_lot::ReentrantMutex<rusqlite::Connection>> {
+fn db() -> Arc<k2_core::db::DbLock> {
     k2_core::db::shared()
 }
 

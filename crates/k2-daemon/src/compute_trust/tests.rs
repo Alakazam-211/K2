@@ -19,8 +19,6 @@ use k2_core::compute::proto::node_roster::{NodeRoster, OwnerAttestation, SeatSta
 use k2_core::compute::proto::statement::{KeyExposure, NodeStatement, RotationStatement};
 use k2_core::connect_users::Role;
 use k2_core::federation::{FederationPeer, PeerTrust};
-use parking_lot::ReentrantMutex;
-use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use super::test_seams;
@@ -30,7 +28,7 @@ use crate::compute_admin::test_seams as admin_seams;
 const OWNER: &str = "owner.k2.dev";
 const CLIENT: &str = "client.k2.dev";
 
-type Db = Arc<ReentrantMutex<Connection>>;
+type Db = Arc<k2_core::db::DbLock>;
 
 /// CI on compute is a preview (0.46.10 ships it dark, `ciPreview`): these
 /// tests run with it on (compute and CI), under the one env lock, so no

@@ -17,8 +17,6 @@ use std::time::{Duration, Instant};
 
 use k2_core::log_debug;
 use k2_core::sources::{FetchPlan, SourceRow, Transition, MAX_CONCURRENT_FETCHES};
-use parking_lot::ReentrantMutex;
-use rusqlite::Connection;
 
 use crate::cli_response::CliResponse;
 
@@ -110,7 +108,7 @@ pub(crate) fn status_line(code: u16) -> &'static str {
     }
 }
 
-type Db = Arc<ReentrantMutex<Connection>>;
+type Db = Arc<k2_core::db::DbLock>;
 type FetchFn = dyn Fn(&FetchPlan) -> fetch::Fetched + Send + Sync;
 
 /// Facts for `GET /cli/sources/status`.
@@ -412,7 +410,7 @@ pub(crate) mod test_engine {
 
         /// One tick; run every dispatched job inline; repeat until nothing
         /// more is dispatched. Returns how many fetches ran.
-        pub(crate) fn step(&mut self, conn: &Connection) -> usize {
+        pub(crate) fn step(&mut self, conn: &rusqlite::Connection) -> usize {
             let mut ran = 0;
             loop {
                 let mut post = scheduler::Post::default();

@@ -411,7 +411,7 @@ type OnGc = Box<dyn FnOnce(&[String]) + Send>;
 struct FakeEngine {
     hashes: Vec<String>,
     asked: Mutex<Vec<Vec<String>>>,
-    db: Arc<parking_lot::ReentrantMutex<rusqlite::Connection>>,
+    db: Arc<k2_core::db::DbLock>,
     lock_free: Mutex<Option<bool>>,
     on_gc: Mutex<Option<OnGc>>,
 }

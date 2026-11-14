@@ -163,7 +163,7 @@ pub fn run_once() {
 mod tests {
     use super::*;
 
-    fn conn() -> std::sync::Arc<parking_lot::ReentrantMutex<Connection>> {
+    fn conn() -> std::sync::Arc<crate::db::DbLock> {
         crate::db::init_for_tests()
     }
 

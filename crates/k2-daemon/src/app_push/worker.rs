@@ -85,7 +85,7 @@ impl<T> Fair<T> {
 struct Queued {
     job: Job,
     #[cfg(test)]
-    db: std::sync::Arc<parking_lot::ReentrantMutex<rusqlite::Connection>>,
+    db: std::sync::Arc<k2_core::db::DbLock>,
 }
 
 struct State {

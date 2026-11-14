@@ -1260,7 +1260,7 @@ mod tests {
         assert!(may_survive_restart("my-remote-shell-notes"), "only the prefix counts");
     }
 
-    fn conn() -> std::sync::Arc<parking_lot::ReentrantMutex<Connection>> {
+    fn conn() -> std::sync::Arc<crate::db::DbLock> {
         db::init_for_tests()
     }
 

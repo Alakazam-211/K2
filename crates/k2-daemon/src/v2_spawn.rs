@@ -916,6 +916,7 @@ fn attach_only_session(req: &SpawnRequest) -> HandlerResult {
 
 fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     let __t_total = std::time::Instant::now();
+    let mut steps = crate::spawn_steps::SpawnSteps::start();
 
     // `attach_only_supported` is false only under the debug-build harness
     // hook that simulates a released daemon (which ignores the field).
@@ -1003,6 +1004,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // real pane cols/rows; on reuse we honor that fit immediately so
     // the first grid attach snapshot is already at the target size
     // (no 80×24 snap → claim-resize → reflow storm).
+    steps.step("resume lookup");
     let __t_lookup = std::time::Instant::now();
     let existing = v2_session_map::lookup_by_agent_name(&req.agent_name);
     let lookup_ms = __t_lookup.elapsed().as_secs_f64() * 1000.0;
@@ -1324,6 +1326,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // k2-ptyd S3 (PRD §7.5 meta): what a restarted daemon needs to adopt
     // this session. Identity only (P72).
     let mut ptyd_meta = serde_json::Map::new();
+    steps.step("session lookup and argv");
 
     // COMPAT-58 (#58 Phase 1 / PR-A) — per-cell scoped passport + UDS.
     // Default ON (`K2_HOOK_SCOPED`); opt out with `0`/`false`/`off`.
@@ -1386,6 +1389,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         // sandboxed cell).
         // R8: owner-set env = the request's owner part plus the canonical
         // preset's env (an Owner/Admin row); other references need a grant.
+        steps.step("token mint");
         let mut owner_env = req.owner_env.clone();
         if let Some(resolved_env) = canonical_resolved.as_ref().and_then(|r| r.env.as_ref()) {
             for (k, v) in resolved_env {
@@ -1404,6 +1408,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm),
             &refs_from,
         );
+        steps.step("vault secrets");
         ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
         if let Some(dir) = delivered.dir {
             ptyd_meta.insert("secrets_dir".into(), dir.to_string_lossy().into_owned().into());
@@ -1437,6 +1442,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         }
     }
 
+    steps.step("cell identity");
     // Folder-trust gate (prd-security-sweep-0464-v1 SS11): before the cell,
     // the login slot or any trust grant. A held folder (card waiting) or a
     // denied one starts no harness: 409 with the body that says how to
@@ -1461,6 +1467,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         }
     }
 
+    steps.step("trust gate");
     // P4-H6 — PER-SESSION worker uid + fail-closed PER-SESSION egress, set up
     // BEFORE the cell boots. Each microVM cell now drops to its OWN distinct uid
     // (allocated here from the reserved range) instead of the shared `k2cell`, so
@@ -1588,6 +1595,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         per_session_uid = Some(cell_uid);
     }
 
+    steps.step("sandbox");
     // LLM login wallet: a pinned session runs on its login (slot home or
     // API key), a resume on the login its conversation started under.
     let llm_login = {
@@ -1625,6 +1633,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             llm_login.as_ref().map(|g| g.ptyd_meta()),
         ));
     }
+    steps.step("login step");
     let __t_spawn = std::time::Instant::now();
     let session = match DaemonPtySession::spawn(cfg) {
         Ok(s) => s,
@@ -1665,6 +1674,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             .store(req.rows.max(1), Ordering::Relaxed);
     }
     let dpty_spawn_ms = __t_spawn.elapsed().as_secs_f64() * 1000.0;
+    steps.step("pty spawn");
 
     // COMPAT-58 (#58 Phase 1 / PR-A) — per-cell UDS after PTY open.
     // Default ON; bind failure degrades to TCP dual-accept (non-fatal).
@@ -1853,6 +1863,8 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         session.write(b"\r".to_vec());
     }
 
+    steps.step("after spawn");
+    steps.finish(&req.agent_name, &session_id_for_response.to_string());
     let total_ms = __t_total.elapsed().as_secs_f64() * 1000.0;
     log_debug!(
         "[v2-perf] side=daemon SPAWN_SUMMARY session={} agent={} reused=false total_ms={:.3} lookup_ms={:.3} dpty_spawn_ms={:.3} pending_drained={}",

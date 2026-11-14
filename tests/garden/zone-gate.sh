@@ -148,7 +148,10 @@ set +e; out="$(python3 "$GATE" --area nope 2>&1)"; code=$?; set -e
 out="$(python3 "$GATE")" || { echo "FAIL: the real tree: $out" >&2; exit 1; }
 case "$out" in *"zone-gate: ok ("*) ;; *) echo "FAIL: the real tree: $out" >&2; exit 1 ;; esac
 pass=$((pass + 1))
-grep -q '^pub const ZONE: &str = "k2.dev";$' "$HERE/crates/k2-client/src/hosts.rs" || { echo "FAIL: crates/k2-client/src/hosts.rs has no ZONE" >&2; exit 1; }
+# ZONE is the primary zone under its older name, so the value sits on PRIMARY_ZONE.
+grep -q '^pub const PRIMARY_ZONE: &str = "k2.dev";$' "$HERE/crates/k2-client/src/hosts.rs" || { echo "FAIL: crates/k2-client/src/hosts.rs has no PRIMARY_ZONE = k2.dev" >&2; exit 1; }
+pass=$((pass + 1))
+grep -q '^pub const ZONE: &str = PRIMARY_ZONE;$' "$HERE/crates/k2-client/src/hosts.rs" || { echo "FAIL: crates/k2-client/src/hosts.rs: ZONE is not PRIMARY_ZONE" >&2; exit 1; }
 pass=$((pass + 1))
 out="$(python3 "$GATE" --area renderer)" || { echo "FAIL: the real renderer tree: $out" >&2; exit 1; }
 case "$out" in *"zone-gate: ok ("*) ;; *) echo "FAIL: the real renderer tree: $out" >&2; exit 1 ;; esac

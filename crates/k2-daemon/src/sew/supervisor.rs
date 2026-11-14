@@ -1721,6 +1721,12 @@ pub(super) fn status_body(env: &Env, with_health: bool) -> Value {
         alarms.push(ALARM_RECONFIGURE_BLOCKED.into());
     }
     alarms.extend(k2_alarms(env, &row, sew_status.as_ref(), now));
+    // sew-db started before its Postgres package was upgraded: new
+    // backends can't load the new libraries (migrations fail).
+    let sew_db = if db.is_active() { crate::pg_stale::check_sew_db(env.ops.pg_stale_ops()) } else { None };
+    if sew_db.as_ref().is_some_and(crate::pg_stale::Finding::is_stale) {
+        alarms.push(super::sew_db_postgres::ALARM_SEW_DB_OUTDATED.into());
+    }
     let mut warnings = warnings;
     let public_url = public_url(env);
     if public_url.is_none() {
@@ -1750,6 +1756,8 @@ pub(super) fn status_body(env: &Env, with_health: bool) -> Value {
         "identityProvider": row_provider(&row),
         "voice": voice,
         "units": {"sewDb": db.json(), "sew": sew.json()},
+        // sew-db's Postgres against the installed package (pg_stale).
+        "sewDbPostgres": sew_db.as_ref().map(crate::pg_stale::Finding::json),
         "apiHealth": api_health.as_ref().map(super::health::Health::json),
         // A reconfigure that did not happen: typed state + the person's fix.
         "reconfigure": reconfigure,
@@ -2548,6 +2556,7 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
         }
         _ => {}
     }
+    super::sew_db_postgres::need_sew_db_current(env)?;
     let voice = super::voice::load(env).installed;
     if voice {
         upgrade_media_source(env, req)?;

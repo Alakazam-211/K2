@@ -300,6 +300,9 @@ if verb == "status":
     blocked = d.get("upgradeBlocked")
     if isinstance(blocked, dict) and (d.get("upgradeAvailable") or []):
         print("first:     %s" % blocked.get("hint"))
+    for s in d.get("pgStale") or []:
+        print("outdated:  %s still runs the Postgres it started with; %s%s was installed since. %s" % (
+            s.get("name"), s.get("package"), (" " + s["installedVersion"]) if s.get("installedVersion") else "", s.get("fix")))
 elif verb == "clusters":
     cl = d.get("clusters") or []
     print("%s cluster(s) · new databases go on Postgres %s%s" % (len(cl), d.get("defaultMajor"), " (pinned)" if d.get("defaultMajorPinned") else ""))

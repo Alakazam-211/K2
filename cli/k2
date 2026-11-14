@@ -79293,6 +79293,10 @@ if verb in ("status",):
     if v.get("upgradeAvailable"):
         line("upgrade", "available: k2 hostchat upgrade")
     line("alarms", ", ".join(v.get("alarms") or []))
+    pgs = v.get("sewDbPostgres") or {}
+    if pgs.get("stale"):
+        line("sew-db", "runs an older Postgres than the installed %s%s. %s" % (
+            pgs.get("package"), (" " + pgs["installedVersion"]) if pgs.get("installedVersion") else "", pgs.get("fix")))
     for w in v.get("warnings") or []:
         line("warning", w.get("message") or w.get("code"))
     line("last error", v.get("lastError"))
@@ -90287,6 +90291,9 @@ if verb == "status":
     blocked = d.get("upgradeBlocked")
     if isinstance(blocked, dict) and (d.get("upgradeAvailable") or []):
         print("first:     %s" % blocked.get("hint"))
+    for s in d.get("pgStale") or []:
+        print("outdated:  %s still runs the Postgres it started with; %s%s was installed since. %s" % (
+            s.get("name"), s.get("package"), (" " + s["installedVersion"]) if s.get("installedVersion") else "", s.get("fix")))
 elif verb == "clusters":
     cl = d.get("clusters") or []
     print("%s cluster(s) · new databases go on Postgres %s%s" % (len(cl), d.get("defaultMajor"), " (pinned)" if d.get("defaultMajorPinned") else ""))

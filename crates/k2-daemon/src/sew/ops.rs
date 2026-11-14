@@ -130,6 +130,11 @@ pub trait SewOps: Send + Sync {
     fn record_load(&self, name: &str) -> Option<Value>;
     /// Write a record (`None` removes it).
     fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String>;
+    /// What K2 reads to tell whether sew-db runs an older Postgres than
+    /// the installed package (`pg_stale`).
+    fn pg_stale_ops(&self) -> &dyn crate::pg_stale::StaleOps {
+        &crate::pg_stale::REAL
+    }
     /// One notice for the server's owner (an inbox ticket from "Sew").
     fn owner_notice(&self, title: &str, body: &str) {
         if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "Chat / Voice Hosting", title, body) {
@@ -933,6 +938,9 @@ pub mod fake {
         /// Queued `/api/v1/health` answers (default: 200 ready).
         pub api_health_q: Mutex<VecDeque<Result<(u16, Value), String>>>,
         pub api_health_n: Mutex<usize>,
+        /// [`SewOps::pg_stale_ops`]: sew-db's start and the package's
+        /// times (default: sew-db not seen running, nothing stale).
+        pub pg_stale: crate::pg_stale::fake::Fake,
         /// [`SewOps::release_source`] (default: offline, no cache). A test
         /// points it at a loopback server and a scratch cache; files under
         /// that cache are read from disk by `read_file`.
@@ -1020,6 +1028,7 @@ pub mod fake {
                 served_connects: Mutex::new(Vec::new()),
                 api_health_q: Mutex::new(VecDeque::new()),
                 api_health_n: Mutex::new(0),
+                pg_stale: Default::default(),
                 mgmt_version: Mutex::new(None),
                 media_conf: Mutex::new(None),
                 media_argv: Mutex::new(Vec::new()),
@@ -1520,6 +1529,9 @@ pub mod fake {
     }
 
     impl SewOps for FakeOps {
+        fn pg_stale_ops(&self) -> &dyn crate::pg_stale::StaleOps {
+            &self.pg_stale
+        }
         fn release_source(&self) -> crate::sew::fetch::Source {
             self.release_source.lock().unwrap().clone()
         }

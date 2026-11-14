@@ -506,7 +506,21 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
         "defaultMajorPinned": majors["defaultMajorPinned"],
         "defaultMajorSource": majors["defaultMajorSource"],
         "supportedMajors": majors["supportedMajors"],
+        // A cluster still running after its Postgres package was upgraded
+        // (the health loop's last check; --health checks now).
+        "pgStale": pg_stale_json(include_health && sql_supported()),
     })
+}
+
+/// The `k2 db` clusters that run an older Postgres than the installed
+/// package: checked now with `fresh`, else the health loop's last answer.
+fn pg_stale_json(fresh: bool) -> serde_json::Value {
+    let stale: Vec<crate::pg_stale::Finding> = if fresh {
+        crate::pg_stale::check_sql_clusters(&crate::pg_stale::REAL).into_iter().filter(|f| f.is_stale()).collect()
+    } else {
+        crate::pg_stale::last_stale().into_iter().filter(|f| f.name != "sew-db").collect()
+    };
+    serde_json::Value::Array(stale.iter().map(crate::pg_stale::Finding::json).collect())
 }
 
 /// Majors side by side for status and the doctor (§14, V24: agents read

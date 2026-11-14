@@ -162,6 +162,8 @@ pub mod root_helper;
 pub mod root_helper_routes;
 // Workspace data sidecar (prd-workspace-data-sidecar-v1) — supervised
 // Postgres + JSONB store. Linux-only at RUNTIME (`sql_supported`).
+// A K2-run Postgres older than its installed package (health loop).
+pub mod pg_stale;
 pub mod sew;
 pub mod sql;
 pub mod sql_routes;

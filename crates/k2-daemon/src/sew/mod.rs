@@ -68,6 +68,7 @@ pub mod routes;
 pub mod s32;
 pub mod secrets;
 pub mod service_user;
+pub mod sew_db_postgres;
 pub mod sew_wire;
 pub mod store;
 pub mod supervisor;

@@ -222,6 +222,10 @@ fn full_body(settings: &k2_core::app_settings::AppSettings) -> serde_json::Value
         Some(l) => serde_json::json!({ "port": l.port, "moved": l.moved }),
         None => serde_json::Value::Null,
     };
+    // A K2-run Postgres still running after its package was upgraded:
+    // `{checkedAt, stale: […]}` from the health loop's last check; null
+    // until the first one (and off Linux).
+    body["pgStale"] = crate::pg_stale::boot_status_value();
     // Voice rooms 0.46.8 (S9b): the voice lane and media path, only while
     // the voice tunnel preview is on (the body is unchanged otherwise).
     if k2_core::tunnel::voice_lane::preview_enabled() {

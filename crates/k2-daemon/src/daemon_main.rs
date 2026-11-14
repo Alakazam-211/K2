@@ -1609,6 +1609,10 @@ async fn async_main() {
     // Registry only (restart only if the reload is refused). Linux thread.
     mail::defaults::spawn_startup_reconcile();
     sql::supervisor::spawn_health_loop();
+    // A K2-run Postgres (sew-db, the k2 db clusters) still running after
+    // its package was upgraded: on boot and every 15 min; a notice to
+    // the owner, never a restart. Linux only.
+    crate::pg_stale::spawn();
     // Sew on K2 (S29 K12): the 60 s Sew health cadence, after first
     // finishing or rolling back an upgrade the last daemon died in. Linux
     // only; nothing runs while no Sew is installed.

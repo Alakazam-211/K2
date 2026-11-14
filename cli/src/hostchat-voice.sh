@@ -860,6 +860,10 @@ if verb in ("status",):
     if v.get("upgradeAvailable"):
         line("upgrade", "available: k2 hostchat upgrade")
     line("alarms", ", ".join(v.get("alarms") or []))
+    pgs = v.get("sewDbPostgres") or {}
+    if pgs.get("stale"):
+        line("sew-db", "runs an older Postgres than the installed %s%s. %s" % (
+            pgs.get("package"), (" " + pgs["installedVersion"]) if pgs.get("installedVersion") else "", pgs.get("fix")))
     for w in v.get("warnings") or []:
         line("warning", w.get("message") or w.get("code"))
     line("last error", v.get("lastError"))

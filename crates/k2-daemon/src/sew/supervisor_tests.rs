@@ -2944,3 +2944,68 @@ fn the_automatic_rollback_takes_sews_failed_engine_as_rolled_back() {
     assert!(e.contains("rolled back to 0.0.1") && e.contains(MEDIA_CMD), "{e}");
     assert_eq!(t.ops.effects().iter().filter(|e| *e == "engine sew rollback").count(), 1);
 }
+
+// ── sew-db older than its Postgres package (pg_stale) ────────────────────
+
+/// sew-db's postmaster started at `started`; postgresql-17 was installed
+/// (or upgraded) at `installed`.
+fn sew_db_postgres(t: &T, started: i64, installed: i64) {
+    let f = &t.ops.pg_stale;
+    f.units.lock().unwrap().insert(UNIT_DB.into(), (777, started));
+    f.cmdlines.lock().unwrap().insert(777, "/usr/lib/postgresql/17/bin/postgres -D /var/lib/sew/pg".into());
+    f.dpkg.lock().unwrap().insert("postgresql-17".into(), installed);
+    f.versions.lock().unwrap().insert("/usr/lib/postgresql/17/bin/postgres".into(), "17.12".into());
+}
+
+/// unattended-upgrades moved postgresql-17 under a running sew-db: the
+/// upgrade refuses before any effect and says how to restart it; nothing
+/// is restarted. Once sew-db started after the package, it goes ahead.
+#[test]
+fn upgrade_refuses_while_sew_db_runs_an_older_postgres_than_its_package() {
+    let t = t();
+    on_old_release(&t);
+    sew_db_postgres(&t, 1_000, 2_000);
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
+    let f = upgrade_begin(&t.env(), &req).err().expect("refused");
+    assert_eq!((f.code, f.status), ("sew_db_outdated", 409), "{}", f.hint);
+    assert!(f.hint.contains("sudo systemctl restart sew-db.service, then k2 hostchat restart"), "{}", f.hint);
+    assert!(f.hint.contains("postgresql-17 (17.12)"), "{}", f.hint);
+    assert_eq!(f.extra.as_ref().unwrap()["sewDbPostgres"]["stale"], true);
+    let dry = upgrade_begin(&t.env(), &UpgradeRequest { dry_run: true, ..req.clone() }).err().expect("dry run refused too");
+    assert_eq!(dry.code, "sew_db_outdated");
+    assert!(t.ops.effects().is_empty(), "nothing restarted or staged: {:?}", t.ops.effects());
+    assert_eq!(t.row().status, "running", "the record is untouched");
+    // sew-db restarted after the package: the upgrade runs.
+    sew_db_postgres(&t, 3_000, 2_000);
+    let v = upgrade(&t);
+    assert_eq!(v["result"], "done", "{v}");
+}
+
+/// Status names it: an alarm (degraded) and the finding; the health loop
+/// never restarts anything over it.
+#[test]
+fn status_shows_sew_db_running_an_older_postgres() {
+    let t = t();
+    t.enabled();
+    // No other alarm, so the stale one alone makes it degraded.
+    store::update(1, |r| {
+        r.ship_kind = "dir".into();
+        r.recovery_shown_at = Some(1);
+    })
+    .unwrap();
+    assert_eq!(status(&t.env(), false)["state"], "running");
+    sew_db_postgres(&t, 1_000, 2_000);
+    let s = status(&t.env(), false);
+    assert!(s["alarms"].as_array().unwrap().iter().any(|a| a == crate::sew::sew_db_postgres::ALARM_SEW_DB_OUTDATED), "{s}");
+    assert_eq!(s["state"], "degraded", "{s}");
+    assert_eq!(s["sewDbPostgres"]["installedVersion"], "17.12");
+    assert_eq!(s["sewDbPostgres"]["fix"], crate::pg_stale::SEW_DB_FIX);
+    t.ops.clear();
+    assert_eq!(health_tick(&t.env()).as_deref(), Some("degraded"));
+    assert!(t.ops.effects().is_empty(), "never a restart: {:?}", t.ops.effects());
+    // Current: no alarm.
+    sew_db_postgres(&t, 3_000, 2_000);
+    let s = status(&t.env(), false);
+    assert!(!s["alarms"].as_array().unwrap().iter().any(|a| a == crate::sew::sew_db_postgres::ALARM_SEW_DB_OUTDATED), "{s}");
+    assert_eq!(s["sewDbPostgres"]["stale"], false);
+}

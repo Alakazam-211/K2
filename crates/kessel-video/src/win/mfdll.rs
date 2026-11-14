@@ -54,6 +54,8 @@ type CreateReader =
 /// buffers and MFT enumeration).
 pub(crate) struct MfPlat {
     startup: Startup,
+    // Attribute stores are for capture (camera lists and source readers).
+    #[cfg_attr(not(feature = "windows"), allow(dead_code))]
     create_attributes: CreateAttributes,
     create_media_type: CreateOut,
     create_sample: CreateOut,
@@ -193,6 +195,7 @@ impl MfPlat {
     }
 
     /// `MFCreateAttributes`.
+    #[cfg_attr(not(feature = "windows"), allow(dead_code))]
     pub(crate) fn create_attributes(&self, n: u32) -> windows::core::Result<IMFAttributes> {
         let mut p = std::ptr::null_mut();
         // SAFETY: an out pointer for a new attribute store we then own.

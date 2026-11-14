@@ -10,7 +10,7 @@ use crate::kit::{now_us, QueuedSource, SourceControl, SourceShared};
 use crate::types::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::sync_channel;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Media::MediaFoundation::*;

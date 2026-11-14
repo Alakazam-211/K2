@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+"""Find where the CLI's own name, `k2`, is text for a reader, and (one day)
+rewrite it to `k5`.
+
+    python3 scripts/garden/cli-name-flip.py                 dry run: counts per class
+    python3 scripts/garden/cli-name-flip.py --unsure        the lines it will not touch, for hand review
+    python3 scripts/garden/cli-name-flip.py --show CLASS    the lines of one class
+    python3 scripts/garden/cli-name-flip.py --apply --root DIR
+                                                            rewrite DIR/cli/src (text and comments only)
+
+The dry run is the normal mode. It changes nothing. It reads the CLI's
+parts (cli/src/*.sh and cli/src/schema/*.entries) and sorts every use of
+the bare word `k2` into a class:
+
+  text      inside words a person or agent reads: a heredoc that is printed,
+            or a quoted string (a Usage line, a hint, an error). Will change.
+  comment   in a shell comment. Will change.
+  kept      a name that is not the CLI's: `[k2 ...]` log and stamp prefixes.
+            Never changes.
+  unsure    everything else: a string that is exactly "k2" (a value, not a
+            sentence), `k2` as a command word in shell code, `$(k2 ...)`, a
+            heredoc that feeds an interpreter (python, node, sql) when the
+            word is not inside a string there. Never changed by this tool:
+            someone reads each one and either rewrites the line so it is
+            plainly text, or leaves it.
+
+Names that only contain k2 are not matched at all: k2.dev, k2so, k2skn_,
+K2_PORT, ~/.k2, cli/k2, dev.k2.daemon, k2-daemon, .k2/. Those are other
+kinds of name with their own rules.
+
+--apply is for the release that changes the name, and for the test that
+proves the rewrite leaves a script that still parses. It needs --root, so
+it can never run on the tree it lives in by accident; it rewrites `text`
+and `comment` uses to k5 and leaves `kept` and `unsure` alone.
+"""
+import os
+import re
+import sys
+
+WORD = re.compile(r"(?<![\w./$~-])k2(?![\w.:/-])")
+HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# A heredoc or a quoted string that starts after one of these is a program
+# for that interpreter, not words for a reader.
+INTERPRETER = re.compile(r"(\bpython3?\b|\$_k2_py\b|\$\{?PY\b|\bnode\b|\bsqlite3\b|\bpsql\b|\bosascript\b|\bawk\b|\bjq\b|\bsed\b|\bruby\b|\bperl\b|\bssh\b|\bbash\b|\bsh\b|\beval\b)")
+CLASSES = ("text", "comment", "kept", "unsure")
+# After `k2 `, these mark a use as the command even when the word is not a
+# verb: a flag, a placeholder, an ellipsis.
+COMMAND_TAIL = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
+NEXT_WORD = re.compile(r" ([a-z][a-z0-9-]*)")
+EXTRA_VERBS = {"help", "version", "study", "update", "setup", "explain", "capabilities", "whoami", "cli", "command", "commands", "verb", "verbs"}
+
+
+def parts(root):
+    src = os.path.join(root, "cli", "src")
+    out = []
+    for dirpath, dirnames, filenames in os.walk(src):
+        dirnames.sort()
+        for name in sorted(filenames):
+            if name.endswith(".sh") or name.endswith(".entries"):
+                out.append(os.path.join(dirpath, name))
+    return out
+
+
+def verbs(root):
+    """The first words of the CLI's commands: every `"name": "<verb> ..."` in
+    the schema entries, plus the top-level words the router answers."""
+    found = set(EXTRA_VERBS)
+    name = re.compile(r'"name":\s*"([a-z][a-z0-9-]*)')
+    label = re.compile(r"^\s+([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)*)\)")
+    for path in parts(root):
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        if path.endswith(".entries") or os.path.basename(path).startswith("schema"):
+            found.update(name.findall(text))
+        if os.path.basename(path) == "router.sh":
+            for line in text.split("\n"):
+                m = label.match(line)
+                if m:
+                    found.update(w for w in m.group(1).split("|") if w)
+    return found
+
+
+def contexts(line, stack):
+    """The context of each character of a shell line: 'bare', 'comment',
+    'squote', 'dquote', each of the last two with '-code' when the string
+    is a program. `stack` is the open quotes and `$(` groups carried from
+    the line before: frames ('s'|'d', is code) and ('(', depth). Returns
+    (list, stack, heredoc or None)."""
+    stack = list(stack)
+    ctx = []
+    heredoc = None
+    i = 0
+    n = len(line)
+
+    def tag():
+        for kind, extra in reversed(stack):
+            if kind in "sd":
+                return ("squote" if kind == "s" else "dquote") + ("-code" if extra else "")
+            # a $( group: what is inside it is shell code again
+            return "bare"
+        return "bare"
+
+    while i < n:
+        c = line[i]
+        top = stack[-1][0] if stack else None
+        if top == "s":
+            ctx.append(tag())
+            if c == "'":
+                stack.pop()
+            i += 1
+            continue
+        if top == "d":
+            if c == "\\" and i + 1 < n:
+                ctx += [tag(), tag()]
+                i += 2
+                continue
+            if c == "$" and line[i + 1:i + 2] == "(":
+                ctx += [tag(), tag()]
+                stack.append(("(", 1))
+                i += 2
+                continue
+            ctx.append(tag())
+            if c == '"':
+                stack.pop()
+            i += 1
+            continue
+        # bare: the top level, or inside a $( group
+        if c == "\\" and i + 1 < n:
+            ctx += ["bare", "bare"]
+            i += 2
+            continue
+        if c == "#" and (i == 0 or line[i - 1] in " \t;("):
+            ctx += ["comment"] * (n - i)
+            break
+        if c in "'\"":
+            if c == "'" and i > 0 and line[i - 1] == "$":
+                pass  # $'...' is a quote like any other for our purpose
+            is_code = bool(INTERPRETER.search(line[:i]))
+            stack.append(("s" if c == "'" else "d", is_code))
+            ctx.append(tag())
+            i += 1
+            continue
+        if top == "(":
+            if c == "(":
+                stack[-1] = ("(", stack[-1][1] + 1)
+            elif c == ")":
+                depth = stack[-1][1] - 1
+                if depth == 0:
+                    stack.pop()
+                    ctx.append(tag())
+                    i += 1
+                    continue
+                stack[-1] = ("(", depth)
+        h = HEREDOC.match(line, i)
+        if h and heredoc is None and not line[:i].rstrip().endswith("$(("):
+            heredoc = (h.group(3), h.group(1) == "-", bool(INTERPRETER.search(line[:i])))
+            ctx += ["bare"] * (h.end() - i)
+            i = h.end()
+            continue
+        ctx.append("bare")
+        i += 1
+    return ctx, stack, heredoc
+
+
+def in_code_string(line, pos, outer=None):
+    """Inside a string literal on this line of interpreter code, by counting
+    quotes before `pos`. `outer` is the shell quote the code sits in, which
+    is not a quote of the code itself."""
+    quote = None
+    i = 0
+    while i < pos:
+        c = line[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"" and c != outer:
+            if quote is None:
+                quote = c
+            elif quote == c:
+                quote = None
+        i += 1
+    return quote is not None
+
+
+def whole_string_is_name(line, m):
+    b = line[m.start() - 1] if m.start() > 0 else ""
+    a = line[m.end()] if m.end() < len(line) else ""
+    return b in "'\"" and a == b
+
+
+def reads_as_command(line, m, known):
+    """`k2` here names the command for a reader: it is followed by one of
+    the CLI's verbs, a flag or a placeholder, or it stands in backticks, or
+    the words around it say so."""
+    after = line[m.end():]
+    before = line[:m.start()]
+    if COMMAND_TAIL.match(after):
+        return True
+    w = NEXT_WORD.match(after)
+    if w and w.group(1) in known:
+        return True
+    if before.endswith("`") and after.lstrip("\\").startswith("`"):
+        return True
+    if re.search(r"(Usage:|usage:|run|Run|try|Try|use|Use|via|with|the|The|see|See|:)\s+[`'\"]?$", before) and re.match(r"[`'\"]?( CLI\b|[`'\".,;)]|$)", after):
+        return True
+    return False
+
+
+def classify(line, m, where, known):
+    before = line[:m.start()]
+    after = line[m.end():]
+    if before.endswith("[") and (after.startswith("]") or after.startswith(" ")):
+        return "kept", "a [k2 ...] prefix or stamp"
+    if where == "comment":
+        return "comment", "comment"
+    if where == "bare":
+        return "unsure", "k2 as a word in shell code"
+    if before.rstrip().endswith("$("):
+        return "unsure", "$(k2 ...): runs the command"
+    if whole_string_is_name(line, m):
+        return "unsure", "a string that is exactly k2 (a value)"
+    if where.endswith("-code") and not in_code_string(line, m.start(), outer=where[0] == "s" and "'" or '"' if where != "heredoc-code" else None):
+        return "unsure", "interpreter code, not in a string"
+    if not reads_as_command(line, m, known):
+        return "unsure", "k2 followed by a word that is not a command"
+    return "text", "printed text" if not where.endswith("-code") else "string in interpreter code"
+
+
+def classify_file(path, known):
+    """Yield (line number, start, end, class, why) for each bare `k2`."""
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    if path.endswith(".entries"):
+        # Schema entries are JSON inside one printed heredoc: all text.
+        for n, line in enumerate(lines, 1):
+            for m in WORD.finditer(line):
+                yield n, m.start(), m.end(), *classify(line, m, "heredoc", known)
+        return
+    stack, heredoc = [], None
+    rows = []
+    for n, line in enumerate(lines, 1):
+        if heredoc:
+            term, strip, is_code = heredoc
+            if (line.lstrip("\t") if strip else line) == term:
+                heredoc = None
+                continue
+            for m in WORD.finditer(line):
+                where = "heredoc-code" if is_code else "heredoc"
+                if is_code and line.strip().startswith("#"):
+                    where = "comment"
+                rows.append((n, m.start(), m.end(), *classify(line, m, where, known)))
+            continue
+        ctx, stack, heredoc = contexts(line, stack)
+        for m in WORD.finditer(line):
+            where = ctx[m.start()] if m.start() < len(ctx) else "bare"
+            rows.append((n, m.start(), m.end(), *classify(line, m, where, known)))
+    # A part must end with every quote closed. If it does not, this reader
+    # lost its place somewhere in it, and nothing it says about the part
+    # can be trusted: every use there is left for a person. (schema-head.sh
+    # ends inside the manifest's heredoc on purpose; the entries follow.)
+    if stack or (heredoc and os.path.basename(path) != "schema-head.sh"):
+        rows = [(n, s, e, cls if cls == "kept" else "unsure", why if cls == "kept" else "the reader lost its place in this part")
+                for n, s, e, cls, why in rows]
+    yield from rows
+
+
+def collect(root):
+    rows = []
+    known = verbs(root)
+    for path in parts(root):
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        for n, s, e, cls, why in classify_file(path, known):
+            rows.append((rel, n, s, e, cls, why))
+    return rows
+
+
+def apply(root, rows):
+    by_file = {}
+    for rel, n, s, e, cls, _ in rows:
+        if cls in ("text", "comment"):
+            by_file.setdefault(rel, []).append((n, s, e))
+    for rel, edits in by_file.items():
+        path = os.path.join(root, rel)
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().split("\n")
+        for n, s, e in sorted(edits, reverse=True):
+            line = lines[n - 1]
+            assert line[s:e] == "k2", f"{rel}:{n}: expected k2 at {s}"
+            lines[n - 1] = line[:s] + "k5" + line[e:]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    return sum(len(v) for v in by_file.values()), len(by_file)
+
+
+def main(argv):
+    here = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    root = None
+    mode = "count"
+    show = None
+    args = list(argv)
+    while args:
+        a = args.pop(0)
+        if a == "--unsure":
+            mode, show = "show", "unsure"
+        elif a == "--show" and args and args[0] in CLASSES:
+            mode, show = "show", args.pop(0)
+        elif a == "--apply":
+            mode = "apply"
+        elif a == "--root" and args:
+            root = args.pop(0)
+        else:
+            sys.exit("cli-name-flip: usage: cli-name-flip.py [--unsure | --show text|comment|kept|unsure] [--root DIR]\n"
+                     "                      cli-name-flip.py --apply --root DIR")
+    if mode == "apply":
+        if root is None:
+            sys.exit("cli-name-flip: --apply needs --root DIR (it never rewrites the tree it runs from by default)")
+        if os.path.realpath(root) == os.path.realpath(here) and os.environ.get("CLI_NAME_FLIP_THIS_TREE") != "yes":
+            sys.exit("cli-name-flip: --apply on this tree itself is refused; set CLI_NAME_FLIP_THIS_TREE=yes for the real flip")
+    root = root or here
+    rows = collect(root)
+    if mode == "show":
+        for rel, n, s, e, cls, why in rows:
+            if cls == show:
+                with open(os.path.join(root, rel), encoding="utf-8") as f:
+                    text = f.read().split("\n")[n - 1].strip()
+                print(f"{rel}:{n}: [{why}] {text[:170]}")
+        return 0
+    if mode == "apply":
+        changed, files = apply(root, rows)
+        print(f"cli-name-flip: rewrote {changed} uses of k2 to k5 in {files} files under {root}/cli/src.")
+        return 0
+    totals = {c: 0 for c in CLASSES}
+    for row in rows:
+        totals[row[4]] += 1
+    files = len({r[0] for r in rows})
+    print(f"cli-name-flip (dry run): {len(rows)} uses of the word k2 in {files} parts of cli/src")
+    print(f"  will change: text {totals['text']}, comment {totals['comment']}")
+    print(f"  will not:    kept {totals['kept']}, unsure {totals['unsure']}")
+    why = {}
+    for r in rows:
+        if r[4] == "unsure":
+            why[r[5]] = why.get(r[5], 0) + 1
+    for k in sorted(why, key=lambda k: -why[k]):
+        print(f"    unsure: {why[k]:5d}  {k}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

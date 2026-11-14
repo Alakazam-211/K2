@@ -11,9 +11,10 @@ const RUST = join(dirname(fileURLToPath(import.meta.url)), '../../../crates/k2-c
 /** The value of `pub const NAME: &str = "...";` in the Rust hosts module. */
 function rustConst(name: string): string {
   const src = readFileSync(RUST, 'utf8')
-  const m = src.match(new RegExp(`^pub const ${name}: &str = "([^"]*)";$`, 'm'))
+  const m = src.match(new RegExp(`^pub const ${name}: &str = (?:"([^"]*)"|([A-Z_][A-Z0-9_]*));$`, 'm'))
   if (!m) throw new Error(`no pub const ${name} in ${RUST}`)
-  return m[1]
+  // A const may name another const (ZONE = PRIMARY_ZONE): follow it.
+  return m[1] !== undefined ? m[1] : rustConst(m[2])
 }
 
 describe('the renderer hosts module', () => {

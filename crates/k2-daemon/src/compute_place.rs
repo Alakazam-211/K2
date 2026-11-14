@@ -1141,7 +1141,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         }
         out.visible += 1;
         // `--avoid` (0.46.8): never this node, for this job, in any move.
-        if w.auto && w.filter.avoid.contains(&n.id) {
+        if w.auto && w.filter.avoids(&n.id, &n.name) {
             skipped(&mut out, skip::AVOIDED);
             continue;
         }
@@ -2022,7 +2022,7 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
     }
     // `--avoid` names the node it waits on (never placed there; only a
     // release that races a placement can leave it so): leave for any.
-    if j.ctl.any.as_ref().is_some_and(|f| f.avoid.contains(&node.id)) {
+    if j.ctl.any.as_ref().is_some_and(|f| f.avoids(&node.id, &node.name)) {
         return Some(("node_avoided", true));
     }
     if !compute_ws::is_online(&node.id) {
@@ -2059,7 +2059,7 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
 /// [`candidates_report`] already leaves such nodes out; the mover checks
 /// again so its decision stands on its own.
 fn movable(c: &Cand, w: &Want) -> bool {
-    if w.filter.avoid.contains(&c.node.id) || (!w.filter.only.is_empty() && !w.filter.only.contains(&c.node.id)) {
+    if w.filter.avoids(&c.node.id, &c.node.name) || (!w.filter.only.is_empty() && !w.filter.only.contains(&c.node.id)) {
         return false;
     }
     if required_features(w).iter().any(|f| !c.offer.features.iter().any(|x| x == f)) {

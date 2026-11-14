@@ -28,8 +28,9 @@
 //! submit, the sweeper's moves and retries on another node never pick it.
 //! With a named node it is refused (`avoid_with_pinned_node`, exit 2); when
 //! the avoid list alone leaves no node, `avoid_leaves_no_node` (exit 3). A
-//! name that isn't one of the caller's nodes is a note, not an error
-//! (0.46.12, [`avoid_from`]).
+//! name that isn't one of the caller's nodes is a note, not an error, and
+//! is still kept: the node may be granted, or join, while the job waits
+//! ([`avoid_from`]).
 
 use std::collections::BTreeMap;
 
@@ -67,51 +68,83 @@ const MAX_AVOID: usize = 32;
 
 // ── --avoid ──────────────────────────────────────────────────────────
 
+/// What `avoid: ["k2n11", …]` resolved to: node ids, names kept as typed,
+/// and the notes for the caller.
+#[derive(Debug, Default)]
+pub(crate) struct Avoid {
+    pub ids: Vec<String>,
+    /// Names that matched no node at all ([`store::AnyFilter::avoid_names`]).
+    pub names: Vec<String>,
+    pub notes: Vec<String>,
+}
+
 /// `avoid: ["k2n11", …]` → node ids (full name or a unique prefix of a node
 /// the caller may see, as when naming a node; `node_ambiguous`, exit 2),
 /// and one note per name that isn't one of the caller's nodes (0.46.12).
 ///
-/// A node not granted to the workspace can never be picked, so avoiding it
-/// is a no-op, not an error: a caller can keep a standing "never those
-/// nodes" list as flags. A name that matches no node at all gets the very
-/// same note, so the answer never says whether an ungranted node exists.
-/// The owner and Admins see every node; for them only a name that matches
-/// none is a note.
-pub(crate) fn avoid_from(who: &Who, v: &serde_json::Value, ws_id: &str) -> R<(Vec<String>, Vec<String>)> {
-    let Some(raw) = v.get("avoid").filter(|x| !x.is_null()) else { return Ok((Vec::new(), Vec::new())) };
+/// A name that isn't one of the caller's nodes is not an error: a caller
+/// can keep a standing "never those nodes" list as flags. It is still kept,
+/// silently: an ungranted node by id (the full name, or every node whose
+/// name starts with it), a name that matches no node as typed. A grant can
+/// come while the job waits, and a node can join later under that name;
+/// `--avoid` holds for the job's whole life. A name that matches no node
+/// at all gets the very same note, so the answer never says whether an
+/// ungranted node exists. The owner and Admins see every node; for them
+/// only a name that matches none is a note.
+pub(crate) fn avoid_from(who: &Who, v: &serde_json::Value, ws_id: &str) -> R<Avoid> {
+    let mut out = Avoid::default();
+    let Some(raw) = v.get("avoid").filter(|x| !x.is_null()) else { return Ok(out) };
     let list = raw.as_array().ok_or_else(|| no(codes::BAD_REQUEST, 400, "avoid is a list of node names (--avoid k2n11, repeatable)"))?;
     if list.len() > MAX_AVOID {
         return Err(no(codes::BAD_REQUEST, 400, format!("--avoid names at most {MAX_AVOID} nodes")));
     }
     let granted: Option<Vec<String>> = (!who.is_admin()).then(|| crate::compute_views::granted_node_ids(ws_id));
-    let mut ids: Vec<String> = Vec::new();
-    let mut notes: Vec<String> = Vec::new();
     for x in list {
         let t = x.as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "avoid is a list of node names (--avoid k2n11, repeatable)"))?;
-        let mine = match resolve_node_for(who, Some(t), Some(ws_id)) {
-            Ok(n) if granted.as_ref().is_none_or(|g| g.contains(&n.id)) => Some(n),
-            Ok(_) => None,
-            Err(e) if e.code == codes::NODE_NOT_FOUND => None,
+        let t = t.trim();
+        let hidden: Vec<String> = match resolve_node_for(who, Some(t), Some(ws_id)) {
+            Ok(n) if granted.as_ref().is_none_or(|g| g.contains(&n.id)) => {
+                if !out.ids.contains(&n.id) {
+                    out.ids.push(n.id);
+                }
+                continue;
+            }
+            // Named in full (or by id), but not granted to the workspace.
+            Ok(n) => vec![n.id],
+            // No node of the caller's matches: any node that starts so.
+            Err(e) if e.code == codes::NODE_NOT_FOUND => nodes_starting(t),
             Err(e) => return Err(e),
         };
-        match mine {
-            Some(n) if !ids.contains(&n.id) => ids.push(n.id),
-            Some(_) => {}
-            None => {
-                let note = avoid_not_yours(t.trim());
-                if !notes.contains(&note) {
-                    notes.push(note);
-                }
+        if hidden.is_empty() && !t.is_empty() && !out.names.iter().any(|n| n == t) {
+            out.names.push(t.to_string());
+        }
+        for id in hidden {
+            if !out.ids.contains(&id) {
+                out.ids.push(id);
             }
         }
+        let note = avoid_not_yours(t);
+        if !out.notes.contains(&note) {
+            out.notes.push(note);
+        }
     }
-    Ok((ids, notes))
+    Ok(out)
+}
+
+/// Every live node whose name starts with `t` (any grant).
+fn nodes_starting(t: &str) -> Vec<String> {
+    if t.is_empty() {
+        return Vec::new();
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::list_nodes(&conn, false).into_iter().filter(|n| n.name.starts_with(t)).map(|n| n.id).collect()
 }
 
 /// The note for an `--avoid` name that isn't one of the caller's nodes
 /// (granted elsewhere, or no node at all: the same words either way).
 pub(crate) fn avoid_not_yours(name: &str) -> String {
-    format!("--avoid {name}: not one of your nodes; nothing to avoid")
+    format!("--avoid {name}: not one of your nodes now; if it becomes one, this job still never goes there")
 }
 
 /// `--only NODE` (repeatable, 0.46.9): auto-placement picks only among
@@ -150,10 +183,17 @@ pub(crate) fn avoid_with_pinned(named: &str) -> crate::compute_routes::Refusal {
     )
 }
 
-fn names_of(ids: &[String]) -> Vec<String> {
+/// The avoided nodes' names, as a caller of workspace `ws_id` may see them:
+/// a node not granted to it (kept silently by [`avoid_from`]) is left out,
+/// unless the caller is the owner or an Admin.
+fn names_of(ids: &[String], ws_id: &str, admin: bool) -> Vec<String> {
+    let granted: Option<Vec<String>> = (!admin).then(|| crate::compute_views::granted_node_ids(ws_id));
     let db = k2_core::db::shared();
     let conn = db.lock();
-    ids.iter().map(|id| store::node_by_id(&conn, id).map(|n| n.name).unwrap_or_else(|| format!("{id} (removed)"))).collect()
+    ids.iter()
+        .filter(|id| granted.as_ref().is_none_or(|g| g.contains(id)))
+        .map(|id| store::node_by_id(&conn, id).map(|n| n.name).unwrap_or_else(|| format!("{id} (removed)")))
+        .collect()
 }
 
 /// Nothing fits with `want`'s avoid list: `avoid_leaves_no_node` when the
@@ -162,6 +202,7 @@ fn names_of(ids: &[String]) -> Vec<String> {
 pub(crate) fn avoid_leaves_none(ws: &Ws, want: &Want, now: i64) -> R<()> {
     let mut open = want.clone();
     open.filter.avoid.clear();
+    open.filter.avoid_names.clear();
     let without = place::candidates(&open, &[], now);
     if without.is_empty() {
         return Ok(());
@@ -177,7 +218,7 @@ pub(crate) fn avoid_leaves_none(ws: &Ws, want: &Want, now: i64) -> R<()> {
             fit.join(", ")
         ),
     )
-    .with("avoid", names_of(&want.filter.avoid)))
+    .with("avoid", names_of(&want.filter.avoid, &want.ws_id, want.admin)))
 }
 
 // ── the submit hint ──────────────────────────────────────────────────
@@ -192,6 +233,7 @@ pub(crate) fn pinned_hint(job: &store::JobRow, want: &Want) -> Option<String> {
     let mut w = want.clone();
     w.auto = true;
     w.filter.avoid.clear();
+    w.filter.avoid_names.clear();
     let report = place::candidates_report(&w, std::slice::from_ref(&job.node_id), now);
     let free = report.cands.iter().filter(|c| c.tier(&w) == Some(Tier::Now)).min_by(|a, b| a.band(&w).cmp(&b.band(&w)).then_with(|| a.node.name.cmp(&b.node.name)))?;
     let (here, queued) = {
@@ -226,9 +268,9 @@ pub(crate) fn cpus_hint(node: &str, offer: Option<&k2_core::compute::proto::fram
 struct Ask {
     /// `--to NODE`; `None` = `--auto`.
     to: Option<String>,
-    avoid: Vec<String>,
-    /// `--avoid` names that aren't the caller's nodes (one note each).
-    avoid_notes: Vec<String>,
+    /// `--avoid`: ids, names kept as typed, and one note per name that
+    /// isn't one of the caller's nodes.
+    avoid: Avoid,
     /// `Some(None)`: `--os any` (drop it).
     os: Option<Option<String>>,
     arch: Option<Option<String>>,
@@ -260,14 +302,14 @@ pub(crate) fn handle(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     if to.is_some() && (has_avoid || s(&v, "os").is_some() || s(&v, "arch").is_some() || !labels.is_empty()) {
         return Err(no(codes::BAD_REQUEST, 400, "--avoid, --os, --arch and --label go with --auto; --to pins the job to that one node"));
     }
-    let mut ask = Ask { to, avoid: Vec::new(), avoid_notes: Vec::new(), os: any_or(&v, "os"), arch: any_or(&v, "arch"), labels };
+    let mut ask = Ask { to, avoid: Avoid::default(), os: any_or(&v, "os"), arch: any_or(&v, "arch"), labels };
     if let Some(f) = v.get("filter") {
         return move_matching(who, &v, f, ask);
     }
     let j = job_for(who, s(&v, "job"))?;
-    (ask.avoid, ask.avoid_notes) = avoid_from(who, &v, &j.workspace_id)?;
+    ask.avoid = avoid_from(who, &v, &j.workspace_id)?;
     let mut out = move_one(who, &j, &ask)?;
-    out["warnings"] = ask.avoid_notes.clone().into();
+    out["warnings"] = ask.avoid.notes.clone().into();
     Ok(out)
 }
 
@@ -298,7 +340,7 @@ fn move_matching(who: &Who, v: &serde_json::Value, f: &serde_json::Value, mut as
         Some(t) => Some(resolve_node_for(who, Some(t), Some(&ws))?.id),
         None => None,
     };
-    (ask.avoid, ask.avoid_notes) = avoid_from(who, v, &ws)?;
+    ask.avoid = avoid_from(who, v, &ws)?;
     let rows: Vec<store::JobRow> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -326,7 +368,7 @@ fn move_matching(who: &Who, v: &serde_json::Value, f: &serde_json::Value, mut as
         "moved": moved,
         "skipped": skipped,
         "scope": scope,
-        "warnings": ask.avoid_notes,
+        "warnings": ask.avoid.notes,
     }))
 }
 
@@ -371,8 +413,8 @@ fn node_kind(node_id: &str) -> (Option<String>, Option<String>) {
     (get("os"), get("arch"))
 }
 
-fn filter_json(f: &store::AnyFilter) -> serde_json::Value {
-    serde_json::json!({"os": f.os, "arch": f.arch, "labels": f.labels, "avoid": names_of(&f.avoid)})
+fn filter_json(f: &store::AnyFilter, ws_id: &str, admin: bool) -> serde_json::Value {
+    serde_json::json!({"os": f.os, "arch": f.arch, "labels": f.labels, "avoid": names_of(&f.avoid, ws_id, admin)})
 }
 
 /// `--auto`: write the auto filter; the sweeper moves it (or, when the
@@ -395,7 +437,12 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
         f.arch = arch.clone();
     }
     f.labels.extend(ask.labels.clone());
-    for id in &ask.avoid {
+    for t in &ask.avoid.names {
+        if !f.avoid_names.contains(t) {
+            f.avoid_names.push(t.clone());
+        }
+    }
+    for id in &ask.avoid.ids {
         if !f.avoid.contains(id) {
             f.avoid.push(id.clone());
         }
@@ -415,7 +462,7 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
     let now = compute::now();
     let report = place::candidates_report(&w, &[], now);
     if report.cands.is_empty() {
-        if !f.avoid.is_empty() {
+        if !f.avoid.is_empty() || !f.avoid_names.is_empty() {
             avoid_leaves_none(ws, &w, now)?;
         }
         return Err(no(codes::NO_NODE_FITS, 404, format!("{}; job {short} stays where it is, pinned", no_fit_hint(ws, &w, &report))));
@@ -437,7 +484,7 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
             Some(to) => {
                 audit_release(who, j, &f, was_auto, Some(&to));
                 Ok(serde_json::json!({
-                    "ok": true, "job": short, "mode": "auto", "from": here, "node": node_name(&to), "moved": true, "filter": filter_json(&f),
+                    "ok": true, "job": short, "mode": "auto", "from": here, "node": node_name(&to), "moved": true, "filter": filter_json(&f, &j.workspace_id, who.is_admin()),
                     "note": format!("{here} doesn't fit the new ask, so it moved now"),
                 }))
             }
@@ -479,7 +526,7 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
     audit_release(who, j, &f, was_auto, None);
     compute_ws::notify_change();
     Ok(serde_json::json!({
-        "ok": true, "job": short, "mode": "auto", "from": here, "node": here, "moved": false, "filter": filter_json(&f),
+        "ok": true, "job": short, "mode": "auto", "from": here, "node": here, "moved": false, "filter": filter_json(&f, &j.workspace_id, who.is_admin()),
         "note": if on_node {
             format!("it waits in {here}'s own queue; K2 asks for it back when another node can start it now")
         } else {

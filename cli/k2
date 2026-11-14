@@ -27599,9 +27599,9 @@ Agents:
                                 named node (avoid_with_pinned_node, exit 2). When
                                 every node that fits is avoided: avoid_leaves_no_node,
                                 exit 3, nothing queued. A name that isn't one of
-                                your nodes is fine (it could never be picked): one
-                                note, "--avoid k2n9: not one of your nodes;
-                                nothing to avoid", so a standing list works as flags
+                                your nodes is fine and still kept (if it becomes
+                                yours while the job waits, K2 still skips it): one
+                                note, so a standing list works as flags
                  [--only <node>]...  K2 picks only among these nodes (repeatable; a
                                 name or a start of one): keep private work on your
                                 own nodes without listing every node to --avoid.
@@ -60821,11 +60821,11 @@ AVOID A NODE (0.46.8)
   refused (avoid_with_pinned_node, exit 2). When every node that could
   take the job is avoided, nothing is queued (avoid_leaves_no_node,
   exit 3). A node that isn't yours (not granted to this workspace, or no
-  node by that name) could never be picked, so naming it is fine: the job
-  runs and one note says so. Keep a standing "never those nodes" list as
-  flags:
+  node by that name) is fine: the job runs and one note says so. It is
+  still kept: if it becomes yours while the job waits (granted, or a new
+  node by that name), K2 still never picks it. Keep a "never" list as flags:
     k2 compute run --avoid k2n9 --avoid k2-arch --mem 8G -- make test
-    [k2 compute] note: --avoid k2n9: not one of your nodes; nothing to avoid
+    [k2 compute] note: --avoid k2n9: not one of your nodes now; if it becomes one, this job still never goes there
   --only <node> (repeatable, run and test; 0.46.9) is the other way round:
   K2 picks only among the nodes you list. Use it to keep private work on
   your own nodes without listing every node to avoid:

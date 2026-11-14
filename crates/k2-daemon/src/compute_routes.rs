@@ -1867,7 +1867,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     }
     // `--avoid NODE` (0.46.8): nodes auto-placement never picks for it. A
     // name that isn't one of this workspace's nodes is a note (0.46.12).
-    let (avoid, avoid_notes) = crate::compute_move::avoid_from(who, v, &ws.id)?;
+    let crate::compute_move::Avoid { ids: avoid, names: avoid_names, notes: avoid_notes } = crate::compute_move::avoid_from(who, v, &ws.id)?;
     let avoid_asked = v.get("avoid").and_then(|a| a.as_array()).is_some_and(|a| !a.is_empty());
     if avoid_asked && !any {
         return Err(crate::compute_move::avoid_with_pinned(s(&v, "node").unwrap_or("--same-node-as")));
@@ -1885,7 +1885,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             .and_then(|l| l.as_object())
             .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
             .unwrap_or_default(),
-        avoid,
+        avoid, avoid_names,
         distro: distro_from(v)?,
         only,
     };
@@ -3333,7 +3333,7 @@ fn pick_node(
     let report = place::candidates_report(want, &[], now);
     // `--avoid` (0.46.8): the avoid list alone leaving nothing is its own
     // refusal (never queued on a node it avoids, never queued forever).
-    if report.cands.is_empty() && !want.filter.avoid.is_empty() {
+    if report.cands.is_empty() && !(want.filter.avoid.is_empty() && want.filter.avoid_names.is_empty()) {
         crate::compute_move::avoid_leaves_none(ws, want, now)?;
     }
     // `--tier ci`: candidates keep only nodes where this workspace may

@@ -73,9 +73,9 @@ Agents:
                                 named node (avoid_with_pinned_node, exit 2). When
                                 every node that fits is avoided: avoid_leaves_no_node,
                                 exit 3, nothing queued. A name that isn't one of
-                                your nodes is fine (it could never be picked): one
-                                note, "--avoid k2n9: not one of your nodes;
-                                nothing to avoid", so a standing list works as flags
+                                your nodes is fine and still kept (if it becomes
+                                yours while the job waits, K2 still skips it): one
+                                note, so a standing list works as flags
                  [--only <node>]...  K2 picks only among these nodes (repeatable; a
                                 name or a start of one): keep private work on your
                                 own nodes without listing every node to --avoid.

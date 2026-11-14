@@ -793,9 +793,16 @@ pub struct AnyFilter {
     pub labels: BTreeMap<String, String>,
     /// `--avoid NODE` (0.46.8): node ids auto-placement never picks for
     /// this job: not at submit, not in the sweeper's moves, not for a
-    /// retry on another node. Ids, so a rename keeps it.
+    /// retry on another node. Ids, so a rename keeps it. Also the nodes
+    /// the workspace isn't granted at submit: a grant can come while the
+    /// job waits.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub avoid: Vec<String>,
+    /// `--avoid` names that matched no node at submit, as typed: a node
+    /// that joins (or is renamed) later under that name, or a name that
+    /// starts with it, is avoided too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avoid_names: Vec<String>,
     /// `--distro ubuntu@24.04` (protocol 7): `ID` or `ID_LIKE`, the version
     /// on a dot prefix. A node that doesn't report its distro never fits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -804,6 +811,14 @@ pub struct AnyFilter {
     /// ids (every move and retry too). Empty = any granted node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub only: Vec<String>,
+}
+
+impl AnyFilter {
+    /// `--avoid` rules this node out: its id is on the list, or its name
+    /// is (or starts with) a name that matched no node at submit.
+    pub fn avoids(&self, node_id: &str, node_name: &str) -> bool {
+        self.avoid.iter().any(|a| a == node_id) || self.avoid_names.iter().any(|t| !t.is_empty() && node_name.starts_with(t.as_str()))
+    }
 }
 
 /// One attempt that ended in an infrastructure failure.
@@ -2311,5 +2326,18 @@ mod tests {
         assert!(r.detail.as_deref().is_some_and(|d| d.starts_with("replaced by job ")), "{:?}", r.detail);
         assert!(!replace_if_queued(&c, &started.id, "newjob00000000000000000000000001", 7).unwrap(), "a started job is never replaced");
         assert_eq!(job_by_id(&c, &started.id).unwrap().state, "running");
+    }
+
+    /// `--avoid`: a node by id whatever its name, or by a name kept as
+    /// typed (that name or one starting with it); nothing else.
+    #[test]
+    fn avoid_rules_out_by_id_or_by_a_kept_name() {
+        let f = AnyFilter { avoid: vec!["id-11".into()], avoid_names: vec!["k2n2".into()], ..Default::default() };
+        assert!(f.avoids("id-11", "renamed-later"), "by id, after a rename");
+        assert!(f.avoids("id-20", "k2n2") && f.avoids("id-21", "k2n21-vin"), "the kept name, and a name starting with it");
+        assert!(!f.avoids("id-12", "k2n12-vin"), "neither");
+        let old: AnyFilter = serde_json::from_str("{\"avoid\":[\"id-11\"]}").unwrap();
+        assert!(old.avoid_names.is_empty() && old.avoids("id-11", "x"), "a row from before keeps reading");
+        assert!(!serde_json::to_string(&AnyFilter::default()).unwrap().contains("avoidNames"), "empty: not written");
     }
 }

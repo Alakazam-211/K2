@@ -195,6 +195,7 @@ export function AgentRowButton({
   color,
   avatar,
   name,
+  nameMark,
   nameAside,
   subline,
   onClick,
@@ -206,6 +207,8 @@ export function AgentRowButton({
   color: string
   avatar: React.ReactNode
   name: string
+  /** A small mark right after the name (Home's pin). */
+  nameMark?: React.ReactNode
   nameAside?: React.ReactNode
   subline?: React.ReactNode
   onClick: () => void
@@ -233,7 +236,14 @@ export function AgentRowButton({
       <div className="flex items-center flex-shrink-0">{avatar}</div>
       <div className="flex flex-col justify-center min-w-0 flex-1">
         <div className="flex items-center gap-2 w-full leading-4">
-          <span className="truncate flex-1 leading-4">{name}</span>
+          {nameMark ? (
+            <span className="flex min-w-0 flex-1 items-center gap-1 leading-4">
+              <span className="truncate leading-4">{name}</span>
+              {nameMark}
+            </span>
+          ) : (
+            <span className="truncate flex-1 leading-4">{name}</span>
+          )}
           <span className="flex items-center">{nameAside}</span>
         </div>
         {/* Line 2 sits 2px below line 1 (`mt-0.5`, Rosson 2026-10-16): the
@@ -249,12 +259,15 @@ export function SingleProjectItem({
   project,
   isActive,
   onContextMenu,
-  shortcutIndex
+  shortcutIndex,
+  nameMark
 }: {
   project: ReturnType<typeof useProjectsStore.getState>['projects'][number]
   isActive: boolean
   onContextMenu: (e: React.MouseEvent, projectId: string) => void
   shortcutIndex?: number
+  /** A small mark right after the name (Home's pin). */
+  nameMark?: React.ReactNode
 }): React.JSX.Element {
   const setActiveWorkspace = useProjectsStore((s) => s.setActiveWorkspace)
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
@@ -294,6 +307,7 @@ export function SingleProjectItem({
           />
         }
         name={project.name}
+        nameMark={nameMark}
         nameAside={
           <>
             {/* thread-read-v1: this workspace's Threads, unread / waiting on you. */}

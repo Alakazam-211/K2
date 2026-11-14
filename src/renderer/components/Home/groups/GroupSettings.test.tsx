@@ -174,7 +174,7 @@ describe('Pin / Unpin in a row’s menu', () => {
     expect(pinMenuItem(home(2), home(2).rows[3])).toEqual({ id: 'home-pin', label: 'Pin', shortcut: '⌘3' })
     expect(pinMenuItem(home(2), home(2).rows[0])).toEqual({ id: 'home-unpin', label: 'Unpin' })
     const full = home(MAX_PINS)
-    expect(pinMenuItem(full, full.rows[MAX_PINS])).toEqual({ id: 'home-pin', label: 'Pin', enabled: false, hint: '9 pinned already' })
+    expect(pinMenuItem(full, full.rows[MAX_PINS])).toEqual({ id: 'home-pin', label: 'Pin', enabled: false, hint: 'Up to 9 pins' })
   })
 })
 

@@ -61,6 +61,9 @@ import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Si
 import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameHeader from './groups/GroupNameHeader'
 import { useHomeGroups } from './groups/useHomeGroups'
+import { useGroupSwipeSlide } from './groups/GroupSwipeSlide'
+import { useRowFlip } from './groups/useRowFlip'
+import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
 import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
@@ -170,7 +173,7 @@ export function pinMenuItem(home: Home, row: HomeRow): ContextMenuItemDef {
   if (isPinned(row)) return { id: 'home-unpin', label: 'Unpin' }
   const full = pinnedRows(home).length >= MAX_PINS
   return full
-    ? { id: 'home-pin', label: 'Pin', enabled: false, hint: `${MAX_PINS} pinned already` }
+    ? { id: 'home-pin', label: 'Pin', enabled: false, hint: `Up to ${MAX_PINS} pins` }
     : { id: 'home-pin', label: 'Pin', shortcut: `⌘${pinnedRows(home).length + 1}` }
 }
 
@@ -322,6 +325,7 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
         />
       }
       name={row.label}
+      nameMark={isPinned(row) ? <HomeRowPinMark /> : undefined}
       nameAside={
         <>
           {badges && (
@@ -395,6 +399,7 @@ function WorkspaceHomeRowView({ home, row, index }: { home: Home; row: HomeRow; 
           isActive={isActive}
           onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
           shortcutIndex={index}
+          nameMark={isPinned(row) ? <HomeRowPinMark /> : undefined}
         />
       </div>
     )
@@ -407,6 +412,7 @@ function WorkspaceHomeRowView({ home, row, index }: { home: Home; row: HomeRow; 
           isActive={isActive}
           onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
           shortcutIndex={index}
+          nameMark={isPinned(row) ? <HomeRowPinMark /> : undefined}
         />
         <div className="pointer-events-none absolute right-2 top-1">
           <SameServerNote note={note} />
@@ -422,7 +428,12 @@ function WorkspaceHomeRowView({ home, row, index }: { home: Home; row: HomeRow; 
 }
 
 export default function HomeSidebar(): React.JSX.Element {
-  const home = useHomesStore(selectedHome)
+  const selected = useHomesStore(selectedHome)
+  const homes = useHomesStore((s) => s.homes)
+  // A committed swipe slides the group just left out before the new one
+  // slides in (groups/GroupSwipeSlide): for that moment the list shows it.
+  const slide = useGroupSwipeSlide('nav')
+  const home = (slide.shownGroupId ? homes.find((h) => h.id === slide.shownGroupId) : undefined) ?? selected
   const pickerOpen = useHomeAddPickerStore((s) => s.open)
   const setPickerOpen = useHomeAddPickerStore((s) => s.setOpen)
   const barRef = useRef<HTMLDivElement | null>(null)
@@ -463,6 +474,12 @@ export default function HomeSidebar(): React.JSX.Element {
 
   // Pins first, then the rest (manual or most recent first).
   const rows = displayRows(home)
+  const pinCount = rows.filter(isPinned).length
+  // "Pinned" over the pins; "Agents" over the rest once there are pins or
+  // "Most recent at the top" is on (K2 Design's mock).
+  const agentsCaption = pinCount > 0 || !!home.recentFirst
+  // Most recent at the top: a row that moves up glides there.
+  useRowFlip(listRef, rows.map((r) => r.address), !!home.recentFirst, home.id)
 
   return (
     <div className="relative flex flex-col h-full" data-home-sidebar="" data-group-swipe-zone="">
@@ -484,14 +501,17 @@ export default function HomeSidebar(): React.JSX.Element {
       {/* Home roster. When it scrolls, its ends fade softly under the Home
           picker and the bottom bar, as the Thread's do (Rosson 2026-11-14),
           tinted with the nav's own fill. */}
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-home-list-stage="">
       <ScrollEdgeFrame
         className="flex-1 min-h-0"
         scrollClassName="overflow-y-auto overflow-x-hidden py-1"
         tint={HOME_NAV_EDGE_TINT}
         testId="home-nav-list"
       >
-        <div ref={listRef}>
-          {rows.map((row, idx) => (
+        <div ref={listRef} style={slide.listStyle} data-home-list-slide="">
+          {pinCount > 0 && <HomeRowCaption kind="pinned" />}
+          {rows.map((row, idx) => [
+            agentsCaption && idx === pinCount ? <HomeRowCaption key="agents-caption" kind="agents" recentFirst={!!home.recentFirst} /> : null,
             <div
               key={row.address}
               data-home-row={row.address}
@@ -513,11 +533,11 @@ export default function HomeSidebar(): React.JSX.Element {
             >
               {rowDrag.showsDropLineAt('home', idx) && <RowDropLine />}
               <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
-              {idx < rows.length - 1 && !rowDrag.showsDropLineAt('home', idx + 1) && (
+              {idx < rows.length - 1 && idx !== pinCount - 1 && !rowDrag.showsDropLineAt('home', idx + 1) && (
                 <div className="border-b border-[var(--color-border)]" />
               )}
-            </div>
-          ))}
+            </div>,
+          ])}
           {rowDrag.showsDropLineAt('home', rows.length) && <RowDropLine />}
         </div>
 
@@ -528,6 +548,8 @@ export default function HomeSidebar(): React.JSX.Element {
           </div>
         )}
       </ScrollEdgeFrame>
+      {slide.peek}
+      </div>
 
       {/* Setup checklist (renders nothing while off, hidden or finished) */}
       <SetupChecklist />
@@ -542,7 +564,7 @@ export default function HomeSidebar(): React.JSX.Element {
           <HomeGroupBar {...groups.bar} />
         </div>
       <div ref={barRef} className="relative flex flex-col gap-2" data-nav-footer="">
-        {pickerOpen && <AddAgentPicker home={home} />}
+        {pickerOpen && <AddAgentPicker home={selected} />}
         <div className={NAV_FOOTER_ROW_CLASS}>
           <NavFooterButton
             label="Add Agent"

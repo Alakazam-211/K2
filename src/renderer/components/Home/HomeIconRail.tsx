@@ -3,7 +3,9 @@
 // the Home roster as icons. A connected-server row is the Agents rail icon
 // itself (`ProjectIcon`); a row on another server is the same 32px button
 // with its letter avatar. Above the bottom buttons, the group bar stands
-// upright (one icon per group, the current one in the accent colour).
+// upright (one icon per group, the current one in the accent colour; five
+// show, then it scrolls). Pinned agents sit first, under a short rule. The
+// sideways swipe slides the icons and peeks the next group's glyph.
 
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -22,8 +24,9 @@ import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupCheck
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
 import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameFlash from './groups/GroupNameFlash'
-import { displayRows } from '@/lib/home-row-order'
+import { displayRows, isPinned } from '@/lib/home-row-order'
 import { useHomeGroups } from './groups/useHomeGroups'
+import { useGroupSwipeSlide } from './groups/GroupSwipeSlide'
 
 const RAIL_WIDTH = 48
 
@@ -82,8 +85,13 @@ function RailRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element
 }
 
 export default function HomeIconRail(): React.JSX.Element {
-  const home = useHomesStore(selectedHome)
+  const selected = useHomesStore(selectedHome)
+  const homes = useHomesStore((s) => s.homes)
+  const slide = useGroupSwipeSlide('rail')
+  const home = (slide.shownGroupId ? homes.find((h) => h.id === slide.shownGroupId) : undefined) ?? selected
   const groups = useHomeGroups()
+  const rows = displayRows(home)
+  const pinCount = rows.filter(isPinned).length
   return (
     <div
       data-material="tile"
@@ -106,10 +114,18 @@ export default function HomeIconRail(): React.JSX.Element {
         </svg>
       </button>
 
-      <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full">
-        {displayRows(home).map((row) => (
-          <RailRow key={row.address} home={home} row={row} />
-        ))}
+      <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden" data-home-rail-stage="">
+        <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full">
+          <div className="flex w-full flex-col items-center gap-0.5" style={slide.listStyle} data-home-list-slide="">
+            {rows.map((row, i) => [
+              <RailRow key={row.address} home={home} row={row} />,
+              pinCount > 0 && i === pinCount - 1 && i < rows.length - 1 ? (
+                <span key="pin-rule" aria-hidden="true" data-home-rail-pin-rule="" className="mx-auto my-[3px] h-px w-5 flex-shrink-0 bg-[var(--color-divider)]" />
+              ) : null,
+            ])}
+          </div>
+        </div>
+        {slide.peek}
       </div>
 
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">

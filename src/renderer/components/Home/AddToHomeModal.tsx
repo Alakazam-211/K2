@@ -402,13 +402,16 @@ export function AddToHomeModal({ home, index, icon, section, onClose, onAdded, o
           {tab === 'people' && <AddPersonPanel home={home} onAddRow={addRow} autoFocus={panelFocus} />}
           {tab === 'channels' && (
             <>
-              <div role="tablist" className="flex flex-shrink-0 gap-2 px-5 pb-1.5 type-hint" data-add-channel-mode={channelMode}>
-                <button type="button" role="tab" aria-selected={channelMode === 'pick'} data-testid="add-to-home-channels-pick" onClick={() => setChannelMode('pick')}>
-                  Add a channel
-                </button>
-                <button type="button" role="tab" aria-selected={channelMode === 'new'} data-testid="add-to-home-channels-new" onClick={() => setChannelMode('new')}>
-                  New channel
-                </button>
+              <div className="flex flex-shrink-0 justify-start px-5 pb-2" data-add-channel-mode={channelMode}>
+                <Segmented
+                  aria-label="Channels: add or make"
+                  value={channelMode}
+                  onChange={setChannelMode}
+                  options={[
+                    { value: 'pick', label: 'Add a channel', buttonProps: { 'data-testid': 'add-to-home-channels-pick' } },
+                    { value: 'new', label: 'New channel', buttonProps: { 'data-testid': 'add-to-home-channels-new' } },
+                  ]}
+                />
               </div>
               {channelMode === 'pick' ? (
                 <AddChannelPanel home={home} onAddRow={addRow} autoFocus={panelFocus} />

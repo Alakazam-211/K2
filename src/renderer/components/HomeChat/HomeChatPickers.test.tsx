@@ -175,7 +175,9 @@ describe('channels', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     render(<NewChannelPanel home={home()} onAddRow={add} />)
     const name = await screen.findByTestId('home-chat-new-channel-name')
-    expect((screen.getByTestId('home-chat-invite-only') as HTMLInputElement).checked).toBe(true)
+    // Invite only is the default, on the segmented privacy choice.
+    expect(screen.getByTestId('home-chat-invite-only').getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByTestId('home-chat-open').getAttribute('aria-checked')).toBe('false')
     await screen.findByText('Alex')
     expect(screen.queryByText('Atlas agent')).toBeNull()
     await act(async () => {
@@ -193,6 +195,38 @@ describe('channels', () => {
     vi.useRealTimers()
     expect(h.post).toHaveBeenCalledWith(expect.anything(), 'home-chat/channels/create', { name: 'Launch', open: false, members: ['k2:connect:a'] })
     await waitFor(() => expect(home().rows).toEqual([{ kind: 'channel', address: '650::local', workspaceId: null, label: 'Launch' }]))
+  })
+
+  it('New channel uses the shared field, checkbox and segmented privacy; Open says so and makes an open channel', async () => {
+    h.post.mockImplementation(async (_s, route) => {
+      if (route === 'home-chat/channels/create') return { ok: true, slug: 'c-1', conv: '651', state: 'active' }
+      return { ok: true }
+    })
+    h.get.mockImplementation(async (_s, route) => {
+      if (route === 'home-chat/status') return { ok: true, on: true, reason: null, flags: {} }
+      if (route === 'home-chat/summary') return { ok: true, chat: 'live', convs: [] }
+      if (route === 'home-chat/people') return people
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<NewChannelPanel home={home()} onAddRow={add} />)
+    const name = await screen.findByTestId('home-chat-new-channel-name')
+    expect(name.getAttribute('data-k2-chamfer')).toBe('control')
+    await screen.findByText('Alex')
+    expect(document.querySelector('[data-new-channel-field="people"] input[type="checkbox"]')?.classList.contains('k2-checkbox')).toBe(true)
+    expect(screen.getByTestId('home-chat-open').closest('[role="radiogroup"]')?.classList.contains('k2-segmented')).toBe(true)
+    expect(document.querySelector('[data-new-channel-privacy-hint]')?.textContent).toContain('Only the people in it see it.')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('home-chat-open'))
+    })
+    expect(document.querySelector('[data-new-channel-privacy-hint]')?.textContent).toContain('Everyone on this server can find it and join.')
+    await act(async () => {
+      fireEvent.change(name, { target: { value: 'Lobby' } })
+    })
+    await act(async () => {
+      fireEvent.keyDown(name, { key: 'Enter' })
+    })
+    expect(h.post).toHaveBeenCalledWith(expect.anything(), 'home-chat/channels/create', { name: 'Lobby', open: true, members: [] })
+    await waitFor(() => expect(home().rows).toEqual([{ kind: 'channel', address: '651::local', workspaceId: null, label: 'Lobby' }]))
   })
 
   it('waiting for a channel id gives up after its time', async () => {

@@ -13,8 +13,9 @@
 //     person whose chat is still being set up shows "Setting up…".
 //     Adding writes a `person` row; the DM is opened on the first open.
 //     A match on another server asks "Same person as …? Keep one row." (§6.3).
-//   - New channel: a server, a name, Invite-only (the default) or Open, and
-//     people. The daemon makes it over mgmt with a random slug; the row goes
+//   - New channel: a server (when there is a choice), a name, who can see
+//     it (Invite only, the default, or Open: a segmented control), and
+//     people; the Settings field style, K2's Input, dropdown and checkbox. The daemon makes it over mgmt with a random slug; the row goes
 //     on the Home once Sew answers with the channel's id.
 //   - Add a channel: a server's text channels you can see (browse), joined
 //     on open when it is open and you aren't in it yet.
@@ -23,7 +24,7 @@
 // channels only (HP-14). A Mac server, or one with chat off, says "No chat
 // on this server".
 
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type JSX } from 'react'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import type { Home, HomeRow } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -42,7 +43,11 @@ import { refreshHomeChatHost, refreshHomeChatPeople, scopeForChatHost, useHomeCh
 import { SearchableAgentList, tokenAndMatch, type AgentListRow, type AgentListSection } from '@/components/ui/SearchableAgentList'
 import { AgentListStatus, agentListStatusClass } from '@/components/ui/AgentListStatus'
 import { serverLabelFor } from './serverLabel'
-import { Radio } from '@/components/ui/Radio'
+import { Input } from '@/components/ui/Input'
+import { Checkbox } from '@/components/ui/Checkbox'
+import { Button } from '@/components/ui/Button'
+import { Segmented } from '@/components/ui/Segmented'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 
 const itemClass =
@@ -386,6 +391,7 @@ export function NewChannelPanel({ onAddRow, onBack, onDone, autoFocus = true }: 
   const [members, setMembers] = useState<Set<string>>(new Set())
   const [state, setState] = useState<{ kind: 'idle' } | { kind: 'busy'; line: string } | { kind: 'error'; line: string }>({ kind: 'idle' })
   const people = server ? (byHost[server.key]?.people?.people ?? []).filter(pickablePerson) : []
+  const formId = useId()
 
   const create = async (): Promise<void> => {
     if (!server || !name.trim()) return
@@ -415,88 +421,113 @@ export function NewChannelPanel({ onAddRow, onBack, onDone, autoFocus = true }: 
   return (
     <>
       <BackHead label="New channel" onBack={onBack} />
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-2 text-[11px]" data-testid="home-chat-new-channel">
+      <div className="flex min-h-0 flex-1 flex-col" data-testid="home-chat-new-channel">
         {usable.length === 0 ? (
-          <p className="text-[var(--color-text-muted)]">{noChatLine(null)}</p>
+          <p className={`${SETTING_ROW_HINT} px-5 py-2`}>{noChatLine(null)}</p>
         ) : (
           <>
-            <label className="flex items-center gap-2">
-              <span className="w-14 text-[var(--color-text-muted)]">Server</span>
-              <select
-                aria-label="Server"
-                value={server?.key ?? ''}
-                onChange={(e) => {
-                  setHostKey(e.target.value)
-                  setMembers(new Set())
-                }}
-                className="min-w-0 flex-1 border border-[var(--color-border)] bg-transparent"
-              >
-                {usable.map((s) => (
-                  <option key={s.key} value={s.key}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="w-14 text-[var(--color-text-muted)]">Name</span>
-              <input
-                autoFocus={autoFocus}
-                aria-label="Channel name"
-                data-testid="home-chat-new-channel-name"
-                value={name}
-                maxLength={100}
-                onChange={(e) => setName(e.target.value)}
-                className="min-w-0 flex-1 border border-[var(--color-border)] bg-transparent px-1.5 py-0.5"
-              />
-            </label>
-            <fieldset className="flex flex-col gap-0.5">
-              <label className="flex items-center gap-2">
-                <Radio name="hc-visibility" checked={!open} onChange={() => setOpen(false)} data-testid="home-chat-invite-only" />
-                Invite-only: only the people in it see it
-              </label>
-              <label className="flex items-center gap-2">
-                <Radio name="hc-visibility" checked={open} onChange={() => setOpen(true)} data-testid="home-chat-open" />
-                Open to everyone on this server
-              </label>
-              <span className="text-[10px] text-[var(--color-text-muted)]">This can't be changed later.</span>
-            </fieldset>
-            <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">People</div>
-            {people.length === 0 ? (
-              <p className="text-[var(--color-text-muted)]">Nobody else to add yet.</p>
-            ) : (
-              people.map((p) => (
-                <label key={p.ext} className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={members.has(p.ext)}
-                    onChange={(e) =>
-                      setMembers((cur) => {
-                        const next = new Set(cur)
-                        if (e.target.checked) next.add(p.ext)
-                        else next.delete(p.ext)
-                        return next
-                      })
-                    }
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pt-2 pb-3">
+              {usable.length > 1 && (
+                <div className="flex flex-col gap-1.5" data-new-channel-field="server">
+                  <span className={SETTING_ROW_LABEL} id={`${formId}-server`}>
+                    Server
+                  </span>
+                  <SettingDropdown
+                    value={server?.key ?? ''}
+                    options={usable.map((s) => ({ value: s.key, label: s.label }))}
+                    onChange={(key) => {
+                      setHostKey(key)
+                      setMembers(new Set())
+                    }}
+                    ariaLabel="Server"
+                    menuAlign="left"
+                    fullWidth
                   />
-                  <span className="truncate">{p.displayName}</span>
-                </label>
-              ))
-            )}
-            {state.kind !== 'idle' && (
-              <p className={state.kind === 'error' ? 'text-[var(--color-status-error-text)]' : 'text-[var(--color-text-muted)]'} data-testid="home-chat-new-channel-state">
-                {state.line}
+                </div>
+              )}
+              <label className="flex flex-col gap-1.5" data-new-channel-field="name">
+                <span className={SETTING_ROW_LABEL}>Name</span>
+                <Input
+                  autoFocus={autoFocus}
+                  aria-label="Channel name"
+                  data-testid="home-chat-new-channel-name"
+                  value={name}
+                  maxLength={100}
+                  placeholder="e.g. launch"
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && name.trim() && state.kind !== 'busy') {
+                      e.preventDefault()
+                      void create()
+                    }
+                  }}
+                  className="w-full"
+                />
+              </label>
+              <div className="flex flex-col gap-1.5" data-new-channel-field="privacy" data-k2-line="">
+                <span className={SETTING_ROW_LABEL}>Who can see it</span>
+                <div className="flex justify-start">
+                  <Segmented
+                    aria-label="Who can see it"
+                    value={open ? 'open' : 'invite'}
+                    onChange={(v) => setOpen(v === 'open')}
+                    options={[
+                      { value: 'invite', label: 'Invite only', buttonProps: { 'data-testid': 'home-chat-invite-only' } },
+                      { value: 'open', label: 'Open', buttonProps: { 'data-testid': 'home-chat-open' } },
+                    ]}
+                  />
+                </div>
+                <span className={SETTING_ROW_HINT} data-new-channel-privacy-hint="">
+                  {open ? 'Everyone on this server can find it and join.' : 'Only the people in it see it.'} This can't be changed later.
+                </span>
+              </div>
+              <div className="flex flex-col gap-1" data-new-channel-field="people">
+                <span className={SETTING_ROW_LABEL}>People</span>
+                {people.length === 0 ? (
+                  <p className={`m-0 ${SETTING_ROW_HINT}`}>Nobody else to add yet.</p>
+                ) : (
+                  <div className="-mx-2 flex flex-col">
+                    {people.map((p) => (
+                      <label
+                        key={p.ext}
+                        className="flex min-h-[36px] cursor-pointer items-center gap-2.5 rounded-[var(--radius-selector)] px-2 py-1 hover:bg-[var(--color-row-hover)]"
+                      >
+                        <Checkbox
+                          checked={members.has(p.ext)}
+                          onChange={(e) =>
+                            setMembers((cur) => {
+                              const next = new Set(cur)
+                              if (e.target.checked) next.add(p.ext)
+                              else next.delete(p.ext)
+                              return next
+                            })
+                          }
+                        />
+                        <HomeChatPersonAvatar username={p.username} name={p.displayName} picture={p.picture} size={20} />
+                        <span className="min-w-0 flex-1 truncate type-name text-[var(--color-text-primary)]">{p.displayName}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-5 py-3" data-new-channel-foot="">
+              <p
+                className={`m-0 min-w-0 flex-1 type-hint ${state.kind === 'error' ? 'text-[var(--color-status-error-text)]' : 'text-[var(--color-text-secondary)]'}`}
+                data-testid="home-chat-new-channel-state"
+                role={state.kind === 'error' ? 'alert' : 'status'}
+              >
+                {state.kind === 'idle' ? '' : state.line}
               </p>
-            )}
-            <button
-              type="button"
-              data-testid="home-chat-new-channel-create"
-              disabled={!name.trim() || state.kind === 'busy'}
-              onClick={() => void create()}
-              className="self-start border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-primary)] disabled:opacity-50"
-            >
-              Make channel
-            </button>
+              <Button
+                variant="accent"
+                data-testid="home-chat-new-channel-create"
+                disabled={!name.trim() || state.kind === 'busy'}
+                onClick={() => void create()}
+              >
+                Make channel
+              </Button>
+            </div>
           </>
         )}
       </div>

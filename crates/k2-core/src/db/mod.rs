@@ -594,18 +594,9 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
     run_migrations_through(conn, None)
 }
 
-/// [`run_migrations`], stopping after `last` when given (tests build an
-/// older release's database this way, then upgrade it).
-pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS _migrations (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            applied_at INTEGER NOT NULL DEFAULT (unixepoch())
-        );",
-    )?;
-
-    let migrations: &[(&str, &str)] = &[
+/// The migrations in apply order, written by hand. At module level so the
+/// test in `migrations_list_tests.rs` can hold it against `drizzle_sql/ORDER`.
+const MIGRATIONS_BY_HAND: &[(&str, &str)] = &[
         ("0000_lethal_scalphunter", include_str!("../../drizzle_sql/0000_lethal_scalphunter.sql")),
         ("0001_nostalgic_lenny_balinger", include_str!("../../drizzle_sql/0001_nostalgic_lenny_balinger.sql")),
         ("0002_fearless_photon", include_str!("../../drizzle_sql/0002_fearless_photon.sql")),
@@ -1999,7 +1990,18 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         ("0303_approval_requests", include_str!("../../drizzle_sql/0303_approval_requests.sql")),
     ];
 
-    for (name, sql) in migrations {
+/// [`run_migrations`], stopping after `last` when given (tests build an
+/// older release's database this way, then upgrade it).
+pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS _migrations (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );",
+    )?;
+
+    for (name, sql) in MIGRATIONS_BY_HAND {
         let already_applied: bool = conn.query_row(
             "SELECT COUNT(*) > 0 FROM _migrations WHERE name = ?1",
             params![name],
@@ -2362,6 +2364,9 @@ pub(crate) fn seed_audit_sentinels(conn: &Connection) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod migrations_list_tests;
 
 #[cfg(test)]
 mod tests {

@@ -31,12 +31,40 @@ import {
  *  re-reads its window the full way instead. */
 export const THREAD_DELTA_PAGE = 200
 
+/** The `/boot-status` feature key that gates delta reads. */
+export const FEATURE_THREAD_DELTA = 'thread-delta-v1' as const
+
+/** A row that left the Thread (`seq` null when the answer left it out). */
+export interface RemovedRef {
+  id: string
+  seq: number | null
+}
+
 export interface ThreadDeltaAnswer {
   conversation_id: string
   items: OverlayThreadItem[]
   hasMore: boolean
   changed: OverlayThreadItem[]
-  removed: Array<{ id: string; seq: number }>
+  removed: RemovedRef[]
+}
+
+/** The access or the chat is gone: drop its cache. */
+export function goneStatus(status: number | null | undefined): boolean {
+  return status === 403 || status === 404
+}
+
+/** A delta's `removed` list (as K2 Companion's `parseRemoved`). */
+export function parseRemoved(raw: unknown): RemovedRef[] {
+  if (!Array.isArray(raw)) return []
+  const out: RemovedRef[] = []
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue
+    const id = (r as { id?: unknown }).id
+    const seq = (r as { seq?: unknown }).seq
+    if (typeof id !== 'string' || !id) continue
+    out.push({ id, seq: typeof seq === 'number' && Number.isFinite(seq) ? seq : null })
+  }
+  return out
 }
 
 /** A thread-delta-v1 answer, or null when the body is not one (no
@@ -47,13 +75,7 @@ export function parseThreadDelta(raw: unknown): ThreadDeltaAnswer | null {
   if (typeof r.after_seq !== 'number' || !Array.isArray(r.changed)) return null
   const snap = threadItemsFromSnapshot(r)
   const changed = threadItemsFromSnapshot({ items: r.changed }).items
-  const removed: Array<{ id: string; seq: number }> = []
-  for (const x of Array.isArray(r.removed) ? r.removed : []) {
-    if (!x || typeof x !== 'object') continue
-    const row = x as Record<string, unknown>
-    if (typeof row.id === 'string' && row.id && typeof row.seq === 'number') removed.push({ id: row.id, seq: row.seq })
-  }
-  return { conversation_id: snap.conversation_id, items: snap.items, hasMore: snap.has_more, changed, removed }
+  return { conversation_id: snap.conversation_id, items: snap.items, hasMore: snap.has_more, changed, removed: parseRemoved(r.removed) }
 }
 
 /**
@@ -66,7 +88,7 @@ export function parseThreadDelta(raw: unknown): ThreadDeltaAnswer | null {
  */
 export function applyThreadDelta(
   current: OverlayThreadItem[],
-  delta: Pick<ThreadDeltaAnswer, 'items' | 'changed' | 'removed'>,
+  delta: Pick<ThreadDeltaAnswer, 'items' | 'changed'> & { removed: ReadonlyArray<{ id: string }> },
   hasMore: boolean,
 ): OverlayThreadItem[] {
   let list = current

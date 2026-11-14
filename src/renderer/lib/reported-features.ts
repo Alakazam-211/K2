@@ -136,6 +136,12 @@ export const REPORTED_FEATURES = {
    *  focus and reconnect by delta from its last read (`threadDelta.ts`);
    *  without it, it re-reads its whole loaded window. */
   'thread-delta-v1': 'thread-delta-v1',
+  /** inbox-catchup-v1 (0.46.3): `POST /cli/thread/catchup` answers many
+   *  Threads' deltas (or newest pages) in one call. With it, the desktop
+   *  brings its cached Threads (and the top and unread Home rows) up to
+   *  date on launch and focus (`chatCatchupRun.ts`); without it, each
+   *  Thread re-syncs when opened. */
+  'inbox-catchup-v1': 'inbox-catchup-v1',
   /** ticket-attachments-v1 (0.46.6, prd-ticket-attachments-v1): files on
    *  ticket messages. `show` comments carry `id` and `attachments`;
    *  `attachments` on `POST /cli/feedback/comment`; the door

@@ -91,10 +91,32 @@ function RailRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element
   return <OtherRowIcon home={home} row={row} />
 }
 
-/** A group's rail icons, pins first under a short rule. */
-function RailRows({ home }: { home: Home }): React.JSX.Element {
+/** A group's rail icons, pins first under a short rule. An empty group
+ *  shows only a + (Add to Home), its title saying the group is empty;
+ *  `preview` (the group a swipe heads to) draws it, not live. */
+function RailRows({ home, preview = false }: { home: Home; preview?: boolean }): React.JSX.Element {
   const rows = displayRows(home)
   const pinCount = rows.filter(isPinned).length
+  if (rows.length === 0) {
+    return (
+      <div className="flex w-full flex-col items-center gap-0.5">
+        <button
+          type="button"
+          data-k2-focus=""
+          data-home-add-open="empty"
+          className={RAIL_BUTTON_CLASS}
+          title={`${home.name} is empty: add agents`}
+          aria-label={`${home.name} is empty. Add to Home`}
+          aria-haspopup="dialog"
+          aria-hidden={preview ? true : undefined}
+          tabIndex={preview ? -1 : undefined}
+          onClick={preview ? undefined : (e) => useHomeAddPickerStore.getState().setOpen(true, e.currentTarget)}
+        >
+          <NavFooterPlus />
+        </button>
+      </div>
+    )
+  }
   return (
     <div className="flex w-full flex-col items-center gap-0.5">
       {rows.map((row, i) => [
@@ -111,7 +133,7 @@ function RailRows({ home }: { home: Home }): React.JSX.Element {
 function RailRowsPreview({ home }: { home: Home }): React.JSX.Element {
   return (
     <div className="flex-1 flex flex-col items-center gap-0.5 overflow-hidden w-full">
-      <RailRows home={home} />
+      <RailRows home={home} preview />
     </div>
   )
 }

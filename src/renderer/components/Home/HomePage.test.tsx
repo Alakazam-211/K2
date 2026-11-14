@@ -450,12 +450,41 @@ describe('Home — the Agents page shell', () => {
     expect(screen.getByText('No workspace selected')).toBeTruthy()
   })
 
-  it('an empty Home shows the empty state with Add Agent wording', () => {
+  it('an empty group says so in the nav, with a + that opens Add to Home', () => {
     const home = useHomesStore.getState().homes[0]
     for (const r of [...home.rows]) useHomesStore.getState().removeRow(home.id, r.address)
     render(<Shell />)
     expect(screen.getByText('Add an agent to get started', { selector: '[data-room-empty] p' })).toBeTruthy()
-    expect(within(homeSidebar()).getByText('No agents on this Home yet')).toBeTruthy()
+    // The group's own empty state, centred in the list: its name, the hint
+    // and a small + that opens Add to Home (focus comes back to it).
+    const note = homeSidebar().querySelector('[data-home-empty]') as HTMLElement
+    expect(note.getAttribute('role')).toBe('status')
+    expect(note.className).toContain('absolute inset-0 flex flex-col items-center justify-center')
+    expect(note.querySelector('b')?.textContent).toBe('Group 1 is empty')
+    expect(within(note).getByText('Add agents with + below.')).toBeTruthy()
+    expect(within(homeSidebar()).queryByText('No agents on this Home yet')).toBeNull()
+    const plus = within(note).getByRole('button', { name: 'Add to Group 1' })
+    expect(plus.getAttribute('title')).toBe('Add to Home')
+    expect(plus.getAttribute('data-home-add-open')).toBe('empty')
+    fireEvent.click(plus)
+    expect(screen.getByRole('dialog', { name: 'Add to Home' })).toBeTruthy()
+    fireEvent.click(screen.getByTestId('dialog-close'))
+    expect(document.activeElement).toBe(plus)
+  })
+
+  it('an empty group in the rail shows only a +, its title saying the group is empty', () => {
+    const home = useHomesStore.getState().homes[0]
+    for (const r of [...home.rows]) useHomesStore.getState().removeRow(home.id, r.address)
+    useSidebarStore.setState({ isCollapsed: true })
+    render(<Shell />)
+    const stage = document.querySelector('[data-home-rail-stage]') as HTMLElement
+    const buttons = within(stage).getAllByRole('button')
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual(['Group 1 is empty. Add to Home'])
+    expect(buttons[0].getAttribute('title')).toBe('Group 1 is empty: add agents')
+    fireEvent.click(buttons[0])
+    expect(screen.getByRole('dialog', { name: 'Add to Home' })).toBeTruthy()
+    fireEvent.click(screen.getByTestId('dialog-close'))
+    expect(document.activeElement).toBe(buttons[0])
   })
 
   it('the roster scrolls between the Home picker and the bottom bar, its ends fading in the nav\'s own colour', () => {

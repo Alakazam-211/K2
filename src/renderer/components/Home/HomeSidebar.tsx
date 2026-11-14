@@ -63,7 +63,7 @@ import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
 import { useRowFlip } from './groups/useRowFlip'
 import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
 import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
-import { HomeNavFooterRow } from './HomeNavFooter'
+import { HomeAddButton, HomeNavFooterRow } from './HomeNavFooter'
 import { AddToHomeHost } from './AddToHomeModal'
 import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
 import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
@@ -485,11 +485,27 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
   )
 }
 
-function EmptyHomeNote(): React.JSX.Element {
+/** An empty group, centred and calm in the list area: "<Group> is empty",
+ *  "Add agents with + below." and a small + (the footer's) that opens Add
+ *  to Home; focus comes back to it when that closes. `preview`: the group
+ *  a swipe heads to, drawn but not live. */
+function EmptyGroupNote({ name, preview = false }: { name: string; preview?: boolean }): React.JSX.Element {
   return (
-    <div className="px-3 py-6 text-center">
-      <p className="text-xs text-[var(--color-text-muted)]">No agents on this Home yet</p>
-      <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">Add an agent to get started</p>
+    <div
+      role={preview ? undefined : 'status'}
+      aria-hidden={preview ? true : undefined}
+      className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 p-4 text-center"
+      data-home-empty=""
+    >
+      <b className="max-w-full truncate type-heading text-[var(--color-text-primary)]" title={`${name} is empty`}>
+        {name} is empty
+      </b>
+      <span className="type-hint text-[var(--color-text-secondary)]">Add agents with + below.</span>
+      {preview ? (
+        <span className="mt-1.5 h-8 w-8" />
+      ) : (
+        <HomeAddButton place="empty" label={`Add to ${name}`} title="Add to Home" className="mt-1.5" />
+      )}
     </div>
   )
 }
@@ -502,7 +518,7 @@ function HomeRowsPreview({ home }: { home: Home }): React.JSX.Element {
       <div>
         <HomeRowItems home={home} />
       </div>
-      {displayRows(home).length === 0 && <EmptyHomeNote />}
+      {displayRows(home).length === 0 && <EmptyGroupNote name={home.name} preview />}
     </ScrollEdgeFrame>
   )
 }
@@ -564,7 +580,7 @@ export default function HomeSidebar(): React.JSX.Element {
         <div ref={listRef}>
           <HomeRowItems home={home} drag={{ reorder: rowDrag, listRef, onDrop: dropHomeRow }} />
         </div>
-        {rows.length === 0 && <EmptyHomeNote />}
+        {rows.length === 0 && <EmptyGroupNote name={home.name} />}
       </ScrollEdgeFrame>
       </GroupSwipeStrip>
       </div>

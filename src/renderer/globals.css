@@ -1,8 +1,12 @@
-/* Layer order: tw (lowest) < cm-overrides < unlayered (highest).            */
+/* Layer order: k2-chamfer-base, k2-focus-base (lowest) < tw < cm-overrides */
+/* < unlayered (highest).                                                    */
+/* The two base layers hold defaults that any Tailwind class must beat: the  */
+/* `position: relative` a chamfered box or a focus-ring box needs, which an  */
+/* element's own absolute / fixed / sticky class overrides.                  */
 /* Tailwind preflight in @layer tw can't override anything above it.         */
 /* Our CM layout overrides in @layer cm-overrides beat Tailwind but lose to  */
 /* CodeMirror's unlayered runtime style-mod styles (syntax highlighting etc) */
-@layer k2-chamfer-base, tw, cm-overrides;
+@layer k2-chamfer-base, k2-focus-base, tw, cm-overrides;
 @import "tailwindcss" layer(tw);
 /* OA4: the mail reader views live outside the renderer (sdk/mail-reader). */
 @source "../../sdk/mail-reader/src";
@@ -1427,9 +1431,15 @@ html:not([data-style="terminal"]) .k2-focus[class*="[--k2-ch-focus-inner:"]:focu
    control's 45° cuts (the cut buttons' ring above), elsewhere a 2px ring
    rounded by --radius-selector. The accent as text, so 3:1 on every ground. */
 /* The ring needs a positioned box, or ::after attaches to the nearest
-   positioned ancestor and rings a whole card or pane. Zero specificity, so
-   an element's own absolute / fixed / sticky still wins. */
-:where([data-k2-focus]:not([data-zen-root] *, [data-k2-thread-zen] *)) { position: relative; }
+   positioned ancestor and rings a whole card or pane. The default lives in a
+   layer under Tailwind's, so an element's own absolute / fixed / sticky
+   class still wins: unlayered CSS beats every layer whatever its
+   specificity, and here it dropped absolute boxes back into the flow (the
+   search field's clear button, Get started's Skip). The ring itself (below)
+   stays unlayered, so no Tailwind class can turn it off or recolour it. */
+@layer k2-focus-base {
+  :where([data-k2-focus]:not([data-zen-root] *, [data-k2-thread-zen] *)) { position: relative; }
+}
 :where([data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)) { outline: none; }
 [data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
   content: '';

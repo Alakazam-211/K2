@@ -228,9 +228,7 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
       {/* One line, never wrapping: the row's button takes what's left and
           its words wrap inside it; Skip keeps its own width at the right,
           on the title's first line. Skip is in the flow, not laid over the
-          row: the shared focus ring makes every data-k2-focus box
-          `position: relative` from outside Tailwind's layer, which beats an
-          `absolute` class and dropped Skip under the row. */}
+          row, so it can never cover the title. */}
       <div className="flex items-start" data-setup-line="">
         <button
           type="button"

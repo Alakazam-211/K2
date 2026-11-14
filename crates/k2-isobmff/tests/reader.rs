@@ -236,6 +236,16 @@ fn hevc_av1_opus_aac_and_pcm_entries() {
     let e = entry_of(single_entry_movie(*b"soun", audio_entry(b"twos", 1, 16, 44100, &[])));
     assert_eq!(e.codec, Codec::Pcm(Pcm { float: false, big_endian: true, signed: true, bits_per_sample: 16 }));
 
+    // QuickTime in24: big-endian, unless wave/enda says little-endian
+    // (FFmpeg writes it so for pcm_s24le; found by the ffprobe referee).
+    let e = entry_of(single_entry_movie(*b"soun", audio_entry(b"in24", 2, 24, 48000, &[])));
+    assert_eq!(e.codec, Codec::Pcm(Pcm { float: false, big_endian: true, signed: true, bits_per_sample: 24 }));
+    let wave = bx(b"wave", &cat(&[&bx(b"frma", b"in24"), &bx(b"enda", &[0, 1]), &u32b(8)[..], &[0u8; 4]]));
+    let e = entry_of(single_entry_movie(*b"soun", audio_entry(b"in24", 2, 24, 48000, &[wave])));
+    assert_eq!(e.codec, Codec::Pcm(Pcm { float: false, big_endian: false, signed: true, bits_per_sample: 24 }));
+    let e = entry_of(single_entry_movie(*b"soun", audio_entry(b"fl32", 2, 32, 48000, &[bx(b"enda", &[0, 1])])));
+    assert_eq!(e.codec, Codec::Pcm(Pcm { float: true, big_endian: false, signed: true, bits_per_sample: 32 }));
+
     let pcmc = full(b"pcmC", 0, 0, &[1, 32]);
     let e = entry_of(single_entry_movie(*b"soun", audio_entry(b"fpcm", 2, 32, 48000, &[pcmc])));
     assert_eq!(e.codec, Codec::Pcm(Pcm { float: true, big_endian: false, signed: false, bits_per_sample: 32 }));

@@ -307,10 +307,12 @@ fn audio_codec(entry: &mut SampleEntry, fmt: FourCC, kids: &[BoxRef<'_>], sample
         b"sowt" => pcm(false, false, true, sample_size),
         b"twos" => pcm(false, true, true, sample_size),
         b"raw " => pcm(false, true, false, 8),
-        b"in24" => pcm(false, true, true, 24),
-        b"in32" => pcm(false, true, true, 32),
-        b"fl32" => pcm(true, true, true, 32),
-        b"fl64" => pcm(true, true, true, 64),
+        // Big-endian unless a QuickTime `enda` atom (in `wave`, or beside
+        // it) says little-endian.
+        b"in24" => pcm(false, !little_endian(kids, depth, ctx)?, true, 24),
+        b"in32" => pcm(false, !little_endian(kids, depth, ctx)?, true, 32),
+        b"fl32" => pcm(true, !little_endian(kids, depth, ctx)?, true, 32),
+        b"fl64" => pcm(true, !little_endian(kids, depth, ctx)?, true, 64),
         b"ipcm" | b"fpcm" => {
             let float = fmt.0 == *b"fpcm";
             match find_one(kids, b"pcmC")? {
@@ -331,4 +333,20 @@ fn audio_codec(entry: &mut SampleEntry, fmt: FourCC, kids: &[BoxRef<'_>], sample
     }
     entry.codec = codec;
     Ok(())
+}
+
+/// QuickTime's `enda` atom (16 bits, 1 = little-endian), in `wave` or
+/// directly in the sound sample entry.
+fn little_endian(kids: &[BoxRef<'_>], depth: u32, ctx: &mut Ctx) -> Result<bool> {
+    let read = |b: BoxRef<'_>| -> Result<bool> { Ok(Cur::new(b.payload, b.fourcc).u16()? & 0xff != 0) };
+    if let Some(e) = find_one(kids, b"enda")? {
+        return read(e);
+    }
+    if let Some(w) = find_one(kids, b"wave")? {
+        let wk = children(w.payload, w.fourcc, depth, ctx)?;
+        if let Some(e) = find_one(&wk, b"enda")? {
+            return read(e);
+        }
+    }
+    Ok(false)
 }

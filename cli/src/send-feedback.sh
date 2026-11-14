@@ -439,6 +439,8 @@ import json, sys
 v = json.load(sys.stdin)
 d, h, c = v.get("deploy") or {}, v.get("health") or {}, v.get("checks") or {}
 print("%s  %s  (%s)" % (v["app"], v.get("verdict", "").upper(), d.get("state", "")))
+if d.get("stateReason"):
+    print("  why        %s" % d["stateReason"])
 seed, live, last = d.get("seed") or {}, d.get("live") or {}, d.get("last") or {}
 if seed:
     print("  deploy     Seed %s%s, live since %s by %s, commit %s" % ((seed.get("hash") or "")[:12], (" v" + seed["version"]) if seed.get("version") else "",

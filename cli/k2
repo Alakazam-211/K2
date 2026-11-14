@@ -13092,7 +13092,8 @@ WHAT A DEPLOY DOES
      k2 app sdk add put @k2/server (and Sew's packages) there, and the
      Seed carries them, so the App installs offline and rolls back with
      its SDK.
-  2. The Seed starts on a fresh port with $PORT set. GET host.health.path
+  2. The Seed starts on a fresh port with $HOST and $PORT set; it must
+     listen on exactly $HOST:$PORT (WHERE TO LISTEN). GET host.health.path
      (default /) must answer 2xx within the gate (default 120s).
   3. New connections switch to it. Old ones finish (drain).
   4. The old version stays warm for the watch window (5 min). If the new
@@ -13101,6 +13102,25 @@ WHAT A DEPLOY DOES
   5. After the window a crash restarts it: at once, then 5s, 30s, 2min,
      10min, 30min. 6 restarts in an hour → crashlooping; K2 stops and
      tells you. A deploy not live after 10 min is stalled; K2 tells you.
+
+WHERE TO LISTEN (every engine)
+  Bind $HOST:$PORT as given. Don't hard-code an address or a port.
+    guarded or open-path container   HOST=0.0.0.0 (inside the App's own
+                                     network; its port is published on
+                                     the box's loopback only)
+    process exception, process       HOST=127.0.0.1
+  An App bound to 127.0.0.1 inside a container never gets K2's health
+  check (connection reset) and never goes live. A manifest can't set
+  HOST. K2_HOST is where K2 is (the gateway), not your address.
+
+WHEN A START FAILS
+  An App's stdout and stderr are kept from the first byte, also for a
+  start that exits before it is healthy (a missing secret file, a bad
+  flag): no shell wrapper needed.
+    k2 app status <app-id>             why: how it ended (exit code or
+                                       signal) and the logs command
+    k2 app logs <app-id> --deployment <d-…>   that start's output
+  With nothing live, k2 app logs <app-id> shows the newest deployment.
 
 HOW FAR BACK YOU CAN GO
   K2 always keeps the Seeds of an App's last 5 deployments that went live
@@ -53986,6 +54006,8 @@ import json, sys
 v = json.load(sys.stdin)
 d, h, c = v.get("deploy") or {}, v.get("health") or {}, v.get("checks") or {}
 print("%s  %s  (%s)" % (v["app"], v.get("verdict", "").upper(), d.get("state", "")))
+if d.get("stateReason"):
+    print("  why        %s" % d["stateReason"])
 seed, live, last = d.get("seed") or {}, d.get("live") or {}, d.get("last") or {}
 if seed:
     print("  deploy     Seed %s%s, live since %s by %s, commit %s" % ((seed.get("hash") or "")[:12], (" v" + seed["version"]) if seed.get("version") else "",

@@ -1550,8 +1550,10 @@ esac
         std::fs::create_dir_all(tc.rustup_home()).unwrap();
         assert_eq!(tc.rust_installer(), Some("rustup"));
         let calls = || std::fs::read_to_string(tc.rustup_home().join("calls.log")).unwrap_or_default();
-        // A new toolchain: installed with its target in one go.
-        let need = needs::parse_all(&["rust@1.95.0+target:wasm32-unknown-unknown"]).unwrap();
+        // `+minimal`: this test is about targets (the default clippy and
+        // rustfmt have their own tests). A new toolchain: installed with its
+        // target in one go.
+        let need = needs::parse_all(&["rust@1.95.0+minimal+target:wasm32-unknown-unknown"]).unwrap();
         let r = tc.resolve(&need, &[], None, &mut |_| {}).await.unwrap();
         assert!(r.installed_any);
         assert!(calls().contains("toolchain install 1.95.0 --profile minimal --no-self-update --target wasm32-unknown-unknown"), "{}", calls());
@@ -1562,7 +1564,7 @@ esac
         assert!(!r.installed_any, "{}", calls());
         assert_eq!(calls().lines().filter(|l| !l.starts_with("toolchain list")).count(), before.lines().filter(|l| !l.starts_with("toolchain list")).count());
         // A second target on the same toolchain: `target add` for it only.
-        let two = needs::parse_all(&["rust@1.95.0+target:wasm32-unknown-unknown+target:wasm32-wasip1"]).unwrap();
+        let two = needs::parse_all(&["rust@1.95.0+minimal+target:wasm32-unknown-unknown+target:wasm32-wasip1"]).unwrap();
         let r = tc.resolve(&two, &[], None, &mut |_| {}).await.unwrap();
         assert!(r.installed_any);
         assert!(calls().lines().any(|l| l == "target add --toolchain 1.95.0 wasm32-wasip1"), "{}", calls());

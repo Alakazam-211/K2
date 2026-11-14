@@ -1692,6 +1692,10 @@ async fn async_main() {
     // 0.46.4: the boot migrations' leftovers whose trash timed out, now off
     // the boot path (background thread, no Finder, never deleted).
     let _deferred_trash = k2_core::safe_delete::trash_later(deferred_boot_trash);
+    // Speed pass P6: the unread summary's per-doc facts for Thread lines
+    // written before this build (one background thread, after `ready`;
+    // counts are exact before it finishes, only slower).
+    k2_core::overlay::spawn_doc_meta_backfill();
     // P44: adopted sessions' cell sockets accept only from here on.
     crate::ptyd_adopt::serve_adopted_cells();
 

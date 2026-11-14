@@ -10,6 +10,7 @@ pub mod attachments;
 pub mod card_echo;
 pub mod catalog;
 pub mod doc;
+pub mod doc_meta;
 pub mod options;
 pub mod store;
 pub mod summary;
@@ -418,6 +419,43 @@ pub fn waiting_cards(conversation_id: Option<&str>, now: i64) -> Result<Vec<(Str
     }
     Ok(out)
 }
+
+/// Fill the read-state facts (`doc_meta`, speed pass P6) of docs written
+/// before this build, on one background thread: a batch per write
+/// transaction, a short pause between batches so posts are never held
+/// up. Counts are exact meanwhile (a doc with no row is read the old
+/// way); this only makes them cheap. Returns at once; a store that was
+/// walked already costs one read. Called by the daemon after `ready`.
+pub fn spawn_doc_meta_backfill() {
+    let spawned = std::thread::Builder::new().name("k2-doc-meta-backfill".into()).spawn(|| {
+        let started = std::time::Instant::now();
+        let mut steps = 0u64;
+        loop {
+            match store::backfill_doc_meta_step(DOC_META_BACKFILL_BATCH) {
+                Ok(true) => {
+                    if steps > 0 {
+                        crate::log_debug!("[overlay] doc_meta backfill done: {steps} batches in {:?}", started.elapsed());
+                    }
+                    return;
+                }
+                Ok(false) => {
+                    steps += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => {
+                    crate::log_debug!("[overlay] WARN doc_meta backfill stopped (counts stay exact, read the old way): {e}");
+                    return;
+                }
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        crate::log_debug!("[overlay] WARN doc_meta backfill thread: {e}");
+    }
+}
+
+/// Docs per backfill write transaction.
+const DOC_META_BACKFILL_BATCH: usize = 500;
 
 /// True when this Thread doc is a card waiting on a person now.
 pub fn is_waiting_now(doc: &OverlayDoc, now: i64) -> bool {

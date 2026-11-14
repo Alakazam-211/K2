@@ -12,6 +12,7 @@
 //! thread_changes conv/mark:020/id   → seq | removed:seq  (thread-delta-v1)
 //! client_ids    ns/clientMsgId      → id\tconv\tms\tbodyHash  (post-idempotency-v1)
 //! client_ids_by_time ms:020/ns/clientMsgId → ""         (its sweep index)
+//! doc_meta      id                  → DocMeta (read-state facts, P6)
 //! ```
 //!
 //! Never query by scanning `docs/`. Walk a collection prefix, then point-get.
@@ -23,6 +24,7 @@ use std::time::{Duration, Instant};
 use redb::{Database, ReadableTable, TableDefinition};
 
 use super::doc::{OverlayDoc, OverlayItem};
+use super::doc_meta::DocMeta;
 
 const DOCS: TableDefinition<&str, &[u8]> = TableDefinition::new("docs");
 const THREAD: TableDefinition<&str, &str> = TableDefinition::new("thread");
@@ -42,6 +44,17 @@ const PENDING_CARDS: TableDefinition<&str, &str> = TableDefinition::new("pending
 /// card written before the index existed was added to it.
 const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
 const META_PENDING_V1: &str = "pending_cards_v1";
+/// Read-state facts per doc (speed pass P6): `{doc id}` → [`DocMeta`]
+/// encoded. Written in the same transaction as EVERY body write
+/// ([`write_meta`] / [`put_meta`]), so it is never older than the body it
+/// describes. Docs written before it existed have no row until the
+/// background backfill ([`backfill_doc_meta_step`]) reaches them; readers
+/// parse those the old way meanwhile.
+const DOC_META: TableDefinition<&str, &str> = TableDefinition::new("doc_meta");
+/// `"1"` once the backfill has walked every doc.
+const META_DOC_META_V1: &str = "doc_meta_v1";
+/// The backfill's resume point: the last doc id it walked.
+const META_DOC_META_AT: &str = "doc_meta_backfill_at";
 
 /// Collected conversations (lines K2 gathers from an outside agent
 /// product, e.g. a local Grok Bot): `{conv}/{product entry id}` → doc id.
@@ -403,6 +416,7 @@ pub fn put_doc(doc: &OverlayDoc) -> Result<(), String> {
             .insert(doc.id.as_str(), json.as_slice())
             .map_err(|e| format!("overlay insert docs: {e}"))?;
     }
+    write_meta(&txn, doc)?;
     txn.commit()
         .map_err(|e| format!("overlay redb commit: {e}"))?;
     Ok(())
@@ -431,6 +445,7 @@ pub fn put_card_doc(conversation_id: &str, seq: i64, doc: &OverlayDoc) -> Result
             pending.remove(key.as_str()).map_err(|e| format!("overlay pending_cards remove: {e}"))?;
         }
     }
+    write_meta(&txn, doc)?;
     note_change(&txn, conversation_id, &doc.id, Some(seq))?;
     txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
 }
@@ -574,6 +589,15 @@ pub fn pending_cards(conversation_id: Option<&str>) -> Result<Vec<(String, Strin
         Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
         Err(e) => return Err(format!("overlay open pending_cards: {e}")),
     };
+    pending_keys(&table, conversation_id)
+}
+
+/// The `pending_cards` keys of one conversation (or `None`, all) as
+/// `(conversation, card id)`.
+fn pending_keys<T: ReadableTable<&'static str, &'static str>>(
+    table: &T,
+    conversation_id: Option<&str>,
+) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     match conversation_id {
         Some(conv) => {
@@ -706,6 +730,7 @@ pub fn get_doc(id: &str) -> Result<Option<OverlayDoc>, String> {
         .map_err(|e| format!("overlay open docs: {e}"))?;
     match table.get(id).map_err(|e| format!("overlay get doc: {e}"))? {
         Some(guard) => {
+            read_counts::note(|c| c.doc_parses += 1);
             let doc: OverlayDoc = serde_json::from_slice(guard.value())
                 .map_err(|e| format!("overlay doc parse {id}: {e}"))?;
             Ok(Some(doc))
@@ -856,6 +881,7 @@ pub fn commit_write_keyed(
         docs.insert(doc.id.as_str(), json.as_slice())
             .map_err(|e| format!("overlay insert docs: {e}"))?;
     }
+    write_meta(&txn, doc)?;
     if let Some((conv, seq)) = thread {
         let key = conv_key(conv, seq);
         let mut table = txn
@@ -1338,6 +1364,7 @@ fn point_get_doc(txn: &redb::ReadTransaction, id: &str) -> Result<Option<Overlay
         .map_err(|e| format!("overlay open docs: {e}"))?;
     match table.get(id).map_err(|e| format!("overlay get doc: {e}"))? {
         Some(guard) => {
+            read_counts::note(|c| c.doc_parses += 1);
             let doc: OverlayDoc = serde_json::from_slice(guard.value())
                 .map_err(|e| format!("overlay doc parse {id}: {e}"))?;
             Ok(Some(doc))
@@ -1706,6 +1733,8 @@ impl ExtTxn<'_> {
             .map_err(|e| format!("overlay open docs: {e}"))?;
         t.insert(doc.id.as_str(), json.as_slice())
             .map_err(|e| format!("overlay insert docs: {e}"))?;
+        drop(t);
+        write_meta(self.txn, doc)?;
         self.wrote = true;
         Ok(())
     }
@@ -1860,6 +1889,7 @@ pub fn import_docs(
         let mut ids = txn.open_table(IMPORT_IDS).map_err(|e| format!("overlay open import_ids: {e}"))?;
         let mut docs = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
         let mut thread = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+        let mut meta = txn.open_table(DOC_META).map_err(|e| format!("overlay open doc_meta: {e}"))?;
         let mut fresh: Vec<&(String, OverlayDoc)> = Vec::with_capacity(entries.len());
         let mut seen = std::collections::HashSet::new();
         let mut skipped = 0usize;
@@ -1906,6 +1936,7 @@ pub fn import_docs(
             seq += 1;
             docs.insert(doc.id.as_str(), json.as_slice())
                 .map_err(|e| format!("overlay insert docs: {e}"))?;
+            put_meta(&mut meta, doc)?;
             thread
                 .insert(conv_key(conversation_id, seq).as_str(), doc.id.as_str())
                 .map_err(|e| format!("overlay insert thread: {e}"))?;
@@ -1918,6 +1949,319 @@ pub fn import_docs(
     before_commit(out)?;
     txn.commit().map_err(|e| format!("overlay redb commit: {e}"))?;
     Ok(out)
+}
+
+// ── read-state facts per doc (speed pass P6) ────────────────────────────
+
+/// Write `doc`'s [`DocMeta`] row in `txn` (every body write calls this or
+/// [`put_meta`] in its own transaction).
+fn write_meta(txn: &redb::WriteTransaction, doc: &OverlayDoc) -> Result<(), String> {
+    let mut meta = txn.open_table(DOC_META).map_err(|e| format!("overlay open doc_meta: {e}"))?;
+    put_meta(&mut meta, doc)
+}
+
+fn put_meta(meta: &mut redb::Table<&str, &str>, doc: &OverlayDoc) -> Result<(), String> {
+    meta.insert(doc.id.as_str(), DocMeta::of(doc).encode().as_str())
+        .map_err(|e| format!("overlay insert doc_meta: {e}"))?;
+    Ok(())
+}
+
+/// Store reads a test can count (thread-local, so parallel tests don't
+/// mix). Counting is compiled out of release builds.
+pub mod read_counts {
+    /// What one thread read since its last `take`.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct ReadCounts {
+        /// Whole Thread docs read and JSON-parsed.
+        pub doc_parses: u64,
+        /// `doc_meta` rows read.
+        pub meta_gets: u64,
+        /// Pointer range walks (one per conversation counted).
+        pub pointer_ranges: u64,
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    thread_local! {
+        static COUNTS: std::cell::Cell<ReadCounts> =
+            const { std::cell::Cell::new(ReadCounts { doc_parses: 0, meta_gets: 0, pointer_ranges: 0 }) };
+    }
+
+    #[inline]
+    pub(super) fn note(f: impl FnOnce(&mut ReadCounts)) {
+        #[cfg(any(test, feature = "test-util"))]
+        COUNTS.with(|c| {
+            let mut v = c.get();
+            f(&mut v);
+            c.set(v);
+        });
+        #[cfg(not(any(test, feature = "test-util")))]
+        let _ = f;
+    }
+
+    /// This thread's counts since the last call, then zero them.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn take() -> ReadCounts {
+        COUNTS.with(|c| c.replace(ReadCounts::default()))
+    }
+}
+
+/// The lines of one conversation past a cursor, as read-state facts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadScan {
+    /// More than the cap's worth of lines sit past the cursor (the facts
+    /// are not read: the count is the cap whatever they are).
+    pub over_cap: bool,
+    /// One per line past the cursor, oldest first (empty when `over_cap`).
+    pub lines: Vec<DocMeta>,
+}
+
+/// The facts of `id` from `doc_meta`, or (no row, or a row this build
+/// can't read) from the doc itself. `Ok(None)` when there is no such doc.
+fn meta_or_doc(
+    meta: Option<&redb::ReadOnlyTable<&str, &str>>,
+    txn: &redb::ReadTransaction,
+    id: &str,
+) -> Result<Option<DocMeta>, String> {
+    if let Some(t) = meta {
+        read_counts::note(|c| c.meta_gets += 1);
+        if let Some(g) = t.get(id).map_err(|e| format!("overlay get doc_meta: {e}"))? {
+            if let Some(m) = DocMeta::decode(g.value()) {
+                return Ok(Some(m));
+            }
+        }
+    }
+    Ok(point_get_doc(txn, id)?.map(|d| DocMeta::of(&d)))
+}
+
+/// For each `(conversation, after_seq)`: the Thread lines with
+/// `seq > after_seq` as [`DocMeta`]s, or `over_cap` when more than `cap`
+/// sit there. ONE read transaction for all of them; one pointer range per
+/// conversation (newest first, stopping past `cap`), then a `doc_meta`
+/// point read per line. No doc is parsed unless it has no row yet.
+pub fn thread_unread_scans(convs: &[(&str, i64)], cap: usize) -> Result<Vec<UnreadScan>, String> {
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let thread = match txn.open_table(THREAD) {
+        Ok(t) => Some(t),
+        Err(redb::TableError::TableDoesNotExist(_)) => None,
+        Err(e) => return Err(format!("overlay open thread: {e}")),
+    };
+    let meta = match txn.open_table(DOC_META) {
+        Ok(t) => Some(t),
+        Err(redb::TableError::TableDoesNotExist(_)) => None,
+        Err(e) => return Err(format!("overlay open doc_meta: {e}")),
+    };
+    let mut out = Vec::with_capacity(convs.len());
+    for (conv, after) in convs {
+        let Some(thread) = thread.as_ref() else {
+            out.push(UnreadScan { over_cap: false, lines: Vec::new() });
+            continue;
+        };
+        read_counts::note(|c| c.pointer_ranges += 1);
+        let start = conv_key(conv, after.saturating_add(1));
+        let end = conv_end(conv);
+        let mut pointers = Vec::new();
+        let mut over_cap = false;
+        for entry in thread.range(start.as_str()..end.as_str()).map_err(|e| format!("overlay thread range: {e}"))?.rev() {
+            if pointers.len() >= cap {
+                over_cap = true;
+                break;
+            }
+            let (k, v) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+            pointers.push(parse_conv_pointer("thread", k.value(), v.value())?);
+        }
+        if over_cap {
+            out.push(UnreadScan { over_cap, lines: Vec::new() });
+            continue;
+        }
+        pointers.reverse();
+        let mut lines = Vec::with_capacity(pointers.len());
+        for (seq, id) in pointers {
+            let m = meta_or_doc(meta.as_ref(), &txn, &id)?
+                .ok_or_else(|| format!("overlay thread seq {seq} points at missing docs/{id}"))?;
+            lines.push(m);
+        }
+        out.push(UnreadScan { over_cap, lines });
+    }
+    Ok(out)
+}
+
+/// Every indexed pending card of one conversation (or `None`, all) with
+/// its facts, as `(conversation, card id, facts)`, in one read
+/// transaction. A card whose doc is gone is left out.
+pub fn pending_card_metas(conversation_id: Option<&str>) -> Result<Vec<(String, String, DocMeta)>, String> {
+    ensure_pending_index()?;
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let keys = match txn.open_table(PENDING_CARDS) {
+        Ok(t) => pending_keys(&t, conversation_id)?,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(format!("overlay open pending_cards: {e}")),
+    };
+    let meta = match txn.open_table(DOC_META) {
+        Ok(t) => Some(t),
+        Err(redb::TableError::TableDoesNotExist(_)) => None,
+        Err(e) => return Err(format!("overlay open doc_meta: {e}")),
+    };
+    let mut out = Vec::with_capacity(keys.len());
+    for (conv, card) in keys {
+        if let Some(m) = meta_or_doc(meta.as_ref(), &txn, &card)? {
+            out.push((conv, card, m));
+        }
+    }
+    Ok(out)
+}
+
+/// One step of the `doc_meta` backfill for docs written before it
+/// existed: up to `limit` docs after the saved resume point, in one write
+/// transaction (a concurrent body write lands before or after it, and a
+/// row already there is never replaced: it is at least as new). A doc
+/// that does not parse gets no row (a reader parses it and fails as
+/// before). `Ok(true)` once every doc has been walked; later calls return
+/// at once.
+pub fn backfill_doc_meta_step(limit: usize) -> Result<bool, String> {
+    let db = db()?;
+    {
+        let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+        match txn.open_table(META) {
+            Ok(t) => {
+                if t.get(META_DOC_META_V1).map_err(|e| format!("overlay get meta: {e}"))?.is_some() {
+                    return Ok(true);
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(format!("overlay open meta: {e}")),
+        }
+    }
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    let done = {
+        let mut state = txn.open_table(META).map_err(|e| format!("overlay open meta: {e}"))?;
+        if state.get(META_DOC_META_V1).map_err(|e| format!("overlay get meta: {e}"))?.is_some() {
+            true
+        } else {
+            let after = state
+                .get(META_DOC_META_AT)
+                .map_err(|e| format!("overlay get meta: {e}"))?
+                .map(|g| g.value().to_string());
+            let docs = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
+            let mut meta = txn.open_table(DOC_META).map_err(|e| format!("overlay open doc_meta: {e}"))?;
+            let lower: std::ops::Bound<&str> = match after.as_deref() {
+                Some(a) => std::ops::Bound::Excluded(a),
+                None => std::ops::Bound::Unbounded,
+            };
+            let mut last: Option<String> = None;
+            let mut walked = 0usize;
+            let mut rows: Vec<(String, String)> = Vec::new();
+            let mut exhausted = true;
+            for entry in docs
+                .range::<&str>((lower, std::ops::Bound::Unbounded))
+                .map_err(|e| format!("overlay docs range: {e}"))?
+            {
+                if walked >= limit {
+                    exhausted = false;
+                    break;
+                }
+                let (k, v) = entry.map_err(|e| format!("overlay docs iter: {e}"))?;
+                walked += 1;
+                let id = k.value().to_string();
+                if meta.get(id.as_str()).map_err(|e| format!("overlay get doc_meta: {e}"))?.is_none() {
+                    if let Ok(doc) = serde_json::from_slice::<OverlayDoc>(v.value()) {
+                        rows.push((id.clone(), DocMeta::of(&doc).encode()));
+                    }
+                }
+                last = Some(id);
+            }
+            for (id, row) in &rows {
+                meta.insert(id.as_str(), row.as_str()).map_err(|e| format!("overlay insert doc_meta: {e}"))?;
+            }
+            if exhausted {
+                state.insert(META_DOC_META_V1, "1").map_err(|e| format!("overlay insert meta: {e}"))?;
+                state.remove(META_DOC_META_AT).map_err(|e| format!("overlay remove meta: {e}"))?;
+            } else if let Some(l) = &last {
+                state.insert(META_DOC_META_AT, l.as_str()).map_err(|e| format!("overlay insert meta: {e}"))?;
+            }
+            exhausted
+        }
+    };
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))?;
+    Ok(done)
+}
+
+/// Test only: start the `doc_meta` backfill over (as on a store from
+/// before it), and write Thread lines the way a build without `doc_meta`
+/// did (bodies + pointers, no rows).
+#[cfg(any(test, feature = "test-util"))]
+pub mod doc_meta_test {
+    use super::*;
+
+    pub fn restart_backfill() -> Result<(), String> {
+        let db = db()?;
+        let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+        {
+            let mut state = txn.open_table(META).map_err(|e| format!("overlay open meta: {e}"))?;
+            state.remove(META_DOC_META_V1).map_err(|e| format!("overlay remove meta: {e}"))?;
+            state.remove(META_DOC_META_AT).map_err(|e| format!("overlay remove meta: {e}"))?;
+        }
+        txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+    }
+
+    /// Append `docs` to `conversation_id`'s Thread at `first_seq..` in ONE
+    /// transaction; `with_meta` false = as an older build wrote them.
+    pub fn write_lines(conversation_id: &str, first_seq: i64, docs: &[OverlayDoc], with_meta: bool) -> Result<(), String> {
+        let db = db()?;
+        let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+        {
+            let mut bodies = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
+            let mut thread = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+            let mut meta = txn.open_table(DOC_META).map_err(|e| format!("overlay open doc_meta: {e}"))?;
+            let mut pending = txn.open_table(PENDING_CARDS).map_err(|e| format!("overlay open pending_cards: {e}"))?;
+            for (i, doc) in docs.iter().enumerate() {
+                let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
+                bodies.insert(doc.id.as_str(), json.as_slice()).map_err(|e| format!("overlay insert docs: {e}"))?;
+                thread
+                    .insert(conv_key(conversation_id, first_seq + i as i64).as_str(), doc.id.as_str())
+                    .map_err(|e| format!("overlay insert thread: {e}"))?;
+                if is_waiting_card(doc) {
+                    pending
+                        .insert(pending_key(conversation_id, &doc.id).as_str(), "")
+                        .map_err(|e| format!("overlay insert pending_cards: {e}"))?;
+                }
+                if with_meta {
+                    put_meta(&mut meta, doc)?;
+                }
+            }
+        }
+        txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+    }
+
+    /// Drop `doc_meta` rows (as if written by an older build).
+    pub fn forget(ids: &[&str]) -> Result<(), String> {
+        let db = db()?;
+        let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+        {
+            let mut meta = txn.open_table(DOC_META).map_err(|e| format!("overlay open doc_meta: {e}"))?;
+            for id in ids {
+                meta.remove(*id).map_err(|e| format!("overlay remove doc_meta: {e}"))?;
+            }
+        }
+        txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+    }
+
+    /// The stored row of `id`, decoded (`None` = no row).
+    pub fn row(id: &str) -> Result<Option<DocMeta>, String> {
+        let db = db()?;
+        let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+        let t = match txn.open_table(DOC_META) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(format!("overlay open doc_meta: {e}")),
+        };
+        let out = t.get(id).map_err(|e| format!("overlay get doc_meta: {e}"))?.map(|g| g.value().to_string());
+        match out {
+            Some(s) => DocMeta::decode(&s).map(Some).ok_or_else(|| format!("doc_meta {id}: unreadable row {s:?}")),
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]

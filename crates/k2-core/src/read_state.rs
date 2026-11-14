@@ -55,6 +55,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::notify_prefs::{People, OWNER};
+use crate::overlay::doc_meta::DocMeta;
 use crate::overlay::{self, OverlayDoc, SeqRemap};
 
 /// `kind` of a Thread conversation (`id` = its conversationId).
@@ -143,12 +144,23 @@ impl Person {
     /// True when this person wrote this Thread doc (the credential stamp
     /// `author`, never `from`).
     pub fn wrote_thread_doc(&self, doc: &OverlayDoc) -> bool {
+        self.wrote_stamp(doc.author.as_ref().map(|a| (a.kind.as_str(), a.login.as_str())))
+    }
+
+    /// [`Person::wrote_thread_doc`] from a line's stored facts.
+    fn wrote_line(&self, line: &DocMeta) -> bool {
+        self.wrote_stamp(line.author.as_ref().map(|(k, l)| (k.as_str(), l.as_str())))
+    }
+
+    /// The credential stamp `(kind, login)` is this person's.
+    fn wrote_stamp(&self, author: Option<(&str, &str)>) -> bool {
+        let Some((kind, login)) = author else { return false };
         if let Some(g) = &self.guest {
-            return doc.author.as_ref().is_some_and(|a| a.kind == overlay::doc::AUTHOR_GUEST && a.login == *g);
+            return kind == overlay::doc::AUTHOR_GUEST && login == g;
         }
-        match &doc.author {
-            Some(a) if a.kind == overlay::doc::AUTHOR_OWNER => self.key == OWNER,
-            Some(a) if a.kind == overlay::doc::AUTHOR_USER => self.is_login(&a.login),
+        match kind {
+            k if k == overlay::doc::AUTHOR_OWNER => self.key == OWNER,
+            k if k == overlay::doc::AUTHOR_USER => self.is_login(login),
             _ => false,
         }
     }
@@ -466,49 +478,26 @@ pub fn is_muted(conn: &Connection, person: &str, kind: &str, id: &str, now: i64)
     Ok(cursor(conn, person, kind, id)?.muted_at(now))
 }
 
-/// Does this Thread doc count as unread for `person` (when past the
+/// Does this Thread line count as unread for `person` (when past the
 /// cursor)? Someone else's post, not history, not a card waiting on them,
-/// and never an action card for an App guest (it can't see one).
-fn thread_doc_counts(person: &Person, doc: &OverlayDoc, now: i64) -> bool {
-    if person.guest.is_some() && doc.is_action_card() {
+/// and never an action card for an App guest (it can't see one). Reads
+/// the line's stored facts ([`DocMeta`], speed pass P6), never its doc.
+fn line_counts(person: &Person, line: &DocMeta, now: i64) -> bool {
+    if person.guest.is_some() && line.action_card {
         return false;
     }
-    !person.wrote_thread_doc(doc)
-        && doc.imported.is_none()
-        && doc.external.is_none()
-        && doc.via.as_deref() != Some("import")
-        && !(overlay::is_waiting_now(doc, now) && card_waits_for(person, doc))
-}
-
-/// A permission card's floor (`choice.action.view.approvers.floor`), or
-/// `None` for any other doc. A permission card without a readable floor
-/// waits for the owner only (the strictest floor).
-fn permission_floor(doc: &OverlayDoc) -> Option<&str> {
-    let action = doc.choice.as_ref()?.action.as_ref()?;
-    if action.id != crate::permission::CARD_ACTION_PERMISSION && action.id != crate::permission::CARD_ACTION_BATCH {
-        return None;
-    }
-    let floor = action
-        .view
-        .as_ref()
-        .and_then(|v| v.get("approvers"))
-        .and_then(|a| a.get("floor"))
-        .and_then(serde_json::Value::as_str);
-    Some(match floor {
-        Some("admin") => "admin",
-        _ => "owner",
-    })
+    !person.wrote_line(line) && !line.history && !(line.is_waiting_now(now) && card_waits_for(person, line))
 }
 
 /// Whether a waiting card is waiting on `person` (§4.6): never an action
 /// card for an App guest; a permission card only for people at its floor
 /// (the owner person, or a Connect login whose role meets it); every other
 /// card for everyone, as before.
-fn card_waits_for(person: &Person, doc: &OverlayDoc) -> bool {
+fn card_waits_for(person: &Person, card: &DocMeta) -> bool {
     if person.guest.is_some() {
-        return !doc.is_action_card();
+        return !card.action_card;
     }
-    let Some(floor) = permission_floor(doc) else { return true };
+    let Some(floor) = card.permission_floor.as_deref() else { return true };
     if person.key == OWNER {
         return true;
     }
@@ -520,27 +509,40 @@ fn card_waits_for(person: &Person, doc: &OverlayDoc) -> bool {
 }
 
 /// The waiting cards in one conversation (or every one) that wait on
-/// `person`, as `(conversation, card id)`.
+/// `person`, as `(conversation, card id)`: the pending-card index plus
+/// each card's stored facts (no doc parse).
 fn waiting_for(person: &Person, conversation_id: Option<&str>, now: i64) -> Result<Vec<(String, String)>, ReadError> {
-    let mut out = Vec::new();
-    for (conv, card) in overlay::waiting_cards(conversation_id, now)? {
-        match overlay::get_doc(&card)? {
-            Some(doc) if !card_waits_for(person, &doc) => {}
-            _ => out.push((conv, card)),
+    Ok(overlay::store::pending_card_metas(conversation_id)?
+        .into_iter()
+        .filter(|(_, _, card)| card.is_waiting_now(now) && card_waits_for(person, card))
+        .map(|(conv, card, _)| (conv, card))
+        .collect())
+}
+
+/// Unread lines for `person` in each `(conversation, cursor, head)`, in
+/// order: one store read for all of them, and only conversations whose
+/// head is past the cursor are read at all.
+fn thread_unreads(person: &Person, convs: &[(&str, i64, i64)], now: i64) -> Result<Vec<i64>, ReadError> {
+    let ahead: Vec<(&str, i64)> = convs.iter().filter(|(_, after, head)| head > after).map(|(c, after, _)| (*c, *after)).collect();
+    let mut scans = overlay::store::thread_unread_scans(&ahead, UNREAD_CAP as usize)?.into_iter();
+    let mut out = Vec::with_capacity(convs.len());
+    for (_, after, head) in convs {
+        if head <= after {
+            out.push(0);
+            continue;
         }
+        let scan = scans.next().ok_or_else(|| ReadError::Store("unread scan: a conversation came back short".into()))?;
+        out.push(if scan.over_cap {
+            UNREAD_CAP
+        } else {
+            scan.lines.iter().filter(|l| line_counts(person, l, now)).count() as i64
+        });
     }
     Ok(out)
 }
 
 fn thread_unread(person: &Person, conv: &str, after: i64, head: i64, now: i64) -> Result<i64, ReadError> {
-    if head <= after {
-        return Ok(0);
-    }
-    let page = overlay::read_thread_page(conv, Some(after), None, UNREAD_CAP as usize)?;
-    if page.has_more {
-        return Ok(UNREAD_CAP);
-    }
-    Ok(page.items.iter().filter(|i| thread_doc_counts(person, &i.doc, now)).count() as i64)
+    Ok(thread_unreads(person, &[(conv, after, head)], now)?[0])
 }
 
 fn project_unread(conn: &Connection, person: &Person, group: &str, after: i64, head: i64) -> Result<i64, ReadError> {
@@ -643,26 +645,33 @@ pub fn summary(conn: &Connection, person: &Person, now: i64) -> Result<Summary, 
         .map_err(store_err)?
         .collect::<Result<_, _>>()
         .map_err(store_err)?;
-    for (conv, project_id, head, cur) in rows {
-        let w = waiting.get(&conv).copied().unwrap_or(0);
+    // Only conversations with something past the cursor are read, all
+    // in one store read: a pointer range each, then each line's stored
+    // facts. No doc is parsed (speed pass P6).
+    let ahead: Vec<(&str, i64, i64)> = rows
+        .iter()
+        .filter(|(_, _, head, cur)| *head > cur.last_read_seq)
+        .map(|(conv, _, head, cur)| (conv.as_str(), cur.last_read_seq, *head))
+        .collect();
+    let unreads = thread_unreads(person, &ahead, now)?;
+    let unread_of: HashMap<&str, i64> = ahead.iter().map(|(c, _, _)| *c).zip(unreads).collect();
+    for (conv, project_id, head, cur) in &rows {
+        let w = waiting.get(conv).copied().unwrap_or(0);
         let muted = cur.muted_at(now);
-        if head <= cur.last_read_seq && w == 0 && !muted {
-            continue;
-        }
-        let unread = thread_unread(person, &conv, cur.last_read_seq, head, now)?;
+        let unread = unread_of.get(conv.as_str()).copied().unwrap_or(0);
         if unread == 0 && w == 0 && !muted {
             continue;
         }
         let item = ReadItem {
             kind: KIND_THREAD.to_string(),
-            id: conv,
-            project_id: Some(project_id),
+            id: conv.clone(),
+            project_id: Some(project_id.clone()),
             unread,
             waiting: w,
             muted,
             muted_until: if muted { cur.muted_until } else { None },
             last_read_seq: cur.last_read_seq,
-            last_seq: head,
+            last_seq: *head,
         };
         out.totals.add(&item);
         out.items.push(item);
@@ -1636,3 +1645,7 @@ mod tests {
         assert_eq!(sums(&owner()).get(&project).map(|s| s.unread), Some(1));
     }
 }
+
+#[cfg(test)]
+#[path = "read_state_index_tests.rs"]
+mod index_tests;

@@ -48,7 +48,7 @@ beforeEach(() => {
         chat: 'live',
         convs: [
           { conv: '500', kind: 'dm', unread: true, badge: { kind: 'count', n: 4 }, with: 'k2:connect:a' },
-          { conv: '600', kind: 'channel', unread: true, badge: { kind: 'dot' } },
+          { conv: '600', kind: 'channel', unread: true, badge: { kind: 'dot' }, inviteOnly: true },
         ],
       }
     if (route === 'home-chat/people')
@@ -72,6 +72,17 @@ describe('Home chat rows', () => {
     await waitFor(() => expect(document.querySelector('[data-home-chat-badge="count"] [data-unread-count]')?.getAttribute('data-unread-count')).toBe('4'))
     expect(document.querySelector('[data-home-chat-badge="dot"]')).not.toBeNull()
     await screen.findByText('Alex Ng')
+  })
+
+  it('a channel row carries whether it is invite-only, as data for its glyph', async () => {
+    render(
+      <>
+        <HomeChatHomeRow home={HOME} row={HOME.rows[0]} />
+        <HomeChatHomeRow home={HOME} row={HOME.rows[1]} />
+      </>,
+    )
+    await waitFor(() => expect(document.querySelector('[data-home-chat-row="channel"]')?.getAttribute('data-invite-only')).toBe('true'))
+    expect(document.querySelector('[data-home-chat-row="person"]')?.hasAttribute('data-invite-only')).toBe(false)
   })
 
   it('clicking opens the chat in the main area', async () => {

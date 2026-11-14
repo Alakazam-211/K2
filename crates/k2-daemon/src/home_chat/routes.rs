@@ -230,6 +230,7 @@ fn channels(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
         let row = skin(|conn| ledger::channel_by_id(conn, &id))?;
         out.push(json!({
             "conv": id, "name": ch["name"], "open": ch["visibility"] == "public",
+            "inviteOnly": row.as_ref().map(|r| !r.open).or_else(|| super::state::invite_only_of(&ch["visibility"])),
             "archived": ch["archived"].as_bool().unwrap_or(false) || row.as_ref().is_some_and(|r| r.state == ledger::CH_ARCHIVED),
             "home": row.is_some(), "allowAgents": row.as_ref().is_some_and(|r| r.allow_agents),
         }));
@@ -248,6 +249,13 @@ fn summary(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
         let conv = r["conv"].as_str().unwrap_or_default().to_string();
         if let Some(other) = skin(|conn| ledger::dm_other(conn, &c.ext, &conv))? {
             r["with"] = json!(other);
+        }
+    }
+    // A Home channel's kind is K2's ledger's (made here): invite-only or open.
+    for r in rows.iter_mut().filter(|r| r["kind"] == "channel") {
+        let conv = r["conv"].as_str().unwrap_or_default().to_string();
+        if let Some(ch) = skin(|conn| ledger::channel_by_id(conn, &conv))? {
+            r["inviteOnly"] = json!(!ch.open);
         }
     }
     let chat = match h.status() {
@@ -328,6 +336,7 @@ fn members(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
     let list = skin(|conn| ledger::members_of(conn, &ch.slug))?;
     Ok(json!({
         "ok": true, "conv": ch.channel_id, "slug": ch.slug, "state": ch.state, "name": ch.desired_name(), "open": ch.open,
+        "inviteOnly": !ch.open,
         "creator": ch.creator_ext, "allowAgents": ch.allow_agents,
         "people": list.iter().filter(|m| m.state != ledger::M_PENDING_REMOVE).map(|m| json!({"ext": m.external_id, "state": m.state})).collect::<Vec<_>>(),
         // Agent grants are a later slice (S8): none yet.

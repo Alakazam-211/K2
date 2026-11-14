@@ -24,6 +24,7 @@ import { matchesElsewhere } from '@/lib/home-chat/people'
 import type { HomeChatPerson } from '@/lib/home-chat/api'
 import {
   homeChatRowBadge,
+  homeChatRowInviteOnly,
   refreshHomeChatPeople,
   useHomeChatHost,
   useHomeChatStore,
@@ -121,6 +122,8 @@ export function HomeChatHomeRow({ home, row }: { home: Home; row: HomeRow; index
   const name = person?.displayName ?? row.label
   const also = person ? matchesElsewhere(person, hostKey, peopleByHost) : []
   const badge = homeChatRowBadge(host, target)
+  // Data for K2 Design's glyph (# open, a lock invite-only).
+  const inviteOnly = homeChatRowInviteOnly(host, target)
   const unreachable = !!host?.statusError
   const noChat = host?.status !== null && host?.status !== undefined && !host.status.on
   const greyed = unreachable || noChat || host?.summary?.chat === 'unavailable'
@@ -138,7 +141,12 @@ export function HomeChatHomeRow({ home, row }: { home: Home; row: HomeRow; index
         : `Open #${name} on ${place}`
 
   return (
-    <div className="no-drag" data-home-chat-row={target.kind} data-testid="home-chat-row">
+    <div
+      className="no-drag"
+      data-home-chat-row={target.kind}
+      data-invite-only={inviteOnly === null ? undefined : String(inviteOnly)}
+      data-testid="home-chat-row"
+    >
       <AgentRowButton
         isActive={isActive}
         color={MUTED}

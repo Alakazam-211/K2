@@ -21,6 +21,19 @@ pub struct Conv {
     pub last_message_id: Option<String>,
     /// When the last message was posted (Sew's RFC 3339 text).
     pub last_at: Option<String>,
+    /// A channel is invite-only (Sew `private`) or open (`public`); `None`
+    /// for a DM, or while Sew hasn't said.
+    pub invite_only: Option<bool>,
+}
+
+/// Sew's channel `visibility` as invite-only: `private` yes, `public` no,
+/// anything else unknown.
+pub fn invite_only_of(visibility: &Value) -> Option<bool> {
+    match visibility.as_str() {
+        Some("private") => Some(true),
+        Some("public") => Some(false),
+        _ => None,
+    }
 }
 
 /// The person's whole followed state.
@@ -82,6 +95,9 @@ impl PersonState {
             let c = self.convs.entry(id.clone()).or_insert_with(|| Conv { channel_id: id, ..Default::default() });
             c.dm = is_dm_kind(kind);
             c.space_id = id_of(&ch["space_id"]);
+            if !c.dm {
+                c.invite_only = invite_only_of(&ch["visibility"]).or(c.invite_only);
+            }
             if let Some(m) = id_of(&ch["last_message_id"]) {
                 c.last_message_id = Some(m);
             }
@@ -204,6 +220,9 @@ impl PersonState {
             "badge": badge,
             "lastAt": c.last_at,
             "lastMessageId": c.last_message_id,
+            // Data for the row's glyph (# open, a lock invite-only); the
+            // routes fill it from K2's ledger when Sew hasn't said.
+            "inviteOnly": if c.dm { None } else { c.invite_only },
         })
     }
 

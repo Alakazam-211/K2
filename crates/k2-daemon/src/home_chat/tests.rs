@@ -229,6 +229,25 @@ fn summary_badges_follow_the_rule() {
     assert!(!st.convs.contains_key("901"));
 }
 
+/// Each channel in the summary says whether it is invite-only (data for the
+/// row's glyph); a DM says nothing, nor does a channel Sew didn't describe.
+#[test]
+fn summary_says_which_channels_are_invite_only() {
+    let mut ready = ready_body();
+    ready["channels"][1]["visibility"] = json!("private");
+    ready["channels"].as_array_mut().expect("channels").push(json!({"id": "902", "space_id": "7001", "kind": "text", "visibility": "public"}));
+    let mut st = PersonState::default();
+    st.apply_ready(&ready);
+    let row = |st: &PersonState, conv: &str| st.summary(&[conv.to_string()], false)[0].clone();
+    assert_eq!(row(&st, "901")["inviteOnly"], json!(true));
+    assert_eq!(row(&st, "902")["inviteOnly"], json!(false));
+    assert_eq!(row(&st, "900")["inviteOnly"], Value::Null, "a DM");
+    st.apply_event("message_created", &json!({"message": {"id": "8", "channel_id": "903", "space_id": "7001", "author_id": "42"}}), false);
+    assert_eq!(row(&st, "903")["inviteOnly"], Value::Null, "not described yet");
+    assert_eq!(super::state::invite_only_of(&json!("private")), Some(true));
+    assert_eq!(super::state::invite_only_of(&json!("restricted")), None);
+}
+
 /// Typing frames reach clients only for conversations they have open, and
 /// never the person's own.
 #[test]

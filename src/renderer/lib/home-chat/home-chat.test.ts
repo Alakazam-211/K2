@@ -81,10 +81,11 @@ describe('Sew answers', () => {
       chat: 'live',
       convs: [
         { conv: '5', kind: 'dm', unread: true, badge: { kind: 'count', n: 3 }, with: 'k2:connect:a' },
-        { conv: '6', kind: 'channel', unread: true, badge: { kind: 'dot' } },
-        { conv: '7', kind: 'channel', unread: false, badge: { kind: 'none' } },
+        { conv: '6', kind: 'channel', unread: true, badge: { kind: 'dot' }, inviteOnly: true },
+        { conv: '7', kind: 'channel', unread: false, badge: { kind: 'none' }, inviteOnly: false },
       ],
     })
+    expect(s.convs.map((c) => c.inviteOnly)).toEqual([null, true, false])
     expect(s.convs.map((c) => [c.conv, c.badge, c.with])).toEqual([
       ['5', { kind: 'count', n: 3 }, 'k2:connect:a'],
       ['6', { kind: 'dot' }, null],

@@ -350,6 +350,14 @@ export function homeChatRowBadge(host: HomeChatHostState | undefined, target: Ho
   return host.summary.convs.find((c) => c.conv === conv)?.badge ?? { kind: 'none' }
 }
 
+/** Is a channel row's channel invite-only? From its server's summary (data
+ *  for the row's glyph; K2 Design draws it). Null: a person row, or not
+ *  known yet. */
+export function homeChatRowInviteOnly(host: HomeChatHostState | undefined, target: HomeChatTarget): boolean | null {
+  if (target.kind !== 'channel') return null
+  return host?.summary?.convs.find((c) => c.conv === target.conv)?.inviteOnly ?? null
+}
+
 /** Names of who is typing in a conversation now, by member id. */
 export function typingMembers(typing: Record<string, Record<string, number>>, hostKey: string, conv: string, now: number): string[] {
   const who = typing[`${hostKey}|${conv}`] ?? {}

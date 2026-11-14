@@ -55,6 +55,9 @@ export interface HomeChatSummaryRow {
   lastMessageId: string | null
   /** A DM's other person (their external id), when K2 kept the DM. */
   with: string | null
+  /** A channel is invite-only (true) or open (false); null for a DM, or
+   *  while the server hasn't said. Data for the row's glyph. */
+  inviteOnly: boolean | null
 }
 
 export interface HomeChatSummary {
@@ -97,6 +100,8 @@ export interface HomeChatChannel {
   conv: string
   name: string
   open: boolean
+  /** Invite-only (the inverse of `open`, as the server says it). */
+  inviteOnly: boolean
   archived: boolean
   /** Made from Home (K2's ledger knows it). */
   home: boolean
@@ -206,6 +211,7 @@ export function parseHomeChatSummary(v: unknown): HomeChatSummary {
       lastAt: typeof row.lastAt === 'string' ? row.lastAt : null,
       lastMessageId: idOf(row.lastMessageId),
       with: typeof row.with === 'string' ? row.with : null,
+      inviteOnly: typeof row.inviteOnly === 'boolean' ? row.inviteOnly : null,
     })
   }
   return { chat: typeof o.chat === 'string' ? o.chat : 'unavailable', convs }
@@ -262,6 +268,7 @@ export async function fetchHomeChatChannels(scope: ServerScope, q?: string): Pro
       conv,
       name: str(r.name) || conv,
       open: r.open === true,
+      inviteOnly: typeof r.inviteOnly === 'boolean' ? r.inviteOnly : r.open !== true,
       archived: r.archived === true,
       home: r.home === true,
       allowAgents: r.allowAgents === true,

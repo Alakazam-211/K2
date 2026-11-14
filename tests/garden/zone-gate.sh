@@ -98,11 +98,62 @@ printf '# c\n1 crates/a/src/old.rs\n2 crates/a/src/old.rs\n' > "$T/c.txt"
 run 1 "line 3: crates/a/src/old.rs is listed twice"
 run 1 "unknown argument: --nope" --nope
 
+# ── the renderer area ───────────────────────────────────────────────────
+mkdir -p "$T/src/renderer/lib" "$T/src/renderer/components" "$T/src/renderer/__tests__"
+printf 'export const ZONE = "k2.dev"\n' > "$T/src/renderer/lib/hosts.ts"
+cat > "$T/src/renderer/components/A.tsx" <<'TS'
+// k2.dev in a comment is not counted
+/** nor in a doc comment: acme.k2.dev */
+const url = `https://${sub}.k2.dev`
+export function A() {
+  return (
+    <p>
+      {/* k2.dev in a JSX comment is not counted */}
+      Your k2.dev account
+    </p>
+  )
+}
+TS
+printf 'it("x", () => expect(h).toBe("a.k2.dev"))\n' > "$T/src/renderer/components/A.test.tsx"
+printf 'export const FAR = "far@other.k2.dev"\n' > "$T/src/renderer/components/a-fixture.ts"
+printf 'const h = "a.k2.dev"\n' > "$T/src/renderer/__tests__/b.ts"
+printf '# c\n\n2 src/renderer/components/A.tsx\n' > "$T/r.txt"
+rrun() {
+    local want="$1" text="$2" out code; shift 2
+    set +e; out="$(python3 "$GATE" --area renderer --root "$T" --ceilings "$T/r.txt" "$@" 2>&1)"; code=$?; set -e
+    if [ "$code" != "$want" ]; then echo "FAIL: renderer exit $code, wanted $want: $out" >&2; exit 1; fi
+    case "$out" in *"$text"*) ;; *) echo "FAIL: renderer output lacks '$text': $out" >&2; exit 1 ;; esac
+    pass=$((pass + 1))
+}
+# Code and copy are counted; comments, test files, fixtures, test folders
+# and the renderer's hosts module are not. The Rust tree is not looked at.
+rrun 0 "zone-gate: ok (2 lines in 1 files still spell out k2.dev)."
+rrun 0 'src/renderer/components/A.tsx:3: const url' --list
+rrun 0 'src/renderer/components/A.tsx:8: Your k2.dev account' --list
+out="$(python3 "$GATE" --area renderer --root "$T" --ceilings "$T/r.txt" --list)"
+case "$out" in *A.tsx:1:*|*A.tsx:2:*|*A.tsx:7:*|*A.test.tsx*|*a-fixture*|*__tests__*|*lib/hosts.ts*|*crates/*) echo "FAIL: the renderer list has a line it should not: $out" >&2; exit 1 ;; esac
+pass=$((pass + 1))
+# A new line in an unlisted renderer file fails and names the module to use.
+printf 'export const h = `${x}.k2.dev`\n' > "$T/src/renderer/components/B.ts"
+rrun 1 "src/renderer/components/B.ts:1 spells out k2.dev and the file is not listed: use @/lib/hosts."
+rm "$T/src/renderer/components/B.ts"
+# One more line in a listed file fails with both counts.
+printf 'const more = "relay.k2.dev"\n' >> "$T/src/renderer/components/A.tsx"
+rrun 1 "src/renderer/components/A.tsx has 3 lines with k2.dev, its ceiling is 2: use @/lib/hosts for the new one."
+# An unknown area is refused.
+set +e; out="$(python3 "$GATE" --area nope 2>&1)"; code=$?; set -e
+[ "$code" = 1 ] && case "$out" in *"unknown argument: --area"*) pass=$((pass + 1)) ;; *) echo "FAIL: --area nope: $out" >&2; exit 1 ;; esac
+
 # The real tree passes, and the hosts module really holds the zone.
 out="$(python3 "$GATE")" || { echo "FAIL: the real tree: $out" >&2; exit 1; }
 case "$out" in *"zone-gate: ok ("*) ;; *) echo "FAIL: the real tree: $out" >&2; exit 1 ;; esac
 pass=$((pass + 1))
 grep -q '^pub const ZONE: &str = "k2.dev";$' "$HERE/crates/k2-client/src/hosts.rs" || { echo "FAIL: crates/k2-client/src/hosts.rs has no ZONE" >&2; exit 1; }
+pass=$((pass + 1))
+out="$(python3 "$GATE" --area renderer)" || { echo "FAIL: the real renderer tree: $out" >&2; exit 1; }
+case "$out" in *"zone-gate: ok ("*) ;; *) echo "FAIL: the real renderer tree: $out" >&2; exit 1 ;; esac
+pass=$((pass + 1))
+grep -q "^export const ZONE = 'k2.dev'$" "$HERE/src/renderer/lib/hosts.ts" || { echo "FAIL: src/renderer/lib/hosts.ts has no ZONE" >&2; exit 1; }
 pass=$((pass + 1))
 
 echo "zone-gate tests: $pass passed"

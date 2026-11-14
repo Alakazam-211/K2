@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""The zone gate: no new hard-coded `k2.dev` in Rust code.
+"""The zone gate: no new hard-coded `k2.dev` in Rust or renderer code.
 
     python3 scripts/garden/zone-gate.py             check; exit 1 on a failure
     python3 scripts/garden/zone-gate.py --tighten   lower each ceiling to today's
                                                     count and drop rows at zero
     python3 scripts/garden/zone-gate.py --list      print every counted line
+    ... --area renderer                             the same for src/ (TypeScript);
+                                                    the default area is rust
 
 The zone lives in crates/k2-client/src/hosts.rs (`k2_core::hosts`). Code
 that builds a box's name or asks whether a host is ours calls that module.
@@ -24,50 +26,80 @@ named *_tests.rs, *_test.rs, tests.rs or test_*.rs), and everything from a
 file's first `#[cfg(test)] mod` on. Tests keep the literal on purpose: they
 pin what the zone is.
 
+The renderer area (--area renderer) is the same idea for src/: .ts and
+.tsx lines with `k2.dev` outside a comment, test files (*.test.ts, *.test.tsx,
+*.wktest.ts, fixtures) left out, the module being src/renderer/lib/hosts.ts and
+the ceilings scripts/garden/zone-ceilings-renderer.txt. Much of what is left
+there is copy shown to people ("your k2.dev account"): it stays listed until
+the copy itself is decided.
+
 For tests: --root DIR and --ceilings FILE point it at another tree.
 """
 import os
 import re
 import sys
 
-HOSTS_MODULE = "crates/k2-client/src/hosts.rs"
-AREAS = ("crates", "src-tauri/src")
-SKIP_DIRS = {"target", "node_modules", ".git", "binaries", "tests", "benches", "fuzz", "fixtures"}
-TEST_FILE = re.compile(r"(^tests\.rs$|_tests?\.rs$|^test_.*\.rs$)")
+SKIP_DIRS = {"target", "node_modules", ".git", "binaries", "tests", "benches", "fuzz", "fixtures", "__tests__", "dist"}
 TEST_MOD = re.compile(r"\s*(pub(\([a-z]+\))? )?mod \w+")
 COMMENT_TAIL = re.compile(r"\s//.*$")
 
+# Per area: where to look, which files, which are tests, the module that may
+# spell the zone out, the ceilings file, and what the failure tells you to use.
+AREA_RULES = {
+    "rust": {
+        "dirs": ("crates", "src-tauri/src"),
+        "ext": (".rs",),
+        "test_file": re.compile(r"(^tests\.rs$|_tests?\.rs$|^test_.*\.rs$)"),
+        "module": "crates/k2-client/src/hosts.rs",
+        "ceilings": "zone-ceilings.txt",
+        "use": "k2_core::hosts",
+        "comment": ("//",),
+        "cut_at_test_mod": True,
+    },
+    "renderer": {
+        "dirs": ("src",),
+        "ext": (".ts", ".tsx"),
+        "test_file": re.compile(r"(\.test\.tsx?$|\.wktest\.ts$|\.spec\.tsx?$|-fixture\.ts$|\.d\.ts$|\.generated\.ts$)"),
+        "module": "src/renderer/lib/hosts.ts",
+        "ceilings": "zone-ceilings-renderer.txt",
+        "use": "@/lib/hosts",
+        "comment": ("//", "*", "/*", "{/*"),
+        "cut_at_test_mod": False,
+    },
+}
 
-def counted_lines(path):
+
+def counted_lines(path, rules):
     """(line number, text) for each counted line of one file."""
     with open(path, encoding="utf-8", errors="replace") as f:
         lines = f.read().split("\n")
     out = []
     for i, line in enumerate(lines):
         s = line.strip()
-        if s.startswith("#[cfg(test)]") and i + 1 < len(lines) and TEST_MOD.match(lines[i + 1]):
+        if rules["cut_at_test_mod"] and s.startswith("#[cfg(test)]") and i + 1 < len(lines) and TEST_MOD.match(lines[i + 1]):
             break
-        if "k2.dev" not in line or s.startswith("//"):
+        if "k2.dev" not in line or s.startswith(rules["comment"]):
             continue
         if "k2.dev" in COMMENT_TAIL.sub("", line):
             out.append((i + 1, s))
     return out
 
 
-def scan(root):
+def scan(root, rules=None):
     """{relative path: [(line number, text)]} for files with a counted line."""
+    rules = rules or AREA_RULES["rust"]
     found = {}
-    for area in AREAS:
+    for area in rules["dirs"]:
         for dirpath, dirnames, filenames in os.walk(os.path.join(root, area)):
             dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
             for name in sorted(filenames):
-                if not name.endswith(".rs") or TEST_FILE.search(name):
+                if not name.endswith(rules["ext"]) or rules["test_file"].search(name):
                     continue
                 full = os.path.join(dirpath, name)
                 rel = os.path.relpath(full, root).replace(os.sep, "/")
-                if rel == HOSTS_MODULE:
+                if rel == rules["module"]:
                     continue
-                hits = counted_lines(full)
+                hits = counted_lines(full, rules)
                 if hits:
                     found[rel] = hits
     return found
@@ -95,6 +127,7 @@ def main(argv):
     root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     ceilings = None
     mode = "check"
+    area = "rust"
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -104,14 +137,18 @@ def main(argv):
             mode = "list"
         elif a == "--root" and args:
             root = args.pop(0)
+        elif a == "--area" and args and args[0] in AREA_RULES:
+            area = args.pop(0)
         elif a == "--ceilings" and args:
             ceilings = args.pop(0)
         else:
             sys.exit(f"zone-gate: unknown argument: {a}")
+    rules = AREA_RULES[area]
+    use = rules["use"]
     if ceilings is None:
-        ceilings = os.path.join(root, "scripts", "garden", "zone-ceilings.txt")
+        ceilings = os.path.join(root, "scripts", "garden", rules["ceilings"])
 
-    found = scan(root)
+    found = scan(root, rules)
     if mode == "list":
         for rel in sorted(found):
             for n, text in found[rel]:
@@ -137,10 +174,10 @@ def main(argv):
         if cap is None:
             failed = True
             for n, text in found[p]:
-                print(f"zone-gate: FAIL {p}:{n} spells out k2.dev and the file is not listed: use k2_core::hosts. {text[:120]}")
+                print(f"zone-gate: FAIL {p}:{n} spells out k2.dev and the file is not listed: use {use}. {text[:120]}")
         elif have > cap:
             failed = True
-            print(f"zone-gate: FAIL {p} has {have} lines with k2.dev, its ceiling is {cap}: use k2_core::hosts for the new one.")
+            print(f"zone-gate: FAIL {p} has {have} lines with k2.dev, its ceiling is {cap}: use {use} for the new one.")
     if failed:
         return 1
     slack = [p for p in rows if len(found.get(p, [])) < rows[p]]

@@ -153,6 +153,9 @@ jobs:
       - name: Zone gate (no new hard-coded k2.dev in Rust code)
         run: python3 scripts/garden/zone-gate.py
 
+      - name: Zone gate (no new hard-coded k2.dev in renderer code)
+        run: python3 scripts/garden/zone-gate.py --area renderer
+
       - name: Zone gate on broken trees
         run: bash tests/garden/zone-gate.sh
 

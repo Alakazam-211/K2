@@ -69,6 +69,7 @@ part_web() {
     step "k2-home gate";                           bash scripts/k2-home-gate.sh
     step "brand inventory script";                 bash tests/garden/brand-inventory.sh
     step "zone gate (no new hard-coded k2.dev)";   python3 scripts/garden/zone-gate.py
+    step "zone gate, renderer";                    python3 scripts/garden/zone-gate.py --area renderer
     step "zone gate on broken trees";              bash tests/garden/zone-gate.sh
     step "private-docs gate";                      bash scripts/private-docs-gate.sh
     step "typecheck:web";                          bun run typecheck:web

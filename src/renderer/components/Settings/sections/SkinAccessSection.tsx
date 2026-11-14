@@ -30,6 +30,7 @@ import { AppPhonePairing } from './AppPhonePairing'
 import { AppReleases } from './AppReleases'
 import { LinuxOnlyNote } from './LinuxOnlyNote'
 import { ConfirmSheet } from './AccessDialogs'
+import { ZONE_SUFFIX, boxHost } from '@/lib/hosts'
 import {
   APPS_CONTENT_WIDTH,
   APPS_LIST_ROW,
@@ -340,7 +341,7 @@ export const DEFAULT_HYDRA: SkinHydra = {
   hint: HYDRA_LINUX_BANNER,
 }
 
-const CONNECT_URL_STUB = 'https://skin.<sub>.k2.dev'
+const CONNECT_URL_STUB = `https://skin.${boxHost('<sub>')}`
 const DIRECT_LISTEN_STUB = 'Caddy :443 (or LAN port) → 127.0.0.1:daemon'
 
 const INPUT_CLS = 'w-full type-control'
@@ -378,11 +379,11 @@ function hostFromUrl(url: string): string | null {
 function deriveConnectUrl(rec: Record<string, unknown>, subdomain: string | null): string {
   const explicit = asString(rec.connectUrl) ?? asString(rec.connect_url)
   if (explicit) return explicit
-  if (subdomain) return `https://skin.${subdomain}.k2.dev`
+  if (subdomain) return `https://skin.${boxHost(subdomain)}`
   const url = asString(rec.url)
   if (url) {
     const host = hostFromUrl(url)
-    if (host?.endsWith('.k2.dev')) {
+    if (host?.endsWith(ZONE_SUFFIX)) {
       return host.startsWith('skin.') ? `https://${host}` : `https://skin.${host}`
     }
   }

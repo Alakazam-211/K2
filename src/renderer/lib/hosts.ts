@@ -16,3 +16,12 @@ export const ZONE_SUFFIX = '.k2.dev'
 
 /** Where a person manages their plan. */
 export const DASHBOARD_URL = 'https://k2.dev/dashboard'
+
+/** The default relay a tunnel dials (the daemon's `hosts::RELAY_HOST`). */
+export const RELAY_HOST = 'relay.k2.dev'
+
+/** `<label>.k2.dev`. The label is used as given, as a template string
+ *  would use it. */
+export function boxHost(label: string | null | undefined): string {
+  return `${label}${ZONE_SUFFIX}`
+}

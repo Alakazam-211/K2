@@ -72,11 +72,12 @@ import { primaryScope } from '@/kessel/server-scope'
 import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 import { isAirgap } from '@/lib/airgap'
+import { RELAY_HOST, ZONE_SUFFIX, boxHost } from '@/lib/hosts'
 
 // 0.46.6: no relay address lives here. The daemon owns the default
 // (relay.k2.dev) and the relay list; the form shows what the daemon
 // stores and only placeholders otherwise (an empty field is never sent).
-const RELAY_PLACEHOLDER = 'relay.k2.dev'
+const RELAY_PLACEHOLDER = RELAY_HOST
 const PORT_PLACEHOLDER = '7000'
 
 /** POST /cli/tunnel/config body for a subdomain bind (account flow). No
@@ -712,7 +713,7 @@ export function K2ConnectSection({
         try {
           const result = await claimSubdomain(accessToken, sub, deviceId, deviceLabel)
           if (!result.claimed && result.holder && result.holder !== deviceId) {
-            setStartError(`${sub}.k2.dev is in use on another computer. Turn its tunnel off there first.`)
+            setStartError(`${boxHost(sub)} is in use on another computer. Turn its tunnel off there first.`)
             return
           }
         } catch (e) {
@@ -790,7 +791,7 @@ export function K2ConnectSection({
   // dropdown above (one switch, no restart).
   const releaseFromDevice = async (mode: 'release' | 'forget'): Promise<void> => {
     const sub = subdomain.trim()
-    const label = sub ? `${sub}.k2.dev` : 'its address'
+    const label = sub ? boxHost(sub) : 'its address'
     const ok =
       mode === 'forget'
         ? await confirm({
@@ -914,7 +915,7 @@ export function K2ConnectSection({
     setBusy(true)
     setError(null)
     setStartError(null)
-    const what = `Couldn't switch to ${sub.label}.k2.dev.`
+    const what = `Couldn't switch to ${boxHost(sub.label)}.`
     try {
       const res = await tunnelPost('config', bindConfigBody(sub, deviceId, deviceLabel ?? ''))
       if (!res.ok) {
@@ -929,10 +930,10 @@ export function K2ConnectSection({
       // 0.45.2: the daemon moved off the old name as part of this write
       // (listener, cert renewer, routes); a failed step is shown, not lost.
       if (cfg.identityChange && !cfg.identityChange.ok) {
-        setError(cfg.identityChange.error ?? 'a step failed', `${sub.label}.k2.dev is saved, but moving the tunnel to it didn't finish.`)
+        setError(cfg.identityChange.error ?? 'a step failed', `${boxHost(sub.label)} is saved, but moving the tunnel to it didn't finish.`)
         return
       }
-      setBoundMsg(running ? `This server now uses ${sub.label}.k2.dev.` : `This server will use ${sub.label}.k2.dev. Turn the tunnel on to reach it there.`)
+      setBoundMsg(running ? `This server now uses ${boxHost(sub.label)}.` : `This server will use ${boxHost(sub.label)}. Turn the tunnel on to reach it there.`)
       void refreshStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e), what)
@@ -947,7 +948,7 @@ export function K2ConnectSection({
   // omits both fields → plain running/stopped, exactly the old card.
   const tunnelDisabled = status?.enabled === false
   const tunnelReleased = status?.released === true
-  const publicUrl = status?.public_url ?? (subdomain.trim() ? `https://${subdomain.trim()}.k2.dev` : null)
+  const publicUrl = status?.public_url ?? (subdomain.trim() ? `https://${boxHost(subdomain.trim())}` : null)
   const frpcMissing = status ? !status.frpc_installed : false
   // 0.45.2: a running tunnel whose encrypted listener serves another name
   // (the 0.45.0 switch bug) — the daemon reports both since 0.45.2.
@@ -964,7 +965,7 @@ export function K2ConnectSection({
   const subdomainOptions = subdomains.map((s) => {
     const heldByOther = !!s.claimed_by && s.claimed_by !== deviceId && freshClaim(s.claimed_at)
     const heldBySelf = s.claimed_by === deviceId && freshClaim(s.claimed_at)
-    const base = s.status === 'active' ? `${s.label}.k2.dev` : `${s.label}.k2.dev (${s.status})`
+    const base = s.status === 'active' ? boxHost(s.label) : `${boxHost(s.label)} (${s.status})`
     const suffix = heldByOther ? ' (in use on another device)' : heldBySelf ? ' (this device)' : ''
     return { value: s.label, label: `${base}${suffix}`, disabled: heldByOther }
   })
@@ -976,8 +977,8 @@ export function K2ConnectSection({
     // from the currently-bound subdomain.
     if (running && value !== subdomain.trim()) {
       const ok = await confirm({
-        title: `Switch to ${value}.k2.dev?`,
-        message: `The tunnel moves from ${subdomain.trim()}.k2.dev to ${value}.k2.dev. Apps signed in at the old address need the new one.`,
+        title: `Switch to ${boxHost(value)}?`,
+        message: `The tunnel moves from ${boxHost(subdomain.trim())} to ${boxHost(value)}. Apps signed in at the old address need the new one.`,
         confirmLabel: 'Switch',
       })
       if (!ok) {
@@ -1037,9 +1038,9 @@ export function K2ConnectSection({
       )
       if (outcome.ok) {
         setSelectedLabel(row.label)
-        setBoundMsg(`This server now uses ${row.label}.k2.dev.`)
+        setBoundMsg(`This server now uses ${boxHost(row.label)}.`)
       } else {
-        setError(outcome.error, `Couldn't switch to ${row.label}.k2.dev. The tunnel still uses ${oldLabel}.k2.dev.`)
+        setError(outcome.error, `Couldn't switch to ${boxHost(row.label)}. The tunnel still uses ${boxHost(oldLabel)}.`)
         // Nothing changed, or the daemon put the old name back.
         setSelectedLabel(oldLabel || null)
       }
@@ -1123,7 +1124,7 @@ export function K2ConnectSection({
         <label htmlFor="tunnel-manual-sub" className="type-row text-[var(--color-text-primary)]">Address</label>
         <div className={`${SETTING_FIELD_WIDTH} flex items-center gap-1.5 flex-shrink-0`}>
           <Input id="tunnel-manual-sub" className="flex-1 min-w-0 type-control" placeholder="alex" value={subdomain} onChange={(e) => setSubdomain(e.target.value)} />
-          <span className="type-hint text-[var(--color-text-secondary)]">.k2.dev</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">{ZONE_SUFFIX}</span>
         </div>
       </div>
       <div className="flex items-center justify-between gap-6" data-settings-id="k2-connect.token">

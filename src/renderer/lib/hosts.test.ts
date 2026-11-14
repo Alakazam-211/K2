@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DASHBOARD_URL, ZONE, ZONE_SUFFIX } from './hosts'
+import { DASHBOARD_URL, RELAY_HOST, ZONE, ZONE_SUFFIX, boxHost } from './hosts'
 import { SUBDOMAIN_HOST as PUBLISHED_HOST, PLAN_DASHBOARD_URL } from './published-subdomains'
 import { SUBDOMAIN_HOST as URLS_HOST } from '@/components/WorkspacePanel/urls-ports'
 
@@ -27,6 +27,14 @@ describe('the renderer hosts module', () => {
     expect(ZONE_SUFFIX).toBe('.k2.dev')
     expect(ZONE_SUFFIX).toBe(`.${ZONE}`)
     expect(DASHBOARD_URL).toBe('https://k2.dev/dashboard')
+    expect(RELAY_HOST).toBe('relay.k2.dev')
+  })
+
+  it('boxHost adds the zone and nothing else', () => {
+    expect(boxHost('acme')).toBe('acme.k2.dev')
+    expect(boxHost('app.acme')).toBe('app.acme.k2.dev')
+    expect(boxHost('<sub>')).toBe('<sub>.k2.dev')
+    expect(boxHost('')).toBe('.k2.dev')
   })
 
   it('is where the older names take their values from', () => {

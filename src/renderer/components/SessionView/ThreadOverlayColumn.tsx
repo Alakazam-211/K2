@@ -8,6 +8,7 @@ import type { ThreadTurn } from './overlayThread'
 import { ThreadComposeDrawerContext, type ThreadComposeDrawer } from './threadComposeDrawer'
 import { ThreadEmptyStart, emptyStartPlace, sameEmptyStartPlace, type EmptyStartPlace } from './ThreadEmptyStart'
 import { THREAD_FLOAT_INSET_VAR } from './threadFloats'
+import { measureThreadDock, writeThreadDock } from './threadDock'
 import { FOOTER_FADE_TARGETS, ThreadFooterFade, threadFadeTop } from '@/components/Thread/ThreadZenKit'
 import { ProgressiveHeaderBlur } from '@/components/ui'
 
@@ -48,6 +49,10 @@ export function cssTimeMs(raw: string): number | null {
  * Style's slow motion), so the bar slides down as one layer: nothing
  * re-mounts or re-lays out, and the field keeps its focus and caret.
  * Reduced motion: an instant switch.
+ *
+ * The Jump to bottom pill floats just above the bar's top: the root carries
+ * the bar's dock (threadDock), re-measured as the bar resizes and as the
+ * activity bar starts to slide out.
  */
 export function ThreadOverlayColumn({
   addr,
@@ -112,12 +117,15 @@ export function ThreadOverlayColumn({
 
   useLayoutEffect(() => {
     const el = composeRef.current
+    const root = rootRef.current
     if (!el || !hasCompose) {
       setBottom(0)
+      if (root) writeThreadDock(root, null)
       return
     }
     const measure = (): void => {
       const slot = el.getBoundingClientRect()
+      if (root) writeThreadDock(root, measureThreadDock(el))
       setBottom(Math.ceil(slot.height))
       // Everything that can sit on the box is in the bar's flow, so its
       // coming and going (and the drawer growing) resizes the slot: this
@@ -129,10 +137,17 @@ export function ThreadOverlayColumn({
       setFadeTop(threadFadeTop(slot.top, tops))
     }
     measure()
-    if (typeof ResizeObserver === 'undefined') return
+    // The activity bar keeps its room while it slides out: its phase
+    // turning to "out" is when the pill starts down with it.
+    const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(measure)
+    mo?.observe(el, { subtree: true, attributes: true, attributeFilter: ['data-phase'] })
+    if (typeof ResizeObserver === 'undefined') return () => mo?.disconnect()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
+    return () => {
+      ro.disconnect()
+      mo?.disconnect()
+    }
   }, [hasCompose])
 
   // Place the group: the column, the bar and the picture-and-name, each

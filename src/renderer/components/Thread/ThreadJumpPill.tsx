@@ -8,6 +8,16 @@
 //     "N new messages ↓" (the accent treatment);
 //   - the person sent while scrolled up (a send doesn't move the list):
 //     "Sent ↓" (quiet).
+// Where it floats (Rosson 2026-11-14, "match mobile"): THREAD_JUMP_PILL_GAP
+// above whatever is topmost on the message box, the activity bar while it
+// stands there, else the box itself. The Thread column measures both and
+// sets THREAD_DOCK_BOX_VAR (the list's foot to the box's top: a growing
+// draft moves the pill at once, as the box grows) and THREAD_DOCK_ABOVE_VAR
+// (what stands on the box: the bar, chips). That part moves with the bar's
+// own slide, its length and curve (ZenActivityDrawer), so the two travel as
+// one; THREAD_DOCK_EASE_VAR is the curve of the move under way. Outside a
+// column (no variables) it sits the gap above `bottom`.
+//
 // A click goes to the bottom (smoothly; a jump under reduced motion). At
 // the bottom the pill fades out and the count resets (the list decides,
 // `shown` and the words come in as props).
@@ -24,6 +34,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { ArrowDownIcon } from '@/components/icons/K2Icons'
+import { ZEN_DRAWER_EASE_IN, ZEN_DRAWER_MS } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { CHAMFER_SCOPE, CHAMFER_CUT, chamferVars } from './chamfer'
 
 /** The pill's own attribute (the CSS hook). */
@@ -33,8 +44,19 @@ export const THREAD_JUMP_PILL_ANIMATING = 'k2-jump-pill--animating'
 /** The width animation (K2 Companion's): 220ms. The ease is the Style's
  *  standard ease, which in Glass is the phone's cubic-bezier(0.22, 1, 0.36, 1). */
 export const THREAD_JUMP_PILL_WIDTH_MS = 220
-/** Space (px) between the pill and the message box (or the list's foot). */
-export const THREAD_JUMP_PILL_GAP = 12
+/** Space (px) between the pill and what is topmost on the message box (the
+ *  activity bar, else the box), or the list's foot. K2 Companion's 8px
+ *  (ThreadPane: the pill row's `bottom: 8 + drawerCover`), which is also the
+ *  message bar's own top padding. */
+export const THREAD_JUMP_PILL_GAP = 8
+/** px from the list frame's foot to the message box's top (the column sets it). */
+export const THREAD_DOCK_BOX_VAR = '--thread-dock-box'
+/** px from the message box's top to the top of what stands on it. */
+export const THREAD_DOCK_ABOVE_VAR = '--thread-dock-above'
+/** The curve of the move under way: the bar's slide in or out. */
+export const THREAD_DOCK_EASE_VAR = '--thread-dock-ease'
+/** The pill's own fallback for the box's top (its `bottom` prop). */
+const BASE_VAR = '--thread-jump-base'
 /** Within this many px of the bottom the list counts as at the bottom. */
 export const THREAD_JUMP_BOTTOM_PX = 32
 
@@ -56,6 +78,8 @@ const P = `[${THREAD_JUMP_PILL_ATTR}]`
 const FADE = 'var(--motion-duration-fast, 140ms) var(--motion-ease-standard, ease-out)'
 const WIDTH = `${THREAD_JUMP_PILL_WIDTH_MS}ms var(--motion-ease-standard, cubic-bezier(0.22, 1, 0.36, 1))`
 const RING = 'var(--zen-focus-ring, var(--zen-accent))'
+/** Rides the activity bar: its slide's length and curve. */
+const RIDE = `translate ${ZEN_DRAWER_MS}ms var(${THREAD_DOCK_EASE_VAR}, ${ZEN_DRAWER_EASE_IN})`
 /** Glass with its Frost on (the desktop Thread only; a Garden draws its own):
  *  the quiet pill lets a little of the blurred list through. */
 const GLASS = 'html[data-style="glass"]:not([data-frost="tile"]) [data-k2-thread-zen]'
@@ -65,8 +89,8 @@ const GLASS = 'html[data-style="glass"]:not([data-frost="tile"]) [data-k2-thread
  *  the messages; Glass's quiet fill is the raised surface at 86% over the
  *  frost blur (solid with reduced transparency). */
 export const THREAD_JUMP_PILL_CSS = `
-${P} { left: 50%; z-index: 3; display: inline-flex; max-width: calc(100% - 2 * var(--zen-gap, 12px)); align-items: center; margin: 0; padding: 0; border-radius: var(--zen-pill-radius, 999px); font: inherit; font-size: var(--zen-type-sm, 0.8em); line-height: 16px; white-space: nowrap; cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, 6px); transition: opacity ${FADE}, transform ${FADE}, visibility 0s linear var(--motion-duration-fast, 140ms); }
-${P}[data-shown] { opacity: 1; visibility: visible; pointer-events: auto; transform: translate(-50%, 0); transition: opacity ${FADE}, transform ${FADE}, visibility 0s; }
+${P} { left: 50%; bottom: calc(var(${THREAD_DOCK_BOX_VAR}, var(${BASE_VAR}, 0px)) + ${THREAD_JUMP_PILL_GAP}px); translate: 0 calc(-1 * var(${THREAD_DOCK_ABOVE_VAR}, 0px)); z-index: 3; display: inline-flex; max-width: calc(100% - 2 * var(--zen-gap, 12px)); align-items: center; margin: 0; padding: 0; border-radius: var(--zen-pill-radius, 999px); font: inherit; font-size: var(--zen-type-sm, 0.8em); line-height: 16px; white-space: nowrap; cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, 6px); transition: opacity ${FADE}, transform ${FADE}, ${RIDE}, visibility 0s linear var(--motion-duration-fast, 140ms); }
+${P}[data-shown] { opacity: 1; visibility: visible; pointer-events: auto; transform: translate(-50%, 0); transition: opacity ${FADE}, transform ${FADE}, ${RIDE}, visibility 0s; }
 ${P} [data-jump-clip] { display: block; overflow: hidden; max-width: 100%; }
 ${P} [data-jump-inner] { display: inline-flex; align-items: center; gap: 6px; width: max-content; padding: 4px 10px 4px 12px; }
 ${P}.${THREAD_JUMP_PILL_ANIMATING} [data-jump-clip] { transition: width ${WIDTH}; }
@@ -91,7 +115,8 @@ export interface ThreadJumpPillProps {
   reducedMotion: boolean
   /** Go to the bottom. */
   onJump: () => void
-  /** px from the list frame's bottom (the message box's height + a gap). */
+  /** px from the list frame's bottom to the message bar's top, when no
+   *  Thread column says where the box is (THREAD_DOCK_BOX_VAR wins). */
   bottom: number
 }
 
@@ -152,7 +177,7 @@ export function ThreadJumpPill({ shown, unseen, sent, reducedMotion, onJump, bot
   const style: CSSProperties = {
     // Inline: Terminal's chamfer rule makes a cut element `relative`.
     position: 'absolute',
-    bottom,
+    ...({ [BASE_VAR]: `${bottom}px` } as CSSProperties),
     background: fill,
     border: `1px solid ${edge}`,
     color: accent ? 'var(--zen-accent-text)' : 'var(--zen-text)',

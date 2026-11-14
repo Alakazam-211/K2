@@ -41,7 +41,7 @@ import {
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
-import { THREAD_JUMP_BOTTOM_PX, THREAD_JUMP_PILL_GAP, ThreadJumpPill } from '@/components/Thread/ThreadJumpPill'
+import { THREAD_JUMP_BOTTOM_PX, ThreadJumpPill } from '@/components/Thread/ThreadJumpPill'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import {
   ThreadSenderAvatarContext,
@@ -673,7 +673,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         sent={sentAway}
         reducedMotion={reducedMotion}
         onJump={jumpToBottom}
-        bottom={bottomInset + THREAD_JUMP_PILL_GAP}
+        bottom={bottomInset}
       />
       </div>
       {/* TW12: live only, never stored (TW13). With a message box the

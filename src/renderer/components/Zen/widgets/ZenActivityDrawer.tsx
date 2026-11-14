@@ -61,6 +61,10 @@ const TONE: Record<ThreadStripTone, string> = {
 
 /** Slide / fade length (ms); the CSS uses the same. */
 export const ZEN_DRAWER_MS = 200
+/** The slide in (a touch of overshoot) and the slide out; the Thread's
+ *  Jump to bottom pill rides the same curves (SessionView/threadDock). */
+export const ZEN_DRAWER_EASE_IN = 'cubic-bezier(0.2, 0.9, 0.3, 1.12)'
+export const ZEN_DRAWER_EASE_OUT = 'cubic-bezier(0.4, 0, 0.8, 0.4)'
 /** Collapsed tile height (px) above the box. */
 export const ZEN_DRAWER_TILE_PX = 32
 /** The desktop's Stop on the tile: its height and the room it keeps. */
@@ -162,8 +166,8 @@ export const ZEN_DRAWER_CSS = `
 @keyframes zen-drawer-fade-in { from { opacity: 0; } }
 @keyframes zen-drawer-fade-out { to { opacity: 0; } }
 @keyframes zen-drawer-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
-${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
-${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
+${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms ${ZEN_DRAWER_EASE_IN} both; }
+${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms ${ZEN_DRAWER_EASE_OUT} both; }
 ${DRAWER_SCOPE} [data-zen-drawer] [data-zen-pulse], ${DRAWER_SCOPE} [data-zen-drawer] .zen-drawer-pulse-text { animation: ${ZEN_DRAWER_PULSE_ANIMATION}; }
 ${DRAWER_SCOPE} [data-zen-drawer] [data-zen-pulse], ${DRAWER_SCOPE} [data-zen-drawer] .zen-drawer-pulse-text { will-change: opacity; }
 ${DRAWER_SCOPE} .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }

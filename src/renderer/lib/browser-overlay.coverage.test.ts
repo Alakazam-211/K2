@@ -44,9 +44,6 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/AgentPane/PinnedChatRetainer.tsx': 'docks pinned chats into their pane slots, not above other panes',
   // Inline in a column that never reaches a pane.
   'components/Home/HomeAddPanels.tsx': 'Add Agent / Add Workspace panels open inside the Home sidebar column',
-  // People and channels on Home: a DM or channel takes the main area, so the
-  // room (and its Browser tabs) is hidden while these show.
-  'components/HomeChat/HomeChatMembersSheet.tsx': 'a Home chat is in the main area: the room and its Browser tabs are hidden',
   'components/ui/SearchableAgentList.tsx': 'an inline list inside its host panel (the host claims if it floats)',
   // Portals that only host a component that claims its own box.
   'components/Voice/VoicePopover.tsx': "rendered only through VoiceButton's anchored menu, which claims its box",

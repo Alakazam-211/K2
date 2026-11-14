@@ -234,7 +234,8 @@ describe('the members sheet hides what a role can’t do (§13)', () => {
     members = { ...members, agents: [{ agent: 'ws-1', name: 'Atlas' }] }
     render(<HomeChatMembersSheet target={channel} onClose={() => undefined} onChanged={() => undefined} />)
     const list = await screen.findByTestId('home-chat-agent-list')
-    expect(list.textContent).toContain('👁')
+    // The eye is a line icon now (K2 Design), named for screen readers.
+    expect(list.querySelector('[aria-label="Can read and post"] svg')).not.toBeNull()
     expect(list.textContent).toContain('Atlas')
   })
 })

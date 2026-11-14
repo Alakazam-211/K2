@@ -1360,7 +1360,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
         other => other,
     };
     // A′: each request's pass fence lives in this connection's scope.
-    super::pass_gate::scope(crate::slow_request::scope(async move {
+    super::pass_gate::scope(crate::slow_request::scope(crate::response_wire::scope(async move {
         let mut requests_served: u32 = 0;
         loop {
             // Idle keep-alive wait: not request time (slow_request).
@@ -1368,6 +1368,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                 return;
             }
             super::pass_gate::set_fenced(false);
+            crate::response_wire::reset();
             let mut answered_head = Vec::new();
             let outcome =
                 crate::watch_tcp_in_place!(handle_one_request(&mut stream, &state, ingress, &mut answered_head));
@@ -1400,7 +1401,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                 }
             }
         }
-    }))
+    })))
     .await
 }
 
@@ -1565,6 +1566,13 @@ async fn handle_one_request(
         }
     };
     crate::slow_request::note_tcp(method, path_and_query, &req); // a slow /cli/* request's line
+    // gzip for JSON leaving this machine; the projects list's ETag / 304.
+    crate::response_wire::note(crate::response_wire::Request::from_head(
+        matches!(ingress, Ingress::Lan | Ingress::Tunnel),
+        method,
+        path_and_query,
+        &req,
+    ));
 
     // H5 (E2E splice hardening): reject `Transfer-Encoding: chunked`.
     // `read_post_body` is Content-Length-driven ONLY — it never decodes

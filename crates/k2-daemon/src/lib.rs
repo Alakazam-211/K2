@@ -268,6 +268,8 @@ pub mod cell_identity;
 pub mod cell_server;
 // A /cli/* request over 5 s (or still running at 30 s) logs one line.
 pub mod slow_request;
+// gzip for JSON that leaves this machine; ETag/304 on the projects list.
+pub mod response_wire;
 // The daemon's own stdout/stderr log files rotate at 50 MB (3 kept).
 pub mod stderr_log;
 pub mod cell_uds;

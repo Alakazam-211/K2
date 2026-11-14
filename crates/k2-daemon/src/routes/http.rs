@@ -1428,22 +1428,37 @@ pub(crate) async fn send_response_with_cookie_and_location(
         Some(v) if !v.is_empty() => format!("Location: {v}\r\n"),
         _ => String::new(),
     };
-    let resp = format!(
-        "HTTP/1.1 {status}\r\n\
-         Content-Type: {ct}\r\n\
-         Content-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Expose-Headers: *\r\n\
-         {frame}{cookie_line}{location_line}\r\n{}",
-        body.len(),
-        body,
-        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
-    );
+    let extra = format!("{cookie_line}{location_line}");
+    let (status, resp) = wire_response(status, ct, body, &extra);
     // Runtime S19: on an App's gateway link, the per-call audit row gets
     // the result and bytes out (a no-op off a link).
-    crate::apps::audit::note_response(status, body);
-    crate::slow_request::note_status(status);
-    let _ = stream.write_all(resp.as_bytes()).await;
+    crate::apps::audit::note_response(&status, if status.starts_with("304") { "" } else { body });
+    crate::slow_request::note_status(&status);
+    let _ = stream.write_all(&resp).await;
+}
+
+/// The bytes of one answer: the canonical header set, `extra` header lines,
+/// and the body as this request may receive it ([`crate::response_wire`]:
+/// gzip off this machine, a 304 for an unchanged ETag route). Returns the
+/// status actually sent with the bytes.
+fn wire_response(status: &str, ct: &str, body: &str, extra: &str) -> (String, Vec<u8>) {
+    let shaped = crate::response_wire::shape(&crate::response_wire::current(), status, ct, body);
+    let length = if shaped.has_body { format!("Content-Length: {}\r\n", shaped.body.len()) } else { String::new() };
+    let head = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {ct}\r\n\
+         {length}\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Expose-Headers: *\r\n\
+         {frame}{extra}{wire}\r\n",
+        status = shaped.status,
+        wire = shaped.headers,
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
+    );
+    let mut bytes = Vec::with_capacity(head.len() + shaped.body.len());
+    bytes.extend_from_slice(head.as_bytes());
+    bytes.extend_from_slice(&shaped.body);
+    (shaped.status, bytes)
 }
 
 /// Like [`send_response`] plus extra header lines. `extra` is zero or more
@@ -1464,20 +1479,10 @@ pub(crate) async fn send_response_with_headers(
     // bulletin); the same bytes while the Org Chart is off.
     let fed = crate::org_chart::feed::stamp_tcp(status, body);
     let body: &str = &fed;
-    let resp = format!(
-        "HTTP/1.1 {status}\r\n\
-         Content-Type: {ct}\r\n\
-         Content-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Expose-Headers: *\r\n\
-         {frame}{extra}\r\n{}",
-        body.len(),
-        body,
-        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
-    );
-    crate::apps::audit::note_response(status, body);
-    crate::slow_request::note_status(status);
-    let _ = stream.write_all(resp.as_bytes()).await;
+    let (status, resp) = wire_response(status, ct, body, extra);
+    crate::apps::audit::note_response(&status, if status.starts_with("304") { "" } else { body });
+    crate::slow_request::note_status(&status);
+    let _ = stream.write_all(&resp).await;
 }
 
 /// T1 — 429 for an IP over 5 login POSTs / 300s. JSON body, `Retry-After: 300`,

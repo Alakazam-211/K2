@@ -1173,6 +1173,9 @@ pub fn features() -> Vec<&'static str> {
     // git.note, the sheet-gated start / land / settle, and
     // GET /cli/workbench/agents (sidecars in a Garden's reach).
     out.push("workbench-v1");
+    // Speed pass P4: `GET /cli/projects/list` carries an ETag and answers
+    // 304 to a matching `If-None-Match` (crate::response_wire).
+    out.push(crate::response_wire::FEATURE_PROJECTS_ETAG);
     out.push(crate::zen_remote_routes::FEATURE);
     // 0.46.10: the Voice & Chat only login role, its shares and
     // `/cli/shared*` (prd-voice-chat-only-members-v1 §8.1).

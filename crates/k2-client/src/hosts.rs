@@ -11,22 +11,54 @@
 //! below are the compiled-in defaults; the modules that use them keep
 //! their own names for them and their own env overrides.
 
-/// The zone itself.
-pub const ZONE: &str = "k2.dev";
+/// Every zone whose names are ours: what [`in_zone`], [`under_zone`] and
+/// [`label_of`] ask about. One today. A zone goes on this list before
+/// anything is served under it, so that a name in it is never taken for
+/// someone else's domain.
+///
+/// Who should ask these: a check that REFUSES our own names (as a custom
+/// domain, a mail domain, a name to issue a certificate for here). Those
+/// fail closed when the list grows. Code that ACCEPTS a host because it
+/// is ours (the Origin check, routing by host, a peer's address) uses
+/// [`ZONE_SUFFIX`], the primary zone, until serving a second zone is
+/// built on purpose: a longer list must never widen what is let in.
+pub const ZONES: &[&str] = &["k2.dev"];
 
-/// The zone as a suffix, with its dot: what a box's full name ends with.
+/// The zone a box's own name is built under: what [`box_host`] uses.
+/// Building names under another zone is a separate, deliberate change.
+pub const PRIMARY_ZONE: &str = "k2.dev";
+
+/// The primary zone, under its older name.
+pub const ZONE: &str = PRIMARY_ZONE;
+
+/// The primary zone as a suffix, with its dot.
 pub const ZONE_SUFFIX: &str = ".k2.dev";
 
-/// `<label>.k2.dev`. The label is used as given: no trimming, no case
-/// change, and a label that already carries the zone gets it again.
+/// `<label>.k2.dev`: the label under the primary zone. The label is used
+/// as given: no trimming, no case change, and a label that already
+/// carries the zone gets it again.
 pub fn box_host(label: impl std::fmt::Display) -> String {
     format!("{label}{ZONE_SUFFIX}")
 }
 
-/// Whether `host` is the zone or a name under it. Compares bytes as
-/// given: a caller that wants any case lowers the host first.
+/// What is left of `host` when the dot and name of one of our zones is
+/// taken off its end: `acme` for `acme.k2.dev`, `app.acme` for
+/// `app.acme.k2.dev`. `None` when the host is not under a zone of ours
+/// (the bare zone itself is not under it). Compares bytes as given: a
+/// caller that wants any case lowers the host first.
+pub fn label_of(host: &str) -> Option<&str> {
+    ZONES.iter().find_map(|zone| host.strip_suffix(zone).and_then(|rest| rest.strip_suffix('.')))
+}
+
+/// Whether `host` is a name under one of our zones (not the bare zone).
+pub fn under_zone(host: &str) -> bool {
+    label_of(host).is_some()
+}
+
+/// Whether `host` is one of our zones or a name under one. Compares
+/// bytes as given: a caller that wants any case lowers the host first.
 pub fn in_zone(host: &str) -> bool {
-    host == ZONE || host.ends_with(ZONE_SUFFIX)
+    ZONES.contains(&host) || under_zone(host)
 }
 
 // ── K2's own services ────────────────────────────────────────────────
@@ -63,6 +95,34 @@ mod tests {
         assert_eq!(ZONE, "k2.dev");
         assert_eq!(ZONE_SUFFIX, ".k2.dev");
         assert_eq!(ZONE_SUFFIX, format!(".{ZONE}"));
+    }
+
+    /// One zone today, and it is the one names are built under. Adding a
+    /// zone to ZONES changes what counts as ours and nothing about how a
+    /// box's name is built.
+    #[test]
+    fn the_zones_are_the_primary_zone_and_no_other() {
+        assert_eq!(ZONES, &["k2.dev"]);
+        assert_eq!(PRIMARY_ZONE, "k2.dev");
+        assert!(ZONES.contains(&PRIMARY_ZONE));
+        assert_eq!(ZONE, PRIMARY_ZONE);
+    }
+
+    /// label_of is `strip_suffix(".k2.dev")`, case for case.
+    #[test]
+    fn label_of_takes_the_zone_off_the_end() {
+        for host in [
+            "acme.k2.dev", "app.acme.k2.dev", "k2.dev", ".k2.dev", "notk2.dev", "k2.dev.example.com",
+            "ACME.K2.DEV", "acme.k2.dev.k2.dev", "acme.k2.dev.", "", "acme", "10.0.0.5:38471.k2.dev",
+        ] {
+            assert_eq!(label_of(host), host.strip_suffix(".k2.dev"), "{host}");
+            assert_eq!(under_zone(host), host.ends_with(".k2.dev"), "{host}");
+            assert_eq!(in_zone(host), host == "k2.dev" || host.ends_with(".k2.dev"), "{host}");
+        }
+        assert_eq!(label_of("acme.k2.dev"), Some("acme"));
+        assert_eq!(label_of("app.acme.k2.dev"), Some("app.acme"));
+        assert_eq!(label_of("k2.dev"), None);
+        assert_eq!(label_of("notk2.dev"), None);
     }
 
     /// The compiled-in service addresses, spelled out: a change to one of

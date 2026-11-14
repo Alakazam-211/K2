@@ -111,7 +111,9 @@ pub fn is_ts_net_host(host: &str) -> bool {
 /// `k2.dev` or `*.k2.dev` (Connect zone).
 pub fn is_k2_dev_host(host: &str) -> bool {
     let h = hostname_only(host).to_ascii_lowercase();
-    crate::hosts::in_zone(&h)
+    // The primary zone only, not every zone of ours: this decides how a
+    // peer is dialed, and dialing under another zone is built on purpose.
+    h == crate::hosts::ZONE || h.ends_with(crate::hosts::ZONE_SUFFIX)
 }
 
 /// Bare Connect routing label: no dot, no colon, not a URL (e.g. `"rpm"`).

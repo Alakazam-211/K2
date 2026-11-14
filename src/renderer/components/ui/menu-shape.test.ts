@@ -138,7 +138,6 @@ describe('menus that opt in', () => {
     ['ui/OverflowMenu.tsx', 1, 1],
     ['Projects/bar-menu.tsx', 1, 1],
     ['Settings/controls/SettingControls.tsx', 1, 1],
-    ['Home/HomePicker.tsx', 1, 1],
     ['Sidebar/FocusGroupDropdown.tsx', 1, 1],
     ['ui/SearchableAgentList.tsx', 1, 1],
     ['TopBar/ServerSwitcher.tsx', 1, 2],
@@ -163,7 +162,7 @@ describe('menus that opt in', () => {
   })
 
   it('no menu row draws a square outline that a Terminal cut would clip', () => {
-    for (const file of ['Projects/bar-menu.tsx', 'FileViewerPane/BoardFileName.tsx', 'Home/HomePicker.tsx']) {
+    for (const file of ['Projects/bar-menu.tsx', 'FileViewerPane/BoardFileName.tsx']) {
       expect([file, /-outline-offset-2/.test(src(`components/${file}`))]).toEqual([file, false])
     }
   })

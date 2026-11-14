@@ -85,6 +85,23 @@ is K2's own (`ZenIcon`), not Lucide.
 > ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 > OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+## Third-party: lucide-react, Home group icons (ISC)
+
+The Home group bar and the group edit card draw each group's icon from a
+curated list of about 240 neutral Lucide icons (no brand or company logos),
+imported by name from the `lucide-react` npm package and drawn squared
+(square caps, mitred joins, stroke 1.75) like the icons above.
+
+| | |
+|--|--|
+| **What** | npm `lucide-react` **1.73.0** (pinned exactly), the icons named in `src/renderer/lib/group-icons.ts` |
+| **Upstream** | [Lucide](https://github.com/lucide-icons/lucide) (`packages/lucide-react`) |
+| **License** | **ISC** (Copyright (c) 2026 Lucide Icons and Contributors), with the Feather-derived icons under **MIT** (Copyright (c) 2013-present Cole Bemis) — full text, unedited, in `src/renderer/assets/lucide/LICENSE` |
+| **K2 code** | Is **MIT**. The ISC/MIT icons do **not** relicense the product. |
+
+When redistributing K2 builds, ship this notice and/or
+`src/renderer/assets/lucide/LICENSE`.
+
 ## Contributed: Board (Garden widget) — MIT
 
 The Board Garden's whiteboard widget is **Board by Baden Ballard (MIT)**.

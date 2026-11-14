@@ -38,6 +38,7 @@ import { findWorkspaceForRow, homeAddress, parseHomeAddress, workspaceHandle } f
 import { homeHostKey } from '@/lib/host-key'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { onSavedHostRekey } from '@/lib/connect-host-hooks'
+import { GROUP_ICON_NAME_RE } from '@/lib/group-icon-name'
 
 export const HOMES_STORAGE_KEY = 'k2.homes.v1'
 export const HOMES_LAST_SELECTED_KEY = 'k2.homes.lastSelected'
@@ -76,7 +77,12 @@ export interface Home {
   id: string
   name: string
   rows: HomeRow[]
+  /** Home groups: a Lucide icon name (`lib/group-icons.ts`), synced like the
+   *  name. Absent or null: the group bar draws a numbered dot. */
+  icon?: string | null
 }
+
+export { GROUP_ICON_NAME_RE }
 
 export interface HomesDoc {
   version: 1
@@ -130,6 +136,7 @@ function isHome(v: unknown): v is Home {
     typeof h.id === 'string' &&
     h.id.length > 0 &&
     typeof h.name === 'string' &&
+    (h.icon === undefined || h.icon === null || (typeof h.icon === 'string' && GROUP_ICON_NAME_RE.test(h.icon))) &&
     Array.isArray(h.rows) &&
     h.rows.every(isRow)
   )
@@ -178,6 +185,9 @@ export interface HomesState {
   createHome: (name: string) => string | null
   /** False when the name is empty or the Home is gone. */
   renameHome: (id: string, name: string) => boolean
+  /** Set (a Lucide name) or clear (null) a Home's icon. False for a name
+   *  that isn't storable or a Home that is gone. */
+  setHomeIcon: (id: string, icon: string | null) => boolean
   /** False for the last Home (never deleted) or an unknown id. */
   deleteHome: (id: string) => boolean
   /** False when the address is already on that Home (dedupe per Home). */
@@ -368,6 +378,22 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
         const clean = cleanHomeName(name)
         if (!clean) return false
         const next = mapHome(id, (h) => ({ ...h, name: clean }))
+        if (!next) return false
+        commit(next)
+        return true
+      },
+
+      setHomeIcon: (id, icon) => {
+        if (icon !== null && !GROUP_ICON_NAME_RE.test(icon)) return false
+        const home = get().homes.find((h) => h.id === id)
+        if (!home) return false
+        if ((home.icon ?? null) === icon) return true
+        const next = mapHome(id, (h) => {
+          const copy: Home = { ...h }
+          if (icon === null) delete copy.icon
+          else copy.icon = icon
+          return copy
+        })
         if (!next) return false
         commit(next)
         return true

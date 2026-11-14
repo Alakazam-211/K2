@@ -22,13 +22,14 @@
 //   cursor  — the server cursor this device has caught up to.
 //   redirects — merged-away Home id → the Home it went into.
 //
-// What syncs: Home names and order, rows and row order. What stays local:
+// What syncs: Home names, icons and order, rows and row order. What stays local:
 // the selected Home, expanded state, and label / workspaceId repairs
 // (`repairRows`), which would otherwise flip-flop between devices. A row's
 // label travels when the row is created; an address change (a handle
 // rename) is a delete plus an add.
 
 import type { Home, HomeRow } from '@/stores/homes'
+import { GROUP_ICON_NAME_RE } from '@/lib/group-icon-name'
 import { assignOrders, compareOrder, orderBetween } from '@/lib/fractional-index'
 
 export interface WireHome {
@@ -40,6 +41,9 @@ export interface WireHome {
   deviceId?: string
   deleted?: boolean
   mergedInto?: string
+  /** Home groups (0305): a Lucide icon name, null = none. Absent = this
+   *  item doesn't say (an older server or device): the known icon stays. */
+  icon?: string | null
 }
 
 export interface WireRow {
@@ -143,6 +147,9 @@ function stamp(ctx: EngineCtx, prev: WireItem | undefined): number {
   return Math.max(ctx.now, (prev?.updatedAt ?? 0) + 1)
 }
 
+/** The first-run Home's names, old and new (`nameKey` form). */
+const SEED_NAMES: ReadonlySet<string> = new Set(['home', 'group 1'])
+
 function nameKey(name: string | null): string {
   return (name ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase()
 }
@@ -172,7 +179,14 @@ function localView(homes: readonly Home[], st: SyncState, ctx: AddressMap): View
     return isLive(k) ? k.order : null
   })
   homes.forEach((h, hi) => {
-    items.set(`h|${h.id}`, { kind: 'home', id: h.id, name: h.name, order: homeOrders[hi], updatedAt: 0 })
+    const homeItem: WireHome = { kind: 'home', id: h.id, name: h.name, order: homeOrders[hi], updatedAt: 0 }
+    // The icon rides along when the Home has one, or as null when the
+    // known copy has one (a clear must say null: a left-out icon keeps the
+    // server's).
+    const icon = h.icon ?? null
+    const known = st.known[`h|${h.id}`]
+    if (icon !== null || (known?.kind === 'home' && (known.icon ?? null) !== null)) homeItem.icon = icon
+    items.set(`h|${h.id}`, homeItem)
     const seen = new Set<string>()
     const rows: Array<{ row: HomeRow; address: string }> = []
     for (const r of h.rows) {
@@ -200,11 +214,13 @@ function localView(homes: readonly Home[], st: SyncState, ctx: AddressMap): View
   return { items }
 }
 
-/** Does a view item differ from the known one in what syncs? (Names and
- *  order; never labels or workspace ids.) */
+/** Does a view item differ from the known one in what syncs? (Names, icons
+ *  and order; never labels or workspace ids.) */
 function syncedFieldsDiffer(view: WireItem, known: WireItem): boolean {
   if (view.order !== known.order) return true
-  if (view.kind === 'home' && known.kind === 'home') return view.name !== known.name
+  if (view.kind === 'home' && known.kind === 'home') {
+    return view.name !== known.name || (view.icon ?? null) !== (known.icon ?? null)
+  }
   return false
 }
 
@@ -245,6 +261,15 @@ export function diffLocal(homes: readonly Home[], prev: SyncState, ctx: EngineCt
   return { state: st, changes }
 }
 
+/** A newer server item that leaves out a field added later (an older
+ *  server) keeps the known value, as the daemon does for an older client. */
+function keepOmitted(c: WireItem, known: WireItem | undefined): WireItem {
+  if (c.kind === 'home' && known?.kind === 'home' && c.icon === undefined && known.icon !== undefined) {
+    return { ...c, icon: known.icon }
+  }
+  return c
+}
+
 /**
  * Apply a pull. A server item replaces the known one when it is newer (and
  * drops an unsent local edit it beats); an older one is ignored (the local
@@ -264,7 +289,7 @@ export function applyPull(prev: SyncState, pull: PullAnswer, now: number): SyncS
     const k = itemKey(c)
     const known = st.known[k]
     if (known && !beats(c, known)) continue
-    st.known[k] = c
+    st.known[k] = keepOmitted(c, known)
     if (st.outbox[k]) delete st.outbox[k]
   }
   st.redirects = { ...st.redirects, ...pull.redirects }
@@ -339,7 +364,9 @@ export function buildLocal(st: SyncState, previous: readonly Home[], ctx: Addres
         label: hint ? hint.label : w.label,
       })
     }
-    return { id: h.id, name: h.name ?? 'Home', rows }
+    const home: Home = { id: h.id, name: h.name ?? 'Home', rows }
+    if (h.icon) home.icon = h.icon
+    return home
   })
 }
 
@@ -385,18 +412,42 @@ export function firstSync(local: readonly Home[], pull: PullAnswer, prev: SyncSt
     }
     return last
   }
+  // An untouched first-run Home is the same Home whichever seed name its
+  // device used ("Home" before 0.46.13, "Group 1" after): with no exact
+  // name match, an empty local seed merges into an empty server seed.
+  const claimedSeeds = new Set<string>()
+  const pristineServerSeed = (): string | null => {
+    for (const s of serverHomes) {
+      if (!SEED_NAMES.has(nameKey(s.name)) || (s.icon ?? null) !== null || lastRowOrder(s.id) !== null) continue
+      if (claimedSeeds.has(s.id)) continue
+      return s.id
+    }
+    return null
+  }
   for (const h of local) {
     let target: string
+    const seedMatch =
+      !byName.has(nameKey(h.name)) && h.rows.length === 0 && !h.icon && SEED_NAMES.has(nameKey(h.name))
+        ? pristineServerSeed()
+        : null
     if (isLive(st.known[`h|${h.id}`])) {
       target = h.id
-    } else if (byName.has(nameKey(h.name))) {
-      target = byName.get(nameKey(h.name)) as string
+    } else if (byName.has(nameKey(h.name)) || seedMatch !== null) {
+      target = seedMatch ?? (byName.get(nameKey(h.name)) as string)
+      if (seedMatch !== null) claimedSeeds.add(seedMatch)
       st.redirects[h.id] = target
       add({ kind: 'home', id: h.id, name: h.name, order: '', updatedAt: ctx.now, deviceId: ctx.deviceId, deleted: true, mergedInto: target })
+      // The local icon carries over onto a server Home that has none.
+      const server = st.known[`h|${target}`]
+      if (h.icon && server?.kind === 'home' && !server.icon) {
+        add({ ...server, icon: h.icon, updatedAt: stamp(ctx, server), deviceId: ctx.deviceId })
+      }
     } else {
       lastHomeOrder = orderBetween(lastHomeOrder, null)
       target = h.id
-      add({ kind: 'home', id: h.id, name: h.name, order: lastHomeOrder, updatedAt: ctx.now, deviceId: ctx.deviceId })
+      const item: WireHome = { kind: 'home', id: h.id, name: h.name, order: lastHomeOrder, updatedAt: ctx.now, deviceId: ctx.deviceId }
+      if (h.icon) item.icon = h.icon
+      add(item)
       byName.set(nameKey(h.name), h.id)
     }
     for (const r of h.rows) {
@@ -459,6 +510,7 @@ export function parseWireItem(v: unknown): WireItem | null {
     }
     if (deleted) item.deleted = true
     if (typeof o.mergedInto === 'string') item.mergedInto = o.mergedInto
+    if (o.icon === null || (typeof o.icon === 'string' && GROUP_ICON_NAME_RE.test(o.icon))) item.icon = o.icon
     return item
   }
   if (o.kind === 'row' && typeof o.homeId === 'string' && typeof o.address === 'string' && o.address.includes('::')) {

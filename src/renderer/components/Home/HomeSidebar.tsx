@@ -1,12 +1,13 @@
 // Home on the Agents shell — the sidebar (prd-home-v1 H2/H3/H5/H6).
 //
 // Same chrome as the Agents `Sidebar`: resize handle, the header control
-// row (here the Home picker in the focus-group dropdown's spot, running the
-// full width: no "⌘ 1-9" hint beside it, Rosson 2026-11-09; the rows keep
-// their 1–9 numbers and ⌘1–9 still opens them; ⌘K stays on the keyboard,
-// the menus and the rails), the row list, and the bottom bar with ONE
-// button in the Add Workspace spot — Add Agent — beside the collapse
-// button. Add Agent opens one picker with This server and From a server.
+// row (here the current group's name and its "…" edit card, in the
+// focus-group dropdown's spot; no "⌘ 1-9" hint; the rows keep their 1–9
+// numbers and ⌘1–9 still opens them; ⌘K stays on the keyboard, the menus
+// and the rails), the row list, and the bottom bar: the group bar (one
+// icon per group, `groups/HomeGroupBar`), then ONE button in the Add
+// Workspace spot — Add Agent — beside the collapse button. Add Agent opens
+// one picker with This server and From a server.
 //
 // Rows:
 //   - A row on the connected server paints as the Agents row itself
@@ -57,7 +58,9 @@ import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
 import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
-import HomePicker from './HomePicker'
+import HomeGroupBar from './groups/HomeGroupBar'
+import GroupNameHeader from './groups/GroupNameHeader'
+import { useHomeGroups } from './groups/useHomeGroups'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
 import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
@@ -409,6 +412,7 @@ export default function HomeSidebar(): React.JSX.Element {
   const setPickerOpen = useHomeAddPickerStore((s) => s.setOpen)
   const barRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const groups = useHomeGroups()
 
   // ── Drag-to-reorder (shared with the Agents sidebar: same ghost, line, cursor) ──
   const rowDrag = useRowDragReorder<'home'>()
@@ -442,11 +446,17 @@ export default function HomeSidebar(): React.JSX.Element {
     <div className="relative flex flex-col h-full" data-home-sidebar="">
       <ResizeHandle />
 
-      {/* Header controls — the focus-group row's spot and look. The picker
-          runs the full width (no ⌘ 1-9 hint beside it); its menu matches. The
-          per-Home ⌥⌘N badges stay inside the open picker. */}
+      {/* Header — the focus-group row's spot: the current group's name and
+          count, and "…" for its edit card. Switching is the group bar at the
+          bottom, the sideways swipe and ⌥⌘1–9 (no ⌘ 1-9 hint here). */}
       <div className="px-3 pt-3 pb-2 no-drag" data-home-header="">
-        <HomePicker />
+        <GroupNameHeader
+          name={groups.current.name}
+          icon={groups.current.icon}
+          index={groups.current.index}
+          count={groups.current.count}
+          onEdit={groups.editCurrent}
+        />
       </div>
 
       {/* Home roster. When it scrolls, its ends fade softly under the Home
@@ -503,6 +513,7 @@ export default function HomeSidebar(): React.JSX.Element {
           the window's top-bar toggle, prd-zen-gardens-v1 G5/G6.) */}
       <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2" data-nav-footer="">
         {pickerOpen && <AddAgentPicker home={home} />}
+        <HomeGroupBar {...groups.bar} />
         <div className={NAV_FOOTER_ROW_CLASS}>
           <NavFooterButton
             label="Add Agent"

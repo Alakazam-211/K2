@@ -16,7 +16,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'
-import HomePicker from '@/components/Home/HomePicker'
+import HomeGroupBar from '@/components/Home/groups/HomeGroupBar'
+import { useHomeGroups } from '@/components/Home/groups/useHomeGroups'
 import { useHomesStore } from '@/stores/homes'
 import { useState } from 'react'
 import { ANCHORED_MENU_MARGIN, ZEN_ANCHORED_MENU_LAYER, anchoredMenuBox, useAnchoredMenu } from './useAnchoredMenu'
@@ -323,8 +324,8 @@ describe('anchored menus under the app zoom', () => {
   }
 })
 
-describe('Home picker (Home sidebar)', () => {
-  it('portals out of the sidebar’s scroller; a pick selects the Home; outside click closes', () => {
+describe('Home group edit card (Home nav)', () => {
+  it('portals out of the nav’s scroller, opens up from the bottom bar; typing keeps it, an outside click closes it', () => {
     const first = useHomesStore.getState().homes[0]
     const second = useHomesStore.getState().createHome('Anchored test')
     if (!second) throw new Error('could not create a Home')
@@ -332,61 +333,45 @@ describe('Home picker (Home sidebar)', () => {
     try {
       render(
         <div data-sidebar="" style={{ overflowY: 'auto', height: 120 }}>
-          <HomePicker />
+          <GroupBarHarness />
         </div>,
       )
       const sidebar = document.querySelector('[data-sidebar]') as HTMLElement
-      const button = sidebar.querySelector('button[title="Pick a Home"]') as HTMLElement
-      setRect(button.parentElement as HTMLElement, { top: 50, left: 12, width: 230, height: 30 })
+      const icon = sidebar.querySelector(`[data-group-id="${second}"]`) as HTMLElement
+      setRect(icon, { top: window.innerHeight - 60, left: 12, width: 28, height: 28 })
       act(() => {
-        fireEvent.click(button)
+        fireEvent.contextMenu(icon)
       })
-      const menu = menuEl('[data-home-picker-menu]')
-      expect(sidebar.contains(menu)).toBe(false)
-      expect(menu.style.position).toBe('fixed')
-      expect(menu.style.top).toBe('82px')
-      expect(menu.style.width).toBe('230px')
-      // Every row is clickable and looks it.
-      for (const b of Array.from(menu.querySelectorAll('button:not(:disabled)'))) {
-        expect(b.classList.contains('cursor-pointer'), b.textContent ?? '').toBe(true)
+      const card = menuEl('[data-group-edit-card]')
+      expect(sidebar.contains(card)).toBe(false)
+      expect(card.style.position).toBe('fixed')
+      expect(card.getAttribute('data-placement')).toBe('up')
+      expect(card.style.bottom).toBe(`${60 + 6}px`)
+      // Every enabled button is clickable and looks it.
+      for (const b of Array.from(card.querySelectorAll('button:not(:disabled)'))) {
+        expect(b.classList.contains('cursor-pointer'), b.outerHTML.slice(0, 80)).toBe(true)
       }
-      const pick = Array.from(menu.querySelectorAll('[role="menuitemradio"]')).find((b) =>
-        b.textContent?.includes('Anchored test'),
-      )
-      if (!(pick instanceof HTMLElement)) throw new Error('no Anchored test Home in the menu')
-      act(() => {
-        fireEvent.mouseDown(pick)
-        fireEvent.click(pick)
-      })
-      expect(useHomesStore.getState().selectedId).toBe(second)
-      expect(document.querySelector('[data-home-picker-menu]')).toBeNull()
-
-      // Rename mode lives in the same portalled menu; typing there doesn't close it.
-      act(() => {
-        fireEvent.click(button)
-      })
-      const rename = Array.from(menuEl('[data-home-picker-menu]').querySelectorAll('button')).find((b) =>
-        b.textContent?.startsWith('Rename'),
-      )
-      if (!rename) throw new Error('no Rename')
-      act(() => {
-        fireEvent.mouseDown(rename)
-        fireEvent.click(rename)
-      })
-      const input = menuEl('[data-home-picker-menu]').querySelector('input') as HTMLInputElement
+      const input = card.querySelector('[data-group-name-input]') as HTMLInputElement
       act(() => {
         fireEvent.mouseDown(input)
+        fireEvent.change(input, { target: { value: 'Anchored renamed' } })
       })
-      expect(document.querySelector('[data-home-picker-menu]')).not.toBeNull()
+      expect(document.querySelector('[data-group-edit-card]')).not.toBeNull()
+      expect(useHomesStore.getState().homes.find((h) => h.id === second)?.name).toBe('Anchored renamed')
       act(() => {
         fireEvent.mouseDown(document.body)
       })
-      expect(document.querySelector('[data-home-picker-menu]')).toBeNull()
+      expect(document.querySelector('[data-group-edit-card]')).toBeNull()
     } finally {
       act(() => useHomesStore.getState().deleteHome(second))
     }
   })
 })
+
+function GroupBarHarness(): React.JSX.Element {
+  const g = useHomeGroups()
+  return <HomeGroupBar {...g.bar} />
+}
 
 /** A top-bar style popover: a trigger, the menu on the popover layer, and
  *  the next control after the trigger. */

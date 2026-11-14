@@ -2,7 +2,7 @@
 //
 // Agent counts in the two nav pickers (Rosson 2026-10-16): the Agents
 // nav's focus-group picker shows how many agents the nav lists for the
-// pick, like the Home picker does for a Home; in both, the count sits
+// pick, like the Home nav header does for a group; in both, the count sits
 // right after the name (not at the far edge), a long name truncates, and
 // the count stays.
 //
@@ -13,7 +13,7 @@
 // an ellipsis (min-w-0 truncate); the count never shrinks (flex-shrink-0).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -91,7 +91,8 @@ vi.mock('@/stores/focus-groups', async () => {
 })
 
 import Sidebar from './Sidebar'
-import HomePicker from '@/components/Home/HomePicker'
+import GroupNameHeader from '@/components/Home/groups/GroupNameHeader'
+import { useHomeGroups } from '@/components/Home/groups/useHomeGroups'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useHomesStore, selectedHome } from '@/stores/homes'
@@ -209,7 +210,14 @@ describe('focus-group picker count (Agents nav)', () => {
   })
 })
 
-describe('Home picker count', () => {
+// The Home nav's header (where the Home picker was): the current group's
+// name, then its agent count.
+function HomeHeader(): React.JSX.Element {
+  const g = useHomeGroups()
+  return <GroupNameHeader name={g.current.name} icon={g.current.icon} index={g.current.index} count={g.current.count} onEdit={g.editCurrent} />
+}
+
+describe('Home group header count', () => {
   beforeEach(() => {
     localStorage.clear()
     sessionStorage.clear()
@@ -221,24 +229,17 @@ describe('Home picker count', () => {
     st.addRow(id, { address: 'nova::local', workspaceId: 'pn', label: 'Nova' })
   })
 
-  it('the button shows the Home\'s agent count right after the name', () => {
-    render(<HomePicker />)
-    expectCountAfterName(trigger('[aria-haspopup="menu"]'), LONG, 2)
+  it('the header shows the group\'s agent count right after the name', () => {
+    render(<HomeHeader />)
+    expectCountAfterName(trigger('[data-group-name-header]'), LONG, 2)
   })
 
   it('updates live when an agent is added or removed', () => {
-    render(<HomePicker />)
+    render(<HomeHeader />)
     const home = selectedHome(useHomesStore.getState())
     act(() => { useHomesStore.getState().addRow(home.id, { address: 'bee::b.k2.dev', workspaceId: 'pb', label: 'Bee' }) })
-    expect(labelParts(trigger('[aria-haspopup="menu"]')).count.textContent).toBe('3')
+    expect(labelParts(trigger('[data-group-name-header]')).count.textContent).toBe('3')
     act(() => { useHomesStore.getState().removeRow(home.id, 'cortana::local') })
-    expect(labelParts(trigger('[aria-haspopup="menu"]')).count.textContent).toBe('2')
-  })
-
-  it('the menu row for each Home carries its count right after the name', () => {
-    render(<HomePicker />)
-    fireEvent.click(trigger('[aria-haspopup="menu"]'))
-    const current = screen.getByRole('menuitemradio', { checked: true })
-    expectCountAfterName(current, LONG, 2)
+    expect(labelParts(trigger('[data-group-name-header]')).count.textContent).toBe('2')
   })
 })

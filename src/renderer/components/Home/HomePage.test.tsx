@@ -826,27 +826,23 @@ describe('Home — the Agents page shell', () => {
       expect(rowOf('Cortana').querySelector('[data-shortcut-badge="1"]')).not.toBeNull()
       expect(rowOf('Bee').querySelector('[data-shortcut-badge="2"]')).not.toBeNull()
       expect(rowOf('Nova').querySelector('[data-shortcut-badge="4"]')).not.toBeNull()
-      // No `⌘ 1-9` hint in the header (Rosson 2026-11-09): the picker is the
-      // header's only child, so it runs the full width.
-      const pickerButton = within(homeSidebar()).getByTitle('Pick a Home')
+      // No `⌘ 1-9` hint in the header: it holds the current group's name
+      // (its one child, the full width) and the "…" for its card.
       expect(homeSidebar().querySelector('[data-home-row-hint]')).toBeNull()
       expect(homeSidebar().querySelector('[data-shortcut-hint]')).toBeNull()
       const header = homeSidebar().querySelector('[data-home-header]')
       if (!(header instanceof HTMLElement)) throw new Error('no Home header')
       expect(header.children.length).toBe(1)
-      expect(header.contains(pickerButton)).toBe(true)
-      expect(pickerButton.className).toContain('w-full')
+      expect(header.querySelector('[data-group-name-header]')?.className).toContain('w-full')
+      expect(within(header).getByRole('button', { name: `Edit group ${home.name}` })).toBeTruthy()
 
-      fireEvent.click(pickerButton)
-      // The menu is portalled out of the sidebar (no clipping ancestor).
-      const menu = document.querySelector('[data-home-picker-menu]')
-      if (!(menu instanceof HTMLElement)) throw new Error('no Home picker menu')
-      expect(homeSidebar().contains(menu)).toBe(false)
-      const items = within(menu).getAllByRole('menuitemradio')
-      expect(items.map((el) => el.querySelector('[data-shortcut-badge]')?.textContent ?? null)).toEqual([
-        '⌥⌘1',
-        '⌥⌘2',
-        '⌥⌘3',
+      // The group bar at the bottom of the nav: each group's ⌥⌘N in its tooltip.
+      const bar = within(homeSidebar()).getByRole('toolbar', { name: 'Groups' })
+      expect(homeSidebar().querySelector('[data-nav-footer]')?.contains(bar)).toBe(true)
+      expect(Array.from(bar.querySelectorAll('[data-group-id]')).map((b) => b.getAttribute('title'))).toEqual([
+        `${home.name} (⌥⌘1)`,
+        'Second (⌥⌘2)',
+        'Third (⌥⌘3)',
       ])
     } finally {
       for (const id of extra) if (id) useHomesStore.getState().deleteHome(id)

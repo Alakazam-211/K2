@@ -12,7 +12,8 @@
 //! (`updatedAt`, `deviceId`), deletes kept as **tombstones**.
 //!
 //! **Items** (the wire shape the routes speak, camelCase):
-//! - Home: `{kind:"home", id, name, order, updatedAt, deleted?, mergedInto?}`
+//! - Home: `{kind:"home", id, name, order, updatedAt, deleted?, mergedInto?,
+//!   icon?}` — `icon` is a Lucide icon name (`[a-z0-9-]{1,64}`) or null.
 //! - Row:  `{kind:"row", homeId, address:"handle::<serverId>", label,
 //!   workspaceId, order, updatedAt, deleted?}` — identity `(homeId, address)`.
 //!
@@ -24,6 +25,11 @@
 //! brings the item back. `mergedInto` (a Home tombstone only) keeps a
 //! merged-away Home id as a redirect, so selections and Garden `seedHome`
 //! still resolve.
+//!
+//! **Fields an older client leaves out.** A field added after 0.46.1
+//! (`icon`, migration 0305) is optional on a push: left out, the stored
+//! value stays (an older device's rename must not wipe the icon a newer one
+//! set); JSON `null` clears it.
 //!
 //! **Cursor.** Each person has a monotonic `seq`; every push that changes
 //! something bumps it once and stamps the changed items with it. A pull
@@ -62,9 +68,16 @@ pub const ADDRESS_MAX: usize = 300;
 pub const ORDER_MAX: usize = 128;
 pub const DEVICE_NAME_MAX: usize = 80;
 pub const PLATFORM_MAX: usize = 32;
+/// The longest Home icon name (a Lucide icon name, kebab-case).
+pub const ICON_MAX: usize = 64;
 
 /// The fractional-index digits, in ASCII (= string compare) order.
 pub const ORDER_DIGITS: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// A Home icon name: 1..=[`ICON_MAX`] chars of `[a-z0-9-]`.
+pub fn valid_icon(s: &str) -> bool {
+    !s.is_empty() && s.len() <= ICON_MAX && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
 
 /// True when migration 0193's tables exist.
 pub fn tables_exist(conn: &Connection) -> bool {
@@ -115,6 +128,28 @@ pub struct Item {
     pub deleted: bool,
     /// Home tombstone only: the Home it was merged into.
     pub merged_into: Option<String>,
+    /// Home only: its Lucide icon name, None for none.
+    pub icon: Option<String>,
+    /// The optional fields this push left out (an older client): each
+    /// keeps the stored value. Always empty on an item read from storage.
+    pub omitted: Omitted,
+}
+
+/// Which optional fields a pushed item left out (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Omitted {
+    pub icon: bool,
+}
+
+impl Item {
+    /// Fill every field this push left out from what the server holds (or
+    /// the default when it holds nothing).
+    fn keep_omitted(&mut self, existing: Option<&Item>) {
+        if self.omitted.icon {
+            self.icon = existing.and_then(|e| e.icon.clone());
+        }
+        self.omitted = Omitted::default();
+    }
 }
 
 impl Item {
@@ -140,6 +175,7 @@ impl Item {
                 "kind": "home",
                 "id": self.home_id,
                 "name": self.name,
+                "icon": self.icon,
                 "order": self.order,
                 "updatedAt": self.updated_at,
                 "deviceId": self.device_id,
@@ -180,6 +216,7 @@ pub mod reason {
     pub const FUTURE_UPDATED_AT: &str = "future_updated_at";
     pub const INVALID_DELETED: &str = "invalid_deleted";
     pub const INVALID_MERGED_INTO: &str = "invalid_merged_into";
+    pub const INVALID_ICON: &str = "invalid_icon";
     pub const LAST_HOME: &str = "last_home";
 }
 
@@ -262,6 +299,12 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
                 Some(Value::String(m)) if deleted && valid_id(m) && m != id => Some(m.clone()),
                 Some(_) => return Err(reason::INVALID_MERGED_INTO),
             };
+            let (icon, icon_omitted) = match o.get("icon") {
+                None => (None, true),
+                Some(Value::Null) => (None, false),
+                Some(Value::String(s)) if valid_icon(s) => (Some(s.clone()), false),
+                Some(_) => return Err(reason::INVALID_ICON),
+            };
             Ok(Item {
                 kind,
                 home_id: id.to_string(),
@@ -274,6 +317,8 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
                 device_id: device_id.to_string(),
                 deleted,
                 merged_into,
+                icon,
+                omitted: Omitted { icon: icon_omitted },
             })
         }
         Kind::Row => {
@@ -298,6 +343,9 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
             if o.get("mergedInto").is_some_and(|m| !m.is_null()) {
                 return Err(reason::INVALID_MERGED_INTO);
             }
+            if o.get("icon").is_some_and(|m| !m.is_null()) {
+                return Err(reason::INVALID_ICON);
+            }
             Ok(Item {
                 kind,
                 home_id: home_id.to_string(),
@@ -310,6 +358,8 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
                 device_id: device_id.to_string(),
                 deleted,
                 merged_into: None,
+                icon: None,
+                omitted: Omitted::default(),
             })
         }
     }
@@ -318,7 +368,7 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
 // ── Storage ────────────────────────────────────────────────────────────
 
 const ITEM_COLS: &str =
-    "kind, home_id, address, name, label, workspace_id, ord, updated_at, device_id, deleted, merged_into";
+    "kind, home_id, address, name, label, workspace_id, ord, updated_at, device_id, deleted, merged_into, icon";
 
 fn item_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
     let kind: String = r.get(0)?;
@@ -334,6 +384,8 @@ fn item_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
         device_id: r.get(8)?,
         deleted: r.get::<_, i64>(9)? != 0,
         merged_into: r.get(10)?,
+        icon: r.get(11)?,
+        omitted: Omitted::default(),
     })
 }
 
@@ -518,6 +570,7 @@ pub fn push(
             }
         }
         let mut item = item;
+        item.keep_omitted(existing.as_ref());
         if item.kind == Kind::Home && item.deleted && existing.as_ref().is_some_and(|e| !e.deleted) {
             if live_home_count_except(&tx, person, &item.home_id)? == 0 {
                 rejected.push(Rejected { item: item.to_json(), reason: reason::LAST_HOME });
@@ -540,12 +593,13 @@ pub fn push(
         }
         tx.execute(
             "INSERT INTO homes_items (person, kind, home_id, address, name, label, workspace_id, ord, \
-               updated_at, device_id, deleted, merged_into, seq) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+               updated_at, device_id, deleted, merged_into, seq, icon) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
              ON CONFLICT (person, kind, home_id, address) DO UPDATE SET \
                name = excluded.name, label = excluded.label, workspace_id = excluded.workspace_id, \
                ord = excluded.ord, updated_at = excluded.updated_at, device_id = excluded.device_id, \
-               deleted = excluded.deleted, merged_into = excluded.merged_into, seq = excluded.seq",
+               deleted = excluded.deleted, merged_into = excluded.merged_into, seq = excluded.seq, \
+               icon = excluded.icon",
             params![
                 person,
                 item.kind.as_str(),
@@ -559,7 +613,8 @@ pub fn push(
                 item.device_id,
                 item.deleted as i64,
                 item.merged_into,
-                next
+                next,
+                item.icon
             ],
         )?;
         applied += 1;
@@ -763,6 +818,8 @@ mod tests {
         let conn = Connection::open_in_memory().expect("mem db");
         conn.execute_batch(include_str!("../drizzle_sql/0193_homes_sync.sql").replace("--> statement-breakpoint", "").as_str())
             .expect("0193 applies");
+        conn.execute_batch(include_str!("../drizzle_sql/0305_home_groups.sql").replace("--> statement-breakpoint", "").as_str())
+            .expect("0305 applies");
         assert!(tables_exist(&conn));
         conn
     }
@@ -1042,6 +1099,84 @@ mod tests {
         assert_eq!(clean_platform(" iOS "), Some("ios".into()));
         assert_eq!(clean_platform("mac os"), None);
         assert_eq!(clean_device_name("  My   Phone "), Some("My Phone".into()));
+    }
+
+    fn icon_of(conn: &Connection, person: &str, id: &str) -> Value {
+        live(conn, person)
+            .into_iter()
+            .find(|v| v["kind"] == "home" && v["id"] == id)
+            .unwrap_or_else(|| panic!("no live Home {id}"))["icon"]
+            .clone()
+    }
+
+    #[test]
+    fn a_home_icon_pushes_and_pulls() {
+        let c = db();
+        let mut h = home("h1", "Work", "V", NOW);
+        h["icon"] = json!("briefcase");
+        let r = push(&c, "owner", "laptop", &[h], NOW).expect("push");
+        assert!(r.rejected.is_empty(), "{:?}", r.rejected);
+        assert_eq!(icon_of(&c, "owner", "h1"), json!("briefcase"));
+        // The incremental pull carries it too.
+        let p = pull(&c, "owner", Some(0), None, NOW).expect("delta");
+        assert_eq!(p.changes[0].to_json()["icon"], json!("briefcase"));
+        // A newer edit with another icon wins; JSON null clears it.
+        let mut h = home("h1", "Work", "V", NOW + 1);
+        h["icon"] = json!("rocket");
+        push(&c, "owner", "phone", &[h], NOW).expect("change");
+        assert_eq!(icon_of(&c, "owner", "h1"), json!("rocket"));
+        let mut h = home("h1", "Work", "V", NOW + 2);
+        h["icon"] = Value::Null;
+        push(&c, "owner", "phone", &[h], NOW).expect("clear");
+        assert_eq!(icon_of(&c, "owner", "h1"), Value::Null, "null clears the icon");
+        // A Home that never had one reads as null.
+        push(&c, "owner", "phone", &[home("h2", "Other", "k", NOW)], NOW).expect("h2");
+        assert_eq!(icon_of(&c, "owner", "h2"), Value::Null);
+    }
+
+    #[test]
+    fn an_older_client_that_leaves_icon_out_keeps_the_stored_icon() {
+        let c = db();
+        let mut h = home("h1", "Work", "V", NOW);
+        h["icon"] = json!("briefcase");
+        push(&c, "owner", "new-client", &[h], NOW).expect("set");
+        // An older client renames the Home later: no `icon` key at all.
+        let old = home("h1", "Work stuff", "k", NOW + 10);
+        assert!(old.get("icon").is_none());
+        let r = push(&c, "owner", "old-client", &[old], NOW).expect("old rename");
+        assert_eq!(r.applied, 1);
+        let l = live(&c, "owner");
+        let got = l.iter().find(|v| v["id"] == "h1").expect("h1");
+        assert_eq!((got["name"].clone(), got["order"].clone(), got["icon"].clone()), (json!("Work stuff"), json!("k"), json!("briefcase")));
+        // Its tombstone keeps the icon for context as well (a later edit brings it back with it).
+        push(&c, "owner", "old-client", &[home("h2", "Spare", "s", NOW)], NOW).expect("spare");
+        push(&c, "owner", "old-client", &[tomb(home("h1", "Work stuff", "k", NOW + 20))], NOW).expect("tomb");
+        let p = pull(&c, "owner", Some(2), None, NOW).expect("delta");
+        let t = p.changes.iter().map(Item::to_json).find(|v| v["id"] == "h1").expect("tombstone in delta");
+        assert_eq!((t["deleted"].clone(), t["icon"].clone()), (json!(true), json!("briefcase")));
+    }
+
+    #[test]
+    fn a_bad_icon_is_refused() {
+        let c = db();
+        let mut cases = Vec::new();
+        for bad in [json!("Briefcase"), json!("brief case"), json!(""), json!("a".repeat(ICON_MAX + 1)), json!("emoji-\u{1F600}"), json!(5), json!(true)] {
+            let mut h = home("h1", "Work", "V", NOW);
+            h["icon"] = bad;
+            cases.push(h);
+        }
+        // An icon on a row is refused too (rows have none).
+        let mut r = row("h1", "a::b", "V", NOW);
+        r["icon"] = json!("rocket");
+        cases.push(r);
+        let res = push(&c, "owner", "d", &cases, NOW).expect("push");
+        assert_eq!(res.applied, 0);
+        assert_eq!(res.rejected.iter().map(|x| x.reason).collect::<Vec<_>>(), vec![reason::INVALID_ICON; 8]);
+        // The longest valid name passes.
+        let mut ok = home("h1", "Work", "V", NOW);
+        ok["icon"] = json!("a".repeat(ICON_MAX));
+        assert!(push(&c, "owner", "d", &[ok], NOW).expect("ok").rejected.is_empty());
+        assert!(valid_icon("gamepad-2") && valid_icon("house") && !valid_icon("House"));
     }
 
     #[test]

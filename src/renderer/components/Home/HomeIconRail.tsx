@@ -2,7 +2,8 @@
 // `IconRail` (48px, command palette, + then the collapse button), with
 // the Home roster as icons. A connected-server row is the Agents rail icon
 // itself (`ProjectIcon`); a row on another server is the same 32px button
-// with its letter avatar.
+// with its letter avatar. Above the bottom buttons, the group bar stands
+// upright (one icon per group, the current one in the accent colour).
 
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -19,6 +20,8 @@ import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButto
 import { useHomeAddPickerStore, useRowStatus } from './home-room'
 import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupChecklist'
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
+import HomeGroupBar from './groups/HomeGroupBar'
+import { useHomeGroups } from './groups/useHomeGroups'
 
 const RAIL_WIDTH = 48
 
@@ -78,6 +81,7 @@ function RailRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element
 
 export default function HomeIconRail(): React.JSX.Element {
   const home = useHomesStore(selectedHome)
+  const groups = useHomeGroups()
   return (
     <div
       data-material="tile"
@@ -106,6 +110,10 @@ export default function HomeIconRail(): React.JSX.Element {
       </div>
 
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
+        {/* The group bar, upright: one icon per group, then "+". */}
+        <div className="mb-1 w-full border-t border-[var(--color-border)] pt-1 flex justify-center">
+          <HomeGroupBar {...groups.bar} orientation="vertical" />
+        </div>
         <SetupChecklistRailButton />
         <button
           data-material="frost"

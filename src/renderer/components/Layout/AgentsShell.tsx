@@ -28,6 +28,7 @@ import HomeSidebar from '@/components/Home/HomeSidebar'
 import HomeIconRail from '@/components/Home/HomeIconRail'
 import { useHomeRoomSelected } from '@/components/Home/home-room'
 import { useHomesStore, selectedHome } from '@/stores/homes'
+import { useGroupSwipe } from '@/hooks/useGroupSwipe'
 import { usePageViewStore } from '@/stores/page-view'
 import { LeftPanelContent, RightPanelContent } from './WorkspaceDrawers'
 import { NoTabBarDrawerToggles } from './DrawerTabBarToggle'
@@ -91,6 +92,8 @@ export default function AgentsShell({
   const room = primaryRoom()
   const onHome = usePageViewStore((s) => s.page === 'home')
   const homeEmpty = useHomesStore((s) => selectedHome(s).rows.length === 0)
+  // Home groups: a two-finger sideways swipe moves between groups.
+  useGroupSwipe(onHome)
   const remote = useShownRemoteRoom()
   const remoteRoom = remote?.room ?? null
   // The top bar names a room on another server as `server / agent / branch`.

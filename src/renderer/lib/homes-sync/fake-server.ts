@@ -108,6 +108,10 @@ export class FakeHomeServer {
         superseded++
         continue
       }
+      // As the daemon: a left-out icon keeps the stored one, null clears.
+      if (item.kind === 'home' && item.icon === undefined) {
+        item.icon = ex?.item.kind === 'home' ? (ex.item.icon ?? null) : null
+      }
       if (item.kind === 'home' && item.deleted && ex && !ex.item.deleted) {
         const others = [...this.items.values()].filter((s) => s.item.kind === 'home' && !s.item.deleted && itemKey(s.item) !== k)
         if (others.length === 0) {

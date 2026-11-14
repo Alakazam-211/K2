@@ -62,7 +62,7 @@ fn com_on_this_thread() -> Result<(), VideoError> {
     if COM_READY.with(|c| c.get()) {
         return Ok(());
     }
-    super::camera::init()?;
+    super::mfdll::init()?;
     COM_READY.with(|c| c.set(true));
     Ok(())
 }

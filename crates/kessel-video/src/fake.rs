@@ -310,6 +310,7 @@ impl VideoBackend for FakeBackend {
                     60,
                 );
                 c.max_instances = self.inner.cfg.max_instances;
+                c.file_mode = dir == CodecDirection::Decode;
                 c.h264 = Some(H264Capability::new(
                     vec![
                         H264Profile::ConstrainedBaseline,
@@ -482,7 +483,7 @@ impl VideoBackend for FakeBackend {
             return Err(unsupported("the fake has no hardware decoder"));
         }
         Ok(Box::new(ThreadedDecoder::start(
-            Box::new(StructuralDecoder),
+            Box::new(StructuralDecoder::default()),
             config,
             wake,
         )?))
@@ -829,9 +830,39 @@ impl EncoderCore for StructuralEncoder {
     }
 }
 
-struct StructuralDecoder;
+/// The structural decoder. In File mode it plays an OS decoder that buffers
+/// without reordering: each frame comes out [`FILE_DELAY`] inputs late, in
+/// decode order, so the presentation order is the decoder thread's work.
+#[derive(Default)]
+struct StructuralDecoder {
+    /// File mode: decoded frames not yet given out, in decode order.
+    delayed: std::collections::VecDeque<VideoFrame>,
+}
+
+/// How many inputs late the structural decoder gives a File-mode frame.
+const FILE_DELAY: usize = 2;
 
 impl DecoderCore for StructuralDecoder {
+    fn decode_file(
+        &mut self,
+        input: &EncodedInput,
+        out: &mut Vec<VideoFrame>,
+    ) -> Result<(), DecodeError> {
+        if let Some(mut f) = self.decode(input)? {
+            f.capture_us = input.capture_us;
+            self.delayed.push_back(f);
+        }
+        while self.delayed.len() > FILE_DELAY {
+            out.extend(self.delayed.pop_front());
+        }
+        Ok(())
+    }
+
+    fn flush_file(&mut self, out: &mut Vec<VideoFrame>) -> Result<(), DecodeError> {
+        out.extend(self.delayed.drain(..));
+        Ok(())
+    }
+
     fn decode(&mut self, input: &EncodedInput) -> Result<Option<VideoFrame>, DecodeError> {
         let nals = h264::annexb_nals(&input.data);
         let types: Vec<u8> = nals.iter().filter_map(|n| h264::nal_type(n)).collect();
@@ -881,6 +912,7 @@ impl DecoderCore for StructuralDecoder {
     }
 
     fn reset(&mut self) -> Result<(), VideoError> {
+        self.delayed.clear();
         Ok(())
     }
 
@@ -890,7 +922,7 @@ impl DecoderCore for StructuralDecoder {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::api::no_wake;
     use crate::convert::convert;
@@ -1485,7 +1517,7 @@ mod tests {
             h264::push_annexb(&mut au, &slice);
             EncodedInput::new(VideoCodec::H264, au, true, 1)
         };
-        let mut dec = StructuralDecoder;
+        let mut dec = StructuralDecoder::default();
         let f = crate::kit::DecoderCore::decode(&mut dec, &au(8192, 16))
             .expect("8192 wide decodes")
             .expect("a frame");
@@ -1494,5 +1526,160 @@ mod tests {
             let r = crate::kit::DecoderCore::decode(&mut dec, &au(w, h));
             assert!(matches!(r, Err(DecodeError::Corrupt(_))), "{w}x{h}: {r:?}");
         }
+    }
+
+    /// `n` structural access units in presentation order (frame `i` has
+    /// code `i` and pts `i * 40_000`), then put in decode order with two
+    /// B-frames between anchors: I0 P3 B1 B2 P6 B4 B5 … and the tail.
+    pub(crate) fn b_frame_stream(n: u32) -> Vec<EncodedInput> {
+        let b = FakeBackend::new(FakeConfig::default());
+        let mut enc = b
+            .encoder(EncoderConfig::h264(320, 180, 25, 300_000), no_wake())
+            .expect("enc");
+        let mut shown = Vec::new();
+        for i in 0..n {
+            let pts = i as u64 * 40_000;
+            enc.submit(
+                &pattern_frame(320, 180, i, pts).expect("frame"),
+                EncodeOptions::default(),
+            )
+            .expect("submit");
+            let e = wait_for(Duration::from_secs(2), || enc.poll())
+                .expect("out")
+                .expect("ok");
+            shown.push(EncodedInput::file(
+                VideoCodec::H264,
+                e.data,
+                e.keyframe,
+                pts,
+                None,
+            ));
+        }
+        let mut order = vec![0usize];
+        let mut anchor = 0usize;
+        while anchor + 3 < n as usize {
+            order.extend([anchor + 3, anchor + 1, anchor + 2]);
+            anchor += 3;
+        }
+        order.extend(anchor + 1..n as usize);
+        order
+            .into_iter()
+            .enumerate()
+            .map(|(k, i)| {
+                let mut input = shown[i].clone();
+                input.dts_us = Some(k as u64 * 40_000);
+                input
+            })
+            .collect()
+    }
+
+    #[test]
+    fn file_mode_gives_every_frame_in_presentation_order_with_its_pts() {
+        let stream = b_frame_stream(40);
+        let decode_order: Vec<u64> = stream.iter().map(|i| i.capture_us).collect();
+        assert_ne!(
+            decode_order,
+            {
+                let mut s = decode_order.clone();
+                s.sort();
+                s
+            },
+            "the stream is in decode order, not presentation order"
+        );
+        let b = FakeBackend::new(FakeConfig::default());
+        assert!(b
+            .capabilities()
+            .best(VideoCodec::H264, CodecDirection::Decode)
+            .is_some_and(|c| c.file_mode));
+        let mut cfg = DecoderConfig::file(VideoCodec::H264);
+        cfg.output_queue = 3;
+        let mut dec = b.decoder(cfg, no_wake()).expect("dec");
+        let mut out: Vec<VideoFrame> = Vec::new();
+        let mut busy = 0;
+        let mut take = |dec: &mut Box<dyn VideoDecoder>, out: &mut Vec<VideoFrame>| {
+            while let Some(r) = dec.poll() {
+                match r {
+                    Ok(f) => out.push(f),
+                    Err(DecodeError::EndOfStream) => return true,
+                    Err(e) => panic!("decode: {e:?}"),
+                }
+            }
+            false
+        };
+        for input in stream {
+            loop {
+                match dec.submit(input.clone()) {
+                    Ok(()) => break,
+                    Err(DecodeError::Busy) => {
+                        busy += 1;
+                        std::thread::sleep(Duration::from_millis(1));
+                        take(&mut dec, &mut out);
+                    }
+                    Err(e) => panic!("submit: {e:?}"),
+                }
+            }
+        }
+        assert!(busy > 0, "a queue of 3 pushed back");
+        // The tail is still inside until the flush.
+        std::thread::sleep(Duration::from_millis(50));
+        take(&mut dec, &mut out);
+        assert!(out.len() < 40, "{} out before the flush", out.len());
+        dec.flush().expect("flush");
+        assert_eq!(
+            dec.submit(EncodedInput::new(VideoCodec::H264, vec![0], true, 0)),
+            Err(DecodeError::Busy),
+            "no input while the flush drains"
+        );
+        assert!(
+            wait_for(Duration::from_secs(5), || take(&mut dec, &mut out)
+                .then_some(()))
+            .is_some(),
+            "EndOfStream after the drain"
+        );
+        assert_eq!(out.len(), 40, "every frame came out");
+        for (i, f) in out.iter().enumerate() {
+            assert_eq!(f.capture_us, i as u64 * 40_000, "frame {i}'s pts");
+            assert_eq!(read_frame_code(f), Some(i as u32), "frame {i}'s content");
+        }
+        let st = dec.stats();
+        assert_eq!((st.frames_in, st.frames_out, st.dropped_out), (40, 40, 0));
+        assert_eq!(st.errors, 0);
+        // After the end of stream: times start afresh, from a keyframe.
+        let again = b_frame_stream(4);
+        assert_eq!(dec.submit(again[1].clone()), Err(DecodeError::NeedKeyframe));
+        dec.submit(again[0].clone())
+            .expect("a keyframe after the flush");
+        dec.flush().expect("flush");
+        let mut out2 = Vec::new();
+        assert!(
+            wait_for(Duration::from_secs(5), || take(&mut dec, &mut out2)
+                .then_some(()))
+            .is_some()
+        );
+        assert_eq!(out2.len(), 1);
+        assert_eq!(out2[0].capture_us, 0);
+    }
+
+    #[test]
+    fn real_time_has_no_flush_and_file_queues_are_checked() {
+        let b = FakeBackend::new(FakeConfig::default());
+        let mut dec = b
+            .decoder(DecoderConfig::new(VideoCodec::H264), no_wake())
+            .expect("dec");
+        assert!(matches!(
+            dec.flush(),
+            Err(DecodeError::Video(VideoError::Unsupported(_)))
+        ));
+        for q in [0, crate::kit::FILE_OUTPUT_QUEUE_MAX + 1] {
+            let mut cfg = DecoderConfig::file(VideoCodec::H264);
+            cfg.output_queue = q;
+            assert!(matches!(
+                b.decoder(cfg, no_wake()),
+                Err(VideoError::Invalid(_))
+            ));
+        }
+        let mut cfg = DecoderConfig::new(VideoCodec::H264);
+        cfg.output_queue = 0;
+        assert!(b.decoder(cfg, no_wake()).is_ok(), "real time ignores it");
     }
 }

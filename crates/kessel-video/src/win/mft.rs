@@ -13,9 +13,8 @@
 //! [`Mft::process`] hides the difference: one input sample in, the output
 //! samples for it out.
 
-use super::camera::string_attr;
 use super::map_error;
-use super::mfdll::mfplat;
+use super::mfdll::{mfplat, string_attr};
 use crate::error::{unsupported, VideoError};
 use crate::types::ImplPreference;
 use std::time::{Duration, Instant};
@@ -84,7 +83,7 @@ pub(super) fn on_com_thread<T: Send>(f: impl FnOnce() -> T + Send) -> T {
 /// where Windows has no H.264 (an N or KN edition without the Media Feature
 /// Pack); `Unsupported` where Media Foundation itself is missing.
 pub(super) fn find(role: Role, pref: ImplPreference) -> Result<Vec<Found>, VideoError> {
-    super::camera::init()?;
+    super::mfdll::init()?;
     let mf = mfplat()?;
     let t = h264_type();
     let (category, input, output, ms_clsid) = match role {
@@ -173,6 +172,9 @@ pub(super) enum NoOutput {
     Drain,
     /// Accept that there is none yet (a decoder fed only parameter sets).
     Wait,
+    /// Return as soon as the MFT asks for the next input: its outputs come
+    /// with later inputs or a drain (a decoder in File mode, reordering).
+    Queue,
 }
 
 /// An open MFT.
@@ -206,6 +208,12 @@ impl Mft {
     /// Create the MFT behind `found`. Asynchronous ones are unlocked; low
     /// latency is asked for (decoders then output each frame at once).
     pub(super) fn open(found: &Found) -> Result<Mft, VideoError> {
+        Mft::open_with(found, true)
+    }
+
+    /// [`Mft::open`], with low latency (`MF_LOW_LATENCY`) asked for or not:
+    /// without it a decoder may hold frames back and reorder them.
+    pub(super) fn open_with(found: &Found, low_latency: bool) -> Result<Mft, VideoError> {
         // SAFETY: activation of an object Media Foundation enumerated.
         let transform: IMFTransform = unsafe { found.activate.ActivateObject() }
             .map_err(|e| map_error(&e, "ActivateObject"))?;
@@ -238,7 +246,7 @@ impl Mft {
                             .map_err(|e| map_error(&e, "IMFMediaEventGenerator"))?,
                     );
                 }
-                let _ = a.SetUINT32(&MF_LOW_LATENCY, 1);
+                let _ = a.SetUINT32(&MF_LOW_LATENCY, low_latency as u32);
             }
             let (mut i, mut o) = ([0u32], [0u32]);
             // E_NOTIMPL means fixed streams numbered from 0.
@@ -353,13 +361,52 @@ impl Mft {
         }
         self.pull_all(&mut out, on_change)?;
         if out.is_empty() && no_output == NoOutput::Drain {
-            // SAFETY: a command on a live MFT; it then gives what it holds
-            // and takes input again.
-            unsafe { self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0) }
-                .map_err(|e| map_error(&e, "MFT_MESSAGE_COMMAND_DRAIN"))?;
-            self.pull_all(&mut out, on_change)?;
+            self.drain_into(&mut out, on_change)?;
         }
         Ok(out)
+    }
+
+    /// Everything the MFT holds, now (a decoder's end of stream). It takes
+    /// input again after.
+    pub(super) fn drain(
+        &mut self,
+        on_change: &mut dyn FnMut(&IMFTransform) -> Result<(), VideoError>,
+    ) -> Result<Vec<IMFSample>, VideoError> {
+        self.fresh_from = 0;
+        let mut out = Vec::new();
+        self.drain_into(&mut out, on_change)?;
+        Ok(out)
+    }
+
+    fn drain_into(
+        &mut self,
+        out: &mut Vec<IMFSample>,
+        on_change: &mut dyn FnMut(&IMFTransform) -> Result<(), VideoError>,
+    ) -> Result<(), VideoError> {
+        // SAFETY: a command on a live MFT; it then gives what it holds
+        // and takes input again (an asynchronous one answers with its held
+        // outputs, then METransformDrainComplete).
+        unsafe { self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0) }
+            .map_err(|e| map_error(&e, "MFT_MESSAGE_COMMAND_DRAIN"))?;
+        let Some(ev) = self.events.clone() else {
+            return self.pull_all(out, on_change);
+        };
+        let drain_start = Instant::now();
+        loop {
+            match next_event(&ev)? {
+                Some(t) if t == METransformDrainComplete => break,
+                Some(t) => self.on_event(t, out, on_change)?,
+                None if drain_start.elapsed() > STUCK => {
+                    return Err(VideoError::os(
+                        0,
+                        format!("{} didn't finish draining in {STUCK:?}", self.name),
+                    ))
+                }
+                None => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        self.drained = true;
+        Ok(())
     }
 
     /// `ProcessOutput` until the MFT wants more input.
@@ -500,6 +547,9 @@ impl Mft {
                     if out.len() > had {
                         return Ok(out);
                     }
+                    if no_output == NoOutput::Queue && self.credits > 0 {
+                        return Ok(out);
+                    }
                 }
                 None => {
                     // Wants more input and gave nothing for this one yet.
@@ -516,28 +566,10 @@ impl Mft {
                 }
             }
         }
-        if no_output == NoOutput::Wait {
+        if no_output != NoOutput::Drain {
             return Ok(out);
         }
-        // SAFETY: a command on a live MFT; it answers with its held
-        // outputs, then METransformDrainComplete.
-        unsafe { self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0) }
-            .map_err(|e| map_error(&e, "MFT_MESSAGE_COMMAND_DRAIN"))?;
-        let drain_start = Instant::now();
-        loop {
-            match next_event(&ev)? {
-                Some(t) if t == METransformDrainComplete => break,
-                Some(t) => self.on_event(t, &mut out, on_change)?,
-                None if drain_start.elapsed() > STUCK => {
-                    return Err(VideoError::os(
-                        0,
-                        format!("{} didn't finish draining in {STUCK:?}", self.name),
-                    ))
-                }
-                None => std::thread::sleep(Duration::from_millis(1)),
-            }
-        }
-        self.drained = true;
+        self.drain_into(&mut out, on_change)?;
         Ok(out)
     }
 

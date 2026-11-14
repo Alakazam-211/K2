@@ -6,12 +6,71 @@
 //! N or KN edition without the Media Feature Pack runs with no cameras and
 //! no H.264 instead of failing to start.
 
+// Capture needs the `windows` feature; the codecs (`windows-codecs`) don't.
+#[cfg(feature = "windows")]
 mod camera;
 mod h264_dec;
 mod h264_enc;
 mod mfdll;
 mod mft;
+#[cfg(feature = "windows")]
 mod screen;
+
+/// A build without the `windows` feature (the `codecs` feature alone): no
+/// Media Foundation capture and no Windows Graphics Capture.
+#[cfg(not(feature = "windows"))]
+mod camera {
+    use crate::api::{FrameSource, Wake};
+    use crate::error::{unsupported, VideoError};
+    use crate::types::*;
+
+    pub(crate) fn cameras() -> Vec<CameraInfo> {
+        Vec::new()
+    }
+
+    pub(crate) fn permission() -> Permission {
+        Permission::Denied
+    }
+
+    pub(crate) fn open(
+        _id: Option<&str>,
+        _c: CaptureConstraints,
+        _wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
+        Err(unsupported(WHY))
+    }
+
+    pub(crate) const WHY: &str = "kessel-video was built without capture (the `windows` feature)";
+}
+
+/// See `camera` above.
+#[cfg(not(feature = "windows"))]
+mod screen {
+    use super::camera::WHY;
+    use crate::api::{Done, FrameSource, Wake};
+    use crate::error::{unsupported, VideoError};
+    use crate::types::*;
+
+    pub(crate) fn supported() -> bool {
+        false
+    }
+
+    pub(crate) fn sources() -> Result<Vec<ScreenSourceInfo>, VideoError> {
+        Ok(Vec::new())
+    }
+
+    pub(crate) fn pick(_opts: PickOptions, done: Done<Result<ScreenSelection, VideoError>>) {
+        done(Err(unsupported(WHY)))
+    }
+
+    pub(crate) fn open(
+        _source: &ScreenSelection,
+        _c: CaptureConstraints,
+        _wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
+        Err(unsupported(WHY))
+    }
+}
 
 use crate::api::{
     Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
@@ -185,6 +244,7 @@ fn h264_capabilities() -> Vec<CodecCapability> {
             level,
         ));
         c.formats = formats.clone();
+        c.file_mode = dir == CodecDirection::Decode;
         c
     };
     let mut out = Vec::new();
@@ -245,7 +305,10 @@ impl VideoBackend for WinBackend {
         caps.codecs.extend(h264_capabilities());
         // Media Foundation is missing on an N or KN edition without the
         // Media Feature Pack.
-        caps.camera = mfdll::mfplat().is_ok() && mfdll::mfcapture().is_ok();
+        #[cfg(feature = "windows")]
+        {
+            caps.camera = mfdll::mfplat().is_ok() && mfdll::mfcapture().is_ok();
+        }
         let wgc = screen::supported();
         // The system picker (GraphicsCapturePicker) needs the app's HWND:
         // PickOptions::with_parent_window. No window exclusion: Windows' only
@@ -420,7 +483,7 @@ pub(crate) fn map_error(e: &windows::core::Error, what: &str) -> VideoError {
 #[cfg(test)]
 mod h264_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "windows"))]
 mod tests {
     use super::*;
     use crate::api::no_wake;

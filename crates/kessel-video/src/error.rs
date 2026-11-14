@@ -80,8 +80,10 @@ pub(crate) fn unsupported(detail: impl Into<String>) -> VideoError {
     VideoError::Unsupported(detail.into())
 }
 
-/// Decoder failures. All but `Busy` mean: send a PLI and call `reset` (the
-/// decoder already drops input until a keyframe).
+/// Decoder failures. All but `Busy` and `EndOfStream` mean: send a PLI and
+/// call `reset` (the decoder already drops input until a keyframe). In
+/// [`DecodeMode::File`](crate::DecodeMode::File) there is no PLI to send:
+/// go on from the next keyframe.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DecodeError {
@@ -99,6 +101,11 @@ pub enum DecodeError {
     /// The OS session is gone (GPU reset, backgrounded); `reset` reopens it.
     #[error("session_lost")]
     SessionLost,
+    /// [`DecodeMode::File`](crate::DecodeMode::File): not a failure. After
+    /// [`VideoDecoder::flush`](crate::VideoDecoder::flush), every frame that
+    /// was inside has come out; the next input must be a keyframe.
+    #[error("end_of_stream")]
+    EndOfStream,
     /// Anything else.
     #[error(transparent)]
     Video(#[from] VideoError),

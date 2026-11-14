@@ -159,7 +159,7 @@ fn with_view(frame: &VideoFrame, f: ViewFn<'_>) -> Option<Result<VideoFrame, Vid
         ),
         #[allow(unused_variables)]
         FrameBuffer::Native(n) => {
-            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+            #[cfg(all(feature = "apple-codecs", any(target_os = "macos", target_os = "ios")))]
             if let Some(cv) = n.0.as_any().downcast_ref::<crate::apple::pixel::CvFrame>() {
                 return Some(cv.read_view(f));
             }

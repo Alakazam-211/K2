@@ -6,7 +6,13 @@ carry live video over their own transport:
 - **camera and screen capture** through each operating system's own APIs;
 - **H.264 encoding and decoding through the OS's codec** (VideoToolbox on
   macOS and iOS, Media Foundation on Windows, MediaCodec on Android). The
-  crate contains no H.264 implementation and links no codec library;
+  crate contains no H.264 implementation and links no codec library. Each
+  codec comes from the OS and depends on the OS: where the OS has none, the
+  capability query lists none and opening one answers `unsupported`.
+  kessel-video never installs or buys a codec;
+- **two decode modes:** real time for a live track, and File mode for a
+  file's access units in decode order (B-frames), out in presentation
+  order with their pts, never dropped;
 - **VP8** encoding and decoding in pure Rust, through the published
   [`vp8-encoder`](https://crates.io/crates/vp8-encoder) and
   [`vp8-decoder`](https://crates.io/crates/vp8-decoder) crates;
@@ -30,12 +36,12 @@ won't. Each change is listed in CHANGELOG.md.
 
 | Platform | Cameras | Screens | Encode | Decode | Status |
 |---|---|---|---|---|---|
-| macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | The test suite passes, including VideoToolbox H.264 encoding and decoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
-| iOS (iPhone, iPad) | AVFoundation | Frame-in: the app feeds its broadcast upload extension's frames | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked and unit-tested only: never run on an iPhone or iPad.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. The iOS-only code and its tests (which need the simulator or a phone) have not run, and camera capture, rotation and interruptions need a device and a person. |
-| Linux (x86-64) | V4L2 | X11 screens (MIT-SHM, DAMAGE, XFIXES; listed, no picker), and the ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. X11 capture is tested against Xvfb (an in-memory X server). **Camera capture is untested with a real camera, and portal screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
-| Windows (x86-64) | Media Foundation | Windows Graphics Capture | H.264 (Media Foundation), VP8 | H.264 (Media Foundation), VP8 | The test suite passes on Windows 11 with no GPU, including H.264 encoding and decoding through Microsoft's software MFTs. **Hardware H.264 MFTs are untested** (they need a machine with a GPU), and **camera and screen capture are untested on hardware** (their tests run by hand). |
-| Android (API 24+) | Camera2 through the NDK | MediaProjection (API 26+), once the app hands one over | H.264 (MediaCodec), VP8 | VP8 | **Type-checked and unit-tested only: never run on a device or an emulator** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, MediaProjection screens, errors, VP8) is tested on a host over a scripted platform; the NDK and JNI calls themselves have not run. |
-| Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same | Tested on Linux and macOS. |
+| macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox: real time and File mode), VP8 | The test suite passes, including VideoToolbox H.264 encoding and decoding, and File mode on a B-frame clip from VideoToolbox's own encoder. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
+| iOS (iPhone, iPad) | AVFoundation | Frame-in: the app feeds its broadcast upload extension's frames | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox: real time and File mode), VP8 | **Type-checked and unit-tested only: never run on an iPhone or iPad.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. The iOS-only code and its tests (which need the simulator or a phone) have not run, and camera capture, rotation and interruptions need a device and a person. |
+| Linux (x86-64) | V4L2 | X11 screens (MIT-SHM, DAMAGE, XFIXES; listed, no picker), and the ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 (no H.264: Linux has no OS codec) | The test suite passes on machines with no camera and no desktop. X11 capture is tested against Xvfb (an in-memory X server). **Camera capture is untested with a real camera, and portal screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
+| Windows (x86-64) | Media Foundation | Windows Graphics Capture | H.264 (Media Foundation), VP8 | H.264 (Media Foundation: real time and File mode), VP8 | The test suite passes on Windows 11 with no GPU, including H.264 encoding and decoding through Microsoft's software MFTs. **File mode is type-checked only: never run on Windows.** **Hardware H.264 MFTs are untested** (they need a machine with a GPU), and **camera and screen capture are untested on hardware** (their tests run by hand). |
+| Android (API 24+) | Camera2 through the NDK | MediaProjection (API 26+), once the app hands one over | H.264 (MediaCodec), VP8 | VP8 (no H.264 decoder yet) | **Type-checked and unit-tested only: never run on a device or an emulator** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, MediaProjection screens, errors, VP8) is tested on a host over a scripted platform; the NDK and JNI calls themselves have not run. |
+| Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same, File mode too | Tested on Linux and macOS. |
 
 "Type-checked" means `cargo check` and `cargo clippy` pass for that target.
 "Unit-tested" means the logic's tests pass on a Mac or a Linux machine, not on
@@ -56,9 +62,9 @@ caller has already decrypted and verified.
 | Piece | How |
 |---|---|
 | Backend | One `VideoBackend` per app: capabilities, cameras, permissions, screens and windows, encoders, decoders, conversion, machine-wide events. `system()` for the OS, `null()` for none, `fake::FakeBackend` for tests. |
-| Threads and queues | Sources, encoders and decoders work by submit and poll. Each takes a `Wake` callback that runs after something is queued. Queues are small and bounded and never block the producer: capture 2 frames (oldest dropped), encoder output 8 (`submit` answers `Busy` instead), decoder output 2 (oldest dropped), events 32. No async runtime. |
+| Threads and queues | Sources, encoders and decoders work by submit and poll. Each takes a `Wake` callback that runs after something is queued. Queues are small and bounded and never block the producer: capture 2 frames (oldest dropped), encoder output 8 (`submit` answers `Busy` instead), decoder output 2 in real time (oldest dropped) or `DecoderConfig::output_queue` in File mode (8 by default, at most 64; `submit` answers `Busy` instead), events 32. No async runtime. |
 | Frame-in | `frame_in()` makes a `FrameSource` that the host feeds: CPU frames or native buffers (a CVPixelBuffer through `pixel_buffer_frame`, an AHardwareBuffer through `hardware_buffer_frame`), each with its timestamp and the quarter turn that makes it upright. Same queue, rate, size box and events as any source, and it never pauses for the app's background. Phone screen sharing comes in this way on iOS. |
-| Codecs | Codec-neutral: VP8 as raw RFC 6386 frames, H.264 as one Annex B access unit with 4-byte start codes and SPS and PPS before every IDR. Real time: no reordering, no B-frames, one output per input at most, `set_rates` never forces a keyframe, `capture_us` passes through. |
+| Codecs | Codec-neutral: VP8 as raw RFC 6386 frames, H.264 as one Annex B access unit with 4-byte start codes and SPS and PPS before every IDR. Every H.264 codec is the OS's own and works only where the OS has it: VideoToolbox (macOS, iOS), Media Foundation (Windows, not an N edition without the Media Feature Pack), MediaCodec (Android, encoding only). Elsewhere `capabilities()` lists no H.264 and opening one answers `unsupported`. Real time: no reordering, no B-frames, one output per input at most, `set_rates` never forces a keyframe, `capture_us` passes through. Decoders also have File mode (`DecoderConfig::file`, below). |
 | VP8 | `vp8-encoder` and `vp8-decoder` (feature `vp8`, part of `system`) in every backend, the fake included: real time, L1T2 and L1T3 temporal layers, one encoder per simulcast layer. |
 | Pixels | I420, NV12, BGRA and RGBA, with conversion and scaling on the CPU (`convert`), and OS-native buffers (`NativeFrame`) that pass from a source to an encoder of the same backend without a copy. On macOS and iOS, `convert` to `Native` makes pooled, IOSurface-backed NV12 pixel buffers from CPU planes, for a display layer. `convert` to I420 or NV12 reads a CVPixelBuffer or an AHardwareBuffer in place while it is locked, so one hardware capture feeds an H.264 encoder (the native frame) and a VP8 encoder (I420) at once, and its output memory comes from a pool: a steady stream allocates no pixel memory. |
 | Capability query | Per codec, direction and implementation: hardware or software, the largest size and rate, how many may be open at once, temporal layers, H.264 profiles and level, pixel formats. A hardware H.264 entry is listed only after a real hardware session opens, never assumed. Every open encoder and decoder reports what the OS actually made (`implementation()`: `Hardware`, `Software`, or `Unknown` where the OS doesn't say); a session counts as hardware only when the OS confirms it, never because hardware was asked for. On macOS and iOS an H.264 encoder's `info().name` also names its VideoToolbox encoder and profile, and each session open logs one `info` line (target `kessel_video::apple`). |
@@ -154,13 +160,73 @@ assert_eq!((upright.width, upright.height), (640, 360));
 # Ok::<(), kessel_video::VideoError>(())
 ```
 
+### Decoding a file
+
+`DecoderConfig::file` makes a decoder for a file's access units (the
+media-derivatives case) instead of a live track:
+
+- Access units go in in **decode order**, each with its presentation time in
+  `capture_us` and its decode time in `dts_us` when the container has one,
+  both in microseconds (`EncodedInput::file`; a container's times on its own
+  timescale convert as `t * 1_000_000 / timescale`). H.264 with B-frames is
+  fine: the OS session may reorder (VideoToolbox's temporal processing,
+  Media Foundation without low latency).
+- Frames come out in **presentation order**, each with its own pts in
+  `capture_us`. The decoder holds frames back as far as the stream's SPS
+  says it may reorder, so the last ones come out only at the end.
+- **Nothing is dropped:** up to `output_queue` frames wait for `poll`, and
+  `submit` answers `Busy` while that many do.
+- `flush()` at the end (or before a seek) gives every frame still inside,
+  then `Err(DecodeError::EndOfStream)`. The next input must be a keyframe,
+  and times start afresh.
+- Times that can't be in order are refused with `invalid`: a dts not after
+  the one before, a pts already given or at or before a frame already out.
+- **8-bit 4:2:0 H.264 only.** A 10-bit, 4:2:2, 4:4:4 or monochrome stream,
+  or one over 8192 pixels a side, is refused with `unsupported` (read from
+  its SPS before the OS sees it), never decoded wrong. HEVC, ProRes and
+  10-bit output are not in this release.
+- `capabilities()` marks each decoder entry that does File mode
+  (`CodecCapability::file_mode`).
+
+```rust
+use kessel_video::fake::{FakeBackend, FakeConfig};
+use kessel_video::{no_wake, DecodeError, DecoderConfig, EncodeOptions, EncodedInput, EncoderConfig, VideoBackend, VideoCodec, VideoFrame};
+
+let backend = FakeBackend::new(FakeConfig::default());
+let mut encoder = backend.encoder(EncoderConfig::h264(320, 180, 25, 300_000), no_wake())?;
+let frame = VideoFrame::filled(kessel_video::PixelFormat::I420, 320, 180, [16, 128, 128], 0)?;
+encoder.submit(&frame, EncodeOptions::default())?;
+let encoded = loop {
+    if let Some(e) = encoder.poll() {
+        break e?;
+    }
+};
+let mut decoder = backend.decoder(DecoderConfig::file(VideoCodec::H264), no_wake())?;
+// pts 40 ms, dts 0: as a container stores them.
+decoder.submit(EncodedInput::file(VideoCodec::H264, encoded.data, encoded.keyframe, 40_000, Some(0)))?;
+decoder.flush()?;
+let mut frames = Vec::new();
+loop {
+    match decoder.poll() {
+        Some(Ok(f)) => frames.push(f),
+        Some(Err(DecodeError::EndOfStream)) => break,
+        Some(Err(e)) => return Err(e.into()),
+        None => std::thread::sleep(std::time::Duration::from_millis(1)),
+    }
+}
+assert_eq!(frames.len(), 1);
+assert_eq!(frames[0].capture_us, 40_000);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ### Errors
 
 `VideoError` is an enum with stable string forms (`no_permission`,
 `device_busy`, `device_lost`, `not_found`, `unsupported`, `no_resources`,
 `busy`, `os`, `shut_down`, `invalid`). Decoders report `DecodeError`:
-`need_keyframe`, `busy`, `corrupt`, `session_lost`; all but `busy` mean
-"ask the sender for a keyframe".
+`need_keyframe`, `busy`, `corrupt`, `session_lost`, `end_of_stream`; all
+but `busy` and `end_of_stream` mean "ask the sender for a keyframe" (in
+File mode: go on from the next keyframe).
 
 ## The fake backend
 
@@ -328,7 +394,9 @@ On Windows:
   keyframes on request, and CPU input (NV12; other formats are converted).
 - The decoder takes Annex B access units and gives CPU frames in the asked
   format. It has no Direct3D device, so Microsoft's decoder decodes on the
-  CPU. Native (Direct3D 11) frames aren't offered on Windows yet: cameras,
+  CPU. In File mode it opens the MFT without low latency, so it may
+  reorder, and drains it at `flush()`; that path is type-checked only and
+  has never run on Windows. Native (Direct3D 11) frames aren't offered on Windows yet: cameras,
   screens and the decoder all give CPU planes.
 - The N and KN editions of Windows have no Media Foundation until the
   Media Feature Pack is installed. kessel-video loads Media Foundation's
@@ -374,11 +442,25 @@ undefined symbols allowed on Android) and run it on macOS.
   app built with `-ignore_auto_link`, or with a linker that skips these
   options, must list those six itself.
   ScreenCaptureKit and CoreGraphics (macOS screens) are opened at run time.
+  A `codecs`-only build on macOS asks for neither AVFoundation nor
+  ScreenCaptureKit: only CoreFoundation, CoreMedia, CoreVideo, Foundation
+  and VideoToolbox.
 - Features: `system` (default) is the OS backend for the target plus `vp8`.
   `apple`, `windows`, `linux` and `android` pick backends one by one; `vp8` adds the
   Rust VP8 codecs. With `--no-default-features` you get the API, `null()`
   and the fake backend (with structural H.264 only), with no OS code and no
   `unsafe`.
+- `codecs` (with `default-features = false`) builds the encoders and
+  decoders only, for a worker that never captures: `apple-codecs`
+  (VideoToolbox), `windows-codecs` (Media Foundation's MFTs) and `vp8`. No
+  camera, screen-capture or capture-permission code: on macOS no
+  AVFoundation and no ScreenCaptureKit, on Windows no Media Foundation
+  capture, no Windows Graphics Capture and none of the `windows` crate's
+  Direct3D, DXGI, WinRT or window APIs. `system()` still gives the OS
+  backend; its cameras and screens are empty and opening one answers
+  `unsupported`. Linux has no OS codec, so a `codecs` build there has no
+  backend (`system()` answers `unsupported`). On iOS the camera module is
+  still built (the app-state code shares it).
 - `deny.toml` lists the licence allowlist; `tests/licences.rs` checks the
   same rules without needing cargo-deny, and that no C codec library or its
   bindings are in the tree.
@@ -405,7 +487,11 @@ What parses data from the network, and how it is tested:
   the rest) are safe Rust and check every length.
 - **H.264 decoding** goes to the OS's decoder (VideoToolbox on Apple,
   Microsoft's or the GPU driver's decoder MFT on Windows). The crate itself
-  only splits the NAL unit framing, with the checked helpers above.
+  only splits the NAL unit framing, with the checked helpers above, and in
+  File mode reads each SPS (`h264::parse_sps`, safe Rust, every read
+  bounds-checked, every Exp-Golomb code capped at 32 bits and every count
+  at what H.264 allows) to refuse what it can't decode before the OS sees
+  it.
 - **Not fuzzed.** kessel-video has no coverage-guided fuzzer. A seeded
   random test sends 3,000 hostile frames (random bytes; valid VP8 frames
   with bits flipped, truncated, extended, spliced, with a rewritten header
@@ -413,7 +499,13 @@ What parses data from the network, and how it is tested:
   every 40 so deltas reach the inter-prediction paths, and checks that every
   answer is an error or a well-formed frame within the size limit. Another
   500 go through the decoder's own thread, which must still decode a valid
-  keyframe afterwards. 5,000 hostile inputs go through the `h264` helpers.
+  keyframe afterwards. 5,000 hostile inputs go through the `h264` helpers,
+  and 5,000 mutated SPS NAL units through `parse_sps`. File mode gets its
+  own: truncated and garbage access units, times going backwards or
+  repeated, absurd sizes and other sampling, and a flood past the output
+  queue, through the fake backend's decoder (which holds frames back as an
+  OS decoder does); every answer must be a typed error or a frame in
+  presentation order, with none dropped.
   It runs the same inputs every time. vp8-decoder's own README says how it
   is tested (the WebM conformance vectors).
 

@@ -9,14 +9,18 @@
 //! and the rest still work. Interface methods are vtable calls and need no
 //! imports.
 
+use super::map_error;
 use crate::error::{unsupported, VideoError};
 use std::ffi::c_void;
 use std::sync::OnceLock;
-use windows::core::{Interface, GUID, HRESULT, PCSTR, PCWSTR};
+use windows::core::{Interface, GUID, HRESULT, PCSTR, PCWSTR, PWSTR};
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFAttributes, IMFMediaBuffer, IMFMediaSource, IMFMediaType, IMFSample,
-    IMFSourceReader, MFT_REGISTER_TYPE_INFO,
+    IMFActivate, IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, MFSTARTUP_FULL,
+    MFT_REGISTER_TYPE_INFO, MF_VERSION,
 };
+#[cfg(feature = "windows")]
+use windows::Win32::Media::MediaFoundation::{IMFMediaSource, IMFSourceReader};
+use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::{
     GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
 };
@@ -37,9 +41,12 @@ type TEnumEx = unsafe extern "system" fn(
     *mut *mut *mut c_void,
     *mut u32,
 ) -> HRESULT;
+#[cfg(feature = "windows")]
 type EnumDeviceSources =
     unsafe extern "system" fn(*mut c_void, *mut *mut *mut c_void, *mut u32) -> HRESULT;
+#[cfg(feature = "windows")]
 type CreateDeviceSource = unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> HRESULT;
+#[cfg(feature = "windows")]
 type CreateReader =
     unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> HRESULT;
 
@@ -54,7 +61,9 @@ pub(crate) struct MfPlat {
     tenum_ex: TEnumEx,
 }
 
-/// `mf.dll` and `mfreadwrite.dll`: capture devices and the source reader.
+/// `mf.dll` and `mfreadwrite.dll`: capture devices and the source reader
+/// (the `windows` feature: a `codecs`-only build has no capture).
+#[cfg(feature = "windows")]
 pub(crate) struct MfCapture {
     enum_device_sources: EnumDeviceSources,
     create_device_source: CreateDeviceSource,
@@ -107,7 +116,41 @@ pub(crate) fn mfplat() -> Result<&'static MfPlat, VideoError> {
     .ok_or_else(|| unsupported(NO_MF))
 }
 
+/// COM on this thread (multithreaded; an STA thread keeps its apartment,
+/// which Media Foundation also works in) and Media Foundation once.
+/// `Unsupported` where Media Foundation isn't installed.
+pub(crate) fn init() -> Result<(), VideoError> {
+    let mf = mfplat()?;
+    // SAFETY: COM initialisation for the calling thread; RPC_E_CHANGED_MODE
+    // (already an STA) is fine for Media Foundation.
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    static STARTED: OnceLock<Result<(), VideoError>> = OnceLock::new();
+    STARTED
+        .get_or_init(|| {
+            // MFStartup with the SDK version; never shut down (the process
+            // keeps Media Foundation for its lifetime).
+            mf.startup(MF_VERSION, MFSTARTUP_FULL)
+                .map_err(|e| map_error(&e, "MFStartup"))
+        })
+        .clone()
+}
+
+/// A string attribute.
+pub(crate) fn string_attr(a: &IMFAttributes, key: &windows::core::GUID) -> Option<String> {
+    let mut p = PWSTR::null();
+    let mut len = 0u32;
+    // SAFETY: Media Foundation allocates the string; we free it with
+    // CoTaskMemFree after copying it.
+    unsafe {
+        a.GetAllocatedString(key, &mut p, &mut len).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const core::ffi::c_void));
+        s
+    }
+}
+
 /// Media Foundation's capture DLLs, or `Unsupported`.
+#[cfg(feature = "windows")]
 pub(crate) fn mfcapture() -> Result<&'static MfCapture, VideoError> {
     static CAP: OnceLock<Option<MfCapture>> = OnceLock::new();
     CAP.get_or_init(|| {
@@ -235,6 +278,7 @@ unsafe fn take_array<T: Interface>(list: *mut *mut c_void, count: u32) -> Vec<T>
     out
 }
 
+#[cfg(feature = "windows")]
 impl MfCapture {
     /// `MFEnumDeviceSources`.
     pub(crate) fn enum_device_sources(

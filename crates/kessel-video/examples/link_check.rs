@@ -37,8 +37,8 @@ pub fn main() {
 }
 
 #[cfg(any(
-    feature = "apple",
-    feature = "windows",
+    feature = "apple-codecs",
+    feature = "windows-codecs",
     feature = "linux",
     feature = "android"
 ))]
@@ -123,8 +123,8 @@ fn run() -> Result<(), String> {
 }
 
 #[cfg(not(any(
-    feature = "apple",
-    feature = "windows",
+    feature = "apple-codecs",
+    feature = "windows-codecs",
     feature = "linux",
     feature = "android"
 )))]
@@ -134,8 +134,8 @@ fn run() -> Result<(), String> {
 
 #[cfg_attr(
     not(any(
-        feature = "apple",
-        feature = "windows",
+        feature = "apple-codecs",
+        feature = "windows-codecs",
         feature = "linux",
         feature = "android"
     )),

@@ -63,7 +63,7 @@ pub(crate) fn lost_session(st: OSStatus) -> VideoError {
 }
 
 /// AVCC sample → one Annex B access unit, SPS + PPS in front of a keyframe.
-unsafe fn sample_to_annexb(sb: CMSampleBufferRef) -> Result<CoreFrame, VideoError> {
+pub(super) unsafe fn sample_to_annexb(sb: CMSampleBufferRef) -> Result<CoreFrame, VideoError> {
     let mut key = true;
     let atts = CMSampleBufferGetSampleAttachmentsArray(sb, 0);
     if !atts.is_null() && CFArrayGetCount(atts) > 0 {

@@ -2,7 +2,7 @@
 //! source reader on a thread of its own that delivers NV12 frames.
 
 use super::map_error;
-use super::mfdll::{mfcapture, mfplat};
+use super::mfdll::{init, mfcapture, mfplat, string_attr};
 use crate::api::{FrameSource, Wake};
 use crate::error::VideoError;
 use crate::frame::{PixelFormat, Planes, VideoFrame};
@@ -10,33 +10,13 @@ use crate::kit::{now_us, QueuedSource, SourceControl, SourceShared};
 use crate::types::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::sync_channel;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::thread::JoinHandle;
-use windows::core::{Interface, PCWSTR, PWSTR};
+use windows::core::{Interface, PCWSTR};
 use windows::Win32::Media::MediaFoundation::*;
-use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 
 /// An open was refused by the OS's camera privacy setting.
 static REFUSED: AtomicBool = AtomicBool::new(false);
-
-/// COM on this thread (multithreaded; an STA thread keeps its apartment,
-/// which Media Foundation also works in) and Media Foundation once.
-/// `Unsupported` where Media Foundation isn't installed.
-pub(super) fn init() -> Result<(), VideoError> {
-    let mf = mfplat()?;
-    // SAFETY: COM initialisation for the calling thread; RPC_E_CHANGED_MODE
-    // (already an STA) is fine for Media Foundation.
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-    static STARTED: OnceLock<Result<(), VideoError>> = OnceLock::new();
-    STARTED
-        .get_or_init(|| {
-            // MFStartup with the SDK version; never shut down (the process
-            // keeps Media Foundation for its lifetime).
-            mf.startup(MF_VERSION, MFSTARTUP_FULL)
-                .map_err(|e| map_error(&e, "MFStartup"))
-        })
-        .clone()
-}
 
 pub(crate) fn permission() -> Permission {
     if REFUSED.load(Ordering::Acquire) {
@@ -50,20 +30,6 @@ pub(super) fn attributes(n: u32) -> Result<IMFAttributes, VideoError> {
     mfplat()?
         .create_attributes(n)
         .map_err(|e| map_error(&e, "MFCreateAttributes"))
-}
-
-/// A string attribute.
-pub(super) fn string_attr(a: &IMFAttributes, key: &windows::core::GUID) -> Option<String> {
-    let mut p = PWSTR::null();
-    let mut len = 0u32;
-    // SAFETY: Media Foundation allocates the string; we free it with
-    // CoTaskMemFree after copying it.
-    unsafe {
-        a.GetAllocatedString(key, &mut p, &mut len).ok()?;
-        let s = p.to_string().ok();
-        CoTaskMemFree(Some(p.0 as *const core::ffi::c_void));
-        s
-    }
 }
 
 pub(crate) fn cameras() -> Vec<CameraInfo> {

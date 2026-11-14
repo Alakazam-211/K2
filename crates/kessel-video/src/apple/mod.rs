@@ -30,8 +30,9 @@ macro_rules! autolink {
     };
 }
 
+// AVFoundation is the camera module's own (it links and autolinks it), so
+// a build without capture never asks for it.
 autolink!(
-    "AVFoundation",
     "CoreFoundation",
     "CoreMedia",
     "CoreVideo",
@@ -39,13 +40,16 @@ autolink!(
     "VideoToolbox"
 );
 
+// Cameras need the `apple` feature (on iOS the app-state code shares the
+// camera module, so it is always there).
+#[cfg(any(feature = "apple", target_os = "ios"))]
 mod camera;
 mod ffi;
 #[cfg(target_os = "ios")]
 mod ios;
 mod objc;
 pub(crate) mod pixel;
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "apple", target_os = "macos"))]
 mod screen;
 mod vt_dec;
 mod vt_enc;
@@ -98,15 +102,21 @@ pub(crate) use objc::os_name;
 
 /// iOS has no screen capture here: sharing the screen needs a broadcast
 /// upload extension, which runs in its own process and hands its frames to
-/// the app, which pushes them into a [`crate::frame_in()`] source.
-#[cfg(target_os = "ios")]
+/// the app, which pushes them into a [`crate::frame_in()`] source. A macOS
+/// build without the `apple` feature (the `codecs` feature alone) has no
+/// screen capture either.
+#[cfg(any(target_os = "ios", not(feature = "apple")))]
 mod screen {
     use crate::api::{Done, FrameSource, Wake};
     use crate::error::{unsupported, VideoError};
     use crate::types::*;
 
-    const WHY: &str = "screen capture on iOS needs a broadcast upload extension; \
-                       push its frames into a frame_in source";
+    const WHY: &str = if cfg!(target_os = "ios") {
+        "screen capture on iOS needs a broadcast upload extension; \
+         push its frames into a frame_in source"
+    } else {
+        "kessel-video was built without capture (the `apple` feature)"
+    };
 
     pub(crate) fn supported() -> bool {
         false
@@ -116,14 +126,18 @@ mod screen {
         false
     }
 
-    // Nothing to ask: the person starts the broadcast from the system's
-    // own picker, and that is the consent.
+    // iOS: nothing to ask; the person starts the broadcast from the
+    // system's own picker, and that is the consent. Without capture: no.
     pub(crate) fn permission() -> Permission {
-        Permission::Granted
+        if cfg!(target_os = "ios") {
+            Permission::Granted
+        } else {
+            Permission::Denied
+        }
     }
 
     pub(crate) fn request_permission(done: Done<Permission>) {
-        done(Permission::Granted)
+        done(permission())
     }
 
     pub(crate) fn sources() -> Result<Vec<ScreenSourceInfo>, VideoError> {
@@ -140,6 +154,37 @@ mod screen {
         _wake: Wake,
     ) -> Result<Box<dyn FrameSource>, VideoError> {
         Err(unsupported(WHY))
+    }
+}
+
+/// A macOS build without the `apple` feature (the `codecs` feature alone):
+/// no cameras, and no AVFoundation.
+#[cfg(not(any(feature = "apple", target_os = "ios")))]
+mod camera {
+    use crate::api::{Done, FrameSource, Wake};
+    use crate::error::{unsupported, VideoError};
+    use crate::types::*;
+
+    pub(crate) fn cameras() -> Vec<CameraInfo> {
+        Vec::new()
+    }
+
+    pub(crate) fn permission() -> Permission {
+        Permission::Denied
+    }
+
+    pub(crate) fn request_permission(done: Done<Permission>) {
+        done(Permission::Denied)
+    }
+
+    pub(crate) fn open(
+        _id: Option<&str>,
+        _c: CaptureConstraints,
+        _wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
+        Err(unsupported(
+            "kessel-video was built without capture (the `apple` feature)",
+        ))
     }
 }
 
@@ -335,7 +380,7 @@ impl VideoBackend for AppleBackend {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::new("apple", os_name());
         crate::rust_codecs::add_capabilities(&mut caps);
-        caps.camera = true;
+        caps.camera = cfg!(any(feature = "apple", target_os = "ios"));
         let listed = screen::supported();
         caps.screen = ScreenCapability {
             // iOS: the broadcast upload extension's frames, which the app
@@ -404,6 +449,7 @@ impl VideoBackend for AppleBackend {
         );
         c.h264 = h264();
         c.formats = formats;
+        c.file_mode = true;
         caps.codecs.push(c);
         caps
     }
@@ -545,4 +591,6 @@ impl VideoBackend for AppleBackend {
 }
 
 #[cfg(test)]
+mod file_tests;
+#[cfg(all(test, feature = "apple"))]
 mod tests;

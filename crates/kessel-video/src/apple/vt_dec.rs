@@ -2,8 +2,11 @@
 //!
 //! Input is one Annex B access unit per frame. SPS and PPS in band set up
 //! (or replace) the session's format; the other NAL units go to
-//! VideoToolbox as one AVCC sample. Decoding is synchronous: one frame in,
-//! at most one out, as [`DecoderCore`] wants. Outputs are NV12
+//! VideoToolbox as one AVCC sample. Real time: decoding is synchronous,
+//! one frame in, at most one out, as [`DecoderCore`] wants. File mode: each
+//! sample carries its pts and dts, temporal processing is on (VideoToolbox
+//! may hold frames back and give them in presentation order), and every
+//! frame keeps the pts VideoToolbox hands back with it. Outputs are NV12
 //! CVPixelBuffers, handed on as native frames; the decoder thread converts
 //! them to the caller's format.
 
@@ -20,11 +23,23 @@ use std::sync::Mutex;
 
 autolink!("VideoToolbox", "CoreMedia", "CoreVideo", "CoreFoundation");
 
-/// What the output callback fills: one entry per decoded frame, the pixel
-/// buffer retained.
+/// One output callback: the pixel buffer (retained), nothing (dropped), or
+/// a failure, with the frame's pts.
+type Output = (Result<Option<Cf>, OSStatus>, CMTime);
+
+/// What the output callback fills: one entry per decoded frame.
 #[derive(Default)]
 struct Outbox {
-    out: Vec<Result<Option<Cf>, OSStatus>>,
+    out: Vec<Output>,
+}
+
+/// A CMTime in µs; `None` when it isn't a valid time.
+fn cm_time_us(t: CMTime) -> Option<u64> {
+    if t.flags & CM_TIME_VALID == 0 || t.timescale <= 0 {
+        return None;
+    }
+    let us = t.value as i128 * 1_000_000 / t.timescale as i128;
+    u64::try_from(us).ok()
 }
 
 extern "C" fn on_output(
@@ -33,7 +48,7 @@ extern "C" fn on_output(
     status: OSStatus,
     flags: u32,
     image: CVPixelBufferRef,
-    _pts: CMTime,
+    pts: CMTime,
     _duration: CMTime,
 ) {
     // SAFETY: refcon is the decoder's boxed Mutex<Outbox>, alive until the
@@ -48,7 +63,11 @@ extern "C" fn on_output(
         // take our own retain.
         Ok(Some(unsafe { Cf::retain(image as CFTypeRef) }))
     };
-    outbox.lock().unwrap_or_else(|e| e.into_inner()).out.push(r);
+    outbox
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .out
+        .push((r, pts));
 }
 
 /// The decoder's error for a VideoToolbox status.
@@ -93,6 +112,11 @@ pub(crate) struct VtDecoder {
     pref: ImplPreference,
     /// What the open session runs; `None` while there is none.
     implementation: Option<Implementation>,
+    /// [`DecodeMode::File`].
+    file: bool,
+    /// File mode: frames a session gave as it closed for a new format,
+    /// not yet handed on.
+    carry: Vec<Output>,
 }
 
 // SAFETY: the session is driven from one thread at a time (&mut self);
@@ -120,7 +144,111 @@ impl VtDecoder {
             outbox: Box::default(),
             pref: config.implementation,
             implementation: None,
+            file: config.mode == DecodeMode::File,
+            carry: Vec::new(),
         })
+    }
+
+    /// File mode: have the session give every frame it holds back, and
+    /// keep them for the next [`DecoderCore::decode_file`] or
+    /// [`DecoderCore::flush_file`].
+    fn finish_delayed(&mut self) -> Result<(), DecodeError> {
+        if self.session.is_null() {
+            return Ok(());
+        }
+        // SAFETY: a live session; the wait returns once every frame,
+        // delayed ones included, has gone through the callback.
+        let st = unsafe {
+            let st = VTDecompressionSessionFinishDelayedFrames(self.session);
+            let wait = VTDecompressionSessionWaitForAsynchronousFrames(self.session);
+            if st != 0 {
+                st
+            } else {
+                wait
+            }
+        };
+        let got = std::mem::take(&mut self.outbox.lock().unwrap_or_else(|e| e.into_inner()).out);
+        self.carry.extend(got);
+        if st != 0 {
+            let e = decode_error(st, "VTDecompressionSessionFinishDelayedFrames");
+            if e == DecodeError::SessionLost {
+                self.close_session();
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// File mode: hand on what the callback gave (and any carried frames),
+    /// each with its own pts. The first failure among them is the result,
+    /// after every frame is out.
+    fn take_file_outputs(&mut self, out: &mut Vec<VideoFrame>) -> Result<(), DecodeError> {
+        let got = std::mem::take(&mut self.outbox.lock().unwrap_or_else(|e| e.into_inner()).out);
+        let mut all = std::mem::take(&mut self.carry);
+        all.extend(got);
+        let mut first_err = None;
+        for (r, pts) in all {
+            match r {
+                Ok(None) => {}
+                Ok(Some(pb)) => match cm_time_us(pts) {
+                    // SAFETY: a pixel buffer we hold a retain on.
+                    Some(us) => out.push(unsafe { native_frame(pb.0 as CVPixelBufferRef, us) }),
+                    None => {
+                        first_err.get_or_insert(DecodeError::Corrupt(
+                            "VideoToolbox gave a frame without a time".into(),
+                        ));
+                    }
+                },
+                Err(st) => {
+                    first_err.get_or_insert(decode_error(st, "VideoToolbox decode"));
+                }
+            }
+        }
+        match first_err {
+            Some(e) => {
+                if e == DecodeError::SessionLost {
+                    self.close_session();
+                }
+                Err(e)
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// The parameter sets of `input` applied, and its sample, ready for the
+    /// session: `None` when it holds nothing to decode.
+    fn prepare(&mut self, input: &EncodedInput) -> Result<Option<Cf>, DecodeError> {
+        if input.codec != VideoCodec::H264 {
+            return Err(DecodeError::Video(unsupported(format!(
+                "{:?} into the H.264 decoder",
+                input.codec
+            ))));
+        }
+        let au = split_access_unit(&input.data);
+        match (au.sps, au.pps) {
+            (Some(sps), Some(pps)) => self.set_params(sps, pps)?,
+            (None, None) => {}
+            _ => {
+                return Err(DecodeError::Corrupt(
+                    "an access unit with an SPS or a PPS but not both".into(),
+                ))
+            }
+        }
+        if au.nals.is_empty() {
+            return Ok(None);
+        }
+        if self.format.0.is_null() {
+            return Err(if h264::is_keyframe(&au.nals) {
+                DecodeError::Corrupt("an IDR with no SPS and PPS before it".into())
+            } else {
+                DecodeError::NeedKeyframe
+            });
+        }
+        if self.session.is_null() {
+            self.open_session()?;
+        }
+        let dts = if self.file { input.dts_us } else { None };
+        self.sample(&au.nals, input.capture_us, dts).map(Some)
     }
 
     fn close_session(&mut self) {
@@ -176,6 +304,10 @@ impl VtDecoder {
             && unsafe { VTDecompressionSessionCanAcceptFormatDescription(self.session, format.0) }
                 != 0;
         if !keep {
+            if self.file {
+                // The old session's held-back frames still come out.
+                self.finish_delayed()?;
+            }
             self.close_session();
         }
         self.format = format;
@@ -257,8 +389,9 @@ impl VtDecoder {
             })));
         }
         if let Some(k) = cf_const(c"kVTDecompressionPropertyKey_RealTime") {
+            let real_time = if self.file { no() } else { yes() };
             // SAFETY: a live session, a framework key, a CF boolean.
-            unsafe { VTSessionSetProperty(self.session, k, yes()) };
+            unsafe { VTSessionSetProperty(self.session, k, real_time) };
         }
         Ok(())
     }
@@ -278,7 +411,12 @@ impl VtDecoder {
     }
 
     /// The AVCC sample for `nals`, in a block buffer CoreMedia owns.
-    fn sample(&self, nals: &[&[u8]], capture_us: u64) -> Result<Cf, DecodeError> {
+    fn sample(
+        &self,
+        nals: &[&[u8]],
+        capture_us: u64,
+        dts_us: Option<u64>,
+    ) -> Result<Cf, DecodeError> {
         let mut avcc = Vec::new();
         for nal in nals {
             if nal.len() > u32::MAX as usize {
@@ -323,7 +461,9 @@ impl VtDecoder {
         let timing = CMSampleTimingInfo {
             duration: CM_TIME_INVALID,
             pts: cm_time(capture_us.min(i64::MAX as u64) as i64, 1_000_000),
-            dts: CM_TIME_INVALID,
+            dts: dts_us.map_or(CM_TIME_INVALID, |d| {
+                cm_time(d.min(i64::MAX as u64) as i64, 1_000_000)
+            }),
         };
         let mut sb: CMSampleBufferRef = ptr::null_mut();
         // SAFETY: a live block buffer and format description, one timing
@@ -354,36 +494,9 @@ impl VtDecoder {
 
 impl DecoderCore for VtDecoder {
     fn decode(&mut self, input: &EncodedInput) -> Result<Option<VideoFrame>, DecodeError> {
-        if input.codec != VideoCodec::H264 {
-            return Err(DecodeError::Video(unsupported(format!(
-                "{:?} into the H.264 decoder",
-                input.codec
-            ))));
-        }
-        let au = split_access_unit(&input.data);
-        match (au.sps, au.pps) {
-            (Some(sps), Some(pps)) => self.set_params(sps, pps)?,
-            (None, None) => {}
-            _ => {
-                return Err(DecodeError::Corrupt(
-                    "an access unit with an SPS or a PPS but not both".into(),
-                ))
-            }
-        }
-        if au.nals.is_empty() {
+        let Some(sample) = self.prepare(input)? else {
             return Ok(None);
-        }
-        if self.format.0.is_null() {
-            return Err(if h264::is_keyframe(&au.nals) {
-                DecodeError::Corrupt("an IDR with no SPS and PPS before it".into())
-            } else {
-                DecodeError::NeedKeyframe
-            });
-        }
-        if self.session.is_null() {
-            self.open_session()?;
-        }
-        let sample = self.sample(&au.nals, input.capture_us)?;
+        };
         let mut info = 0u32;
         // SAFETY: a live session and sample buffer. Flags 0: synchronous, so
         // the callback has run when this returns; the wait makes sure.
@@ -415,7 +528,7 @@ impl DecoderCore for VtDecoder {
                 format!("VideoToolbox gave {} frames for one input", got.len()),
             )));
         }
-        match got.into_iter().next() {
+        match got.into_iter().next().map(|(r, _pts)| r) {
             None | Some(Ok(None)) => Ok(None),
             Some(Err(st)) => {
                 let e = decode_error(st, "VideoToolbox decode");
@@ -425,6 +538,8 @@ impl DecoderCore for VtDecoder {
                 Err(e)
             }
             Some(Ok(Some(pb))) => {
+                // The pts VideoToolbox gives back is the one this sample
+                // carried; the decoder thread stamps `capture_us` anyway.
                 // SAFETY: a pixel buffer we hold a retain on.
                 let f = unsafe { native_frame(pb.0 as CVPixelBufferRef, input.capture_us) };
                 Ok(Some(f))
@@ -432,8 +547,64 @@ impl DecoderCore for VtDecoder {
         }
     }
 
+    fn decode_file(
+        &mut self,
+        input: &EncodedInput,
+        out: &mut Vec<VideoFrame>,
+    ) -> Result<(), DecodeError> {
+        if !self.file {
+            return match self.decode(input)? {
+                Some(f) => {
+                    out.push(f);
+                    Ok(())
+                }
+                None => Ok(()),
+            };
+        }
+        let sample = match self.prepare(input) {
+            Ok(s) => s,
+            Err(e) => {
+                // Frames a closing session gave still go out.
+                let _ = self.take_file_outputs(out);
+                return Err(e);
+            }
+        };
+        let Some(sample) = sample else {
+            return self.take_file_outputs(out);
+        };
+        let mut info = 0u32;
+        // SAFETY: a live session and sample buffer. Synchronous decode with
+        // temporal processing: the callback may run now for this frame, or
+        // later (here or in a flush) for it and for frames before it.
+        let st = unsafe {
+            VTDecompressionSessionDecodeFrame(
+                self.session,
+                sample.0 as CMSampleBufferRef,
+                DECODE_FRAME_ENABLE_TEMPORAL_PROCESSING,
+                ptr::null_mut(),
+                &mut info,
+            )
+        };
+        let taken = self.take_file_outputs(out);
+        if st != 0 {
+            let e = decode_error(st, "VTDecompressionSessionDecodeFrame");
+            if e == DecodeError::SessionLost {
+                self.close_session();
+            }
+            return Err(e);
+        }
+        taken
+    }
+
+    fn flush_file(&mut self, out: &mut Vec<VideoFrame>) -> Result<(), DecodeError> {
+        let finished = self.finish_delayed();
+        let taken = self.take_file_outputs(out);
+        finished.and(taken)
+    }
+
     fn reset(&mut self) -> Result<(), VideoError> {
         self.close_session();
+        self.carry.clear();
         self.format = Cf::null();
         self.params = None;
         Ok(())

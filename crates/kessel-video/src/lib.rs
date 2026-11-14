@@ -67,11 +67,11 @@ mod yuv;
 #[cfg(test)]
 mod hostile_tests;
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(feature = "apple-codecs", any(target_os = "macos", target_os = "ios")))]
 #[allow(unsafe_code)]
 mod apple;
 
-#[cfg(all(feature = "windows", windows))]
+#[cfg(all(feature = "windows-codecs", windows))]
 #[allow(unsafe_code)]
 mod win;
 
@@ -97,10 +97,10 @@ pub use api::{
     EVENT_QUEUE,
 };
 /// macOS and iOS: the `CVPixelBufferRef` inside an Apple native frame.
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(feature = "apple-codecs", any(target_os = "macos", target_os = "ios")))]
 pub use apple::pixel::apple_pixel_buffer;
 /// macOS and iOS: a frame around a CVPixelBuffer the host already has.
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(feature = "apple-codecs", any(target_os = "macos", target_os = "ios")))]
 pub use apple::pixel::pixel_buffer_frame;
 /// The `bytes` crate, re-exported so callers use the same version.
 pub use bytes;
@@ -115,8 +115,8 @@ pub use frame_in::{frame_in, FrameIn, FrameInOptions, FrameInSender, Rotation};
 pub use kit::now_us;
 pub use null::null;
 #[cfg(any(
-    feature = "apple",
-    feature = "windows",
+    feature = "apple-codecs",
+    feature = "windows-codecs",
     feature = "linux",
     feature = "android"
 ))]

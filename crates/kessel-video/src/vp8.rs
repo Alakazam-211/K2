@@ -39,6 +39,7 @@ pub(crate) fn capabilities() -> Vec<CodecCapability> {
         1080,
         30,
     );
+    d.file_mode = true;
     d.formats = vec![
         PixelFormat::I420,
         PixelFormat::Nv12,

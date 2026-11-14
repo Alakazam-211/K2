@@ -3,9 +3,15 @@
 //! with Windows (on the CPU here: it is given no Direct3D device).
 //!
 //! Input is one Annex B access unit per frame, as the crate's encoders give
-//! it. Low latency is on, so each frame comes out as soon as it is decoded.
+//! it. Real time: low latency is on, so each frame comes out as soon as it
+//! is decoded. File mode: low latency is off, so the MFT may hold frames
+//! back and reorder them (B-frames); each sample carries its pts (and its
+//! dts, as `MFSampleExtension_DecodeTimestamp`), every output keeps the
+//! sample time the MFT gives it, and the end of stream drains the MFT.
 //! Outputs are NV12 CPU planes, cropped to the picture's display area; the
 //! decoder thread converts them to the caller's format.
+//!
+//! File mode is compile-checked only: no Windows machine has run it.
 
 use super::map_error;
 use super::mft::{self, available, sample_from, unpack, Found, Mft, NoOutput, Role};
@@ -24,7 +30,7 @@ fn com_on_this_thread() -> Result<(), VideoError> {
     if COM_READY.with(|c| c.get()) {
         return Ok(());
     }
-    super::camera::init()?;
+    super::mfdll::init()?;
     COM_READY.with(|c| c.set(true));
     Ok(())
 }
@@ -121,6 +127,8 @@ pub(crate) struct MfDecoder {
     last_time: i64,
     /// The session failed: `reset` opens a new one.
     failed: bool,
+    /// [`DecodeMode::File`]: low latency off, every output with its time.
+    file: bool,
 }
 
 // SAFETY: the MFT and its activation object are free-threaded (see
@@ -143,10 +151,11 @@ impl MfDecoder {
                 cfg.codec
             )));
         }
+        let file = cfg.mode == DecodeMode::File;
         let candidates = mft::find(Role::Decoder, cfg.implementation)?;
         let mut last = None;
         for f in candidates {
-            match open_one(&f) {
+            match open_one_with(&f, !file) {
                 Ok(mft) => {
                     return Ok(MfDecoder {
                         mft,
@@ -154,6 +163,7 @@ impl MfDecoder {
                         layout: None,
                         last_time: -1,
                         failed: false,
+                        file,
                     })
                 }
                 Err(e) => last = Some(e),
@@ -330,7 +340,12 @@ impl MfDecoder {
 }
 
 pub(super) fn open_one(found: &Found) -> Result<Mft, VideoError> {
-    let mut mft = Mft::open(found)?;
+    open_one_with(found, true)
+}
+
+/// [`open_one`], with low latency on (real time) or off (File mode).
+fn open_one_with(found: &Found, low_latency: bool) -> Result<Mft, VideoError> {
+    let mut mft = Mft::open_with(found, low_latency)?;
     let input = mft::video_type(&MFVideoFormat_H264)?;
     // SAFETY: offering the MFT an H.264 input type.
     unsafe { mft.transform.SetInputType(mft.in_id(), &input, 0) }
@@ -340,19 +355,132 @@ pub(super) fn open_one(found: &Found) -> Result<Mft, VideoError> {
     Ok(mft)
 }
 
+impl MfDecoder {
+    /// A decode failure as the decoder's error; a lost session is marked
+    /// for `reset` to reopen.
+    fn decode_error(&mut self, e: VideoError) -> DecodeError {
+        if mft::is_lost(&e) {
+            self.failed = true;
+            DecodeError::SessionLost
+        } else {
+            match e {
+                VideoError::Os { detail, .. } => DecodeError::Corrupt(detail),
+                other => DecodeError::Video(other),
+            }
+        }
+    }
+
+    /// File mode: the frames in `outs`, each with the time the MFT gave its
+    /// sample. Those before `fresh_from` came out in the type before a
+    /// change and are read with the layout of then (`old`), if there was
+    /// one.
+    fn file_frames(
+        &mut self,
+        outs: &[IMFSample],
+        fresh_from: usize,
+        old: Option<Layout>,
+        out: &mut Vec<VideoFrame>,
+    ) -> Result<(), VideoError> {
+        for (i, sample) in outs.iter().enumerate() {
+            let layout = if i < fresh_from {
+                match old {
+                    Some(l) => l,
+                    None => continue,
+                }
+            } else {
+                match self.layout {
+                    Some(l) => l,
+                    None => {
+                        let l = self.read_layout()?;
+                        self.layout = Some(l);
+                        l
+                    }
+                }
+            };
+            // SAFETY: a read of a live sample's time (100 ns units).
+            let time =
+                unsafe { sample.GetSampleTime() }.map_err(|e| map_error(&e, "GetSampleTime"))?;
+            let pts_us = u64::try_from(time / 10)
+                .map_err(|_| VideoError::os(0, format!("an output at {time} (100 ns)")))?;
+            let planes = MfDecoder::copy_out(sample, layout)?;
+            out.push(VideoFrame::from_planes(planes, layout.w, layout.h, pts_us)?);
+        }
+        Ok(())
+    }
+
+    fn decode_file_inner(
+        &mut self,
+        input: &EncodedInput,
+        out: &mut Vec<VideoFrame>,
+    ) -> Result<(), VideoError> {
+        com_on_this_thread()?;
+        // The pts as given (in decode order it goes back and forth).
+        let time = (input.capture_us.min(i64::MAX as u64 / 10) * 10) as i64;
+        let sample = sample_from(&input.data, time, 0)?;
+        if let Some(dts) = input.dts_us {
+            let dts = dts.min(i64::MAX as u64 / 10) * 10;
+            // SAFETY: an attribute on a sample we own; only a hint to the
+            // MFT, so a refusal changes nothing.
+            let _ = unsafe { sample.SetUINT64(&MFSampleExtension_DecodeTimestamp, dts) };
+        }
+        let out_id = self.mft.out_id();
+        let old = self.layout;
+        let mut changed = false;
+        let result = self.mft.process(&sample, NoOutput::Queue, &mut |t| {
+            changed = true;
+            set_nv12_output(t, out_id)
+        });
+        if changed {
+            self.layout = None;
+        }
+        let outs = result?;
+        let fresh = self.mft.fresh_from();
+        self.file_frames(&outs, fresh, old, out)
+    }
+
+    fn flush_file_inner(&mut self, out: &mut Vec<VideoFrame>) -> Result<(), VideoError> {
+        com_on_this_thread()?;
+        let out_id = self.mft.out_id();
+        let old = self.layout;
+        let mut changed = false;
+        let result = self.mft.drain(&mut |t| {
+            changed = true;
+            set_nv12_output(t, out_id)
+        });
+        if changed {
+            self.layout = None;
+        }
+        let outs = result?;
+        let fresh = self.mft.fresh_from();
+        self.file_frames(&outs, fresh, old, out)
+    }
+}
+
 impl DecoderCore for MfDecoder {
     fn decode(&mut self, input: &EncodedInput) -> Result<Option<VideoFrame>, DecodeError> {
-        self.decode_inner(input).map_err(|e| {
-            if mft::is_lost(&e) {
-                self.failed = true;
-                DecodeError::SessionLost
-            } else {
-                match e {
-                    VideoError::Os { detail, .. } => DecodeError::Corrupt(detail),
-                    other => DecodeError::Video(other),
-                }
+        self.decode_inner(input).map_err(|e| self.decode_error(e))
+    }
+
+    fn decode_file(
+        &mut self,
+        input: &EncodedInput,
+        out: &mut Vec<VideoFrame>,
+    ) -> Result<(), DecodeError> {
+        if !self.file {
+            if let Some(f) = self.decode(input)? {
+                out.push(f);
             }
-        })
+            return Ok(());
+        }
+        self.decode_file_inner(input, out)
+            .map_err(|e| self.decode_error(e))
+    }
+
+    fn flush_file(&mut self, out: &mut Vec<VideoFrame>) -> Result<(), DecodeError> {
+        if !self.file {
+            return Ok(());
+        }
+        self.flush_file_inner(out).map_err(|e| self.decode_error(e))
     }
 
     fn reset(&mut self) -> Result<(), VideoError> {
@@ -364,7 +492,7 @@ impl DecoderCore for MfDecoder {
         }
         // A lost session: the same MFT again (never another kind, so the
         // implementation reported at open stays true).
-        self.mft = open_one(&self.found)?;
+        self.mft = open_one_with(&self.found, !self.file)?;
         self.failed = false;
         Ok(())
     }
@@ -441,7 +569,7 @@ mod tests {
             windows::core::BOOL,
             *mut *mut std::ffi::c_void,
         ) -> windows::core::HRESULT;
-        super::super::camera::init().expect("Media Foundation");
+        super::super::mfdll::init().expect("Media Foundation");
         let m = super::super::mfdll::load("mfplat.dll").expect("mfplat");
         // SAFETY: MFCreate2DMediaBuffer's signature.
         let create: Create2D =

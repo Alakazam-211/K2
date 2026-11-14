@@ -1,6 +1,6 @@
 [package]
 name = "kessel-video"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 # zbus 5's minimum (with zvariant and zbus_macros), for the Linux backend.
 # The windows crate (0.62) needs 1.82.
@@ -28,11 +28,37 @@ default = ["system"]
 fake = []
 # macOS and iOS: AVFoundation, VideoToolbox, and ScreenCaptureKit (macOS
 # only). System frameworks through FFI; no codec library is linked or shipped.
-apple = ["dep:objc2", "dep:block2", "dep:log"]
+apple = ["apple-codecs"]
+# macOS and iOS codecs only: H.264 through VideoToolbox, with CoreMedia,
+# CoreVideo and Foundation. No AVFoundation and no ScreenCaptureKit (on iOS
+# the camera module stays: the app-state code shares it).
+apple-codecs = ["dep:objc2", "dep:block2", "dep:log"]
 # Media Foundation cameras, Windows Graphics Capture screens, and H.264
 # through Media Foundation's MFTs (the GPU driver's or Microsoft's own). OS
 # components through the `windows` crate.
-windows = ["dep:windows", "dep:windows-future"]
+windows = [
+    "windows-codecs",
+    "dep:windows-future",
+    "windows?/Foundation",
+    "windows?/Graphics",
+    "windows?/Graphics_Capture",
+    "windows?/Graphics_DirectX",
+    "windows?/Graphics_DirectX_Direct3D11",
+    "windows?/Win32_Graphics_Direct3D",
+    "windows?/Win32_Graphics_Direct3D11",
+    "windows?/Win32_Graphics_Dwm",
+    "windows?/Win32_Graphics_Dxgi",
+    "windows?/Win32_Graphics_Dxgi_Common",
+    "windows?/Win32_Graphics_Gdi",
+    "windows?/Win32_System_WinRT",
+    "windows?/Win32_System_WinRT_Direct3D11",
+    "windows?/Win32_System_WinRT_Graphics_Capture",
+    "windows?/Win32_UI_Shell",
+    "windows?/Win32_UI_WindowsAndMessaging",
+]
+# Windows codecs only: H.264 through Media Foundation's MFTs. No Media
+# Foundation capture, no Windows Graphics Capture, no Direct3D or WinRT.
+windows-codecs = ["dep:windows"]
 # V4L2 cameras (raw ioctls), X11 screens (x11rb's pure-Rust connection:
 # MIT-SHM, DAMAGE, XFIXES; listed, no picker) and the xdg-desktop-portal
 # ScreenCast (zbus, pure Rust) with PipeWire (the system's libpipewire,
@@ -53,6 +79,13 @@ vp8 = ["dep:vp8-decoder", "dep:vp8-encoder"]
 # its OS, so a Linux build compiles only the Linux backend (Cargo features
 # can't be target-gated themselves).
 system = ["apple", "windows", "linux", "android", "vp8"]
+# The encoders and decoders only, for a worker that never captures: the
+# OS's H.264 (VideoToolbox, Media Foundation) and VP8, with no camera,
+# screen-capture or capture-permission code. Use it with
+# `default-features = false`. Linux has no OS codec, so there `system()`
+# answers `Unsupported` (VP8 is in every backend, and Linux's backend is
+# the `linux` feature, capture and all).
+codecs = ["apple-codecs", "windows-codecs", "vp8"]
 
 # Every dependency comes from crates.io as a caret requirement, so library
 # users get patch and security releases (vp8-decoder decodes frames that come
@@ -87,31 +120,17 @@ x11rb = { version = "0.14", optional = true, default-features = false, features 
 zbus = { version = "5", optional = true }
 
 [target.'cfg(windows)'.dependencies]
+# What the codecs need; the `windows` feature adds the capture APIs
+# (Graphics Capture, Direct3D, DXGI, WinRT, the shell and window APIs).
 windows = { version = "0.62", optional = true, features = [
-    "Foundation",
-    "Graphics",
-    "Graphics_Capture",
-    "Graphics_DirectX",
-    "Graphics_DirectX_Direct3D11",
     "Wdk_System_SystemServices",
     "Win32_Foundation",
-    "Win32_Graphics_Direct3D",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Dwm",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Gdi",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_SystemInformation",
     "Win32_System_Variant",
-    "Win32_System_WinRT",
-    "Win32_System_WinRT_Direct3D11",
-    "Win32_System_WinRT_Graphics_Capture",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
 ] }
 windows-future = { version = "0.3", optional = true }
 

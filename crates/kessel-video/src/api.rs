@@ -67,12 +67,29 @@ pub trait VideoEncoder: Send {
     }
 }
 
-/// A video decoder (one remote track).
+/// A video decoder (one remote track, or one file in
+/// [`DecodeMode::File`]).
 pub trait VideoDecoder: Send {
-    /// Queue one frame. Never blocks.
+    /// Queue one frame. Never blocks. In [`DecodeMode::File`], `Busy` while
+    /// the output queue is full (poll, then submit again) or a flush is
+    /// draining, and `Invalid` for an input whose times can't be in order
+    /// (see [`DecodeMode::File`]).
     fn submit(&mut self, frame: EncodedInput) -> Result<(), DecodeError>;
-    /// The next decoded frame (queue of 2, oldest dropped) or an error.
+    /// The next decoded frame or an error. Real time: a queue of 2, oldest
+    /// dropped. [`DecodeMode::File`]: frames in presentation order, never
+    /// dropped for room.
     fn poll(&mut self) -> Option<Result<VideoFrame, DecodeError>>;
+    /// [`DecodeMode::File`]: the end of the stream (or of a run before a
+    /// seek). Never blocks: every frame still inside then comes out through
+    /// `poll`, followed by `Err(DecodeError::EndOfStream)`; `submit` answers
+    /// `Busy` until then, and the next input must be a keyframe. Times
+    /// start afresh after it. Real time (and the default for decoders in
+    /// other crates): `Unsupported`.
+    fn flush(&mut self) -> Result<(), DecodeError> {
+        Err(DecodeError::Video(VideoError::Unsupported(
+            "flush is for DecodeMode::File".into(),
+        )))
+    }
     /// Forget all state (and reopen a lost session). The next accepted input
     /// is a keyframe.
     fn reset(&mut self);

@@ -1,15 +1,15 @@
 //! Choosing the OS backend.
 
 #[cfg(any(
-    feature = "apple",
-    feature = "windows",
+    feature = "apple-codecs",
+    feature = "windows-codecs",
     feature = "linux",
     feature = "android"
 ))]
 use crate::api::VideoBackend;
 #[cfg(any(
-    feature = "apple",
-    feature = "windows",
+    feature = "apple-codecs",
+    feature = "windows-codecs",
     feature = "linux",
     feature = "android"
 ))]
@@ -307,8 +307,8 @@ pub struct SystemConfig {
 /// The OS backend for this target (feature `system`, or the per-OS
 /// feature). `Unsupported` on a target whose backend isn't built.
 #[cfg(any(
-    feature = "apple",
-    feature = "windows",
+    feature = "apple-codecs",
+    feature = "windows-codecs",
     feature = "linux",
     feature = "android"
 ))]
@@ -329,12 +329,12 @@ pub(crate) fn os_name() -> String {
     os::name()
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(feature = "apple-codecs", any(target_os = "macos", target_os = "ios")))]
 mod os {
     pub(super) use crate::apple::{backend, os_name as name};
 }
 
-#[cfg(all(feature = "windows", windows))]
+#[cfg(all(feature = "windows-codecs", windows))]
 mod os {
     pub(super) use crate::win::{backend, os_name as name};
 }
@@ -350,15 +350,15 @@ mod os {
 }
 
 #[cfg(not(any(
-    all(feature = "apple", any(target_os = "macos", target_os = "ios")),
-    all(feature = "windows", windows),
+    all(feature = "apple-codecs", any(target_os = "macos", target_os = "ios")),
+    all(feature = "windows-codecs", windows),
     all(feature = "linux", target_os = "linux"),
     all(feature = "android", target_os = "android")
 )))]
 mod os {
     #[cfg(any(
-        feature = "apple",
-        feature = "windows",
+        feature = "apple-codecs",
+        feature = "windows-codecs",
         feature = "linux",
         feature = "android"
     ))]

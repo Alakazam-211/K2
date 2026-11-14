@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.1.8
+
+H.264 decoding for files: a File mode beside real time, with B-frames,
+presentation order, pts kept, a deeper output queue that never drops, and an
+end-of-stream flush. A `codecs` feature that builds the encoders and
+decoders without any capture code. Additions only: nothing in 0.1.7's API
+changes or goes away, and real time decodes as before. No new dependency.
+
+### File mode (`DecodeMode::File`)
+
+- `DecoderConfig::file(codec)` (or `DecoderConfig::mode`) opens a decoder
+  for a file's access units in decode order. Each `EncodedInput` carries its
+  pts in `capture_us` and its dts in the new `dts_us` (both µs;
+  `EncodedInput::file` builds one). Frames come out in presentation order,
+  each with its own pts.
+- VideoToolbox: samples carry pts and dts, temporal processing is on
+  (`kVTDecodeFrame_EnableTemporalProcessing`, so the session may reorder),
+  real time is off, and each frame keeps the pts VideoToolbox hands back.
+  A new SPS that needs a new session first takes the old one's held frames.
+- Media Foundation: the decoder MFT is opened without low latency, samples
+  carry pts (and dts as `MFSampleExtension_DecodeTimestamp`), every output
+  keeps its sample time, and the flush drains the MFT. **Type-checked for
+  Windows only; it has never run on Windows.**
+- The decoder thread holds frames back as far as the stream may reorder
+  (the SPS's `max_num_reorder_frames`, else the level's `MaxDpbFrames`, at
+  most 16), so the order is right whether or not the OS reorders.
+- `VideoDecoder::flush()` (a new trait method with a default, which answers
+  `Unsupported`) drains every frame still inside, then gives
+  `Err(DecodeError::EndOfStream)` (a new variant). The next input must be
+  a keyframe. Real time answers `Unsupported`.
+- The output queue holds `DecoderConfig::output_queue` frames (new; default
+  `kit::FILE_OUTPUT_QUEUE` = 8, at most `kit::FILE_OUTPUT_QUEUE_MAX` = 64,
+  else `Invalid` at open; `DecoderConfig::validate` checks it). It never
+  drops: `submit` answers `Busy` while it is full, and during a flush.
+- Times that can't be in order are refused with `Invalid`: a dts not after
+  the last, a pts already given, at or before a frame already out, or over
+  `i64::MAX`. The stream then goes on from a keyframe.
+- H.264 that isn't 8-bit 4:2:0 (10-bit, 4:2:2, 4:4:4, monochrome), or over
+  8192 pixels a side, is refused with `Unsupported` from its SPS, never
+  decoded wrong. HEVC, ProRes and 10-bit output are not in this release.
+- `CodecCapability::file_mode` (new) marks the decoder entries that do File
+  mode: VideoToolbox, Media Foundation, VP8 and the fake's structural H.264.
+  Where the OS has no H.264 decoder (Linux, Android) none is listed, as
+  before.
+- `kit::DecoderCore` gains `decode_file` and `flush_file`, with defaults
+  that wrap `decode`, so cores in other crates work in File mode unchanged.
+- `h264::parse_sps` and `h264::SpsInfo` (new): profile, level, sampling,
+  bit depth, size, the VUI's reorder limits, `max_dpb_frames()` and
+  `reorder_depth()`.
+- The fake backend's structural decoder plays an OS decoder in File mode:
+  it gives each frame two inputs late, in decode order.
+- Hostile tests for File mode: truncated and garbage access units, times
+  going backwards and repeated, absurd sizes and other sampling, a flood
+  past the output queue, and 5,000 mutated SPS NAL units.
+
+### The `codecs` feature
+
+- `codecs` = `apple-codecs` + `windows-codecs` + `vp8`: VideoToolbox, Media
+  Foundation's MFTs and VP8, with no camera, screen-capture or
+  capture-permission code. Use it with `default-features = false`.
+  `apple` is now `apple-codecs` plus capture, and `windows` is
+  `windows-codecs` plus capture, so `system` (the default) builds what it
+  built before.
+- macOS: AVFoundation is linked and auto-linked only by the camera module,
+  and ScreenCaptureKit is never named, so a `codecs` build asks for neither.
+  iOS still builds the camera module (its app-state code shares it).
+- Windows: the `windows` crate's Graphics Capture, Direct3D, DXGI, WinRT,
+  shell and window features, `windows-future`, and the Media Foundation
+  capture DLLs (`mf.dll`, `mfreadwrite.dll`) belong to the `windows`
+  feature only.
+- In a `codecs` build `system()` gives the OS backend with no cameras and
+  no screens: listing gives none, opening one answers `Unsupported`, and
+  the capabilities say so. Linux has no OS codec, so `codecs` alone builds
+  no Linux backend (`system()` answers `Unsupported`, as for any target
+  without one).
+
 ## 0.1.7
 
 X11 screen capture on Linux, listed and opened without a picker. No API

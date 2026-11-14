@@ -178,6 +178,9 @@ pub struct CodecCapability {
     pub h264: Option<H264Capability>,
     /// Encode: accepted input formats. Decode: formats it can output.
     pub formats: Vec<PixelFormat>,
+    /// Decode: [`DecodeMode::File`] works here (access units in decode
+    /// order in, frames in presentation order out). Encode: false.
+    pub file_mode: bool,
 }
 
 impl CodecCapability {
@@ -204,6 +207,7 @@ impl CodecCapability {
             max_temporal_layers: 1,
             h264: None,
             formats: Vec::new(),
+            file_mode: false,
         }
     }
 }
@@ -996,7 +1000,38 @@ pub struct EncoderStats {
 
 // ───────────────────────────── decoder ─────────────────────────────
 
-/// One decoder per remote track.
+/// How a decoder treats its input and output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DecodeMode {
+    /// A live track (the default): each input decodes at once and its frame
+    /// comes out at once, in submit order, stamped with the input's
+    /// `capture_us`. No reordering, so no B-frames. The output queue holds
+    /// 2 and drops the oldest: a late frame is worth less than the next.
+    #[default]
+    Realtime,
+    /// A file: access units go in in **decode order**, each with its
+    /// presentation time in [`EncodedInput::capture_us`] (µs) and, when
+    /// the container has one, its decode time in [`EncodedInput::dts_us`].
+    /// The OS session may reorder (B-frames), and frames come out in
+    /// **presentation order**, each stamped with its own pts.
+    ///
+    /// - Nothing is dropped: up to [`DecoderConfig::output_queue`] frames
+    ///   wait for `poll`, and `submit` answers `Busy` while that many do.
+    /// - The decoder holds frames back for reordering, as the stream's SPS
+    ///   says it may need. [`VideoDecoder::flush`] at the end of the stream
+    ///   (or before a seek) gives every frame still inside, then
+    ///   [`DecodeError::EndOfStream`].
+    /// - H.264 streams the OS decoder here can't decode to 8-bit 4:2:0
+    ///   (10-bit, 4:2:2, 4:4:4, monochrome) are refused with
+    ///   `Unsupported`, never decoded wrong.
+    ///
+    /// [`VideoDecoder::flush`]: crate::VideoDecoder::flush
+    /// [`DecodeError::EndOfStream`]: crate::DecodeError::EndOfStream
+    File,
+}
+
+/// One decoder per remote track (or per file, in [`DecodeMode::File`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct DecoderConfig {
@@ -1009,17 +1044,50 @@ pub struct DecoderConfig {
     /// Scale outputs to fit this box, keeping the aspect ratio; `None`: the
     /// coded size.
     pub fit: Option<(u32, u32)>,
+    /// Real time (the default) or a file.
+    pub mode: DecodeMode,
+    /// [`DecodeMode::File`] only: how many decoded frames may wait for
+    /// `poll` before `submit` answers `Busy`, 1 to
+    /// [`FILE_OUTPUT_QUEUE_MAX`](crate::kit::FILE_OUTPUT_QUEUE_MAX)
+    /// (anything else is `Invalid` at open). Real time ignores it: its
+    /// queue is always 2, oldest dropped.
+    pub output_queue: usize,
 }
 
 impl DecoderConfig {
-    /// `codec`, hardware preferred, I420 out at the coded size.
+    /// `codec`, hardware preferred, I420 out at the coded size, real time.
     pub fn new(codec: VideoCodec) -> DecoderConfig {
         DecoderConfig {
             codec,
             implementation: ImplPreference::default(),
             output: PixelFormat::I420,
             fit: None,
+            mode: DecodeMode::Realtime,
+            output_queue: crate::kit::FILE_OUTPUT_QUEUE,
         }
+    }
+
+    /// `codec` for a file ([`DecodeMode::File`]): hardware preferred, I420
+    /// out at the coded size, an output queue of
+    /// [`FILE_OUTPUT_QUEUE`](crate::kit::FILE_OUTPUT_QUEUE).
+    pub fn file(codec: VideoCodec) -> DecoderConfig {
+        DecoderConfig {
+            mode: DecodeMode::File,
+            ..DecoderConfig::new(codec)
+        }
+    }
+
+    /// `Invalid` for a File-mode output queue outside 1 to
+    /// [`FILE_OUTPUT_QUEUE_MAX`](crate::kit::FILE_OUTPUT_QUEUE_MAX).
+    pub fn validate(&self) -> Result<(), VideoError> {
+        let max = crate::kit::FILE_OUTPUT_QUEUE_MAX;
+        if self.mode == DecodeMode::File && !(1..=max).contains(&self.output_queue) {
+            return Err(invalid(format!(
+                "a File-mode output queue of {} (1 to {max})",
+                self.output_queue
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -1033,8 +1101,14 @@ pub struct EncodedInput {
     pub data: Bytes,
     /// The caller's reading of the bitstream (VP8 P bit; an H.264 IDR).
     pub keyframe: bool,
-    /// Passed through to the output `VideoFrame::capture_us`.
+    /// Real time: passed through to the output `VideoFrame::capture_us`.
+    /// [`DecodeMode::File`]: the access unit's presentation time (pts) in
+    /// µs, which its frame comes out with. At most `i64::MAX`.
     pub capture_us: u64,
+    /// [`DecodeMode::File`]: the access unit's decode time (dts) in µs,
+    /// when the container has one. Each must be later than the one before
+    /// (until a flush or reset). Real time ignores it.
+    pub dts_us: Option<u64>,
 }
 
 impl EncodedInput {
@@ -1050,6 +1124,23 @@ impl EncodedInput {
             data: data.into(),
             keyframe,
             capture_us,
+            dts_us: None,
+        }
+    }
+
+    /// An access unit from a file ([`DecodeMode::File`]), in decode order:
+    /// its presentation and decode times in µs (a container's times on
+    /// its own timescale convert as `t * 1_000_000 / timescale`).
+    pub fn file(
+        codec: VideoCodec,
+        data: impl Into<Bytes>,
+        keyframe: bool,
+        pts_us: u64,
+        dts_us: Option<u64>,
+    ) -> EncodedInput {
+        EncodedInput {
+            dts_us,
+            ..EncodedInput::new(codec, data, keyframe, pts_us)
         }
     }
 }
@@ -1062,7 +1153,10 @@ pub struct DecoderStats {
     pub frames_in: u64,
     /// Frames out.
     pub frames_out: u64,
-    /// Decoded frames dropped because the output queue was full.
+    /// Decoded frames dropped: real time, because the output queue was
+    /// full; [`DecodeMode::File`] (which never drops for room), a frame the
+    /// OS gave after a later one had already come out, or twice (a broken
+    /// stream).
     pub dropped_out: u64,
     /// Errors (including inputs refused for want of a keyframe).
     pub errors: u64,

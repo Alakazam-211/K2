@@ -230,6 +230,7 @@ extern "C" {
         info_flags_out: *mut u32,
     ) -> OSStatus;
     pub fn VTDecompressionSessionWaitForAsynchronousFrames(session: VTSessionRef) -> OSStatus;
+    pub fn VTDecompressionSessionFinishDelayedFrames(session: VTSessionRef) -> OSStatus;
     pub fn VTDecompressionSessionCanAcceptFormatDescription(
         session: VTSessionRef,
         format: CMFormatDescriptionRef,
@@ -290,6 +291,8 @@ extern "C" {
     pub fn CMSampleBufferGetDataBuffer(sb: CMSampleBufferRef) -> CMBlockBufferRef;
     pub fn CMSampleBufferGetImageBuffer(sb: CMSampleBufferRef) -> CVPixelBufferRef;
     pub fn CMSampleBufferGetFormatDescription(sb: CMSampleBufferRef) -> CMFormatDescriptionRef;
+    pub fn CMSampleBufferGetPresentationTimeStamp(sb: CMSampleBufferRef) -> CMTime;
+    pub fn CMSampleBufferGetDecodeTimeStamp(sb: CMSampleBufferRef) -> CMTime;
     pub fn CMSampleBufferGetSampleAttachmentsArray(sb: CMSampleBufferRef, create: u8)
         -> CFArrayRef;
     pub fn CMBlockBufferGetDataLength(bb: CMBlockBufferRef) -> usize;
@@ -386,6 +389,11 @@ pub const VT_DECODER_NOT_AVAILABLE_NOW: OSStatus = -12913;
 pub const VT_ENCODER_NOT_AVAILABLE_NOW: OSStatus = -12915;
 /// `kVTDecodeInfo_FrameDropped`.
 pub const DECODE_INFO_FRAME_DROPPED: u32 = 1 << 1;
+/// `kVTDecodeFrame_EnableTemporalProcessing`: the decoder may hold frames
+/// back and give them in presentation order.
+pub const DECODE_FRAME_ENABLE_TEMPORAL_PROCESSING: u32 = 1 << 3;
+/// `kCMTimeFlags_Valid`.
+pub const CM_TIME_VALID: u32 = 1;
 /// `kCMBlockBufferAssureMemoryNowFlag`.
 pub const BLOCK_BUFFER_ASSURE_MEMORY_NOW: u32 = 1;
 

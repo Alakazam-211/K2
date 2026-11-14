@@ -107,6 +107,9 @@ function RowButton({
       aria-expanded={hasSub ? Boolean(open) : undefined}
       aria-pressed={item.checked !== undefined ? item.checked : undefined}
       data-context-menu-item={item.id}
+      // The lit row (pointer or arrow keys): its muted hint steps up to
+      // secondary text on the band (globals.css, the hovered-row rule).
+      data-highlighted={focused || open ? '' : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',

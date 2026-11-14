@@ -1409,6 +1409,16 @@ html:not([data-style="terminal"]) :is(.k2-focus, .k2-checkbox, .k2-radio):focus-
   outline: 2px solid var(--color-accent-text);
   outline-offset: 2px;
 }
+/* A filled button (accent, danger) also draws a 1.5px line of its label
+   colour inside its edge, as Terminal's cut ring does. The ring is the accent
+   as text, about 1.9:1 on the accent fill, so on its own the focused button
+   only looked a little larger; the line reads on the fill (4.5:1, the
+   label's pair) and the ring on the page. The button opts in the way it does
+   for Terminal: --k2-ch-focus-inner (ui/Button.tsx). Unfilled buttons are
+   untouched. */
+html:not([data-style="terminal"]) .k2-focus[class*="[--k2-ch-focus-inner:"]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  box-shadow: inset 0 0 0 1.5px var(--k2-ch-focus-inner), var(--ring-field);
+}
 
 /* Keyboard focus on a list row or a tab (a role="button" row, a tab-strip tab):
    the element opts in with data-k2-focus and a positioned box (`relative`).
@@ -1497,6 +1507,23 @@ html[data-scheme="light"] [data-agent-row][aria-current="true"]:not([data-zen-ro
 }
 html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not([data-zen-root] *) {
   background: var(--color-wash-1);
+}
+
+/* Muted text on a hovered or selected row steps up to the secondary tier,
+   every Style. A row's band (the hover wash, the selected wash, the accent
+   wash under a selected Settings row) takes muted text under 4.5:1 (3.9:1 on
+   Charcoal's card, 4.1:1 on Veil's); secondary clears it on every band.
+   A row is the nav's agent row, a list option or tree item, or an item of a
+   menu (the context menu, a dropdown, any role="menu" or "listbox"); it is
+   lit when hovered, keyboard-focused, highlighted (data-highlighted, the
+   context menu's arrow keys) or picked (data-selected). Disabled items stay
+   quiet. Any item its list marks current (aria-current) or selected
+   (aria-selected on an option, a tree item or a grid row) steps up too.
+   Settings' own list rows do it through SETTING_LIST_ROW_HOVER and
+   SETTING_LIST_ROW_BAND. Gardens keep their own look. */
+:is([data-agent-row], [role="option"], [role="treeitem"], :is([role="menu"], [role="listbox"], [data-context-menu], [data-setting-dropdown-menu]) :is(button, [role^="menuitem"], [role="option"])):is(:hover, :focus-visible, [data-highlighted], [data-selected]):not(:disabled, [aria-disabled="true"]):not([data-zen-root], [data-zen-root] *, [data-k2-thread-zen] *),
+:is([aria-current="true"], [aria-current="page"], :is([role="option"], [role="treeitem"], [role="row"])[aria-selected="true"]):not([data-zen-root], [data-zen-root] *, [data-k2-thread-zen] *) {
+  --color-text-muted: var(--color-text-secondary);
 }
 
 /* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:

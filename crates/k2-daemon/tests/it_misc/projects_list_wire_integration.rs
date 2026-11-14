@@ -27,9 +27,10 @@ fn lock() -> k2_core::test_env::SerialGuard {
 
 const OWNER_TOKEN: &str = "owner-token-projects-list-wire";
 
-/// Ceilings for 200 workspaces × 3 rows (measured, plus about 20%).
-const BUDGET_PLAIN_BYTES: usize = 400_000;
-const BUDGET_GZIP_BYTES: usize = 40_000;
+/// Ceilings for 200 workspaces × 3 rows: measured 472,134 plain and 22,358
+/// gzip on Linux, plus about 20%.
+const BUDGET_PLAIN_BYTES: usize = 570_000;
+const BUDGET_GZIP_BYTES: usize = 27_000;
 
 struct Resp {
     status: u16,

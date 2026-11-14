@@ -1412,6 +1412,7 @@ mod tests {
                 // git.note and the sheet-gated start / land / settle; GET
                 // /cli/workbench/agents (sidecars in the Garden reach).
                 "workbench-v1",
+                "projects-etag",
                 "gardens-remote-v1",
                 "voice-chat-role-v1",
                 "grokbots-v1",

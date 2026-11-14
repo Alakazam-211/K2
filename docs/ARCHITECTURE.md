@@ -1,227 +1,84 @@
 # K2 Architecture
 
-Technical architecture of K2, covering the system design, backend modules, frontend structure, IPC layer and database schema.
+A one-page map. K2 is daemon-first: one long-running daemon (`crates/k2-daemon`, built on the library `crates/k2-core`) owns the data, the terminals and the agents, and keeps working with the app closed. Everything a person or an agent touches is a front-end of that daemon: the desktop app, the `k2` CLI, remote clients through K2 Connect, and the phone app. The front-ends hold no logic of their own. They ask the daemon and show the answer.
 
-## System Overview
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                         macOS Window                            │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │                    React 19 Frontend                       │  │
-│  │                                                            │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌──────────┐  │  │
-│  │  │ Sidebar  │  │ TabBar   │  │ PaneLayout│  │ Command  │  │  │
-│  │  │ Projects │  │ Workspace│  │ Terminals │  │ Palette  │  │  │
-│  │  │ FocusGrp │  │ Tabs     │  │ Viewers   │  │ Cmd+K    │  │  │
-│  │  └──────────┘  └──────────┘  └───────────┘  └──────────┘  │  │
-│  │                                                            │  │
-│  │  Zustand Stores ──── xterm.js (WebGL) ──── react-mosaic   │  │
-│  └────────────────────────────┬───────────────────────────────┘  │
-│                               │ Tauri IPC                        │
-│                               │ (invoke + events)                │
-│  ┌────────────────────────────┴───────────────────────────────┐  │
-│  │                      Rust Backend                          │  │
-│  │                                                            │  │
-│  │  ┌────────────┐  ┌──────────┐  ┌───────┐                  │  │
-│  │  │ Terminal   │  │ Database │  │ Git   │                  │  │
-│  │  │ portable-  │  │ rusqlite │  │ git2  │                  │  │
-│  │  │ pty        │  │ SQLite   │  │       │                  │  │
-│  │  └────────────┘  └──────────┘  └───────┘                  │  │
-│  │                                                            │  │
-│  │  ┌────────────┐  ┌──────────┐  ┌──────────────────────┐   │  │
-│  │  │ Filesystem │  │ Settings │  │ Workspace Ops        │   │  │
-│  │  │ read/write │  │ KV store │  │ split/close/arrange  │   │  │
-│  │  └────────────┘  └──────────┘  └──────────────────────┘   │  │
-│  └────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-## Backend Modules
-
-All Rust source lives under `src-tauri/src/`.
-
-### `terminal/` -- PTY Management
-
-- **TerminalManager** holds a `HashMap<String, TerminalInstance>` where each instance contains the PTY master, child process, resize handle, and a 256KB scrollback ring buffer.
-- `terminal_create` spawns a shell via `portable-pty`, starts a read loop on a background thread, and streams output to the frontend via Tauri events (`terminal:data:{id}`). Accepts an optional `id` parameter for stable terminal IDs across reattach.
-- `terminal_write` writes bytes into the PTY master.
-- `terminal_resize` sends a resize signal to the PTY.
-- `terminal_kill` terminates the child process (SIGHUP then SIGKILL) and removes the entry.
-- `terminal_exists` checks if a PTY is alive (used by frontend to decide create vs reattach).
-- `terminal_get_buffer` returns the scrollback buffer for replay on reattach.
-- **Persistence**: PTYs survive tab switches. When a TerminalView unmounts (tab switch), the PTY keeps running and buffering output. On remount, the frontend replays the buffer and resubscribes to events.
-- SIGPIPE is ignored at startup to prevent writes to dead PTYs from crashing the app.
-- All PTYs are killed on window close to prevent zombie processes.
-
-### `db/` -- SQLite Database
-
-- Database lives at `~/.k2/k2.db` (`~/.k2/k2so.db` is a compat link to it since 0.46.6).
-- Uses WAL mode and foreign key enforcement.
-- Migrations are embedded in the binary (via `include_str!`) and tracked in a `_migrations` table.
-- `schema.rs` defines typed structs and CRUD methods for all 7 tables.
-
-### `commands/` -- Tauri IPC Handlers
-
-All `#[tauri::command]` functions grouped by domain:
-
-| Module | Commands |
-|--------|----------|
-| `projects.rs` | CRUD, icon detection, editor launch, folder picker, git init |
-| `workspaces.rs` | List, create, delete workspaces |
-| `focus_groups.rs` | CRUD, project assignment, reconciliation |
-| `workspace_sections.rs` | CRUD, reorder, workspace assignment |
-| `agents.rs` | Preset CRUD, reorder, reset built-ins |
-| `terminal.rs` | PTY lifecycle (create, write, resize, kill) |
-| `git.rs` | Repo info, branches, worktrees, changes |
-| `filesystem.rs` | Read dir, read/write files, open in Finder |
-| `settings.rs` | Get/update/reset key-value settings |
-| `project_config.rs` | Per-project config, run commands |
-
-### `git/` -- Git Operations
-
-- Uses `git2` crate for repository inspection.
-- Provides branch listing, worktree management (create, remove, reopen), and change detection.
-- Worktree paths are stored in the `workspaces` table.
-
-### Other Backend Files
-
-- `state.rs` -- `AppState` struct holding `Mutex<Connection>`, `Mutex<TerminalManager>`.
-- `editors.rs` -- Detects installed editors (VS Code, Cursor, Zed, etc.) for "Open in Editor" functionality.
-- `menu.rs` -- Native macOS menu bar construction and event handling.
-- `window.rs` -- Saves/restores window position, size, and maximized state through the daemon's `/cli/window-state/get` and `/cli/window-state/set` routes.
-- `crates/k2-core/src/project_config.rs` -- Reads the per-project `config.json` and `config.local.json` from the workspace's dot directory.
-
-## Frontend
-
-All TypeScript/React source lives under `src/renderer/`.
-
-### Stores (Zustand)
-
-State is managed through Zustand stores, each responsible for one domain:
-
-| Store | Responsibility |
-|-------|----------------|
-| `projects.ts` | Project list, selection, CRUD operations |
-| `tabs.ts` | Workspace tabs, pane tree, active tab tracking |
-| `panels.ts` | Panel layout state (sidebar, file tree, etc.) |
-| `presets.ts` | Agent preset list and management |
-| `filetree.ts` | File tree expansion state, directory contents |
-| `focus-groups.ts` | Focus group tabs and project assignment |
-| `settings.ts` | App settings (theme, font, etc.) |
-| `sidebar.ts` | Sidebar visibility and active section |
-| `command-palette.ts` | Command palette visibility and filtering |
-| `context-menu.ts` | Right-click context menu state |
-| `terminal-settings.ts` | Terminal font, size, theme |
-| `toast.ts` | Toast notification queue |
-| `git-init-dialog.ts` | Git initialization dialog state |
-
-### Key Components
-
-- **Terminal** -- Wraps xterm.js with the WebGL renderer and fit addon. Communicates with the Rust PTY via Tauri events.
-- **PaneLayout** -- Uses `react-mosaic-component` for tiled pane management. Each leaf is a terminal or document viewer.
-- **FileViewerPane** -- Dispatches on file extension to render Markdown (react-markdown + remark-gfm), PDF (pdfjs-dist), or DOCX (mammoth).
-- **PresetsBar** -- Row of buttons for launching agent CLI tools. Each button opens a new terminal with the preset's command.
-- **Sidebar** -- Project list with focus group tabs, drag-to-reorder, context menus.
-- **FocusWindow** -- Detachable window for a focused view of a single project.
-- **CommandPalette** -- Cmd+K overlay for quick actions.
-
-### Layout System
-
-The pane layout is a binary tree (from react-mosaic) where:
-- **Branch nodes** have a `direction` (row/column) and `splitPercentage`.
-- **Leaf nodes** are pane IDs mapped to either a terminal or document viewer.
-
-Layout state is stored in the `tabs` Zustand store and persisted to the database per-workspace so layouts restore when switching workspaces.
-
-## IPC: Tauri Commands + Events
-
-Communication between frontend and backend uses two mechanisms:
-
-### Commands (Frontend -> Backend)
-
-Frontend calls `invoke("command_name", { args })` which maps to a `#[tauri::command]` Rust function. Returns a `Result<T, String>`.
+## The shape
 
 ```
-Frontend                    Backend
-invoke("terminal_create")  →  terminal::terminal_create()
-                           ←  Ok(terminal_id)
+  Desktop app                  k2 CLI           Remote clients         Phone app
+  src-tauri/ (Tauri shell)     cli/k2           through K2 Connect     (source not
+  src/renderer/ (React)                         (tunnel and relay)      in this repo)
+        |                         |                    |                    |
+        +-------------------------+--------------------+--------------------+
+                                  |
+                HTTP /cli/* and /v1/*, WebSocket streams,
+                /boot-status checked first
+                                  |
+                +-----------------------------------+
+                |             k2-daemon             |
+                |   routes, policy, live streams    |
+                |   k2-core: db, terminals,         |
+                |   scheduler, agents, tunnel       |
+                +-----------------------------------+
+                  |        |        |         |           |
+               SQLite    vault    k2-ptyd   k2-root-    compute nodes
+               (k2-core  (k2-     (holds    helper      (k2-node, they
+                db)      vault)   PTYs)     (Linux)     dial in)
 ```
 
-### Events (Backend -> Frontend)
+## How clients talk to the daemon
 
-Backend emits events via `app.emit()` for streaming data:
+- **HTTP routes.** Almost everything is a route under `/cli/*`. One function matches them all: `crates/k2-daemon/src/routes/dispatcher.rs`. Each `/cli/*` route has a row in the route policy table (`ROUTES` in `crates/k2-daemon/src/routes/route_policy.rs`, rows in `crates/k2-daemon/src/routes/policy/`) that says the lowest login role it admits. A smaller `/v1/*` set, matched in the same dispatcher, is the door for API keys.
+- **WebSocket streams.** Live data is pushed, not polled. The main ones:
 
-- `terminal:data:{id}` -- PTY output bytes
+  | Stream | File in `crates/k2-daemon/src/` |
+  |---|---|
+  | `/events`, agent hook events | `events.rs` |
+  | `/cli/sessions/events`, session lifecycle per workspace | `session_events_ws.rs` |
+  | `/cli/sessions/subscribe`, one session's frames | `sessions_ws.rs` |
+  | `/cli/sessions/bytes`, one session's raw bytes | `sessions_bytes_ws.rs` |
+  | `/cli/sessions/grid`, terminal grid snapshots and deltas | `sessions_grid_ws.rs` |
+  | `/cli/awareness/subscribe`, the awareness bus | `awareness_ws.rs` |
+  | `/cli/overlay/events`, Thread and overlay pushes | `overlay_ws.rs` |
 
-Frontend listens with `listen("event_name", callback)` from `@tauri-apps/api/event`.
+- **`/boot-status` comes first.** The daemon binds its port before it runs migrations, and the dispatcher answers `503` to every route except `/ping`, `/health`, `/boot-status` and the two public key routes until the boot is done (`crates/k2-daemon/src/boot_status.rs`, `is_ready`). The body gives a `phase` (`starting`, `migrating`, `ready` or `error`), the `protocol` range, and for a signed-in or local caller the `version` and `features`. The desktop app mounts only against a local daemon of its own version in phase `ready` (`src/renderer/components/ConnectionGate.tsx`). The CLI polls the same route after a restart (`cli/src/daemon.sh`).
+- **Finding the local daemon.** At start the daemon writes `daemon.port` and `daemon.token` into the K2 home, `~/.k2` by default (`crates/k2-daemon/src/daemon_main.rs`). The port is kept across restarts when it can be (`crates/k2-core/src/port_claim.rs`). The token is new on every boot. The desktop shell reads both files in `src-tauri/src/daemon_client.rs`, the CLI in `cli/src/daemon.sh`.
+- **K2 Connect.** The daemon runs the client side of the tunnel that makes it reachable from outside: `crates/k2-core/src/tunnel/`. The relay server is not in this repo. Remote clients then use the same routes and streams as local ones.
+- **Phone.** The phone app's source is not in this repo. What is here is the daemon side: a phone signs in with a device session it gets by redeeming a one-time pairing code (`crates/k2-core/src/connect_device_pairing.rs`, `crates/k2-daemon/src/connect_device_routes.rs`).
 
-## Database Schema
+## What the daemon owns
 
-SQLite database at `~/.k2/k2.db` (formerly `k2so.db`) with 7 tables (plus `_migrations`):
+- **SQLite.** The database code is `crates/k2-core/src/db/`. The schema is the numbered migrations in `crates/k2-core/drizzle_sql/`.
+- **The vault.** `crates/k2-vault`, linked into the daemon. The daemon's side is `crates/k2-daemon/src/vault/`.
+- **k2-ptyd.** A separate process that holds terminal sessions. After a restart the daemon takes them back (`crates/k2-daemon/src/ptyd_adopt.rs`, `crates/k2-core/src/terminal/ptyd/`).
+- **The root helper.** K2's one root door on Linux. The daemon's side is `crates/k2-daemon/src/root_helper/`.
+- **Compute nodes.** A node connects to the daemon over the `/cli/compute/attach` WebSocket (`crates/k2-daemon/src/compute_ws.rs`) and runs the jobs it is given.
 
-```sql
-focus_groups
-├── id          TEXT PRIMARY KEY
-├── name        TEXT NOT NULL
-├── color       TEXT
-├── tab_order   INTEGER NOT NULL DEFAULT 0
-└── created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+## Where things live
 
-projects
-├── id              TEXT PRIMARY KEY
-├── name            TEXT NOT NULL
-├── path            TEXT NOT NULL
-├── color           TEXT NOT NULL DEFAULT '#6366f1'
-├── tab_order       INTEGER NOT NULL DEFAULT 0
-├── last_opened_at  INTEGER
-├── worktree_mode   INTEGER NOT NULL DEFAULT 0
-├── icon_url        TEXT
-├── focus_group_id  TEXT → focus_groups(id)
-└── created_at      INTEGER NOT NULL DEFAULT (unixepoch())
+| Part | Path | What it is |
+|---|---|---|
+| Daemon | `crates/k2-daemon` | The long-running process: routes, policy, streams, scheduler and agent orchestration. |
+| Core library | `crates/k2-core` | Device-local logic the daemon links: db, terminal, scheduler, agent hooks, push. |
+| Thin-client helpers | `crates/k2-client` | What a thin client needs without k2-core: paths, process bootstrap, account session. |
+| Vault | `crates/k2-vault` | One encrypted store for passwords, tokens and keys, used in-process by the daemon. |
+| Terminals | `crates/k2-ptyd`, `crates/k2-core/src/terminal/` | A small per-user PTY host, so sessions survive a daemon restart, and the daemon's terminal code. |
+| Compute | `crates/k2-node`, `crates/k2-node-proto` | The compute node runtime, and the wire between it and a controller daemon. |
+| Root helper | `crates/k2-root-helper`, `crates/k2-root-proto` | K2's one root door on Linux, and its protocol. |
+| Apps | `crates/k2-app-engine` | Drives rootless Podman for guarded K2 Apps, on the daemon's orders only. |
+| Desktop shell | `src-tauri/` | The Tauri app: windows, menu, tray, and the connection to the daemon. |
+| Renderer | `src/renderer/` | The React front-end, a thin client of the daemon. |
+| CLI | `cli/src/`, `cli/k2` | Shell parts, joined into the one file `cli/k2` by `scripts/build-cli.sh`. Edit a part, never `cli/k2`. |
+| SDK | `sdk/` | The widget frame runtime (`sdk/k2-runtime.js`), the server SDK and generated contract files. |
+| Migrations | `crates/k2-core/drizzle_sql/` | Numbered SQL migrations for the SQLite database. |
+| Contract catalog | `crates/k2-core/src/contract/catalog.json` | The verb catalog: a verb layer over the route table, not a second one. |
+| Tests | `tests/README.md` | The map of every place tests live and how to run them. |
 
-workspace_sections
-├── id           TEXT PRIMARY KEY
-├── project_id   TEXT NOT NULL → projects(id)
-├── name         TEXT NOT NULL
-├── color        TEXT
-├── is_collapsed INTEGER NOT NULL DEFAULT 0
-├── tab_order    INTEGER NOT NULL DEFAULT 0
-└── created_at   INTEGER NOT NULL DEFAULT (unixepoch())
+The workspace `Cargo.toml` lists every crate. The "Project Structure" part of [CONTRIBUTING.md](../CONTRIBUTING.md) says in one line what each is for.
 
-workspaces
-├── id             TEXT PRIMARY KEY
-├── project_id     TEXT NOT NULL → projects(id)
-├── section_id     TEXT → workspace_sections(id)
-├── type           TEXT NOT NULL DEFAULT 'default'
-├── branch         TEXT
-├── name           TEXT NOT NULL
-├── tab_order      INTEGER NOT NULL DEFAULT 0
-├── worktree_path  TEXT
-└── created_at     INTEGER NOT NULL DEFAULT (unixepoch())
+## Rules that follow from the design
 
-agent_presets
-├── id          TEXT PRIMARY KEY
-├── label       TEXT NOT NULL
-├── command     TEXT NOT NULL
-├── icon        TEXT
-├── enabled     INTEGER NOT NULL DEFAULT 1
-├── sort_order  INTEGER NOT NULL DEFAULT 0
-├── is_built_in INTEGER NOT NULL DEFAULT 0
-└── created_at  INTEGER NOT NULL DEFAULT (unixepoch())
-
-terminal_tabs
-├── id            TEXT PRIMARY KEY
-├── workspace_id  TEXT NOT NULL → workspaces(id)
-├── title         TEXT NOT NULL
-├── tab_order     INTEGER NOT NULL DEFAULT 0
-└── created_at    INTEGER NOT NULL DEFAULT (unixepoch())
-
-terminal_panes
-├── id              TEXT PRIMARY KEY
-├── tab_id          TEXT NOT NULL → terminal_tabs(id)
-├── split_direction TEXT
-├── split_ratio     REAL
-├── pane_order      INTEGER NOT NULL DEFAULT 0
-└── created_at      INTEGER NOT NULL DEFAULT (unixepoch())
-```
+- **Logic goes in the daemon or the core.** `crates/k2-daemon` and `crates/k2-core` are the only places for behaviour. That is what lets the CLI, the desktop app and a remote client all get the same answer.
+- **`src-tauri/` is connection and OS work only.** It links `crates/k2-client`, not k2-core (see the note in `src-tauri/Cargo.toml`; k2-core is there for tests and benches only). A Tauri command is for a window, the menu, the tray or the link to the daemon.
+- **The renderer renders what the daemon answers.** It calls routes through `src/renderer/lib/daemon-cli.ts` and listens to the streams. It does not decide.
+- **A new feature is a route plus a policy row.** Then a CLI verb and a renderer call on top. The steps are in [CONTRIBUTING.md](../CONTRIBUTING.md), "How to Add a Feature or Command".

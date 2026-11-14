@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
 // Home groups: what the swipe looks like. The strip follows the fingers
-// 1:1 with the incoming group riding in beside it (its glyph and name at
-// the leading edge, no instruction text), then glides on and lands, or
-// glides back; a rubber band at the ends. Synthetic wheel streams, fake
+// 1:1 with the incoming group's rows riding in beside it (no tile naming
+// the group, no instruction text), then glides on and lands, or glides
+// back; a rubber band at the ends. Synthetic wheel streams, fake
 // timers and rAF. Also the bar reading the live swipe, and the
 // recent-first move.
 
@@ -91,7 +91,12 @@ afterEach(() => {
 
 const strip = (): HTMLElement => document.querySelector('[data-group-swipe-strip]') as HTMLElement
 const incoming = (): HTMLElement | null => document.querySelector('[data-group-swipe-incoming]')
-const peek = (): HTMLElement | null => document.querySelector('[data-group-swipe-peek]')
+/** Rosson: no tile naming the group the swipe heads to. Nothing floats
+ *  over the strip: only the two lists' rows are on screen. */
+const expectNoTile = (rows: string): void => {
+  expect(document.querySelector('[data-group-swipe-peek], [data-group-float], [data-k2-chamfer-float]')).toBeNull()
+  expect(document.body.textContent).toBe(rows)
+}
 const current = (): string => selectedHome(useHomesStore.getState()).name
 /** One wheel event over the list, a frame after the last; then that frame paints. */
 const wheel = (deltaX: number): void => {
@@ -114,25 +119,26 @@ const glideMs = (): number => {
 }
 
 describe('the strip', () => {
-  it('follows the fingers 1:1 (0, 25%, 50%) with the next group riding in at its edge, and no hint text', () => {
+  it('follows the fingers 1:1 (0, 30%, 60%) with the next group’s rows riding in at its edge, and no tile or hint text', () => {
     render(<Nav />)
     expect(strip().style.transform).toBe('')
     expect(incoming()).toBeNull()
-    for (let i = 0; i < 12; i++) wheel(5) // locks at 10 px, then 5 a frame: 60 px = 25%
+    expectNoTile('One rows')
+    for (let i = 0; i < 12; i++) wheel(6) // locks at 10 px, then 6 a frame: 72 px = 30%
     wait(FRAME)
-    expect([strip().style.transform, strip().style.transition]).toEqual(['translate3d(-60.00px, 0, 0)', 'none'])
+    expect([strip().style.transform, strip().style.transition]).toEqual(['translate3d(-72.00px, 0, 0)', 'none'])
     const inc = incoming() as HTMLElement
     expect(inc.getAttribute('data-group-swipe-incoming')).toBe(ids[1])
     expect([inc.style.left, inc.hasAttribute('inert'), inc.getAttribute('aria-hidden')]).toEqual(['100%', true, 'true'])
     expect(screen.getByTestId('incoming-rows').textContent).toBe('Two rows')
-    // The peek is the group's glyph and name, inside the strip, nothing else.
-    expect(inc.contains(peek())).toBe(true)
-    expect(peek()?.textContent).toMatch(/Two$/)
-    expect(peek()?.style.left).toBe('8px')
+    // The incoming group is its rows alone.
+    expect(inc.children.length).toBe(1)
+    expectNoTile('One rowsTwo rows')
     expect(document.body.textContent).not.toMatch(HINTS)
-    for (let i = 0; i < 12; i++) wheel(5)
+    for (let i = 0; i < 12; i++) wheel(6)
     wait(FRAME)
-    expect(strip().style.transform).toBe('translate3d(-120.00px, 0, 0)')
+    expect(strip().style.transform).toBe('translate3d(-144.00px, 0, 0)')
+    expectNoTile('One rowsTwo rows')
     // React drew the incoming group once, not per wheel event.
     expect(incomingRenders).toBeLessThanOrEqual(2)
     expect(document.body.textContent).not.toMatch(HINTS)
@@ -146,8 +152,7 @@ describe('the strip', () => {
     const ms = glideMs()
     expect(strip().style.transition).toBe(`transform ${ms}ms ${GLIDE_EASE}`)
     expect(strip().style.transform).toBe('translate3d(-240.00px, 0, 0)')
-    expect(peek()?.style.opacity).toBe('0')
-    expect(document.body.textContent).not.toMatch(HINTS)
+    expectNoTile('One rowsTwo rows')
     // Still on One while it glides; the switch is the landing.
     expect(current()).toBe('One')
     wait(ms + GLIDE_LAND_SLACK_MS)
@@ -187,8 +192,7 @@ describe('the strip', () => {
     wait(FRAME)
     expect(strip().style.transform).toBe('translate3d(30.00px, 0, 0)')
     expect(incoming()?.style.left).toBe('-100%')
-    expect(peek()?.textContent).toMatch(/One$/)
-    expect(peek()?.style.right).toBe('8px')
+    expectNoTile('Two rowsOne rows')
   })
 
   it('past the first group: a third of the travel, nothing beside it, and back', () => {
@@ -204,13 +208,12 @@ describe('the strip', () => {
     expect(strip().style.transform).toBe('')
   })
 
-  it('the rail peeks the glyph alone', () => {
+  it('the rail shows no tile either', () => {
     render(<Nav variant="rail" />)
     for (let i = 0; i < 12; i++) wheel(5)
     wait(FRAME)
-    expect(peek()?.textContent).not.toContain('Two')
-    expect(peek()?.style.left).toBe('2px')
-    expect(document.body.textContent).not.toMatch(HINTS)
+    expect(strip().style.transform).toBe('translate3d(-60.00px, 0, 0)')
+    expectNoTile('One rowsTwo rows')
   })
 })
 

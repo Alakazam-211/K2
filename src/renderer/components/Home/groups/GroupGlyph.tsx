@@ -5,7 +5,7 @@
 //
 // Two sizes of "no icon" (K2 Design's notes): where the glyph is small (the
 // bar's 8 px, the dialog list's 12 px) the bare numeral, bold; where there
-// is room (the dialog's "No icon" choice, the swipe peek) the outlined dot
+// is room (the dialog's "No icon" choice) the outlined dot
 // with the number in it: Terminal's cut octagon, Glass's circle.
 
 import { groupIcon, type GroupIconDef } from '@/lib/group-icons'

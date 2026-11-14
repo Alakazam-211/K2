@@ -58,9 +58,8 @@ html:not([data-style="terminal"]) [data-home-group-bar] [data-group-id][data-k2-
   color: color-mix(in oklab, var(--color-accent-text) calc(var(--group-swipe-progress) * 100%), var(--color-text-muted));
 }
 
-/* Small floats (the bar's name tip, the swipe's peek at the incoming
-   group's edge): the elevated fill and
-   edge in Terminal; Glass's menu material, rounded. */
+/* Small floats (the bar's name tip): the elevated fill and edge in
+   Terminal; Glass's menu material, rounded. */
 [data-group-float] {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
@@ -71,12 +70,11 @@ html[data-style="glass"] [data-group-float] {
   border-radius: 8px;
   border-width: 0.5px;
 }
-html[data-style="glass"] [data-group-float="peek"] { border-radius: 14px; }
 
-/* Terminal: the small floats (the bar's name tip, the swipe's peek) are cut
-   like the top bar's (data-k2-chamfer, globals.css); their shadow is the
-   wrapper's drop-shadow (data-k2-chamfer-float), since a box-shadow can't
-   follow a cut. */
+/* Terminal: the small floats (the bar's name tip) are cut like the top
+   bar's (data-k2-chamfer, globals.css); their shadow is the wrapper's
+   drop-shadow (data-k2-chamfer-float), since a box-shadow can't follow a
+   cut. */
 html[data-style="terminal"] [data-group-float][data-k2-chamfer] { box-shadow: none; }
 
 /* Terminal: the Home rows' status dot (the live square) is round, as in

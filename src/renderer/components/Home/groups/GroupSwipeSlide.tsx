@@ -3,8 +3,8 @@
 // the person what to do).
 //   - `GroupSwipeStrip` wraps the agent list. While a swipe is under way
 //     the group it heads to rides in beside the list, at its edge, as one
-//     strip: that group's rows with its glyph and name at the leading edge
-//     (the peek, part of the motion, not a message).
+//     strip: that group's rows and nothing else (Rosson: no tile naming
+//     the group; the bar's colours already say where it goes).
 //   - The strip follows the fingers 1:1, then glides on: to the next group
 //     (the switch happens as it lands) or back home. Past the first or last
 //     group it moves a third as far and glides back.
@@ -16,7 +16,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import { groupSwipeLive, useGroupSwipeStore, type SwipeFrame } from '@/hooks/useGroupSwipe'
 import { useHomesStore, type Home } from '@/stores/homes'
-import { GroupGlyph } from './GroupGlyph'
 
 interface StripMotion {
   width: number
@@ -56,12 +55,6 @@ export function paintStrip(el: HTMLElement, f: SwipeFrame, m: StripMotion): void
   void el.offsetWidth
   el.style.transition = `transform ${f.ms}ms ${f.easing}`
   el.style.transform = shift(f.to, m.width)
-  // Landing on the group: its name rides in and fades as the header takes it.
-  const peek = el.querySelector<HTMLElement>('[data-group-swipe-peek]')
-  if (peek && f.outcome === 'commit') {
-    peek.style.transition = `opacity ${f.ms}ms ease-out`
-    peek.style.opacity = '0'
-  }
 }
 
 function useStripMotion(ref: React.RefObject<HTMLDivElement | null>, groupId: string): void {
@@ -86,31 +79,6 @@ function useStripMotion(ref: React.RefObject<HTMLDivElement | null>, groupId: st
   useLayoutEffect(() => {
     if (ref.current && groupSwipeLive.get().kind === 'rest') paintStrip(ref.current, groupSwipeLive.get(), motion.current)
   }, [ref, groupId])
-}
-
-/** The incoming group's glyph and name at the leading edge of its rows
- *  (the glyph alone in the rail). A card: cut in Terminal like the top
- *  bar's floats (the surface chamfer; its shadow on the wrapper, since a
- *  box-shadow can't follow a cut), rounded in Glass. */
-function GroupSwipePeek({ variant, group, index, sign }: { variant: 'nav' | 'rail'; group: Home; index: number; sign: number }): React.JSX.Element {
-  const edge = sign > 0 ? 'left' : 'right'
-  return (
-    <div
-      data-group-swipe-peek={group.id}
-      data-k2-chamfer-float=""
-      className="pointer-events-none absolute top-[38%] z-20 flex min-w-0 max-w-[calc(100%-16px)]"
-      style={{ [edge]: variant === 'rail' ? 2 : 8 }}
-    >
-      <div data-group-float="peek" data-k2-chamfer="surface" className={`flex min-w-0 items-center gap-2 ${variant === 'rail' ? 'p-1.5' : 'px-3 py-2'}`}>
-        <span className="flex-shrink-0 text-[var(--color-text-secondary)]">
-          <GroupGlyph icon={group.icon ?? null} index={index} />
-        </span>
-        {variant === 'nav' && (
-          <span className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{group.name}</span>
-        )}
-      </div>
-    </div>
-  )
 }
 
 export interface GroupSwipeStripProps {
@@ -146,7 +114,6 @@ export function GroupSwipeStrip({ variant, renderIncoming, children }: GroupSwip
           style={{ left: `${sign * 100}%` }}
         >
           {renderIncoming(incoming)}
-          <GroupSwipePeek variant={variant} group={incoming} index={to} sign={sign} />
         </div>
       )}
     </div>

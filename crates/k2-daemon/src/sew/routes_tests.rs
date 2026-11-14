@@ -310,7 +310,9 @@ fn every_route_is_classified_post_only_where_it_mutates_and_on_the_agent_list() 
         let floor = lookup(p).unwrap().post.unwrap();
         assert!(!floor.admits(Role::Member), "{p}: no Member login");
         let agent_ok = crate::session_token::is_agent_verb(p);
-        assert_eq!(agent_ok, *p != "/cli/sew/server/recovery-key", "{p}");
+        // The owner's alone, never a passport's: the launch key, and adopt.
+        let owner_only = matches!(*p, "/cli/sew/server/recovery-key" | "/cli/sew/server/adopt");
+        assert_eq!(agent_ok, !owner_only, "{p}");
     }
     for p in ["/cli/sew/status", "/cli/sew/preflight", "/cli/sew/backups", "/cli/sew/job"] {
         assert!(crate::session_token::is_agent_verb(p), "{p}");
@@ -743,4 +745,92 @@ fn the_emergency_rollback_is_the_owners_with_a_confirm_bound_to_the_bundle() {
     assert_eq!((v["result"].as_str(), v["confirmedBy"].as_str()), (Some("rolled_back"), Some("vault-password")), "{v}");
     assert!(ran());
     assert!(v["keptBackup"].as_str().is_some_and(|k| !k.is_empty()), "{v}");
+}
+
+/// `k2 hostchat adopt`: an `error` record over a Sew that systemd and Sew
+/// itself report healthy goes back to the live verdict, with the version
+/// on disk recorded and the error cleared. Nothing is installed, migrated
+/// or restarted: no root call besides the read-only status.
+#[test]
+fn adopt_takes_a_healthy_sew_back_from_an_error_record() {
+    let t = t();
+    t.enable();
+    let pin = k2_root_proto::sew::pinned().version;
+    *t.ops.on_disk.lock().unwrap() = Some(pin.into());
+    crate::sew::store::update(1, |r| {
+        r.status = "error".into();
+        r.installed_version = Some("0.0.1".into());
+        r.last_error = Some("upgrade: health check timed out".into());
+        // No other alarm (off-box copies, the launch key): the verdict is running.
+        r.ship_kind = "dir".into();
+        r.recovery_shown_at = Some(1);
+    })
+    .unwrap();
+    let (_, st) = t.get(&Who::Owner, "/cli/sew/status");
+    assert!(st["note"].as_str().unwrap_or("").contains("k2 hostchat adopt"), "status hints at adopt: {st}");
+    t.ops.clear();
+
+    let (status_line, v) = t.call(&Who::Owner, "/cli/sew/server/adopt", json!({}));
+    assert_eq!(status_line, "200 OK", "{v}");
+    assert_eq!(v["state"], "running", "{v}");
+    assert_eq!(v["installedVersion"]["from"], "0.0.1");
+    assert_eq!(v["installedVersion"]["to"], pin);
+    assert_eq!(v["clearedError"], "upgrade: health check timed out");
+    let row = crate::sew::store::load().unwrap();
+    assert_eq!(row.status, "running");
+    assert_eq!(row.installed_version.as_deref(), Some(pin));
+    assert_eq!(row.last_error, None);
+    assert!(t.ops.effects().is_empty(), "adopt never installs, migrates or restarts: {:?}", t.ops.effects());
+    let audit = std::fs::read_to_string(k2_core::auth_audit::path()).unwrap();
+    let want = format!("adopted state=running installed={pin}");
+    assert!(audit.lines().any(|l| l.contains(ADOPT_AUDIT) && l.contains(&want)), "audited: {audit}");
+}
+
+#[test]
+fn adopt_refuses_a_unit_down_a_record_not_in_error_and_anyone_but_the_owner() {
+    use k2_root_proto::sew::{UNIT_DB, UNIT_SEW};
+    let t = t();
+    t.enable();
+    let pin = k2_root_proto::sew::pinned().version;
+    *t.ops.on_disk.lock().unwrap() = Some(pin.into());
+    // Not in error: nothing to adopt.
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/adopt", json!({}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "not_in_error"), "{v}");
+    assert_eq!(crate::sew::store::load().unwrap().status, "running");
+
+    crate::sew::store::update(1, |r| {
+        r.status = "error".into();
+        r.last_error = Some("enable: x".into());
+    })
+    .unwrap();
+    // Not the owner: an Admin or Member login, an agent with Manage Sew,
+    // a K2 shell tab.
+    for who in [login(Role::Admin), login(Role::Member), agent("w-it"), shell("w-it")] {
+        let (st, v) = t.call(&who, "/cli/sew/server/adopt", json!({}));
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "owner_only"), "{who:?}: {v}");
+    }
+    for (who, want) in [(Who::Wrong, "wrong_credential"), (Who::Invalid, "forbidden")] {
+        assert_eq!(code(&t.call(&who, "/cli/sew/server/adopt", json!({})).1), want);
+    }
+    // A unit down: refused, the record untouched.
+    t.ops.set_unit(UNIT_SEW, "failed", 1);
+    t.ops.clear();
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/adopt", json!({}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "units_not_active"), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap();
+    assert!(hint.contains(&format!("{UNIT_SEW} is 'failed'")), "{v}");
+    t.ops.set_unit(UNIT_SEW, "active", 0);
+    t.ops.set_unit(UNIT_DB, "inactive", 0);
+    assert_eq!(code(&t.call(&Who::Owner, "/cli/sew/server/adopt", json!({})).1), "units_not_active");
+    t.ops.set_unit(UNIT_DB, "active", 0);
+    // Sew's mgmt health not OK: refused.
+    *t.ops.mgmt_health_ok.lock().unwrap() = false;
+    assert_eq!(code(&t.call(&Who::Owner, "/cli/sew/server/adopt", json!({})).1), "sew_unhealthy");
+    *t.ops.mgmt_health_ok.lock().unwrap() = true;
+    // No binary on disk: refused.
+    *t.ops.on_disk.lock().unwrap() = None;
+    assert_eq!(code(&t.call(&Who::Owner, "/cli/sew/server/adopt", json!({})).1), "binary_unreadable");
+    let row = crate::sew::store::load().unwrap();
+    assert_eq!((row.status.as_str(), row.last_error.as_deref()), ("error", Some("enable: x")), "every refusal leaves the record");
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
 }

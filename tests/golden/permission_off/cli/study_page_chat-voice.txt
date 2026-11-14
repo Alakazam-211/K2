@@ -141,6 +141,7 @@ WHAT GOES WRONG
   calls fail on another host of the App, or in a Tauri window → k2 study tauri-voice
   device certificate refused: revoked → a logout, often your sign-in code's: k2 study app-chat
   degraded, k2_backup_offbox_none → no off-box backup: the owner, k2 hostchat ship (--help)
+  status error, yet "systemd reports Sew running" → the owner, once Sew is healthy: k2 hostchat adopt
 
 NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents never join calls.
 

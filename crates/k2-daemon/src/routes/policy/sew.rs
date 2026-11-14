@@ -143,6 +143,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/sew/recording/policy", Admin),
     get("/cli/sew/recording/preflight", Member),
     post("/cli/sew/recording/uninstall", Admin),
+    // Take a healthy Sew back from an `error` record (the owner's; the
+    // handler refuses Admins and every passport).
+    post("/cli/sew/server/adopt", Owner),
     // S32 (K27): the app URL behind Open Sew as owner (Manage Sew).
     post("/cli/sew/server/app-url", Admin),
     post("/cli/sew/server/backup", Admin),

@@ -150,7 +150,7 @@ pub fn need_released(env: &Env) -> R<()> {
     }
 }
 
-fn unsupported() -> Fail {
+pub(super) fn unsupported() -> Fail {
     no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
 }
 
@@ -274,13 +274,13 @@ fn helper_pin_matches(env: &Env) -> bool {
 }
 
 /// `engine sew status` (open, read-only).
-fn box_status(env: &Env) -> Option<Value> {
+pub(super) fn box_status(env: &Env) -> Option<Value> {
     helper(env, &["status"], None).ok()
 }
 
 /// The upgrade-only build (item 12) the helper says is on disk: its
 /// version and label (`known` stays false: not a release).
-fn on_disk_upgrade_only(st: &Value) -> Option<(String, String)> {
+pub(super) fn on_disk_upgrade_only(st: &Value) -> Option<(String, String)> {
     let u = st.pointer("/binary/upgradeOnly")?;
     Some((u.get("version")?.as_str()?.to_string(), u.get("label")?.as_str()?.to_string()))
 }
@@ -299,7 +299,7 @@ fn accepted_label(sha: &str) -> String {
 }
 
 /// (present, known version) of `/usr/local/bin/sew`.
-fn on_disk(st: &Value) -> (bool, Option<String>, bool) {
+pub(super) fn on_disk(st: &Value) -> (bool, Option<String>, bool) {
     let present = st.pointer("/binary/present").and_then(Value::as_bool).unwrap_or(false);
     let known = st.pointer("/binary/known").and_then(Value::as_bool).unwrap_or(false);
     let v = st.pointer("/binary/version").and_then(Value::as_str).map(str::to_string);
@@ -1449,7 +1449,13 @@ pub fn reconcile(row: &str, db: &UnitInfo, sew: &UnitInfo, verdict: &str) -> Rec
         // error: only a person's enable clears it.
         other => {
             if both {
-                r(other, false, Some("systemd reports Sew running; the record says otherwise".into()))
+                let note = if other == "error" {
+                    "systemd reports Sew running; the record says otherwise (when Sew is healthy, \
+                     k2 hostchat adopt clears the error)"
+                } else {
+                    "systemd reports Sew running; the record says otherwise"
+                };
+                r(other, false, Some(note.into()))
             } else {
                 r(other, true, None)
             }
@@ -1659,7 +1665,7 @@ pub fn status(env: &Env, with_health: bool) -> Value {
     body
 }
 
-fn status_body(env: &Env, with_health: bool) -> Value {
+pub(super) fn status_body(env: &Env, with_health: bool) -> Value {
     if !env.ops.linux() {
         return json!({"ok": true, "supported": false, "state": "not-installed", "pinnedVersion": pinned().version});
     }
@@ -2130,7 +2136,7 @@ pub fn grant_hook_boot(env: &Env) -> Value {
 
 // ── disable / uninstall / purge ──────────────────────────────────────────
 
-fn need_row(allow_removed: bool) -> R<Row> {
+pub(super) fn need_row(allow_removed: bool) -> R<Row> {
     let r = store::load().ok_or_else(|| no("not_installed", 404, "Chat / Voice Hosting is not installed on this box (k2 hostchat enable)"))?;
     if !allow_removed && r.status == "removed" {
         return Err(no("not_installed", 409, "Chat / Voice Hosting was uninstalled (data kept): k2 hostchat enable brings it back"));

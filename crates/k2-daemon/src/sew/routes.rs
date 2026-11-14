@@ -54,6 +54,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/media/uninstall",
     "/cli/sew/media/url",
     "/cli/sew/preflight",
+    "/cli/sew/server/adopt",
     "/cli/sew/server/backup",
     "/cli/sew/server/config",
     "/cli/sew/server/disable",
@@ -87,6 +88,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/media/tier",
     "/cli/sew/media/uninstall",
     "/cli/sew/media/url",
+    "/cli/sew/server/adopt",
     "/cli/sew/server/backup",
     "/cli/sew/server/config",
     "/cli/sew/server/disable",
@@ -324,6 +326,9 @@ fn vault() -> Result<std::sync::Arc<k2_vault::LocalVault>, String> {
     #[cfg(not(test))]
     crate::vault::get().map_err(|e| format!("the vault isn't open ({}): {}", e.code, e.hint))
 }
+
+/// The audit event `k2 hostchat adopt` writes (adopted or refused).
+pub const ADOPT_AUDIT: &str = "sew-adopt";
 
 /// The id a person confirm is bound to.
 pub fn confirm_secret_id() -> String {
@@ -743,6 +748,34 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/server/restart" => {
             need_manage(who)?;
             sup::restart(&env)
+        }
+        // A healthy Sew back from an `error` record: the owner only (token
+        // or Owner login), never an Admin or a passport. Audited either way.
+        "/cli/sew/server/adopt" => {
+            need_credential(who)?;
+            let audit = |outcome: &str| crate::vault::auth_audit(ADOPT_AUDIT, &who.label(), outcome, "cli");
+            if !who.is_owner() {
+                audit("refused owner_only");
+                return Err(no(
+                    "owner_only",
+                    403,
+                    "only the server's owner adopts a running Sew (k2 hostchat adopt from a terminal outside K2, or an Owner login)",
+                ));
+            }
+            match super::adopt::adopt(&env) {
+                Ok(v) => {
+                    audit(&format!(
+                        "adopted state={} installed={}",
+                        v["state"].as_str().unwrap_or("?"),
+                        v["installedVersion"]["to"].as_str().unwrap_or("?")
+                    ));
+                    Ok(v)
+                }
+                Err(f) => {
+                    audit(&format!("refused {}", f.code));
+                    Err(f)
+                }
+            }
         }
         "/cli/sew/server/rotate-master" => {
             let v = json_body(body)?;

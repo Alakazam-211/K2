@@ -497,6 +497,11 @@ Server:
   k2 hostchat disable | doctor | backup | backups [--json]
   k2 hostchat restart [--json]              (bring Sew back in order: sew-db, sew, then voice; waits for
                                              it to be ready; K2 never restarts Sew on its own)
+  k2 hostchat adopt [--json]                (the owner: status says error, but systemd and Sew report it
+                                             running. Records the Sew on disk and the live state, clears
+                                             the error. Needs both units active, Sew's health OK and a
+                                             readable /usr/local/bin/sew; never installs, migrates or
+                                             restarts anything)
   k2 hostchat reconfigure [--json]          (re-run Sew's installer over this install; an upgrade from
                                              Sew 0.3.0 does it by itself; needs root helper protocol 11)
   k2 hostchat rollback [--media-tarball FILE] [--json]
@@ -985,6 +990,13 @@ elif verb == "ship":
     if mi.get("error"):
         line("key mirror", "waiting: %s" % mi.get("error"))
     line("note", v.get("note"))
+elif verb == "adopt":
+    line("Chat / Voice Hosting", v.get("state"))
+    iv = v.get("installedVersion") or {}
+    line("version", "%s (record said %s)" % (iv.get("to"), iv.get("from")) if iv.get("from") != iv.get("to") else iv.get("to"))
+    line("cleared error", v.get("clearedError"))
+    for a in v.get("alarms") or []:
+        line("alarm", a)
 elif verb == "recovery-key":
     print(v.get("recoveryKey") or v.get("key") or "")
     if v.get("warning"):
@@ -1314,6 +1326,7 @@ if v.get("ok") is False:
         doctor) _hostchat_call POST /cli/sew/server/doctor "{}"; _hostchat_print doctor "$as_json" ;;
         reconfigure) _hostchat_call POST /cli/sew/server/reconfigure "{}"; _hostchat_print reconfigure "$as_json" ;;
         restart) _hostchat_call POST /cli/sew/server/restart "{}"; _hostchat_print restart "$as_json" ;;
+        adopt) _hostchat_call POST /cli/sew/server/adopt "{}"; _hostchat_print adopt "$as_json" ;;
         backup) K2_CP_MAX_TIME=1900 _hostchat_call POST /cli/sew/server/backup "{}"; _hostchat_print backup "$as_json" ;;
         backups) _hostchat_call GET /cli/sew/backups ""; _hostchat_print backups "$as_json" ;;
         job)

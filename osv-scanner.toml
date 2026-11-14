@@ -203,18 +203,6 @@ id = "RUSTSEC-2023-0071"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "K2's only RSA private-key operation is k2-vault's ssh-agent signing (ssh_agent.rs AgentKey::sign): PKCS#1 v1.5 signatures, SHA-2 only, through rsa's try_sign_with_rng, which blinds the exponentiation with a fresh random factor and checks the result (rsa_decrypt_and_check). K2 does no RSA decryption, so Marvin's padding oracle has nothing to query, and ssh-key's own unblinded RSA signer is never called (RSA keys go through to_rsa). The agent socket serves same-uid peers only (SO_PEERCRED / getpeereid). A remote ssh server can time only signatures over a padded hash it can't choose, a burst of 60 and 240/min per (session, secret) by default; forwarded connections are refused by default (that check trusts the client's session-bind). No fixed rsa release exists: revisit when upstream's constant-time rewrite (rsa 0.10) ships."
 
-# rustls 0.22.4
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0346"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "rustls 0.22.4 only via imap -> rustls-connector 0.19 (mail IMAP client). 0346 needs Debug-logging session values (not done); 0349 needs an active MITM and only downgrades key exchange. Fix: move imap off rustls-connector 0.19."
-
-# rustls 0.22.4
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0349"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "rustls 0.22.4 only via imap -> rustls-connector 0.19 (mail IMAP client). 0346 needs Debug-logging session values (not done); 0349 needs an active MITM and only downgrades key exchange. Fix: move imap off rustls-connector 0.19."
-
 # rustls 0.22.4 (alias RUSTSEC-2026-0348)
 [[IgnoredVulns]]
 id = "GHSA-h2v8-394m-p7vv"
@@ -226,36 +214,6 @@ reason = "Brotli certificate decompression (RFC 8879), which rustls added in 0.2
 id = "RUSTSEC-2025-0134"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Unmaintained (functionality moved into rustls-pki-types); used to read local PEM files (k2-core, k2-daemon, native-certs). No known vulnerability. Replace with rustls-pki-types' PEM API."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0049"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0098"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0099"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0104"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0382"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Real exposure, fix in progress: rustls-webpki 0.102.8 reaches the daemon through imap -> rustls-connector 0.19. The IMAP client's TLS moves to rustls 0.23 + webpki 0.103 (both in the lock), dropping imap's rustls-tls feature; this entry goes with that change, before 0.46.13 ships."
 
 # serde_with 3.18.0
 [[IgnoredVulns]]

@@ -56,14 +56,6 @@ ignore = [
     { id = "RUSTSEC-2025-0141", reason = "Unmaintained (no known vulnerability). One use: k2-core's ptyd saved-screen file (terminal/ptyd/snapshot.rs, 0.46.5 S4), K2's own file (0600 in a 0700 dir under <K2 home>/run), written and read by the same daemon user. Decode is bounded: magic + FORMAT header, a file of at most 64 MiB, gzip inflate capped at 256 MiB, bincode with_limit, then a trial restore under catch_unwind; anything else is removed and the session replays from the ring. Fix: 0.46.6 replaces the codec (postcard as FORMAT 2, keeping a read-only FORMAT 1 reader for one release), then drop bincode." },
     # git2 0.19.0
     { id = "RUSTSEC-2026-0008", reason = "Unsound Buf deref / Remote::list / blame_buffer Signature. Seven k2-core files use git2 (git.rs, git_changes.rs, git_notes.rs, git_tools.rs, turn_changes.rs, worktree_task.rs, deploy/build.rs); none calls the affected APIs. Fix: git2 0.20+/0.21 (dependency-majors PRD)." },
-    # rustls-webpki 0.102.8
-    { id = "RUSTSEC-2026-0049", reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19." },
-    # rustls-webpki 0.102.8
-    { id = "RUSTSEC-2026-0098", reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19." },
-    # rustls-webpki 0.102.8
-    { id = "RUSTSEC-2026-0099", reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19." },
-    # rustls-webpki 0.102.8
-    { id = "RUSTSEC-2026-0104", reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19." },
     # git2 0.19.0
     { id = "RUSTSEC-2026-0183", reason = "Unsound Buf deref / Remote::list / blame_buffer Signature. Seven k2-core files use git2 (git.rs, git_changes.rs, git_notes.rs, git_tools.rs, turn_changes.rs, worktree_task.rs, deploy/build.rs); none calls the affected APIs. Fix: git2 0.20+/0.21 (dependency-majors PRD)." },
     # git2 0.19.0
@@ -76,10 +68,6 @@ ignore = [
     { id = "RUSTSEC-2026-0195", reason = "Quadratic attribute check / NsReader allocation DoS. 0.38: k2-core thumbs.rs and k2-node-proto results.rs parse local or job-produced XML (no NsReader), and Tauri's plist reads XML at build time and, at runtime on the Mac, the app's own Info.plist; 0.39: wayland-scanner proc-macro at build time. Fix: quick-xml 0.41." },
     # smallstr 0.3.1
     { id = "RUSTSEC-2026-0215", reason = "Unmaintained advisory only; reached through the vendored yrs fork (in the daemon, and in k2-export through k2-mpc-base), in maintenance mode and leaving text at the native switch." },
-    # rustls 0.22.4
-    { id = "RUSTSEC-2026-0346", reason = "rustls 0.22.4 only via imap -> rustls-connector 0.19 (mail IMAP client). 0346 needs Debug-logging session values (not done); 0349 needs an active MITM and only downgrades key exchange. Fix: move imap off rustls-connector 0.19." },
-    # rustls 0.22.4
-    { id = "RUSTSEC-2026-0349", reason = "rustls 0.22.4 only via imap -> rustls-connector 0.19 (mail IMAP client). 0346 needs Debug-logging session values (not done); 0349 needs an active MITM and only downgrades key exchange. Fix: move imap off rustls-connector 0.19." },
     # zip 2.4.2, zip 4.6.1
     { id = "RUSTSEC-2026-0367", reason = "Advisories are in ZipArchive::extract()/ZipStreamReader::extract(); K2 never calls them (own extractor fs_extract.rs masks modes to 0o777 since 0.46.3; tauri-plugin-updater's zip 4.6 is Windows-installer only). Fix: zip 9." },
     # zip 2.4.2, zip 4.6.1
@@ -92,8 +80,6 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener), and zbus is also a direct dependency of k2-deskd and kessel-video. No known vulnerability. Revisit with zbus 6." },
     # zvariant_derive 5.10.0
     { id = "RUSTSEC-2026-0372", reason = "Unmaintained zbus sub-crate split; Linux desktop D-Bus (notify-rust, opener), and zbus is also a direct dependency of k2-deskd and kessel-video. No known vulnerability. Revisit with zbus 6." },
-    # rustls-webpki 0.102.8
-    { id = "RUSTSEC-2026-0382", reason = "Real exposure, fix in progress: rustls-webpki 0.102.8 reaches the daemon through imap -> rustls-connector 0.19. The IMAP client's TLS moves to rustls 0.23 + webpki 0.103 (both in the lock), dropping imap's rustls-tls feature; this entry goes with that change, before 0.46.13 ships." },
     # crypto-bigint 0.5.5
     { id = "RUSTSEC-2026-0387", reason = "Timing variability in constant-time operations; via p256 0.13 <- hpke in k2-core, for end-to-end push sealing (HPKE seals only in production; crypto-bigint only decodes and range-checks; scalar multiplication is p256's; long-term P-256 keys sign through ring). ssh-key 0.6.7 holds p256 at 0.13 (ssh-key 0.7 is a release candidate): revisit when ssh-key 0.7 ships." },
     # zip 2.4.2, zip 4.6.1

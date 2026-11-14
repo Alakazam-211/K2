@@ -27,6 +27,17 @@
 //!   still, so a scene view is drawn transparent ([`Look::Transparent`]:
 //!   RGBA with coverage alpha, no background) unless the request asks for
 //!   `look=opaque`; the cache keys the look, never a background colour.
+//! - **Clay, and the scene view fitted to its contents.** Every view is
+//!   drawn in clay ([`Clay`]: the renderer's two default tones, the shell
+//!   darker and the contents lighter, by the same class rule as content
+//!   framing), never in the objects' base colours. `@scene` is fitted to the
+//!   contents ([`Framing::Contents`]: the room's shell is drawn but left out
+//!   of the fit); the turntable and the cameras keep the bounds framing (the
+//!   worker refuses content framing for them), and an object is framed on
+//!   itself. Neither is in the renderer's digest (both are the request's,
+//!   not the scene's), so the host keys them: clay in the renderer's
+//!   [`build`](PreviewRenderer::build) (every view has it), the framing in
+//!   the scene view's digest ([`keyed_digest`]).
 //! - **What rides along** ([`super::extras`]): each object's local box,
 //!   each camera's display values, the turntable frames' titles, and with
 //!   each image the camera that drew it.
@@ -39,10 +50,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use k2_core::log_debug;
+use k2_scenerender::camera::Framing;
 use k2_scenerender::digest::{self, Target};
 use k2_scenerender::host::{self, Limits, SceneRequest};
-use k2_scenerender::proto::{FailureCode, ImageFormat, BINARY_NAME, PROTO, VERSION};
+use k2_scenerender::proto::{Clay, FailureCode, ImageFormat, BINARY_NAME, PROTO, VERSION};
 use k2_scenerender::scene::InputLimits;
+use sha2::{Digest as _, Sha256};
 
 use super::{extras, Container, FailCode, Failed, Image, Listing, Look, PreviewRenderer, Source, Width};
 use crate::docs::target::Target as DocTarget;
@@ -88,8 +101,37 @@ fn code(c: FailureCode) -> FailCode {
     }
 }
 
-/// The containers of a K2SCENE1, with their raw digests. Reads the header
-/// only (every bound checked) and hashes each mesh's data once.
+/// How the 3D tab frames `target`: the scene view on its contents, every
+/// other view as the renderer frames it (the turntable and a camera on the
+/// bounds, which content framing is refused for; an object on itself).
+pub fn framing_for(target: Target) -> Framing {
+    match target {
+        Target::Scene => Framing::Contents,
+        Target::Camera(_) | Target::Object(_) | Target::Turntable(_) => Framing::Bounds,
+    }
+}
+
+/// The digest a container is keyed by: the renderer's digest of what it
+/// draws, and for a view not on the bounds framing, that framing too. The
+/// renderer's digest leaves the request's framing out, so without this a
+/// scene of one object would give `@scene` and that object's view the same
+/// render hash, and one could be answered with the other's image (see
+/// [`super::reuse`]) though they are framed differently.
+pub fn keyed_digest(target: Target, raw: [u8; 32]) -> [u8; 32] {
+    match framing_for(target) {
+        Framing::Bounds => raw,
+        Framing::Contents => {
+            let mut h = Sha256::new();
+            h.update(b"k2/scene-preview/framing/contents\0");
+            h.update(raw);
+            h.finalize().into()
+        }
+    }
+}
+
+/// The containers of a K2SCENE1, with their digests (the scene view's with
+/// its framing, [`keyed_digest`]). Reads the header only (every bound
+/// checked) and hashes each mesh's data once.
 pub fn list_k2scene(k2scene: &[u8]) -> Result<Listing, Failed> {
     let items = digest::list(k2scene, &InputLimits::default()).map_err(|e| Failed::new(FailCode::UnsupportedPart, format!("the scene: {e}")))?;
     let containers = items
@@ -101,7 +143,7 @@ pub fn list_k2scene(k2scene: &[u8]) -> Result<Listing, Failed> {
             key: it.key,
             position: i as u32 + 1,
             hidden: false,
-            digest: it.digest,
+            digest: keyed_digest(it.target, it.digest),
             locator: it.target.locator(),
         })
         .collect();
@@ -117,12 +159,16 @@ pub fn limits_for(width: Width, wall: Duration) -> Limits {
 }
 
 /// The worker's request for one view in `look`: WebP; transparent with no
-/// background, or opaque on the renderer's own neutral.
+/// background, or opaque on the renderer's own neutral; in clay with the
+/// default tones, framed as [`framing_for`] says.
 pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> SceneRequest<'_> {
-    let mut req = SceneRequest::new(k2scene, vec![target.view(width.px())]);
+    let mut view = target.view(width.px());
+    view.framing = framing_for(target);
+    let mut req = SceneRequest::new(k2scene, vec![view]);
     req.format = ImageFormat::Webp;
     req.background = None;
     req.transparent = look == Look::Transparent;
+    req.clay = Some(Clay::default());
     req
 }
 
@@ -178,8 +224,10 @@ impl PreviewRenderer for SceneRenderer {
         "scene"
     }
 
+    /// The worker's protocol and version, and `.clay`: every view is drawn
+    /// in clay, so no image drawn in base colours is ever served.
     fn build(&self) -> String {
-        format!("scenerender-p{PROTO}-{VERSION}")
+        format!("scenerender-p{PROTO}-{VERSION}.clay")
     }
 
     /// No doc yet: a live BLEND doc needs the pack's mesh read and its tier

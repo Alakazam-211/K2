@@ -11,8 +11,9 @@ use std::time::Duration;
 use k2_mpc_base::blob::BlobStore;
 use k2_mpc_base::errors::Value;
 use k2_mpc_base::store::DocKey;
+use k2_scenerender::camera::{Framing, ViewSpec};
 use k2_scenerender::digest::Target as SceneTarget;
-use k2_scenerender::proto::{CameraMeta, ImageFormat, ViewMeta};
+use k2_scenerender::proto::{CameraMeta, Clay, ImageFormat, Request, ViewMeta, CLAY_CONTENTS, CLAY_SHELL, PROTO, VERSION};
 use k2_scenerender::scene::{encode, SensorFit};
 use k2_scenerender::testgen;
 use serde_json::json;
@@ -274,6 +275,79 @@ fn a_transparent_request_is_drawn_and_cached_as_transparent() {
         let Got::Hit(e) = cache::get(&blobs, &key, "@obj:Tx", hash, Width::Thumb, &Look::Transparent.cache_build("fake-1")) else { panic!("cached") };
         assert_eq!((e.meta["look"].clone(), e.meta["camera"].clone()), (json!("transparent"), json!({ "fx": 1.5 })));
     });
+}
+
+// ── 3. Clay, and the scene view on its contents ──────────────────────
+
+#[test]
+fn the_scene_view_asks_for_contents_framing_and_clay_in_the_default_tones() {
+    let bytes = encode(&scene_with_display_fields());
+    for look in Look::ALL {
+        let r = scene::request_for(&bytes, SceneTarget::Scene, Width::Full, look);
+        assert_eq!(r.views.len(), 1);
+        assert_eq!((r.views[0].view, r.views[0].framing, r.views[0].objects.clone()), (ViewSpec::Auto, Framing::Contents, None), "{look:?}");
+        assert_eq!(r.clay, Some(Clay { shell: CLAY_SHELL, contents: CLAY_CONTENTS }), "{look:?}: the renderer's own tones");
+        assert_eq!(r.transparent, look == Look::Transparent);
+        assert_eq!(r.background, None);
+    }
+    // On the wire: contents framing and clay, nothing else changed.
+    let r = scene::request_for(&bytes, SceneTarget::Scene, Width::Thumb, Look::Transparent);
+    let mut line = Request::new(r.views.clone());
+    line.clay = r.clay;
+    let text = String::from_utf8(line.line()).expect("utf-8");
+    assert!(text.contains(r#""framing":"contents""#), "{text}");
+    assert!(text.contains(r#""clay":{"shell":[138,134,128],"contents":[206,202,194]}"#), "{text}");
+}
+
+#[test]
+fn objects_cameras_and_turntable_frames_ask_for_clay_on_their_own_framing() {
+    let bytes = encode(&scene_with_display_fields());
+    let mut targets = vec![SceneTarget::Object(0), SceneTarget::Object(3), SceneTarget::Camera(0)];
+    targets.extend((0..8).map(SceneTarget::Turntable));
+    for t in targets {
+        for look in Look::ALL {
+            let r = scene::request_for(&bytes, t, Width::Thumb, look);
+            assert_eq!(r.views, [t.view(Width::Thumb.px())], "{t:?}: the renderer's own view, bounds framed");
+            assert_eq!(r.views[0].framing, Framing::Bounds, "{t:?}: never contents");
+            assert_eq!(r.clay, Some(Clay::default()), "{t:?} {look:?}");
+        }
+        assert_eq!(scene::framing_for(t), Framing::Bounds);
+    }
+    let o = scene::request_for(&bytes, SceneTarget::Object(3), Width::Thumb, Look::Opaque);
+    assert_eq!((o.views[0].view, o.views[0].objects.clone()), (ViewSpec::Auto, Some(vec![3])), "an object framed on itself alone");
+    assert_eq!(scene::framing_for(SceneTarget::Scene), Framing::Contents);
+}
+
+/// Clay and the framing change the pixels but are not in the renderer's
+/// digest, so the host keys them: clay in the build (every view), the
+/// framing in the scene view's digest.
+#[test]
+fn clay_and_the_scene_views_framing_are_in_the_cache_key() {
+    let build = scene::SCENE.build();
+    assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay"));
+    let plain = format!("scenerender-p{PROTO}-{VERSION}");
+    for look in Look::ALL {
+        assert_ne!(cache::entry_name("@scene", "ab12", Width::Thumb, &look.cache_build(&build)), cache::entry_name("@scene", "ab12", Width::Thumb, &look.cache_build(&plain)), "{look:?}: never an image drawn without clay");
+    }
+    assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.rgba"));
+
+    // A scene of one object: the renderer's digest of `@scene` and of that
+    // object's view is one, but they are framed differently.
+    let bytes = encode(&testgen::cube_scene());
+    let raw = k2_scenerender::digest::list(&bytes, &k2_scenerender::scene::InputLimits::default()).expect("raw");
+    let (rs, ro) = (raw.iter().find(|i| i.key == "@scene").expect("scene"), raw.iter().find(|i| i.key.starts_with("@obj:")).expect("object"));
+    assert_eq!(rs.digest, ro.digest, "the renderer's digest leaves the framing out");
+    let l = scene::list_k2scene(&bytes).expect("a listing");
+    let (s, o) = (l.containers.iter().find(|c| c.key == "@scene").expect("scene"), l.containers.iter().find(|c| c.key.starts_with("@obj:")).expect("object"));
+    assert_ne!(s.digest, o.digest, "the scene view's framing is keyed: no image is shared between them");
+    assert_eq!(s.digest, scene::keyed_digest(SceneTarget::Scene, rs.digest));
+    assert_eq!(o.digest, ro.digest, "a bounds-framed view keeps the renderer's digest");
+    // Every other view keeps the renderer's digest.
+    let both = scene::list_k2scene(&encode(&scene_with_display_fields())).expect("a listing");
+    let raw_both = k2_scenerender::digest::list(&encode(&scene_with_display_fields()), &k2_scenerender::scene::InputLimits::default()).expect("raw");
+    for (c, r) in both.containers.iter().zip(&raw_both) {
+        assert_eq!(c.digest == r.digest, c.key != "@scene", "{}", c.key);
+    }
 }
 
 // ── 4. The events, in order ──────────────────────────────────────────

@@ -69,7 +69,8 @@ fn fresh_home_gets_the_link_and_exactly_one_block() {
     assert_eq!(report.user_link, LinkOutcome::Created);
     assert_eq!(report.user_link_path, link);
     assert_eq!(link_target(&link), cli, "~/.local/bin/k2 runs the bundled CLI");
-    assert_eq!(link_target(&user_bin_dir(h).join("k2so")), shim, "the k2so alias is linked too");
+    assert!(fs::symlink_metadata(user_bin_dir(h).join("k2so")).is_err(), "a new install gets no k2so alias");
+    assert_eq!(report.user_legacy, None);
     assert_eq!(read(&link), CLI_BODY);
 
     assert_eq!(report.path, PathOutcome::BlockAdded { file: zprofile(h) });
@@ -103,7 +104,7 @@ fn a_second_run_adds_nothing() {
     // Same login PATH (the probe ran before the block existed).
     let again = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("second heal");
     assert_eq!(again.user_link, LinkOutcome::Current);
-    assert_eq!(again.user_legacy, Some(LinkOutcome::Current));
+    assert_eq!(again.user_legacy, None, "still no k2so alias");
     assert_eq!(again.path, PathOutcome::BlockPresent { file: zprofile(h) });
     assert_eq!(read(&zprofile(h)), after_first, "the second run must not touch ~/.zprofile");
 
@@ -188,6 +189,29 @@ fn a_link_reaching_the_cli_by_an_equivalent_path_is_current() {
 }
 
 #[test]
+fn an_existing_system_k2so_alias_is_refreshed_and_a_foreign_one_left_alone() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    let sys = h.join("usr-local-bin");
+    fs::create_dir_all(&sys).unwrap();
+    let old_shim = h.join("Old/K2SO.app/Contents/Resources/_up_/cli/k2so");
+    std::os::unix::fs::symlink(&old_shim, sys.join("k2so")).unwrap();
+
+    let report = heal(&input(&cli, &shim, Some(&sys), Some(BARE_LOGIN_PATH))).expect("heal");
+    assert_eq!(report.system_legacy, Some(LinkOutcome::Repointed { from: old_shim }));
+    assert_eq!(link_target(&sys.join("k2so")), shim, "the alias an earlier install made keeps working");
+
+    // A k2so in ~/.local/bin that isn't K2's stays as it is.
+    let bin = user_bin_dir(h);
+    let other = "#!/bin/sh\necho some other k2so\n";
+    fs::write(bin.join("k2so"), other).unwrap();
+    let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    assert!(matches!(report.user_legacy, Some(LinkOutcome::Foreign { .. })), "{:?}", report.user_legacy);
+    assert_eq!(read(&bin.join("k2so")), other);
+}
+
+#[test]
 fn a_writable_system_bin_is_linked_and_a_missing_one_is_never_made() {
     let home = TempHome::new();
     let h = home.path();
@@ -198,7 +222,8 @@ fn a_writable_system_bin_is_linked_and_a_missing_one_is_never_made() {
     let report = heal(&input(&cli, &shim, Some(&sys), Some(BARE_LOGIN_PATH))).expect("heal");
     assert_eq!(report.system_link, Some(LinkOutcome::Created));
     assert_eq!(link_target(&sys.join("k2")), cli);
-    assert_eq!(link_target(&sys.join("k2so")), shim);
+    assert!(fs::symlink_metadata(sys.join("k2so")).is_err(), "no new k2so alias in the system bin");
+    assert_eq!(report.system_legacy, None);
 
     let missing = h.join("no-such-bin");
     let report = heal(&input(&cli, &shim, Some(&missing), Some(BARE_LOGIN_PATH))).expect("heal");
@@ -259,12 +284,17 @@ fn a_stale_link_to_an_old_bundle_is_repointed() {
     let bin = user_bin_dir(h);
     fs::create_dir_all(&bin).unwrap();
 
-    // A link into a bundle that has since been deleted (K2SO.app → K2.app).
+    // A link into a bundle that has since been deleted (K2SO.app → K2.app),
+    // with the k2so alias an earlier install left beside it.
     let gone = h.join("Old/K2SO.app/Contents/Resources/_up_/cli/k2");
+    let gone_shim = h.join("Old/K2SO.app/Contents/Resources/_up_/cli/k2so");
     std::os::unix::fs::symlink(&gone, bin.join("k2")).unwrap();
+    std::os::unix::fs::symlink(&gone_shim, bin.join("k2so")).unwrap();
     let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
     assert_eq!(report.user_link, LinkOutcome::Repointed { from: gone });
     assert_eq!(link_target(&bin.join("k2")), cli);
+    assert_eq!(report.user_legacy, Some(LinkOutcome::Repointed { from: gone_shim }), "an existing k2so alias keeps working");
+    assert_eq!(link_target(&bin.join("k2so")), shim);
 
     // The app moved: the link still points at the old (existing) copy.
     let (moved_cli, moved_shim) = make_bundle(h, "Moved");

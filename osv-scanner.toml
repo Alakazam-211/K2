@@ -224,6 +224,24 @@ id = "RUSTSEC-2026-0342"
 ignoreUntil = 2026-12-05T00:00:00Z
 reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
 
+# quinn-proto 0.11.14
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0523"
+ignoreUntil = 2026-12-05T00:00:00Z
+reason = "In Cargo.lock only, through reqwest's weak quinn?/ring feature (reqwest's http3 is off: no h3 in the lock), so it is never compiled into K2; cargo deny finds no quinn in any shipped crate's tree. Fix: refresh the lock (0.11.19)."
+
+# quinn-proto 0.11.14
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0524"
+ignoreUntil = 2026-12-05T00:00:00Z
+reason = "In Cargo.lock only, through reqwest's weak quinn?/ring feature (reqwest's http3 is off: no h3 in the lock), so it is never compiled into K2; cargo deny finds no quinn in any shipped crate's tree. Fix: refresh the lock (0.11.19)."
+
+# quinn-udp 0.5.14
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0538"
+ignoreUntil = 2026-12-05T00:00:00Z
+reason = "In Cargo.lock only, through quinn, which reqwest's weak quinn?/ring feature keeps in the lock (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.5.16)."
+
 # rsa 0.9.10 (k2-vault directly and via ssh-key 0.6.7)
 [[IgnoredVulns]]
 id = "RUSTSEC-2023-0071"

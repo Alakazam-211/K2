@@ -31,6 +31,11 @@
 //! instead of its base colour: shell darker, contents lighter ([`Clay`]; the
 //! tones may be given, `{"shell": [r, g, b], "contents": [r, g, b]}`, sRGB).
 //! Absent, objects keep their base colours. It is the request's too.
+//! `"ao": {}` darkens creases, corners and where objects meet the floor with
+//! screen-space ambient occlusion ([`Ao`]; `{"strength": s, "radius": r}`,
+//! both optional, see [`crate::raster::occlusion`]), with or without clay,
+//! opaque or transparent (the alpha stays the coverage). Absent, no occlusion:
+//! the bytes are as before. It is the request's too.
 //!
 //! **Response (stdout):** one line of JSON, the [`Response`], then, when `ok`,
 //! each view's image in order (`views[i].image_len` bytes each), then EOF.
@@ -83,6 +88,15 @@ pub const CLAY_SHELL: [u8; 3] = [138, 134, 128];
 /// turned to the key light gets 0.94 (sRGB 200, 196, 188). Lighter than the
 /// shell, short of the default background.
 pub const CLAY_CONTENTS: [u8; 3] = [206, 202, 194];
+
+/// Ambient occlusion's strength when the request names none: the whole
+/// effect (a right-angle crease keeps about 0.7 of its light, a narrow gap
+/// less); a lower strength is lighter.
+pub const AO_STRENGTH: f32 = 1.0;
+
+/// Ambient occlusion's radius when the request names none, as a fraction of
+/// the drawn objects' bounding radius (a 6 x 5 m room: about 0.4 m).
+pub const AO_RADIUS: f32 = 0.1;
 
 /// The aspect when neither the view nor the camera gives one.
 pub const DEFAULT_ASPECT: f64 = 4.0 / 3.0;
@@ -193,6 +207,50 @@ impl Default for Clay {
     }
 }
 
+/// Screen-space ambient occlusion ([`crate::raster::occlusion`]): each
+/// covered pixel's light is darkened by how much the surfaces around it
+/// close in on it, from the depth image alone. Either field may be left out
+/// for its default.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ao {
+    /// How dark full occlusion gets, 0 to 1 ([`AO_STRENGTH`] when absent):
+    /// the light is multiplied by `1 - strength * occlusion`.
+    #[serde(default = "ao_strength")]
+    pub strength: f32,
+    /// How far an occluder reaches, as a fraction (above 0, at most 1) of the
+    /// drawn objects' bounding radius ([`AO_RADIUS`] when absent): a world
+    /// size, so a still looks the same at any width.
+    #[serde(default = "ao_radius")]
+    pub radius: f32,
+}
+
+fn ao_strength() -> f32 {
+    AO_STRENGTH
+}
+
+fn ao_radius() -> f32 {
+    AO_RADIUS
+}
+
+impl Default for Ao {
+    fn default() -> Ao {
+        Ao { strength: AO_STRENGTH, radius: AO_RADIUS }
+    }
+}
+
+impl Ao {
+    /// Both fields in range: the strength in [0, 1], the radius in (0, 1].
+    pub fn check(&self) -> Result<(), String> {
+        if !(self.strength >= 0.0 && self.strength <= 1.0) {
+            return Err(format!("ao strength {}: 0 to 1", self.strength));
+        }
+        if !(self.radius > 0.0 && self.radius <= 1.0) {
+            return Err(format!("ao radius {}: above 0, at most 1", self.radius));
+        }
+        Ok(())
+    }
+}
+
 /// One view to draw.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct View {
@@ -235,6 +293,9 @@ pub struct Request {
     /// Clay shading in two tones by class; `None`: base colours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clay: Option<Clay>,
+    /// Screen-space ambient occlusion; `None`: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ao: Option<Ao>,
     /// Samples per axis (1-4); `None`: [`default_ssaa`] of each view's width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssaa: Option<u32>,
@@ -250,7 +311,7 @@ pub struct Request {
 
 impl Request {
     pub fn new(views: Vec<View>) -> Request {
-        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, transparent: false, clay: None, ssaa: None, threads: 1, hostile: None }
+        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, transparent: false, clay: None, ao: None, ssaa: None, threads: 1, hostile: None }
     }
 
     /// The line, newline included.
@@ -478,6 +539,23 @@ mod tests {
         k.clay = Some(Clay::default());
         let kl = k.line();
         assert_eq!(Request::parse(&kl[..kl.len() - 1]).expect("parse"), k);
+        // Ambient occlusion: off when absent (and off the line), defaults for the fields left out.
+        assert_eq!(m.ao, None);
+        assert!(!String::from_utf8_lossy(&line).contains(r#""ao""#));
+        let ao = |json: &str| Request::parse(format!(r#"{{"proto":1,"input_len":3,"views":[],"ao":{json}}}"#).as_bytes()).expect("ao").ao;
+        assert_eq!(ao("{}"), Some(Ao { strength: AO_STRENGTH, radius: AO_RADIUS }));
+        assert_eq!(ao(r#"{"strength":0.5}"#), Some(Ao { strength: 0.5, radius: AO_RADIUS }));
+        assert_eq!(ao(r#"{"strength":0.25,"radius":0.2}"#), Some(Ao { strength: 0.25, radius: 0.2 }));
+        assert!(Request::parse(br#"{"proto":1,"input_len":3,"views":[],"ao":{"radius":"far"}}"#).is_err());
+        let mut a = r.clone();
+        a.ao = Some(Ao::default());
+        let al = a.line();
+        assert!(String::from_utf8_lossy(&al).contains(r#""ao":{"#));
+        assert_eq!(Request::parse(&al[..al.len() - 1]).expect("parse"), a);
+        assert!(Ao::default().check().is_ok() && Ao { strength: 0.0, radius: 1.0 }.check().is_ok());
+        for bad in [Ao { strength: -0.1, ..Ao::default() }, Ao { strength: 1.5, ..Ao::default() }, Ao { strength: f32::NAN, ..Ao::default() }, Ao { radius: 0.0, ..Ao::default() }, Ao { radius: 2.0, ..Ao::default() }, Ao { radius: f32::INFINITY, ..Ao::default() }] {
+            assert!(bad.check().is_err(), "{bad:?}");
+        }
         assert!(Request::parse(br#"{"proto":2,"input_len":3,"views":[]}"#).is_err());
         assert!(Request::parse(b"not json").is_err());
     }

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use k2_scenerender::camera::{self, Framing, ViewSpec};
 use k2_scenerender::host::{self, Limits, SceneRequest};
-use k2_scenerender::proto::{CameraMeta, FailureCode, ImageFormat, Request, View};
+use k2_scenerender::proto::{Ao, CameraMeta, Clay, FailureCode, ImageFormat, Request, View};
 use k2_scenerender::render;
 use k2_scenerender::scene::{encode, InputLimits, Scene};
 use k2_scenerender::testgen;
@@ -428,6 +428,28 @@ fn render_times_on_generated_scenes() {
                 v.raster_ms,
                 v.encode_ms,
                 v.image_len
+            );
+        }
+    }
+    // Ambient occlusion's cost: the interior still, framed on its contents, in clay, with and
+    // without it (the raster time holds its depth and occlusion passes).
+    let input = encode(&testgen::interior_scene());
+    for (w, l) in [(640u32, thumb()), (1920, still())] {
+        for ao in [None, Some(Ao::default())] {
+            let mut req = SceneRequest::new(&input, vec![View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, w) }]);
+            req.clay = Some(Clay::default());
+            req.ao = ao;
+            let started = Instant::now();
+            let r = host::render(bin(), &req, &l).expect("render");
+            let v = &r.views[0].meta;
+            eprintln!(
+                "[scenerender] time interior clay {w} px, occlusion {}: {} ms end to end, {} threads, raster {:.1} ms, encode {:.1} ms, estimate {} MiB",
+                if ao.is_some() { "on" } else { "off" },
+                started.elapsed().as_millis(),
+                l.threads,
+                v.raster_ms,
+                v.encode_ms,
+                r.estimate_bytes >> 20
             );
         }
     }

@@ -7,9 +7,12 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use k2_scenerender::camera::ViewSpec;
+use k2_scenerender::camera::{Framing, ViewSpec};
 use k2_scenerender::host::{self, Limits, SceneRequest};
-use k2_scenerender::proto::{FailureCode, View};
+use k2_scenerender::proto::{Ao, FailureCode, View};
+use k2_scenerender::render::AO_BYTES_PER_PX;
+use k2_scenerender::scene::encode;
+use k2_scenerender::testgen;
 
 fn bin() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_k2-scenerender"))
@@ -55,6 +58,32 @@ fn memory_past_the_cap_is_too_large_through_the_allocator_and_around_it() {
         let l = Limits { wall: Duration::from_secs(30), ..short() };
         assert_eq!(hostile("alloc_raw", &l).code, FailureCode::TooLarge);
     }
+}
+
+/// Ambient occlusion's buffers (a depth image and a factor per pixel) are in
+/// the worker's up-front estimate: under a cap between the plain still's
+/// estimate and the occluded one's, the plain still draws and the occluded
+/// one is refused before any drawing; at a cap of its own estimate it draws,
+/// so what it allocates stays inside it.
+#[test]
+fn ambient_occlusion_buffers_are_in_the_memory_estimate() {
+    let input = encode(&testgen::interior_scene());
+    let plain = SceneRequest::new(&input, vec![View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 1920) }]);
+    let ao = SceneRequest { ao: Some(Ao::default()), ..plain.clone() };
+    let l = Limits { wall: Duration::from_secs(60), ..Limits::still() };
+    let a = host::render(bin(), &plain, &l).unwrap_or_else(|f| panic!("plain: {} {}", f.code, f.detail));
+    let b = host::render(bin(), &ao, &l).unwrap_or_else(|f| panic!("ao: {} {}", f.code, f.detail));
+    let (w, h) = (b.views[0].meta.width as u64, b.views[0].meta.height as u64);
+    assert_eq!(b.estimate_bytes - a.estimate_bytes, AO_BYTES_PER_PX * w * h);
+    eprintln!("[scenerender] estimate at {w} x {h}: {} MiB plain, {} MiB with occlusion", a.estimate_bytes >> 20, b.estimate_bytes >> 20);
+    let between = Limits { memory_bytes: a.estimate_bytes + (b.estimate_bytes - a.estimate_bytes) / 2, ..l };
+    assert!(host::render(bin(), &plain, &between).is_ok());
+    let f = host::render(bin(), &ao, &between).expect_err("over the cap");
+    assert_eq!(f.code, FailureCode::TooLarge, "{}", f.detail);
+    assert!(f.detail.contains("memory"), "{}", f.detail);
+    let own = Limits { memory_bytes: b.estimate_bytes, ..l };
+    let r = host::render(bin(), &ao, &own).unwrap_or_else(|f| panic!("at its own estimate: {} {} | {}", f.code, f.detail, f.stderr));
+    assert_eq!(r.views[0].image, b.views[0].image);
 }
 
 #[test]

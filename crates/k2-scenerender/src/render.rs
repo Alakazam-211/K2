@@ -48,6 +48,8 @@ pub struct Plan {
     pub transparent: bool,
     /// How an auto view is fitted (bounds for every other view).
     pub framing: Framing,
+    /// Ambient occlusion (the request's `ao`): its buffers are in the estimate.
+    pub ao: bool,
 }
 
 /// The images of a request.
@@ -71,6 +73,9 @@ pub fn check_request(req: &Request, caps: &Caps) -> Result<(), Failure> {
     }
     if req.transparent && req.background.is_some() {
         return Err(Failure::new(FailureCode::InvalidInput, "a transparent image has no background"));
+    }
+    if let Some(ao) = &req.ao {
+        ao.check().map_err(|m| Failure::new(FailureCode::InvalidInput, m))?;
     }
     Ok(())
 }
@@ -144,7 +149,7 @@ pub fn plan(mesh_counts: &[(u64, u64)], objects: &[Object], cameras: &[Camera], 
         if ssaa > caps.max_ssaa {
             return Err(big(format!("ssaa {ssaa}, at most {}", caps.max_ssaa)));
         }
-        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without, transparent: req.transparent, framing: v.framing });
+        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without, transparent: req.transparent, framing: v.framing, ao: req.ao.is_some() });
     }
     Ok(plans)
 }
@@ -168,7 +173,9 @@ pub fn threads(req: &Request, caps: &Caps) -> u32 {
 /// before the mesh data is read): the decoded data (the size of its bytes),
 /// the header's parse (4x its JSON), the largest view's vertex stage (32 B
 /// per drawn vertex) and band lists (10 B per drawn triangle), its image and
-/// the encoder's copies (9 B per pixel, 12 transparent), each thread's band
+/// the encoder's copies (9 B per pixel, 12 transparent), with ambient
+/// occlusion its depth image, raw occlusion and factors (12 B per pixel),
+/// each thread's band
 /// buffers, every encoded image kept until the response (4 B per pixel, 5
 /// transparent; at most the output cap), and 16 MiB of base.
 pub fn estimate_bytes(data_bytes: u64, header_bytes: u64, plans: &[Plan], threads: u32, max_output: u64) -> u64 {
@@ -178,12 +185,17 @@ pub fn estimate_bytes(data_bytes: u64, header_bytes: u64, plans: &[Plan], thread
         let (w, h, s) = (p.width as u64, p.height as u64, p.ssaa as u64);
         let band = w * s * BAND_PX as u64 * s * 16;
         let (image, kept) = if p.transparent { (12, 5) } else { (9, 4) };
+        let image = if p.ao { image + AO_BYTES_PER_PX } else { image };
         let view = 32 * p.vertices + 10 * p.triangles + image * w * h + threads as u64 * band;
         peak = peak.max(view);
         out = out.saturating_add(kept * w * h);
     }
     data_bytes + 4 * header_bytes + peak + out.min(max_output) + (16 << 20)
 }
+
+/// Ambient occlusion's own buffers, per pixel: the depth image, the raw occlusion and the
+/// factors (an f32 each).
+pub const AO_BYTES_PER_PX: u64 = 12;
 
 fn ms(since: Instant) -> f64 {
     (since.elapsed().as_secs_f64() * 1e6).round() / 1e3
@@ -214,8 +226,10 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
             _ => Vec::new(),
         };
         let clay = req.clay.map(|c| raster::Clay { shell: &shell, shell_srgb: c.shell, contents_srgb: c.contents });
+        // The radius is a fraction of what is drawn (its bounding sphere), so a world size.
+        let ao = req.ao.map(|a| raster::Ao { radius: (a.radius as f64 * camera::bounding_sphere(scene, &p.active).1) as f32, strength: a.strength });
         let params = raster::Params { width: p.width, height: p.height, ssaa: p.ssaa, threads, background_srgb: background, transparent: p.transparent };
-        let drawn = catch_unwind(AssertUnwindSafe(|| raster::render_with(scene, &p.active, &frame, &params, clay.as_ref())))
+        let drawn = catch_unwind(AssertUnwindSafe(|| raster::render_shaded(scene, &p.active, &frame, &params, clay.as_ref(), ao.as_ref())))
             .map_err(|_| Failure::new(FailureCode::RendererError, format!("view {vi}: the rasterizer panicked")))?;
         let (img, stats) = drawn;
         let t1 = Instant::now();
@@ -270,7 +284,7 @@ pub fn render_bytes(input: &[u8], req: &Request, caps: &Caps) -> Result<(Output,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::{Clay, View};
+    use crate::proto::{Ao, Clay, View};
     use crate::scene::{encode, InputLimits};
     use crate::testgen;
 
@@ -530,6 +544,43 @@ mod tests {
         assert_eq!(off.views[0].1, crate::encode::encode(&img, ImageFormat::Webp).expect("webp"), "the base-colour rasterizer's bytes");
     }
 
+    /// Ambient occlusion through a request: strength 0 is the plain still
+    /// byte for byte (opaque and transparent, clay or not, any view); the
+    /// default changes each still, the same bytes for any thread count; out
+    /// of range values are refused before any drawing.
+    #[test]
+    fn ambient_occlusion_is_the_requests_and_strength_zero_is_none() {
+        let input = encode(&testgen::interior_scene());
+        let views = vec![View::new(ViewSpec::Auto, 96), View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 96) }, View::new(ViewSpec::Turntable(5), 64)];
+        for clay in [None, Some(Clay::default())] {
+            for transparent in [false, true] {
+                let mut req = Request::new(views.clone());
+                req.transparent = transparent;
+                req.clay = clay;
+                let plain = render_bytes(&input, &req, &caps()).expect("plain").0;
+                req.ao = Some(Ao { strength: 0.0, ..Ao::default() });
+                let zero = render_bytes(&input, &req, &caps()).expect("zero").0;
+                req.ao = Some(Ao::default());
+                req.threads = 1;
+                let ao = render_bytes(&input, &req, &caps()).expect("ao").0;
+                req.threads = 4;
+                let ao4 = render_bytes(&input, &req, &caps()).expect("ao, 4 threads").0;
+                for i in 0..views.len() {
+                    let what = format!("view {i}, clay {}, transparent {transparent}", clay.is_some());
+                    assert!(plain.views[i].1 == zero.views[i].1, "{what}");
+                    assert!(plain.views[i].1 != ao.views[i].1, "{what}");
+                    assert!(ao.views[i].1 == ao4.views[i].1, "{what}");
+                    assert_eq!((plain.views[i].0.covered_px, plain.views[i].0.camera), (ao.views[i].0.covered_px, ao.views[i].0.camera), "{what}");
+                }
+            }
+        }
+        for bad in [Ao { strength: 1.01, ..Ao::default() }, Ao { radius: 0.0, ..Ao::default() }, Ao { radius: f32::NAN, ..Ao::default() }] {
+            let mut req = Request::new(views.clone());
+            req.ao = Some(bad);
+            assert_eq!(render_bytes(&input, &req, &caps()).expect_err("refused").code, FailureCode::InvalidInput, "{bad:?}");
+        }
+    }
+
     #[test]
     fn png_and_webp_both_decode_to_a_valid_header() {
         let input = encode(&testgen::sphere_scene());
@@ -553,11 +604,14 @@ mod tests {
 
     #[test]
     fn the_estimate_grows_with_the_work() {
-        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false, transparent: false, framing: Framing::Bounds };
+        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false, transparent: false, framing: Framing::Bounds, ao: false };
         let small = estimate_bytes(1000, 100, &[p(320, 10)], 1, 1 << 30);
         let big = estimate_bytes(1000, 100, &[p(320, 1_000_000)], 1, 1 << 30);
         let two = estimate_bytes(1000, 100, &[p(320, 10), p(320, 10)], 1, 1 << 30);
         let rgba = estimate_bytes(1000, 100, &[Plan { transparent: true, ..p(320, 10) }], 1, 1 << 30);
         assert!(small < big && small < two && small < rgba);
+        // Ambient occlusion counts its depth image and factors.
+        let ao = estimate_bytes(1000, 100, &[Plan { ao: true, ..p(320, 10) }], 1, 1 << 30);
+        assert_eq!(ao - small, AO_BYTES_PER_PX * 320 * 240);
     }
 }

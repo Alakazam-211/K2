@@ -29,6 +29,25 @@ fn main() {
     scenes.push(("camera-display", display));
     scenes.push(("interior", testgen::interior_scene()));
     scenes.push(("empty-room", testgen::empty_room_scene()));
+    // For ambient occlusion (the render target draws it too): the 10 cm cube standing on the
+    // floor, seen from a camera a few centimetres off it (the kernel's reach at its cap, pairs
+    // off the image).
+    let mut contact = testgen::small_object_scene();
+    contact.cameras.push(k2_scenerender::scene::Camera {
+        id: "crease".into(),
+        position: [0.62, 0.06, 0.45],
+        target: Some([0.5, 0.02, 0.3]),
+        forward: None,
+        up: [0.0, 1.0, 0.0],
+        yfov: 1.2,
+        aspect: None,
+        znear: Some(0.01),
+        active: None,
+        lens_mm: None,
+        sensor_mm: None,
+        sensor_fit: None,
+    });
+    scenes.push(("ao-contact", contact));
     for (name, s) in testgen::degenerate_scenes() {
         scenes.push((name, s));
     }

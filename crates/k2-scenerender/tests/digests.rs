@@ -10,7 +10,7 @@
 //! update the table from this test's `[digest]` lines.
 
 use k2_scenerender::camera::{Framing, ViewSpec};
-use k2_scenerender::proto::{Clay, ImageFormat, Request, View};
+use k2_scenerender::proto::{Ao, Clay, ImageFormat, Request, View};
 use k2_scenerender::render::render_bytes;
 use k2_scenerender::sandbox::Caps;
 use k2_scenerender::scene::{encode, InputLimits, Scene};
@@ -21,7 +21,8 @@ use k2_scenerender::testgen;
 /// macOS (k2n1-m4, Apple M4, job c4090b9e). The 27 transparent ones: made on k2n10-vin
 /// (job 9919a84e), the 30 above unchanged there. The 11 content-framing ones: made on
 /// k2-arch (x86_64, job d8bddba8). The 13 clay ones: made on k2-arch (job 20f420f1). All 81
-/// matched on aarch64 macOS (k2n1-m4, job ffe2988a).
+/// matched on aarch64 macOS (k2n1-m4, job ffe2988a). The 15 ambient occlusion ones: made on
+/// k2n10-vin (job ac55097d), all 96 matched on aarch64 macOS (k2n1-m4, job e76bf3a5).
 const WANT: &[(&str, &str)] = &[
     ("cube-webp-320/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
     ("cube-webp-320/0", "5a8e7a89bef92a33281af63a775f1c297cd8dc99090f88b80d190b43eb91c9bc"),
@@ -106,7 +107,22 @@ const WANT: &[(&str, &str)] = &[
     ("empty-room-clay/k2scene1", "5c87521c765dda93a8341896f22ac8f27ed0cdd2586dabad17e031b044377efc"),
     ("empty-room-clay/0", "00ddd81edbb0ef3cf1d7add18a31cda44366710913db0f6b85855877eb55425c"),
     ("small-object-clay/k2scene1", "25c2e806f1c3b53fa889bd36b059c299f268474f77be3a63bbb0b3cd9a8441f6"),
-    ("small-object-clay/0", "615441da2daffda32ea9249726a5e2231d15e3e750f6f895f0f202eca78aa0f9"),
+    ("small-object-clay/0", "615441da2daffda32ea9249726a5e2231d15e3e750f6f895f0f202eca78aa0f9"),    // Ambient occlusion (opaque and transparent, clay and base colours, default and own values).
+    ("interior-ao/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-ao/0", "a9bb7ffb1f4b79b197fa05e8c7c8bb5ab2dcf42531f1adf60e716023a3e279de"),
+    ("interior-ao/1", "d7e313f7429abad3dcdf1955581e0fd870a5adff442db01b4230c8aa3f8b14d4"),
+    ("interior-ao/2", "764c58410764e866b1680a5a16bb4efb89bc2cdc9472139da62d2daf94889928"),
+    ("interior-clay-ao/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay-ao/0", "4e7d22dbb3efd5ac5f79ba54d7144999898b71a013e40da42209800b8f0c86bf"),
+    ("interior-clay-ao/1", "47b0ef31e1e59fc05d8a189c83a685b716315a1716210542c7424e1b75d0da46"),
+    ("interior-clay-ao-alpha/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay-ao-alpha/0", "b7821a95db8fa64689e7fceb4476845844468404f955accb248494e359bc6104"),
+    ("interior-ao-alpha/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-ao-alpha/0", "83349303973eff69737a3bb70d2204a1bb2898141afd9dcde0f4424495fd42bc"),
+    ("interior-clay-ao-own/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay-ao-own/0", "1966f900a5b0a75e9dc1ba17b9c9bb1b6dd9b3a82bc79b84a6ef281b49085b9a"),
+    ("small-object-clay-ao/k2scene1", "25c2e806f1c3b53fa889bd36b059c299f268474f77be3a63bbb0b3cd9a8441f6"),
+    ("small-object-clay-ao/0", "a1f73af4c1cb4badf01a9f2b939f1eeae2c750f7c0d08a9977738ad7332d12c4"),
 ];
 
 fn caps() -> Caps {
@@ -132,6 +148,11 @@ fn case_with(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<
 
 #[allow(clippy::too_many_arguments)]
 fn case_clay(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32, transparent: bool, clay: Option<Clay>) {
+    case_ao(out, name, s, views, format, threads, transparent, clay, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn case_ao(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32, transparent: bool, clay: Option<Clay>, ao: Option<Ao>) {
     let input = encode(s);
     out.push((format!("{name}/k2scene1"), hex(&digest(&input))));
     let mut req = Request::new(views);
@@ -139,6 +160,7 @@ fn case_clay(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<
     req.threads = threads;
     req.transparent = transparent;
     req.clay = clay;
+    req.ao = ao;
     let (o, _) = render_bytes(&input, &req, &caps()).unwrap_or_else(|f| panic!("{name}: {} {}", f.code, f.detail));
     for (i, (_, img)) in o.views.iter().enumerate() {
         out.push((format!("{name}/{i}"), hex(&digest(img))));
@@ -193,6 +215,17 @@ fn the_digests_are_the_checked_in_ones() {
     case_clay(&mut got, "interior-clay-tones", &testgen::interior_scene(), vec![contents(240)], ImageFormat::Webp, 4, false, tones);
     case_clay(&mut got, "empty-room-clay", &testgen::empty_room_scene(), vec![auto(160)], ImageFormat::Webp, 1, false, clay);
     case_clay(&mut got, "small-object-clay", &testgen::small_object_scene(), vec![contents(240)], ImageFormat::Webp, 2, false, clay);
+    // Ambient occlusion: the interior in base colours (bounds- and contents-framed, 2x2 SSAA at
+    // 800 px) and in clay (contents-framed, a turntable frame), transparent with and without
+    // clay, the request's own strength and radius, one small object.
+    let ao = Some(Ao::default());
+    case_ao(&mut got, "interior-ao", &testgen::interior_scene(), vec![auto(320), contents(320), contents(800)], ImageFormat::Webp, 3, false, None, ao);
+    case_ao(&mut got, "interior-clay-ao", &testgen::interior_scene(), vec![contents(320), View::new(ViewSpec::Turntable(1), 200)], ImageFormat::Webp, 2, false, clay, ao);
+    case_ao(&mut got, "interior-clay-ao-alpha", &testgen::interior_scene(), vec![contents(320)], ImageFormat::Png, 4, true, clay, ao);
+    case_ao(&mut got, "interior-ao-alpha", &testgen::interior_scene(), vec![contents(320)], ImageFormat::Webp, 1, true, None, ao);
+    let own = Some(Ao { strength: 0.5, radius: 0.25 });
+    case_ao(&mut got, "interior-clay-ao-own", &testgen::interior_scene(), vec![contents(240)], ImageFormat::Webp, 2, false, clay, own);
+    case_ao(&mut got, "small-object-clay-ao", &testgen::small_object_scene(), vec![contents(240)], ImageFormat::Webp, 3, false, clay, ao);
     for (k, v) in &got {
         eprintln!("[digest] (\"{k}\", \"{v}\"),");
     }
@@ -201,6 +234,8 @@ fn the_digests_are_the_checked_in_ones() {
     assert_eq!(find("empty-room/0"), find("empty-room/1"), "an all-shell room falls back to the bounds framing");
     assert_ne!(find("interior/0"), find("interior/1"));
     assert_ne!(find("interior/0"), find("interior-clay/0"));
+    assert_ne!(find("interior/1"), find("interior-ao/1"));
+    assert_ne!(find("interior-clay/1"), find("interior-clay-ao/0"));
     let want: Vec<(String, String)> = WANT.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let differ: Vec<&str> = got.iter().zip(&want).filter(|(g, w)| g != w).map(|(g, _)| g.0.as_str()).collect();
     assert!(differ.is_empty() && got.len() == want.len(), "{} of {} differ ({} checked in): {differ:?}", differ.len(), got.len(), want.len());

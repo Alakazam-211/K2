@@ -9,7 +9,8 @@
 //! - [`camera`], [`raster`]: the 3/4 auto view (fitted to every object, or
 //!   to the contents with a lens shift), the turntable, given cameras;
 //!   fixed-point edges, a z-buffer, near clipping, two-light Lambert plus
-//!   ambient (the clay look), SSAA, threads by fixed bands;
+//!   ambient (the clay look), screen-space ambient occlusion when asked for,
+//!   SSAA, threads by fixed bands;
 //! - [`contents`]: which objects are shell (floor, walls) and which contents,
 //!   from world boxes alone;
 //! - [`srgb`], [`trig`], [`math`]: no libm on the render path, so the bytes are

@@ -40,6 +40,15 @@
 //! **Clay shading** ([`render_with`] and a [`Clay`]): each object's base colour is replaced by
 //! one of two tones, by whether it is shell; nothing else changes (the lights, the coverage
 //! alpha, the order of every operation).
+//!
+//! **Ambient occlusion** ([`render_shaded`] and an [`Ao`]), off unless asked for: before the
+//! colour pass, a depth pass draws the same bands depth only and keeps one sample of each pixel
+//! (1/w at a fixed place in it; 0 where nothing is drawn there) for the whole frame. Each covered
+//! pixel then gets a factor in [0, 1] from that depth image ([`occlusion`]), and the colour pass
+//! multiplies every covered sample's linear colour by its pixel's factor before the box filter:
+//! the whole light (ambient, key and fill) is darkened, the background and the coverage alpha are
+//! not. A factor of exactly 1 leaves the sample's bits as they were, so where nothing occludes,
+//! the pixels are the plain image's.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -108,7 +117,10 @@ pub struct Stats {
     pub covered_px: u64,
     pub vertex_us: u64,
     pub bin_us: u64,
+    /// The colour pass, and with ambient occlusion its depth and occlusion passes too.
     pub raster_us: u64,
+    /// The depth and occlusion passes alone (0 without ambient occlusion).
+    pub ao_us: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -192,13 +204,27 @@ pub struct Clay<'a> {
     pub contents_srgb: [u8; 3],
 }
 
+/// Ambient occlusion for [`render_shaded`] (see [`occlusion`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ao {
+    /// How far an occluder reaches, in world units: full weight within it, none past twice it.
+    pub radius: f32,
+    /// How dark full occlusion gets, 0 to 1: the light factor is `1 - strength * occlusion`.
+    pub strength: f32,
+}
+
 /// Render the active objects: opaque RGB8 on the background colour, or RGBA8 when transparent.
 pub fn render(scene: &Scene, active: &[u32], frame: &Frame, p: &Params) -> (Image, Stats) {
-    render_with(scene, active, frame, p, None)
+    render_shaded(scene, active, frame, p, None, None)
 }
 
 /// [`render`], with each object in a clay tone instead of its base colour when `clay` is given.
 pub fn render_with(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&Clay>) -> (Image, Stats) {
+    render_shaded(scene, active, frame, p, clay, None)
+}
+
+/// The vertex and bin stages: the context every pass draws from, and each band's triangles.
+fn prepare<'a>(scene: &'a Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&Clay>, st: &mut Stats) -> (Ctx<'a>, Vec<Vec<u32>>) {
     let s = p.ssaa.clamp(1, 4) as i64;
     let ws = p.width as i64 * s;
     let hs = p.height as i64 * s;
@@ -211,7 +237,6 @@ pub fn render_with(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, cla
         shift: [frame.shift_x, frame.shift_y],
         shifted: frame.shift_x != 0.0 || frame.shift_y != 0.0,
     };
-    let mut st = Stats::default();
 
     let t0 = Instant::now();
     let (objs, vpos, vnor, vfix) = vertex_stage(scene, active, frame, &cam, p.threads, clay);
@@ -237,25 +262,43 @@ pub fn render_with(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, cla
         l1: normalize(KEY_DIR),
         l2: normalize(FILL_DIR),
     };
-    let bands = bin(&ctx, p.threads, &mut st);
-    let t2 = Instant::now();
-    st.bin_us = (t2 - t1).as_micros() as u64;
+    let bands = bin(&ctx, p.threads, st);
+    st.bin_us = t1.elapsed().as_micros() as u64;
+    (ctx, bands)
+}
 
+/// [`render_with`], darkened by ambient occlusion when `ao` is given.
+pub fn render_shaded(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&Clay>, ao: Option<&Ao>) -> (Image, Stats) {
+    let mut st = Stats::default();
+    let (ctx, bands) = prepare(scene, active, frame, p, clay, &mut st);
+    let s = p.ssaa.clamp(1, 4) as i64;
+    let ws = ctx.ws;
+    let band_rows = ctx.band_rows;
+
+    let t2 = Instant::now();
+    let w = p.width as usize;
+    let factors = ao.map(|a| {
+        let depth = depth_pass(&ctx, &bands, p.threads, s as usize, w, p.height as usize);
+        let f = occlusion(&depth, w, p.height as usize, &Lens::of(frame, p.ssaa), a, p.threads);
+        st.ao_us = t2.elapsed().as_micros() as u64;
+        f
+    });
     let lut = srgb::encode_table();
     let bg = [srgb::to_linear(p.background_srgb[0]), srgb::to_linear(p.background_srgb[1]), srgb::to_linear(p.background_srgb[2])];
-    let w = p.width as usize;
     let ch = if p.transparent { 4 } else { 3 };
     let mut pixels = vec![0u8; w * p.height as usize * ch];
     let covered = AtomicU64::new(0);
     {
         let items: Vec<(usize, &mut [u8])> = pixels.chunks_mut(BAND_PX as usize * w * ch).enumerate().collect();
         let n = (ws * band_rows) as usize;
+        let rows = BAND_PX as usize * w;
         par_each(
             p.threads,
             items,
             || Band { color: vec![[0.0; 3]; n], depth: vec![0.0; n] },
             |buf, (b, out)| {
-                let c = raster_band(&ctx, b, &bands[b], buf, out, bg, &lut, s as usize, w, p.transparent);
+                let k = factors.as_deref().map(|f| &f[b * rows..(b * rows + rows).min(f.len())]);
+                let c = raster_band(&ctx, b, &bands[b], buf, out, bg, &lut, s as usize, w, p.transparent, k);
                 covered.fetch_add(c, Ordering::Relaxed);
             },
         );
@@ -668,7 +711,7 @@ struct SV {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8], bg: [f32; 3], lut: &[u8], s: usize, w: usize, transparent: bool) -> u64 {
+fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8], bg: [f32; 3], lut: &[u8], s: usize, w: usize, transparent: bool, ao: Option<&[f32]>) -> u64 {
     let y_lo = b as i64 * ctx.band_rows;
     let y_hi = (y_lo + ctx.band_rows).min(ctx.hs);
     let ws = ctx.ws as usize;
@@ -694,12 +737,12 @@ fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8]
             oi += 1;
         }
         let ob = &ctx.objs[oi];
-        draw_tri(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
+        draw_tri::<true>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
     }
     if transparent {
-        resolve_rgba(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut)
+        resolve_rgba(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut, ao)
     } else {
-        resolve(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut, bg)
+        resolve(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut, bg, ao)
     }
 }
 
@@ -728,7 +771,9 @@ fn shade(ctx: &Ctx, ob: &Obj, v: [usize; 3], front: bool) -> [[f32; 3]; 3] {
     }
 }
 
-fn draw_tri(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi: i64) {
+/// Draw one triangle into the band: colour and depth, or depth alone (`COLOR` false: no shading,
+/// the colour buffer untouched).
+fn draw_tri<const COLOR: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi: i64) {
     let f = [ctx.vfix[v[0]], ctx.vfix[v[1]], ctx.vfix[v[2]]];
     let fast = f.iter().all(|p| p[0] != NEEDS_CLIP);
     let flat = !ob.smooth;
@@ -741,9 +786,9 @@ fn draw_tri(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi:
         if ob.cull && !front {
             return;
         }
-        let col = shade(ctx, ob, v, front);
+        let col = if COLOR { shade(ctx, ob, v, front) } else { [[0.0; 3]; 3] };
         let sv = |k: usize| SV { x: f[k][0] as i64, y: f[k][1] as i64, iw: 1.0 / -ctx.vpos[v[k]][2], c: col[k] };
-        raster_tri(buf, [sv(0), sv(1), sv(2)], flat, y_lo, y_hi, ctx.ws);
+        raster_tri::<COLOR>(buf, [sv(0), sv(1), sv(2)], flat, y_lo, y_hi, ctx.ws);
     } else {
         let c = [clip_of(ctx.vpos[v[0]], &ctx.cam), clip_of(ctx.vpos[v[1]], &ctx.cam), clip_of(ctx.vpos[v[2]], &ctx.cam)];
         if trivially_out(&c, ctx.cam.near) {
@@ -757,7 +802,7 @@ fn draw_tri(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi:
         if ob.cull && !front {
             return;
         }
-        let col = shade(ctx, ob, v, front);
+        let col = if COLOR { shade(ctx, ob, v, front) } else { [[0.0; 3]; 3] };
         let cv = |k: usize| [c[k][0], c[k][1], c[k][2], col[k][0], col[k][1], col[k][2]];
         let (poly, n) = clip_poly([cv(0), cv(1), cv(2)], ctx.cam.near);
         if n < 3 {
@@ -770,13 +815,14 @@ fn draw_tri(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi:
             sv[k] = SV { x: fx[0] as i64, y: fx[1] as i64, iw: 1.0 / p[2], c: [p[3], p[4], p[5]] };
         }
         for k in 1..n - 1 {
-            raster_tri(buf, [sv[0], sv[k], sv[k + 1]], flat, y_lo, y_hi, ctx.ws);
+            raster_tri::<COLOR>(buf, [sv[0], sv[k], sv[k + 1]], flat, y_lo, y_hi, ctx.ws);
         }
     }
 }
 
-/// Fill one triangle's samples in rows [y_lo, y_hi) (sample space).
-fn raster_tri(buf: &mut Band, v: [SV; 3], flat: bool, y_lo: i64, y_hi: i64, ws: i64) {
+/// Fill one triangle's samples in rows [y_lo, y_hi) (sample space); depth only when `COLOR` is
+/// false.
+fn raster_tri<const COLOR: bool>(buf: &mut Band, v: [SV; 3], flat: bool, y_lo: i64, y_hi: i64, ws: i64) {
     let a = v[0];
     let mut b = v[1];
     let mut c = v[2];
@@ -831,16 +877,18 @@ fn raster_tri(buf: &mut Band, v: [SV; 3], flat: bool, y_lo: i64, y_hi: i64, ws: 
                 let i = row + x as usize;
                 if iw > buf.depth[i] {
                     buf.depth[i] = iw;
-                    buf.color[i] = if flat {
-                        a.c
-                    } else {
-                        let inv = 1.0 / iw;
-                        [
-                            (la * ca[0] + lb * cb[0] + lc * cc[0]) * inv,
-                            (la * ca[1] + lb * cb[1] + lc * cc[1]) * inv,
-                            (la * ca[2] + lb * cb[2] + lc * cc[2]) * inv,
-                        ]
-                    };
+                    if COLOR {
+                        buf.color[i] = if flat {
+                            a.c
+                        } else {
+                            let inv = 1.0 / iw;
+                            [
+                                (la * ca[0] + lb * cb[0] + lc * cc[0]) * inv,
+                                (la * ca[1] + lb * cb[1] + lc * cc[1]) * inv,
+                                (la * ca[2] + lb * cb[2] + lc * cc[2]) * inv,
+                            ]
+                        };
+                    }
                 }
             }
             ea += sxa;
@@ -853,9 +901,19 @@ fn raster_tri(buf: &mut Band, v: [SV; 3], flat: bool, y_lo: i64, y_hi: i64, ws: 
     }
 }
 
+/// The covered sample's colour, times its pixel's occlusion factor when there is one.
+#[inline]
+fn darkened(c: [f32; 3], k: Option<f32>) -> [f32; 3] {
+    match k {
+        Some(k) => [c[0] * k, c[1] * k, c[2] * k],
+        None => c,
+    }
+}
+
 /// Box-filter the band's samples into its output rows; returns how many pixels any triangle covered.
+/// With `ao` (the band's rows of occlusion factors), each covered sample is darkened first.
 #[allow(clippy::too_many_arguments)]
-fn resolve(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: usize, lut: &[u8], bg: [f32; 3]) -> u64 {
+fn resolve(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: usize, lut: &[u8], bg: [f32; 3], ao: Option<&[f32]>) -> u64 {
     let rows = rows_s / s;
     let inv = 1.0 / (s * s) as f32;
     let mut covered = 0u64;
@@ -863,12 +921,13 @@ fn resolve(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: us
         for px in 0..w {
             let mut acc = [0f32; 3];
             let mut hit = false;
+            let k = ao.map(|a| a[r * w + px]);
             for sy in 0..s {
                 let base = (r * s + sy) * ws + px * s;
                 for sx in 0..s {
                     let c = if buf.depth[base + sx] > 0.0 {
                         hit = true;
-                        buf.color[base + sx]
+                        darkened(buf.color[base + sx], k)
                     } else {
                         bg
                     };
@@ -891,8 +950,10 @@ fn resolve(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: us
 
 /// [`resolve`] for a transparent image: RGBA8, alpha = covered samples / samples (rounded half
 /// up, in integers), the colour the mean of the covered samples only (straight alpha), summed
-/// in the same order as [`resolve`] (so a fully covered pixel has the opaque colour).
-fn resolve_rgba(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: usize, lut: &[u8]) -> u64 {
+/// in the same order as [`resolve`] (so a fully covered pixel has the opaque colour). Occlusion
+/// darkens the colour as in [`resolve`]; the alpha is the coverage either way.
+#[allow(clippy::too_many_arguments)]
+fn resolve_rgba(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: usize, lut: &[u8], ao: Option<&[f32]>) -> u64 {
     let rows = rows_s / s;
     let total = (s * s) as u32;
     let mut covered = 0u64;
@@ -900,11 +961,12 @@ fn resolve_rgba(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], 
         for px in 0..w {
             let mut acc = [0f32; 3];
             let mut n = 0u32;
+            let k = ao.map(|a| a[r * w + px]);
             for sy in 0..s {
                 let base = (r * s + sy) * ws + px * s;
                 for sx in 0..s {
                     if buf.depth[base + sx] > 0.0 {
-                        let c = buf.color[base + sx];
+                        let c = darkened(buf.color[base + sx], k);
                         acc[0] += c[0];
                         acc[1] += c[1];
                         acc[2] += c[2];
@@ -926,6 +988,305 @@ fn resolve_rgba(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], 
         }
     }
     covered
+}
+
+/// The depth pass for ambient occlusion: every band drawn depth only (the colour pass's own
+/// triangles, rasterization and depth test), each pixel keeping the 1/w of one sample, the same
+/// one in every pixel ([`Lens::sample_at`]), 0 where it is not covered; the whole frame,
+/// row-major. One fixed sample, not (say) the nearest of the pixel's: on a plane, 1/w at points a
+/// whole number of pixels apart is then exactly affine, which the kernel's flat test relies on.
+fn depth_pass(ctx: &Ctx, bands: &[Vec<u32>], threads: usize, s: usize, w: usize, h: usize) -> Vec<f32> {
+    let mut depth = vec![0f32; w * h];
+    let rows = BAND_PX as usize * w;
+    let ws = ctx.ws as usize;
+    let n = ws * ctx.band_rows as usize;
+    let items: Vec<(usize, &mut [f32])> = depth.chunks_mut(rows).enumerate().collect();
+    par_each(
+        threads,
+        items,
+        || Band { color: Vec::new(), depth: vec![0.0; n] },
+        |buf, (b, out)| {
+            let refs = &bands[b];
+            if refs.is_empty() {
+                return;
+            }
+            let y_lo = b as i64 * ctx.band_rows;
+            let y_hi = (y_lo + ctx.band_rows).min(ctx.hs);
+            let rows_s = (y_hi - y_lo) as usize;
+            buf.depth[..rows_s * ws].fill(0.0);
+            let mut oi = 0usize;
+            for &g in refs {
+                let g = g as u64;
+                while g >= ctx.objs[oi].tbase + ctx.objs[oi].tris {
+                    oi += 1;
+                }
+                let ob = &ctx.objs[oi];
+                draw_tri::<false>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
+            }
+            let c = s / 2;
+            for r in 0..rows_s / s {
+                let row = (r * s + c) * ws + c;
+                for px in 0..w {
+                    out[r * w + px] = buf.depth[row + px * s];
+                }
+            }
+        },
+    );
+    depth
+}
+
+/// What the occlusion pass needs of a view to put a pixel back in view space: the projection's
+/// scales and its lens shift ([`Frame`]), and where in each pixel its depth was taken.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lens {
+    pub fx: f32,
+    pub fy: f32,
+    pub shift: [f32; 2],
+    /// The depth's sample in each pixel, from its top-left corner, in pixels (x and y alike).
+    pub at: f32,
+}
+
+impl Lens {
+    /// `f` drawn with `ssaa` samples per axis: the depth is sample (s/2, s/2) of each pixel.
+    pub fn of(f: &Frame, ssaa: u32) -> Lens {
+        Lens { fx: f.fx, fy: f.fy, shift: [f.shift_x, f.shift_y], at: Lens::sample_at(ssaa) }
+    }
+
+    /// Where sample (s/2, s/2) of `ssaa` per axis sits in its pixel: the centre for 1 and 3,
+    /// 3/4 for 2, 5/8 for 4.
+    pub fn sample_at(ssaa: u32) -> f32 {
+        let s = ssaa.clamp(1, 4);
+        ((s / 2) as f32 + 0.5) / s as f32
+    }
+}
+
+/// The occlusion kernel's axes: 8 directions 22.5 degrees apart over a half turn, each sampled
+/// both ways; (cos, sin) written out, so no libm.
+const AO_AXES: [[f32; 2]; 8] = [
+    [1.0, 0.0],
+    [0.923_879_5, 0.382_683_43],
+    [0.707_106_77, 0.707_106_77],
+    [0.382_683_43, 0.923_879_5],
+    [0.0, 1.0],
+    [-0.382_683_43, 0.923_879_5],
+    [-0.707_106_77, 0.707_106_77],
+    [-0.923_879_5, 0.382_683_43],
+];
+/// Distances per axis: 3 x 8 = 24 pairs per pixel. Axis k's step j is at
+/// `(8 j + AO_ORDER[k] + phase) / 24` of the reach, so the 24 distances are evenly spaced over it,
+/// each used once, and neighbouring axes take distances far apart.
+const AO_STEPS: usize = 3;
+const AO_ORDER: [u32; 8] = [0, 4, 2, 6, 1, 5, 3, 7];
+const AO_PAIRS: usize = AO_STEPS * AO_AXES.len();
+/// The fixed 4 x 4 pattern that varies the kernel from pixel to pixel (no random numbers): cell
+/// `c = AO_PATTERN[y % 4][x % 4]` turns the axes by `AO_TURNS[c % 4]` (quarter steps of the 22.5
+/// degrees between axes) and moves the distances by a phase of `(c / 4 + 0.5) / 4` of a step. Any
+/// 4 x 4 block of pixels holds every cell once, so the blur over 4 x 4 sees 32 directions and 96
+/// distances instead of the 8 and 24 of one pixel: smooth gradients, not rings.
+const AO_PATTERN: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+/// (cos, sin) of 0, 5.625, 11.25 and 16.875 degrees.
+const AO_TURNS: [[f32; 2]; 4] = [[1.0, 0.0], [0.995_184_7, 0.098_017_14], [0.980_785_25, 0.195_090_32], [0.956_940_35, 0.290_284_66]];
+/// A pair bent by less than this (gap over half-chord) counts as flat: it absorbs the rounding of
+/// a plane split into triangles (vertices snapped to 1/256 of a sample, 1/w interpolated in f32).
+pub const AO_BIAS: f32 = 0.05;
+/// The kernel's largest reach on screen, as a fraction of the image's longer side (a surface very
+/// near the eye would otherwise sample across the whole frame).
+pub const AO_MAX_REACH: f32 = 0.25;
+/// The blur takes a neighbour only when its depth is within this fraction of the radius of the
+/// pixel's: the same surface, or one touching it; never the floor seen past a table's edge.
+pub const AO_BLUR_DEPTH: f32 = 0.25;
+
+/// Round half away from zero, without libm (NaN gives 0).
+#[inline]
+fn round_px(v: f32) -> i64 {
+    if v >= 0.0 {
+        (v + 0.5) as i64
+    } else {
+        -((0.5 - v) as i64)
+    }
+}
+
+/// The ambient occlusion factor of each pixel of a depth image: `depth` is row-major `w` x `h`,
+/// each pixel's 1/w at the same place in it (0: nothing drawn there). An uncovered pixel gets 1,
+/// and so does a covered one nothing occludes; full occlusion gets `1 - strength`.
+///
+/// For a covered pixel P (view-space point p at depth z = 1/w), the kernel reaches `radius`
+/// world units: `radius * fx * width / 2 / z` pixels (so the same fraction of the image at any
+/// width), at most [`AO_MAX_REACH`] of the image's longer side. It takes [`AO_PAIRS`] pairs of
+/// pixels A and B at whole-pixel offsets `+d` and `-d` from P (fixed directions and distances,
+/// [`AO_AXES`], varied by P's cell of [`AO_PATTERN`]), so P is exactly their midpoint on screen.
+/// On screen, 1/w is affine over a plane, so for A, B and P on one plane P's 1/w is the mean of
+/// theirs: the pair's gap `z - 2 / (1/w_A + 1/w_B)` (how far the chord AB passes in front of P,
+/// along P's ray) is 0 on any plane, at any angle, and positive only where the surface bends
+/// towards the eye: a crease, a corner, an object standing on the floor. The pair's occlusion is
+/// its gap over half the chord's length (1 for a right-angle corner), less [`AO_BIAS`], at most
+/// 1; it counts fully while A and B are both within `radius` of p, fading to nothing at twice
+/// it, so an object far in front of P casts no halo. A pair with an end off the image or on an
+/// uncovered pixel counts 0: the empty background never occludes. P's raw occlusion is the sum of
+/// its pairs over [`AO_PAIRS`].
+///
+/// Then a blur: P's occlusion is the mean of the raw occlusion over the 4 x 4 pixels from
+/// (x - 2, y - 2) to (x + 1, y + 1) that are covered and within [`AO_BLUR_DEPTH`] of the radius
+/// of P's depth (P is always one). The factor is `1 - strength * occlusion`; where every raw
+/// value is 0 (a plane, the empty background) it is exactly 1.
+///
+/// Only `+ - * / sqrt` in a fixed order, and integer offsets: the same bits on every machine and
+/// for any thread count (rows are split by fixed bands, each pass reading only the one before).
+pub fn occlusion(depth: &[f32], w: usize, h: usize, lens: &Lens, ao: &Ao, threads: usize) -> Vec<f32> {
+    let mut out = vec![1f32; w * h];
+    if depth.len() != w * h || w == 0 || h == 0 {
+        return out;
+    }
+    // View-space x / z and y / z of each column's and row's depth sample.
+    let ax: Vec<f32> = (0..w).map(|i| ((i as f32 + lens.at) * 2.0 / w as f32 - 1.0 - lens.shift[0]) / lens.fx).collect();
+    let ay: Vec<f32> = (0..h).map(|j| (1.0 - (j as f32 + lens.at) * 2.0 / h as f32 - lens.shift[1]) / lens.fy).collect();
+    let mut steps = [[[0f32; 2]; AO_PAIRS]; 16];
+    for (c, cell) in steps.iter_mut().enumerate() {
+        let turn = AO_TURNS[c % 4];
+        let phase = ((c / 4) as f32 + 0.5) / 4.0;
+        for (k, axis) in AO_AXES.iter().enumerate() {
+            let dir = [turn[0] * axis[0] - turn[1] * axis[1], turn[1] * axis[0] + turn[0] * axis[1]];
+            for j in 0..AO_STEPS {
+                let f = ((8 * j as u32 + AO_ORDER[k]) as f32 + phase) / AO_PAIRS as f32;
+                cell[k * AO_STEPS + j] = [dir[0] * f, dir[1] * f];
+            }
+        }
+    }
+    let kernel = Kernel {
+        depth,
+        w: w as i64,
+        h: h as i64,
+        ax: &ax,
+        ay: &ay,
+        steps: &steps,
+        reach: 0.5 * lens.fx * w as f32 * ao.radius,
+        max_reach: w.max(h) as f32 * AO_MAX_REACH,
+        inv_radius: 1.0 / ao.radius,
+    };
+    let rows = BAND_PX as usize * w;
+    let mut raw = vec![0f32; w * h];
+    {
+        let items: Vec<(usize, &mut [f32])> = raw.chunks_mut(rows).enumerate().collect();
+        par_each(
+            threads,
+            items,
+            || (),
+            |_, (b, band)| {
+                for (r, row) in band.chunks_mut(w).enumerate() {
+                    let y = (b * BAND_PX as usize + r) as i64;
+                    for (x, o) in row.iter_mut().enumerate() {
+                        *o = kernel.raw(x as i64, y);
+                    }
+                }
+            },
+        );
+    }
+    let near = AO_BLUR_DEPTH * ao.radius;
+    let items: Vec<(usize, &mut [f32])> = out.chunks_mut(rows).enumerate().collect();
+    par_each(
+        threads,
+        items,
+        || (),
+        |_, (b, band)| {
+            for (r, row) in band.chunks_mut(w).enumerate() {
+                let y = b * BAND_PX as usize + r;
+                for (x, f) in row.iter_mut().enumerate() {
+                    let iw = depth[y * w + x];
+                    if !(iw > 0.0) {
+                        continue;
+                    }
+                    let (mut sum, mut n) = (0f32, 0u32);
+                    for qy in y.saturating_sub(2)..(y + 2).min(h) {
+                        for qx in x.saturating_sub(2)..(x + 2).min(w) {
+                            let q = depth[qy * w + qx];
+                            // |1/q - 1/iw| <= near, without a division.
+                            let d = if q > iw { q - iw } else { iw - q };
+                            if q > 0.0 && d <= near * q * iw {
+                                sum += raw[qy * w + qx];
+                                n += 1;
+                            }
+                        }
+                    }
+                    if n > 0 {
+                        *f = (1.0 - ao.strength * (sum / n as f32)).max(0.0);
+                    }
+                }
+            }
+        },
+    );
+    out
+}
+
+struct Kernel<'a> {
+    depth: &'a [f32],
+    w: i64,
+    h: i64,
+    ax: &'a [f32],
+    ay: &'a [f32],
+    /// Each pattern cell's pair offsets, in units of the reach.
+    steps: &'a [[[f32; 2]; AO_PAIRS]; 16],
+    /// Pixels the radius spans at 1/w = 1.
+    reach: f32,
+    max_reach: f32,
+    inv_radius: f32,
+}
+
+impl Kernel<'_> {
+    #[inline]
+    fn at(&self, x: i64, y: i64, iw: f32) -> V3 {
+        let z = 1.0 / iw;
+        [self.ax[x as usize] * z, self.ay[y as usize] * z, z]
+    }
+
+    /// The raw occlusion at (x, y), 0 to 1.
+    fn raw(&self, x: i64, y: i64) -> f32 {
+        let iw = self.depth[(y * self.w + x) as usize];
+        if !(iw > 0.0) {
+            return 0.0;
+        }
+        let p = self.at(x, y, iw);
+        let reach = (self.reach * iw).min(self.max_reach);
+        let mut sum = 0f32;
+        for st in &self.steps[AO_PATTERN[(y & 3) as usize][(x & 3) as usize] as usize] {
+            let dx = round_px(st[0] * reach);
+            let dy = round_px(st[1] * reach);
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let (xa, ya, xb, yb) = (x + dx, y + dy, x - dx, y - dy);
+            if xa < 0 || xb < 0 || ya < 0 || yb < 0 || xa >= self.w || xb >= self.w || ya >= self.h || yb >= self.h {
+                continue;
+            }
+            let wa = self.depth[(ya * self.w + xa) as usize];
+            let wb = self.depth[(yb * self.w + xb) as usize];
+            if !(wa > 0.0 && wb > 0.0) {
+                continue;
+            }
+            let gap = p[2] - 2.0 / (wa + wb);
+            if !(gap > 0.0) {
+                continue;
+            }
+            let a = self.at(xa, ya, wa);
+            let b = self.at(xb, yb, wb);
+            let (ea, eb) = (sub(a, p), sub(b, p));
+            let (la, lb) = (dot(ea, ea), dot(eb, eb));
+            let far = if la > lb { la } else { lb };
+            let weight = (2.0 - far.sqrt() * self.inv_radius).min(1.0);
+            if !(weight > 0.0) {
+                continue;
+            }
+            let ab = sub(a, b);
+            let half = 0.5 * dot(ab, ab).sqrt();
+            if !(half > 0.0) {
+                continue;
+            }
+            let o = ((gap / half - AO_BIAS) / (1.0 - AO_BIAS)).min(1.0);
+            if o > 0.0 {
+                sum += o * weight;
+            }
+        }
+        sum / AO_PAIRS as f32
+    }
 }
 
 #[cfg(test)]
@@ -1142,6 +1503,184 @@ mod tests {
         }
     }
 
+    /// The depth image and occlusion factors of every object of `s` through `spec` (strength 1).
+    fn ao_factors(s: &Scene, spec: ViewSpec, w: u32, h: u32, ssaa: u32, radius: f32, threads: usize) -> (Vec<f32>, Vec<f32>, Frame) {
+        let active: Vec<u32> = (0..s.objects.len() as u32).collect();
+        let f = frame(s, &active, spec, w as f64 / h as f64).expect("a frame");
+        let p = Params { width: w, height: h, ssaa, threads, background_srgb: BG, transparent: false };
+        let mut st = Stats::default();
+        let (ctx, bands) = prepare(s, &active, &f, &p, None, &mut st);
+        let depth = depth_pass(&ctx, &bands, threads, ssaa as usize, w as usize, h as usize);
+        let k = occlusion(&depth, w as usize, h as usize, &Lens::of(&f, ssaa), &Ao { radius, strength: 1.0 }, threads);
+        (depth, k, f)
+    }
+
+    /// The pixel a world point lands in.
+    fn pixel_of(f: &Frame, p: [f64; 3], w: u32, h: u32) -> usize {
+        let v = m4_point(&f.view, p);
+        let z = -v[2];
+        let x = ((v[0] * f.fx as f64 / z + f.shift_x as f64) * 0.5 + 0.5) * w as f64;
+        let y = (0.5 - (v[1] * f.fy as f64 / z + f.shift_y as f64) * 0.5) * h as f64;
+        assert!(x >= 0.0 && y >= 0.0 && x < w as f64 && y < h as f64, "{p:?} is off the image: {x} {y}");
+        y as usize * w as usize + x as usize
+    }
+
+    fn looking(position: [f32; 3], target: [f32; 3], yfov: f32) -> Camera {
+        Camera {
+            id: "look".into(),
+            position,
+            target: Some(target),
+            forward: None,
+            up: [0.0, 1.0, 0.0],
+            yfov,
+            aspect: None,
+            znear: None,
+            active: None,
+            lens_mm: None,
+            sensor_mm: None,
+            sensor_fit: None,
+        }
+    }
+
+    /// A flat n x n grid of quads (2 n^2 triangles) on y = 0, `size` across.
+    fn flat_grid(n: u32, size: f32) -> Mesh {
+        let mut positions = Vec::new();
+        let mut indices = Vec::new();
+        for j in 0..=n {
+            for i in 0..=n {
+                positions.push([(i as f32 / n as f32 - 0.5) * size, 0.0, (j as f32 / n as f32 - 0.5) * size]);
+            }
+        }
+        for j in 0..n {
+            for i in 0..n {
+                let a = j * (n + 1) + i;
+                indices.push([a, a + n + 1, a + 1]);
+                indices.push([a + 1, a + n + 1, a + n + 2]);
+            }
+        }
+        Mesh { positions, normals: None, indices, hash: None }
+    }
+
+    #[test]
+    fn occlusion_leaves_a_flat_plane_alone() {
+        // A plane cut into 512 triangles, seen at a slant from off to one side, through the
+        // horizon (its far edge against the empty background): no pixel is occluded at all.
+        let s = Scene {
+            up: UpAxis::Y,
+            meshes: vec![flat_grid(16, 20.0)],
+            objects: vec![testgen::object("plane", 0, [0.8, 0.8, 0.8], testgen::identity(), None)],
+            cameras: vec![looking([3.0, 2.0, 7.0], [-1.0, 0.0, -2.0], 0.9)],
+        };
+        for (w, h, ssaa) in [(160u32, 120u32, 4u32), (640, 480, 2)] {
+            let (depth, k, _) = ao_factors(&s, ViewSpec::Camera(0), w, h, ssaa, 1.0, 2);
+            let covered = depth.iter().filter(|&&d| d > 0.0).count();
+            assert!(covered > (w * h / 3) as usize && covered < (w * h) as usize, "{covered}");
+            let occluded = k.iter().filter(|&&f| f != 1.0).count();
+            assert_eq!(occluded, 0, "{w} x {h}: a plane is never occluded");
+        }
+    }
+
+    #[test]
+    fn occlusion_darkens_an_inside_corner_and_only_near_it() {
+        // A floor slab and a wall standing on it at z = -3: dark along the crease, untouched a
+        // couple of radii away from it, on the floor and up the wall.
+        let s = Scene {
+            up: UpAxis::Y,
+            meshes: vec![testgen::boxes(&[([-3.0, -0.1, -3.0], [3.0, 0.0, 3.0])]), testgen::boxes(&[([-3.0, 0.0, -3.0], [3.0, 3.0, -2.9])])],
+            objects: vec![
+                testgen::object("floor", 0, [0.8, 0.8, 0.8], testgen::identity(), Some(false)),
+                testgen::object("wall", 1, [0.8, 0.8, 0.8], testgen::identity(), Some(false)),
+            ],
+            cameras: vec![looking([1.0, 2.0, 5.0], [0.0, 0.5, -3.0], 0.9)],
+        };
+        let (w, h) = (320u32, 240u32);
+        let (_, k, f) = ao_factors(&s, ViewSpec::Camera(0), w, h, 2, 0.4, 3);
+        let at = |p: [f64; 3]| k[pixel_of(&f, p, w, h)];
+        let near_floor = at([0.0, 0.0, -2.85]);
+        let near_wall = at([0.0, 0.05, -2.9]);
+        let darkest = k.iter().fold(1f32, |m, &f| m.min(f));
+        eprintln!("[ao] corner: {near_floor} on the floor, {near_wall} on the wall, {darkest} at the darkest");
+        assert!(near_floor < 0.85 && near_wall < 0.85 && darkest < 0.75, "the crease: {near_floor} {near_wall} {darkest}");
+        // Farther along the floor, lighter; past twice the radius, nothing.
+        assert!(at([0.0, 0.0, -2.6]) > near_floor, "{} {near_floor}", at([0.0, 0.0, -2.6]));
+        assert_eq!(at([0.0, 0.0, -1.0]), 1.0);
+        assert_eq!(at([0.0, 0.0, 1.5]), 1.0);
+        assert_eq!(at([0.0, 1.5, -2.9]), 1.0);
+        assert!(k.iter().all(|&f| (0.0..=1.0).contains(&f)));
+    }
+
+    #[test]
+    fn occlusion_of_the_empty_background_is_none() {
+        // Nothing drawn: every factor 1.
+        let lens = Lens { fx: 1.5, fy: 2.0, shift: [0.0, 0.0], at: 0.5 };
+        assert!(occlusion(&[0.0; 64 * 48], 64, 48, &lens, &Ao { radius: 0.5, strength: 1.0 }, 2).iter().all(|&f| f == 1.0));
+        // Convex objects on the empty background: their edges bend away from the eye and the
+        // background around them never occludes, so they are untouched too.
+        for s in [testgen::white_cube_scene(), testgen::sphere_scene()] {
+            let (depth, k, _) = ao_factors(&s, ViewSpec::Auto, 200, 150, 2, 0.3, 1);
+            assert!(depth.iter().filter(|&&d| d > 0.0).count() > 2000);
+            assert!(k.iter().all(|&f| f == 1.0));
+        }
+    }
+
+    #[test]
+    fn occlusion_is_the_same_for_any_thread_count_and_alike_at_any_width() {
+        let s = testgen::interior_scene();
+        let (_, one, _) = ao_factors(&s, ViewSpec::Auto, 300, 225, 2, 0.4, 1);
+        for t in [2, 5] {
+            assert!(ao_factors(&s, ViewSpec::Auto, 300, 225, 2, 0.4, t).1 == one, "threads {t}");
+        }
+        // The radius is a world size: the same share of the picture is darkened, as much, at any
+        // width (the mean darkening over the covered pixels within a tenth).
+        let mean = |w: u32, h: u32, ssaa: u32| -> f64 {
+            let (depth, k, _) = ao_factors(&s, ViewSpec::Auto, w, h, ssaa, 0.4, 4);
+            let (mut sum, mut n) = (0f64, 0u32);
+            for (d, f) in depth.iter().zip(&k) {
+                if *d > 0.0 {
+                    sum += 1.0 - *f as f64;
+                    n += 1;
+                }
+            }
+            sum / n as f64
+        };
+        let (small, large) = (mean(320, 240, 4), mean(1280, 960, 2));
+        eprintln!("[ao] mean darkening: {small:.4} at 320 px, {large:.4} at 1280 px");
+        assert!(small > 0.01 && (small - large).abs() < 0.1 * large, "{small} {large}");
+    }
+
+    #[test]
+    fn occlusion_darkens_the_colour_never_the_coverage() {
+        let s = testgen::interior_scene();
+        let active: Vec<u32> = (0..s.objects.len() as u32).collect();
+        let (w, h) = (200u32, 150u32);
+        let f = frame(&s, &active, ViewSpec::Turntable(1), w as f64 / h as f64).expect("a frame");
+        let ao = Ao { radius: 0.4, strength: 0.8 };
+        for transparent in [false, true] {
+            let p = Params { width: w, height: h, ssaa: 2, threads: 2, background_srgb: BG, transparent };
+            let (plain, sp) = render(&s, &active, &f, &p);
+            // Strength 0: every factor exactly 1, so the plain image's bytes.
+            let (zero, _) = render_shaded(&s, &active, &f, &p, None, Some(&Ao { strength: 0.0, ..ao }));
+            assert!(zero.pixels == plain.pixels, "transparent {transparent}");
+            let (dark, sd) = render_shaded(&s, &active, &f, &p, None, Some(&ao));
+            assert_eq!(sp.covered_px, sd.covered_px);
+            assert!(sd.ao_us > 0 && sp.ao_us == 0);
+            let ch = if transparent { 4 } else { 3 };
+            let mut darker = 0;
+            for (a, b) in plain.pixels.chunks(ch).zip(dark.pixels.chunks(ch)) {
+                assert!(b[..3].iter().zip(&a[..3]).all(|(d, p)| d <= p), "{a:?} {b:?}");
+                if transparent {
+                    assert_eq!(a[3], b[3], "the alpha is the coverage");
+                }
+                darker += (a[..3] != b[..3]) as u32;
+            }
+            assert!(darker > 500, "{darker}");
+            // The same bytes for any thread count.
+            for t in [1, 4] {
+                assert!(render_shaded(&s, &active, &f, &Params { threads: t, ..p }, None, Some(&ao)).0.pixels == dark.pixels, "threads {t}");
+            }
+        }
+    }
+
     #[test]
     fn degenerate_scenes_draw_without_a_crash() {
         for (name, s) in testgen::degenerate_scenes() {
@@ -1150,8 +1689,11 @@ mod tests {
             for spec in specs {
                 if let Ok(f) = frame(&s, &active, spec, 4.0 / 3.0) {
                     for transparent in [false, true] {
-                        let (img, _) = render(&s, &active, &f, &Params { width: 40, height: 30, ssaa: 2, threads: 2, background_srgb: BG, transparent });
+                        let p = Params { width: 40, height: 30, ssaa: 2, threads: 2, background_srgb: BG, transparent };
+                        let (img, _) = render(&s, &active, &f, &p);
                         assert_eq!(img.pixels.len(), 40 * 30 * if transparent { 4 } else { 3 }, "{name}");
+                        let (img, _) = render_shaded(&s, &active, &f, &p, None, Some(&Ao { radius: 0.5, strength: 1.0 }));
+                        assert_eq!(img.pixels.len(), 40 * 30 * if transparent { 4 } else { 3 }, "{name} with occlusion");
                     }
                 }
             }

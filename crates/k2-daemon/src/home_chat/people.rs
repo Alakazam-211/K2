@@ -103,8 +103,10 @@ pub fn logins() -> Result<Vec<Login>, String> {
         .collect())
 }
 
-fn ready(ext: &str) -> bool {
-    hook::chat_member(ext).ok().flatten().is_some_and(|m| m.state == members::ACTIVE)
+/// The person's Sew member id once their member is set up (`None` while
+/// pending): the chat view names a message's author by it.
+pub fn ready_member(ext: &str) -> Option<String> {
+    hook::chat_member(ext).ok().flatten().filter(|m| m.state == members::ACTIVE).map(|m| m.member_id)
 }
 
 /// `GET /cli/home-chat/people` (§6.1).
@@ -112,7 +114,8 @@ pub fn list(c: &Caller) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
     let show_role = c.is_admin();
     if c.ext != "k2:owner" {
-        let mut v = json!({"ext": "k2:owner", "username": "owner", "displayName": crate::workspace_msg::resolve_owner_from(), "picture": null, "ready": ready("k2:owner")});
+        let member = ready_member("k2:owner");
+        let mut v = json!({"ext": "k2:owner", "username": "owner", "displayName": crate::workspace_msg::resolve_owner_from(), "picture": null, "ready": member.is_some(), "memberId": member});
         if show_role {
             v["role"] = json!("owner");
         }
@@ -126,7 +129,8 @@ pub fn list(c: &Caller) -> Result<Vec<Value>, String> {
         if ext == c.ext {
             continue;
         }
-        let mut v = json!({"ext": ext, "username": l.username, "displayName": l.display_name, "picture": null, "ready": ready(&ext)});
+        let member = ready_member(&ext);
+        let mut v = json!({"ext": ext, "username": l.username, "displayName": l.display_name, "picture": null, "ready": member.is_some(), "memberId": member});
         if show_role {
             v["role"] = json!(l.role.as_wire());
         }

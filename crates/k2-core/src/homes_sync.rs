@@ -17,7 +17,13 @@
 //!   or null; `recentFirst` sorts its unpinned rows by `lastMessagedAt`.
 //! - Row:  `{kind:"row", homeId, address:"handle::<serverId>", label,
 //!   workspaceId, order, updatedAt, deleted?, pinOrder?, lastMessagedAt?}` —
-//!   identity `(homeId, address)`. `pinOrder` is a fractional-index key among
+//!   identity `(kind, homeId, address)`. Two more row kinds carry the same
+//!   fields (migration 0306, prd-home-people-channels-v1 §5): `person`
+//!   (`address` = `<external id>::<serverId>`, `k2:owner` or
+//!   `k2:connect:<uuid>`: the DM with that person there) and `channel`
+//!   (`address` = `<Sew channel id>::<serverId>`). An older client drops
+//!   kinds it doesn't know; an older server refuses them one item at a time
+//!   (`invalid_kind`). `pinOrder` is a fractional-index key among
 //!   the Home's pinned rows (null = not pinned; at most [`MAX_PINS`] per
 //!   Home); `lastMessagedAt` is the person's last send to that agent (epoch
 //!   ms; a push never moves it back).
@@ -104,15 +110,41 @@ pub fn tables_exist(conn: &Connection) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Home,
+    /// An agent row (`handle::<serverId>`).
     Row,
+    /// A person on a server (`<external id>::<serverId>`): their DM.
+    Person,
+    /// A Sew channel on a server (`<channel id>::<serverId>`).
+    Channel,
 }
+
+/// Every item kind this store takes (the pull answer's `kinds`, so a client
+/// knows the server keeps people and channels).
+pub const KINDS: &[&str] = &["home", "row", "person", "channel"];
 
 impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Home => "home",
             Kind::Row => "row",
+            Kind::Person => "person",
+            Kind::Channel => "channel",
         }
+    }
+
+    pub fn parse(s: &str) -> Option<Kind> {
+        match s {
+            "home" => Some(Kind::Home),
+            "row" => Some(Kind::Row),
+            "person" => Some(Kind::Person),
+            "channel" => Some(Kind::Channel),
+            _ => None,
+        }
+    }
+
+    /// A row of a Home (agent, person or channel), not a Home.
+    pub fn is_row(self) -> bool {
+        self != Kind::Home
     }
 }
 
@@ -211,8 +243,8 @@ impl Item {
                 "updatedAt": self.updated_at,
                 "deviceId": self.device_id,
             }),
-            Kind::Row => json!({
-                "kind": "row",
+            Kind::Row | Kind::Person | Kind::Channel => json!({
+                "kind": self.kind.as_str(),
                 "homeId": self.home_id,
                 "address": self.address,
                 "label": self.label.clone().unwrap_or_default(),
@@ -293,14 +325,28 @@ pub fn normalize_address(s: &str) -> Option<String> {
     Some(a)
 }
 
+/// Does a normalized address name what its kind says? A person is a box
+/// person's external id (`k2:owner`, `k2:connect:<id>`), never an agent's or
+/// an App user's; a channel is a Sew id (digits). An agent row is any handle.
+pub fn address_fits(kind: Kind, address: &str) -> bool {
+    let Some((handle, _)) = address.split_once("::") else { return false };
+    match kind {
+        Kind::Home => false,
+        Kind::Row => true,
+        Kind::Person => {
+            handle == "k2:owner"
+                || handle.strip_prefix("k2:connect:").is_some_and(|id| {
+                    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+        }
+        Kind::Channel => !handle.is_empty() && handle.len() <= 20 && handle.bytes().all(|b| b.is_ascii_digit()),
+    }
+}
+
 /// Parse one pushed change into an [`Item`], or the reason it is refused.
 pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'static str> {
     let o = v.as_object().ok_or(reason::NOT_AN_OBJECT)?;
-    let kind = match o.get("kind").and_then(Value::as_str) {
-        Some("home") => Kind::Home,
-        Some("row") => Kind::Row,
-        _ => return Err(reason::INVALID_KIND),
-    };
+    let kind = o.get("kind").and_then(Value::as_str).and_then(Kind::parse).ok_or(reason::INVALID_KIND)?;
     let updated_at = match o.get("updatedAt") {
         Some(Value::Number(n)) => n.as_i64().filter(|t| *t > 0).ok_or(reason::INVALID_UPDATED_AT)?,
         _ => return Err(reason::INVALID_UPDATED_AT),
@@ -378,13 +424,14 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
                 },
             })
         }
-        Kind::Row => {
+        Kind::Row | Kind::Person | Kind::Channel => {
             let home_id =
                 o.get("homeId").and_then(Value::as_str).filter(|s| valid_id(s)).ok_or(reason::INVALID_HOME_ID)?;
             let address = o
                 .get("address")
                 .and_then(Value::as_str)
                 .and_then(normalize_address)
+                .filter(|a| address_fits(kind, a))
                 .ok_or(reason::INVALID_ADDRESS)?;
             let label = match o.get("label") {
                 None | Some(Value::Null) => String::new(),
@@ -457,7 +504,7 @@ const ITEM_COLS: &str =
 fn item_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
     let kind: String = r.get(0)?;
     Ok(Item {
-        kind: if kind == "row" { Kind::Row } else { Kind::Home },
+        kind: Kind::parse(&kind).unwrap_or(Kind::Home),
         home_id: r.get(1)?,
         address: r.get(2)?,
         name: r.get(3)?,
@@ -494,11 +541,13 @@ fn person_seq(conn: &Connection, person: &str) -> rusqlite::Result<(i64, i64)> {
         .unwrap_or((0, 0)))
 }
 
-fn pinned_count_except(conn: &Connection, person: &str, home_id: &str, except_address: &str) -> rusqlite::Result<i64> {
+/// Live pinned rows of every row kind on a Home, but `(except_kind,
+/// except_address)` itself (pins are shared by agents, people and channels).
+fn pinned_count_except(conn: &Connection, person: &str, home_id: &str, except_kind: Kind, except_address: &str) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT COUNT(*) FROM homes_items WHERE person = ?1 AND kind = 'row' AND home_id = ?2 \
-         AND deleted = 0 AND pin_order IS NOT NULL AND address != ?3",
-        params![person, home_id, except_address],
+        "SELECT COUNT(*) FROM homes_items WHERE person = ?1 AND kind != 'home' AND home_id = ?2 \
+         AND deleted = 0 AND pin_order IS NOT NULL AND NOT (kind = ?3 AND address = ?4)",
+        params![person, home_id, except_kind.as_str(), except_address],
         |r| r.get(0),
     )
 }
@@ -669,11 +718,11 @@ pub fn push(
         }
         let mut item = item;
         item.keep_omitted(existing.as_ref());
-        let newly_pinned = item.kind == Kind::Row
+        let newly_pinned = item.kind.is_row()
             && !item.deleted
             && item.pin_order.is_some()
             && !existing.as_ref().is_some_and(|e| !e.deleted && e.pin_order.is_some());
-        if newly_pinned && pinned_count_except(&tx, person, &item.home_id, &item.address)? >= MAX_PINS as i64 {
+        if newly_pinned && pinned_count_except(&tx, person, &item.home_id, item.kind, &item.address)? >= MAX_PINS as i64 {
             rejected.push(Rejected { item: item.to_json(), reason: reason::TOO_MANY_PINS });
             continue;
         }
@@ -689,7 +738,7 @@ pub fn push(
                 if item.name.is_none() {
                     item.name = ex.name.clone();
                 }
-                if item.kind == Kind::Row && item.label.as_deref().unwrap_or("").is_empty() {
+                if item.kind.is_row() && item.label.as_deref().unwrap_or("").is_empty() {
                     item.label = ex.label.clone();
                 }
                 if item.order.is_empty() {
@@ -930,6 +979,8 @@ mod tests {
             .expect("0193 applies");
         conn.execute_batch(include_str!("../drizzle_sql/0305_home_groups.sql").replace("--> statement-breakpoint", "").as_str())
             .expect("0305 applies");
+        conn.execute_batch(include_str!("../drizzle_sql/0306_home_chat_rows.sql").replace("--> statement-breakpoint", "").as_str())
+            .expect("0306 applies");
         assert!(tables_exist(&conn));
         conn
     }
@@ -1454,5 +1505,137 @@ mod tests {
             assert!(lo < m && m < hi && valid_order(&m), "{lo} {m} {hi}");
             lo = m;
         }
+    }
+
+    fn chat_row(kind: &str, home: &str, addr: &str, order: &str, at: i64) -> Value {
+        json!({"kind": kind, "homeId": home, "address": addr, "label": "Alex", "workspaceId": null, "order": order, "updatedAt": at})
+    }
+
+    #[test]
+    fn person_and_channel_rows_round_trip_beside_agent_rows() {
+        let c = db();
+        push(&c, "owner", "laptop", &[home("h1", "Work", "V", NOW)], NOW).expect("home");
+        let mut p = chat_row("person", "h1", "K2:Connect:3f2a-9b::abcdef0123456789", "V", NOW);
+        p["pinOrder"] = json!("V");
+        p["lastMessagedAt"] = json!(NOW - 10);
+        let ch = chat_row("channel", "h1", "184467440737::abcdef0123456789", "l", NOW);
+        // An agent row whose handle happens to be the channel's id is its own item.
+        let agent = row("h1", "184467440737::abcdef0123456789", "t", NOW);
+        let r = push(&c, "owner", "laptop", &[p, ch, agent], NOW).expect("push");
+        assert!(r.rejected.is_empty(), "{:?}", r.rejected);
+        assert_eq!(r.applied, 3);
+        let l = live(&c, "owner");
+        let person = l.iter().find(|v| v["kind"] == "person").expect("person row");
+        assert_eq!(person["address"], json!("k2:connect:3f2a-9b::abcdef0123456789"), "lowercased like agent rows");
+        assert_eq!((person["pinOrder"].clone(), person["lastMessagedAt"].clone()), (json!("V"), json!(NOW - 10)));
+        assert_eq!(l.iter().filter(|v| v["kind"] == "channel").count(), 1);
+        assert_eq!(l.iter().filter(|v| v["kind"] == "row").count(), 1, "the agent row with the same address stays apart");
+        // A tombstone for the channel leaves the agent row.
+        push(&c, "owner", "phone", &[tomb(chat_row("channel", "h1", "184467440737::abcdef0123456789", "l", NOW + 5))], NOW)
+            .expect("tomb");
+        let l = live(&c, "owner");
+        assert!(l.iter().all(|v| v["kind"] != "channel"));
+        assert_eq!(l.iter().filter(|v| v["kind"] == "row").count(), 1);
+        // An incremental pull carries the tombstone with its kind.
+        let d = pull(&c, "owner", Some(1), None, NOW).expect("delta");
+        let t = d.changes.iter().map(Item::to_json).find(|v| v["deleted"] == json!(true)).expect("tombstone");
+        assert_eq!(t["kind"], json!("channel"));
+        assert_eq!(KINDS, &["home", "row", "person", "channel"]);
+    }
+
+    #[test]
+    fn a_person_is_a_box_person_and_a_channel_a_sew_id() {
+        let c = db();
+        let bad = [
+            chat_row("person", "h1", "k2:workspace:5d1c::s", "V", NOW),
+            chat_row("person", "h1", "k2:principal:app-1::s", "V", NOW),
+            chat_row("person", "h1", "alex::s", "V", NOW),
+            chat_row("person", "h1", "k2:connect:::s", "V", NOW),
+            chat_row("channel", "h1", "general::s", "V", NOW),
+            chat_row("channel", "h1", "123456789012345678901::s", "V", NOW),
+        ];
+        let r = push(&c, "owner", "d", &bad, NOW).expect("push");
+        assert_eq!(r.applied, 0);
+        assert_eq!(r.rejected.iter().map(|x| x.reason).collect::<Vec<_>>(), vec![reason::INVALID_ADDRESS; 6]);
+        let good = [
+            chat_row("person", "h1", "k2:owner::s", "V", NOW),
+            chat_row("person", "h1", "k2:connect:0b6f6b8e-1d2c-4e1a-9f00-1234567890ab::s", "l", NOW),
+            chat_row("channel", "h1", "42::s", "t", NOW),
+        ];
+        let r = push(&c, "owner", "d", &good, NOW).expect("push");
+        assert!(r.rejected.is_empty(), "{:?}", r.rejected);
+        let r = push(&c, "owner", "d", &[json!({"kind": "group", "id": "h1", "name": "x", "order": "V", "updatedAt": NOW})], NOW)
+            .expect("push");
+        assert_eq!(r.rejected[0].reason, reason::INVALID_KIND);
+    }
+
+    #[test]
+    fn pins_are_shared_by_agents_people_and_channels() {
+        let c = db();
+        push(&c, "owner", "d", &[home("h1", "Work", "V", NOW)], NOW).expect("home");
+        let mut items = Vec::new();
+        for i in 1..=MAX_PINS {
+            let kind = ["row", "person", "channel"][i % 3];
+            let addr = match kind {
+                "row" => format!("a{i}::s"),
+                "person" => format!("k2:connect:p{i}::s"),
+                _ => format!("{i}::s"),
+            };
+            let mut r = chat_row(kind, "h1", &addr, "V", NOW);
+            r["pinOrder"] = json!(format!("{i}"));
+            items.push(r);
+        }
+        assert!(push(&c, "owner", "d", &items, NOW).expect("nine").rejected.is_empty());
+        let mut tenth = chat_row("person", "h1", "k2:owner::s", "V", NOW);
+        tenth["pinOrder"] = json!("a");
+        let r = push(&c, "owner", "d", &[tenth], NOW).expect("tenth");
+        assert_eq!(r.rejected.iter().map(|x| x.reason).collect::<Vec<_>>(), vec![reason::TOO_MANY_PINS]);
+        // Moving a pinned channel among the pins is not a new pin.
+        let mut moved = chat_row("channel", "h1", "2::s", "V", NOW + 1);
+        moved["pinOrder"] = json!("z");
+        assert!(push(&c, "owner", "d", &[moved], NOW).expect("move").rejected.is_empty());
+        // An agent row on pinned channel 5's address is another item: a tenth pin.
+        let mut twin = chat_row("row", "h1", "5::s", "V", NOW);
+        twin["pinOrder"] = json!("b");
+        let r = push(&c, "owner", "d", &[twin], NOW).expect("twin");
+        assert_eq!(r.rejected.iter().map(|x| x.reason).collect::<Vec<_>>(), vec![reason::TOO_MANY_PINS]);
+    }
+
+    #[test]
+    fn rows_written_before_0306_keep_every_field_through_the_rebuild() {
+        let conn = Connection::open_in_memory().expect("mem db");
+        conn.execute_batch(include_str!("../drizzle_sql/0193_homes_sync.sql").replace("--> statement-breakpoint", "").as_str())
+            .expect("0193");
+        conn.execute_batch(include_str!("../drizzle_sql/0305_home_groups.sql").replace("--> statement-breakpoint", "").as_str())
+            .expect("0305");
+        let mut r = row("h1", "atlas::s", "V", NOW);
+        r["pinOrder"] = json!("V");
+        r["lastMessagedAt"] = json!(NOW - 1);
+        let mut h = home("h1", "Work", "V", NOW);
+        h["icon"] = json!("rocket");
+        h["recentFirst"] = json!(true);
+        push(&conn, "owner", "d", &[h, r], NOW).expect("old push");
+        // The old CHECK refuses the new kinds outright.
+        assert!(conn
+            .execute(
+                "INSERT INTO homes_items (person, kind, home_id, address, ord, updated_at, device_id, seq) \
+                 VALUES ('owner', 'person', 'h1', 'k2:owner::s', 'V', 1, 'd', 9)",
+                [],
+            )
+            .is_err());
+        let before = pull(&conn, "owner", None, None, NOW).expect("pull").changes;
+        conn.execute_batch(include_str!("../drizzle_sql/0306_home_chat_rows.sql").replace("--> statement-breakpoint", "").as_str())
+            .expect("0306");
+        let after = pull(&conn, "owner", None, None, NOW).expect("pull").changes;
+        assert_eq!(before.len(), 2);
+        assert_eq!(before, after, "every item and field survives the rebuild");
+        let idx: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'homes_items_person_seq'", [], |r| {
+                r.get(0)
+            })
+            .expect("index");
+        assert_eq!(idx, 1, "the cursor index is made again");
+        let r = push(&conn, "owner", "d", &[chat_row("person", "h1", "k2:owner::s", "l", NOW)], NOW).expect("new");
+        assert!(r.rejected.is_empty(), "{:?}", r.rejected);
     }
 }

@@ -108,7 +108,13 @@ pub fn handle(path: &str, caller: R<Caller>, is_post: bool, params: &HashMap<Str
 
 fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &[u8]) -> R<Value> {
     match path {
-        "/cli/home-chat/people" => Ok(json!({"ok": true, "people": people::list(c).map_err(internal)?})),
+        // `me`: the caller's own member id, so a client tells its own
+        // messages from others' (Sew names authors by member id).
+        "/cli/home-chat/people" => Ok(json!({
+            "ok": true,
+            "me": {"ext": c.ext, "memberId": people::ready_member(&c.ext)},
+            "people": people::list(c).map_err(internal)?,
+        })),
         "/cli/home-chat/channels" => channels(c, p),
         "/cli/home-chat/summary" => summary(c, p),
         "/cli/home-chat/messages" => messages(c, p),
@@ -293,15 +299,28 @@ fn sees(c: &Caller, ch: &ledger::ChannelRow) -> R<bool> {
     Ok(ch.open || skin(|conn| ledger::is_member(conn, &ch.slug, &c.ext))?)
 }
 
+/// The channel a members read names: `conv` (its Sew id), or `slug` (K2's,
+/// from `channels/create`, so the creator can wait for a pending channel's id).
+pub(super) fn named_channel(p: &HashMap<String, String>) -> R<ledger::ChannelRow> {
+    if let Some(slug) = param(p, "slug") {
+        if !k2_core::home_chat::is_home_slug(slug) {
+            return Err(usage("slug is a Home channel's slug (c-…)"));
+        }
+        return skin(|conn| ledger::channel_by_slug(conn, slug))?
+            .ok_or_else(|| Refusal::new(404, "channel_not_found", "no Home channel with that id on this server"));
+    }
+    home_channel(&sew_id(param(p, "conv").ok_or_else(|| usage("name the channel: conv or slug"))?, "conv")?)
+}
+
 fn members(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
-    let ch = home_channel(&sew_id(param(p, "conv").ok_or_else(|| usage("name the channel: conv"))?, "conv")?)?;
+    let ch = named_channel(p)?;
     if !sees(c, &ch)? {
         return Err(Refusal::new(404, "channel_not_found", "no Home channel with that id on this server"));
     }
     let list = skin(|conn| ledger::members_of(conn, &ch.slug))?;
     Ok(json!({
-        "ok": true, "conv": ch.channel_id, "name": ch.desired_name(), "open": ch.open, "creator": ch.creator_ext,
-        "allowAgents": ch.allow_agents,
+        "ok": true, "conv": ch.channel_id, "slug": ch.slug, "state": ch.state, "name": ch.desired_name(), "open": ch.open,
+        "creator": ch.creator_ext, "allowAgents": ch.allow_agents,
         "people": list.iter().filter(|m| m.state != ledger::M_PENDING_REMOVE).map(|m| json!({"ext": m.external_id, "state": m.state})).collect::<Vec<_>>(),
         // Agent grants are a later slice (S8): none yet.
         "agents": [],

@@ -216,6 +216,10 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor, params: &Ha
                 "ok": true,
                 "person": person,
                 "serverId": crate::boot_status::server_id(),
+                // The item kinds this server keeps (0306: people and
+                // channels): a client that queued rows an older server
+                // refused sends them again once they are listed.
+                "kinds": homes_sync::KINDS,
                 "cursor": p.cursor,
                 "full": p.full,
                 "changes": p.changes.iter().map(homes_sync::Item::to_json).collect::<Vec<_>>(),

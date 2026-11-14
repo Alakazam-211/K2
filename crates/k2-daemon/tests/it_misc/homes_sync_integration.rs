@@ -279,6 +279,8 @@ async fn homes_routes_sync_one_person_across_devices_and_refuse_everyone_else() 
         assert_eq!(row["address"], addr.as_str());
         assert_eq!(row["homeId"], "h1");
         assert_eq!(row["deviceId"], "desk-1", "who wrote it (LWW tie-break)");
+        // 0306: the server lists the kinds it keeps.
+        assert_eq!(v["kinds"], json!(["home", "row", "person", "channel"]), "{v}");
 
         // Gina is her own person: nothing of the owner's.
         register(port, &gina, "gina-phone", "Gina's phone", "android");
@@ -334,6 +336,20 @@ async fn homes_routes_sync_one_person_across_devices_and_refuse_everyone_else() 
         assert_eq!(reasons, vec!["invalid_name", "invalid_address"], "{r}");
         assert_eq!(r["applied"], 1);
         assert_eq!(r["rejected"][0]["item"]["id"], "h9", "the refused item is echoed back");
+        // 0306: a person row and a channel row sync across the person's
+        // devices like an agent row; an agent's external id is no person.
+        let mut person = row_item("h1", &format!("k2:owner::{sid}"), "Owner", "w", t + 70);
+        person["kind"] = json!("person");
+        let mut channel = row_item("h1", &format!("4242::{sid}"), "design", "x", t + 70);
+        channel["kind"] = json!("channel");
+        let mut agent_as_person = row_item("h1", &format!("k2:workspace:5d1c::{sid}"), "agent", "y", t + 70);
+        agent_as_person["kind"] = json!("person");
+        let r = push(port, OWNER_TOKEN, "desk-1", json!([person, channel, agent_as_person])).json();
+        assert_eq!(r["applied"], 2, "{r}");
+        assert_eq!(r["rejected"][0]["reason"], "invalid_address", "{r}");
+        let v = pull(port, &phone, "phone-1", None).json();
+        let kinds: Vec<&str> = v["changes"].as_array().unwrap().iter().filter_map(|c| c["kind"].as_str()).collect();
+        assert!(kinds.contains(&"person") && kinds.contains(&"channel"), "{v}");
         // Bad bodies.
         let r = http(port, "POST", &format!("/cli/me/homes/push?token={OWNER_TOKEN}"), Some(r#"{"deviceId":"desk-1"}"#));
         assert_eq!((r.status, r.code().as_str()), (400, "usage"), "{}", r.body);

@@ -354,3 +354,19 @@ fn renew_follows_sews_contract() {
     follower::release_all();
     set_deps(None);
 }
+
+/// A members read names its channel by Sew id or by K2's slug (the creator
+/// waits on a pending channel by its slug); anything else is a usage error,
+/// before any store is read.
+#[test]
+fn members_take_a_conv_or_a_home_slug() {
+    let q = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
+    let r = routes::named_channel(&q(&[])).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (400, "usage"));
+    for bad in ["general", "c-short", "c-ABCDEFGHIJ", "../c-0123456789"] {
+        let r = routes::named_channel(&q(&[("slug", bad)])).unwrap_err();
+        assert_eq!((r.status, r.code.as_str()), (400, "usage"), "{bad}");
+    }
+    let r = routes::named_channel(&q(&[("conv", "not-an-id")])).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (400, "usage"));
+}

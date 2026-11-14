@@ -277,3 +277,97 @@ fn no_truncation_or_byte_corruption_panics() {
     sweep(&build(&small).to_vec(), limits);
     sweep(&build(&simple_spec()).to_vec(), limits);
 }
+
+// Movie fragments: an fMP4 init segment from the writer, then moofs built
+// by hand.
+
+fn frag_init() -> Vec<u8> {
+    let opus = OpusConfig { output_channel_count: 2, pre_skip: 312, input_sample_rate: 48000, output_gain: 0, channel_mapping_family: 0, channel_mapping: None };
+    let t = TrackSetup { track_id: 1, timescale: 48000, codec: TrackCodec::Opus(opus), width: 0, height: 0, pixel_aspect: None, colour: None, language: *b"und" };
+    Fmp4Writer::new(InitConfig { movie_timescale: 1000, creation_time: 0, tracks: vec![t] }).unwrap().init_segment().unwrap()
+}
+
+fn tfhd(track: u32, flags: u32, fields: &[u32]) -> Vec<u8> {
+    let mut b = u32b(track);
+    for &f in fields {
+        b.extend(u32b(f));
+    }
+    full(b"tfhd", 0, flags, &b)
+}
+
+fn trun(version: u8, flags: u32, count: u32, rest: &[u8]) -> Vec<u8> {
+    full(b"trun", version, flags, &cat(&[&u32b(count), rest]))
+}
+
+fn moof(kids: &[Vec<u8>]) -> Vec<u8> {
+    let mut b = full(b"mfhd", 0, 0, &u32b(1));
+    for k in kids {
+        b.extend_from_slice(k);
+    }
+    bx(b"moof", &b)
+}
+
+fn traf(kids: &[Vec<u8>]) -> Vec<u8> {
+    bx(b"traf", &kids.concat())
+}
+
+/// init + a moof with one traf (tfhd default-base-is-moof, default size 4,
+/// duration 960) + an mdat of `data` bytes.
+fn frag_file(tf: Vec<u8>, tr: Vec<u8>, data: usize) -> Vec<u8> {
+    cat(&[&frag_init(), &moof(&[traf(&[tf, tr])]), &bx(b"mdat", &vec![7u8; data])])
+}
+
+fn base_tfhd() -> Vec<u8> {
+    tfhd(1, 0x02_0000 | 0x08 | 0x10, &[960, 4])
+}
+
+#[test]
+fn hostile_fragments() {
+    // A good one first: 3 samples of 4 bytes after the moof header.
+    let tr = |count| trun(0, 0x01, count, &u32b(0));
+    let ok = frag_file(base_tfhd(), tr(3), 12);
+    let moof_len = u32::from_be_bytes(ok[frag_init().len()..][..4].try_into().unwrap());
+    let good = frag_file(base_tfhd(), trun(0, 0x01, 3, &u32b(moof_len + 8)), 12);
+    let r = open_with(good.clone(), Limits::default()).unwrap();
+    let s: Vec<Sample> = r.movie().tracks[0].samples().collect();
+    assert_eq!(s.len(), 3);
+    assert_eq!((s[2].dts, s[2].size), (1920, 4));
+
+    assert_eq!(err(cat(&[&camera(), &moof(&[])])), Error::Invalid { fourcc: fc(b"moof"), what: "movie fragment without mvex" });
+    assert_eq!(err(frag_file(tfhd(99, 0x02_0000, &[]), tr(1), 4)), Error::UnknownTrack(99));
+    assert_eq!(err(frag_file(base_tfhd(), tr(u32::MAX), 0)), Error::LimitReached(Limit::TrackSamples));
+    assert_eq!(err(frag_file(base_tfhd(), trun(0, 0x01 | 0x200, 1000, &u32b(0)), 0)), Error::Truncated(fc(b"trun")));
+    assert!(matches!(err(frag_file(base_tfhd(), tr(1000), 12)), Error::PastEndOfFile { fourcc, .. } if fourcc == fc(b"trun")));
+    assert_eq!(err(frag_file(tfhd(1, 0x02_0000 | 0x02, &[5]), tr(1), 4)), Error::Invalid { fourcc: fc(b"tfhd"), what: "sample_description_index out of range" });
+    assert_eq!(err(frag_file(base_tfhd(), trun(2, 0x01, 1, &u32b(0)), 4)), Error::UnsupportedVersion { fourcc: fc(b"trun"), version: 2 });
+    let before = frag_file(base_tfhd(), trun(0, 0x01, 1, &u32b(-100_000i32 as u32)), 4);
+    assert_eq!(err(before), Error::Invalid { fourcc: fc(b"trun"), what: "data_offset before the file start" });
+    let no_mfhd = cat(&[&frag_init(), &bx(b"moof", &traf(&[base_tfhd(), tr(1)])), &bx(b"mdat", &[0; 4])]);
+    assert_eq!(err(no_mfhd), Error::Missing { parent: fc(b"moof"), child: fc(b"mfhd") });
+    let no_tfhd = cat(&[&frag_init(), &moof(&[traf(&[tr(1)])])]);
+    assert_eq!(err(no_tfhd), Error::Missing { parent: fc(b"traf"), child: fc(b"tfhd") });
+    let two = cat(&[&good, &moof(&[traf(&[base_tfhd(), trun(0, 0, 0, &[])])])]);
+    assert_eq!(err_with(two.clone(), Limits { max_fragments: 1, ..Limits::default() }), Error::LimitReached(Limit::Fragments));
+    assert!(open_with(two, Limits::default()).is_ok());
+    assert!(matches!(err_with(good.clone(), Limits { max_box_bytes: 100, ..Limits::default() }), Error::TooLarge { .. }));
+    assert_eq!(err_with(good.clone(), Limits { max_total_samples: 2, ..Limits::default() }), Error::LimitReached(Limit::TotalSamples));
+    let mut no_trex = good.clone();
+    let t = find_box(&no_trex, b"trex", 0).unwrap();
+    no_trex[t + 4..t + 8].copy_from_slice(b"xxxx");
+    assert_eq!(err(no_trex), Error::Missing { parent: fc(b"mvex"), child: fc(b"trex") });
+    let mut trex_bad = good.clone();
+    patch(&mut trex_bad, b"trex", 0, 4, &u32b(42));
+    assert_eq!(err(trex_bad), Error::UnknownTrack(42));
+    // The time sum cannot overflow.
+    let huge = frag_file(tfhd(1, 0x02_0000 | 0x08 | 0x10, &[u32::MAX, 0]), trun(0, 0, 1 << 20, &[]), 0);
+    let late = cat(&[&frag_init(), &moof(&[traf(&[base_tfhd(), full(b"tfdt", 1, 0, &u64b(u64::MAX - 10)), tr(1)])]), &bx(b"mdat", &[0; 4])]);
+    assert!(open_with(huge, Limits::default()).is_ok(), "2^20 × 2^32 ticks still fits");
+    assert_eq!(err(late), Error::Overflow(fc(b"trun")));
+}
+
+#[test]
+fn no_fragment_truncation_or_corruption_panics() {
+    let tr = trun(1, 0x01 | 0x100 | 0x200 | 0x400 | 0x800, 3, &cat(&[&u32b(0), &[0u8; 48]]));
+    let file = frag_file(base_tfhd(), tr, 64);
+    sweep(&file, Limits { max_samples_per_track: 1 << 16, max_total_samples: 1 << 17, ..Limits::default() });
+}

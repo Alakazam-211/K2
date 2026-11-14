@@ -8,8 +8,12 @@ rewrite it to `k5`.
     python3 scripts/garden/cli-name-flip.py --apply --root DIR
                                                             rewrite DIR/cli/src (text and comments only)
 
+    ... --area rust        the same for Rust sources (crates/, src-tauri/src/);
+                           the default area is cli
+
 The dry run is the normal mode. It changes nothing. It reads the CLI's
-parts (cli/src/*.sh and cli/src/schema/*.entries) and sorts every use of
+parts (cli/src/*.sh and cli/src/schema/*.entries), or with --area rust
+every .rs file under crates/ and src-tauri/src/, and sorts every use of
 the bare word `k2` into a class:
 
   text      inside words a person or agent reads: a heredoc that is printed,
@@ -27,6 +31,11 @@ the bare word `k2` into a class:
 Names that only contain k2 are not matched at all: k2.dev, k2so, k2skn_,
 K2_PORT, ~/.k2, cli/k2, dev.k2.daemon, k2-daemon, .k2/. Those are other
 kinds of name with their own rules.
+
+In Rust, text is a string literal where k2 reads as the command (same
+rule), comments are `//` and `/* */` comments and doc comments, and a use
+in code outside a string is unsure. Test files are read too: a test that
+asserts a sentence has to change with the sentence.
 
 --apply is for the release that changes the name, and for the test that
 proves the rewrite leaves a script that still parses. It needs --root, so
@@ -264,6 +273,117 @@ def classify_file(path, known):
     yield from rows
 
 
+def rust_files(root):
+    out = []
+    for area in ("crates", os.path.join("src-tauri", "src")):
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, area)):
+            dirnames[:] = sorted(d for d in dirnames if d not in ("target", "node_modules", ".git", "binaries"))
+            for name in sorted(filenames):
+                if name.endswith(".rs"):
+                    out.append(os.path.join(dirpath, name))
+    return out
+
+
+RAW_OPEN = re.compile(r'b?r(#*)"')
+CHAR_LIT = re.compile(r"'(\\(x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|.)|[^'\\\n])'")
+
+
+def rust_contexts(text):
+    """The context of each character of a Rust file: 'code', 'comment',
+    'string'. Reads line and block comments (nested), strings with escapes,
+    raw strings, and tells a char literal from a lifetime."""
+    ctx = ["code"] * len(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            ctx[i:j] = ["comment"] * (j - i)
+            i = j
+        elif c == "/" and text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif text.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            ctx[i:j] = ["comment"] * (j - i)
+            i = j
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            j = min(j + 1, n)
+            ctx[i:j] = ["string"] * (j - i)
+            i = j
+        elif c in "rb" and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")) and RAW_OPEN.match(text, i):
+            m = RAW_OPEN.match(text, i)
+            close = '"' + m.group(1)
+            j = text.find(close, m.end())
+            j = n if j < 0 else j + len(close)
+            ctx[i:j] = ["string"] * (j - i)
+            i = j
+        elif c == "'":
+            m = CHAR_LIT.match(text, i)
+            i = m.end() if m else i + 1   # a char literal, or a lifetime's tick
+        else:
+            i += 1
+    return ctx
+
+
+def classify_rust_file(path, known):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    if "k2" not in text:
+        return
+    ctx = rust_contexts(text)
+    starts = [0]
+    for m in re.finditer("\n", text):
+        starts.append(m.end())
+    line_no = 0
+    for m in WORD.finditer(text):
+        while line_no + 1 < len(starts) and starts[line_no + 1] <= m.start():
+            line_no += 1
+        ls = starts[line_no]
+        le = text.find("\n", ls)
+        le = len(text) if le < 0 else le
+        line = text[ls:le]
+        col = m.start() - ls
+        lm = WORD.match(line, col)
+        where = ctx[m.start()]
+        before, after = line[:col], line[col + 2:]
+        if before.endswith("[") and (after.startswith("]") or after.startswith(" ")):
+            cls = ("kept", "a [k2 ...] prefix or stamp")
+        elif where == "comment":
+            cls = ("comment", "comment")
+        elif where == "code":
+            cls = ("unsure", "k2 in Rust code, not in a string")
+        elif whole_string_is_name(line, lm):
+            cls = ("unsure", "a string that is exactly k2 (a value)")
+        elif before.rstrip().endswith("$("):
+            cls = ("unsure", "$(k2 ...): runs the command")
+        elif not reads_as_command(line, lm, known):
+            cls = ("unsure", "k2 followed by a word that is not a command")
+        else:
+            cls = ("text", "string literal")
+        yield line_no + 1, col, col + 2, *cls
+
+
+def collect_rust(root):
+    rows = []
+    known = verbs(root)
+    for path in rust_files(root):
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        for n, s, e, cls, why in classify_rust_file(path, known):
+            rows.append((rel, n, s, e, cls, why))
+    return rows
+
+
 def collect(root):
     rows = []
     known = verbs(root)
@@ -297,6 +417,7 @@ def main(argv):
     root = None
     mode = "count"
     show = None
+    area = "cli"
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -308,16 +429,19 @@ def main(argv):
             mode = "apply"
         elif a == "--root" and args:
             root = args.pop(0)
+        elif a == "--area" and args and args[0] in ("cli", "rust"):
+            area = args.pop(0)
         else:
-            sys.exit("cli-name-flip: usage: cli-name-flip.py [--unsure | --show text|comment|kept|unsure] [--root DIR]\n"
-                     "                      cli-name-flip.py --apply --root DIR")
+            sys.exit("cli-name-flip: usage: cli-name-flip.py [--area cli|rust] [--unsure | --show text|comment|kept|unsure] [--root DIR]\n"
+                     "                      cli-name-flip.py [--area cli|rust] --apply --root DIR")
     if mode == "apply":
         if root is None:
             sys.exit("cli-name-flip: --apply needs --root DIR (it never rewrites the tree it runs from by default)")
         if os.path.realpath(root) == os.path.realpath(here) and os.environ.get("CLI_NAME_FLIP_THIS_TREE") != "yes":
             sys.exit("cli-name-flip: --apply on this tree itself is refused; set CLI_NAME_FLIP_THIS_TREE=yes for the real flip")
     root = root or here
-    rows = collect(root)
+    rows = collect(root) if area == "cli" else collect_rust(root)
+    place = "cli/src" if area == "cli" else "crates and src-tauri/src"
     if mode == "show":
         for rel, n, s, e, cls, why in rows:
             if cls == show:
@@ -327,13 +451,13 @@ def main(argv):
         return 0
     if mode == "apply":
         changed, files = apply(root, rows)
-        print(f"cli-name-flip: rewrote {changed} uses of k2 to k5 in {files} files under {root}/cli/src.")
+        print(f"cli-name-flip: rewrote {changed} uses of k2 to k5 in {files} files under {root}/{place}.")
         return 0
     totals = {c: 0 for c in CLASSES}
     for row in rows:
         totals[row[4]] += 1
     files = len({r[0] for r in rows})
-    print(f"cli-name-flip (dry run): {len(rows)} uses of the word k2 in {files} parts of cli/src")
+    print(f"cli-name-flip (dry run): {len(rows)} uses of the word k2 in {files} files of {place}")
     print(f"  will change: text {totals['text']}, comment {totals['comment']}")
     print(f"  will not:    kept {totals['kept']}, unsure {totals['unsure']}")
     why = {}

@@ -108,6 +108,42 @@ bash -n "$S/cli/src/a.sh" || die "the rewritten part does not parse"; ok
 # A second run finds no text left to change.
 python3 "$FLIP" --root "$S" | grep -q "will change: text 0, comment 0" || die "a second run still finds text: $(python3 "$FLIP" --root "$S")"; ok
 
+# ── Rust: a made-up crate ───────────────────────────────────────────────
+mkdir -p "$S/crates/a/src"
+cat > "$S/crates/a/src/lib.rs" <<'RS'
+//! Run `k2 msg` to send (a doc comment).
+/* k2 vault in a block comment /* nested k2 msg */ still comment */
+pub const HINT: &str = "Ask with: k2 msg <addr>";
+pub const TAG: &str = "k2";
+pub const RAW: &str = r#"say "k2 vault list" here"#;
+fn f<'a>(k2: &'a str) -> String { let q = '"'; format!("{k2} is not k2 msg {q}") }
+fn g() { log("[k2 sidecar] up"); let s = "the k2 object"; let b = b"k2 msg"; let u = "k2.dev k2so K2_PORT"; }
+RS
+rshow() { python3 "$FLIP" --area rust --root "$S" --show "$1"; }
+rhas() { case "$(rshow "$1")" in *"$2"*) ok ;; *) die "rust class $1 lacks: $2 :: $(rshow "$1")" ;; esac; }
+rhas comment 'lib.rs:1:'
+[ "$(rshow comment | grep -c 'lib.rs:2:')" = 2 ] || die "both uses in the nested block comment are comments: $(rshow comment)"; ok
+rhas text 'lib.rs:3: [string literal]'
+rhas unsure 'lib.rs:4: [a string that is exactly k2 (a value)]'
+rhas text 'lib.rs:5: [string literal]'
+# A lifetime and a char literal holding a quote do not confuse the reader:
+# {k2} in the format string is a value, the sentence after it is text.
+rhas unsure 'lib.rs:6: [k2 followed by a word that is not a command]'
+rhas text 'lib.rs:6: [string literal]'
+rhas kept 'lib.rs:7: [a [k2 ...] prefix or stamp]'
+rhas unsure 'lib.rs:7: [k2 followed by a word that is not a command]'
+rhas text 'lib.rs:7: [string literal]'
+out="$(python3 "$FLIP" --area rust --root "$S")"
+case "$out" in *"will change: text 4, comment 3"*) ok ;; *) die "the rust dry run counts: $out" ;; esac
+case "$out" in *"will not:    kept 1, unsure 3"*) ok ;; *) die "the rust dry run counts: $out" ;; esac
+python3 "$FLIP" --area rust --apply --root "$S" | grep -q "rewrote 7 uses of k2 to k5 in 1 files" || die "rust --apply said: $(python3 "$FLIP" --area rust --root "$S")"; ok
+rline() { sed -n "${1}p" "$S/crates/a/src/lib.rs"; }
+[ "$(rline 3)" = 'pub const HINT: &str = "Ask with: k5 msg <addr>";' ] || die "rust line 3: $(rline 3)"; ok
+[ "$(rline 4)" = 'pub const TAG: &str = "k2";' ] || die "rust line 4: $(rline 4)"; ok
+[ "$(rline 5)" = 'pub const RAW: &str = r#"say "k5 vault list" here"#;' ] || die "rust line 5: $(rline 5)"; ok
+[ "$(rline 6)" = "fn f<'a>(k2: &'a str) -> String { let q = '\"'; format!(\"{k2} is not k5 msg {q}\") }" ] || die "rust line 6: $(rline 6)"; ok
+[ "$(rline 7)" = 'fn g() { log("[k2 sidecar] up"); let s = "the k2 object"; let b = b"k5 msg"; let u = "k2.dev k2so K2_PORT"; }' ] || die "rust line 7: $(rline 7)"; ok
+
 # ── refusals ────────────────────────────────────────────────────────────
 set +e
 out="$(python3 "$FLIP" --apply 2>&1)"; code=$?
@@ -144,6 +180,11 @@ bash "$C/scripts/build-cli.sh" --root "$C" >/dev/null || die "the rewritten part
 bash -n "$C/cli/k2" || die "the rewritten cli/k2 does not parse"; ok
 out="$(bash "$C/tests/check-embedded-python.sh" 2>&1)" || die "embedded Python in the rewritten CLI: $(printf '%s' "$out" | tail -5)"
 case "$out" in *"OK: every embedded Python block compiles."*) ok ;; *) die "embedded Python check: $(printf '%s' "$out" | tail -3)" ;; esac
+# The real Rust sources: the dry run reads all of them and finds text.
+out="$(python3 "$FLIP" --area rust)"
+case "$out" in *"files of crates and src-tauri/src"*) ok ;; *) die "the real rust dry run: $out" ;; esac
+n="$(printf '%s\n' "$out" | sed -n 's/.*will change: text \([0-9]*\),.*/\1/p')"
+[ "$n" -gt 1000 ] || die "the real rust dry run found only $n text uses"; ok
 # The real tree was not touched by any of this.
 bash "$HERE/scripts/build-cli.sh" --check >/dev/null || die "the real cli/k2 is no longer the join of its parts"; ok
 

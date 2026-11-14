@@ -9,7 +9,7 @@
 //!   switch never selects it. The guarded container engine is the default.
 //! - **Clean environment** (S1 applied): `env_clear()`, then `PATH`
 //!   (login-shell enriched), `LANG`, `LC_*`, `TZ`, `TMPDIR`, `HOME` (the App
-//!   folder's `home/`), `PORT`, `NODE_ENV`, the App identity (S24's
+//!   folder's `home/`), `PORT`, `HOST=127.0.0.1` (`bind_host.rs`), `NODE_ENV`, the App identity (S24's
 //!   `K2_APP_ID` = the published service UUID, `K2_HOST`, `K2_PORT`; plus
 //!   `K2_APP_NAME` = the App's slug, AR37), `K2_APP_DEPLOYMENT`,
 //!   `K2_APP_DATA`, `K2_APP_CACHE`, the manifest's declared variables, then
@@ -172,7 +172,7 @@ fn run_file(app_id: &str, deployment_id: &str) -> PathBuf {
 }
 
 /// Variables K2 sets itself; a manifest can't declare these.
-const OWN: &[&str] = &["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ"];
+const OWN: &[&str] = &["PATH", "HOME", "PORT", super::bind_host::HOST_ENV, "NODE_ENV", "TMPDIR", "LANG", "TZ"];
 
 /// The App's slug (its CLI/URL handle). `K2_APP_ID` keeps S24's meaning,
 /// the published service UUID, which existing BFFs send on login (AR37).
@@ -195,6 +195,7 @@ fn clean_env_with_daemon_port(spec: &AppSpec, port: u16, daemon_port: u16) -> Ve
     out.push(("TMPDIR".into(), spec.cache_dir.join("tmp").to_string_lossy().to_string()));
     out.push(("HOME".into(), spec.home_dir.to_string_lossy().to_string()));
     out.push(("PORT".into(), port.to_string()));
+    out.push((super::bind_host::HOST_ENV.into(), super::bind_host::ON_HOST_NETWORK.into()));
     out.push(("NODE_ENV".into(), "production".into()));
     for (k, v) in &spec.env {
         if !OWN.contains(&k.as_str()) && !k.starts_with("K2_") {
@@ -785,7 +786,7 @@ mod tests {
         assert_eq!(env.get("K2_APP_ORIGINS").map(String::as_str), Some("https://hearth.example.com,https://pe-test.sewlab.k2.dev"));
         for k in env.keys() {
             assert!(
-                ["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ", "GREETING", "K2_HOST", "K2_PORT"].contains(&k.as_str())
+                ["PATH", "HOME", "PORT", "HOST", "NODE_ENV", "TMPDIR", "LANG", "TZ", "GREETING", "K2_HOST", "K2_PORT"].contains(&k.as_str())
                     || k.starts_with("LC_")
                     || k.starts_with("K2_APP_"),
                 "unexpected variable {k}"

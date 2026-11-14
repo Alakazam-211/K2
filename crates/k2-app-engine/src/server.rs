@@ -26,6 +26,9 @@ use serde_json::{json, Value};
 use crate::quadlet::{self, SecretMount};
 use crate::sys::{self, Out};
 
+/// `HOST` in an App's container: the App binds `$HOST:$PORT`.
+pub const IN_CONTAINER_HOST: &str = "0.0.0.0";
+
 /// The distro's Podman (what k2app runs unless K2's bundle is installed).
 pub const PODMAN: &str = "/usr/bin/podman";
 
@@ -56,6 +59,33 @@ pub fn node_options(r: &wire::Resources) -> String {
 /// a bare "argv" sent a 0.46.10 user hunting (a put of binary data broke
 /// the per-word cap). Bulk bytes go on stdin, never in argv.
 const ARGV_RULE: &str = "argv refused: 1 to 64 words, each 1 to 4096 bytes with no control characters (send bulk data on stdin)";
+
+/// A container's environment before its secrets: the daemon's (identity,
+/// declared) with the engine's own names put back, `PORT` (the App's port
+/// inside) and `HOST` (what the App binds: [`IN_CONTAINER_HOST`]).
+pub(crate) fn container_env(s: &StartSpec, px: u16) -> std::collections::BTreeMap<String, String> {
+    let mut env = s.env.clone();
+    for k in ["PORT", "HOST", "HOME", "TMPDIR", "NODE_OPTIONS", "K2_PASS_FILE", "K2_SECRETS_DIR", "K2_APP_DATA", "K2_APP_CACHE"] {
+        env.remove(k);
+    }
+    env.insert("PORT".into(), s.app_port.unwrap_or(s.port).to_string());
+    // The App binds HOST:PORT. Its published port arrives on the
+    // container's own interface, never its loopback: 0.0.0.0 inside the
+    // namespace (the port is published on host loopback only).
+    env.insert("HOST".into(), IN_CONTAINER_HOST.into());
+    env.insert("HOME".into(), "/app-home".into());
+    env.insert("TMPDIR".into(), "/tmp".into());
+    env.insert("K2_APP_DATA".into(), "/data".into());
+    env.insert("K2_APP_CACHE".into(), "/cache".into());
+    // S15: the App's only way out is its own egress proxy (the daemon
+    // listens on the forwarded port and enforces the allowlist). These
+    // replace any value the daemon's env carried.
+    for (k, v) in wire::proxy_env(px) {
+        env.insert(k.into(), v);
+    }
+    env.insert("NODE_OPTIONS".into(), node_options(&s.resources));
+    env
+}
 
 fn bad(m: impl Into<String>) -> (&'static str, String) {
     (codes::BAD_REQUEST, m.into())
@@ -557,23 +587,8 @@ impl Engine {
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&run_dir).map_err(|e| (codes::IO, format!("mkdir: {e}")))?;
         }
         // Environment: the daemon's (identity, declared) + the engine's own.
-        let mut env = s.env.clone();
-        for k in ["PORT", "HOME", "TMPDIR", "NODE_OPTIONS", "K2_PASS_FILE", "K2_SECRETS_DIR", "K2_APP_DATA", "K2_APP_CACHE"] {
-            env.remove(k);
-        }
         let app_port = s.app_port.unwrap_or(s.port);
-        env.insert("PORT".into(), app_port.to_string());
-        env.insert("HOME".into(), "/app-home".into());
-        env.insert("TMPDIR".into(), "/tmp".into());
-        env.insert("K2_APP_DATA".into(), "/data".into());
-        env.insert("K2_APP_CACHE".into(), "/cache".into());
-        // S15: the App's only way out is its own egress proxy (the daemon
-        // listens on the forwarded port and enforces the allowlist). These
-        // replace any value the daemon's env carried.
-        for (k, v) in wire::proxy_env(px) {
-            env.insert(k.into(), v);
-        }
-        env.insert("NODE_OPTIONS".into(), node_options(&s.resources));
+        let mut env = container_env(s, px);
         let mut mounts = Vec::new();
         let mut made = Vec::new();
         let cleanup = |made: &[String]| {
@@ -613,6 +628,14 @@ impl Engine {
             }
             env.insert("K2_PASS_FILE".into(), PASS_TARGET.into());
         }
+        // The deployment's log outlives its container (`app_logs.rs`).
+        let log_file = match crate::app_logs::prepare(&self.state(), &app, &s.deployment) {
+            Ok(p) => p,
+            Err(e) => {
+                cleanup(&made);
+                return Err((codes::IO, e));
+            }
+        };
         let env_file = run_dir.join(format!("{}.env", s.deployment));
         let env_text: String = env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
         if let Err(e) = sys::write_atomic(&env_file, env_text.as_bytes(), 0o600) {
@@ -638,6 +661,7 @@ impl Engine {
         let data_s = self.apps().join(app.as_str()).join("data").to_string_lossy().to_string();
         let cache_s = self.apps().join(app.as_str()).join("cache").to_string_lossy().to_string();
         let env_s = env_file.to_string_lossy().to_string();
+        let log_s = log_file.to_string_lossy().to_string();
         let sec_s = self.seccomp_path().to_string_lossy().to_string();
         let runtime = self.runtime_arg();
         let unit_text = quadlet::render(&quadlet::Render {
@@ -651,6 +675,7 @@ impl Engine {
             data_dir: &data_s,
             cache_dir: &cache_s,
             env_file: &env_s,
+            log_file: &log_s,
             seccomp: &sec_s,
             gw_port: gw,
             px_port: px,
@@ -785,10 +810,16 @@ impl Engine {
     }
 
     /// S17 / protocol 3: the App's last `lines` log lines from its capped
-    /// `k8s-file` log (`podman logs`; the container is the deployment's).
+    /// `k8s-file` log: the deployment's own file (`app_logs.rs`, kept after
+    /// the container is gone), else `podman logs` (a container an older
+    /// engine started logs in its own folder).
     fn logs(&self, app: &str, dep: &str, lines: u32) -> R<Value> {
         let (a, _) = Self::ids(app, dep)?;
-        let n = lines.clamp(1, wire::MAX_LOG_LINES).to_string();
+        let lines = lines.clamp(1, wire::MAX_LOG_LINES);
+        if let Some(text) = crate::app_logs::read_tail(&crate::app_logs::path(&self.state(), &a, dep), lines as usize, MAX_OUTPUT) {
+            return Ok(json!({ "text": text }));
+        }
+        let n = lines.to_string();
         let ctr = unit_stem(&a, dep);
         let o = self.run(podman_bin(), &["logs", "--tail", &n, &ctr], None, 60)?;
         if !o.ok() {
@@ -984,6 +1015,7 @@ impl Engine {
             stopped.push(s.deployment);
         }
         let _ = std::fs::remove_dir(self.run_dir(&a));
+        crate::app_logs::remove_app(&self.state(), &a);
         let _ = std::fs::remove_file(self.user_units().join(app_slice(&a)));
         // The App's pass goes with its last instance (the daemon revoked it).
         let _ = std::fs::remove_dir_all(self.pass_dir(&a));

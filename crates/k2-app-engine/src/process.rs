@@ -38,7 +38,7 @@ fn io(e: impl std::fmt::Display) -> (&'static str, String) {
 
 /// Variables the engine sets itself (a deployment can't).
 const OWN: &[&str] = &[
-    "PATH", "HOME", "TMPDIR", "PORT", "NODE_OPTIONS", "K2_PASS_FILE", "K2_SECRETS_DIR", "K2_APP_DATA", "K2_APP_CACHE", "K2_HOST", "K2_PORT",
+    "PATH", "HOME", "TMPDIR", "PORT", "HOST", "NODE_OPTIONS", "K2_PASS_FILE", "K2_SECRETS_DIR", "K2_APP_DATA", "K2_APP_CACHE", "K2_HOST", "K2_PORT",
     "K2_GATEWAY_URL",
 ];
 
@@ -59,6 +59,8 @@ pub fn resolve_env(s: &ProcessSpec, gw: u16, secret_env: &BTreeMap<String, Strin
     env.insert("HOME".into(), format!("{state}/home"));
     env.insert("TMPDIR".into(), "/tmp".into());
     env.insert("PORT".into(), s.port.to_string());
+    // The App binds HOST:PORT; this unit is on the host's network.
+    env.insert("HOST".into(), "127.0.0.1".into());
     env.insert("K2_APP_DATA".into(), format!("{state}/data"));
     env.insert("K2_APP_CACHE".into(), format!("{state}/cache"));
     env.insert("K2_HOST".into(), "127.0.0.1".into());

@@ -110,7 +110,7 @@ fn signal_name(sig: i32) -> String {
     }
 }
 
-fn exit_words(code: Option<i32>, signal: Option<i32>) -> String {
+pub(crate) fn exit_words(code: Option<i32>, signal: Option<i32>) -> String {
     match (code, signal) {
         (_, Some(s)) => format!("was killed by {}", signal_name(s)),
         (Some(c), None) => format!("exited with code {c}"),

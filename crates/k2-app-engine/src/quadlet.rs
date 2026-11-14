@@ -34,8 +34,8 @@
 //!    (`MemorySwapMax=0` on the unit), tasks, open files, the App's CPU
 //!    weight on its own slice, `OOMPolicy=kill` (an OOM takes the whole
 //!    App down cleanly and K2 restarts it), and a capped log file per
-//!    deployment (`k8s-file` with `max-size`; the engine's `logs` verb
-//!    reads it).
+//!    deployment (`k8s-file` with `max-size`, at the engine's own `path=`
+//!    so it outlives the container; the engine's `logs` verb reads it).
 //!
 //! The open path's **relaxed** container (§4.3, S13) keeps all of that
 //! except: a writable root, `/app` a writable copy of the code made at
@@ -75,6 +75,9 @@ pub struct Render<'a> {
     pub data_dir: &'a str,
     pub cache_dir: &'a str,
     pub env_file: &'a str,
+    /// The deployment's own log file (`app_logs.rs`): outside the
+    /// container's folder, so it outlives the container.
+    pub log_file: &'a str,
     pub seccomp: &'a str,
     pub gw_port: u16,
     /// The App's egress proxy port (S15), forwarded like the gateway.
@@ -285,6 +288,7 @@ pub fn render(r: &Render) -> String {
         podman_args.push(format!("--memory={m}m --memory-swap={m}m"));
     }
     podman_args.push(format!("--log-opt=max-size={}", r.resources.log_bytes));
+    podman_args.push(format!("--log-opt=path={}", r.log_file));
     line(format!("PodmanArgs={}", podman_args.join(" ")));
     line(format!("StopTimeout={stop}"));
     line("LogDriver=k8s-file".into());

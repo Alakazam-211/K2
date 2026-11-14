@@ -15,6 +15,7 @@ fn base_render<'a>(app: &'a AppId, argv: &'a [String], secrets: &'a [SecretMount
         data_dir: "/var/lib/k2app/apps/acme-skin/data",
         cache_dir: "/var/lib/k2app/apps/acme-skin/cache",
         env_file: "/var/lib/k2app/engine/run/acme-skin/d-0123456789ab.env",
+        log_file: "/var/lib/k2app/engine/logs/acme-skin/d-0123456789ab.log",
         seccomp: "/var/lib/k2app/engine/seccomp-k2-v1.json",
         gw_port: 38_601,
         px_port: 38_901,
@@ -67,7 +68,7 @@ fn the_floor_is_in_every_unit() {
         "\nRunInit=true\n",
         "\nPidsLimit=512\n",
         "\nUlimit=nofile=4096:4096\n",
-        "\nPodmanArgs=--memory=512m --memory-swap=512m --log-opt=max-size=52428800\n",
+        "\nPodmanArgs=--memory=512m --memory-swap=512m --log-opt=max-size=52428800 --log-opt=path=/var/lib/k2app/engine/logs/acme-skin/d-0123456789ab.log\n",
         "\nLogDriver=k8s-file\n",
         "\nStopTimeout=40\n",
         "\nSecret=k2-acme-skin--d-0123456789ab--0,type=env,target=STRIPE_KEY\n",
@@ -117,7 +118,7 @@ fn no_memory_cap_means_no_memory_flag() {
     r.resources = &RES_NOCAP;
     let u = render(&r);
     assert!(!u.contains("--memory"), "{u}");
-    assert!(u.contains("\nPodmanArgs=--log-opt=max-size=8388608\n"), "{u}");
+    assert!(u.contains("\nPodmanArgs=--log-opt=max-size=8388608 --log-opt=path=/var/lib/k2app/engine/logs/acme-skin/d-0123456789ab.log\n"), "{u}");
     assert!(u.contains("\nMemorySwapMax=0\n") && u.contains("\nOOMPolicy=kill\n"), "{u}");
     assert!(u.contains("\nPidsLimit=256\n") && u.contains("\nUlimit=nofile=8192:8192\n"), "{u}");
     assert_eq!(

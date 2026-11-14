@@ -21,6 +21,7 @@
 #![cfg(unix)]
 
 pub mod accept_backoff;
+pub mod app_logs;
 pub mod build;
 pub mod oci;
 pub mod peer;

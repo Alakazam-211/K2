@@ -250,6 +250,7 @@ const OWN: &[&str] = &[
     "PATH",
     "HOME",
     "PORT",
+    super::bind_host::HOST_ENV,
     "NODE_ENV",
     "TMPDIR",
     "LANG",
@@ -270,7 +271,9 @@ const OWN: &[&str] = &[
 /// declared variables, then the App identity (S24/AR37: `K2_APP_ID` = the
 /// published service UUID, `K2_APP_NAME` = the slug) and the gateway link
 /// (`K2_HOST`/`K2_PORT` point at the link inside the wall, AR37; the same
-/// in-wall `127.0.0.1:8730` for every App, S14). The engine adds `PORT`,
+/// in-wall `127.0.0.1:8730` for every App, S14), and `HOST=0.0.0.0`, the
+/// App's own bind address in the container (`bind_host.rs`; the process
+/// exception sets its own). The engine adds `PORT`,
 /// `HOME`, `TMPDIR`, `NODE_OPTIONS`, `K2_APP_DATA`, `K2_APP_CACHE` and the
 /// secret/pass file variables.
 pub fn guarded_env(spec: &AppSpec, host_lang: Option<String>, host_tz: Option<String>) -> BTreeMap<String, String> {
@@ -290,6 +293,7 @@ pub fn guarded_env(spec: &AppSpec, host_lang: Option<String>, host_tz: Option<St
     env.insert(k2_core_app_id_env().into(), spec.service_id.clone());
     env.insert(super::process_engine::APP_NAME_ENV.into(), spec.app_id.clone());
     env.insert("K2_APP_DEPLOYMENT".into(), spec.deployment_id.clone());
+    env.insert(super::bind_host::HOST_ENV.into(), super::bind_host::IN_CONTAINER.into());
     env.insert("K2_HOST".into(), "127.0.0.1".into());
     env.insert("K2_PORT".into(), wire::IN_WALL_GATEWAY_PORT.to_string());
     env.insert("K2_GATEWAY_URL".into(), super::gateway::in_wall_url());

@@ -970,6 +970,9 @@ struct Exit {
     exited: bool,
     code: Option<i32>,
     signal: Option<i32>,
+    /// The App's own command was started (its output may say why it
+    /// failed): the App's state then points at `k2 app logs`.
+    ran: bool,
 }
 
 impl Exit {
@@ -977,8 +980,8 @@ impl Exit {
     /// the engine still holds the child).
     fn of(h: &RunHandle) -> Exit {
         match engine_of(h).liveness(h) {
-            Liveness::Exited(code) => Exit { exited: true, code, signal: super::process_engine::exit_signal(&h.deployment_id) },
-            _ => Exit::default(),
+            Liveness::Exited(code) => Exit { exited: true, code, signal: super::process_engine::exit_signal(&h.deployment_id), ran: true },
+            _ => Exit { ran: true, ..Exit::default() },
         }
     }
 }
@@ -993,7 +996,13 @@ fn pipeline_fail_exit(app_id: &str, dep: &str, code: &str, msg: &str, exit: Exit
     audit(app_id, "failed", "system", json!({ "deployment": dep, "code": code, "error": msg }));
     let no_live = with_rt(app_id, |rt| rt.live.is_none());
     if no_live {
-        let _ = db(|c| store::set_state(c, app_id, store::STATE_FAILED, Some(msg)));
+        // The App ran: its state says how it ended and where its output is.
+        let reason = if exit.ran {
+            super::early_exit::state_reason(app_id, dep, msg, super::early_exit::exit_text(exit.exited, exit.code, exit.signal).as_deref())
+        } else {
+            msg.to_string()
+        };
+        let _ = db(|c| store::set_state(c, app_id, store::STATE_FAILED, Some(&reason)));
     }
     // The failure history, and the App's agent hears (0.46.3). A crash
     // restart's own failure is a crash: `restart_outcome` records it.
@@ -1186,7 +1195,9 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
     }
     let h = match eng.start(&spec, &prepared, port) {
         Ok(h) => h,
-        Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
+        // A4: K2's own engine faults never ran the App.
+        Err(e) if codes::is_k2_side(e.code) => return pipeline_fail(app_id, dep, e.code, &e.message),
+        Err(e) => return pipeline_fail_exit(app_id, dep, e.code, &e.message, Exit { ran: true, ..Exit::default() }),
     };
     let _ = db(|c| store::set_started(c, dep, port, h.pid.map(i64::from)));
     let path = m.health_path();
@@ -1813,7 +1824,9 @@ fn crashed(app_id: &str, inst: Instance, why: &str, exit: Exit, t: &Timings) {
     ));
     match decision {
         Decision::Restart { after_secs } => {
-            let _ = db(|c| store::set_state(c, app_id, STATE_RESTARTING, Some(why)));
+            let ended = super::early_exit::exit_text(exit.exited, exit.code, exit.signal).unwrap_or_else(|| why.to_string());
+            let reason = super::early_exit::state_reason(app_id, &inst.handle.deployment_id, &ended, None);
+            let _ = db(|c| store::set_state(c, app_id, STATE_RESTARTING, Some(&reason)));
             audit(app_id, "crashed", "system", json!({ "deployment": inst.handle.deployment_id, "why": why, "restartInSecs": after_secs }));
         }
         Decision::Breaker => breaker(app_id, why),
@@ -1884,14 +1897,22 @@ fn restart_outcome(app_id: &str, dep: &str) {
     );
     match decision {
         Decision::Restart { .. } => {
-            let _ = db(|c| store::set_state(c, app_id, "restarting", Some("the restart failed its health gate")));
+            // The failed start's own reason (how it ended, its logs) when
+            // the pipeline wrote one for this deployment.
+            let hint = super::early_exit::logs_hint(app_id, dep);
+            let failed = db(|c| store::get_app(c, app_id)).ok().flatten().and_then(|a| a.state_reason).filter(|r| r.contains(&hint));
+            let why = match failed {
+                Some(r) => format!("the restart failed its health gate: {r}"),
+                None => super::early_exit::state_reason(app_id, dep, &format!("the restart failed its health gate: {msg}"), None),
+            };
+            let _ = db(|c| store::set_state(c, app_id, "restarting", Some(&why)));
         }
         Decision::Breaker => breaker(app_id, "its restarts keep failing the health gate"),
     }
 }
 
 fn breaker(app_id: &str, why: &str) {
-    let msg = format!("{why}; restarted 6 times within an hour, so K2 stopped restarting it");
+    let msg = format!("{why}; restarted 6 times within an hour, so K2 stopped restarting it. Why: k2 app errors {app_id} --kind crash");
     let _ = db(|c| store::set_state(c, app_id, store::STATE_CRASHLOOPING, Some(&msg)));
     audit(app_id, "crashlooping", "system", json!({ "why": why }));
     if let Ok(Some(app)) = db(|c| store::get_app(c, app_id)) {

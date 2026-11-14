@@ -25,6 +25,7 @@ mod app_activity_ear_integration;
 mod app_agent_config_write_integration;
 mod app_agent_identity_integration;
 mod app_auth_door_integration;
+mod app_bind_host_and_early_logs_integration;
 mod app_caps_cards_activity_integration;
 mod app_caps_no_widening_integration;
 mod app_chat_key_integration;

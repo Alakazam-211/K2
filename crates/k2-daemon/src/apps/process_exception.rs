@@ -151,6 +151,8 @@ impl RuntimeEngine for ProcessException {
         for k in ["K2_HOST", "K2_PORT", "K2_GATEWAY_URL"] {
             env.remove(k);
         }
+        // The process exception is on the host's network: it binds loopback.
+        env.insert(super::bind_host::HOST_ENV.into(), super::bind_host::ON_HOST_NETWORK.into());
         // Box services (0.46.0): the process exception has the host's
         // loopback, narrowed by its nft rule; it dials the host port, which
         // the rule admits only while approved.

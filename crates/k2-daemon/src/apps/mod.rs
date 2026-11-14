@@ -62,6 +62,8 @@ pub mod app_key_routes;
 pub mod approvals;
 pub mod audit;
 pub mod attribution;
+/// Where an App listens: `HOST`/`PORT` per lane ("bind HOST:PORT as given").
+pub mod bind_host;
 pub mod box_prep;
 /// Undo box setup: the owner's `k2 app box unprep` (0.46.3 F8).
 pub mod box_unprep;
@@ -98,6 +100,8 @@ pub mod rehost;
 pub mod reach;
 /// Loud failures: ERROR lines and owner notices (R34, R44).
 pub mod runtime_notes;
+/// A start that failed: the App's state names its exit and its logs.
+pub mod early_exit;
 pub mod exception;
 pub mod exec;
 pub mod failures;

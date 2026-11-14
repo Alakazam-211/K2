@@ -964,6 +964,18 @@ else:
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/roles/room" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    # Held for the owner (an App's agent without "Let this agent manage
+                    # its Apps' users"): a card on its Thread; exit 2 until decided.
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+if not isinstance(d, dict) or d.get("status") != "held":
+    sys.exit(0)
+r=d.get("request") or {}
+print("Held for the owner (request %s): %s" % (r.get("id") or "?", r.get("summary") or ""))
+if d.get("hint"):
+    print("  " + d["hint"])
+sys.exit(2)' || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)

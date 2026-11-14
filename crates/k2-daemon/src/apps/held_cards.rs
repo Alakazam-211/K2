@@ -185,15 +185,15 @@ fn held_of(req: &PermissionRequest) -> Option<reqs::AppRequest> {
 }
 
 /// Would "Let this agent manage its Apps' users" have let the requesting agent do
-/// this itself? A test guest of its own App, or the guests-rooms grant in
-/// its own room only. Never copy-host or a label transfer (owner steps).
+/// this itself? A test guest of its own App, a room line on a role of its own
+/// App, or the guests-rooms grant in its own room only. Never copy-host or a label transfer (owner steps).
 fn switch_covers(r: &reqs::AppRequest) -> bool {
     let Some(ws) = r.requester_workspace.as_deref() else { return false };
     if !r.requested_by.starts_with("agent:") || r.kind != reqs::KIND_MANAGE {
         return false;
     }
     match r.body.get("route").and_then(J::as_str) {
-        Some(super::agent_grants::TEST_GUEST_ADD) => true,
+        Some(super::agent_grants::TEST_GUEST_ADD | super::role_room_hold::APPLY_ROUTE) => true,
         Some(super::agent_grants::GUEST_ROOMS_APPLY) => r
             .body
             .pointer("/body/rooms")

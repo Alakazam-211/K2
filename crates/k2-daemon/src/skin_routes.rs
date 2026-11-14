@@ -929,12 +929,11 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
     Ok(())
 }
 
-/// The role writes (Rosson 2026-11-03: "Any and all scopes for user roles can be
-/// managed by the agent that owns the app"): a role of one of its Apps may name
-/// any room and any cap. A box-wide role: only its own workspace's room. A role
-/// the owner made reaching elsewhere stays the owner's, and so does another App's
-/// ([`role_is_agents`]). A login's tie still holds it to its App's own room
-/// ([`skin::ties`]). What the handler can't read is its own 400.
+/// The role writes ("Any and all scopes for user roles can be managed by the agent
+/// that owns the app"): with the App-users switch, any role of one of its Apps, the
+/// owner's too, may name any room and cap. A box-wide role: only its own room;
+/// another App's stays the owner's ([`role_is_agents`]). A login's tie still holds
+/// it to its App's own room. What the handler can't read is its own 400.
 fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
     // The handlers' own lookup (id first, then name): a decoy role named
@@ -945,14 +944,6 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
             None => Ok(None),
         }
     };
-    let existing = |keys: &[&str]| -> Result<(), CliResponse> {
-        match found(keys)? {
-            Some(r) if !role_is_agents(&r, ws) => {
-                Err(outside_workspace(format!("role '{}' reaches outside your workspace (another workspace's room or App)", r.name)))
-            }
-            _ => Ok(()),
-        }
-    };
     // The App a role belongs to, when it is one of `ws`'s.
     let own_app_of = |r: Option<&skin::SkinRole>| -> Option<String> {
         r.and_then(|r| r.app_id.clone()).filter(|a| app_of_workspace(a, ws))
@@ -960,6 +951,14 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
     // Role writes also ride "Build and run Apps". What reaches past the agent's
     // own room, or holds a person-only cap, needs the App-users switch too.
     let users_switch = k2_core::workspace::settings::agents_can_manage_app_users(ws);
+    // Its own App's role the owner made reaching elsewhere: the switch's (`role_room_hold` holds it for the owner).
+    let existing = |keys: &[&str]| -> Result<(), CliResponse> {
+        match found(keys)? {
+            Some(r) if !role_is_agents(&r, ws) && own_app_of(Some(&r)).is_some() => if users_switch { Ok(()) } else { Err(app_users_off_response()) },
+            Some(r) if !role_is_agents(&r, ws) => Err(outside_workspace(format!("role '{}' reaches outside your workspace (another workspace's room or App)", r.name))),
+            _ => Ok(()),
+        }
+    };
     let policy_ok = |policy: &RoomPolicy, app: Option<&str>| -> Result<(), CliResponse> {
         if app.is_none() && policy.keys().any(|k| k != ws) {
             return Err(outside_workspace("a box-wide role of yours may name only your workspace's room: name the App (--app) for any other".to_string()));
@@ -1124,9 +1123,9 @@ fn role_within(r: &skin::SkinRole, allowed: &[String]) -> bool {
     r.rooms.iter().chain(r.room_policy.keys()).all(|k| allowed.contains(k))
 }
 
-/// A role an agent of `ws` may edit: wholly its workspace's, or a role of one
-/// of its Apps that an agent wrote ([`skin::guest_rooms::written`]). A role the
-/// owner made reaching elsewhere stays the owner's.
+/// A role an agent of `ws` may edit without the App-users switch: wholly its workspace's, or
+/// a role of one of its Apps that an agent wrote ([`skin::guest_rooms::written`]). With the
+/// switch, any role of its Apps ([`agent_may_write_role`]).
 fn role_is_agents(r: &skin::SkinRole, ws: &str) -> bool {
     role_in_workspace(r, ws)
         || (r.app_id.as_deref().is_some_and(|app| app_of_workspace(app, ws))

@@ -316,21 +316,26 @@ async fn the_agent_that_owns_the_app_gives_any_room_and_any_cap() {
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another App's role: {}", r.body);
     let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": format!("box{t}"), "roomAccess": [line(&b.ops)] })).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "box-wide: {}", r.body);
-    // Role writes also ride "Build and run Apps": with only that one on, no other
-    // room and no person-only cap.
+    // Role writes also ride "Build and run Apps": with only that one on, another
+    // room or a person-only cap is one held request for the owner, nothing applied.
     k2_core::workspace::settings::set_agents_can_manage_app_users(&b.sales.id, false).unwrap();
     let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.desk.handle })).await;
-    assert_eq!(r.status, 403, "another room with the switch off: {}", r.body);
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "another room with the switch off: {}", r.body);
     let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.sales.handle, "caps": ["files:read", "files:download"] })).await;
-    assert_eq!(r.status, 403, "a person-only cap with the switch off: {}", r.body);
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "a person-only cap with the switch off: {}", r.body);
+    let now = k2_core::skin::find_role(&role).unwrap().expect("role");
+    assert!(!now.room_policy.contains_key(&b.desk.id), "held, not applied: {now:?}");
+    assert!(!now.room_policy[&b.sales.id].iter().any(|c| c == "files:download"), "held, not applied: {now:?}");
     let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.sales.handle, "caps": ["thread:read"] })).await;
     assert_eq!(r.status, 200, "its own room stays: {}", r.body);
 }
 
-/// A role the owner made reaching another room stays the owner's: its folder
-/// limits and lines. A role the agent wrote is the agent's.
+/// A role the owner made on the agent's App, reaching another room: with "Let
+/// this agent manage its Apps' users" off it stays the owner's (its folder
+/// limits: the switch's refusal; a room line: held for the owner). With the
+/// switch on it is the App's to change, like a role the agent wrote.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_agent_cant_touch_a_role_the_owner_made_reaching_elsewhere() {
+async fn a_role_the_owner_made_on_its_app_is_the_agents_only_with_the_switch() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
@@ -340,11 +345,18 @@ async fn an_agent_cant_touch_a_role_the_owner_made_reaching_elsewhere() {
     owner_post(port, "/cli/skin/roles", json!({ "name": role, "app": b.shop, "roomAccess": [{ "handle": b.ops.handle, "caps": ["thread:read", "files:read"] }] })).await;
     owner_post(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": b.ops.handle, "read": ["public"] })).await;
     let before = k2_core::skin::find_role(&role).unwrap().unwrap().room_paths;
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&b.sales.id, false).unwrap();
     let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": role, "handle": b.ops.handle, "clear": true })).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "{}", r.body);
     assert_eq!(k2_core::skin::find_role(&role).unwrap().unwrap().room_paths, before, "the limit stays");
     let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.sales.handle })).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    assert!(!k2_core::skin::find_role(&role).unwrap().unwrap().room_policy.contains_key(&b.sales.id), "held, not applied");
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&b.sales.id, true).unwrap();
+    let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": role, "handle": b.ops.handle, "clear": true })).await;
+    assert_eq!(r.status, 200, "with the switch: {}", r.body);
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.sales.handle })).await;
+    assert_eq!(r.status, 200, "with the switch: {}", r.body);
     let mine = format!("mine{t}");
     let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": mine, "app": b.shop, "roomAccess": [line(&b.sales), line(&b.ops)] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -1145,17 +1157,14 @@ async fn a_stray_id_on_a_role_write_marks_only_the_role_it_wrote() {
     assert!(role_marked(&decoy), "the role it wrote carries the mark");
     assert_eq!(rooms_of(&sb), vec![b.ops.id.clone()], "an unrelated box login keeps its room");
 
-    // An owner's App role doesn't become the agent's to edit.
+    // An owner's App role: a decoy naming its id doesn't mark it either.
     let portal = format!("portal{t}");
     owner_post(port, "/cli/skin/roles", json!({ "name": portal, "app": b.shop, "roomAccess": [{ "handle": b.ops.handle, "caps": ["thread:read", "files:read"] }] })).await;
-    let edit = json!({ "name": portal, "handle": b.ops.handle, "clear": true });
-    let r = post(port, "/cli/skin/roles/room", &b.agent, edit.clone()).await;
-    assert_eq!(r.status, 403, "{}", r.body);
     let d2 = format!("dd{t}");
     let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": d2, "id": portal, "app": b.shop, "roomAccess": [line(&b.sales)] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let r = post(port, "/cli/skin/roles/room", &b.agent, edit).await;
-    assert_eq!(r.status, 403, "still the owner's: {}", r.body);
+    assert!(!role_marked(&portal), "the owner's App role stays unmarked");
+    assert!(role_marked(&d2));
 
     // The paths route reads `name` first; `id` is nothing to it.
     let mine = format!("mine{t}");

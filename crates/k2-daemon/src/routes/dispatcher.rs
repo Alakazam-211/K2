@@ -13191,10 +13191,10 @@ async fn handle_one_request(
                         }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let session = crate::session_token::require_hook(presented_bearer(&query, bearer_token.as_deref()), p).map(|v| v.session_id);
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/room", &body, &actor, crate::skin_routes::handle_roles_room),
-                            &actor,
+                            crate::apps::role_room_hold::scoped(agent_ws.as_deref(), session.as_deref(), &body, &actor), &actor,
                         )
                     })
                     .await

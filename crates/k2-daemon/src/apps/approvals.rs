@@ -712,6 +712,11 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
             if route == super::db_connect::APPLY_ROUTE {
                 return super::db_connect::apply(r, by);
             }
+            // A role of the agent's own App: the room line it showed, as the
+            // owner who approved it (`role_room_hold`).
+            if route == super::role_room_hold::APPLY_ROUTE {
+                return super::role_room_hold::apply(r, by);
+            }
             // 0.46.4: an agent's App-grant owner steps (copy-host, the
             // guests-rooms grant, a label transfer), run as the owner with
             // exactly the values the request showed.

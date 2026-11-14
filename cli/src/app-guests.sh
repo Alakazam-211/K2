@@ -18,8 +18,9 @@ without the owner token.
                                        An agent with "Let this agent manage its
                                        Apps' users" on doesn't need this to give
                                        people rooms: k2 app user rooms and
-                                       k2 app role room take any room on this
-                                       box. The owner, or that agent: at once.
+                                       k2 app role room (a role of its own App)
+                                       take any room on this box. The owner,
+                                       or that agent: at once.
                                        With the switch off: one held request
                                        with a card for the owner (exit 2).
                                        --revoke stops the App's code handing out

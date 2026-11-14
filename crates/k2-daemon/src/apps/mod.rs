@@ -141,6 +141,8 @@ pub mod quotas;
 pub mod resources;
 /// `requires.sew` / `requires.voice` against this box's Sew (0.46.3).
 pub mod requires;
+/// An App's agent adding a room to a role of its own App: at once, or held for the owner.
+pub mod role_room_hold;
 /// Per-App Postgres majors: the App's database and `requires.postgres`
 /// (prd-app-pg-choice-dualrun-v1 Part A, 0.46.4).
 pub mod pg_choice;

@@ -8896,6 +8896,10 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Chat caps (App-wide; any room line counts): chat:read, chat:post,
                                         chat:respond, voice:join, voice:video (needs voice:join). They cap the
                                         person's chat pass; Sew's roles still decide. k2 study app-chat.
+                                        An App's own agent: any room on any role of its own App, at once
+                                        with "Let this agent manage its Apps' users" on; with it off, one
+                                        held request with a card for the owner on your Thread (exit 2).
+                                        A box-wide role, or another workspace's App's, stays the owner's.
   k2 app role room <role> <handle> --clear
                                         Drop that room from the role
   k2 app role paths <role> <room> [--read jobs/J1/,jobs/J3/] [--write jobs/J1/in/] [--upload Inbox/] [--upload-dir jobs/J1/in]
@@ -19659,8 +19663,9 @@ without the owner token.
                                        An agent with "Let this agent manage its
                                        Apps' users" on doesn't need this to give
                                        people rooms: k2 app user rooms and
-                                       k2 app role room take any room on this
-                                       box. The owner, or that agent: at once.
+                                       k2 app role room (a role of its own App)
+                                       take any room on this box. The owner,
+                                       or that agent: at once.
                                        With the switch off: one held request
                                        with a card for the owner (exit 2).
                                        --revoke stops the App's code handing out
@@ -21009,6 +21014,18 @@ else:
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/roles/room" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    # Held for the owner (an App's agent without "Let this agent manage
+                    # its Apps' users"): a card on its Thread; exit 2 until decided.
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+if not isinstance(d, dict) or d.get("status") != "held":
+    sys.exit(0)
+r=d.get("request") or {}
+print("Held for the owner (request %s): %s" % (r.get("id") or "?", r.get("summary") or ""))
+if d.get("hint"):
+    print("  " + d["hint"])
+sys.exit(2)' || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)

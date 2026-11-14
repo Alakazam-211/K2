@@ -2903,6 +2903,10 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Chat caps (App-wide; any room line counts): chat:read, chat:post,
                                         chat:respond, voice:join, voice:video (needs voice:join). They cap the
                                         person's chat pass; Sew's roles still decide. k2 study app-chat.
+                                        An App's own agent: any room on any role of its own App, at once
+                                        with "Let this agent manage its Apps' users" on; with it off, one
+                                        held request with a card for the owner on your Thread (exit 2).
+                                        A box-wide role, or another workspace's App's, stays the owner's.
   k2 app role room <role> <handle> --clear
                                         Drop that room from the role
   k2 app role paths <role> <room> [--read jobs/J1/,jobs/J3/] [--write jobs/J1/in/] [--upload Inbox/] [--upload-dir jobs/J1/in]

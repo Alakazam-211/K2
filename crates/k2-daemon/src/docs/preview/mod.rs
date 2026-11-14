@@ -16,6 +16,8 @@
 //! | `mod.rs` | the per-type interface ([`PreviewRenderer`]), the registry ([`renderer_for`]), the shared types |
 //! | [`deck`] | `.pptx` slides: the pptx pack's view index, drawn by `k2-deckrender` (one process per render) |
 //! | [`scene`] | live BLEND scenes: the pack's mesh read (K2SCENE1; not in K2 yet), cameras and objects drawn by `k2-scenerender` (one process per request) |
+//! | [`extras`] | what a listing and an image carry besides the image (a scene's bounds, cameras, turntable titles), in the client's shapes |
+//! | [`reuse`] | a renamed container answered from the image its render hash already has, without a render |
 //! | [`cache`] | the sealed on-disk cache, its cap, and the purge hooks' file side |
 //! | [`service`] | per-doc index memo, dirty detection, the render queue and slots, the host time cap, `preview_ready` |
 //! | [`route`] | `GET /cli/docs/preview` |

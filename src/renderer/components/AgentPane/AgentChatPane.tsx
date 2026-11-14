@@ -53,7 +53,17 @@ import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
 import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
-import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats, type ThreadFloatId } from '@/components/SessionView/threadFloats'
+import {
+  THREAD_FLOATS_GRID,
+  THREAD_FLOATS_GRID_ATTR,
+  THREAD_FLOAT_CENTRE_CLASS,
+  THREAD_FLOAT_GROUP_CLASS,
+  ThreadFloatScrim,
+  floatProps,
+  useThreadFloats,
+  type ThreadFloatId,
+} from '@/components/SessionView/threadFloats'
+import { ThreadFloatMerge } from '@/components/SessionView/ThreadFloatMerge'
 import { SPLIT_BAR_ATTR, SplitColumnFloatsContext } from '@/components/SessionView/splitChrome'
 import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
 import type { ThreadPanelKind } from '@/components/SessionView/threadPanels'
@@ -405,10 +415,12 @@ function ChatHeader({
             ? `h-[31px] ${SPLIT_BAR_GRID}`
             : 'px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch'
       }
+      {...{ [THREAD_FLOATS_GRID_ATTR]: floating ? '' : undefined }}
     >
+      {floating ? <ThreadFloatMerge /> : null}
       <div
         className={
-          floating ? 'flex min-w-0 items-center gap-1.5 thread-float-group' : splitBar ? SPLIT_BAR_LEFT_CLASS : 'flex min-w-0 items-stretch'
+          floating ? THREAD_FLOAT_GROUP_CLASS : splitBar ? SPLIT_BAR_LEFT_CLASS : 'flex min-w-0 items-stretch'
         }
         data-split-bar-group={splitBar ? 'left' : undefined}
       >
@@ -438,7 +450,9 @@ function ChatHeader({
       {floating && shows('search') ? <ThreadFloatSearch /> : null}
       </div>
       {floating ? (
-        shows('identity') ? <ThreadViewIdentity name={displayName} addr={overlayAddr} /> : <span />
+        <div className={THREAD_FLOAT_CENTRE_CLASS}>
+          {shows('identity') ? <ThreadViewIdentity name={displayName} addr={overlayAddr} /> : null}
+        </div>
       ) : splitBar ? (
         <div className={SPLIT_BAR_CENTRE_CLASS} data-split-bar-centre="">
           {shows('identity') ? <ThreadViewIdentity name={displayName} addr={overlayAddr} bar /> : null}
@@ -451,7 +465,7 @@ function ChatHeader({
       <div
         className={
           floating
-            ? 'flex min-w-0 items-center justify-end gap-1.5 thread-float-group'
+            ? `${THREAD_FLOAT_GROUP_CLASS} justify-end`
             : splitBar
               ? SPLIT_BAR_RIGHT_CLASS
               : 'flex min-w-0 items-center justify-end gap-1'

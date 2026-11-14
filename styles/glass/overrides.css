@@ -115,6 +115,9 @@
 [data-style="glass"][data-palette="veil"] :is([data-material="frost"]:not([class~="absolute"], [class~="fixed"]), [data-k2-thread-zen] [data-zen-send]):not([data-zen-root] *) { position: relative; }
 /* The 1px gradient ring that follows the corners: dark down the sides, bright
    at top and bottom, fading gradually between them. */
+[data-style="glass"][data-palette="veil"] {
+  --k2-veil-ring: linear-gradient(to bottom, rgba(255, 255, 255, 0.95) 0%, rgba(0, 0, 0, 0.2) 32%, rgba(0, 0, 0, 0.2) 68%, rgba(255, 255, 255, 0.95) 100%);
+}
 [data-style="glass"][data-palette="veil"] :is([data-material="frost"], [data-k2-thread-zen] [data-zen-send]):not([data-zen-root] *)::before {
   content: "";
   position: absolute;
@@ -122,12 +125,21 @@
   border-radius: inherit;
   padding: 1px;
   pointer-events: none;
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.95) 0%, rgba(0, 0, 0, 0.2) 32%, rgba(0, 0, 0, 0.2) 68%, rgba(255, 255, 255, 0.95) 100%);
+  background: var(--k2-veil-ring);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
 }
+/* Thread view's merged objects (globals.css, "Merged and joined objects"):
+   the same rim along the merged outline, 1px of the ring, and the frost's
+   soft drop under it. */
+[data-style="glass"][data-palette="veil"] .thread-float-merge:not([data-zen-root] *) {
+  --k2-merge-edge: 1px;
+  --k2-merge-shadow-blur: 5px;
+  --k2-merge-shadow-y: 2px;
+}
+[data-style="glass"][data-palette="veil"] .thread-float-merge > [data-k2-merge="glass"] > [data-k2-merge="edge"]:not([data-zen-root] *) { background: var(--k2-veil-ring); }
 /* Tiles: white, soft shadow, no inner sheen. Raised controls keep the rim. */
 [data-style="glass"][data-palette="veil"] :is([data-material="tile"], [data-material="raised"]):not([data-floating]):not([data-zen-root] *) {
   border-color: var(--color-border);

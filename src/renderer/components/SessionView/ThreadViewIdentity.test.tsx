@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Thread view's header (prd-thread-view-focus-v1 §4): the picture above the
-// name, as on the phone; one line in small panes; the server under the name
+// name, as on the phone; one line in short panes; the server under the name
 // in a room on another server. No status dot (dropped from v1: the phone's
-// header has none).
+// header has none). The name keeps its size: its object grows and gives way
+// around it, in the phone's order (identityFit).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, screen } from '@testing-library/react'
 
@@ -16,7 +17,7 @@ vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({
   },
 }))
 
-import { ThreadViewIdentity, identityCompact } from './ThreadViewIdentity'
+import { IDENTITY_NAME_MIN_PX, IDENTITY_PAD_PX, ThreadViewIdentity, identityCompact, identityFit } from './ThreadViewIdentity'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { primaryScope } from '@/kessel/server-scope'
@@ -72,12 +73,59 @@ afterEach(() => {
 })
 
 describe('identityCompact', () => {
-  it('one line under 420 tall or 360 wide, not at the edge, not at size 0', () => {
-    expect(identityCompact(800, 419)).toBe(true)
-    expect(identityCompact(359, 700)).toBe(true)
-    expect(identityCompact(800, 420)).toBe(false)
-    expect(identityCompact(360, 700)).toBe(false)
-    expect(identityCompact(0, 0)).toBe(false)
+  it('one line under 420 tall, not at the edge, not at size 0', () => {
+    expect(identityCompact(419)).toBe(true)
+    expect(identityCompact(420)).toBe(false)
+    expect(identityCompact(0)).toBe(false)
+  })
+})
+
+describe('identityFit: the name keeps its size, the object gives way around it', () => {
+  const pad = IDENTITY_PAD_PX
+  it('with room, the object is the text and its roomy padding', () => {
+    expect(identityFit({ name: 200, server: 90, room: 600 })).toEqual({
+      pad: 'roomy',
+      width: 200 + 2 * pad.roomy,
+      serverClips: false,
+      nameClips: false,
+    })
+  })
+
+  it('first the padding tightens', () => {
+    const room = 200 + 2 * pad.roomy - 1
+    expect(identityFit({ name: 200, server: 90, room })).toEqual({
+      pad: 'snug',
+      width: 200 + 2 * pad.snug,
+      serverClips: false,
+      nameClips: false,
+    })
+  })
+
+  it('then the server line shortens, while the name still fits whole', () => {
+    // The server's line is the longer: it gives way, the name doesn't.
+    const f = identityFit({ name: 150, server: 240, room: 200 })
+    expect(f).toEqual({ pad: 'snug', width: 200, serverClips: true, nameClips: false })
+  })
+
+  it('the name shortens last, and never below its minimum', () => {
+    expect(identityFit({ name: 300, server: 90, room: 200 })).toMatchObject({ width: 200, nameClips: true, serverClips: false })
+    const tiny = identityFit({ name: 300, room: 40 })
+    expect(tiny.width).toBe(IDENTITY_NAME_MIN_PX + 2 * pad.snug)
+    // A short name is never padded out to the minimum.
+    expect(identityFit({ name: 30, room: 40 }).width).toBe(30 + 2 * pad.snug)
+  })
+
+  it('the text itself never shrinks: the fit only ever changes the object', () => {
+    for (const room of [600, 300, 200, 120]) {
+      const f = identityFit({ name: 250, server: 120, room })
+      expect(Object.keys(f).sort()).toEqual(['nameClips', 'pad', 'serverClips', 'width'])
+    }
+  })
+
+  it('in one line, the picture sits inside and the server is on hover', () => {
+    const f = identityFit({ name: 100, server: 300, room: 160, compact: true })
+    expect(f).toMatchObject({ pad: 'roomy', serverClips: false, nameClips: false })
+    expect(identityFit({ name: 100, room: 135, compact: true }).pad).toBe('snug')
   })
 })
 
@@ -131,11 +179,18 @@ describe('ThreadViewIdentity', () => {
     expect(screen.getByTestId('thread-view-picture').style.width).toBe('36px')
   })
 
-  it('in a narrow pane, keeps the server on hover rather than a second line', () => {
-    paneSize = { width: 300, height: 700 }
+  it('in a short pane, keeps the server on hover rather than a second line', () => {
+    paneSize = { width: 800, height: 400 }
     renderInRoom(remote, framed('Sales', 'sales'))
     expect(screen.queryByTestId('thread-view-server')).toBeNull()
     expect(screen.getByTestId('thread-view-identity').title).toBe('Office box')
+  })
+
+  it('a narrow pane keeps the picture above the name: the name has the whole row under it', () => {
+    paneSize = { width: 300, height: 700 }
+    renderInRoom(remote, framed('Sales', 'sales'))
+    expect(screen.getByTestId('thread-view-identity').hasAttribute('data-compact')).toBe(false)
+    expect(screen.getByTestId('thread-view-server').textContent).toBe('Office box')
   })
 
   it('follows a renamed agent', async () => {
@@ -145,5 +200,82 @@ describe('ThreadViewIdentity', () => {
     rerender(framed('Sales Desk', 'sales'))
     expect(screen.getByTestId('thread-view-name').textContent).toBe('Sales Desk')
     expect(avatar.calls.at(-1)?.label).toBe('Sales Desk')
+  })
+})
+
+describe('in the floats’ row', () => {
+  // jsdom lays nothing out: the row's and the text's widths, in CSS px.
+  let rowWidth = 800
+  const textWidth: Record<string, number> = {}
+  beforeEach(() => {
+    rowWidth = 800
+    textWidth['thread-view-name'] = 180
+    textWidth['thread-view-server'] = 70
+    const own = <T,>(key: keyof HTMLElement, get: (el: HTMLElement) => T | undefined) => {
+      const base = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key) ?? Object.getOwnPropertyDescriptor(Element.prototype, key)
+      vi.spyOn(HTMLElement.prototype, key as 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        const v = get(this)
+        return (v ?? base?.get?.call(this) ?? 0) as number
+      })
+    }
+    own('clientWidth', (el) => (el.dataset.testid === 'row' ? rowWidth + 24 : undefined))
+    own('offsetWidth', (el) => (el.dataset.testid === 'row' ? rowWidth + 24 : undefined))
+    own('scrollWidth', (el) => textWidth[el.dataset.testid ?? ''])
+  })
+
+  function inRow(name: string): React.JSX.Element {
+    return (
+      <div data-testid="pane">
+        <div data-session-header="" data-thread-floats="">
+          <div data-testid="row" data-thread-floats-grid="" style={{ paddingLeft: 12, paddingRight: 12 }}>
+            <div className="thread-float-group" />
+            <div>
+              <ThreadViewIdentity name={name} addr="sales" />
+            </div>
+            <div className="thread-float-group" />
+          </div>
+        </div>
+      </div>
+    )
+  }
+  const root = () => screen.getByTestId('thread-view-identity')
+  const refit = () =>
+    act(() => {
+      for (const fire of observed) fire()
+    })
+
+  it('the name’s object is as wide as its text, out past the picture’s column', () => {
+    renderInRoom(remote, inRow('Sales'))
+    expect(root().getAttribute('data-fit')).toBe('roomy')
+    expect(root().hasAttribute('data-plate')).toBe(true)
+    // The text (181, a px for rounding) and 14px each side.
+    expect(root().style.getPropertyValue('--k2-plate-w')).toBe('209px')
+    // Its margins give back all but the picture's 36px: its column stays the picture's.
+    expect(root().style.getPropertyValue('--k2-plate-ml')).toBe('-86.5px')
+    expect(root().style.getPropertyValue('--k2-plate-mr')).toBe('-86.5px')
+    expect(screen.getByTestId('thread-view-name').style.fontSize).toBe('var(--type-lg)')
+  })
+
+  it('narrowing: the padding goes first, then the object stops at the row’s edges', () => {
+    renderInRoom(remote, inRow('Sales'))
+    rowWidth = 200
+    refit()
+    expect(root().getAttribute('data-fit')).toBe('snug')
+    expect(root().style.getPropertyValue('--k2-plate-w')).toBe('197px')
+    rowWidth = 150
+    refit()
+    expect(root().style.getPropertyValue('--k2-plate-w')).toBe('150px')
+    // The name is whole on hover.
+    expect(screen.getByTestId('thread-view-name').title).toBe('Sales')
+    // The text's size never changed.
+    expect(screen.getByTestId('thread-view-name').style.fontSize).toBe('var(--type-lg)')
+  })
+
+  it('in one line, sits between the objects (no reach), with its minimum', () => {
+    paneSize = { width: 800, height: 400 }
+    renderInRoom(primary, inRow('Sales'))
+    expect(root().hasAttribute('data-compact')).toBe(true)
+    expect(root().hasAttribute('data-plate')).toBe(false)
+    expect(screen.getByTestId('thread-view-name').style.minWidth).toBe(`${IDENTITY_NAME_MIN_PX}px`)
   })
 })

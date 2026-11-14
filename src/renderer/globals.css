@@ -2508,6 +2508,85 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
 [data-compact] > [data-k2-float="name"] { height: var(--k2-float-h); padding: 0 12px 0 4px; margin-top: 0; }
 [data-k2-float-picture] { position: relative; z-index: 2; filter: var(--k2-float-picture-lift); }
 html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--color-border); }
+/* The name keeps its size (ThreadViewIdentity, as on the phone): its object
+   reaches out of the picture's column, under the objects beside it, out to
+   the row's edges. ThreadViewIdentity sizes and places it; its margins give
+   back all but the picture's width, so the column stays the picture's. Out
+   of room it gives way: its padding first (`snug`), then the server line,
+   then the name. In one line it sits between the objects (padding only). */
+[data-thread-view-identity][data-plate] > [data-k2-float="name"] {
+  flex-shrink: 0;
+  width: var(--k2-plate-w);
+  max-width: none;
+  margin-left: var(--k2-plate-ml);
+  margin-right: var(--k2-plate-mr);
+}
+[data-thread-view-identity][data-fit="snug"]:not([data-compact]) > [data-k2-float="name"] { padding-inline: 8px; }
+[data-thread-view-identity][data-fit="snug"][data-compact] > [data-k2-float="name"] { padding-right: 8px; }
+/* Terminal: the name's object starts on the objects' bottom edge, so where
+   it reaches under one the two share that hairline (the joined bar below). */
+html[data-style="terminal"] [data-thread-view-identity]:not([data-compact]) > [data-k2-float="name"] {
+  margin-top: calc(var(--k2-float-group-top) + var(--k2-float-h) - 37px);
+}
+
+/* Merged and joined objects (ThreadFloatMerge, floatMerge.ts). Where the
+   name's object comes within 16px of an object beside it the two become
+   one, drawn by one layer behind the row:
+   - Glass melts them, as the phone's header does: one frosted fill, its
+     edge and its light catch, each cut to the merged outline by a mask and
+     coloured by the frost's own tokens. The pieces drop their own glass
+     meanwhile (their hover and lit fills stay). Only while it's drawn
+     ([data-k2-merged]): while the row moves, and with no canvas or in the
+     solid fallback, each piece keeps its own.
+   - Terminal joins them: one segmented bar, the gaps filled, one chamfered
+     outline round the lot and one hairline where two pieces meet. The
+     pieces drop their own box meanwhile ([data-k2-joined]).
+   Neither while an empty Thread's start has the picture and name. */
+.thread-float-merge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Glass's rim, as the frost's own: a 0.5px edge, no drop (Veil below). */
+  --k2-merge-edge: 0.5px;
+  --k2-merge-shadow-blur: 0px;
+  --k2-merge-shadow-y: 0px;
+}
+.thread-float-merge > [data-k2-merge] { position: absolute; display: none; overflow: visible; }
+.thread-float-merge > [data-k2-merge="glass"] > div {
+  position: absolute;
+  inset: 0;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+.thread-float-merge > [data-k2-merge="glass"] > div[hidden] { display: none; }
+html[data-style="glass"]:not([data-frost="tile"]) [data-thread-floats-host]:not(:has([data-thread-centred])) [data-k2-merged] > .thread-float-merge > [data-k2-merge="glass"] { display: block; }
+[data-k2-merge="fill"] {
+  background: var(--material-tint);
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+}
+[data-k2-merge="edge"] { background: var(--material-edge); }
+[data-k2-merge="sheen"] { background: var(--color-frost-sheen); }
+[data-k2-merge="shadow"] { background: var(--color-shadow-soft); }
+html[data-style="glass"]:not([data-frost="tile"]) [data-thread-floats-host]:not(:has([data-thread-centred])) [data-k2-merged] [data-k2-merge-piece][data-material="frost"]:not([data-zen-root] *) {
+  --material-tint: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+html[data-style="glass"]:not([data-frost="tile"]) [data-thread-floats-host]:not(:has([data-thread-centred])) [data-k2-merged] [data-k2-merge-piece][data-material="frost"]:not([data-zen-root] *)::before { content: none; }
+html[data-style="terminal"] [data-thread-floats-host]:not(:has([data-thread-centred])) [data-k2-joined] > .thread-float-merge > [data-k2-merge="bar"] { display: block; }
+[data-k2-merge="bar-fill"] { fill: var(--color-bg-surface); stroke: var(--color-border); stroke-width: 2px; }
+[data-k2-merge="bar-dividers"] { fill: var(--color-border); }
+html[data-style="terminal"] [data-thread-floats-host]:not(:has([data-thread-centred])) [data-k2-joined] [data-k2-merge-piece][data-k2-float] { border-color: transparent; }
+html[data-style="terminal"] [data-thread-floats-host]:not(:has([data-thread-centred])) [data-k2-joined] [data-k2-merge-piece][data-k2-float]:not(button:hover:not(:disabled), [aria-pressed="true"], [aria-expanded="true"]) { background: transparent; }
 
 /* An empty Thread's start (ThreadOverlayColumn, ThreadEmptyStart): the
    agent's picture and name over a lifted message box, centred. The header's
@@ -2557,21 +2636,20 @@ html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--co
   pointer-events: none;
 }
 [data-k2-float-menu] { pointer-events: auto; }
-/* The sides hold their full width, so long pills give way first: the session
-   title goes where it would squeeze the name; narrower still, the pills and
-   gaps tighten. */
+/* The sides hold their full width, so their labels go first where the row
+   gets tight (the name reaches under them meanwhile); narrower still, the
+   pills and gaps tighten. */
 @container thread-floats (max-width: 840px) { [data-k2-float-label] { display: none; } }
 @container thread-floats (max-width: 520px) {
   [data-k2-float="pill"] { padding: 0 8px; }
-  [data-k2-float="name"] { padding-inline: 10px; }
   .thread-float-group { gap: 4px; }
 }
 @container thread-floats (max-width: 380px) {
   [data-thread-floats] { --k2-float-h: calc(var(--k2-float-size) - 2px); }
-  [data-thread-floats] > div:not(.thread-float-scrim) { padding-inline: 8px; column-gap: 4px; }
+  [data-thread-floats] > div:not(.thread-float-scrim, .thread-float-merge) { padding-inline: 8px; column-gap: 4px; }
   [data-k2-float="pill"] { padding: 0 5px; }
   .thread-float-group { gap: 2px; }
-  [data-testid="thread-view-identity"] { overflow: hidden; }
+  [data-thread-view-identity][data-compact] { overflow: hidden; }
 }
 
 /* Outside Glass, content fades as it passes under, with no blur. Reaches a

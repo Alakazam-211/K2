@@ -1,7 +1,17 @@
 import type { JSX } from 'react'
 import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { ThreadFloatSearch } from './ThreadFloatSearch'
-import { THREAD_FLOATS_GRID, ThreadFloatScrim, threadFloatShown, useThreadFloats, type ThreadFloatId } from './threadFloats'
+import {
+  THREAD_FLOATS_GRID,
+  THREAD_FLOATS_GRID_ATTR,
+  THREAD_FLOAT_CENTRE_CLASS,
+  THREAD_FLOAT_GROUP_CLASS,
+  ThreadFloatScrim,
+  threadFloatShown,
+  useThreadFloats,
+  type ThreadFloatId,
+} from './threadFloats'
+import { ThreadFloatMerge } from './ThreadFloatMerge'
 import { useSplitColumnFloatsSource } from './splitChrome'
 
 /** Whether split view's floats column draws `id`: SPLIT_VIEW_THREAD_FLOATS,
@@ -31,16 +41,18 @@ export function SplitColumnFloats({ kind }: { kind: 'thread' | 'chatter' }): JSX
       data-testid="split-column-floats"
       data-split-column-floats={kind}
       data-thread-floats=""
+      {...{ [THREAD_FLOATS_GRID_ATTR]: '' }}
     >
       <ThreadFloatScrim />
-      <div className="relative z-[1] flex min-w-0 items-center gap-1.5 thread-float-group">
+      <ThreadFloatMerge />
+      <div className={THREAD_FLOAT_GROUP_CLASS}>
         {shows('bell') ? source.bell : null}
         {shows('search') ? <ThreadFloatSearch /> : null}
       </div>
-      <div className="relative z-[1] min-w-0">
+      <div className={THREAD_FLOAT_CENTRE_CLASS}>
         {shows('identity') ? <ThreadViewIdentity name={source.name} addr={source.addr} /> : null}
       </div>
-      <div className="relative z-[1] flex min-w-0 items-center justify-end gap-1.5 thread-float-group" />
+      <div className={`${THREAD_FLOAT_GROUP_CLASS} justify-end`} />
     </div>
   )
 }

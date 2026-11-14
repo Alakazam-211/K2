@@ -16,8 +16,12 @@ import { ThreadDrawerSelector } from './ThreadDrawerSelector'
 import type { ThreadPanelKind } from './threadPanels'
 import { ThreadFloatBell } from './ThreadFloatBell'
 import { ThreadFloatSearch } from './ThreadFloatSearch'
+import { ThreadFloatMerge } from './ThreadFloatMerge'
 import {
   THREAD_FLOATS_GRID,
+  THREAD_FLOATS_GRID_ATTR,
+  THREAD_FLOAT_CENTRE_CLASS,
+  THREAD_FLOAT_GROUP_CLASS,
   ThreadFloatScrim,
   floatProps,
   threadFloatShown,
@@ -366,13 +370,14 @@ export function SidecarSessionHeader({
       data-testid="sidecar-session-header"
       data-session-header=""
       data-thread-floats={floating ? '' : undefined}
-      {...{ [SPLIT_BAR_ATTR]: splitBar ? '' : undefined }}
+      {...{ [SPLIT_BAR_ATTR]: splitBar ? '' : undefined, [THREAD_FLOATS_GRID_ATTR]: floating ? '' : undefined }}
     >
         {floating ? <ThreadFloatScrim /> : null}
+        {floating ? <ThreadFloatMerge /> : null}
         <div
           className={
             floating
-              ? 'relative z-[1] flex min-w-0 items-center gap-1.5 thread-float-group'
+              ? THREAD_FLOAT_GROUP_CLASS
               : splitBar
                 ? SPLIT_BAR_LEFT_CLASS
                 : 'flex min-w-0 items-stretch'
@@ -405,7 +410,7 @@ export function SidecarSessionHeader({
         {floating && shows('search') ? <ThreadFloatSearch /> : null}
         </div>
         {floating ? (
-          <div className="relative z-[1] min-w-0">
+          <div className={THREAD_FLOAT_CENTRE_CLASS}>
             {shows('identity') ? <ThreadViewIdentity name={title} addr={addr} /> : null}
           </div>
         ) : splitBar ? (
@@ -423,7 +428,7 @@ export function SidecarSessionHeader({
         <div
           className={
             floating
-              ? 'relative z-[1] flex min-w-0 items-center justify-end gap-1.5 thread-float-group'
+              ? `${THREAD_FLOAT_GROUP_CLASS} justify-end`
               : splitBar
                 ? SPLIT_BAR_RIGHT_CLASS
                 : 'flex min-w-0 items-center justify-end gap-1'

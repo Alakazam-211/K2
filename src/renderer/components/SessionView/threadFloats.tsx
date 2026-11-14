@@ -19,11 +19,21 @@ export const THREAD_FLOAT_INSET_VAR = '--thread-float-inset'
 export const THREAD_FLOAT_LEFT_VAR = '--thread-float-left'
 export const THREAD_FLOAT_TOP_VAR = '--thread-float-top'
 
-/** The sides can't shrink below their buttons, so the name's pill can't run
- *  under them: it truncates instead. With room to spare the sides are equal
- *  and the name is centred; only when it is out of room does it sit off-centre. */
+/** The sides can't shrink below their buttons, so the row of objects never
+ *  overlaps. With room to spare the sides are equal and the picture is
+ *  centred; only when the row is out of room does it sit off-centre. The
+ *  name's object reaches out of its column, under the objects beside it
+ *  (ThreadViewIdentity), where it melts into them or joins them
+ *  (ThreadFloatMerge). In one line it sits between them and shortens. */
 export const THREAD_FLOATS_GRID =
   'grid grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)] gap-x-2 items-start px-3'
+/** Marks the floats' row: the grid the objects sit in. */
+export const THREAD_FLOATS_GRID_ATTR = 'data-thread-floats-grid'
+/** The objects beside the name, each side's group: over the name's object
+ *  where it reaches under them. */
+export const THREAD_FLOAT_GROUP_CLASS = 'relative z-[2] flex min-w-0 items-center gap-1.5 thread-float-group'
+/** The name's column. */
+export const THREAD_FLOAT_CENTRE_CLASS = 'relative z-[1] min-w-0'
 
 /** `capsule`: several controls in one object, the page tabs' pattern
  *  (`ThreadDrawerSelector`). */

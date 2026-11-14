@@ -107,6 +107,9 @@ export interface HomeChatSectionProps {
   home: Home
   onAddRow: (row: HomeRow) => boolean
   onBack?: () => void
+  /** Focus the section's first field on mount (default). Off when ←/→ on
+   *  Add to Home's tab bar showed it, so focus stays on the tabs. */
+  autoFocus?: boolean
 }
 
 function BackHead({ label, onBack }: { label: string; onBack?: () => void }): JSX.Element | null {
@@ -146,7 +149,7 @@ function listedPeople(st: HomeChatHostState | undefined): HomeChatPerson[] {
   return (st?.people?.people ?? []).filter((p) => /^(k2:owner|k2:connect:)/.test(p.ext))
 }
 
-export function AddPersonPanel({ home, onAddRow, onBack }: HomeChatSectionProps): JSX.Element {
+export function AddPersonPanel({ home, onAddRow, onBack, autoFocus = true }: HomeChatSectionProps): JSX.Element {
   const servers = useChatServers()
   useServersRead(servers, true)
   const [query, setQuery] = useState('')
@@ -226,7 +229,7 @@ export function AddPersonPanel({ home, onAddRow, onBack }: HomeChatSectionProps)
         emptyText="Nobody matches"
         ariaLabel="People on your servers"
         listClassName={listClass}
-        autoFocus
+        autoFocus={autoFocus}
       />
     </>
   )
@@ -236,7 +239,7 @@ export function AddPersonPanel({ home, onAddRow, onBack }: HomeChatSectionProps)
 
 type ChannelListing = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ok'; channels: HomeChatChannel[] }
 
-export function AddChannelPanel({ home, onAddRow, onBack }: HomeChatSectionProps): JSX.Element {
+export function AddChannelPanel({ home, onAddRow, onBack, autoFocus = true }: HomeChatSectionProps): JSX.Element {
   const servers = useChatServers()
   useServersRead(servers, false)
   const [query, setQuery] = useState('')
@@ -317,7 +320,7 @@ export function AddChannelPanel({ home, onAddRow, onBack }: HomeChatSectionProps
         emptyText="No channels match"
         ariaLabel="Channels on your servers"
         listClassName={listClass}
-        autoFocus
+        autoFocus={autoFocus}
       />
     </>
   )
@@ -348,7 +351,7 @@ export async function waitForChannelId(
 }
 
 /** `onDone`: the channel is made and on the Home (the modal closes). */
-export function NewChannelPanel({ onAddRow, onBack, onDone }: HomeChatSectionProps & { onDone?: () => void }): JSX.Element {
+export function NewChannelPanel({ onAddRow, onBack, onDone, autoFocus = true }: HomeChatSectionProps & { onDone?: () => void }): JSX.Element {
   const servers = useChatServers()
   useServersRead(servers, true)
   const byHost = useHomeChatStore((s) => s.byHost)
@@ -415,7 +418,7 @@ export function NewChannelPanel({ onAddRow, onBack, onDone }: HomeChatSectionPro
             <label className="flex items-center gap-2">
               <span className="w-14 text-[var(--color-text-muted)]">Name</span>
               <input
-                autoFocus
+                autoFocus={autoFocus}
                 aria-label="Channel name"
                 data-testid="home-chat-new-channel-name"
                 value={name}

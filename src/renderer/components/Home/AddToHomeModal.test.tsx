@@ -32,7 +32,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { ADD_TO_HOME_SECTIONS, AddToHomeModal, addToHomeSections } from './AddToHomeModal'
+import { ADD_TO_HOME_SECTIONS, AddToHomeModal, addToHomeSections, rememberedAddToHomeTab } from './AddToHomeModal'
 import { resetHomeChatForTests } from '@/stores/home-chat'
 import type { Home, HomeRow } from '@/stores/homes'
 
@@ -40,10 +40,10 @@ import type { Home, HomeRow } from '@/stores/homes'
 
 const HOME: Home = { id: 'h1', name: 'Work', rows: [] }
 
-function open(section: 'agents' | 'people' | 'channels', rows: HomeRow[], onClose = vi.fn(), onAdded = vi.fn()) {
+function open(section: 'agents' | 'people' | 'channels' | undefined, rows: HomeRow[], onClose = vi.fn(), onAdded = vi.fn(), home: Home = HOME) {
   render(
     <AddToHomeModal
-      home={HOME}
+      home={home}
       index={0}
       icon={null}
       section={section}
@@ -58,6 +58,7 @@ function open(section: 'agents' | 'people' | 'channels', rows: HomeRow[], onClos
 beforeEach(() => {
   resetHomeChatForTests()
   h.offered = true
+  localStorage.clear()
 })
 afterEach(() => {
   cleanup()
@@ -104,6 +105,56 @@ describe('Add to Home: people and channels', () => {
     h.offered = false
     open('people', [])
     expect(document.querySelector('[data-add-to-home-tabs]')).toBeNull()
+    expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('agents')
+  })
+
+  it('the tabs are the segmented control: Agents, People, Channels, left-aligned', () => {
+    open('agents', [])
+    const bar = document.querySelector('[data-add-to-home-tabs]')!
+    const group = bar.querySelector('[role="radiogroup"]')!
+    expect(group.classList.contains('k2-segmented')).toBe(true)
+    expect(bar.className).toContain('justify-start')
+    expect([...group.querySelectorAll('[role="radio"]')].map((b) => b.textContent)).toEqual(['Agents', 'People', 'Channels'])
+    expect(screen.getByTestId('add-to-home-tab-agents').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('→ and ← on the tab bar switch tabs, and focus stays on the tabs', async () => {
+    open('agents', [])
+    const agents = screen.getByTestId('add-to-home-tab-agents')
+    agents.focus()
+    await act(async () => {
+      fireEvent.keyDown(agents, { key: 'ArrowRight' })
+    })
+    expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('people')
+    expect(document.activeElement).toBe(screen.getByTestId('add-to-home-tab-people'))
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('add-to-home-tab-people'), { key: 'ArrowRight' })
+    })
+    expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('channels')
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('add-to-home-tab-channels'), { key: 'ArrowLeft' })
+    })
+    expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('people')
+    // Give a search's own focus a frame: it must not take focus off the tabs.
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(document.activeElement).toBe(screen.getByTestId('add-to-home-tab-people'))
+  })
+
+  it('the last tab is remembered per Home', async () => {
+    open(undefined, [])
+    expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('agents')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('add-to-home-tab-channels'))
+    })
+    expect(rememberedAddToHomeTab('h1')).toBe('channels')
+    cleanup()
+    open(undefined, [])
+    expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('channels')
+    cleanup()
+    // Another Home keeps its own (none yet: Agents).
+    open(undefined, [], vi.fn(), vi.fn(), { id: 'h2', name: 'Play', rows: [] })
     expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('agents')
   })
 })

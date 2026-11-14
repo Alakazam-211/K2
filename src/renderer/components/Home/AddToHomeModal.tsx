@@ -9,7 +9,10 @@
 // current group. A tab bar between that line and the search appears only
 // once there is more than one kind to add (`addToHomeSections`): Agents,
 // and People and Channels once a server this window knows has Home chat
-// (prd-home-people-channels-v1 S6; `useHomeChatOffered`).
+// (prd-home-people-channels-v1 S6; `useHomeChatOffered`). It is K2's
+// segmented control, hugging its labels and left-aligned (the Groups
+// dialog's Agents | Icon); ←/→ on it switches tabs. The last tab is kept
+// per Home in this window (`rememberAddToHomeTab`): the next open lands there.
 //
 // People: everyone you share a server with (owner, admin, member and Voice
 // & Chat only logins), never App users, disabled logins or agents. Channels:
@@ -37,6 +40,7 @@ import { CheckIcon } from 'lucide-react'
 import { DialogFrame, DialogScrim } from '@/components/ui/Dialog'
 import { SearchField } from '@/components/ui/SearchField'
 import { DIALOG_EDGE_TINT, ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
+import { Segmented } from '@/components/ui/Segmented'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { selectedHome, useHomesStore, type Home, type HomeRow } from '@/stores/homes'
@@ -70,6 +74,28 @@ export function addToHomeSections(chat: boolean): ReadonlyArray<{ id: AddToHomeS
   return chat ? ADD_TO_HOME_SECTIONS : ADD_TO_HOME_SECTIONS.filter((s) => s.id === 'agents')
 }
 
+const TAB_KEY = 'k2.addToHome.tab.'
+
+/** The tab Add to Home last showed on `homeId` in this window (a per-viewer
+ *  convenience, so local storage); null when none or storage is off. */
+export function rememberedAddToHomeTab(homeId: string): AddToHomeSection | null {
+  try {
+    const v = globalThis.localStorage?.getItem(TAB_KEY + homeId)
+    return v === 'agents' || v === 'people' || v === 'channels' ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** Keep `tab` as `homeId`'s last Add to Home tab. */
+export function rememberAddToHomeTab(homeId: string, tab: AddToHomeSection): void {
+  try {
+    globalThis.localStorage?.setItem(TAB_KEY + homeId, tab)
+  } catch {
+    // Storage off (a private window): the dialog opens on Agents next time.
+  }
+}
+
 /** The dialog's most, and its margins from the window (the Groups dialog's). */
 export const ADD_TO_HOME_MAX = { width: 560, height: 540 } as const
 export const ADD_TO_HOME_MARGIN = { x: 16, y: 24 } as const
@@ -88,7 +114,8 @@ export interface AddToHomeModalProps {
   /** The group's 0-based position and icon, for "Adds to". */
   index: number
   icon: string | null
-  /** The section it opens on. */
+  /** The section it opens on (default: the last one shown on this Home,
+   *  else Agents). */
   section?: AddToHomeSection
   onClose: () => void
   /** A row was added (its address). The dialog closes right after. */
@@ -169,12 +196,15 @@ export function AddAgentsPanel({
   onAdded,
   onCancel,
   avatarFor,
+  autoFocus = true,
 }: {
   home: Home
   onAdded: (address: string) => void
   /** Esc in the list (a listbox keeps Esc from the dialog's own handler). */
   onCancel: () => void
   avatarFor?: HomeAvatarLookup
+  /** Focus the search on mount (not when ←/→ on the tab bar showed it). */
+  autoFocus?: boolean
 }): JSX.Element {
   const { sources, add } = useAddableAgents(home, avatarFor)
   const [query, setQuery] = useState('')
@@ -183,9 +213,10 @@ export function AddAgentsPanel({
   const listId = useId()
 
   useEffect(() => {
+    if (!autoFocus) return
     const raf = requestAnimationFrame(() => searchRef.current?.focus())
     return () => cancelAnimationFrame(raf)
-  }, [])
+  }, [autoFocus])
 
   const shown = useMemo(() => {
     const q = query.trim()
@@ -283,11 +314,24 @@ export function AddAgentsPanel({
   )
 }
 
-export function AddToHomeModal({ home, index, icon, section = 'agents', onClose, onAdded, onAddRow, avatarFor }: AddToHomeModalProps): JSX.Element {
+export function AddToHomeModal({ home, index, icon, section, onClose, onAdded, onAddRow, avatarFor }: AddToHomeModalProps): JSX.Element {
   const titleId = useId()
   const sections = addToHomeSections(useHomeChatOffered() && !isWebClient())
-  const [picked, setTab] = useState<AddToHomeSection>(section)
+  const [picked, setPicked] = useState<AddToHomeSection>(() => section ?? rememberedAddToHomeTab(home.id) ?? 'agents')
   const tab = sections.some((s) => s.id === picked) ? picked : 'agents'
+  // ←/→ on the tab bar keeps focus there (so the next arrow moves on); a
+  // click, or the first open, puts it in the panel's search.
+  const viaKeys = useRef(false)
+  const [panelFocus, setPanelFocus] = useState(true)
+  const setTab = useCallback(
+    (next: AddToHomeSection) => {
+      setPanelFocus(!viaKeys.current)
+      viaKeys.current = false
+      setPicked(next)
+      rememberAddToHomeTab(home.id, next)
+    },
+    [home.id],
+  )
   const [channelMode, setChannelMode] = useState<'pick' | 'new'>('pick')
   const added = useCallback(
     (address: string) => {
@@ -330,24 +374,32 @@ export function AddToHomeModal({ home, index, icon, section = 'agents', onClose,
           </p>
         </div>
         {sections.length > 1 && (
-          <div role="tablist" className="flex flex-shrink-0 gap-1 px-5 pb-2.5" data-add-to-home-tabs="">
-            {sections.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === s.id}
-                data-testid={`add-to-home-tab-${s.id}`}
-                onClick={() => setTab(s.id)}
-              >
-                {s.label}
-              </button>
-            ))}
+          // Hugs its labels, left-aligned (the Groups dialog's Agents | Icon).
+          <div
+            className="flex flex-shrink-0 justify-start px-5 pb-2.5"
+            data-add-to-home-tabs=""
+            onKeyDownCapture={(e) => {
+              viaKeys.current = e.key.startsWith('Arrow')
+            }}
+            onPointerDownCapture={() => {
+              viaKeys.current = false
+            }}
+          >
+            <Segmented
+              aria-label="Add to Home: show"
+              value={tab}
+              onChange={setTab}
+              options={sections.map((s) => ({
+                value: s.id,
+                label: s.label,
+                buttonProps: { 'data-testid': `add-to-home-tab-${s.id}`, 'data-add-to-home-tab': s.id },
+              }))}
+            />
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col" data-add-to-home-panel={tab}>
-          {tab === 'agents' && <AddAgentsPanel home={home} onAdded={added} onCancel={onClose} avatarFor={avatarFor} />}
-          {tab === 'people' && <AddPersonPanel home={home} onAddRow={addRow} />}
+          {tab === 'agents' && <AddAgentsPanel home={home} onAdded={added} onCancel={onClose} avatarFor={avatarFor} autoFocus={panelFocus} />}
+          {tab === 'people' && <AddPersonPanel home={home} onAddRow={addRow} autoFocus={panelFocus} />}
           {tab === 'channels' && (
             <>
               <div role="tablist" className="flex flex-shrink-0 gap-2 px-5 pb-1.5 type-hint" data-add-channel-mode={channelMode}>
@@ -358,7 +410,11 @@ export function AddToHomeModal({ home, index, icon, section = 'agents', onClose,
                   New channel
                 </button>
               </div>
-              {channelMode === 'pick' ? <AddChannelPanel home={home} onAddRow={addRow} /> : <NewChannelPanel home={home} onAddRow={addRow} />}
+              {channelMode === 'pick' ? (
+                <AddChannelPanel home={home} onAddRow={addRow} autoFocus={panelFocus} />
+              ) : (
+                <NewChannelPanel home={home} onAddRow={addRow} autoFocus={panelFocus} />
+              )}
             </>
           )}
         </div>

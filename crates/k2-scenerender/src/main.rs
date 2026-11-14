@@ -294,7 +294,14 @@ fn run(caps: &Caps, memory: u64, sandbox: &str) -> i32 {
         timings: Some(Timings { header_ms, data_ms, views_ms: ms(t2) }),
         estimate_bytes: Some(est),
     };
-    let images: Vec<&[u8]> = o.views.iter().map(|v| v.1.as_slice()).collect();
+    // Each view's image, then its id image when the request asked for ids.
+    let mut images: Vec<&[u8]> = Vec::with_capacity(o.views.len() + o.ids.len());
+    for (i, v) in o.views.iter().enumerate() {
+        images.push(&v.1);
+        if let Some(ids) = o.ids.get(i) {
+            images.push(ids);
+        }
+    }
     respond(&mut out, &resp.line(), &images)
 }
 

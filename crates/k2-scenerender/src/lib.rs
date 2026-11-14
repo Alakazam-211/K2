@@ -10,13 +10,14 @@
 //!   to the contents with a lens shift), the turntable, given cameras;
 //!   fixed-point edges, a z-buffer, near clipping, two-light Lambert plus
 //!   ambient (the clay look), screen-space ambient occlusion when asked for,
-//!   SSAA, threads by fixed bands;
+//!   an id image (which object is under each pixel) when asked for, SSAA,
+//!   threads by fixed bands;
 //! - [`contents`]: which objects are shell (floor, walls) and which contents,
 //!   from world boxes alone;
 //! - [`srgb`], [`trig`], [`math`]: no libm on the render path, so the bytes are
 //!   the same on every CPU;
 //! - [`encode`]: WebP lossless (default) and PNG, opaque RGB or transparent
-//!   RGBA (coverage alpha, straight colour);
+//!   RGBA (coverage alpha, straight colour); id images as 24-bit PNG;
 //! - [`proto`], [`render`], [`sandbox`], [`host`]: the wire, the worker's
 //!   side, the limits it puts on itself first thing, and the side the
 //!   daemon links (posix_spawn, watchdog);

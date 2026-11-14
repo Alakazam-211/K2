@@ -49,6 +49,15 @@
 //! the whole light (ambient, key and fill) is darkened, the background and the coverage alpha are
 //! not. A factor of exactly 1 leaves the sample's bits as they were, so where nothing occludes,
 //! the pixels are the plain image's.
+//!
+//! **Object ids** ([`render_with_ids`]), off unless asked for: the colour pass also writes, into
+//! each sample it fills, the drawn object's index in the scene's objects plus 1, under the same
+//! depth test (so where two objects overlap, the nearer one's, the earliest on a tie). Each
+//! pixel then keeps the value of one sample, the one the depth pass keeps ([`Lens::sample_at`]),
+//! 0 where nothing is drawn there: an id image at the output size, the object the occlusion's
+//! depth is of. The colour, the depth and the order of every float operation are untouched, so
+//! the image's bytes are the same with ids or without. A pixel is on an edge between objects
+//! when a 4-neighbour holds another value (or 0): anything that wants the edges derives them so.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -136,6 +145,8 @@ struct Cam {
 }
 
 struct Obj {
+    /// The object's index in the scene's objects.
+    index: u32,
     vbase: usize,
     tbase: u64,
     tris: u64,
@@ -269,6 +280,19 @@ fn prepare<'a>(scene: &'a Scene, active: &[u32], frame: &Frame, p: &Params, clay
 
 /// [`render_with`], darkened by ambient occlusion when `ao` is given.
 pub fn render_shaded(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&Clay>, ao: Option<&Ao>) -> (Image, Stats) {
+    let (img, _, st) = draw(scene, active, frame, p, clay, ao, false);
+    (img, st)
+}
+
+/// [`render_shaded`], and the id image: for each pixel, row-major at the output size, the index
+/// in the scene's objects plus 1 of the object drawn at its depth sample, 0 where nothing is (see
+/// the module's notes). The image is the same, byte for byte, as [`render_shaded`]'s.
+pub fn render_with_ids(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&Clay>, ao: Option<&Ao>) -> (Image, Vec<u32>, Stats) {
+    let (img, ids, st) = draw(scene, active, frame, p, clay, ao, true);
+    (img, ids.unwrap_or_default(), st)
+}
+
+fn draw(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&Clay>, ao: Option<&Ao>, ids: bool) -> (Image, Option<Vec<u32>>, Stats) {
     let mut st = Stats::default();
     let (ctx, bands) = prepare(scene, active, frame, p, clay, &mut st);
     let s = p.ssaa.clamp(1, 4) as i64;
@@ -287,25 +311,31 @@ pub fn render_shaded(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, c
     let bg = [srgb::to_linear(p.background_srgb[0]), srgb::to_linear(p.background_srgb[1]), srgb::to_linear(p.background_srgb[2])];
     let ch = if p.transparent { 4 } else { 3 };
     let mut pixels = vec![0u8; w * p.height as usize * ch];
+    let mut id_px = if ids { vec![0u32; w * p.height as usize] } else { Vec::new() };
     let covered = AtomicU64::new(0);
     {
-        let items: Vec<(usize, &mut [u8])> = pixels.chunks_mut(BAND_PX as usize * w * ch).enumerate().collect();
-        let n = (ws * band_rows) as usize;
         let rows = BAND_PX as usize * w;
+        let out = pixels.chunks_mut(rows * ch);
+        let items: Vec<(usize, &mut [u8], Option<&mut [u32]>)> = if ids {
+            out.zip(id_px.chunks_mut(rows)).enumerate().map(|(b, (o, i))| (b, o, Some(i))).collect()
+        } else {
+            out.enumerate().map(|(b, o)| (b, o, None)).collect()
+        };
+        let n = (ws * band_rows) as usize;
         par_each(
             p.threads,
             items,
-            || Band { color: vec![[0.0; 3]; n], depth: vec![0.0; n] },
-            |buf, (b, out)| {
+            || Band { color: vec![[0.0; 3]; n], depth: vec![0.0; n], id: if ids { vec![0; n] } else { Vec::new() } },
+            |buf, (b, out, id_out)| {
                 let k = factors.as_deref().map(|f| &f[b * rows..(b * rows + rows).min(f.len())]);
-                let c = raster_band(&ctx, b, &bands[b], buf, out, bg, &lut, s as usize, w, p.transparent, k);
+                let c = raster_band(&ctx, b, &bands[b], buf, out, bg, &lut, s as usize, w, p.transparent, k, id_out);
                 covered.fetch_add(c, Ordering::Relaxed);
             },
         );
     }
     st.covered_px = covered.load(Ordering::Relaxed);
     st.raster_us = t2.elapsed().as_micros() as u64;
-    (Image { width: p.width, height: p.height, alpha: p.transparent, pixels }, st)
+    (Image { width: p.width, height: p.height, alpha: p.transparent, pixels }, ids.then_some(id_px), st)
 }
 
 type VertexOut = (Vec<Obj>, Vec<V3>, Vec<V3>, Vec<[i32; 2]>);
@@ -323,6 +353,7 @@ fn vertex_stage(scene: &Scene, active: &[u32], frame: &Frame, cam: &Cam, threads
         let smooth = m.normals.is_some();
         any_smooth |= smooth;
         objs.push(Obj {
+            index: oi,
             vbase: vb,
             tbase: tb,
             tris: m.indices.len() as u64,
@@ -700,6 +731,8 @@ fn bin_chunk(ctx: &Ctx, lo: u64, hi: u64) -> BinOut {
 struct Band {
     color: Vec<[f32; 3]>,
     depth: Vec<f32>,
+    /// Each sample's object (index + 1), written with its depth; empty without ids.
+    id: Vec<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -711,7 +744,7 @@ struct SV {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8], bg: [f32; 3], lut: &[u8], s: usize, w: usize, transparent: bool, ao: Option<&[f32]>) -> u64 {
+fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8], bg: [f32; 3], lut: &[u8], s: usize, w: usize, transparent: bool, ao: Option<&[f32]>, ids: Option<&mut [u32]>) -> u64 {
     let y_lo = b as i64 * ctx.band_rows;
     let y_hi = (y_lo + ctx.band_rows).min(ctx.hs);
     let ws = ctx.ws as usize;
@@ -727,7 +760,7 @@ fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8]
         }
         return 0;
     }
-    // Only depth is cleared: a sample's colour is read only where its depth was written.
+    // Only depth is cleared: a sample's colour (and id) is read only where its depth was written.
     let n = (y_hi - y_lo) as usize * ws;
     buf.depth[..n].fill(0.0);
     let mut oi = 0usize;
@@ -737,7 +770,22 @@ fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8]
             oi += 1;
         }
         let ob = &ctx.objs[oi];
-        draw_tri::<true>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
+        if ids.is_some() {
+            draw_tri::<true, true>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
+        } else {
+            draw_tri::<true, false>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
+        }
+    }
+    if let Some(ids) = ids {
+        // The depth pass's sample of each pixel (see `depth_pass`).
+        let c = s / 2;
+        for r in 0..(y_hi - y_lo) as usize / s {
+            let row = (r * s + c) * ws + c;
+            for px in 0..w {
+                let i = row + px * s;
+                ids[r * w + px] = if buf.depth[i] > 0.0 { buf.id[i] } else { 0 };
+            }
+        }
     }
     if transparent {
         resolve_rgba(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut, ao)
@@ -772,11 +820,12 @@ fn shade(ctx: &Ctx, ob: &Obj, v: [usize; 3], front: bool) -> [[f32; 3]; 3] {
 }
 
 /// Draw one triangle into the band: colour and depth, or depth alone (`COLOR` false: no shading,
-/// the colour buffer untouched).
-fn draw_tri<const COLOR: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi: i64) {
+/// the colour buffer untouched); with `IDS`, the object's index + 1 into each sample it wins too.
+fn draw_tri<const COLOR: bool, const IDS: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi: i64) {
     let f = [ctx.vfix[v[0]], ctx.vfix[v[1]], ctx.vfix[v[2]]];
     let fast = f.iter().all(|p| p[0] != NEEDS_CLIP);
     let flat = !ob.smooth;
+    let id = ob.index.saturating_add(1);
     if fast {
         let area = edge(f[0], f[1], f[2]);
         if area == 0 {
@@ -788,7 +837,7 @@ fn draw_tri<const COLOR: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Ban
         }
         let col = if COLOR { shade(ctx, ob, v, front) } else { [[0.0; 3]; 3] };
         let sv = |k: usize| SV { x: f[k][0] as i64, y: f[k][1] as i64, iw: 1.0 / -ctx.vpos[v[k]][2], c: col[k] };
-        raster_tri::<COLOR>(buf, [sv(0), sv(1), sv(2)], flat, y_lo, y_hi, ctx.ws);
+        raster_tri::<COLOR, IDS>(buf, [sv(0), sv(1), sv(2)], flat, y_lo, y_hi, ctx.ws, id);
     } else {
         let c = [clip_of(ctx.vpos[v[0]], &ctx.cam), clip_of(ctx.vpos[v[1]], &ctx.cam), clip_of(ctx.vpos[v[2]], &ctx.cam)];
         if trivially_out(&c, ctx.cam.near) {
@@ -815,14 +864,15 @@ fn draw_tri<const COLOR: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Ban
             sv[k] = SV { x: fx[0] as i64, y: fx[1] as i64, iw: 1.0 / p[2], c: [p[3], p[4], p[5]] };
         }
         for k in 1..n - 1 {
-            raster_tri::<COLOR>(buf, [sv[0], sv[k], sv[k + 1]], flat, y_lo, y_hi, ctx.ws);
+            raster_tri::<COLOR, IDS>(buf, [sv[0], sv[k], sv[k + 1]], flat, y_lo, y_hi, ctx.ws, id);
         }
     }
 }
 
 /// Fill one triangle's samples in rows [y_lo, y_hi) (sample space); depth only when `COLOR` is
-/// false.
-fn raster_tri<const COLOR: bool>(buf: &mut Band, v: [SV; 3], flat: bool, y_lo: i64, y_hi: i64, ws: i64) {
+/// false; `id` into each sample it wins when `IDS`.
+#[allow(clippy::too_many_arguments)]
+fn raster_tri<const COLOR: bool, const IDS: bool>(buf: &mut Band, v: [SV; 3], flat: bool, y_lo: i64, y_hi: i64, ws: i64, id: u32) {
     let a = v[0];
     let mut b = v[1];
     let mut c = v[2];
@@ -877,6 +927,9 @@ fn raster_tri<const COLOR: bool>(buf: &mut Band, v: [SV; 3], flat: bool, y_lo: i
                 let i = row + x as usize;
                 if iw > buf.depth[i] {
                     buf.depth[i] = iw;
+                    if IDS {
+                        buf.id[i] = id;
+                    }
                     if COLOR {
                         buf.color[i] = if flat {
                             a.c
@@ -1004,7 +1057,7 @@ fn depth_pass(ctx: &Ctx, bands: &[Vec<u32>], threads: usize, s: usize, w: usize,
     par_each(
         threads,
         items,
-        || Band { color: Vec::new(), depth: vec![0.0; n] },
+        || Band { color: Vec::new(), depth: vec![0.0; n], id: Vec::new() },
         |buf, (b, out)| {
             let refs = &bands[b];
             if refs.is_empty() {
@@ -1021,7 +1074,7 @@ fn depth_pass(ctx: &Ctx, bands: &[Vec<u32>], threads: usize, s: usize, w: usize,
                     oi += 1;
                 }
                 let ob = &ctx.objs[oi];
-                draw_tri::<false>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
+                draw_tri::<false, false>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
             }
             let c = s / 2;
             for r in 0..rows_s / s {
@@ -1501,6 +1554,110 @@ mod tests {
             let c = px(&img, 20, 20);
             assert!(c[0] > 0 && c[2] == 0, "the nearer (red) quad must win: {c:?}");
         }
+    }
+
+    /// The id image of the objects `active` of `s` through `spec`, with the image drawn alongside
+    /// it and the image drawn without ids.
+    fn ids_of(s: &Scene, active: &[u32], spec: ViewSpec, p: &Params, clay: Option<&Clay>, ao: Option<&Ao>) -> (Vec<u32>, Image, Image, Stats) {
+        let f = frame(s, active, spec, p.width as f64 / p.height as f64).expect("a frame");
+        let (img, ids, st) = render_with_ids(s, active, &f, p, clay, ao);
+        assert_eq!(ids.len(), (p.width * p.height) as usize);
+        let (plain, _) = render_shaded(s, active, &f, p, clay, ao);
+        (ids, img, plain, st)
+    }
+
+    #[test]
+    fn ids_name_the_object_under_each_pixel() {
+        // The white cube: its index + 1 at the centre, 0 in the corners; at one sample per pixel
+        // the covered pixels are exactly the ones with an id.
+        let s = testgen::white_cube_scene();
+        let p = Params { width: 160, height: 120, ssaa: 1, threads: 2, background_srgb: BG, transparent: false };
+        let (ids, _, _, st) = ids_of(&s, &[0], ViewSpec::Auto, &p, None, None);
+        assert_eq!(ids[60 * 160 + 80], 1);
+        assert_eq!((ids[0], ids[159], ids[119 * 160], ids[119 * 160 + 159]), (0, 0, 0, 0));
+        assert_eq!(ids.iter().filter(|&&i| i != 0).count() as u64, st.covered_px);
+        // Two quads one behind the other: the nearer one's index wins, in either order.
+        let quad = |z: f32| Mesh {
+            positions: vec![[-1.0, -1.0, z], [1.0, -1.0, z], [1.0, 1.0, z], [-1.0, 1.0, z]],
+            normals: None,
+            indices: vec![[0, 1, 2], [0, 2, 3]],
+            hash: None,
+        };
+        for (order, nearer) in [([0u32, 1], 1u32), ([1, 0], 2)] {
+            let s = Scene {
+                up: UpAxis::Y,
+                meshes: vec![quad(0.5), quad(-0.5)],
+                objects: order.iter().map(|&m| testgen::object(&format!("q{m}"), m, [0.5; 3], testgen::identity(), None)).collect(),
+                cameras: vec![looking([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], 0.8)],
+            };
+            for ssaa in [1, 2, 3, 4] {
+                let p = Params { width: 40, height: 40, ssaa, threads: 1, background_srgb: BG, transparent: false };
+                let (ids, _, _, _) = ids_of(&s, &[0, 1], ViewSpec::Camera(0), &p, None, None);
+                assert_eq!(ids[20 * 40 + 20], nearer, "order {order:?}, ssaa {ssaa}");
+                assert_eq!(ids[0], 0, "the background");
+                assert!(ids.iter().all(|&i| i == 0 || i == nearer), "the farther quad is hidden everywhere");
+                // Drawn alone, the farther one shows.
+                let far = if nearer == 1 { 1 } else { 0 };
+                let (alone, _, _, _) = ids_of(&s, &[far], ViewSpec::Camera(0), &p, None, None);
+                assert_eq!(alone[20 * 40 + 20], far + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn ids_are_the_same_for_any_thread_count_and_leave_the_image_alone() {
+        let s = testgen::grid_scene(30, false);
+        let all: Vec<u32> = (0..s.objects.len() as u32).collect();
+        let p = Params { width: 200, height: 150, ssaa: 2, threads: 1, background_srgb: BG, transparent: false };
+        let (one, img, plain, _) = ids_of(&s, &all, ViewSpec::Turntable(2), &p, None, None);
+        assert!(img.pixels == plain.pixels);
+        let distinct: std::collections::BTreeSet<u32> = one.iter().copied().collect();
+        assert!(distinct.len() > 100, "{}", distinct.len());
+        for t in [2, 3, 8] {
+            assert!(ids_of(&s, &all, ViewSpec::Turntable(2), &Params { threads: t, ..p }, None, None).0 == one, "threads {t}");
+        }
+        // The interior in clay, with occlusion, opaque and transparent: the image is the one drawn
+        // without ids, and the ids don't depend on the look.
+        let s = testgen::interior_scene();
+        let all: Vec<u32> = (0..s.objects.len() as u32).collect();
+        let shell: Vec<bool> = (0..all.len()).map(|k| k < 4).collect();
+        let clay = Clay { shell: &shell, shell_srgb: [138, 134, 128], contents_srgb: [206, 202, 194] };
+        let ao = Ao { radius: 0.4, strength: 1.0 };
+        let p = Params { width: 240, height: 180, ssaa: 2, threads: 3, background_srgb: BG, transparent: false };
+        let (base, _, _, _) = ids_of(&s, &all, ViewSpec::Auto, &p, None, None);
+        for transparent in [false, true] {
+            for (c, a) in [(None, None), (Some(&clay), None), (None, Some(&ao)), (Some(&clay), Some(&ao))] {
+                let p = Params { transparent, ..p };
+                let (ids, img, plain, _) = ids_of(&s, &all, ViewSpec::Auto, &p, c, a);
+                assert!(img.pixels == plain.pixels, "transparent {transparent}");
+                assert!(ids == base);
+                for t in [1, 5] {
+                    assert!(ids_of(&s, &all, ViewSpec::Auto, &Params { threads: t, ..p }, c, a).0 == base, "threads {t}");
+                }
+            }
+        }
+        let seen: std::collections::BTreeSet<u32> = base.iter().copied().collect();
+        assert!(seen.len() >= 8 && seen.iter().all(|&i| i as usize <= all.len()), "{seen:?}");
+    }
+
+    #[test]
+    fn ids_are_where_the_occlusions_depth_is() {
+        // Covered at the depth sample, and only there; an object view holds that object alone.
+        let s = testgen::interior_scene();
+        let all: Vec<u32> = (0..s.objects.len() as u32).collect();
+        for (ssaa, spec) in [(1u32, ViewSpec::Auto), (2, ViewSpec::Turntable(3)), (3, ViewSpec::Auto), (4, ViewSpec::Turntable(6))] {
+            let (w, h) = (160u32, 120u32);
+            let p = Params { width: w, height: h, ssaa, threads: 2, background_srgb: BG, transparent: true };
+            let f = frame(&s, &all, spec, w as f64 / h as f64).expect("a frame");
+            let mut st = Stats::default();
+            let (ctx, bands) = prepare(&s, &all, &f, &p, None, &mut st);
+            let depth = depth_pass(&ctx, &bands, 2, ssaa as usize, w as usize, h as usize);
+            let (_, ids, _) = render_with_ids(&s, &all, &f, &p, None, None);
+            assert!(depth.iter().zip(&ids).all(|(d, i)| (*d > 0.0) == (*i != 0)), "ssaa {ssaa}");
+        }
+        let p = Params { width: 120, height: 90, ssaa: 2, threads: 2, background_srgb: BG, transparent: false };
+        let (ids, _, _, _) = ids_of(&s, &[5], ViewSpec::Auto, &p, None, None);
+        assert!(ids.iter().all(|&i| i == 0 || i == 6) && ids.contains(&6));
     }
 
     /// The depth image and occlusion factors of every object of `s` through `spec` (strength 1).

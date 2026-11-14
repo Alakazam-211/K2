@@ -1,6 +1,6 @@
 //! The whole request, small: decode, plan and draw two views at 48 px (the
 //! auto view and a camera or turntable frame), as the worker does, then the
-//! same views in clay with ambient occlusion. A typed error is fine; a panic escaping the renderer, a fault, a hang or an
+//! same views in clay with ambient occlusion and their id images. A typed error is fine; a panic escaping the renderer, a fault, a hang or an
 //! allocation past libFuzzer's limit is a finding.
 #![no_main]
 
@@ -38,8 +38,10 @@ fuzz_target!(|data: &[u8]| {
         req.views[1] = View::new(ViewSpec::Turntable(3), 32);
         let _ = render_bytes(data, &req, &caps);
     }
-    // The same views in clay with ambient occlusion: the depth pass and the kernel too.
+    // The same views in clay with ambient occlusion and ids: the depth pass, the kernel, the id
+    // image and its table too.
     req.clay = Some(Clay::default());
     req.ao = Some(Ao::default());
+    req.ids = true;
     let _ = render_bytes(data, &req, &caps);
 });

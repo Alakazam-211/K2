@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use k2_scenerender::camera::{Framing, ViewSpec};
 use k2_scenerender::host::{self, Limits, SceneRequest};
 use k2_scenerender::proto::{Ao, FailureCode, View};
-use k2_scenerender::render::AO_BYTES_PER_PX;
+use k2_scenerender::raster::BAND_PX;
+use k2_scenerender::render::{AO_BYTES_PER_PX, IDS_BYTES_PER_PX, IDS_KEPT_PER_PX, IDS_TABLE_BYTES};
 use k2_scenerender::scene::encode;
 use k2_scenerender::testgen;
 
@@ -84,6 +85,35 @@ fn ambient_occlusion_buffers_are_in_the_memory_estimate() {
     let own = Limits { memory_bytes: b.estimate_bytes, ..l };
     let r = host::render(bin(), &ao, &own).unwrap_or_else(|f| panic!("at its own estimate: {} {} | {}", f.code, f.detail, f.stderr));
     assert_eq!(r.views[0].image, b.views[0].image);
+}
+
+/// The id image's buffers (the image, its encoding, a u32 per band sample,
+/// the tables) are in the estimate too: under a cap between the plain still's
+/// estimate and the one with ids, the plain still draws and the one with ids
+/// is refused before any drawing; at its own estimate it draws.
+#[test]
+fn id_buffers_are_in_the_memory_estimate() {
+    let input = encode(&testgen::interior_scene());
+    let plain = SceneRequest::new(&input, vec![View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 1920) }]);
+    let ids = SceneRequest { ids: true, ..plain.clone() };
+    let l = Limits { wall: Duration::from_secs(60), ..Limits::still() };
+    let a = host::render(bin(), &plain, &l).unwrap_or_else(|f| panic!("plain: {} {}", f.code, f.detail));
+    let b = host::render(bin(), &ids, &l).unwrap_or_else(|f| panic!("ids: {} {}", f.code, f.detail));
+    let m = &b.views[0].meta;
+    let (w, h, s) = (m.width as u64, m.height as u64, m.ssaa as u64);
+    let bands = l.threads as u64 * w * s * BAND_PX as u64 * s * 4;
+    assert_eq!(b.estimate_bytes - a.estimate_bytes, (IDS_BYTES_PER_PX + IDS_KEPT_PER_PX) * w * h + bands + IDS_TABLE_BYTES);
+    eprintln!("[scenerender] estimate at {w} x {h}: {} MiB plain, {} MiB with ids", a.estimate_bytes >> 20, b.estimate_bytes >> 20);
+    let between = Limits { memory_bytes: a.estimate_bytes + (b.estimate_bytes - a.estimate_bytes) / 2, ..l };
+    assert!(host::render(bin(), &plain, &between).is_ok());
+    let f = host::render(bin(), &ids, &between).expect_err("over the cap");
+    assert_eq!(f.code, FailureCode::TooLarge, "{}", f.detail);
+    assert!(f.detail.contains("memory"), "{}", f.detail);
+    let own = Limits { memory_bytes: b.estimate_bytes, ..l };
+    let r = host::render(bin(), &ids, &own).unwrap_or_else(|f| panic!("at its own estimate: {} {} | {}", f.code, f.detail, f.stderr));
+    assert_eq!(r.views[0].image, a.views[0].image);
+    assert_eq!(r.views[0].ids, b.views[0].ids);
+    assert!(r.views[0].ids.is_some() && a.views[0].ids.is_none());
 }
 
 #[test]

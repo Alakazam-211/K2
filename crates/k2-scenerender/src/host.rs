@@ -19,7 +19,7 @@
 //! | files | `RLIMIT_FSIZE` 0, `RLIMIT_NOFILE` 64, `RLIMIT_CORE` 0, inherited fds closed | same | — |
 //! | network | seccomp: `socket(2)` and `io_uring_setup(2)` fail with `EACCES` (another ABI: `EPERM`) | the `no-network` sandbox profile (`sandbox_init`), best effort (it fails when the host already runs in a sandbox) | none (documented gap) |
 //! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL, the parent's pid checked | the parent's pid checked at start and watched | — |
-//! | output | the response line at most [`MAX_RESPONSE_LINE`], the images together at most [`Limits::max_output_bytes`]; past either: kill | same | same |
+//! | output | the response line at most [`MAX_RESPONSE_LINE`], the images (and id images) together at most [`Limits::max_output_bytes`]; past either: kill | same | same |
 //!
 //! How it ended: the worker's own failure line wins (the allocator writes
 //! `too_large` before it aborts); then the watchdog's reason (time →
@@ -153,12 +153,14 @@ pub struct SceneRequest<'a> {
     pub clay: Option<Clay>,
     /// Screen-space ambient occlusion; `None`: none.
     pub ao: Option<Ao>,
+    /// Each view's id image and table too ([`crate::proto::IdsMeta`]).
+    pub ids: bool,
 }
 
 impl<'a> SceneRequest<'a> {
     /// `views` of `scene`, WebP, the default background and SSAA.
     pub fn new(scene: &'a [u8], views: Vec<View>) -> SceneRequest<'a> {
-        SceneRequest { scene, views, format: ImageFormat::Webp, background: None, transparent: false, ssaa: None, clay: None, ao: None }
+        SceneRequest { scene, views, format: ImageFormat::Webp, background: None, transparent: false, ssaa: None, clay: None, ao: None, ids: false }
     }
 }
 
@@ -167,6 +169,9 @@ impl<'a> SceneRequest<'a> {
 pub struct RenderedView {
     pub meta: ViewMeta,
     pub image: Vec<u8>,
+    /// Its id image (PNG, see [`crate::proto::IdsMeta`]) when the request asked for ids; the
+    /// table is in `meta.ids`.
+    pub ids: Option<Vec<u8>>,
 }
 
 /// A drawn request.
@@ -245,6 +250,7 @@ pub fn render_with(bin: &Path, req: &SceneRequest<'_>, limits: &Limits, hostile:
         transparent: req.transparent,
         clay: req.clay,
         ao: req.ao,
+        ids: req.ids,
         ssaa: req.ssaa,
         threads: limits.threads.max(1),
         hostile: hostile.map(str::to_string),
@@ -279,6 +285,7 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
     let line = request.line();
     let memory_cap = limits.memory_bytes;
     let wanted = request.views.len();
+    let want_ids = request.ids;
 
     let kill = |reason: u8| {
         let _ = why.compare_exchange(WHY_NONE, reason, Ordering::AcqRel, Ordering::Acquire);
@@ -335,7 +342,7 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
 
         let mut r = BufReader::with_capacity(256 << 10, stdout);
         let mut response: Option<Response> = None;
-        let mut images: Vec<Vec<u8>> = Vec::new();
+        let mut images: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
         let mut breach: Option<String> = None;
         match read_line(&mut r, MAX_RESPONSE_LINE) {
             Ok(None) => {}
@@ -346,26 +353,24 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
             Err(m) => breach = Some(m),
         }
         if let Some(Response { ok: true, views: Some(views), .. }) = &response {
-            let total = views.iter().fold(0u64, |a, v| a.saturating_add(v.image_len));
+            let total = views.iter().fold(0u64, |a, v| a.saturating_add(v.image_len).saturating_add(v.ids.as_ref().map_or(0, |i| i.image_len)));
             if views.len() != wanted {
                 breach = Some(format!("{} images for {wanted} views", views.len()));
+            } else if views.iter().any(|v| v.ids.is_some() != want_ids) {
+                breach = Some(if want_ids { "a view without its id image".into() } else { "an id image no one asked for".into() });
             } else if total > limits.max_output_bytes {
                 kill(WHY_OUTPUT);
             } else {
                 for v in views {
-                    // At most `image_len` bytes, read as they come (never reserved up front).
-                    let mut img = Vec::new();
-                    match (&mut r).take(v.image_len).read_to_end(&mut img) {
-                        Ok(n) if n as u64 == v.image_len => images.push(img),
-                        Ok(n) => {
-                            breach = Some(format!("an image ended after {n} of {} bytes", v.image_len));
-                            break;
-                        }
-                        Err(e) => {
-                            breach = Some(format!("reading an image: {e}"));
-                            break;
-                        }
-                    }
+                    let Some(img) = read_image(&mut r, v.image_len, &mut breach) else { break };
+                    let ids = match &v.ids {
+                        Some(m) => match read_image(&mut r, m.image_len, &mut breach) {
+                            Some(i) => Some(i),
+                            None => break,
+                        },
+                        None => None,
+                    };
+                    images.push((img, ids));
                 }
             }
         }
@@ -394,6 +399,23 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
     })
 }
 
+/// Exactly `len` bytes, read as they come (never reserved up front); `None`, and the breach
+/// set, when they end early or fail.
+fn read_image(r: &mut impl Read, len: u64, breach: &mut Option<String>) -> Option<Vec<u8>> {
+    let mut img = Vec::new();
+    match r.take(len).read_to_end(&mut img) {
+        Ok(n) if n as u64 == len => Some(img),
+        Ok(n) => {
+            *breach = Some(format!("an image ended after {n} of {len} bytes"));
+            None
+        }
+        Err(e) => {
+            *breach = Some(format!("reading an image: {e}"));
+            None
+        }
+    }
+}
+
 /// One line, without its newline; `None` at EOF before any byte. Longer than
 /// `max`, or EOF inside the line: a breach.
 fn read_line(r: &mut impl BufRead, max: usize) -> Result<Option<Vec<u8>>, String> {
@@ -413,7 +435,7 @@ fn decide(
     why: u8,
     status: ExitStatus,
     response: Option<Response>,
-    images: Vec<Vec<u8>>,
+    images: Vec<(Vec<u8>, Option<Vec<u8>>)>,
     breach: Option<String>,
     limits: &Limits,
     stderr: String,
@@ -439,7 +461,7 @@ fn decide(
         {
             Ok(Rendered {
                 format,
-                views: metas.into_iter().zip(images).map(|(meta, image)| RenderedView { meta, image }).collect(),
+                views: metas.into_iter().zip(images).map(|(meta, (image, ids))| RenderedView { meta, image, ids }).collect(),
                 objects_without_modifiers: objects_without_modifiers.unwrap_or_default(),
                 timings: timings.unwrap_or_default(),
                 estimate_bytes: estimate_bytes.unwrap_or(0),

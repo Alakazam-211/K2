@@ -22,7 +22,9 @@ use k2_scenerender::testgen;
 /// (job 9919a84e), the 30 above unchanged there. The 11 content-framing ones: made on
 /// k2-arch (x86_64, job d8bddba8). The 13 clay ones: made on k2-arch (job 20f420f1). All 81
 /// matched on aarch64 macOS (k2n1-m4, job ffe2988a). The 15 ambient occlusion ones: made on
-/// k2n10-vin (job ac55097d), all 96 matched on aarch64 macOS (k2n1-m4, job e76bf3a5).
+/// k2n10-vin (job ac55097d), all 96 matched on aarch64 macOS (k2n1-m4, job e76bf3a5). The 15
+/// object id ones (stills and id images): made on k2n10-vin (job feb4c66f), the 96 above unchanged
+/// there.
 const WANT: &[(&str, &str)] = &[
     ("cube-webp-320/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
     ("cube-webp-320/0", "5a8e7a89bef92a33281af63a775f1c297cd8dc99090f88b80d190b43eb91c9bc"),
@@ -123,6 +125,22 @@ const WANT: &[(&str, &str)] = &[
     ("interior-clay-ao-own/0", "1966f900a5b0a75e9dc1ba17b9c9bb1b6dd9b3a82bc79b84a6ef281b49085b9a"),
     ("small-object-clay-ao/k2scene1", "25c2e806f1c3b53fa889bd36b059c299f268474f77be3a63bbb0b3cd9a8441f6"),
     ("small-object-clay-ao/0", "a1f73af4c1cb4badf01a9f2b939f1eeae2c750f7c0d08a9977738ad7332d12c4"),
+    // Object ids: each view's still (the same digest as without ids) and its id image.
+    ("interior-ids/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-ids/0", "0ed4575e66103f2ddb39a7a6b8d336c8cc178ee22bfa954cf35bb146b1041004"),
+    ("interior-ids/0/ids", "869df1c0821202f5e9c7697de2027a3c49f971cbe530975c4a697fab7e2363c0"),
+    ("interior-ids/1", "5604afb144e8e0ff199a89781a87e972807e13ea167dac5928487ceb229c1410"),
+    ("interior-ids/1/ids", "2251c9ac83286ce4d2e0951dc33150a65e09c29c653447e310babb59a3fdb329"),
+    ("interior-ids/2", "077ee9c670b1110eef37d7bfbe35fe200dd1bba0bf56ba09b6cfeb94eefb0bb1"),
+    ("interior-ids/2/ids", "774b7c5918640351a290895b3d550c7d41b41337e35336e5f1c14b75080570a8"),
+    ("interior-ids/3", "564c63a628b41ce4a20f2e8ce4b1116686a712082f2b1c7c4a26b3b0c265681c"),
+    ("interior-ids/3/ids", "970321f1ed76268c6d5760116414826a41aeb61639577ab53378afe00306c875"),
+    ("interior-clay-ao-ids-alpha/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay-ao-ids-alpha/0", "b7821a95db8fa64689e7fceb4476845844468404f955accb248494e359bc6104"),
+    ("interior-clay-ao-ids-alpha/0/ids", "2251c9ac83286ce4d2e0951dc33150a65e09c29c653447e310babb59a3fdb329"),
+    ("interior-clay-ao-ids-1920/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
+    ("interior-clay-ao-ids-1920/0", "f1b67dc5de403a0a5992dc67e10eb9747a517b61542509c2e1601b9b1fcab120"),
+    ("interior-clay-ao-ids-1920/0/ids", "480a871d5e95e86757e7e5b994c2afc3193dca0449c01c27d32363cd5cf73416"),
 ];
 
 fn caps() -> Caps {
@@ -153,6 +171,12 @@ fn case_clay(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<
 
 #[allow(clippy::too_many_arguments)]
 fn case_ao(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32, transparent: bool, clay: Option<Clay>, ao: Option<Ao>) {
+    case_ids(out, name, s, views, format, threads, transparent, clay, ao, false)
+}
+
+/// With `ids`, each view's id image too, as `<name>/<i>/ids`, after its still.
+#[allow(clippy::too_many_arguments)]
+fn case_ids(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32, transparent: bool, clay: Option<Clay>, ao: Option<Ao>, ids: bool) {
     let input = encode(s);
     out.push((format!("{name}/k2scene1"), hex(&digest(&input))));
     let mut req = Request::new(views);
@@ -161,9 +185,14 @@ fn case_ao(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<Vi
     req.transparent = transparent;
     req.clay = clay;
     req.ao = ao;
+    req.ids = ids;
     let (o, _) = render_bytes(&input, &req, &caps()).unwrap_or_else(|f| panic!("{name}: {} {}", f.code, f.detail));
+    assert_eq!(o.ids.len(), if ids { o.views.len() } else { 0 }, "{name}");
     for (i, (_, img)) in o.views.iter().enumerate() {
         out.push((format!("{name}/{i}"), hex(&digest(img))));
+        if let Some(png) = o.ids.get(i) {
+            out.push((format!("{name}/{i}/ids"), hex(&digest(png))));
+        }
     }
 }
 
@@ -226,6 +255,13 @@ fn the_digests_are_the_checked_in_ones() {
     let own = Some(Ao { strength: 0.5, radius: 0.25 });
     case_ao(&mut got, "interior-clay-ao-own", &testgen::interior_scene(), vec![contents(240)], ImageFormat::Webp, 2, false, clay, own);
     case_ao(&mut got, "small-object-clay-ao", &testgen::small_object_scene(), vec![contents(240)], ImageFormat::Webp, 3, false, clay, ao);
+    // Object ids: the interior's views above (bounds- and contents-framed), a turntable frame
+    // and an object view; transparent in clay with occlusion; the contents-framed still at 1920
+    // in clay with occlusion, as the 3D tab draws it.
+    let object = |o: u32, w: u32| View { objects: Some(vec![o]), ..View::new(ViewSpec::Auto, w) };
+    case_ids(&mut got, "interior-ids", &testgen::interior_scene(), vec![auto(320), contents(320), View::new(ViewSpec::Turntable(1), 200), object(5, 160)], ImageFormat::Webp, 3, false, None, None, true);
+    case_ids(&mut got, "interior-clay-ao-ids-alpha", &testgen::interior_scene(), vec![contents(320)], ImageFormat::Png, 4, true, clay, ao, true);
+    case_ids(&mut got, "interior-clay-ao-ids-1920", &testgen::interior_scene(), vec![contents(1920)], ImageFormat::Webp, 4, false, clay, ao, true);
     for (k, v) in &got {
         eprintln!("[digest] (\"{k}\", \"{v}\"),");
     }
@@ -236,6 +272,11 @@ fn the_digests_are_the_checked_in_ones() {
     assert_ne!(find("interior/0"), find("interior-clay/0"));
     assert_ne!(find("interior/1"), find("interior-ao/1"));
     assert_ne!(find("interior-clay/1"), find("interior-clay-ao/0"));
+    // Ids leave the stills alone, and don't depend on the look.
+    assert_eq!(find("interior-ids/0"), find("interior/0"));
+    assert_eq!(find("interior-ids/1"), find("interior/1"));
+    assert_eq!(find("interior-clay-ao-ids-alpha/0"), find("interior-clay-ao-alpha/0"));
+    assert_eq!(find("interior-clay-ao-ids-alpha/0/ids"), find("interior-ids/1/ids"));
     let want: Vec<(String, String)> = WANT.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let differ: Vec<&str> = got.iter().zip(&want).filter(|(g, w)| g != w).map(|(g, _)| g.0.as_str()).collect();
     assert!(differ.is_empty() && got.len() == want.len(), "{} of {} differ ({} checked in): {differ:?}", differ.len(), got.len(), want.len());

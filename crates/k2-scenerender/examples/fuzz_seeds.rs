@@ -48,6 +48,16 @@ fn main() {
         sensor_fit: None,
     });
     scenes.push(("ao-contact", contact));
+    // For ids (the render target asks for them): ids as a BIM pack writes them, an IFC GlobalId
+    // shared by two objects (one product split in two), the same in lower case, and ids that
+    // need escaping in JSON.
+    let mut ids = testgen::interior_scene();
+    ids.objects[4].id = "2O2Fr$t4X7Zf8NOew3FLOH".into();
+    ids.objects[5].id = "2O2Fr$t4X7Zf8NOew3FLOH".into();
+    ids.objects[6].id = "2o2fr$t4x7zf8noew3floh".into();
+    ids.objects[7].id = " Vase \"\u{1}\u{e9}\\ ".into();
+    ids.objects[8].id = String::new();
+    scenes.push(("ids", ids));
     for (name, s) in testgen::degenerate_scenes() {
         scenes.push((name, s));
     }

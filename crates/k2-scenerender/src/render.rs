@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::camera::{self, Framing, ViewSpec, TURNTABLE_FRAMES};
 use crate::contents::{self, MAX_LEFT_OUT_LISTED};
-use crate::proto::{CameraMeta, FailureCode, FramingMeta, ImageFormat, Request, Timings, ViewMeta, DEFAULT_ASPECT, DEFAULT_BACKGROUND};
+use crate::proto::{CameraMeta, FailureCode, FramingMeta, IdEntry, IdsMeta, ImageFormat, Request, Timings, ViewMeta, DEFAULT_ASPECT, DEFAULT_BACKGROUND, MAX_IDS_LISTED_BYTES};
 use crate::raster::{self, BAND_PX};
 use crate::sandbox::Caps;
 use crate::encode;
@@ -50,6 +50,8 @@ pub struct Plan {
     pub framing: Framing,
     /// Ambient occlusion (the request's `ao`): its buffers are in the estimate.
     pub ao: bool,
+    /// The id image too (the request's `ids`): its buffers are in the estimate.
+    pub ids: bool,
 }
 
 /// The images of a request.
@@ -57,6 +59,8 @@ pub struct Plan {
 pub struct Output {
     pub format: ImageFormat,
     pub views: Vec<(ViewMeta, Vec<u8>)>,
+    /// Each view's id image, in the same order, when the request asked for ids; else empty.
+    pub ids: Vec<Vec<u8>>,
     pub objects_without_modifiers: Vec<u32>,
 }
 
@@ -149,7 +153,7 @@ pub fn plan(mesh_counts: &[(u64, u64)], objects: &[Object], cameras: &[Camera], 
         if ssaa > caps.max_ssaa {
             return Err(big(format!("ssaa {ssaa}, at most {}", caps.max_ssaa)));
         }
-        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without, transparent: req.transparent, framing: v.framing, ao: req.ao.is_some() });
+        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without, transparent: req.transparent, framing: v.framing, ao: req.ao.is_some(), ids: req.ids });
     }
     Ok(plans)
 }
@@ -175,27 +179,77 @@ pub fn threads(req: &Request, caps: &Caps) -> u32 {
 /// per drawn vertex) and band lists (10 B per drawn triangle), its image and
 /// the encoder's copies (9 B per pixel, 12 transparent), with ambient
 /// occlusion its depth image, raw occlusion and factors (12 B per pixel),
-/// each thread's band
-/// buffers, every encoded image kept until the response (4 B per pixel, 5
-/// transparent; at most the output cap), and 16 MiB of base.
+/// with ids the id image and its encoding ([`IDS_BYTES_PER_PX`]), each
+/// thread's band buffers (16 B per sample, 20 with ids), every encoded image
+/// kept until the response (4 B per pixel, 5 transparent, 3 more with ids;
+/// at most the output cap), with ids the tables ([`IDS_TABLE_BYTES`]), and
+/// 16 MiB of base.
 pub fn estimate_bytes(data_bytes: u64, header_bytes: u64, plans: &[Plan], threads: u32, max_output: u64) -> u64 {
     let mut peak = 0u64;
     let mut out = 0u64;
+    let mut tables = 0u64;
     for p in plans {
         let (w, h, s) = (p.width as u64, p.height as u64, p.ssaa as u64);
-        let band = w * s * BAND_PX as u64 * s * 16;
+        let band = w * s * BAND_PX as u64 * s * if p.ids { 20 } else { 16 };
         let (image, kept) = if p.transparent { (12, 5) } else { (9, 4) };
         let image = if p.ao { image + AO_BYTES_PER_PX } else { image };
+        let (image, kept) = if p.ids { (image + IDS_BYTES_PER_PX, kept + IDS_KEPT_PER_PX) } else { (image, kept) };
         let view = 32 * p.vertices + 10 * p.triangles + image * w * h + threads as u64 * band;
         peak = peak.max(view);
         out = out.saturating_add(kept * w * h);
+        if p.ids {
+            tables = IDS_TABLE_BYTES;
+        }
     }
-    data_bytes + 4 * header_bytes + peak + out.min(max_output) + (16 << 20)
+    data_bytes + 4 * header_bytes + peak + out.min(max_output) + tables + (16 << 20)
 }
 
 /// Ambient occlusion's own buffers, per pixel: the depth image, the raw occlusion and the
 /// factors (an f32 each).
 pub const AO_BYTES_PER_PX: u64 = 12;
+
+/// The id image's own buffers, per pixel: the image (a u32), its RGB copy and the encoder's
+/// filtered rows (3 B each).
+pub const IDS_BYTES_PER_PX: u64 = 10;
+
+/// An encoded id image kept until the response, per pixel, at most (PNG, 8-bit RGB).
+pub const IDS_KEPT_PER_PX: u64 = 3;
+
+/// The id tables of a request: what they hold in memory and in the response line (three times
+/// [`MAX_IDS_LISTED_BYTES`]: each entry's id and its place in the list, then the line).
+pub const IDS_TABLE_BYTES: u64 = 3 * MAX_IDS_LISTED_BYTES as u64;
+
+/// The table of an id image (values: index + 1, 0 for nothing) of a scene with `objects`: how
+/// many objects it shows, and those objects ascending by index, as many as fit `budget` bytes of
+/// their JSON (each entry and a comma), the first that doesn't fit ending the list. Ids are
+/// copied as they are; objects sharing an id are each listed under their own index.
+pub fn id_table(objects: &[Object], ids: &[u32], budget: usize) -> (u64, Vec<IdEntry>) {
+    let mut seen = vec![false; objects.len() + 1];
+    for &v in ids {
+        if let Some(s) = seen.get_mut(v as usize) {
+            *s = true;
+        }
+    }
+    let (mut count, mut used, mut open) = (0u64, 0usize, true);
+    let mut listed = Vec::new();
+    for (k, o) in objects.iter().enumerate() {
+        if !seen[k + 1] {
+            continue;
+        }
+        count += 1;
+        if open {
+            let e = IdEntry { index: k as u32, id: o.id.clone() };
+            let len = serde_json::to_vec(&e).map(|j| j.len() + 1).unwrap_or(usize::MAX);
+            if len <= budget - used {
+                used += len;
+                listed.push(e);
+            } else {
+                open = false;
+            }
+        }
+    }
+    (count, listed)
+}
 
 fn ms(since: Instant) -> f64 {
     (since.elapsed().as_secs_f64() * 1e6).round() / 1e3
@@ -206,6 +260,7 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
     let threads = threads(req, caps) as usize;
     let background = req.background.unwrap_or(DEFAULT_BACKGROUND);
     let mut views = Vec::with_capacity(plans.len());
+    let mut ids_images = Vec::new();
     let mut total = 0u64;
     for (vi, p) in plans.iter().enumerate() {
         let bad_view = |e: String| Failure::new(FailureCode::InvalidInput, format!("view {vi}: {e}"));
@@ -229,9 +284,17 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
         // The radius is a fraction of what is drawn (its bounding sphere), so a world size.
         let ao = req.ao.map(|a| raster::Ao { radius: (a.radius as f64 * camera::bounding_sphere(scene, &p.active).1) as f32, strength: a.strength });
         let params = raster::Params { width: p.width, height: p.height, ssaa: p.ssaa, threads, background_srgb: background, transparent: p.transparent };
-        let drawn = catch_unwind(AssertUnwindSafe(|| raster::render_shaded(scene, &p.active, &frame, &params, clay.as_ref(), ao.as_ref())))
-            .map_err(|_| Failure::new(FailureCode::RendererError, format!("view {vi}: the rasterizer panicked")))?;
-        let (img, stats) = drawn;
+        let drawn = catch_unwind(AssertUnwindSafe(|| {
+            if p.ids {
+                let (img, ids, st) = raster::render_with_ids(scene, &p.active, &frame, &params, clay.as_ref(), ao.as_ref());
+                (img, Some(ids), st)
+            } else {
+                let (img, st) = raster::render_shaded(scene, &p.active, &frame, &params, clay.as_ref(), ao.as_ref());
+                (img, None, st)
+            }
+        }))
+        .map_err(|_| Failure::new(FailureCode::RendererError, format!("view {vi}: the rasterizer panicked")))?;
+        let (img, id_px, stats) = drawn;
         let t1 = Instant::now();
         let camera = CameraMeta { view: frame.view_f32(), proj: frame.projection(), fx: frame.fx, fy: frame.fy, near: frame.near, shift_x: frame.shift_x, shift_y: frame.shift_y };
         let bytes = encode::encode(&img, req.format).map_err(|e| Failure::new(FailureCode::RendererError, format!("view {vi}: {e}")))?;
@@ -240,6 +303,19 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
         if total > caps.max_output_bytes {
             return Err(Failure::new(FailureCode::TooLarge, format!("the images are over {} bytes", caps.max_output_bytes)));
         }
+        let (ids_meta, ids_png) = match id_px {
+            Some(px) => {
+                let png = encode::ids_png(&px, p.width, p.height).map_err(|e| Failure::new(FailureCode::RendererError, format!("view {vi}: {e}")))?;
+                total = total.saturating_add(png.len() as u64);
+                if total > caps.max_output_bytes {
+                    return Err(Failure::new(FailureCode::TooLarge, format!("the images and id images are over {} bytes", caps.max_output_bytes)));
+                }
+                // Each view gets an equal share of the response line's budget for the tables.
+                let (count, objects) = id_table(&scene.objects, &px, MAX_IDS_LISTED_BYTES / plans.len().max(1));
+                (Some(IdsMeta { image_len: png.len() as u64, count, objects }), Some(png))
+            }
+            None => (None, None),
+        };
         let meta = ViewMeta {
             width: p.width,
             height: p.height,
@@ -247,6 +323,7 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
             image_len: bytes.len() as u64,
             camera: Some(camera).filter(CameraMeta::is_finite),
             framing,
+            ids: ids_meta,
             objects: stats.objects,
             triangles: stats.triangles,
             covered_px: stats.covered_px,
@@ -257,10 +334,11 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
             encode_ms: ms(t1),
         };
         views.push((meta, bytes));
+        ids_images.extend(ids_png);
     }
     let objects_without_modifiers =
         scene.objects.iter().enumerate().filter(|(_, o)| o.modifiers_not_applied).map(|(i, _)| i as u32).collect();
-    Ok(Output { format: req.format, views, objects_without_modifiers })
+    Ok(Output { format: req.format, views, ids: ids_images, objects_without_modifiers })
 }
 
 /// Decode `input` (a whole K2SCENE1) and draw every view of `req`: the
@@ -581,6 +659,157 @@ mod tests {
         }
     }
 
+    /// The id image's values and the set of them (0 left out).
+    fn id_values(png: &[u8], w: u32, h: u32) -> (Vec<u32>, std::collections::BTreeSet<u32>) {
+        let (iw, ih, px) = crate::encode::ids_from_png(png).expect("an id png");
+        assert_eq!((iw, ih), (w, h), "the still's size");
+        let set = px.iter().copied().filter(|&v| v != 0).collect();
+        (px, set)
+    }
+
+    /// Ids through a request: every view gets its id image after its image,
+    /// at the still's size, with a table of exactly the objects in it, in
+    /// every look; the stills are the bytes drawn without ids; an object view
+    /// shows only its objects; any thread count draws the same id image.
+    #[test]
+    fn ids_come_with_their_table_and_leave_the_stills_alone() {
+        let s = testgen::interior_scene();
+        let input = encode(&s);
+        let views = vec![
+            View::new(ViewSpec::Auto, 96),
+            View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 96) },
+            View::new(ViewSpec::Turntable(3), 64),
+            View { objects: Some(vec![0, 5, 6]), ..View::new(ViewSpec::Auto, 64) },
+            View { objects: Some(vec![9]), ..View::new(ViewSpec::Auto, 48) },
+        ];
+        let mut first: Option<Vec<Vec<u8>>> = None;
+        for (clay, ao) in [(None, None), (Some(Clay::default()), None), (Some(Clay::default()), Some(Ao::default()))] {
+            for transparent in [false, true] {
+                let mut req = Request::new(views.clone());
+                req.transparent = transparent;
+                req.clay = clay;
+                req.ao = ao;
+                let plain = render_bytes(&input, &req, &caps()).expect("plain").0;
+                assert!(plain.ids.is_empty() && plain.views.iter().all(|v| v.0.ids.is_none()));
+                req.ids = true;
+                let with = render_bytes(&input, &req, &caps()).expect("ids").0;
+                assert_eq!(with.ids.len(), views.len());
+                for (i, ((a, b), png)) in plain.views.iter().zip(&with.views).zip(&with.ids).enumerate() {
+                    let what = format!("view {i}, clay {}, ao {}, transparent {transparent}", clay.is_some(), ao.is_some());
+                    assert!(a.1 == b.1, "{what}: the still is the same");
+                    let m = b.0.ids.as_ref().expect("the table");
+                    assert_eq!(m.image_len, png.len() as u64);
+                    let (_, set) = id_values(png, b.0.width, b.0.height);
+                    let listed: Vec<u32> = m.objects.iter().map(|e| e.index + 1).collect();
+                    assert_eq!(listed, set.iter().copied().collect::<Vec<_>>(), "{what}: the table is the objects in the image, ascending");
+                    assert_eq!(m.count, set.len() as u64);
+                    assert!(m.objects.iter().all(|e| e.id == s.objects[e.index as usize].id), "{what}");
+                    if let Some(only) = &views[i].objects {
+                        assert!(m.objects.iter().all(|e| only.contains(&e.index)), "{what}: {:?}", m.objects);
+                    }
+                }
+                assert!(with.views[0].0.ids.as_ref().expect("ids").count >= 8);
+                assert_eq!(with.views[4].0.ids.as_ref().map(|m| (m.count, m.objects[0].index)), Some((1, 9)), "the object view: that object alone");
+                // The id images don't depend on the look.
+                match &first {
+                    None => first = Some(with.ids.clone()),
+                    Some(f) => assert!(*f == with.ids),
+                }
+                req.threads = 4;
+                assert!(render_bytes(&input, &req, &caps()).expect("4 threads").0.ids == with.ids);
+            }
+        }
+    }
+
+    /// Renaming objects changes the table, never the id image or the still;
+    /// ids are kept byte for byte (an IFC GlobalId, case, spaces), and objects
+    /// sharing an id are each listed under their own index.
+    #[test]
+    fn a_rename_changes_the_table_not_the_id_image() {
+        let a = testgen::interior_scene();
+        let mut b = a.clone();
+        let global = "2O2Fr$t4X7Zf8NOew3FLOH";
+        b.objects[0].id = " Floor ".into();
+        b.objects[4].id = global.into();
+        b.objects[5].id = global.into();
+        b.objects[6].id = global.to_lowercase();
+        b.objects[7].id = "Vase \"\u{e9}\"\\".into();
+        let views = vec![View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 120) }, View::new(ViewSpec::Auto, 80)];
+        let mut req = Request::new(views);
+        req.ids = true;
+        req.clay = Some(Clay::default());
+        let (ra, rb) = (render_bytes(&encode(&a), &req, &caps()).expect("a").0, render_bytes(&encode(&b), &req, &caps()).expect("b").0);
+        assert_eq!(ra.ids, rb.ids);
+        for (x, y) in ra.views.iter().zip(&rb.views) {
+            assert_eq!(x.1, y.1);
+            let (tx, ty) = (x.0.ids.as_ref().expect("a"), y.0.ids.as_ref().expect("b"));
+            assert_ne!(tx, ty);
+            assert_eq!(tx.objects.iter().map(|e| e.index).collect::<Vec<_>>(), ty.objects.iter().map(|e| e.index).collect::<Vec<_>>());
+            let id = |k: u32| ty.objects.iter().find(|e| e.index == k).map(|e| e.id.as_str());
+            assert_eq!((id(4), id(5)), (Some(global), Some(global)), "a shared id, under each index");
+            assert_eq!(id(6), Some("2o2fr$t4x7zf8noew3floh"));
+            assert_eq!(id(0), Some(" Floor "));
+            assert_eq!(id(7), Some("Vase \"\u{e9}\"\\"));
+        }
+        // And through the response line, byte for byte.
+        let line = crate::proto::Response { ok: true, code: None, detail: None, format: Some(ImageFormat::Webp), views: Some(rb.views.iter().map(|v| v.0.clone()).collect()), ..crate::proto::Response::failed(FailureCode::TooLarge, "") }.line();
+        let back = crate::proto::Response::parse(&line[..line.len() - 1]).expect("parse").views.expect("views");
+        assert_eq!(back[0].ids, rb.views[0].0.ids);
+    }
+
+    /// The table lists in index order while the entries' JSON fits the
+    /// budget, and counts every object; a scene of long ids keeps the
+    /// response line far inside its cap.
+    #[test]
+    fn the_id_table_is_bounded_and_counts_everything() {
+        let s = testgen::grid_scene(4, false);
+        let px: Vec<u32> = vec![0, 3, 3, 1, 16, 9, 0, 9];
+        let (count, all) = id_table(&s.objects, &px, usize::MAX);
+        assert_eq!(count, 4);
+        assert_eq!(all.iter().map(|e| e.index).collect::<Vec<_>>(), [0, 2, 8, 15]);
+        // `{"index":0,"id":"Item.000"}` and a comma: 28 bytes (29 for index 15).
+        assert_eq!(serde_json::to_vec(&all[0]).expect("json").len() + 1, 28);
+        for (budget, n) in [(0, 0), (27, 0), (28, 1), (55, 1), (56, 2), (28 * 3 + 28, 3), (28 * 3 + 29, 4)] {
+            let (c, l) = id_table(&s.objects, &px, budget);
+            assert_eq!((c, l.len()), (4, n), "budget {budget}");
+            assert_eq!(l[..], all[..n]);
+        }
+        assert_eq!(id_table(&s.objects, &[0; 10], usize::MAX), (0, vec![]));
+        // 2,500 objects with 1 KiB ids of control characters (6 bytes each in JSON): cut short at
+        // the budget, everything counted, the line well inside its cap.
+        let mut big = testgen::grid_scene(50, false);
+        for (k, o) in big.objects.iter_mut().enumerate() {
+            o.id = format!("{k:04}{}", "\u{1}".repeat(crate::scene::MAX_ID_BYTES - 4));
+        }
+        let mut req = Request::new(vec![View::new(ViewSpec::Auto, 480)]);
+        req.ids = true;
+        let out = render_bytes(&encode(&big), &req, &caps()).expect("long ids").0;
+        let m = out.views[0].0.ids.as_ref().expect("ids");
+        let line = crate::proto::Response { ok: true, code: None, detail: None, format: Some(ImageFormat::Webp), views: Some(vec![out.views[0].0.clone()]), ..crate::proto::Response::failed(FailureCode::TooLarge, "") }.line();
+        eprintln!("[ids] {} objects in the image, {} listed, a {} byte line", m.count, m.objects.len(), line.len());
+        assert!(m.count > m.objects.len() as u64 && !m.objects.is_empty());
+        assert!(m.objects.windows(2).all(|w| w[0].index < w[1].index));
+        assert!(line.len() <= crate::proto::MAX_IDS_LISTED_BYTES + (64 << 10) && line.len() < crate::proto::MAX_RESPONSE_LINE);
+        assert!(m.objects.iter().all(|e| e.id == big.objects[e.index as usize].id));
+    }
+
+    /// The id images count against the output cap with the stills: a cap
+    /// the still fits but not its id image refuses the request with ids.
+    #[test]
+    fn id_images_count_against_the_output_cap() {
+        let input = encode(&testgen::interior_scene());
+        let mut req = Request::new(vec![View::new(ViewSpec::Auto, 200)]);
+        let plain = render_bytes(&input, &req, &caps()).expect("plain").0;
+        req.ids = true;
+        let with = render_bytes(&input, &req, &caps()).expect("ids").0;
+        let still = plain.views[0].1.len() as u64;
+        let tight = Caps { max_output_bytes: still + with.ids[0].len() as u64 / 2, ..caps() };
+        assert!(render_bytes(&input, &Request { ids: false, ..req.clone() }, &tight).is_ok());
+        assert_eq!(render_bytes(&input, &req, &tight).expect_err("over").code, FailureCode::TooLarge);
+        let exact = Caps { max_output_bytes: still + with.ids[0].len() as u64, ..caps() };
+        assert!(render_bytes(&input, &req, &exact).is_ok());
+    }
+
     #[test]
     fn png_and_webp_both_decode_to_a_valid_header() {
         let input = encode(&testgen::sphere_scene());
@@ -604,7 +833,7 @@ mod tests {
 
     #[test]
     fn the_estimate_grows_with_the_work() {
-        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false, transparent: false, framing: Framing::Bounds, ao: false };
+        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false, transparent: false, framing: Framing::Bounds, ao: false, ids: false };
         let small = estimate_bytes(1000, 100, &[p(320, 10)], 1, 1 << 30);
         let big = estimate_bytes(1000, 100, &[p(320, 1_000_000)], 1, 1 << 30);
         let two = estimate_bytes(1000, 100, &[p(320, 10), p(320, 10)], 1, 1 << 30);
@@ -613,5 +842,9 @@ mod tests {
         // Ambient occlusion counts its depth image and factors.
         let ao = estimate_bytes(1000, 100, &[Plan { ao: true, ..p(320, 10) }], 1, 1 << 30);
         assert_eq!(ao - small, AO_BYTES_PER_PX * 320 * 240);
+        // Ids count their image, its encoding and copy kept, a u32 per band sample, the tables.
+        let ids = estimate_bytes(1000, 100, &[Plan { ids: true, ..p(320, 10) }], 2, 1 << 30);
+        let plain = estimate_bytes(1000, 100, &[p(320, 10)], 2, 1 << 30);
+        assert_eq!(ids - plain, (IDS_BYTES_PER_PX + IDS_KEPT_PER_PX) * 320 * 240 + 2 * 320 * 4 * BAND_PX as u64 * 4 * 4 + IDS_TABLE_BYTES);
     }
 }

@@ -36,14 +36,20 @@
 //! both optional, see [`crate::raster::occlusion`]), with or without clay,
 //! opaque or transparent (the alpha stays the coverage). Absent, no occlusion:
 //! the bytes are as before. It is the request's too.
+//! `"ids": true` also draws each view's id image: which object is under each
+//! pixel ([`IdsMeta`], [`crate::raster::render_with_ids`]). The stills are the
+//! same bytes with it or without; absent, no id image and no table.
 //!
 //! **Response (stdout):** one line of JSON, the [`Response`], then, when `ok`,
-//! each view's image in order (`views[i].image_len` bytes each), then EOF.
+//! each view's image in order (`views[i].image_len` bytes each), each followed,
+//! when the request asked for ids, by that view's id image
+//! (`views[i].ids.image_len` bytes), then EOF.
 //! Each view's [`ViewMeta`] carries the camera it was drawn through
 //! ([`CameraMeta`]: view and projection matrices, the pixel mapping), left
 //! out only when one of its values isn't finite. A view that asked for content
 //! framing also carries [`FramingMeta`]: whether the contents were framed and
-//! which objects were left out of the frame.
+//! which objects were left out of the frame. A view drawn with ids carries
+//! [`IdsMeta`]: its id image's length and the ids of the objects in it.
 //! The worker exits [`EXIT_OK`] after the images, [`EXIT_FAILED`] after a
 //! typed failure. Anything else (no line, a malformed one, fewer image bytes
 //! than announced, bytes after them) is a breach the host reports as
@@ -67,6 +73,13 @@ pub const MAX_REQUEST_LINE: usize = 4 << 20;
 
 /// Largest response line (the objects drawn without modifiers are in it).
 pub const MAX_RESPONSE_LINE: usize = 8 << 20;
+
+/// The id tables of a response's views together list objects up to this many
+/// bytes of their JSON ([`IdsMeta::objects`]); each view gets an equal share.
+/// Every object in an id image is still counted. Half the response line: the
+/// rest of it (cameras, left-out lists, the objects without modifiers) stays
+/// well inside the other half.
+pub const MAX_IDS_LISTED_BYTES: usize = 4 << 20;
 
 /// The background when the request names none: sRGB 240, 240, 240, the
 /// current neutral (K2 Design picks the final one).
@@ -299,6 +312,9 @@ pub struct Request {
     /// Screen-space ambient occlusion; `None`: none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ao: Option<Ao>,
+    /// Each view's id image and table too ([`IdsMeta`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ids: bool,
     /// Samples per axis (1-4); `None`: [`default_ssaa`] of each view's width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssaa: Option<u32>,
@@ -314,7 +330,7 @@ pub struct Request {
 
 impl Request {
     pub fn new(views: Vec<View>) -> Request {
-        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, transparent: false, clay: None, ao: None, ssaa: None, threads: 1, hostile: None }
+        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, transparent: false, clay: None, ao: None, ids: false, ssaa: None, threads: 1, hostile: None }
     }
 
     /// The line, newline included.
@@ -398,6 +414,35 @@ pub struct FramingMeta {
     pub grown: bool,
 }
 
+/// One object in a view's id image: its index in the scene's objects (the
+/// image holds index + 1) and its id as the scene names it, byte for byte
+/// (never trimmed, folded or made unique: several objects may share an id,
+/// one product split into several objects, and each is listed under its own
+/// index).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdEntry {
+    pub index: u32,
+    pub id: String,
+}
+
+/// A view's id image (only when the request asked for ids): PNG, 8-bit RGB,
+/// at the still's size, each pixel `r << 16 | g << 8 | b` (see
+/// [`crate::encode::ids_png`]): 0 where nothing is drawn, else the index + 1
+/// of the object drawn at the pixel's one depth sample, the nearer where
+/// objects overlap. Indices, not ids, so renaming an object changes the table,
+/// never the image. A pixel is on an edge between objects when a 4-neighbour
+/// holds another value (or 0).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdsMeta {
+    /// The id image's bytes, right after the view's image.
+    pub image_len: u64,
+    /// How many objects the id image shows.
+    pub count: u64,
+    /// Those objects, ascending by index, as many as fit the view's share of
+    /// [`MAX_IDS_LISTED_BYTES`]: fewer than `count` when cut short.
+    pub objects: Vec<IdEntry>,
+}
+
 /// What the worker reports for one view.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewMeta {
@@ -413,6 +458,9 @@ pub struct ViewMeta {
     /// What content framing did; `None` unless the view asked for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framing: Option<FramingMeta>,
+    /// The id image and its table; `None` unless the request asked for ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<IdsMeta>,
     /// Objects and triangles drawn (instancing expanded), and the pixels any covered.
     pub objects: u64,
     pub triangles: u64,
@@ -559,6 +607,16 @@ mod tests {
         for bad in [Ao { strength: -0.1, ..Ao::default() }, Ao { strength: 1.5, ..Ao::default() }, Ao { strength: f32::NAN, ..Ao::default() }, Ao { radius: 0.0, ..Ao::default() }, Ao { radius: 2.0, ..Ao::default() }, Ao { radius: f32::INFINITY, ..Ao::default() }] {
             assert!(bad.check().is_err(), "{bad:?}");
         }
+        // Ids: off when absent (and off the line), on with `true`.
+        assert!(!m.ids);
+        assert!(!String::from_utf8_lossy(&line).contains("ids"));
+        let mut i = r.clone();
+        i.ids = true;
+        let il = i.line();
+        assert!(String::from_utf8_lossy(&il).contains(r#""ids":true"#));
+        assert_eq!(Request::parse(&il[..il.len() - 1]).expect("parse"), i);
+        assert!(Request::parse(br#"{"proto":1,"input_len":3,"views":[],"ids":true}"#).expect("ids").ids);
+        assert!(Request::parse(br#"{"proto":1,"input_len":3,"views":[],"ids":{}}"#).is_err(), "a flag, not an object");
         assert!(Request::parse(br#"{"proto":2,"input_len":3,"views":[]}"#).is_err());
         assert!(Request::parse(b"not json").is_err());
     }
@@ -594,6 +652,22 @@ mod tests {
         let mut inf = views[0].camera.expect("a camera");
         inf.view[12] = f32::INFINITY;
         assert!(!inf.is_finite());
+        // A view's id table crosses the wire byte for byte: ids repeated, case kept, spaces kept.
+        let ids = IdsMeta {
+            image_len: 77,
+            count: 4,
+            objects: vec![
+                IdEntry { index: 0, id: "2O2Fr$t4X7Zf8NOew3FLOH".into() },
+                IdEntry { index: 3, id: "2O2Fr$t4X7Zf8NOew3FLOH".into() },
+                IdEntry { index: 4, id: "2o2fr$t4x7zf8noew3floh".into() },
+                IdEntry { index: 9, id: " Wall \"A\"\u{1}\u{e9} ".into() },
+            ],
+        };
+        let mut with = views[..1].to_vec();
+        with[0].ids = Some(ids.clone());
+        let wl = Response { views: Some(with), ..r.clone() }.line();
+        assert_eq!(Response::parse(&wl[..wl.len() - 1]).expect("parse").views.expect("views")[0].ids, Some(ids));
+        assert!(!String::from_utf8_lossy(&line).contains(r#""ids""#), "absent unless asked");
         // A line without it (an older worker) still reads.
         let old = br#"{"proto":1,"ok":true,"format":"webp","views":[{"width":1,"height":1,"ssaa":1,"image_len":0,"objects":0,"triangles":0,"covered_px":0,"without_modifiers":false,"vertex_ms":0,"bin_ms":0,"raster_ms":0,"encode_ms":0}]}"#;
         assert_eq!(Response::parse(old).expect("old").views.expect("views")[0].camera, None);

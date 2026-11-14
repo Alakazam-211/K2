@@ -2,7 +2,9 @@
 //! renderer change: each scene's auto view framed on every object's bounds
 //! and on its contents, in base colours and in clay, with and without
 //! ambient occlusion, and transparent in clay. In process (no sandbox), the
-//! bytes the worker draws.
+//! bytes the worker draws. Each with its id image too (`-ids.png`, the bytes
+//! the worker sends) and that image in false colour (`-ids-false.png`: each
+//! object a colour of its own, nothing white), to look at.
 //! `cargo run -p k2-scenerender --example stills -- <dir> [width] [ao strength] [ao radius]`.
 
 use k2_scenerender::camera::{Framing, ViewSpec};
@@ -46,6 +48,7 @@ fn main() {
             req.clay = clay.then(Clay::default);
             req.ao = occlusion.then_some(ao);
             req.transparent = transparent;
+            req.ids = true;
             let (out, _) = render_bytes(&input, &req, &caps).unwrap_or_else(|f| panic!("{name}: {} {}", f.code, f.detail));
             let (meta, png) = &out.views[0];
             let tag = match framing {
@@ -55,16 +58,40 @@ fn main() {
             let file = format!("{name}-{tag}{}{}{}.png", if clay { "-clay" } else { "" }, if occlusion { "-ao" } else { "" }, if transparent { "-alpha" } else { "" });
             let path = std::path::Path::new(&dir).join(file);
             std::fs::write(&path, png).expect("write a still");
+            let ids = &out.ids[0];
+            std::fs::write(path.with_extension("ids.png"), ids).expect("write an id image");
+            std::fs::write(path.with_extension("ids-false.png"), false_colour(ids)).expect("write a false-colour id image");
+            let table = meta.ids.as_ref().expect("the id table");
             println!(
-                "{}: {}x{}, ssaa {}, raster {:.1} ms, framing {:?}, camera shift {:?}",
+                "{}: {}x{}, ssaa {}, raster {:.1} ms, encode {:.1} ms, framing {:?}, camera shift {:?}, id image {} bytes, objects {:?}",
                 path.display(),
                 meta.width,
                 meta.height,
                 meta.ssaa,
                 meta.raster_ms,
+                meta.encode_ms,
                 meta.framing,
-                meta.camera.map(|c| (c.shift_x, c.shift_y))
+                meta.camera.map(|c| (c.shift_x, c.shift_y)),
+                table.image_len,
+                table.objects.iter().map(|e| (e.index, e.id.as_str())).collect::<Vec<_>>()
             );
         }
     }
+}
+
+/// An id image in false colour: white where nothing is drawn, each value a colour of its own
+/// (a hash of it, kept off white and off black).
+fn false_colour(ids_png: &[u8]) -> Vec<u8> {
+    let (w, h, px) = k2_scenerender::encode::ids_from_png(ids_png).expect("an id image");
+    let mut rgb = Vec::with_capacity(px.len() * 3);
+    for v in px {
+        if v == 0 {
+            rgb.extend_from_slice(&[255, 255, 255]);
+            continue;
+        }
+        let x = v.wrapping_mul(0x9E37_79B1).rotate_left(13).wrapping_mul(0x85EB_CA77);
+        rgb.extend_from_slice(&[40 + (x >> 24) as u8 % 180, 40 + (x >> 16) as u8 % 180, 40 + (x >> 8) as u8 % 180]);
+    }
+    let img = k2_scenerender::raster::Image { width: w, height: h, alpha: false, pixels: rgb };
+    k2_scenerender::encode::png(&img).expect("a png")
 }

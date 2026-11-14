@@ -53,6 +53,54 @@ fn the_worker_draws_what_the_library_draws() {
     }
 }
 
+/// Ids through the worker: each view's id image follows its image and is
+/// the in-process one; the table crosses the wire byte for byte (an IFC
+/// GlobalId shared by two objects, each under its own index); the stills are
+/// the bytes drawn without ids.
+#[test]
+fn the_worker_sends_each_views_id_image_after_its_image() {
+    let global = "2O2Fr$t4X7Zf8NOew3FLOH";
+    let mut s = testgen::interior_scene();
+    s.objects[4].id = global.into();
+    s.objects[5].id = global.into();
+    let input = encode(&s);
+    let views = vec![
+        View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 320) },
+        View::new(ViewSpec::Turntable(2), 200),
+        View { objects: Some(vec![5]), ..View::new(ViewSpec::Auto, 96) },
+    ];
+    let mut req = SceneRequest::new(&input, views.clone());
+    req.transparent = true;
+    req.clay = Some(Clay::default());
+    req.ao = Some(Ao::default());
+    let plain = host::render(bin(), &req, &thumb()).expect("plain");
+    assert!(plain.views.iter().all(|v| v.ids.is_none() && v.meta.ids.is_none()));
+    req.ids = true;
+    let r = host::render(bin(), &req, &thumb()).expect("ids");
+    let mut lib = Request::new(views);
+    lib.transparent = true;
+    lib.clay = Some(Clay::default());
+    lib.ao = Some(Ao::default());
+    lib.ids = true;
+    lib.threads = 1;
+    let (o, _) = render::render_bytes(&input, &lib, &thumb().args(1).caps).expect("in process");
+    for (i, v) in r.views.iter().enumerate() {
+        assert_eq!(v.image, plain.views[i].image, "view {i}: the still");
+        assert_eq!(v.image, o.views[i].1, "view {i}");
+        assert_eq!(v.ids.as_ref(), Some(&o.ids[i]), "view {i}: the id image");
+        assert_eq!(v.meta.ids, o.views[i].0.ids, "view {i}: the table");
+        let t = v.meta.ids.as_ref().expect("a table");
+        let (w, h, px) = k2_scenerender::encode::ids_from_png(v.ids.as_ref().expect("ids")).expect("png");
+        assert_eq!((w, h), (v.meta.width, v.meta.height));
+        assert!(px.iter().all(|&p| p == 0 || t.objects.iter().any(|e| e.index + 1 == p)));
+    }
+    let t = r.views[0].meta.ids.as_ref().expect("a table");
+    let id = |k: u32| t.objects.iter().find(|e| e.index == k).map(|e| e.id.as_bytes());
+    assert_eq!((id(4), id(5)), (Some(global.as_bytes()), Some(global.as_bytes())));
+    let only = r.views[2].meta.ids.as_ref().expect("a table");
+    assert_eq!((only.count, only.objects[0].index, only.objects[0].id.as_str()), (1, 5, global));
+}
+
 #[test]
 fn a_turntable_is_one_process_with_the_bytes_of_eight() {
     let input = encode(&testgen::grid_scene(4, true));
@@ -431,26 +479,33 @@ fn render_times_on_generated_scenes() {
             );
         }
     }
-    // Ambient occlusion's cost: the interior still, framed on its contents, in clay, with and
-    // without it (the raster time holds its depth and occlusion passes).
+    // Ambient occlusion's and the id image's cost: the interior still, framed on its contents,
+    // in clay, with and without each (the raster time holds the depth and occlusion passes and
+    // the ids' writes; the encode time the id image and its table). Each run three times.
     let input = encode(&testgen::interior_scene());
     for (w, l) in [(640u32, thumb()), (1920, still())] {
-        for ao in [None, Some(Ao::default())] {
-            let mut req = SceneRequest::new(&input, vec![View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, w) }]);
-            req.clay = Some(Clay::default());
-            req.ao = ao;
-            let started = Instant::now();
-            let r = host::render(bin(), &req, &l).expect("render");
-            let v = &r.views[0].meta;
-            eprintln!(
-                "[scenerender] time interior clay {w} px, occlusion {}: {} ms end to end, {} threads, raster {:.1} ms, encode {:.1} ms, estimate {} MiB",
-                if ao.is_some() { "on" } else { "off" },
-                started.elapsed().as_millis(),
-                l.threads,
-                v.raster_ms,
-                v.encode_ms,
-                r.estimate_bytes >> 20
-            );
+        for (ao, ids) in [(None, false), (None, true), (Some(Ao::default()), false), (Some(Ao::default()), true)] {
+            for run in 0..3 {
+                let mut req = SceneRequest::new(&input, vec![View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, w) }]);
+                req.clay = Some(Clay::default());
+                req.ao = ao;
+                req.ids = ids;
+                let started = Instant::now();
+                let r = host::render(bin(), &req, &l).expect("render");
+                let v = &r.views[0].meta;
+                eprintln!(
+                    "[scenerender] time interior clay {w} px, occlusion {}, ids {}, run {run}: {} ms end to end, {} threads, raster {:.1} ms, encode {:.1} ms, {} + {} bytes, estimate {} MiB",
+                    if ao.is_some() { "on" } else { "off" },
+                    if ids { "on" } else { "off" },
+                    started.elapsed().as_millis(),
+                    l.threads,
+                    v.raster_ms,
+                    v.encode_ms,
+                    v.image_len,
+                    v.ids.as_ref().map_or(0, |i| i.image_len),
+                    r.estimate_bytes >> 20
+                );
+            }
         }
     }
 }

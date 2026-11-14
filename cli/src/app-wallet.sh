@@ -153,6 +153,7 @@ cmd_app() {
         status) shift; cmd_app_status "$@" ;;
         build) shift; cmd_app_build "$@" ;;
         install) shift; cmd_app_install "$@" ;;
+        catalog) shift; cmd_app_catalog "$@" ;;
         deploy) shift; cmd_app_deploy "$@" ;;
         rollback) shift; cmd_app_rollback "$@" ;;
         stop|start|restart) cmd_app_lifecycle "$@" ;;

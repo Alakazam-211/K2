@@ -766,6 +766,10 @@ case "${1:-help}" in
             db|database)
                 shift; cmd_app "$@"
                 ;;
+            # `k2 app catalog` (one-click suite Apps) owns its --help.
+            catalog)
+                shift; cmd_app "$@"
+                ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.
             grant)
                 case "${3:-}" in

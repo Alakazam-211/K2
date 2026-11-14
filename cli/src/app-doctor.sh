@@ -674,6 +674,11 @@ else:
 
 # k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S | --folder F] [--pg-major M] [--json]
 cmd_app_install() {
+    # `--catalog <entry>` is the one-click install (a daemon job, app-catalog.sh).
+    local _a
+    for _a in "$@"; do
+        case "$_a" in --catalog|--catalog=*) cmd_app_install_catalog "$@"; return ;; esac
+    done
     local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0 dov="" pgmajor="" transfer=""
     while [ $# -gt 0 ]; do
         case "$1" in

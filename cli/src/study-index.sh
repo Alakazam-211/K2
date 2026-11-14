@@ -2,7 +2,7 @@
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps"
 
 _study_usage() {
     cat <<'EOF'
@@ -27,7 +27,7 @@ Topics:
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
-  agent-templates  provenance
+  agent-templates  provenance  suite-apps
 EOF
 }
 
@@ -50,6 +50,7 @@ _study_title() {
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
         app-deploys) echo "Deploying Apps" ;;
+        suite-apps) echo "One-click suite Apps (Hearth, Meet)" ;;
         app-move) echo "Moving your --cmd service to an App" ;;
         app-api) echo "The App API: server SDK and gateway routes" ;;
         app-errors) echo "App refusals: every id, its fix and who fixes it" ;;
@@ -184,6 +185,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
   app-deploys         Host a server App: Seeds, deploys, rollback (beta)
+  suite-apps          One-click Hearth and Meet: the job, addresses, waits, refusals
   app-move            Move your --cmd service to an App when ready, step by step
   app-api             An App's server calls: the SDK, every route, passes, refusals
   app-errors          Every App refusal id: what happened, the fix, who fixes it (k2 explain)
@@ -275,6 +277,7 @@ _study_page() {
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
         app-deploys) _study_page_app_deploys ;;
+        suite-apps) _study_page_suite_apps ;;
         app-move) _study_page_app_move ;;
         app-api) _study_page_app_api ;;
         app-errors) _study_page_app_errors ;;

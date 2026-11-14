@@ -21,6 +21,7 @@ daemon-install	P2: headless standalone-daemon installer
 talk-and-workspace	GH#8 #69 (Wave 2) — batch HITL "scout" + batch-answer
 app-runtime	App runtime (prd-k2-app-runtime-v1 stage 1)
 app-doctor	k2 app doctor --store (0.46.9, the Tauri App SDK)
+app-catalog	one-click suite Apps (prd-one-click-suite-apps-v1)
 +	App egress (runtime S15) and held widenings
 app-db	k2 app db (0.46.11, prd-app-database-integrations-v1 S2)
 app-box	App box services (0.46.0)

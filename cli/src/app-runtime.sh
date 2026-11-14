@@ -9,6 +9,14 @@ _app_rt_usage() {
     cat <<'EOF'
 k2 app — host Apps on this box (Apps (beta): Settings → Apps → This server)
 
+One step (suite Apps verified by K2: Sew's Hearth and Meet):
+  k2 app catalog                       What this box can deploy, and why not.
+  k2 app install --catalog <entry> [--address LABEL|auto] [--dry-run]
+                                       Download, check, install, address, deploy,
+                                       approve, Sew setup, healthy, ready, as one
+                                       daemon job. k2 app catalog --help;
+                                       k2 study suite-apps.
+
 Make and ship:
   k2 app sdk add <folder> [--sew]      Once per App (again after a K2 update):
                                        puts @k2/server in <folder>/vendor/ and

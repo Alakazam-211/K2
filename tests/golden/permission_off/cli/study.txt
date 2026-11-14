@@ -22,6 +22,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
   app-deploys         Host a server App: Seeds, deploys, rollback (beta)
+  suite-apps          One-click Hearth and Meet: the job, addresses, waits, refusals
   app-move            Move your --cmd service to an App when ready, step by step
   app-api             An App's server calls: the SDK, every route, passes, refusals
   app-errors          Every App refusal id: what happened, the fix, who fixes it (k2 explain)

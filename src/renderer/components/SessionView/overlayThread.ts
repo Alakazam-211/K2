@@ -556,6 +556,11 @@ export interface OverlayThreadItem {
   /** Display only: this window's send the server hasn't confirmed yet
    *  (`threadOutbox.ts`). Never on a server item. */
   pending?: PendingMark
+  /** Came by a push (a socket frame, this window's own send), not by a
+   *  server read: a row before it may be missing, so it never becomes a
+   *  re-sync cursor (`threadCacheMerge.newestSeq`). A server read's copy
+   *  clears it (`mergeThreadItems`). */
+  provisional?: true
 }
 
 export interface OverlaySnapshot {
@@ -965,6 +970,7 @@ function sameItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
   return (
     a.seq === b.seq &&
     a.localTime === b.localTime &&
+    a.provisional === b.provisional &&
     a.pending?.state === b.pending?.state &&
     a.pending?.error === b.pending?.error &&
     JSON.stringify(a.doc) === JSON.stringify(b.doc)
@@ -1018,6 +1024,9 @@ export function mergeThreadItems(
       }
       if (item.localTime && !prevServerAt) merged.localTime = true
       else delete merged.localTime
+      // A server read's copy confirms the row; a push keeps what was held
+      // (an in-place change to a confirmed row stays confirmed).
+      if (!item.provisional || !prev.provisional) delete merged.provisional
       if (sameItem(list[at], merged)) continue
       next ??= current.slice()
       next[at] = merged
@@ -1042,6 +1051,8 @@ export function applyOverlayFrame(
   items: OverlayThreadItem[],
   frame: OverlayWsFrame,
   floorSeq: number,
+  /** A live push: a row it adds is `provisional` (never a cursor). */
+  opts: { provisional?: boolean } = {},
 ): OverlayThreadItem[] {
   if (frame.collection !== 'thread') return items
   const seq = overlaySeq(frame.seq)
@@ -1061,7 +1072,13 @@ export function applyOverlayFrame(
   // Missing seq still appends (after the newest) — never vanish.
   const newest = items.reduce((m, it) => (it.seq > m ? it.seq : m), 0)
   return mergeThreadItems(items, [
-    { collection: 'thread', seq: Number.isFinite(seq) ? seq : newest + 1, id, doc },
+    {
+      collection: 'thread',
+      seq: Number.isFinite(seq) ? seq : newest + 1,
+      id,
+      doc,
+      ...(opts.provisional ? { provisional: true as const } : {}),
+    },
   ])
 }
 

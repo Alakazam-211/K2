@@ -43,12 +43,12 @@ describe('the shared first page read', () => {
     expect(getMock).toHaveBeenCalledTimes(2)
   })
 
-  it('a local read is never shared or cached', async () => {
+  it('a local read is never shared, and fills the view cache too (speed pass P3b)', async () => {
     getMock.mockResolvedValue(page)
     const s = scope(false)
     await Promise.all([readThreadFirstPage(s, 'k2'), readThreadFirstPage(s, 'k2')])
     expect(getMock).toHaveBeenCalledTimes(2)
-    expect(peekThreadView('local', 'k2')).toBeNull()
+    expect(peekThreadView('local', 'k2')?.items.map((it) => it.id)).toEqual(['t1'])
   })
 })
 

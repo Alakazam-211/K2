@@ -5,8 +5,8 @@
 // On a remote server it is shared: a view that opens while the same read
 // is already on its way (a Home row's hover prefetch, the room starting its
 // Thread before the pinned Chat is ensured) waits for that one instead of
-// sending another. Every remote read also refreshes the Thread's view cache
-// (`threadViewCache.ts`). A local read goes out as before.
+// sending another. Every read, local or remote, also refreshes the Thread's
+// view cache (`threadViewCache.ts`); a local read is never shared.
 
 import { daemonCliGet } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -23,17 +23,18 @@ function readKey(scope: ServerScope, addr: string, cards: string): string {
  *  for the same Thread is joined. Throws what the read threw. */
 export function readThreadFirstPage(scope: ServerScope, addr: string): Promise<unknown> {
   const params = { addr, limit: OVERLAY_PAGE_SIZE, ...threadCardsParams(scope) }
-  if (!scope.isRemote) return daemonCliGet<unknown>(scope, 'thread', params)
+  const hostKey = scope.hostKey
+  const save = (raw: unknown): unknown => {
+    const snap = threadItemsFromSnapshot(raw)
+    saveThreadView(hostKey, addr, snap.conversation_id, snap.items, Date.now(), { hasMore: snap.has_more })
+    return raw
+  }
+  if (!scope.isRemote) return daemonCliGet<unknown>(scope, 'thread', params).then(save)
   const key = readKey(scope, addr, params.cards ?? '')
   const running = inflight.get(key)
   if (running) return running
-  const hostKey = scope.hostKey
   const p = daemonCliGet<unknown>(scope, 'thread', params)
-    .then((raw) => {
-      const snap = threadItemsFromSnapshot(raw)
-      saveThreadView(hostKey, addr, snap.conversation_id, snap.items)
-      return raw
-    })
+    .then(save)
     .finally(() => {
       inflight.delete(key)
     })

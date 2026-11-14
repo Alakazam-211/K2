@@ -210,7 +210,99 @@ pub fn state() -> RootHelperState {
         RootHelperState::missing()
     };
     *slot = Some((Instant::now(), st.clone()));
+    remember(&st);
     st
+}
+
+/// The last probe this daemon made (any [`state`] refresh, auto-heal),
+/// for `/boot-status`. Reading it never probes.
+#[derive(Debug, Clone)]
+pub(crate) struct Seen {
+    pub(crate) st: RootHelperState,
+    /// The legacy pg helper was there (only looked at when the root helper
+    /// is missing; a file check, never a root call).
+    pub(crate) legacy_pg: bool,
+}
+
+static LAST_SEEN: Mutex<Option<Seen>> = Mutex::new(None);
+
+/// Keep a fresh probe's answer for `/boot-status`.
+pub(crate) fn remember(st: &RootHelperState) {
+    let legacy_pg = st.kind == Kind::Missing && legacy_pg_present();
+    remember_seen(Seen {
+        st: st.clone(),
+        legacy_pg,
+    });
+}
+
+fn remember_seen(seen: Seen) {
+    *LAST_SEEN.lock().unwrap_or_else(|p| p.into_inner()) = Some(seen);
+}
+
+/// `state` as `k2 root-helper status` names it: root, not_allowed,
+/// legacy (only the old pg helper serves) or missing.
+fn state_word(st: &RootHelperState, legacy_pg: bool) -> &'static str {
+    match st.kind {
+        Kind::Root => "root",
+        Kind::NotAllowed => "not_allowed",
+        // Only the pg script still serves when the root helper is absent;
+        // a leftover k2-mail-helper is reported (`legacy.mail`) but never
+        // used (retired at install).
+        Kind::Missing if legacy_pg => "legacy",
+        Kind::Missing => "missing",
+    }
+}
+
+/// The `/boot-status` `rootHelper` field, for fleet monitoring: `null` off
+/// Linux; `{state, protocol, version}` on Linux, from the last probe and
+/// the last auto-heal (no root call, no path, no error text). `state` is
+/// the status word, made more exact for a working helper: `package` (a
+/// package manager owns it), `rolled_back` (the last heal rolled back and
+/// it is still older than K2), `airgapped` (older than K2, air-gap on, so
+/// it waits for `k2 root-helper update --from`). `unknown` until the first
+/// probe after boot.
+pub(crate) fn boot_status_from(
+    seen: Option<&Seen>,
+    last_heal: Option<&heal::Outcome>,
+    airgap: &dyn Fn() -> bool,
+    daemon_version: &str,
+    linux: bool,
+) -> Value {
+    if !linux {
+        return Value::Null;
+    }
+    let Some(seen) = seen else {
+        return json!({ "state": "unknown", "protocol": 0, "version": null });
+    };
+    let st = &seen.st;
+    let behind = match (
+        st.version.as_deref().and_then(k2_root_proto::version::Semver::parse),
+        k2_root_proto::version::Semver::parse(daemon_version),
+    ) {
+        (Some(have), Some(want)) => have < want,
+        _ => false,
+    };
+    let state = match state_word(st, seen.legacy_pg) {
+        "root" if st.package_owned => "package",
+        "root" if behind && matches!(last_heal, Some(heal::Outcome::RolledBack { .. })) => {
+            "rolled_back"
+        }
+        "root" if behind && airgap() => "airgapped",
+        word => word,
+    };
+    json!({ "state": state, "protocol": st.protocol, "version": st.version })
+}
+
+/// [`boot_status_from`] for this daemon: two lock reads, no probe.
+pub fn boot_status_value() -> Value {
+    let seen = LAST_SEEN.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    boot_status_from(
+        seen.as_ref(),
+        heal::last_result().as_ref(),
+        &k2_core::airgap::enabled,
+        env!("CARGO_PKG_VERSION"),
+        cfg!(target_os = "linux"),
+    )
 }
 
 #[cfg(test)]
@@ -492,15 +584,7 @@ pub fn status_json(
 ) -> Value {
     // An installed-but-not-allowed root helper says so even when a legacy
     // helper still answers (correctness review #8).
-    let kind = match st.kind {
-        Kind::Root => "root",
-        Kind::NotAllowed => "not_allowed",
-        // Only the pg script still serves when the root helper is absent;
-        // a leftover k2-mail-helper is reported (`legacy.mail`) but never
-        // used (retired at install, Rosson 2026-10-10).
-        Kind::Missing if legacy_pg => "legacy",
-        Kind::Missing => "missing",
-    };
+    let kind = state_word(st, legacy_pg);
     json!({
         "state": kind,
         "version": st.version,

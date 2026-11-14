@@ -293,6 +293,10 @@ fn full_body_base(settings: &k2_core::app_settings::AppSettings) -> serde_json::
         // prd-k2-db-rename-v1 DB-A4: what this boot's home database switch
         // did, `{file, outcome, reason, markerAt}` (null before the DB opens).
         "homeDb": k2_core::db::home_switch::status_json(),
+        // 0.46.13 (fleet monitoring): the root helper, `{state, protocol,
+        // version}` from the daemon's last probe and auto-heal (never a
+        // root call per request); null off Linux.
+        "rootHelper": crate::root_helper::boot_status_value(),
     })
 }
 
@@ -1583,9 +1587,16 @@ mod tests {
         for k in [
             "version", "protocol", "phase", "detail", "instanceId", "serverId", "publicHost", "features",
             "installKind", "webClient", "scopedHooks", "ops", "api", "airgap", "listen", "connectLogin", "homeDb",
+            "rootHelper",
         ] {
             assert!(full.get(k).is_some(), "full keeps {k}");
         }
+        // The root helper rides the full view only: an object on Linux,
+        // null elsewhere.
+        assert_eq!(full["rootHelper"].is_object(), cfg!(target_os = "linux"), "{}", full["rootHelper"]);
+        assert_eq!(full["rootHelper"].is_null(), !cfg!(target_os = "linux"), "{}", full["rootHelper"]);
+        assert!(!raw.contains("rootHelper"), "compat has no rootHelper: {raw}");
+        assert!(!public.contains("rootHelper"), "public has no rootHelper: {public}");
         assert_eq!(full["webClient"]["enabled"], s.web_client_enabled);
         assert_eq!(full["connectLogin"]["ingress"], "edge");
     }

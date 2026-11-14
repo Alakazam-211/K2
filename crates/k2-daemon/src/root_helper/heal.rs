@@ -223,6 +223,15 @@ pub(super) struct HealStatus {
 
 static STATUS: Mutex<Option<HealStatus>> = Mutex::new(None);
 
+/// The latest heal's result (`None` before the first one).
+pub(super) fn last_result() -> Option<Outcome> {
+    STATUS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .and_then(|s| s.last_result.clone())
+}
+
 /// The `autoHeal` block of `GET /cli/root-helper/status`, against the live
 /// probe `live` that the same status read made.
 pub fn status_value(live: &RootHelperState) -> Value {
@@ -320,7 +329,9 @@ pub struct LiveOps;
 impl HealOps for LiveOps {
     fn probe(&self) -> RootHelperState {
         super::invalidate();
-        super::probe_with(&super::RealDoor)
+        let st = super::probe_with(&super::RealDoor);
+        super::remember(&st);
+        st
     }
     fn fetch(&self, url: &str) -> Result<Vec<u8>, FetchError> {
         let resp = reqwest::blocking::Client::builder()
@@ -414,6 +425,9 @@ pub fn spawn_auto_heal() {
     let _ = std::thread::Builder::new()
         .name("k2-root-helper-heal".into())
         .spawn(|| {
+            // One probe now, so `/boot-status` reports the helper from the
+            // first minutes on (it only ever reads the last probe).
+            let _ = super::state();
             std::thread::sleep(std::time::Duration::from_secs(120));
             let mut backoff = 3600u64;
             loop {

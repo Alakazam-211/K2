@@ -208,6 +208,22 @@ async fn compat_is_the_default_and_keeps_every_field_old_clients_read() {
         let features: Vec<&str> =
             full_v["features"].as_array().expect("features").iter().map(|f| f.as_str().unwrap()).collect();
         assert_eq!(features.last(), Some(&"boot-status-views-v1"), "{features:?}");
+        // The root helper for fleet monitoring: {state, protocol, version}
+        // on Linux (from the last probe), null elsewhere; full view only.
+        let rh = &full_v["rootHelper"];
+        if cfg!(target_os = "linux") {
+            let mut keys: Vec<&String> = rh.as_object().unwrap_or_else(|| panic!("rootHelper object: {rh}")).keys().collect();
+            keys.sort();
+            assert_eq!(keys, ["protocol", "state", "version"], "{rh}");
+            let state = rh["state"].as_str().unwrap_or_else(|| panic!("rootHelper.state: {rh}"));
+            assert!(
+                ["unknown", "root", "missing", "not_allowed", "legacy", "package", "rolled_back", "airgapped"].contains(&state),
+                "{rh}"
+            );
+            assert!(rh["protocol"].is_u64(), "{rh}");
+        } else {
+            assert!(rh.is_null(), "rootHelper off Linux: {rh}");
+        }
 
         // Tunnel, no credential: compat, byte-exact key order.
         let compat = boot(d.tunnel_port, &[]);
@@ -223,7 +239,7 @@ async fn compat_is_the_default_and_keeps_every_field_old_clients_read() {
             assert_eq!(c[*f], full_v[*f], "compat keeps {f} exactly as the full body has it");
         }
         assert_eq!(c["airgap"]["enabled"], full_v["airgap"]["enabled"]);
-        for hidden in ["detail", "installKind", "webClient", "scopedHooks", "ops", "api", "listen", "connectLogin", "homeDb"] {
+        for hidden in ["detail", "installKind", "webClient", "scopedHooks", "ops", "api", "listen", "connectLogin", "homeDb", "rootHelper"] {
             assert!(c.get(hidden).is_none(), "compat hides {hidden}: {}", compat.body);
         }
         assert!(c["airgap"].get("baked").is_none(), "compat hides airgap.baked");

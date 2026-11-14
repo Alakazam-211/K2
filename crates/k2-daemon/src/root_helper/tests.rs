@@ -671,3 +671,136 @@ fn auto_heal_needs_root_is_superseded_once_the_helper_is_installed() {
     assert!(v["lastResult"].is_null());
     assert!(v.get("superseded").is_none(), "{v}");
 }
+
+// ── /boot-status `rootHelper` (fleet monitoring) ─────────────────────
+
+fn seen(st: RootHelperState, legacy_pg: bool) -> Seen {
+    Seen { st, legacy_pg }
+}
+
+fn never_airgap() -> bool {
+    false
+}
+
+fn airgap_on() -> bool {
+    true
+}
+
+/// Shape: off Linux null; on Linux exactly `{state, protocol, version}`,
+/// with the words `k2 root-helper status` uses.
+#[test]
+fn boot_status_field_has_the_status_shape_and_is_null_off_linux() {
+    let root = seen(root_at("0.46.13", 13), false);
+    assert_eq!(boot_status_from(Some(&root), None, &never_airgap, "0.46.13", false), Value::Null);
+    assert_eq!(boot_status_from(None, None, &never_airgap, "0.46.13", false), Value::Null);
+
+    let v = boot_status_from(Some(&root), None, &never_airgap, "0.46.13", true);
+    assert_eq!(v, json!({"state": "root", "protocol": 13, "version": "0.46.13"}));
+    assert_eq!(v.as_object().map(|o| o.len()), Some(3), "{v}");
+
+    // Before the first probe after boot.
+    assert_eq!(
+        boot_status_from(None, None, &never_airgap, "0.46.13", true),
+        json!({"state": "unknown", "protocol": 0, "version": null})
+    );
+
+    let missing = seen(RootHelperState::missing(), false);
+    assert_eq!(
+        boot_status_from(Some(&missing), None, &never_airgap, "0.46.13", true),
+        json!({"state": "missing", "protocol": 0, "version": null})
+    );
+    let legacy = seen(RootHelperState::missing(), true);
+    assert_eq!(boot_status_from(Some(&legacy), None, &never_airgap, "0.46.13", true)["state"], "legacy");
+    let not_allowed = seen(
+        RootHelperState {
+            kind: Kind::NotAllowed,
+            ..RootHelperState::missing()
+        },
+        false,
+    );
+    assert_eq!(boot_status_from(Some(&not_allowed), None, &never_airgap, "0.46.13", true)["state"], "not_allowed");
+
+    // The same words and numbers as `GET /cli/root-helper/status`.
+    for s in [&root, &missing, &legacy, &not_allowed] {
+        let status = status_json(&s.st, "absent", s.legacy_pg, None);
+        let boot = boot_status_from(Some(s), None, &never_airgap, "0.46.13", true);
+        assert_eq!(boot["state"], status["state"], "{boot} vs {status}");
+        assert_eq!(boot["protocol"], status["protocol"]);
+        assert_eq!(boot["version"], status["version"]);
+    }
+}
+
+/// The finer states for a working helper: package, rolled_back, airgapped,
+/// each one only while it is true.
+#[test]
+fn boot_status_field_names_package_rolled_back_and_airgapped() {
+    let package = seen(
+        RootHelperState {
+            package_owned: true,
+            ..root_at("0.46.1", 12)
+        },
+        false,
+    );
+    assert_eq!(boot_status_from(Some(&package), None, &never_airgap, "0.46.13", true)["state"], "package");
+
+    let rolled = Outcome::RolledBack {
+        from: "0.46.13".into(),
+        to: "0.46.12".into(),
+        reason: "after the update the helper answers None".into(),
+    };
+    let behind = seen(root_at("0.46.12", 12), false);
+    assert_eq!(
+        boot_status_from(Some(&behind), Some(&rolled), &never_airgap, "0.46.13", true),
+        json!({"state": "rolled_back", "protocol": 12, "version": "0.46.12"})
+    );
+    // An admin installed the current helper since: plain root again.
+    let current = seen(root_at("0.46.13", 13), false);
+    assert_eq!(boot_status_from(Some(&current), Some(&rolled), &never_airgap, "0.46.13", true)["state"], "root");
+
+    assert_eq!(boot_status_from(Some(&behind), None, &airgap_on, "0.46.13", true)["state"], "airgapped");
+    assert_eq!(boot_status_from(Some(&current), None, &airgap_on, "0.46.13", true)["state"], "root");
+    assert_eq!(boot_status_from(Some(&behind), None, &never_airgap, "0.46.13", true)["state"], "root");
+    // A dev build (no x.y.z) is never "behind".
+    assert_eq!(boot_status_from(Some(&behind), None, &airgap_on, "dev", true)["state"], "root");
+}
+
+/// Fleet monitoring reads it: never a path or error text.
+#[test]
+fn boot_status_field_carries_no_path_or_error_text() {
+    let st = RootHelperState {
+        path: "/opt/private-place/k2-root-helper".into(),
+        error: Some("helper version: exit 1: sudo: token=abc123".into()),
+        ..root_at("0.46.13", 13)
+    };
+    let v = boot_status_from(Some(&seen(st, false)), None, &never_airgap, "0.46.13", true);
+    let text = v.to_string();
+    for leak in ["path", "error", "private-place", "abc123", "sudo"] {
+        assert!(!text.contains(leak), "{leak} in {text}");
+    }
+}
+
+/// Cached: the field reads the last probe and never probes itself (the
+/// test seam says root while the last remembered probe says missing).
+#[test]
+fn boot_status_value_reads_the_last_probe_and_never_probes() {
+    let k2 = env!("CARGO_PKG_VERSION");
+    test_seam::set(Some(root_at(k2, 99)));
+    remember_seen(seen(RootHelperState::missing(), false));
+    let v = boot_status_value();
+    if cfg!(target_os = "linux") {
+        assert_eq!(v["state"], "missing", "{v}");
+    } else {
+        assert!(v.is_null(), "{v}");
+    }
+    // A status read (the seam) does not change it; a remembered probe does.
+    let _ = state();
+    assert_eq!(boot_status_value(), v);
+    remember_seen(seen(root_at(k2, 99), false));
+    let v = boot_status_value();
+    if cfg!(target_os = "linux") {
+        assert_eq!(v, json!({"state": "root", "protocol": 99, "version": k2}));
+    } else {
+        assert!(v.is_null(), "{v}");
+    }
+    test_seam::set(None);
+}

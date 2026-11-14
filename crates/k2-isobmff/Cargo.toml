@@ -1,0 +1,14 @@
+[package]
+name = "k2-isobmff"
+# Its own version line, independent of the K2 release (like k2-scenerender):
+# release.sh does not bump it.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "K2's own ISO BMFF / QuickTime MOV reader and CMAF fMP4 writer, the container layer of the video-derivatives worker: bounded, typed errors, no panics on untrusted input. Std only."
+
+# No dependencies of any kind (normal, build or dev): the container layer is
+# all our own code, from the specs. tests/licences.rs pins that; the fuzz
+# crate (fuzz/, its own workspace) is the only place libfuzzer-sys appears.
+[dependencies]

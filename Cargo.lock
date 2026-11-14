@@ -4890,6 +4890,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-isobmff"
+version = "0.1.0"
+
+[[package]]
 name = "k2-menubar"
 version = "0.46.12"
 dependencies = [

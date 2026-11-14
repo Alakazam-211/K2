@@ -68,6 +68,10 @@ members = [
     # The offline verifier for K2 Compute build statements: MIT OR
     # Apache-2.0, pure Rust, linked into nothing else.
     "crates/kessel-attest",
+    # K2's own ISO BMFF / MOV reader and CMAF fMP4 writer: the container
+    # layer for video previews. Std only, no dependencies; its fuzz
+    # targets live in its own fuzz/ workspace.
+    "crates/k2-isobmff",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos

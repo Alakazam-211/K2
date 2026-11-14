@@ -1,0 +1,55 @@
+# cargo-deny policy for k2-isobmff (the ISO BMFF / MOV reader and fMP4 writer):
+#   cargo deny --manifest-path crates/k2-isobmff/Cargo.toml \
+#       --config crates/k2-isobmff/deny.toml check licenses bans advisories sources
+# The crate has no dependencies at all; tests/licences.rs pins that. This
+# keeps it so if one is ever added: permissive licences only, no git source,
+# and no third-party container or media crate (the container layer is our
+# own code, prd-video-tab-media-v1 §3.3). No ignores.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+exclude-dev = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    # Third-party ISO BMFF / Matroska / media readers: never in this tree.
+    { name = "mp4parse" },
+    { name = "mp4" },
+    { name = "mp4-rust" },
+    { name = "mp4box" },
+    { name = "filmcraft-isobmff" },
+    { name = "symphonia" },
+    { name = "symphonia-format-isomp4" },
+    { name = "matroska" },
+    { name = "ffmpeg-next" },
+    { name = "ffmpeg-sys-next" },
+    { name = "gstreamer" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[advisories]
+ignore = []

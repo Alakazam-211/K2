@@ -2029,6 +2029,38 @@ fn on_receipt(node_id: &str, r: ReceiptFrame) {
 /// longer than any size-based guess, and is fine while bytes keep coming.
 pub const PULL_IDLE: Duration = Duration::from_secs(60);
 
+/// The clock a pull's idle limit is measured on: the wall clock, or in
+/// tests one that only moves when the test moves it, so "the node went
+/// quiet for the whole limit" and "bytes kept coming" don't depend on how
+/// busy the machine running the test is.
+#[derive(Clone, Default)]
+struct PullClock {
+    manual: Option<Arc<Mutex<Instant>>>,
+}
+
+impl PullClock {
+    fn now(&self) -> Instant {
+        match &self.manual {
+            Some(t) => *t.lock().unwrap_or_else(|p| p.into_inner()),
+            None => Instant::now(),
+        }
+    }
+
+    /// A clock that stands still until [`PullClock::advance`].
+    #[cfg(test)]
+    fn manual() -> Self {
+        Self { manual: Some(Arc::new(Mutex::new(Instant::now()))) }
+    }
+
+    /// Move a manual clock on and wake the pulls waiting on it.
+    #[cfg(test)]
+    fn advance(&self, by: Duration) {
+        let t = self.manual.as_ref().expect("only a manual clock is moved by hand");
+        *t.lock().unwrap_or_else(|p| p.into_inner()) += by;
+        notify_change();
+    }
+}
+
 /// One artifact being pulled from a node into the controller's cache.
 struct Pull {
     node_id: String,
@@ -2043,8 +2075,9 @@ struct Pull {
     next_seq: u32,
     /// The node paces this pull by our acks (`artifact-flow`).
     flow: bool,
-    /// When the last chunk came (or the request went).
+    /// When the last chunk came (or the request went), on `clock`.
     moved: Instant,
+    clock: PullClock,
     done: Option<Result<(), (String, String)>>,
 }
 
@@ -2168,7 +2201,7 @@ fn on_artifact_chunk(node_id: &str, c: ArtifactChunk) {
         }
         p.got += data.len() as u64;
         p.next_seq += 1;
-        p.moved = Instant::now();
+        p.moved = p.clock.now();
         if c.last {
             let sha = p.hasher.take().map(|h| h.finish_hex()).unwrap_or_default();
             if p.got != p.expect_bytes || !crypto::ct_eq(sha.as_bytes(), p.expect_sha.as_bytes()) {
@@ -2253,6 +2286,17 @@ fn resume_part(part: &std::path::Path, total: u64) -> Option<(std::fs::File, cry
 /// acks, a pull that stops is cancelled there, and the next fetch
 /// continues from the bytes already here.
 pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool, idle: Duration) -> Result<std::path::PathBuf, (String, String)> {
+    fetch_artifact_on(job, info, over_relay, idle, PullClock::default())
+}
+
+/// [`fetch_artifact`] with its idle limit on `clock`.
+fn fetch_artifact_on(
+    job: &store::JobRow,
+    info: &ArtifactInfo,
+    over_relay: bool,
+    idle: Duration,
+    clock: PullClock,
+) -> Result<std::path::PathBuf, (String, String)> {
     let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
     if cache_holds(&dst, info) {
         return Ok(dst);
@@ -2302,7 +2346,8 @@ pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool
                 got: from,
                 next_seq: 0,
                 flow,
-                moved: Instant::now(),
+                moved: clock.now(),
+                clock,
                 done: None,
             },
         )
@@ -2348,13 +2393,12 @@ pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool
 fn wait_pull(request_id: &str, node_id: &str, conn_at: Option<u64>, flow: bool, idle: Duration) -> Result<(), (String, String)> {
     loop {
         let seen = change_counter();
-        let Some((done, moved)) = with_pulls(|m| m.get(request_id).map(|p| (p.done.clone(), p.moved))) else {
+        let Some((done, quiet)) = with_pulls(|m| m.get(request_id).map(|p| (p.done.clone(), p.clock.now().saturating_duration_since(p.moved)))) else {
             return Err(("artifact_unavailable".into(), "the transfer ended; try again".into()));
         };
         if let Some(d) = done {
             return d;
         }
-        let quiet = moved.elapsed();
         if quiet >= idle {
             return Err(("artifact_timeout".into(), format!("the node sent nothing for {} s; try again", idle.as_secs())));
         }
@@ -3547,6 +3591,8 @@ mod tests {
     /// keeps nothing behind, and a later ask starts a new pull.
     #[test]
     fn a_background_pull_reports_its_error_once_and_leaves_nothing_behind() {
+        // The cache path comes from $HOME: hold it still (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
         let db = k2_core::db::shared();
         let j = {
@@ -3648,8 +3694,13 @@ mod tests {
     /// deadline allowed (60 s + 1 s per MB assumed about 1 MB/s). A pull
     /// that keeps getting bytes is not cut off; only one that stops
     /// moving for its whole timeout fails.
+    ///
+    /// The artifact tests hold a temp home (the cache path comes from
+    /// $HOME, which other tests change) and run their pulls on a manual
+    /// clock, so a busy test machine can't make a pull time out.
     #[test]
     fn a_slow_pull_that_keeps_moving_is_not_cut_off() {
+        let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
         let j = {
             let db = k2_core::db::shared();
@@ -3660,21 +3711,23 @@ mod tests {
         let info = ArtifactInfo { name: "dist/app.tar.gz".into(), sha256: crypto::sha256_hex(&body), bytes: body.len() as u64 };
         let _ = std::fs::remove_dir_all(artifact_cache_path(&j.id, j.generation, &info.sha256).parent().unwrap());
         let mut rx = relay_conn("n-slow", &[results::FEATURE_ARTIFACTS]);
-        let (job, inf) = (j.clone(), info.clone());
-        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(2)));
+        let clock = PullClock::manual();
+        let (job, inf, c) = (j.clone(), info.clone(), clock.clone());
+        let pull = std::thread::spawn(move || fetch_artifact_on(&job, &inf, false, Duration::from_secs(2), c));
         let get = next_sent(&mut rx, |f| match f {
             Frame::ArtifactGet(g) => Some(g.clone()),
             _ => None,
         });
-        // Six pieces, one every 0.7 s: 4.2 s in all, twice the timeout,
-        // but never 2 s without a byte.
-        let t0 = Instant::now();
+        // Six pieces, one every 1.9 s: 11.4 s in all, over five times the
+        // timeout, but never 2 s without a byte.
+        let t0 = clock.now();
         for (i, piece) in body.chunks(1024).enumerate() {
-            std::thread::sleep(Duration::from_millis(700));
+            clock.advance(Duration::from_millis(1900));
+            assert!(!pull.is_finished(), "piece {i}: the pull is still waiting for bytes");
             test_frame("n-slow", chunk(&get.request_id, i as u32, piece, i == 5, &info));
         }
         let r = pull.join().expect("the pull thread");
-        assert!(t0.elapsed() > Duration::from_secs(2), "the transfer took longer than the timeout");
+        assert!(clock.now() - t0 > Duration::from_secs(2) * 5, "the transfer took far longer than the timeout");
         let path = r.unwrap_or_else(|(c, h)| panic!("a moving pull failed: {c}: {h}"));
         assert_eq!(std::fs::read(&path).expect("cached"), body);
         test_detach("n-slow");
@@ -3757,12 +3810,14 @@ mod tests {
     /// from there and finishes the file.
     #[test]
     fn a_flow_pull_acks_cancels_when_it_stops_and_the_next_one_continues() {
+        let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
         let body: Vec<u8> = (0..3 * 1024u32).map(|i| (i % 253) as u8).collect();
         let (j, info) = flow_job("flowflow0123456789abcdef01234567", "n-flow", &body);
         let mut rx = relay_conn("n-flow", &[results::FEATURE_ARTIFACTS, results::FEATURE_ARTIFACT_FLOW]);
-        let (job, inf) = (j.clone(), info.clone());
-        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(1)));
+        let clock = PullClock::manual();
+        let (job, inf, c) = (j.clone(), info.clone(), clock.clone());
+        let pull = std::thread::spawn(move || fetch_artifact_on(&job, &inf, false, Duration::from_secs(1), c));
         let get = next_sent(&mut rx, |f| match f {
             Frame::ArtifactGet(g) => Some(g.clone()),
             _ => None,
@@ -3774,9 +3829,13 @@ mod tests {
             _ => None,
         });
         assert_eq!((ack.request_id.as_str(), ack.next), (get.request_id.as_str(), 1024));
-        // The node goes quiet: the pull fails, the node is told to stop.
+        assert!(!pull.is_finished(), "a pull whose clock hasn't moved can't have timed out");
+        // The node goes quiet for the whole limit: the pull fails, the node
+        // is told to stop.
+        clock.advance(Duration::from_secs(1));
         let (code, hint) = pull.join().unwrap().expect_err("a quiet node fails the pull");
         assert_eq!(code, "artifact_timeout", "{hint}");
+        assert!(hint.contains("the next fetch continues"), "{hint}");
         let cancel = next_sent(&mut rx, |f| match f {
             Frame::ArtifactCancel(c) => Some(c.clone()),
             _ => None,
@@ -3786,8 +3845,8 @@ mod tests {
         assert_eq!(std::fs::read(part_path(&dst)).expect("the partial file stays"), body[..1024]);
 
         // The next fetch continues at byte 1024 and finishes the file.
-        let (job, inf) = (j.clone(), info.clone());
-        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(5)));
+        let (job, inf, c) = (j.clone(), info.clone(), PullClock::manual());
+        let pull = std::thread::spawn(move || fetch_artifact_on(&job, &inf, false, Duration::from_secs(1), c));
         let get = next_sent(&mut rx, |f| match f {
             Frame::ArtifactGet(g) => Some(g.clone()),
             _ => None,
@@ -3812,13 +3871,15 @@ mod tests {
     /// second fetch of a file being pulled joins that pull.
     #[test]
     fn a_reconnect_ends_the_pull_and_a_second_fetch_joins_a_running_one() {
+        let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
         let body: Vec<u8> = (0..2048u32).map(|i| (i % 249) as u8).collect();
         let (j, info) = flow_job("dropdrop0123456789abcdef01234567", "n-drop", &body);
         let mut rx = relay_conn("n-drop", &[results::FEATURE_ARTIFACTS, results::FEATURE_ARTIFACT_FLOW]);
-        let (job, inf) = (j.clone(), info.clone());
-        let t0 = Instant::now();
-        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(30)));
+        // A clock that never moves: this pull can't time out, so it ends
+        // only because its session did.
+        let (job, inf, c) = (j.clone(), info.clone(), PullClock::manual());
+        let pull = std::thread::spawn(move || fetch_artifact_on(&job, &inf, false, Duration::from_secs(30), c));
         let get = next_sent(&mut rx, |f| match f {
             Frame::ArtifactGet(g) => Some(g.clone()),
             _ => None,
@@ -3829,12 +3890,11 @@ mod tests {
         let (code, hint) = pull.join().unwrap().expect_err("the pull ends with its session");
         assert_eq!(code, "node_offline", "{hint}");
         assert!(hint.contains("the next fetch continues"), "{hint}");
-        assert!(t0.elapsed() < Duration::from_secs(10), "not after its 30 s timeout: {:?}", t0.elapsed());
 
         // Two fetches at once: one request to the node, both get the file.
         let spawn = || {
-            let (job, inf) = (j.clone(), info.clone());
-            std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(10)))
+            let (job, inf, c) = (j.clone(), info.clone(), PullClock::manual());
+            std::thread::spawn(move || fetch_artifact_on(&job, &inf, false, Duration::from_secs(10), c))
         };
         let first = spawn();
         let get = next_sent(&mut rx2, |f| match f {

@@ -27,6 +27,10 @@ const h = vi.hoisted(() => {
   return { listQueue, sticky, scopes, daemonCliGet, daemonCliPost }
 })
 
+// The chrome's own columns (SessionColumns) draw the Thread and Chatter;
+// these tests drive the box they place themselves, so the columns' stay empty.
+vi.mock('@/components/SessionView/ThreadOverlayColumn', () => ({ ThreadOverlayColumn: () => null }))
+vi.mock('@/components/SessionView/ChatterOverlayPane', () => ({ ChatterOverlayPane: () => null }))
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: h.daemonCliGet,
   daemonCliPost: h.daemonCliPost,

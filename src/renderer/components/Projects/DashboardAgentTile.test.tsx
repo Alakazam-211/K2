@@ -10,8 +10,6 @@ const mounts = vi.hoisted(() => ({ terminal: 0, unmounts: 0 }))
 
 vi.mock('@/kessel-term/TerminalPane', async () => {
   const { useSessionViewChrome } = await import('@/components/SessionView/sessionViewChrome')
-  const { ThreadOverlayColumn } = await import('@/components/SessionView/ThreadOverlayColumn')
-  const { TerminalComposeBar } = await import('@/components/Terminal/TerminalComposeBar')
   return {
     TerminalPane: (props: { terminalId: string; attachAgentName?: string; cwd: string; sessionId?: string; holdSpawn?: boolean }) => {
       const chrome = useSessionViewChrome()
@@ -31,19 +29,7 @@ vi.mock('@/kessel-term/TerminalPane', async () => {
           data-attach={props.attachAgentName}
           data-sessionid={props.sessionId ?? 'NONE'}
           data-hold={String(props.holdSpawn === true)}
-        >
-          {/* Thread view: the Thread and its message box, where the real pane draws them. */}
-          {chrome?.viewTab === 'thread' ? (
-            <ThreadOverlayColumn
-              addr={chrome.overlayAddr}
-              conversationId={chrome.conversationId}
-              active
-              composeBar={
-                <TerminalComposeBar sessionId="" draftId={String(props.attachAgentName)} workspacePath={props.cwd} sendDestination="thread" />
-              }
-            />
-          ) : null}
-        </div>
+        />
       )
     },
   }

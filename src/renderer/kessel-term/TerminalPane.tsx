@@ -92,23 +92,17 @@ import {
 } from '@/components/Terminal/terminalLinkDetector'
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
-import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
-import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { TerminalErrorBox, TerminalHeldLabel } from './terminalPaneStates'
-import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
-import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
-import { useTerminalRevealPresence } from '@/components/SessionView/threadReveal'
-import { threadDrawerOpen, type ThreadDrawerKind } from '@/components/SessionView/threadPanels'
-import { ThreadDrawerPanel } from '@/components/SessionView/ThreadDrawerPanel'
+import {
+  SessionColumns,
+  useReportTerminalThreadHandle,
+  useSessionColumnsHost,
+  useSessionColumnsState,
+  type TerminalThreadHandle,
+} from '@/components/SessionView/SessionColumns'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { effectiveKeybinding, keyEventMatchesCombo } from '@shared/hotkeys'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
-import {
-  DEFAULT_SPLIT_LEFT,
-  DEFAULT_SPLIT_RIGHT,
-  overlayViewer,
-  type SplitPaneView,
-} from '@/components/SessionView/sessionViewTab'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { isSoleWorkspaceViewer } from '@/stores/presence'
 import { useStore } from 'zustand'
@@ -606,32 +600,22 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     heldLabel,
   } = props
   const sessionChrome = useSessionViewChrome()
-  const viewTab = sessionChrome?.viewTab ?? 'terminal'
-  const splitLeft = sessionChrome?.splitLeft ?? DEFAULT_SPLIT_LEFT
-  const splitRight = sessionChrome?.splitRight ?? DEFAULT_SPLIT_RIGHT
-  const showSplit = viewTab === 'split'
-  const { thread: showThreadOverlay, chatter: showChatterOverlay, hidePty } =
-    overlayViewer(viewTab, { left: splitLeft, right: splitRight })
-  const showThreadOnly = viewTab === 'thread'
-  // Thread view only: the `single` path below passes it; Split doesn't.
-  const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
-  // Thread view's revealed terminal (`threadReveal.ts`). `revealOpen` is what
-  // the person asked for; the column stays laid out (`revealShown`) while it
-  // slides shut. Keyed during render so the commit that closes it still has
-  // it on screen.
-  // Chatter and Heartbeats (`threadPanels.ts`) slide out of the same column:
-  // `drawerOpen` is whichever is open, `drawerShown` the one laid out (the
-  // last one open while it slides shut).
-  const drawerOpen = showThreadOnly
-    ? threadDrawerOpen(!!sessionChrome?.terminalRevealed, sessionChrome?.threadPanel ?? null)
-    : null
-  const revealOpen = drawerOpen !== null
-  const { shown: drawerLaidOut, onClosed: onRevealClosed } = useTerminalRevealPresence(revealOpen, showThreadOnly)
-  const [lastDrawer, setLastDrawer] = useState<ThreadDrawerKind>(drawerOpen ?? 'terminal')
-  if (drawerOpen && drawerOpen !== lastDrawer) setLastDrawer(drawerOpen)
-  const drawerShown: ThreadDrawerKind = drawerOpen ?? lastDrawer
+  // The session's columns (SessionColumns.tsx): a body around this pane that
+  // draws them (`PinnedSessionBody`) owns their state, and this pane draws
+  // only its grid; else this pane draws them around its grid itself.
+  const columnsHost = useSessionColumnsHost()
+  const ownColumns = useSessionColumnsState(columnsHost ? null : sessionChrome)
+  const columns = columnsHost?.state ?? ownColumns
+  const {
+    showSplit,
+    showThread: showThreadOverlay,
+    showChatter: showChatterOverlay,
+    hidePty,
+    showThreadOnly,
+    showChatterOnly,
+  } = columns
   // The terminal's own column (the painter, focus): only when it's the drawer.
-  const revealShown = drawerLaidOut && drawerShown === 'terminal'
+  const revealShown = columns.revealShown
   // Read by the key handler, which doesn't re-bind on a view change.
   const showThreadOnlyRef = useRef(showThreadOnly)
   showThreadOnlyRef.current = showThreadOnly
@@ -642,7 +626,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // A sidecar's header shows the toggle before this pane knows of a PTY.
   // Reported in the effect below (phase is declared later in this body).
   const reportTerminalLive = sessionChrome?.reportTerminalLive
-  const showChatterOnly = viewTab === 'chatter'
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
   // / Cmd+Shift+- menu events (wired via listen('terminal:zoom-*')
@@ -3172,6 +3155,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       forceGridResyncRef.current('input-send-failed')
     }
   }, [])
+  // What the Thread's message box and Stop need from this PTY, for the
+  // columns (SessionColumns.tsx); reported up when a body draws them.
+  const phaseSessionId = 'sessionId' in phase && phase.sessionId ? phase.sessionId : ''
+  const threadHandle = useMemo<TerminalThreadHandle>(
+    () => ({ sessionId: phaseSessionId, phaseKind: phase.kind, sendInput, readOnly: readOnlyRoom, showComposeBar }),
+    [phaseSessionId, phase.kind, sendInput, readOnlyRoom, showComposeBar],
+  )
+  useReportTerminalThreadHandle(columnsHost, threadHandle)
 
   // 0.37.11 — active-viewer resize protocol.
   //
@@ -5484,22 +5475,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       />
     )
   }
-  const composeThread = (): React.ReactNode => {
-    if (!showComposeBar || !shouldShowTerminalComposeBar(phase)) return null
-    return (
-      <TerminalComposeBar
-        sessionId={sessionIdForCompose}
-        workspacePath={cwd}
-        onInjectInput={sendInput}
-        draftId={composeDraftId}
-        sendDestination="thread"
-      />
-    )
-  }
-  // The Thread working strip's Stop (prd-daemon-activity-and-thread-working-
-  // v1 S7): the same Esc the Thread compose bar sends, into this PTY. A
-  // view-only room never types, so it gets no Stop.
-  const stopThreadTurn = readOnlyRoom ? undefined : (): void => sendInput('\x1b')
   const grid = (
     <div
       ref={containerRef}
@@ -5858,6 +5833,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     </div>
   )
 
+  const terminalNode = errorBox ?? (
+    <>
+      {grid}
+      {showSplit ? composePty() : null}
+    </>
+  )
   return (
     <div
       style={{
@@ -5870,103 +5851,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }}
       data-terminal-pane-wrapper=""
     >
-    <SplitSessionColumns
-      showSplit={showSplit}
-      hidePty={hidePty}
-      left={splitLeft}
-      right={splitRight}
-      reveal={
-        showThreadOnly && sessionChrome?.terminalRevealed !== undefined
-          ? {
-              kind: drawerShown,
-              open: revealOpen,
-              shown: drawerLaidOut,
-              motionKey: sessionChrome.terminalRevealKey ?? null,
-              onClosed: onRevealClosed,
-            }
-          : null
-      }
-      panel={
-        drawerLaidOut && drawerShown !== 'terminal' && sessionChrome?.threadPanel !== undefined ? (
-          <ThreadDrawerPanel kind={drawerShown} active={drawerOpen === drawerShown} />
-        ) : null
-      }
-      terminal={
-        errorBox ?? (
-          <>
-            {grid}
-            {showSplit ? composePty() : null}
-          </>
-        )
-      }
-      sharedTerminal={
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-testid="split-terminal-shared">
-          <div className="flex-1 min-h-0" />
-          {composePty()}
-        </div>
-      }
-      renderView={(view: Exclude<SplitPaneView, 'terminal'>) => {
-        if (!sessionChrome) return null
-        if (view === 'thread') {
-          return (
-            <ThreadOverlayColumn
-              addr={sessionChrome.overlayAddr}
-              conversationId={sessionChrome.conversationId}
-              active
-              composeBar={composeThread()}
-              agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
-              centreEmpty
-              onStop={stopThreadTurn}
-            />
-          )
-        }
-        return (
-          <div
-            className="flex-1 min-w-0 min-h-0 flex flex-col"
-            data-testid="agent-session-chatter"
-          >
-            <div className="flex-1 min-h-0 min-w-0">
-              <ChatterOverlayPane
-                addr={sessionChrome.overlayAddr}
-                conversationId={sessionChrome.conversationId}
-                active
-              />
-            </div>
-          </div>
-        )
-      }}
-      single={
-        <>
-          {sessionChrome && showThreadOverlay && (
-            <ThreadOverlayColumn
-              addr={sessionChrome.overlayAddr}
-              conversationId={sessionChrome.conversationId}
-              active={showThreadOverlay}
-              composeBar={composeThread()}
-              agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
-              centreEmpty
-              onStop={stopThreadTurn}
-              textCapPx={threadTextCap}
-            />
-          )}
-          {sessionChrome && showChatterOverlay && (
-            <div
-              className="flex-1 min-w-0 min-h-0 flex flex-col"
-              data-testid="agent-session-chatter"
-            >
-              <div className="flex-1 min-h-0 min-w-0">
-                <ChatterOverlayPane
-                  addr={sessionChrome.overlayAddr}
-                  conversationId={sessionChrome.conversationId}
-                  active={showChatterOverlay}
-                  textCapPx={threadTextCap}
-                />
-              </div>
-            </div>
-          )}
-        </>
-      }
-    />
+      {columnsHost ? (
+        terminalNode
+      ) : (
+        <SessionColumns
+          chrome={sessionChrome}
+          state={ownColumns}
+          terminal={terminalNode}
+          handle={threadHandle}
+          draftId={composeDraftId}
+          cwd={cwd}
+        />
+      )}
       {/* Terminal-tab composer docks under the PTY column (in-flow). Thread
        *  tab uses the overlay column above so DevTools/viewport shrinks
        *  chat + Message-the-agent together. Split keeps one bar per column.

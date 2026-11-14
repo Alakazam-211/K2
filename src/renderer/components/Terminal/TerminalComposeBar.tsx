@@ -274,9 +274,10 @@ export function TerminalComposeBar({
   // Keyed by the pane's agent (`draftId`) when the host passes one, so the
   // text survives a refresh (new PTY, new `sessionId`, remounted bar).
   // The Thread's box shows before its session is up (the pinned Chat's
-  // ensure, a tile still checking): the host passes the same `draftId` the
-  // pane will (ThreadEarlyCompose), so the session arriving never swaps or
-  // wipes the text. No owner at all: memory only.
+  // ensure, a tile still checking, an asleep agent) and through a respawn:
+  // the session body draws it with the pane's `draftId` (SessionColumns), so
+  // a session arriving or changing never swaps or wipes the text. No owner
+  // at all: memory only.
   const draftOwner = draftId ? `agent:${draftId}` : sessionId
   const draftKey = draftOwner
     ? scopedKey(scope, sendOnThread ? `k2:composer:draft:${draftOwner}:thread` : `k2:composer:draft:${draftOwner}`)

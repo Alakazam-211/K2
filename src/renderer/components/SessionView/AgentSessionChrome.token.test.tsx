@@ -21,6 +21,13 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 
+// The chrome's columns (SessionColumns) draw these: stand-ins.
+vi.mock('@/components/SessionView/ThreadOverlayColumn', () => ({
+  ThreadOverlayColumn: () => <div data-testid="thread-column" />,
+}))
+vi.mock('@/components/SessionView/ChatterOverlayPane', () => ({
+  ChatterOverlayPane: () => <div data-testid="chatter-column" />,
+}))
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ host: '127.0.0.1', port: 1, token: 't', secure: false })),
   daemonWsBase: () => 'ws://127.0.0.1:1',
@@ -47,8 +54,6 @@ vi.stubGlobal(
 )
 
 import { AgentSessionChrome } from './AgentSessionChrome'
-import { SplitSessionColumns } from './SplitSessionColumns'
-import { useSessionViewChrome } from './sessionViewChrome'
 import { sessionViewSplitStorageKey } from './sessionViewTab'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { resetLlmAccountsForTests } from '@/stores/llm-accounts'
@@ -173,27 +178,11 @@ describe('agent chat tab header Token picker', () => {
       pins = []
       localStorage.setItem(sessionViewSplitStorageKey('local', 'conv-r'), JSON.stringify({ left, right }))
       const room = testRoom({ tabs: {}, presence: EMPTY_PRESENCE, projects: [PROJECT] })
-      function Columns() {
-        const chrome = useSessionViewChrome()
-        if (!chrome) return null
-        return (
-          <SplitSessionColumns
-            showSplit={chrome.viewTab === 'split'}
-            hidePty={false}
-            left={chrome.splitLeft}
-            right={chrome.splitRight}
-            terminal={<div data-testid="terminal-pane" />}
-            sharedTerminal={null}
-            renderView={(view) => <div data-testid={`${view}-column`} />}
-            single={null}
-          />
-        )
-      }
       // A new agent opens in Split view.
       renderInRoom(
         room,
         <AgentSessionChrome title="sales/reviewer" addr="sales/reviewer" conversationId="conv-r" agentName="tab-xyz" cwd="/ws/sales" command="claude">
-          <Columns />
+          <div data-testid="terminal-pane" />
         </AgentSessionChrome>,
       )
       const bar = screen.getByTestId('sidecar-session-header')

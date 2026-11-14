@@ -44,7 +44,6 @@ import {
 import ModeToggle, { ModeToggleSessionContext, type ModeToggleSession } from '@/components/Presence/ModeToggle'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
-import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
 import { prefetchThread } from '@/components/SessionView/threadRead'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
@@ -859,11 +858,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // pane at once with its spawn held (TerminalPane `holdSpawn`). The Thread
   // and its message box paint now, and when there is a session to show the
   // same pane attaches: nothing remounts. The session runs headless in the
-  // daemon; the Thread never needed the terminal. Once a session has been
-  // attached, a later ensure (refresh, switch, continue) is a respawn and
-  // keeps its own body below.
-  const attachedOnceRef = useRef(false)
-  if (phase.kind === 'ready') attachedOnceRef.current = true
+  // daemon; the Thread never needed the terminal. A respawn (refresh,
+  // switch, continue) swaps only the pane (`beginEnsure`): the Thread is
+  // drawn by PinnedSessionBody around it and stays.
   // The attach key whose pane has been let go (spawned or attached): only
   // that pane needs a remount for a new session. A held pane attaches to
   // whatever is live when it lets go.
@@ -879,6 +876,15 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const [attachNonce, setAttachNonce] = useState(0)
   const attachNonceRef = useRef(attachNonce)
   attachNonceRef.current = attachNonce
+  // The pane under this attach key has attached (see releasedNonceRef).
+  const paneAttached = (): boolean => releasedNonceRef.current === attachNonceRef.current
+  // Every ensure starts here. A pane already attached (a respawn: refresh,
+  // switch, continue, a retry) gives way to a fresh held one at once, beside
+  // the same Thread; when the ensure answers, that pane attaches.
+  const beginEnsure = useCallback((): void => {
+    setPhase({ kind: 'ensuring' })
+    if (releasedNonceRef.current === attachNonceRef.current) setAttachNonce((n) => n + 1)
+  }, [])
 
   // Pinned-chat background retention — hold the grid-WS while this pane
   // is hidden IFF the workspace is in the canonical Active section
@@ -1049,7 +1055,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // SessionAdded echo for this same new session won't double-bump.
         // (A cold mount with forceRespawn=false does NOT bump — TerminalPane
         // just mounted once and is already on the right PTY.)
-        if (forceRespawn) setAttachNonce((n) => n + 1)
+        if (forceRespawn && paneAttached()) setAttachNonce((n) => n + 1)
       } catch (err) {
         const choices = firstChatChoices(err)
         if (choices) {
@@ -1114,7 +1120,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // is decided, whoever decided it, the session starts: the same idempotent
   // ensure a visit makes, so it joins a spawn the daemon retried itself.
   const startAfterFolderTrust = useCallback((): void => {
-    setPhase({ kind: 'ensuring' })
+    beginEnsure()
     void ensure(false)
   }, [ensure])
   const folderHold = useFolderTrustHold(
@@ -1158,7 +1164,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           return
         }
         // Running: attach as before (the ensure finds the live session).
-        setPhase({ kind: 'ensuring' })
+        beginEnsure()
         void ensure(false)
       })
     return () => {
@@ -1179,7 +1185,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   useEffect(() => {
     if (!terminalWanted) return
     if (phase.kind !== 'asleep' && phase.kind !== 'checking') return
-    setPhase({ kind: 'ensuring' })
+    beginEnsure()
     void ensure(false)
   }, [terminalWanted, phase.kind, ensure])
 
@@ -1202,7 +1208,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // Only a pane that has attached needs a remount for the new session.
         // A held one (the first ensure's own spawn heard before its answer,
         // or an asleep agent woken) attaches when it lets go.
-        const paneAttached = releasedNonceRef.current === attachNonceRef.current
+        const attached = paneAttached()
         const before = phaseRef.current.kind
         const wasAsleep = before === 'asleep' || before === 'checking'
         attachedSessionIdRef.current = event.session_id
@@ -1215,7 +1221,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           canonicalSessionId: held ?? (wasAsleep ? lastOverlayConvRef.current : null) ?? event.session_id,
         })
         if (wasAsleep) setWokeWhileAsleep(true)
-        if (paneAttached) setAttachNonce((n) => n + 1)
+        if (attached) setAttachNonce((n) => n + 1)
       },
       onRemoved: (event) => {
         if (event.agent_name !== projectId) return
@@ -1249,7 +1255,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     freshHoldProviderIdRef.current = null
     discoveryGenRef.current += 1
     setRefreshing(true)
-    setPhase({ kind: 'ensuring' })
+    beginEnsure()
     await ensure(true)
     setRefreshing(false)
   }, [refreshing, ensure])
@@ -1266,7 +1272,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       freshHoldProviderIdRef.current = null
       discoveryGenRef.current += 1
       setRefreshing(true)
-      setPhase({ kind: 'ensuring' })
+      beginEnsure()
       try {
         // HOST-AWARE persist of the pinned session (same client the legacy
         // path uses; the route reads query params).
@@ -1320,7 +1326,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       return
     }
     setRefreshing(true)
-    setPhase({ kind: 'ensuring' })
+    beginEnsure()
     let spawned = false
     try {
       const res = await ensurePinnedChat(room.scope, projectPath, { freshProvider: req.targetProvider })
@@ -1349,7 +1355,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       })
       const nextProvider = res.provider || providerKeyForCommand(res.command)
       if (nextProvider) setLiveProvider(nextProvider)
-      setAttachNonce((n) => n + 1)
+      if (paneAttached()) setAttachNonce((n) => n + 1)
       if (!stillOpen()) return
       const msg = await daemonCliPost<MsgResponse>(room.scope, 'terminal/send-message', {
         session_id: res.sessionId,
@@ -1542,35 +1548,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         </>
       )
     }
-    if (phase.kind === 'ensuring' && attachedOnceRef.current) {
-      // A respawn (refresh, switch, continue): the Thread beside the
-      // terminal's "Loading session…" until the new session is known.
-      return (
-      <>
-      {continueDialog}
-      <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
-        {header}
-        <SplitColumnFloatsContext.Provider value={splitFloats}>
-          <EnsuringThreadBody
-            viewTab={viewTab}
-            splitLeft={splitLeft}
-            splitRight={splitRight}
-            addr={overlayAddr}
-            conversationId={overlayConv}
-            displayName={displayName}
-            agentName={projectId}
-            projectPath={projectPath}
-          />
-        </SplitColumnFloatsContext.Provider>
-      </div>
-      </>
-      )
-    }
   }
 
   // phase.kind === 'ready', or no session yet with the Thread shown: the
   // same pane, its spawn held until there is a session to show (see
-  // attachedOnceRef). Woken from asleep, it waits until it is shown.
+  // beginEnsure). Woken from asleep, it waits until it is shown.
   const holdSpawn = phase.kind !== 'ready' || (wokeWhileAsleep && !terminalWanted)
   if (!holdSpawn) releasedNonceRef.current = attachNonce
   const heldLabel = phase.kind === 'asleep' ? ASLEEP_LABEL : undefined
@@ -1631,79 +1613,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
 
 /** The terminal's place while the agent sleeps (Thread or Chatter view). */
 export const ASLEEP_LABEL = 'Asleep. Open the terminal or send a message to wake it.'
-
-/** While the pinned Chat is being ensured: the Thread (and Chatter), with
- *  "Loading session…" where the terminal will be. The message box is there
- *  at once (Rosson 2026-11-10: "The user should be able to type there"): a
- *  Thread post needs the address, not the session. It shares its draft with
- *  the terminal pane's box, so when the session comes up the person keeps
- *  typing (ThreadEarlyCompose). Placed as the ready Thread places it
- *  (`centreEmpty`), so nothing moves then. */
-function EnsuringThreadBody({
-  viewTab,
-  splitLeft,
-  splitRight,
-  addr,
-  conversationId,
-  displayName,
-  agentName,
-  projectPath,
-}: {
-  viewTab: SessionViewTab
-  splitLeft: SplitPaneView
-  splitRight: SplitPaneView
-  addr: string
-  conversationId: string | null
-  displayName?: string
-  /** The ready pane's chrome agent name (the workspace id). */
-  agentName: string
-  projectPath: string
-}): React.JSX.Element {
-  const loading = (
-    <div
-      className="flex-1 min-h-0 flex items-center justify-center text-xs text-[var(--color-text-muted)]"
-      data-testid="agent-session-loading"
-    >
-      Loading session…
-    </div>
-  )
-  const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
-  const threadColumn = (textCapPx: number | null): React.JSX.Element => (
-    <ThreadOverlayColumn
-      addr={addr}
-      conversationId={conversationId}
-      active
-      composeBar={
-        <ThreadEarlyCompose
-          addr={addr}
-          conversationId={conversationId}
-          agentName={agentName}
-          projectPath={projectPath}
-          displayName={displayName}
-        />
-      }
-      agentName={displayName || addr}
-      centreEmpty
-      textCapPx={textCapPx}
-    />
-  )
-  return (
-    <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-ensuring">
-      <SplitSessionColumns
-        showSplit={viewTab === 'split'}
-        hidePty={viewTab !== 'split'}
-        left={splitLeft}
-        right={splitRight}
-        terminal={loading}
-        sharedTerminal={loading}
-        renderView={(view) =>
-          view === 'thread' ? threadColumn(null) : <ChatterOverlayPane addr={addr} conversationId={conversationId} active />
-        }
-        single={threadColumn(threadTextCap)}
-      />
-    </div>
-  )
-}
 
 function OverlayTabBody({
   viewTab,

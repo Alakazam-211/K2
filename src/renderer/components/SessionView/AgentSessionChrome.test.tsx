@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { useState } from 'react'
-import { act, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { act, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useContextMenuStore } from '@/stores/context-menu'
 
@@ -51,6 +51,21 @@ class FakeWS {
   close() {}
 }
 vi.stubGlobal('WebSocket', FakeWS)
+
+// The chrome's columns (SessionColumns) draw these; stand-ins with the
+// Thread's message box.
+vi.mock('@/components/SessionView/ThreadOverlayColumn', () => ({
+  ThreadOverlayColumn: () => (
+    <div data-testid="thread-overlay-pane">
+      <div data-testid="message-compose-thread" data-compose-bar="" data-compose-destination="thread">
+        Message the agent
+      </div>
+    </div>
+  ),
+}))
+vi.mock('@/components/SessionView/ChatterOverlayPane', () => ({
+  ChatterOverlayPane: () => <div data-testid="chatter-overlay-pane" />,
+}))
 
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
@@ -111,6 +126,9 @@ function renderChrome(command?: string, commandHint?: string) {
   )
 }
 
+/** A TerminalPane in the chrome: the chrome draws the columns, the Thread and
+ *  Chatter around it (SessionColumns); the pane draws its terminal and its
+ *  own message box. */
 function ProbeTerminal() {
   const chrome = useSessionViewChrome()
   const viewer = overlayViewer(chrome?.viewTab ?? 'terminal', {
@@ -119,16 +137,11 @@ function ProbeTerminal() {
   })
   return (
     <div data-testid="terminal-pane">
-      {chrome && viewer.thread ? <div data-testid="thread-overlay-pane" /> : null}
-      {chrome && viewer.chatter ? <div data-testid="chatter-overlay-pane" /> : null}
       {viewer.hidePty ? null : <div data-testid="pty-visible" />}
       <button type="button" data-testid="fake-report-live" onClick={() => chrome?.reportTerminalLive?.(true)} />
       {chrome?.viewTab === 'split' ? (
         <>
           <div data-testid="message-compose" data-compose-bar="" data-compose-destination="pty">
-            Message the agent
-          </div>
-          <div data-testid="message-compose-thread" data-compose-bar="" data-compose-destination="thread">
             Message the agent
           </div>
         </>
@@ -251,15 +264,18 @@ describe('Thread view header (S2)', () => {
 
   it("split view's bar has the picture and name as one line, in its middle", async () => {
     renderIn('split')
+    // The bar's; the Thread's column floats its own (SplitColumnFloats).
+    const bar = (): HTMLElement => screen.getByTestId('sidecar-session-header')
     const identity = await waitFor(() => {
-      const el = screen.queryByTestId('thread-view-identity')
+      const el = within(bar()).queryByTestId('thread-view-identity')
       if (!el) throw new Error('no identity')
       return el
     })
     expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
     expect(identity.hasAttribute('data-compact')).toBe(true)
     expect(identity.closest('[data-split-bar-centre]')).not.toBeNull()
-    expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
+    expect(within(bar()).getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
+    expect(screen.getAllByTestId('thread-view-identity')).toHaveLength(2)
   })
 })
 
@@ -279,7 +295,8 @@ describe('sidecar chrome (C4/C6/C10)', () => {
 
   it('shows the durable handle, no session dropdown, refresh stays', () => {
     renderChrome()
-    expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
+    const bar = screen.getByTestId('sidecar-session-header')
+    expect(within(bar).getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
     expect(screen.queryByLabelText('Switch pinned chat session')).toBeNull()
     expect(screen.getByLabelText('Refresh session')).not.toBeNull()
     expect(screen.queryByTestId('session-view-tabs')).toBeNull()
@@ -291,7 +308,7 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     // own column of the bar.
     const header = screen.getByTestId('sidecar-session-header')
     expect(header.hasAttribute('data-split-bar')).toBe(true)
-    const name = screen.getByTestId('thread-view-identity')
+    const name = within(header).getByTestId('thread-view-identity')
     const menu = screen.getByTestId('session-view-menu')
     const refresh = screen.getByLabelText('Refresh session')
     const kids = Array.from(header.children)

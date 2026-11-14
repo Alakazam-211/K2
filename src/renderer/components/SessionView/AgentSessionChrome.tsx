@@ -31,7 +31,8 @@ import {
 } from './threadFloats'
 import { SPLIT_BAR_ATTR, SplitColumnFloatsContext, type SplitColumnFloatsSource } from './splitChrome'
 import { chatHarnessName } from './chatHarness'
-import { SessionViewChromeContext } from './sessionViewChrome'
+import { SessionViewChromeContext, type SessionViewChromeValue } from './sessionViewChrome'
+import { SessionColumns, SessionColumnsContext, useSessionColumnsHostValue } from './SessionColumns'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 import { useRoom } from '@/components/Room/RoomContext'
@@ -162,26 +163,32 @@ export function AgentSessionChrome({
     }
   }, [room, refreshing, onRefresh, agentName, cwd])
 
+  const chrome = useMemo<SessionViewChromeValue>(
+    () => ({
+      viewTab,
+      splitLeft,
+      splitRight,
+      overlayAddr: addr,
+      overlayAddrProblem: addrProblem ?? null,
+      retryOverlayAddr: onRetryAddr,
+      conversationId,
+      agentName,
+      displayName: title,
+      terminalRevealed,
+      terminalRevealKey,
+      reportTerminalLive: setTerminalLive,
+      threadPanel,
+      setThreadPanel,
+      projectPath: cwd,
+    }),
+    [viewTab, splitLeft, splitRight, addr, addrProblem, onRetryAddr, conversationId, agentName, title, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, cwd],
+  )
+  // The columns and the Thread are drawn here, outside the refresh remount,
+  // so a refresh rebuilds only the pane (SessionColumns.tsx).
+  const columns = useSessionColumnsHostValue(chrome)
+
   return (
-    <SessionViewChromeContext.Provider
-      value={{
-        viewTab,
-        splitLeft,
-        splitRight,
-        overlayAddr: addr,
-        overlayAddrProblem: addrProblem ?? null,
-        retryOverlayAddr: onRetryAddr,
-        conversationId,
-        agentName,
-        displayName: title,
-        terminalRevealed,
-        terminalRevealKey,
-        reportTerminalLive: setTerminalLive,
-        threadPanel,
-        setThreadPanel,
-        projectPath: cwd,
-      }}
-    >
+    <SessionViewChromeContext.Provider value={chrome}>
       <ModeToggleSessionContext.Provider value={modeSession}>
       <div className="relative h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
         <SidecarSessionHeader
@@ -229,7 +236,16 @@ export function AgentSessionChrome({
         ) : null}
         <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
           <SplitColumnFloatsContext.Provider value={splitFloats}>
-            <Remount key={nonce}>{children}</Remount>
+            <SessionColumnsContext.Provider value={columns.host}>
+              <SessionColumns
+                chrome={chrome}
+                state={columns.state}
+                terminal={<Remount key={nonce}>{children}</Remount>}
+                handle={columns.handle}
+                draftId={agentName}
+                cwd={cwd ?? ''}
+              />
+            </SessionColumnsContext.Provider>
           </SplitColumnFloatsContext.Provider>
         </div>
       </div>
@@ -513,26 +529,43 @@ export function PinnedSessionBody({
   viewSwitch?: boolean
   children: ReactNode
 }): JSX.Element {
+  const chrome = useMemo<SessionViewChromeValue>(
+    () => ({
+      viewTab,
+      splitLeft,
+      splitRight,
+      overlayAddr: addr,
+      conversationId,
+      agentName: agentName ?? '',
+      displayName,
+      terminalRevealed,
+      terminalRevealKey,
+      threadPanel: setThreadPanel ? (threadPanel ?? null) : undefined,
+      setThreadPanel,
+      projectPath,
+      viewSwitch,
+    }),
+    [viewTab, splitLeft, splitRight, addr, conversationId, agentName, displayName, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, projectPath, viewSwitch],
+  )
+  // The session's columns are drawn here, around the terminal pane
+  // (`children`), so a respawn that rebuilds the pane keeps the Thread, its
+  // scroll and its message box (SessionColumns.tsx).
+  const { state, handle, host } = useSessionColumnsHostValue(chrome)
   return (
-    <SessionViewChromeContext.Provider
-      value={{
-        viewTab,
-        splitLeft,
-        splitRight,
-        overlayAddr: addr,
-        conversationId,
-        agentName: agentName ?? '',
-        displayName,
-        terminalRevealed,
-        terminalRevealKey,
-        threadPanel: setThreadPanel ? (threadPanel ?? null) : undefined,
-        setThreadPanel,
-        projectPath,
-        viewSwitch,
-      }}
-    >
+    <SessionViewChromeContext.Provider value={chrome}>
       <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-        <SplitColumnFloatsContext.Provider value={splitFloats ?? null}>{children}</SplitColumnFloatsContext.Provider>
+        <SplitColumnFloatsContext.Provider value={splitFloats ?? null}>
+          <SessionColumnsContext.Provider value={host}>
+            <SessionColumns
+              chrome={chrome}
+              state={state}
+              terminal={children}
+              handle={handle}
+              draftId={agentName ?? ''}
+              cwd={projectPath ?? ''}
+            />
+          </SessionColumnsContext.Provider>
+        </SplitColumnFloatsContext.Provider>
       </div>
     </SessionViewChromeContext.Provider>
   )

@@ -174,6 +174,7 @@ vi.mock('@/stores/connect-host', () => ({
 
 
 import { TerminalPane } from './TerminalPane'
+import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { fixedStore, renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
@@ -726,5 +727,76 @@ describe('the Thread paints first; the terminal attaches beside it', () => {
     await waitFor(() => expect(view.getByTestId('terminal-pane-error')).toBeTruthy())
     expect(view.queryByTestId('stub-thread')).toBeNull()
     expect(view.queryByTestId('session-split-columns')).toBeNull()
+  })
+})
+
+// Inside a session body (PinnedSessionBody) the body draws the columns and
+// the Thread; the pane draws only its grid and reports what the Thread's box
+// and Stop need. A respawn rebuilds only the pane.
+describe('in a session body: the body draws the Thread, the pane only its grid', () => {
+  function body(viewTab: 'thread' | 'split' | 'terminal', paneKey: number, revealed = false): React.JSX.Element {
+    return (
+      <TabVisibilityContext.Provider value={true}>
+        <PinnedSessionBody
+          viewTab={viewTab}
+          splitLeft="terminal"
+          splitRight="thread"
+          addr="sales"
+          conversationId="c1"
+          agentName="proj-1"
+          displayName="Sales"
+          terminalRevealed={revealed}
+          terminalRevealKey="c1"
+          projectPath="/tmp/ws"
+        >
+          <TerminalPane key={paneKey} terminalId="pg-test" cwd="/tmp/ws" attachAgentName="proj-1" />
+        </PinnedSessionBody>
+      </TabVisibilityContext.Provider>
+    )
+  }
+  const threadBox = (): Record<string, unknown> | null => {
+    const bar = h.threadProps.at(-1)?.composeBar as { props?: Record<string, unknown> } | null | undefined
+    return bar?.props ?? null
+  }
+
+  it('one Thread, its box sending to the Thread with the pane\'s session and input', async () => {
+    const view = renderInRoom(room, body('split', 0))
+    await goReady()
+    expect(view.getAllByTestId('stub-thread')).toHaveLength(1)
+    expect(view.getByTestId('session-split-right').contains(view.getByTestId('stub-thread'))).toBe(true)
+    expect(view.getByTestId('session-split-left').querySelector('[data-terminal-container]')).toBeTruthy()
+    const box = threadBox()
+    expect(box?.sendDestination).toBe('thread')
+    expect(box?.sessionId).toBe('s1')
+    expect(box?.draftId).toBe('proj-1')
+    expect(typeof box?.onInjectInput).toBe('function')
+    // Stop is Esc into this PTY.
+    const stop = h.threadProps.at(-1)?.onStop as (() => void) | undefined
+    expect(stop).toBeTruthy()
+    act(() => stop!())
+    expect(sends('input').map((m) => m.text)).toEqual(['\x1b'])
+  })
+
+  it('a respawn (the pane remounts) keeps the Thread mounted, and the new pane spawns once', async () => {
+    const view = renderInRoom(room, body('thread', 0))
+    await goReady()
+    expect(h.threadMounts).toBe(1)
+    expect(SPAWN()).toBe(1)
+    view.rerender(body('thread', 1))
+    await waitFor(() => expect(SPAWN()).toBe(2))
+    expect(h.threadMounts).toBe(1)
+    expect(view.getAllByTestId('stub-thread')).toHaveLength(1)
+  })
+
+  it('Thread view: hidden 0×0 measures send no resize; a reveal sends one', async () => {
+    const view = renderInRoom(room, body('thread', 0))
+    await goReady()
+    const before = sends('resize').length
+    fireTerminalRO(0, 0)
+    expect(sends('resize').length).toBe(before)
+    view.rerender(body('thread', 0, true))
+    await waitFor(() => expect(view.getByTestId('session-reveal-terminal').style.display).toBe('flex'))
+    fireTerminalRO(800, 400)
+    await waitFor(() => expect(sends('resize').length).toBe(before + 1))
   })
 })

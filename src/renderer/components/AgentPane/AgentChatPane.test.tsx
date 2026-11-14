@@ -93,11 +93,6 @@ const h = vi.hoisted(() => {
     })),
     stampAgentSessionId: vi.fn(),
     addTabToGroup: vi.fn(() => 'pane-should-not-exist'),
-    // On: the TerminalPane probe also draws the session view's Thread where
-    // the real pane draws it (its Thread column and the Thread's message
-    // box, `TerminalPane.tsx` render), so a test can see whether the Thread
-    // survives the terminal's attach.
-    threadInPane: { value: false },
     // `sessions/lookup-by-agent`'s answer: the agent's session is running.
     alive: { value: true },
     lookups: { value: 0 },
@@ -150,16 +145,9 @@ vi.mock('@/stores/session-events', async () => {
 })
 
 vi.mock('@/kessel-term/TerminalPane', async () => {
-  const { useSessionViewChrome } = await import('@/components/SessionView/sessionViewChrome')
-  const { overlayViewer } = await import('@/components/SessionView/sessionViewTab')
-  const { SplitSessionColumns } = await import('@/components/SessionView/SplitSessionColumns')
-  const { ThreadOverlayColumn } = await import('@/components/SessionView/ThreadOverlayColumn')
-  const { TerminalComposeBar } = await import('@/components/Terminal/TerminalComposeBar')
   return {
     TerminalPane: (props: Record<string, unknown>) => {
       h.terminalProps.current = props
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const chrome = useSessionViewChrome()
       // Count mounts so a test can detect a remount (key bump). Empty deps →
       // fires once per mounted instance; a key-driven remount creates a new
       // instance and fires again.
@@ -182,38 +170,7 @@ vi.mock('@/kessel-term/TerminalPane', async () => {
           <div data-testid="message-compose" data-compose-bar="" />
         </div>
       )
-      if (!h.threadInPane.value || !chrome) return terminal
-      const sides = { left: chrome.splitLeft, right: chrome.splitRight }
-      const { thread, hidePty } = overlayViewer(chrome.viewTab, sides)
-      const column = (
-        <ThreadOverlayColumn
-          addr={chrome.overlayAddr}
-          conversationId={chrome.conversationId}
-          active
-          composeBar={
-            <TerminalComposeBar
-              sessionId=""
-              draftId={String(props.attachAgentName)}
-              workspacePath={String(props.cwd)}
-              sendDestination="thread"
-            />
-          }
-          agentName={chrome.displayName || chrome.overlayAddr}
-          centreEmpty
-        />
-      )
-      return (
-        <SplitSessionColumns
-          showSplit={chrome.viewTab === 'split'}
-          hidePty={hidePty}
-          left={chrome.splitLeft}
-          right={chrome.splitRight}
-          terminal={terminal}
-          sharedTerminal={null}
-          renderView={(view) => (view === 'thread' ? column : null)}
-          single={thread ? column : null}
-        />
-      )
+      return terminal
     },
   }
 })
@@ -351,7 +308,6 @@ beforeEach(() => {
   h.terminalProps.current = null
   h.terminalMountCount.value = 0
   h.activeIds.value = new Set()
-  h.threadInPane.value = false
   h.alive.value = true
   h.lookups.value = 0
 })
@@ -1354,7 +1310,6 @@ describe('a sleeping agent stays asleep in Thread view', () => {
 
   beforeEach(() => {
     localStorage.clear()
-    h.threadInPane.value = true
     h.alive.value = false
     h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
       if (route === 'thread/post') return { ok: true, id: 'p1', seq: 1, body: (body as { text: string }).text }
@@ -1493,10 +1448,6 @@ describe('a sleeping agent stays asleep in Thread view', () => {
 })
 
 describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () => {
-  // The probe draws the Thread where the real TerminalPane does.
-  beforeEach(() => {
-    h.threadInPane.value = true
-  })
   const handled = testRoom({
     tabs: useTabsStore,
     projects: [{ id: 'proj-1', path: '/ws', handle: 'sales', workspaces: [] } as never],
@@ -1750,10 +1701,13 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     }
   })
 
-  it('a refresh (a respawn) still shows the Thread while it waits, then attaches the new session', async () => {
+  it('a refresh (a respawn): the Thread stays (no remount), a fresh held pane waits, then attaches the new session', async () => {
     localStorage.clear()
     renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    const thread = screen.getByTestId('thread-overlay-pane')
+    const box = screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea')
+    expect(h.terminalMountCount.value).toBe(1)
     let release: () => void = () => {}
     const pending = new Promise<void>((resolve) => {
       release = resolve
@@ -1769,17 +1723,39 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
       await act(async () => {
         fireEvent.click(screen.getByLabelText('Refresh chat session'))
       })
-      await waitFor(() => expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy())
-      expect(screen.getByTestId('thread-overlay-pane')).toBeTruthy()
+      // The old pane gave way to a fresh held one; the Thread and its box stay.
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('true'))
+      expect(h.terminalMountCount.value).toBe(2)
+      expect(screen.getByTestId('thread-overlay-pane')).toBe(thread)
+      expect(screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea')).toBe(box)
       await act(async () => release())
       await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-2'))
       expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false')
       expect(lastEnsureCall()).toMatchObject({ forceRespawn: true })
+      // The held pane attached in place: no second remount, same Thread.
+      expect(h.terminalMountCount.value).toBe(2)
+      expect(screen.getByTestId('thread-overlay-pane')).toBe(thread)
     } finally {
       release()
       h.daemonCliPost.mockImplementation(async () => mountEnsure())
       localStorage.clear()
     }
+  })
+
+  it('a respawn the daemon made (SessionAdded, a new session): the pane re-attaches, the Thread and its box stay', async () => {
+    localStorage.clear()
+    renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+    const thread = screen.getByTestId('thread-overlay-pane')
+    const box = screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea')
+    await act(async () => {
+      h.sessionHandlers.current!.onAdded!({ agent_name: 'proj-1', workspace_path: '/ws', session_id: 'sess-NEW' })
+    })
+    await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-NEW'))
+    expect(h.terminalMountCount.value).toBe(2)
+    expect(screen.getByTestId('thread-overlay-pane')).toBe(thread)
+    expect(screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea')).toBe(box)
+    localStorage.clear()
   })
 
   it('a list without the handle looks the address up as before', async () => {

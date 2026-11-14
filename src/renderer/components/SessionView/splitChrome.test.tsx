@@ -17,6 +17,18 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: () => 'ws://127.0.0.1:1',
 }))
 vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
+// The session's columns are drawn by the chrome (SessionColumns): a Thread
+// and a Chatter with one focusable message each.
+vi.mock('@/components/SessionView/ThreadOverlayColumn', () => ({
+  ThreadOverlayColumn: () => (
+    <div data-testid="agent-session-thread">
+      <button type="button" data-testid="thread-message">message</button>
+    </div>
+  ),
+}))
+vi.mock('@/components/SessionView/ChatterOverlayPane', () => ({
+  ChatterOverlayPane: () => <button type="button" data-testid="chatter-message">message</button>,
+}))
 // The bar's and the floats' chain (home avatars, the host pool) reads other
 // connect-host exports at load, so keep the real ones.
 vi.mock('@/stores/connect-host', async (importOriginal) => ({
@@ -53,8 +65,7 @@ import {
   sessionHeaderShows,
   splitBarModeToggle,
 } from './AgentSessionChrome'
-import { SplitSessionColumns } from './SplitSessionColumns'
-import { useSessionViewChrome } from './sessionViewChrome'
+import { useSessionColumnsHost } from './SessionColumns'
 import { sessionViewSplitStorageKey, sessionViewTabStorageKey, type SessionViewTab, type SplitPaneView } from './sessionViewTab'
 import { CHATTER_VIEW_FLOATS, SPLIT_VIEW_THREAD_FLOATS, THREAD_FLOATS_HOST_ATTR, threadFloatShown, type ThreadFloatId } from './threadFloats'
 import { splitFloatsKind, splitFloatsSide } from './splitChrome'
@@ -262,36 +273,14 @@ describe("the session header as split view's bar", () => {
   })
 })
 
-/** A TerminalPane as it lays out split view: the columns, a terminal with a
- *  key target, a Thread and a Chatter with one each. */
+/** A TerminalPane in a session body: the chrome draws the columns around
+ *  it (SessionColumns), so it draws only its terminal, with a key target. */
 function SplitProbe() {
-  const chrome = useSessionViewChrome()
-  if (!chrome) return null
+  if (!useSessionColumnsHost()) throw new Error('the session chrome draws no columns')
   return (
-    <SplitSessionColumns
-      showSplit={chrome.viewTab === 'split'}
-      hidePty={chrome.viewTab !== 'terminal' && chrome.viewTab !== 'split'}
-      left={chrome.splitLeft}
-      right={chrome.splitRight}
-      terminal={
-        <div data-terminal-container="">
-          <textarea data-testid="terminal-input" />
-        </div>
-      }
-      sharedTerminal={<div data-testid="shared" />}
-      renderView={(view) =>
-        view === 'thread' ? (
-          <div data-testid="agent-session-thread">
-            <button type="button" data-testid="thread-message">message</button>
-          </div>
-        ) : (
-          <div data-testid="agent-session-chatter">
-            <button type="button" data-testid="chatter-message">message</button>
-          </div>
-        )
-      }
-      single={<div data-testid="single" />}
-    />
+    <div data-terminal-container="">
+      <textarea data-testid="terminal-input" />
+    </div>
   )
 }
 

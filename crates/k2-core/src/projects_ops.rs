@@ -1529,7 +1529,7 @@ mod tests {
             crate::app_settings::save(&s).expect("save global settings");
 
             let _scoped_db = db::scoped_for_test();
-            let path = format!("/tmp/k2so-stamp-test/{}", Uuid::new_v4());
+            let path = format!("/tmp/k2-stamp-test/{}", Uuid::new_v4());
             let created =
                 projects_create("StampMe", &path, None).expect("projects_create ok");
             assert_eq!(

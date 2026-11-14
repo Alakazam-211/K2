@@ -70,7 +70,7 @@ fn install_mocks() -> (RecordingInject, RecordingWake) {
 
 fn tmp_inbox(tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "k2so-ingress-test-{}-{}-{}",
+        "k2-ingress-test-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()
@@ -162,12 +162,12 @@ fn first_agent_signal(frames: &[Frame]) -> Option<AgentSignal> {
 fn from_session_sets_session_id_and_from_address() {
     let _g = lock();
     init_for_tests();
-    ensure_project("k2so-ws");
+    ensure_project("k2-ws");
     let _mocks = install_mocks();
     let _inbox = tmp_inbox("from-session");
 
     let session_id = SessionId::new();
-    let ws = WorkspaceId("k2so-ws".into());
+    let ws = WorkspaceId("k2-ws".into());
     // Build a signal as APC would — from=Broadcast placeholder,
     // to=Agent with empty workspace.
     let bare_signal = AgentSignal::new(
@@ -227,14 +227,14 @@ fn from_session_sets_session_id_and_from_address() {
     match &got.from {
         AgentAddress::Agent { workspace, name } => {
             assert_eq!(name, "foo");
-            assert_eq!(workspace.0, "k2so-ws");
+            assert_eq!(workspace.0, "k2-ws");
         }
         other => panic!("from not enriched: {other:?}"),
     }
     match &got.to {
         AgentAddress::Agent { workspace, name } => {
             assert_eq!(name, "bar");
-            assert_eq!(workspace.0, "k2so-ws", "to's empty workspace should get filled");
+            assert_eq!(workspace.0, "k2-ws", "to's empty workspace should get filled");
         }
         other => panic!("to not enriched: {other:?}"),
     }
@@ -244,7 +244,7 @@ fn from_session_sets_session_id_and_from_address() {
 fn apc_msg_with_live_delivery_triggers_inject_through_ingress() {
     let _g = lock();
     init_for_tests();
-    ensure_project("k2so-ws");
+    ensure_project("k2-ws");
     let (inject, _wake) = install_mocks();
     let _inbox = tmp_inbox("live-inject");
 
@@ -255,7 +255,7 @@ fn apc_msg_with_live_delivery_triggers_inject_through_ingress() {
     bar_entry.set_agent_name("bar");
 
     // Build APC from "foo" (the sending session) to "bar".
-    let ws = WorkspaceId("k2so-ws".into());
+    let ws = WorkspaceId("k2-ws".into());
     let from_session_id = SessionId::new();
 
     // First produce the signal via line_mux.
@@ -285,7 +285,7 @@ fn apc_msg_with_live_delivery_triggers_inject_through_ingress() {
     let calls = inject.calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 1, "exactly one inject expected");
     assert_eq!(
-        calls[0].0, "k2so-ws",
+        calls[0].0, "k2-ws",
         "0.37.5: inject delivers to bare workspace_id"
     );
     let text = String::from_utf8_lossy(&calls[0].1);
@@ -298,7 +298,7 @@ fn apc_msg_with_live_delivery_triggers_inject_through_ingress() {
 fn apc_msg_with_delivery_inbox_writes_inbox_no_inject_even_when_live() {
     let _g = lock();
     init_for_tests();
-    ensure_project("k2so-ws");
+    ensure_project("k2-ws");
     let (inject, _wake) = install_mocks();
     let inbox = tmp_inbox("inbox-over-live");
 
@@ -314,7 +314,7 @@ fn apc_msg_with_delivery_inbox_writes_inbox_no_inject_even_when_live() {
     ));
     let signal = first_agent_signal(&frames).expect("one signal");
 
-    let ws = WorkspaceId("k2so-ws".into());
+    let ws = WorkspaceId("k2-ws".into());
     let report = ingress::from_session(
         SessionId::new(),
         signal,
@@ -338,7 +338,7 @@ fn apc_msg_with_delivery_inbox_writes_inbox_no_inject_even_when_live() {
 fn apc_with_offline_target_triggers_wake() {
     let _g = lock();
     init_for_tests();
-    ensure_project("k2so-ws");
+    ensure_project("k2-ws");
     let (_inject, wake) = install_mocks();
     let _inbox = tmp_inbox("live-offline-wake");
 
@@ -350,7 +350,7 @@ fn apc_with_offline_target_triggers_wake() {
     ));
     let signal = first_agent_signal(&frames).expect("one signal");
 
-    let ws = WorkspaceId("k2so-ws".into());
+    let ws = WorkspaceId("k2-ws".into());
     let report = ingress::from_session(
         SessionId::new(),
         signal,

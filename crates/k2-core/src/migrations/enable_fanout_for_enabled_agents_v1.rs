@@ -71,7 +71,7 @@ mod tests {
 
     fn temp_workspace() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-fanout-mig-{}-{}",
+            "k2-fanout-mig-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));

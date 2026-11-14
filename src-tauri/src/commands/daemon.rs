@@ -402,7 +402,7 @@ mod tests {
         // has no `.k2/heartbeat.*`, so `daemon_ws_url_in` must report
         // NotInstalled deterministically regardless of any live daemon.
         let unique = format!(
-            "k2so-ws-url-test-{}-{}",
+            "k2-ws-url-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

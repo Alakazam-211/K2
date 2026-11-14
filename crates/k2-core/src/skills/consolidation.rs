@@ -609,7 +609,7 @@ mod tests {
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0);
             let dir = std::env::temp_dir().join(format!(
-                "k2so-skills-consolidation-test-{}-{}-{}",
+                "k2-skills-consolidation-test-{}-{}-{}",
                 pid, nanos, n
             ));
             fs::create_dir_all(dir.join(".k2so")).unwrap();

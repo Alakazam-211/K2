@@ -330,7 +330,7 @@ mod tests {
 
     fn temp_workspace() -> std::path::PathBuf {
         let base = env::temp_dir().join(format!(
-            "k2so-skills-crud-{}-{}",
+            "k2-skills-crud-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -694,7 +694,7 @@ mod regenerate_skills_tests {
 
     fn scratch_project() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-regen-skills-test-{}-{}",
+            "k2-regen-skills-test-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));
@@ -792,7 +792,7 @@ mod regenerate_skills_tests {
             "harness-fanout mirror should be written by the canonical writer",
         );
         let mirror_content = std::fs::read_to_string(&mirror).unwrap();
-        assert_no_deprecated_verbs(&mirror_content, "k2so-cli-eng harness mirror");
+        assert_no_deprecated_verbs(&mirror_content, "k2-cli-eng harness mirror");
 
         std::fs::remove_dir_all(&proj).ok();
     }

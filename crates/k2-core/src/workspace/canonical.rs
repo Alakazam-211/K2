@@ -675,7 +675,7 @@ mod tests {
 
     fn scratch_project() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-canonical-{}-{}",
+            "k2-canonical-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));

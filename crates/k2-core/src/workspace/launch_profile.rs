@@ -421,7 +421,7 @@ coordination_level: chatty
 
     fn scratch_project() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "k2so-launch-profile-test-{}-{}",
+            "k2-launch-profile-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

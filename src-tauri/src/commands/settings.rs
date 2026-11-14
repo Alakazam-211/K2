@@ -895,7 +895,7 @@ pub fn relaunch_via_open(_app: AppHandle) {
                      rm -f \"$0\"\n"
                 );
 
-                let script_path = format!("/tmp/k2so-relaunch-{pid}.sh");
+                let script_path = format!("/tmp/k2-relaunch-{pid}.sh");
                 if std::fs::write(&script_path, &script).is_ok() {
                     let _ = std::fs::set_permissions(
                         &script_path,

@@ -31,7 +31,7 @@ fn lock() -> k2_core::test_env::SerialGuard {
 
 fn setup_project(workspace_id: &str, name: &str) -> PathBuf {
     let project_path = std::env::temp_dir().join(format!(
-        "k2so-ws-msg-test-{}-{}-{}",
+        "k2-ws-msg-test-{}-{}-{}",
         workspace_id,
         std::process::id(),
         std::time::SystemTime::now()
@@ -150,7 +150,7 @@ struct HomeGuard {
 impl HomeGuard {
     fn new(label: &str) -> Self {
         let home = std::env::temp_dir().join(format!(
-            "k2so-ws-msg-home-{}-{}-{}",
+            "k2-ws-msg-home-{}-{}-{}",
             label,
             std::process::id(),
             std::time::SystemTime::now()
@@ -180,7 +180,7 @@ impl Drop for HomeGuard {
 /// prepend its dir to PATH so the daemon spawn finds it.
 fn install_agent_shim(binary: &str) -> PathBuf {
     let shim_dir = std::env::temp_dir().join(format!(
-        "k2so-ws-msg-shim-{}-{}-{}",
+        "k2-ws-msg-shim-{}-{}-{}",
         binary,
         std::process::id(),
         std::time::SystemTime::now()

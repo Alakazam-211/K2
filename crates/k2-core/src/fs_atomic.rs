@@ -272,7 +272,7 @@ mod tests {
 
     fn tmpdir() -> PathBuf {
         let base = std::env::temp_dir().join(format!(
-            "k2so-fsatomic-{}-{}",
+            "k2-fsatomic-{}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));

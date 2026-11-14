@@ -18,7 +18,7 @@ use k2_core::session::{
 
 fn tmp_project(tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "k2so-archive-test-{}-{}-{}",
+        "k2-archive-test-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

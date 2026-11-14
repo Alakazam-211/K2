@@ -43,7 +43,7 @@ fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 
 fn tmp_project_dir(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
-        "k2so-h5-{}-{}-{}",
+        "k2-h5-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

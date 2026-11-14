@@ -306,7 +306,7 @@ mod tests {
     fn unique_tmp() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "k2so-channel-test-{}-{}",
+            "k2-channel-test-{}-{}",
             std::process::id(),
             n
         ));

@@ -692,7 +692,7 @@ mod tests {
 
     fn tmp_ws() -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "k2so-repoint-test-{}-{}",
+            "k2-repoint-test-{}-{}",
             std::process::id(),
             // monotonic-ish uniqueness without Date/rand (forbidden):
             // use an atomic counter.
@@ -795,7 +795,7 @@ mod tests {
 
     fn temp_workspace_with_unified_agent(persona_type: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-commands-create-test-{}-{}-{}",
+            "k2-commands-create-test-{}-{}-{}",
             persona_type,
             std::process::id(),
             std::time::SystemTime::now()
@@ -866,7 +866,7 @@ mod tests {
         // instead of `.k2/agent/ROLE.md`. Post-0.40.4 the dest filename is
         // ROLE.md.)
         let dir = std::env::temp_dir().join(format!(
-            "k2so-commands-create-canonical-{}-{}",
+            "k2-commands-create-canonical-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

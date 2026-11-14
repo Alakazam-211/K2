@@ -6485,7 +6485,7 @@ mod concurrency_tests {
     fn scratch_db() -> (PathBuf, PathBuf) {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "k2so-schema-test-{}-{}-{}",
+            "k2-schema-test-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

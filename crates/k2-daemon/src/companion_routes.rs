@@ -476,7 +476,7 @@ mod tests {
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
         let p = std::env::temp_dir().join(format!(
-            "k2so-companion-routes-test-{}-{}-{}",
+            "k2-companion-routes-test-{}-{}-{}",
             std::process::id(),
             nanos,
             n

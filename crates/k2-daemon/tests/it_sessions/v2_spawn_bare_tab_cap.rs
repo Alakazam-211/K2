@@ -37,7 +37,7 @@ fn lock() -> (k2_core::test_env::StubHome, k2_core::test_env::SerialGuard) {
 
 fn temp_cwd(tag: &str) -> String {
     let dir = std::env::temp_dir().join(format!(
-        "k2so-bare-tab-cap-{}-{}-{}",
+        "k2-bare-tab-cap-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

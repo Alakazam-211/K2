@@ -1964,7 +1964,7 @@ mod tests {
 
     fn unique_path(label: &str) -> String {
         format!(
-            "/tmp/k2so-settings-test-{}-{}-{}",
+            "/tmp/k2-settings-test-{}-{}-{}",
             label,
             std::process::id(),
             Uuid::new_v4(),
@@ -3311,7 +3311,7 @@ mod tests {
     /// land on disk. Returns the path.
     fn insert_project_with_real_dir(label: &str) -> (String, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-fanout-default-{}-{}-{}",
+            "k2-fanout-default-{}-{}-{}",
             label,
             std::process::id(),
             Uuid::new_v4(),

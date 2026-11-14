@@ -45,7 +45,7 @@ fn lock() -> (k2_core::test_env::StubHome, k2_core::test_env::SerialGuard) {
 /// shim dir so the caller can keep it alive for the test's duration.
 fn install_claude_shim() -> PathBuf {
     let shim_dir = std::env::temp_dir().join(format!(
-        "k2so-pinned-chat-shim-{}-{}",
+        "k2-pinned-chat-shim-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -79,7 +79,7 @@ fn register_shim_dir(shim_dir: &std::path::Path) {
 
 fn setup_project(workspace_id: &str, name: &str) -> PathBuf {
     let project_path = std::env::temp_dir().join(format!(
-        "k2so-pinned-chat-test-{}-{}-{}",
+        "k2-pinned-chat-test-{}-{}-{}",
         workspace_id,
         std::process::id(),
         std::time::SystemTime::now()
@@ -133,7 +133,7 @@ struct HomeGuard {
 impl HomeGuard {
     fn new(label: &str) -> Self {
         let home = std::env::temp_dir().join(format!(
-            "k2so-pinned-chat-home-{}-{}-{}",
+            "k2-pinned-chat-home-{}-{}-{}",
             label,
             std::process::id(),
             std::time::SystemTime::now()
@@ -394,7 +394,7 @@ async fn ensure_pinned_chat_errors_when_workspace_unregistered() {
     init_for_tests();
     v2_session_map::clear_for_tests();
 
-    let result = ensure_pinned_chat("/tmp/k2so-pinned-chat-not-registered", false, false);
+    let result = ensure_pinned_chat("/tmp/k2-pinned-chat-not-registered", false, false);
     assert!(result.is_err());
     assert!(
         result.unwrap_err().contains("project not registered"),
@@ -922,7 +922,7 @@ fn saved_harness(workspace_id: &str) -> Option<String> {
 /// the claude shim).
 fn install_agent_shim(binary: &str) -> PathBuf {
     let shim_dir = std::env::temp_dir().join(format!(
-        "k2so-pinned-chat-shim-{}-{}-{}",
+        "k2-pinned-chat-shim-{}-{}-{}",
         binary,
         std::process::id(),
         std::time::SystemTime::now()

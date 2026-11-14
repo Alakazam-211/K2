@@ -1552,7 +1552,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!("k2so-fs_commands-{label}-{pid}-{nanos}"));
+            let path = std::env::temp_dir().join(format!("k2-fs_commands-{label}-{pid}-{nanos}"));
             fs::create_dir_all(&path).expect("create tempdir");
             Self { path }
         }

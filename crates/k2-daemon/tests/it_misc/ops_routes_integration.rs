@@ -111,7 +111,7 @@ fn with_temp_home<T, F: FnOnce(&Path) -> T>(f: F) -> T {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!("k2so-ops-{}-{nanos}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("k2-ops-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp HOME");
     std::env::set_var("HOME", &tmp);
     let _ = k2_core::db::init_for_tests();

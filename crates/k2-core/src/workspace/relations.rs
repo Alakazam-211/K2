@@ -96,7 +96,7 @@ mod tests {
 
     fn unique_path(label: &str) -> String {
         format!(
-            "/tmp/k2so-relations-test-{}-{}-{}",
+            "/tmp/k2-relations-test-{}-{}-{}",
             label,
             std::process::id(),
             Uuid::new_v4(),

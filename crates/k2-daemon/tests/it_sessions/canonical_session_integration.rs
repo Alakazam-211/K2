@@ -34,7 +34,7 @@ fn lock() -> (k2_core::test_env::StubHome, k2_core::test_env::SerialGuard) {
 /// write paths do. Use [`set_agent_enabled`] to pause an agent.
 fn setup_project(workspace_id: &str, name: &str, agent_mode: &str) -> PathBuf {
     let project_path = std::env::temp_dir().join(format!(
-        "k2so-canonical-test-{}-{}-{}",
+        "k2-canonical-test-{}-{}-{}",
         workspace_id,
         std::process::id(),
         std::time::SystemTime::now()
@@ -245,7 +245,7 @@ struct HomeGuard {
 impl HomeGuard {
     fn new(label: &str) -> Self {
         let home = std::env::temp_dir().join(format!(
-            "k2so-canonical-home-{}-{}-{}",
+            "k2-canonical-home-{}-{}-{}",
             label,
             std::process::id(),
             std::time::SystemTime::now()
@@ -302,7 +302,7 @@ fn install_agent_shim(binary: &str) -> ShimGuard {
     let prev_path = std::env::var_os("PATH");
     let prev_shim_os = std::env::var_os("K2_TEST_AGENT_SHIM_DIR");
     let shim_dir = std::env::temp_dir().join(format!(
-        "k2so-canonical-shim-{}-{}-{}",
+        "k2-canonical-shim-{}-{}-{}",
         binary,
         std::process::id(),
         std::time::SystemTime::now()
@@ -463,7 +463,7 @@ async fn ensure_canonical_session_errors_when_workspace_unregistered() {
     v2_session_map::clear_for_tests();
 
     // Path not in `projects` table → resolver returns None.
-    let unregistered = "/tmp/k2so-canonical-test-not-registered";
+    let unregistered = "/tmp/k2-canonical-test-not-registered";
     let result = ensure_canonical_session(unregistered);
     assert!(result.is_err(), "ensure must error on unregistered workspace");
     let err = result.unwrap_err();

@@ -1768,7 +1768,7 @@ mod gap_route_tests {
         // Garbage project_path so the core call fails fast, but the body
         // (all 8 fields) must deserialize without a serde error first.
         let body = serde_json::json!({
-            "project_path": "/nonexistent/k2so-set-surfaced-test",
+            "project_path": "/nonexistent/k2-set-surfaced-test",
             "agent_name": "agentX",
             "surfaced": true,
             "terminal_id": "tid-1",
@@ -1840,7 +1840,7 @@ mod gap_route_tests {
         let mut params = std::collections::HashMap::new();
         params.insert(
             "project_id".to_string(),
-            "k2so-relations-dispatch-test-nonexistent".to_string(),
+            "k2-relations-dispatch-test-nonexistent".to_string(),
         );
         let out = dispatch("/cli/relations/list", &params)
             .expect("/cli/relations/list must be handled by agents dispatch");

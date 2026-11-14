@@ -307,7 +307,7 @@ mod tests {
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
         let project_path = std::env::temp_dir().join(format!(
-            "k2so-checkin-regress-{}-{}-{}",
+            "k2-checkin-regress-{}-{}-{}",
             std::process::id(),
             nanos,
             n

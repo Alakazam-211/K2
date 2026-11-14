@@ -43,7 +43,7 @@ fn lock() -> k2_core::test_env::SerialGuard {
 /// (project_id, project_path).
 fn setup_project(tag: &str) -> (String, PathBuf) {
     let project_path = std::env::temp_dir().join(format!(
-        "k2so-active-reaper-{}-{}-{}",
+        "k2-active-reaper-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

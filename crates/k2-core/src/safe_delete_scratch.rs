@@ -109,7 +109,7 @@ mod tests {
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
         let dir = std::env::temp_dir().join(format!(
-            "k2so-scratch-safe-trash-test-{pid}-{nanos}-{n}"
+            "k2-scratch-safe-trash-test-{pid}-{nanos}-{n}"
         ));
         fs::create_dir_all(&dir).unwrap();
         dir

@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn count_md_files_handles_missing_dir() {
-        let missing = PathBuf::from("/tmp/k2so-does-not-exist-xyz-12345");
+        let missing = PathBuf::from("/tmp/k2-does-not-exist-xyz-12345");
         assert_eq!(count_md_files(&missing), 0);
     }
 }

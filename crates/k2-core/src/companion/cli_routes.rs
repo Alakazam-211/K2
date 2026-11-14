@@ -117,7 +117,7 @@ mod tests {
         crate::db::init_for_tests();
         // init_for_tests already seeds `_orphan` + `_broadcast`. Add one
         // real workspace so the response isn't empty either way.
-        ensure_project("real-ws-cli", "/tmp/k2so-cli-routes-test", "RealOne");
+        ensure_project("real-ws-cli", "/tmp/k2-cli-routes-test", "RealOne");
 
         let body = list_projects().expect("list_projects ok");
         let parsed: Vec<serde_json::Value> =

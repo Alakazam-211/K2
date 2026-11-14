@@ -436,7 +436,7 @@ mod tests {
 
     fn scratch_project() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-harness-test-{}-{}",
+            "k2-harness-test-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));
@@ -539,7 +539,7 @@ mod tests {
             .expect("cursor mdc entry present");
         assert_eq!(
             mdc.action, "refresh",
-            "k2so-generated file should be refreshed in place, got {:?}",
+            "k2-generated file should be refreshed in place, got {:?}",
             mdc.action,
         );
 

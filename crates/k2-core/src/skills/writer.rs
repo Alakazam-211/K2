@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn upsert_creates_file_with_markers_when_missing() {
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-skill-writer-test-{}.md",
+            "k2-skill-writer-test-{}.md",
             uuid::Uuid::new_v4()
         ));
         upsert_k2_section(&tmp, "hello content");
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn upsert_replaces_existing_section_preserving_user_content() {
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-skill-writer-preserve-{}.md",
+            "k2-skill-writer-preserve-{}.md",
             uuid::Uuid::new_v4()
         ));
         std::fs::write(
@@ -388,7 +388,7 @@ mod tests {
 
     fn scratch_project() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-writer-gate-{}-{}",
+            "k2-writer-gate-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4(),
         ));
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn upsert_appends_when_no_markers_present() {
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-skill-writer-append-{}.md",
+            "k2-skill-writer-append-{}.md",
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&tmp, "# Pure user content\n").unwrap();

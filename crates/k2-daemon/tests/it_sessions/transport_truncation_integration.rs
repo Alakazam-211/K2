@@ -126,7 +126,7 @@ fn temp_workspace(tag: &str) -> std::path::PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let dir = std::env::temp_dir().join(format!(
-        "k2so-trunc-{tag}-{}-{nanos}",
+        "k2-trunc-{tag}-{}-{nanos}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).expect("create temp workspace");

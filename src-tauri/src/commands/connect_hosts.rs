@@ -243,7 +243,7 @@ mod tests {
 
     fn tmp_home(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-connhosts-{tag}-{}-{}",
+            "k2-connhosts-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

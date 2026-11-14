@@ -77,7 +77,7 @@ fn install_mocks() -> (RecordingInject, RecordingWake) {
 
 fn tmp_inbox_root(tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "k2so-egress-test-{}-{}-{}",
+        "k2-egress-test-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

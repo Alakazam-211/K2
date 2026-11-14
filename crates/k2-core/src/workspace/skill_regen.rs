@@ -1802,7 +1802,7 @@ mod tests {
 
     fn scratch_project() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-skill-regen-test-{}-{}",
+            "k2-skill-regen-test-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));

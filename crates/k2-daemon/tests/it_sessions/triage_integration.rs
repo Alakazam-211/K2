@@ -34,7 +34,7 @@ fn lock() -> k2_core::test_env::SerialGuard {
 
 fn tmp_project_dir(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
-        "k2so-h6-{}-{}-{}",
+        "k2-h6-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

@@ -385,7 +385,7 @@ mod tests {
         // Real filesystem round-trip: create a skill, then write an
         // opt-in skill, asserting both land on disk under .k2/skills/.
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-skills-routes-{}-{}",
+            "k2-skills-routes-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn set_harness_fanout_enabled_writes_marker() {
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-fanout-routes-{}-{}",
+            "k2-fanout-routes-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -468,7 +468,7 @@ mod tests {
         // the WRITE route just persisted, so the remote checkbox stops
         // snapping back to unchecked.
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-fanout-read-{}-{}",
+            "k2-fanout-read-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn set_agents_md_generate_on_plants_and_off_leaves_file() {
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-generate-routes-{}-{}",
+            "k2-generate-routes-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn set_agents_md_generate_on_skips_user_file() {
         let tmp = std::env::temp_dir().join(format!(
-            "k2so-generate-skip-{}-{}",
+            "k2-generate-skip-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

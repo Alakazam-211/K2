@@ -366,7 +366,7 @@ mod tests {
         // compose_agent_wake_context — which errors with
         // "Agent 'X' does not exist".
         let dir = std::env::temp_dir().join(format!(
-            "k2so-launch-missing-{}-{}",
+            "k2-launch-missing-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));

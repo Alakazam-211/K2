@@ -185,7 +185,7 @@ mod tests {
     /// primary agent on disk. Returns (workspace_path, agent_name).
     fn scratch_workspace_with_primary(agent_name: &str, persona_type: &str, role: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-editor-test-{}-{}-{}",
+            "k2-editor-test-{}-{}-{}",
             agent_name,
             std::process::id(),
             Uuid::new_v4(),
@@ -254,7 +254,7 @@ mod tests {
         // or manager. Build an AGENT.md that includes one of them and
         // verify isManager=true.
         let dir = std::env::temp_dir().join(format!(
-            "k2so-editor-manager-flag-{}-{}",
+            "k2-editor-manager-flag-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));
@@ -276,7 +276,7 @@ mod tests {
     fn get_editor_context_rejects_missing_agent() {
         // Fresh workspace, no agent on disk.
         let dir = std::env::temp_dir().join(format!(
-            "k2so-editor-missing-{}-{}",
+            "k2-editor-missing-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn save_agent_md_rejects_missing_agent() {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-editor-save-missing-{}-{}",
+            "k2-editor-save-missing-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));

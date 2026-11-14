@@ -135,7 +135,7 @@ mod tests {
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2so-port-claim-{}-{}-{}",
+            "k2-port-claim-{}-{}-{}",
             tag,
             std::process::id(),
             std::time::SystemTime::now()

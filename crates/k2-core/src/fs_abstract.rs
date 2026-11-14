@@ -778,7 +778,7 @@ mod tests {
     fn tmpdir() -> PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let base = std::env::temp_dir().join(format!(
-            "k2so-fsabs-{}-{}-{}",
+            "k2-fsabs-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

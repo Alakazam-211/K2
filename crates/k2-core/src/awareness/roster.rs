@@ -200,7 +200,7 @@ mod tests {
         let db = crate::db::shared();
         let conn = db.lock();
         let path = std::env::temp_dir().join(format!(
-            "k2so-roster-{}-{}",
+            "k2-roster-{}-{}",
             name,
             Uuid::new_v4()
         ));
@@ -295,7 +295,7 @@ mod tests {
         // No `projects` row for this path at all → roster is empty
         // (never panics, never errors).
         let bogus_root = std::env::temp_dir().join(format!(
-            "k2so-roster-unregistered-{}",
+            "k2-roster-unregistered-{}",
             Uuid::new_v4()
         ));
         std::fs::create_dir_all(&bogus_root).unwrap();

@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 /// `heartbeat_port_claim_integration.rs`.
 fn isolated_home(tag: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!(
-        "k2so-port-stab-home-{}-{}-{}",
+        "k2-port-stab-home-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 /// absolute path to the test's `.k2so` dir.
 fn isolated_home(tag: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!(
-        "k2so-h7-home-{}-{}-{}",
+        "k2-h7-home-{}-{}-{}",
         tag,
         std::process::id(),
         std::time::SystemTime::now()

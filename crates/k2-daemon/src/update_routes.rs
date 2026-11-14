@@ -3038,7 +3038,7 @@ mod tests {
     fn prepare_apply_accepts_staged_job_with_existing_file() {
         let _g = clear_jobs_for_test();
         // Create a real staged file in a tempdir so the precondition passes.
-        let dir = std::env::temp_dir().join(format!("k2so-p3-prep-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("k2-p3-prep-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mk tmp");
         let staged = dir.join("k2-daemon");
         std::fs::write(&staged, b"#!fake binary").expect("write staged");
@@ -3066,7 +3066,7 @@ mod tests {
     #[test]
     fn handle_apply_none_seam_acks_without_firing() {
         let _g = clear_jobs_for_test();
-        let dir = std::env::temp_dir().join(format!("k2so-p3-apply-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("k2-p3-apply-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mk tmp");
         let staged = dir.join("k2-daemon");
         std::fs::write(&staged, b"#!fake binary").expect("write staged");

@@ -117,7 +117,7 @@ fn manager_settings() -> clone::WorkspaceSettings {
 
 #[test]
 fn unpack_places_files_registers_and_applies_settings() {
-    let root = TempDir::new("k2so-unpack-test");
+    let root = TempDir::new("k2-unpack-test");
     let (bundle, _src_slug) = build_source_bundle(&root, Some(manager_settings()));
 
     let dest_parent = root.path().join("dest");
@@ -196,7 +196,7 @@ fn unpack_places_files_registers_and_applies_settings() {
 
 #[test]
 fn unpack_is_collision_safe() {
-    let root = TempDir::new("k2so-unpack-collide");
+    let root = TempDir::new("k2-unpack-collide");
     let (bundle, _slug) = build_source_bundle(&root, Some(manager_settings()));
 
     let dest_parent = root.path().join("dest");
@@ -223,7 +223,7 @@ fn unpack_is_collision_safe() {
 
 #[test]
 fn unpack_with_no_settings_registers_with_defaults() {
-    let root = TempDir::new("k2so-unpack-nosettings");
+    let root = TempDir::new("k2-unpack-nosettings");
     let (bundle, _slug) = build_source_bundle(&root, None);
 
     let dest_parent = root.path().join("dest");
@@ -247,7 +247,7 @@ fn unpack_with_no_settings_registers_with_defaults() {
 /// skip identity apply).
 #[test]
 fn unpack_applies_pinned_chat_and_chat_pins() {
-    let root = TempDir::new("k2so-unpack-identity");
+    let root = TempDir::new("k2-unpack-identity");
     let sid = "44444444-4444-4444-4444-444444444444";
     let (bundle, _slug) = build_source_bundle_with_identity(
         &root,
@@ -364,7 +364,7 @@ fn pack_handler_rejects_invalid_json() {
 /// workspace must 400 before any job is created.
 #[test]
 fn pack_rejects_unregistered_workspace() {
-    let root = TempDir::new("k2so-pack-unregistered");
+    let root = TempDir::new("k2-pack-unregistered");
     let body = serde_json::json!({ "project_path": root.path().to_string_lossy() })
         .to_string();
     let resp = super::handle_clone_pack(body.as_bytes(), None);
@@ -392,7 +392,7 @@ fn pack_rejects_nonexistent_path() {
 #[test]
 fn pack_job_builds_bundle_and_cleanup_removes_it() {
     let _g = pack_lock();
-    let root = TempDir::new("k2so-pack-ok");
+    let root = TempDir::new("k2-pack-ok");
     let project = root.path().join("Pack WS");
     let home = root.path().join("home");
     fs::create_dir_all(&project).unwrap();
@@ -454,7 +454,7 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
 #[test]
 fn pack_job_enforces_transfer_ceiling() {
     let _g = pack_lock();
-    let root = TempDir::new("k2so-pack-oversize");
+    let root = TempDir::new("k2-pack-oversize");
     let project = root.path().join("Big WS");
     let home = root.path().join("home");
     fs::create_dir_all(&project).unwrap();
@@ -555,7 +555,7 @@ fn pack_cleanup_rejects_unknown_job_and_running_job() {
 /// so `~/.k2so/clone-tmp/*.tar.gz` doesn't accumulate over repeated clones.
 #[test]
 fn unpack_removes_the_uploaded_bundle_file() {
-    let root = TempDir::new("k2so-unpack-cleanup");
+    let root = TempDir::new("k2-unpack-cleanup");
     let (bundle, _slug) = build_source_bundle(&root, Some(manager_settings()));
 
     // Simulate the uploaded bundle living under the dest's clone-tmp dir so
@@ -587,7 +587,7 @@ fn unpack_removes_the_uploaded_bundle_file() {
 /// and any non-matching file untouched, and never recurses into subdirs.
 #[test]
 fn prune_stale_bundles_removes_only_old_tar_gz() {
-    let root = TempDir::new("k2so-prune");
+    let root = TempDir::new("k2-prune");
     let tmp_dir = root.path().join(".k2").join("clone-tmp");
     fs::create_dir_all(&tmp_dir).unwrap();
 

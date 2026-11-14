@@ -66,7 +66,7 @@ struct Fixture {
 
 /// Build the synthetic workspace described in the PRD test plan.
 fn build_fixture() -> Fixture {
-    let root = TempDir::new("k2so-clone-test");
+    let root = TempDir::new("k2-clone-test");
     let project = root.path().join("workspace");
     let home = root.path().join("home");
     fs::create_dir_all(&project).unwrap();

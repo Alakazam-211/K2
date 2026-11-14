@@ -1112,7 +1112,7 @@ mod tests {
         // spawn here (no DB / no claude), so we assert the parse path
         // gets past the request-shape gate by checking the error is
         // about project registration, not JSON parsing.
-        let body = br#"{"project":"/nonexistent/k2so-pinned-chat-unit-test"}"#;
+        let body = br#"{"project":"/nonexistent/k2-pinned-chat-unit-test"}"#;
         let result = handle_ensure_pinned_chat(body);
         // No claude binary / unregistered project → 400 with a
         // registration error, NOT a parse error.

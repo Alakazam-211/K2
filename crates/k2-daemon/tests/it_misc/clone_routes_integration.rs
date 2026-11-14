@@ -167,7 +167,7 @@ fn build_bundle_with_manager_settings(root: &Path) -> PathBuf {
 async fn clone_unpack_rejects_missing_and_garbage_token() {
     let _g = lock();
     let prev = std::env::var_os("HOME");
-    let tmp = std::env::temp_dir().join(format!("k2so-clone-it-403-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("k2-clone-it-403-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     std::env::set_var("HOME", &tmp);
     let _ = k2_core::db::init_for_tests();
@@ -208,7 +208,7 @@ async fn clone_unpack_rejects_missing_and_garbage_token() {
 async fn clone_unpack_owner_token_extracts_registers_and_configures() {
     let _g = lock();
     let prev = std::env::var_os("HOME");
-    let tmp = std::env::temp_dir().join(format!("k2so-clone-it-ok-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("k2-clone-it-ok-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     // HOME is the REMOTE home — memory/sessions land under tmp/.claude/projects.
     std::env::set_var("HOME", &tmp);

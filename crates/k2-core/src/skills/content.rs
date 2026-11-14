@@ -2435,7 +2435,7 @@ mod tests {
     fn write_opt_in_skill_writes_internal_only_no_fanout() {
         // Even with the harness-fanout marker ON, the opt-in skill write
         // must NOT fan out — these bodies live under .k2so/skills/ only.
-        let proj = std::env::temp_dir().join(format!("k2so-optin-{}", Uuid::new_v4()));
+        let proj = std::env::temp_dir().join(format!("k2-optin-{}", Uuid::new_v4()));
         fs::create_dir_all(proj.join(".k2so")).unwrap();
         let path = proj.to_str().unwrap();
         crate::workspace::onboarding::set_harness_fanout_enabled(path, true).unwrap();
@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn compose_agent_wake_context_does_not_plant_skill_md_on_workspace_primary() {
         let proj = std::env::temp_dir().join(format!(
-            "k2so-compose-primary-skill-{}-{}",
+            "k2-compose-primary-skill-{}-{}",
             std::process::id(),
             Uuid::new_v4(),
         ));

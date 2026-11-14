@@ -1666,7 +1666,7 @@ pub fn verify(username: &str, password: &str) -> bool {
 fn build_dummy_hash() -> String {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
-        .hash_password(b"k2so-dummy-verify-target", &salt)
+        .hash_password(b"k2-dummy-verify-target", &salt)
         .map(|h| h.to_string())
         // Fall back to a baked PHC-shaped string only if hashing fails
         // (effectively never); verify against it will just return false.

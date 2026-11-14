@@ -178,7 +178,7 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let path =
-                std::env::temp_dir().join(format!("k2so-review_checklist-test-{pid}-{nanos}"));
+                std::env::temp_dir().join(format!("k2-review_checklist-test-{pid}-{nanos}"));
             fs::create_dir_all(&path).expect("create tempdir");
             Self { path }
         }

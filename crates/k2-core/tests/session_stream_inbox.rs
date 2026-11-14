@@ -38,7 +38,7 @@ fn mk_signal(text: &str) -> AgentSignal {
 /// agent name don't collide.
 fn tmp_root(tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "k2so-inbox-test-{}-{}-{}",
+        "k2-inbox-test-{}-{}-{}",
         tag,
         std::process::id(),
         uuid_ns()

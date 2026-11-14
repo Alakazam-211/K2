@@ -38,7 +38,7 @@ fn lock() -> (k2_core::test_env::StubHome, k2_core::test_env::SerialGuard) {
 
 fn setup_project(workspace_id: &str) -> PathBuf {
     let project_path = std::env::temp_dir().join(format!(
-        "k2so-hb-fire-v2-test-{}-{}-{}",
+        "k2-hb-fire-v2-test-{}-{}-{}",
         workspace_id,
         std::process::id(),
         std::time::SystemTime::now()

@@ -1,11 +1,13 @@
 // Home groups: the name tip over a group's icon in the bar (beside it in the
 // rail): the group's name and its ⌥⌘N, and on keyboard focus how to edit
 // groups. The icon's own label already says all of it, so the tip is only
-// for the eye (aria-hidden). Portalled, and kept 8 px inside the window.
+// for the eye (aria-hidden). Portalled, kept 8 px inside the window, and
+// it claims its box over a live Browser page (lib/browser-overlay).
 
 import { useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { clientRectToCss, cssViewport } from '@/lib/app-zoom'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 export interface GroupBarTipProps {
   anchor: HTMLElement
@@ -23,6 +25,9 @@ const EDGE_PX = 8
 export default function GroupBarTip({ anchor, name, chord, keyboard, vertical }: GroupBarTipProps): React.ReactPortal {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  // Beside the rail it can reach over the room: claim its box over a live
+  // Browser page.
+  useBrowserOverlay({ active: true, ref, kind: 'popover', watch: pos })
 
   useLayoutEffect(() => {
     const tip = ref.current

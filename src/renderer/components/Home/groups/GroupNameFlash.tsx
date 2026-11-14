@@ -4,12 +4,17 @@
 // politely. Not on first paint. It wears the bar's name tip (home-groups.css).
 
 import { useEffect, useRef, useState } from 'react'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 export const GROUP_NAME_FLASH_MS = 1500
 
 export default function GroupNameFlash({ id, name }: { id: string; name: string }): React.JSX.Element | null {
   const [shown, setShown] = useState(false)
   const first = useRef(true)
+  const ref = useRef<HTMLSpanElement>(null)
+  // It sits beside the rail, over the room: claim its box over a live
+  // Browser page while it shows.
+  useBrowserOverlay({ active: shown, ref, kind: 'popover' })
   useEffect(() => {
     if (first.current) {
       first.current = false
@@ -22,6 +27,7 @@ export default function GroupNameFlash({ id, name }: { id: string; name: string 
   if (!shown) return null
   return (
     <span
+      ref={ref}
       role="status"
       aria-live="polite"
       data-group-name-flash={id}

@@ -16,8 +16,6 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'
-import HomeGroupBar from '@/components/Home/groups/HomeGroupBar'
-import { useHomeGroups } from '@/components/Home/groups/useHomeGroups'
 import { useHomesStore } from '@/stores/homes'
 import { useState } from 'react'
 import { ANCHORED_MENU_MARGIN, ZEN_ANCHORED_MENU_LAYER, anchoredMenuBox, useAnchoredMenu } from './useAnchoredMenu'
@@ -323,55 +321,6 @@ describe('anchored menus under the app zoom', () => {
     })
   }
 })
-
-describe('Home group edit card (Home nav)', () => {
-  it('portals out of the nav’s scroller, opens up from the bottom bar; typing keeps it, an outside click closes it', () => {
-    const first = useHomesStore.getState().homes[0]
-    const second = useHomesStore.getState().createHome('Anchored test')
-    if (!second) throw new Error('could not create a Home')
-    act(() => useHomesStore.getState().selectHome(first.id))
-    try {
-      render(
-        <div data-sidebar="" style={{ overflowY: 'auto', height: 120 }}>
-          <GroupBarHarness />
-        </div>,
-      )
-      const sidebar = document.querySelector('[data-sidebar]') as HTMLElement
-      const icon = sidebar.querySelector(`[data-group-id="${second}"]`) as HTMLElement
-      setRect(icon, { top: window.innerHeight - 60, left: 12, width: 28, height: 28 })
-      act(() => {
-        fireEvent.contextMenu(icon)
-      })
-      const card = menuEl('[data-group-edit-card]')
-      expect(sidebar.contains(card)).toBe(false)
-      expect(card.style.position).toBe('fixed')
-      expect(card.getAttribute('data-placement')).toBe('up')
-      expect(card.style.bottom).toBe(`${60 + 6}px`)
-      // Every enabled button is clickable and looks it.
-      for (const b of Array.from(card.querySelectorAll('button:not(:disabled)'))) {
-        expect(b.classList.contains('cursor-pointer'), b.outerHTML.slice(0, 80)).toBe(true)
-      }
-      const input = card.querySelector('[data-group-name-input]') as HTMLInputElement
-      act(() => {
-        fireEvent.mouseDown(input)
-        fireEvent.change(input, { target: { value: 'Anchored renamed' } })
-      })
-      expect(document.querySelector('[data-group-edit-card]')).not.toBeNull()
-      expect(useHomesStore.getState().homes.find((h) => h.id === second)?.name).toBe('Anchored renamed')
-      act(() => {
-        fireEvent.mouseDown(document.body)
-      })
-      expect(document.querySelector('[data-group-edit-card]')).toBeNull()
-    } finally {
-      act(() => useHomesStore.getState().deleteHome(second))
-    }
-  })
-})
-
-function GroupBarHarness(): React.JSX.Element {
-  const g = useHomeGroups()
-  return <HomeGroupBar {...g.bar} />
-}
 
 /** A top-bar style popover: a trigger, the menu on the popover layer, and
  *  the next control after the trigger. */

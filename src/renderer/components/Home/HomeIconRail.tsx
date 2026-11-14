@@ -113,9 +113,9 @@ export default function HomeIconRail(): React.JSX.Element {
       </div>
 
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
-        {/* The group bar, upright: one icon per group, then "+". The name
+        {/* The group icons, upright (no divider). The name
             flashes beside it after a switch (no room for it here). */}
-        <div className="relative mb-1 w-full border-t border-[var(--color-border)] pt-1 flex justify-center">
+        <div className="relative mb-1 w-full pt-1 flex justify-center">
           <HomeGroupBar {...groups.bar} orientation="vertical" />
           <GroupNameFlash id={groups.current.id} name={groups.current.name} />
         </div>

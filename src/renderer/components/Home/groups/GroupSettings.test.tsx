@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
-// Home groups, the second step: the bar's "Recent first" mark, the edit
-// card's Group settings view (every group: icon, name, "Most recent at the
-// top", order by drag or ⌥↑/⌥↓), and Pin / Unpin in a row's menu with the
-// tenth pin offered but off.
+// Home groups: the All groups modal's two panes, with plain props as K2
+// Design will use them. The list (select, ⌥↑/⌥↓, drag, Add group) and the
+// selected group's settings (name, "Most recent at the top", the whole
+// icon set with search and Recent, Delete confirmed once and off on the
+// last group). Also Pin / Unpin in a row's menu and the rail's name flash.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -14,10 +15,13 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-import HomeGroupBar, { type GroupBarItem, type HomeGroupBarProps } from './HomeGroupBar'
-import { moveId } from './GroupSettingsList'
+import GroupEditModal, { type GroupEditModalProps } from './GroupEditModal'
+import { moveId } from './GroupList'
+import type { GroupBarItem } from './HomeGroupBar'
 import GroupNameFlash, { GROUP_NAME_FLASH_MS } from './GroupNameFlash'
 import { pinMenuItem } from '../HomeSidebar'
+import { GROUP_ICONS } from '@/lib/group-icons'
+import { GROUP_ICON_RECENTS_KEY } from '@/lib/group-icon-recents'
 import { MAX_PINS } from '@/lib/home-row-order'
 import type { Home } from '@/stores/homes'
 
@@ -27,38 +31,31 @@ const G: GroupBarItem[] = [
   { id: 'g3', name: 'Later', icon: 'rocket', order: 2, recentFirst: false, pinned: [] },
 ]
 
-function props(over: Partial<HomeGroupBarProps> = {}): HomeGroupBarProps {
+function props(over: Partial<GroupEditModalProps> = {}): GroupEditModalProps {
   return {
     groups: G,
-    currentId: 'g2',
-    onSelect: vi.fn(),
+    currentId: 'g1',
+    initialId: 'g2',
     onRename: vi.fn(),
     onSetIcon: vi.fn(),
     onCreate: vi.fn(() => null),
     onDelete: vi.fn(),
     onSetRecentFirst: vi.fn(),
     onReorderGroups: vi.fn(),
-    swipe: null,
+    onClose: vi.fn(),
     ...over,
   }
 }
 
-function bar(): HTMLElement {
-  return screen.getByRole('toolbar', { name: 'Groups' })
+function row(id: string): HTMLElement {
+  const el = document.querySelector(`[data-group-list-row="${id}"]`)
+  if (!(el instanceof HTMLElement)) throw new Error(`no list row ${id}`)
+  return el
 }
 
-function openSettings(): HTMLElement {
-  fireEvent.contextMenu(within(bar()).getByRole('button', { name: 'Play' }))
-  const card = document.querySelector('[data-group-edit-card]') as HTMLElement
-  fireEvent.click(card.querySelector('[data-group-settings-open]') as HTMLElement)
-  const list = card.querySelector('[data-group-settings]')
-  if (!(list instanceof HTMLElement)) throw new Error('no Group settings view')
-  return list
-}
-
-function settingsRow(list: HTMLElement, id: string): HTMLElement {
-  const el = list.querySelector(`[data-group-settings-row="${id}"]`)
-  if (!(el instanceof HTMLElement)) throw new Error(`no settings row ${id}`)
+function detail(): HTMLElement {
+  const el = document.querySelector('[data-group-detail]')
+  if (!(el instanceof HTMLElement)) throw new Error('no detail pane')
   return el
 }
 
@@ -67,71 +64,95 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-describe('the "Recent first" mark', () => {
-  it('marks only a group whose switch is on, in its tooltip and for a screen reader', () => {
-    render(<HomeGroupBar {...props()} />)
-    const work = within(bar()).getByRole('button', { name: 'Work' })
-    expect(work.querySelector('[data-recent-first-mark]')).not.toBeNull()
-    expect(work.getAttribute('title')).toContain('Most recent at the top')
-    expect(work.getAttribute('aria-description')).toBe('Most recent at the top')
-    const play = within(bar()).getByRole('button', { name: 'Play' })
-    expect(play.querySelector('[data-recent-first-mark]')).toBeNull()
-    expect(play.getAttribute('aria-description')).toBeNull()
-  })
-})
-
-describe('Group settings in the edit card', () => {
-  it('lists every group with its icon or dot, its name and its switch', () => {
-    render(<HomeGroupBar {...props()} />)
-    const list = openSettings()
-    expect(Array.from(list.querySelectorAll('[data-group-settings-row]')).map((r) => r.getAttribute('data-group-settings-row'))).toEqual(['g1', 'g2', 'g3'])
-    expect(settingsRow(list, 'g1').querySelector('svg[data-group-icon="briefcase"]')).not.toBeNull()
-    expect(settingsRow(list, 'g2').querySelector('[data-group-dot="2"]')).not.toBeNull()
-    expect((settingsRow(list, 'g1').querySelector('[data-group-recent-first]') as HTMLInputElement).checked).toBe(true)
-    expect((settingsRow(list, 'g3').querySelector('[data-group-recent-first]') as HTMLInputElement).checked).toBe(false)
+describe('the list pane', () => {
+  it('lists every group with its icon or dot, its name and the "Recent" mark; a click selects', () => {
+    render(<GroupEditModal {...props()} />)
+    expect(Array.from(document.querySelectorAll('[data-group-list-row]')).map((r) => r.getAttribute('data-group-list-row'))).toEqual(['g1', 'g2', 'g3'])
+    expect(row('g1').querySelector('svg[data-group-icon="briefcase"]')).not.toBeNull()
+    expect(row('g2').querySelector('[data-group-dot="2"]')).not.toBeNull()
+    expect(row('g1').querySelector('[data-group-list-recent]')).not.toBeNull()
+    expect(row('g3').querySelector('[data-group-list-recent]')).toBeNull()
+    expect(detail().getAttribute('data-group-detail')).toBe('g2')
+    fireEvent.click(row('g3'))
+    expect(detail().getAttribute('data-group-detail')).toBe('g3')
   })
 
-  it('the switch, a rename and ⌥↑/⌥↓ go out through the callbacks', () => {
+  it('⌥↑/⌥↓ move the focused group; plain arrows move the selection', () => {
     const p = props()
-    render(<HomeGroupBar {...p} />)
-    const list = openSettings()
-    fireEvent.click(settingsRow(list, 'g3').querySelector('[data-group-recent-first]') as HTMLElement)
-    expect(p.onSetRecentFirst).toHaveBeenLastCalledWith('g3', true)
-    fireEvent.change(settingsRow(list, 'g2').querySelector('[data-group-settings-name]') as HTMLElement, { target: { value: 'Fun' } })
-    expect(p.onRename).toHaveBeenLastCalledWith('g2', 'Fun')
-    fireEvent.keyDown(settingsRow(list, 'g1'), { key: 'ArrowDown', altKey: true })
+    render(<GroupEditModal {...p} />)
+    fireEvent.keyDown(row('g1'), { key: 'ArrowDown', altKey: true })
     expect(p.onReorderGroups).toHaveBeenLastCalledWith(['g2', 'g1', 'g3'])
-    fireEvent.keyDown(settingsRow(list, 'g3'), { key: 'ArrowUp', altKey: true })
+    fireEvent.keyDown(row('g3'), { key: 'ArrowUp', altKey: true })
     expect(p.onReorderGroups).toHaveBeenLastCalledWith(['g1', 'g3', 'g2'])
-    // Without ⌥, or past either end, nothing moves.
-    fireEvent.keyDown(settingsRow(list, 'g1'), { key: 'ArrowDown' })
-    fireEvent.keyDown(settingsRow(list, 'g1'), { key: 'ArrowUp', altKey: true })
+    fireEvent.keyDown(row('g1'), { key: 'ArrowUp', altKey: true })
     expect(p.onReorderGroups).toHaveBeenCalledTimes(2)
+    fireEvent.keyDown(row('g2'), { key: 'ArrowDown' })
+    expect(detail().getAttribute('data-group-detail')).toBe('g3')
   })
 
   it('a drag drops a group onto another’s place', () => {
     const p = props()
-    render(<HomeGroupBar {...p} />)
-    const list = openSettings()
-    fireEvent.dragStart(settingsRow(list, 'g3'))
-    fireEvent.dragOver(settingsRow(list, 'g1'))
-    fireEvent.drop(settingsRow(list, 'g1'))
+    render(<GroupEditModal {...p} />)
+    fireEvent.dragStart(row('g3'))
+    fireEvent.dragOver(row('g1'))
+    fireEvent.drop(row('g1'))
     expect(p.onReorderGroups).toHaveBeenLastCalledWith(['g3', 'g1', 'g2'])
     expect(moveId(['a', 'b', 'c'], 0, 2)).toEqual(['b', 'c', 'a'])
   })
+})
 
-  it('a group’s icon opens that group’s own card; Back returns', () => {
+describe('the settings pane', () => {
+  it('shows the whole icon set: search, Recent, "No icon" and every curated icon', () => {
+    localStorage.setItem(GROUP_ICON_RECENTS_KEY, JSON.stringify(['rocket', 'house']))
     const p = props()
-    const { rerender } = render(<HomeGroupBar {...p} />)
-    const list = openSettings()
-    fireEvent.click(within(settingsRow(list, 'g3')).getByRole('button', { name: 'Icon and more for Later' }))
-    rerender(<HomeGroupBar {...p} />)
-    expect(document.querySelector('[data-group-edit-card]')?.getAttribute('data-group-edit-card')).toBe('g3')
-    expect(document.querySelector('[data-group-settings]')).toBeNull()
-    const card = document.querySelector('[data-group-edit-card]') as HTMLElement
-    fireEvent.click(card.querySelector('[data-group-settings-open]') as HTMLElement)
-    fireEvent.click(card.querySelector('[data-group-settings-back]') as HTMLElement)
-    expect(card.querySelector('[data-group-name-input]')).not.toBeNull()
+    render(<GroupEditModal {...p} />)
+    const grid = detail().querySelector('[data-group-icon-grid]') as HTMLElement
+    expect(grid.className).not.toMatch(/max-h-/)
+    expect(grid.querySelectorAll('[data-group-icon-pick]').length).toBe(GROUP_ICONS.length + 1)
+    expect(Array.from(detail().querySelectorAll('[data-group-icon-recent] [data-group-icon-pick]')).map((b) => b.getAttribute('data-group-icon-pick'))).toEqual(['rocket', 'house'])
+    fireEvent.change(detail().querySelector('[data-group-icon-search]') as HTMLInputElement, { target: { value: 'rock' } })
+    fireEvent.click(detail().querySelector('[data-group-icon-grid] [data-group-icon-pick="rocket"]') as HTMLElement)
+    expect(p.onSetIcon).toHaveBeenLastCalledWith('g2', 'rocket')
+    fireEvent.change(detail().querySelector('[data-group-icon-search]') as HTMLInputElement, { target: { value: '' } })
+    fireEvent.click(within(detail()).getByRole('button', { name: 'No icon (numbered dot)' }))
+    expect(p.onSetIcon).toHaveBeenLastCalledWith('g2', null)
+  })
+
+  it('the name saves as you type (an empty one too: the placeholder says what), the switch is the app’s Toggle', () => {
+    const p = props({ emptyNameFallback: () => 'Group 4', initialId: 'g1' })
+    render(<GroupEditModal {...p} />)
+    const name = detail().querySelector('[data-group-name-input]') as HTMLInputElement
+    expect(name.placeholder).toBe('Group 4')
+    fireEvent.change(name, { target: { value: 'Work 2' } })
+    expect(p.onRename).toHaveBeenLastCalledWith('g1', 'Work 2')
+    fireEvent.change(name, { target: { value: '' } })
+    expect(p.onRename).toHaveBeenLastCalledWith('g1', '')
+    const sw = detail().querySelector('[data-group-recent-first="g1"]') as HTMLElement
+    expect([sw.getAttribute('role'), sw.getAttribute('aria-checked'), sw.className.includes('k2-switch')]).toEqual(['switch', 'true', true])
+    fireEvent.click(sw)
+    expect(p.onSetRecentFirst).toHaveBeenLastCalledWith('g1', false)
+  })
+
+  it('Delete asks once, then deletes; it is off on the last group', () => {
+    const p = props()
+    const { unmount } = render(<GroupEditModal {...p} />)
+    fireEvent.click(detail().querySelector('[data-group-delete]') as HTMLElement)
+    expect(p.onDelete).not.toHaveBeenCalled()
+    fireEvent.click(detail().querySelector('[data-group-delete-yes]') as HTMLElement)
+    expect(p.onDelete).toHaveBeenCalledWith('g2')
+    unmount()
+    render(<GroupEditModal {...props({ groups: [G[1]] })} />)
+    const del = detail().querySelector('[data-group-delete]') as HTMLButtonElement
+    expect([del.disabled, del.title]).toEqual([true, 'The last group can’t be deleted'])
+  })
+
+  it('a deleted selection falls back to the first group; the × closes', () => {
+    const p = props()
+    const { rerender } = render(<GroupEditModal {...p} />)
+    rerender(<GroupEditModal {...p} groups={[G[0], G[2]]} />)
+    expect(detail().getAttribute('data-group-detail')).toBe('g1')
+    fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0])
+    expect(p.onClose).toHaveBeenCalled()
   })
 })
 
@@ -151,34 +172,6 @@ describe('Pin / Unpin in a row’s menu', () => {
     expect(pinMenuItem(home(2), home(2).rows[0])).toEqual({ id: 'home-unpin', label: 'Unpin' })
     const full = home(MAX_PINS)
     expect(pinMenuItem(full, full.rows[MAX_PINS])).toEqual({ id: 'home-pin', label: 'Pin', enabled: false, hint: '9 pinned already' })
-  })
-})
-
-describe('the card’s own switch and Delete in All groups', () => {
-  it('the card has the group’s "Most recent at the top" switch', () => {
-    const p = props()
-    render(<HomeGroupBar {...p} />)
-    fireEvent.contextMenu(within(bar()).getByRole('button', { name: 'Work' }))
-    const sw = document.querySelector('[data-group-card-recent-first]') as HTMLInputElement
-    expect(sw.checked).toBe(true)
-    fireEvent.click(sw)
-    expect(p.onSetRecentFirst).toHaveBeenLastCalledWith('g1', false)
-  })
-
-  it('a row’s Delete confirms in the row; it is off on the last group', () => {
-    const p = props()
-    const { unmount } = render(<HomeGroupBar {...p} />)
-    const list = openSettings()
-    fireEvent.click(list.querySelector('[data-group-settings-delete="g3"]') as HTMLElement)
-    expect(p.onDelete).not.toHaveBeenCalled()
-    fireEvent.click(list.querySelector('[data-group-settings-delete-yes="g3"]') as HTMLElement)
-    expect(p.onDelete).toHaveBeenCalledWith('g3')
-    unmount()
-    const one = props({ groups: [G[1]] })
-    render(<HomeGroupBar {...one} />)
-    const only = openSettings()
-    const del = only.querySelector('[data-group-settings-delete="g2"]') as HTMLButtonElement
-    expect([del.disabled, del.title]).toEqual([true, 'The last group can’t be deleted'])
   })
 })
 

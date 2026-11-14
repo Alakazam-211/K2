@@ -13,8 +13,8 @@
 // `useGroupSwipeStore` carries the live progress (0–1 and next/prev, null
 // at rest) and the last release (commit or cancel, with a sequence number)
 // for the bar's visual. A commit past the last group is a cancel (no
-// wrap). Progress is published under prefers-reduced-motion too: the
-// visual decides how to show it (a fade instead of a slide).
+// wrap). There is no reduced-motion variant: the swipe always slides,
+// with the peek, whatever prefers-reduced-motion says.
 
 import { useEffect } from 'react'
 import { create } from 'zustand'

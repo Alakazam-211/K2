@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
-// Home groups: the bottom group bar and its edit card. The bar alone with
-// plain props (as K2 Design will use it), then wired to the Homes store
-// (`useHomeGroups`): "+", the header's "…", rename and icon saved live.
+// Home groups: the group icon row. The bar alone with plain props (as K2
+// Design will use it), then wired to the Homes store (`useHomeGroups`):
+// the header's "…", rename and icon saved live, an emptied name.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -15,8 +15,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import HomeGroupBar, { type GroupBarItem, type HomeGroupBarProps } from './HomeGroupBar'
 import GroupNameHeader from './GroupNameHeader'
+import { GROUP_BAR_ICON_PX } from './GroupGlyph'
 import { useHomeGroups } from './useHomeGroups'
-import { GROUP_ICON_RECENTS_KEY } from '@/lib/group-icon-recents'
 import { selectedHome, useHomesStore } from '@/stores/homes'
 
 const G: GroupBarItem[] = [
@@ -45,9 +45,9 @@ function groupButton(name: string): HTMLElement {
   return within(screen.getByRole('toolbar', { name: 'Groups' })).getByRole('button', { name })
 }
 
-function card(): HTMLElement {
-  const el = document.querySelector('[data-group-edit-card]')
-  if (!(el instanceof HTMLElement)) throw new Error('no group edit card')
+function modal(): HTMLElement {
+  const el = document.querySelector('[data-group-edit-modal]')
+  if (!(el instanceof HTMLElement)) throw new Error('no All groups modal')
   return el
 }
 
@@ -57,8 +57,8 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-describe('the group bar', () => {
-  it('paints the current group in the accent colour and the others muted; each is a labelled button', () => {
+describe('the group icon row', () => {
+  it('bare icons: the current group in the accent colour, the others muted; each a labelled, focusable button', () => {
     render(<HomeGroupBar {...props({ currentId: 'g2' })} />)
     const play = groupButton('Play')
     expect(play.getAttribute('aria-current')).toBe('true')
@@ -67,37 +67,49 @@ describe('the group bar', () => {
       const b = groupButton(other)
       expect(b.getAttribute('aria-current')).toBeNull()
       expect(b.className).toContain('text-[var(--color-text-muted)]')
-      expect(b.className).not.toContain('text-[var(--color-accent)]')
       expect(b.tagName).toBe('BUTTON')
+      // The app's focus ring; no cell or bubble behind the glyph.
+      expect(b.hasAttribute('data-k2-focus')).toBe(true)
+      expect(b.className).not.toMatch(/\bbg-|rounded/)
     }
+    // No "+" in the row.
+    expect(screen.queryByRole('button', { name: 'New group' })).toBeNull()
   })
 
-  it('draws a group’s Lucide icon squared at 16 px, and a numbered dot when it has none or an unknown name', () => {
+  it('draws a Lucide icon squared at half size, in a larger click target; a numbered dot when it has none or an unknown name', () => {
     render(<HomeGroupBar {...props()} />)
-    const svg = groupButton('Work').querySelector('svg')
+    const work = groupButton('Work')
+    const svg = work.querySelector('svg[data-group-icon]')
     if (!svg) throw new Error('no icon on Work')
     expect(svg.getAttribute('class')).toContain('lucide-briefcase')
     expect([svg.getAttribute('width'), svg.getAttribute('stroke-width'), svg.getAttribute('stroke-linecap'), svg.getAttribute('stroke-linejoin'), svg.getAttribute('stroke')]).toEqual([
-      '16',
+      String(GROUP_BAR_ICON_PX),
       '1.75',
       'square',
       'miter',
       'currentColor',
     ])
+    expect(GROUP_BAR_ICON_PX).toBe(8)
+    expect(work.className).toContain('h-6 w-6')
     expect(groupButton('Play').querySelector('[data-group-dot]')?.textContent).toBe('2')
     expect(groupButton('Play').querySelector('svg')).toBeNull()
     expect(groupButton('Later').querySelector('[data-group-dot]')?.textContent).toBe('3')
   })
 
-  it('a click switches; the tooltip names the ⌥⌘ chord when given', () => {
+  it('a click switches; the tooltip names the ⌥⌘ chord and "Most recent at the top"', () => {
     const p = props({ shortcutLabel: (i) => `⌥⌘${i + 1}` })
     render(<HomeGroupBar {...p} />)
     fireEvent.click(groupButton('Play'))
     expect(p.onSelect).toHaveBeenCalledWith('g2')
     expect(groupButton('Later').getAttribute('title')).toBe('Later (⌥⌘3)')
+    const work = groupButton('Work')
+    expect(work.getAttribute('title')).toBe('Work (⌥⌘1) · Most recent at the top')
+    expect(work.getAttribute('aria-description')).toBe('Most recent at the top')
+    expect(work.querySelector('[data-recent-first-mark]')).not.toBeNull()
+    expect(groupButton('Play').querySelector('[data-recent-first-mark]')).toBeNull()
   })
 
-  it('arrow keys move focus along the bar', () => {
+  it('arrow keys move focus along the row', () => {
     render(<HomeGroupBar {...props()} />)
     groupButton('Work').focus()
     fireEvent.keyDown(groupButton('Work'), { key: 'ArrowRight' })
@@ -117,7 +129,7 @@ describe('the group bar', () => {
     expect([bar.getAttribute('data-swipe-direction'), bar.style.getPropertyValue('--group-swipe-progress')]).toEqual(['none', '0'])
   })
 
-  it('with many groups the bar scrolls and brings the current group into view', () => {
+  it('with many groups the row scrolls and brings the current group into view', () => {
     const many = Array.from({ length: 14 }, (_, i) => ({ id: `m${i}`, name: `G${i}`, icon: null, order: i, recentFirst: false, pinned: [] }))
     const seen: string[] = []
     // jsdom has no scrollIntoView: record which element asked to be shown.
@@ -126,7 +138,6 @@ describe('the group bar', () => {
     proto.scrollIntoView = function (this: HTMLElement) {
       seen.push(this.getAttribute('data-group-id') ?? '')
     }
-    const spy = { mockRestore: () => delete proto.scrollIntoView }
     try {
       const { rerender } = render(<HomeGroupBar {...props({ groups: many, currentId: 'm0' })} />)
       const scroller = document.querySelector('[data-group-bar-scroller]') as HTMLElement
@@ -134,94 +145,51 @@ describe('the group bar', () => {
       rerender(<HomeGroupBar {...props({ groups: many, currentId: 'm12' })} />)
       expect(seen.at(-1)).toBe('m12')
     } finally {
-      spy.mockRestore()
+      delete proto.scrollIntoView
     }
   })
 })
 
-describe('the group edit card', () => {
-  it('right-click opens it, outside the bar; Escape and an outside click close it', () => {
+describe('opening the All groups modal', () => {
+  it('a right-click opens it centred on the window, outside the row, with that group selected; Escape closes it', () => {
     render(<HomeGroupBar {...props()} />)
     fireEvent.contextMenu(groupButton('Play'))
-    const c = card()
-    expect(c.getAttribute('data-group-edit-card')).toBe('g2')
-    expect(screen.getByRole('toolbar', { name: 'Groups' }).contains(c)).toBe(false)
-    expect((within(c).getByDisplayValue('Play') as HTMLInputElement).value).toBe('Play')
-    fireEvent.keyDown(c, { key: 'Escape' })
-    expect(document.querySelector('[data-group-edit-card]')).toBeNull()
-
-    fireEvent.contextMenu(groupButton('Work'))
-    expect(card().getAttribute('data-group-edit-card')).toBe('g1')
+    const m = modal()
+    expect(screen.getByRole('toolbar', { name: 'Groups' }).contains(m)).toBe(false)
+    expect(m.getAttribute('role')).toBe('dialog')
+    expect(m.closest('[data-dialog-placement="center"]')).not.toBeNull()
+    expect(m.querySelector('[data-group-detail]')?.getAttribute('data-group-detail')).toBe('g2')
+    expect(m.querySelector('[data-group-list-row="g2"]')?.getAttribute('aria-selected')).toBe('true')
     act(() => {
-      fireEvent.mouseDown(document.body)
+      fireEvent.keyDown(document, { key: 'Escape' })
     })
-    expect(document.querySelector('[data-group-edit-card]')).toBeNull()
+    expect(document.querySelector('[data-group-edit-modal]')).toBeNull()
   })
 
   it('a long press on touch opens it; a short tap does not', () => {
     vi.useFakeTimers()
     try {
       render(<HomeGroupBar {...props()} />)
-      fireEvent.pointerDown(groupButton('Play'), { pointerType: 'touch' })
-      fireEvent.pointerUp(groupButton('Play'), { pointerType: 'touch' })
+      fireEvent.pointerDown(groupButton('Later'), { pointerType: 'touch' })
+      fireEvent.pointerUp(groupButton('Later'), { pointerType: 'touch' })
       act(() => {
         vi.advanceTimersByTime(800)
       })
-      expect(document.querySelector('[data-group-edit-card]')).toBeNull()
-      fireEvent.pointerDown(groupButton('Play'), { pointerType: 'touch' })
+      expect(document.querySelector('[data-group-edit-modal]')).toBeNull()
+      fireEvent.pointerDown(groupButton('Later'), { pointerType: 'touch' })
       act(() => {
         vi.advanceTimersByTime(600)
       })
-      expect(card().getAttribute('data-group-edit-card')).toBe('g2')
+      expect(modal().querySelector('[data-group-detail]')?.getAttribute('data-group-detail')).toBe('g3')
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('saves the name as you type (an empty one too: the placeholder says what it saves as) and the icon on a pick', () => {
-    const p = props({ emptyNameFallback: () => 'Group 4' })
-    render(<HomeGroupBar {...p} />)
-    fireEvent.contextMenu(groupButton('Work'))
-    const name = card().querySelector('[data-group-name-input]') as HTMLInputElement
-    expect(name.placeholder).toBe('Group 4')
-    fireEvent.change(name, { target: { value: 'Work 2' } })
-    expect(p.onRename).toHaveBeenLastCalledWith('g1', 'Work 2')
-    fireEvent.change(name, { target: { value: '   ' } })
-    expect(p.onRename).toHaveBeenLastCalledWith('g1', '   ')
-
-    const search = card().querySelector('[data-group-icon-search]') as HTMLInputElement
-    fireEvent.change(search, { target: { value: 'rock' } })
-    const grid = card().querySelector('[data-group-icon-grid]') as HTMLElement
-    const rocket = grid.querySelector('[data-group-icon-pick="rocket"]') as HTMLElement
-    expect(rocket).not.toBeNull()
-    fireEvent.click(rocket)
-    expect(p.onSetIcon).toHaveBeenLastCalledWith('g1', 'rocket')
-    // The pick joins this computer's Recent row.
-    expect(JSON.parse(localStorage.getItem(GROUP_ICON_RECENTS_KEY) ?? 'null')).toEqual(['rocket'])
-    fireEvent.change(search, { target: { value: '' } })
-    expect(card().querySelector('[data-group-icon-recent] [data-group-icon-pick="rocket"]')).not.toBeNull()
-    // "No icon" clears it.
-    fireEvent.click(within(card()).getByRole('button', { name: 'No icon (numbered dot)' }))
-    expect(p.onSetIcon).toHaveBeenLastCalledWith('g1', null)
-  })
-
-  it('Delete asks once, then deletes; it is off on the last group', () => {
-    const p = props()
-    const { unmount } = render(<HomeGroupBar {...p} />)
-    fireEvent.contextMenu(groupButton('Later'))
-    fireEvent.click(card().querySelector('[data-group-delete]') as HTMLElement)
-    expect(p.onDelete).not.toHaveBeenCalled()
-    fireEvent.click(card().querySelector('[data-group-delete-yes]') as HTMLElement)
-    expect(p.onDelete).toHaveBeenCalledWith('g3')
-    expect(document.querySelector('[data-group-edit-card]')).toBeNull()
-    unmount()
-
-    const one = props({ groups: [G[0]] })
-    render(<HomeGroupBar {...one} />)
-    fireEvent.contextMenu(groupButton('Work'))
-    const del = card().querySelector('[data-group-delete]') as HTMLButtonElement
-    expect(del.disabled).toBe(true)
-    expect(del.title).toBe('The last group can’t be deleted')
+  it('the context-menu key on a focused icon opens it', () => {
+    render(<HomeGroupBar {...props()} />)
+    fireEvent.keyDown(groupButton('Work'), { key: 'ContextMenu' })
+    expect(modal().querySelector('[data-group-detail]')?.getAttribute('data-group-detail')).toBe('g1')
   })
 })
 
@@ -244,49 +212,39 @@ function setHomeNames(names: string[]): void {
   expect(useHomesStore.getState().homes.map((h) => h.name)).toEqual(names)
 }
 
-describe('the group bar on the Homes store', () => {
-  it('"+" makes the next free "Group N", selects it and opens its card with the name selected', () => {
+describe('the group row on the Homes store', () => {
+  it('the header’s "…" opens the modal on the current group; Add group makes the next "Group N", selected, its name selected', () => {
     setHomeNames(['Home', 'Group 1', 'group 3'])
+    act(() => useHomesStore.getState().selectHome(useHomesStore.getState().homes[1].id))
     render(<Wired />)
-    fireEvent.click(screen.getByRole('button', { name: 'New group' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Group 1)' }))
+    expect(modal().querySelector('[data-group-detail]')?.getAttribute('data-group-detail')).toBe(useHomesStore.getState().homes[1].id)
+    fireEvent.click(modal().querySelector('[data-group-create]') as HTMLElement)
     expect(useHomesStore.getState().homes.map((h) => h.name)).toEqual(['Home', 'Group 1', 'group 3', 'Group 2'])
-    expect(selectedHome(useHomesStore.getState()).name).toBe('Group 2')
-    const input = card().querySelector('[data-group-name-input]') as HTMLInputElement
+    const added = useHomesStore.getState().homes[3]
+    expect(modal().querySelector('[data-group-detail]')?.getAttribute('data-group-detail')).toBe(added.id)
+    const input = modal().querySelector('[data-group-name-input]') as HTMLInputElement
     expect(input.value).toBe('Group 2')
     expect(document.activeElement).toBe(input)
     expect([input.selectionStart, input.selectionEnd]).toEqual([0, 'Group 2'.length])
-    // Typing renames it live.
     fireEvent.change(input, { target: { value: 'Sales' } })
-    expect(selectedHome(useHomesStore.getState()).name).toBe('Sales')
+    expect(useHomesStore.getState().homes[3].name).toBe('Sales')
   })
 
-  it('an emptied name saves as the next unused "Group N"', () => {
+  it('an emptied name saves as the next unused "Group N"; an icon pick lands in the store and the row', () => {
     setHomeNames(['Group 1', 'Work', 'Group 3'])
     render(<Wired />)
     fireEvent.contextMenu(groupButton('Work'))
-    const input = card().querySelector('[data-group-name-input]') as HTMLInputElement
+    const input = modal().querySelector('[data-group-name-input]') as HTMLInputElement
     expect(input.placeholder).toBe('Group 2')
     fireEvent.change(input, { target: { value: '' } })
     expect(useHomesStore.getState().homes.map((h) => h.name)).toEqual(['Group 1', 'Group 2', 'Group 3'])
-  })
-
-  it('the header shows the current group and its "…" opens the same card; an icon pick lands in the store', () => {
-    setHomeNames(['Work', 'Play'])
-    act(() => useHomesStore.getState().selectHome(useHomesStore.getState().homes[1].id))
-    render(<Wired />)
-    const header = document.querySelector('[data-group-name-header]') as HTMLElement
-    expect(header.textContent).toContain('Play')
-    fireEvent.click(screen.getByRole('button', { name: 'Edit group Play' }))
-    const play = useHomesStore.getState().homes[1]
-    expect(card().getAttribute('data-group-edit-card')).toBe(play.id)
-    fireEvent.change(card().querySelector('[data-group-icon-search]') as HTMLInputElement, { target: { value: 'gamepad' } })
-    fireEvent.click(card().querySelector('[data-group-icon-pick="gamepad-2"]') as HTMLElement)
+    fireEvent.change(modal().querySelector('[data-group-icon-search]') as HTMLInputElement, { target: { value: 'gamepad' } })
+    fireEvent.click(modal().querySelector('[data-group-icon-pick="gamepad-2"]') as HTMLElement)
     expect(useHomesStore.getState().homes[1].icon).toBe('gamepad-2')
-    // The bar and the header both draw it now.
-    expect(groupButton('Play').querySelector('svg')?.getAttribute('class')).toContain('lucide-gamepad-2')
-    expect(header.querySelector('svg')?.getAttribute('class')).toContain('lucide-gamepad-2')
-    // A click on the other group switches.
-    fireEvent.click(groupButton('Work'))
-    expect(selectedHome(useHomesStore.getState()).name).toBe('Work')
+    expect(groupButton('Group 2').querySelector('svg')?.getAttribute('class')).toContain('lucide-gamepad-2')
+    // A click on a group in the row still switches.
+    fireEvent.click(groupButton('Group 3'))
+    expect(selectedHome(useHomesStore.getState()).name).toBe('Group 3')
   })
 })

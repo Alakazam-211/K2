@@ -87,7 +87,7 @@ is K2's own (`ZenIcon`), not Lucide.
 
 ## Third-party: lucide-react, Home group icons (ISC)
 
-The Home group bar and the group edit card draw each group's icon from a
+The Home group icons and the All groups modal draw each group's icon from a
 curated list of about 240 neutral Lucide icons (no brand or company logos),
 imported by name from the `lucide-react` npm package and drawn squared
 (square caps, mitred joins, stroke 1.75) like the icons above.

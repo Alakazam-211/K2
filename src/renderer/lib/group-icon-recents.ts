@@ -1,4 +1,4 @@
-// The group edit card's "Recent" icon row: the last icons this person picked
+// The All groups modal's "Recent" icon row: the last icons this person picked
 // on this computer. A per-viewer convenience in localStorage, never synced;
 // storage can throw or come back empty, and then the row is just empty.
 

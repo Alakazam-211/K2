@@ -1,11 +1,11 @@
 // Home on the Agents shell — the sidebar (prd-home-v1 H2/H3/H5/H6).
 //
 // Same chrome as the Agents `Sidebar`: resize handle, the header control
-// row (here the current group's name and its "…" edit card, in the
+// row (here the current group's name and its "…" for All groups, in the
 // focus-group dropdown's spot; no "⌘ 1-9" hint; the rows keep their 1–9
 // numbers and ⌘1–9 still opens them; ⌘K stays on the keyboard, the menus
-// and the rails), the row list, and the bottom bar: the group bar (one
-// icon per group, `groups/HomeGroupBar`), then ONE button in the Add
+// and the rails), the row list, the group icons right under it (one
+// per group, no divider, `groups/HomeGroupBar`), and the bottom bar: ONE button in the Add
 // Workspace spot — Add Agent — beside the collapse button. Add Agent opens
 // one picker with This server and From a server.
 //
@@ -469,7 +469,7 @@ export default function HomeSidebar(): React.JSX.Element {
       <ResizeHandle />
 
       {/* Header — the focus-group row's spot: the current group's name and
-          count, and "…" for its edit card. Switching is the group bar at the
+          count, and "…" for the All groups modal. Switching is the group icons at the
           bottom, the sideways swipe and ⌥⌘1–9 (no ⌘ 1-9 hint here). */}
       <div className="px-3 pt-3 pb-2 no-drag" data-home-header="">
         <GroupNameHeader
@@ -529,6 +529,12 @@ export default function HomeSidebar(): React.JSX.Element {
         )}
       </ScrollEdgeFrame>
 
+      {/* The group icons, right under the list with no divider: the list's
+          own bottom edge fade (ScrollEdgeFrame) runs out behind them. */}
+      <div className="flex justify-center px-3 pb-1 no-drag" data-home-group-row="">
+        <HomeGroupBar {...groups.bar} />
+      </div>
+
       {/* Setup checklist (renders nothing while off, hidden or finished) */}
       <SetupChecklist />
 
@@ -536,7 +542,6 @@ export default function HomeSidebar(): React.JSX.Element {
           the window's top-bar toggle, prd-zen-gardens-v1 G5/G6.) */}
       <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2" data-nav-footer="">
         {pickerOpen && <AddAgentPicker home={home} />}
-        <HomeGroupBar {...groups.bar} />
         <div className={NAV_FOOTER_ROW_CLASS}>
           <NavFooterButton
             label="Add Agent"

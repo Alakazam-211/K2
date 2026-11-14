@@ -3,7 +3,7 @@
 // names, icons, pins, "Most recent at the top" and last sends across
 // devices through the daemon) and the swipe state, and turns the bar's
 // gestures into store calls. The components it feeds are presentational
-// (`HomeGroupBar`, `GroupNameHeader`, `GroupEditCard`, `GroupSettingsList`).
+// (`HomeGroupBar`, `GroupNameHeader`, `GroupEditModal`, `GroupList`, `GroupDetailPane`).
 //
 // K2 Design's contract (home-groups notes): groups {id, name, icon, order,
 // pinned, recentFirst}, currentId, swipe {progress, direction} | null, and
@@ -24,8 +24,8 @@ import type { GroupBarItem, GroupEditing, HomeGroupBarProps } from './HomeGroupB
 export interface HomeGroups {
   bar: HomeGroupBarProps
   current: { id: string; name: string; icon: string | null; index: number; count: number }
-  /** Open the current group's card against `anchor` (the header's "…"). */
-  editCurrent(anchor: HTMLElement): void
+  /** Open the All groups modal on the current group (the header's "…"). */
+  editCurrent(): void
   /** The current group's agents (row address) → the person's last send to
    *  them (epoch ms), for "Most recent at the top". */
   lastMessagedAt: Readonly<Record<string, number>>
@@ -113,7 +113,7 @@ export function useHomeGroups(): HomeGroups {
   return {
     bar,
     current: { id: current.id, name: current.name, icon: current.icon ?? null, index, count: current.rows.length },
-    editCurrent: (anchor) => setEditing({ id: current.id, anchor }),
+    editCurrent: () => setEditing({ id: current.id }),
     lastMessagedAt,
     recentIcons: readRecentGroupIcons,
   }

@@ -1,5 +1,5 @@
 // Home group icons: the curated Lucide set a person picks a group's icon
-// from (the group edit card's grid). Lucide only, imported by name (the
+// from (the All groups modal's grid). Lucide only, imported by name (the
 // `…Icon` exports, which never shadow a global such as `Map`) from
 // `lucide-react` (pinned 1.73.0; ISC, see NOTICE.md and
 // `src/renderer/assets/lucide/LICENSE`). Never the whole set and never a

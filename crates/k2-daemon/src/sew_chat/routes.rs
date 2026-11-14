@@ -1111,6 +1111,12 @@ fn write_route(c: &Caller, action: Action, body: &[u8]) -> R<Value> {
         _ => to.clone(),
     };
 
+    // 1b. Sew chat is for people: an agent with no K5 grant never sends into
+    // the K5 Space, and nothing reaches Sew first.
+    if action == Action::Send {
+        super::home_gate::refuse_k5_send(c, &to)?;
+    }
+
     // 2. Sew on; the caller has chat somewhere.
     let sew = backend()?;
     need_any_access(c)?;

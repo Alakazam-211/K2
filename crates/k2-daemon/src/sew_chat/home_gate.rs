@@ -114,6 +114,18 @@ pub fn check_dm_target(sew: &dyn SewChat, a: &ActAs, username: &str) -> R<()> {
     }
 }
 
+/// `k2 chat send <k5-admin/…>`: refused before ANY Sew call (Sew's posting
+/// joins a public channel for act-as too, so nothing may reach it) when the
+/// agent holds no K5 grant at all. The resolved channel is checked again
+/// by [`check`].
+pub fn refuse_k5_send(c: &Caller, to: &str) -> R<()> {
+    let space = to.trim().split('/').next().unwrap_or("");
+    if space.eq_ignore_ascii_case(sew_wire::ADMIN_SPACE_SLUG) && !home_chat::agent_may_post_in_k5(&c.project_id) {
+        return Err(k5_refusal());
+    }
+    Ok(())
+}
+
 /// `follow` and `wait --in` on a K5 channel: agents get no notifications
 /// from channels (D17), granted or not.
 pub fn refuse_notifications(ch: &Channel) -> R<()> {

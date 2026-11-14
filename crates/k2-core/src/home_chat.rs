@@ -153,6 +153,15 @@ pub fn agent_may_read_dm(workspace_uuid: &str, person_ext: &str) -> bool {
     false
 }
 
+/// May the agent `workspace_uuid` post anywhere in the K5 Space at all (it
+/// holds any channel grant)? Lets `k2 chat send` refuse a K5 address before
+/// anything reaches Sew. S8 turns this into "holds any [`CHANNEL_GRANT_KIND`]
+/// grant"; until then: never.
+pub fn agent_may_post_in_k5(workspace_uuid: &str) -> bool {
+    let _ = workspace_uuid;
+    false
+}
+
 /// May the agent `workspace_uuid` read or post in the K5 channel
 /// `channel_id`? S8 turns this into a [`CHANNEL_GRANT_KIND`] grant check.
 /// Until then: never (deny by default).
@@ -247,5 +256,6 @@ mod tests {
             assert!(!is_box_person(ext), "{ext}");
         }
         assert!(!agent_may_use_k5_channel("0f8fad5b-d9cb-469f-a165-70867728950e", "9001"));
+        assert!(!agent_may_post_in_k5("0f8fad5b-d9cb-469f-a165-70867728950e"));
     }
 }

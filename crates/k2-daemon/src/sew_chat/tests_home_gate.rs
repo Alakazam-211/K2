@@ -70,6 +70,11 @@ fn a_dm_with_a_box_person_from_before_is_off_limits() {
 fn k5_channels_are_not_granted() {
     let e = env();
     k5(&e);
+    // A send is refused before anything reaches Sew (posting would join).
+    let before = e.fake.calls().len();
+    let (s, v) = send(&agent(WA), "k5-admin/team", "hello people");
+    assert_eq!((s, code(&v)), (404, "not_granted"), "{v}");
+    assert_eq!(e.fake.calls().len(), before, "no Sew call at all: {:?}", &e.fake.calls()[before..]);
     let (s, v) = get("/cli/sew/chat/channels", &agent(WA), &[("space", "k5-admin")]);
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["channels"], json!([]), "{v}");

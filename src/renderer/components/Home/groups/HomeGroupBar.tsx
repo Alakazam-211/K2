@@ -11,11 +11,14 @@
 // Presentational, for K2 Design to restyle: it takes the groups and
 // callbacks and holds only its own UI state (which card is open). The logic
 // is `useHomeGroups`. The swipe between groups (`useGroupSwipe`) reaches it
-// as `swipe`: the root carries `--group-swipe-progress` (0–1) and
-// `data-swipe-direction` (-1, 0, 1) for a visual that follows the finger.
+// as `swipe` ({progress 0–1, direction next|prev}, null at rest) and
+// `swipeRelease` (commit or cancel, once per swipe): the root carries
+// `--group-swipe-progress`, `data-swipe-direction` (next, prev or none) and
+// `data-swipe-armed` past SWIPE_COMMIT_AT (letting go would switch), for a
+// visual that follows the finger.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { SwipeProgress } from '@/lib/group-swipe'
+import { SWIPE_COMMIT_AT, type SwipeProgress, type SwipeRelease } from '@/lib/group-swipe'
 import { GroupGlyph } from './GroupGlyph'
 import GroupEditCard from './GroupEditCard'
 
@@ -57,11 +60,16 @@ export interface HomeGroupBarProps {
   onUnpin?(groupId: string, rowId: string): void
   onReorderPins?(groupId: string, rowIds: string[]): void
   swipe: SwipeProgress
+  /** How the last swipe ended (`seq` grows per release), for the slide or
+   *  crossfade. */
+  swipeRelease?: (SwipeRelease & { seq: number }) | null
   /** `vertical` in the collapsed rail. */
   orientation?: 'horizontal' | 'vertical'
   /** Controlled card state (the nav header's "…" opens it too). */
   editing?: GroupEditing | null
   onEditingChange?(next: GroupEditing | null): void
+  /** What an empty name saves as (the card's placeholder). */
+  emptyNameFallback?(id: string): string
   /** The switch chord painted in a group's tooltip (`⌥⌘1`), or null. */
   shortcutLabel?(index: number): string | null
 }
@@ -88,6 +96,7 @@ export default function HomeGroupBar({
   editing: editingProp,
   onEditingChange,
   shortcutLabel,
+  emptyNameFallback,
 }: HomeGroupBarProps): React.JSX.Element {
   const [editingOwn, setEditingOwn] = useState<GroupEditing | null>(null)
   const controlled = editingProp !== undefined
@@ -99,6 +108,7 @@ export default function HomeGroupBar({
   const rootRef = useRef<HTMLDivElement>(null)
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const vertical = orientation === 'vertical'
+  const swipeSign = swipe ? (swipe.direction === 'next' ? 1 : -1) : 0
 
   const buttonFor = (id: string): HTMLElement | null =>
     Array.from(rootRef.current?.querySelectorAll<HTMLElement>('[data-group-id]') ?? []).find(
@@ -148,8 +158,9 @@ export default function HomeGroupBar({
       aria-label="Groups"
       aria-orientation={orientation}
       data-home-group-bar={orientation}
-      data-swipe-direction={swipe.direction}
-      style={{ '--group-swipe-progress': swipe.progress } as React.CSSProperties}
+      data-swipe-direction={swipe?.direction ?? 'none'}
+      data-swipe-armed={swipe && swipe.progress >= SWIPE_COMMIT_AT ? '' : undefined}
+      style={{ '--group-swipe-progress': swipe?.progress ?? 0 } as React.CSSProperties}
       className={`flex items-center gap-0.5 ${vertical ? 'flex-col' : 'flex-row'}`}
     >
       <div
@@ -220,13 +231,13 @@ export default function HomeGroupBar({
                 <span
                   aria-hidden="true"
                   data-group-current-mark=""
-                  className={`pointer-events-none absolute bg-[var(--color-accent)] ${
+                  className={`pointer-events-none absolute bg-[var(--color-accent)] motion-reduce:!transform-none ${
                     vertical ? 'left-0 top-1.5 bottom-1.5 w-[2px]' : 'bottom-0 left-1.5 right-1.5 h-[2px]'
                   }`}
                   style={{
                     transform: vertical
-                      ? `translateY(calc(var(--group-swipe-progress) * ${swipe.direction} * 50%))`
-                      : `translateX(calc(var(--group-swipe-progress) * ${swipe.direction} * 50%))`,
+                      ? `translateY(calc(var(--group-swipe-progress) * ${swipeSign} * 50%))`
+                      : `translateX(calc(var(--group-swipe-progress) * ${swipeSign} * 50%))`,
                   }}
                 />
               )}
@@ -274,6 +285,7 @@ export default function HomeGroupBar({
           onSetRecentFirst={onSetRecentFirst}
           onReorderGroups={onReorderGroups}
           onEditGroup={(id) => setEditing({ id, anchor: editingAnchor })}
+          emptyNameFallback={emptyNameFallback}
         />
       )}
     </div>

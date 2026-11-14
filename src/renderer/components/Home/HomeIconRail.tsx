@@ -21,6 +21,7 @@ import { useHomeAddPickerStore, useRowStatus } from './home-room'
 import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupChecklist'
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
 import HomeGroupBar from './groups/HomeGroupBar'
+import GroupNameFlash from './groups/GroupNameFlash'
 import { displayRows } from '@/lib/home-row-order'
 import { useHomeGroups } from './groups/useHomeGroups'
 
@@ -89,6 +90,7 @@ export default function HomeIconRail(): React.JSX.Element {
       className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
       style={{ width: RAIL_WIDTH }}
       data-home-rail=""
+      data-group-swipe-zone=""
     >
       <button
         data-material="frost"
@@ -111,9 +113,11 @@ export default function HomeIconRail(): React.JSX.Element {
       </div>
 
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
-        {/* The group bar, upright: one icon per group, then "+". */}
-        <div className="mb-1 w-full border-t border-[var(--color-border)] pt-1 flex justify-center">
+        {/* The group bar, upright: one icon per group, then "+". The name
+            flashes beside it after a switch (no room for it here). */}
+        <div className="relative mb-1 w-full border-t border-[var(--color-border)] pt-1 flex justify-center">
           <HomeGroupBar {...groups.bar} orientation="vertical" />
+          <GroupNameFlash id={groups.current.id} name={groups.current.name} />
         </div>
         <SetupChecklistRailButton />
         <button

@@ -16,7 +16,6 @@ vi.mock('@tauri-apps/api/event', () => ({
 import HomeGroupBar, { type GroupBarItem, type HomeGroupBarProps } from './HomeGroupBar'
 import GroupNameHeader from './GroupNameHeader'
 import { useHomeGroups } from './useHomeGroups'
-import { SWIPE_REST } from '@/lib/group-swipe'
 import { GROUP_ICON_RECENTS_KEY } from '@/lib/group-icon-recents'
 import { selectedHome, useHomesStore } from '@/stores/homes'
 
@@ -37,7 +36,7 @@ function props(over: Partial<HomeGroupBarProps> = {}): HomeGroupBarProps {
     onDelete: vi.fn(),
     onSetRecentFirst: vi.fn(),
     onReorderGroups: vi.fn(),
-    swipe: SWIPE_REST,
+    swipe: null,
     ...over,
   }
 }
@@ -107,11 +106,15 @@ describe('the group bar', () => {
     expect(document.activeElement).toBe(groupButton('Work'))
   })
 
-  it('carries swipe progress for the visual to follow', () => {
-    render(<HomeGroupBar {...props({ swipe: { progress: 0.4, direction: -1 } })} />)
+  it('carries swipe progress for the visual to follow, armed past 35%', () => {
+    const { rerender } = render(<HomeGroupBar {...props({ swipe: { progress: 0.2, direction: 'prev' } })} />)
     const bar = screen.getByRole('toolbar', { name: 'Groups' })
-    expect(bar.style.getPropertyValue('--group-swipe-progress')).toBe('0.4')
-    expect(bar.getAttribute('data-swipe-direction')).toBe('-1')
+    expect(bar.style.getPropertyValue('--group-swipe-progress')).toBe('0.2')
+    expect([bar.getAttribute('data-swipe-direction'), bar.getAttribute('data-swipe-armed')]).toEqual(['prev', null])
+    rerender(<HomeGroupBar {...props({ swipe: { progress: 0.4, direction: 'next' } })} />)
+    expect([bar.getAttribute('data-swipe-direction'), bar.getAttribute('data-swipe-armed')]).toEqual(['next', ''])
+    rerender(<HomeGroupBar {...props({ swipe: null })} />)
+    expect([bar.getAttribute('data-swipe-direction'), bar.style.getPropertyValue('--group-swipe-progress')]).toEqual(['none', '0'])
   })
 
   it('with many groups the bar scrolls and brings the current group into view', () => {
@@ -175,15 +178,16 @@ describe('the group edit card', () => {
     }
   })
 
-  it('saves the name as you type (never an empty one) and the icon on a pick', () => {
-    const p = props()
+  it('saves the name as you type (an empty one too: the placeholder says what it saves as) and the icon on a pick', () => {
+    const p = props({ emptyNameFallback: () => 'Group 4' })
     render(<HomeGroupBar {...p} />)
     fireEvent.contextMenu(groupButton('Work'))
     const name = card().querySelector('[data-group-name-input]') as HTMLInputElement
+    expect(name.placeholder).toBe('Group 4')
     fireEvent.change(name, { target: { value: 'Work 2' } })
     expect(p.onRename).toHaveBeenLastCalledWith('g1', 'Work 2')
     fireEvent.change(name, { target: { value: '   ' } })
-    expect(p.onRename).toHaveBeenCalledTimes(1)
+    expect(p.onRename).toHaveBeenLastCalledWith('g1', '   ')
 
     const search = card().querySelector('[data-group-icon-search]') as HTMLInputElement
     fireEvent.change(search, { target: { value: 'rock' } })
@@ -254,6 +258,16 @@ describe('the group bar on the Homes store', () => {
     // Typing renames it live.
     fireEvent.change(input, { target: { value: 'Sales' } })
     expect(selectedHome(useHomesStore.getState()).name).toBe('Sales')
+  })
+
+  it('an emptied name saves as the next unused "Group N"', () => {
+    setHomeNames(['Group 1', 'Work', 'Group 3'])
+    render(<Wired />)
+    fireEvent.contextMenu(groupButton('Work'))
+    const input = card().querySelector('[data-group-name-input]') as HTMLInputElement
+    expect(input.placeholder).toBe('Group 2')
+    fireEvent.change(input, { target: { value: '' } })
+    expect(useHomesStore.getState().homes.map((h) => h.name)).toEqual(['Group 1', 'Group 2', 'Group 3'])
   })
 
   it('the header shows the current group and its "…" opens the same card; an icon pick lands in the store', () => {

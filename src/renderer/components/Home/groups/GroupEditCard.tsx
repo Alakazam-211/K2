@@ -2,8 +2,9 @@
 // press on touch, or the "…" beside the current group's name). It holds the
 // group's name (saved as you type), its icon (search, a Recent row, the
 // grid, or no icon for the numbered dot) and Delete (confirm once; never
-// the last group), and "Group settings…" (every group: name, icon, "Most
-// recent at the top", order; `GroupSettingsList`). Escape or a click
+// the last group), its "Most recent at the top" switch, and "All groups…"
+// (every group: name, icon, "Most recent at the top", order, Delete;
+// `GroupSettingsList`). Escape or a click
 // outside closes it.
 //
 // Presentational: everything it changes goes out through its callbacks, so
@@ -43,6 +44,8 @@ export interface GroupEditCardProps {
   onReorderGroups(ids: string[]): void
   /** Show another group's card (from the settings list). */
   onEditGroup(id: string): void
+  /** What an empty name saves as (the placeholder): the next "Group N". */
+  emptyNameFallback?(id: string): string
 }
 
 const CELL =
@@ -88,6 +91,7 @@ export default function GroupEditCard({
   onSetRecentFirst,
   onReorderGroups,
   onEditGroup,
+  emptyNameFallback,
 }: GroupEditCardProps): React.JSX.Element | null {
   const [view, setView] = useState<'group' | 'settings'>('group')
   const menu = useAnchoredMenu<HTMLElement>({
@@ -148,6 +152,7 @@ export default function GroupEditCard({
           onRename={onRename}
           onSetRecentFirst={onSetRecentFirst}
           onReorderGroups={onReorderGroups}
+          onDelete={onDelete}
           onEditGroup={(id) => (id === group.id ? setView('group') : onEditGroup(id))}
           onBack={() => setView('group')}
         />
@@ -162,10 +167,11 @@ export default function GroupEditCard({
           maxLength={HOME_NAME_MAX}
           data-group-name-input=""
           className="w-full border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 py-1 text-xs text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
+          placeholder={emptyNameFallback?.(group.id)}
           onChange={(e) => {
             setName(e.target.value)
-            // Saved as you type; an empty name is never saved.
-            if (e.target.value.trim()) onRename(group.id, e.target.value)
+            // Saved as you type; an empty one saves as the placeholder's "Group N".
+            onRename(group.id, e.target.value)
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') onClose()
@@ -216,13 +222,26 @@ export default function GroupEditCard({
         )}
       </div>
 
+      <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+        Most recent at the top
+        <input
+          type="checkbox"
+          role="switch"
+          aria-checked={group.recentFirst}
+          checked={group.recentFirst}
+          data-group-card-recent-first=""
+          className="cursor-pointer accent-[var(--color-accent)]"
+          onChange={(e) => onSetRecentFirst(group.id, e.target.checked)}
+        />
+      </label>
+
       <button
         type="button"
         data-group-settings-open=""
         className="w-full px-2 py-1 text-left text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] cursor-pointer"
         onClick={() => setView('settings')}
       >
-        Group settings…
+        All groups…
       </button>
 
       <div className="border-t border-[var(--color-border)] pt-2">

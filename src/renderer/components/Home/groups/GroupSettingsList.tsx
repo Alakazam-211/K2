@@ -1,8 +1,9 @@
-// Home groups: the edit card's "Group settings" view. Every group, with its
+// Home groups: the edit card's "All groups…" view. Every group, with its
 // icon, its name (saved as you type), its "Most recent at the top" switch,
-// and its place in the list: drag a row, or ⌥↑ / ⌥↓ on a focused row, to
-// move it (the bar, the swipe and ⌥⌘1–9 follow the new order). Clicking a
-// group's icon opens that group's own card view (name, icon, Delete).
+// Delete (confirm in the row; off on the last group), and its place in the
+// list: drag a row, or ⌥↑ / ⌥↓ on a focused row, to move it (the bar, the
+// swipe and ⌥⌘1–9 follow the new order). Clicking a group's icon opens that
+// group's own card view (name, icon grid).
 //
 // Presentational: every change goes out through a callback
 // (`useHomeGroups` wires them), so K2 Design can restyle it.
@@ -18,6 +19,8 @@ export interface GroupSettingsListProps {
   onRename(id: string, name: string): void
   onSetRecentFirst(id: string, on: boolean): void
   onReorderGroups(ids: string[]): void
+  /** Refused for the last group (its Delete is off). */
+  onDelete(id: string): void
   /** Open one group's own view (its icon grid and Delete). */
   onEditGroup(id: string): void
   onBack(): void
@@ -42,7 +45,8 @@ function NameField({ group, onRename }: { group: GroupBarItem; onRename(id: stri
       className="min-w-0 flex-1 border border-transparent bg-transparent px-1 py-0.5 text-xs text-[var(--color-text-primary)] hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none"
       onChange={(e) => {
         setName(e.target.value)
-        if (e.target.value.trim()) onRename(group.id, e.target.value)
+        // Saved as you type; an empty one saves as the next "Group N".
+        onRename(group.id, e.target.value)
       }}
       onKeyDown={(e) => e.stopPropagation()}
     />
@@ -55,11 +59,13 @@ export default function GroupSettingsList({
   onRename,
   onSetRecentFirst,
   onReorderGroups,
+  onDelete,
   onEditGroup,
   onBack,
 }: GroupSettingsListProps): React.JSX.Element {
   const ids = groups.map((g) => g.id)
   const [dragId, setDragId] = useState<string | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
 
   return (
     <div className="flex flex-col gap-2" data-group-settings="">
@@ -75,7 +81,7 @@ export default function GroupSettingsList({
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
-        <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Group settings</span>
+        <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">All groups</span>
       </div>
       <ul className="flex max-h-72 flex-col gap-0.5 overflow-y-auto" aria-label="Groups" data-group-settings-list="">
         {groups.map((g, i) => (
@@ -136,6 +142,34 @@ export default function GroupSettingsList({
               />
               Recent
             </label>
+            {confirmId === g.id ? (
+              <button
+                type="button"
+                data-group-settings-delete-yes={g.id}
+                className="flex-shrink-0 px-1 text-[10px] text-[var(--color-status-error-text)] hover:underline cursor-pointer"
+                onClick={() => {
+                  setConfirmId(null)
+                  onDelete(g.id)
+                }}
+                onBlur={() => setConfirmId(null)}
+              >
+                Delete?
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-label={`Delete ${g.name}`}
+                title={groups.length > 1 ? `Delete “${g.name}”` : 'The last group can’t be deleted'}
+                disabled={groups.length <= 1}
+                data-group-settings-delete={g.id}
+                className="flex h-5 w-5 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-text)] disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                onClick={() => setConfirmId(g.id)}
+              >
+                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true">
+                  <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+                </svg>
+              </button>
+            )}
           </li>
         ))}
       </ul>

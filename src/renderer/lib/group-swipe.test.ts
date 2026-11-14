@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 //
-// Home groups: the two-finger sideways swipe. The tracker (threshold, one
-// step per gesture, quiet gap, up/down scrolls ignored), the next/previous
-// pick, where a swipe may start, and the window hook on the Homes store.
+// Home groups: the two-finger sideways swipe. The tracker (progress over
+// the distance, commit past 35% on release or at once at 100%, cancel
+// short of it, one step per gesture, up/down scrolls ignored), the
+// next/previous pick, where a swipe may start, and the window hook on the
+// Homes store.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
@@ -15,64 +17,73 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import {
   GroupSwipeTracker,
+  SWIPE_COMMIT_AT,
+  SWIPE_DISTANCE_PX,
   SWIPE_QUIET_MS,
-  SWIPE_THRESHOLD_PX,
   steppedGroupId,
   swipeAllowedFrom,
 } from './group-swipe'
 import { useGroupSwipe, useGroupSwipeStore } from '@/hooks/useGroupSwipe'
 import { selectedHome, useHomesStore } from '@/stores/homes'
 
+const D = SWIPE_DISTANCE_PX
+
 describe('GroupSwipeTracker', () => {
-  it('reports progress toward the threshold, then steps once (next for a leftward swipe)', () => {
+  it('reports progress and direction while the fingers move (leftward = next)', () => {
     const t = new GroupSwipeTracker()
-    let a = t.feed({ deltaX: SWIPE_THRESHOLD_PX / 4, deltaY: 0, time: 0 })
-    expect(a).toEqual({ swipe: { progress: 0.25, direction: 1 }, step: 0 })
-    a = t.feed({ deltaX: SWIPE_THRESHOLD_PX / 4, deltaY: 0, time: 16 })
-    expect(a.swipe.progress).toBe(0.5)
-    a = t.feed({ deltaX: SWIPE_THRESHOLD_PX / 2, deltaY: 0, time: 32 })
-    expect(a).toEqual({ swipe: { progress: 0, direction: 0 }, step: 1 })
+    expect(t.feed({ deltaX: D / 4, deltaY: 0, time: 0 })).toEqual({ swipe: { progress: 0.25, direction: 'next' }, release: null })
+    expect(t.feed({ deltaX: -D / 2, deltaY: 0, time: 16 })).toEqual({ swipe: { progress: 0.25, direction: 'prev' }, release: null })
   })
 
-  it('one gesture moves one group: the momentum tail after a step never steps again', () => {
-    const t = new GroupSwipeTracker()
-    const steps: number[] = []
-    // 60 frames of a strong swipe and its tail, 16 ms apart (no quiet gap).
-    for (let i = 0; i < 60; i++) steps.push(t.feed({ deltaX: 40, deltaY: 0, time: i * 16 }).step)
-    expect(steps.filter((s) => s !== 0)).toEqual([1])
-    // After a quiet gap, a new gesture steps again (the other way).
-    const later = 60 * 16 + SWIPE_QUIET_MS + 1
-    const back = [0, 1, 2, 3].map((i) => t.feed({ deltaX: -50, deltaY: 0, time: later + i * 16 }).step)
-    expect(back.filter((s) => s !== 0)).toEqual([-1])
+  it('on release (the stream goes quiet) it commits past 35% and cancels short of it', () => {
+    expect(SWIPE_COMMIT_AT).toBe(0.35)
+    const past = new GroupSwipeTracker()
+    past.feed({ deltaX: D * 0.4, deltaY: 0, time: 0 })
+    expect(past.settle(SWIPE_QUIET_MS - 1)).toEqual({ swipe: { progress: 0.4, direction: 'next' }, release: null })
+    expect(past.settle(SWIPE_QUIET_MS + 1)).toEqual({ swipe: null, release: { outcome: 'commit', direction: 'next' } })
+    const short = new GroupSwipeTracker()
+    short.feed({ deltaX: -D * 0.3, deltaY: 0, time: 0 })
+    expect(short.settle(SWIPE_QUIET_MS + 1)).toEqual({ swipe: null, release: { outcome: 'cancel', direction: 'prev' } })
+    // Nothing moving: no release.
+    expect(short.settle(SWIPE_QUIET_MS * 3)).toEqual({ swipe: null, release: null })
   })
 
-  it('below the threshold nothing steps, and a quiet gap starts over', () => {
+  it('a full swipe commits at once; its momentum tail never steps again', () => {
     const t = new GroupSwipeTracker()
-    expect(t.feed({ deltaX: SWIPE_THRESHOLD_PX - 1, deltaY: 0, time: 0 }).step).toBe(0)
-    expect(t.settle(SWIPE_QUIET_MS + 1)).toEqual({ progress: 0, direction: 0 })
-    // The old travel is gone: one more pixel is not a step.
-    expect(t.feed({ deltaX: 1, deltaY: 0, time: SWIPE_QUIET_MS + 2 }).step).toBe(0)
+    const releases = []
+    for (let i = 0; i < 60; i++) {
+      const a = t.feed({ deltaX: 40, deltaY: 0, time: i * 16 })
+      if (a.release) releases.push(a.release)
+    }
+    const end = t.settle(60 * 16 + SWIPE_QUIET_MS + 1)
+    if (end.release) releases.push(end.release)
+    expect(releases).toEqual([{ outcome: 'commit', direction: 'next' }])
   })
 
-  it('an up/down scroll is not a swipe, even with a little sideways drift', () => {
+  it('a new gesture after a quiet gap releases the old one first', () => {
     const t = new GroupSwipeTracker()
-    for (let i = 0; i < 40; i++) expect(t.feed({ deltaX: 20, deltaY: 60, time: i * 16 }).step).toBe(0)
+    t.feed({ deltaX: D * 0.5, deltaY: 0, time: 0 })
+    const a = t.feed({ deltaX: -10, deltaY: 0, time: SWIPE_QUIET_MS + 50 })
+    expect(a.release).toEqual({ outcome: 'commit', direction: 'next' })
+    expect(a.swipe).toEqual({ progress: 10 / D, direction: 'prev' })
   })
 
-  it('line-mode deltas count in pixels', () => {
+  it('an up/down scroll is not a swipe, even with a little sideways drift; line deltas count in pixels', () => {
     const t = new GroupSwipeTracker()
-    expect(t.feed({ deltaX: Math.ceil(SWIPE_THRESHOLD_PX / 16), deltaY: 0, deltaMode: 1, time: 0 }).step).toBe(1)
+    for (let i = 0; i < 40; i++) expect(t.feed({ deltaX: 20, deltaY: 60, time: i * 16 })).toEqual({ swipe: null, release: null })
+    const lines = new GroupSwipeTracker()
+    expect(lines.feed({ deltaX: Math.ceil(D / 16), deltaY: 0, deltaMode: 1, time: 0 }).release).toEqual({ outcome: 'commit', direction: 'next' })
   })
 })
 
 describe('steppedGroupId', () => {
   it('moves one along and stops at either end (no wrap)', () => {
     const ids = ['a', 'b', 'c']
-    expect(steppedGroupId(ids, 'a', 1)).toBe('b')
-    expect(steppedGroupId(ids, 'b', -1)).toBe('a')
-    expect(steppedGroupId(ids, 'c', 1)).toBeNull()
-    expect(steppedGroupId(ids, 'a', -1)).toBeNull()
-    expect(steppedGroupId(ids, 'gone', 1)).toBeNull()
+    expect(steppedGroupId(ids, 'a', 'next')).toBe('b')
+    expect(steppedGroupId(ids, 'b', 'prev')).toBe('a')
+    expect(steppedGroupId(ids, 'c', 'next')).toBeNull()
+    expect(steppedGroupId(ids, 'a', 'prev')).toBeNull()
+    expect(steppedGroupId(ids, 'gone', 'next')).toBeNull()
   })
 })
 
@@ -100,77 +111,89 @@ describe('where a swipe may start', () => {
 
 describe('useGroupSwipe on the Homes store', () => {
   let now = 0
-  let reduce = false
+  let nav: HTMLElement
   beforeEach(() => {
+    vi.useFakeTimers()
     localStorage.clear()
     sessionStorage.clear()
     now = 1000
-    reduce = false
     vi.spyOn(performance, 'now').mockImplementation(() => now)
-    window.matchMedia = ((q: string) => ({ matches: reduce && q.includes('reduce') })) as unknown as typeof window.matchMedia
+    useGroupSwipeStore.setState({ swipe: null, release: null })
     const st = useHomesStore.getState()
     const before = st.homes.map((h) => h.id)
     for (const n of ['One', 'Two', 'Three']) if (st.createHome(n) === null) throw new Error(`createHome refused ${n}`)
     for (const id of before) if (!useHomesStore.getState().deleteHome(id)) throw new Error('deleteHome refused')
     act(() => useHomesStore.getState().selectHome(useHomesStore.getState().homes[0].id))
+    nav = document.createElement('nav')
+    nav.setAttribute('data-group-swipe-zone', '')
+    document.body.appendChild(nav)
   })
   afterEach(() => {
     cleanup()
+    nav.remove()
     vi.restoreAllMocks()
+    vi.useRealTimers()
   })
 
-  const wheel = (deltaX: number, target: EventTarget = document.body, extra: WheelEventInit = {}): void => {
+  const wheel = (deltaX: number, target: EventTarget = nav, extra: WheelEventInit = {}): void => {
     now += 16
     act(() => {
       target.dispatchEvent(new WheelEvent('wheel', { deltaX, deltaY: 0, bubbles: true, ...extra }))
     })
   }
+  const letGo = (): void => {
+    now += SWIPE_QUIET_MS + 30
+    act(() => {
+      vi.advanceTimersByTime(SWIPE_QUIET_MS + 30)
+    })
+  }
   const current = (): string => selectedHome(useHomesStore.getState()).name
 
-  it('a swipe moves one group and the visual follows the finger', () => {
+  it('the visual follows the finger; letting go past 35% switches once, short of it springs back', () => {
     renderHook(() => useGroupSwipe(true))
-    wheel(SWIPE_THRESHOLD_PX / 2)
-    expect(useGroupSwipeStore.getState().swipe).toEqual({ progress: 0.5, direction: 1 })
-    for (let i = 0; i < 20; i++) wheel(40)
-    expect(current()).toBe('Two')
-    now += SWIPE_QUIET_MS + 1
-    for (let i = 0; i < 5; i++) wheel(-40)
+    wheel(D * 0.2)
+    wheel(D * 0.2)
+    expect(useGroupSwipeStore.getState().swipe).toEqual({ progress: 0.4, direction: 'next' })
     expect(current()).toBe('One')
-  })
-
-  it('reduced motion: the step happens, the visual stays at rest', () => {
-    reduce = true
-    renderHook(() => useGroupSwipe(true))
-    wheel(SWIPE_THRESHOLD_PX / 2)
-    expect(useGroupSwipeStore.getState().swipe).toEqual({ progress: 0, direction: 0 })
-    wheel(SWIPE_THRESHOLD_PX)
+    letGo()
     expect(current()).toBe('Two')
+    expect(useGroupSwipeStore.getState()).toEqual({ swipe: null, release: { outcome: 'commit', direction: 'next', seq: 1 } })
+    wheel(-D * 0.2)
+    letGo()
+    expect(current()).toBe('Two')
+    expect(useGroupSwipeStore.getState().release).toEqual({ outcome: 'cancel', direction: 'prev', seq: 2 })
   })
 
-  it('ignored when off Home, on a pinch, when already handled, or inside a sideways scroller', () => {
+  it('no wrap: a commit past the last group is a cancel', () => {
+    renderHook(() => useGroupSwipe(true))
+    wheel(-D * 0.6)
+    letGo()
+    expect(current()).toBe('One')
+    expect(useGroupSwipeStore.getState().release).toEqual({ outcome: 'cancel', direction: 'prev', seq: 1 })
+  })
+
+  it('ignored outside the nav, when off Home, on a pinch, when already handled, or inside a sideways scroller', () => {
     const { rerender } = renderHook(({ on }) => useGroupSwipe(on), { initialProps: { on: false } })
-    wheel(SWIPE_THRESHOLD_PX * 2)
+    wheel(D * 2)
+    letGo()
     expect(current()).toBe('One')
     rerender({ on: true })
-    wheel(SWIPE_THRESHOLD_PX * 2, document.body, { ctrlKey: true })
-    expect(current()).toBe('One')
+    wheel(D * 2, document.body)
+    wheel(D * 2, nav, { ctrlKey: true })
     const strip = document.createElement('div')
     sideways(strip, true)
-    document.body.appendChild(strip)
-    wheel(SWIPE_THRESHOLD_PX * 2, strip)
+    nav.appendChild(strip)
+    wheel(D * 2, strip)
+    // Something under the pointer (a list) handled the wheel itself.
+    const own = document.createElement('div')
+    own.addEventListener('wheel', (e) => e.preventDefault(), { passive: false })
+    nav.appendChild(own)
+    wheel(D * 2, own, { cancelable: true })
+    letGo()
     expect(current()).toBe('One')
-    // Something under the pointer (a terminal) handled the wheel itself.
-    // (Not on <body>: wheel listeners there are passive by default.)
-    const term = document.createElement('div')
-    term.addEventListener('wheel', (e) => e.preventDefault(), { passive: false })
-    document.body.appendChild(term)
-    wheel(SWIPE_THRESHOLD_PX * 2, term, { cancelable: true })
-    expect(current()).toBe('One')
-    // The same swipe on plain page does move.
-    now += SWIPE_QUIET_MS + 1
-    wheel(SWIPE_THRESHOLD_PX * 2)
+    expect(useGroupSwipeStore.getState().release).toBeNull()
+    // The same swipe on the nav itself does move.
+    wheel(D * 2)
     expect(current()).toBe('Two')
-    strip.remove()
-    term.remove()
   })
 })

@@ -61,6 +61,18 @@ describe('the curated group icons', () => {
     }
   })
 
+  it('holds every picker icon K2 Design’s mock uses (its names were taken from lucide-react 1.48)', () => {
+    const mock = `house briefcase palette shopping-cart code terminal book-open music camera film gamepad-2 heart star
+      sun moon cloud leaf tree-pine mountain flower-2 coffee utensils plane car bike rocket globe map compass flag bell
+      calendar clock inbox mail message-square phone users user baby dog cat wrench hammer lightbulb flask-conical
+      graduation-cap dumbbell wallet piggy-bank chart-line folder archive package gift shield lock key zap flame
+      droplet anchor sparkles bookmark pencil pen-line brush layers server cpu laptop smartphone headphones mic video
+      store building tent umbrella trophy target puzzle bot`.split(/\s+/)
+    expect(mock.length).toBe(83)
+    const names = new Set(GROUP_ICONS.map((d) => d.name))
+    expect(mock.filter((n) => !names.has(n))).toEqual([])
+  })
+
   it('holds no brand or company logo', () => {
     const names = GROUP_ICONS.map((d) => d.name)
     for (const brand of BRAND_DENYLIST) {

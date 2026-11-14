@@ -2,29 +2,36 @@
 // previous group, like Spaces. Pure: the hook (`hooks/useGroupSwipe.ts`)
 // feeds it wheel events and acts on its answers.
 //
-// One gesture moves one group. A trackpad sends a stream of wheel events
-// (the fingers, then the momentum tail); the stream counts as one gesture
-// until it goes quiet for SWIPE_QUIET_MS. Horizontal travel adds up while
-// the event is more sideways than up/down; at SWIPE_THRESHOLD_PX the
-// gesture steps once and locks until the stream goes quiet, so the
-// momentum tail never steps again.
+// A trackpad sends a stream of wheel events (the fingers, then the momentum
+// tail); the stream is one gesture until it goes quiet for SWIPE_QUIET_MS,
+// which is when the fingers are taken as let go. While it runs, the
+// sideways travel (only events more sideways than up/down count) is the
+// swipe's progress, 0–1 over SWIPE_DISTANCE_PX, for a visual that follows
+// the finger. On release it commits when the progress reached
+// SWIPE_COMMIT_AT (35%, as K2 Design's mock), else it cancels. A swipe that
+// reaches the full distance commits at once and the rest of that gesture
+// is ignored, so one gesture never moves more than one group.
 //
 // Direction: fingers moving left (deltaX > 0 with natural scrolling) go to
 // the next group, as Spaces does; right goes back.
 
-/** What the group bar's visual follows while the fingers move. */
-export interface SwipeProgress {
-  /** 0 at rest, 1 at the step. */
-  progress: number
-  /** +1 toward the next group, -1 toward the previous, 0 at rest. */
-  direction: -1 | 0 | 1
+export type SwipeDirection = 'next' | 'prev'
+
+/** What the group bar's visual follows while the fingers move; null at rest. */
+export type SwipeProgress = { progress: number; direction: SwipeDirection } | null
+
+/** How a swipe ended: `commit` switched groups, `cancel` springs back
+ *  (short of SWIPE_COMMIT_AT, or no group that way). */
+export interface SwipeRelease {
+  outcome: 'commit' | 'cancel'
+  direction: SwipeDirection
 }
 
-export const SWIPE_REST: SwipeProgress = { progress: 0, direction: 0 }
-
-/** Sideways travel (CSS px) that moves one group. */
-export const SWIPE_THRESHOLD_PX = 120
-/** A gap with no wheel events that ends a gesture (ms). */
+/** Sideways travel (CSS px) for the whole swipe (progress 1). */
+export const SWIPE_DISTANCE_PX = 240
+/** On release, the progress that switches groups. */
+export const SWIPE_COMMIT_AT = 0.35
+/** A gap with no wheel events that ends a gesture (ms): the release. */
 export const SWIPE_QUIET_MS = 200
 
 export interface WheelSample {
@@ -38,8 +45,8 @@ export interface WheelSample {
 
 export interface SwipeAnswer {
   swipe: SwipeProgress
-  /** +1 / -1 when this sample completes a step, else 0. */
-  step: -1 | 0 | 1
+  /** Set when this answer ends the swipe. */
+  release: SwipeRelease | null
 }
 
 const LINE_PX = 16
@@ -57,52 +64,58 @@ export class GroupSwipeTracker {
   private locked = false
 
   constructor(
-    private readonly threshold = SWIPE_THRESHOLD_PX,
+    private readonly distance = SWIPE_DISTANCE_PX,
     private readonly quietMs = SWIPE_QUIET_MS,
+    private readonly commitAt = SWIPE_COMMIT_AT,
   ) {}
 
+  /** One wheel event. A gesture that went quiet before it is released
+   *  first (call `settle` on a timer to release without a next event). */
   feed(s: WheelSample): SwipeAnswer {
-    if (s.time - this.last > this.quietMs) {
-      this.acc = 0
-      this.locked = false
-    }
+    const earlier = this.settle(s.time)
     this.last = s.time
-    if (this.locked) return { swipe: SWIPE_REST, step: 0 }
+    if (earlier.release) {
+      // The previous gesture ended in the gap; this event starts a new one.
+      const next = this.feed(s)
+      return { swipe: next.swipe, release: next.release ?? earlier.release }
+    }
+    if (this.locked) return { swipe: null, release: null }
     const dx = px(s.deltaX, s.deltaMode)
     const dy = px(s.deltaY, s.deltaMode)
     // Mostly up/down: a scroll, not a swipe (it still keeps the gesture alive).
     if (Math.abs(dx) > Math.abs(dy)) this.acc += dx
-    if (Math.abs(this.acc) >= this.threshold) {
-      const step = this.acc > 0 ? 1 : -1
+    if (Math.abs(this.acc) >= this.distance) {
+      const direction: SwipeDirection = this.acc > 0 ? 'next' : 'prev'
       this.acc = 0
       this.locked = true
-      return { swipe: SWIPE_REST, step }
+      return { swipe: null, release: { outcome: 'commit', direction } }
     }
-    return { swipe: this.progress(), step: 0 }
+    return { swipe: this.progress(), release: null }
   }
 
-  /** Where the gesture stands; at rest once it has gone quiet by `time`. */
-  settle(time: number): SwipeProgress {
-    if (time - this.last > this.quietMs) {
-      this.acc = 0
-      this.locked = false
-      return SWIPE_REST
-    }
-    return this.progress()
+  /** At `time`: if the gesture has gone quiet, it is let go: commit past
+   *  SWIPE_COMMIT_AT, else cancel (null when nothing was moving). */
+  settle(time: number): SwipeAnswer {
+    if (time - this.last <= this.quietMs) return { swipe: this.locked ? null : this.progress(), release: null }
+    const p = this.progress()
+    this.acc = 0
+    this.locked = false
+    if (!p) return { swipe: null, release: null }
+    return { swipe: null, release: { outcome: p.progress >= this.commitAt ? 'commit' : 'cancel', direction: p.direction } }
   }
 
   private progress(): SwipeProgress {
-    if (this.acc === 0) return SWIPE_REST
-    return { progress: Math.min(1, Math.abs(this.acc) / this.threshold), direction: this.acc > 0 ? 1 : -1 }
+    if (this.acc === 0) return null
+    return { progress: Math.min(1, Math.abs(this.acc) / this.distance), direction: this.acc > 0 ? 'next' : 'prev' }
   }
 }
 
-/** The group `step` away from `currentId` in `ids` order, or null at either
- *  end (no wrap, as Spaces) or when `currentId` isn't there. */
-export function steppedGroupId(ids: readonly string[], currentId: string, step: -1 | 1): string | null {
+/** The group one step `direction` from `currentId` in `ids` order, or null
+ *  at either end (no wrap) or when `currentId` isn't there. */
+export function steppedGroupId(ids: readonly string[], currentId: string, direction: SwipeDirection): string | null {
   const i = ids.indexOf(currentId)
   if (i < 0) return null
-  const j = i + step
+  const j = i + (direction === 'next' ? 1 : -1)
   return j >= 0 && j < ids.length ? ids[j] : null
 }
 
@@ -116,7 +129,7 @@ export function scrollsSideways(el: Element): boolean {
 
 /** Whether a wheel event that starts at `target` may switch groups: not
  *  inside an element that scrolls sideways, nor inside one that opts out
- *  (`data-group-swipe="off"`), up to `root` (exclusive of nothing above it). */
+ *  (`data-group-swipe="off"`), up to `root`. */
 export function swipeAllowedFrom(target: EventTarget | null, root: Element | null = null): boolean {
   let el = target instanceof Element ? target : null
   while (el && el !== root) {

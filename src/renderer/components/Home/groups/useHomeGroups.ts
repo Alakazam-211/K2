@@ -1,14 +1,24 @@
 // Home groups: the logic behind the group bar, the nav header and the edit
 // card. It reads the Homes store (each Home is a group; the store syncs
-// names and icons across devices through the daemon) and the swipe progress,
-// and turns the bar's gestures into store calls. The components it feeds
-// are presentational (`HomeGroupBar`, `GroupNameHeader`, `GroupEditCard`).
+// names, icons, pins, "Most recent at the top" and last sends across
+// devices through the daemon) and the swipe state, and turns the bar's
+// gestures into store calls. The components it feeds are presentational
+// (`HomeGroupBar`, `GroupNameHeader`, `GroupEditCard`, `GroupSettingsList`).
+//
+// K2 Design's contract (home-groups notes): groups {id, name, icon, order,
+// pinned, recentFirst}, currentId, swipe {progress, direction} | null, and
+// onSelect, onRename (an empty name is saved as the next unused "Group N"),
+// onSetIcon, onCreate → id, onDelete (refused for the last group), onPin,
+// onUnpin, onReorderPins, onSetRecentFirst, onReorderGroups. Also here: the
+// swipe's release (commit or cancel), each agent's last send by the person
+// (`lastMessagedAt`), and this computer's recent icons.
 
 import { useMemo, useState } from 'react'
-import { nextGroupName, selectedHome, useHomesStore } from '@/stores/homes'
+import { cleanHomeName, nextGroupName, selectedHome, useHomesStore } from '@/stores/homes'
 import { HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
 import { useGroupSwipeStore } from '@/hooks/useGroupSwipe'
 import { pinnedRows } from '@/lib/home-row-order'
+import { readRecentGroupIcons } from '@/lib/group-icon-recents'
 import type { GroupBarItem, GroupEditing, HomeGroupBarProps } from './HomeGroupBar'
 
 export interface HomeGroups {
@@ -16,6 +26,11 @@ export interface HomeGroups {
   current: { id: string; name: string; icon: string | null; index: number; count: number }
   /** Open the current group's card against `anchor` (the header's "…"). */
   editCurrent(anchor: HTMLElement): void
+  /** The current group's agents (row address) → the person's last send to
+   *  them (epoch ms), for "Most recent at the top". */
+  lastMessagedAt: Readonly<Record<string, number>>
+  /** This computer's recently picked icons, newest first (not synced). */
+  recentIcons(): string[]
 }
 
 /** The group switch chord for the bar's tooltips (⌥⌘1–9). */
@@ -23,10 +38,16 @@ export function groupShortcutLabel(index: number): string | null {
   return index < HOME_SWITCH_LIMIT ? homeSwitchCombo(index + 1) : null
 }
 
+/** The name an empty rename saves: the next "Group N" no other group uses. */
+export function emptyNameFallback(homes: readonly { id: string; name: string }[], id: string): string {
+  return nextGroupName(homes.filter((h) => h.id !== id))
+}
+
 export function useHomeGroups(): HomeGroups {
   const homes = useHomesStore((s) => s.homes)
   const current = useHomesStore(selectedHome)
   const swipe = useGroupSwipeStore((s) => s.swipe)
+  const swipeRelease = useGroupSwipeStore((s) => s.release)
   const [editing, setEditing] = useState<GroupEditing | null>(null)
 
   const groups = useMemo<GroupBarItem[]>(
@@ -42,17 +63,25 @@ export function useHomeGroups(): HomeGroups {
     [homes],
   )
   const index = Math.max(0, homes.findIndex((h) => h.id === current.id))
+  const lastMessagedAt = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const r of current.rows) if (typeof r.lastMessagedAt === 'number') out[r.address] = r.lastMessagedAt
+    return out
+  }, [current])
 
   const bar: HomeGroupBarProps = {
     groups,
     currentId: current.id,
     swipe,
+    swipeRelease,
     editing,
     onEditingChange: setEditing,
     shortcutLabel: groupShortcutLabel,
+    emptyNameFallback: (id) => emptyNameFallback(useHomesStore.getState().homes, id),
     onSelect: (id) => useHomesStore.getState().selectHome(id),
     onRename: (id, name) => {
-      useHomesStore.getState().renameHome(id, name)
+      const st = useHomesStore.getState()
+      st.renameHome(id, cleanHomeName(name) ?? emptyNameFallback(st.homes, id))
     },
     onSetIcon: (id, icon) => {
       useHomesStore.getState().setHomeIcon(id, icon)
@@ -85,5 +114,7 @@ export function useHomeGroups(): HomeGroups {
     bar,
     current: { id: current.id, name: current.name, icon: current.icon ?? null, index, count: current.rows.length },
     editCurrent: (anchor) => setEditing({ id: current.id, anchor }),
+    lastMessagedAt,
+    recentIcons: readRecentGroupIcons,
   }
 }

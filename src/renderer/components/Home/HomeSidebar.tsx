@@ -465,7 +465,7 @@ export default function HomeSidebar(): React.JSX.Element {
   const rows = displayRows(home)
 
   return (
-    <div className="relative flex flex-col h-full" data-home-sidebar="">
+    <div className="relative flex flex-col h-full" data-home-sidebar="" data-group-swipe-zone="">
       <ResizeHandle />
 
       {/* Header — the focus-group row's spot: the current group's name and

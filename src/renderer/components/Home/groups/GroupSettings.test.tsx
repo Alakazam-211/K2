@@ -6,7 +6,7 @@
 // tenth pin offered but off.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -16,8 +16,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import HomeGroupBar, { type GroupBarItem, type HomeGroupBarProps } from './HomeGroupBar'
 import { moveId } from './GroupSettingsList'
+import GroupNameFlash, { GROUP_NAME_FLASH_MS } from './GroupNameFlash'
 import { pinMenuItem } from '../HomeSidebar'
-import { SWIPE_REST } from '@/lib/group-swipe'
 import { MAX_PINS } from '@/lib/home-row-order'
 import type { Home } from '@/stores/homes'
 
@@ -38,7 +38,7 @@ function props(over: Partial<HomeGroupBarProps> = {}): HomeGroupBarProps {
     onDelete: vi.fn(),
     onSetRecentFirst: vi.fn(),
     onReorderGroups: vi.fn(),
-    swipe: SWIPE_REST,
+    swipe: null,
     ...over,
   }
 }
@@ -151,5 +151,52 @@ describe('Pin / Unpin in a row’s menu', () => {
     expect(pinMenuItem(home(2), home(2).rows[0])).toEqual({ id: 'home-unpin', label: 'Unpin' })
     const full = home(MAX_PINS)
     expect(pinMenuItem(full, full.rows[MAX_PINS])).toEqual({ id: 'home-pin', label: 'Pin', enabled: false, hint: '9 pinned already' })
+  })
+})
+
+describe('the card’s own switch and Delete in All groups', () => {
+  it('the card has the group’s "Most recent at the top" switch', () => {
+    const p = props()
+    render(<HomeGroupBar {...p} />)
+    fireEvent.contextMenu(within(bar()).getByRole('button', { name: 'Work' }))
+    const sw = document.querySelector('[data-group-card-recent-first]') as HTMLInputElement
+    expect(sw.checked).toBe(true)
+    fireEvent.click(sw)
+    expect(p.onSetRecentFirst).toHaveBeenLastCalledWith('g1', false)
+  })
+
+  it('a row’s Delete confirms in the row; it is off on the last group', () => {
+    const p = props()
+    const { unmount } = render(<HomeGroupBar {...p} />)
+    const list = openSettings()
+    fireEvent.click(list.querySelector('[data-group-settings-delete="g3"]') as HTMLElement)
+    expect(p.onDelete).not.toHaveBeenCalled()
+    fireEvent.click(list.querySelector('[data-group-settings-delete-yes="g3"]') as HTMLElement)
+    expect(p.onDelete).toHaveBeenCalledWith('g3')
+    unmount()
+    const one = props({ groups: [G[1]] })
+    render(<HomeGroupBar {...one} />)
+    const only = openSettings()
+    const del = only.querySelector('[data-group-settings-delete="g2"]') as HTMLButtonElement
+    expect([del.disabled, del.title]).toEqual([true, 'The last group can’t be deleted'])
+  })
+})
+
+describe('the rail’s name flash', () => {
+  it('shows the group’s name for a moment after a switch, not on first paint', () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = render(<GroupNameFlash id="g1" name="Work" />)
+      expect(document.querySelector('[data-group-name-flash]')).toBeNull()
+      rerender(<GroupNameFlash id="g2" name="Play" />)
+      const flag = document.querySelector('[data-group-name-flash="g2"]') as HTMLElement
+      expect([flag.textContent, flag.getAttribute('role')]).toEqual(['Play', 'status'])
+      act(() => {
+        vi.advanceTimersByTime(GROUP_NAME_FLASH_MS + 1)
+      })
+      expect(document.querySelector('[data-group-name-flash]')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

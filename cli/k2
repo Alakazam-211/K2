@@ -55057,6 +55057,10 @@ AN IPHONE FROM A LINUX SERVER
     (else exit 3 sim_node_not_granted, naming the owner's `k2 compute
     grant` command). From the Mobile tab, only the owner or an admin can
     start one.
+  - A workspace with a compute node list (`k2 compute allow-nodes`) gets
+    an iPhone only on a Mac on that list (else exit 3 node_not_allowed;
+    a person adds the Mac). A pinned-only Mac is used only when you boot
+    a device that names it (an id like k2n1-m4:<type> from list-devices).
   - The Mac can't reach this server's localhost or LAN. Open the App's
     public URL (the url line of `k2 app inspect <app>`). localhost and
     private addresses are refused (sim_url_unreachable), and so are
@@ -55077,7 +55081,7 @@ EXITS
   0 ok · 1 daemon unreachable · 2 usage, or held (sim_held, sim_node_busy)
   · 3 refused (switch off: sim_switch_off, compute_off; stale id; no
   device running; licence not accepted; sim_lane_unavailable,
-  sim_node_not_granted).
+  sim_node_not_granted, node_not_allowed).
   `--json` errors go to stderr as {"error":{"code","hint","status"}}.
 EOF
 }

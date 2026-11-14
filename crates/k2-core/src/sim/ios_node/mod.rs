@@ -70,10 +70,13 @@ pub struct NodeInfo {
     /// Why the node takes nothing new right now, in words ("paused by its
     /// owner", "holding for Sew CI"); `None` = free.
     pub hold: Option<String>,
+    /// `k2 compute node pinned-only <node> on`: automatic placement never
+    /// picks it; a device that names it (`k2n1-m4:<type>`) still boots there.
+    pub pinned_only: bool,
 }
 
 impl NodeInfo {
-    /// Speaks sim at all (protocol 7 and the feature).
+    /// Speaks sim at all (protocol 11 and the feature).
     pub fn offers_sim(&self) -> bool {
         self.mac && self.protocol >= psim::PROTOCOL_SIM && self.features.iter().any(|f| f == psim::FEATURE_SIM_IOS) && self.sim.is_some()
     }
@@ -86,6 +89,9 @@ pub trait NodeDirectory: Send + Sync {
     fn nodes(&self) -> Vec<NodeInfo>;
     /// This workspace (`projects.id`) has a live compute grant on the node.
     fn granted(&self, node_id: &str, workspace_id: &str) -> bool;
+    /// The node is on this workspace's compute node list, or it has none
+    /// (`k2 compute allow-nodes`). Fails closed on a read error.
+    fn allowed(&self, node_id: &str, workspace_id: &str) -> bool;
     /// Send a sim frame on the node's attach socket; `false` = not connected.
     fn send(&self, node_id: &str, frame: k2_node_proto::frames::Frame) -> bool;
     /// The node's enrolled public key (SPKI DER), by node id.
@@ -326,7 +332,13 @@ impl IosNodeLane {
             Some((n, t)) => (Some(n.to_string()), Some(t.to_string())),
             None => (None, req.profile_id.clone()),
         };
-        let sim_nodes: Vec<&NodeInfo> = nodes.iter().filter(|n| n.offers_sim()).filter(|n| want_node.as_ref().is_none_or(|w| *w == n.name)).collect();
+        // A pinned-only Mac takes an iPhone only when the device names it,
+        // as a compute job must name it.
+        let sim_nodes: Vec<&NodeInfo> = nodes
+            .iter()
+            .filter(|n| n.offers_sim())
+            .filter(|n| want_node.as_ref().map_or(!n.pinned_only, |w| *w == n.name))
+            .collect();
         if sim_nodes.is_empty() {
             if let Some(w) = &want_node {
                 return Err(LaneError::node(NodeReason::LaneUnavailable, format!("{w} doesn't run iPhones for this server. `k2 sim list-devices --platform ios` lists the ones that do.")));
@@ -336,6 +348,7 @@ impl IosNodeLane {
         let mut busy: Vec<String> = Vec::new();
         let mut not_ready: Vec<&NodeInfo> = Vec::new();
         let mut not_granted: Vec<&NodeInfo> = Vec::new();
+        let mut not_allowed: Vec<&NodeInfo> = Vec::new();
         let mut outdated: Vec<&NodeInfo> = Vec::new();
         let mut ok: Vec<&NodeInfo> = Vec::new();
         for n in sim_nodes {
@@ -348,6 +361,9 @@ impl IosNodeLane {
                 outdated.push(n);
             } else if !f.ready {
                 not_ready.push(n);
+            } else if !self.dir.allowed(&n.id, &req.workspace_id) {
+                // The workspace's node list binds everyone, the owner too.
+                not_allowed.push(n);
             } else if !req.grant_exempt && !self.dir.granted(&n.id, &req.workspace_id) {
                 // As with `k2 compute run`: the owner and admins may use any
                 // active node without a grant; agents and others need one.
@@ -376,6 +392,15 @@ impl IosNodeLane {
             }
             if !busy.is_empty() {
                 return Err(LaneError::node(NodeReason::Busy, format!("{}. Try again later.", busy.join("; "))));
+            }
+            if let Some(n) = not_allowed.first() {
+                return Err(LaneError::node(
+                    NodeReason::NotAllowed,
+                    format!(
+                        "{0} can run iPhones, but it isn't on this workspace's compute node list (`k2 compute allow-nodes`), so nothing from it goes there. Only a person adds it: `k2 compute allow-nodes --add {0} --workspace <workspace>` (the owner or an Admin, from a terminal outside K2).",
+                        n.name
+                    ),
+                ));
             }
             let n = not_granted.first().expect("some reason");
             return Err(LaneError::node(

@@ -384,6 +384,33 @@ fn the_owner_and_admins_need_no_grant() {
     assert_eq!(dir.node.sessions().len(), 1);
 }
 
+/// A lease follows compute placement: a workspace's node list (`k2 compute
+/// allow-nodes`) keeps its iPhones off every other Mac, the owner's too
+/// (`node_not_allowed`, exit 3, before anything is leased), and a
+/// pinned-only Mac takes an iPhone only when the device names it.
+#[test]
+fn the_node_list_and_pinned_only_hold_for_a_lease() {
+    let (dir, lane) = setup();
+    dir.disallow(WS_ID);
+    for r in [req(None), BootRequest { grant_exempt: true, ..req(None) }] {
+        let e = lane.boot(&r).unwrap_err();
+        assert_eq!((e.code(), e.http_status()), ("node_not_allowed", 403), "{}", e.message());
+        assert!(matches!(e, LaneError::Node { reason: NodeReason::NotAllowed, .. }));
+        assert_eq!(NodeReason::NotAllowed.exit(), 3, "a person changes the list");
+        assert!(e.message().contains("k2 compute allow-nodes --add k2n1-m4"), "{}", e.message());
+    }
+    assert!(dir.node.sessions().is_empty(), "nothing leased off the list");
+    dir.allow_again(WS_ID);
+
+    *dir.node.pinned_only.lock().unwrap() = true;
+    let e = lane.boot(&req(None)).unwrap_err();
+    assert_eq!(e.code(), "sim_lane_unavailable", "automatic placement never picks a pinned-only Mac: {}", e.message());
+    assert!(dir.node.sessions().is_empty());
+    let b = lane.boot(&req(Some(&format!("{NODE_NAME}:{TYPE_17_PRO}")))).expect("a device that names the Mac boots there");
+    assert_eq!(b.profile.name, "iPhone 17 Pro (on k2n1-m4)");
+    assert_eq!(dir.node.sessions().len(), 1);
+}
+
 #[test]
 fn one_iphone_per_node_and_a_pick_names_its_device() {
     let (dir, lane) = setup();
@@ -403,9 +430,12 @@ fn one_iphone_per_node_and_a_pick_names_its_device() {
 struct NoNodes;
 impl NodeDirectory for NoNodes {
     fn nodes(&self) -> Vec<NodeInfo> {
-        vec![NodeInfo { id: "n2".into(), name: "k2n9-vin".into(), online: true, protocol: 7, features: vec![], mac: false, sim: None, hold: None }]
+        vec![NodeInfo { id: "n2".into(), name: "k2n9-vin".into(), online: true, protocol: 7, features: vec![], mac: false, sim: None, hold: None, pinned_only: false }]
     }
     fn granted(&self, _: &str, _: &str) -> bool {
+        true
+    }
+    fn allowed(&self, _: &str, _: &str) -> bool {
         true
     }
     fn send(&self, _: &str, _: Frame) -> bool {

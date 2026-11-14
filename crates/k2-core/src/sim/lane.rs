@@ -651,6 +651,10 @@ pub enum NodeReason {
     LaneUnavailable,
     /// A ready node, but this workspace has no compute grant on it. 403, exit 3.
     NotGranted,
+    /// A ready node off this workspace's compute node list (`k2 compute
+    /// allow-nodes`), for everyone: the same code as a compute job's. 403,
+    /// exit 3.
+    NotAllowed,
     /// Every ready node is busy, held, draining or low on memory or disk. 409, exit 2.
     Busy,
     /// The node's helper or protocol is older than this server's. 409, exit 3.
@@ -667,6 +671,7 @@ impl NodeReason {
         match self {
             NodeReason::LaneUnavailable => "sim_lane_unavailable",
             NodeReason::NotGranted => "sim_node_not_granted",
+            NodeReason::NotAllowed => "node_not_allowed",
             NodeReason::Busy => "sim_node_busy",
             NodeReason::Outdated => "sim_node_outdated",
             NodeReason::Refused => "sim_node_refused",
@@ -676,7 +681,7 @@ impl NodeReason {
     pub fn http_status(self) -> u16 {
         match self {
             NodeReason::LaneUnavailable | NodeReason::Busy | NodeReason::Outdated => 409,
-            NodeReason::NotGranted | NodeReason::Refused => 403,
+            NodeReason::NotGranted | NodeReason::NotAllowed | NodeReason::Refused => 403,
             NodeReason::UrlUnreachable => 400,
         }
     }
@@ -684,7 +689,7 @@ impl NodeReason {
     pub fn exit(self) -> u8 {
         match self {
             NodeReason::Busy => 2,
-            NodeReason::LaneUnavailable | NodeReason::NotGranted | NodeReason::Outdated => 3,
+            NodeReason::LaneUnavailable | NodeReason::NotGranted | NodeReason::NotAllowed | NodeReason::Outdated => 3,
             NodeReason::Refused | NodeReason::UrlUnreachable => 1,
         }
     }

@@ -52,7 +52,7 @@ pub fn hold_of(row: &store::NodeRow, offer: Option<&frames::Offer>) -> Option<St
     })
 }
 
-fn info(row: &store::NodeRow) -> NodeInfo {
+fn info(row: &store::NodeRow, pinned: &compute::pinned_only::Pinned) -> NodeInfo {
     let (online, _, live) = crate::compute_ws::live_view(&row.id);
     let offer = live.or_else(|| row.last_offer.clone());
     let os = offer.as_ref().and_then(|o| o.labels.get("os").cloned()).or_else(|| row.os.clone());
@@ -65,23 +65,30 @@ fn info(row: &store::NodeRow) -> NodeInfo {
         mac: os.as_deref() == Some("macos"),
         sim: offer.as_ref().and_then(|o| o.sim.clone()),
         hold: hold_of(row, offer.as_ref()),
+        pinned_only: pinned.holds(&row.id),
     }
 }
 
 impl NodeDirectory for Directory {
     fn nodes(&self) -> Vec<NodeInfo> {
-        let rows = {
+        let (rows, pinned) = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            store::list_nodes(&conn, false)
+            (store::list_nodes(&conn, false), compute::pinned_only::all(&conn))
         };
-        rows.iter().filter(|r| r.state == "active").map(info).collect()
+        rows.iter().filter(|r| r.state == "active").map(|r| info(r, &pinned)).collect()
     }
 
     fn granted(&self, node_id: &str, workspace_id: &str) -> bool {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::grant(&conn, node_id, workspace_id).is_some_and(|g| g.expires_at.is_none_or(|t| t > compute::now()))
+    }
+
+    fn allowed(&self, node_id: &str, workspace_id: &str) -> bool {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        compute::allow::allows(&conn, workspace_id, node_id)
     }
 
     fn send(&self, node_id: &str, frame: Frame) -> bool {

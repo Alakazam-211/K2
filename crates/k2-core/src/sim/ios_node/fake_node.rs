@@ -95,6 +95,8 @@ pub struct FakeNode {
     pub hold: Mutex<Option<String>>,
     pub ready: Mutex<bool>,
     pub helper_protocol: Mutex<u64>,
+    /// `k2 compute node pinned-only` on this node.
+    pub pinned_only: Mutex<bool>,
     /// Frames the fake helper sends after `frames on` (then it goes still).
     pub frames_budget: Mutex<u32>,
     worker: Mutex<Option<mpsc::Sender<(Arc<NodeStream>, Vec<u8>)>>>,
@@ -126,6 +128,7 @@ impl FakeNode {
             hold: Mutex::new(None),
             ready: Mutex::new(true),
             helper_protocol: Mutex::new(psim::HELPER_PROTOCOL),
+            pinned_only: Mutex::new(false),
             frames_budget: Mutex::new(3),
             worker: Mutex::new(None),
         });
@@ -198,6 +201,7 @@ impl FakeNode {
             mac: true,
             sim: Some(self.facts()),
             hold: self.hold.lock().unwrap().clone(),
+            pinned_only: *self.pinned_only.lock().unwrap(),
         }
     }
 
@@ -643,17 +647,28 @@ pub struct FakeDirectory {
     pub extra: Mutex<Vec<NodeInfo>>,
     /// Frames sent to nodes other than the fake.
     pub sent: Mutex<Vec<(String, String)>>,
+    /// Workspaces whose compute node list leaves the fake node off.
+    pub off_list: Mutex<Vec<String>>,
 }
 
 impl FakeDirectory {
     pub fn new() -> Arc<Self> {
         let controller = SigningKey::generate().unwrap();
         let node = FakeNode::new(&controller);
-        Arc::new(Self { node, controller, grants: Mutex::new(vec![]), extra: Mutex::new(vec![]), sent: Mutex::new(vec![]) })
+        Arc::new(Self { node, controller, grants: Mutex::new(vec![]), extra: Mutex::new(vec![]), sent: Mutex::new(vec![]), off_list: Mutex::new(vec![]) })
     }
 
     pub fn grant(&self, workspace_id: &str) {
         self.grants.lock().unwrap().push((NODE_ID.into(), workspace_id.into()));
+    }
+
+    /// The workspace gets a node list without the fake node on it.
+    pub fn disallow(&self, workspace_id: &str) {
+        self.off_list.lock().unwrap().push(workspace_id.into());
+    }
+
+    pub fn allow_again(&self, workspace_id: &str) {
+        self.off_list.lock().unwrap().retain(|w| w != workspace_id);
     }
 }
 
@@ -665,6 +680,9 @@ impl NodeDirectory for FakeDirectory {
     }
     fn granted(&self, node_id: &str, workspace_id: &str) -> bool {
         self.grants.lock().unwrap().iter().any(|(n, w)| n == node_id && w == workspace_id)
+    }
+    fn allowed(&self, node_id: &str, workspace_id: &str) -> bool {
+        node_id != NODE_ID || !self.off_list.lock().unwrap().iter().any(|w| w == workspace_id)
     }
     fn send(&self, node_id: &str, frame: Frame) -> bool {
         if node_id != NODE_ID {

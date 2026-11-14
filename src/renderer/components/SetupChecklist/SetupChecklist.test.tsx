@@ -665,6 +665,41 @@ describe('the fold between the list and the Get started button', () => {
     })
   }
 
+  it('Hide starts the fold from the list\'s height on screen, not one reflowed by the same commit (the nav floor)', async () => {
+    mockReducedMotion(false)
+    const made = mockAnimate()
+    // The list's laid-out height, as the ResizeObserver last saw it at rest.
+    let listH = 200
+    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute('data-setup-checklist') ? listH : 0
+      },
+    })
+    const RO = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    } as unknown as typeof ResizeObserver
+    try {
+      h.daemonCliPost.mockResolvedValue(body({ hidden: true }))
+      render(<SetupChecklist />)
+      const hide = await screen.findByTestId('setup-hide')
+      // Hiding narrows the nav (its setup floor goes) in the same commit, so
+      // the rows rewrap taller before the fold reads them.
+      listH = 215
+      fireEvent.click(hide)
+      await waitFor(() => expect(made.length).toBe(2))
+      const list = made.find((m) => m.el.hasAttribute('data-setup-checklist'))!
+      expect(list.keyframes[0]).toMatchObject({ height: '200px' })
+    } finally {
+      globalThis.ResizeObserver = RO
+      if (desc) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', desc)
+    }
+  })
+
   it('Hide folds the list down into the button on the slow motion tokens, then drops the list', async () => {
     mockReducedMotion(false)
     const made = mockAnimate()

@@ -416,6 +416,12 @@ function GetStartedSlot({
   const pendingFocus = useRef(false)
   const openRef = useRef(open)
   openRef.current = open
+  /** The open list's height as last laid out at rest (no fold running),
+   *  kept by a ResizeObserver. A fold that shuts it starts from this, not
+   *  from a reading taken in the commit that hides it: the nav's setup floor
+   *  narrows the nav in that same commit, the rows rewrap taller there, and
+   *  the fold would start a step away from what was on screen. */
+  const restListHeight = useRef<number | null>(null)
 
   /** Focus the part the fold goes to, once it's drawn; false until then. */
   const focusIncoming = (): boolean => {
@@ -501,9 +507,11 @@ function GetStartedSlot({
       setParts(open ? 'list' : 'button')
       return
     }
-    // Start from where things are now (mid-fold too).
+    // Start from where things are now (mid-fold too); a list at rest from
+    // its last height on screen (see restListHeight).
     const h = (el: HTMLElement | null): number => (el ? parseFloat(getComputedStyle(el).height) || el.offsetHeight : 0)
-    const from = { list: listRef.current ? h(listRef.current) : 0, button: buttonSlotRef.current ? h(buttonSlotRef.current) : 0 }
+    const listNow = listRef.current ? (parts === 'list' && restListHeight.current !== null ? restListHeight.current : h(listRef.current)) : 0
+    const from = { list: listNow, button: buttonSlotRef.current ? h(buttonSlotRef.current) : 0 }
     if (parts === 'both') {
       focusIfAsked()
       runFold(from)
@@ -532,6 +540,22 @@ function GetStartedSlot({
   useEffect(() => () => {
     for (const a of anims.current) a.cancel()
   }, [])
+
+  // Keep the list's height at rest (only while it's the one part drawn).
+  useLayoutEffect(() => {
+    const el = listRef.current
+    if (parts !== 'list' || !el) {
+      restListHeight.current = null
+      return
+    }
+    restListHeight.current = el.offsetHeight
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (anims.current.length === 0) restListHeight.current = el.offsetHeight
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [parts])
 
   const leftNow = rowsLeft(rows)
   return (

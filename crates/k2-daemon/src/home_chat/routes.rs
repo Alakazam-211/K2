@@ -151,7 +151,7 @@ fn sew_id(raw: &str, what: &str) -> R<String> {
 }
 
 fn skin<T>(f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>) -> R<T> {
-    k2_core::skin::with_skin_conn(f).map_err(internal)
+    k2_core::tool_hook::with_home_chat_db(f).map_err(internal)
 }
 
 /// One call to Sew as the person, on their held session; a 401 signs in

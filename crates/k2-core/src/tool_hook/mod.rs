@@ -1329,6 +1329,16 @@ pub fn sew_voice_features() -> Result<features::VoiceFeatures, String> {
     crate::skin::with_skin_conn(|conn| features::VoiceFeatures::read(conn, CHAT_KIND))
 }
 
+/// Run `f` on `skin.db`, where the Home chat ledger lives
+/// ([`admin_channels`]): the daemon's `/cli/home-chat/*` routes and the held
+/// sessions' revokes. `Err` when Sew was never set up here (no skin.db).
+pub fn with_home_chat_db<T>(f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>) -> Result<T, String> {
+    if !skin_store_exists() {
+        return Err("chat is not set up on this server".into());
+    }
+    crate::skin::with_skin_conn(f)
+}
+
 /// Sew 0.10.0's Home chat flags ([`features::HomeChatFeatures`]), from the
 /// one list the last status refresh recorded (all false before any sweep,
 /// or on a box without Sew).

@@ -139,7 +139,7 @@ pub fn revoke(ext: &str) {
         return;
     }
     let op = k2_core::sew_revoke::SewSessionRevoke::K2Sid(sid_for(ext));
-    if let Err(e) = k2_core::skin::with_skin_conn(|c| k2_core::sew_revoke::enqueue(c, &op)) {
+    if let Err(e) = k2_core::tool_hook::with_home_chat_db(|c| k2_core::sew_revoke::enqueue(c, &op)) {
         k2_core::log_debug!("[home-chat] revoke of {ext}'s held session not queued: {e}");
     }
 }

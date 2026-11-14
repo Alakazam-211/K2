@@ -4,7 +4,7 @@ version = "0.46.12"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "K2 device-local core library: db, llm, terminal, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2-daemon (persistent-agent runtime)."
+description = "K2 device-local core library: db, terminal, scheduler, agent_hooks, push. Linked by k2-daemon (persistent-agent runtime). src-tauri (Tauri app, thin client) uses it only in its tests and benches."
 
 [lib]
 path = "src/lib.rs"
@@ -21,8 +21,8 @@ required-features = ["sim-live-ios"]
 
 [features]
 # Enables db::shared()'s automatic in-memory-DB fallback for downstream
-# crates' test binaries. Without this, cfg(test) in k2so-core is only
-# active when k2so-core's own tests run — src-tauri's test binary would
+# crates' test binaries. Without this, cfg(test) in k2-core is only
+# active when k2-core's own tests run — src-tauri's test binary would
 # panic with "db::init_database must run before db::shared()".
 # Enable in src-tauri's [dev-dependencies] entry; NOT a runtime feature.
 test-util = ["k2-client/test-util"]
@@ -53,10 +53,10 @@ airgap = []
 # with it a missing Xcode fails loudly (vs-live M-A18). Not a runtime feature.
 sim-live-ios = []
 
-# k2so-core's OWN integration tests (under `crates/k2so-core/tests/`) are
+# k2-core's OWN integration tests (under `crates/k2-core/tests/`) are
 # separate compilation units that don't see `cfg(test)` of the lib —
 # they only see features. Pull the lib back in as a dev-dependency with
-# `test-util` enabled so plain `cargo test -p k2so-core` (no manual
+# `test-util` enabled so plain `cargo test -p k2-core` (no manual
 # `--features test-util` flag) compiles integration tests that reach
 # for `init_for_tests` and the other test-util-gated helpers. Without
 # this, contributors and CI hit a confusing "no `init_for_tests` in
@@ -84,7 +84,7 @@ k2-simvideo = { path = "../k2-simvideo" }
 # Shared primitive deps.
 parking_lot = "0.12"
 
-# DB layer (migrations live in crates/k2so-core/drizzle_sql/, loaded via
+# DB layer (migrations live in crates/k2-core/drizzle_sql/, loaded via
 # include_str!). Bundled SQLite so every platform ships the same version.
 rusqlite = { version = "0.41", features = ["bundled", "hooks"] }
 

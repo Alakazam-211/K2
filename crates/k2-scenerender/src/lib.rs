@@ -11,7 +11,8 @@
 //!   ambient (the clay look), SSAA, threads by fixed bands;
 //! - [`srgb`], [`trig`], [`math`]: no libm on the render path, so the bytes are
 //!   the same on every CPU;
-//! - [`encode`]: WebP lossless (default) and PNG;
+//! - [`encode`]: WebP lossless (default) and PNG, opaque RGB or transparent
+//!   RGBA (coverage alpha, straight colour);
 //! - [`proto`], [`render`], [`sandbox`], [`host`]: the wire, the worker's
 //!   side, the limits it puts on itself first thing, and the side the
 //!   daemon links (posix_spawn, watchdog);

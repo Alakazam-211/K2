@@ -145,6 +145,8 @@ pub struct SceneRequest<'a> {
     pub format: ImageFormat,
     /// sRGB background; `None`: the current neutral.
     pub background: Option<[u8; 3]>,
+    /// RGBA with coverage alpha (straight colour) instead of a background.
+    pub transparent: bool,
     /// Samples per axis; `None`: by width.
     pub ssaa: Option<u32>,
 }
@@ -152,7 +154,7 @@ pub struct SceneRequest<'a> {
 impl<'a> SceneRequest<'a> {
     /// `views` of `scene`, WebP, the default background and SSAA.
     pub fn new(scene: &'a [u8], views: Vec<View>) -> SceneRequest<'a> {
-        SceneRequest { scene, views, format: ImageFormat::Webp, background: None, ssaa: None }
+        SceneRequest { scene, views, format: ImageFormat::Webp, background: None, transparent: false, ssaa: None }
     }
 }
 
@@ -213,6 +215,9 @@ pub fn render_with(bin: &Path, req: &SceneRequest<'_>, limits: &Limits, hostile:
     if req.views.is_empty() {
         return Err(Failure::new(FailureCode::InvalidInput, "no views asked for"));
     }
+    if req.transparent && req.background.is_some() {
+        return Err(Failure::new(FailureCode::InvalidInput, "a transparent image has no background"));
+    }
     if req.views.len() as u64 > limits.max_views as u64 {
         return Err(Failure::new(FailureCode::TooLarge, format!("{} views; at most {}", req.views.len(), limits.max_views)));
     }
@@ -230,6 +235,7 @@ pub fn render_with(bin: &Path, req: &SceneRequest<'_>, limits: &Limits, hostile:
         views: req.views.clone(),
         format: req.format,
         background: req.background,
+        transparent: req.transparent,
         ssaa: req.ssaa,
         threads: limits.threads.max(1),
         hostile: hostile.map(str::to_string),
@@ -580,6 +586,8 @@ mod tests {
         assert_eq!(render(nowhere, &SceneRequest::new(b"x", vec![View::new(ViewSpec::Auto, 0)]), &limits).expect_err("zero").code, FailureCode::InvalidInput);
         assert_eq!(render(nowhere, &SceneRequest::new(b"x", vec![View::new(ViewSpec::Auto, 641)]), &limits).expect_err("wide").code, FailureCode::TooLarge);
         assert_eq!(render(nowhere, &SceneRequest::new(b"x", vec![View::new(ViewSpec::Auto, 8); 65]), &limits).expect_err("many").code, FailureCode::TooLarge);
+        let both = SceneRequest { transparent: true, background: Some([0, 0, 0]), ..SceneRequest::new(b"x", one()) };
+        assert_eq!(render(nowhere, &both, &limits).expect_err("both").code, FailureCode::InvalidInput);
         assert_eq!(render(nowhere, &SceneRequest::new(b"x", one()), &limits).expect_err("no binary").code, FailureCode::RendererError);
     }
 }

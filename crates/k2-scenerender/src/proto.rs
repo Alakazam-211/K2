@@ -18,7 +18,10 @@
 //! `view` is `"auto"` (the 3/4 view), `{"turntable": k}` (k = 0..7) or
 //! `{"camera": i}`; `objects` (optional) draws and frames only those object
 //! indices; the height is `round(width / aspect)`, the aspect from the view,
-//! else the camera's, else 4:3.
+//! else the camera's, else 4:3. `background` (sRGB) sets the opaque images'
+//! background; `"transparent": true` draws RGBA with coverage alpha instead
+//! (straight colour, see [`crate::raster`]), and refuses a `background`.
+//! Absent, both give the opaque default, byte for byte the same as before.
 //!
 //! **Response (stdout):** one line of JSON, the [`Response`], then, when `ok`,
 //! each view's image in order (`views[i].image_len` bytes each), then EOF.
@@ -166,6 +169,9 @@ pub struct Request {
     /// sRGB background; `None`: [`DEFAULT_BACKGROUND`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<[u8; 3]>,
+    /// RGBA images, alpha = coverage, colour straight; no `background` with it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transparent: bool,
     /// Samples per axis (1-4); `None`: [`default_ssaa`] of each view's width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssaa: Option<u32>,
@@ -181,7 +187,7 @@ pub struct Request {
 
 impl Request {
     pub fn new(views: Vec<View>) -> Request {
-        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, ssaa: None, threads: 1, hostile: None }
+        Request { proto: PROTO, input_len: 0, views, format: ImageFormat::Webp, background: None, transparent: false, ssaa: None, threads: 1, hostile: None }
     }
 
     /// The line, newline included.
@@ -357,7 +363,15 @@ mod tests {
         assert_eq!(Request::parse(&line[..line.len() - 1]).expect("parse"), r);
         let min = br#"{"proto":1,"input_len":3,"views":[{"view":{"camera":2},"width":10}]}"#;
         let m = Request::parse(min).expect("defaults");
-        assert_eq!((m.format, m.background, m.ssaa, m.threads, m.hostile), (ImageFormat::Webp, None, None, 0, None));
+        assert_eq!((m.format, m.background, m.transparent, m.ssaa, m.threads, m.hostile), (ImageFormat::Webp, None, false, None, 0, None));
+        // Opaque, the line is what it was; transparent, it says so and round-trips.
+        assert!(!String::from_utf8_lossy(&line).contains("transparent"));
+        let mut t = r.clone();
+        t.background = None;
+        t.transparent = true;
+        let tl = t.line();
+        assert!(String::from_utf8_lossy(&tl).contains(r#""transparent":true"#));
+        assert_eq!(Request::parse(&tl[..tl.len() - 1]).expect("parse"), t);
         assert_eq!(m.views[0].view, ViewSpec::Camera(2));
         assert!(Request::parse(br#"{"proto":2,"input_len":3,"views":[]}"#).is_err());
         assert!(Request::parse(b"not json").is_err());

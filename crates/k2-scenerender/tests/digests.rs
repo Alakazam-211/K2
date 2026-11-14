@@ -18,7 +18,8 @@ use k2_scenerender::sha256::{digest, hex};
 use k2_scenerender::testgen;
 
 /// Made on x86_64 Linux (k2n10-vin, Intel, job 71bc4b0f) and matched, all 30, on aarch64
-/// macOS (k2n1-m4, Apple M4, job c4090b9e).
+/// macOS (k2n1-m4, Apple M4, job c4090b9e). The 27 transparent ones: made on k2n10-vin
+/// (job 9919a84e), the 30 above unchanged there.
 const WANT: &[(&str, &str)] = &[
     ("cube-webp-320/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
     ("cube-webp-320/0", "5a8e7a89bef92a33281af63a775f1c297cd8dc99090f88b80d190b43eb91c9bc"),
@@ -50,6 +51,34 @@ const WANT: &[(&str, &str)] = &[
     ("terrain-200k/k2scene1", "9fe86ae3af59abeafd74a17458ecea65357a7d40a54549eb605c534094a0e789"),
     ("terrain-200k/0", "3db9bdae1bd0fa53c3d77635bbc468c87af4caabc5168773f268c6451c363885"),
     ("terrain-200k/1", "2c4e9e223945e65df1ea816d18d68aa49577dd06f5f75198981a37ee117170be"),
+    // Transparent (RGBA, coverage alpha).
+    ("cube-webp-320-alpha/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
+    ("cube-webp-320-alpha/0", "a04366f927a5eed7fc48d8e7a51a2a7fc1dcd8c475b10f058722cce93a3c64a4"),
+    ("cube-png-320-alpha/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
+    ("cube-png-320-alpha/0", "edf1b99d8183550ebcdf1b246e9882ed067e1f056a5655575be881c0753058ee"),
+    ("sphere-alpha/k2scene1", "e37daa01f64f7d8d383a48c62d7825dcca8bd012f90cece165f0454828f3f724"),
+    ("sphere-alpha/0", "61f71a3817527e5beae22e1776e78d965518d24d18ca43a25f7ff0e7a81a0112"),
+    ("sphere-alpha/1", "b4e092768f1768f072f05c7e4064dd0b6ec1f1ade044a6947a33a020f10bb9bf"),
+    ("grid-z-turntable-alpha/k2scene1", "488744bce54658e039e1e408b4f5762342fcc49e1de756dbbe829e5a30fbeca6"),
+    ("grid-z-turntable-alpha/0", "4f6cb6d30c9919962875f1170c7b2c5ed3a499a276710a3f0f44e8a0a0a2e242"),
+    ("grid-z-turntable-alpha/1", "204e4c91397f02b3bae784f658825179f91dd33502bbdcc3006eabb3fa8f0e25"),
+    ("grid-z-turntable-alpha/2", "2ec2cf94b1e3338f3bdecac405508f17f91664947a710c530ba49b573ed8df8d"),
+    ("grid-z-turntable-alpha/3", "50af17a95b9636223ce27de9613ee74e7ac6d6e94be325e39360a1ee36526226"),
+    ("grid-z-turntable-alpha/4", "ee351752d2cba09a3a6758d1ea292590bb1e0f5976eb9420264edf2bd62bd849"),
+    ("grid-z-turntable-alpha/5", "a34192fdc94add2a929ba871fd7b8f25e38fbd84d9d09dd6009c664de45f0d23"),
+    ("grid-z-turntable-alpha/6", "29a0275876003521cdea2772fdaaebf086de6d44b1f93cc62f711a531da6d63f"),
+    ("grid-z-turntable-alpha/7", "a891f0b7ff55cf35536ed79f5c4391d768a9e98e60b6b6f9ac28fa15dfded656"),
+    ("mirrored-alpha/k2scene1", "5273ec44c510c8c019fe9119f4d60aa0a13913c9e17c902b9e19162858ce800a"),
+    ("mirrored-alpha/0", "c6257341b18a7e1cb70bb3fd2f7e436ecbde072cbb54d333e7329733f958b73b"),
+    ("camera-alpha/k2scene1", "01d2b2cbae4b6915c7959e561d2f82fd3fd2e8dbb56d4e853e0b5e3b2992b7d0"),
+    ("camera-alpha/0", "c5994980f7bdab9e3a5665b5b4abae47140db8099432b7fcee46bcc624fd4f21"),
+    ("camera-alpha/1", "44cccab5007974c2e26a9a16160e63fd039e601db942c5659bc86bb26e2b0f70"),
+    ("degenerate-collapsed-alpha/k2scene1", "ec7e6131aa9c80b9dd85320678fca7b8db042b92d65326dc11ead5f66a722cfa"),
+    ("degenerate-collapsed-alpha/0", "a9cae8308b95c674e9e7df997b26a53eabe2223169521d0770718e0a40341c5d"),
+    ("degenerate-camera-inside-alpha/k2scene1", "69518e6050c7c508f5cf4b3ccd1bcd22553d694174b544a3e74ec24655b7cdba"),
+    ("degenerate-camera-inside-alpha/0", "f65d38be709861b700b7206a81b687b119e49bb1d0bf8467b76e349a740eb482"),
+    ("terrain-200k-alpha/k2scene1", "9fe86ae3af59abeafd74a17458ecea65357a7d40a54549eb605c534094a0e789"),
+    ("terrain-200k-alpha/0", "8446abc6adb8ac39056a7d8103b281e2b7e04a5fd947f41774d9ce0f784a6208"),
 ];
 
 fn caps() -> Caps {
@@ -66,11 +95,16 @@ fn caps() -> Caps {
 }
 
 fn case(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32) {
+    case_with(out, name, s, views, format, threads, false)
+}
+
+fn case_with(out: &mut Vec<(String, String)>, name: &str, s: &Scene, views: Vec<View>, format: ImageFormat, threads: u32, transparent: bool) {
     let input = encode(s);
     out.push((format!("{name}/k2scene1"), hex(&digest(&input))));
     let mut req = Request::new(views);
     req.format = format;
     req.threads = threads;
+    req.transparent = transparent;
     let (o, _) = render_bytes(&input, &req, &caps()).unwrap_or_else(|f| panic!("{name}: {} {}", f.code, f.detail));
     for (i, (_, img)) in o.views.iter().enumerate() {
         out.push((format!("{name}/{i}"), hex(&digest(img))));
@@ -95,6 +129,20 @@ fn the_digests_are_the_checked_in_ones() {
         }
     }
     case(&mut got, "terrain-200k", &testgen::large_scene(200_000), vec![auto(640), View::new(ViewSpec::Turntable(6), 1920)], ImageFormat::Webp, 4);
+    // Transparent (RGBA, coverage alpha) renders of the same fixtures.
+    case_with(&mut got, "cube-webp-320-alpha", &testgen::cube_scene(), vec![auto(320)], ImageFormat::Webp, 1, true);
+    case_with(&mut got, "cube-png-320-alpha", &testgen::cube_scene(), vec![auto(320)], ImageFormat::Png, 2, true);
+    case_with(&mut got, "sphere-alpha", &testgen::sphere_scene(), vec![auto(320), auto(1280)], ImageFormat::Webp, 3, true);
+    let turntable: Vec<View> = (0..8).map(|k| View::new(ViewSpec::Turntable(k), 160)).collect();
+    case_with(&mut got, "grid-z-turntable-alpha", &testgen::grid_scene(5, true), turntable, ImageFormat::Webp, 2, true);
+    case_with(&mut got, "mirrored-alpha", &testgen::mirrored_scene(), vec![auto(400)], ImageFormat::Webp, 1, true);
+    case_with(&mut got, "camera-alpha", &testgen::camera_scene(), vec![View::new(ViewSpec::Camera(0), 640), View { view: ViewSpec::Auto, objects: Some(vec![0]), width: 200, aspect: Some(1.0) }], ImageFormat::Webp, 4, true);
+    for (name, s) in testgen::degenerate_scenes() {
+        if name == "camera-inside" || name == "collapsed" {
+            case_with(&mut got, &format!("degenerate-{name}-alpha"), &s, vec![View::new(if s.cameras.is_empty() { ViewSpec::Auto } else { ViewSpec::Camera(0) }, 120)], ImageFormat::Webp, 2, true);
+        }
+    }
+    case_with(&mut got, "terrain-200k-alpha", &testgen::large_scene(200_000), vec![auto(640)], ImageFormat::Webp, 4, true);
     for (k, v) in &got {
         eprintln!("[digest] (\"{k}\", \"{v}\"),");
     }

@@ -43,6 +43,8 @@ pub struct Plan {
     pub vertices: u64,
     pub triangles: u64,
     pub without_modifiers: bool,
+    /// RGBA (the request's `transparent`).
+    pub transparent: bool,
 }
 
 /// The images of a request.
@@ -63,6 +65,9 @@ pub fn check_request(req: &Request, caps: &Caps) -> Result<(), Failure> {
     }
     if req.input_len > caps.input.max_input_bytes {
         return Err(Failure::new(FailureCode::TooLarge, format!("input bytes: {}, at most {}", req.input_len, caps.input.max_input_bytes)));
+    }
+    if req.transparent && req.background.is_some() {
+        return Err(Failure::new(FailureCode::InvalidInput, "a transparent image has no background"));
     }
     Ok(())
 }
@@ -133,7 +138,7 @@ pub fn plan(mesh_counts: &[(u64, u64)], objects: &[Object], cameras: &[Camera], 
         if ssaa > caps.max_ssaa {
             return Err(big(format!("ssaa {ssaa}, at most {}", caps.max_ssaa)));
         }
-        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without });
+        plans.push(Plan { view: v.view, active, width: v.width, height, aspect, ssaa, vertices: dv, triangles: dt, without_modifiers: without, transparent: req.transparent });
     }
     Ok(plans)
 }
@@ -157,18 +162,19 @@ pub fn threads(req: &Request, caps: &Caps) -> u32 {
 /// before the mesh data is read): the decoded data (the size of its bytes),
 /// the header's parse (4x its JSON), the largest view's vertex stage (32 B
 /// per drawn vertex) and band lists (10 B per drawn triangle), its image and
-/// the encoder's copies (9 B per pixel), each thread's band buffers, every
-/// encoded image kept until the response (at most the output cap), and 16 MiB
-/// of base.
+/// the encoder's copies (9 B per pixel, 12 transparent), each thread's band
+/// buffers, every encoded image kept until the response (4 B per pixel, 5
+/// transparent; at most the output cap), and 16 MiB of base.
 pub fn estimate_bytes(data_bytes: u64, header_bytes: u64, plans: &[Plan], threads: u32, max_output: u64) -> u64 {
     let mut peak = 0u64;
     let mut out = 0u64;
     for p in plans {
         let (w, h, s) = (p.width as u64, p.height as u64, p.ssaa as u64);
         let band = w * s * BAND_PX as u64 * s * 16;
-        let view = 32 * p.vertices + 10 * p.triangles + 9 * w * h + threads as u64 * band;
+        let (image, kept) = if p.transparent { (12, 5) } else { (9, 4) };
+        let view = 32 * p.vertices + 10 * p.triangles + image * w * h + threads as u64 * band;
         peak = peak.max(view);
-        out = out.saturating_add(4 * w * h);
+        out = out.saturating_add(kept * w * h);
     }
     data_bytes + 4 * header_bytes + peak + out.min(max_output) + (16 << 20)
 }
@@ -185,7 +191,7 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
     let mut total = 0u64;
     for (vi, p) in plans.iter().enumerate() {
         let frame = camera::frame(scene, &p.active, p.view, p.aspect).map_err(|e| Failure::new(FailureCode::InvalidInput, format!("view {vi}: {e}")))?;
-        let params = raster::Params { width: p.width, height: p.height, ssaa: p.ssaa, threads, background_srgb: background };
+        let params = raster::Params { width: p.width, height: p.height, ssaa: p.ssaa, threads, background_srgb: background, transparent: p.transparent };
         let drawn = catch_unwind(AssertUnwindSafe(|| raster::render(scene, &p.active, &frame, &params)))
             .map_err(|_| Failure::new(FailureCode::RendererError, format!("view {vi}: the rasterizer panicked")))?;
         let (img, stats) = drawn;
@@ -317,6 +323,12 @@ mod tests {
         assert_eq!(render_bytes(&input, &r, &tight).expect_err("ssaa cap").code, FailureCode::TooLarge);
         let small_out = Caps { max_output_bytes: 10, ..c };
         assert_eq!(render_bytes(&input, &Request::new(vec![View::new(ViewSpec::Auto, 32)]), &small_out).expect_err("out").code, FailureCode::TooLarge);
+        let mut t = Request::new(vec![View::new(ViewSpec::Auto, 32)]);
+        t.transparent = true;
+        assert!(render_bytes(&input, &t, &c).is_ok());
+        assert_eq!(render_bytes(&input, &t, &small_out).expect_err("out").code, FailureCode::TooLarge, "the output cap holds for RGBA");
+        t.background = Some([1, 2, 3]);
+        assert_eq!(render_bytes(&input, &t, &c).expect_err("both").code, FailureCode::InvalidInput, "transparent with a background");
     }
 
     #[test]
@@ -329,14 +341,24 @@ mod tests {
         r.format = ImageFormat::Png;
         let png = render_bytes(&input, &r, &caps()).expect("png").0;
         assert_eq!(&png.views[0].1[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(png.views[0].1[25], 2, "colour type RGB");
+        r.transparent = true;
+        let rgba = render_bytes(&input, &r, &caps()).expect("png rgba").0;
+        assert_eq!(rgba.views[0].1[25], 6, "colour type RGBA");
+        r.format = ImageFormat::Webp;
+        let wa = render_bytes(&input, &r, &caps()).expect("webp rgba").0;
+        // VP8L: the alpha_is_used bit (byte 24 of the file, bit 4) is set, and not for the opaque one.
+        assert_eq!((&wa.views[0].1[12..16], wa.views[0].1[24] & 0x10), (&b"VP8L"[..], 0x10));
+        assert_eq!(webp.views[0].1[24] & 0x10, 0);
     }
 
     #[test]
     fn the_estimate_grows_with_the_work() {
-        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false };
+        let p = |w: u32, t: u64| Plan { view: ViewSpec::Auto, active: vec![], width: w, height: w * 3 / 4, aspect: 4.0 / 3.0, ssaa: 4, vertices: t, triangles: t, without_modifiers: false, transparent: false };
         let small = estimate_bytes(1000, 100, &[p(320, 10)], 1, 1 << 30);
         let big = estimate_bytes(1000, 100, &[p(320, 1_000_000)], 1, 1 << 30);
         let two = estimate_bytes(1000, 100, &[p(320, 10), p(320, 10)], 1, 1 << 30);
-        assert!(small < big && small < two);
+        let rgba = estimate_bytes(1000, 100, &[Plan { transparent: true, ..p(320, 10) }], 1, 1 << 30);
+        assert!(small < big && small < two && small < rgba);
     }
 }

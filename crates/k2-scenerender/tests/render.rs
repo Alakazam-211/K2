@@ -192,6 +192,51 @@ fn every_still_carries_the_camera_that_drew_it() {
     }
 }
 
+/// A transparent still through the worker: RGBA, alpha the coverage, the
+/// colour straight (a fully covered pixel has the opaque colour), uncovered
+/// pixels 0, 0, 0, 0; the WebP decodes to the PNG's pixels. Prints what alpha
+/// costs in WebP bytes against the opaque default.
+#[test]
+fn a_transparent_still_is_rgba_with_coverage_alpha() {
+    let scenes = [("cube", testgen::cube_scene(), 320u32), ("sphere", testgen::sphere_scene(), 320), ("grid-5", testgen::grid_scene(5, true), 320), ("terrain-200k", testgen::large_scene(200_000), 640)];
+    for (name, s, w) in scenes {
+        let input = encode(&s);
+        let mut req = SceneRequest::new(&input, vec![View::new(ViewSpec::Auto, w)]);
+        let opaque = host::render(bin(), &req, &thumb()).expect("opaque");
+        req.transparent = true;
+        let clear = host::render(bin(), &req, &thumb()).expect("transparent");
+        let (ob, cb) = (opaque.views[0].image.len(), clear.views[0].image.len());
+        eprintln!("[scenerender] alpha cost {name} {w} px webp: opaque {ob} B, transparent {cb} B ({:+.1}%)", (cb as f64 / ob as f64 - 1.0) * 100.0);
+        req.format = ImageFormat::Png;
+        let clear_png = host::render(bin(), &req, &thumb()).expect("transparent png");
+        req.transparent = false;
+        let opaque_png = host::render(bin(), &req, &thumb()).expect("opaque png");
+        let (cw, ch, cn, c) = decode_png(&clear_png.views[0].image);
+        let (_, _, on, o) = decode_png(&opaque_png.views[0].image);
+        assert_eq!((cw, ch, cn, on), (w, clear.views[0].meta.height, 4, 3), "{name}");
+        let (mut covered, mut full) = (0u64, 0u64);
+        for i in 0..(cw * ch) as usize {
+            let (px, op) = (&c[i * 4..i * 4 + 4], &o[i * 3..i * 3 + 3]);
+            match px[3] {
+                0 => assert_eq!(px, [0, 0, 0, 0], "{name}: an uncovered pixel"),
+                255 => {
+                    assert_eq!(&px[..3], op, "{name}: a covered pixel has the opaque colour");
+                    covered += 1;
+                    full += 1;
+                }
+                _ => covered += 1,
+            }
+        }
+        assert_eq!(covered, clear.views[0].meta.covered_px, "{name}");
+        assert!(full > 0 && full < covered, "{name}: {full} of {covered}");
+        let mut d = image_webp::WebPDecoder::new(std::io::Cursor::new(&clear.views[0].image)).expect("a webp");
+        assert!(d.has_alpha(), "{name}");
+        let mut buf = vec![0; d.output_buffer_size().expect("its size")];
+        d.read_image(&mut buf).expect("decoded");
+        assert!(buf == c, "{name}: the WebP and the PNG carry the same pixels");
+    }
+}
+
 #[test]
 fn hostile_inputs_end_typed() {
     let good = encode(&testgen::cube_scene());

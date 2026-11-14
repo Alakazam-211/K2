@@ -14,6 +14,11 @@
 //!    box-filters the SSAA samples into its rows of the image (linear -> sRGB through the fixed
 //!    table of [`crate::srgb`]: no libm on the render path).
 //!
+//! **Transparent** ([`Params::transparent`]): RGBA8 instead of RGB8 on the background. Alpha is
+//! the pixel's covered samples over its samples, rounded half up in integers; the colour is
+//! straight (not premultiplied), the mean of the covered samples only; an uncovered pixel is
+//! 0, 0, 0, 0. A fully covered pixel has the opaque image's colour exactly.
+//!
 //! **Determinism:** work is split by fixed chunks (vertices, triangles) and fixed bands, never by
 //! thread count; each unit's result depends only on its input, and merges are in index order. So
 //! the bytes are the same for any thread count. Edge functions are exact integers (i64), with a
@@ -65,14 +70,19 @@ pub struct Params {
     pub ssaa: u32,
     /// Worker threads (1: the calling thread only). Doesn't change the output.
     pub threads: usize,
+    /// The opaque image's background (unused when transparent).
     pub background_srgb: [u8; 3],
+    /// RGBA with coverage alpha instead of RGB on the background.
+    pub transparent: bool,
 }
 
 pub struct Image {
     pub width: u32,
     pub height: u32,
-    /// RGB8, rows top to bottom.
-    pub rgb: Vec<u8>,
+    /// RGBA8 (straight alpha) when transparent, else RGB8.
+    pub alpha: bool,
+    /// The pixels, rows top to bottom.
+    pub pixels: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -159,7 +169,7 @@ where
     });
 }
 
-/// Render the active objects. The image is opaque RGB8 on the background colour.
+/// Render the active objects: opaque RGB8 on the background colour, or RGBA8 when transparent.
 pub fn render(scene: &Scene, active: &[u32], frame: &Frame, p: &Params) -> (Image, Stats) {
     let s = p.ssaa.clamp(1, 4) as i64;
     let ws = p.width as i64 * s;
@@ -198,24 +208,25 @@ pub fn render(scene: &Scene, active: &[u32], frame: &Frame, p: &Params) -> (Imag
     let lut = srgb::encode_table();
     let bg = [srgb::to_linear(p.background_srgb[0]), srgb::to_linear(p.background_srgb[1]), srgb::to_linear(p.background_srgb[2])];
     let w = p.width as usize;
-    let mut rgb = vec![0u8; w * p.height as usize * 3];
+    let ch = if p.transparent { 4 } else { 3 };
+    let mut pixels = vec![0u8; w * p.height as usize * ch];
     let covered = AtomicU64::new(0);
     {
-        let items: Vec<(usize, &mut [u8])> = rgb.chunks_mut(BAND_PX as usize * w * 3).enumerate().collect();
+        let items: Vec<(usize, &mut [u8])> = pixels.chunks_mut(BAND_PX as usize * w * ch).enumerate().collect();
         let n = (ws * band_rows) as usize;
         par_each(
             p.threads,
             items,
             || Band { color: vec![[0.0; 3]; n], depth: vec![0.0; n] },
             |buf, (b, out)| {
-                let c = raster_band(&ctx, b, &bands[b], buf, out, bg, &lut, s as usize, w);
+                let c = raster_band(&ctx, b, &bands[b], buf, out, bg, &lut, s as usize, w, p.transparent);
                 covered.fetch_add(c, Ordering::Relaxed);
             },
         );
     }
     st.covered_px = covered.load(Ordering::Relaxed);
     st.raster_us = t2.elapsed().as_micros() as u64;
-    (Image { width: p.width, height: p.height, rgb }, st)
+    (Image { width: p.width, height: p.height, alpha: p.transparent, pixels }, st)
 }
 
 type VertexOut = (Vec<Obj>, Vec<V3>, Vec<V3>, Vec<[i32; 2]>);
@@ -597,10 +608,14 @@ struct SV {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8], bg: [f32; 3], lut: &[u8], s: usize, w: usize) -> u64 {
+fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8], bg: [f32; 3], lut: &[u8], s: usize, w: usize, transparent: bool) -> u64 {
     let y_lo = b as i64 * ctx.band_rows;
     let y_hi = (y_lo + ctx.band_rows).min(ctx.hs);
     let ws = ctx.ws as usize;
+    if refs.is_empty() && transparent {
+        out.fill(0);
+        return 0;
+    }
     if refs.is_empty() {
         // Nothing here: the background, without touching the sample buffers.
         let px = [lut[q16(bg[0])], lut[q16(bg[1])], lut[q16(bg[2])]];
@@ -621,7 +636,11 @@ fn raster_band(ctx: &Ctx, b: usize, refs: &[u32], buf: &mut Band, out: &mut [u8]
         let ob = &ctx.objs[oi];
         draw_tri(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
     }
-    resolve(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut, bg)
+    if transparent {
+        resolve_rgba(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut)
+    } else {
+        resolve(buf, (y_hi - y_lo) as usize, ws, s, out, w, lut, bg)
+    }
 }
 
 fn light(base: [f32; 3], n: V3, ctx: &Ctx) -> [f32; 3] {
@@ -810,6 +829,44 @@ fn resolve(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: us
     covered
 }
 
+/// [`resolve`] for a transparent image: RGBA8, alpha = covered samples / samples (rounded half
+/// up, in integers), the colour the mean of the covered samples only (straight alpha), summed
+/// in the same order as [`resolve`] (so a fully covered pixel has the opaque colour).
+fn resolve_rgba(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], w: usize, lut: &[u8]) -> u64 {
+    let rows = rows_s / s;
+    let total = (s * s) as u32;
+    let mut covered = 0u64;
+    for r in 0..rows {
+        for px in 0..w {
+            let mut acc = [0f32; 3];
+            let mut n = 0u32;
+            for sy in 0..s {
+                let base = (r * s + sy) * ws + px * s;
+                for sx in 0..s {
+                    if buf.depth[base + sx] > 0.0 {
+                        let c = buf.color[base + sx];
+                        acc[0] += c[0];
+                        acc[1] += c[1];
+                        acc[2] += c[2];
+                        n += 1;
+                    }
+                }
+            }
+            let o = (r * w + px) * 4;
+            if n == 0 {
+                out[o..o + 4].fill(0);
+                continue;
+            }
+            let inv = 1.0 / n as f32;
+            out[o] = lut[q16(acc[0] * inv)];
+            out[o + 1] = lut[q16(acc[1] * inv)];
+            out[o + 2] = lut[q16(acc[2] * inv)];
+            out[o + 3] = ((510 * n + total) / (2 * total)) as u8;
+            covered += 1;
+        }
+    }
+    covered
+}
 
 #[cfg(test)]
 mod tests {
@@ -823,13 +880,13 @@ mod tests {
     fn draw(s: &Scene, w: u32, h: u32, ssaa: u32, threads: usize, spec: ViewSpec) -> (Image, Stats, Frame) {
         let active: Vec<u32> = (0..s.objects.len() as u32).collect();
         let f = frame(s, &active, spec, w as f64 / h as f64).expect("a frame");
-        let (img, st) = render(s, &active, &f, &Params { width: w, height: h, ssaa, threads, background_srgb: BG });
+        let (img, st) = render(s, &active, &f, &Params { width: w, height: h, ssaa, threads, background_srgb: BG, transparent: false });
         (img, st, f)
     }
 
     fn px(img: &Image, x: u32, y: u32) -> [u8; 3] {
         let o = ((y * img.width + x) * 3) as usize;
-        [img.rgb[o], img.rgb[o + 1], img.rgb[o + 2]]
+        [img.pixels[o], img.pixels[o + 1], img.pixels[o + 2]]
     }
 
     #[test]
@@ -870,7 +927,45 @@ mod tests {
         let (a, _, _) = draw(&s, 200, 150, 2, 1, ViewSpec::Turntable(2));
         for t in [2, 3, 8] {
             let (b, _, _) = draw(&s, 200, 150, 2, t, ViewSpec::Turntable(2));
-            assert!(a.rgb == b.rgb, "threads {t} differ");
+            assert!(a.pixels == b.pixels, "threads {t} differ");
+        }
+    }
+
+    #[test]
+    fn transparent_alpha_is_coverage_and_colour_is_straight() {
+        let s = testgen::sphere_scene();
+        let active = [0u32];
+        let (w, h) = (96u32, 72u32);
+        let f = frame(&s, &active, ViewSpec::Auto, w as f64 / h as f64).expect("a frame");
+        let p = Params { width: w, height: h, ssaa: 4, threads: 1, background_srgb: BG, transparent: false };
+        let (opaque, so) = render(&s, &active, &f, &p);
+        let (clear, sc) = render(&s, &active, &f, &Params { transparent: true, ..p });
+        assert!(clear.alpha && !opaque.alpha);
+        assert_eq!(so.covered_px, sc.covered_px);
+        let (mut full, mut part, mut none) = (0, 0, 0);
+        for i in 0..(w * h) as usize {
+            let (o, c) = (&opaque.pixels[i * 3..i * 3 + 3], &clear.pixels[i * 4..i * 4 + 4]);
+            match c[3] {
+                0 => {
+                    assert_eq!(c, [0, 0, 0, 0]);
+                    none += 1;
+                }
+                255 => {
+                    assert_eq!(&c[..3], o, "a covered pixel has the opaque colour");
+                    full += 1;
+                }
+                a => {
+                    // 16 samples: alpha is round(255 n / 16) for some n in 1..=15.
+                    assert!((1..16).any(|n| (510 * n + 16) / 32 == a as u32), "{a}");
+                    part += 1;
+                }
+            }
+        }
+        assert!(full > 100 && part > 20 && none > 100, "{full} {part} {none}");
+        assert_eq!((full + part) as u64, sc.covered_px);
+        // The same bytes for any thread count.
+        for t in [2, 5] {
+            assert!(render(&s, &active, &f, &Params { transparent: true, threads: t, ..p }).0.pixels == clear.pixels, "threads {t}");
         }
     }
 
@@ -982,8 +1077,10 @@ mod tests {
             let specs = if s.cameras.is_empty() { vec![ViewSpec::Auto, ViewSpec::Turntable(5)] } else { vec![ViewSpec::Camera(0)] };
             for spec in specs {
                 if let Ok(f) = frame(&s, &active, spec, 4.0 / 3.0) {
-                    let (img, _) = render(&s, &active, &f, &Params { width: 40, height: 30, ssaa: 2, threads: 2, background_srgb: BG });
-                    assert_eq!(img.rgb.len(), 40 * 30 * 3, "{name}");
+                    for transparent in [false, true] {
+                        let (img, _) = render(&s, &active, &f, &Params { width: 40, height: 30, ssaa: 2, threads: 2, background_srgb: BG, transparent });
+                        assert_eq!(img.pixels.len(), 40 * 30 * if transparent { 4 } else { 3 }, "{name}");
+                    }
                 }
             }
         }

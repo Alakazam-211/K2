@@ -39,6 +39,7 @@ mod app_mobile_access_integration;
 mod app_move_polish_integration;
 mod app_pairing_integration;
 mod app_project_chat_integration;
+mod app_role_room_hold_integration;
 mod app_selfmove_integration;
 mod app_sew_routes_reachable_integration;
 mod app_transfers_integration;

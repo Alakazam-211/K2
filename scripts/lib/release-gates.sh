@@ -25,8 +25,12 @@
 #                   fast Mac lane): --cpus 7 --mem 8G, 6 workers.
 #   typecheck-web   bun run typecheck:web (tsc-rs) on a Linux x86 node.
 #   vite-build-web  bun run vite:build:web on a Linux x86 node.
-#   ratchet         scripts/garden/ratchet.sh on a Linux x86 node: the
-#                   biggest source files may only get smaller.
+#   ratchet         the checks that need no build, on a Linux x86 node:
+#                   the two Mac test lists match the test files
+#                   (scripts/ci/k2-node-mac-tests.sh check and
+#                   k2-daemon-mac-tests.sh check), then
+#                   scripts/garden/ratchet.sh: the biggest source files
+#                   may only get smaller.
 # Each job's command runs under set -euo pipefail, and a gate passes only
 # with exit 0 AND its result line in the log (vitest's "Tests … passed",
 # cargo's "Finished", vite's "built in", the typecheck's marker line, the
@@ -69,6 +73,11 @@
 # Sent in this order: vitest first, so on k2n1-m4 (one slot) it queues ahead
 # of the macOS check when --gates-only sends both there.
 K2RG_GATES_ALL="vitest cargo-linux cargo-macos typecheck-web vite-build-web ratchet"
+# The ratchet gate's commands, the same on compute and here. The ratchet is
+# last: its "ratchet: ok." is the line the gate's log must end with. Joined
+# with &&, so a list check that fails stops the gate there even where the
+# caller has set -e switched off (k2rg_local ... || ...).
+K2RG_NO_BUILD_CHECKS="bash scripts/ci/k2-node-mac-tests.sh check && bash scripts/ci/k2-daemon-mac-tests.sh check && bash scripts/garden/ratchet.sh"
 K2RG_STATE=""
 K2RG_SHA=""
 K2RG_KIND=""
@@ -239,9 +248,9 @@ k2rg_submit_all() {
                     -- "set -euo pipefail; bun install --frozen-lockfile >/dev/null; bun run vite:build:web" || rc=1
                 ;;
             ratchet)
-                _k2rg_submit ratchet "size ratchet (scripts/garden/ratchet.sh)" \
+                _k2rg_submit ratchet "Mac test lists, size ratchet (no build)" \
                     --any --os linux --arch x86_64 ${placement[@]+"${placement[@]}"} --cpus 1 --mem 1G --timeout 10m \
-                    -- "set -euo pipefail; bash scripts/garden/ratchet.sh" || rc=1
+                    -- "set -euo pipefail; $K2RG_NO_BUILD_CHECKS" || rc=1
                 ;;
         esac
     done
@@ -401,7 +410,7 @@ k2rg_local() {
         vitest) bunx vitest run --reporter=dot ;;
         vite-build-web) bun run vite:build:web ;;
         cargo-linux) "$(git rev-parse --show-toplevel)/scripts/linux-build-gate.sh" ;;
-        ratchet) bash scripts/garden/ratchet.sh ;;
+        ratchet) eval "$K2RG_NO_BUILD_CHECKS" ;;
         *) echo "FATAL: no gate $1" >&2; return 2 ;;
     esac
 }

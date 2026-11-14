@@ -1022,3 +1022,7 @@ mod ticket_rule_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "html_mxss_tests.rs"]
+mod mxss_tests;

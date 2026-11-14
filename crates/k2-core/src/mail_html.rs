@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Tags a cleaned message may keep.
-const MAIL_TAGS: &[&str] = &[
+pub(crate) const MAIL_TAGS: &[&str] = &[
     "a", "abbr", "address", "article", "b", "bdi", "bdo", "big", "blockquote", "br", "caption",
     "center", "cite", "code", "col", "colgroup", "dd", "del", "details", "dfn", "div", "dl", "dt",
     "em", "figcaption", "figure", "font", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header",

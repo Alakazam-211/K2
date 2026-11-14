@@ -76,7 +76,7 @@ function formatClock(iso: string | null | undefined): string {
   return iso ? localWhen(iso) : ''
 }
 
-/** Row shape returned by `k2so_heartbeat_fires_list_all` — most recent
+/** Row shape returned by `k2_heartbeat_fires_list_all` — most recent
  *  fire decisions across all workspaces. Used by the audit log column. */
 interface SystemFireRow {
   id: number
@@ -94,7 +94,7 @@ interface SystemFireRow {
 }
 
 
-/** Row shape returned by the `k2so_heartbeat_list_all` Tauri command —
+/** Row shape returned by the `k2_heartbeat_list_all` Tauri command —
  *  every active heartbeat across all workspaces with the parent project's
  *  name + path joined in. */
 interface SystemHeartbeatRow {
@@ -512,7 +512,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
       const raw =
         useConnectHostStore.getState().activeHost !== 'local'
           ? await daemonCliGet<unknown>(primaryScope(), 'heartbeat/list-all')
-          : await invoke<unknown>('k2so_heartbeat_list_all')
+          : await invoke<unknown>('k2_heartbeat_list_all')
       const sorted = [...listReply<SystemHeartbeatRow>(raw)].sort((a, b) => {
         const byProj = a.projectName.toLowerCase().localeCompare(b.projectName.toLowerCase())
         if (byProj !== 0) return byProj
@@ -549,7 +549,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
         const raw =
           useConnectHostStore.getState().activeHost !== 'local'
             ? await daemonCliGet<unknown>(primaryScope(), 'heartbeat/fires-list-all', { limit: 100 })
-            : await invoke<unknown>('k2so_heartbeat_fires_list_all', { limit: 100 })
+            : await invoke<unknown>('k2_heartbeat_fires_list_all', { limit: 100 })
         const rows = listReply<SystemFireRow>(raw)
         if (!cancelled) {
           setFires(rows)

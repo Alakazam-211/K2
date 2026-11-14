@@ -217,7 +217,7 @@ native-voice = ["dep:tauri-plugin-sew-voice", "dep:zeroize"]
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # Test / bench only (never in `cargo build`): the k2-core helper tests in
-# commands/k2so_agents.rs + agent_hooks.rs and benches/perf.rs (terminal
+# commands/agents.rs + agent_hooks.rs and benches/perf.rs (terminal
 # reflow) exercise k2-core directly. `test-util` enables db::shared()'s
 # in-memory fallback.
 k2-core = { path = "../crates/k2-core", features = ["test-util"] }

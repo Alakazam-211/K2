@@ -137,14 +137,14 @@ describe('WakeSchedulerSection', () => {
     expect(screen.queryByText(/reply wasn’t a list/)).toBeNull()
     expect(screen.queryByText('Something went wrong')).toBeNull()
 
-    h.invokes.k2so_heartbeat_list_all = [ROW]
+    h.invokes.k2_heartbeat_list_all = [ROW]
     fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[1])
     await waitFor(() => expect(screen.getByTestId('heartbeat-row-hb1')).toBeTruthy())
   })
 
   it('row buttons say what they do', async () => {
-    h.invokes.k2so_heartbeat_list_all = [ROW]
-    h.invokes.k2so_heartbeat_fires_list_all = []
+    h.invokes.k2_heartbeat_list_all = [ROW]
+    h.invokes.k2_heartbeat_fires_list_all = []
     h.routes['heartbeat/scheduler-status'] = STATUS
     render(<WakeSchedulerSection />)
     const edit = await screen.findByRole('button', { name: 'Edit the instructions for nightly-build' })
@@ -153,8 +153,8 @@ describe('WakeSchedulerSection', () => {
   })
 
   it('a row is two lines: the switch beside the text, the other controls under it', async () => {
-    h.invokes.k2so_heartbeat_list_all = [ROW]
-    h.invokes.k2so_heartbeat_fires_list_all = []
+    h.invokes.k2_heartbeat_list_all = [ROW]
+    h.invokes.k2_heartbeat_fires_list_all = []
     h.routes['heartbeat/scheduler-status'] = STATUS
     render(<WakeSchedulerSection />)
     await screen.findByRole('button', { name: 'Edit the instructions for nightly-build' })
@@ -174,8 +174,8 @@ describe('WakeSchedulerSection', () => {
   })
 
   it('an empty list says how to add one', async () => {
-    h.invokes.k2so_heartbeat_list_all = []
-    h.invokes.k2so_heartbeat_fires_list_all = []
+    h.invokes.k2_heartbeat_list_all = []
+    h.invokes.k2_heartbeat_fires_list_all = []
     h.routes['heartbeat/scheduler-status'] = STATUS
     render(<WakeSchedulerSection />)
     await waitFor(() => expect(screen.getByText('No heartbeats yet')).toBeTruthy())
@@ -184,8 +184,8 @@ describe('WakeSchedulerSection', () => {
   })
 
   it('pausing confirms in the row; a failed pause puts the switch back and says why', async () => {
-    h.invokes.k2so_heartbeat_list_all = [ROW]
-    h.invokes.k2so_heartbeat_fires_list_all = []
+    h.invokes.k2_heartbeat_list_all = [ROW]
+    h.invokes.k2_heartbeat_fires_list_all = []
     h.routes['heartbeat/scheduler-status'] = STATUS
     render(<WakeSchedulerSection />)
     const sw = await screen.findByRole('switch', { name: 'Run nightly-build in atlas' })
@@ -206,8 +206,8 @@ describe('WakeSchedulerSection', () => {
   })
 
   it('Problems shows only failed runs, and opening one shows why', async () => {
-    h.invokes.k2so_heartbeat_list_all = [ROW]
-    h.invokes.k2so_heartbeat_fires_list_all = [fire(2, 'error', 'WAKEUP.md not found'), fire(1, 'fired')]
+    h.invokes.k2_heartbeat_list_all = [ROW]
+    h.invokes.k2_heartbeat_fires_list_all = [fire(2, 'error', 'WAKEUP.md not found'), fire(1, 'fired')]
     h.routes['heartbeat/scheduler-status'] = STATUS
     const { container } = render(<WakeSchedulerSection />)
     await waitFor(() => expect(container.querySelectorAll('[data-fire-row]').length).toBe(2))

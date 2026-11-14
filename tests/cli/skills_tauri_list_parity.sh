@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 0.39.0g Phase 2.5b followup — verify the new Tauri `k2so_skills_list`
+# 0.39.0g Phase 2.5b followup — verify the new Tauri `k2_skills_list`
 # command and the existing daemon `/cli/agents/list` route (which the
 # `k2 skills list` CLI verb shells through) return the same set of
 # skill names for a workspace post-consolidation.
@@ -98,7 +98,7 @@ AGENTS_URL="http://127.0.0.1:${K2SO_PORT}/cli/agents/list?project=${WS_ENC}&toke
 AGENTS_RESP="$(curl -sf --connect-timeout 5 --max-time 15 "$AGENTS_URL")"
 echo "  /cli/agents/list response: $AGENTS_RESP"
 
-# Filesystem-side view: what the Tauri `k2so_skills_list` will see
+# Filesystem-side view: what the Tauri `k2_skills_list` will see
 # (it reads `.k2/skills/<name>/` directly via
 # `k2_core::skills::crud::list`, skipping dotfile dirs).
 FS_NAMES="$(ls -1 "$WS/.k2/skills" | grep -v '^\.' | sort | tr '\n' ',' | sed 's/,$//')"

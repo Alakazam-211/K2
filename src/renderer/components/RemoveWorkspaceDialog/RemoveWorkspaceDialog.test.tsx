@@ -23,7 +23,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string, args?: unknown) => {
     h.calls.push(`invoke ${cmd}`)
     h.invokes.push({ cmd, args })
-    return cmd === 'k2so_agents_teardown_workspace' ? h.teardown : []
+    return cmd === 'k2_agents_teardown_workspace' ? h.teardown : []
   }),
 }))
 vi.mock('@/lib/daemon-cli', async () => {
@@ -170,8 +170,8 @@ describe('Remove Workspace teardown modes', () => {
       fireEvent.click(screen.getByText(title))
       fireEvent.click(screen.getByRole('button', { name: button }))
       await screen.findByText('Workspace disconnected')
-      expect(h.invokes).toEqual([{ cmd: 'k2so_agents_teardown_workspace', args: { projectPath: '/ws/sales', mode } }])
-      expect(h.calls.slice(-2)).toEqual(['invoke k2so_agents_teardown_workspace', 'remove ws-sales'])
+      expect(h.invokes).toEqual([{ cmd: 'k2_agents_teardown_workspace', args: { projectPath: '/ws/sales', mode } }])
+      expect(h.calls.slice(-2)).toEqual(['invoke k2_agents_teardown_workspace', 'remove ws-sales'])
       expect(screen.getByText('/ws/sales/CLAUDE.md')).toBeTruthy()
       expect(useRemoveWorkspaceDialogStore.getState().isOpen).toBe(true)
       fireEvent.click(screen.getByRole('button', { name: 'Done' }))

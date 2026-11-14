@@ -23,7 +23,7 @@ import { WorkspacePhonePushBell } from './WorkspacePhonePushToggle'
 import { scopedKey } from '@/kessel/server-scope'
 
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
-// now uses `invoke<number>('k2so_inbox_count', ...)` so the only
+// now uses `invoke<number>('k2_inbox_count', ...)` so the only
 // renderer-side type that survived the migration is the count itself.
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ export default function WorkspacePanel(): React.JSX.Element {
       // Phase 2.1c Item 2 — workspace inbox primitive count endpoint
       // (replaces the legacy `k2so_agents_workspace_inbox_list` whose
       // full-payload fetch was wasted bandwidth for a sidebar badge).
-      // MS67: `k2so_inbox_count` counts THIS computer's inbox. In a room on
+      // MS67: `k2_inbox_count` counts THIS computer's inbox. In a room on
       // another server, count THAT server's workspace inbox (`inbox/list`,
       // the same read the room's Inbox tab makes).
       if (!room.localCommands) {
@@ -100,7 +100,7 @@ export default function WorkspacePanel(): React.JSX.Element {
         return
       }
       try {
-        const count = await invoke<number>('k2so_inbox_count', { projectPath: activeProjectPath })
+        const count = await invoke<number>('k2_inbox_count', { projectPath: activeProjectPath })
         if (!cancelled) setWsInboxCount(count)
       } catch { if (!cancelled) setWsInboxCount(0) }
     }

@@ -1416,7 +1416,7 @@ function ProjectDetail({
   // HeartbeatsPanel so the editor can render at this level.
   const [wakeupEditingHb, setWakeupEditingHb] = useState<HeartbeatRow | null>(null)
   // Heartbeat refresh nonce — incremented when the wakeup editor
-  // closes so the panel's k2so_heartbeat_list query re-runs and
+  // closes so the panel's k2_heartbeat_list query re-runs and
   // picks up any edits the agent made to the row.
   const [hbRefreshNonce, setHbRefreshNonce] = useState(0)
   // When agentMode is 'off' and there are no historical fires for this
@@ -2108,7 +2108,7 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
 
   useEffect(() => {
     let cancelled = false
-    invoke<boolean>('k2so_workspace_get_show_heartbeat_sessions', { projectPath })
+    invoke<boolean>('k2_workspace_get_show_heartbeat_sessions', { projectPath })
       .then((v) => { if (!cancelled) setEnabled(v) })
       .catch((err) => {
         // Surface the error rather than silently defaulting — a missing
@@ -4170,7 +4170,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
 
   useEffect(() => {
     let cancelled = false
-    invoke<(K2AgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
+    invoke<(K2AgentInfo & { agentType?: string })[]>('k2_agents_list', { projectPath })
       .then((agents) => {
         if (cancelled) return
         // Post-0.37.0 there's at most one agent per workspace. Pick
@@ -4196,7 +4196,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
     let unlisten: (() => void) | null = null
     let cancelled = false
     listen('sync:projects', () => {
-      invoke<(K2AgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
+      invoke<(K2AgentInfo & { agentType?: string })[]>('k2_agents_list', { projectPath })
         .then((agents) => { if (agents[0]?.name) setTechName(agents[0].name) })
         .catch(() => {})
     }).then((u) => { if (cancelled) u(); else unlisten = u })
@@ -4248,7 +4248,7 @@ function K2AgentPersonaButton({ projectPath, projectName, onOpenEditor }: { proj
   useEffect(() => {
     const ensure = async () => {
       try {
-        const agents = asArray<K2AgentInfo & { agentType?: string }>(await invoke('k2so_agents_list', { projectPath }))
+        const agents = asArray<K2AgentInfo & { agentType?: string }>(await invoke('k2_agents_list', { projectPath }))
         // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
         const existing = agents.find((a: any) => isBuiltinAgentType(a.agentType))
         if (existing) {
@@ -4582,7 +4582,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
   )
 }
 
-/// Compact summary row returned by the new `k2so_skills_list` Tauri
+/// Compact summary row returned by the new `k2_skills_list` Tauri
 /// verb. Shape matches `k2_core::skills::crud::SkillSummary` — see
 /// `crates/k2-core/src/skills/crud.rs`.
 interface SkillSummary {
@@ -4602,7 +4602,7 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
 
   const fetchAgents = useCallback(async () => {
     try {
-      const result = await invoke<K2AgentInfo[]>('k2so_agents_list', { projectPath })
+      const result = await invoke<K2AgentInfo[]>('k2_agents_list', { projectPath })
       setAgents(asArray<K2AgentInfo>(result))
     } catch {
       setAgents([])
@@ -4612,7 +4612,7 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
   const fetchWsInbox = useCallback(async () => {
     // Phase 2.1c Item 2 — workspace inbox primitive count endpoint.
     try {
-      const count = await invoke<number>('k2so_inbox_count', { projectPath })
+      const count = await invoke<number>('k2_inbox_count', { projectPath })
       setWsInboxCount(count)
     } catch {
       setWsInboxCount(0)
@@ -4726,7 +4726,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
     // section works under every mode (Off / K2 Agent / Manager /
     // Custom).
     try {
-      const result = await invoke<SkillSummary[]>('k2so_skills_list', { projectPath })
+      const result = await invoke<SkillSummary[]>('k2_skills_list', { projectPath })
       setSkills(asArray<SkillSummary>(result))
       setLoadError(false)
     } catch (err) {
@@ -4740,7 +4740,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
 
   const fetchAgents = useCallback(async () => {
     try {
-      const result = await invoke<K2AgentInfo[]>('k2so_agents_list', { projectPath })
+      const result = await invoke<K2AgentInfo[]>('k2_agents_list', { projectPath })
       setAgents(asArray<K2AgentInfo>(result))
     } catch {
       setAgents([])

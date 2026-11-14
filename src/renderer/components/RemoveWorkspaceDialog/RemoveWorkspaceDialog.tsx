@@ -82,7 +82,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
           uninstallApps: uninstallWorkspaceApps,
           teardown: async () => {
             if (mode === 'deregister_only') return
-            const teardownResults = await invoke<RemoveWorkspaceResult[]>('k2so_agents_teardown_workspace', {
+            const teardownResults = await invoke<RemoveWorkspaceResult[]>('k2_agents_teardown_workspace', {
               projectPath,
               mode,
             })

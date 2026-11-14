@@ -9,7 +9,7 @@
 // skipped) or ROUTED to that server's `/cli` route.
 //
 // `LOCAL_ONLY_ACTIONS` is the one list. `local-only-actions.test.ts` scans
-// every renderer source for `invoke('k2so_*' | 'k2_core*' | 'projects_*' |
+// every renderer source for `invoke('k2_agents_*' (and the other renamed k2_* agent commands) | 'k2so_*' | 'k2_core*' | 'projects_*' |
 // 'fs_*' | 'read_worktree_file' | 'format_file')` and fails when a command
 // is missing here, and lists every room-code site with its gate status.
 //
@@ -73,22 +73,22 @@ export const LOCAL_ONLY_ACTIONS: Readonly<Record<string, LocalOnlyAction>> = Obj
   read_worktree_file: { kind: 'command', inRemoteRoom: 'route', route: 'fs/read-file', why: 'reads this computer’s disk' },
 
   // ── Local k2_core reads and writes (MS67) ──────────────────────────────
-  k2so_session_lookup_by_agent: { kind: 'command', inRemoteRoom: 'off', why: 'asks this computer’s daemon, not the room’s (must fix before M4)' },
-  k2so_chat_refresh_broadcast: { kind: 'command', inRemoteRoom: 'off', why: 'broadcasts on this computer’s daemon (must fix before M4)' },
-  k2so_inbox_count: { kind: 'command', inRemoteRoom: 'route', route: 'inbox/list', why: 'counts this computer’s inbox' },
-  k2so_agents_list: { kind: 'command', inRemoteRoom: 'route', route: 'agents/list', why: 'lists this computer’s agents' },
-  k2so_agents_review_queue: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s review queue' },
-  k2so_agents_build_launch: { kind: 'command', inRemoteRoom: 'off', why: 'builds a launch on this computer' },
-  k2so_agents_get_editor_context: { kind: 'command', inRemoteRoom: 'off', why: 'reads this computer’s agent files' },
-  k2so_agents_preview_schedule: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat installer' },
-  k2so_agents_install_heartbeat: { kind: 'command', inRemoteRoom: 'off', why: 'installs a heartbeat on this computer' },
-  k2so_agents_update_heartbeat_projects: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat installer' },
-  k2so_agents_teardown_workspace: { kind: 'command', inRemoteRoom: 'off', why: 'tears down a workspace on this computer' },
-  k2so_heartbeat_set_session: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat store' },
-  k2so_heartbeat_list_all: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat store' },
-  k2so_heartbeat_fires_list_all: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat store' },
-  k2so_workspace_get_show_heartbeat_sessions: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s workspace setting' },
-  k2so_skills_list: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s skills' },
+  k2_session_lookup_by_agent: { kind: 'command', inRemoteRoom: 'off', why: 'asks this computer’s daemon, not the room’s (must fix before M4)' },
+  k2_chat_refresh_broadcast: { kind: 'command', inRemoteRoom: 'off', why: 'broadcasts on this computer’s daemon (must fix before M4)' },
+  k2_inbox_count: { kind: 'command', inRemoteRoom: 'route', route: 'inbox/list', why: 'counts this computer’s inbox' },
+  k2_agents_list: { kind: 'command', inRemoteRoom: 'route', route: 'agents/list', why: 'lists this computer’s agents' },
+  k2_agents_review_queue: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s review queue' },
+  k2_agents_build_launch: { kind: 'command', inRemoteRoom: 'off', why: 'builds a launch on this computer' },
+  k2_agents_get_editor_context: { kind: 'command', inRemoteRoom: 'off', why: 'reads this computer’s agent files' },
+  k2_agents_preview_schedule: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat installer' },
+  k2_agents_install_heartbeat: { kind: 'command', inRemoteRoom: 'off', why: 'installs a heartbeat on this computer' },
+  k2_agents_update_heartbeat_projects: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat installer' },
+  k2_agents_teardown_workspace: { kind: 'command', inRemoteRoom: 'off', why: 'tears down a workspace on this computer' },
+  k2_heartbeat_set_session: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat store' },
+  k2_heartbeat_list_all: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat store' },
+  k2_heartbeat_fires_list_all: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s heartbeat store' },
+  k2_workspace_get_show_heartbeat_sessions: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s workspace setting' },
+  k2_skills_list: { kind: 'command', inRemoteRoom: 'off', why: 'this computer’s skills' },
 
   // ── This computer's daemon events re-emitted by Tauri (MS14) ───────────
   'sync:projects': { kind: 'event', inRemoteRoom: 'off', why: 'this computer’s daemon changed its projects' },

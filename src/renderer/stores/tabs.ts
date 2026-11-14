@@ -199,7 +199,7 @@ export interface TabsRoomBinding {
   workspace: TabsRoomWorkspace | null
   deps: TabsRoomDeps
   /** MS67 — may this room call THIS computer's Tauri commands
-   *  (`k2so_agents_list`, …)? The primary room keeps today's behaviour
+   *  (`k2_agents_list`, …)? The primary room keeps today's behaviour
    *  (true); a pinned room is true only when its scope is `local`. */
   localCommands: boolean
 }
@@ -702,7 +702,7 @@ export const LAYOUT_SCHEMA_VERSION = 2
  *   - v2 (current): paneGroupId is the canonical key (daemon's
  *     `tab-<paneGroupId>` agent_name). Daemon owns cwd/command/args/
  *     sessionId/renderer — those come back via
- *     `k2so_sessions_list_for_workspace` in `reconcileWithDaemon`.
+ *     `k2_sessions_list_for_workspace` in `reconcileWithDaemon`.
  *
  *  Heartbeat metadata fields (`heartbeatName`, `surfacedAgentName`,
  *  `attachAgentName`, `projectPath`) stay on v2 terminals — the daemon's
@@ -3408,10 +3408,10 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       let agentName = ''
       try {
         type AgentRow = { name: string; isManager?: boolean; agentType: string }
-        // MS67 — `k2so_agents_list` reads THIS computer. A room that may not
+        // MS67 — `k2_agents_list` reads THIS computer. A room that may not
         // call local commands asks its own server's daemon instead.
         const agents = binding.localCommands
-          ? await invoke<AgentRow[]>('k2so_agents_list', { projectPath })
+          ? await invoke<AgentRow[]>('k2_agents_list', { projectPath })
           : asArray<AgentRow>(await daemonCliGet(scope, 'agents/list', { project: projectPath }))
         if (agents && agents.length > 0) {
           // Find the primary agent: manager/coordinator first, then first custom, then first agent
@@ -3443,7 +3443,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       }
 
       // Active-workspace guard. agent-name resolution above is async
-      // (a setTimeout plus an awaited k2so_agents_list round-trip), so
+      // (a setTimeout plus an awaited k2_agents_list round-trip), so
       // the user can switch workspaces while this call is in flight.
       // ensureSystemAgentTabs mutates the GLOBALLY-active tab set, so a
       // stale callback would stamp THIS workspace's agent/projectPath
@@ -4240,7 +4240,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       //    session/set-surfaced — that flag is one bit for the whole
       //    project, and the listener would append a companion.
       // 3. Cold: the id active-session already returned, else the host
-      //    heartbeat list. Never the local k2so_heartbeat_list invoke.
+      //    heartbeat list. Never the local k2_heartbeat_list invoke.
       const nonempty = (id: string | null | undefined): string | null => {
         if (typeof id !== 'string') return null
         const trimmed = id.trim()
@@ -7001,7 +7001,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
    *  authoritative. */
   async function fetchDaemonSessions(projectPath: string): Promise<DaemonSessionRow[] | null> {
     try {
-      // Host-aware (0.40.38): the old `k2so_sessions_list_for_workspace`
+      // Host-aware (0.40.38): the old `k2_sessions_list_for_workspace`
       // Tauri invoke is hard-wired to the LOCAL daemon, so on a remote
       // host reconcile asked the wrong machine, got nothing, and never
       // refilled item `command` — which is what drives tab agent icons

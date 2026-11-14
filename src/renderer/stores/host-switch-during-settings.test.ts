@@ -38,7 +38,7 @@ vi.mock('@tauri-apps/api/core', () => ({
     if (cmd === 'daemon_ws_url') {
       return { state: 'unavailable', reason: 'test env', port: null, token: null }
     }
-    if (cmd === 'k2so_sessions_list_for_workspace') return '[]'
+    if (cmd === 'k2_sessions_list_for_workspace') return '[]'
     return null
   }),
 }))

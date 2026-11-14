@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string) => {
-    if (cmd === 'k2so_agents_list') return [{ name: 'app-agent', agentType: 'custom' }]
+    if (cmd === 'k2_agents_list') return [{ name: 'app-agent', agentType: 'custom' }]
     if (cmd === 'daemon_ws_url') return { state: 'unavailable', reason: 'test env', port: null, token: null }
     return null
   }),

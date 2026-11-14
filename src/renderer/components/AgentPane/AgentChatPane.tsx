@@ -1800,7 +1800,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
     // MS67 — the cross-window remount broadcast is a local Tauri command.
     if (room.localCommands) {
-      invoke('k2so_chat_refresh_broadcast', { projectPath })
+      invoke('k2_chat_refresh_broadcast', { projectPath })
         .catch((e) => console.warn('[chat-refresh] broadcast failed:', e))
     }
 
@@ -1937,7 +1937,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       // command asks THIS computer's daemon, so only a room that may use
       // local commands runs it.
       if (room.localCommands) try {
-        const json = await invoke<string>('k2so_session_lookup_by_agent', {
+        const json = await invoke<string>('k2_session_lookup_by_agent', {
           agent: projectId,
         })
         const data = JSON.parse(json) as {

@@ -116,10 +116,10 @@ describe('heartbeat-sessions refresh failure path (the "Loading…" mask fix)', 
     expect(s.loadedFor).toBe('/ws/a')
     expect(s.lastError).toBeNull()
     expect(s.active).toHaveLength(1)
-    // Roster comes from the daemon on local too (not k2so_heartbeat_list).
+    // Roster comes from the daemon on local too (not k2_heartbeat_list).
     expect(daemonCliGetMock).toHaveBeenCalledWith('heartbeat/list', { project: '/ws/a' })
     expect(invokeMock).not.toHaveBeenCalledWith(
-      'k2so_heartbeat_list',
+      'k2_heartbeat_list',
       expect.anything(),
     )
   })

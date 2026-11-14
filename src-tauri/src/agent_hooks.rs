@@ -5,7 +5,7 @@
 //! What remains in this module:
 //!
 //!   - Tauri command shims (`k2so_heartbeat_*`, `k2so_session_lookup_*`,
-//!     `k2so_sessions_list_for_workspace`) that the renderer invokes
+//!     `k2_sessions_list_for_workspace`) that the renderer invokes
 //!     and which proxy through to the daemon's `/cli/*` routes.
 //!   - Nothing about hook installation: the daemon writes `notify.sh` and
 //!     the per-CLI hook configs itself (prd-daemon-activity-and-thread-
@@ -44,11 +44,11 @@ use crate::daemon_client::{off_main, DaemonClient};
 /// inject-into-live-session / resume-and-fire) — the same path the cron
 /// tick and `k2 heartbeat launch <name>` take. All real logic lives in
 /// `crates/k2-daemon/src/heartbeat_launch.rs`. Kept under the legacy
-/// `k2so_heartbeat_force_fire` name since the renderer still references
-/// it from the WorkspacePanel header path; `k2so_heartbeat_smart_launch`
+/// `k2_heartbeat_force_fire` name since the renderer still references
+/// it from the WorkspacePanel header path; `k2_heartbeat_smart_launch`
 /// is the canonical name going forward.
 #[tauri::command]
-pub async fn k2so_heartbeat_force_fire(
+pub async fn k2_heartbeat_force_fire(
     project_path: String,
     name: String,
 ) -> Result<String, String> {
@@ -56,11 +56,11 @@ pub async fn k2so_heartbeat_force_fire(
 }
 
 /// Smart-launch a heartbeat — invoked by the React Launch button.
-/// Identical impl to `k2so_heartbeat_force_fire`; the rename is a
+/// Identical impl to `k2_heartbeat_force_fire`; the rename is a
 /// signal that this is the daemon-first path going forward and that
 /// callers shouldn't expect Tauri-side spawn behaviour.
 #[tauri::command]
-pub async fn k2so_heartbeat_smart_launch(
+pub async fn k2_heartbeat_smart_launch(
     project_path: String,
     name: String,
 ) -> Result<String, String> {
@@ -83,7 +83,7 @@ fn heartbeat_launch_with(client: &DaemonClient, project_path: &str, name: &str) 
 /// performs lazy-cleanup of stale columns inside the same call.
 /// See `.k2/prds/heartbeat-active-session-tracking.md`.
 #[tauri::command]
-pub async fn k2so_heartbeat_active_session(
+pub async fn k2_heartbeat_active_session(
     project_path: String,
     name: String,
 ) -> Result<String, String> {
@@ -104,7 +104,7 @@ fn heartbeat_active_session_with(client: &DaemonClient, project_path: &str, name
 ///   `{ agentName, sessionId, sessionAlive, isV2 }`.
 /// `sessionId` is non-null only when a live session exists.
 #[tauri::command]
-pub async fn k2so_session_lookup_by_agent(agent: String) -> Result<String, String> {
+pub async fn k2_session_lookup_by_agent(agent: String) -> Result<String, String> {
     off_main(move || session_lookup_by_agent_with(&DaemonClient::try_connect()?, &agent)).await
 }
 
@@ -121,7 +121,7 @@ fn session_lookup_by_agent_with(client: &DaemonClient, agent: &str) -> Result<St
 /// falling back to `launchDefaultAgent`, so opening a workspace in a
 /// second window adopts existing PTYs rather than spawning duplicates.
 #[tauri::command]
-pub async fn k2so_sessions_list_for_workspace(path: String) -> Result<String, String> {
+pub async fn k2_sessions_list_for_workspace(path: String) -> Result<String, String> {
     off_main(move || sessions_list_for_workspace_with(&DaemonClient::try_connect()?, &path)).await
 }
 

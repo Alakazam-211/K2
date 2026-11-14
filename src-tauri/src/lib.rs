@@ -45,7 +45,7 @@ mod linux_daemon;
 // k2-core's in-process `agent_hooks::emit`) is gone with the k2-core link.
 // Every hook event the renderer listens to comes from the daemon's /events
 // bus through `daemon_events.rs`; the one event this process raised itself
-// (`k2so_chat_refresh_broadcast`) is emitted directly.
+// (`k2_chat_refresh_broadcast`) is emitted directly.
 // Background subscriber for the daemon's /events WebSocket. Spawned in
 // setup() once; reconnects forever so we survive daemon restarts.
 mod daemon_events;
@@ -1598,8 +1598,8 @@ pub fn run() {
             // (`/cli/claude-auth/*`). Renderer hits the daemon
             // directly; no Tauri command surface remains.
             // K2 Agents
-            commands::k2so_agents::k2so_agents_list,
-            commands::k2so_agents::k2so_chat_refresh_broadcast,
+            commands::agents::k2_agents_list,
+            commands::agents::k2_chat_refresh_broadcast,
             // Plan B cleanup — `states_*` command surface deleted. Routed
             // daemon data; the renderer reaches it host-aware via
             // `/cli/states/*` on the active daemon.
@@ -1607,7 +1607,7 @@ pub fn run() {
             // the legacy `k2so_agents_work_*` + `k2so_agents_workspace_inbox_list`
             // calls). The badge count forwards to `/cli/inbox/count`
             // (0.46.4; the other inbox shims had no renderer caller).
-            commands::inbox::k2so_inbox_count,
+            commands::inbox::k2_inbox_count,
             // Phase 2.1 wrap-up — generic worktree fs reader (powers
             // WorktreeDetailPane's Task tab; renders the worktree's
             // CLAUDE.md as Markdown). Path-canonicalized + traversal-
@@ -1615,7 +1615,7 @@ pub fn run() {
             commands::worktree::read_worktree_file,
             // Phase 2.5b follow-up — Skills panel list; forwards to
             // `/cli/skills/list` (0.46.4).
-            commands::skills::k2so_skills_list,
+            commands::skills::k2_skills_list,
             // Legacy `k2so_agents_work_list` removed — its renderer
             // callers now use `k2so_inbox_list` above. The per-agent
             // work-queue surface is itself being retired with the
@@ -1627,13 +1627,13 @@ pub fn run() {
             // the canonical-agents PRD (§7): consent gate is gone now that
             // harness fan-out is off by default.
             // Canonical Agent Flow (canonical-agents PRD §4 / §5.2 / §8.1).
-            commands::k2so_agents::k2so_detect_canonical_state,
+            commands::agents::k2_detect_canonical_state,
             // Back-compat aliases — retained during the 0.33.0 rename window so
             // stale React `invoke()` names keep working until every call site
             // has migrated to the canonical new names above.
-            commands::k2so_agents::k2so_agents_teardown_workspace,
-            commands::k2so_agents::k2so_agents_build_launch,
-            commands::k2so_agents::k2so_agents_review_queue,
+            commands::agents::k2_agents_teardown_workspace,
+            commands::agents::k2_agents_build_launch,
+            commands::agents::k2_agents_review_queue,
             // `k2so_agents_workspace_inbox_list` and
             // `k2so_agents_workspace_inbox_create` removed (Phase 2.1c
             // Item 2) — renderer migrated to `k2so_inbox_*` above.
@@ -1641,30 +1641,30 @@ pub fn run() {
             // `workspace_inbox_create` and its daemon caller
             // `workspace_msg::deliver_to_inbox` — the inbox-delivery
             // path is now `k2_core::inbox::compose` end-to-end.
-            commands::k2so_agents::k2so_agents_lock,
-            commands::k2so_agents::k2so_agents_install_heartbeat,
-            commands::k2so_agents::k2so_agents_uninstall_heartbeat,
-            commands::k2so_agents::k2so_agents_apply_wake_scheduler,
-            commands::k2so_agents::k2so_agents_update_heartbeat_projects,
-            commands::k2so_agents::k2so_agents_preview_schedule,
+            commands::agents::k2_agents_lock,
+            commands::agents::k2_agents_install_heartbeat,
+            commands::agents::k2_agents_uninstall_heartbeat,
+            commands::agents::k2_agents_apply_wake_scheduler,
+            commands::agents::k2_agents_update_heartbeat_projects,
+            commands::agents::k2_agents_preview_schedule,
             // Multi-heartbeat (agent_heartbeats table)
-            commands::k2so_agents::k2so_heartbeat_list,
-            commands::k2so_agents::k2so_heartbeat_list_all,
-            commands::k2so_agents::k2so_heartbeat_fires_list_all,
-            commands::k2so_agents::k2so_workspace_get_show_heartbeat_sessions,
-            commands::k2so_agents::k2so_heartbeat_set_session,
-            agent_hooks::k2so_heartbeat_force_fire,
-            agent_hooks::k2so_heartbeat_smart_launch,
-            agent_hooks::k2so_heartbeat_active_session,
-            agent_hooks::k2so_session_lookup_by_agent,
-            agent_hooks::k2so_sessions_list_for_workspace,
+            commands::agents::k2_heartbeat_list,
+            commands::agents::k2_heartbeat_list_all,
+            commands::agents::k2_heartbeat_fires_list_all,
+            commands::agents::k2_workspace_get_show_heartbeat_sessions,
+            commands::agents::k2_heartbeat_set_session,
+            agent_hooks::k2_heartbeat_force_fire,
+            agent_hooks::k2_heartbeat_smart_launch,
+            agent_hooks::k2_heartbeat_active_session,
+            agent_hooks::k2_session_lookup_by_agent,
+            agent_hooks::k2_sessions_list_for_workspace,
             // Agent Sessions (DB-tracked)
-            commands::k2so_agents::workspace_session_get,
-            commands::k2so_agents::workspace_session_set_session_id,
+            commands::agents::workspace_session_get,
+            commands::agents::workspace_session_set_session_id,
             // Workspace Relations
             // Agent Skills
             // Agent Editor
-            commands::k2so_agents::k2so_agents_get_editor_context,
+            commands::agents::k2_agents_get_editor_context,
             // Phase 2 Unit 6 — `commands::review_checklist::*` shims
             // deleted. Renderer hits `/cli/review-checklist/*` on the
             // daemon.

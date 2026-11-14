@@ -696,7 +696,7 @@ export function startAgentPolling(): void {
           let allow = false
           try {
             allow = await invoke<boolean>(
-              'k2so_workspace_get_show_heartbeat_sessions',
+              'k2_workspace_get_show_heartbeat_sessions',
               { projectPath },
             )
           } catch (err) {

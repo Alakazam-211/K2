@@ -219,7 +219,7 @@ describe('setHeartbeatSession — explicit local scope (WakeScheduler contract)'
     invoke.mockResolvedValue('{"success":true}')
     await setHeartbeatSession('/w', 'daily', { mode: 'pinned' }, { scope: 'local' })
     expect(daemonCliPostQuery).not.toHaveBeenCalled()
-    expect(invoke).toHaveBeenCalledWith('k2so_heartbeat_set_session', {
+    expect(invoke).toHaveBeenCalledWith('k2_heartbeat_set_session', {
       projectPath: '/w',
       name: 'daily',
       mode: 'pinned',
@@ -232,7 +232,7 @@ describe('setHeartbeatSession — explicit local scope (WakeScheduler contract)'
       { mode: 'session', sessionId: 's1', provider: 'pi' },
       { scope: 'local' },
     )
-    expect(invoke).toHaveBeenLastCalledWith('k2so_heartbeat_set_session', {
+    expect(invoke).toHaveBeenLastCalledWith('k2_heartbeat_set_session', {
       projectPath: '/w',
       name: 'daily',
       mode: 'session',

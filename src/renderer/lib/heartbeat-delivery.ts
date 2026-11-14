@@ -131,7 +131,7 @@ export function selectableSessions(
 /** Persist a heartbeat's delivery target.
  *
  *  0.40.48 host-aware fix: this used to ride the Tauri bridge
- *  (`k2so_heartbeat_set_session` → the LOCAL daemon), so with a remote
+ *  (`k2_heartbeat_set_session` → the LOCAL daemon), so with a remote
  *  host active the write targeted the wrong machine and 400'd with
  *  "Project not found: <remote path>" — the local daemon has never heard
  *  of the remote workspace. Default scope is now the ACTIVE host via
@@ -152,7 +152,7 @@ export async function setHeartbeatSession(
   opts?: { scope?: 'active-host' | 'local' },
 ): Promise<void> {
   if (opts?.scope === 'local') {
-    const resp = await invoke<string>('k2so_heartbeat_set_session', {
+    const resp = await invoke<string>('k2_heartbeat_set_session', {
       projectPath,
       name,
       mode: target.mode,

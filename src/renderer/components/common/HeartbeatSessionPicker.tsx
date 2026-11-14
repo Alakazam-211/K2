@@ -364,10 +364,10 @@ export async function openHeartbeatTarget(
   const tabs = room.getState()
   if (mode === 'pinned') {
     type AgentRow = { name: string; agentType: string }
-    // MS67 — `k2so_agents_list` reads THIS computer; a room that may not use
+    // MS67 — `k2_agents_list` reads THIS computer; a room that may not use
     // local commands asks its own server.
     const agents = room.room.localCommands
-      ? await invoke<AgentRow[]>('k2so_agents_list', { projectPath }).catch(() => [] as AgentRow[])
+      ? await invoke<AgentRow[]>('k2_agents_list', { projectPath }).catch(() => [] as AgentRow[])
       : asArray<AgentRow>(
           await daemonCliGet(room.room.scope, 'agents/list', { project: projectPath }).catch(() => []),
         )

@@ -1,6 +1,6 @@
 // Home M4 — local-only actions (MS57, vs-live MS67).
 //
-// 1. Every `invoke('k2so_*' | 'k2_core*' | 'projects_*' | 'fs_*' |
+// 1. Every `invoke('k2_<agents|heartbeat|inbox|…>_*' | 'k2so_*' | 'k2_core*' | 'projects_*' | 'fs_*' |
 //    'read_worktree_file' | 'format_file')` in the renderer is listed in
 //    LOCAL_ONLY_ACTIONS, and every listed command is still invoked
 //    somewhere (no stale entries).
@@ -44,7 +44,7 @@ function read(f: string): string {
 }
 
 const INVOKE =
-  /\binvoke\s*(?:<(?:[^<>]|<[^<>]*>)*>)?\s*\(\s*['"]((?:k2so_|k2_core|projects_|fs_|read_worktree_file|format_file)[A-Za-z0-9_]*)['"]/g
+  /\binvoke\s*(?:<(?:[^<>]|<[^<>]*>)*>)?\s*\(\s*['"]((?:k2so_|k2_core|k2_(?:agents|heartbeat|inbox|skills|session|sessions|workspace|chat|detect)_|projects_|fs_|read_worktree_file|format_file)[A-Za-z0-9_]*)['"]/g
 const LOCAL_EVENTS = Object.entries(LOCAL_ONLY_ACTIONS)
   .filter(([, a]) => a.kind === 'event')
   .map(([name]) => name)
@@ -91,24 +91,24 @@ type Site = { status: 'gated'; gate: string } | { status: 'todo' }
 /** `<file> <name>` → how the room site is handled. `gated`: the file
  *  contains `gate`. `todo`: the file carries a TODO(M4-integrate). */
 const ROOM_SITES: Record<string, Site> = {
-  'components/AgentPane/AgentChatPane.tsx k2so_chat_refresh_broadcast': { status: 'gated', gate: 'room.localCommands' },
-  'components/AgentPane/AgentChatPane.tsx k2so_session_lookup_by_agent': { status: 'gated', gate: 'room.localCommands' },
+  'components/AgentPane/AgentChatPane.tsx k2_chat_refresh_broadcast': { status: 'gated', gate: 'room.localCommands' },
+  'components/AgentPane/AgentChatPane.tsx k2_session_lookup_by_agent': { status: 'gated', gate: 'room.localCommands' },
   'components/AgentPane/AgentChatPane.tsx sync:projects': { status: 'gated', gate: 'room.localCommands' },
   'components/AgentPane/AgentInboxPane.tsx sync:projects': { status: 'gated', gate: 'room.localCommands' },
   // Gated off; routing to that server's /cli is the TODO.
   'components/AgentPane/AgentPane.tsx read_worktree_file': { status: 'gated', gate: 'room.localCommands' },
-  'components/AgentPane/AgentPane.tsx k2so_agents_review_queue': { status: 'gated', gate: 'room.localCommands' },
-  'components/AgentPane/AgentPane.tsx k2so_agents_build_launch': { status: 'gated', gate: 'room.localCommands' },
+  'components/AgentPane/AgentPane.tsx k2_agents_review_queue': { status: 'gated', gate: 'room.localCommands' },
+  'components/AgentPane/AgentPane.tsx k2_agents_build_launch': { status: 'gated', gate: 'room.localCommands' },
   'components/FileTree/FileTree.tsx fs_watch_dir': { status: 'gated', gate: 'mayRunLocalActions(room)' },
   'components/FileTree/FileTree.tsx fs_unwatch_dir': { status: 'gated', gate: 'mayRunLocalActions(room)' },
   'components/FileTree/FileTree.tsx fs://change': { status: 'gated', gate: 'mayRunLocalActions(room)' },
   'components/FileViewerPane/CodeEditor.tsx format_file': { status: 'gated', gate: 'localFormatRef.current' },
   'components/TabBar/TabBar.tsx projects_open_in_terminal': { status: 'gated', gate: 'room.localCommands' },
-  'components/WorkspacePanel/WorkspacePanel.tsx k2so_inbox_count': { status: 'gated', gate: 'room.localCommands' },
+  'components/WorkspacePanel/WorkspacePanel.tsx k2_inbox_count': { status: 'gated', gate: 'room.localCommands' },
   'components/WorkspacePanel/WorkspacePanel.tsx projects_open_in_finder': { status: 'gated', gate: 'room.localCommands' },
-  'components/common/HeartbeatSessionPicker.tsx k2so_agents_list': { status: 'gated', gate: 'room.room.localCommands' },
+  'components/common/HeartbeatSessionPicker.tsx k2_agents_list': { status: 'gated', gate: 'room.room.localCommands' },
   'hooks/useTerminalShortcuts.ts projects_open_focus_window': { status: 'gated', gate: 'room.localCommands' },
-  'stores/tabs.ts k2so_agents_list': { status: 'gated', gate: 'binding.localCommands' },
+  'stores/tabs.ts k2_agents_list': { status: 'gated', gate: 'binding.localCommands' },
 }
 
 describe('local-only actions catalog (MS67)', () => {
@@ -135,8 +135,8 @@ describe('local-only actions catalog (MS67)', () => {
   })
 
   it('the two must-fix commands are off in a remote room', () => {
-    expect(localOnlyAction('k2so_session_lookup_by_agent').inRemoteRoom).toBe('off')
-    expect(localOnlyAction('k2so_chat_refresh_broadcast').inRemoteRoom).toBe('off')
+    expect(localOnlyAction('k2_session_lookup_by_agent').inRemoteRoom).toBe('off')
+    expect(localOnlyAction('k2_chat_refresh_broadcast').inRemoteRoom).toBe('off')
   })
 })
 

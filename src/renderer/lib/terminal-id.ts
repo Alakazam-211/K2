@@ -44,7 +44,7 @@ export type TerminalIdKind =
  * has it on hand) but it's IGNORED in the produced id. Pre-0.37.5
  * the id was `agent-chat:<projectId>:<agent>`; that suffix caused
  * the renderer to write the wrong shape to
- * `workspace_sessions.terminal_id` via `k2so_agents_lock`,
+ * `workspace_sessions.terminal_id` via `k2_agents_lock`,
  * bypassing the SQL migration 0042 (C3PO 5c80bef1). The bare-pid
  * form keeps Tauri's terminal manager and the SQL canonical row
  * in agreement.

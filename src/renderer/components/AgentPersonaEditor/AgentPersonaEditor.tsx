@@ -74,7 +74,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
   useEffect(() => {
     const init = async () => {
       try {
-        const ctx = await invoke<EditorContext>('k2so_agents_get_editor_context', {
+        const ctx = await invoke<EditorContext>('k2_agents_get_editor_context', {
           projectPath,
           agentName,
         })

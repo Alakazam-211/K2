@@ -204,7 +204,7 @@ function deriveRemoteState(
 export async function resolvePrimaryAgent(projectPath: string): Promise<string | null> {
   try {
     const list = await invoke<Array<{ name: string; isManager?: boolean; agentType?: string }>>(
-      'k2so_agents_list',
+      'k2_agents_list',
       { projectPath },
     )
     if (list.length === 0) return null
@@ -240,7 +240,7 @@ export async function resolvePrimaryAgent(projectPath: string): Promise<string |
  *  and two rooms never thrash one `loadedFor`. */
 export interface HeartbeatSessionsBinding {
   scope: ServerScope
-  /** May it run this computer's commands (`k2so_agents_list`) to enrich
+  /** May it run this computer's commands (`k2_agents_list`) to enrich
    *  liveness? Only for this computer's daemon. */
   localCommands: boolean
 }
@@ -299,7 +299,7 @@ export function createHeartbeatSessionsStore(binding: HeartbeatSessionsBinding):
       // Roster always comes from the ACTIVE host's daemon via
       // `/cli/heartbeat/*` (host-aware daemonCliGet) — same path the CLI
       // and remote panel use. Pre-0.40.65 the LOCAL host still went through
-      // Tauri `k2so_heartbeat_list` → in-process k2_core DB. That process
+      // Tauri `k2_heartbeat_list` → in-process k2_core DB. That process
       // can open a *different* file than the long-running daemon (Stage A
       // dual-read prefers `k2.db` when present; a stray empty `k2.db` made
       // the drawer report "Project not found" while the sidebar — which

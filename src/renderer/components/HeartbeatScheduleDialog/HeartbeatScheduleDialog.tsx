@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 // Plan B — projects_update is host-aware daemon data; route through the
 // `/cli/projects/update` HTTP layer and re-emit `sync:projects`. The
-// `k2so_agents_*` calls are agent-control (out of scope), stay on invoke.
+// `k2_agents_*` calls are agent-control (out of scope), stay on invoke.
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
@@ -154,7 +154,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
   const scheduleJson = useMemo(() => buildScheduleJson(tab, scheduled, hourly), [tab, scheduled, hourly])
   useEffect(() => {
     const mode = tab === 'hourly' ? 'hourly' : 'scheduled'
-    invoke<string[]>('k2so_agents_preview_schedule', { mode, scheduleJson, count: 5 })
+    invoke<string[]>('k2_agents_preview_schedule', { mode, scheduleJson, count: 5 })
       .then(setPreview)
       .catch(() => setPreview([]))
   }, [tab, scheduleJson])
@@ -169,8 +169,8 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
       const mode = tab === 'hourly' ? 'hourly' : 'scheduled'
       await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, heartbeatMode: mode, heartbeatSchedule: scheduleJson })
       void emit('sync:projects').catch(() => {})
-      await invoke('k2so_agents_update_heartbeat_projects')
-      try { await invoke('k2so_agents_install_heartbeat') } catch { /* may already be installed */ }
+      await invoke('k2_agents_update_heartbeat_projects')
+      try { await invoke('k2_agents_install_heartbeat') } catch { /* may already be installed */ }
 
       // Optimistic local update
       useProjectsStore.setState({
@@ -190,7 +190,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
     if (!projectId) return
     await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, heartbeatMode: 'off', heartbeatSchedule: '' })
     void emit('sync:projects').catch(() => {})
-    await invoke('k2so_agents_update_heartbeat_projects')
+    await invoke('k2_agents_update_heartbeat_projects')
     useProjectsStore.setState({
       projects: useProjectsStore.getState().projects.map((p) =>
         p.id === projectId ? { ...p, heartbeatMode: 'off', heartbeatSchedule: null } : p

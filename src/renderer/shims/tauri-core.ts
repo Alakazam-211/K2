@@ -109,28 +109,28 @@ function defaultFor(cmd: string): unknown {
     // ── list-shaped desktop commands → empty array ─────────────────
     case 'projects_get_editors':
     case 'projects_get_all_editors':
-    case 'k2so_agents_list':
-    case 'k2so_agents_preview_schedule':
-    case 'k2so_agents_teardown_workspace':
-    case 'k2so_heartbeat_list_all':
-    case 'k2so_heartbeat_fires_list_all':
+    case 'k2_agents_list':
+    case 'k2_agents_preview_schedule':
+    case 'k2_agents_teardown_workspace':
+    case 'k2_heartbeat_list_all':
+    case 'k2_heartbeat_fires_list_all':
     case 'fs_search_tree':
     case 'fs_list_dir':
     case 'fs_list':
       return []
     // ── count-shaped ───────────────────────────────────────────────
-    case 'k2so_inbox_count':
+    case 'k2_inbox_count':
     case 'renderer_memory_status':
       return 0
     // ── object-shaped ──────────────────────────────────────────────
-    case 'k2so_agents_get_editor_context':
-    case 'k2so_agents_build_launch':
+    case 'k2_agents_get_editor_context':
+    case 'k2_agents_build_launch':
     case 'permissions_get_status':
       return {}
     case 'fs_watch_dir':
     case 'fs_unwatch_dir':
-    case 'k2so_agents_update_heartbeat_projects':
-    case 'k2so_agents_install_heartbeat':
+    case 'k2_agents_update_heartbeat_projects':
+    case 'k2_agents_install_heartbeat':
       return undefined
     default:
       // Prefer [] over null when the command name looks list-like.

@@ -25,7 +25,7 @@ fn daemon() -> Result<DaemonClient, String> {
 
 /// `workspace::agent::list` → `GET /cli/agents/list`.
 #[tauri::command]
-pub async fn k2so_agents_list(project_path: String) -> Result<Value, String> {
+pub async fn k2_agents_list(project_path: String) -> Result<Value, String> {
     off_main(move || daemon()?.mirror_get("/cli/agents/list", &[("project", &project_path)])).await
 }
 
@@ -34,7 +34,7 @@ pub async fn k2so_agents_list(project_path: String) -> Result<Value, String> {
 /// `POST /cli/agents/build-launch`. `heartbeat_name` is the
 /// heartbeat-scoped resume target (React callers leave it `None`).
 #[tauri::command]
-pub async fn k2so_agents_build_launch(
+pub async fn k2_agents_build_launch(
     project_path: String,
     agent_name: String,
     agent_cli_command: Option<String>,
@@ -62,7 +62,7 @@ pub async fn k2so_agents_build_launch(
 /// `workspace::canonical::detect_canonical_state` →
 /// `POST /cli/canonical/detect-state`.
 #[tauri::command]
-pub async fn k2so_detect_canonical_state(project_path: String) -> Result<Value, String> {
+pub async fn k2_detect_canonical_state(project_path: String) -> Result<Value, String> {
     off_main(move || {
         daemon()?.mirror_post("/cli/canonical/detect-state", &json!({ "project_path": project_path }))
     })
@@ -72,13 +72,13 @@ pub async fn k2so_detect_canonical_state(project_path: String) -> Result<Value, 
 /// Review queue (agents with finished work in worktree branches):
 /// `workspace::reviews::review_queue` → `GET /cli/reviews`.
 #[tauri::command]
-pub async fn k2so_agents_review_queue(project_path: String) -> Result<Value, String> {
+pub async fn k2_agents_review_queue(project_path: String) -> Result<Value, String> {
     off_main(move || daemon()?.mirror_get("/cli/reviews", &[("project", &project_path)])).await
 }
 
 /// `workspace::session::k2_agents_lock` → `POST /cli/agents/lock`.
 #[tauri::command]
-pub async fn k2so_agents_lock(
+pub async fn k2_agents_lock(
     project_path: String,
     agent_name: String,
     terminal_id: Option<String>,
@@ -99,11 +99,11 @@ pub async fn k2so_agents_lock(
 
 /// 0.38.0 — broadcast across this app's windows when the pinned-chat
 /// refresh button is clicked. The same `chat:refreshed` event (payload
-/// `{projectPath}`) k2-core's `k2so_chat_refresh_broadcast` emitted
+/// `{projectPath}`) k2-core's `k2_chat_refresh_broadcast` emitted
 /// through the in-process hook sink; emitted directly now (no daemon call,
 /// so it stays sync).
 #[tauri::command]
-pub fn k2so_chat_refresh_broadcast(app: tauri::AppHandle, project_path: String) -> Result<(), String> {
+pub fn k2_chat_refresh_broadcast(app: tauri::AppHandle, project_path: String) -> Result<(), String> {
     let _ = app.emit(k2_client::events::CHAT_REFRESHED, json!({ "projectPath": project_path }));
     Ok(())
 }
@@ -111,7 +111,7 @@ pub fn k2so_chat_refresh_broadcast(app: tauri::AppHandle, project_path: String) 
 /// Next `count` fire times for a schedule (Settings preview):
 /// `scheduler::preview_fire_times` → `POST /cli/heartbeat/preview-schedule`.
 #[tauri::command]
-pub async fn k2so_agents_preview_schedule(
+pub async fn k2_agents_preview_schedule(
     mode: String,
     schedule_json: String,
     count: u32,
@@ -127,7 +127,7 @@ pub async fn k2so_agents_preview_schedule(
 
 /// `heartbeats::k2_heartbeat_list` → `GET /cli/heartbeat/list`.
 #[tauri::command]
-pub async fn k2so_heartbeat_list(project_path: String) -> Result<Value, String> {
+pub async fn k2_heartbeat_list(project_path: String) -> Result<Value, String> {
     off_main(move || daemon()?.mirror_get("/cli/heartbeat/list", &[("project", &project_path)])).await
 }
 
@@ -135,7 +135,7 @@ pub async fn k2so_heartbeat_list(project_path: String) -> Result<Value, String> 
 /// Heartbeats settings page audit log). Default limit 100 fires.
 /// `heartbeats::k2_heartbeat_fires_list_all` → `GET /cli/heartbeat/fires-list-all`.
 #[tauri::command]
-pub async fn k2so_heartbeat_fires_list_all(limit: Option<i64>) -> Result<Value, String> {
+pub async fn k2_heartbeat_fires_list_all(limit: Option<i64>) -> Result<Value, String> {
     off_main(move || {
         let limit_s = limit.map(|l| l.to_string());
         let mut params: Vec<(&str, &str)> = Vec::new();
@@ -151,7 +151,7 @@ pub async fn k2so_heartbeat_fires_list_all(limit: Option<i64>) -> Result<Value, 
 /// project's name + path. `heartbeats::k2_heartbeat_list_all` →
 /// `GET /cli/heartbeat/list-all`.
 #[tauri::command]
-pub async fn k2so_heartbeat_list_all() -> Result<Value, String> {
+pub async fn k2_heartbeat_list_all() -> Result<Value, String> {
     off_main(|| daemon()?.mirror_get("/cli/heartbeat/list-all", &[])).await
 }
 
@@ -159,7 +159,7 @@ pub async fn k2so_heartbeat_list_all() -> Result<Value, String> {
 /// `heartbeats::k2_workspace_get_show_heartbeat_sessions` →
 /// `POST /cli/heartbeat/show-sessions`.
 #[tauri::command]
-pub async fn k2so_workspace_get_show_heartbeat_sessions(project_path: String) -> Result<Value, String> {
+pub async fn k2_workspace_get_show_heartbeat_sessions(project_path: String) -> Result<Value, String> {
     off_main(move || {
         daemon()?.mirror_post("/cli/heartbeat/show-sessions", &json!({ "project_path": project_path }))
     })
@@ -176,7 +176,7 @@ pub async fn k2so_workspace_get_show_heartbeat_sessions(project_path: String) ->
 /// session, new on next fire), or `session` (an explicit saved
 /// session — `session_id` + `provider` ride along, mode=session only).
 #[tauri::command]
-pub async fn k2so_heartbeat_set_session(
+pub async fn k2_heartbeat_set_session(
     project_path: String,
     name: String,
     mode: String,
@@ -211,7 +211,7 @@ pub async fn k2so_heartbeat_set_session(
 
 /// Install the heartbeat scheduler via the daemon.
 #[tauri::command]
-pub async fn k2so_agents_install_heartbeat() -> Result<(), String> {
+pub async fn k2_agents_install_heartbeat() -> Result<(), String> {
     off_main(|| {
         let client = daemon()?;
         let cfg = k2_client::app_settings_view::load().wake_scheduler;
@@ -245,13 +245,13 @@ fn apply_wake_scheduler_blocking() -> Result<String, String> {
 /// Apply the user's Wake Scheduler settings — daemon decides between
 /// install / uninstall based on `mode`.
 #[tauri::command]
-pub async fn k2so_agents_apply_wake_scheduler() -> Result<String, String> {
+pub async fn k2_agents_apply_wake_scheduler() -> Result<String, String> {
     off_main(apply_wake_scheduler_blocking).await
 }
 
 /// Uninstall the heartbeat scheduler via the daemon.
 #[tauri::command]
-pub async fn k2so_agents_uninstall_heartbeat() -> Result<(), String> {
+pub async fn k2_agents_uninstall_heartbeat() -> Result<(), String> {
     off_main(|| {
         let client = daemon()?;
         let _ = client.cli_post_json("/cli/heartbeat/uninstall-launchd", &json!({}))?;
@@ -261,10 +261,10 @@ pub async fn k2so_agents_uninstall_heartbeat() -> Result<(), String> {
 }
 
 /// Refresh the heartbeat-scheduler lifecycle when the toggle changes —
-/// the same idempotent re-apply as `k2so_agents_apply_wake_scheduler`
+/// the same idempotent re-apply as `k2_agents_apply_wake_scheduler`
 /// (its result is ignored, as before).
 #[tauri::command]
-pub async fn k2so_agents_update_heartbeat_projects() -> Result<(), String> {
+pub async fn k2_agents_update_heartbeat_projects() -> Result<(), String> {
     off_main(|| {
         let _ = apply_wake_scheduler_blocking();
         Ok(())
@@ -276,7 +276,7 @@ pub async fn k2so_agents_update_heartbeat_projects() -> Result<(), String> {
 /// `workspace::agent_editor::k2_agents_get_editor_context` →
 /// `POST /cli/agents/editor-context`.
 #[tauri::command]
-pub async fn k2so_agents_get_editor_context(project_path: String, agent_name: String) -> Result<Value, String> {
+pub async fn k2_agents_get_editor_context(project_path: String, agent_name: String) -> Result<Value, String> {
     off_main(move || {
         daemon()?.mirror_post(
             "/cli/agents/editor-context",
@@ -314,7 +314,7 @@ pub async fn workspace_session_set_session_id(
 /// `workspace::teardown::k2_agents_teardown_workspace` →
 /// `POST /cli/agents/teardown-workspace`.
 #[tauri::command]
-pub async fn k2so_agents_teardown_workspace(project_path: String, mode: String) -> Result<Value, String> {
+pub async fn k2_agents_teardown_workspace(project_path: String, mode: String) -> Result<Value, String> {
     off_main(move || {
         daemon()?.mirror_post(
             "/cli/agents/teardown-workspace",

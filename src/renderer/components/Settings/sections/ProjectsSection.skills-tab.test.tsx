@@ -23,8 +23,8 @@ type Answers = { skills: () => unknown; agents: () => unknown }
 
 function answer({ skills, agents }: Answers): void {
   invoke.mockImplementation(async (cmd: string) => {
-    if (cmd === 'k2so_skills_list') return skills()
-    if (cmd === 'k2so_agents_list') return agents()
+    if (cmd === 'k2_skills_list') return skills()
+    if (cmd === 'k2_agents_list') return agents()
     return null
   })
 }

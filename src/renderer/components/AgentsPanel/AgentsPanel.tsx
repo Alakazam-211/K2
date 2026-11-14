@@ -40,7 +40,7 @@ export default function AgentsPanel(): React.JSX.Element {
       return
     }
     try {
-      const result = await invoke<K2AgentInfo[]>('k2so_agents_list', {
+      const result = await invoke<K2AgentInfo[]>('k2_agents_list', {
         projectPath: activeProject.path,
       })
       // Web shim may soft-resolve null; never store a non-array (renders crash on .length).
@@ -59,7 +59,7 @@ export default function AgentsPanel(): React.JSX.Element {
     // a sidebar badge). Defaults to 0 on error to keep the sidebar
     // intact when the daemon is briefly unreachable.
     try {
-      const count = await invoke<number>('k2so_inbox_count', { projectPath: activeProject.path })
+      const count = await invoke<number>('k2_inbox_count', { projectPath: activeProject.path })
       setWsInboxCount(count)
     } catch {
       setWsInboxCount(0)
@@ -108,7 +108,7 @@ export default function AgentsPanel(): React.JSX.Element {
         args: string[]
         cwd: string
         agentName: string
-      }>('k2so_agents_build_launch', {
+      }>('k2_agents_build_launch', {
         projectPath: activeProject.path,
         agentName,
       })
@@ -376,7 +376,7 @@ function WorkspaceInboxButton({ projectPath }: { projectPath: string }): React.J
     const check = async () => {
       // Phase 2.1c Item 2 — workspace inbox primitive count endpoint.
       try {
-        const c = await invoke<number>('k2so_inbox_count', { projectPath })
+        const c = await invoke<number>('k2_inbox_count', { projectPath })
         setCount(c)
       } catch { setCount(0) }
     }

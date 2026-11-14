@@ -37,7 +37,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // ── Boundary mocks (installed BEFORE the modules import) ─────────────────
 
 vi.mock('@tauri-apps/api/core', () => ({
-  // k2so_sessions_list_for_workspace (reconcile) returns null → reconcile
+  // k2_sessions_list_for_workspace (reconcile) returns null → reconcile
   // is inert (just subscribes). All other invokes resolve null.
   invoke: vi.fn(async (cmd: string) => {
     if (cmd === 'daemon_ws_url') {

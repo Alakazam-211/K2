@@ -93,7 +93,7 @@ assert 'Body text for the shape parity check' in item['bodyPreview'], \
 PYEOF
 
 # Now verify the lightweight `/cli/inbox/list` empty-folder behaviour
-# matches what `k2so_inbox_count` returns. Tauri command body:
+# matches what `k2_inbox_count` returns. Tauri command body:
 #   k2_core::inbox::list_root(&workspace).len()
 # So one seeded item -> count == 1.
 COUNT_LEN="$(echo "$RESP" | python3 -c "import sys, json; print(len(json.load(sys.stdin)))")"

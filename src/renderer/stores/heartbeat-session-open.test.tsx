@@ -236,7 +236,7 @@ beforeEach(() => {
     if (cmd === 'daemon_ws_url') {
       return { state: 'unavailable', reason: 'test env', port: null, token: null }
     }
-    if (cmd === 'k2so_agents_list') {
+    if (cmd === 'k2_agents_list') {
       return [{ name: 'claude', agentType: 'custom' }]
     }
     throw new Error(`unexpected invoke ${cmd}`)
@@ -282,7 +282,7 @@ describe('pinned chat is decided before any conversation search', () => {
     expect(state.extraGroups[0].tabs.map((t) => t.id)).toEqual(['extra-leftover'])
     expect(cli.getText).not.toHaveBeenCalled()
     expect(cli.posts).toEqual([])
-    expect(cli.invoke).not.toHaveBeenCalledWith('k2so_heartbeat_list', expect.anything())
+    expect(cli.invoke).not.toHaveBeenCalledWith('k2_heartbeat_list', expect.anything())
   })
 
   it('the drawer row focuses the pinned Chat tab and does not append a companion', async () => {
@@ -302,7 +302,7 @@ describe('pinned chat is decided before any conversation search', () => {
     expect(state.extraGroups[0].activeTabId).toBeNull()
     expect(cli.getText).not.toHaveBeenCalled()
     expect(cli.posts).toEqual([])
-    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2so_heartbeat_list')
+    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2_heartbeat_list')
   })
 })
 
@@ -329,7 +329,7 @@ describe('an already-open session is focused by conversation id', () => {
     expect(state.activeTabId).toBe('main-other')
     expect(cli.posts).toEqual([])
     expect(cli.get.mock.calls.map((c) => c[0])).not.toContain('heartbeat/list')
-    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2so_heartbeat_list')
+    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2_heartbeat_list')
 
     // Own-session mode uses the same open path.
     await openHeartbeatTarget(useTabsStore, PROJECT, 'daily', 'auto')
@@ -380,7 +380,7 @@ describe('a live heartbeat process with no tab is attached', () => {
     expect(data[0].renderer).toBe('kessel')
     expect(data[0].heartbeatName).toBe('daily')
     expect(cli.posts).toEqual([])
-    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2so_heartbeat_list')
+    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2_heartbeat_list')
 
     await useTabsStore.getState().openHeartbeatTab(PROJECT, 'daily')
     expect(useTabsStore.getState().tabs).toHaveLength(1)
@@ -410,7 +410,7 @@ describe('a live heartbeat process with no tab is attached', () => {
 })
 
 describe('cold path reads the host list or the id active-session already returned', () => {
-  it('uses claudeSessionId and does not call k2so_heartbeat_list or heartbeat/list', async () => {
+  it('uses claudeSessionId and does not call k2_heartbeat_list or heartbeat/list', async () => {
     activePayload = {
       name: 'daily',
       claudeSessionId: SID,
@@ -430,7 +430,7 @@ describe('cold path reads the host list or the id active-session already returne
     expect(data[0].renderer).toBe('kessel')
     expect(data[0].attachAgentName).toBeUndefined()
     expect(cli.get.mock.calls.map((c) => c[0])).not.toContain('heartbeat/list')
-    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2so_heartbeat_list')
+    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2_heartbeat_list')
     expect(cli.posts).toEqual([])
   })
 
@@ -440,7 +440,7 @@ describe('cold path reads the host list or the id active-session already returne
     expect(id).toBeTruthy()
     expect(terminalData(useTabsStore.getState().tabs.find((t) => t.id === id)! )[0].conversationId).toBe(SID)
     expect(cli.get).toHaveBeenCalledWith('heartbeat/list', { project: PROJECT })
-    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2so_heartbeat_list')
+    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2_heartbeat_list')
   })
 
   it('with no saved id, logs click Launch first and opens nothing', async () => {
@@ -452,7 +452,7 @@ describe('cold path reads the host list or the id active-session already returne
     expect(info).toHaveBeenCalledWith(
       '[openHeartbeatTab] heartbeat has no saved session yet; click Launch first',
     )
-    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2so_heartbeat_list')
+    expect(cli.invoke.mock.calls.map((c) => c[0])).not.toContain('k2_heartbeat_list')
     info.mockRestore()
   })
 })

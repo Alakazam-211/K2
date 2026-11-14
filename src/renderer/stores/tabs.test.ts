@@ -17,7 +17,7 @@ import { primaryScope } from '@/kessel/server-scope'
 // in the jsdom/node test env (no Tauri bridge).
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string) => {
-    if (cmd === 'k2so_agents_list') return []
+    if (cmd === 'k2_agents_list') return []
     if (cmd === 'k2so_workspace_agent_display_name') return 'resolved-agent'
     return null
   }),

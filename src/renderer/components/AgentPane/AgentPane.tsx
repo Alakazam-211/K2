@@ -99,7 +99,7 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
   )
   // Phase 2.1 wrap-up — Task tab reads `<worktree>/CLAUDE.md` via the
   // `read_worktree_file` Tauri command (path-canonicalized, traversal-
-  // rejecting). Review tab fetches `k2so_agents_review_queue` and
+  // rejecting). Review tab fetches `k2_agents_review_queue` and
   // filters client-side by this worktree's branch.
   const [taskContent, setTaskContent] = useState<string>('')
   const [taskError, setTaskError] = useState<string | null>(null)
@@ -205,7 +205,7 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
       setReviewLoaded(true)
       return () => { cancelled = true }
     }
-    invoke<WorktreeReviewItem[]>('k2so_agents_review_queue', { projectPath })
+    invoke<WorktreeReviewItem[]>('k2_agents_review_queue', { projectPath })
       .then((items) => {
         if (cancelled) return
         // Prefer worktreePath match (most precise). Fall back to
@@ -476,7 +476,7 @@ function WorktreeChatTerminal({
         }
         return
       }
-      // MS67: `k2so_agents_build_launch` builds on THIS computer; a room on
+      // MS67: `k2_agents_build_launch` builds on THIS computer; a room on
       // another server falls through to the plain launch below (no `/cli`
       // route builds it there yet — M5).
       if (room.localCommands) try {
@@ -484,7 +484,7 @@ function WorktreeChatTerminal({
           command: string
           args: string[]
           cwd: string
-        }>('k2so_agents_build_launch', { projectPath, agentName })
+        }>('k2_agents_build_launch', { projectPath, agentName })
         if (!cancelled && result) {
           setLaunchConfig({ command: result.command, args: result.args, cwd: result.cwd })
           claimAgentLock(room.scope, { project: projectPath, agent: agentName, terminal_id: myTerminalId, owner: 'user' }).catch(() => {})

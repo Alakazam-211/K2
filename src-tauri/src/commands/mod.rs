@@ -24,7 +24,7 @@ pub mod linux_pkg_update;
 // plist `dev.k2.claude-auth.plist`) now lives in the
 // daemon's `claude_auth_host` module so refresh keeps working when
 // the Tauri app is closed.
-pub mod k2so_agents;
+pub mod agents;
 pub mod format;
 // Phase 2 Unit 1 — `companion` command shims deleted. The renderer
 // hits `/cli/companion/*` on k2-daemon directly; no Tauri-side

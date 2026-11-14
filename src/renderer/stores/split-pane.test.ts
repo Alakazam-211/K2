@@ -36,7 +36,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string) => {
-    if (cmd === 'k2so_sessions_list_for_workspace') {
+    if (cmd === 'k2_sessions_list_for_workspace') {
       return JSON.stringify(daemon.sessions)
     }
     if (cmd === 'daemon_ws_url') {

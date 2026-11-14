@@ -193,7 +193,7 @@ import { __resetHostPoolForTests, hostPool } from '@/lib/host-pool-instance'
 import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
 import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { homeRooms } from '@/stores/home-rooms'
-import { otherRowOpenTitle } from './HomeSidebar'
+import { HOME_NAV_EDGE_TINT, otherRowOpenTitle } from './HomeSidebar'
 import { __resetAddPickerListingsForTests } from './HomeAddPanels'
 import { HOME_AGENT_COLORS_KEY, useHomeAvatarStore } from '@/lib/home-avatars'
 
@@ -451,6 +451,29 @@ describe('Home — the Agents page shell', () => {
     render(<Shell />)
     expect(screen.getByText('Add an agent to get started', { selector: '[data-room-empty] p' })).toBeTruthy()
     expect(within(homeSidebar()).getByText('No agents on this Home yet')).toBeTruthy()
+  })
+
+  it('the roster scrolls between the Home picker and the bottom bar, its ends fading in the nav\'s own colour', () => {
+    render(<Shell />)
+    const nav = homeSidebar()
+    const frame = within(nav).getByTestId('home-nav-list')
+    // Between the picker and the Add Agent bar, in the list's old place.
+    const header = nav.querySelector('[data-home-header]') as HTMLElement
+    const footer = nav.querySelector('[data-nav-footer]') as HTMLElement
+    expect(header.compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(frame.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(frame.className).toContain('flex-1 min-h-0')
+    // The rows scroll inside it; one band at each end, never read aloud.
+    const list = frame.querySelector('[data-scroll-edges-list]') as HTMLElement
+    expect(list.querySelectorAll('[data-agent-row]').length).toBe(3)
+    expect(list.className).toContain('overflow-y-auto')
+    const bands = frame.querySelectorAll(':scope > [data-scroll-edge][aria-hidden="true"]')
+    expect(Array.from(bands).map((b) => b.getAttribute('data-scroll-edge'))).toEqual(['top', 'bottom'])
+    // Three rows fit: no band shows.
+    expect([frame.dataset.edgeTop, frame.dataset.edgeBottom]).toEqual(['0', '0'])
+    // Tinted with the nav tile's fill, never black.
+    expect(frame.style.getPropertyValue('--k2-edge-tint')).toBe(HOME_NAV_EDGE_TINT)
+    expect(HOME_NAV_EDGE_TINT).toBe('var(--tile-fill, var(--color-bg-surface))')
   })
 
   it('with the setting off, clicking a row on another server switches through pickHost and lands on Home', async () => {

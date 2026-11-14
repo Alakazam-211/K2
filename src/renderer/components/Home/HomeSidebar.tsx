@@ -53,6 +53,7 @@ import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
+import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
 import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
@@ -69,6 +70,11 @@ import { isGrokBotAddress } from '@/lib/grokbots'
 export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
 
 export { MachineChip } from './MachineChip'
+
+/** What the nav's scroll edges tint with: the nav tile's own fill (Layout's
+ *  Surface: `--color-bg-surface`, which Glass's tile reads as `--tile-fill`),
+ *  so a band melts into the nav in every Style and palette, never darkens it. */
+export const HOME_NAV_EDGE_TINT = 'var(--tile-fill, var(--color-bg-surface))'
 
 /** The one word a remote row keeps: an action (Sign in, No access, Not
  *  found), just before the cluster (Q2: glyphs everywhere else). */
@@ -443,8 +449,15 @@ export default function HomeSidebar(): React.JSX.Element {
         <HomePicker />
       </div>
 
-      {/* Home roster */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
+      {/* Home roster. When it scrolls, its ends fade softly under the Home
+          picker and the bottom bar, as the Thread's do (Rosson 2026-11-14),
+          tinted with the nav's own fill. */}
+      <ScrollEdgeFrame
+        className="flex-1 min-h-0"
+        scrollClassName="overflow-y-auto overflow-x-hidden py-1"
+        tint={HOME_NAV_EDGE_TINT}
+        testId="home-nav-list"
+      >
         <div ref={listRef}>
           {rows.map((row, idx) => (
             <div
@@ -481,7 +494,7 @@ export default function HomeSidebar(): React.JSX.Element {
             <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">Add an agent to get started</p>
           </div>
         )}
-      </div>
+      </ScrollEdgeFrame>
 
       {/* Setup checklist (renders nothing while off, hidden or finished) */}
       <SetupChecklist />

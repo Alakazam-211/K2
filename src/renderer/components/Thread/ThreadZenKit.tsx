@@ -59,6 +59,7 @@ import {
 } from './ThreadMessageMenu'
 
 import { THREAD_JUMP_PILL_CSS } from './ThreadJumpPill'
+import { FOOTER_BLUR_LAYERS, FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE } from '@/components/ui/scrollEdgeLayers'
 import {
   CHAMFER_CUT,
   THREAD_CHAMFER_CSS,
@@ -259,36 +260,9 @@ export const FOOTER_FADE_MOVE_MS = 200
 
 const FOOTER_FADE_SCOPE = `[${THREAD_ZEN_SCOPE_ATTR}] .thread-footer-fade`
 
-/** The frosted tint: nearly clear at the top, stronger toward the bottom
- *  ([% of the glass's height from its top, % of the background]). */
-export const FOOTER_TINT_STOPS: ReadonlyArray<readonly [number, number]> = [
-  [0, 0],
-  [20, 6],
-  [45, 18],
-  [70, 32],
-  [100, 46],
-]
-
-/** Reduced transparency (no blur): the gradient goes nearly opaque within
- *  6px of the glass's top ([px from the top, % of the background]). */
-export const FOOTER_TINT_STOPS_OPAQUE: ReadonlyArray<readonly [number, number]> = [
-  [0, 0],
-  [1, 20],
-  [2, 44],
-  [3, 66],
-  [4, 84],
-  [6, 95],
-]
-
-/** The blur layers, light to heavy: [blur px, mask clear until %, fully on
- *  at %] of the glass's height from its top. Each starts before the one
- *  above it is fully on, so the masks overlap. */
-export const FOOTER_BLUR_LAYERS: ReadonlyArray<readonly [number, number, number]> = [
-  [1, 0, 12],
-  [4, 8, 35],
-  [10, 28, 60],
-  [20, 52, 80],
-]
+// The tint and blur layers live in ui/scrollEdgeLayers, shared with the
+// other lists that fade the same way (the Home nav, ScrollEdgeFade).
+export { FOOTER_BLUR_LAYERS, FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE }
 
 /** The field's see-through wash (% of its own fill), dark and light
  *  schemes; reduced transparency keeps it opaque. */

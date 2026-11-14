@@ -1,0 +1,74 @@
+/* Home groups: the few rules Tailwind classes can't say (K2 Design's mock,
+   .k2/prds/mockup-home-groups.html). Tokens only. Gardens never match:
+   every rule sits under a Home groups mark. */
+
+/* The outlined "no icon" dot: Terminal's cut octagon, a circle elsewhere. */
+html[data-style="terminal"] [data-group-dot-shape="round"] { display: none; }
+html:not([data-style="terminal"]) [data-group-dot-shape="cut"] { display: none; }
+
+/* The bar's focus ring is the app's (data-k2-focus): Terminal's cut ring
+   around the 24 px target; outside Terminal a circle, not the selector
+   radius. */
+html:not([data-style="terminal"]) [data-home-group-bar] [data-group-id][data-k2-focus]:focus-visible::after {
+  border-radius: 50%;
+}
+
+/* The bar's edge fades: the nav's own fill, only while more groups sit past
+   that edge (data-fade-start / data-fade-end on the scroller's frame). */
+[data-group-bar-frame] { --k2-gbar-tint: var(--tile-fill, var(--color-bg-surface)); }
+[data-group-bar-frame] > [data-group-bar-fade] {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  visibility: hidden;
+}
+[data-group-bar-frame][data-orientation="horizontal"] > [data-group-bar-fade] { top: 0; bottom: 0; width: 14px; }
+[data-group-bar-frame][data-orientation="horizontal"] > [data-group-bar-fade="start"] { left: 0; background: linear-gradient(to right, var(--k2-gbar-tint) 20%, transparent); }
+[data-group-bar-frame][data-orientation="horizontal"] > [data-group-bar-fade="end"] { right: 0; background: linear-gradient(to left, var(--k2-gbar-tint) 20%, transparent); }
+[data-group-bar-frame][data-orientation="vertical"] > [data-group-bar-fade] { left: 0; right: 0; height: 12px; }
+[data-group-bar-frame][data-orientation="vertical"] > [data-group-bar-fade="start"] { top: 0; background: linear-gradient(to bottom, var(--k2-gbar-tint) 20%, transparent); }
+[data-group-bar-frame][data-orientation="vertical"] > [data-group-bar-fade="end"] { bottom: 0; background: linear-gradient(to top, var(--k2-gbar-tint) 20%, transparent); }
+[data-group-bar-frame][data-fade-start] > [data-group-bar-fade="start"],
+[data-group-bar-frame][data-fade-end] > [data-group-bar-fade="end"] { visibility: visible; }
+
+/* Small floats (the bar's name tip, the swipe peek): the elevated fill and
+   edge in Terminal; Glass's menu material, rounded. */
+[data-group-float] {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-5);
+}
+html[data-style="glass"] [data-group-float] {
+  box-shadow: var(--shadow-3);
+  border-radius: 8px;
+  border-width: 0.5px;
+}
+html[data-style="glass"] [data-group-float="peek"] { border-radius: 14px; }
+[data-group-float="peek"][data-armed] { border-color: var(--color-text-secondary); }
+
+/* The dialog list's selected row: a 2px edge in Terminal. */
+html[data-style="terminal"] [data-group-list-row][aria-selected="true"]:not([data-one-pane] *)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--color-text-primary);
+}
+
+/* The icon grid's picked cell: a wash and a 1px secondary ring inside. */
+[data-group-icon-pick][aria-pressed="true"] {
+  background: var(--color-wash-2);
+  color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--color-text-secondary);
+}
+
+/* A row lifted by the recent-first move. */
+[data-home-row][data-row-lift] {
+  position: relative;
+  z-index: 3;
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-5);
+}
+html[data-style="glass"] [data-home-row][data-row-lift] { box-shadow: var(--shadow-3); }

@@ -16,6 +16,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 import HomeGroupBar, { type GroupBarItem, type HomeGroupBarProps } from './HomeGroupBar'
 import GroupNameHeader from './GroupNameHeader'
 import { GROUP_BAR_ICON_PX } from './GroupGlyph'
+import { centredScroll } from './group-bar-scroll'
 import { useHomeGroups } from './useHomeGroups'
 import { selectedHome, useHomesStore } from '@/stores/homes'
 
@@ -58,11 +59,11 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('the group icon row', () => {
-  it('bare icons: the current group in the accent colour, the others muted; each a labelled, focusable button', () => {
+  it('bare icons: the current group in the accent text colour, the others muted; each a labelled, focusable button', () => {
     render(<HomeGroupBar {...props({ currentId: 'g2' })} />)
     const play = groupButton('Play')
     expect(play.getAttribute('aria-current')).toBe('true')
-    expect(play.className).toContain('text-[var(--color-accent)]')
+    expect(play.className).toContain('text-[var(--color-accent-text)]')
     for (const other of ['Work', 'Later']) {
       const b = groupButton(other)
       expect(b.getAttribute('aria-current')).toBeNull()
@@ -76,7 +77,7 @@ describe('the group icon row', () => {
     expect(screen.queryByRole('button', { name: 'New group' })).toBeNull()
   })
 
-  it('draws a Lucide icon squared at half size, in a larger click target; a numbered dot when it has none or an unknown name', () => {
+  it('draws a Lucide icon squared at the bar size, in a larger click target; its number when it has none or an unknown name', () => {
     render(<HomeGroupBar {...props()} />)
     const work = groupButton('Work')
     const svg = work.querySelector('svg[data-group-icon]')
@@ -89,24 +90,29 @@ describe('the group icon row', () => {
       'miter',
       'currentColor',
     ])
-    expect(GROUP_BAR_ICON_PX).toBe(8)
-    expect(work.className).toContain('h-6 w-6')
+    expect(GROUP_BAR_ICON_PX).toBe(12)
+    expect(work.className).toContain('h-[var(--k2-group-target)] w-[var(--k2-group-target)]')
     expect(groupButton('Play').querySelector('[data-group-dot]')?.textContent).toBe('2')
     expect(groupButton('Play').querySelector('svg')).toBeNull()
     expect(groupButton('Later').querySelector('[data-group-dot]')?.textContent).toBe('3')
   })
 
-  it('a click switches; the tooltip names the ⌥⌘ chord and "Most recent at the top"', () => {
+  it('a click switches; the name tip shows the ⌥⌘ chord; the label carries the chord and "Most recent at the top"', () => {
     const p = props({ shortcutLabel: (i) => `⌥⌘${i + 1}` })
     render(<HomeGroupBar {...p} />)
     fireEvent.click(groupButton('Play'))
     expect(p.onSelect).toHaveBeenCalledWith('g2')
-    expect(groupButton('Later').getAttribute('title')).toBe('Later (⌥⌘3)')
+    // The tip (K2 Design's look) replaces the native title.
+    expect(groupButton('Later').getAttribute('title')).toBeNull()
+    fireEvent.mouseEnter(groupButton('Later'))
+    const tip = document.querySelector('[data-group-bar-tip]') as HTMLElement
+    expect(tip.textContent).toBe('Later⌥⌘3')
+    expect(tip.getAttribute('aria-hidden')).toBe('true')
+    fireEvent.mouseLeave(groupButton('Later'))
+    expect(document.querySelector('[data-group-bar-tip]')).toBeNull()
+    expect(groupButton('Later').getAttribute('aria-keyshortcuts')).toBe('Alt+Meta+3')
     const work = groupButton('Work')
-    expect(work.getAttribute('title')).toBe('Work (⌥⌘1) · Most recent at the top')
     expect(work.getAttribute('aria-description')).toBe('Most recent at the top')
-    expect(work.querySelector('[data-recent-first-mark]')).not.toBeNull()
-    expect(groupButton('Play').querySelector('[data-recent-first-mark]')).toBeNull()
   })
 
   it('arrow keys move focus along the row', () => {
@@ -129,24 +135,16 @@ describe('the group icon row', () => {
     expect([bar.getAttribute('data-swipe-direction'), bar.style.getPropertyValue('--group-swipe-progress')]).toEqual(['none', '0'])
   })
 
-  it('with many groups the row scrolls and brings the current group into view', () => {
+  it('with many groups the row scrolls and centres the current group (its own scroller only)', () => {
     const many = Array.from({ length: 14 }, (_, i) => ({ id: `m${i}`, name: `G${i}`, icon: null, order: i, recentFirst: false, pinned: [] }))
-    const seen: string[] = []
-    // jsdom has no scrollIntoView: record which element asked to be shown.
-    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: (o?: unknown) => void }
-    expect(proto.scrollIntoView).toBeUndefined()
-    proto.scrollIntoView = function (this: HTMLElement) {
-      seen.push(this.getAttribute('data-group-id') ?? '')
-    }
-    try {
-      const { rerender } = render(<HomeGroupBar {...props({ groups: many, currentId: 'm0' })} />)
-      const scroller = document.querySelector('[data-group-bar-scroller]') as HTMLElement
-      expect(scroller.className).toContain('overflow-x-auto')
-      rerender(<HomeGroupBar {...props({ groups: many, currentId: 'm12' })} />)
-      expect(seen.at(-1)).toBe('m12')
-    } finally {
-      delete proto.scrollIntoView
-    }
+    render(<HomeGroupBar {...props({ groups: many, currentId: 'm12' })} />)
+    const scroller = document.querySelector('[data-group-bar-scroller]') as HTMLElement
+    expect(scroller.className).toContain('overflow-x-auto')
+    // 14 targets of 20 px in a 160 px view: the 13th centred, then clamped at the ends.
+    expect(centredScroll(12 * 20, 20, 160, 14 * 20)).toBe(120)
+    expect(centredScroll(0, 20, 160, 14 * 20)).toBe(0)
+    expect(centredScroll(13 * 20, 20, 160, 14 * 20)).toBe(120)
+    expect(centredScroll(40, 20, 160, 100)).toBe(0)
   })
 })
 

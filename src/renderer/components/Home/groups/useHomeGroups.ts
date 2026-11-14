@@ -59,6 +59,7 @@ export function useHomeGroups(): HomeGroups {
         order,
         recentFirst: !!h.recentFirst,
         pinned: pinnedRows(h).map((r) => r.address),
+        count: h.rows.length,
       })),
     [homes],
   )
@@ -113,7 +114,7 @@ export function useHomeGroups(): HomeGroups {
   return {
     bar,
     current: { id: current.id, name: current.name, icon: current.icon ?? null, index, count: current.rows.length },
-    editCurrent: () => setEditing({ id: current.id }),
+    editCurrent: () => setEditing({ id: current.id, from: 'header' }),
     lastMessagedAt,
     recentIcons: readRecentGroupIcons,
   }

@@ -8,8 +8,9 @@ import { Button } from '@/components/ui'
 export const NAV_COLLAPSE_SLIDE = 'width var(--motion-duration-slow) var(--motion-ease-standard)'
 
 /** The footer row's gap before «, held inside «'s slot so the slot can
- *  close to nothing and the main action takes the whole row. */
-const NAV_COLLAPSE_GAP_PX = 8
+ *  close to nothing and the main action takes the whole row. The Home
+ *  group bar spaces its glyphs by it too (groups/group-bar-look.ts). */
+export const NAV_COLLAPSE_GAP_PX = 8
 
 /** Past the slowest Style's `--motion-duration-slow` (320ms): when the slot
  *  stops clipping if no transitionend came. */

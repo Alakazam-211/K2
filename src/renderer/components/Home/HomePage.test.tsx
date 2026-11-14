@@ -836,18 +836,19 @@ describe('Home — the Agents page shell', () => {
       expect(header.querySelector('[data-group-name-header]')?.className).toContain('w-full')
       expect(within(header).getByRole('button', { name: `Edit groups (${home.name})` })).toBeTruthy()
 
-      // The group icons right under the agent list (no divider, outside the
-      // bordered footer): each group's ⌥⌘N in its tooltip.
+      // The group icons on their own row right above Add Agent | « (no
+      // divider anywhere): each group's ⌥⌘N in its label's shortcuts.
       const bar = within(homeSidebar()).getByRole('toolbar', { name: 'Groups' })
       expect(homeSidebar().querySelector('[data-nav-footer]')?.contains(bar)).toBe(false)
       const groupRow = homeSidebar().querySelector('[data-home-group-row]') as HTMLElement
       expect(groupRow.contains(bar)).toBe(true)
       expect(groupRow.className).not.toContain('border')
-      expect(homeSidebar().querySelector('[data-testid="home-nav-list"]')?.nextElementSibling).toBe(groupRow)
-      expect(Array.from(bar.querySelectorAll('[data-group-id]')).map((b) => b.getAttribute('title'))).toEqual([
-        `${home.name} (⌥⌘1)`,
-        'Second (⌥⌘2)',
-        'Third (⌥⌘3)',
+      expect(groupRow.nextElementSibling).toBe(homeSidebar().querySelector('[data-nav-footer]'))
+      expect(groupRow.parentElement?.className).not.toContain('border')
+      expect(Array.from(bar.querySelectorAll('[data-group-id]')).map((b) => b.getAttribute('aria-keyshortcuts'))).toEqual([
+        'Alt+Meta+1',
+        'Alt+Meta+2',
+        'Alt+Meta+3',
       ])
     } finally {
       for (const id of extra) if (id) useHomesStore.getState().deleteHome(id)

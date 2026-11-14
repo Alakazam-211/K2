@@ -471,7 +471,7 @@ export default function HomeSidebar(): React.JSX.Element {
       {/* Header — the focus-group row's spot: the current group's name and
           count, and "…" for the All groups modal. Switching is the group icons at the
           bottom, the sideways swipe and ⌥⌘1–9 (no ⌘ 1-9 hint here). */}
-      <div className="px-3 pt-3 pb-2 no-drag" data-home-header="">
+      <div className="no-drag" data-home-header="">
         <GroupNameHeader
           name={groups.current.name}
           icon={groups.current.icon}
@@ -529,18 +529,19 @@ export default function HomeSidebar(): React.JSX.Element {
         )}
       </ScrollEdgeFrame>
 
-      {/* The group icons, right under the list with no divider: the list's
-          own bottom edge fade (ScrollEdgeFrame) runs out behind them. */}
-      <div className="flex justify-center px-3 pb-1 no-drag" data-home-group-row="">
-        <HomeGroupBar {...groups.bar} />
-      </div>
-
       {/* Setup checklist (renders nothing while off, hidden or finished) */}
       <SetupChecklist />
 
-      {/* Add Agent + collapse the nav — the Add Workspace bar. (Zen Mode is
-          the window's top-bar toggle, prd-zen-gardens-v1 G5/G6.) */}
-      <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2" data-nav-footer="">
+      {/* The footer, with no divider: the group icons on their own row, then
+          Add Agent + collapse the nav (the Add Workspace bar). The list's own
+          bottom edge fade (ScrollEdgeFrame) runs out just above them, only
+          while there is more below. (Zen Mode is the window's top-bar
+          toggle, prd-zen-gardens-v1 G5/G6.) */}
+      <div className="flex flex-col gap-2 px-3 pb-3 pt-1" data-home-footer="">
+        <div className="flex justify-center no-drag" data-home-group-row="">
+          <HomeGroupBar {...groups.bar} />
+        </div>
+      <div ref={barRef} className="relative flex flex-col gap-2" data-nav-footer="">
         {pickerOpen && <AddAgentPicker home={home} />}
         <div className={NAV_FOOTER_ROW_CLASS}>
           <NavFooterButton
@@ -552,6 +553,7 @@ export default function HomeSidebar(): React.JSX.Element {
           />
           <SidebarCollapseButton footer />
         </div>
+      </div>
       </div>
     </div>
   )

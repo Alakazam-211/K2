@@ -1,7 +1,7 @@
 // Home groups: in the collapsed rail there is no room for the current
 // group's name, so after each switch (a click, the swipe, ⌥⌘N) it shows
 // for a moment in a small flag beside the rail's group bar, and is read out
-// politely. Not on first paint. Presentational: K2 Design restyles it.
+// politely. Not on first paint. It wears the bar's name tip (home-groups.css).
 
 import { useEffect, useRef, useState } from 'react'
 
@@ -25,7 +25,8 @@ export default function GroupNameFlash({ id, name }: { id: string; name: string 
       role="status"
       aria-live="polite"
       data-group-name-flash={id}
-      className="pointer-events-none absolute left-full bottom-0 z-10 ml-2 whitespace-nowrap border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-primary)] shadow"
+      data-group-float="tip"
+      className="pointer-events-none absolute left-full bottom-0 z-10 ml-2.5 whitespace-nowrap px-2 py-1 text-[11px] text-[var(--color-text-primary)]"
     >
       {name}
     </span>

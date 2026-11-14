@@ -95,6 +95,8 @@ function mockOk(): void {
     // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
     if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
     if (route === 'skin/roles/suggest') return { templates: [] }
+    // Add an App (its own tests in AppsCatalogSection.test.tsx).
+    if (route === 'app/catalog') return { ok: true, entries: [] }
     throw new Error(`unexpected GET ${route}`)
   })
   h.daemonCliPost.mockResolvedValue({ ok: true })
@@ -749,6 +751,23 @@ describe('SkinAccessSection', () => {
         roomAccess: [{ handle: 'sales', caps: ['thread:read', 'thread:post', 'files:write'] }],
       })
     })
+  })
+
+  it('lists Add an App under Host and opens it as its own pane, not This server', async () => {
+    render(<SkinAccessSection />)
+    await loaded()
+    const rail = screen.getByRole('complementary', { name: 'Apps' })
+    const rows = Array.from(rail.querySelectorAll('[data-apps-rail]')).map((el) => el.getAttribute('data-apps-rail'))
+    expect(rows.slice(0, 3)).toEqual(['server', 'host', ':add-app'])
+    expect(screen.queryByTestId('apps-catalog')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an App' }))
+    expect(await screen.findByRole('heading', { level: 2, name: 'Add an App' })).toBeTruthy()
+    expect(screen.getByTestId('apps-catalog')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add an App' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.queryByTestId('apps-server')).toBeNull()
+    await waitFor(() => expect(h.daemonCliGet.mock.calls.some((c) => c[0] === 'app/catalog')).toBe(true))
+    fireEvent.click(screen.getByRole('button', { name: 'This server' }))
+    expect(screen.queryByTestId('apps-catalog')).toBeNull()
   })
 
   it('shows tokens and Hydra only after Host, and never Guests or Leftover Caddy', async () => {

@@ -212,6 +212,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.3: an agent's App switches and cores (its workspace card) and
   // Settings → Apps' rows and review note write the window's own server.
   'components/Settings/sections/app-access-api.ts',
+  // Settings → Apps → Add an App reads the window's own server's suite App
+  // catalog and starts and follows its install jobs.
+  'components/Settings/sections/app-catalog-api.ts',
   // 0.45.6 Garden v3: Settings → External Data lists this server's sources.
   'components/Settings/sections/DataSourcesSection.tsx',
   'components/Settings/sections/data-sources-ui.ts',

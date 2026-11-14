@@ -25,6 +25,7 @@ import { K2_CAPS } from '@/lib/k2-caps.generated'
 import { AppsServerSection } from './AppsServerSection'
 import { AppAboutCard, AppsBoxSection } from './AppsBoxSection'
 import { AppsResourcesSection } from './AppsResourcesSection'
+import { AppsCatalogSection } from './AppsCatalogSection'
 import { AppPeopleAccess } from './AppPeopleAccess'
 import { AppPhonePairing } from './AppPhonePairing'
 import { AppReleases } from './AppReleases'
@@ -1149,6 +1150,15 @@ export function SkinAccessSection(): React.JSX.Element {
                 'The server’s own sign-in',
                 () => select('host'),
               )}
+              {railRow(
+                ADD_APP_PANE,
+                !showServer && selectedApp === ADD_APP_PANE,
+                'Add an App',
+                <RailGlyph kind="add" />,
+                'Add an App',
+                'Hearth and Meet, in one step',
+                () => select(ADD_APP_PANE),
+              )}
             </div>
           </Surface>
           <section>
@@ -1208,6 +1218,8 @@ export function SkinAccessSection(): React.JSX.Element {
               <AppsServerSection middle={<AppsBoxSection />} />
               <AppsResourcesSection />
             </>
+          ) : selectedApp === ADD_APP_PANE ? (
+            <AppsCatalogSection />
           ) : selectedApp == null ? null : (
             <>
               {selectedPublished && published ? (
@@ -1857,10 +1869,18 @@ function trimReason(text: string): string {
   return text.trim().replace(/[.\s]+$/, '')
 }
 
-function RailGlyph({ kind }: { kind: 'server' | 'host' }): React.JSX.Element {
+/** The rail key of the Add an App pane. Not an App id: those are lowercase
+ *  letters, digits and dashes, so a colon never collides with one. */
+const ADD_APP_PANE = ':add-app'
+
+function RailGlyph({ kind }: { kind: 'server' | 'host' | 'add' }): React.JSX.Element {
   return (
     <AvatarFrame>
-      {kind === 'server' ? (
+      {kind === 'add' ? (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-3.5 h-3.5">
+          <path d="M8 3.5v9M3.5 8h9" strokeLinecap="round" />
+        </svg>
+      ) : kind === 'server' ? (
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-3.5 h-3.5">
           <rect x="2.5" y="3" width="11" height="4" />
           <rect x="2.5" y="9" width="11" height="4" />

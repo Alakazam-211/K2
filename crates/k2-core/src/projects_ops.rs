@@ -1505,6 +1505,14 @@ mod tests {
     /// connection itself (every statement SQLite starts, whoever starts it).
     /// Paths are fresh per call, so the agent display name cache is cold.
     fn list_statement_count(projects: usize) -> usize {
+        list_statement_count_of(projects, projects_list_with_workspaces)
+    }
+
+    /// [`list_statement_count`] for any of the list's entry points. The
+    /// route's `projects_list_with_workspaces_read` runs the same reads
+    /// through `db::read`; with this scoped in-memory DB (no read pool) they
+    /// run on this traced connection, so they are counted, never 0.
+    fn list_statement_count_of(projects: usize, list: fn() -> Result<Vec<ProjectWithWorkspaces>, String>) -> usize {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let mut conn = rusqlite::Connection::open(":memory:").expect("open");
         db::run_migrations(&conn).expect("migrations");
@@ -1533,8 +1541,8 @@ mod tests {
             }),
         )
         .expect("trace");
-        let handle = std::sync::Arc::new(parking_lot::ReentrantMutex::new(conn));
-        let listed = db::with_scoped_handle(handle, || projects_list_with_workspaces().expect("list ok"));
+        let handle = std::sync::Arc::new(db::DbLock::new(conn));
+        let listed = db::with_scoped_handle(handle, || list().expect("list ok"));
         assert_eq!(listed.len(), projects, "every seeded project is listed");
         assert!(
             listed.iter().all(|p| p.workspaces.len() == 3),
@@ -1553,6 +1561,19 @@ mod tests {
         let large = list_statement_count(200);
         assert_eq!(small, large, "statements for 5 projects ({small}) vs 200 ({large})");
         assert!(large <= 6, "the projects list runs {large} statements; want at most 6");
+    }
+
+    /// The route's read-pool entry point runs the same fixed reads.
+    #[test]
+    fn projects_list_read_statement_count_does_not_grow_with_projects() {
+        let before = db::read_pool::read_counts_for_test();
+        let small = list_statement_count_of(5, projects_list_with_workspaces_read);
+        let large = list_statement_count_of(200, projects_list_with_workspaces_read);
+        let after = db::read_pool::read_counts_for_test();
+        assert_eq!(after.no_pool, before.no_pool + 2, "both lists went through db::read");
+        assert!(small > 0, "the reads were counted");
+        assert_eq!(small, large, "statements for 5 projects ({small}) vs 200 ({large})");
+        assert_eq!(large, list_statement_count(200), "the same reads as the main-connection list");
     }
 
     /// Workspaces keep their per-project order (by `tab_order`) when read in

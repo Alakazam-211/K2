@@ -1,6 +1,6 @@
 HTTP/1.1 200 OK
 content-type: application/json
-keys: adopted, airgap, api, connectLogin, detail, features, homeDb, installKind, instanceId, listen, ops, phase, protocol, protocolMin, ptyd, publicHost, rootHelper, scopedHooks, serverId, vaultProxy, version, view, webClient
+keys: adopted, airgap, api, connectLogin, detail, features, homeDb, installKind, instanceId, listen, ops, pgStale, phase, protocol, protocolMin, ptyd, publicHost, rootHelper, scopedHooks, serverId, vaultProxy, version, view, webClient
 features:
   spawn-attach-only
   tickets-list-all
@@ -24,6 +24,7 @@ features:
   zen-files-v1
   garden-history-v1
   workbench-v1
+  projects-etag
   gardens-remote-v1
   voice-chat-role-v1
   grokbots-v1

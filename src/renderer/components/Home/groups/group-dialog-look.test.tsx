@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
+import { DIALOG_EDGE_TINT } from '@/components/ui/ScrollEdgeFade'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -15,7 +16,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import { type GroupBarItem } from './HomeGroupBar'
 import GroupEditModal, { GROUP_DIALOG_STYLE } from './GroupEditModal'
-import { GROUP_DIALOG_FOOT_CLASS, GROUP_DIALOG_FOOT_PX, groupDialogSize } from './group-bar-look'
+import { GROUP_DIALOG_FOOT_CLASS, GROUP_DIALOG_FOOT_PX, GROUP_DIALOG_HEIGHT_SHARE, groupDialogSize } from './group-bar-look'
 
 const G: GroupBarItem[] = [
   { id: 'g1', name: 'Work', icon: 'briefcase', order: 0, recentFirst: false, pinned: [], count: 4 },
@@ -26,16 +27,17 @@ const G: GroupBarItem[] = [
 afterEach(() => cleanup())
 
 describe('the Groups dialog', () => {
-  it('is at most 880 × 640, 16 px from the sides and 24 px from the top and bottom; one pane under 640 px', () => {
-    expect(groupDialogSize(1440, 900)).toEqual({ width: 880, height: 640, onePane: false })
-    expect(groupDialogSize(1100, 720)).toEqual({ width: 880, height: 640, onePane: false })
-    expect(groupDialogSize(800, 600)).toEqual({ width: 768, height: 552, onePane: false })
-    expect(groupDialogSize(1280, 560)).toEqual({ width: 880, height: 512, onePane: false })
-    expect(groupDialogSize(640, 560)).toEqual({ width: 608, height: 512, onePane: true })
+  it('is up to 880 wide and 90% of the window high, 16 px from the sides; one pane under 640 px', () => {
+    expect(groupDialogSize(1440, 900)).toEqual({ width: 880, height: 810, onePane: false })
+    expect(groupDialogSize(1100, 720)).toEqual({ width: 880, height: 648, onePane: false })
+    expect(groupDialogSize(800, 600)).toEqual({ width: 768, height: 540, onePane: false })
+    expect(groupDialogSize(1280, 560)).toEqual({ width: 880, height: 504, onePane: false })
+    expect(groupDialogSize(640, 560)).toEqual({ width: 608, height: 504, onePane: true })
     expect(groupDialogSize(672, 600).onePane).toBe(false)
     expect(groupDialogSize(671, 600).onePane).toBe(true)
+    expect(GROUP_DIALOG_HEIGHT_SHARE).toBe(0.9)
     expect(GROUP_DIALOG_STYLE.width).toBe('min(880px, calc(var(--k2-vw) - 32px))')
-    expect(GROUP_DIALOG_STYLE.height).toBe('min(640px, calc(var(--k2-vh) - 48px))')
+    expect(GROUP_DIALOG_STYLE.height).toBe('calc(var(--k2-vh) * 0.9)')
   })
 
   it('is K2’s dialog shape with a Done button and no ×, its list 220 px', () => {
@@ -75,5 +77,21 @@ describe('the Groups dialog', () => {
     expect(tabs.className).toContain('justify-start')
     const seg = tabs.querySelector('.k2-segmented') as HTMLElement
     expect(seg.className).not.toMatch(/w-full|flex-1/)
+  })
+
+  it('the icon grid fades right under its search: the band starts at the field, heavy, in the dialog\'s fill', () => {
+    render(<GroupEditModal groups={G} currentId="g1" initialId="g2" startTab="icon" onRename={vi.fn()} onSetIcon={vi.fn()} onCreate={vi.fn(() => null)} onDelete={vi.fn()} onSetRecentFirst={vi.fn()} onReorderGroups={vi.fn()} onClose={vi.fn()} />)
+    const check = (testId: string): void => {
+      const frame = screen.getByTestId(testId)
+      expect(frame.hasAttribute('data-edge-heavy')).toBe(true)
+      expect(frame.style.getPropertyValue('--k2-edge-tint')).toBe(DIALOG_EDGE_TINT)
+      const header = frame.previousElementSibling as HTMLElement
+      expect(header.hasAttribute('data-edge-header')).toBe(true)
+      // No room under the field: the frame (and its band) starts at its edge,
+      // and the header paints over the band so the field's ring stays whole.
+      expect(header.className).not.toMatch(/(^|\s)(pb|py)-/)
+      expect(header.className).toContain('z-[2]')
+    }
+    check('group-icon-frame')
   })
 })

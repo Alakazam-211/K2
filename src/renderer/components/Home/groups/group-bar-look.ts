@@ -55,9 +55,12 @@ export function groupNumeralPx(px: number): number {
   return px <= 8 ? 9 : 11
 }
 
-/** The Groups dialog: at most 880 × 640, kept 16 px from the window's sides
- *  and 24 px from its top and bottom. Two panes need 640 px of width. */
-export const GROUP_DIALOG_MAX = { width: 880, height: 640 } as const
+/** The Groups dialog: up to 880 wide, kept 16 px from the window's sides,
+ *  and 90% of the window's height (Rosson), centred. Two panes need 640 px
+ *  of width. Only its lists and the icon grid scroll. */
+export const GROUP_DIALOG_MAX = { width: 880 } as const
+/** The dialog's height as a share of the window's (`--k2-vh`, zoom-aware). */
+export const GROUP_DIALOG_HEIGHT_SHARE = 0.9
 export const GROUP_DIALOG_MARGIN = { x: 16, y: 24 } as const
 export const GROUP_DIALOG_TWO_PANE_MIN = 640
 export const GROUP_DIALOG_LIST_PX = 220
@@ -76,6 +79,6 @@ export interface GroupDialogSize {
 /** The dialog's size in a `vw` × `vh` window (CSS px). */
 export function groupDialogSize(vw: number, vh: number): GroupDialogSize {
   const width = Math.max(0, Math.min(GROUP_DIALOG_MAX.width, vw - 2 * GROUP_DIALOG_MARGIN.x))
-  const height = Math.max(0, Math.min(GROUP_DIALOG_MAX.height, vh - 2 * GROUP_DIALOG_MARGIN.y))
+  const height = Math.max(0, Math.round(vh * GROUP_DIALOG_HEIGHT_SHARE))
   return { width, height, onePane: width < GROUP_DIALOG_TWO_PANE_MIN }
 }

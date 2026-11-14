@@ -11,7 +11,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { GROUP_ICONS, groupIcon, searchGroupIcons, type GroupIconDef } from '@/lib/group-icons'
 import { readRecentGroupIcons, rememberGroupIcon } from '@/lib/group-icon-recents'
-import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
+import { DIALOG_EDGE_TINT, ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { SearchField } from '@/components/ui/SearchField'
 import { GroupDot, GroupIconSvg } from './GroupGlyph'
 
@@ -116,7 +116,7 @@ export default function GroupIconPicker({ groupId, icon, index, onSetIcon, onPic
 
   return (
     <>
-      <div className="flex-shrink-0 px-5 pb-1.5">
+      <div className="flex-shrink-0 px-5 relative z-[2]" data-edge-header="">
         <SearchField
           className="w-full"
           value={query}
@@ -128,7 +128,7 @@ export default function GroupIconPicker({ groupId, icon, index, onSetIcon, onPic
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto overflow-x-hidden px-5 pb-2 pt-1" tint="var(--color-bg-surface)" testId="group-icon-frame">
+      <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto overflow-x-hidden px-5 pb-2 pt-2.5" tint={DIALOG_EDGE_TINT} heavy testId="group-icon-frame">
         <div
           ref={gridRef}
           role="grid"

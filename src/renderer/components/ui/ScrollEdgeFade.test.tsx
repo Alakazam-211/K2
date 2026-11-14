@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { act, cleanup, render } from '@testing-library/react'
 import {
+  DIALOG_EDGE_TINT,
+  edgeTintCss,
   SCROLL_EDGE_CSS,
   SCROLL_EDGE_LIP_PCT,
   SCROLL_EDGE_PX,
@@ -292,8 +294,9 @@ describe('the looks follow the Thread', () => {
   })
 
   it("every band tints with the list's own colour, never black, in every palette and both schemes", () => {
-    // Top and bottom, in Terminal, Glass and Glass's tile fallback.
-    expect(tintRules).toHaveLength(6)
+    // Top and bottom, in Terminal, Glass, Glass's tile fallback and a
+    // dialog's heavy band.
+    expect(tintRules).toHaveLength(8)
     for (const rule of tintRules) {
       expect(rule).toContain(`color-mix(in srgb, var(${SCROLL_EDGE_TINT_VAR}) `)
       expect(rule).not.toMatch(/rgba\(0, 0, 0|#000\b|black/)
@@ -304,5 +307,25 @@ describe('the looks follow the Thread', () => {
     expect(ruleFor(SCROLL_EDGE_CSS, '[data-scroll-edges] {')).toContain(`${SCROLL_EDGE_TINT_VAR}: var(--color-bg);`)
     // No colour of its own anywhere in the sheet (a mask's `black` is alpha only).
     expect(SCROLL_EDGE_CSS).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i)
+  })
+})
+
+describe('a heavy band (a list in a dialog)', () => {
+  it('in Glass tints with the no-blur ramp under its blurs, solid at the bar', () => {
+    for (const edge of ['top', 'bottom'] as const) {
+      const rule = ruleFor(SCROLL_EDGE_CSS, `html[data-style="glass"] [data-scroll-edges][data-edge-heavy] > [data-scroll-edge="${edge}"] > .k2-edge-tint {`)
+      expect(rule).toContain(edgeTintCss(edge, GLASS_TINT_STOPS_TILE).replace(/^background: /, '').replace(/;$/, ''))
+    }
+    // The blurs stay: only the tint is heavier.
+    expect(SCROLL_EDGE_CSS).not.toMatch(/\[data-edge-heavy\][^{]*\[data-edge-blur\][^{]*\{ display: none/)
+  })
+
+  it('is marked on the frame only when asked for, with the dialog tint', () => {
+    const { container, rerender } = render(<ScrollEdgeFrame tint={DIALOG_EDGE_TINT} heavy><div /></ScrollEdgeFrame>)
+    const frame = container.querySelector('[data-scroll-edges]') as HTMLElement
+    expect(frame.hasAttribute('data-edge-heavy')).toBe(true)
+    expect(frame.style.getPropertyValue(SCROLL_EDGE_TINT_VAR)).toBe('var(--tile-fill, var(--color-bg-surface))')
+    rerender(<ScrollEdgeFrame><div /></ScrollEdgeFrame>)
+    expect((container.querySelector('[data-scroll-edges]') as HTMLElement).hasAttribute('data-edge-heavy')).toBe(false)
   })
 })

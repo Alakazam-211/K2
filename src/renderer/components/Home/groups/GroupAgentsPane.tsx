@@ -11,7 +11,7 @@
 import { useId, useMemo, useRef, useState } from 'react'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { SearchField } from '@/components/ui/SearchField'
-import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
+import { DIALOG_EDGE_TINT, ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { useHomesStore, type Home } from '@/stores/homes'
 import { AddSourceHead, SectionStatus, addableMatches, useAddableAgents, type AddableAgent } from '../HomeAddPanels'
@@ -105,7 +105,7 @@ function GroupAgentsList({ home }: { home: Home }): React.JSX.Element {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-group-agents={home.id}>
-      <div className="flex flex-shrink-0 items-center gap-3 px-5 pb-1.5">
+      <div className="flex flex-shrink-0 items-center gap-3 px-5 relative z-[2]" data-edge-header="">
         <SearchField
           className="min-w-0 flex-1"
           value={query}
@@ -128,7 +128,7 @@ function GroupAgentsList({ home }: { home: Home }): React.JSX.Element {
           {groupAgentCountText(home.rows.length, home.name)}
         </span>
       </div>
-      <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto overflow-x-hidden px-3 pb-2 pt-1" tint="var(--color-bg-surface)" testId="group-agents-frame">
+      <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto overflow-x-hidden px-3 pb-2 pt-2.5" tint={DIALOG_EDGE_TINT} heavy testId="group-agents-frame">
         <div
           ref={listRef}
           role="group"

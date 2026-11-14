@@ -36,7 +36,7 @@ import { createPortal } from 'react-dom'
 import { CheckIcon } from 'lucide-react'
 import { DialogFrame, DialogScrim } from '@/components/ui/Dialog'
 import { SearchField } from '@/components/ui/SearchField'
-import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
+import { DIALOG_EDGE_TINT, ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { selectedHome, useHomesStore, type Home, type HomeRow } from '@/stores/homes'
@@ -219,7 +219,7 @@ export function AddAgentsPanel({
 
   return (
     <>
-      <div className="flex-shrink-0 px-5 pt-0.5 pb-2.5">
+      <div className="flex-shrink-0 px-5 pt-0.5 relative z-[2]" data-edge-header="">
         <SearchField
           ref={searchRef}
           type="text"
@@ -240,7 +240,7 @@ export function AddAgentsPanel({
           data-add-search=""
         />
       </div>
-      <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto overflow-x-hidden px-3 pt-1 pb-3" testId="add-to-home-list">
+      <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto overflow-x-hidden px-3 pt-3.5 pb-3" tint={DIALOG_EDGE_TINT} heavy testId="add-to-home-list">
         <div
           ref={listRef}
           id={listId}

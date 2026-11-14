@@ -1186,6 +1186,13 @@ describe('Home — the Agents page shell', () => {
     fireEvent.click(within(homeSidebar()).getByRole('button', { name: 'Add to Home' }))
     const surface = screen.getByRole('dialog', { name: 'Add to Home' })
     for (const c of ADD_TO_HOME_SIZE_CLASS.split(' ')) expect(surface.className).toContain(c)
+    // The list fades right under the search, heavy, in the dialog's fill.
+    const frame = within(surface).getByTestId('add-to-home-list')
+    expect(frame.hasAttribute('data-edge-heavy')).toBe(true)
+    expect(frame.style.getPropertyValue('--k2-edge-tint')).toBe('var(--tile-fill, var(--color-bg-surface))')
+    const header = frame.previousElementSibling as HTMLElement
+    expect(header.hasAttribute('data-edge-header')).toBe(true)
+    expect(header.className).not.toMatch(/(^|\s)(pb|py)-/)
   })
 
   it('Add to Home lists each saved server in its own section, minus the connected one (Q3)', async () => {

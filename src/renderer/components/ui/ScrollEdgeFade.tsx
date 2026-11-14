@@ -41,6 +41,10 @@ export const SCROLL_EDGE_PX = GLASS_BAND_PX
  *  leaves fractional scroll offsets). */
 export const SCROLL_EDGE_SLACK_PX = 1
 
+/** The bands' tint in a dialog: the dialog's own fill (its Surface is a
+ *  tile in Glass, the surface colour elsewhere). */
+export const DIALOG_EDGE_TINT = 'var(--tile-fill, var(--color-bg-surface))'
+
 /** The colour the bands tint with: the list's own surface. */
 export const SCROLL_EDGE_TINT_VAR = '--k2-edge-tint'
 
@@ -111,6 +115,7 @@ ${EDGES.map((e) => FOOTER_BLUR_LAYERS.map((l, i) => terminalLayer(e, l, i)).join
 ${EDGES.map((e) => `${band(e)} > .k2-edge-tint { ${edgeTintCss(e, SCRIM_TINT_STOPS)} }`).join('\n')}
 ${EDGES.map((e) => GLASS_BLUR_LAYERS.map((l, i) => glassLayer(e, l, i)).join('\n')).join('\n')}
 ${EDGES.map((e) => `${GLASS} ${band(e)} > .k2-edge-tint { ${edgeTintCss(e, GLASS_TINT_STOPS)} }`).join('\n')}
+${EDGES.map((e) => `${GLASS} ${FRAME}[data-edge-heavy] > [data-scroll-edge="${e}"] > .k2-edge-tint { ${edgeTintCss(e, GLASS_TINT_STOPS_TILE)} }`).join('\n')}
 ${GLASS}[data-frost="tile"] ${BLUR_SPANS} { display: none; }
 ${EDGES.map((e) => `${GLASS}[data-frost="tile"] ${band(e)} > .k2-edge-tint { ${edgeTintCss(e, GLASS_TINT_STOPS_TILE)} }`).join('\n')}
 @media (prefers-reduced-transparency: reduce) {
@@ -180,19 +185,23 @@ export interface ScrollEdgeFrameProps {
   /** What the bands tint with: the surface the list sits on (default the
    *  page, `var(--color-bg)`). Never black: it is the list's own colour. */
   tint?: string
+  /** The heavier tint (Glass's no-blur ramp) under the blurs: for a list in
+   *  a dialog, where a row must never read through the band beside a bar
+   *  even if the webview draws no blur there. */
+  heavy?: boolean
   testId?: string
   children: ReactNode
 }
 
 /** A scrolling list whose ends fade softly under the bars beside it. */
-export function ScrollEdgeFrame({ className, scrollClassName, tint, testId, children }: ScrollEdgeFrameProps): JSX.Element {
+export function ScrollEdgeFrame({ className, scrollClassName, tint, heavy = false, testId, children }: ScrollEdgeFrameProps): JSX.Element {
   const frame = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   useScrollEdges(frame, scroller, content)
   const style = tint ? ({ [SCROLL_EDGE_TINT_VAR]: tint } as CSSProperties) : undefined
   return (
-    <div ref={frame} className={cx('relative', className)} data-scroll-edges="" data-testid={testId} style={style}>
+    <div ref={frame} className={cx('relative', className)} data-scroll-edges="" data-edge-heavy={heavy ? '' : undefined} data-testid={testId} style={style}>
       <style data-scroll-edge-styles="">{SCROLL_EDGE_CSS}</style>
       <div ref={scroller} className={cx('absolute inset-0', scrollClassName)} data-scroll-edges-list="">
         <div ref={content}>{children}</div>

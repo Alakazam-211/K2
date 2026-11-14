@@ -315,6 +315,18 @@ describe('the Groups dialog: Agents | Icon', () => {
     expect(studio().rows.map((r) => r.address)).toEqual(['cortana::local'])
   })
 
+  it('the agents list fades right under its search: heavy, in the dialog\'s fill, no room under the field', () => {
+    render(<Wired />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Studio)' }))
+    const frame = within(modal()).getByTestId('group-agents-frame')
+    expect(frame.hasAttribute('data-edge-heavy')).toBe(true)
+    expect(frame.style.getPropertyValue('--k2-edge-tint')).toBe('var(--tile-fill, var(--color-bg-surface))')
+    const header = frame.previousElementSibling as HTMLElement
+    expect(header.hasAttribute('data-edge-header')).toBe(true)
+    expect(header.className).not.toMatch(/(^|\s)(pb|py)-/)
+    expect(header.className).toContain('z-[2]')
+  })
+
   it('the search narrows the list; the list is one tab stop and ↑/↓ move through it', () => {
     render(<Wired />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit groups (Studio)' }))

@@ -3,8 +3,8 @@
 // a group's icon in the bar, with that group selected, and from the "…"
 // beside the current group's name. K2's dialog shape (DialogScrim, then
 // DialogFrame's Surface: elevation 5, the box radius, cut in Terminal),
-// at most 720 × 540, kept 16 px from the window's sides and 24 px from its
-// top and bottom (`groupDialogSize`).
+// up to 880 wide, kept 16 px from the window's sides, and 90% of the
+// window's height (`groupDialogSize`).
 //
 // Two panes: the group list (`GroupList`, 220 px: select, reorder by drag or
 // ⌥↑/⌥↓, New group) and the selected group's settings (`GroupDetailPane`:
@@ -26,7 +26,7 @@ import { Button } from '@/components/ui'
 import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import GroupList from './GroupList'
 import GroupDetailPane, { type GroupDetailTab } from './GroupDetailPane'
-import { GROUP_DIALOG_LIST_PX, GROUP_DIALOG_MARGIN, GROUP_DIALOG_MAX, GROUP_DIALOG_TWO_PANE_MIN } from './group-bar-look'
+import { GROUP_DIALOG_HEIGHT_SHARE, GROUP_DIALOG_LIST_PX, GROUP_DIALOG_MARGIN, GROUP_DIALOG_MAX, GROUP_DIALOG_TWO_PANE_MIN } from './group-bar-look'
 import type { GroupBarItem } from './HomeGroupBar'
 
 export interface GroupEditModalProps {
@@ -53,7 +53,7 @@ export interface GroupEditModalProps {
 /** The dialog's box: the max size, clamped to the window less the margins. */
 export const GROUP_DIALOG_STYLE: React.CSSProperties = {
   width: `min(${GROUP_DIALOG_MAX.width}px, calc(var(--k2-vw) - ${2 * GROUP_DIALOG_MARGIN.x}px))`,
-  height: `min(${GROUP_DIALOG_MAX.height}px, calc(var(--k2-vh) - ${2 * GROUP_DIALOG_MARGIN.y}px))`,
+  height: `calc(var(--k2-vh) * ${GROUP_DIALOG_HEIGHT_SHARE})`,
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',

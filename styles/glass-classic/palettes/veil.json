@@ -24,6 +24,8 @@
     "accent-hover": { "$value": "#2258bd", "$type": "color" },
     "accent-soft": { "$value": "#6d9ae8", "$type": "color" },
     "on-accent": { "$value": "#ffffff", "$type": "color" },
+    "on-danger": { "$value": "#ffffff", "$type": "color", "$description": "The label on a danger fill (danger, danger-active, danger-muted): 4.5:1 on each." },
+    "on-warn": { "$value": "#1a1400", "$type": "color", "$description": "The ink on a warning or needs-you fill (the Tickets count): 4.5:1 on status-needs-you." },
     "status-working": { "$value": "#2f6fe0", "$type": "color" },
     "status-error": { "$value": "#c22f2f", "$type": "color" },
     "status-ok": { "$value": "#1e7c46", "$type": "color" },

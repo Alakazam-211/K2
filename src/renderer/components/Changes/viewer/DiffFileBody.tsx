@@ -25,10 +25,10 @@ export function statusLabel(status: string): string {
 
 const STATUS_COLOR: Record<string, string> = {
   M: 'var(--color-accent)',
-  A: 'var(--color-status-ok)',
-  U: 'var(--color-status-ok)',
-  D: 'var(--color-status-error)',
-  C: 'var(--color-status-error)',
+  A: 'var(--color-status-ok-soft)',
+  U: 'var(--color-status-ok-soft)',
+  D: 'var(--color-status-error-text)',
+  C: 'var(--color-status-error-text)',
   R: 'var(--color-accent)',
   T: 'var(--color-accent)',
 }

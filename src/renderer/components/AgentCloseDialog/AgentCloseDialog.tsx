@@ -92,7 +92,7 @@ export default function AgentCloseDialog({
           </button>
           <button
             onClick={onConfirm}
-            className="px-4 py-1.5 text-xs text-[var(--color-on-accent)] bg-[var(--color-danger)] hover:bg-[var(--color-danger-active)] transition-colors no-drag cursor-pointer"
+            className="px-4 py-1.5 text-xs text-[var(--color-on-danger)] bg-[var(--color-danger)] hover:bg-[var(--color-danger-active)] transition-colors no-drag cursor-pointer"
           >
             {mode === 'app' ? 'Quit Anyway' : 'Close Anyway'}
           </button>

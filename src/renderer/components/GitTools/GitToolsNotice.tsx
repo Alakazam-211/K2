@@ -97,7 +97,7 @@ function HowTo({ status }: { status: GitToolsStatus }): React.JSX.Element | null
     : 'Install git yourself:'
   return (
     <details className="mt-1.5" data-testid="git-tools-howto">
-      <summary className="outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)] cursor-pointer type-hint text-[var(--color-text-secondary)]">{title}</summary>
+      <summary className="outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent-text)] cursor-pointer type-hint text-[var(--color-text-secondary)]">{title}</summary>
       <pre className="mt-1 whitespace-pre-wrap break-all type-hint font-mono text-[var(--color-text-secondary)]">
         {status.howTo.join('\n')}
       </pre>

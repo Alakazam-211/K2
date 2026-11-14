@@ -212,7 +212,7 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
         </div>
       )}
       {error && (
-        <p role="alert" data-testid="agent-email-notices-error" className="type-hint text-[var(--color-status-error)] mt-1">
+        <p role="alert" data-testid="agent-email-notices-error" className="type-hint text-[var(--color-status-error-text)] mt-1">
           {error}
         </p>
       )}

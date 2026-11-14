@@ -38,7 +38,7 @@ import type { FilterableWorkspace } from './WorkspaceFilterDropdown'
  *  rail dot. */
 export function statusChipClass(status: FeedbackStatus): string {
   return status === 'waiting'
-    ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_12%,transparent)] text-[var(--color-status-needs-you)]'
+    ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_12%,transparent)] text-[var(--color-status-warn-text)]'
     : status === 'needs_discussion'
       ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
       : status === 'answered'

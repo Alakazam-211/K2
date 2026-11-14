@@ -34,7 +34,7 @@
   --divider-color: var(--color-border);
   --ring-surface: 0 0 #0000;
   --ring-field: 0 0 #0000;
-  --ring-focus: 0 0 #0000;
+  --ring-focus: 0 0 0 2px var(--color-accent-text);
   --shadow-1: 0 0 #0000;
   --shadow-2: 0 0 #0000;
   --shadow-3: 0 0 #0000;
@@ -76,7 +76,7 @@
   --color-bg-hover: #1e1e1e;
   --color-border: #2a2a2a;
   --color-border-strong: rgba(255, 255, 255, 0.25);
-  --color-control-edge: #7a7a82;
+  --color-control-edge: #7e7e86;
   --color-divider: #48484b;
   --color-text-primary: #e4e4e7;
   --color-text-secondary: #b0b0b8;
@@ -105,6 +105,8 @@
   --color-status-ok-hover: #16a34a;
   --color-danger: #dc2626;
   --color-danger-active: #b91c1c;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 255, 255, 0.05);
   --color-wash-2: rgba(255, 255, 255, 0.1);
   --color-wash-3: rgba(255, 255, 255, 0.2);
@@ -259,6 +261,8 @@
   --color-status-ok-hover: #3da45c;
   --color-danger: #d13b3b;
   --color-danger-active: #b02f2f;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 250, 235, 0.04);
   --color-wash-2: rgba(255, 250, 235, 0.08);
   --color-wash-3: rgba(255, 250, 235, 0.16);
@@ -348,6 +352,8 @@
   --color-status-ok-hover: #1f5731;
   --color-danger: #b3261e;
   --color-danger-active: #8e1d17;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #000000;
   --color-wash-1: rgba(30, 26, 16, 0.04);
   --color-wash-2: rgba(30, 26, 16, 0.08);
   --color-wash-3: rgba(30, 26, 16, 0.16);
@@ -431,7 +437,7 @@
   --divider-color: transparent;
   --ring-surface: 0 0 #0000;
   --ring-field: inset 0 1px 0 0 var(--color-ring-edge);
-  --ring-focus: 0 0 0 2px color-mix(in srgb, var(--color-accent) 40%, transparent);
+  --ring-focus: 0 0 0 2px var(--color-accent-text);
   --shadow-1: 0 1px 2px var(--color-shadow-soft);
   --shadow-2: 0 4px 12px var(--color-shadow-soft);
   --shadow-3: 0 8px 24px var(--color-shadow);
@@ -502,8 +508,10 @@
   --color-status-warn-amber-soft: #ffc35c;
   --color-status-warn-amber-bright: #ffdc9e;
   --color-status-ok-hover: #26b84d;
-  --color-danger: #ff453a;
+  --color-danger: #d83a30;
   --color-danger-active: #d70015;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 255, 255, 0.05);
   --color-wash-2: rgba(255, 255, 255, 0.10);
   --color-wash-3: rgba(255, 255, 255, 0.20);
@@ -573,7 +581,7 @@
   --color-bg-hover: rgba(60, 60, 67, 0.08);
   --color-border: #eaeaea;
   --color-border-strong: rgba(60, 60, 67, 0.35);
-  --color-control-edge: #828287;
+  --color-control-edge: #7f7f84;
   --color-divider: #ababae;
   --color-text-primary: #000000;
   --color-text-secondary: #58585d;
@@ -586,7 +594,7 @@
   --color-status-error: #ff3b30;
   --color-status-ok: #34c759;
   --color-status-warn: #ff9500;
-  --color-status-ok-soft: #207c37;
+  --color-status-ok-soft: #1e7534;
   --color-status-warn-soft: #c26b00;
   --color-status-error-soft: #d70015;
   --color-neutral: #6e6e73;
@@ -594,14 +602,16 @@
   --color-status-error-bright: #a50011;
   --color-status-error-text: #d70015;
   --color-status-working-soft: #0a6fd6;
-  --color-status-warn-text: #b25d00;
+  --color-status-warn-text: #a25400;
   --color-status-needs-you: #ff9500;
   --color-status-warn-amber: #c26b00;
   --color-status-warn-amber-soft: #a85a00;
   --color-status-warn-amber-bright: #8f4c00;
   --color-status-ok-hover: #248a3d;
-  --color-danger: #ff3b30;
+  --color-danger: #d9302a;
   --color-danger-active: #d70015;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(60, 60, 67, 0.05);
   --color-wash-2: rgba(60, 60, 67, 0.09);
   --color-wash-3: rgba(60, 60, 67, 0.16);
@@ -614,7 +624,7 @@
   --color-diff-remove-text: #c0392b;
   --color-diff-modified-border: #34c759;
   --color-code-inline: #9a5b00;
-  --color-danger-hover: #ff3b30;
+  --color-danger-hover: #d70015;
   --color-overlay-soft-bg: rgba(60, 60, 67, 0.05);
   --color-overlay-soft-border: rgba(60, 60, 67, 0.08);
   --color-scrollbar-thumb: rgba(60, 60, 67, 0.18);
@@ -671,10 +681,10 @@
   --color-bg-hover: rgba(255, 255, 255, 0.08);
   --color-border: #33302b;
   --color-border-strong: rgba(255, 255, 255, 0.28);
-  --color-control-edge: #7d776c;
+  --color-control-edge: #807a6f;
   --color-divider: #59554c;
   --color-text-primary: #eae6de;
-  --color-text-secondary: #a89f92;
+  --color-text-secondary: #bab2a4;
   --color-text-muted: #a09a8e;
   --color-accent: #ffc700;
   --color-accent-hover: #ffd54d;
@@ -700,6 +710,8 @@
   --color-status-ok-hover: #3da45c;
   --color-danger: #d13b3b;
   --color-danger-active: #b02f2f;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 250, 235, 0.04);
   --color-wash-2: rgba(255, 250, 235, 0.08);
   --color-wash-3: rgba(255, 250, 235, 0.16);
@@ -908,10 +920,11 @@
 /* A tile you press (Usage's totals) is edged in the control edge, 3:1 on
    the page; the soft drop would darken the page beside that edge under it. */
 [data-style="glass"][data-palette="veil"] button[data-material="tile"]:not([data-floating]):not([data-zen-root] *) { box-shadow: none; }
-/* Small accent text: #0a84ff is under 4.5:1 here, so text darkens. Fills and
-   icons drawn with --color-accent are untouched. */
+/* Small accent text: #0a84ff is under 4.5:1 here, so text darkens, far
+   enough to hold 4.5:1 on the hover fills too (a hovered row, button or
+   list item). Fills and icons drawn with --color-accent are untouched. */
 [data-style="glass"][data-palette="veil"] {
-  --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, black);
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 75%, black);
 }
 /* Obsidian: #0a84ff text on a selected row (accent at 10% over a tile) is
    4.0:1, so small accent text lightens a little. Fills and icons keep
@@ -1031,7 +1044,7 @@
 [data-style="glass"]:not([data-palette="veil"]) [data-k2-float="capsule"] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
 /* An agent tile's view picker (Projects): the page tabs' capsule in the
    tile's 32px bar, with the same focus ink on the accent circle. */
-[data-style="glass"]:not([data-palette="veil"]) [data-tab-mode="switch"] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
+[data-style="glass"]:not([data-palette="veil"]) [data-page-tabs] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
 
 /* Light glass inverts the selected pill: a dark wash, normal ink. */
 [data-style="glass"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *) {
@@ -1070,6 +1083,9 @@
    label turns white on hover, which the grey wash would leave unreadable. */
 [data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([class*="hover:bg-[var(--color-danger"]):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: color-mix(in srgb, var(--tile-raised) 90%, var(--color-text-primary));
+  /* The edge lightens with the fill (as a Styles tile's does), so it keeps
+     3:1 against the hovered fill as well as the page. */
+  border-color: var(--color-text-muted);
 }
 [data-style="glass"] button[class~="border"][class*="hover:bg-[var(--color-danger"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: var(--color-danger-muted);
@@ -1162,6 +1178,12 @@
 /* Disabled in Veil: a white knob on a pale track looked live (the 50% fade
    that greys it on dark grounds leaves white on white), so it goes flat and
    grey, as the other looks show it. */
+/* Off in Veil, the white knob on the pale track (1.3:1) takes the control
+   edge as its own rim, as the slider's thumb does, so where it sits reads at
+   3:1 as well as the track's edge. */
+[data-style="glass"][data-palette="veil"] .k2-switch[aria-checked="false"]:not(:disabled) .k2-switch-knob:not([data-zen-root] *) {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--color-control-edge);
+}
 [data-style="glass"][data-palette="veil"] .k2-switch:disabled .k2-switch-knob:not([data-zen-root] *) {
   background-color: color-mix(in srgb, var(--color-control-edge) 50%, var(--color-bg-surface));
   box-shadow: none;
@@ -1273,7 +1295,7 @@
 [data-style="glass"] [data-drawer-tab][data-selected]:not([data-zen-root] *) {
   background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
-[data-style="glass"] [data-drawer-tab]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+[data-style="glass"] [data-drawer-tab]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
 /* The » / « toggles: a small round control, no cell line beside it. */
 [data-style="glass"] [data-drawer-tabbar-toggle]:not([data-zen-root] *) {
   border-width: 0;
@@ -1333,7 +1355,7 @@
 }
 [data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: var(--motion-press-scale); }
 [data-style="glass"] [data-nav-control]:focus-visible:not([data-zen-root] *),
-[data-style="glass"] [data-nav-picker]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+[data-style="glass"] [data-nav-picker]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent-text); outline-offset: 1px; }
 
 /* The Home, focus-group and server pickers: a pill the height of the top-bar
    capsules, sentence-case name, round count. */
@@ -1727,6 +1749,8 @@
   --color-status-ok-hover: #2fbf70;
   --color-danger: #e0454f;
   --color-danger-active: #c23540;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 255, 255, 0.05);
   --color-wash-2: rgba(255, 255, 255, 0.10);
   --color-wash-3: rgba(255, 255, 255, 0.20);
@@ -1812,6 +1836,8 @@
   --color-status-ok-hover: #16613a;
   --color-danger: #c22f2f;
   --color-danger-active: #9c2424;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(20, 30, 60, 0.04);
   --color-wash-2: rgba(20, 30, 60, 0.08);
   --color-wash-3: rgba(20, 30, 60, 0.15);
@@ -1897,6 +1923,8 @@
   --color-status-ok-hover: #3da45c;
   --color-danger: #d13b3b;
   --color-danger-active: #b02f2f;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 250, 235, 0.04);
   --color-wash-2: rgba(255, 250, 235, 0.08);
   --color-wash-3: rgba(255, 250, 235, 0.16);
@@ -2030,7 +2058,7 @@
   --divider-color: var(--color-border);
   --ring-surface: 0 0 #0000;
   --ring-field: 0 0 #0000;
-  --ring-focus: 0 0 #0000;
+  --ring-focus: 0 0 0 2px var(--color-accent-text);
   --shadow-1: 0 0 #0000;
   --shadow-2: 0 0 #0000;
   --shadow-3: 0 0 #0000;
@@ -2090,7 +2118,7 @@
   --color-bg-hover: #1e1e1e;
   --color-border: #2a2a2a;
   --color-border-strong: rgba(255, 255, 255, 0.25);
-  --color-control-edge: #7a7a82;
+  --color-control-edge: #7e7e86;
   --color-divider: #48484b;
   --color-text-primary: #e4e4e7;
   --color-text-secondary: #b0b0b8;
@@ -2119,6 +2147,8 @@
   --color-status-ok-hover: #16a34a;
   --color-danger: #dc2626;
   --color-danger-active: #b91c1c;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 255, 255, 0.05);
   --color-wash-2: rgba(255, 255, 255, 0.1);
   --color-wash-3: rgba(255, 255, 255, 0.2);
@@ -2177,7 +2207,7 @@
   --color-bg-hover: #e7e2d7;
   --color-border: #dcd5c6;
   --color-border-strong: rgba(62, 52, 34, 0.30);
-  --color-control-edge: #7f7767;
+  --color-control-edge: #736b5c;
   --color-divider: #b2aa9b;
   --color-text-primary: #221e15;
   --color-text-secondary: #4a4437;
@@ -2190,7 +2220,7 @@
   --color-status-error: #b3261e;
   --color-status-ok: #276b3d;
   --color-status-warn: #9a6a08;
-  --color-status-ok-soft: #266e3e;
+  --color-status-ok-soft: #23663a;
   --color-status-warn-soft: #a87908;
   --color-status-error-soft: #a12b24;
   --color-neutral: #857c6b;
@@ -2198,7 +2228,7 @@
   --color-status-error-bright: #8c211b;
   --color-status-error-text: #a12b24;
   --color-status-working-soft: #c76a2e;
-  --color-status-warn-text: #8a6206;
+  --color-status-warn-text: #775505;
   --color-status-needs-you: #c2620a;
   --color-status-warn-amber: #935f04;
   --color-status-warn-amber-soft: #7d5203;
@@ -2206,6 +2236,8 @@
   --color-status-ok-hover: #1f5731;
   --color-danger: #b3261e;
   --color-danger-active: #8e1d17;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #000000;
   --color-wash-1: rgba(40, 32, 16, 0.04);
   --color-wash-2: rgba(40, 32, 16, 0.08);
   --color-wash-3: rgba(40, 32, 16, 0.16);
@@ -2264,10 +2296,10 @@
   --color-bg-hover: #252320;
   --color-border: #2e2b27;
   --color-border-strong: rgba(255, 255, 255, 0.25);
-  --color-control-edge: #7d776c;
+  --color-control-edge: #88837a;
   --color-divider: #4f4b44;
   --color-text-primary: #eae6de;
-  --color-text-secondary: #a89f92;
+  --color-text-secondary: #bab2a4;
   --color-text-muted: #a09a8e;
   --color-accent: #ffc700;
   --color-accent-hover: #ffd54d;
@@ -2293,6 +2325,8 @@
   --color-status-ok-hover: #3da45c;
   --color-danger: #d13b3b;
   --color-danger-active: #b02f2f;
+  --color-on-danger: #ffffff;
+  --color-on-warn: #1a1400;
   --color-wash-1: rgba(255, 250, 235, 0.04);
   --color-wash-2: rgba(255, 250, 235, 0.08);
   --color-wash-3: rgba(255, 250, 235, 0.16);
@@ -2340,6 +2374,18 @@
   --term-ansi-15: #f4f0e7;
 }
 /* ── terminal/overrides.css (policy-checked: scoped, no !important/url/@import) ── */
+/* ── Accent as text ──────────────────────────────────────────────────────
+   Small accent text holds 4.5:1 on the hover fills as well as the page, the
+   card and the menu (a hovered button's fill, a hovered row). Charcoal's
+   blue lightens a little and Paper's deepens a little; fills, icons and the
+   accent button keep --color-accent. */
+[data-style="terminal"][data-palette="charcoal"] {
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, white);
+}
+[data-style="terminal"][data-palette="paper"] {
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 94%, black);
+}
+
 /* ── Tab dividers ─────────────────────────────────────────────────────────
    Short dividers between tabs, the top bar's colour and size (a size smaller in
    a split pane's strip), the same rule as Glass. None beside the selected tab,

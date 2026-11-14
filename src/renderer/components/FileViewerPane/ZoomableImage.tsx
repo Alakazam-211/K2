@@ -332,7 +332,7 @@ export function ZoomableImage({ src, alt, onError }: ZoomableImageProps): React.
       tabIndex={0}
       role="group"
       aria-label="Image viewer"
-      className="relative h-full w-full overflow-hidden select-none bg-[var(--color-bg)] outline-none focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-[var(--color-accent)]"
+      className="relative h-full w-full overflow-hidden select-none bg-[var(--color-bg)] outline-none focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-[var(--color-accent-text)]"
       style={{ cursor: pannable ? (dragging ? 'grabbing' : 'grab') : undefined }}
     >
       <img

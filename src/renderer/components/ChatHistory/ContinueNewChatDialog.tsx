@@ -277,7 +277,7 @@ export function ContinueNewChatDialog({
           include previous session filepath for reference.
         </label>
         {error && (
-          <div role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', marginBottom: 12, whiteSpace: 'pre-wrap' }}>
+          <div role="alert" style={{ fontSize: 12, color: 'var(--color-status-error-text)', marginBottom: 12, whiteSpace: 'pre-wrap' }}>
             {error}
           </div>
         )}

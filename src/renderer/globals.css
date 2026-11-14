@@ -646,7 +646,7 @@ html[data-style="terminal"] [contenteditable="true"]:not([data-zen-root] *) *::s
 }
 
 .markdown-content .k2-file-link:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-accent-text);
   outline-offset: 1px;
 }
 
@@ -2028,7 +2028,7 @@ html[data-style="terminal"] .k2-segment[aria-checked="true"]:focus-visible:not([
   --k2-tag-edge: var(--color-border);
 }
 .k2-tag[data-tone="ok"] {
-  --k2-tag-ink: color-mix(in srgb, var(--color-status-ok) 55%, var(--color-text-primary));
+  --k2-tag-ink: color-mix(in srgb, var(--color-status-ok-soft) 75%, var(--color-text-primary));
   --k2-tag-fill: color-mix(in srgb, var(--color-status-ok) 10%, transparent);
   --k2-tag-edge: color-mix(in srgb, var(--color-status-ok) 45%, transparent);
 }
@@ -2410,7 +2410,7 @@ button[data-k2-float][aria-expanded="true"] { background: var(--k2-float-fill-li
 /* The bell is the same plain colour on or off; a cross-out marks it muted (Rosson, 2026-11-09). */
 button[data-k2-float][role="switch"] { color: var(--color-text-primary); }
 button[data-k2-float]:disabled { opacity: 0.5; }
-html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float]:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 1px; }
 
 /* The drawers' selector (ThreadDrawerSelector): the terminal, Chatter and
    Heartbeats as one object holding the page tabs (`PageTab`). Terminal: square
@@ -2418,13 +2418,17 @@ html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float
    the page tabs' capsule (styles/glass/overrides.css). Focus as Segmented's. */
 [data-k2-float="capsule"] { padding: 0 1px; gap: 2px; }
 [data-k2-float="capsule"] > [data-page-tab] { width: 24px; padding: 0; }
-[data-k2-float="capsule"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+[data-k2-float="capsule"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
 /* The same capsule in an agent tile's bar (`switch` mode, Projects): the
    view picker. Its cells are the float's 24px; Terminal boxes them in a
    hairline so the four read as one control. Glass draws the page tabs'
    capsule (styles/glass/overrides.css). */
 [data-page-tabs][data-tab-mode="switch"] > [data-page-tab] { width: 24px; padding: 0; }
-[data-page-tabs][data-tab-mode="switch"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
+/* Keyboard focus on a page tab, in the top bar and in a tile's picker: 2px
+   of the accent as text inside the tab (the browser's own ring read 1.6:1 on
+   Glass's filled tab). Glass rings a filled (selected) tab in its label
+   colour (styles/glass/overrides.css). */
+[data-page-tabs] > [data-page-tab]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
 html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] { gap: 0; border: 1px solid var(--color-border); }
 html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] > [data-page-tab] + [data-page-tab] { border-left: 1px solid var(--color-border); }
 /* An agent tile's picker is a size smaller (ThreadDrawerSelector size="sm",
@@ -2670,7 +2674,7 @@ html[data-style="glass"] .thread-float-scrim { display: none; }
    in a very narrow pane the field has the row to itself (`tight`). */
 [data-thread-search] { justify-content: flex-start; }
 [data-thread-search]:focus-within { border-color: var(--color-accent); }
-html:is([data-style="glass"], [data-style="glass-classic"]) [data-thread-search]:focus-within { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+html:is([data-style="glass"], [data-style="glass-classic"]) [data-thread-search]:focus-within { outline: 1px solid var(--color-accent-text); outline-offset: 1px; }
 .thread-search-input { width: 168px; font: inherit; color: inherit; height: 100%; }
 .thread-search-input::-webkit-search-cancel-button,
 .thread-search-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }

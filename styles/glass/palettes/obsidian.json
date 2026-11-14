@@ -82,6 +82,16 @@
       "$value": "#ffffff",
       "$type": "color"
     },
+    "on-danger": {
+      "$value": "#ffffff",
+      "$type": "color",
+      "$description": "The label on a danger fill (danger, danger-active, danger-muted): 4.5:1 on each."
+    },
+    "on-warn": {
+      "$value": "#1a1400",
+      "$type": "color",
+      "$description": "The ink on a warning or needs-you fill (the Tickets count): 4.5:1 on status-needs-you."
+    },
     "accent-fill": {
       "$value": "color-mix(in srgb, var(--color-accent) 82%, black)",
       "$type": "color",
@@ -178,7 +188,7 @@
       "$type": "color"
     },
     "danger": {
-      "$value": "#ff453a",
+      "$value": "#d83a30",
       "$type": "color"
     },
     "danger-active": {

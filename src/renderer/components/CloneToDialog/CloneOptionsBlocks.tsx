@@ -178,7 +178,7 @@ export function EnvFilesBlock({ pull }: { pull: boolean }): React.JSX.Element {
       )}
       {n > 0 && !carrySecrets && (
         <p
-          className="pl-[22px] text-[11px] leading-relaxed text-[var(--color-status-warn)]"
+          className="pl-[22px] text-[11px] leading-relaxed text-[var(--color-status-warn-text)]"
           data-testid="clone-secret-files-warning"
         >
           {n === 1

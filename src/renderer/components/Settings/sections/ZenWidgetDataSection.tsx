@@ -83,7 +83,7 @@ export function ZenWidgetDataSection(): React.JSX.Element {
           <p className={`${MUTED} mb-6`}>Each custom widget’s data on this computer.</p>
           {st.failure ? (
             <div className="mb-4">
-              <p role="alert" className="type-hint text-[var(--color-status-error)]" data-testid="zen-widget-data-load-error">
+              <p role="alert" className="type-hint text-[var(--color-status-error-text)]" data-testid="zen-widget-data-load-error">
                 {zenSettingsErrorText(new Error(st.failure.message))}
               </p>
               <button type="button" onClick={() => void loadZenSettings()} className={`${BTN} mt-2`}>

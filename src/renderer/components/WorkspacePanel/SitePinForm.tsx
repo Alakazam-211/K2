@@ -119,7 +119,7 @@ export function SitePinForm({
         </div>
       ) : null}
       {error ? (
-        <div data-testid="site-pin-error" className="text-[10px] text-[var(--color-status-error)]">
+        <div data-testid="site-pin-error" className="text-[10px] text-[var(--color-status-error-text)]">
           {error}
         </div>
       ) : null}

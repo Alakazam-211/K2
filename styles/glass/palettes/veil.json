@@ -43,7 +43,7 @@
       "$type": "color"
     },
     "control-edge": {
-      "$value": "#828287",
+      "$value": "#7f7f84",
       "$type": "color"
     },
     "control-hover": { "$value": "var(--color-border)", "$type": "color", "$description": "Hover fill of the default Button (an elevated chip at rest). Glass keeps the border step; its tile buttons hover by the Glass rules in globals." },
@@ -81,6 +81,16 @@
     "on-accent": {
       "$value": "#ffffff",
       "$type": "color"
+    },
+    "on-danger": {
+      "$value": "#ffffff",
+      "$type": "color",
+      "$description": "The label on a danger fill (danger, danger-active, danger-muted): 4.5:1 on each."
+    },
+    "on-warn": {
+      "$value": "#1a1400",
+      "$type": "color",
+      "$description": "The ink on a warning or needs-you fill (the Tickets count): 4.5:1 on status-needs-you."
     },
     "accent-fill": {
       "$value": "color-mix(in srgb, var(--color-accent) 78%, black)",
@@ -130,7 +140,7 @@
       "$type": "color"
     },
     "status-ok-soft": {
-      "$value": "#207c37",
+      "$value": "#1e7534",
       "$type": "color",
       "$description": "Ok text and dots (the (active) mark, ok callouts): at least 4.5:1 on every ground."
     },
@@ -155,7 +165,7 @@
       "$type": "color"
     },
     "status-warn-text": {
-      "$value": "#b25d00",
+      "$value": "#a25400",
       "$type": "color"
     },
     "status-needs-you": {
@@ -179,7 +189,7 @@
       "$type": "color"
     },
     "danger": {
-      "$value": "#ff3b30",
+      "$value": "#d9302a",
       "$type": "color"
     },
     "danger-active": {
@@ -191,7 +201,7 @@
       "$type": "color"
     },
     "danger-hover": {
-      "$value": "#ff3b30",
+      "$value": "#d70015",
       "$type": "color"
     },
     "neutral": {

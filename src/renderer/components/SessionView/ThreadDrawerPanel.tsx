@@ -294,7 +294,7 @@ function ChatterRow({
 
 const TONE_CLASS: Record<ThreadInputTone, string> = {
   ok: 'text-[var(--color-status-ok-soft)]',
-  warn: 'text-[var(--color-status-warn-amber)]',
+  warn: 'text-[var(--color-status-warn-text)]',
   error: 'text-[var(--color-status-error-soft)]',
   muted: 'text-[var(--color-text-muted)]',
 }

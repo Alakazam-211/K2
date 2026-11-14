@@ -2082,7 +2082,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     measure={measureResourceName}
                   />
                   {row.missing ? (
-                    <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--color-status-warn-soft)]">
+                    <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--color-status-warn-text)]">
                       missing
                     </span>
                   ) : null}

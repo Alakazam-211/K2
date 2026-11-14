@@ -259,7 +259,7 @@ export function ZenGardenSyncControls({
         onChange={sync}
       />
       {error && (
-        <p role="alert" className="type-hint text-[var(--color-status-error)] mt-1">
+        <p role="alert" className="type-hint text-[var(--color-status-error-text)] mt-1">
           {error}
         </p>
       )}

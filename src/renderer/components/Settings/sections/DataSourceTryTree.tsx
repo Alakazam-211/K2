@@ -59,7 +59,7 @@ export function TrySummary({ r }: { r: SourceTryResponse }): React.JSX.Element {
         </p>
       ))}
       {r.warnings.map((w) => (
-        <p key={w.code + w.field} className="text-[var(--color-status-warn)]">
+        <p key={w.code + w.field} className="text-[var(--color-status-warn-text)]">
           {w.hint}
         </p>
       ))}

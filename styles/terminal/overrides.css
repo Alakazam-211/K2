@@ -1,3 +1,15 @@
+/* ── Accent as text ──────────────────────────────────────────────────────
+   Small accent text holds 4.5:1 on the hover fills as well as the page, the
+   card and the menu (a hovered button's fill, a hovered row). Charcoal's
+   blue lightens a little and Paper's deepens a little; fills, icons and the
+   accent button keep --color-accent. */
+[data-style="terminal"][data-palette="charcoal"] {
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, white);
+}
+[data-style="terminal"][data-palette="paper"] {
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 94%, black);
+}
+
 /* ── Tab dividers ─────────────────────────────────────────────────────────
    Short dividers between tabs, the top bar's colour and size (a size smaller in
    a split pane's strip), the same rule as Glass. None beside the selected tab,

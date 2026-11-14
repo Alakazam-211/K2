@@ -211,7 +211,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
         </div>
       ) : null}
       {wide ? (
-        <p className="type-hint text-[var(--color-status-warn)] mt-1" data-garden-data-restore-warning="">
+        <p className="type-hint text-[var(--color-status-warn-text)] mt-1" data-garden-data-restore-warning="">
           {RESTORE_WIDE_WARNING}
         </p>
       ) : null}
@@ -240,7 +240,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
       </div>
       {done ? <p className={MUTED}>{done}</p> : null}
       {error ? (
-        <p className="type-hint text-[var(--color-status-error)] mt-1" data-testid="garden-data-restore-error">
+        <p className="type-hint text-[var(--color-status-error-text)] mt-1" data-testid="garden-data-restore-error">
           {error}
         </p>
       ) : null}

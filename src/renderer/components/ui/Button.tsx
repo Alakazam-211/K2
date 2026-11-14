@@ -30,16 +30,16 @@ const VARIANTS: Record<string, string> = {
     'bg-[var(--color-accent-fill)] border border-[var(--color-accent-edge,var(--color-accent-fill))] text-[var(--color-on-accent)] hover:bg-[var(--color-accent-fill-hover)] hover:border-[var(--color-accent-edge,var(--color-accent-fill-hover))] active:bg-[color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black)] active:border-[var(--color-accent-edge,color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black))] [--k2-ch-focus-inner:var(--color-on-accent)]',
   /** Destructive action (red-600/700 idiom). */
   danger:
-    'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus-inner:var(--color-on-accent)]',
+    'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-danger)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus-inner:var(--color-on-danger)]',
   /** A destructive action on a resting page (Reset…): present but quiet. The
    *  quiet button's outline with the label in the error colour (4.5:1 on a
-   *  card); it fills red only under the pointer and on press, where the white
-   *  label clears 4.5:1 too. Its confirm dialog keeps the filled red. */
+   *  card); it fills red only under the pointer and on press, where its label
+   *  (--color-on-danger) clears 4.5:1 too. Its confirm dialog keeps the filled red. */
   'danger-quiet':
-    'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-status-error-text)] hover:bg-[var(--color-danger-muted)] hover:border-[var(--color-danger-muted)] hover:text-[var(--color-on-accent)] active:bg-[var(--color-danger-active)] active:border-[var(--color-danger-active)] active:text-[var(--color-on-accent)]',
+    'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-status-error-text)] hover:bg-[var(--color-danger-muted)] hover:border-[var(--color-danger-muted)] hover:text-[var(--color-on-danger)] active:bg-[var(--color-danger-active)] active:border-[var(--color-danger-active)] active:text-[var(--color-on-danger)]',
   /** Muted destructive (ConfirmDialog confirm / kick). */
   'danger-muted':
-    'bg-[var(--color-danger-muted)] border border-[var(--color-danger-muted)] text-[var(--color-on-accent)] [--k2-ch-focus-inner:var(--color-on-accent)]',
+    'bg-[var(--color-danger-muted)] border border-[var(--color-danger-muted)] text-[var(--color-on-danger)] [--k2-ch-focus-inner:var(--color-on-danger)]',
 }
 
 const SIZES: Record<string, string> = {

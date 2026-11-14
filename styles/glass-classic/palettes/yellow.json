@@ -76,6 +76,16 @@
       "$type": "color",
       "$description": "Ink on gold: white fails contrast on #ffc700."
     },
+    "on-danger": {
+      "$value": "#ffffff",
+      "$type": "color",
+      "$description": "The label on a danger fill (danger, danger-active, danger-muted): 4.5:1 on each."
+    },
+    "on-warn": {
+      "$value": "#1a1400",
+      "$type": "color",
+      "$description": "The ink on a warning or needs-you fill (the Tickets count): 4.5:1 on status-needs-you."
+    },
     "status-working": {
       "$value": "#4c8dff",
       "$type": "color"

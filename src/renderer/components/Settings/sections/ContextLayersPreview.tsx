@@ -95,7 +95,7 @@ function KindBadge({ kind }: { kind: LayerKind }): React.JSX.Element {
   const style: Record<LayerKind, string> = {
     auto: 'text-[var(--color-text-muted)] italic',
     global: 'text-[var(--color-accent)]',
-    ws: 'text-[var(--color-status-warn-amber)]',
+    ws: 'text-[var(--color-status-warn-text)]',
     heartbeat: 'text-emerald-400',
   }
   return <span className={`type-hint ${style[kind]}`}>{kind}</span>

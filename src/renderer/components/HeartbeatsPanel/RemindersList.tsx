@@ -100,7 +100,7 @@ export function RemindersList({
   return (
     <div data-testid="reminders-list" className="space-y-1">
       <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">Reminders</div>
-      {error && <div className={`${muted} !text-[var(--color-status-warn)]`}>{error}</div>}
+      {error && <div className={`${muted} !text-[var(--color-status-warn-text)]`}>{error}</div>}
       {rows.map((r) => (
         <div key={r.name} className="flex items-center justify-between gap-2 text-[11px]">
           <span className="min-w-0 truncate text-[var(--color-text-primary)]" title={r.text ?? ''}>

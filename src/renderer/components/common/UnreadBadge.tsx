@@ -30,7 +30,7 @@ const UNREAD_BG = 'bg-[var(--color-accent-fill)]'
 const MUTED_BG = 'bg-[var(--color-text-muted)]'
 const WAITING_BG = 'bg-[var(--color-status-needs-you)]'
 const TICKET_PILL =
-  'min-w-[14px] h-[14px] inline-flex flex-shrink-0 items-center justify-center text-[8px] font-bold rounded-[var(--radius-badge)] px-0.5 border border-[var(--color-status-needs-you)] text-[var(--color-status-needs-you)]'
+  'min-w-[14px] h-[14px] inline-flex flex-shrink-0 items-center justify-center text-[8px] font-bold rounded-[var(--radius-badge)] px-0.5 border border-[var(--color-status-needs-you)] text-[var(--color-status-warn-text)]'
 
 export function UnreadBadge({
   unread,

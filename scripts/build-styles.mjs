@@ -53,7 +53,7 @@ const REQUIRED_COLOR_SLOTS = [
   'status-ok-soft', 'status-warn-soft', 'status-error-soft', 'neutral', 'control-track-off',
   'status-error-bright', 'status-error-text', 'status-working-soft',
   'status-warn-text', 'status-needs-you', 'status-warn-amber', 'status-warn-amber-soft', 'status-warn-amber-bright',
-  'status-ok-hover', 'danger', 'danger-active',
+  'status-ok-hover', 'danger', 'danger-active', 'on-danger', 'on-warn',
   'wash-1', 'wash-2', 'wash-3', 'scrim', 'danger-muted', 'row-hover',
   // A name or time drawn on video (the call's tiles): readable on any picture.
   'media-label-bg', 'media-label-text',

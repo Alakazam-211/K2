@@ -16,7 +16,8 @@ const src = (rel: string): string => readFileSync(join(components, rel), 'utf8')
 describe('needs the person = needs-you, never the working token', () => {
   it('the Tickets page-tab badge (tickets waiting on you)', () => {
     const s = src('TopBar/PageTabs.tsx')
-    expect(s).toContain("badgeClass: 'bg-[var(--color-status-needs-you)]'")
+    // The needs-you fill, inked in the dark on-warn (white read under 2:1).
+    expect(s).toContain("badgeClass: 'bg-[var(--color-status-needs-you)] !text-[var(--color-on-warn)]'")
     expect(s).not.toContain('status-working')
   })
 
@@ -35,7 +36,8 @@ describe('needs the person = needs-you, never the working token', () => {
 
   it('a 20+ day old chat is needs-you orange, not the working accent', () => {
     const s = src('ChatHistory/ChatHistory.tsx')
-    expect(s).toContain("color: old ? 'var(--color-status-needs-you)'")
+    // As text, the needs-you family's text tone (4.5:1 on every surface).
+    expect(s).toContain("color: old ? 'var(--color-status-warn-text)'")
     expect(s).not.toContain('var(--color-status-working)')
   })
 

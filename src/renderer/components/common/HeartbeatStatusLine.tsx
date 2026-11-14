@@ -18,7 +18,7 @@ import {
 const TONE_CLASS: Record<HeartbeatStatusTone, string> = {
   next: 'text-[var(--color-text-muted)]',
   firing: 'text-[var(--color-accent)]',
-  waiting: 'text-[var(--color-status-warn-amber)]',
+  waiting: 'text-[var(--color-status-warn-text)]',
   problem: 'text-[var(--color-status-error-soft)]',
   disabled: 'text-[var(--color-text-muted)]',
 }

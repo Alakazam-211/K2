@@ -45,7 +45,7 @@ const TILE_BASE = 'border border-[var(--color-border)] bg-[var(--color-bg-elevat
 const TILE_ON = 'border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg)]'
 /** Hang up: the app's danger color (as the danger Button). */
 const TILE_DANGER =
-  'border border-[var(--color-danger)] bg-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)]'
+  'border border-[var(--color-danger)] bg-[var(--color-danger)] text-[var(--color-on-danger)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)]'
 
 /** The headset list's call row (VoicePopover, VideoCallButtons): the tile
  *  strip's square buttons, but a real `disabled` (the list has no drag). */
@@ -238,7 +238,7 @@ export function RecordingBadge({ call, variant }: { call: VoiceCall; variant: Ca
       data-testid={`call-${variant}-recording`}
       role="status"
       title={recordingBadgeTitle(r, starter)}
-      className="flex shrink-0 items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-status-error)]"
+      className="flex shrink-0 items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-status-error-text)]"
       style={noDrag}
     >
       <span aria-hidden className="inline-block h-2 w-2 rounded-[var(--radius-pill)] bg-[var(--color-status-error)]" />

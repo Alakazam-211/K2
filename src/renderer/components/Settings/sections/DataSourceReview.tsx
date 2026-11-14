@@ -204,7 +204,7 @@ export function DataSourceReview({
         {keeps && <p className={muted}>Keeps: {keeps}</p>}
         {pending.lan && <p className={danger}>This reads a LAN address or plain http. Only the owner can approve it.</p>}
         {(show?.warnings ?? []).map((w) => (
-          <p key={w.code + w.field} className="text-[var(--color-status-warn)]">
+          <p key={w.code + w.field} className="text-[var(--color-status-warn-text)]">
             {w.hint}
           </p>
         ))}
@@ -302,7 +302,7 @@ export function DataSourceReview({
       )}
       {phase.step === 'root' && (
         <div className="space-y-1 type-hint" data-testid="sources-review-rootkey">
-          <p className="text-[var(--color-status-warn)]">{phase.hint.hint}</p>
+          <p className="text-[var(--color-status-warn-text)]">{phase.hint.hint}</p>
           <div className="flex gap-1.5">
             <button type="button" className={btn} onClick={() => void approve(phase.token, true)} data-testid="sources-review-use-anyway">
               Use anyway

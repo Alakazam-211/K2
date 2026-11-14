@@ -42,10 +42,10 @@ function fmt(unix: number | null | undefined): string {
 
 function Chip({ text, tone }: { text: string; tone: 'ok' | 'warn' | 'error' | 'info' | 'muted' }): React.JSX.Element {
   const color = {
-    ok: 'var(--color-status-ok)',
-    warn: 'var(--color-status-warn)',
-    error: 'var(--color-status-error-soft)',
-    info: 'var(--color-accent)',
+    ok: 'var(--color-status-ok-soft)',
+    warn: 'var(--color-status-warn-text)',
+    error: 'var(--color-status-error-text)',
+    info: 'var(--color-accent-text)',
     muted: 'var(--color-text-muted)',
   }[tone]
   return (

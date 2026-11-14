@@ -148,10 +148,11 @@
 /* A tile you press (Usage's totals) is edged in the control edge, 3:1 on
    the page; the soft drop would darken the page beside that edge under it. */
 [data-style="glass"][data-palette="veil"] button[data-material="tile"]:not([data-floating]):not([data-zen-root] *) { box-shadow: none; }
-/* Small accent text: #0a84ff is under 4.5:1 here, so text darkens. Fills and
-   icons drawn with --color-accent are untouched. */
+/* Small accent text: #0a84ff is under 4.5:1 here, so text darkens, far
+   enough to hold 4.5:1 on the hover fills too (a hovered row, button or
+   list item). Fills and icons drawn with --color-accent are untouched. */
 [data-style="glass"][data-palette="veil"] {
-  --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, black);
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 75%, black);
 }
 /* Obsidian: #0a84ff text on a selected row (accent at 10% over a tile) is
    4.0:1, so small accent text lightens a little. Fills and icons keep
@@ -271,7 +272,7 @@
 [data-style="glass"]:not([data-palette="veil"]) [data-k2-float="capsule"] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
 /* An agent tile's view picker (Projects): the page tabs' capsule in the
    tile's 32px bar, with the same focus ink on the accent circle. */
-[data-style="glass"]:not([data-palette="veil"]) [data-tab-mode="switch"] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
+[data-style="glass"]:not([data-palette="veil"]) [data-page-tabs] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
 
 /* Light glass inverts the selected pill: a dark wash, normal ink. */
 [data-style="glass"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *) {
@@ -310,6 +311,9 @@
    label turns white on hover, which the grey wash would leave unreadable. */
 [data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([class*="hover:bg-[var(--color-danger"]):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: color-mix(in srgb, var(--tile-raised) 90%, var(--color-text-primary));
+  /* The edge lightens with the fill (as a Styles tile's does), so it keeps
+     3:1 against the hovered fill as well as the page. */
+  border-color: var(--color-text-muted);
 }
 [data-style="glass"] button[class~="border"][class*="hover:bg-[var(--color-danger"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: var(--color-danger-muted);
@@ -402,6 +406,12 @@
 /* Disabled in Veil: a white knob on a pale track looked live (the 50% fade
    that greys it on dark grounds leaves white on white), so it goes flat and
    grey, as the other looks show it. */
+/* Off in Veil, the white knob on the pale track (1.3:1) takes the control
+   edge as its own rim, as the slider's thumb does, so where it sits reads at
+   3:1 as well as the track's edge. */
+[data-style="glass"][data-palette="veil"] .k2-switch[aria-checked="false"]:not(:disabled) .k2-switch-knob:not([data-zen-root] *) {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--color-control-edge);
+}
 [data-style="glass"][data-palette="veil"] .k2-switch:disabled .k2-switch-knob:not([data-zen-root] *) {
   background-color: color-mix(in srgb, var(--color-control-edge) 50%, var(--color-bg-surface));
   box-shadow: none;
@@ -513,7 +523,7 @@
 [data-style="glass"] [data-drawer-tab][data-selected]:not([data-zen-root] *) {
   background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
-[data-style="glass"] [data-drawer-tab]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+[data-style="glass"] [data-drawer-tab]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
 /* The » / « toggles: a small round control, no cell line beside it. */
 [data-style="glass"] [data-drawer-tabbar-toggle]:not([data-zen-root] *) {
   border-width: 0;
@@ -573,7 +583,7 @@
 }
 [data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: var(--motion-press-scale); }
 [data-style="glass"] [data-nav-control]:focus-visible:not([data-zen-root] *),
-[data-style="glass"] [data-nav-picker]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+[data-style="glass"] [data-nav-picker]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent-text); outline-offset: 1px; }
 
 /* The Home, focus-group and server pickers: a pill the height of the top-bar
    capsules, sentence-case name, round count. */

@@ -91,7 +91,7 @@ export function MailWatchPanel({ projectPath }: { projectPath: string }): React.
 
   return (
     <div className="space-y-4">
-      {error && <div className={`${muted} !text-[var(--color-status-warn)]`}>{error}</div>}
+      {error && <div className={`${muted} !text-[var(--color-status-warn-text)]`}>{error}</div>}
 
       <SettingsGroup title="Mail">
         <Row

@@ -178,7 +178,7 @@ export function GitAccessSetupForm({
         </>
       )}
       {error ? (
-        <div data-testid="git-access-error" className="text-[10px] text-[var(--color-status-error)]">
+        <div data-testid="git-access-error" className="text-[10px] text-[var(--color-status-error-text)]">
           {error}
         </div>
       ) : null}

@@ -19,7 +19,7 @@ import { Button } from '@/components/ui'
 export const BTN =
   'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 export const DANGER_BTN =
-  'px-2 py-1 type-control border border-[var(--color-status-error)] text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
+  'px-2 py-1 type-control border border-[var(--color-status-error)] text-[var(--color-status-error-text)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 export const INPUT =
   'px-2 py-1 type-row bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 

@@ -198,7 +198,7 @@ describe('Glass: keyboard focus on a filled button', () => {
     for (const variant of ['accent', 'danger', 'danger-muted', 'default', 'ghost', 'quiet', 'danger-quiet']) {
       render(<Button variant={variant}>{variant}</Button>)
       const el = screen.getByText(variant)
-      const filled = /\[--k2-ch-focus-inner:var\(--color-on-accent\)\]/.test(el.className)
+      const filled = /\[--k2-ch-focus-inner:var\(--color-on-(?:accent|danger)\)\]/.test(el.className)
       expect(filled, `${variant} sets Terminal's inner line`).toBe(['accent', 'danger', 'danger-muted'].includes(variant))
       expect(el.matches(atRest), `${variant} takes Glass's inner line`).toBe(filled)
     }

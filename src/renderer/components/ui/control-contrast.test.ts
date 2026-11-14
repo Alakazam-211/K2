@@ -374,7 +374,8 @@ describe('Keyboard focus', () => {
     const button = readFileSync(join(__dirname, 'Button.tsx'), 'utf8')
     for (const v of ['accent', 'danger', "'danger-muted'"]) {
       const cls = new RegExp(`\\n  ${v}:\\s*'([^']+)'`).exec(button)![1]
-      expect(cls, v).toContain('[--k2-ch-focus-inner:var(--color-on-accent)]')
+      // The inner line is the button's own label colour.
+      expect(cls, v).toContain(v === 'accent' ? '[--k2-ch-focus-inner:var(--color-on-accent)]' : '[--k2-ch-focus-inner:var(--color-on-danger)]')
       expect(cls, v).not.toContain('[--k2-ch-focus:')
     }
     for (const v of ['default', 'ghost', 'quiet', "'danger-quiet'"]) {

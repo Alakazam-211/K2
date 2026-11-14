@@ -203,7 +203,7 @@ export default function WorktreeDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="feature/my-feature"
-                className="w-full px-3 py-2 text-xs font-mono bg-white/[0.04] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/25"
+                className="w-full px-3 py-2 text-xs font-mono bg-white/[0.04] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent-text)]/25"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && canCreate) handleCreate()
                 }}

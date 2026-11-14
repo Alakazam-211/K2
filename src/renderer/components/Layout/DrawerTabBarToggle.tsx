@@ -80,7 +80,7 @@ export function DrawerToggleButton({
         size === 'square'
           ? `${NAV_TOGGLE_BOX} bg-white/[0.04] text-[var(--color-text-secondary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)]`
           : 'h-full w-8 self-stretch bg-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]'
-      } ${dividerClass} flex-shrink-0 cursor-pointer items-center justify-center outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]`}
+      } ${dividerClass} flex-shrink-0 cursor-pointer items-center justify-center outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent-text)]`}
     >
       <DoubleChevron direction={direction} className="h-4 w-4" />
       {children}

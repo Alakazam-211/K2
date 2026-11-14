@@ -1213,7 +1213,7 @@ function MobileDevice({
               tabIndex={-1}
               role="application"
               aria-label={`${session?.profile?.name ?? 'Device'} screen${interactive ? '' : ' (watching)'}`}
-              className="relative h-full w-full overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
+              className="relative h-full w-full overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent-text)]"
               style={{ cursor: interactive ? 'pointer' : 'default', touchAction: 'none' }}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}

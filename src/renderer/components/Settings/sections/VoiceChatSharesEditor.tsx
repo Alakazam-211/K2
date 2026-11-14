@@ -58,7 +58,7 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
         Nothing else.
       </div>
       {agents.trim() ? (
-        <div className="type-hint text-[var(--color-status-warn-soft)]" data-testid={`voice-chat-shares-notice-${username}`}>
+        <div className="type-hint text-[var(--color-status-warn-text)]" data-testid={`voice-chat-shares-notice-${username}`}>
           {SHARED_CONTEXT_NOTICE}
         </div>
       ) : null}

@@ -231,7 +231,7 @@ export default function PageTabs(): React.JSX.Element {
               ? {
                   badge: ticketsBadge.badge,
                   // Tickets waiting on you: the needs-you orange, not working.
-                  badgeClass: 'bg-[var(--color-status-needs-you)]',
+                  badgeClass: 'bg-[var(--color-status-needs-you)] !text-[var(--color-on-warn)]',
                   badgeStale: ticketsBadge.badgeStale,
                   badgeTitle: ticketsBadge.badgeTitle,
                 }

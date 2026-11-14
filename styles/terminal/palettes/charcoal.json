@@ -49,7 +49,7 @@
       "$description": "Checkbox outlines and other controls needing more contrast than border."
     },
     "control-edge": {
-      "$value": "#7a7a82",
+      "$value": "#7e7e86",
       "$type": "color",
       "$description": "Outline of interactive controls (buttons, fields, dropdowns, checkboxes, radios, switch tracks, segmented pickers): at least 3:1 on every background, the hovered list row (row-hover over a card, #2c2c2c: 3.28) being the worst case. Hairline dividers stay on border."
     },
@@ -90,6 +90,16 @@
       "$value": "#ffffff",
       "$type": "color",
       "$description": "Glyphs/knobs drawn on accent or bright fills (checkbox check, slider thumb)."
+    },
+    "on-danger": {
+      "$value": "#ffffff",
+      "$type": "color",
+      "$description": "The label on a danger fill (danger, danger-active, danger-muted): 4.5:1 on each."
+    },
+    "on-warn": {
+      "$value": "#1a1400",
+      "$type": "color",
+      "$description": "The ink on a warning or needs-you fill (the Tickets count): 4.5:1 on status-needs-you."
     },
     "accent-fill": {
       "$value": "color-mix(in srgb, var(--color-accent) 82%, black)",

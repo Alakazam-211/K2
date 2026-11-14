@@ -57,7 +57,7 @@ function CloseGlyph(): JSX.Element {
 }
 
 const INNER_BUTTON =
-  'inline-flex items-center justify-center h-5 w-5 flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]'
+  'inline-flex items-center justify-center h-5 w-5 flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent-text)]'
 
 /** Thread view's search object, right of the bell: a round button that
  *  opens a field in the same row. The Thread below finds and highlights

@@ -300,7 +300,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
         <div className="px-3 py-2 border-b border-[var(--color-border)]">
           {listError ? (
             <p
-              className={`text-[10px] text-[var(--color-status-error)] ${hasAny || leftoversError ? 'mb-1.5' : ''}`}
+              className={`text-[10px] text-[var(--color-status-error-text)] ${hasAny || leftoversError ? 'mb-1.5' : ''}`}
               data-published-list-error=""
             >
               {listError}
@@ -308,7 +308,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
           ) : null}
           {leftoversError ? (
             <p
-              className={`text-[10px] text-[var(--color-status-error)] ${hasAny ? 'mb-1.5' : ''}`}
+              className={`text-[10px] text-[var(--color-status-error-text)] ${hasAny ? 'mb-1.5' : ''}`}
               data-published-leftovers-error=""
             >
               {leftoversError}
@@ -409,7 +409,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                       </span>
                     ) : null}
                     {svc.error ? (
-                      <span className="block text-[10px] text-[var(--color-status-error)] truncate" title={svc.error}>
+                      <span className="block text-[10px] text-[var(--color-status-error-text)] truncate" title={svc.error}>
                         {svc.error}
                       </span>
                     ) : null}

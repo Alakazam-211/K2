@@ -149,7 +149,7 @@ export function CloneProposalsBanner({ addr, refreshKey }: { addr: string; refre
         )
       })}
       {error && (
-        <p role="alert" className="text-[11px] text-[var(--color-status-error)]">
+        <p role="alert" className="text-[11px] text-[var(--color-status-error-text)]">
           {error}
         </p>
       )}

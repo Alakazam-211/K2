@@ -72,7 +72,7 @@ export function NoticeCard({
         <div style={{ color: muted, fontSize: '0.86em' }}>Told the agent.</div>
       ) : (
         <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: '0.86em', color: 'var(--color-status-warn)' }}>
+          <span style={{ fontSize: '0.86em', color: 'var(--color-status-warn-text)' }}>
             Couldn't reach the agent{notice.reason ? ` (${notice.reason})` : ''}. It's in the next digest.
           </span>
           {onRetry && (

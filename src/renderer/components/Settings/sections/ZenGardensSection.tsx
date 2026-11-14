@@ -205,7 +205,7 @@ function GardenRow({
           onMouseDown={onHandleMouseDown}
           onKeyDown={onHandleKeyDown}
           onBlur={onHandleBlur}
-          className={`w-4 h-6 flex-shrink-0 flex items-center justify-center no-drag outline-none focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] ${
+          className={`w-4 h-6 flex-shrink-0 flex items-center justify-center no-drag outline-none focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-[var(--color-accent-text)] ${
             reorderable
               ? 'cursor-grab active:cursor-grabbing hover:text-[var(--color-text-primary)] focus:text-[var(--color-text-primary)]'
               : 'cursor-default opacity-30'

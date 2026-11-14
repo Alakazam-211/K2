@@ -310,7 +310,7 @@ export function MobileControlRail(props: MobileControlRailProps): React.JSX.Elem
                 <button
                   type="button"
                   role="menuitem"
-                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 disabled:cursor-default disabled:opacity-50"
+                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--color-status-error-text)] hover:bg-[var(--color-danger)]/10 disabled:cursor-default disabled:opacity-50"
                   disabled={busy}
                   onClick={() => {
                     props.onStop()

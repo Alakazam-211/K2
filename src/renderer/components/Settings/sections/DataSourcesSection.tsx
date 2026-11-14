@@ -155,7 +155,7 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
           </span>
         </p>
         {legacy && (
-          <p className="type-hint text-[var(--color-status-warn)]" data-testid="sources-legacy-token">
+          <p className="type-hint text-[var(--color-status-warn-text)]" data-testid="sources-legacy-token">
             This server is saved with an old host token, so it treats you as its owner. Sign in to it again with your Connect
             login (Settings → Network → Connected Servers).
           </p>

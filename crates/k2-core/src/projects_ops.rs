@@ -445,33 +445,42 @@ pub struct ProjectWithWorkspaces {
 }
 
 /// Same sentinel filter as [`projects_list`], plus a nested `workspaces`
-/// array per row. One `db.lock()` covers the project+workspace join so
-/// the HTTP handler does not N+1. Internal callers keep using the flat
-/// [`projects_list`]. `iconRev` is computed after the lock is released
-/// (it may stat or read a repo icon file).
+/// array per row. Internal callers keep using the flat [`projects_list`].
+///
+/// A fixed number of statements however many projects there are: the
+/// projects read and ONE workspaces read ([`project_rows_with_workspaces`]),
+/// joined in memory. `iconRev` and the display name are computed after the
+/// lock is released (they may stat or read files); the display name falls
+/// back to the row's own name, never a lookup per row.
 pub fn projects_list_with_workspaces() -> Result<Vec<ProjectWithWorkspaces>, String> {
     let rows = {
         let db = db::shared();
         let conn = db.lock();
-        let projects = Project::list(&conn).map_err(|e| e.to_string())?;
-        let mut rows = Vec::with_capacity(projects.len());
-        for project in projects {
-            if db::AUDIT_SENTINEL_IDS.contains(&project.id.as_str()) {
-                continue;
-            }
-            let workspaces = Workspace::list(&conn, &project.id).map_err(|e| e.to_string())?;
-            rows.push((project, workspaces));
-        }
-        rows
+        project_rows_with_workspaces(&conn)?
     };
     Ok(rows
         .into_iter()
         .map(|(project, workspaces)| {
             let icon_rev = project_icon_rev(project.icon_url.as_deref(), &project.path);
-            // Mtime-cached; its fallback reads the DB, so it runs here,
-            // after the lock above is released.
-            let agent_display_name = crate::workspace::display::agent_display_name(&project.path);
+            let agent_display_name =
+                crate::workspace::display::agent_display_name_with_name(&project.path, &project.name);
             ProjectWithWorkspaces { project, workspaces, icon_rev, agent_display_name }
+        })
+        .collect())
+}
+
+/// The visible projects (sentinels dropped), each with its workspaces, from
+/// two reads on `conn`: [`Project::list`] and
+/// [`Workspace::list_all_by_project`].
+fn project_rows_with_workspaces(conn: &rusqlite::Connection) -> Result<Vec<(Project, Vec<Workspace>)>, String> {
+    let projects = Project::list(conn).map_err(|e| e.to_string())?;
+    let mut by_project = Workspace::list_all_by_project(conn).map_err(|e| e.to_string())?;
+    Ok(projects
+        .into_iter()
+        .filter(|p| !db::AUDIT_SENTINEL_IDS.contains(&p.id.as_str()))
+        .map(|project| {
+            let workspaces = by_project.remove(&project.id).unwrap_or_default();
+            (project, workspaces)
         })
         .collect())
 }

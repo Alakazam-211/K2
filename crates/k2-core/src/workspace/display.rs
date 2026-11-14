@@ -69,6 +69,18 @@ fn current_mtime(path: &std::path::Path) -> Option<SystemTime> {
 ///    requires a workspace with no `projects` row, i.e. an unregistered
 ///    path; should not happen in practice).
 pub fn agent_display_name(project_path: &str) -> String {
+    cached_display_name(project_path, || lookup_project_name(project_path))
+}
+
+/// [`agent_display_name`] for a caller that already holds the workspace's
+/// `projects.name` (the projects list): step 3 uses `project_name` instead
+/// of reading the database, so listing N workspaces never runs N lookups.
+/// Same cache, same answer.
+pub fn agent_display_name_with_name(project_path: &str, project_name: &str) -> String {
+    cached_display_name(project_path, || Some(project_name.to_string()))
+}
+
+fn cached_display_name(project_path: &str, project_name: impl FnOnce() -> Option<String>) -> String {
     let agent_md = persona_md_in(workspace_agent_path(project_path));
     let mtime = current_mtime(&agent_md);
 
@@ -81,7 +93,7 @@ pub fn agent_display_name(project_path: &str) -> String {
         }
     }
 
-    let resolved = resolve_uncached(project_path, &agent_md);
+    let resolved = resolve_uncached(&agent_md, project_name);
 
     {
         let mut cache = cache().lock().unwrap();
@@ -97,7 +109,7 @@ pub fn agent_display_name(project_path: &str) -> String {
     resolved
 }
 
-fn resolve_uncached(project_path: &str, agent_md: &PathBuf) -> String {
+fn resolve_uncached(agent_md: &PathBuf, project_name: impl FnOnce() -> Option<String>) -> String {
     if let Ok(content) = fs::read_to_string(agent_md) {
         let fm = parse_frontmatter(&content);
         if let Some(d) = fm.get("display_name") {
@@ -112,7 +124,7 @@ fn resolve_uncached(project_path: &str, agent_md: &PathBuf) -> String {
         }
     }
 
-    if let Some(name) = lookup_project_name(project_path) {
+    if let Some(name) = project_name() {
         if !name.is_empty() {
             return name;
         }

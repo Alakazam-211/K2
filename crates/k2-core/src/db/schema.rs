@@ -795,6 +795,37 @@ impl Workspace {
         rows.collect()
     }
 
+    /// Every workspace row in ONE statement, grouped by `project_id`, each
+    /// group in the same order [`Workspace::list`] gives (`tab_order`, ties
+    /// by insertion). For readers that would otherwise run `list` once per
+    /// project (the projects list).
+    pub fn list_all_by_project(conn: &Connection) -> Result<std::collections::HashMap<String, Vec<Workspace>>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, section_id, type, branch, name, tab_order, worktree_path, nav_visible, created_at \
+             FROM workspaces ORDER BY project_id, tab_order, rowid",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Workspace {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                section_id: row.get(2)?,
+                type_: row.get(3)?,
+                branch: row.get(4)?,
+                name: row.get(5)?,
+                tab_order: row.get(6)?,
+                worktree_path: row.get(7)?,
+                nav_visible: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?;
+        let mut out: std::collections::HashMap<String, Vec<Workspace>> = std::collections::HashMap::new();
+        for ws in rows {
+            let ws = ws?;
+            out.entry(ws.project_id.clone()).or_default().push(ws);
+        }
+        Ok(out)
+    }
+
     pub fn get(conn: &Connection, id: &str) -> Result<Workspace> {
         conn.query_row(
             "SELECT id, project_id, section_id, type, branch, name, tab_order, worktree_path, nav_visible, created_at \

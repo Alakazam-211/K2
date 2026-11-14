@@ -321,6 +321,31 @@ pub fn card_prompt_for(caller: &str, for_workspace: Option<&str>, eval: &gate::E
     s
 }
 
+/// Files named in [`card_subject`].
+pub const SUBJECT_FILES: usize = 3;
+
+/// What the card is about, in one line for the answer an agent is sent
+/// (`action_card_echo`): the folder, how many risky settings, and the
+/// files of the most important ones: `/srv/app (4 risky settings:
+/// .claude/settings.json, .claude/a.sh, .claude/b.sh, …)`.
+pub fn card_subject(eval: &gate::Evaluation) -> String {
+    let n = eval.findings.len();
+    if n == 0 {
+        return eval.path.clone();
+    }
+    let mut ranked: Vec<&k2_core::cli_folder_trust::scan::Finding> = eval.findings.iter().collect();
+    ranked.sort_by_key(|f| finding_rank(&f.what));
+    let mut files: Vec<&str> = Vec::new();
+    for f in &ranked {
+        if !files.contains(&f.file.as_str()) {
+            files.push(&f.file);
+        }
+    }
+    let more = if files.len() > SUBJECT_FILES { ", …" } else { "" };
+    let shown = files.into_iter().take(SUBJECT_FILES).collect::<Vec<_>>().join(", ");
+    format!("{} ({n} risky setting{}: {shown}{more})", eval.path, if n == 1 { "" } else { "s" })
+}
+
 /// Who asked, for the card: the actor's own caller, else the agent whose
 /// passport made this request, else the folder's agent.
 fn caller_name(actor: &Actor, folder_project: Option<&str>) -> String {
@@ -384,6 +409,8 @@ fn present(ask: &Ask<'_>) -> Asked {
             "scope": eval.scope,
             "fingerprint": eval.fingerprint,
             "caller": caller,
+            // Named in the answer the agent is sent (`action_card_echo`).
+            "subject": card_subject(eval),
         }),
         dedupe: eval.scope.clone(),
         result: None,

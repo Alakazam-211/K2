@@ -3916,6 +3916,8 @@ fn answer_action_card(
         card_actor_author(params, session_author),
     ) {
         Ok(mut cb) => {
+            // The agent is told what the card was about, not only the choice.
+            cb.inject_line = crate::action_card_echo::answer_line(&action, &answer);
             // The card keeps what the action did (`choice.action.result`,
             // whose `message` every client shows under the chosen option),
             // and the frame that goes out carries it.

@@ -982,3 +982,59 @@ fn an_agent_from_another_server_is_refused() {
     let st = gate::status(&path).unwrap();
     assert_eq!((st.state.as_str(), st.card.as_deref()), ("undecided", None), "nothing was posted");
 }
+
+// ── The answer the agent is sent names the folder ────────────────────
+//
+// "chose Trust it" alone names nothing: after two cards (two restarts) a
+// person reading the agent's Chat couldn't tell what was trusted.
+
+/// The card's subject: the folder, how many risky settings, and the files
+/// of the most important ones first, at most three, then "…".
+#[test]
+fn the_card_subject_names_the_folder_and_the_first_files() {
+    let e = env();
+    let ws = folder(&e.home, "subject", Some(HOOK));
+    std::fs::create_dir_all(ws.join(".claude/scratch/scripts")).unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(ws.join(format!(".claude/scratch/scripts/{name}.sh")), "echo hi\n").unwrap();
+    }
+    let eval = gate::evaluate(&s(&ws)).unwrap();
+    let n = eval.findings.len();
+    assert!(n >= 4, "a hook and three scripts: {:?}", eval.findings);
+    assert_eq!(
+        card_subject(&eval),
+        format!("{} ({n} risky settings: .claude/settings.json, .claude/scratch/scripts/a.sh, .claude/scratch/scripts/b.sh, …)", s(&ws)),
+        "the hook ranks above the scripts; three files, then …"
+    );
+
+    let one = folder(&e.home, "subject-one", Some(HOOK));
+    let eval = gate::evaluate(&s(&one)).unwrap();
+    assert_eq!(eval.findings.len(), 1, "{:?}", eval.findings);
+    assert_eq!(card_subject(&eval), format!("{} (1 risky setting: .claude/settings.json)", s(&one)));
+}
+
+/// A tap on the card: the agent is sent one line that names the choice
+/// and the folder with what's in it, not a bare "chose Trust it".
+#[test]
+fn the_answer_the_agent_is_sent_names_the_folder() {
+    let e = env();
+    let ws = folder(&e.home, "echo", Some(HOOK));
+    let (_pid, addr, conv) = register_with_thread(&ws);
+    let r = held(&ws);
+    let card = r.card.clone().expect("a card on the folder's Thread");
+    let subject = card_subject(&gate::evaluate(&s(&ws)).unwrap());
+    let stored = card_doc(&conv, &card).action.expect("an action card");
+    assert_eq!(stored.params["subject"], subject.as_str(), "the card carries its subject");
+
+    let ok = tap(&addr, &card, TRUST_IT, "owner");
+    assert_eq!(ok.status, "200 OK", "{}", ok.body);
+    let want = format!("[thread:{addr}] chose \"{TRUST_IT}\" for {subject}");
+    let injects = crate::overlay_routes::recorded_injects();
+    let line = injects
+        .iter()
+        .find(|l| l.contains(&format!("[thread:{addr}] ")))
+        .unwrap_or_else(|| panic!("no answer sent to the agent: {injects:?}"));
+    assert!(line.ends_with(&want), "{line}");
+    assert!(line.contains(&s(&ws)) && line.contains(".claude/settings.json"), "{line}");
+    assert!(!line.contains('\n'), "{line}");
+}

@@ -250,7 +250,9 @@ vi.mock('@/stores/connect-host', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/stores/connect-host')>()),
   useConnectHostStore: Object.assign(
     (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),
-    { getState: () => ({ activeHost: 'local' as const }) },
+    // The Thread view cache watches the saved logins (it forgets a server's
+    // copies on sign-out): no saved servers here.
+    { getState: () => ({ activeHost: 'local' as const, hosts: [] }), subscribe: () => () => {} },
   ),
   activeHostKey: () => 'local',
   // settings.ts registers a host-switch listener at module scope; Thread

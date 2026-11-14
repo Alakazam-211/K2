@@ -7,8 +7,9 @@
 //! `scripts/garden/zone-gate.py` keeps new `k2.dev` literals out of the
 //! rest of the Rust code.
 //!
-//! Nothing here reads settings or the network. Service addresses
-//! (relay, cert, push, ...) still live with their own modules.
+//! Nothing here reads settings or the network. The service addresses
+//! below are the compiled-in defaults; the modules that use them keep
+//! their own names for them and their own env overrides.
 
 /// The zone itself.
 pub const ZONE: &str = "k2.dev";
@@ -28,6 +29,31 @@ pub fn in_zone(host: &str) -> bool {
     host == ZONE || host.ends_with(ZONE_SUFFIX)
 }
 
+// ── K2's own services ────────────────────────────────────────────────
+// These are fixed hosts, not names under a box's label. They do not
+// follow ZONE: if boxes ever answer under a second zone, these stay.
+
+/// The default relay a tunnel dials.
+pub const RELAY_HOST: &str = "relay.k2.dev";
+/// The list of relays (K2 Web serves it).
+pub const RELAY_LIST_URL: &str = "https://k2.dev/api/tunnel/relays";
+/// K2 Connect's control plane.
+pub const CONNECT_BASE: &str = "https://connect.k2.dev";
+/// The certificate broker's endpoint.
+pub const CERT_BROKER_URL: &str = "https://cert.k2.dev/cert";
+/// The push gateway.
+pub const PUSH_GATEWAY_URL: &str = "https://push.k2.dev";
+/// The download host for App updates.
+pub const DL_BASE: &str = "https://dl.k2.dev";
+/// Where product feedback is sent.
+pub const FEEDBACK_ENDPOINT: &str = "https://feedback.akzm.k2.dev";
+/// The website's API base (`/api/dns/*` lives there).
+pub const WEB_API_BASE: &str = "https://k2.dev";
+/// Where a person upgrades their plan.
+pub const DASHBOARD_URL: &str = "https://k2.dev/dashboard";
+/// What an App's edge-terminated web host ends with (`<sub>.app.k2.dev`).
+pub const WEB_APP_HOST_SUFFIX: &str = ".app.k2.dev";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,6 +63,22 @@ mod tests {
         assert_eq!(ZONE, "k2.dev");
         assert_eq!(ZONE_SUFFIX, ".k2.dev");
         assert_eq!(ZONE_SUFFIX, format!(".{ZONE}"));
+    }
+
+    /// The compiled-in service addresses, spelled out: a change to one of
+    /// them is a change every running daemon makes on its next update.
+    #[test]
+    fn the_service_addresses_are_what_they_were() {
+        assert_eq!(RELAY_HOST, "relay.k2.dev");
+        assert_eq!(RELAY_LIST_URL, "https://k2.dev/api/tunnel/relays");
+        assert_eq!(CONNECT_BASE, "https://connect.k2.dev");
+        assert_eq!(CERT_BROKER_URL, "https://cert.k2.dev/cert");
+        assert_eq!(PUSH_GATEWAY_URL, "https://push.k2.dev");
+        assert_eq!(DL_BASE, "https://dl.k2.dev");
+        assert_eq!(FEEDBACK_ENDPOINT, "https://feedback.akzm.k2.dev");
+        assert_eq!(WEB_API_BASE, "https://k2.dev");
+        assert_eq!(DASHBOARD_URL, "https://k2.dev/dashboard");
+        assert_eq!(WEB_APP_HOST_SUFFIX, ".app.k2.dev");
     }
 
     #[test]

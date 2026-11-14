@@ -31,7 +31,7 @@ pub mod store;
 pub mod wire;
 
 /// The intake, compiled in (PF20).
-pub const DEFAULT_ENDPOINT: &str = "https://feedback.akzm.k2.dev";
+pub const DEFAULT_ENDPOINT: &str = crate::hosts::FEEDBACK_ENDPOINT;
 /// Tests and dev only: another intake base URL (the `K2_PUSH_GATEWAY_URL`
 /// pattern).
 pub const ENDPOINT_ENV: &str = "K2_PRODUCT_FEEDBACK_URL";

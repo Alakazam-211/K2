@@ -1238,7 +1238,7 @@ impl HttpDispatchSender {
 }
 
 /// The gateway a paired daemon uses when nothing overrides it (TP6).
-pub const DEFAULT_GATEWAY_URL: &str = "https://push.k2.dev";
+pub const DEFAULT_GATEWAY_URL: &str = crate::hosts::PUSH_GATEWAY_URL;
 
 /// Most devices one dispatch call may carry (the gateway's
 /// `MAX_DEVICES_PER_DISPATCH`); a larger recipient set is split.

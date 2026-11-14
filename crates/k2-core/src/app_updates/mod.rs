@@ -65,7 +65,7 @@ pub const MAX_NOTES_BYTES: usize = 16 * 1024;
 pub const MAX_PLATFORMS: usize = 16;
 /// The download host (TC-30). `K2_DL_BASE` points tests (and a staging
 /// host) elsewhere.
-pub const DL_BASE: &str = "https://dl.k2.dev";
+pub const DL_BASE: &str = crate::hosts::DL_BASE;
 
 /// The download host's base URL now (no trailing slash).
 pub fn dl_base() -> String {

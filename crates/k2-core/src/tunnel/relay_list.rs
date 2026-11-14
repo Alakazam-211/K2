@@ -72,7 +72,7 @@ use serde::{Deserialize, Serialize};
 use super::config::{self, RelayEndpoint, TunnelConfig};
 
 /// The k2.dev relay-list endpoint (K2 Web owns it).
-pub const DEFAULT_RELAY_LIST_URL: &str = "https://k2.dev/api/tunnel/relays";
+pub const DEFAULT_RELAY_LIST_URL: &str = crate::hosts::RELAY_LIST_URL;
 
 /// Env var overriding [`DEFAULT_RELAY_LIST_URL`] (staging / tests), like
 /// `K2_CERT_BROKER_URL` for the cert broker.

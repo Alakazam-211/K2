@@ -129,7 +129,7 @@ pub(crate) const CODE_WEB_CLIENT_DISABLED: &str = "WEB_CLIENT_DISABLED";
 
 /// Host suffix for the edge-terminated web path (`<sub>.app.k2.dev`).
 /// Desktop E2E stays on `<sub>.k2.dev` (no `.app.` segment).
-const WEB_APP_HOST_MARKER: &str = ".app.k2.dev";
+const WEB_APP_HOST_MARKER: &str = k2_core::hosts::WEB_APP_HOST_SUFFIX;
 
 /// Teaching hint when the web-client wall is OFF.
 pub(crate) const HINT_WEB_CLIENT_DISABLED: &str =

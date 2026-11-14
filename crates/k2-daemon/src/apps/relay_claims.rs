@@ -98,7 +98,7 @@ pub const CAPABILITY: &str = "customSni";
 /// relay yet, or another box's live proxy still holds the name. Not a failure.
 pub const WAITING_TO_TAKE_OVER: &str = "waiting to take over at K2's relay (it isn't routing this name here yet; if another server held it, that server's tunnel must let go first; K2 tries again)";
 /// Where a person upgrades to Pro.
-pub const UPGRADE_URL: &str = "https://k2.dev/dashboard";
+pub const UPGRADE_URL: &str = k2_core::hosts::DASHBOARD_URL;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 

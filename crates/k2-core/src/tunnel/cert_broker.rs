@@ -39,7 +39,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 /// Default broker endpoint (the deployed control-plane `/cert` RPC).
-pub const DEFAULT_BROKER_URL: &str = "https://cert.k2.dev/cert";
+pub const DEFAULT_BROKER_URL: &str = crate::hosts::CERT_BROKER_URL;
 
 /// Env var that overrides [`DEFAULT_BROKER_URL`] (staging / integration
 /// tests point this at a mock or a staging control plane).

@@ -43,7 +43,7 @@ use super::config::SUBDOMAIN_HOST;
 /// `/subdomains` API lives here. Overridable via [`CONTROL_PLANE_BASE_ENV`]
 /// for staging / integration tests — mirrors the cert broker's
 /// `K2_CERT_BROKER_URL` override.
-pub const DEFAULT_CONTROL_PLANE_BASE: &str = "https://connect.k2.dev";
+pub const DEFAULT_CONTROL_PLANE_BASE: &str = crate::hosts::CONNECT_BASE;
 
 /// Env var overriding [`DEFAULT_CONTROL_PLANE_BASE`].
 pub const CONTROL_PLANE_BASE_ENV: &str = "K2_CONNECT_BASE";

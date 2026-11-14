@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 /// Default web API host that serves `/api/dns/*` (k2-dev-web).
-pub const DEFAULT_DNS_API_BASE: &str = "https://k2.dev";
+pub const DEFAULT_DNS_API_BASE: &str = k2_core::hosts::WEB_API_BASE;
 
 /// Env override for [`DEFAULT_DNS_API_BASE`] (tests / staging).
 pub const DNS_API_BASE_ENV: &str = "K2_DNS_API_BASE";

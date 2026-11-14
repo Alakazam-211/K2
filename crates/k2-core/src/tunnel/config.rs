@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 /// frp's TOML schema expects. Before 0.46.6 this was relay k2e-01's IP
 /// ([`LEGACY_DEFAULT_SERVER_HOST`]), which every saved `tunnel.json` still
 /// carries; [`super::relay_list::effective`] replaces such a list in memory.
-pub const DEFAULT_SERVER_HOST: &str = "relay.k2.dev";
+pub const DEFAULT_SERVER_HOST: &str = crate::hosts::RELAY_HOST;
 
 /// The built-in default before 0.46.6 (relay k2e-01). Dialed only when the
 /// `relay_default` switch says `legacy` ([`relay_default_mode`]). Remove

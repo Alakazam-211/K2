@@ -1,13 +1,13 @@
 // Home on the Agents shell — the sidebar (prd-home-v1 H2/H3/H5/H6).
 //
-// Same chrome as the Agents `Sidebar`: resize handle, the header control
-// row (here the current group's name and its "…" for All groups, in the
-// focus-group dropdown's spot; no "⌘ 1-9" hint; the rows keep their 1–9
-// numbers and ⌘1–9 still opens them; ⌘K stays on the keyboard, the menus
-// and the rails), the row list, the group icons right under it (one
-// per group, no divider, `groups/HomeGroupBar`), and the bottom bar: ONE button in the Add
-// Workspace spot — Add Agent — beside the collapse button. Add Agent opens
-// one picker with This server and From a server.
+// Same chrome as the Agents `Sidebar`: resize handle, the top row at the
+// tab strip's height (the current group's name and count, "…" for the
+// Groups dialog and « to collapse the nav; no "⌘ 1-9" hint; the rows keep
+// their 1–9 numbers and ⌘1–9 still opens them; ⌘K stays on the keyboard,
+// the menus and the rails), the row list, the group icons right under it
+// (one per group, no divider, `groups/HomeGroupBar`), Get started, and
+// the bottom bar: ONE button in the Add Workspace spot — Add Agent. Add
+// Agent opens one picker with This server and From a server.
 //
 // Rows:
 //   - A row on the connected server paints as the Agents row itself
@@ -53,7 +53,6 @@ import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
 import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
-import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
@@ -553,8 +552,8 @@ export default function HomeSidebar(): React.JSX.Element {
     <div className="relative flex flex-col h-full" data-home-sidebar="" data-group-swipe-zone="">
       <ResizeHandle />
 
-      {/* Header — the focus-group row's spot: the current group's name and
-          count, and "…" for the All groups modal. Switching is the group icons at the
+      {/* The top row, at the tab strip's height: the current group's name
+          and count, "…" for the Groups dialog and « to collapse the nav. Switching is the group icons at the
           bottom, the sideways swipe and ⌥⌘1–9 (no ⌘ 1-9 hint here). */}
       <div className="no-drag" data-home-header="">
         <GroupNameHeader
@@ -588,8 +587,7 @@ export default function HomeSidebar(): React.JSX.Element {
 
       {/* The footer, with no divider: the group icons on their own row,
           then Get started (the setup checklist; nothing while it is off,
-          hidden or finished), then Add Agent + collapse the nav (the Add
-          Workspace bar). The list's own bottom edge fade (ScrollEdgeFrame)
+          hidden or finished), then Add Agent (« is in the top row). The list's own bottom edge fade (ScrollEdgeFrame)
           runs out just above them, only while there is more below. The
           checklist stays a child of the nav's column, so its open list keeps
           its cap of 45% of the nav. (Zen Mode is the window's top-bar
@@ -618,7 +616,6 @@ export default function HomeSidebar(): React.JSX.Element {
             aria-expanded={pickerOpen}
             aria-haspopup="dialog"
           />
-          <SidebarCollapseButton footer />
         </div>
       </div>
     </div>

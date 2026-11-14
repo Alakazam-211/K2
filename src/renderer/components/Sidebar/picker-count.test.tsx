@@ -229,9 +229,19 @@ describe('Home group header count', () => {
     st.addRow(id, { address: 'nova::local', workspaceId: 'pn', label: 'Nova' })
   })
 
-  it('the header shows the group\'s agent count right after the name', () => {
+  it('the header shows the group\'s agent count after the name, at the end by "…" (the top row mock)', () => {
     render(<HomeHeader />)
-    expectCountAfterName(trigger('[data-group-name-header]'), LONG, 2)
+    const parts = labelParts(trigger('[data-group-name-header]'))
+    expect(parts.name.textContent).toBe(LONG)
+    expect(parts.count.textContent).toBe('2')
+    expect(parts.name.nextElementSibling).toBe(parts.count)
+    // The name takes the room and truncates; the count never shrinks.
+    expect(parts.label.className).toMatch(/\bflex-1\b/)
+    expect(parts.label.className).toMatch(/\bmin-w-0\b/)
+    expect(parts.name.className).toMatch(/\btruncate\b/)
+    expect(parts.name.className).toMatch(/\bmin-w-0\b/)
+    expect(parts.name.className).toMatch(/\bflex-1\b/)
+    expect(parts.count.className).toMatch(/\bflex-shrink-0\b/)
   })
 
   it('updates live when an agent is added or removed', () => {

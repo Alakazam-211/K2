@@ -13,13 +13,41 @@
 // `usePanelsStore`); `DrawerToggleButton` is the same button for any
 // other drawer (e.g. the Projects page's chat panel, the Tickets list).
 
-import type { ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { usePanelsStore } from '@/stores/panels'
 import { NAV_TOGGLE_BOX, useRoomTabBarDrawerToggle } from './drawer-toggles'
 import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 
 type Side = 'left' | 'right'
+
+/** The drawers' header icon button ('fill'): 32px wide and its strip's full
+ *  height, no fill at rest and muted ink, the elevated fill and secondary
+ *  ink on hover, a 1px inset accent ring on focus. The same in both Styles.
+ *  Shared by the drawer toggles and the Home nav's top row ("…" and «). */
+export const DRAWER_HEADER_BUTTON_CLASS =
+  'no-drag relative flex h-full w-8 self-stretch flex-shrink-0 cursor-pointer items-center justify-center bg-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent-text)]'
+
+/** A drawer header icon button, for any strip that wants one (the Home
+ *  nav's top row). `label` is its tooltip and accessible name. */
+export const DrawerHeaderButton = forwardRef<
+  HTMLButtonElement,
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'aria-label'> & { label: string }
+>(function DrawerHeaderButton({ label, className, children, ...rest }, ref) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      title={label}
+      aria-label={label}
+      data-drawer-header-button=""
+      className={className ? `${DRAWER_HEADER_BUTTON_CLASS} ${className}` : DRAWER_HEADER_BUTTON_CLASS}
+      {...rest}
+    >
+      {children}
+    </button>
+  )
+})
 
 export function DrawerToggleButton({
   side,
@@ -76,11 +104,11 @@ export function DrawerToggleButton({
       // 'fill' (in a tab strip) takes the strip's own background and the
       // strip's icon colours (as the split / + buttons); 'square' keeps the
       // nav toggle's tinted box.
-      className={`no-drag relative flex ${
+      className={
         size === 'square'
-          ? `${NAV_TOGGLE_BOX} bg-white/[0.04] text-[var(--color-text-secondary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)]`
-          : 'h-full w-8 self-stretch bg-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]'
-      } ${dividerClass} flex-shrink-0 cursor-pointer items-center justify-center outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent-text)]`}
+          ? `no-drag relative flex ${NAV_TOGGLE_BOX} bg-white/[0.04] text-[var(--color-text-secondary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] ${dividerClass} flex-shrink-0 cursor-pointer items-center justify-center outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent-text)]`
+          : `${DRAWER_HEADER_BUTTON_CLASS} ${dividerClass}`
+      }
     >
       <DoubleChevron direction={direction} className="h-4 w-4" />
       {children}

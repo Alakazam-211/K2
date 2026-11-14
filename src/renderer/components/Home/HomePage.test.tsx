@@ -195,6 +195,8 @@ import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pend
 import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { homeRooms } from '@/stores/home-rooms'
 import { HOME_NAV_EDGE_TINT, otherRowOpenTitle } from './HomeSidebar'
+import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
+import { DRAWER_HEADER_BUTTON_CLASS } from '@/components/Layout/DrawerTabBarToggle'
 import { __resetAddPickerListingsForTests } from './HomeAddPanels'
 import { HOME_AGENT_COLORS_KEY, useHomeAvatarStore } from '@/lib/home-avatars'
 
@@ -703,11 +705,11 @@ describe('Home — the Agents page shell', () => {
     render(<Shell />)
     const bar = screen.getByText('Add Agent').closest('div')
     if (!bar) throw new Error('no bottom bar')
-    // The bar: Add Agent + the collapse button (in its slot), like Add Workspace.
+    // The bar: Add Agent alone (« is in the top row).
     expect(Array.from(bar.querySelectorAll(':scope > button, :scope > [data-nav-collapse-slot] > button')).map((b) => b.textContent?.trim() || b.getAttribute('aria-label'))).toEqual([
       'Add Agent',
-      'Collapse workspaces sidebar',
     ])
+    expect(homeSidebar().querySelector('[data-nav-footer] [data-nav-collapse]')).toBeNull()
 
     const addButton = screen.getByText('Add Agent').closest('button')
     if (!addButton) throw new Error('no Add Agent button')
@@ -893,6 +895,49 @@ describe('Home — the Agents page shell', () => {
       expect(list.className).toContain('max-h-[45%]')
       expect(footer.nextElementSibling).toBe(list)
       expect(list.nextElementSibling).toBe(bottomBar)
+    } finally {
+      resetFirstRunForTests()
+    }
+  })
+
+  it('the top row is the tab strip\'s height: name, count, then "…" and « as drawer header buttons', () => {
+    render(<Shell />)
+    const home = useHomesStore.getState().homes[0]
+    const row = homeSidebar().querySelector('[data-group-name-header]') as HTMLElement
+    // The shared tab-strip token, never a number of its own, with the
+    // tab strip's bottom line.
+    expect(row.className.split(/\s+/)).toContain(TAB_STRIP_HEIGHT)
+    expect(row.className).toContain('border-b border-[var(--color-border)]')
+    expect(row.className).not.toMatch(/min-h-|\bpy-|\bpt-|\bpb-/)
+    // Name (takes the room, truncates), count, then the two buttons, edge to edge.
+    const name = row.querySelector('[data-group-name]') as HTMLElement
+    expect(name.textContent).toBe(home.name)
+    expect(name.className).toMatch(/\bflex-1\b/)
+    expect(name.className).toMatch(/\btruncate\b/)
+    expect(name.nextElementSibling?.getAttribute('data-group-count')).toBe('')
+    const buttons = Array.from(row.querySelectorAll(':scope > button'))
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([`Edit groups (${home.name})`, 'Collapse workspaces sidebar'])
+    for (const b of buttons) {
+      expect(b.hasAttribute('data-drawer-header-button')).toBe(true)
+      expect(b.className).toContain(DRAWER_HEADER_BUTTON_CLASS)
+    }
+    expect(buttons[1].className).toContain('-ml-2')
+    // "…" opens the Groups dialog on the current group; « collapses the nav.
+    fireEvent.click(buttons[0])
+    expect(document.querySelector('[data-group-detail]')?.getAttribute('data-group-detail')).toBe(home.id)
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    fireEvent.click(buttons[1])
+    expect(useSidebarStore.getState().isCollapsed).toBe(true)
+  })
+
+  it('the top row has no « until setup is finished (as the footer\'s « was)', () => {
+    const doc = parseFirstRunDoc({ enabled: true, hidden: true, finished: false, rows: [{ id: 'tunnel', state: 'todo', opens: 'tunnel' }] })
+    act(() => useFirstRunStore.setState({ entries: { [primaryScope().id]: { doc, error: null } } }))
+    try {
+      render(<Shell />)
+      const row = homeSidebar().querySelector('[data-group-name-header]') as HTMLElement
+      expect(within(row).queryByRole('button', { name: 'Collapse workspaces sidebar' })).toBeNull()
+      expect(within(row).getByRole('button', { name: /^Edit groups/ })).toBeTruthy()
     } finally {
       resetFirstRunForTests()
     }

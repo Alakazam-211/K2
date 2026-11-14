@@ -9,7 +9,10 @@
 //!   carries a weak `ETag` (a hash of the bytes it would send), and a
 //!   request whose `If-None-Match` names that tag gets `304 Not Modified`
 //!   with no body. The tag is a hash of the answer itself, so it can never
-//!   say "unchanged" about a list that changed, whatever changed it.
+//!   say "unchanged" about a list that changed, whatever changed it. The
+//!   tag may also come as the `if_none_match` query parameter: a header a
+//!   web page sets itself makes the browser ask first (a CORS preflight,
+//!   one more round trip), a query parameter does not.
 //!
 //! The dispatcher notes each request ([`note`]) inside the connection's
 //! [`scope`]; the writers in `routes/http.rs` call [`shape`]. Outside a
@@ -39,7 +42,8 @@ pub struct Request {
     pub remote: bool,
     /// A GET of a route in [`ETAG_ROUTES`].
     pub etag: bool,
-    /// The request's `If-None-Match`, as sent.
+    /// The request's `If-None-Match` header, else its `if_none_match`
+    /// query parameter.
     pub if_none_match: Option<String>,
 }
 
@@ -53,7 +57,15 @@ impl Request {
             gzip: remote && crate::static_files::accepts(header_value(head, "accept-encoding"), "gzip"),
             remote,
             etag,
-            if_none_match: if etag { header_value(head, "if-none-match").map(str::to_string) } else { None },
+            if_none_match: if etag {
+                header_value(head, "if-none-match").map(str::to_string).or_else(|| {
+                    k2_core::agent_hooks::parse_query_params(path_and_query)
+                        .remove("if_none_match")
+                        .filter(|v| !v.is_empty())
+                })
+            } else {
+                None
+            },
         }
     }
 }
@@ -238,6 +250,20 @@ mod tests {
         assert_eq!(s.status, "200 OK");
         assert_eq!(s.body, changed.as_bytes());
         assert!(s.headers.contains(&format!("ETag: {}\r\n", etag_of(&changed))));
+    }
+
+    /// A web page sends the tag as a query parameter (no preflight).
+    #[test]
+    fn etag_from_the_query_parameter() {
+        let body = big_json();
+        let tag = etag_of(&body);
+        let enc: String = tag.bytes().map(|b| format!("%{b:02X}")).collect();
+        let pq = format!("/cli/projects/list?token=t&if_none_match={enc}");
+        let r = Request::from_head(false, "GET", &pq, &head(&[]));
+        assert_eq!(r.if_none_match.as_deref(), Some(tag.as_str()));
+        assert_eq!(shape(&r, "200 OK", "application/json", &body).status, "304 Not Modified");
+        let stale = Request::from_head(false, "GET", "/cli/projects/list?if_none_match=W%2F%22old%22", &head(&[]));
+        assert_eq!(shape(&stale, "200 OK", "application/json", &body).status, "200 OK");
     }
 
     #[test]

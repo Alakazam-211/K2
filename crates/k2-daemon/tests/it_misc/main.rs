@@ -46,6 +46,7 @@ mod ops_stream_ws_integration;
 mod power_helper_route_integration;
 mod preset_routes_integration;
 mod product_feedback_integration;
+mod projects_list_wire_integration;
 mod provision_users_integration;
 mod push_log_cli_integration;
 mod stash_sync_integration;

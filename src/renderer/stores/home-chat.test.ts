@@ -26,6 +26,9 @@ import {
   useHomeChatStore,
 } from './home-chat'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
+import { renderHook } from '@testing-library/react'
+import { noteServerVersion } from '@/kessel/server-scope'
+import { useHomeChatOffered } from './home-chat'
 
 const HOST = 'local'
 const alex: HomeChatTarget = { kind: 'person', hostKey: HOST, ext: 'k2:connect:a', address: 'k2:connect:a::local' }
@@ -71,6 +74,18 @@ describe('Home chat badges (§15.1)', () => {
     await vi.advanceTimersByTimeAsync(300)
     expect(get).toHaveBeenCalledWith(expect.anything(), 'home-chat/summary', undefined)
     vi.useRealTimers()
+  })
+})
+
+describe('Add to Home offers people and channels (S6)', () => {
+  it('only once a server said it has Home chat: never assumed, not even for this computer', () => {
+    // This computer's daemon, never checked yet: not assumed on.
+    expect(renderHook(() => useHomeChatOffered()).result.current).toBe(false)
+    noteServerVersion('local', '0.46.13', [])
+    expect(renderHook(() => useHomeChatOffered()).result.current).toBe(false)
+    noteServerVersion('local', '0.46.13', ['home-chat-v1'])
+    expect(renderHook(() => useHomeChatOffered()).result.current).toBe(true)
+    noteServerVersion('local', '0.46.13', [])
   })
 })
 

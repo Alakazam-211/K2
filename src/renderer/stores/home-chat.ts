@@ -16,7 +16,7 @@
 import { create, useStore } from 'zustand'
 import { useEffect } from 'react'
 import { hostPool } from '@/lib/host-pool-instance'
-import { primaryScope, scopeForHost, type ServerScope } from '@/kessel/server-scope'
+import { primaryScope, reportedSupports, scopeForHost, type ServerScope } from '@/kessel/server-scope'
 import { homeRooms } from '@/stores/home-rooms'
 import { usePageViewStore } from '@/stores/page-view'
 import { closeGrokChat, useGrokBotsStore } from '@/stores/grokbots'
@@ -144,9 +144,11 @@ export function useHomeChatOffered(): boolean {
   const pooled = useStore(hostPool.store, (s) =>
     Object.values(s.entries).some((e) => e?.boot?.features?.includes(HOME_CHAT_FEATURE) ?? false),
   )
+  // Only what a server said: Home chat is a switch (off by default), so an
+  // unchecked server (even this computer's daemon) never counts as on.
   let primary = false
   try {
-    primary = primaryScope().serverSupports(HOME_CHAT_FEATURE)
+    primary = reportedSupports(primaryScope().hostKey, HOME_CHAT_FEATURE)
   } catch {
     primary = false
   }

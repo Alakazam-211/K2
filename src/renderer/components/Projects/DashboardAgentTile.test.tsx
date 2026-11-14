@@ -10,8 +10,10 @@ const mounts = vi.hoisted(() => ({ terminal: 0, unmounts: 0 }))
 
 vi.mock('@/kessel-term/TerminalPane', async () => {
   const { useSessionViewChrome } = await import('@/components/SessionView/sessionViewChrome')
+  const { ThreadOverlayColumn } = await import('@/components/SessionView/ThreadOverlayColumn')
+  const { TerminalComposeBar } = await import('@/components/Terminal/TerminalComposeBar')
   return {
-    TerminalPane: (props: { terminalId: string; attachAgentName?: string }) => {
+    TerminalPane: (props: { terminalId: string; attachAgentName?: string; cwd: string; sessionId?: string; holdSpawn?: boolean }) => {
       const chrome = useSessionViewChrome()
       useEffect(() => {
         mounts.terminal++
@@ -27,7 +29,21 @@ vi.mock('@/kessel-term/TerminalPane', async () => {
           data-revealed={String(chrome?.terminalRevealed)}
           data-panel={String(chrome?.threadPanel)}
           data-attach={props.attachAgentName}
-        />
+          data-sessionid={props.sessionId ?? 'NONE'}
+          data-hold={String(props.holdSpawn === true)}
+        >
+          {/* Thread view: the Thread and its message box, where the real pane draws them. */}
+          {chrome?.viewTab === 'thread' ? (
+            <ThreadOverlayColumn
+              addr={chrome.overlayAddr}
+              conversationId={chrome.conversationId}
+              active
+              composeBar={
+                <TerminalComposeBar sessionId="" draftId={String(props.attachAgentName)} workspacePath={props.cwd} sendDestination="thread" />
+              }
+            />
+          ) : null}
+        </div>
       )
     },
   }
@@ -253,6 +269,8 @@ describe('an asleep tile', () => {
 
   it('still checking its session: the message box is there at once, then a Wake bar if it is asleep', () => {
     const r = renderInRoom(room, <Tile phase={{ kind: 'checking' }} />)
+    // The live tile's pane, held: nothing spawns while the check runs.
+    expect(screen.getByTestId('mock-terminal').getAttribute('data-hold')).toBe('true')
     const box = screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea') as HTMLTextAreaElement
     expect(box).not.toBeNull()
     expect(box.disabled).toBe(false)
@@ -265,6 +283,32 @@ describe('an asleep tile', () => {
       </div>,
     )
     expect(screen.getByTestId('tile-wake-bar').textContent).toContain('sales is asleep.')
+    // Asleep: the held pane went without ever spawning.
+    expect(screen.queryByTestId('mock-terminal')).toBeNull()
+  })
+
+  it('still checking, then live: the same pane attaches, and the Thread and its box stay', () => {
+    const tile = (phase: TermPhase): React.JSX.Element => (
+      <div data-tile-view="thread" data-testid="tile">
+        <DashboardAgentTile workspaceId="ws-sales" member={member} dashboardId="d1" initialPhase={phase} view="thread" addr="sales" />
+      </div>
+    )
+    const r = renderInRoom(room, tile({ kind: 'checking' }))
+    const column = screen.getByTestId('thread-column')
+    const box = screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea') as HTMLTextAreaElement
+    box.focus()
+    fireEvent.change(box, { target: { value: 'morning' } })
+    expect(mounts.terminal).toBe(1)
+    r.rerender(tile(LIVE))
+    const term = screen.getByTestId('mock-terminal')
+    expect(term.getAttribute('data-hold')).toBe('false')
+    expect(term.getAttribute('data-sessionid')).toBe('s1')
+    expect(mounts.terminal).toBe(1)
+    expect(mounts.unmounts).toBe(0)
+    expect(screen.getByTestId('thread-column')).toBe(column)
+    expect(screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea')).toBe(box)
+    expect(box.value).toBe('morning')
+    expect(document.activeElement).toBe(box)
   })
 
   it('Terminal view offers Wake too; Heartbeats reads without a session', () => {

@@ -661,6 +661,19 @@ describe('the Thread paints first; the terminal attaches beside it', () => {
     expect(SPAWN()).toBe(1)
   })
 
+  it('held again after it spawned (a tile re-checking a live session): no second spawn, no loading label', async () => {
+    const view = renderInRoom(room, held(chrome({ viewTab: 'split' }), false))
+    await goReady()
+    expect(SPAWN()).toBe(1)
+    view.rerender(held(chrome({ viewTab: 'split' }), true))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(view.queryByTestId('terminal-pane-held')).toBeNull()
+    expect(SPAWN()).toBe(1)
+    expect(h.sockets.length).toBe(1)
+  })
+
   it('attach pending: the Thread and its message box are there while the spawn has not answered', async () => {
     globalThis.fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch
     const view = renderInRoom(room, pane(chrome({ viewTab: 'thread' })))

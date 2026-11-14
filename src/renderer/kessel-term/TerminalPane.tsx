@@ -5694,7 +5694,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         )}
         </div>
       </div>
-      {holdSpawn && <TerminalHeldLabel />}
+      {holdSpawn && !spawnArmed && <TerminalHeldLabel />}
       {/* Passive-view affordance: this pane is watching a grid sized
           by another viewer (scaled down to fit). Styling matches the
           DEV badge above. */}

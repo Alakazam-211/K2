@@ -31,7 +31,6 @@ import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { Button, OverflowMenu, usePressSpring } from '@/components/ui'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
-import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { InputsList } from '@/components/SessionView/ThreadDrawerPanel'
 import { ThreadDrawerSelector, VIEW_LABEL, VIEW_TOOLTIP, ViewIcon } from '@/components/SessionView/ThreadDrawerSelector'
@@ -313,7 +312,12 @@ export function DashboardAgentTile({
       />
     ) : null
 
-  if (phase.kind === 'live') {
+  // Thread view, still checking: the live tile's tree with its spawn held
+  // (TerminalPane `holdSpawn`). The Thread and its message box paint now,
+  // and when the check finds the session live the same pane attaches, so
+  // nothing remounts. Asleep or failed, the held pane goes without a spawn.
+  const checkingThread = phase.kind === 'checking' && view === 'thread' && addr !== ''
+  if (phase.kind === 'live' || checkingThread) {
     // One tree for every view, so TerminalPane never remounts on a switch.
     return (
       <TileHost view={view}>
@@ -340,7 +344,8 @@ export function DashboardAgentTile({
               terminalId={`proj-dash:${dashboardId}:${workspaceId}`}
               cwd={projectPath}
               attachAgentName={workspaceId}
-              sessionId={phase.sessionId}
+              sessionId={phase.kind === 'live' ? phase.sessionId : undefined}
+              holdSpawn={phase.kind !== 'live'}
               syncSizeOnShow
               pauseHiddenPaint
             />
@@ -400,14 +405,11 @@ export function DashboardAgentTile({
       </TileHost>
     )
   }
-  // Thread, not live: still checking, the message box is there at once (a
-  // Thread post needs the address, not the session; it shares the live
-  // tile's draft, so typing carries on when the session attaches). Asleep,
-  // a Wake bar stands where it goes, and stays while it wakes. The Wake bar
+  // Thread, asleep (still checking draws the held live tree above): a Wake
+  // bar stands where the message box goes, and stays while it wakes. The Wake bar
   // sits under the Thread's column, as Chatter's does, not in its box: the
   // box keeps its own corners (Thread/chamfer.ts), so inside it Terminal's
   // cut (`data-k2-chamfer`) never reached the bar or its Wake.
-  const early = phase.kind === 'checking'
   const wakeBar =
     phase.kind === 'dormant' ? (
       <TileWakeBar name={name} onWake={() => void wake()} />
@@ -420,14 +422,8 @@ export function DashboardAgentTile({
         addr={addr}
         conversationId={null}
         active={pageLive}
-        composeBar={
-          early ? (
-            <ThreadEarlyCompose addr={addr} conversationId={null} agentName={workspaceId} projectPath={projectPath} displayName={name} />
-          ) : null
-        }
+        composeBar={null}
         agentName={name}
-        // Placed as the live tile's Thread places it, so nothing moves.
-        centreEmpty={early}
         textCapPx={textCap}
       />
       {wakeBar}

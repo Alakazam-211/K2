@@ -1903,6 +1903,8 @@ async fn avoid_with_a_node_not_yours_is_a_note_not_an_error() {
     assert_eq!(j(&r)["job"]["avoid"], json!(["q4na-vin", "nosuchnode"]), "{}", r.body);
     let g = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
     assert_eq!(j(&g)["avoid"], json!(["q4na-vin", "nosuchnode"]), "{}", g.body);
+    assert_eq!(j(&g)["ctl"]["any"]["avoid"], json!(["q4na-vin"]), "the raw filter shows only the workspace's own nodes: {}", g.body);
+    assert!(!g.body.contains("q4nc") && !j(&r)["job"].to_string().contains("q4nc"), "nothing names q4nc: {}", g.body);
 
     // Only notes: placed as if no --avoid was passed; the names still ride.
     let r = run(d.port, &agent, &me, json!({"avoid": ["q4nc-vin", "nosuchnode"], "memBytes": GB})).await;

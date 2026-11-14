@@ -9,7 +9,8 @@
 //!   everything after it is wired against K2SCENE1 bytes: [`list_k2scene`]
 //!   and [`render_k2scene`].
 //! - **Listing:** `@scene` (the auto 3/4 view of everything), one container
-//!   per camera (`@cam:<id>`) and one per object (`@obj:<id>`), each with the
+//!   per camera (`@cam:<id>`), one per object (`@obj:<id>`) and the
+//!   turntable's eight frames (`@turntable:0` to `@turntable:7`), each with the
 //!   raw digest of what it draws, computed from the mesh read alone: meshes,
 //!   transforms, colours, sidedness and cameras, never an object's id
 //!   (`k2_scenerender::digest`). So the cache key is (doc, object or camera,
@@ -203,6 +204,14 @@ mod tests {
                 ("@obj:Item.001", 4, "o1", "Item.001"),
                 ("@obj:Item.002", 5, "o2", "Item.002"),
                 ("@obj:Item.003", 6, "o3", "Item.003"),
+                ("@turntable:0", 7, "t0", ""),
+                ("@turntable:1", 8, "t1", ""),
+                ("@turntable:2", 9, "t2", ""),
+                ("@turntable:3", 10, "t3", ""),
+                ("@turntable:4", 11, "t4", ""),
+                ("@turntable:5", 12, "t5", ""),
+                ("@turntable:6", 13, "t6", ""),
+                ("@turntable:7", 14, "t7", ""),
             ]
         );
         assert_eq!(list_k2scene(&encode(&scene_with_camera())).expect("again"), l, "the same bytes list the same");
@@ -218,7 +227,8 @@ mod tests {
         b.objects[3].transform[12] += 1.0;
         let (la, lb) = (list_k2scene(&encode(&a)).expect("a"), list_k2scene(&encode(&b)).expect("b"));
         let changed: Vec<&str> = la.containers.iter().zip(&lb.containers).filter(|(x, y)| x.digest != y.digest).map(|(x, _)| x.key.as_str()).collect();
-        assert_eq!(changed, ["@scene", "@cam:Camera", "@obj:Item.003"]);
+        assert_eq!(changed[..3], ["@scene", "@cam:Camera", "@obj:Item.003"]);
+        assert!(changed[3..].iter().all(|k| k.starts_with("@turntable:")) && changed.len() == 11, "and the turntable's 8 frames: {changed:?}");
         let mut c = a.clone();
         c.objects[0].id = "Renamed".into();
         let lc = list_k2scene(&encode(&c)).expect("c");
@@ -266,7 +276,7 @@ mod tests {
         s.objects[1].modifiers_not_applied = true;
         let bytes = encode(&s);
         let l = list_k2scene(&bytes).expect("listing");
-        for (c, without, height) in [(&l.containers[0], true, 240), (&l.containers[1], true, 180), (&l.containers[2], false, 240), (&l.containers[3], true, 240)] {
+        for (c, without, height) in [(&l.containers[0], true, 240), (&l.containers[1], true, 180), (&l.containers[2], false, 240), (&l.containers[3], true, 240), (&l.containers[6], true, 240)] {
             let img = render_k2scene_with(&bin, &bytes, c, Width::Thumb, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{}: {:?}", c.key, f));
             assert_eq!((img.mime, img.format, img.width, img.height), ("image/webp", "webp-lossless", 320, height), "{}", c.key);
             assert_eq!(&img.bytes[..4], b"RIFF");

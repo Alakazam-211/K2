@@ -1,15 +1,20 @@
 //! What a scene previews, and the raw digest of what each draws: the host's
 //! listing (V3's `PreviewRenderer::list`), from the mesh read alone.
 //!
-//! **Containers:** `@scene` (the auto 3/4 view of every object), one per
-//! camera (`@cam:<id>`, through that camera) and one per object (`@obj:<id>`,
-//! the auto view of that object alone). An id that is empty, too long for an
-//! address or already used gets the index form (`@cam#2`, `@obj#17`).
+//! **Containers**, in this order: `@scene` (the auto 3/4 view of every
+//! object), one per camera (`@cam:<id>`, through that camera), one per object
+//! (`@obj:<id>`, the auto view of that object alone), then the turntable's
+//! eight frames of every object (`@turntable:0` to `@turntable:7`, frame k at
+//! azimuth 45 + 45k degrees, [`ViewSpec::Turntable`]). An id that is empty,
+//! too long for an address or already used gets the index form (`@cam#2`,
+//! `@obj#17`); the turntable's addresses are fixed. So a scene lists
+//! 1 + cameras + objects + 8 items.
 //!
 //! **Digest** (SHA-256, [`crate::sha256`]), over what changes the pixels and
 //! nothing else, object and camera ids left out (so a rename doesn't redraw):
 //! the up axis; for a camera view the camera's position, target or forward,
-//! up, field of view, aspect and near plane; then for each drawn object, in
+//! up, field of view, aspect and near plane; for a turntable frame its
+//! number; then for each drawn object, in
 //! order, its mesh's digest (over the mesh's counts and its data bytes as
 //! read), its transform, its base colour, its sidedness and
 //! `modifiers_not_applied` (shown with the image). The renderer's build is
@@ -24,7 +29,7 @@
 
 use serde::Serialize;
 
-use crate::camera::mesh_bounds;
+use crate::camera::{mesh_bounds, ViewSpec, TURNTABLE_FRAMES};
 use crate::sha256::Sha256;
 use crate::scene::{self, Camera, Header, InputError, InputLimits, MeshInfo, Object, UpAxis};
 
@@ -40,6 +45,8 @@ pub enum Target {
     Camera(u32),
     /// Object i alone, the auto view.
     Object(u32),
+    /// Every object, turntable frame k (0 to 7).
+    Turntable(u8),
 }
 
 impl Target {
@@ -49,6 +56,7 @@ impl Target {
             Target::Scene => "scene".into(),
             Target::Camera(i) => format!("c{i}"),
             Target::Object(i) => format!("o{i}"),
+            Target::Turntable(k) => format!("t{k}"),
         }
     }
 
@@ -60,17 +68,20 @@ impl Target {
         if let Some(r) = s.strip_prefix('c') {
             return n(r).map(Target::Camera);
         }
+        if let Some(r) = s.strip_prefix('t') {
+            return n(r).filter(|&k| k < TURNTABLE_FRAMES as u32).map(|k| Target::Turntable(k as u8));
+        }
         s.strip_prefix('o').and_then(n).map(Target::Object)
     }
 
     /// The view that draws it.
     pub fn view(self, width: u32) -> crate::proto::View {
-        use crate::camera::ViewSpec;
         use crate::proto::View;
         match self {
             Target::Scene => View::new(ViewSpec::Auto, width),
             Target::Camera(i) => View::new(ViewSpec::Camera(i), width),
             Target::Object(i) => View { view: ViewSpec::Auto, objects: Some(vec![i]), width, aspect: None },
+            Target::Turntable(k) => View::new(ViewSpec::Turntable(k), width),
         }
     }
 }
@@ -88,9 +99,9 @@ pub struct LocalBounds {
 /// One previewed thing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
-    /// Its address (`@scene`, `@cam:Camera`, `@obj:Cube`).
+    /// Its address (`@scene`, `@cam:Camera`, `@obj:Cube`, `@turntable:3`).
     pub key: String,
-    /// Its id as the file names it (empty for the scene).
+    /// Its id as the file names it (empty for the scene and the turntable).
     pub title: String,
     pub target: Target,
     /// The raw digest of what it draws.
@@ -141,15 +152,24 @@ pub fn mesh_digest(m: &MeshInfo, data: &[u8]) -> [u8; 32] {
     h.finish()
 }
 
-fn view_digest(up: UpAxis, camera: Option<&Camera>, objects: &[&Object], mesh: &[[u8; 32]]) -> [u8; 32] {
+/// What a view looks through.
+#[derive(Clone, Copy)]
+enum Through<'a> {
+    Auto,
+    Camera(&'a Camera),
+    Turntable(u8),
+}
+
+fn view_digest(up: UpAxis, through: Through<'_>, objects: &[&Object], mesh: &[[u8; 32]]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"k2scenerender/view/v1\0");
     h.update(&[match up {
         UpAxis::Y => b'y',
         UpAxis::Z => b'z',
     }]);
-    match camera {
-        Some(c) => {
+    // 0: auto, 1: a camera, 2: a turntable frame (the first two as they always were).
+    match through {
+        Through::Camera(c) => {
             h.update(&[1]);
             f32s(&mut h, &c.position);
             opt3(&mut h, &c.target);
@@ -159,7 +179,8 @@ fn view_digest(up: UpAxis, camera: Option<&Camera>, objects: &[&Object], mesh: &
             opt1(&mut h, c.aspect);
             opt1(&mut h, c.znear);
         }
-        None => h.update(&[0]),
+        Through::Turntable(k) => h.update(&[2, k]),
+        Through::Auto => h.update(&[0]),
     }
     h.update(&(objects.len() as u64).to_le_bytes());
     for o in objects {
@@ -211,17 +232,22 @@ fn local_box(m: &MeshInfo, data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
 
 fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<([f32; 3], [f32; 3])>]) -> Vec<Item> {
     let all: Vec<&Object> = h.objects.iter().collect();
-    let mut items = Vec::with_capacity(1 + h.cameras.len() + h.objects.len());
-    items.push(Item { key: "@scene".into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, None, &all, mesh), bounds: None });
+    let mut items = Vec::with_capacity(1 + h.cameras.len() + h.objects.len() + TURNTABLE_FRAMES as usize);
+    items.push(Item { key: "@scene".into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, mesh), bounds: None });
     let mut used = std::collections::HashSet::new();
     for (i, c) in h.cameras.iter().enumerate() {
         let key = if addressable(&c.id) && used.insert(format!("@cam:{}", c.id)) { format!("@cam:{}", c.id) } else { format!("@cam#{i}") };
-        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Some(c), &all, mesh), bounds: None });
+        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, mesh), bounds: None });
     }
     for (i, o) in h.objects.iter().enumerate() {
         let key = if addressable(&o.id) && used.insert(format!("@obj:{}", o.id)) { format!("@obj:{}", o.id) } else { format!("@obj#{i}") };
         let bounds = boxes[o.mesh as usize].map(|(min, max)| LocalBounds { min, max, approx: o.modifiers_not_applied });
-        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, None, &[o], mesh), bounds });
+        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], mesh), bounds });
+    }
+    for k in 0..TURNTABLE_FRAMES {
+        let key = format!("@turntable:{k}");
+        used.insert(key.clone());
+        items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, mesh), bounds: None });
     }
     items
 }
@@ -241,14 +267,40 @@ mod tests {
         let s = testgen::camera_scene();
         let items = list(&encode(&s), &InputLimits::default()).expect("list");
         let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
-        assert_eq!(keys, ["@scene", "@cam:Camera", "@obj:Cube"]);
-        assert_eq!(items.iter().map(|i| i.target).collect::<Vec<_>>(), [Target::Scene, Target::Camera(0), Target::Object(0)]);
-        for t in [Target::Scene, Target::Camera(7), Target::Object(12)] {
+        assert_eq!(keys, ["@scene", "@cam:Camera", "@obj:Cube", "@turntable:0", "@turntable:1", "@turntable:2", "@turntable:3", "@turntable:4", "@turntable:5", "@turntable:6", "@turntable:7"]);
+        let mut targets = vec![Target::Scene, Target::Camera(0), Target::Object(0)];
+        targets.extend((0..8).map(Target::Turntable));
+        assert_eq!(items.iter().map(|i| i.target).collect::<Vec<_>>(), targets);
+        for t in [Target::Scene, Target::Camera(7), Target::Object(12), Target::Turntable(0), Target::Turntable(7)] {
             assert_eq!(Target::from_locator(&t.locator()), Some(t));
         }
-        for bad in ["", "c", "o-1", "c01", "x3", "o1x", "scene2"] {
+        assert_eq!(Target::Turntable(3).locator(), "t3");
+        assert_eq!(Target::Turntable(5).view(64), crate::proto::View::new(ViewSpec::Turntable(5), 64));
+        for bad in ["", "c", "o-1", "c01", "x3", "o1x", "scene2", "t", "t8", "t03", "t-1", "t300"] {
             assert_eq!(Target::from_locator(bad), None, "{bad}");
         }
+        // An object or camera named like a turntable frame keeps its own address.
+        let mut n = testgen::camera_scene();
+        n.objects[0].id = "@turntable:0".into();
+        n.cameras[0].id = "turntable:1".into();
+        let keys: Vec<String> = digests(&n).into_iter().map(|x| x.0).collect();
+        assert_eq!(keys[..4], ["@scene".to_string(), "@cam:turntable:1".into(), "@obj:@turntable:0".into(), "@turntable:0".into()]);
+        assert_eq!(keys.len(), 11);
+    }
+
+    #[test]
+    fn the_turntables_frames_each_have_their_own_digest() {
+        let s = testgen::grid_scene(2, false);
+        let d = digests(&s);
+        let frames: Vec<[u8; 32]> = d[d.len() - 8..].iter().map(|x| x.1).collect();
+        let distinct: std::collections::BTreeSet<[u8; 32]> = frames.iter().copied().collect();
+        assert_eq!(distinct.len(), 8, "eight frames, eight digests");
+        assert!(!frames.contains(&d[0].1), "and none is the scene's");
+        // Over what they draw: every object, so any object's edit redraws them all.
+        let mut m = s.clone();
+        m.objects[1].transform[13] += 0.5;
+        let dm = digests(&m);
+        assert!(d[d.len() - 8..].iter().zip(&dm[dm.len() - 8..]).all(|(a, b)| a.1 != b.1));
     }
 
     #[test]
@@ -265,6 +317,7 @@ mod tests {
         c.objects[2].id = String::new();
         let keys: Vec<String> = digests(&c).into_iter().map(|x| x.0).collect();
         assert_eq!(keys[1..4], ["@obj:Item.000".to_string(), "@obj#1".into(), "@obj#2".into()]);
+        assert_eq!(keys[5..], (0..8).map(|k| format!("@turntable:{k}")).collect::<Vec<_>>());
         // Two objects drawing the same thing in the same place have the same digest.
         let mut d = a.clone();
         d.objects[1] = d.objects[0].clone();
@@ -281,21 +334,23 @@ mod tests {
         let changed = |b: &crate::scene::Scene| -> Vec<String> {
             base.iter().zip(digests(b)).filter(|(x, y)| x.1 != y.1).map(|(x, _)| x.0.clone()).collect()
         };
-        // Move one object: the scene, the camera and that object.
+        let tt: Vec<String> = (0..8).map(|k| format!("@turntable:{k}")).collect();
+        let with_tt = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).chain(tt.iter().cloned()).collect() };
+        // Move one object: the scene, the camera, that object and the turntable.
         let mut m = a.clone();
         m.objects[2].transform[12] += 0.5;
-        assert_eq!(changed(&m), ["@scene", "@cam:Camera", "@obj:Item.002"]);
+        assert_eq!(changed(&m), with_tt(&["@scene", "@cam:Camera", "@obj:Item.002"]));
         // Its colour, its sidedness, its modifiers flag: the same set.
         let mut c = a.clone();
         c.objects[2].base_color[0] = 0.0;
-        assert_eq!(changed(&c), ["@scene", "@cam:Camera", "@obj:Item.002"]);
+        assert_eq!(changed(&c), with_tt(&["@scene", "@cam:Camera", "@obj:Item.002"]));
         let mut f = a.clone();
         f.objects[2].modifiers_not_applied = true;
-        assert_eq!(changed(&f), ["@scene", "@cam:Camera", "@obj:Item.002"]);
+        assert_eq!(changed(&f), with_tt(&["@scene", "@cam:Camera", "@obj:Item.002"]));
         // A shared mesh's data: every object that uses it (0 and 2 use mesh 0).
         let mut g = a.clone();
         g.meshes[0].positions[0][0] += 0.25;
-        assert_eq!(changed(&g), ["@scene", "@cam:Camera", "@obj:Item.000", "@obj:Item.002"]);
+        assert_eq!(changed(&g), with_tt(&["@scene", "@cam:Camera", "@obj:Item.000", "@obj:Item.002"]));
         // The camera: only its view.
         let mut k = a.clone();
         k.cameras[0].yfov = 0.7;

@@ -4332,7 +4332,7 @@ dependencies = [
 [[package]]
 name = "is"
 version = "0.11.1"
-source = "git+https://github.com/Alakazam-211/str0m?rev=907e050bfa212a23394f4482110acef04cba8fc6#907e050bfa212a23394f4482110acef04cba8fc6"
+source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
 dependencies = [
  "crc",
  "serde",
@@ -9504,7 +9504,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "str0m"
 version = "0.24.0"
-source = "git+https://github.com/Alakazam-211/str0m?rev=907e050bfa212a23394f4482110acef04cba8fc6#907e050bfa212a23394f4482110acef04cba8fc6"
+source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
 dependencies = [
  "arrayvec",
  "base64ct",
@@ -9524,7 +9524,7 @@ dependencies = [
 [[package]]
 name = "str0m-aws-lc-rs"
 version = "0.6.0"
-source = "git+https://github.com/Alakazam-211/str0m?rev=907e050bfa212a23394f4482110acef04cba8fc6#907e050bfa212a23394f4482110acef04cba8fc6"
+source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
 dependencies = [
  "aws-lc-rs",
  "dimpl",
@@ -9535,7 +9535,7 @@ dependencies = [
 [[package]]
 name = "str0m-proto"
 version = "0.7.0"
-source = "git+https://github.com/Alakazam-211/str0m?rev=907e050bfa212a23394f4482110acef04cba8fc6#907e050bfa212a23394f4482110acef04cba8fc6"
+source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
 dependencies = [
  "base64ct",
  "dimpl",

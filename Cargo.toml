@@ -193,12 +193,12 @@ sew-lk-compat = { git = "https://github.com/Alakazam-211/sew-crates", rev = "85f
 sew-call-client = { git = "https://github.com/Alakazam-211/sew-crates", rev = "85f5c87f93b301823629d920da5bc31015bd64b0" }
 tauri-plugin-sew-voice = { git = "https://github.com/Alakazam-211/sew-crates", rev = "85f5c87f93b301823629d920da5bc31015bd64b0" }
 # A [patch] applies only from the workspace root: the mirror's fork rows, copied
-# (Sew 0.8.3 on: str0m at 907e050b, upstream's fixes; dimpl 0.9 comes from crates.io,
+# (str0m at c57e931d, the fork's sew/0.24-next; dimpl 0.9 comes from crates.io,
 # so the dimpl row is gone).
-str0m = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
-str0m-proto = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
-is = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
-str0m-aws-lc-rs = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
+str0m = { git = "https://github.com/Alakazam-211/str0m", rev = "c57e931dc443f8fde7941ab587f38cb5bdba054d" }
+str0m-proto = { git = "https://github.com/Alakazam-211/str0m", rev = "c57e931dc443f8fde7941ab587f38cb5bdba054d" }
+is = { git = "https://github.com/Alakazam-211/str0m", rev = "c57e931dc443f8fde7941ab587f38cb5bdba054d" }
+str0m-aws-lc-rs = { git = "https://github.com/Alakazam-211/str0m", rev = "c57e931dc443f8fde7941ab587f38cb5bdba054d" }
 # K2's own audio crate, so one kessel-audio is built and no git source on K2 is locked.
 kessel-audio = { path = "crates/kessel-audio" }
 # kessel-video names the VP8 crates by version only (crates.io); in this

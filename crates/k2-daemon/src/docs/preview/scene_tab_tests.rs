@@ -13,7 +13,8 @@ use k2_mpc_base::errors::Value;
 use k2_mpc_base::store::DocKey;
 use k2_scenerender::camera::{Framing, ViewSpec};
 use k2_scenerender::digest::Target as SceneTarget;
-use k2_scenerender::proto::{CameraMeta, Clay, ImageFormat, Request, ViewMeta, CLAY_CONTENTS, CLAY_SHELL, PROTO, VERSION};
+use k2_scenerender::host::SceneRequest;
+use k2_scenerender::proto::{Ao, CameraMeta, Clay, ImageFormat, Request, ViewMeta, AO_RADIUS, AO_STRENGTH, CLAY_CONTENTS, CLAY_SHELL, PROTO, VERSION};
 use k2_scenerender::scene::{encode, SensorFit};
 use k2_scenerender::testgen;
 use serde_json::json;
@@ -277,30 +278,50 @@ fn a_transparent_request_is_drawn_and_cached_as_transparent() {
     });
 }
 
-// ── 3. Clay, and the scene view on its contents ──────────────────────
+// ── 3. Clay, occlusion, and the scene view on its contents ───────────
+
+/// The request line the worker gets for `r` (what the host sends, less the
+/// limits it adds).
+fn wire(r: &SceneRequest<'_>) -> String {
+    let mut line = Request::new(r.views.clone());
+    line.transparent = r.transparent;
+    line.background = r.background;
+    line.clay = r.clay;
+    line.ao = r.ao;
+    String::from_utf8(line.line()).expect("utf-8")
+}
+
+/// Ambient occlusion on the renderer's default settings, as the line carries it.
+const AO_ON_THE_WIRE: &str = r#""ao":{"strength":1.0,"radius":0.1}"#;
 
 #[test]
-fn the_scene_view_asks_for_contents_framing_and_clay_in_the_default_tones() {
+fn the_scene_view_asks_for_contents_framing_and_clay_and_occlusion_on_the_defaults() {
     let bytes = encode(&scene_with_display_fields());
     for look in Look::ALL {
         let r = scene::request_for(&bytes, SceneTarget::Scene, Width::Full, look);
         assert_eq!(r.views.len(), 1);
         assert_eq!((r.views[0].view, r.views[0].framing, r.views[0].objects.clone()), (ViewSpec::Auto, Framing::Contents, None), "{look:?}");
         assert_eq!(r.clay, Some(Clay { shell: CLAY_SHELL, contents: CLAY_CONTENTS }), "{look:?}: the renderer's own tones");
+        assert_eq!(r.ao, Some(Ao { strength: AO_STRENGTH, radius: AO_RADIUS }), "{look:?}: occlusion on the renderer's own settings");
+        assert!(wire(&r).contains(AO_ON_THE_WIRE), "{look:?}: {}", wire(&r));
         assert_eq!(r.transparent, look == Look::Transparent);
         assert_eq!(r.background, None);
     }
-    // On the wire: contents framing and clay, nothing else changed.
+    // On the wire: contents framing, clay and occlusion, nothing else changed.
     let r = scene::request_for(&bytes, SceneTarget::Scene, Width::Thumb, Look::Transparent);
     let mut line = Request::new(r.views.clone());
     line.clay = r.clay;
     let text = String::from_utf8(line.line()).expect("utf-8");
     assert!(text.contains(r#""framing":"contents""#), "{text}");
     assert!(text.contains(r#""clay":{"shell":[138,134,128],"contents":[206,202,194]}"#), "{text}");
+    let text = wire(&r);
+    assert!(text.contains(r#""framing":"contents""#) && text.contains(r#""clay":{"shell":[138,134,128],"contents":[206,202,194]}"#), "{text}");
+    assert!(text.contains(AO_ON_THE_WIRE), "{text}");
+    assert_eq!(Request::parse(text.trim_end().as_bytes()).expect("parse").ao, Some(Ao::default()), "the worker reads the defaults back");
 }
 
 #[test]
-fn objects_cameras_and_turntable_frames_ask_for_clay_on_their_own_framing() {
+fn objects_cameras_and_turntable_frames_ask_for_clay_and_occlusion_on_their_own_framing() {
     let bytes = encode(&scene_with_display_fields());
     let mut targets = vec![SceneTarget::Object(0), SceneTarget::Object(3), SceneTarget::Camera(0)];
     targets.extend((0..8).map(SceneTarget::Turntable));
@@ -310,6 +331,10 @@ fn objects_cameras_and_turntable_frames_ask_for_clay_on_their_own_framing() {
             assert_eq!(r.views, [t.view(Width::Thumb.px())], "{t:?}: the renderer's own view, bounds framed");
             assert_eq!(r.views[0].framing, Framing::Bounds, "{t:?}: never contents");
             assert_eq!(r.clay, Some(Clay::default()), "{t:?} {look:?}");
+            assert_eq!(r.ao, Some(Ao::default()), "{t:?} {look:?}: occlusion on the default settings");
+            let text = wire(&r);
+            assert!(text.contains(AO_ON_THE_WIRE), "{t:?} {look:?}: {text}");
+            assert_eq!(Request::parse(text.trim_end().as_bytes()).expect("parse").ao, Some(Ao::default()), "{t:?} {look:?}");
         }
         assert_eq!(scene::framing_for(t), Framing::Bounds);
     }
@@ -318,18 +343,23 @@ fn objects_cameras_and_turntable_frames_ask_for_clay_on_their_own_framing() {
     assert_eq!(scene::framing_for(SceneTarget::Scene), Framing::Contents);
 }
 
-/// Clay and the framing change the pixels but are not in the renderer's
-/// digest, so the host keys them: clay in the build (every view), the
-/// framing in the scene view's digest.
+/// Clay, occlusion and the framing change the pixels but are not in the
+/// renderer's digest, so the host keys them: clay and occlusion in the build
+/// (every view), the framing in the scene view's digest.
 #[test]
-fn clay_and_the_scene_views_framing_are_in_the_cache_key() {
+fn clay_occlusion_and_the_scene_views_framing_are_in_the_cache_key() {
     let build = scene::SCENE.build();
-    assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay"));
+    assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay.ao"));
     let plain = format!("scenerender-p{PROTO}-{VERSION}");
+    let clay_only = format!("{plain}.clay");
     for look in Look::ALL {
-        assert_ne!(cache::entry_name("@scene", "ab12", Width::Thumb, &look.cache_build(&build)), cache::entry_name("@scene", "ab12", Width::Thumb, &look.cache_build(&plain)), "{look:?}: never an image drawn without clay");
+        let name = |b: &str| cache::entry_name("@scene", "ab12", Width::Thumb, &look.cache_build(b));
+        assert_ne!(name(&build), name(&plain), "{look:?}: never an image drawn without clay");
+        assert_ne!(name(&build), name(&clay_only), "{look:?}: never an image drawn in clay without occlusion");
     }
-    assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.rgba"));
+    assert_eq!(Look::Opaque.cache_build(&build), format!("{plain}.clay.ao"));
+    assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.ao.rgba"));
+    assert_ne!(Look::Transparent.cache_build(&build), Look::Transparent.cache_build(&clay_only));
 
     // A scene of one object: the renderer's digest of `@scene` and of that
     // object's view is one, but they are framed differently.

@@ -34,10 +34,12 @@
 //!   contents ([`Framing::Contents`]: the room's shell is drawn but left out
 //!   of the fit); the turntable and the cameras keep the bounds framing (the
 //!   worker refuses content framing for them), and an object is framed on
-//!   itself. Neither is in the renderer's digest (both are the request's,
-//!   not the scene's), so the host keys them: clay in the renderer's
-//!   [`build`](PreviewRenderer::build) (every view has it), the framing in
-//!   the scene view's digest ([`keyed_digest`]).
+//!   itself. Every view also asks for ambient occlusion with the renderer's
+//!   default settings ([`Ao`]), so creases darken and objects sit on the
+//!   floor. None of these is in the renderer's digest (they are the
+//!   request's, not the scene's), so the host keys them: clay and occlusion
+//!   in the renderer's [`build`](PreviewRenderer::build) (every view has
+//!   both), the framing in the scene view's digest ([`keyed_digest`]).
 //! - **What rides along** ([`super::extras`]): each object's local box,
 //!   each camera's display values, the turntable frames' titles, and with
 //!   each image the camera that drew it.
@@ -53,7 +55,7 @@ use k2_core::log_debug;
 use k2_scenerender::camera::Framing;
 use k2_scenerender::digest::{self, Target};
 use k2_scenerender::host::{self, Limits, SceneRequest};
-use k2_scenerender::proto::{Clay, FailureCode, ImageFormat, BINARY_NAME, PROTO, VERSION};
+use k2_scenerender::proto::{Ao, Clay, FailureCode, ImageFormat, BINARY_NAME, PROTO, VERSION};
 use k2_scenerender::scene::InputLimits;
 use sha2::{Digest as _, Sha256};
 
@@ -160,7 +162,8 @@ pub fn limits_for(width: Width, wall: Duration) -> Limits {
 
 /// The worker's request for one view in `look`: WebP; transparent with no
 /// background, or opaque on the renderer's own neutral; in clay with the
-/// default tones, framed as [`framing_for`] says.
+/// default tones and with ambient occlusion on its default settings, framed
+/// as [`framing_for`] says.
 pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> SceneRequest<'_> {
     let mut view = target.view(width.px());
     view.framing = framing_for(target);
@@ -169,6 +172,7 @@ pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> 
     req.background = None;
     req.transparent = look == Look::Transparent;
     req.clay = Some(Clay::default());
+    req.ao = Some(Ao::default());
     req
 }
 
@@ -224,10 +228,11 @@ impl PreviewRenderer for SceneRenderer {
         "scene"
     }
 
-    /// The worker's protocol and version, and `.clay`: every view is drawn
-    /// in clay, so no image drawn in base colours is ever served.
+    /// The worker's protocol and version, then `.clay.ao`: every view is
+    /// drawn in clay with ambient occlusion, so no image drawn in base
+    /// colours or without occlusion is ever served.
     fn build(&self) -> String {
-        format!("scenerender-p{PROTO}-{VERSION}.clay")
+        format!("scenerender-p{PROTO}-{VERSION}.clay.ao")
     }
 
     /// No doc yet: a live BLEND doc needs the pack's mesh read and its tier

@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub mod access;
 pub mod admin;
 pub mod allow;
+/// A job's attempts across retries and moves: why each ended, its log and files.
+pub mod attempts;
 pub mod advertise;
 pub mod enroll;
 pub mod git;

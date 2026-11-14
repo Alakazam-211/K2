@@ -893,6 +893,40 @@ NEVER STUCK
   Delivery: a job starts at most once per attempt; a retry is a new
   attempt. Make side effects (uploads, deploys) idempotent.
 
+AUTOMATIC RETRIES AND MOVES (0.46.13)
+  K2 starts a job again on its own in the cases below. k2 compute get <job>
+  lists every attempt: its node, when it ran, how it ended and why (in
+  plain words), and what K2 did next (--json: result.attempts).
+  Retried, as a new attempt (--retries N, default 1, at most 5):
+    interrupted/node_update    the node stopped it to update or restart
+                               k2-node (an update waits for running jobs
+                               only up to its drain limit)
+    interrupted/node_restart   k2-node restarted; also node_reboot,
+                               node_shutdown
+    interrupted/node_lost      the node was offline 10 min while it ran
+    unknown/not_on_node        the node had no record of the job
+    failed/sync_failed, spawn_failed, job_dir_failed and other
+                               infrastructure errors on the node
+    failed/package_missing, tool_install_failed, relay_cap
+                               retried only on another node (a job K2 placed)
+  Placed again without using a retry (it hadn't started there):
+    a grant change on a shared node re-sends the jobs waiting in its queue
+    with the new caps (a job that started is never stopped or re-sent);
+    a job K2 placed moves off a busy, sleeping or paused node;
+    its node went offline, or no longer had it, before it started.
+  Never retried: your command's own results (any exit code, a timeout, a
+  stall, a cancel, mem_cap).
+  Turn retries off: --retries 0 (or --no-retry). A job K2 placed may still
+  move before it starts; name a node to keep it there.
+  Earlier attempts stay readable. k2 compute logs <job> prints the latest
+  attempt, with a line on stderr naming the others, and
+    k2 compute logs <job> --attempt 1
+  prints attempt 1 (logs are kept 14 days). Its --artifact files stay on
+  the node it ran on for 7 days:
+    k2 compute fetch <job> --attempt 1
+  An attempt whose node was offline when it ended says its files weren't
+  collected; they show up if that node comes back and reports them.
+
 SPLIT RUNS (a test suite across nodes)
   k2 compute test --shards 4 [-- -p k2-core]
     one cargo-nextest partition (hash:i/4) per shard, each on its own node

@@ -1740,6 +1740,11 @@ fn store_outputs(node_id: &str, job_id: &str, generation: u32, mut o: Outputs) {
     let conn = db.lock();
     let Some(job) = store::job_by_id(&conn, job_id) else { return };
     if job.node_id != node_id || job.generation != generation as i64 {
+        // An earlier attempt's files, reported after this server ended it
+        // (its node was offline then): kept on that attempt's record.
+        if store::set_attempt_outputs(&conn, job_id, node_id, generation as i64, o.capped()) {
+            log_debug!("[compute] job {job_id}: {node_id} reported generation {generation}'s files late; kept on that attempt");
+        }
         return;
     }
     // O2 (prd-compute-blacksmith-class-v1 §4.5.1, `job-stats`): the series

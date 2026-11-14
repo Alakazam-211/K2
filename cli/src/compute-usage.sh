@@ -276,10 +276,12 @@ Agents:
                                              wait while unfinished: where, position,
                                              of, reason, words, etaSecs, etaBasis,
                                              holdsQueue, since; k2 study compute RESULTS)
-  k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]
+  k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay] [--attempt N]
                                              copy kept artifacts here (all, or NAMEs);
                                              --over-relay: files over 100 MB through
-                                             the relay too (up to 500 MB)
+                                             the relay too (up to 500 MB);
+                                             --attempt N: an earlier attempt's files
+                                             (from the node it ran on; get lists them)
   k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]
                  block until the jobs end, no log text; exit = the job's exit
                  code (first failing job for several); 3 = a job was cancelled,
@@ -297,8 +299,12 @@ Agents:
                  run --wait = submit, print the id, then stream (no [compute]
                  message while it waits; a --detach job always gets one).
   k2 compute attach <job> [--since SEQ] [--raw]
-  k2 compute logs <job> [--tail N] [--failures] [--raw]
-                                             --failures: failing tests first, then log lines
+  k2 compute logs <job> [--attempt N] [--tail N] [--failures] [--raw] [--json]
+                                             --failures: failing tests first, then log lines.
+                                             A retried or moved job: the latest attempt,
+                                             with a line on stderr naming the earlier ones;
+                                             --attempt N prints attempt N's log (kept 14 days).
+                                             --json: {attempt, generation, attempts, log}
   k2 compute logs --search 'TEXT' [--check C] [--branch B] [--state failed]
                   [--since 7d] [--limit 50] [-i] [--json]
                  find TEXT in this workspace's kept job logs (14 days), newest
@@ -633,7 +639,8 @@ attached or --wait, 24h --detach, 48h --tier batch) fails with queue_timeout, na
 thing it waited on; jobs K2 placed (no node named) move off a node
 that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
 retry --retries times (default 1) with backoff, on another node when K2
-placed the job.
+placed the job (--retries 0 or --no-retry: never). k2 compute get <job>
+says why each attempt ended; logs/fetch --attempt N read an earlier one.
 A job that prints nothing for --stall-timeout (default 30m) ends as
 timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
 result and never retried.

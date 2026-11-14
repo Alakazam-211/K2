@@ -388,6 +388,8 @@ pub mod compute_provenance;
 pub mod compute_preset;
 pub mod compute_secrets;
 pub mod compute_routes;
+// A job's earlier attempts: their list, `logs --attempt N`, `fetch --attempt N`.
+pub mod compute_attempts;
 // The job and node views (`nodes`, `status`, `queue`, `jobs`, `get`, `cancel`).
 pub mod compute_views;
 /// App runtime stage 1 (prd-k2-app-runtime-v1): `/cli/app/*` routes.

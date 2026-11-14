@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use k2_core::compute::proto::cache as pcache;
 use k2_core::compute::proto::frames::{Blob, Control, JobLimits, JobState, Plan, Src};
@@ -30,7 +30,7 @@ use k2_core::compute::proto::share as pshare;
 use k2_core::compute::proto::tiers::{self, Tier};
 use k2_core::compute::proto::{crypto, env as penv, needs, pairing, results};
 use k2_core::compute::share::{self, pending};
-use k2_core::compute::{self as compute, codes, logs, scheduler, store};
+use k2_core::compute::{self as compute, codes, scheduler, store};
 use k2_core::connect_users::Role;
 
 use crate::cli_response::CliResponse;
@@ -723,7 +723,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/prewarm" => prewarm(&who, body),
         "/cli/compute/jobs" => views::jobs_list(&who, params),
         "/cli/compute/jobs/get" => views::job_get(&who, params),
-        "/cli/compute/jobs/logs" => job_logs(&who, params),
+        "/cli/compute/jobs/logs" => crate::compute_attempts::job_logs(&who, params),
         // O1 (prd-compute-blacksmith-class-v1 §4.5.3): one string across logs.
         crate::compute_logsearch::PATH => crate::compute_logsearch::handle(&who, params),
         p if crate::compute_provenance::is_route(p) => crate::compute_provenance::handle(p, &who, body, params),
@@ -4029,16 +4029,13 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
         out["name"] = name.into();
         return Ok(out);
     }
-    let o =compute::result::outputs(&j).unwrap_or_default();
+    // `attempt=N`: an earlier attempt's files, from its node's copy of that generation.
+    let pick = crate::compute_attempts::picked(&j, params)?;
+    let j = crate::compute_attempts::as_attempt(&j, &pick);
+    let o = compute::result::outputs(&j).unwrap_or_default();
     let short = compute::message::short(&j.id).to_string();
     let Some(name) = params.get("name").map(String::as_str).filter(|n| !n.is_empty()) else {
-        return Ok(serde_json::json!({
-            "job": j.id,
-            "short": short,
-            "generation": j.generation,
-            "state": j.state,
-            "artifacts": o.artifacts,
-        }));
+        return Ok(serde_json::json!({"job": j.id, "short": short, "attempt": pick.attempt, "generation": j.generation, "state": j.state, "artifacts": o.artifacts}));
     };
     let info = o.artifacts.iter().find(|a| a.name == name).ok_or_else(|| {
         no("artifact_not_found", 404, format!("job {short} kept no artifact named '{name}' (k2 compute fetch {short} lists them)"))
@@ -4094,70 +4091,6 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
         "data": crypto::b64(&buf),
         "eof": end >= info.bytes,
     }))
-}
-
-fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
-    let j = job_for(who, params.get("job").map(String::as_str))?;
-    compute_ws::touch_follower(&j.id);
-    if !j.ctl.shards.is_empty() {
-        let shards: Vec<String> = j.ctl.shards.clone();
-        return Ok(serde_json::json!({
-            "job": job_summary(&j),
-            "generation": j.generation,
-            "cursor": 0,
-            "chunks": [],
-            "end": j.is_terminal(),
-            "shards": shards,
-            "hint": "a split run: each shard has its own log (k2 compute logs <run> reads them all)",
-        }));
-    }
-    let generation = params.get("generation").and_then(|g| g.parse::<i64>().ok()).unwrap_or(j.generation);
-    let mut cursor = match params.get("cursor").and_then(|c| c.parse::<u64>().ok()) {
-        Some(c) => c,
-        None => logs::cursor_after_seq(&j.id, generation, params.get("since_seq").and_then(|s| s.parse().ok()).unwrap_or(0)),
-    };
-    let max = params.get("max").and_then(|m| m.parse::<usize>().ok()).unwrap_or(256 * 1024).clamp(1024, 1 << 20);
-    let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0).min(25);
-    let deadline = Instant::now() + Duration::from_secs(wait);
-    loop {
-        let seen = compute_ws::change_counter();
-        let (recs, next) = logs::read_from(&j.id, generation, cursor, max);
-        let row = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            store::job_by_id(&conn, &j.id)
-        }
-        .ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, "the job vanished"))?;
-        let terminal = row.is_terminal() || row.generation != generation;
-        let now = Instant::now();
-        if !recs.is_empty() || terminal || now >= deadline {
-            cursor = next;
-            let chunks: Vec<serde_json::Value> = recs
-                .iter()
-                .map(|r| serde_json::json!({"seq": r.seq, "stream": logs::stream_name(r.stream), "data": crypto::b64(&r.data)}))
-                .collect();
-            let more = !logs::read_from(&j.id, generation, cursor, 1).0.is_empty();
-            let mut out = serde_json::json!({
-                "job": job_summary(&row),
-                "generation": generation,
-                "cursor": cursor,
-                "chunks": chunks,
-                "end": terminal && !more,
-                "nodeOnline": compute_ws::is_online(&row.node_id),
-            });
-            // The wait line a follower prints (L6): why it waits and where,
-            // on this server or in the node's own queue.
-            if row.state == "queued" {
-                if let Some(q) = queue_view(who, &row, &compute_ws::decision_for(&row.node_id)) {
-                    out["queue"] = q;
-                }
-            } else if row.node_queued {
-                out["queue"] = out["job"]["queue"].clone();
-            }
-            return Ok(out);
-        }
-        compute_ws::wait_change(seen, deadline - now);
-    }
 }
 
 /// `POST /cli/compute/jobs/tier` (`k2 compute retier <job> --tier T`,

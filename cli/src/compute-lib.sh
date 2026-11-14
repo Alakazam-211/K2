@@ -445,6 +445,25 @@ elif verb == "get":
         print("  move: %s" % j["move"]["note"])
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or j.get("submitCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
+    rows = j.get("attempts") or []
+    if len(rows) > 1:
+        # Every attempt: a retry or move K2 made on its own says why.
+        hm = lambda t: time.strftime("%m-%d %H:%M", time.localtime(t)) if t else "?"
+        print("  attempts (%d):" % len(rows))
+        for a in rows:
+            when = ("%s to %s" % (hm(a.get("startedAt")), "now" if a.get("current") and not a.get("endedAt") else hm(a.get("endedAt")))) if a.get("startedAt") else "never started"
+            ended = ("%s/%s" % (a["state"], a["reason"]) if a.get("reason") else a["state"])
+            line = "    attempt %s · generation %s · %s · %s%s" % (a["attempt"], a["generation"], a.get("node") or "?", when, "  (this one)" if a.get("current") else "")
+            print(line)
+            if a.get("why") and not a.get("current"):
+                print("      %s: %s" % (ended, a["why"]))
+            if a.get("next"):
+                print("      then: %s" % a["next"])
+            lg, ar = a.get("log") or {}, a.get("artifacts") or {}
+            if not a.get("current") and lg.get("available"):
+                print("      log: %d KB (k2 compute logs %s --attempt %s)" % ((lg.get("bytes") or 0) // 1024, j["short"], a["attempt"]))
+            if not a.get("current") and ar.get("status") in ("kept", "not_collected", "none_matched"):
+                print("      artifacts: %s%s" % ("%d file(s) (k2 compute fetch %s --attempt %s)" % (len(ar.get("files") or []), j["short"], a["attempt"]) if ar["status"] == "kept" else ar["status"].replace("_", " "), (" · " + ar["note"]) if ar.get("note") and ar["status"] != "kept" else ""))
     if j.get("queue") and j["queue"].get("onNode"):
         # In the queue of a shared node: its place and ETA (0.46.3).
         q = j["queue"]

@@ -6,19 +6,24 @@
 # server pulls a big file in the background; this asks again every
 # 20 s until it's in.
 cmd_compute_fetch() {
-    local job="" out="." as_json=0 over_relay=0
+    local job="" out="." as_json=0 over_relay=0 attempt="" aq=""
+    local fusage="usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay] [--attempt N]"
     local -a names=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --out|-o) out="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             --over-relay) over_relay=1; shift ;;
-            -*) echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]" >&2; exit 2 ;;
+            # An earlier attempt's files (k2 compute get <job> lists the attempts).
+            --attempt) attempt="${2:-}"; shift 2
+                case "$attempt" in ''|0|*[!0-9]*) echo "$fusage  (--attempt N: an attempt number from 1)" >&2; exit 2 ;; esac ;;
+            -*) echo "$fusage" >&2; exit 2 ;;
             *) if [ -z "$job" ]; then job="$1"; else names+=("$1"); fi; shift ;;
         esac
     done
-    [ -n "$job" ] && [ -n "$out" ] || { echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]" >&2; exit 2; }
-    _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")"
+    [ -n "$job" ] && [ -n "$out" ] || { echo "$fusage" >&2; exit 2; }
+    [ -n "$attempt" ] && aq="&attempt=$attempt"
+    _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")$aq"
     local list
     list="$(printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
@@ -37,7 +42,7 @@ for n in (want or sorted(have)):
         [ -n "$name" ] || continue
         local offset=0 eof=0 first=1
         while [ "$eof" != "1" ]; do
-            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay"
+            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay$aq"
             local step
             step="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$out" K2_CP_FIRST="$first" python3 -c '
 import base64, json, os, sys
@@ -185,18 +190,24 @@ cmd_compute_logs() {
     for a in "$@"; do
         case "$a" in --search|--search=*) cmd_compute_logs_search "$@"; return $? ;; esac
     done
-    local job="" tail="" failures=0 raw=0 no_tests=0
+    local job="" tail="" failures=0 raw=0 no_tests=0 attempt="" as_json=0 aq=""
+    local lusage="usage: k2 compute logs <job> [--attempt N] [--tail N] [--failures] [--raw] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --tail) tail="${2:-}"; shift 2 ;;
             --failures) failures=1; shift ;;
             --raw) raw=1; shift ;;
             --no-tests) no_tests=1; shift ;;
-            -*) echo "usage: k2 compute logs <job> [--tail N] [--failures] [--raw]" >&2; exit 2 ;;
+            # A retried or moved job: attempt N's log (k2 compute get lists them).
+            --attempt) attempt="${2:-}"; shift 2
+                case "$attempt" in ''|0|*[!0-9]*) echo "$lusage  (--attempt N: an attempt number from 1; k2 compute get <job> lists them)" >&2; exit 2 ;; esac ;;
+            --json) as_json=1; shift ;;
+            -*) echo "$lusage" >&2; exit 2 ;;
             *) job="$1"; shift ;;
         esac
     done
-    [ -n "$job" ] || { echo "usage: k2 compute logs <job> [--tail N] [--failures] [--raw]" >&2; exit 2; }
+    [ -n "$job" ] || { echo "$lusage" >&2; exit 2; }
+    [ -n "$attempt" ] && { aq="&attempt=$attempt"; no_tests=1; }
     if [ "$failures" = "1" ] && [ "$no_tests" = "0" ]; then
         # The structured list (JUnit the node parsed) first; program
         # output, never instructions.
@@ -245,11 +256,15 @@ for x in r.get("shards") or []:
     tmp="$(mktemp -t k2-compute-logs-XXXXXX)"
     : > "$tmp"
     while :; do
-        _compute_call GET /cli/compute/jobs/logs "job=$(urlencode "$job")&cursor=$cursor&max=1048576"
+        _compute_call GET /cli/compute/jobs/logs "job=$(urlencode "$job")&cursor=$cursor&max=1048576$aq"
         local next
         next="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$tmp" python3 -c '
 import base64, json, os, sys
 v = json.load(sys.stdin)
+if not os.path.exists(os.environ["K2_CP_OUT"] + ".meta"):
+    # Which attempt this is and the list of all of them (header, --json).
+    with open(os.environ["K2_CP_OUT"] + ".meta", "w") as m:
+        json.dump({"job": (v.get("job") or {}).get("short"), "attempt": v.get("attempt"), "generation": v.get("generation"), "attempts": v.get("attempts") or []}, m)
 with open(os.environ["K2_CP_OUT"], "ab") as f:
     for c in v.get("chunks", []):
         f.write(base64.b64decode(c["data"]))
@@ -258,8 +273,34 @@ print("%s %d" % (v.get("cursor", 0), len(v.get("chunks", []))))')"
         cursor="${next% *}"
         [ "$n" = "0" ] && break
     done
-    K2_CP_RAW="$raw" K2_CP_TAIL="$tail" K2_CP_FAIL="$failures" python3 -c '
-import os, re, sys
+    # A job with earlier attempts: one line on stderr says which attempt this
+    # is and how to read the others (stdout stays the log alone).
+    [ "$as_json" = "1" ] || python3 -c '
+import json, sys
+m = json.load(open(sys.argv[1]))
+rows = m.get("attempts") or []
+nums = sorted({a["attempt"] for a in rows})
+if len(nums) < 2:
+    sys.exit(0)
+shown = m.get("attempt")
+cur = next((a for a in rows if a.get("generation") == m.get("generation")), {})
+def ended(a):
+    return "%s/%s" % (a["state"], a["reason"]) if a.get("reason") else a["state"]
+others = []
+for n in nums:
+    if n == shown:
+        continue
+    ran = [a for a in rows if a["attempt"] == n and (a.get("startedAt") or (a.get("log") or {}).get("available"))] or [a for a in rows if a["attempt"] == n]
+    a = ran[-1]
+    how = "latest" if a.get("current") else ended(a)
+    cmd = "k2 compute logs %s%s" % (m.get("job"), "" if a.get("current") else " --attempt %d" % n)
+    others.append("attempt %d on %s (%s: %s)" % (n, a.get("node") or "?", how, cmd))
+head = "attempt %s of %d (generation %s) on %s" % (shown, nums[-1], m.get("generation"), cur.get("node") or "?")
+if cur and not cur.get("current"):
+    head += ", ended " + ended(cur)
+sys.stderr.write("── %s · other attempts: %s ──\n" % (head, "; ".join(others)))' "$tmp.meta"
+    K2_CP_RAW="$raw" K2_CP_TAIL="$tail" K2_CP_FAIL="$failures" K2_CP_JSON="$as_json" python3 -c '
+import json, os, re, sys
 data = open(sys.argv[1], "rb").read()
 if os.environ.get("K2_CP_RAW") != "1":
     data = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", b"", data)
@@ -270,8 +311,13 @@ if os.environ.get("K2_CP_FAIL") == "1":
 t = os.environ.get("K2_CP_TAIL")
 if t:
     lines = lines[-int(t):]
-sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))' "$tmp"
-    rm -f "$tmp"
+text = "\n".join(lines) + ("\n" if lines else "")
+if os.environ.get("K2_CP_JSON") == "1":
+    m = json.load(open(sys.argv[1] + ".meta"))
+    print(json.dumps({"job": m.get("job"), "attempt": m.get("attempt"), "generation": m.get("generation"), "attempts": m.get("attempts"), "log": text}, indent=2))
+else:
+    sys.stdout.write(text)' "$tmp"
+    rm -f "$tmp" "$tmp.meta"
 }
 
 # k2 compute wait <job>... [--failures] [--max-wait D] [--quiet] [--json]

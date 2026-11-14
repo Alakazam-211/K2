@@ -626,6 +626,12 @@ pub struct JobCtl {
     /// Earlier attempts that ended in an infrastructure failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_attempts: Vec<AttemptNote>,
+    /// Every generation that ended without ending the job (a retry, a
+    /// re-send, a withdraw, a lost node): where it ran, how it ended, what
+    /// K2 did next, what files it kept ([`super::attempts`]). Written by
+    /// [`requeue_new_attempt`] and [`requeue_new_generation`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<super::attempts::AttemptRecord>,
     /// `--stall-timeout` as asked: None = the default, 0 = off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_secs: Option<i64>,
@@ -1273,7 +1279,9 @@ pub fn set_job_receipt(conn: &Connection, id: &str, receipt_json: &str, ok: bool
 pub fn set_job_ctl(conn: &Connection, id: &str, ctl: &JobCtl) -> Result<(), String> {
     let Some(j) = job_by_id(conn, id) else { return Err("job not found".into()) };
     let plan = j.plan().ok_or_else(|| "stored plan unreadable".to_string())?;
-    conn.execute("UPDATE compute_jobs SET plan_json = ?2 WHERE id = ?1", params![id, plan_json_with(&plan, ctl)?])
+    let mut ctl = ctl.clone();
+    super::attempts::keep_newer(&j.ctl, &mut ctl);
+    conn.execute("UPDATE compute_jobs SET plan_json = ?2 WHERE id = ?1", params![id, plan_json_with(&plan, &ctl)?])
         .map_err(|e| e.to_string())
         .map(|_| ())
 }
@@ -1281,11 +1289,15 @@ pub fn set_job_ctl(conn: &Connection, id: &str, ctl: &JobCtl) -> Result<(), Stri
 /// Move a QUEUED job to another node with its rebuilt plan (new digest).
 /// Returns false when the job wasn't queued any more (it raced a placement).
 pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, reason: &str) -> Result<bool, String> {
+    let mut ctl = ctl.clone();
+    if let Some(j) = job_by_id(conn, id) {
+        super::attempts::keep_newer(&j.ctl, &mut ctl);
+    }
     let n = conn
         .execute(
             "UPDATE compute_jobs SET node_id = ?2, plan_json = ?3, plan_digest = ?4, reason = ?5, detail = NULL, withdraws = 0 \
              WHERE id = ?1 AND state = 'queued'",
-            params![id, plan.node_id, plan_json_with(plan, ctl)?, plan.digest()?, reason],
+            params![id, plan.node_id, plan_json_with(plan, &ctl)?, plan.digest()?, reason],
         )
         .map_err(|e| e.to_string())?;
     Ok(n == 1)
@@ -1298,10 +1310,12 @@ pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, r
 pub fn set_waiting_job_ctl(conn: &Connection, id: &str, generation: i64, ctl: &JobCtl) -> Result<bool, String> {
     let Some(j) = job_by_id(conn, id) else { return Ok(false) };
     let plan = j.plan().ok_or_else(|| "stored plan unreadable".to_string())?;
+    let mut ctl = ctl.clone();
+    super::attempts::keep_newer(&j.ctl, &mut ctl);
     let n = conn
         .execute(
             &format!("UPDATE compute_jobs SET plan_json = ?2 WHERE id = ?1 AND generation = ?3 AND {QUEUED_SQL}"),
-            params![id, plan_json_with(&plan, ctl)?, generation],
+            params![id, plan_json_with(&plan, &ctl)?, generation],
         )
         .map_err(|e| e.to_string())?;
     Ok(n == 1)
@@ -1510,6 +1524,30 @@ pub fn clear_node_queued(conn: &Connection, id: &str) {
     );
 }
 
+/// The job's `plan_json` with a record of its current generation added
+/// (it ends now; `next` = what K2 does with it), before a requeue starts
+/// a new one: the attempt's node, times, end and kept files outlive the
+/// row's reset. None when the job is gone.
+fn with_attempt_record(conn: &Connection, id: &str, next: &str) -> Result<Option<String>, String> {
+    let Some(j) = job_by_id(conn, id) else { return Ok(None) };
+    let plan = j.plan().ok_or_else(|| "stored plan unreadable".to_string())?;
+    let mut ctl = j.ctl.clone();
+    super::attempts::push(&mut ctl, super::attempts::record_of(&j, next, super::now()));
+    plan_json_with(&plan, &ctl).map(Some)
+}
+
+/// A node reported files of an earlier attempt of `id` (its node was
+/// offline when that attempt ended here): keep them on its record. True
+/// when a record took them.
+pub fn set_attempt_outputs(conn: &Connection, id: &str, node_id: &str, generation: i64, outputs: super::proto::results::Outputs) -> bool {
+    let Some(j) = job_by_id(conn, id) else { return false };
+    let mut ctl = j.ctl.clone();
+    if !super::attempts::attach_outputs(&mut ctl, node_id, generation, outputs) {
+        return false;
+    }
+    set_job_ctl(conn, id, &ctl).is_ok()
+}
+
 /// A node-queued job comes back to this server under a NEW generation
 /// (a confirmed withdraw, V46; a lost node, V56): back to `queued`, same
 /// attempt, no retry used. The old `(job, generation)` can never run or
@@ -1517,12 +1555,13 @@ pub fn clear_node_queued(conn: &Connection, id: &str) {
 /// active state of that generation (a cancel that ended it, or a newer
 /// attempt, wins). `Ok(true)` when requeued.
 pub fn requeue_new_generation(conn: &Connection, id: &str, generation: i64, reason: &str) -> Result<bool, String> {
+    let Some(plan_json) = with_attempt_record(conn, id, reason)? else { return Ok(false) };
     conn.execute(
         "UPDATE compute_jobs SET state = 'queued', reason = ?3, detail = NULL, generation = generation + 1, \
          assigned_at = NULL, started_at = NULL, log_seq = 0, log_bytes = 0, node_queued = 0, node_pos = NULL, \
-         node_eta_secs = NULL, node_eta_p90_secs = NULL, node_blocked_by = NULL, node_of = NULL \
+         node_eta_secs = NULL, node_eta_p90_secs = NULL, node_blocked_by = NULL, node_of = NULL, plan_json = ?4 \
          WHERE id = ?1 AND generation = ?2 AND state IN ('assigned','preparing','running','finishing')",
-        params![id, generation, reason],
+        params![id, generation, reason, plan_json],
     )
     .map_err(|e| e.to_string())
     .map(|n| n == 1)
@@ -1549,13 +1588,14 @@ pub fn node_queued_jobs(conn: &Connection) -> Vec<JobRow> {
 
 /// A new attempt: generation + 1, back to queued, results cleared.
 pub fn requeue_new_attempt(conn: &Connection, id: &str, reason: &str) -> Result<JobRow, String> {
+    let plan_json = with_attempt_record(conn, id, reason)?.ok_or_else(|| "job vanished".to_string())?;
     conn.execute(
         "UPDATE compute_jobs SET state = 'queued', reason = ?2, detail = NULL, attempt = attempt + 1, \
          generation = generation + 1, exit_code = NULL, signal = NULL, assigned_at = NULL, started_at = NULL, \
          ended_at = NULL, log_seq = 0, log_bytes = 0, summary_json = NULL, receipt_json = NULL, receipt_ok = NULL, \
          notified_at = NULL, node_queued = 0, node_pos = NULL, node_eta_secs = NULL, node_eta_p90_secs = NULL, \
-         node_blocked_by = NULL, node_of = NULL WHERE id = ?1",
-        params![id, reason],
+         node_blocked_by = NULL, node_of = NULL, plan_json = ?3 WHERE id = ?1",
+        params![id, reason, plan_json],
     )
     .map_err(|e| e.to_string())?;
     job_by_id(conn, id).ok_or_else(|| "job vanished".to_string())
@@ -1915,6 +1955,8 @@ mod tests {
         let r = job_by_id(&c, &j.id).unwrap();
         assert_eq!((r.state.as_str(), r.attempt, r.generation, r.node_queued, r.node_pos), ("queued", 1, 2, false, None));
         assert_eq!((r.withdraws, r.withdrawn_at), (1, Some(7)));
+        let rec = &r.ctl.attempts;
+        assert_eq!(rec.iter().map(|a| (a.attempt, a.generation, a.next.as_str(), a.started_at)).collect::<Vec<_>>(), vec![(1, 1, "withdrawn", None)], "the generation that never started is recorded");
         assert!(node_queued_jobs(&c).is_empty());
         // A cancelled job never comes back.
         set_job_state(&c, &j.id, JobState::Cancelled, Some("cancelled"), None, 8).unwrap();
@@ -2119,7 +2161,13 @@ mod tests {
         more.failed_attempts.push(AttemptNote { attempt: 1, node_id: "n1".into(), state: "interrupted".into(), reason: Some("node_lost".into()), at: 20 });
         set_job_ctl(&c, &j.id, &more).unwrap();
         let r = requeue_new_attempt(&c, &j.id, "retry").unwrap();
+        // ... and records the generation that ended.
+        assert_eq!(r.ctl.attempts.iter().map(|a| (a.attempt, a.generation, a.next.as_str())).collect::<Vec<_>>(), vec![(1, 1, "retry")]);
+        let more = JobCtl { attempts: r.ctl.attempts.clone(), ..more };
         assert_eq!(r.ctl, more);
+        // An options write from before the requeue never drops that record.
+        set_job_ctl(&c, &j.id, &JobCtl { attempts: Vec::new(), ..more.clone() }).unwrap();
+        assert_eq!(job_by_id(&c, &j.id).unwrap().ctl, more);
         // A release (move --auto) rewrites the options only while waiting,
         // under the same generation; the digest stays (ctl isn't the plan).
         let mut auto = more.clone();

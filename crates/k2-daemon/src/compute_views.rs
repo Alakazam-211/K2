@@ -1319,6 +1319,12 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     // CE-7: `get --json` prints the result object: the wait rides there too
     // (null once the job ended), and a running job's stall watch.
     v["result"]["wait"] = v.get("wait").cloned().unwrap_or_default();
+    // Every attempt (a retry or a move K2 made on its own included): where
+    // it ran, how it ended and why, its log and files.
+    if j.ctl.shards.is_empty() {
+        v["attempts"] = crate::compute_attempts::list(&j);
+        v["result"]["attempts"] = v["attempts"].clone();
+    }
     if let Some(s) = v.get("stall").cloned() {
         v["result"]["stall"] = s;
     }

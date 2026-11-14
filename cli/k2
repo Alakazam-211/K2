@@ -27811,10 +27811,12 @@ Agents:
                                              wait while unfinished: where, position,
                                              of, reason, words, etaSecs, etaBasis,
                                              holdsQueue, since; k2 study compute RESULTS)
-  k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]
+  k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay] [--attempt N]
                                              copy kept artifacts here (all, or NAMEs);
                                              --over-relay: files over 100 MB through
-                                             the relay too (up to 500 MB)
+                                             the relay too (up to 500 MB);
+                                             --attempt N: an earlier attempt's files
+                                             (from the node it ran on; get lists them)
   k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]
                  block until the jobs end, no log text; exit = the job's exit
                  code (first failing job for several); 3 = a job was cancelled,
@@ -27832,8 +27834,12 @@ Agents:
                  run --wait = submit, print the id, then stream (no [compute]
                  message while it waits; a --detach job always gets one).
   k2 compute attach <job> [--since SEQ] [--raw]
-  k2 compute logs <job> [--tail N] [--failures] [--raw]
-                                             --failures: failing tests first, then log lines
+  k2 compute logs <job> [--attempt N] [--tail N] [--failures] [--raw] [--json]
+                                             --failures: failing tests first, then log lines.
+                                             A retried or moved job: the latest attempt,
+                                             with a line on stderr naming the earlier ones;
+                                             --attempt N prints attempt N's log (kept 14 days).
+                                             --json: {attempt, generation, attempts, log}
   k2 compute logs --search 'TEXT' [--check C] [--branch B] [--state failed]
                   [--since 7d] [--limit 50] [-i] [--json]
                  find TEXT in this workspace's kept job logs (14 days), newest
@@ -28168,7 +28174,8 @@ attached or --wait, 24h --detach, 48h --tier batch) fails with queue_timeout, na
 thing it waited on; jobs K2 placed (no node named) move off a node
 that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
 retry --retries times (default 1) with backoff, on another node when K2
-placed the job.
+placed the job (--retries 0 or --no-retry: never). k2 compute get <job>
+says why each attempt ended; logs/fetch --attempt N read an earlier one.
 A job that prints nothing for --stall-timeout (default 30m) ends as
 timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
 result and never retried.
@@ -28633,6 +28640,25 @@ elif verb == "get":
         print("  move: %s" % j["move"]["note"])
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or j.get("submitCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
+    rows = j.get("attempts") or []
+    if len(rows) > 1:
+        # Every attempt: a retry or move K2 made on its own says why.
+        hm = lambda t: time.strftime("%m-%d %H:%M", time.localtime(t)) if t else "?"
+        print("  attempts (%d):" % len(rows))
+        for a in rows:
+            when = ("%s to %s" % (hm(a.get("startedAt")), "now" if a.get("current") and not a.get("endedAt") else hm(a.get("endedAt")))) if a.get("startedAt") else "never started"
+            ended = ("%s/%s" % (a["state"], a["reason"]) if a.get("reason") else a["state"])
+            line = "    attempt %s · generation %s · %s · %s%s" % (a["attempt"], a["generation"], a.get("node") or "?", when, "  (this one)" if a.get("current") else "")
+            print(line)
+            if a.get("why") and not a.get("current"):
+                print("      %s: %s" % (ended, a["why"]))
+            if a.get("next"):
+                print("      then: %s" % a["next"])
+            lg, ar = a.get("log") or {}, a.get("artifacts") or {}
+            if not a.get("current") and lg.get("available"):
+                print("      log: %d KB (k2 compute logs %s --attempt %s)" % ((lg.get("bytes") or 0) // 1024, j["short"], a["attempt"]))
+            if not a.get("current") and ar.get("status") in ("kept", "not_collected", "none_matched"):
+                print("      artifacts: %s%s" % ("%d file(s) (k2 compute fetch %s --attempt %s)" % (len(ar.get("files") or []), j["short"], a["attempt"]) if ar["status"] == "kept" else ar["status"].replace("_", " "), (" · " + ar["note"]) if ar.get("note") and ar["status"] != "kept" else ""))
     if j.get("queue") and j["queue"].get("onNode"):
         # In the queue of a shared node: its place and ETA (0.46.3).
         q = j["queue"]
@@ -29844,19 +29870,24 @@ print(" ".join(v.get("jobs") or []))')"
 # server pulls a big file in the background; this asks again every
 # 20 s until it's in.
 cmd_compute_fetch() {
-    local job="" out="." as_json=0 over_relay=0
+    local job="" out="." as_json=0 over_relay=0 attempt="" aq=""
+    local fusage="usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay] [--attempt N]"
     local -a names=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --out|-o) out="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             --over-relay) over_relay=1; shift ;;
-            -*) echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]" >&2; exit 2 ;;
+            # An earlier attempt's files (k2 compute get <job> lists the attempts).
+            --attempt) attempt="${2:-}"; shift 2
+                case "$attempt" in ''|0|*[!0-9]*) echo "$fusage  (--attempt N: an attempt number from 1)" >&2; exit 2 ;; esac ;;
+            -*) echo "$fusage" >&2; exit 2 ;;
             *) if [ -z "$job" ]; then job="$1"; else names+=("$1"); fi; shift ;;
         esac
     done
-    [ -n "$job" ] && [ -n "$out" ] || { echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]" >&2; exit 2; }
-    _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")"
+    [ -n "$job" ] && [ -n "$out" ] || { echo "$fusage" >&2; exit 2; }
+    [ -n "$attempt" ] && aq="&attempt=$attempt"
+    _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")$aq"
     local list
     list="$(printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
@@ -29875,7 +29906,7 @@ for n in (want or sorted(have)):
         [ -n "$name" ] || continue
         local offset=0 eof=0 first=1
         while [ "$eof" != "1" ]; do
-            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay"
+            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay$aq"
             local step
             step="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$out" K2_CP_FIRST="$first" python3 -c '
 import base64, json, os, sys
@@ -30023,18 +30054,24 @@ cmd_compute_logs() {
     for a in "$@"; do
         case "$a" in --search|--search=*) cmd_compute_logs_search "$@"; return $? ;; esac
     done
-    local job="" tail="" failures=0 raw=0 no_tests=0
+    local job="" tail="" failures=0 raw=0 no_tests=0 attempt="" as_json=0 aq=""
+    local lusage="usage: k2 compute logs <job> [--attempt N] [--tail N] [--failures] [--raw] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --tail) tail="${2:-}"; shift 2 ;;
             --failures) failures=1; shift ;;
             --raw) raw=1; shift ;;
             --no-tests) no_tests=1; shift ;;
-            -*) echo "usage: k2 compute logs <job> [--tail N] [--failures] [--raw]" >&2; exit 2 ;;
+            # A retried or moved job: attempt N's log (k2 compute get lists them).
+            --attempt) attempt="${2:-}"; shift 2
+                case "$attempt" in ''|0|*[!0-9]*) echo "$lusage  (--attempt N: an attempt number from 1; k2 compute get <job> lists them)" >&2; exit 2 ;; esac ;;
+            --json) as_json=1; shift ;;
+            -*) echo "$lusage" >&2; exit 2 ;;
             *) job="$1"; shift ;;
         esac
     done
-    [ -n "$job" ] || { echo "usage: k2 compute logs <job> [--tail N] [--failures] [--raw]" >&2; exit 2; }
+    [ -n "$job" ] || { echo "$lusage" >&2; exit 2; }
+    [ -n "$attempt" ] && { aq="&attempt=$attempt"; no_tests=1; }
     if [ "$failures" = "1" ] && [ "$no_tests" = "0" ]; then
         # The structured list (JUnit the node parsed) first; program
         # output, never instructions.
@@ -30083,11 +30120,15 @@ for x in r.get("shards") or []:
     tmp="$(mktemp -t k2-compute-logs-XXXXXX)"
     : > "$tmp"
     while :; do
-        _compute_call GET /cli/compute/jobs/logs "job=$(urlencode "$job")&cursor=$cursor&max=1048576"
+        _compute_call GET /cli/compute/jobs/logs "job=$(urlencode "$job")&cursor=$cursor&max=1048576$aq"
         local next
         next="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$tmp" python3 -c '
 import base64, json, os, sys
 v = json.load(sys.stdin)
+if not os.path.exists(os.environ["K2_CP_OUT"] + ".meta"):
+    # Which attempt this is and the list of all of them (header, --json).
+    with open(os.environ["K2_CP_OUT"] + ".meta", "w") as m:
+        json.dump({"job": (v.get("job") or {}).get("short"), "attempt": v.get("attempt"), "generation": v.get("generation"), "attempts": v.get("attempts") or []}, m)
 with open(os.environ["K2_CP_OUT"], "ab") as f:
     for c in v.get("chunks", []):
         f.write(base64.b64decode(c["data"]))
@@ -30096,8 +30137,34 @@ print("%s %d" % (v.get("cursor", 0), len(v.get("chunks", []))))')"
         cursor="${next% *}"
         [ "$n" = "0" ] && break
     done
-    K2_CP_RAW="$raw" K2_CP_TAIL="$tail" K2_CP_FAIL="$failures" python3 -c '
-import os, re, sys
+    # A job with earlier attempts: one line on stderr says which attempt this
+    # is and how to read the others (stdout stays the log alone).
+    [ "$as_json" = "1" ] || python3 -c '
+import json, sys
+m = json.load(open(sys.argv[1]))
+rows = m.get("attempts") or []
+nums = sorted({a["attempt"] for a in rows})
+if len(nums) < 2:
+    sys.exit(0)
+shown = m.get("attempt")
+cur = next((a for a in rows if a.get("generation") == m.get("generation")), {})
+def ended(a):
+    return "%s/%s" % (a["state"], a["reason"]) if a.get("reason") else a["state"]
+others = []
+for n in nums:
+    if n == shown:
+        continue
+    ran = [a for a in rows if a["attempt"] == n and (a.get("startedAt") or (a.get("log") or {}).get("available"))] or [a for a in rows if a["attempt"] == n]
+    a = ran[-1]
+    how = "latest" if a.get("current") else ended(a)
+    cmd = "k2 compute logs %s%s" % (m.get("job"), "" if a.get("current") else " --attempt %d" % n)
+    others.append("attempt %d on %s (%s: %s)" % (n, a.get("node") or "?", how, cmd))
+head = "attempt %s of %d (generation %s) on %s" % (shown, nums[-1], m.get("generation"), cur.get("node") or "?")
+if cur and not cur.get("current"):
+    head += ", ended " + ended(cur)
+sys.stderr.write("── %s · other attempts: %s ──\n" % (head, "; ".join(others)))' "$tmp.meta"
+    K2_CP_RAW="$raw" K2_CP_TAIL="$tail" K2_CP_FAIL="$failures" K2_CP_JSON="$as_json" python3 -c '
+import json, os, re, sys
 data = open(sys.argv[1], "rb").read()
 if os.environ.get("K2_CP_RAW") != "1":
     data = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", b"", data)
@@ -30108,8 +30175,13 @@ if os.environ.get("K2_CP_FAIL") == "1":
 t = os.environ.get("K2_CP_TAIL")
 if t:
     lines = lines[-int(t):]
-sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))' "$tmp"
-    rm -f "$tmp"
+text = "\n".join(lines) + ("\n" if lines else "")
+if os.environ.get("K2_CP_JSON") == "1":
+    m = json.load(open(sys.argv[1] + ".meta"))
+    print(json.dumps({"job": m.get("job"), "attempt": m.get("attempt"), "generation": m.get("generation"), "attempts": m.get("attempts"), "log": text}, indent=2))
+else:
+    sys.stdout.write(text)' "$tmp"
+    rm -f "$tmp" "$tmp.meta"
 }
 
 # k2 compute wait <job>... [--failures] [--max-wait D] [--quiet] [--json]
@@ -61656,6 +61728,40 @@ NEVER STUCK
   `k2 compute node resume <node>` puts it back at once).
   Delivery: a job starts at most once per attempt; a retry is a new
   attempt. Make side effects (uploads, deploys) idempotent.
+
+AUTOMATIC RETRIES AND MOVES (0.46.13)
+  K2 starts a job again on its own in the cases below. k2 compute get <job>
+  lists every attempt: its node, when it ran, how it ended and why (in
+  plain words), and what K2 did next (--json: result.attempts).
+  Retried, as a new attempt (--retries N, default 1, at most 5):
+    interrupted/node_update    the node stopped it to update or restart
+                               k2-node (an update waits for running jobs
+                               only up to its drain limit)
+    interrupted/node_restart   k2-node restarted; also node_reboot,
+                               node_shutdown
+    interrupted/node_lost      the node was offline 10 min while it ran
+    unknown/not_on_node        the node had no record of the job
+    failed/sync_failed, spawn_failed, job_dir_failed and other
+                               infrastructure errors on the node
+    failed/package_missing, tool_install_failed, relay_cap
+                               retried only on another node (a job K2 placed)
+  Placed again without using a retry (it hadn't started there):
+    a grant change on a shared node re-sends the jobs waiting in its queue
+    with the new caps (a job that started is never stopped or re-sent);
+    a job K2 placed moves off a busy, sleeping or paused node;
+    its node went offline, or no longer had it, before it started.
+  Never retried: your command's own results (any exit code, a timeout, a
+  stall, a cancel, mem_cap).
+  Turn retries off: --retries 0 (or --no-retry). A job K2 placed may still
+  move before it starts; name a node to keep it there.
+  Earlier attempts stay readable. k2 compute logs <job> prints the latest
+  attempt, with a line on stderr naming the others, and
+    k2 compute logs <job> --attempt 1
+  prints attempt 1 (logs are kept 14 days). Its --artifact files stay on
+  the node it ran on for 7 days:
+    k2 compute fetch <job> --attempt 1
+  An attempt whose node was offline when it ended says its files weren't
+  collected; they show up if that node comes back and reports them.
 
 SPLIT RUNS (a test suite across nodes)
   k2 compute test --shards 4 [-- -p k2-core]

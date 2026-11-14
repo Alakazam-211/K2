@@ -3063,6 +3063,18 @@
     "section": "Install"
    },
    {
+    "noun": "setup",
+    "usage": "sudo k2-node setup --sim [--server <slot|label>] [--private-home] iPhones on this Mac for your own servers (Xcode and an iOS runtime first; k2-node sim status says what's missing; --remove takes it away)",
+    "note": "",
+    "section": "Install"
+   },
+   {
+    "noun": "sim",
+    "usage": "sudo k2-node sim enable|disable --server <slot|label>",
+    "note": "iPhones for one of your own servers",
+    "section": "Install"
+   },
+   {
     "noun": "run",
     "usage": "k2-node run [--home DIR] [--config-dir DIR] [--dev [--allow-fake-clock]]",
     "note": "tests: K2_NODE_FAKE_CLOCK_OFFSET=+600 moves a --dev node's clock",

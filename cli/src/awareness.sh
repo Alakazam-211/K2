@@ -12,14 +12,14 @@
 # Defaults:
 #   kind     — "msg" if omitted
 #   delivery — Live (real-time 1-on-1) unless --inbox present
-#   from     — $K2SO_AGENT_NAME if set, else "cli"
+#   from     — $K2_AGENT_NAME (or the retired K2SO_AGENT_NAME) if set, else "cli"
 cmd_signal() {
     local target="${1:-}"
     local kind="${2:-msg}"
     local raw_payload="${3:-{\}}"
     shift 3 2>/dev/null || true
     local delivery="live"
-    local from="${K2SO_AGENT_NAME:-cli}"
+    local from="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --inbox) delivery="inbox"; shift ;;

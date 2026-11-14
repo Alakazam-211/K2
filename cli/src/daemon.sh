@@ -174,7 +174,7 @@ cmd_daemon_status() {
     if [ "$installed" = "no" ]; then
         echo ""
         echo "  Daemon plist is not installed. Open K2 → Settings → General → K2 Daemon"
-        echo "  to install the launch agent (dev builds require K2SO_INSTALL_DAEMON=1)."
+        echo "  to install the launch agent."
     fi
 }
 

@@ -279,7 +279,7 @@ cmd_llm() {
 }
 
 cmd_reserve() {
-    local agent="${K2SO_AGENT_NAME:-}"
+    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     local paths=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -287,14 +287,14 @@ cmd_reserve() {
             *) paths+=("$1"); shift ;;
         esac
     done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
+    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     [[ ${#paths[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
     local joined=$(IFS=,; echo "${paths[*]}")
     cli_request_post "/cli/reserve" "agent=$agent&paths=$(urlencode "$joined")"
 }
 
 cmd_release() {
-    local agent="${K2SO_AGENT_NAME:-}"
+    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     local paths=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -302,7 +302,7 @@ cmd_release() {
             *) paths+=("$1"); shift ;;
         esac
     done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
+    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     local params="agent=$agent"
     if [[ ${#paths[@]} -gt 0 ]]; then
         local joined=$(IFS=,; echo "${paths[*]}")

@@ -4789,7 +4789,7 @@ cmd_daemon_status() {
     if [ "$installed" = "no" ]; then
         echo ""
         echo "  Daemon plist is not installed. Open K2 → Settings → General → K2 Daemon"
-        echo "  to install the launch agent (dev builds require K2SO_INSTALL_DAEMON=1)."
+        echo "  to install the launch agent."
     fi
 }
 
@@ -22481,7 +22481,7 @@ sys.exit(0)
 # ── Agent Skill Surface ─────────────────────────────────────────────
 
 cmd_done() {
-    local agent="${K2SO_AGENT_NAME:-}"
+    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     local blocked=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -22490,7 +22490,7 @@ cmd_done() {
             *) shift ;;
         esac
     done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
+    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     local params="agent=$agent"
     [[ -n "$blocked" ]] && params="$params&blocked=$(urlencode "$blocked")"
     cli_request_post "/cli/done" "$params"
@@ -24341,14 +24341,14 @@ except Exception as e:
 # Defaults:
 #   kind     — "msg" if omitted
 #   delivery — Live (real-time 1-on-1) unless --inbox present
-#   from     — $K2SO_AGENT_NAME if set, else "cli"
+#   from     — $K2_AGENT_NAME (or the retired K2SO_AGENT_NAME) if set, else "cli"
 cmd_signal() {
     local target="${1:-}"
     local kind="${2:-msg}"
     local raw_payload="${3:-{\}}"
     shift 3 2>/dev/null || true
     local delivery="live"
-    local from="${K2SO_AGENT_NAME:-cli}"
+    local from="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --inbox) delivery="inbox"; shift ;;
@@ -40235,7 +40235,7 @@ cmd_llm() {
 }
 
 cmd_reserve() {
-    local agent="${K2SO_AGENT_NAME:-}"
+    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     local paths=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -40243,14 +40243,14 @@ cmd_reserve() {
             *) paths+=("$1"); shift ;;
         esac
     done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
+    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     [[ ${#paths[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
     local joined=$(IFS=,; echo "${paths[*]}")
     cli_request_post "/cli/reserve" "agent=$agent&paths=$(urlencode "$joined")"
 }
 
 cmd_release() {
-    local agent="${K2SO_AGENT_NAME:-}"
+    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     local paths=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -40258,7 +40258,7 @@ cmd_release() {
             *) paths+=("$1"); shift ;;
         esac
     done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
+    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     local params="agent=$agent"
     if [[ ${#paths[@]} -gt 0 ]]; then
         local joined=$(IFS=,; echo "${paths[*]}")
@@ -69408,7 +69408,7 @@ cmd_msg_signal_form() {
     # `msg <ws> --signal <kind> [--payload <json>] [--from <name>]`
     local target="$1"
     shift
-    local kind="msg" payload="{}" from="${K2SO_AGENT_NAME:-cli}" delivery="live"
+    local kind="msg" payload="{}" from="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}" delivery="live"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --signal)  kind="$2"; shift 2 ;;

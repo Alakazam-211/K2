@@ -1,7 +1,7 @@
 # ── Agent Skill Surface ─────────────────────────────────────────────
 
 cmd_done() {
-    local agent="${K2SO_AGENT_NAME:-}"
+    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     local blocked=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -10,7 +10,7 @@ cmd_done() {
             *) shift ;;
         esac
     done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
+    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     local params="agent=$agent"
     [[ -n "$blocked" ]] && params="$params&blocked=$(urlencode "$blocked")"
     cli_request_post "/cli/done" "$params"

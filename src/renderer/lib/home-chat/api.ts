@@ -238,10 +238,11 @@ export function parseHomeChatPeople(v: unknown): HomeChatPeople {
 
 // ── Calls ──────────────────────────────────────────────────────────────
 
-const R = (p: string): string => `home-chat/${p}`
-
+// Whole route literals, never built from a helper: route_policy's client
+// check reads the literal each daemonCliGet names, and `'home-chat/status'` read
+// as the POST-only /cli/status.
 export async function fetchHomeChatStatus(scope: ServerScope): Promise<HomeChatStatus> {
-  const v = await daemonCliGet<{ on?: unknown; reason?: unknown; flags?: unknown }>(scope, R('status'))
+  const v = await daemonCliGet<{ on?: unknown; reason?: unknown; flags?: unknown }>(scope, 'home-chat/status')
   const flags: Record<string, boolean> = {}
   if (v.flags && typeof v.flags === 'object') {
     for (const [k, x] of Object.entries(v.flags as Record<string, unknown>)) flags[k] = x === true
@@ -250,15 +251,15 @@ export async function fetchHomeChatStatus(scope: ServerScope): Promise<HomeChatS
 }
 
 export async function fetchHomeChatPeople(scope: ServerScope): Promise<HomeChatPeople> {
-  return parseHomeChatPeople(await daemonCliGet(scope, R('people')))
+  return parseHomeChatPeople(await daemonCliGet(scope, 'home-chat/people'))
 }
 
 export async function fetchHomeChatSummary(scope: ServerScope, convs?: readonly string[]): Promise<HomeChatSummary> {
-  return parseHomeChatSummary(await daemonCliGet(scope, R('summary'), convs && convs.length ? { convs: convs.join(',') } : undefined))
+  return parseHomeChatSummary(await daemonCliGet(scope, 'home-chat/summary', convs && convs.length ? { convs: convs.join(',') } : undefined))
 }
 
 export async function fetchHomeChatChannels(scope: ServerScope, q?: string): Promise<HomeChatChannel[]> {
-  const v = await daemonCliGet<{ channels?: unknown }>(scope, R('channels'), q ? { q } : undefined)
+  const v = await daemonCliGet<{ channels?: unknown }>(scope, 'home-chat/channels', q ? { q } : undefined)
   const out: HomeChatChannel[] = []
   for (const c of Array.isArray(v.channels) ? v.channels : []) {
     const r = c as Record<string, unknown>
@@ -279,7 +280,7 @@ export async function fetchHomeChatChannels(scope: ServerScope, q?: string): Pro
 
 /** Open (or make) the DM with `ext`: its conversation id. */
 export async function openHomeChatDm(scope: ServerScope, ext: string): Promise<string> {
-  const v = await daemonCliPost<{ conv?: unknown }>(scope, R('dm'), { ext })
+  const v = await daemonCliPost<{ conv?: unknown }>(scope, 'home-chat/dm', { ext })
   const conv = idOf(v.conv)
   if (!conv) throw new Error('the server answered no conversation for that DM')
   return conv
@@ -291,7 +292,7 @@ export async function fetchHomeChatMessages(
   opts: { before?: string; after?: string; limit?: number } = {},
 ): Promise<HomeChatPage> {
   return parseHomeChatPage(
-    await daemonCliGet(scope, R('messages'), {
+    await daemonCliGet(scope, 'home-chat/messages', {
       conv,
       limit: opts.limit ?? 50,
       ...(opts.before ? { before: opts.before } : {}),
@@ -306,7 +307,7 @@ export async function sendHomeChatMessage(
 ): Promise<HomeChatMessage | null> {
   const payload: Record<string, string> = { conv: body.conv, text: body.text, nonce: body.nonce }
   if (body.replyTo) payload.replyTo = body.replyTo
-  const v = await daemonCliPost<{ message?: unknown }>(scope, R('send'), payload)
+  const v = await daemonCliPost<{ message?: unknown }>(scope, 'home-chat/send', payload)
   return parseHomeChatMessage(v.message)
 }
 
@@ -314,39 +315,39 @@ export async function reactHomeChat(
   scope: ServerScope,
   body: { conv: string; msg: string; emoji: string; on: boolean },
 ): Promise<HomeChatMessage | null> {
-  const v = await daemonCliPost<{ message?: unknown }>(scope, R('react'), body)
+  const v = await daemonCliPost<{ message?: unknown }>(scope, 'home-chat/react', body)
   return parseHomeChatMessage(v.message)
 }
 
 /** Who reacted with `emoji` on `msg`: their member ids. */
 export async function fetchHomeChatReactors(scope: ServerScope, msg: string, emoji: string): Promise<string[]> {
-  const v = await daemonCliGet<{ reactors?: { items?: unknown } }>(scope, R('reactors'), { msg, emoji: `u:${emoji}` })
+  const v = await daemonCliGet<{ reactors?: { items?: unknown } }>(scope, 'home-chat/reactors', { msg, emoji: `u:${emoji}` })
   const items = Array.isArray(v.reactors?.items) ? (v.reactors.items as unknown[]) : []
   return items.map((r) => idOf((r as { member_id?: unknown }).member_id)).filter((x): x is string => x !== null)
 }
 
 export async function ackHomeChat(scope: ServerScope, conv: string): Promise<void> {
-  await daemonCliPost(scope, R('ack'), { conv })
+  await daemonCliPost(scope, 'home-chat/ack', { conv })
 }
 
 export async function typingHomeChat(scope: ServerScope, conv: string): Promise<void> {
-  await daemonCliPost(scope, R('typing'), { conv })
+  await daemonCliPost(scope, 'home-chat/typing', { conv })
 }
 
 export async function viewHomeChat(scope: ServerScope, conv: string, open: boolean): Promise<void> {
-  await daemonCliPost(scope, R('view'), { conv, open })
+  await daemonCliPost(scope, 'home-chat/view', { conv, open })
 }
 
 export async function createHomeChatChannel(
   scope: ServerScope,
   body: { name: string; open: boolean; members: string[] },
 ): Promise<{ slug: string; conv: string | null; state: string }> {
-  const v = await daemonCliPost<{ slug?: unknown; conv?: unknown; state?: unknown }>(scope, R('channels/create'), body)
+  const v = await daemonCliPost<{ slug?: unknown; conv?: unknown; state?: unknown }>(scope, 'home-chat/channels/create', body)
   return { slug: str(v.slug), conv: idOf(v.conv), state: str(v.state) }
 }
 
 export async function fetchHomeChatMembers(scope: ServerScope, by: { conv: string } | { slug: string }): Promise<HomeChatMembers> {
-  const v = await daemonCliGet<Record<string, unknown>>(scope, R('channels/members'), by)
+  const v = await daemonCliGet<Record<string, unknown>>(scope, 'home-chat/channels/members', by)
   return {
     conv: idOf(v.conv),
     slug: str(v.slug),
@@ -367,22 +368,22 @@ export async function addHomeChatPeople(
   conv: string,
   ext: string[],
 ): Promise<Array<{ ext: string; outcome: string }>> {
-  const v = await daemonCliPost<{ results?: unknown }>(scope, R('channels/add'), { conv, ext })
+  const v = await daemonCliPost<{ results?: unknown }>(scope, 'home-chat/channels/add', { conv, ext })
   return Array.isArray(v.results) ? (v.results as Array<{ ext: string; outcome: string }>) : []
 }
 
 export async function removeHomeChatPerson(scope: ServerScope, conv: string, ext: string): Promise<void> {
-  await daemonCliPost(scope, R('channels/remove'), { conv, ext })
+  await daemonCliPost(scope, 'home-chat/channels/remove', { conv, ext })
 }
 
 export async function leaveHomeChatChannel(scope: ServerScope, conv: string): Promise<void> {
-  await daemonCliPost(scope, R('channels/leave'), { conv })
+  await daemonCliPost(scope, 'home-chat/channels/leave', { conv })
 }
 
 export async function renameHomeChatChannel(scope: ServerScope, conv: string, name: string): Promise<void> {
-  await daemonCliPost(scope, R('channels/rename'), { conv, name })
+  await daemonCliPost(scope, 'home-chat/channels/rename', { conv, name })
 }
 
 export async function deleteHomeChatChannel(scope: ServerScope, conv: string): Promise<void> {
-  await daemonCliPost(scope, R('channels/delete'), { conv })
+  await daemonCliPost(scope, 'home-chat/channels/delete', { conv })
 }

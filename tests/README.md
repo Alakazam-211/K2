@@ -1,14 +1,14 @@
-# K2SO Test Map
+# K2 Test Map
 
-Everything that tests K2SO lives in one of **six** places. This doc
+Everything that tests K2 lives in one of **six** places. This doc
 maps them so any future agent can answer "where do the tests live" and
 "how do I run them" without grepping.
 
 ## Quick index
 
 1. **Shell behavior** — this folder (`tests/`)
-2. **Rust integration** — `crates/k2so-core/tests/` (16 files)
-3. **Rust integration** — `crates/k2so-daemon/tests/` (15 files)
+2. **Rust integration** — `crates/k2-core/tests/`
+3. **Rust integration** — `crates/k2-daemon/tests/`
 4. **Rust inline unit** — `#[cfg(test)] mod tests` in `crates/*/src/`
 5. **Tauri inline unit** — `#[cfg(test)] mod tests` in `src-tauri/src/`
 6. **TypeScript / Vitest** — `src/renderer/**/*.test.ts(x)`
@@ -17,116 +17,85 @@ maps them so any future agent can answer "where do the tests live" and
 
 ## 1. Shell behavior tests — `tests/` (this folder)
 
-Exercise the full running system over HTTP/filesystem. Each tier has
-different prerequisites, listed below. Both scripts are
-self-contained and print colored PASS/FAIL summaries. Headless checks
-against a sandbox daemon (temp HOME, no setup) live in `tests/cli/`;
-the hook pipeline's `k2 hooks status` check is `tests/cli/hooks_status.sh`.
-
-| File | What it covers | Needs daemon running? | Needs workspace registered? |
-|---|---|---|---|
-| `behavior-test-tier1.sh` | Filesystem state after CLI calls — lock files, CLAUDE.md scaffolds, event queue, triage summary | **yes** | no |
-| `cli-integration-test.sh` | End-to-end CLI surface — every verb tested against a live daemon | **yes** | **yes** |
+Headless checks against a sandbox daemon (temp HOME, no setup) live in
+`tests/cli/`; the hook pipeline's `k2 hooks status` check is
+`tests/cli/hooks_status.sh`. Each script is self-contained and fails
+loudly. The header of each script says what it needs built first.
 
 ### Running
 
 ```bash
-# Tier 1 / cli-integration — need a running daemon and, for cli,
-# a registered test workspace.
-#
-# 1. Point TEST_WORKSPACE at a git-initialized dir. Default is
-#    /Users/z3thon/DevProjects/k2so-cli-test.
-# 2. Register that path in the projects table (a write; for reads use
-#    `sqlite3 -readonly ~/.k2/k2.db …` while K2 runs. A plain sqlite3 on a
-#    missing file creates an empty one):
-sqlite3 ~/.k2/k2.db "INSERT OR REPLACE INTO projects \
-    (id, path, name, color, agent_mode, pinned, tab_order, heartbeat_mode) \
-    VALUES ('cli-test', '$TEST_WORKSPACE', 'cli-test', \
-    '#888', 'manager', 0, 99, 'heartbeat')"
-# 3. Run whichever you want:
-bash tests/behavior-test-tier1.sh
-bash tests/cli-integration-test.sh
+cargo build -p k2-daemon && bash tests/cli/hooks_status.sh
 ```
-
-### Baseline expectations (as of Phase 4 H7.3)
-
-| File | Pass / Fail / Skip |
-|---|---|
-| tier1 | 19 / 0 / 4 |
-| cli-integration | 111 / 0 / 0 |
-
-The tier1 skips are all "project row not found in DB" branches
-guarded on the test workspace not being registered. If you register
-the workspace, the skips convert to real assertions.
 
 ---
 
-## 2. Rust integration tests — `crates/k2so-core/tests/` (14 files)
+## 2. Rust integration tests — `crates/k2-core/tests/`
 
-Gated on the `session_stream` feature (most also need `test-util` for
-the in-memory DB helper). Each file covers one subsystem in isolation
-— no HTTP, no daemon process, just Rust modules calling each other.
+Each `session_stream_*.rs` file covers one subsystem in isolation: no
+HTTP, no daemon process, just Rust modules calling each other. Some
+need the `test-util` feature for the in-memory DB helper; the crate's
+own dev-dependency turns it on.
 
-| File | Tests | Subject |
-|---|---:|---|
-| `session_stream_routing.rs` | 22 | Delivery enum + roster + routing matrix (pure logic) |
-| `session_stream_registry.rs` | 22 | SessionRegistry lifecycle + broadcast fanout |
-| `session_stream_archive.rs` | 19 | NDJSON archive writer task |
-| `session_stream_apc.rs` | 18 | APC extractor, all 8 verbs + split-mid-sequence |
-| `session_stream_egress.rs` | 16 | Egress composer — four-cell matrix + audit |
-| `session_stream_bus.rs` | 15 | Awareness bus singleton subscribe/publish |
-| `session_stream_line_mux.rs` | 14 | LineMux vte::Perform state machine |
-| `session_stream_claude_recognizer.rs` | 11 | Claude Code T0.5 box recognition |
-| `session_stream_setting.rs` | 9 | `use_session_stream` project setting |
-| `session_stream_inbox.rs` | 9 | Filesystem inbox write/drain + concurrency |
-| `session_stream_pty.rs` | 8 | Real PTY session_stream spawn + dual-emit |
-| `session_stream_types.rs` | 8 | Frame / Line / SemanticKind / Session round-trip |
-| `session_stream_ingress.rs` | 7 | APC → egress pipeline end-to-end |
-| `session_stream_awareness.rs` | 6 | AgentSignal / SignalKind serde |
+| File | Subject |
+|---|---|
+| `session_stream_routing.rs` | Delivery enum + roster + routing matrix (pure logic) |
+| `session_stream_registry.rs` | SessionRegistry lifecycle + broadcast fanout |
+| `session_stream_archive.rs` | NDJSON archive writer task |
+| `session_stream_apc.rs` | APC extractor, all 8 verbs + split-mid-sequence |
+| `session_stream_egress.rs` | Egress composer: four-cell matrix + audit |
+| `session_stream_bus.rs` | Awareness bus singleton subscribe/publish |
+| `session_stream_line_mux.rs` | LineMux vte::Perform state machine |
+| `session_stream_claude_recognizer.rs` | Claude Code T0.5 box recognition |
+| `session_stream_setting.rs` | `use_session_stream` project setting |
+| `session_stream_inbox.rs` | Filesystem inbox write/drain + concurrency |
+| `session_stream_types.rs` | Frame / Line / SemanticKind / Session round-trip |
+| `session_stream_ingress.rs` | APC → egress pipeline end-to-end |
+| `session_stream_awareness.rs` | AgentSignal / SignalKind serde |
 
 ### Running
 
 ```bash
 # All core tests (lib + integration).
-cargo test -p k2so-core --features session_stream,test-util
+cargo test -p k2-core
 
 # Just one file.
-cargo test -p k2so-core --features session_stream,test-util \
-    --test session_stream_routing
+cargo test -p k2-core --test session_stream_routing
 ```
 
 ---
 
-## 3. Rust integration tests — `crates/k2so-daemon/tests/` (12 files)
+## 3. Rust integration tests — `crates/k2-daemon/tests/`
 
 Daemon-side HTTP handlers, WebSocket upgrades, and spawn/inject flows.
-Each file corresponds to one feature area.
+Most files sit in one folder per area (`it_apps/`, `it_chat/`,
+`it_compute/`, `it_contract/`, `it_guests/`, `it_mail/`, `it_misc/`,
+`it_sessions/`, `it_zen/`). Each folder is one test binary and each
+file in it is a module of that binary. Some examples:
 
-| File | Tests | Subject |
-|---|---:|---|
-| `terminal_routes_integration.rs` | 17 | `/cli/terminal/read,write,spawn,spawn-background,agents/running` |
-| `watchdog_integration.rs` | 6 | Daemon harness-watchdog escalation ladder |
-| `sessions_ws_integration.rs` | 6 | `/cli/sessions/subscribe` WS loopback |
-| `agents_routes_integration.rs` | 5 | `/cli/agents/launch,delegate` (H5) |
-| `triage_integration.rs` | 4 | Triage read-only summary + scheduler-fire dispatch |
-| `scheduler_wake_integration.rs` | 4 | `DaemonWakeProvider` auto-launch |
-| `companion_routes_integration.rs` | 4 | `/cli/companion/sessions,projects-summary` (H4) |
-| `spawn_to_signal_e2e.rs` | 3 | HTTP spawn → signal → inject end-to-end |
-| `pending_live_durability.rs` | 3 | F3 pending-live queue + boot replay |
-| `providers_inject_integration.rs` | 2 | `DaemonInjectProvider` → real PTY |
-| `awareness_ws_integration.rs` | 2 | `/cli/awareness/subscribe` WS loopback |
-| `heartbeat_port_claim_integration.rs` | 1 | Daemon eagerly owns heartbeat.port (H7) |
-| `heartbeat_fire_v2_integration.rs` | (varies) | 0.37.0 v2-retirement: wake_headless registers in v2_session_map + writes workspace_sessions row |
-| `workspace_msg_integration.rs` | 7 | 0.37.0 simplified-msg: `workspace_msg::resolve_workspace` (name/path/UUID) + `deliver_to_inbox` |
+| File | Subject |
+|---|---|
+| `it_sessions/agents_routes_integration.rs` | `/cli/agents/launch,delegate` |
+| `it_sessions/triage_integration.rs` | Triage read-only summary + scheduler-fire dispatch |
+| `it_sessions/awareness_ws_integration.rs` | `/cli/awareness/subscribe` WS loopback |
+| `it_sessions/heartbeat_port_claim_integration.rs` | Daemon eagerly owns heartbeat.port |
+| `it_sessions/heartbeat_fire_v2_integration.rs` | wake_headless registers in v2_session_map + writes workspace_sessions row |
+| `it_chat/workspace_msg_integration.rs` | `workspace_msg::resolve_workspace` (name/path/UUID) |
 
 ### Running
 
+The daemon test binaries must run under cargo-nextest (each test in
+its own process); see `crates/k2-daemon/tests/support/env.rs`.
+
 ```bash
 # All daemon tests.
-cargo test -p k2so-daemon
+cargo nextest run -p k2-daemon
 
-# Just one file.
-cargo test -p k2so-daemon --test terminal_routes_integration
+# Just one area.
+cargo nextest run -p k2-daemon --test it_sessions
+
+# Just one file in it.
+cargo nextest run -p k2-daemon --test it_sessions agents_routes_integration::
 ```
 
 ---
@@ -134,7 +103,7 @@ cargo test -p k2so-daemon --test terminal_routes_integration
 ## 4. Inline unit tests — `crates/*/src/**/*.rs`
 
 Standard Rust convention: `#[cfg(test)] mod tests { ... }` blocks sit
-next to the code they test. **Not in a separate folder.** To find
+next to the code they test, or in a `<name>_tests.rs` beside it. **Not in a separate folder.** To find
 them, grep:
 
 ```bash
@@ -145,21 +114,14 @@ grep -rl "^#\[cfg(test)\]" crates/*/src/ | sort -u
 grep -rn "^    fn test_\|^    #\[test\]\|^    async fn" crates/*/src/
 ```
 
-Current counts (Phase 4):
-
-| Crate | Inline unit tests |
-|---|---:|
-| `k2so-core` | 275 |
-| `k2so-daemon` | 11 |
-
 Running them:
 
 ```bash
 # Core unit tests only (skips integration).
-cargo test -p k2so-core --features session_stream,test-util --lib
+cargo test -p k2-core --lib
 
 # Daemon unit tests only.
-cargo test -p k2so-daemon --lib
+cargo test -p k2-daemon --lib
 ```
 
 ---
@@ -167,37 +129,27 @@ cargo test -p k2so-daemon --lib
 ## 5. Tauri inline unit tests — `src-tauri/src/**/*.rs`
 
 The host-side Tauri binary ships its own `#[cfg(test)] mod tests`
-blocks for command logic that doesn't live in `k2so-core`. These run
-under the `k2so` crate (NOT `k2so-daemon` or `k2so-core`).
-
-Notable suites:
-- `commands::k2so_agents::migration_safety_tests` — 0.37.0 unification
-  migration: idempotency on second launch, teardown safety, drift
-  adoption.
-- `commands::*::tests` — per-command unit assertions for whatever the
-  command's pure helpers handle (path resolution, frontmatter parsing,
-  etc.).
+blocks for the pure helpers of its commands. These run under the `k2`
+crate (NOT `k2-daemon` or `k2-core`). One example is
+`commands::k2so_agents::pure_helper_tests`.
 
 ```bash
 # All Tauri lib tests.
-cargo test --release -p k2so --lib
+cargo test --release -p k2 --lib
 ```
-
-Current count (0.37.0): **76 passing**.
 
 ---
 
 ## 6. TypeScript / Vitest — `src/renderer/**/*.test.ts(x)`
 
 Renderer-side tests for Zustand stores, pure helpers, and React
-components. Configured via `vitest.config.ts`; runs under jsdom.
+components. Configured via `vitest.config.ts`.
 
-Files:
+Some of the files:
 - `src/renderer/stores/tabs.test.ts` — tab store invariants
 - `src/renderer/lib/smoke.test.ts` — smoke
 - `src/renderer/lib/terminal-id.test.ts` — terminal id parsing
-- `src/renderer/kessel/{client,grid,selection,style,config}.test.ts` — Kessel renderer pieces
-- `src/renderer/kessel/SessionStreamView.test.tsx` — component test
+- `src/renderer/kessel/daemon-ws.test.ts` — daemon WebSocket URL helpers
 
 ```bash
 # Run all vitest.
@@ -208,59 +160,36 @@ bun run test
 bun run typecheck:web
 ```
 
-Current counts (0.37.0): 133 passing, 2 known-pre-existing failing
-(`config.test.ts` uses `bun:test` import vitest can't resolve;
-`SessionStreamView.test.tsx` has DOM-layout assertions that depend on
-jsdom behavior the runtime doesn't replicate).
-
 ---
 
 ## Full battery, one-liner
 
-From a clean, registered workspace with the daemon running:
+Rust: run the per-crate commands in sections 2 to 5.
 
 ```bash
-# Rust everything (core + daemon + Tauri lib).
-cargo test --release --workspace
-
 # TS type-check + vitest.
 bun run typecheck:web && bun run test
-
-# Shell suites that work without manual setup.
-bash tests/behavior-test-tier1.sh
-bash tests/cli-integration-test.sh
 ```
-
-Current totals (0.37.0):
-- Rust core lib: 302 passing
-- Rust core integration (session_stream_*): all green
-- Rust daemon integration: ~80 passing across 15 files (incl. new `workspace_msg_integration.rs`)
-- Tauri lib: 76 passing
-- Vitest: 133 passing (2 known pre-existing failures, see section 6)
-- Shell tier 1: 19 passing
-- Shell CLI integration: 110 passing
 
 ---
 
 ## How to wire a new test
 
-**New behavior / user-visible flow** → add to the relevant tier. Most
-go to tier1 (filesystem) or a headless `tests/cli/` script (sandbox
-daemon). Full-surface regressions go in
-`cli-integration-test.sh`.
+**New behavior / user-visible flow** → add a headless `tests/cli/`
+script (sandbox daemon).
 
 **New core module** → add an integration file in
-`crates/k2so-core/tests/` named `session_stream_<module>.rs` (mirror
-the naming convention) with `#![cfg(feature = "session_stream")]` at
-the top.
+`crates/k2-core/tests/`.
 
-**New daemon HTTP handler** → add an integration file in
-`crates/k2so-daemon/tests/` named `<feature>_integration.rs`. Use the
-`static TEST_LOCK: std::sync::Mutex<()>` pattern (see any existing
-daemon test) to serialize against the shared session_map + DB
-singletons.
+**New daemon HTTP handler** → add a `<feature>_integration.rs` file to
+the matching `crates/k2-daemon/tests/it_*/` folder and name it in that
+folder's `main.rs`. Tests that share process-wide state use the
+`static TEST_LOCK` mutex pattern (see any existing daemon test).
 
 **Unit-level invariant inside a module** → inline
-`#[cfg(test)] mod tests { ... }` at the bottom of the `.rs` file.
-Don't create a parallel `<name>_test.rs` sibling — the inline form is
-the project convention.
+`#[cfg(test)] mod tests { ... }` at the bottom of the `.rs` file. When
+a test module grows to a large share of its file, move it to a sibling
+`<name>_tests.rs` and name it from the file with
+`#[cfg(test)] #[path = "<name>_tests.rs"] mod tests;` (see
+`crates/k2-core/src/first_run_tests.rs`). The tests keep their access
+to the module's private items either way.

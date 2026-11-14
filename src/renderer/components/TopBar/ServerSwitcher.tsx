@@ -25,7 +25,7 @@
 // "Local" is the no-op default and behaves byte-identically to today.
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import {
   useConnectHostStore,
   type ConnectHost,
@@ -489,7 +489,7 @@ export default function ServerSwitcher({
       {open && (
         <div
           ref={popoverRef}
-          {...floatMaterial('menu')} className="absolute left-0 top-7 z-50 w-[260px] rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
+          {...floatMaterial('menu')} {...MENU_LIST} className="absolute left-0 top-7 z-50 w-[260px] rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg text-[12px] flex flex-col"
         >
           {roomServer !== null && (
             <div
@@ -499,7 +499,7 @@ export default function ServerSwitcher({
               Looking at {roomServer} (Home room)
             </div>
           )}
-          <div className="px-2 pb-1">
+          <div className="pb-1">
             <input
               ref={searchRef}
               type="text"
@@ -582,6 +582,7 @@ export default function ServerSwitcher({
           {/* PRD §1: routes to Settings → Connections (the address book). */}
           <button
             onClick={goToConnections}
+            {...MENU_ROW}
             className="w-full text-left px-3 py-1.5 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
           >
             Add a server…
@@ -621,6 +622,7 @@ function SwitcherRow({
       role="option"
       aria-selected={highlighted === true}
       data-switcher-highlighted={highlighted ? 'true' : undefined}
+      {...MENU_ROW}
       onClick={onClick}
       onMouseEnter={onHover}
       className={`w-full text-left px-3 py-1.5 flex items-center gap-2 transition-colors ${

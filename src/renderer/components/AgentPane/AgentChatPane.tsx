@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useDismissOnOutside } from '@/hooks/useDismissOnOutside'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { ProgressiveHeaderBlur } from '@/components/ui'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -508,10 +508,11 @@ function ChatHeader({
         </svg>
       </button>
       {historyOpen && (
-        <div ref={historyMenuRef} {...floatMaterial('menu')} data-k2-float-menu="" className="absolute right-0 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
+        <div ref={historyMenuRef} {...floatMaterial('menu')} {...MENU_LIST} data-k2-float-menu="" className="absolute right-0 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
           <button
             type="button"
             data-testid="pinned-continue-new-chat"
+            {...MENU_ROW}
             disabled={!canContinue}
             title={canContinue ? undefined : 'No chat to continue.'}
             onClick={() => {
@@ -543,6 +544,7 @@ function ChatHeader({
                   key={h}
                   type="button"
                   data-testid={`pinned-move-${h}`}
+                  {...MENU_ROW}
                   disabled={moving}
                   title="Ends this pinned chat and starts a new one on that harness with a summary. Heartbeats, Threads and messages follow; this chat stays in the list below."
                   onClick={() => { void moveTo(h) }}
@@ -572,6 +574,7 @@ function ChatHeader({
                   type="button"
                   role="option"
                   aria-selected={isCurrent}
+                  {...MENU_ROW}
                   onClick={() => {
                     setHistoryOpen(false)
                     onSwitchSession(s.sessionId, s.provider)

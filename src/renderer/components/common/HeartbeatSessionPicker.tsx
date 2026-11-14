@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { Button } from '@/components/ui/Button'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -239,7 +239,7 @@ export function HeartbeatSessionPicker({
           // The body's font size, not the trigger's: the list's 36ch width
           // reads from it.
           style={{ ...menu.style, fontSize: undefined }}
-          {...floatMaterial('menu')} className="w-[36ch] max-h-[calc(var(--k2-vh)*0.4)] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
+          {...floatMaterial('menu')} {...MENU_LIST} className="w-[36ch] max-h-[calc(var(--k2-vh)*0.4)] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl"
         >
           {/* 1 — Pinned chat: the prominent, visually-distinct first
               entry (accent + pin mark, separated from the rest). */}
@@ -248,7 +248,8 @@ export function HeartbeatSessionPicker({
             role="option"
             aria-selected={value.mode === 'pinned'}
             onClick={() => pick({ mode: 'pinned' })}
-            className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 border-b border-[var(--color-border)] font-medium transition-colors no-drag cursor-pointer ${
+            {...MENU_ROW}
+            className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 font-medium transition-colors no-drag cursor-pointer ${
               value.mode === 'pinned'
                 ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
                 : 'text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]'
@@ -265,12 +266,15 @@ export function HeartbeatSessionPicker({
               </svg>
             )}
           </button>
+          {/* Its own line under it, so the lit row keeps the menu's shape. */}
+          <div role="presentation" className="my-1 border-t border-[var(--color-border)]" />
           {/* 2 — Own session: the auto/default state. */}
           <button
             type="button"
             role="option"
             aria-selected={value.mode === 'auto'}
             onClick={() => pick({ mode: 'auto' })}
+            {...MENU_ROW}
             className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors no-drag cursor-pointer ${
               value.mode === 'auto'
                 ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
@@ -307,6 +311,7 @@ export function HeartbeatSessionPicker({
                   role="option"
                   aria-selected={isCurrent}
                   onClick={() => pick({ mode: 'session', sessionId: s.sessionId, provider: s.provider })}
+                  {...MENU_ROW}
                   className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors no-drag cursor-pointer ${
                     isCurrent
                       ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'

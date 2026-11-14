@@ -30,6 +30,7 @@
   --gap-tile: 1px;
   --gap-section: 0px;
   --inset-window: 0px;
+  --inset-menu: 4px;
   --divider-width: 2px;
   --divider-color: var(--color-border);
   --ring-surface: 0 0 #0000;
@@ -184,6 +185,7 @@
   --gap-tile: 8px;
   --gap-section: 10px;
   --inset-window: 10px;
+  --inset-menu: 4px;
   --divider-width: 16px;
   --divider-color: transparent;
   --ring-surface: 0 -1px 0 0 var(--color-ring-edge), 0 0 0 1px var(--color-ring-hairline), 0 2px 4px var(--color-ring-shadow), 0 0 0 3px var(--color-ring-gap), 0 0 0 4px var(--color-ring-hairline-outer);
@@ -433,6 +435,7 @@
   --gap-tile: 4px;
   --gap-section: 0px;
   --inset-window: 8px;
+  --inset-menu: 6px;
   --divider-width: 8px;
   --divider-color: transparent;
   --ring-surface: 0 0 #0000;
@@ -1672,6 +1675,7 @@
   --gap-tile: 6px;
   --gap-section: 8px;
   --inset-window: 10px;
+  --inset-menu: 4px;
   --divider-width: 12px;
   --divider-color: transparent;
   --ring-surface: inset 0 1px 0 0 var(--color-ring-edge-strong), inset 0 0 0 1px var(--color-ring-hairline);
@@ -2054,6 +2058,7 @@
   --gap-tile: 1px;
   --gap-section: 0px;
   --inset-window: 0px;
+  --inset-menu: 4px;
   --divider-width: 2px;
   --divider-color: var(--color-border);
   --ring-surface: 0 0 #0000;

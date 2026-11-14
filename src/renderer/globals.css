@@ -1526,6 +1526,46 @@ html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not(
   --color-text-muted: var(--color-text-secondary);
 }
 
+/* Menu rows inside the menu's shape (Rosson 2026-11-14). A lit row (hover,
+   keyboard focus, data-highlighted, picked) never reaches the menu's edge:
+   the rows sit --inset-menu in from it, and the row's corner runs parallel
+   to the menu's.
+   - Glass: the row's radius is the menu's (--radius-box) less the inset, as
+     on the phone's hold menu (a 16px box, rows 6px in, 10px corners).
+   - Terminal stays square inside: in a cut menu the row is cut too, by the
+     menu's cut less the inset's share of the diagonal, cut - (2 - sqrt 2) x
+     inset, so the two diagonals run parallel; a square menu keeps square rows.
+   A data-k2-focus ring on a row follows the same shape.
+   Opting in (components/ui/float-material.ts): floatMaterial('menu') marks
+   the box data-k2-menu; MENU_LIST marks what holds the rows (the box, or
+   its list under a search field), MENU_ROW each row. Rules only reach rows
+   inside a menu box, so a shared list keeps its own look in a dialog.
+   Gardens keep their own look. */
+:where([data-k2-menu]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  --k2-menu-cut: 0px;
+  --k2-menu-row-radius: max(0px, calc(var(--radius-box) - var(--inset-menu)));
+  --k2-menu-row-cut: max(0px, calc(var(--k2-menu-cut) - 0.5858 * var(--inset-menu)));
+}
+html[data-style="terminal"] :where([data-k2-menu][data-k2-chamfer="surface"]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  --k2-menu-cut: var(--chamfer-surface);
+}
+:is([data-k2-menu][data-k2-menu-list], [data-k2-menu] [data-k2-menu-list]):not([data-zen-root] *, [data-k2-thread-zen] *) {
+  padding: var(--inset-menu);
+}
+[data-k2-menu] [data-k2-menu-row]:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  border-radius: var(--k2-menu-row-radius);
+}
+html[data-style="terminal"] [data-k2-menu] [data-k2-menu-row]:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  border-radius: 0;
+  clip-path: polygon(var(--k2-menu-row-cut) 0, calc(100% - var(--k2-menu-row-cut)) 0, 100% var(--k2-menu-row-cut), 100% calc(100% - var(--k2-menu-row-cut)), calc(100% - var(--k2-menu-row-cut)) 100%, var(--k2-menu-row-cut) 100%, 0 calc(100% - var(--k2-menu-row-cut)), 0 var(--k2-menu-row-cut));
+}
+[data-k2-menu] [data-k2-menu-row][data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
+  border-radius: var(--k2-menu-row-radius);
+}
+html[data-style="terminal"] [data-k2-menu] [data-k2-menu-row][data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
+  --k2-ch-cut: var(--k2-menu-row-cut);
+}
+
 /* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:
    chamfered like the Thread's surfaces (CHAMFER_CUT.surface = 7px), the
    1px edge drawn by `::before` as an even-odd ring (inner cut 7 − 0.414).

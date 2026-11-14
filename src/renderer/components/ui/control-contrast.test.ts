@@ -312,8 +312,12 @@ describe('Keyboard focus', () => {
     // accent, cut in Terminal, round elsewhere) in place of a square outline.
     expect(readFileSync(join(__dirname, 'OverflowMenu.tsx'), 'utf8')).toMatch(/data-menu-item=\{item\.id\}[\s\S]*?data-k2-focus=""/)
     expect(rule(globals, '[data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after')).toContain('inset 0 0 0 2px var(--color-accent-text)')
-    expect(readFileSync(join(repo, 'src/renderer/components/Settings/controls/SettingControls.tsx'), 'utf8')).toContain(
-      'focus:outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]',
+    // The Settings dropdown's rows take the same ring (in the menu's shape);
+    // inside a Garden, where the menu takes no shape, they keep the outline.
+    const dropdown = readFileSync(join(repo, 'src/renderer/components/Settings/controls/SettingControls.tsx'), 'utf8')
+    expect(dropdown).toContain("{...(menuBox.chamfer ? { ...MENU_ROW, 'data-k2-focus': '' } : {})}")
+    expect(dropdown).toContain(
+      "menuBox.chamfer ? '' : 'focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)] '",
     )
   })
 

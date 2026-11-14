@@ -30,7 +30,7 @@ const REQUIRED_TOKEN_SLOTS = {
   chamfer: ['surface', 'control', 'chip', 'send'],
   control: ['check', 'switch-width', 'switch-height', 'switch-knob', 'switch-sm-width', 'switch-sm-height', 'switch-sm-knob', 'slider-track', 'slider-thumb', 'search-height', 'search-icon'],
   gap: ['pane', 'tile', 'section'],
-  inset: ['window'],
+  inset: ['window', 'menu'],
   divider: ['width', 'color'],
   ring: ['surface', 'field', 'focus'],
   shadow: ['1', '2', '3', '4', '5'],

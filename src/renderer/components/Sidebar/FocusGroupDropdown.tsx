@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { PickerOptionLabel, PickerTriggerLabel } from './picker-label'
 
@@ -141,7 +141,7 @@ export default function FocusGroupDropdown({
           </div>
 
           {/* Options list */}
-          <div className="max-h-48 overflow-y-auto py-0.5">
+          <div className="max-h-48 overflow-y-auto" {...MENU_LIST}>
             {filtered.length === 0 ? (
               <div className="px-3 py-2 text-[11px] text-[var(--color-text-muted)] italic">
                 No matches
@@ -156,6 +156,8 @@ export default function FocusGroupDropdown({
                     key={option.id ?? '__all__'}
                     onClick={() => handleSelect(option.id)}
                     onMouseEnter={() => setHighlightIndex(i)}
+                    // Lit (pointer or arrows: one highlight) in the menu's shape.
+                    {...MENU_ROW}
                     className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer ${
                       isHighlighted
                         ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'

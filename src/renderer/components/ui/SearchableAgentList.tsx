@@ -20,6 +20,7 @@
 
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { SearchField } from './SearchField'
+import { MENU_LIST, MENU_ROW } from './float-material'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 
 /** A row's image: a workspace's `ProjectAvatar`, or a caller's glyph. */
@@ -262,7 +263,9 @@ export function SearchableAgentList({
         )}
       </div>
 
-      <div ref={listRef} id={listId} role="listbox" aria-label={ariaLabel} className={listClassName}>
+      {/* In a menu (data-k2-menu) the rows sit in from its edge and light in
+          its shape (MENU_LIST, MENU_ROW); in a dialog they keep their look. */}
+      <div ref={listRef} id={listId} role="listbox" aria-label={ariaLabel} className={listClassName} {...MENU_LIST}>
         {shown.map((section) => (
           <div
             key={section.key}
@@ -317,6 +320,7 @@ export function SearchableAgentList({
                   aria-disabled={pickable ? undefined : true}
                   data-ws-filter-value={row.value}
                   data-row-state={row.state}
+                  {...MENU_ROW}
                   onClick={() => {
                     if (pickable) onPick(row.value)
                   }}

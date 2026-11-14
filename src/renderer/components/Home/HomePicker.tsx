@@ -7,7 +7,7 @@
 // and delete live in the same menu. The last Home cannot be deleted.
 
 import { useEffect, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useHomesStore, selectedHome, HOME_NAME_MAX } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -60,9 +60,12 @@ export default function HomePicker(): React.JSX.Element {
     if (confirmed) useHomesStore.getState().deleteHome(current.id)
   }
 
-  // Same classes as FocusGroupDropdown's options.
+  // Same classes as FocusGroupDropdown's options. A row is lit in the
+  // menu's shape (MENU_ROW); keyboard focus lights it as hover does and adds
+  // the shared row ring (data-k2-focus).
   const itemClass =
-    'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent'
+    'relative w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:bg-[var(--color-wash-1)] focus-visible:text-[var(--color-text-primary)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent'
+  const itemAttrs = { ...MENU_ROW, 'data-k2-focus': '' }
 
   return (
     <div ref={menu.anchorRef} className="relative no-drag">
@@ -93,7 +96,7 @@ export default function HomePicker(): React.JSX.Element {
           data-home-picker-menu=""
           data-placement={menu.placement}
           style={menu.style}
-          {...floatMaterial('menu')} className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+          {...floatMaterial('menu')} {...MENU_LIST} className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
         >
           {mode === 'menu' ? (
             <>
@@ -106,6 +109,7 @@ export default function HomePicker(): React.JSX.Element {
                       type="button"
                       role="menuitemradio"
                       aria-checked={isCurrent}
+                      {...itemAttrs}
                       className={`${itemClass} ${isCurrent ? '!text-[var(--color-accent)]' : ''}`}
                       onClick={() => {
                         useHomesStore.getState().selectHome(h.id)
@@ -128,16 +132,17 @@ export default function HomePicker(): React.JSX.Element {
               </div>
               <div className="border-t border-[var(--color-border)]" />
               <div className="py-0.5">
-              <button type="button" role="menuitem" className={itemClass} onClick={startCreate}>
+              <button type="button" role="menuitem" {...itemAttrs} className={itemClass} onClick={startCreate}>
                 New Home…
               </button>
               {/* A long Home name truncates on one line, like the rows above. */}
-              <button type="button" role="menuitem" className={itemClass} onClick={startRename} title={`Rename “${current.name}”`}>
+              <button type="button" role="menuitem" {...itemAttrs} className={itemClass} onClick={startRename} title={`Rename “${current.name}”`}>
                 <span className="min-w-0 truncate">Rename “{current.name}”…</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
+                {...itemAttrs}
                 className={itemClass}
                 disabled={homes.length <= 1}
                 title={homes.length <= 1 ? 'The last Home can’t be deleted' : `Delete “${current.name}”`}

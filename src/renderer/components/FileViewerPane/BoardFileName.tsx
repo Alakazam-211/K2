@@ -10,7 +10,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { SearchField } from '@/components/ui/SearchField'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 
 export const BOARD_FILE_EXT = '.k5board'
@@ -246,10 +246,13 @@ export function BoardFileName({ filePath, boards, pick, rename, onWidth }: Board
   )
 }
 
+/** A row lit in the menu's shape (MENU_ROW), with the shared row ring for
+ *  keyboard focus (data-k2-focus) in the same shape. */
+const ROW = { ...MENU_ROW, 'data-k2-focus': '' }
 const ITEM = [
   'no-drag flex w-full items-center gap-2 px-3 py-1.5 text-left type-control transition-colors cursor-pointer',
   'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]',
-  'focus:outline-none focus-visible:bg-[var(--color-wash-1)] focus-visible:text-[var(--color-text-primary)] focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]',
+  'relative focus:outline-none focus-visible:bg-[var(--color-wash-1)] focus-visible:text-[var(--color-text-primary)]',
 ].join(' ')
 
 const itemsIn = (root: HTMLElement | null): HTMLElement[] =>
@@ -345,12 +348,13 @@ function BoardMenu(props: {
         aria-label="Your boards"
         data-k2-chamfer="surface"
         {...floatMaterial('menu', 'frost')}
+        {...MENU_LIST}
         style={{ '--k2-menu-origin': 'top left' } as React.CSSProperties}
-        className="flex max-h-[min(calc(var(--k2-vh)*0.6),420px)] flex-col border border-[var(--color-border)] bg-[var(--color-bg)] py-1 [box-shadow:var(--shadow-3)]"
+        className="flex max-h-[min(calc(var(--k2-vh)*0.6),420px)] flex-col border border-[var(--color-border)] bg-[var(--color-bg)] [box-shadow:var(--shadow-3)]"
         onKeyDown={onKeyDown}
       >
         {searching ? (
-          <div className="px-2 pb-1 pt-0.5">
+          <div className="pb-1">
             <SearchField
               ref={searchRef}
               data-testid="board-file-menu-search"
@@ -369,7 +373,7 @@ function BoardMenu(props: {
           ) : list.kind === 'error' ? (
             <div className="flex items-center gap-2 px-3 py-1.5 type-control text-[var(--color-text-secondary)]" data-testid="board-file-menu-error">
               <span>K2 couldn’t list your boards.</span>
-              <button type="button" role="menuitem" className={`${ITEM} !w-auto !px-1 underline`} onClick={() => setTries((n) => n + 1)}>
+              <button type="button" role="menuitem" {...ROW} className={`${ITEM} !w-auto !px-1 underline`} onClick={() => setTries((n) => n + 1)}>
                 Try again
               </button>
             </div>
@@ -388,6 +392,7 @@ function BoardMenu(props: {
                   role="menuitemradio"
                   aria-checked={here}
                   data-board-file-menu-row={r.path}
+                  {...ROW}
                   title={r.rel}
                   className={`${ITEM} ${here ? '!text-[var(--color-text-primary)] font-semibold' : ''}`}
                   onClick={() => onPick(r.path)}
@@ -401,7 +406,7 @@ function BoardMenu(props: {
           )}
         </div>
         <div role="separator" data-menu-separator="" className="my-1 border-t border-[var(--k2-menu-separator,var(--color-border))]" />
-        <button type="button" role="menuitem" data-menu-item="rename" className={ITEM} onClick={onRename}>
+        <button type="button" role="menuitem" data-menu-item="rename" {...ROW} className={ITEM} onClick={onRename}>
           <span className="w-3 flex-none" aria-hidden="true" />
           <span>Rename…</span>
           <span className="ml-auto pl-4 type-hint text-[var(--color-text-muted)]">F2</span>

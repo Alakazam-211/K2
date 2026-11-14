@@ -9,7 +9,7 @@
 // because it has nothing else to tell it apart.
 
 import React, { useEffect, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -156,7 +156,7 @@ export function CardStatusDropdown({
           data-testid="ticket-status-menu"
           data-placement={menu.placement}
           style={menu.style}
-          {...floatMaterial('menu')} className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
+          {...floatMaterial('menu')} {...MENU_LIST} className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg"
         >
           {/* Answered shows as the current state but is not offered. */}
           {row.status === 'answered' && (
@@ -176,10 +176,11 @@ export function CardStatusDropdown({
                 type="button"
                 disabled={busy}
                 onClick={() => void setStatus(s)}
+                {...MENU_ROW}
                 className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors cursor-pointer disabled:opacity-50 ${
                   current
-                    ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
+                    ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
                 }`}
                 title={s === 'waiting' ? 'Reopen — back to waiting' : undefined}
               >

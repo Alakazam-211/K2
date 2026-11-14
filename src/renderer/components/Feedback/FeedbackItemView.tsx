@@ -23,7 +23,7 @@
 // no reassign, no chat — only Resolve and Dismiss.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
@@ -584,7 +584,7 @@ export function HeaderStatusMenu({
         <div
           role="menu"
           data-testid="ticket-header-status-menu"
-          {...floatMaterial('menu')} className="absolute left-0 top-full mt-1 z-30 min-w-[180px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
+          {...floatMaterial('menu')} {...MENU_LIST} className="absolute left-0 top-full mt-1 z-30 min-w-[180px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg"
         >
           {HEADER_STATUSES.map((s) => {
             const current = status === s
@@ -597,10 +597,11 @@ export function HeaderStatusMenu({
                 data-testid={`ticket-status-option-${s}`}
                 disabled={busy}
                 onClick={() => choose(s)}
+                {...MENU_ROW}
                 className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors cursor-pointer disabled:opacity-50 ${
                   current
-                    ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
+                    ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
                 }`}
               >
                 <span className="flex-1">{statusLabel(s)}</span>
@@ -719,7 +720,7 @@ function ReassignMenu({
     <div
       ref={rootRef}
       data-testid="ticket-reassign-menu"
-      {...floatMaterial('menu')} className="absolute left-0 top-full mt-1 z-30 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1"
+      {...floatMaterial('menu')} {...MENU_LIST} className="absolute left-0 top-full mt-1 z-30 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg"
     >
       {all.map((name) => {
         const on = local.includes(name)
@@ -730,8 +731,9 @@ function ReassignMenu({
             data-testid="ticket-reassign-option"
             aria-pressed={on}
             onClick={() => toggle(name)}
+            {...MENU_ROW}
             className={`flex w-full items-center gap-2 px-2 py-1.5 text-[11px] text-left cursor-pointer ${
-              on ? 'bg-white/[0.04] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06]'
+              on ? 'bg-[var(--color-wash-1)] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)]'
             }`}
           >
             <span className="w-3 text-[var(--color-accent)]">{on ? '✓' : ''}</span>

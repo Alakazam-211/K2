@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useLayoutEffect, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { BetaTag, Tag } from '@/components/ui/Tag'
 import { KeyCombo } from '@/components/KeySymbol'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
@@ -15,16 +15,22 @@ import {
  *  (a style can't beat an inline style). The box is cut like K2's other
  *  menus in Terminal (`data-k2-chamfer="surface"`; its wrapper carries the
  *  drop shadow, `data-k2-chamfer-float`, since a box-shadow can't follow a
- *  cut) and Frost in Glass, as the shared row menu (OverflowMenu) is. */
+ *  cut) and Frost in Glass, as the shared row menu (OverflowMenu) is. Its
+ *  rows sit --inset-menu in from the edge (MENU_LIST pads the box) and take
+ *  the menu's shape when lit (MENU_ROW). */
 const PANEL_CLASS =
   "bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:0_4px_24px_rgba(0,0,0,0.5),0_1px_4px_rgba(0,0,0,0.3)] [font-family:var(--font-ui)]"
 
 const PANEL_STYLE: React.CSSProperties = {
   minWidth: 180,
   maxWidth: 320,
-  padding: '4px 0',
   opacity: 1,
 }
+
+/** A flyout sits against the menu's edge, across the inset its parent row
+ *  sits in from that edge, with its first row level with the parent row. */
+const SUB_SIDE = 'calc(100% + var(--inset-menu))'
+const SUB_EDGE = 'calc(-1 * var(--inset-menu))'
 
 /** Keyboard can land on any pickable row and on a submenu parent. */
 function isFocusable(item: ContextMenuItemDef): boolean {
@@ -39,7 +45,7 @@ function StaticRow({ item, index }: { item: ContextMenuItemDef; index: number })
       <div
         key={item.id || `sep-${index}`}
         data-menu-separator=""
-        style={{ height: 1, margin: '4px 8px', background: 'var(--k2-menu-separator, var(--color-border))' }}
+        style={{ height: 1, margin: '4px 6px', background: 'var(--k2-menu-separator, var(--color-border))' }}
       />
     )
   }
@@ -107,6 +113,7 @@ function RowButton({
       aria-expanded={hasSub ? Boolean(open) : undefined}
       aria-pressed={item.checked !== undefined ? item.checked : undefined}
       data-context-menu-item={item.id}
+      {...MENU_ROW}
       // The lit row (pointer or arrow keys): its muted hint steps up to
       // secondary text on the band (globals.css, the hovered-row rule).
       data-highlighted={focused || open ? '' : undefined}
@@ -217,21 +224,21 @@ function Submenu({
     const rect = el.getBoundingClientRect()
     if (rect.right > window.innerWidth) {
       el.style.left = 'auto'
-      el.style.right = '100%'
+      el.style.right = SUB_SIDE
     }
     if (rect.bottom > window.innerHeight) {
       el.style.top = 'auto'
-      el.style.bottom = '-4px'
+      el.style.bottom = SUB_EDGE
     }
   }, [items])
   return (
     <div
       ref={ref}
       data-k2-chamfer-float="menu"
-      style={{ position: 'absolute', left: '100%', top: -4, zIndex: 1 }}
+      style={{ position: 'absolute', left: SUB_SIDE, top: SUB_EDGE, zIndex: 1 }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div role="menu" data-context-submenu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} className={PANEL_CLASS} style={PANEL_STYLE}>
+      <div role="menu" data-context-submenu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} {...MENU_LIST} className={PANEL_CLASS} style={PANEL_STYLE}>
       {items.map((item, i) =>
         item.type === 'separator' || item.type === 'heading' || item.type === 'note' ? (
           <StaticRow key={item.id || `sub-${i}`} item={item} index={i} />
@@ -427,7 +434,7 @@ export default function ContextMenu(): React.JSX.Element | null {
           animation: 'context-menu-fade-in 50ms ease-out',
         }}
       >
-      <div data-context-menu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} className={PANEL_CLASS} style={PANEL_STYLE}>
+      <div data-context-menu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} {...MENU_LIST} className={PANEL_CLASS} style={PANEL_STYLE}>
         {items.map((item, index) => {
           if (item.type === 'separator' || item.type === 'heading' || item.type === 'note') {
             return <StaticRow key={item.id || `sep-${index}`} item={item} index={index} />

@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { useZenShown } from '@/lib/zen/zen-view'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { desktopOsFromNavigator } from '@/lib/desktop-chrome'
@@ -92,7 +92,7 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
     <div
       ref={panelRef}
       role="menu"
-      {...floatMaterial('menu')} className="absolute left-0 top-full z-[100] mt-0.5 min-w-[200px] border border-[var(--color-border)] bg-[var(--color-bg)] py-1 shadow-lg"
+      {...floatMaterial('menu')} {...MENU_LIST} className="absolute left-0 top-full z-[100] mt-0.5 min-w-[200px] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg"
     >
       {MENU_SECTIONS.map((section, si) => (
         <div key={section.title}>
@@ -109,8 +109,9 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
                 key={item.id}
                 type="button"
                 role="menuitem"
+                {...MENU_ROW}
                 onClick={() => run(item.id)}
-                className="flex w-full items-center px-2.5 py-1.5 text-left text-xs text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+                className="flex w-full items-center px-2.5 py-1.5 text-left text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
               >
                 {item.id === 'zen-toggle'
                   ? zenShown

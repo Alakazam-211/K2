@@ -16,7 +16,7 @@
 // font-mono stays where a value or code is meant to be monospaced.
 
 import React from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Surface } from '@/components/ui/Surface'
@@ -644,7 +644,7 @@ export function SettingDropdown({
             {...floatMaterial('menu', menuBox.chamfer ? 'frost' : undefined)} className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
             style={{ '--k2-menu-origin': `${menuBox.bottom !== undefined ? 'bottom' : 'top'} ${menuBox.right !== undefined ? 'right' : 'left'}` } as React.CSSProperties}
           >
-          <div className="max-h-60 overflow-y-auto">
+          <div className="max-h-60 overflow-y-auto" {...(menuBox.chamfer ? MENU_LIST : {})}>
           {options.map((option, i) => {
             const isActive = option.value === value
             const isDisabled = option.disabled === true
@@ -665,17 +665,23 @@ export function SettingDropdown({
                 disabled={isDisabled}
                 data-value={option.value}
                 data-selected={isActive ? '' : undefined}
+                // Outside a Garden the lit row takes the menu's shape
+                // (MENU_ROW) and keyboard focus draws the shared row ring in
+                // it (data-k2-focus); a Garden's dropdown keeps its outline.
+                {...(menuBox.chamfer ? { ...MENU_ROW, 'data-k2-focus': '' } : {})}
                 onClick={() => {
                   if (disabled || isDisabled) return
                   onChange(option.value)
                   setIsOpen(false)
                 }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left type-control transition-colors focus:outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)] ${
+                className={`relative w-full flex items-center gap-2 px-3 py-1.5 text-left type-control transition-colors focus:outline-none ${
+                  menuBox.chamfer ? '' : 'focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)] '
+                }${
                   isDisabled
                     ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
                     : isActive
                       ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/10 cursor-pointer'
-                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] cursor-pointer'
+                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] focus-visible:bg-[var(--color-wash-1)] focus-visible:text-[var(--color-text-primary)] cursor-pointer'
                 }`}
               >
                 {option.leading}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { Button } from './Button'
-import { floatMaterial } from './float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from './float-material'
 import { cx } from './cx'
 
 export interface OverflowMenuItem {
@@ -150,8 +150,9 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
               // Floating chrome: Frost in Glass (a see-through fill over a live
               // blur, with the bright rim); Terminal keeps the opaque cut box.
               {...floatMaterial('menu', 'frost')}
+              {...MENU_LIST}
               style={{ '--k2-menu-origin': 'top right' } as React.CSSProperties}
-              className="bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:var(--shadow-3)] py-1 flex flex-col"
+              className="bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:var(--shadow-3)] flex flex-col"
               onKeyDown={onKeyDown}
             >
               {items.map((item, i) => (
@@ -171,15 +172,15 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
                       close()
                       item.onSelect()
                     }}
-                    // The highlighted row takes the menu's shape: the shared
-                    // list-row ring (`data-k2-focus`, the readable accent),
-                    // cut in Terminal on a flush row, round in Glass on a row
-                    // inset from the menu's rounded edge. The inset and the
-                    // row's corner follow the menu's radius, so Terminal's
-                    // square tokens keep its rows flush and square.
+                    // The highlighted row takes the menu's shape (MENU_ROW):
+                    // --inset-menu in from the edge, round in Glass and cut in
+                    // Terminal, parallel to the menu's corners. Its keyboard
+                    // ring is the shared list-row ring (`data-k2-focus`, the
+                    // readable accent), in the same shape.
                     data-k2-focus=""
+                    {...MENU_ROW}
                     className={cx(
-                      'no-drag relative w-[calc(100%_-_var(--radius-box)/2)] mx-[calc(var(--radius-box)/4)] rounded-[var(--radius-selector)] px-3 py-1.5 text-left type-control transition-colors',
+                      'no-drag relative w-full px-3 py-1.5 text-left type-control transition-colors',
                       'focus:outline-none focus-visible:bg-[var(--color-wash-1)]',
                       item.disabled
                         ? 'text-[var(--color-text-muted)] cursor-not-allowed'

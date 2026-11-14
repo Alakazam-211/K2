@@ -9,7 +9,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useAnchoredMenu, type AnchoredMenu } from '@/hooks/useAnchoredMenu'
-import { floatMaterial } from '@/components/ui/float-material'
+import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { cx } from '@/components/ui'
 
 export function useBarMenu<A extends HTMLElement = HTMLButtonElement>(
@@ -110,9 +110,12 @@ export function BarMenuPanel({
         data-testid={testId}
         // Floating chrome: Frost in Glass; Terminal keeps the opaque cut box.
         {...floatMaterial(role === 'menu' ? 'menu' : 'popover', 'frost')}
+        // A menu's rows sit in from its edge (MENU_LIST); a popover keeps its own padding.
+        {...(role === 'menu' ? MENU_LIST : {})}
         style={{ '--k2-menu-origin': 'top right' } as React.CSSProperties}
         className={cx(
-          'bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:var(--shadow-3)] py-1 flex flex-col',
+          'bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:var(--shadow-3)] flex flex-col',
+          role === 'menu' ? null : 'py-1',
           className,
         )}
         onKeyDown={onKeyDown}
@@ -123,7 +126,8 @@ export function BarMenuPanel({
   )
 }
 
-/** One item of a bar menu (the shared row menu's item look). */
+/** One item of a bar menu (the shared row menu's item look): lit in the
+ *  menu's shape (MENU_ROW), with the shared row ring for keyboard focus. */
 export function BarMenuItem({
   onSelect,
   selected,
@@ -147,12 +151,14 @@ export function BarMenuItem({
       aria-disabled={disabled ? true : undefined}
       title={title}
       data-testid={testId}
+      data-k2-focus=""
+      {...MENU_ROW}
       onClick={() => {
         if (!disabled) onSelect()
       }}
       className={cx(
-        'no-drag w-full flex items-center gap-2.5 px-3 py-1.5 text-left type-control transition-colors',
-        'focus:outline-none focus-visible:bg-[var(--color-wash-1)] focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]',
+        'no-drag relative w-full flex items-center gap-2.5 px-3 py-1.5 text-left type-control transition-colors',
+        'focus:outline-none focus-visible:bg-[var(--color-wash-1)]',
         disabled
           ? 'text-[var(--color-text-muted)] cursor-not-allowed'
           : cx(

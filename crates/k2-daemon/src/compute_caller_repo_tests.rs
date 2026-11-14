@@ -5,7 +5,12 @@
 //! outside it is refused with the way to make it work. The workspace's own
 //! checkout and its worktrees keep the old path.
 
-use super::*;
+use std::path::{Path, PathBuf};
+
+use k2_core::compute::proto::frames::Src;
+use k2_core::compute::{self as compute, codes};
+
+use crate::compute_routes::{source_for, warm_key, Refusal, SourceInfo, Ws, R, REPO_INVALID};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")

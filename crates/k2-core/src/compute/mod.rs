@@ -21,6 +21,8 @@ pub mod allow;
 /// A job's attempts across retries and moves: why each ended, its log and files.
 pub mod attempts;
 pub mod advertise;
+/// Which repo a run ships when the caller is in another repo than the workspace's.
+pub mod caller_repo;
 pub mod enroll;
 pub mod git;
 /// prd-compute-blacksmith-class-v1 O2: job stats series, `k2 compute stats`.

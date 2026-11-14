@@ -38,7 +38,7 @@ pub fn repo_root(dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// The shared git dir (a worktree's `.git` is a file pointing here).
-fn common_dir(root: &Path) -> Result<PathBuf, String> {
+pub(crate) fn common_dir(root: &Path) -> Result<PathBuf, String> {
     let mut c = git(root);
     c.args(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     run(c, "find the git dir").map(PathBuf::from)
@@ -127,7 +127,7 @@ pub fn nested_repo(ws_dir: &Path, rel: &str) -> Result<NestedRepo, String> {
     match inside(&canon) {
         Some(r) if !r.as_os_str().is_empty() && !through_k2(&r) => {}
         Some(r) if r.as_os_str().is_empty() => return Err(format!("--repo {trimmed} is the workspace folder itself; drop --repo")),
-        _ => return Err(format!("--repo {trimmed} leads outside the workspace (or into .k2/) through a link")),
+        _ => return Err(format!("--repo {trimmed} leads outside the workspace (or into .k2/) through a link; {}", super::caller_repo::inside_hint(&ws))),
     }
     if !canon.is_dir() {
         return Err(format!("--repo {trimmed} isn't a folder"));
@@ -140,7 +140,7 @@ pub fn nested_repo(ws_dir: &Path, rel: &str) -> Result<NestedRepo, String> {
     let common = common_dir(&canon)?.canonicalize().map_err(|e| format!("--repo {trimmed}: its git dir: {e}"))?;
     match inside(&common) {
         Some(r) if !through_k2(&r) => {}
-        _ => return Err(format!("--repo {trimmed} is a worktree of a repo outside the workspace ({})", common.display())),
+        _ => return Err(format!("--repo {trimmed} is a worktree of a repo outside the workspace ({}); {}", common.display(), super::caller_repo::inside_hint(&ws))),
     }
     let home = main_checkout_of(&canon)
         .and_then(|h| h.canonicalize().ok())

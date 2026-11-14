@@ -3333,7 +3333,7 @@ fn grant_line(g: &store::GrantRow) -> String {
 /// The project key and commit this run would build, for warm-slot
 /// matching (CP-A9): `--sha`, else HEAD (`--dirty` is HEAD plus changes).
 /// `None` for `--no-source`.
-fn warm_key(ws: &Ws, v: &serde_json::Value) -> Option<(String, Option<String>)> {
+pub(crate) fn warm_key(ws: &Ws, v: &serde_json::Value) -> Option<(String, Option<String>)> {
     if b(v, "noSource") == Some(true) {
         return None;
     }
@@ -3719,8 +3719,10 @@ pub(crate) struct RepoPick {
     /// own repo (today's path, today's project key).
     pub(crate) rel: Option<String>,
     /// Found from the caller's folder (no `--repo`; the workspace root
-    /// isn't a repo).
+    /// isn't a repo, or the caller is in another repo inside it).
     pub(crate) auto: bool,
+    /// One line for the caller when the repo came from their folder.
+    pub(crate) note: Option<String>,
 }
 
 impl RepoPick {
@@ -3733,14 +3735,15 @@ impl RepoPick {
 /// `--repo` refused (bad folder, escapes the jail, not a repo there).
 pub(crate) const REPO_INVALID: &str = "repo_invalid";
 
-fn nested_pick(n: compute::sync::NestedRepo, auto: bool) -> RepoPick {
+pub(crate) fn nested_pick(n: compute::sync::NestedRepo, auto: bool) -> RepoPick {
     let named = (n.root != n.home).then(|| n.root.clone());
-    RepoPick { home: n.home, named, rel: Some(n.rel).filter(|r| !r.is_empty()), auto }
+    RepoPick { home: n.home, named, rel: Some(n.rel).filter(|r| !r.is_empty()), auto, note: None }
 }
 
 /// Which repo of the workspace a job ships: `--repo <subdir>` (a nested
 /// repo, jailed like a caller's worktree: `sync::nested_repo`), else the
-/// workspace's own repo, else (a multi-repo workspace whose root isn't a
+/// workspace's own repo (run from another repo: that one, as `--repo`
+/// would, or refused when it can't ship), else (a multi-repo workspace whose root isn't a
 /// repo) the nested repo the caller runs from. Never a repo outside the
 /// workspace, never `.k2/`.
 pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
@@ -3750,7 +3753,7 @@ pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
         return Ok(nested_pick(n, false));
     }
     match compute::sync::repo_root(ws_dir) {
-        Ok(home) => Ok(RepoPick { home, named: None, rel: None, auto: false }),
+        Ok(home) => crate::compute_repo_pick::in_repo_workspace(ws, home, s(v, "repoDir")),
         Err(_) => {
             let from_caller = s(v, "repoDir")
                 .filter(|d| !d.is_empty())
@@ -3759,7 +3762,7 @@ pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
                 .map_err(|e| no(REPO_INVALID, 400, e))?
                 .flatten();
             match from_caller {
-                Some(n) => Ok(nested_pick(n, true)),
+                Some(n) => Ok(crate::compute_repo_pick::in_plain_workspace(ws, n)),
                 None => Err(no(
                     codes::NOT_A_REPO,
                     400,
@@ -3773,7 +3776,7 @@ pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
     }
 }
 
-fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Vec<String>) -> R<(Src, SourceInfo)> {
+pub(crate) fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Vec<String>) -> R<(Src, SourceInfo)> {
     let pick = repo_pick(ws, v)?;
     let ws_root = pick.home.clone();
     // Run from a git worktree inside the workspace (e.g.
@@ -3806,11 +3809,7 @@ fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Ve
         },
         (None, None) => (ws_root, "workspace"),
     };
-    if pick.auto {
-        if let Some(r) = &pick.rel {
-            warnings.push(format!("workspace {} isn't a git repo: shipping its repo {r} (the one you're in; --repo picks another)", ws.handle));
-        }
-    }
+    warnings.extend(pick.note.clone());
     let dirty = b(v, "dirty") == Some(true);
     let sha = s(v, "sha");
     // Every revision resolves in the checkout actually used (a worktree's
@@ -4456,10 +4455,6 @@ fn local_disable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
     crate::compute_local::disable(&who.label(), b(&v, "elevate") == Some(true)).map_err(|(code, status, hint)| no(code, status, hint))
 }
-
-#[cfg(test)]
-#[path = "compute_caller_repo_tests.rs"]
-mod caller_repo_tests;
 
 #[cfg(test)]
 mod tests {

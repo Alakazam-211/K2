@@ -923,8 +923,13 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const [continueSource, setContinueSource] = useState<ContinueNewChatSource | null>(null)
 
   const lastOverlayConvRef = useRef<string | null>(restoredSessionId ?? null)
+  // A session dropdown pick is in flight: the new conversation reads its own
+  // remembered view (see `carryOnRekey`). Cleared once it is shown.
+  const switchingConversationRef = useRef(false)
+  // Ready with no conversation named yet ('': a wake heard before an
+  // ensure's answer): the one shown stays.
   const overlayConv =
-    phase.kind === 'ready' ? phase.canonicalSessionId : lastOverlayConvRef.current
+    phase.kind === 'ready' && phase.canonicalSessionId ? phase.canonicalSessionId : lastOverlayConvRef.current
   if (phase.kind === 'ready' && phase.canonicalSessionId) {
     lastOverlayConvRef.current = phase.canonicalSessionId
   }
@@ -940,7 +945,12 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     terminalRevealKey,
     threadPanel,
     setThreadPanel,
-  } = useSessionViewTab(overlayConv, room.scope, projectId)
+  } = useSessionViewTab(overlayConv, room.scope, projectId, {
+    // The conversation is named late (an asleep agent woken, the first
+    // ensure's answer) or changes under this pane (a respawn): a view the
+    // person set here stays on screen. A dropdown switch reads its own.
+    carryOnRekey: !switchingConversationRef.current,
+  })
   // The view shows the terminal: Terminal view, a Split with a terminal side,
   // or Thread view's peek. Only then does opening the agent start its session.
   const overlayShown = overlayViewer(viewTab, { left: splitLeft, right: splitRight })
@@ -1181,6 +1191,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     if (phase.kind === 'ensuring') setWokeWhileAsleep(false)
   }, [phase.kind])
 
+  // A dropdown switch is shown (or failed): later key changes carry again.
+  useEffect(() => {
+    if (phase.kind !== 'ensuring') switchingConversationRef.current = false
+  }, [phase.kind])
+
   // Asleep (or still asking) and the terminal is shown now: start it.
   useEffect(() => {
     if (!terminalWanted) return
@@ -1211,6 +1226,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         const attached = paneAttached()
         const before = phaseRef.current.kind
         const wasAsleep = before === 'asleep' || before === 'checking'
+        // Heard before an ensure's answer (that ensure's own spawn): the
+        // conversation shown stays until the answer names it.
+        const keepShown = wasAsleep || before === 'ensuring'
         attachedSessionIdRef.current = event.session_id
         const held = freshHoldProviderIdRef.current
         setPhase({
@@ -1218,7 +1236,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           sessionId: event.session_id,
           // Woken from asleep: the conversation shown stays the one shown
           // (its remembered view with it); the PTY id is not a conversation.
-          canonicalSessionId: held ?? (wasAsleep ? lastOverlayConvRef.current : null) ?? event.session_id,
+          // A PTY id is not a conversation: never a view memory key.
+          canonicalSessionId: held ?? (keepShown ? (lastOverlayConvRef.current ?? '') : event.session_id),
         })
         if (wasAsleep) setWokeWhileAsleep(true)
         if (attached) setAttachNonce((n) => n + 1)
@@ -1269,6 +1288,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const handleSwitchSession = useCallback(
     async (newSessionId: string, provider: string): Promise<void> => {
       if (!newSessionId || newSessionId === canonicalSessionId) return
+      switchingConversationRef.current = true
       freshHoldProviderIdRef.current = null
       discoveryGenRef.current += 1
       setRefreshing(true)

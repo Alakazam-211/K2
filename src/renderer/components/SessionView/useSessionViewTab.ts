@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { homeHostKey } from '@/lib/host-key'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -53,11 +53,22 @@ export function sessionViewHostKey(
  *  including both split sides. `scope` is the room's scope (`useRoom().scope`).
  *  `pinnedProjectId`: the workspace whose pinned Chat this is; given, an
  *  opener's one-shot view ask for it (`stores/session-view-request.ts`, the
- *  window's server only) wins over the remembered view once. */
+ *  window's server only) wins over the remembered view once.
+ *
+ *  `carryOnRekey`: the key is this pane's conversation, which can be named
+ *  late or change under the same pane (an asleep agent woken, a sidecar's
+ *  conversation adopted, a respawn). Once the person has changed the view
+ *  here (the view, a Split side, the terminal peek, a panel), a new key
+ *  keeps what is on screen and remembers it for that conversation, instead
+ *  of reading that conversation's memory: one click on the terminal opens
+ *  it and it stays open through the wake. Off for a deliberate change of
+ *  conversation (the session dropdown), which reads its own memory. A view
+ *  nobody touched still reads the new key's memory, as before. */
 export function useSessionViewTab(
   sessionKey: string | null,
   scope: Pick<ServerScope, 'isPrimary' | 'hostKey'>,
   pinnedProjectId?: string | null,
+  opts?: { carryOnRekey?: boolean },
 ): SessionViewChoice {
   // Subscribed so the primary room re-reads after a server switch (Home M1).
   const windowHostKey = useConnectHostStore((s) => homeHostKey(s.activeHost))
@@ -75,25 +86,48 @@ export function useSessionViewTab(
     () => resolveSessionView(storageKey, splitKey).sides,
   )
 
+  // The person changed the view in this pane (see `carryOnRekey`).
+  const touchedRef = useRef(false)
+  // The key the memos below were last keyed to, and whether its change
+  // carries the view over (the effect below writes it for the new key).
+  const lastHostRef = useRef(hostKey)
+  const carryPendingRef = useRef(false)
+  const shownRef = useRef({ tab: viewTab, sides })
+  shownRef.current = { tab: viewTab, sides }
+
   // Keyed during render, so a change of conversation lands in one commit
   // with its own memory (and never reads as a toggle: no animation).
   const [revealMemo, setRevealMemo] = useState(() => ({
     key: terminalKey,
     revealed: readSessionTerminalRevealed(terminalKey),
   }))
-  if (revealMemo.key !== terminalKey) {
-    setRevealMemo({ key: terminalKey, revealed: readSessionTerminalRevealed(terminalKey) })
-  }
   // The open panel belongs to this conversation too (keyed the same way).
   const [panelMemo, setPanelMemo] = useState<{ key: string | null; panel: ThreadPanelKind | null }>(() => ({
     key: terminalKey,
     panel: null,
   }))
-  if (panelMemo.key !== terminalKey) {
+  if (revealMemo.key !== terminalKey) {
+    // Same server, same pane, a view the person set: it stays on screen.
+    const carry = opts?.carryOnRekey === true && touchedRef.current && lastHostRef.current === hostKey && terminalKey !== null
+    carryPendingRef.current = carry
+    lastHostRef.current = hostKey
+    setRevealMemo({ key: terminalKey, revealed: carry ? revealMemo.revealed : readSessionTerminalRevealed(terminalKey) })
+    setPanelMemo({ key: terminalKey, panel: carry ? panelMemo.panel : null })
+  } else if (panelMemo.key !== terminalKey) {
     setPanelMemo({ key: terminalKey, panel: null })
   }
+  const revealedRef = useRef(revealMemo.revealed)
+  revealedRef.current = revealMemo.revealed
 
   useEffect(() => {
+    if (carryPendingRef.current) {
+      // Carried over: what is shown is now this conversation's memory.
+      carryPendingRef.current = false
+      if (storageKey) writeSessionViewTab(storageKey, shownRef.current.tab)
+      if (splitKey) writeSessionSplitSides(splitKey, shownRef.current.sides)
+      if (terminalKey) writeSessionTerminalRevealed(terminalKey, revealedRef.current)
+      return
+    }
     const resolved = resolveSessionView(storageKey, splitKey)
     setViewTabState(resolved.tab)
     setSides(resolved.sides)
@@ -104,6 +138,7 @@ export function useSessionViewTab(
       writeSessionViewTab(storageKey, resolved.tab)
       writeSessionSplitSides(splitKey, resolved.sides)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey, splitKey])
 
   // An opener asked for this workspace's Chat in a set view (Kessel opens in
@@ -124,6 +159,7 @@ export function useSessionViewTab(
 
   const setViewTab = useCallback(
     (next: SessionViewTab) => {
+      touchedRef.current = true
       setViewTabState(next)
       if (storageKey) writeSessionViewTab(storageKey, next)
       // Split view has no drawers (it picks its sides instead): an open
@@ -135,6 +171,7 @@ export function useSessionViewTab(
 
   const setSplitLeft = useCallback(
     (left: SplitPaneView) => {
+      touchedRef.current = true
       setSides((prev) => {
         const next = { left, right: prev.right }
         if (splitKey) writeSessionSplitSides(splitKey, next)
@@ -146,6 +183,7 @@ export function useSessionViewTab(
 
   const setSplitRight = useCallback(
     (right: SplitPaneView) => {
+      touchedRef.current = true
       setSides((prev) => {
         const next = { left: prev.left, right }
         if (splitKey) writeSessionSplitSides(splitKey, next)
@@ -157,6 +195,7 @@ export function useSessionViewTab(
 
   const setTerminalRevealed = useCallback(
     (revealed: boolean) => {
+      touchedRef.current = true
       setRevealMemo({ key: terminalKey, revealed })
       if (terminalKey) writeSessionTerminalRevealed(terminalKey, revealed)
       // One drawer at a time.
@@ -168,6 +207,7 @@ export function useSessionViewTab(
   const terminalRevealedNow = revealMemo.revealed
   const setThreadPanel = useCallback(
     (panel: ThreadPanelKind | null) => {
+      touchedRef.current = true
       setPanelMemo({ key: terminalKey, panel })
       if (panel && terminalRevealedNow) {
         setRevealMemo({ key: terminalKey, revealed: false })

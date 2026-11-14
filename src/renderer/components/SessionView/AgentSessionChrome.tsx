@@ -108,7 +108,7 @@ export function AgentSessionChrome({
     terminalRevealKey,
     threadPanel,
     setThreadPanel,
-  } = useSessionViewTab(sessionKey, room.scope)
+  } = useSessionViewTab(sessionKey, room.scope, null, { carryOnRekey: true }) // the conversation can be adopted late (TR14)
   // Reported by the TerminalPane below (its phase).
   const [terminalLive, setTerminalLive] = useState(false)
   // The harness picks the Token control's provider below.

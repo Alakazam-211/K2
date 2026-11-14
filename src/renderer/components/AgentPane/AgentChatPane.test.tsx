@@ -1401,6 +1401,97 @@ describe('a sleeping agent stays asleep in Thread view', () => {
     expect(h.terminalMountCount.value).toBe(1)
   })
 
+  // One click opens the terminal and it stays open: the view (peek, Terminal
+  // view, Split) belongs to the view, not to the conversation id the daemon
+  // names once it wakes the agent.
+  describe('one click wakes it, and the terminal stays open', () => {
+    const peekButton = (): HTMLElement =>
+      screen.getByTestId('thread-drawer-selector').querySelector<HTMLElement>('[data-thread-drawer-segment="terminal"]')!
+    const peekOpen = (): boolean => screen.getByTestId('thread-terminal-toggle').getAttribute('aria-pressed') === 'true'
+    const viewNow = (): string | null => screen.getByTestId('session-view-menu').getAttribute('data-view')
+
+    it('the peek: one ensure, and still open after the attach', async () => {
+      await openAsleep('thread')
+      await act(async () => {
+        fireEvent.click(peekButton())
+      })
+      expect(peekOpen()).toBe(true)
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+      await settle()
+      expect(ensureBodies()).toHaveLength(1)
+      expect(viewNow()).toBe('thread')
+      expect(peekOpen()).toBe(true)
+      expect(screen.getByTestId('session-reveal-terminal').style.display).toBe('flex')
+      // Remembered for the conversation the daemon named.
+      expect(localStorage.getItem('local|k2:session-view-terminal:claude-1')).toBe('1')
+    })
+
+    it('Terminal view: one ensure, and still Terminal view after the attach', async () => {
+      await openAsleep('thread')
+      await pickView('Terminal')
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+      await settle()
+      expect(ensureBodies()).toHaveLength(1)
+      expect(viewNow()).toBe('terminal')
+    })
+
+    it('Split view: one ensure, and still Split view after the attach', async () => {
+      await openAsleep('thread')
+      await pickView('Split view')
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+      await settle()
+      expect(ensureBodies()).toHaveLength(1)
+      expect(viewNow()).toBe('split')
+    })
+
+    for (const when of ['before', 'after'] as const) {
+      it(`the peek, with the daemon's SessionAdded ${when} the ensure answers: one ensure, still open`, async () => {
+        let release: () => void = () => {}
+        const pending = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        h.daemonCliPost.mockImplementation(async (route: string) => {
+          if (route === 'workspace/ensure-pinned-chat') {
+            await pending
+            return mountEnsure()
+          }
+          return undefined
+        })
+        await openAsleep('thread')
+        await act(async () => {
+          fireEvent.click(peekButton())
+        })
+        await waitFor(() => expect(ensureBodies()).toHaveLength(1))
+        const added = async (): Promise<void> => {
+          await act(async () => {
+            h.sessionHandlers.current!.onAdded!({ agent_name: 'proj-1', workspace_path: '/ws', session_id: 'sess-1' })
+          })
+        }
+        if (when === 'before') await added()
+        expect(peekOpen()).toBe(true)
+        await act(async () => release())
+        if (when === 'after') await added()
+        await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+        await settle()
+        expect(ensureBodies()).toHaveLength(1)
+        expect(viewNow()).toBe('thread')
+        expect(peekOpen()).toBe(true)
+        expect(h.terminalMountCount.value).toBe(1)
+        // The PTY id never became a view memory key.
+        expect(localStorage.getItem('local|k2:session-view-terminal:sess-1')).toBeNull()
+      })
+    }
+
+    it('a conversation the person never touched keeps its own remembered view when the daemon names it', async () => {
+      localStorage.setItem(sessionViewTabStorageKey('local', 'claude-1'), 'terminal')
+      h.alive.value = true
+      localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'thread', left: 'terminal', right: 'thread' }))
+      renderInRoom(asleepRoom, <AgentChatPane agentName="agent" projectPath="/ws" />)
+      await waitFor(() => expect(screen.getByTestId('terminal-pane').getAttribute('data-hold')).toBe('false'))
+      await waitFor(() => expect(viewNow()).toBe('terminal'))
+    })
+  })
+
   it('a running agent in Thread view is attached as before: one look, one ensure, the pane attached', async () => {
     h.alive.value = true
     localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'thread', left: 'terminal', right: 'thread' }))

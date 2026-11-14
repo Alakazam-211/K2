@@ -296,3 +296,60 @@ describe('Thread view panels and split view', () => {
     expect(hook.result.current.threadPanel).toBe('chatter')
   })
 })
+
+describe('useSessionViewTab carryOnRekey (a conversation named late under the same pane)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+  type P = { key: string | null; carry: boolean; host?: string }
+  const mount = (initialProps: P) =>
+    renderHook(
+      ({ key, carry, host }: P) =>
+        useSessionViewTab(key, { isPrimary: !host, hostKey: host ?? 'local' }, null, { carryOnRekey: carry }),
+      { initialProps },
+    )
+
+  it('a peek opened before the conversation is named stays open, and is remembered for it', () => {
+    const hook = mount({ key: null, carry: true })
+    act(() => hook.result.current.setTerminalRevealed(true))
+    hook.rerender({ key: 'conv-a', carry: true })
+    expect(hook.result.current.terminalRevealed).toBe(true)
+    expect(localStorage.getItem('local|k2:session-view-terminal:conv-a')).toBe('1')
+  })
+
+  it('a view picked before a rename of the key stays, with its sides', () => {
+    const hook = mount({ key: 'restored', carry: true })
+    act(() => hook.result.current.setViewTab('split'))
+    act(() => hook.result.current.setSplitLeft('thread'))
+    act(() => hook.result.current.setSplitRight('terminal'))
+    hook.rerender({ key: 'conv-a', carry: true })
+    expect(hook.result.current.viewTab).toBe('split')
+    expect(hook.result.current.splitLeft).toBe('thread')
+    expect(hook.result.current.splitRight).toBe('terminal')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-a')).toBe('split')
+  })
+
+  it('untouched, a new key reads its own memory as before', () => {
+    localStorage.setItem('local|k2:session-view-tab:conv-a', 'terminal')
+    localStorage.setItem('local|k2:session-view-terminal:conv-a', '1')
+    const hook = mount({ key: null, carry: true })
+    hook.rerender({ key: 'conv-a', carry: true })
+    expect(hook.result.current.viewTab).toBe('terminal')
+    expect(hook.result.current.terminalRevealed).toBe(true)
+  })
+
+  it('carry off (a deliberate switch) reads the new conversation memory', () => {
+    const hook = mount({ key: 'conv-a', carry: true })
+    act(() => hook.result.current.setTerminalRevealed(true))
+    hook.rerender({ key: 'conv-b', carry: false })
+    expect(hook.result.current.terminalRevealed).toBe(false)
+    expect(localStorage.getItem('local|k2:session-view-terminal:conv-b')).toBeNull()
+  })
+
+  it('another server never carries', () => {
+    const hook = mount({ key: 'conv-a', carry: true, host: 'one.example.test' })
+    act(() => hook.result.current.setTerminalRevealed(true))
+    hook.rerender({ key: 'conv-a', carry: true, host: 'two.example.test' })
+    expect(hook.result.current.terminalRevealed).toBe(false)
+  })
+})

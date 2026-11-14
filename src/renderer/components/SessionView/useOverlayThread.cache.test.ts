@@ -159,7 +159,7 @@ describe('remote Thread view cache in the hook', () => {
 
   it('a cached open asks the delta from the copy’s newest server seq (a pushed row never counts), not a page', async () => {
     const scope = localScope()
-    const pushed = { ...page(4, 4, 'pushed').items[0], provisional: true }
+    const pushed = { ...(page(4, 4, 'pushed').items[0] as object), provisional: true }
     saveThreadView('local', 'k2', 'conv-1', [...page(1, 3, 'old').items, pushed] as never)
     daemonCliGet.mockImplementation(async (_s: unknown, route: string, p: Record<string, unknown>) => {
       if (route !== 'thread') throw new Error(`unexpected ${route}`)
@@ -169,7 +169,7 @@ describe('remote Thread view cache in the hook', () => {
         after_seq: p.after_seq,
         has_more: false,
         items: page(4, 5, 'new').items,
-        changed: [{ ...page(2, 2).items[0], doc: { id: 't2', kind: 'text', from: 'k2', body: null, deleted: true } }],
+        changed: [{ ...(page(2, 2).items[0] as object), doc: { id: 't2', kind: 'text', from: 'k2', body: null, deleted: true } }],
         removed: [],
       }
     })

@@ -37,7 +37,7 @@ describe('applyThreadDelta', () => {
     const current = [row(1), row(2), row(3)]
     const next = applyThreadDelta(
       current,
-      { items: [row(4)], changed: [row(2, 'm2', 'now a tombstone')], removed: [{ id: 'm3', seq: 3 }] },
+      { items: [row(4)], changed: [row(2, 'm2', 'now a tombstone')], removed: [{ id: 'm3' }] },
       false,
     )
     expect(next.map((it) => it.id)).toEqual(['m1', 'm2', 'm4'])

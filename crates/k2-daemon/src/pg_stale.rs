@@ -269,7 +269,7 @@ pub struct Real;
 pub static REAL: Real = Real;
 
 fn out(cmd: &str, args: &[&str]) -> Option<String> {
-    let o = std::process::Command::new(cmd).args(args).output().ok()?;
+    let o = k2_core::bg_proc::command(cmd).args(args).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 

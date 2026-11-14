@@ -77,6 +77,10 @@ export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
 
 export { MachineChip } from './MachineChip'
 
+/** Get started in the Home nav: the closed button drops its own padding
+ *  (the icon row's and the bottom bar's 8px are the gaps around it). */
+export const HOME_SETUP_SLOT_CLASS = '[&[data-setup-checklist-collapsed]>div]:py-0'
+
 /** What the nav's scroll edges tint with: the nav tile's own fill (Layout's
  *  Surface: `--color-bg-surface`, which Glass's tile reads as `--tile-fill`),
  *  so a band melts into the nav in every Style and palette, never darkens it. */
@@ -594,25 +598,24 @@ export default function HomeSidebar(): React.JSX.Element {
           its cap of 45% of the nav. (Zen Mode is the window's top-bar
           toggle, prd-zen-gardens-v1 G5/G6.) */}
       {/* The same 8px (NAV_COLLAPSE_GAP_PX) from the icons to Get started's
-          top edge either way: the button's own padding gives it; the open
-          list (or the set-up line) starts with its line, so the row gives
-          it here. The fold between them keeps that edge where it is. */}
-      <div className="flex flex-col px-3 pt-1 has-[+[data-setup-checklist]]:pb-2" data-home-footer="">
+          top edge, closed (the button's fill) or open (the list's line),
+          and from its bottom to the bottom bar. The gaps are the icon row's
+          bottom padding and the bar's top padding, which never change while
+          Get started folds open or shut (both parts are drawn then), so
+          nothing jumps at either end; the button drops its own padding for
+          them. With no Get started, one gap: the icon row lets the bar's
+          padding be it. */}
+      <div className="flex flex-col px-3 pt-1 pb-2 has-[+[data-nav-footer]]:pb-0" data-home-footer="">
         <div className="flex justify-center no-drag" data-home-group-row="">
           <HomeGroupBar {...groups.bar} />
         </div>
       </div>
 
-      <SetupChecklist />
+      <SetupChecklist className={HOME_SETUP_SLOT_CLASS} />
 
-      {/* 8px under the group icons (the footer's gap); the Get started
-          button's own padding is that gap when it sits between them. The
-          row: the ⌘K field (the command palette's entry) and + (Add to
+      {/* The row: the ⌘K field (the command palette's entry) and + (Add to
           Home). */}
-      <div
-        className="relative flex flex-col gap-2 px-3 pb-3 pt-2 [[data-setup-checklist-collapsed]+&]:pt-0"
-        data-nav-footer=""
-      >
+      <div className="relative flex flex-col gap-2 px-3 pb-3 pt-2" data-nav-footer="">
         <HomeNavFooterRow />
       </div>
       <AddToHomeHost />

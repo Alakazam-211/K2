@@ -194,7 +194,7 @@ import { __resetHostPoolForTests, hostPool } from '@/lib/host-pool-instance'
 import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
 import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { homeRooms } from '@/stores/home-rooms'
-import { HOME_NAV_EDGE_TINT, otherRowOpenTitle } from './HomeSidebar'
+import { HOME_NAV_EDGE_TINT, HOME_SETUP_SLOT_CLASS, otherRowOpenTitle } from './HomeSidebar'
 import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 import { NAV_COLLAPSE_GAP_PX } from '@/components/Sidebar/SidebarCollapseButton'
 import { DRAWER_HEADER_BUTTON_CLASS } from '@/components/Layout/DrawerTabBarToggle'
@@ -923,17 +923,22 @@ describe('Home — the Agents page shell', () => {
       expect(footer.nextElementSibling).toBe(button)
       expect(button.nextElementSibling).toBe(bottomBar)
       expect(footer.contains(nav.querySelector('[data-home-group-row]'))).toBe(true)
-      // The button's own padding is the gap above the bottom bar.
-      expect(bottomBar.className).toContain('[[data-setup-checklist-collapsed]+&]:pt-0')
-      // One gap from the icons to Get started's top edge in both states,
-      // NAV_COLLAPSE_GAP_PX (8px = Tailwind's 2): the button's section pads
-      // its fill down by it (py-2) and the icon row adds nothing; the open
-      // list starts with its line, so the icon row pads by it instead.
+      // One gap, NAV_COLLAPSE_GAP_PX (8px, Tailwind's 2), from the icons to
+      // Get started's top edge and from its bottom edge to the bar, in both
+      // states: the icon row's bottom padding and the bar's top padding.
+      // Neither depends on which part is drawn, so a fold (both parts drawn)
+      // never changes them at its start or end. The closed button drops its
+      // own padding.
       expect(NAV_COLLAPSE_GAP_PX).toBe(8)
-      expect((button.firstElementChild as HTMLElement).className.split(/\s+/)).toContain('py-2')
-      expect(footer.className.split(/\s+/)).toContain('has-[+[data-setup-checklist]]:pb-2')
-      expect(footer.className).not.toMatch(/(^|\s)pb-/)
-      expect(button.matches('[data-setup-checklist]')).toBe(false)
+      const cls = (el: Element): string[] => (el as HTMLElement).className.split(/\s+/)
+      expect(cls(footer)).toEqual(expect.arrayContaining(['pt-1', 'pb-2', 'has-[+[data-nav-footer]]:pb-0']))
+      expect(cls(bottomBar)).toEqual(expect.arrayContaining(['pt-2', 'pb-3']))
+      expect(bottomBar.className).not.toContain('[[data-setup-checklist-collapsed]+&]')
+      expect(footer.className).not.toContain('has-[+[data-setup-checklist]]')
+      expect(cls(button)).toContain(HOME_SETUP_SLOT_CLASS)
+      expect(HOME_SETUP_SLOT_CLASS).toBe('[&[data-setup-checklist-collapsed]>div]:py-0')
+      expect(button.matches('[data-setup-checklist-collapsed]')).toBe(true)
+      expect(button.firstElementChild?.tagName).toBe('DIV')
       // The open list sits in the same place, still a child of the nav's
       // column (its 45% cap is of the nav).
       setDoc({})
@@ -942,10 +947,10 @@ describe('Home — the Agents page shell', () => {
       expect(list.className).toContain('max-h-[45%]')
       expect(footer.nextElementSibling).toBe(list)
       expect(list.nextElementSibling).toBe(bottomBar)
-      // The open list's top edge is its line (border-t), so the icon row's
-      // has-[+[data-setup-checklist]] padding is the whole gap.
-      expect(list.matches('[data-setup-checklist]')).toBe(true)
+      // The open list's top edge is its line (border-t), right after the
+      // icon row's padding; the slot class leaves it alone.
       expect(list.className.split(/\s+/)).toContain('border-t')
+      expect(list.matches('[data-setup-checklist-collapsed]')).toBe(false)
     } finally {
       resetFirstRunForTests()
     }

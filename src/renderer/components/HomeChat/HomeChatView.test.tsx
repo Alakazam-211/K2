@@ -109,6 +109,11 @@ async function open(): Promise<void> {
 }
 
 describe('Home chat view', () => {
+  it("the header's glyph matches the row's: a lock for an invite-only channel", async () => {
+    await open()
+    await waitFor(() => expect(screen.getByTestId('home-chat-header-glyph').querySelector('[data-channel-glyph]')?.getAttribute('data-channel-glyph')).toBe('lock'))
+  })
+
   it('draws from the Home chat routes only, never a Thread route', async () => {
     await open()
     expect(screen.getByText('hi @alex, plain text')).toBeTruthy()

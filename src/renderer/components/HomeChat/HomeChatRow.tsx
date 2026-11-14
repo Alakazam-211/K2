@@ -13,7 +13,8 @@
 // server for a person (§6.3), and Remove from <Home> (a DM can't be left in
 // Sew: removing hides the row, D10).
 
-import { useEffect, useMemo, type JSX } from 'react'
+import { useEffect, useMemo, type CSSProperties, type JSX } from 'react'
+import { chamferCutFor } from '@/components/Thread/chamfer'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { useHomesStore, type Home, type HomeRow } from '@/stores/homes'
@@ -31,11 +32,11 @@ import {
 } from '@/stores/home-chat'
 import { MAX_PINS, isPinned, pinnedRows } from '@/lib/home-row-order'
 import { AgentRowButton } from '@/components/Sidebar/Sidebar'
-import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { HomeRowPinMark } from '@/components/Home/groups/HomeRowCaption'
 import { serverLabelFor } from './serverLabel'
+import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 
 const MUTED = 'var(--color-text-muted)'
 
@@ -138,7 +139,7 @@ export function HomeChatHomeRow({ home, row }: { home: Home; row: HomeRow; index
       ? `${place} can’t be reached`
       : target.kind === 'person'
         ? `Message ${name} on ${place}`
-        : `Open #${name} on ${place}`
+        : `Open ${inviteOnly ? 'invite-only channel' : 'channel'} ${name} on ${place}`
 
   return (
     <div
@@ -158,21 +159,19 @@ export function HomeChatHomeRow({ home, row }: { home: Home; row: HomeRow; index
         title={title}
         avatar={
           target.kind === 'person' ? (
-            <ProjectAvatar
-              projectPath={`home-chat:${row.address}`}
-              projectName={name}
-              projectColor={MUTED}
-              iconUrl={person?.picture ?? null}
-              size={32}
-              fetchIcon={false}
-            />
+            // Their initials in their colour, an agent avatar's shape.
+            <HomeChatPersonAvatar username={person?.username ?? row.label} name={name} picture={person?.picture ?? null} size={32} />
           ) : (
+            // `#` open, a lock invite-only (its server's summary says which).
             <span
               aria-hidden="true"
-              className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center border border-[var(--color-border)] text-[14px] text-[var(--color-text-muted)]"
-              data-channel-glyph=""
+              data-k2-chamfer="surface"
+              data-k2-avatar=""
+              className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)]"
+              style={{ '--k2-ch-cut': `${chamferCutFor(32)}px` } as CSSProperties}
+              data-channel-glyph-box=""
             >
-              #
+              <HomeChatChannelGlyph inviteOnly={inviteOnly} size={15} />
             </span>
           )
         }

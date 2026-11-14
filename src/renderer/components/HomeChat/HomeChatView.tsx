@@ -73,6 +73,7 @@ import {
 import { noteHomeChatSend } from '@/lib/home-chat/stamp'
 import { useHomesStore } from '@/stores/homes'
 import {
+  homeChatRowInviteOnly,
   onHomeChatFrame,
   refreshHomeChatPeople,
   scopeForChatHost,
@@ -83,6 +84,9 @@ import {
 import { HomeChatMessageRow, JUMP_WASH_MS, type HomeChatRowActions } from './HomeChatMessageRow'
 import { HomeChatMembersSheet } from './HomeChatMembersSheet'
 import { HomeChatTyping } from './HomeChatTyping'
+import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
+import { EyeIcon } from 'lucide-react'
+import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 
@@ -444,16 +448,22 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   return (
     <div className="relative flex h-full w-full flex-1 flex-col overflow-hidden" data-testid="home-chat-view" data-kind={target.kind}>
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-4 py-2.5" data-testid="home-chat-header">
-        <span aria-hidden="true" className="text-[var(--color-text-muted)]">
-          {dm ? '@' : channel && !channel.open ? '🔒' : '#'}
-        </span>
+        {dm ? (
+          <HomeChatPersonAvatar username={person?.username ?? title} name={title} picture={person?.picture ?? null} size={22} />
+        ) : (
+          // The row's glyph: `#` open, a lock invite-only.
+          <span className="inline-flex text-[var(--color-text-secondary)]" data-testid="home-chat-header-glyph">
+            <HomeChatChannelGlyph inviteOnly={channel ? !channel.open : homeChatRowInviteOnly(host, target)} size={15} />
+          </span>
+        )}
         <span className="truncate text-sm text-[var(--color-text-primary)]" data-testid="home-chat-title">
           {title}
         </span>
         {place !== null && <MachineChip place={place} />}
         {channel && channel.agents.length > 0 && (
-          <span className="text-[10px] text-[var(--color-text-muted)]" data-testid="home-chat-agent-eye" title="Agents with access can read this channel">
-            👁 {channel.agents.length === 1 ? '1 agent can read' : `${channel.agents.length} agents can read`}
+          <span className="inline-flex items-center gap-1 type-hint text-[var(--color-text-secondary)]" data-testid="home-chat-agent-eye" title="Agents with access can read this channel">
+            <EyeIcon size={13} strokeWidth={K2_ICON_STROKE} aria-hidden="true" />
+            {channel.agents.length === 1 ? '1 agent can read' : `${channel.agents.length} agents can read`}
           </span>
         )}
         <div className="flex-1" />

@@ -43,6 +43,7 @@ import { SearchableAgentList, tokenAndMatch, type AgentListRow, type AgentListSe
 import { AgentListStatus, agentListStatusClass } from '@/components/ui/AgentListStatus'
 import { serverLabelFor } from './serverLabel'
 import { Radio } from '@/components/ui/Radio'
+import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 
 const itemClass =
   'no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
@@ -121,12 +122,18 @@ function BackHead({ label, onBack }: { label: string; onBack?: () => void }): JS
   )
 }
 
-function glyph(text: string): AgentListRow['avatar'] {
+/** A person's avatar in a list row (20px, the list's agent avatar size). */
+function personAvatar(p: HomeChatPerson): AgentListRow['avatar'] {
+  return { kind: 'node', node: <HomeChatPersonAvatar username={p.username} name={p.displayName} picture={p.picture} size={20} /> }
+}
+
+/** A channel's glyph in a list row: `#` open, a lock invite-only. */
+function channelGlyph(inviteOnly: boolean): AgentListRow['avatar'] {
   return {
     kind: 'node',
     node: (
-      <span aria-hidden="true" className="inline-flex h-5 w-5 items-center justify-center text-[11px] text-[var(--color-text-muted)]">
-        {text}
+      <span aria-hidden="true" className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center text-[var(--color-text-secondary)]">
+        <HomeChatChannelGlyph inviteOnly={inviteOnly} size={14} />
       </span>
     ),
   }
@@ -171,7 +178,7 @@ export function AddPersonPanel({ home, onAddRow, onBack, autoFocus = true }: Hom
               value: `${server.key}\n${p.ext}`,
               label: p.displayName,
               detail: ready ? (p.role ? `${p.username} · ${p.role}` : p.username) : 'Setting up…',
-              avatar: glyph(p.displayName.trim()[0]?.toUpperCase() ?? '?'),
+              avatar: personAvatar(p),
               state: taken ? 'checked' : ready ? 'pickable' : 'disabled',
               title: taken
                 ? `Already on ${home.name}`
@@ -279,10 +286,10 @@ export function AddChannelPanel({ home, onAddRow, onBack, autoFocus = true }: Ho
         return {
           value: `${server.key}\n${c.conv}`,
           label: c.name,
-          detail: c.open ? 'open' : 'invite-only',
-          avatar: glyph(c.open ? '#' : '🔒'),
+          detail: c.inviteOnly ? 'Invite only' : 'Open',
+          avatar: channelGlyph(c.inviteOnly),
           state: taken ? 'checked' : 'pickable',
-          title: taken ? `Already on ${home.name}` : `Add #${c.name} to ${home.name}`,
+          title: taken ? `Already on ${home.name}` : `Add ${c.name} to ${home.name}`,
         }
       })
       const own =

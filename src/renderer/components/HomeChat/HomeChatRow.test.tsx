@@ -24,6 +24,8 @@ vi.mock('@/lib/home-chat/events-socket', async (orig) => ({
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { HomeChatHomeRow } from './HomeChatRow'
+import { HomeChatChannelGlyph, HomeChatPersonAvatar, PERSON_INK_DARK, personInk } from './HomeChatGlyphs'
+import { CHIP_INK_LIGHT, PERSON_COLORS, personColor, relativeLuminance } from '@/components/Presence/PresenceChip'
 import { resetHomeChatForTests, useHomeChatStore } from '@/stores/home-chat'
 import type { Home } from '@/stores/homes'
 
@@ -102,5 +104,42 @@ describe('Home chat rows', () => {
       fireEvent.click(screen.getByText('design'))
     })
     expect(useHomeChatStore.getState().open).toBeNull()
+  })
+
+  it('a channel row draws a lock when invite-only, # when open', async () => {
+    render(<HomeChatHomeRow home={HOME} row={HOME.rows[1]} />)
+    await waitFor(() => expect(document.querySelector('[data-home-chat-row="channel"] [data-channel-glyph]')?.getAttribute('data-channel-glyph')).toBe('lock'))
+    cleanup()
+    render(<HomeChatChannelGlyph inviteOnly={false} />)
+    expect(document.querySelector('[data-channel-glyph]')?.getAttribute('data-channel-glyph')).toBe('hash')
+    cleanup()
+    // Not known yet: `#`.
+    render(<HomeChatChannelGlyph inviteOnly={null} />)
+    expect(document.querySelector('[data-channel-glyph]')?.getAttribute('data-channel-glyph')).toBe('hash')
+  })
+
+  it('a person row shows their initials in their colour, in the agent avatar shape', async () => {
+    render(<HomeChatHomeRow home={HOME} row={HOME.rows[0]} />)
+    await screen.findByText('Alex Ng')
+    const av = document.querySelector<HTMLElement>('[data-home-chat-row="person"] [data-home-chat-avatar="initials"]')!
+    expect(av.textContent).toBe('AN')
+    expect(av.hasAttribute('data-k2-avatar')).toBe(true)
+    expect(av.getAttribute('data-k2-chamfer')).toBe('surface')
+    const rgb = (hex: string): string => `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`
+    expect(av.style.backgroundColor).toBe(rgb(personColor('alex')))
+  })
+
+  it("initials clear 4.5:1 on every person colour", () => {
+    const ratio = (a: string, b: string): number => {
+      const [x, y] = [relativeLuminance(a), relativeLuminance(b)]
+      return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+    }
+    for (const c of PERSON_COLORS) {
+      const ink = personInk(c)
+      expect([PERSON_INK_DARK, CHIP_INK_LIGHT]).toContain(ink)
+      expect(ratio(ink, c), c).toBeGreaterThanOrEqual(4.5)
+    }
+    render(<HomeChatPersonAvatar username="ana" name="Ana Ruiz" picture="data:image/png;base64,AA" />)
+    expect(document.querySelector('[data-home-chat-avatar="picture"] img')).not.toBeNull()
   })
 })

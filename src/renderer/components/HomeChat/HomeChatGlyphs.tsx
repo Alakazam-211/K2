@@ -4,24 +4,29 @@
 //     person colour every K2 surface uses: the daemon's username hash,
 //     `personColor`). The shape is an agent avatar's (`ProjectAvatar`'s
 //     `data-k2-avatar`): round in Glass, the surface cut in Terminal. The
-//     initials take whichever ink (near-black or white) reads better on the
+//     initials take whichever ink (black or white) reads better on the
 //     colour, so they clear 4.5:1 on every hue.
 //   - Channel: `#` for an open channel, a lock for an invite-only one (null:
 //     not known yet, drawn as `#`), a line icon in the app's stroke.
 
 import type { CSSProperties, JSX } from 'react'
 import { HashIcon, LockIcon } from 'lucide-react'
-import { CHIP_INK_DARK, CHIP_INK_LIGHT, chipInitials, relativeLuminance, resolvePersonColor } from '@/components/Presence/PresenceChip'
+import { CHIP_INK_LIGHT, chipInitials, relativeLuminance, resolvePersonColor } from '@/components/Presence/PresenceChip'
 import { chamferCutFor } from '@/components/Thread/chamfer'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 
-/** The ink for initials on `hex`: the one with more contrast. One of the two
- *  always clears 4.58:1 (the colour can't be far from both ends). */
+/** Black initials, where white would read worse. Pure black, not the
+ *  presence chip's near-black: on a mid blue (the person colours' third) near-black and white
+ *  both fall just under 4.5:1. */
+export const PERSON_INK_DARK = 'black'
+
+/** The ink for initials on `hex`: white or black, whichever has more
+ *  contrast. One of the two always clears 4.58:1. */
 export function personInk(hex: string): string {
   const l = relativeLuminance(hex)
   const onWhite = 1.05 / (l + 0.05)
-  const onDark = (l + 0.05) / (relativeLuminance(CHIP_INK_DARK) + 0.05)
-  return onWhite >= onDark ? CHIP_INK_LIGHT : CHIP_INK_DARK
+  const onBlack = (l + 0.05) / 0.05
+  return onWhite >= onBlack ? CHIP_INK_LIGHT : PERSON_INK_DARK
 }
 
 export function HomeChatPersonAvatar({

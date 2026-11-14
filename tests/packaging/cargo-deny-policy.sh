@@ -36,8 +36,17 @@ want(sorted(l.get("allow", [])) == sorted([
     "ISC", "Zlib", "Unicode-3.0", "BSL-1.0", "0BSD", "CDLA-Permissive-2.0"]),
      f"licenses.allow = the Kessel allowlist, got {l.get('allow')}")
 want(l.get("confidence-threshold") == 0.93, f"licenses.confidence-threshold = 0.93, got {l.get('confidence-threshold')}")
-want(l.get("exceptions") == [{"crate": "to_method", "allow": ["CC0-1.0"]}],
-     f"the one exception: CC0-1.0 for to_method only, got {l.get('exceptions')}")
+# The crate-scoped exceptions the Steward ruled, exactly: no version pins, no others.
+ruled = {
+    "to_method": ["CC0-1.0"], "notify": ["CC0-1.0"], "tiny-keccak": ["CC0-1.0"],
+    "cssparser": ["MPL-2.0"], "cssparser-macros": ["MPL-2.0"], "selectors": ["MPL-2.0"],
+    "dtoa-short": ["MPL-2.0"], "option-ext": ["MPL-2.0"],
+}
+ex = l.get("exceptions", [])
+got = {e.get("crate"): e.get("allow") for e in ex}
+want(len(ex) == len(ruled) and got == ruled and all(set(e) == {"crate", "allow"} for e in ex),
+     f"licenses.exceptions = the ruled crate-scoped list, got {ex}")
+want(not {"MPL-2.0", "CC0-1.0"} & set(l.get("allow", [])), "MPL-2.0 and CC0-1.0 never in licenses.allow")
 want("private" not in l, "no licenses.private (our own crates are checked too)")
 b = d.get("bans", {})
 want({"crate": "epaint_default_fonts"} in b.get("deny", []), "bans.deny has epaint_default_fonts")

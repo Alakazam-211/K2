@@ -103,7 +103,11 @@ ignore = [
 [licenses]
 # The Kessel licence allowlist. A dual (OR) licence passes when one of its
 # options is here. Anything not here is rejected, including MPL-2.0, GPL,
-# LGPL, CC0 (but see the one exception below), OFL-1.1 and Ubuntu-font-1.0.
+# LGPL, CC0, OFL-1.1 and Ubuntu-font-1.0. The crate-scoped exceptions below
+# are the only way past it: CC0-1.0 for to_method, notify and tiny-keccak;
+# MPL-2.0 for cssparser, cssparser-macros, selectors, dtoa-short and
+# option-ext. Each covers that crate only (all versions); any other MPL or
+# CC0 crate is still a finding.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -122,10 +126,44 @@ confidence-threshold = 0.93
 # doesn't use is expected, not a finding.
 unused-allowed-license = "allow"
 
-# The one named exception: CC0-1.0 for the crate `to_method` only, not
-# globally.
+# CC0-1.0 for the crate `to_method` only, not globally.
 [[licenses.exceptions]]
 crate = "to_method"
+allow = ["CC0-1.0"]
+
+# Rosson 11-03, Tauri's five; unmodified, source on crates.io
+[[licenses.exceptions]]
+crate = "cssparser"
+allow = ["MPL-2.0"]
+
+# Rosson 11-03, Tauri's five; unmodified, source on crates.io
+[[licenses.exceptions]]
+crate = "cssparser-macros"
+allow = ["MPL-2.0"]
+
+# Rosson 11-03, Tauri's five; unmodified, source on crates.io
+[[licenses.exceptions]]
+crate = "selectors"
+allow = ["MPL-2.0"]
+
+# Rosson 11-03, Tauri's five; unmodified, source on crates.io
+[[licenses.exceptions]]
+crate = "dtoa-short"
+allow = ["MPL-2.0"]
+
+# Rosson 11-03, Tauri's five; unmodified, source on crates.io
+[[licenses.exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
+
+# Rosson 11-08, card 70d82c46
+[[licenses.exceptions]]
+crate = "notify"
+allow = ["CC0-1.0"]
+
+# Rosson 11-08, card 70d82c46
+[[licenses.exceptions]]
+crate = "tiny-keccak"
 allow = ["CC0-1.0"]
 
 [bans]

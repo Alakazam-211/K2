@@ -117,7 +117,7 @@ fn not_cardable(role: &skin::SkinRole, v: &J, refusal: CliResponse) -> CliRespon
         Some(_) => format!("role '{}' belongs to another workspace's App: only that App's agent or the owner changes it", role.name),
     };
     let hint = format!(
-        "{what}. Instead, make a role of your own App with that room (k2 app role create <name> --app <your app>, then k2 app role \
+        "{what}: it reaches outside your workspace. Instead, make a role of your own App with that room (k2 app role create <name> --app <your app>, then k2 app role \
          room <name> {room} --caps …), or ask your human to run k2 app role room {} {room} from a terminal outside K2",
         role.name
     );

@@ -1126,18 +1126,31 @@ async fn a_real_answer_to_a_send_also_requeues_and_air_gap_or_off_asks_nothing()
     assert_eq!(drain_now(), Pass::Held("disabled"));
     assert_eq!(health_checks(&e.intake), 0, "nothing asked while held");
     assert_eq!(show(port, OWNER, &stranded)["state"], json!("failed"));
+    // Turning sending back on kicks the drain; with nothing queued it asks
+    // /health, which doesn't answer here, so the next check is an hour off.
+    e.intake.set(intake_answers((502, "bad gateway"), intake_created));
     let (s, _) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"enabled": true})));
     assert_eq!(s, 200);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while health_checks(&e.intake) == 0 {
+        assert!(Instant::now() < deadline, "the kick never asked /health");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // drain_now waits out the kick still in flight, then finds the hour not up.
+    assert_eq!(drain_now(), Pass::BackingOff, "the kick's health check went first");
+    let checks = health_checks(&e.intake);
+    assert_eq!(checks, 1, "the kick asked once");
+    assert_eq!(show(port, OWNER, &stranded)["state"], json!("failed"), "no answer: still failed");
 
     // A new send the intake takes: the stranded row is queued again too,
-    // without a health check.
+    // without another health check.
     let (s, v) = send(port, OWNER, json!({"text": "fresh"}));
     assert_eq!(s, 200, "{v}");
     let fresh = v["id"].as_str().unwrap().to_string();
     wait_row(port, OWNER, &fresh, "sent", |it| it["state"] == json!("sent"));
     let it = wait_row(port, OWNER, &stranded, "queued again", |it| it["state"] != json!("failed"));
-    assert_eq!(it["attempts"], json!(0), "a fresh window: {it}");
-    assert_eq!(health_checks(&e.intake), 0);
+    assert_eq!((it["state"].clone(), it["attempts"].clone()), (json!("queued"), json!(0)), "a fresh window: {it}");
+    assert_eq!(health_checks(&e.intake), checks);
     assert_eq!(drain_now(), Pass::Ran { sent: 1, refused: 0, retried: 0 });
     assert_eq!(show(port, OWNER, &stranded)["state"], json!("sent"));
 }

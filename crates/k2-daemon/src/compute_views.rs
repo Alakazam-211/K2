@@ -459,6 +459,10 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     // 0.46.8: pinned (a node named: it never moves on its own; k2 compute
     // move <id> --auto releases it) or auto (K2 may move it while queued).
     v["pinned"] = (j.ctl.any.is_none() && j.ctl.shards.is_empty()).into();
+    // An auto job: the nodes it `--avoid`s, as its workspace may see them.
+    if let Some(f) = j.ctl.any.as_ref() {
+        v["avoid"] = crate::compute_move::avoid_shown(f, &j.workspace_id).into();
+    }
     // A waiting job explains whether K2 may move it, and how its last
     // tries went (bounces, next try).
     if let Some(m) = crate::compute_place::move_state_json(j, compute::now()) {

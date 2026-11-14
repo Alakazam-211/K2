@@ -1092,7 +1092,7 @@ elif verb == "get":
         # Auto-placement (0.46.6): where K2 put it and why (a move says so).
         code = pl.get("code") or ""
         how = ("moved: " + code[len("moved_"):]) if code.startswith("moved_") else "auto"
-        print("  placed on %s (%s, %s): %s%s" % (pl.get("node"), how, pl.get("policy"), pl.get("why"), (" · " + pl["fits"]) if pl.get("fits") else ""))
+        print("  placed on %s (%s, %s): %s%s%s" % (pl.get("node"), how, pl.get("policy"), pl.get("why"), (" · " + pl["fits"]) if pl.get("fits") else "", (" · avoids " + ", ".join(j["avoid"])) if j.get("avoid") else ""))
     if (j.get("move") or {}).get("note"):
         # A waiting job: may K2 move it, and how its last tries went.
         print("  move: %s" % j["move"]["note"])

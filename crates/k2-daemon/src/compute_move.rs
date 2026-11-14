@@ -196,6 +196,14 @@ fn names_of(ids: &[String], ws_id: &str, admin: bool) -> Vec<String> {
         .collect()
 }
 
+/// What an auto job avoids, for its own workspace's eyes (`get`, the
+/// submit answer): the nodes granted to it, then the names kept as typed.
+pub(crate) fn avoid_shown(f: &store::AnyFilter, ws_id: &str) -> Vec<String> {
+    let mut out = names_of(&f.avoid, ws_id, false);
+    out.extend(f.avoid_names.iter().cloned());
+    out
+}
+
 /// Nothing fits with `want`'s avoid list: `avoid_leaves_no_node` when the
 /// list is why (without it a node would fit), else `Ok` (the caller's own
 /// no-fit refusal says why).

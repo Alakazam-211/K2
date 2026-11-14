@@ -1529,8 +1529,8 @@ async fn async_main() {
     // session registry, logs + emits watchdog SemanticEvent frames
     // when sessions go idle past configured thresholds, and
     // escalates to Ctrl-C / SIGKILL. Config is read from env vars
-    // (K2SO_WATCHDOG_*); set K2SO_WATCHDOG_DISABLED=1 to turn it
-    // off entirely. See `watchdog::config_from_env` for the
+    // (K5_WATCHDOG_*, the old K2SO_WATCHDOG_* names still read); set
+    // K5_WATCHDOG_DISABLED=1 to turn it off entirely. See `watchdog::config_from_env` for the
     // defaults.
     let _watchdog_handle = watchdog::spawn(watchdog::config_from_env());
 

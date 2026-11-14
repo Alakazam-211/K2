@@ -18,14 +18,18 @@
 //!
 //! | Var                               | Default |
 //! |-----------------------------------|---------|
-//! | `K2SO_WATCHDOG_DISABLED=1`        | off     | skip all stages |
-//! | `K2SO_WATCHDOG_WARN_SECS=<n>`     | 600     | idle→warning   |
-//! | `K2SO_WATCHDOG_CTRL_C_SECS=<n>`   | 1800    | idle→Ctrl-C    |
-//! | `K2SO_WATCHDOG_KILL_SECS=<n>`     | 3600    | idle→SIGKILL   |
-//! | `K2SO_WATCHDOG_SPAWN_GRACE_SECS=<n>` | 10   | boot grace     |
-//! | `K2SO_WATCHDOG_POLL_SECS=<n>`     | 5       | tick interval  |
+//! | `K5_WATCHDOG_DISABLED=1`          | off     | skip all stages |
+//! | `K5_WATCHDOG_WARN_SECS=<n>`       | 600     | idle→warning   |
+//! | `K5_WATCHDOG_CTRL_C_SECS=<n>`     | 1800    | idle→Ctrl-C    |
+//! | `K5_WATCHDOG_KILL_SECS=<n>`       | 3600    | idle→SIGKILL   |
+//! | `K5_WATCHDOG_SPAWN_GRACE_SECS=<n>` | 10     | boot grace     |
+//! | `K5_WATCHDOG_POLL_SECS=<n>`       | 5       | tick interval  |
 //!
 //! Setting any *_SECS to `0` disables that stage (maps to `None`).
+//!
+//! Each is read under its `K5_` name first, then under the old
+//! `K2SO_` name (and `K2_WATCHDOG_DISABLED`, which exists too). The first
+//! name that is set wins, whatever its value.
 //!
 //! **State lifecycle.** Per-session escalation state lives inside
 //! the watchdog loop itself, keyed by `SessionId`. When a session
@@ -56,51 +60,64 @@ pub fn spawn(config: WatchdogConfig) -> JoinHandle<()> {
     tokio::spawn(async move { run(config).await })
 }
 
+/// The names one watchdog setting is read under, newest first.
+const DISABLED_NAMES: &[&str] = &["K5_WATCHDOG_DISABLED", "K2_WATCHDOG_DISABLED", "K2SO_WATCHDOG_DISABLED"];
+const WARN_NAMES: &[&str] = &["K5_WATCHDOG_WARN_SECS", "K2SO_WATCHDOG_WARN_SECS"];
+const CTRL_C_NAMES: &[&str] = &["K5_WATCHDOG_CTRL_C_SECS", "K2SO_WATCHDOG_CTRL_C_SECS"];
+const KILL_NAMES: &[&str] = &["K5_WATCHDOG_KILL_SECS", "K2SO_WATCHDOG_KILL_SECS"];
+const SPAWN_GRACE_NAMES: &[&str] = &["K5_WATCHDOG_SPAWN_GRACE_SECS", "K2SO_WATCHDOG_SPAWN_GRACE_SECS"];
+const POLL_NAMES: &[&str] = &["K5_WATCHDOG_POLL_SECS", "K2SO_WATCHDOG_POLL_SECS"];
+
+/// The value of the first of `names` that is set, with the name it was
+/// read under. A name that is set wins over the ones after it whatever
+/// its value: an operator who sets the new name means it.
+fn first_set(names: &[&'static str]) -> Option<(&'static str, String)> {
+    names.iter().find_map(|name| std::env::var(name).ok().map(|v| (*name, v)))
+}
+
 /// Load config from environment variables, falling back to
-/// `WatchdogConfig::default()` for anything not set. If
-/// `K2SO_WATCHDOG_DISABLED=1` the returned config has every
-/// threshold cleared (watchdog becomes a no-op).
+/// `WatchdogConfig::default()` for anything not set. If the disabled
+/// switch is `1` the returned config has every threshold cleared
+/// (watchdog becomes a no-op).
 pub fn config_from_env() -> WatchdogConfig {
-    if std::env::var("K2_WATCHDOG_DISABLED").or_else(|_| std::env::var("K2SO_WATCHDOG_DISABLED")).as_deref() == Ok("1") {
-        log_debug!("[daemon/watchdog] disabled via K2SO_WATCHDOG_DISABLED=1");
-        return WatchdogConfig::disabled();
+    if let Some((name, v)) = first_set(DISABLED_NAMES) {
+        if v == "1" {
+            log_debug!("[daemon/watchdog] disabled via {name}=1");
+            return WatchdogConfig::disabled();
+        }
     }
     let defaults = WatchdogConfig::default();
 
-    fn opt_duration(var: &str, fallback: Option<Duration>) -> Option<Duration> {
-        match std::env::var(var) {
-            Ok(v) => match v.parse::<u64>() {
+    fn opt_duration(names: &[&'static str], fallback: Option<Duration>) -> Option<Duration> {
+        match first_set(names) {
+            Some((_, v)) => match v.parse::<u64>() {
                 Ok(0) => None,
                 Ok(secs) => Some(Duration::from_secs(secs)),
                 Err(_) => fallback,
             },
-            Err(_) => fallback,
+            None => fallback,
         }
     }
-    fn duration(var: &str, fallback: Duration) -> Duration {
-        std::env::var(var)
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
+    fn duration(names: &[&'static str], fallback: Duration) -> Duration {
+        first_set(names)
+            .and_then(|(_, v)| v.parse::<u64>().ok())
             .map(Duration::from_secs)
             .unwrap_or(fallback)
     }
 
     WatchdogConfig {
-        warn_after: opt_duration("K2SO_WATCHDOG_WARN_SECS", defaults.warn_after),
-        ctrl_c_after: opt_duration(
-            "K2SO_WATCHDOG_CTRL_C_SECS",
-            defaults.ctrl_c_after,
-        ),
-        kill_after: opt_duration("K2SO_WATCHDOG_KILL_SECS", defaults.kill_after),
-        spawn_grace: duration("K2SO_WATCHDOG_SPAWN_GRACE_SECS", defaults.spawn_grace),
-        poll_interval: duration("K2SO_WATCHDOG_POLL_SECS", defaults.poll_interval),
+        warn_after: opt_duration(WARN_NAMES, defaults.warn_after),
+        ctrl_c_after: opt_duration(CTRL_C_NAMES, defaults.ctrl_c_after),
+        kill_after: opt_duration(KILL_NAMES, defaults.kill_after),
+        spawn_grace: duration(SPAWN_GRACE_NAMES, defaults.spawn_grace),
+        poll_interval: duration(POLL_NAMES, defaults.poll_interval),
     }
 }
 
 async fn run(config: WatchdogConfig) {
     if !config.any_stage_enabled() {
         log_debug!(
-            "[daemon/watchdog] every stage disabled — idle loop (set K2SO_WATCHDOG_*_SECS to enable)"
+            "[daemon/watchdog] every stage disabled — idle loop (set K5_WATCHDOG_*_SECS to enable)"
         );
         return;
     }
@@ -282,17 +299,83 @@ mod tests {
     /// the test's duration.
     #[must_use = "the vars are restored when the guards drop"]
     fn clear_watchdog_env() -> Vec<EnvVar> {
-        [
-            "K2SO_WATCHDOG_DISABLED",
-            "K2SO_WATCHDOG_WARN_SECS",
-            "K2SO_WATCHDOG_CTRL_C_SECS",
-            "K2SO_WATCHDOG_KILL_SECS",
-            "K2SO_WATCHDOG_SPAWN_GRACE_SECS",
-            "K2SO_WATCHDOG_POLL_SECS",
-        ]
-        .into_iter()
-        .map(EnvVar::remove)
-        .collect()
+        [DISABLED_NAMES, WARN_NAMES, CTRL_C_NAMES, KILL_NAMES, SPAWN_GRACE_NAMES, POLL_NAMES]
+            .into_iter()
+            .flatten()
+            .copied()
+            .map(EnvVar::remove)
+            .collect()
+    }
+
+    /// Every setting has a `K5_` name, read first, and keeps its old one.
+    #[test]
+    fn every_setting_is_read_under_k5_first_and_the_old_name_last() {
+        for names in [DISABLED_NAMES, WARN_NAMES, CTRL_C_NAMES, KILL_NAMES, SPAWN_GRACE_NAMES, POLL_NAMES] {
+            let new = names.first().expect("a name");
+            let old = names.last().expect("a name");
+            assert!(new.starts_with("K5_WATCHDOG_"), "{new}");
+            assert!(old.starts_with("K2SO_WATCHDOG_"), "{old}");
+            assert_eq!(new.trim_start_matches("K5_"), old.trim_start_matches("K2SO_"), "the two names differ only in the prefix");
+        }
+    }
+
+    #[test]
+    fn the_k5_names_set_each_value() {
+        let _env = clear_watchdog_env();
+        let _a = EnvVar::set("K5_WATCHDOG_WARN_SECS", "11");
+        let _b = EnvVar::set("K5_WATCHDOG_CTRL_C_SECS", "22");
+        let _c = EnvVar::set("K5_WATCHDOG_KILL_SECS", "33");
+        let _d = EnvVar::set("K5_WATCHDOG_SPAWN_GRACE_SECS", "4");
+        let _e = EnvVar::set("K5_WATCHDOG_POLL_SECS", "2");
+        let c = config_from_env();
+        assert_eq!(c.warn_after, Some(Duration::from_secs(11)));
+        assert_eq!(c.ctrl_c_after, Some(Duration::from_secs(22)));
+        assert_eq!(c.kill_after, Some(Duration::from_secs(33)));
+        assert_eq!(c.spawn_grace, Duration::from_secs(4));
+        assert_eq!(c.poll_interval, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_old_names_still_set_each_value() {
+        let _env = clear_watchdog_env();
+        let _a = EnvVar::set("K2SO_WATCHDOG_WARN_SECS", "11");
+        let _b = EnvVar::set("K2SO_WATCHDOG_CTRL_C_SECS", "22");
+        let _c = EnvVar::set("K2SO_WATCHDOG_KILL_SECS", "33");
+        let _d = EnvVar::set("K2SO_WATCHDOG_SPAWN_GRACE_SECS", "4");
+        let _e = EnvVar::set("K2SO_WATCHDOG_POLL_SECS", "2");
+        let c = config_from_env();
+        assert_eq!(c.warn_after, Some(Duration::from_secs(11)));
+        assert_eq!(c.ctrl_c_after, Some(Duration::from_secs(22)));
+        assert_eq!(c.kill_after, Some(Duration::from_secs(33)));
+        assert_eq!(c.spawn_grace, Duration::from_secs(4));
+        assert_eq!(c.poll_interval, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_k5_name_wins_when_both_are_set() {
+        let _env = clear_watchdog_env();
+        let _old = EnvVar::set("K2SO_WATCHDOG_WARN_SECS", "11");
+        let _new = EnvVar::set("K5_WATCHDOG_WARN_SECS", "99");
+        // Also when the new name switches the stage off and the old one has a number.
+        let _old_kill = EnvVar::set("K2SO_WATCHDOG_KILL_SECS", "33");
+        let _new_kill = EnvVar::set("K5_WATCHDOG_KILL_SECS", "0");
+        let c = config_from_env();
+        assert_eq!(c.warn_after, Some(Duration::from_secs(99)));
+        assert!(c.kill_after.is_none());
+    }
+
+    #[test]
+    fn the_disabled_switch_is_read_under_all_three_names() {
+        for name in DISABLED_NAMES {
+            let _env = clear_watchdog_env();
+            let _on = EnvVar::set(name, "1");
+            assert!(!config_from_env().any_stage_enabled(), "{name}=1 turns the watchdog off");
+        }
+        // A newer name that is set and is not 1 wins over an older 1.
+        let _env = clear_watchdog_env();
+        let _old = EnvVar::set("K2SO_WATCHDOG_DISABLED", "1");
+        let _new = EnvVar::set("K5_WATCHDOG_DISABLED", "0");
+        assert!(config_from_env().any_stage_enabled());
     }
 
     #[test]

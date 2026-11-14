@@ -537,13 +537,13 @@ for n in nodes:
         fi
         local body
         body="$(_compute_json K2_CJ_node="$node" K2_CJ_workspace="$ws" K2_CJ_name="$name" K2_CJ_all_b="$all")"
-        _compute_call POST /cli/compute/cache/clear "$body"
+        _compute_call POST /cli/compute/cache/clear "$body" tcp
     else
         local q=""
         [ -n "$node" ] && q="$q&node=$(urlencode "$node")"
         [ -n "$ws" ] && q="$q&workspace=$(urlencode "$ws")"
         [ -n "$name" ] && q="$q&name=$(urlencode "$name")"
-        _compute_call GET /cli/compute/cache "${q#&}"
+        _compute_call GET /cli/compute/cache "${q#&}" tcp
     fi
     if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; exit 0; fi
     printf '%s' "$_CP_BODY" | K2_CP_VERB="$verb" python3 -c '

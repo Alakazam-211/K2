@@ -34,11 +34,12 @@ cleanup() {
 trap cleanup EXIT
 
 cat > "$SANDBOX/stub.py" <<'PY'
-import json, sys
+import json, os, socketserver, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
 LOG = sys.argv[1]
+CELL = sys.argv[3]
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -50,13 +51,33 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
         self.wfile.write(b)
+    via = "tcp"
+    def who(self, q):
+        return (q.get("token") or [""])[0] or (self.headers.get("Authorization") or "").replace("Bearer ", "")
+    def do_GET(self):
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        with open(LOG, "a") as f:
+            f.write(json.dumps({"path": u.path, "body": {k: v[0] for k, v in q.items() if k != "token"}, "token": self.who(q), "via": self.via}) + "\n")
+        if self.via == "cell" and u.path.startswith("/cli/compute/cache"):
+            # The cell socket never applies "Allow managing compute nodes".
+            return self.reply(403, {"error": {"code": "owner_only", "hint": "only the server's owner"}})
+        if u.path == "/cli/compute/cache":
+            return self.reply(200, {"nodes": [{"node": "k2n7", "online": True, "supported": True,
+                                    "caches": [{"workspace": "ops", "wsKey": "0123456789abcdef", "name": "fuzz", "bytes": 2048, "usedAt": 0, "busy": False}]}]})
+        return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
     def do_POST(self):
         u = urlparse(self.path)
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
-        token = (parse_qs(u.query).get("token") or [""])[0]
+        token = self.who(parse_qs(u.query))
         with open(LOG, "a") as f:
-            f.write(json.dumps({"path": u.path, "body": body, "token": token}) + "\n")
+            f.write(json.dumps({"path": u.path, "body": body, "token": token, "via": self.via}) + "\n")
+        if self.via == "cell" and u.path.startswith("/cli/compute/"):
+            return self.reply(403, {"error": {"code": "owner_only", "hint": "only the server's owner"}})
+        if u.path == "/cli/compute/cache/clear":
+            return self.reply(200, {"nodes": [{"node": "k2n7", "online": True, "supported": True, "caches": [],
+                                    "cleared": [{"workspace": "ops", "wsKey": "0123456789abcdef", "name": "fuzz", "bytes": 2048, "usedAt": 0}]}]})
         if u.path == "/cli/agent-access/set":
             if body.get("workspace") == "locked":
                 return self.reply(403, {"error": {"code": "owner_only", "hint": "only the server's owner may turn this on or off"}})
@@ -73,6 +94,17 @@ class H(BaseHTTPRequestHandler):
                                     "agentsCanUseCompute": False, "note": "agents also need Allow compute nodes"})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
 
+class Cell(H):
+    via = "cell"
+    def address_string(self):
+        return "unix"
+
+class U(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+if os.path.exists(CELL):
+    os.unlink(CELL)
+threading.Thread(target=U(CELL, Cell).serve_forever, daemon=True).start()
 srv = HTTPServer(("127.0.0.1", 0), H)
 with open(sys.argv[2], "w") as f:
     f.write(str(srv.server_address[1]))
@@ -81,9 +113,10 @@ PY
 
 LOG="$SANDBOX/requests.jsonl"
 : > "$LOG"
-python3 "$SANDBOX/stub.py" "$LOG" "$SANDBOX/port" &
+CELL_SOCK="$SANDBOX/cell.sock"
+python3 "$SANDBOX/stub.py" "$LOG" "$SANDBOX/port" "$CELL_SOCK" &
 STUB_PID=$!
-for _ in $(seq 1 50); do [ -s "$SANDBOX/port" ] && break; sleep 0.1; done
+for _ in $(seq 1 50); do [ -s "$SANDBOX/port" ] && [ -S "$CELL_SOCK" ] && break; sleep 0.1; done
 PORT="$(cat "$SANDBOX/port")"
 
 # Owner-style environment: port + token from a throwaway ~/.k2, no session.
@@ -134,6 +167,20 @@ out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops "$K2" compute grant mini-9 --w
 expect_has "grant renders" "$out" "granted mini-9 to web"
 expect_eq "grant body names the other workspace" "$(last body)" '{"node": "mini-9", "workspace": "web"}'
 expect_eq "grant carries the passport" "$(last token)" "passport-ops"
+
+echo "== cache list/clear from a K2 session go over loopback TCP (the cell socket never manages) =="
+# Sent on the cell socket, where the daemon never applies "Allow managing
+# compute nodes", an agent with the switch got owner_only for another
+# workspace's caches although the help says it may.
+out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops K2_HOOK_SOCK="$CELL_SOCK" "$K2" compute cache list --node k2n7 </dev/null)"
+expect_has "cache list renders" "$out" "fuzz"
+expect_eq "cache list path" "$(last path)" "/cli/compute/cache"
+expect_eq "cache list over TCP" "$(last via)" "tcp"
+expect_eq "cache list carries the passport" "$(last token)" "passport-ops"
+out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops K2_HOOK_SOCK="$CELL_SOCK" "$K2" compute cache clear --workspace ops --node k2n7 </dev/null)"
+expect_has "cache clear renders" "$out" "cleared"
+expect_eq "cache clear over TCP" "$(last via)" "tcp"
+expect_eq "cache clear body" "$(last body)" '{"all": false, "node": "k2n7", "workspace": "ops"}'
 
 echo "== docs =="
 usage="$("$K2" compute --help 2>&1 || true)"

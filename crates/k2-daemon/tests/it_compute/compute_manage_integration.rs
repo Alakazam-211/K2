@@ -461,3 +461,56 @@ async fn owner_notice_follows_alerts_to() {
     assert!(inbox_titles(&ops).is_empty(), "the alerts workspace gets it instead");
     set_alerts_to(None);
 }
+
+/// `k2 compute cache`: an agent reaches its own workspace's caches, and an
+/// agent allowed to manage compute nodes reaches any workspace's. Over the
+/// loopback listener, without the switch, another workspace's caches are
+/// refused `owner_only` and its own answer; with it, another workspace's
+/// list and clear answer (an active node that never offered `job-cache`
+/// shows as unsupported). Through a loopback proxy or the Connect tunnel
+/// the same passport never manages.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cache_routes_follow_the_manage_switch() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ops = seed_ws(&env, "cc-ops");
+    let _web = seed_ws(&env, "cc-web");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE projects SET agents_can_use_compute = 1 WHERE id = ?1", params![ops.id]).unwrap();
+    }
+    let (agent, _sid) = passport(&ops);
+    active_node("ccact1", "cc-act");
+
+    // Switch off: its own workspace's caches answer; another workspace's
+    // are the owner's (or an admin's).
+    let r = get(port, "/cli/compute/cache", &agent, "").await;
+    assert_eq!(r.status, 200, "own list, switch off: {}", r.body);
+    let r = get(port, "/cli/compute/cache", &agent, "node=cc-act&workspace=cc-web").await;
+    assert_eq!((r.status, code(&r).as_str()), (403, "owner_only"), "another's list, switch off: {}", r.body);
+    let r = post(port, "/cli/compute/cache/clear", &agent, json!({"node": "cc-act", "workspace": "cc-web"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (403, "owner_only"), "another's clear, switch off: {}", r.body);
+    let r = get(port, "/cli/compute/cache/clear", &agent, "workspace=cc-ops").await;
+    assert_eq!(r.status, 405, "clear is POST-only: {}", r.body);
+
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": ops.id, "toggle": "compute_manage", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // Switch on: another workspace's list and clear answer, per node.
+    let r = get(port, "/cli/compute/cache", &agent, "node=cc-act&workspace=cc-web").await;
+    assert_eq!(r.status, 200, "another's list, switch on: {}", r.body);
+    let row = &j(&r)["nodes"][0];
+    assert_eq!((row["node"].as_str(), row["supported"].as_bool()), (Some("cc-act"), Some(false)), "{}", r.body);
+    let r = post(port, "/cli/compute/cache/clear", &agent, json!({"node": "cc-act", "workspace": "cc-web"})).await;
+    assert_eq!(r.status, 200, "another's clear, switch on: {}", r.body);
+
+    // Never from off the box, switch or not.
+    let pq = format!("/cli/compute/cache?token={}&node=cc-act&workspace=cc-web", enc(&agent));
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "GET", &pq, None, Some("X-Forwarded-For: 203.0.113.9"))).await.unwrap();
+    assert_eq!((r.status, code(&r).as_str()), (403, "owner_only"), "through a loopback proxy: {}", r.body);
+    let r = get(d.tunnel_port, "/cli/compute/cache", &agent, "node=cc-act&workspace=cc-web").await;
+    assert!((400..500).contains(&r.status), "through the Connect tunnel: {} {}", r.status, r.body);
+}

@@ -168,7 +168,7 @@ elif [[ $status -eq 1 ]]; then
     echo -e "${YELLOW}→ P3 (tokio-ize polling) is justified for the 'OVER' paths above.${NC}"
     echo -e "${YELLOW}→ If UI blocking persists post-P3, P4 (daemon split) becomes warranted.${NC}"
 else
-    echo -e "${YELLOW}No [perf] lines found. Did K2SO run with K2SO_PERF=1?${NC}"
+    echo -e "${YELLOW}No [perf] lines found. Did K2 run with K2SO_PERF=1?${NC}"
 fi
 
 exit $status

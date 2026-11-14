@@ -9,12 +9,12 @@ import { join } from 'node:path'
 import { KesselClient } from '../src/renderer/kessel/client'
 import type { Frame } from '../src/renderer/kessel/types'
 
-const k2soDir = join(homedir(), '.k2')
+const k2Dir = join(homedir(), '.k2')
 const port = parseInt(
-  readFileSync(join(k2soDir, 'heartbeat.port'), 'utf-8').trim(),
+  readFileSync(join(k2Dir, 'heartbeat.port'), 'utf-8').trim(),
   10,
 )
-const token = readFileSync(join(k2soDir, 'heartbeat.token'), 'utf-8').trim()
+const token = readFileSync(join(k2Dir, 'heartbeat.token'), 'utf-8').trim()
 
 const res = await fetch(
   `http://127.0.0.1:${port}/cli/sessions/spawn?token=${token}`,

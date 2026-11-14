@@ -20,12 +20,12 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const k2soDir = join(homedir(), '.k2')
+const k2Dir = join(homedir(), '.k2')
 const port = parseInt(
-  readFileSync(join(k2soDir, 'heartbeat.port'), 'utf-8').trim(),
+  readFileSync(join(k2Dir, 'heartbeat.port'), 'utf-8').trim(),
   10,
 )
-const token = readFileSync(join(k2soDir, 'heartbeat.token'), 'utf-8').trim()
+const token = readFileSync(join(k2Dir, 'heartbeat.token'), 'utf-8').trim()
 
 type Frame =
   | { frame: 'Text'; data: { bytes: number[]; style: null } }

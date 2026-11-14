@@ -453,7 +453,7 @@ function DeployCard({
             hint="Where people open it. You can add your own domain on the App’s page after it deploys."
             below={<AddressCheckLine check={check} onUse={setAddress} />}
           >
-            <span className="flex items-center gap-2 min-w-0">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
               <Input
                 ref={addressRef}
                 id={`catalog-address-${entry.entry}`}
@@ -462,7 +462,7 @@ function DeployCard({
                 onChange={(e) => setAddress(e.target.value)}
                 className="w-40"
               />
-              {suffix ? <span className="type-hint text-[var(--color-text-secondary)] truncate">{suffix}</span> : null}
+              {suffix ? <span className="type-hint text-[var(--color-text-secondary)] break-all">{suffix}</span> : null}
             </span>
           </SettingRow>
           <SettingRow label="Looked after by" hint="The agent whose App this becomes.">

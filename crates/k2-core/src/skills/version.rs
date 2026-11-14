@@ -17,7 +17,7 @@
 //! Four-tier system matching the Agent Skills Settings UI:
 //!
 //! - [`SKILL_VERSION_MANAGER`] — Workspace Manager (workspace's manager-mode primary agent).
-//! - [`SKILL_VERSION_K2_AGENT`] — K2SO planner agent (PRDs, etc.).
+//! - [`SKILL_VERSION_K2_AGENT`] — K2 planner agent (PRDs, etc.).
 //! - [`SKILL_VERSION_CUSTOM_AGENT`] — Custom mode single-agent.
 //! - [`SKILL_VERSION_TEMPLATE`] — Sub-agent template delegated to by
 //!   a manager.
@@ -37,39 +37,39 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 // ── Version constants ────────────────────────────────────────────────
 
 /// Bumped to 2 in 0.39.0: Phase 2.1 A25 canonical CLI verbs replace
-/// the pre-Phase-2 deprecated surface (`k2so delegate`, `work *`,
+/// the pre-Phase-2 deprecated surface (`k2 delegate`, `work *`,
 /// `agents create`, etc.). All four tiers re-roll on next startup so
 /// unmodified SKILL.md files stop telling agents to run dead commands.
 ///
-/// Manager / K2SO-agent / custom-agent bumped to 3 in 0.40.x: skills
+/// Manager / K2-agent / custom-agent bumped to 3 in 0.40.x: skills
 /// now teach `feedback ask` (durable agent→human questions) and the
 /// `project` surface (project-group shared chat + the
 /// `[project:<name>]` reply rule).
 ///
-/// Manager / K2SO-agent / custom-agent bumped to 4 in 0.40.30: skills
+/// Manager / K2-agent / custom-agent bumped to 4 in 0.40.30: skills
 /// now teach the API read-back contract — "Respond to your API caller"
 /// (`k2 respond` / `k2 respond --final` when the session was launched
 /// through the K2 API and `K2_HOOK_TOKEN` is staged).
 ///
-/// Manager / K2SO-agent / custom-agent bumped to 5 in 0.40.x (K2 Mail
+/// Manager / K2-agent / custom-agent bumped to 5 in 0.40.x (K2 Mail
 /// S8): skills now teach the `k2 mail` surface — minting, reading with
 /// the untrusted-content markers, the `wait` loop pattern, and send
 /// governance (off | approval | on; queued IS success).
 ///
-/// Manager / K2SO-agent / custom-agent bumped to 6 in 0.40.42 (K2 Mail
+/// Manager / K2-agent / custom-agent bumped to 6 in 0.40.42 (K2 Mail
 /// OAuth, O6): the assistant-inbox note now covers OAuth-linked Gmail /
 /// Microsoft accounts (human-only setup; the agent never runs the flow)
 /// and corrects the linked-send story — drafting is always available,
 /// sending needs a human-granted `send` level, and OAuth inboxes stay
 /// draft-only in Phase 1.
 ///
-/// Manager / K2SO-agent / custom-agent bumped to 7 in 0.40.42 (SMTP
+/// Manager / K2-agent / custom-agent bumped to 7 in 0.40.42 (SMTP
 /// XOAUTH2 landed): a Gmail-OAuth inbox now sends over SMTP at the
 /// `send` level just like an app-password inbox — only Microsoft-OAuth
 /// stays draft-only (until Graph send lands). The assistant-inbox note
 /// corrects the "OAuth inboxes are draft-only" claim accordingly.
 ///
-/// Manager / K2SO-agent / custom-agent bumped to 9: skills teach the
+/// Manager / K2-agent / custom-agent bumped to 9: skills teach the
 /// `k2 db` / `k2 store` sidecar (Linux; fail-closed `db_agent_access`;
 /// owner enable; create/dsn/migrate/dump/store).
 /// Bumped to 10: restore + publish-subdomain off-box hint (D30).
@@ -81,13 +81,16 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// `--assign <user>` (a user on this server; required in a future update).
 /// Bumped to 14 (template to 4) in 0.46.11: `k2 checkin` is retired, so
 /// the tiers teach `inbox`, `organization bulletin` / `update` and `done`.
-pub const SKILL_VERSION_MANAGER: u32 = 14;
-pub const SKILL_VERSION_K2_AGENT: u32 = 14;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 14;
-pub const SKILL_VERSION_TEMPLATE: u32 = 4;
+/// Bumped to 15 (template to 5) in 0.46.13: the skills teach `k2 <verb>`
+/// (never the retired `k2so` CLI name) and say "K2", not "K2SO".
+pub const SKILL_VERSION_MANAGER: u32 = 15;
+pub const SKILL_VERSION_K2_AGENT: u32 = 15;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 15;
+pub const SKILL_VERSION_TEMPLATE: u32 = 5;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
-pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
+/// v3 (0.46.13) = says "K2" where it said "K2SO".
+pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 3;
 /// `k2-zen` skill (prd-zen-mode-v1 Z18). Written only when this daemon
 /// has `~/.k2/zen/` (Z68). v1 = first ship. v2 = theme bundles, `[font]`,
 /// terminal palette, backgrounds, `k2 zen theme` (Omarchy additions).

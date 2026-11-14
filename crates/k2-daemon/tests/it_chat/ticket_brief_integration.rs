@@ -852,9 +852,9 @@ fn teaching_sites_teach_the_brief() {
     for (name, body) in [
         ("manager", generate_manager_skill_content(&pp, "P")),
         ("custom", generate_custom_agent_skill_content("P", "a")),
-        ("k2so-agent", generate_k2_agent_skill_content("P", "a")),
+        ("k2-agent", generate_k2_agent_skill_content("P", "a")),
     ] {
-        assert!(body.contains("k2so tickets template > brief.html"), "{name}");
+        assert!(body.contains("k2 tickets template > brief.html"), "{name}");
         assert!(body.contains("--html brief.html"), "{name}");
         assert!(body.contains("k2 study ticket-brief"), "{name}");
         assert!(body.contains("--html brief.html --assign <user>"), "{name}");
@@ -862,9 +862,9 @@ fn teaching_sites_teach_the_brief() {
         assert!(body.contains("required in a future update"), "{name}");
         assert!(body.contains("k2 connections list --users"), "{name}");
     }
-    assert_eq!(version::SKILL_VERSION_MANAGER, 14);
-    assert_eq!(version::SKILL_VERSION_K2_AGENT, 14);
-    assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 14);
+    assert_eq!(version::SKILL_VERSION_MANAGER, 15);
+    assert_eq!(version::SKILL_VERSION_K2_AGENT, 15);
+    assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 15);
     assert_eq!(version::SKILL_VERSION_WORKSPACE, 58);
 
     // The loadable k2-cli skill the compose path writes into a workspace

@@ -52,19 +52,19 @@ your first user message. Do what it asks, then exit.
 ## Inspecting + managing heartbeats from your terminal
 
 ```
-k2so heartbeat                                       # default: list active schedules
-k2so heartbeat schedule list [--archived]            # full schedule listing
-k2so heartbeat show <name> [--json]                  # schedule + last fire details
-k2so heartbeat schedule add --name <name> --daily --time 09:00
-k2so heartbeat schedule add --name <name> --hourly --start 09:00 --end 17:00 --every 30 --unit minutes
-k2so heartbeat schedule edit <name> --daily --time 10:00
-k2so heartbeat schedule rename <old> <new>
-k2so heartbeat schedule enable <name>
-k2so heartbeat schedule disable <name>
-k2so heartbeat schedule remove <name> [--purge]
-k2so heartbeat signal fire <name>                    # fire now (skip schedule window)
-k2so heartbeat signal wakeup <name>                  # print/edit the WAKEUP.md
-k2so heartbeat signal wake                           # auto-wake (no name needed)
+k2 heartbeat                                       # default: list active schedules
+k2 heartbeat schedule list [--archived]            # full schedule listing
+k2 heartbeat show <name> [--json]                  # schedule + last fire details
+k2 heartbeat schedule add --name <name> --daily --time 09:00
+k2 heartbeat schedule add --name <name> --hourly --start 09:00 --end 17:00 --every 30 --unit minutes
+k2 heartbeat schedule edit <name> --daily --time 10:00
+k2 heartbeat schedule rename <old> <new>
+k2 heartbeat schedule enable <name>
+k2 heartbeat schedule disable <name>
+k2 heartbeat schedule remove <name> [--purge]
+k2 heartbeat signal fire <name>                    # fire now (skip schedule window)
+k2 heartbeat signal wakeup <name>                  # print/edit the WAKEUP.md
+k2 heartbeat signal wake                           # auto-wake (no name needed)
 ```
 
 The user can also drive the same actions from Settings →
@@ -74,14 +74,14 @@ table; whichever you prefer is fine.
 ## Available Tools
 
 Standard CLI tools are available in your terminal (`gh`, `git`,
-`curl`, etc.). K2SO tools:
+`curl`, etc.). K2 tools:
 
 ```
-k2so terminal spawn --title "..." --command "..."   # run parallel tasks
-k2so inbox                                          # your inbox: new work at the top
-k2so organization bulletin                          # today's bulletin of orgs and heads
-k2so organization update "<news>"                   # send your status to your org's head
-k2so done [--blocked "reason"]                      # signal task completion (or blocked)
+k2 terminal spawn --title "..." --command "..."   # run parallel tasks
+k2 inbox                                          # your inbox: new work at the top
+k2 organization bulletin                          # today's bulletin of orgs and heads
+k2 organization update "<news>"                   # send your status to your org's head
+k2 done [--blocked "reason"]                      # signal task completion (or blocked)
 ```
 "#;
 
@@ -189,7 +189,7 @@ canonical persona at `.k2/agent/ROLE.md`:
    reversible).
 
 **Never inject a templated or marked block.** Do not paste a fenced
-"K2SO-managed" region, do not stamp a checksum the daemon would later
+"K2-managed" region, do not stamp a checksum the daemon would later
 auto-rewrite, do not bulldoze existing content. In a long-lived
 workspace a mechanical block displaces context the agent relied on —
 that is exactly the failure mode this organic model exists to avoid.
@@ -246,7 +246,7 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
 
     // ── 1. Identity + Workspace Context ──
     skill.push_str(&format!(
-        "# K2SO Workspace Manager Skill\n\nYou are the primary agent for the **{}** workspace, operating in manager mode.\n\nA workspace has at most one primary agent (you). Specialist personas are **skill profiles** — documentation, not separate spawnable agents. Your harness (Claude Code, Cursor, Tauri Cmd+T) handles all sub-agent and worktree spawning natively; K2SO does not.\n\n",
+        "# K2 Workspace Manager Skill\n\nYou are the primary agent for the **{}** workspace, operating in manager mode.\n\nA workspace has at most one primary agent (you). Specialist personas are **skill profiles** — documentation, not separate spawnable agents. Your harness (Claude Code, Cursor, Tauri Cmd+T) handles all sub-agent and worktree spawning natively; K2 does not.\n\n",
         project_name
     ));
 
@@ -266,13 +266,13 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
     skill.push_str("## Team — Connected Workspaces\n\n");
     skill.push_str("These are other workspace-agents you can collaborate with. Each is itself an agent (hands, memory, skills) — peers, not subordinates.\n\n");
     skill.push_str("To message one — or read what they're doing:\n\n");
-    skill.push_str("    k2so msg <workspace-name> \"your message\"              # live (SHORT messages only)\n");
-    skill.push_str("    k2so msg <workspace-name> --inbox-wake <path> [path…]  # package + knock (preferred)\n");
-    skill.push_str("    k2so msg <workspace-name> --inbox-silent <path> [path…] # package only, no notify\n");
-    skill.push_str("    k2so read <workspace-name>                             # read their live terminal (peek before you inject)\n\n");
-    skill.push_str("The recipient reads a live `msg` immediately if running, or a tray package via `k2so inbox read <id>` on their own schedule. Not `k2 mail`.\n\n");
+    skill.push_str("    k2 msg <workspace-name> \"your message\"              # live (SHORT messages only)\n");
+    skill.push_str("    k2 msg <workspace-name> --inbox-wake <path> [path…]  # package + knock (preferred)\n");
+    skill.push_str("    k2 msg <workspace-name> --inbox-silent <path> [path…] # package only, no notify\n");
+    skill.push_str("    k2 read <workspace-name>                             # read their live terminal (peek before you inject)\n\n");
+    skill.push_str("The recipient reads a live `msg` immediately if running, or a tray package via `k2 inbox read <id>` on their own schedule. Not `k2 mail`.\n\n");
     skill.push_str("**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets truncated by their terminal input widget. Use `--inbox-wake` / `--inbox-silent` for anything substantial (task briefs, file contents, multi-line notes).\n\n");
-    skill.push_str("**`read` for human-in-the-loop:** before injecting into another agent (especially one waiting on a human), `k2so read <workspace-name>` shows the last ~50 lines of its live terminal so you can see what it's doing or waiting on. Add `--agent <name>` for a specific agent, `--lines N` for more history.\n\n");
+    skill.push_str("**`read` for human-in-the-loop:** before injecting into another agent (especially one waiting on a human), `k2 read <workspace-name>` shows the last ~50 lines of its live terminal so you can see what it's doing or waiting on. Add `--agent <name>` for a specific agent, `--lines N` for more history.\n\n");
 
     match crate::connections::list_peers(project_path) {
         Ok(peers) if !peers.is_empty() => {
@@ -281,15 +281,15 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
                 skill.push_str(&format!("  - {}\n", peer.project_name));
             }
             skill.push('\n');
-            skill.push_str("To add a connection:    k2so connections add <other-workspace-path>\n");
-            skill.push_str("To see all connections: k2so connections list\n\n");
+            skill.push_str("To add a connection:    k2 connections add <other-workspace-path>\n");
+            skill.push_str("To see all connections: k2 connections list\n\n");
         }
         // Project not registered (Err) OR no peers (Ok empty) — same
         // user-facing message either way: tell them how to wire one up.
         _ => {
             skill.push_str("### No connected workspaces yet\n\n");
             skill.push_str("You're operating in isolation. To collaborate with another workspace-agent:\n\n");
-            skill.push_str("    k2so connections add <other-workspace-path>\n\n");
+            skill.push_str("    k2 connections add <other-workspace-path>\n\n");
         }
     }
 
@@ -304,16 +304,16 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
 
 On each wake, run through this in order:
 
-1. `k2so inbox` and `k2so organization bulletin`: new work, then today's bulletin of orgs and heads.
+1. `k2 inbox` and `k2 organization bulletin`: new work, then today's bulletin of orgs and heads.
 2. **Triage messages** — respond to live messages from connected workspaces or the user.
-3. **Triage the inbox** — `k2so inbox` shows new arrivals at the top level. Sort by priority (critical > high > normal > low) and decide for each item:
+3. **Triage the inbox** — `k2 inbox` shows new arrivals at the top level. Sort by priority (critical > high > normal > low) and decide for each item:
    - **Act on it** — work it yourself when scoped.
-   - **File it** — `k2so inbox move <id> <folder>` (folders are agent-organized like email; `inbox folders` lists what exists).
-   - **Reply** — `k2so inbox respond <id> "text"` (to sender) or `k2so msg <ws> "..."` (live, to another workspace).
-   - **Archive** — `k2so inbox archive <id>` when complete.
-4. **Review pending merges** — `k2so reviews`, then `k2so review approve|reject|feedback <branch>` per A23.3 framing: worktrees may come from your harness, from a human, or from an integration — your job is to read the diff and decide regardless of origin.
-5. **Report status**: `k2so organization update "triaging 3 inbox items"` sends it to your org's head.
-6. **Signal completion**: `k2so done`, optionally `--blocked "reason"`.
+   - **File it** — `k2 inbox move <id> <folder>` (folders are agent-organized like email; `inbox folders` lists what exists).
+   - **Reply** — `k2 inbox respond <id> "text"` (to sender) or `k2 msg <ws> "..."` (live, to another workspace).
+   - **Archive** — `k2 inbox archive <id>` when complete.
+4. **Review pending merges** — `k2 reviews`, then `k2 review approve|reject|feedback <branch>` per A23.3 framing: worktrees may come from your harness, from a human, or from an integration — your job is to read the diff and decide regardless of origin.
+5. **Report status**: `k2 organization update "triaging 3 inbox items"` sends it to your org's head.
+6. **Signal completion**: `k2 done`, optionally `--blocked "reason"`.
 
 "#);
 
@@ -322,27 +322,27 @@ On each wake, run through this in order:
 
 ### By Task Complexity
 - **Simple** (typo, config, single-file fix): work directly in the main branch.
-- **Complex** (multi-file feature, refactor, new system): hand off to your harness's sub-agent / worktree feature. Load a skill profile (`k2so skills profile <name>`) into the spawned session's context so the sub-agent has the right persona. K2SO no longer spawns agents — your harness does.
+- **Complex** (multi-file feature, refactor, new system): hand off to your harness's sub-agent / worktree feature. Load a skill profile (`k2 skills profile <name>`) into the spawned session's context so the sub-agent has the right persona. K2 no longer spawns agents — your harness does.
 
 "#);
 
     // ── 5. Skills Protocol ──
     skill.push_str(r#"## Skill Profiles
 
-Skill profiles are markdown documents at `.k2/skills/<name>/SKILL.md` describing a role, persona, or capability set. The harness loads them; K2SO does not spawn them.
+Skill profiles are markdown documents at `.k2/skills/<name>/SKILL.md` describing a role, persona, or capability set. The harness loads them; K2 does not spawn them.
 
 ```
-k2so skills list                              # what skill profiles exist here
-k2so skills profile <name>                    # read a profile's SKILL.md
-k2so skills create <name> [--template <src>]  # new profile (optionally seeded)
-k2so skills remove <name>                     # delete (sent to Trash)
-k2so skills regenerate [<name>]               # refresh SKILL.md from templates
+k2 skills list                              # what skill profiles exist here
+k2 skills profile <name>                    # read a profile's SKILL.md
+k2 skills create <name> [--template <src>]  # new profile (optionally seeded)
+k2 skills remove <name>                     # delete (sent to Trash)
+k2 skills regenerate [<name>]               # refresh SKILL.md from templates
 ```
 
 When you need a specialist persona on a piece of work:
-1. `k2so skills profile <name>` — print the SKILL.md content.
+1. `k2 skills profile <name>` — print the SKILL.md content.
 2. Load it into your harness's sub-agent context (Claude Code sub-agent prompt, Cursor worktree instructions, etc.).
-3. Your harness handles the worktree + spawn. K2SO tracks the resulting merge review.
+3. Your harness handles the worktree + spawn. K2 tracks the resulting merge review.
 
 "#);
 
@@ -352,10 +352,10 @@ When you need a specialist persona on a piece of work:
 `reviews` and `review` track pending merge reviews for worktrees this workspace has produced — regardless of who created the worktree (harness sub-agent spawn, human, integration). Your job: read the diff, decide.
 
 ```
-k2so reviews                                   # list pending reviews
-k2so review approve <branch>                   # merge to main, clean up worktree
-k2so review reject <branch> --reason "..."     # discard worktree, optional feedback
-k2so review feedback <branch> -m "..."         # send feedback without rejecting
+k2 reviews                                   # list pending reviews
+k2 review approve <branch>                   # merge to main, clean up worktree
+k2 review reject <branch> --reason "..."     # discard worktree, optional feedback
+k2 review feedback <branch> -m "..."         # send feedback without rejecting
 ```
 
 "#);
@@ -365,40 +365,40 @@ k2so review feedback <branch> -m "..."         # send feedback without rejecting
 
 ### Status and completion
 ```
-k2so organization bulletin                     # today's bulletin of orgs and heads
-k2so organization update "working on auth refactor"   # status to your org's head
-k2so done                                      # signal task complete
-k2so done --blocked "waiting for API spec"
+k2 organization bulletin                     # today's bulletin of orgs and heads
+k2 organization update "working on auth refactor"   # status to your org's head
+k2 done                                      # signal task complete
+k2 done --blocked "waiting for API spec"
 ```
 
 ### Message another workspace — or read what it's doing
 ```
-k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
-k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
-k2so msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
-k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
-k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
-k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
-k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
+k2 talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
+k2 msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
+k2 msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
+k2 msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
+k2 msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
+k2 msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
+k2 read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
 ```
 
-`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise (no silent inbox fallback). Use `--inbox-wake` / `--inbox-silent` when the recipient should open a durable package with `k2so inbox read <id>` on their own schedule. Not `k2 mail`.
+`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise (no silent inbox fallback). Use `--inbox-wake` / `--inbox-silent` when the recipient should open a durable package with `k2 inbox read <id>` on their own schedule. Not `k2 mail`.
 
 **`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text. Longer or multi-line content gets **truncated** by the recipient's terminal input widget — use `--inbox-wake` / `--inbox-silent` for anything substantial (briefs, file contents, multi-line notes). This length limit is the reason the inbox exists.
 
-**`read` (the read complement to `msg`):** `k2so read <workspace>` returns the last N lines (default 50) of that workspace's live terminal — its primary/coordinator session, or a specific `--agent <name>`. Use it for human-in-the-loop: peek what an agent is doing or waiting on *before* you inject a `msg`, or to diagnose a stuck agent. For who is working in your own workspace (the main agent, sidecars, chat tabs), run `k2 sessions`.
+**`read` (the read complement to `msg`):** `k2 read <workspace>` returns the last N lines (default 50) of that workspace's live terminal — its primary/coordinator session, or a specific `--agent <name>`. Use it for human-in-the-loop: peek what an agent is doing or waiting on *before* you inject a `msg`, or to diagnose a stuck agent. For who is working in your own workspace (the main agent, sidecars, chat tabs), run `k2 sessions`.
 
-**`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
+**`talk` (BETA) — THE inter-agent interaction verb.** `k2 talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2 talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2 terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
-Only workspaces linked via `k2so connections` are reachable.
+Only workspaces linked via `k2 connections` are reachable.
 
 ### Ask a human
 ```
-k2so tickets template > brief.html
-k2so tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
+k2 tickets template > brief.html
+k2 tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
 # (`k2 feedback` is a compatibility alias. Product "Feedback" for K2 itself is separate/future.)
 ```
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2so tickets list` / `k2so tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2so tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2so tickets resolve <id> --answered "<outcome>"`) or resolved (`k2so tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2 tickets list` / `k2 tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2 tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2 tickets resolve <id> --answered "<outcome>"`) or resolved (`k2 tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
 
 ### Respond to your API caller
 If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `k2 respond` output reaches it.
@@ -411,10 +411,10 @@ Outside an API-launched session `k2 respond` fails loudly — it needs the sessi
 ### Projects (shared group chat)
 A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
 ```
-k2so project read [<name>]        # catch up on the project's shared chat
-k2so project msg [<name>] "..."   # post to it
+k2 project read [<name>]        # catch up on the project's shared chat
+k2 project msg [<name>] "..."   # post to it
 ```
-**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2so project msg <name> "your reply"`. Never `k2so msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
+**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2 project msg <name> "your reply"`. Never `k2 msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
 
 ### Email (k2 mail)
 Your server can host real email (Linux daemons; your human enables it in Settings → Email). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
@@ -447,23 +447,23 @@ k2 mail delete <address>                        # retire an address you own (fre
     skill.push_str(r#"
 ### Discover peers + connections
 ```
-k2so connections list                          # workspaces with live agents now
-k2so connections list|add|remove               # cross-workspace links
+k2 connections list                          # workspaces with live agents now
+k2 connections list|add|remove               # cross-workspace links
 ```
 
 ### Activity feed
 ```
-k2so activity [--limit N] [--workspace <path>]
+k2 activity [--limit N] [--workspace <path>]
 ```
 
 ### Commit + merge
 ```
-k2so commit [-m "..."]                         # AI-assisted commit
-k2so commit --merge                            # commit and merge into main
+k2 commit [-m "..."]                         # AI-assisted commit
+k2 commit --merge                            # commit and merge into main
 ```
 
 ### Glossary
-Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, skill, inbox, heartbeat, state, …). When in doubt, look it up.
+Run `k2 glossary <term>` for definitions of K2-specific terms (workspace, skill, inbox, heartbeat, state, …). When in doubt, look it up.
 
 "#);
 
@@ -476,7 +476,7 @@ Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, sk
 /// No delegation — custom agents send work to workspace inboxes.
 pub fn generate_custom_agent_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
-r#"# K2SO Agent Skill
+r#"# K2 Agent Skill
 
 You are {agent_name}, a custom agent for {project_name}.
 
@@ -494,8 +494,8 @@ You are {agent_name}, a custom agent for {project_name}.
     skill.push_str(r#"## Start of every wake
 
 ```
-k2so inbox                          # new work at the top
-k2so organization bulletin          # today's bulletin of orgs and heads
+k2 inbox                          # new work at the top
+k2 organization bulletin          # today's bulletin of orgs and heads
 ```
 
 ## Triage your inbox
@@ -503,55 +503,55 @@ k2so organization bulletin          # today's bulletin of orgs and heads
 The workspace inbox is your email: items arrive from other workspaces or are composed by you. Organize it the way you'd organize email — create folders that fit your workflow.
 
 ```
-k2so inbox                          # show top-level new arrivals
-k2so inbox list [<folder>]          # list a folder (e.g., active, projects)
-k2so inbox read <id>                # full text of one item
-k2so inbox compose --title "..." --body "..."   # write a self-note / task
-k2so inbox respond <id> "text"      # reply to sender
-k2so inbox move <id> <folder>       # file (creates folder if needed)
-k2so inbox archive <id>             # mark done (preserved + searchable)
-k2so inbox delete <id>              # send to macOS Trash (recoverable)
-k2so inbox search "query"           # search inbox + folders
-k2so inbox folders                  # list folders you have created
+k2 inbox                          # show top-level new arrivals
+k2 inbox list [<folder>]          # list a folder (e.g., active, projects)
+k2 inbox read <id>                # full text of one item
+k2 inbox compose --title "..." --body "..."   # write a self-note / task
+k2 inbox respond <id> "text"      # reply to sender
+k2 inbox move <id> <folder>       # file (creates folder if needed)
+k2 inbox archive <id>             # mark done (preserved + searchable)
+k2 inbox delete <id>              # send to macOS Trash (recoverable)
+k2 inbox search "query"           # search inbox + folders
+k2 inbox folders                  # list folders you have created
 ```
 
 ## Report status + completion
 
 ```
-k2so organization update "reviewing security audit"   # status to your org's head
-k2so done
-k2so done --blocked "waiting for API access"
+k2 organization update "reviewing security audit"   # status to your org's head
+k2 done
+k2 done --blocked "waiting for API access"
 ```
 
 ## Message another workspace — or read what it's doing
 
 ```
-k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
-k2so msg <workspace> "text"                              # live (call/IM — SHORT messages only)
-k2so msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
-k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
-k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
-k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
+k2 talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
+k2 msg <workspace> "text"                              # live (call/IM — SHORT messages only)
+k2 msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
+k2 msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
+k2 msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
+k2 read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
 ```
 
-`msg` (live) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` if the recipient is offline (no silent fallback). Use `--inbox-wake` / `--inbox-silent` to land a durable tray package the recipient opens with `k2so inbox read <id>` on their own schedule. Not `k2 mail`.
+`msg` (live) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` if the recipient is offline (no silent fallback). Use `--inbox-wake` / `--inbox-silent` to land a durable tray package the recipient opens with `k2 inbox read <id>` on their own schedule. Not `k2 mail`.
 
 **`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets **truncated** by their terminal input widget. Use `--inbox-wake` / `--inbox-silent` for anything substantial. (This length limit is why the inbox exists.)
 
-**`read` for human-in-the-loop:** `k2so read <workspace>` returns the last N lines (default 50) of that workspace's live terminal so you can see what an agent is doing or waiting on *before* injecting a `msg` — or to diagnose a stuck agent. Add `--agent <name>` for a specific agent.
+**`read` for human-in-the-loop:** `k2 read <workspace>` returns the last N lines (default 50) of that workspace's live terminal so you can see what an agent is doing or waiting on *before* injecting a `msg` — or to diagnose a stuck agent. Add `--agent <name>` for a specific agent.
 
-**`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
+**`talk` (BETA) — THE inter-agent interaction verb.** `k2 talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2 talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2 terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
-Only workspaces linked via `k2so connections` are reachable.
+Only workspaces linked via `k2 connections` are reachable.
 
 ## Ask a human
 
 ```
-k2so tickets template > brief.html
-k2so tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
+k2 tickets template > brief.html
+k2 tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
 ```
 
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2so tickets list` / `k2so tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2so tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2so tickets resolve <id> --answered "<outcome>"`) or resolved (`k2so tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2 tickets list` / `k2 tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2 tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2 tickets resolve <id> --answered "<outcome>"`) or resolved (`k2 tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
 
 ## Respond to your API caller
 
@@ -569,11 +569,11 @@ Outside an API-launched session `k2 respond` fails loudly — it needs the sessi
 A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
 
 ```
-k2so project read [<name>]        # catch up on the project's shared chat
-k2so project msg [<name>] "..."   # post to it
+k2 project read [<name>]        # catch up on the project's shared chat
+k2 project msg [<name>] "..."   # post to it
 ```
 
-**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2so project msg <name> "your reply"`. Never `k2so msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
+**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2 project msg <name> "your reply"`. Never `k2 msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
 
 ## Email (k2 mail)
 
@@ -611,29 +611,29 @@ k2 mail delete <address>                        # retire an address you own (fre
 ## Discover peers
 
 ```
-k2so connections list               # workspaces with live agents (and who's wired up to you)
+k2 connections list               # workspaces with live agents (and who's wired up to you)
 ```
 
 ## Glossary
 
-Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, skill, inbox, heartbeat, …). Also try `k2so help` for the full daily-verb surface.
+Run `k2 glossary <term>` for definitions of K2-specific terms (workspace, skill, inbox, heartbeat, …). Also try `k2 help` for the full daily-verb surface.
 "#);
     skill
 }
 
-/// Generate the comprehensive K2SO Agent skill. Broader than the custom-agent
+/// Generate the comprehensive K2 Agent skill. Broader than the custom-agent
 /// template: includes the full multi-heartbeat CRUD, connections messaging,
-/// work creation, and audit commands — because a K2SO agent is the top-tier
+/// work creation, and audit commands — because a K2 agent is the top-tier
 /// autonomous role in its workspace and needs the full surface area.
 ///
 /// Detected by the migration in ensure_k2_skills_up_to_date() via the
-/// first-line signature "# K2SO Agent Skill (Comprehensive)" which the
+/// first-line signature "# K2 Agent Skill (Comprehensive)" which the
 /// older shared `generate_custom_agent_skill_content` doesn't emit.
 pub fn generate_k2_agent_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
-r#"# K2SO Agent Skill (Comprehensive)
+r#"# K2 Agent Skill (Comprehensive)
 
-You are **{agent_name}**, the K2SO planner for **{project_name}**. Your job is planning — turn raw requests into well-scoped PRDs, milestones, and technical specs. Engineering happens in other workspaces (or in your own harness's sub-agent sessions); you do not implement.
+You are **{agent_name}**, the K2 planner for **{project_name}**. Your job is planning — turn raw requests into well-scoped PRDs, milestones, and technical specs. Engineering happens in other workspaces (or in your own harness's sub-agent sessions); you do not implement.
 
 This skill lists the full daily + power-user CLI surface so you can triage, message, schedule wakes, and coordinate with other workspaces.
 
@@ -654,33 +654,33 @@ This skill lists the full daily + power-user CLI surface so you can triage, mess
     skill.push_str(r#"## Every wake (do this first)
 
 ```
-k2so inbox                          # new work at the top
-k2so organization bulletin          # today's bulletin of orgs and heads
+k2 inbox                          # new work at the top
+k2 organization bulletin          # today's bulletin of orgs and heads
 ```
 
 ## Triage your inbox
 
 ```
-k2so inbox                          # top-level new arrivals
-k2so inbox list [<folder>]          # list a folder
-k2so inbox read <id>                # full text of one item
-k2so inbox compose --title "..." --body "..."   # write your own item
-k2so inbox respond <id> "text"      # reply to sender
-k2so inbox move <id> <folder>       # file (creates folder on first use)
-k2so inbox archive <id>             # mark done
-k2so inbox delete <id>              # send to macOS Trash
-k2so inbox search "query"           # search inbox + folders
-k2so inbox folders                  # list folders you have created
+k2 inbox                          # top-level new arrivals
+k2 inbox list [<folder>]          # list a folder
+k2 inbox read <id>                # full text of one item
+k2 inbox compose --title "..." --body "..."   # write your own item
+k2 inbox respond <id> "text"      # reply to sender
+k2 inbox move <id> <folder>       # file (creates folder on first use)
+k2 inbox archive <id>             # mark done
+k2 inbox delete <id>              # send to macOS Trash
+k2 inbox search "query"           # search inbox + folders
+k2 inbox folders                  # list folders you have created
 ```
 
-K2SO does not impose a folder taxonomy — organize like email (e.g., `projects/`, `reference/`, `issues/`, `done/`).
+K2 does not impose a folder taxonomy — organize like email (e.g., `projects/`, `reference/`, `issues/`, `done/`).
 
 ## Report status + completion
 
 ```
-k2so organization update "drafting auth v2 PRD"   # status to your org's head
-k2so done
-k2so done --blocked "waiting for design review"
+k2 organization update "drafting auth v2 PRD"   # status to your org's head
+k2 done
+k2 done --blocked "waiting for design review"
 ```
 
 ## Your role: planning, not implementation
@@ -692,7 +692,7 @@ You don't write code. You write the plan. Engineering personas are skill profile
 Long-form docs that capture the *why* and *what*. Keep them under `.k2/prds/`. When a PRD is ready for triage, register it as an inbox item so it shows up in your queue:
 
 ```
-k2so inbox compose --title "Auth V2: session rotation" --body "See .k2/prds/auth-v2.md" --priority high --type prd
+k2 inbox compose --title "Auth V2: session rotation" --body "See .k2/prds/auth-v2.md" --priority high --type prd
 ```
 
 ### Milestones
@@ -700,7 +700,7 @@ k2so inbox compose --title "Auth V2: session rotation" --body "See .k2/prds/auth
 Break a PRD into ship-sized slices, each with its own acceptance criteria. Store them under `.k2/milestones/` and register the noteworthy ones via inbox:
 
 ```
-k2so inbox compose --title "M1: Rotate on login" --body "Rotate session token on every successful login..." --priority high --type milestone
+k2 inbox compose --title "M1: Rotate on login" --body "Rotate session token on every successful login..." --priority high --type milestone
 ```
 
 ### Specs
@@ -712,62 +712,62 @@ Technical specifications live at `.k2/specs/`. Same pattern — write the file, 
 A workspace can have multiple scheduled heartbeats. Each has its own WAKEUP.md file that is injected as the first user message on fire.
 
 ```
-k2so heartbeat                                  # default: list active schedules
+k2 heartbeat                                  # default: list active schedules
 
 # Schedule CRUD
-k2so heartbeat schedule add --name daily-brief --daily --time 08:00
-k2so heartbeat schedule add --name end-of-day --daily --time 17:30
-k2so heartbeat schedule add --name weekly-review --weekly --days fri --time 16:00
-k2so heartbeat schedule edit <name> --weekly --days mon,wed --time 14:00
-k2so heartbeat schedule rename <old> <new>
-k2so heartbeat schedule enable <name>
-k2so heartbeat schedule disable <name>
-k2so heartbeat schedule remove <name> [--purge]
-k2so heartbeat schedule unarchive <name>
-k2so heartbeat schedule list [--archived]
+k2 heartbeat schedule add --name daily-brief --daily --time 08:00
+k2 heartbeat schedule add --name end-of-day --daily --time 17:30
+k2 heartbeat schedule add --name weekly-review --weekly --days fri --time 16:00
+k2 heartbeat schedule edit <name> --weekly --days mon,wed --time 14:00
+k2 heartbeat schedule rename <old> <new>
+k2 heartbeat schedule enable <name>
+k2 heartbeat schedule disable <name>
+k2 heartbeat schedule remove <name> [--purge]
+k2 heartbeat schedule unarchive <name>
+k2 heartbeat schedule list [--archived]
 
 # Immediate signals
-k2so heartbeat signal fire <name>               # fire now (skip schedule window)
-k2so heartbeat signal wakeup <name>             # print/edit WAKEUP.md
-k2so heartbeat signal wake                      # auto-wake (no name needed)
+k2 heartbeat signal fire <name>               # fire now (skip schedule window)
+k2 heartbeat signal wakeup <name>             # print/edit WAKEUP.md
+k2 heartbeat signal wake                      # auto-wake (no name needed)
 
 # Inspection
-k2so heartbeat show <name> [--json]
-k2so heartbeat status <name> [-n N]
-k2so heartbeat log [-n N]
+k2 heartbeat show <name> [--json]
+k2 heartbeat status <name> [-n N]
+k2 heartbeat log [-n N]
 ```
 
 ## Cross-workspace messaging
 
 ```
-k2so connections list                                    # who's wired up to me / workspaces with live agents
-k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
-k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
-k2so msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
-k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
-k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
-k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
-k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
+k2 connections list                                    # who's wired up to me / workspaces with live agents
+k2 talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
+k2 msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
+k2 msg <workspace> --summary "one line" "text"         # longer than ~3 lines: say what you need / did in one line
+k2 msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
+k2 msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
+k2 msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
+k2 read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
 ```
 
-`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise. Use `--inbox-wake` / `--inbox-silent` for durable tray packages the recipient opens with `k2so inbox read <id>` on their schedule. Not `k2 mail`.
+`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise. Use `--inbox-wake` / `--inbox-silent` for durable tray packages the recipient opens with `k2 inbox read <id>` on their schedule. Not `k2 mail`.
 
 **`msg` length limit:** live `msg` is injected into the recipient's input line — short, single-line text only. Longer/multi-line content gets **truncated** by their terminal input widget; use `--inbox-wake` / `--inbox-silent` for anything substantial. (That limit is why the inbox exists.)
 
 **`read`** returns the last N lines (default 50) of a workspace's live terminal — its primary/coordinator session, or a specific `--agent <name>`. Use it for human-in-the-loop: see what an agent is doing or waiting on before injecting a `msg`, or diagnose a stuck agent.
 
-**`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
+**`talk` (BETA) — THE inter-agent interaction verb.** `k2 talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2 talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2 terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
-Only workspaces linked via `k2so connections` are reachable.
+Only workspaces linked via `k2 connections` are reachable.
 
 ## Ask a human
 
 ```
-k2so tickets template > brief.html
-k2so tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
+k2 tickets template > brief.html
+k2 tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
 ```
 
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2so tickets list` / `k2so tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2so tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2so tickets resolve <id> --answered "<outcome>"`) or resolved (`k2so tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2 tickets list` / `k2 tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2 tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2 tickets resolve <id> --answered "<outcome>"`) or resolved (`k2 tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
 
 ## Respond to your API caller
 
@@ -785,11 +785,11 @@ Outside an API-launched session `k2 respond` fails loudly — it needs the sessi
 A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
 
 ```
-k2so project read [<name>]        # catch up on the project's shared chat
-k2so project msg [<name>] "..."   # post to it
+k2 project read [<name>]        # catch up on the project's shared chat
+k2 project msg [<name>] "..."   # post to it
 ```
 
-**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2so project msg <name> "your reply"`. Never `k2so msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
+**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2 project msg <name> "your reply"`. Never `k2 msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
 
 ## Email (k2 mail)
 
@@ -827,37 +827,37 @@ k2 mail delete <address>                        # retire an address you own (fre
 ## Activity feed + reviews
 
 ```
-k2so activity [--limit N] [--workspace <path>]   # recent audit log
-k2so reviews                                     # pending merge reviews
-k2so review approve|reject|feedback <branch>     # act on a review
+k2 activity [--limit N] [--workspace <path>]   # recent audit log
+k2 reviews                                     # pending merge reviews
+k2 review approve|reject|feedback <branch>     # act on a review
 ```
 
-Worktrees may originate from your harness (Claude Code sub-agent, Cursor worktree), from a human, or from an integration. `k2so reviews` tracks them all; your job is read-the-diff and decide.
+Worktrees may originate from your harness (Claude Code sub-agent, Cursor worktree), from a human, or from an integration. `k2 reviews` tracks them all; your job is read-the-diff and decide.
 
 ## Skills (documentation profiles)
 
 ```
-k2so skills list                              # skill profiles in this workspace
-k2so skills profile <name>                    # read a profile's SKILL.md
-k2so skills create <name> [--template <src>]  # new profile (optionally seeded)
-k2so skills remove <name>                     # delete (sent to Trash)
-k2so skills regenerate [<name>]               # refresh SKILL.md from templates
+k2 skills list                              # skill profiles in this workspace
+k2 skills profile <name>                    # read a profile's SKILL.md
+k2 skills create <name> [--template <src>]  # new profile (optionally seeded)
+k2 skills remove <name>                     # delete (sent to Trash)
+k2 skills regenerate [<name>]               # refresh SKILL.md from templates
 ```
 
-Skills are documents the harness loads when spawning sub-agents — K2SO no longer spawns. When you want a specialist persona applied to work, print the SKILL.md and load it into your harness's session context.
+Skills are documents the harness loads when spawning sub-agents — K2 no longer spawns. When you want a specialist persona applied to work, print the SKILL.md and load it into your harness's session context.
 
 ## Settings + diagnostics
 
 ```
-k2so settings                                # current mode, agentic toggle, companion
-k2so settings --mode <off|agent|manager>
-k2so settings --agentic <on|off>
-k2so hooks status                            # verify CLI-LLM hook wiring is live
+k2 settings                                # current mode, agentic toggle, companion
+k2 settings --mode <off|agent|manager>
+k2 settings --agentic <on|off>
+k2 hooks status                            # verify CLI-LLM hook wiring is live
 ```
 
 ## Glossary
 
-Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, skill, inbox, heartbeat, …). The full daily-verb surface is in `k2so help`; power-user verbs in `k2so help --advanced`.
+Run `k2 glossary <term>` for definitions of K2-specific terms (workspace, skill, inbox, heartbeat, …). The full daily-verb surface is in `k2 help`; power-user verbs in `k2 help --advanced`.
 "#);
     skill
 }
@@ -871,7 +871,7 @@ Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, sk
 /// into ROLE.md. It operates on the workspace's harness files: it pulls
 /// existing harness content INTO `.k2/agent/ROLE.md` + `.k2/PROJECT.md`
 /// (Model A) first so nothing is lost, then mirrors out to the chosen
-/// per-harness files as K2SO-generated copies. Every destructive act
+/// per-harness files as K2-generated copies. Every destructive act
 /// goes through the deterministic safety net
 /// (`workspace::canonical::run_canonical_setup` / `unwind_canonical`):
 /// backup → atomic copy-write → manifest, default dry-run.
@@ -909,7 +909,7 @@ per-harness files are **generated mirrors** of them.
    nothing is lost. Canonical is a target STRUCTURE the user's content
    is poured into, never a template that bulldozes it.
 5. **Mirror out** — derive the chosen per-harness files FROM Model A.
-   These mirrors are K2SO-generated copies (real files, stamped, with an
+   These mirrors are K2-generated copies (real files, stamped, with an
    "edit `.k2/...` instead" header) — NOT symlinks.
 6. **Dry-run + confirm** — produce a DRY-RUN plan first (per-harness
    action table + the backup manifest) and **STOP for confirmation
@@ -921,7 +921,7 @@ per-harness files are **generated mirrors** of them.
 8. **Report** — tell the user exactly what changed and where the
    backups + manifest live.
 9. **Unwind** — the SAME skill undoes it. Manifest-driven exact restore:
-   put each backed-up original back, trash anything K2SO created fresh,
+   put each backed-up original back, trash anything K2 created fresh,
    leave `.k2/` intact.
 
 ## Safety contract (non-negotiable)
@@ -1058,16 +1058,16 @@ pub fn write_opt_in_skill(project_path: &str, skill: OptInSkill) -> PathBuf {
 /// Generate the universal baseline for a skill profile (formerly "agent template").
 ///
 /// Post-Phase-2.1: skills are documentation profiles, not spawnable agents. This
-/// baseline body is what the harness sees when it loads `k2so skills profile <name>`
+/// baseline body is what the harness sees when it loads `k2 skills profile <name>`
 /// and seeds a sub-agent session with the persona. Keep it short — the harness adds
-/// its own session-level instructions; this is just K2SO-CLI context.
+/// its own session-level instructions; this is just K2-CLI context.
 pub fn generate_template_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
-r#"# K2SO Skill Profile — {agent_name}
+r#"# K2 Skill Profile — {agent_name}
 
 A skill profile for **{project_name}**.
 
-A skill is a documentation profile — a persona / capability set the harness can apply to a sub-agent session. K2SO does not spawn this skill; your harness (Claude Code, Cursor, Tauri Cmd+T) does. When your harness loads this profile into a session's context, the CLI surface below is what's available to you inside that session.
+A skill is a documentation profile — a persona / capability set the harness can apply to a sub-agent session. K2 does not spawn this skill; your harness (Claude Code, Cursor, Tauri Cmd+T) does. When your harness loads this profile into a session's context, the CLI surface below is what's available to you inside that session.
 
 "#,
         agent_name = agent_name,
@@ -1083,33 +1083,33 @@ A skill is a documentation profile — a persona / capability set the harness ca
     skill.push_str(r#"## Start of every wake
 
 ```
-k2so inbox                          # new work at the top
-k2so organization bulletin          # today's bulletin of orgs and heads
+k2 inbox                          # new work at the top
+k2 organization bulletin          # today's bulletin of orgs and heads
 ```
 
 ## Triage your inbox
 
 ```
-k2so inbox                          # top-level new arrivals
-k2so inbox list [<folder>]          # list a folder (e.g., active, projects)
-k2so inbox read <id>                # full text of one item
-k2so inbox move <id> <folder>       # file (creates folder on first use)
-k2so inbox archive <id>             # mark done
-k2so inbox compose --title "..." --body "..."   # self-note / task
-k2so inbox respond <id> "text"      # reply to sender
+k2 inbox                          # top-level new arrivals
+k2 inbox list [<folder>]          # list a folder (e.g., active, projects)
+k2 inbox read <id>                # full text of one item
+k2 inbox move <id> <folder>       # file (creates folder on first use)
+k2 inbox archive <id>             # mark done
+k2 inbox compose --title "..." --body "..."   # self-note / task
+k2 inbox respond <id> "text"      # reply to sender
 ```
 
 ## Report status + completion
 
 ```
-k2so organization update "implementing JWT validation"   # status to your org's head
-k2so done
-k2so done --blocked "need clarification on auth flow"
+k2 organization update "implementing JWT validation"   # status to your org's head
+k2 done
+k2 done --blocked "need clarification on auth flow"
 ```
 
 ## Glossary
 
-Run `k2so glossary <term>` for K2SO-specific terminology. `k2so help` lists the full daily verb surface.
+Run `k2 glossary <term>` for K2-specific terminology. `k2 help` lists the full daily verb surface.
 "#);
     skill
 }
@@ -1179,7 +1179,7 @@ pub fn compose_agent_wake_context(
         return Ok(md);
     }
 
-    // ── K2SO / Coordinator agents: full infrastructure CLAUDE.md ───────
+    // ── K2 / Coordinator agents: full infrastructure CLAUDE.md ───────
 
     // List other agents for delegation awareness
     let mut other_agents = Vec::new();
@@ -1205,7 +1205,7 @@ pub fn compose_agent_wake_context(
         }
     }
 
-    md.push_str(&format!("# K2SO Agent: {}\n\n", agent_name));
+    md.push_str(&format!("# K2 Agent: {}\n\n", agent_name));
     md.push_str(&format!("## Identity\n**Role:** {}\n\n", role));
     // Reference the agent's full profile (absolute path so it resolves from worktrees)
     md.push_str(&format!(
@@ -1561,10 +1561,10 @@ mod tests {
     //!      for its tier (manager → "Workspace Manager"; k2so-agent →
     //!      "planner"; etc.).
     //!   3. Each generator's output does NOT contain any of the hard-
-    //!      deprecated verbs Phase 2.1 retired (`k2so delegate`,
-    //!      `k2so work create`, `k2so signal`, `k2so app-update`).
+    //!      deprecated verbs Phase 2.1 retired (`k2 delegate`,
+    //!      `k2 work create`, `k2 signal`, `k2 app-update`).
     //!   4. Each generator references the canonical A25 verbs
-    //!      (`k2so inbox`, `k2so msg`, `k2so done`, `k2so workspace`).
+    //!      (`k2 inbox`, `k2 msg`, `k2 done`, `k2 workspace`).
     //!
     //! The Tier-2.2 PRD calls these "snapshot tests" — they're not
     //! literal value-byte snapshots (those rot fast as templates evolve)
@@ -1578,29 +1578,31 @@ mod tests {
     /// output contains any of these substrings, the template has
     /// regressed.
     ///
-    /// Substrings only — `k2so work create` matches anywhere the verb
-    /// appears as a command-line invocation. Whole `k2so work` is
+    /// Substrings only — `k2 work create` matches anywhere the verb
+    /// appears as a command-line invocation. Whole `k2 work` is
     /// allowed (e.g., the inbox primitive comments still reference it
     /// historically); only the deprecated SUBCOMMANDS are blocklisted.
     const DEPRECATED_VERBS: &[&str] = &[
-        "k2so delegate",
-        "k2so work create",
-        "k2so work send",
-        "k2so work move",
-        "k2so work inbox",
-        "k2so signal",
-        "k2so app-update",
-        // Phase 2.1 also retired `k2so agents create` / `k2so agents list`
-        // / `k2so agents delete` (the plural-noun verbs); but plural
+        "k2 delegate",
+        "k2 work create",
+        "k2 work send",
+        "k2 work move",
+        "k2 work inbox",
+        "k2 signal",
+        "k2 app-update",
+        // Phase 2.1 also retired `k2 agents create` / `k2 agents list`
+        // / `k2 agents delete` (the plural-noun verbs); but plural
         // `agents` in narrative prose ("your agents") is fine.
-        "k2so agents create",
-        "k2so agents delete",
-        "k2so agents list",
-        "k2so agents running",
-        "k2so agents work",
+        "k2 agents create",
+        "k2 agents delete",
+        "k2 agents list",
+        "k2 agents running",
+        "k2 agents work",
         // Retired 0.46.11: `checkin` (and its --status / --done forms)
         // is a stub that points at organization / inbox / done.
-        "k2so checkin",
+        "k2 checkin",
+        // The retired CLI name: generated skills teach `k2`, never `k2so`.
+        "k2so ",
     ];
 
     fn assert_no_deprecated_verbs(content: &str, generator: &str) {
@@ -1657,7 +1659,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             &body,
             "generate_manager_skill_content",
-            &["k2so inbox", "k2so organization update", "k2so done", "k2so reviews"],
+            &["k2 inbox", "k2 organization update", "k2 done", "k2 reviews"],
         );
     }
 
@@ -1670,9 +1672,9 @@ mod tests {
     // (peers, not subordinates). These tests pin the new contract:
     //
     //   - empty peers → "No connected workspaces yet" hint with
-    //     `k2so connections add <other-workspace-path>` instruction
+    //     `k2 connections add <other-workspace-path>` instruction
     //   - present peers → flat alphabetical list (no direction tags)
-    //   - always teaches `k2so msg <workspace-name>` syntax
+    //   - always teaches `k2 msg <workspace-name>` syntax
     //   - never says "outgoing" / "incoming" (direction is a data-
     //     model concept, not a user-visible one)
     //   - never walks `.k2so/skills/` for team membership (skills are
@@ -1708,8 +1710,8 @@ mod tests {
             "empty-peers case must render the 'No connected workspaces yet' hint:\n{body}"
         );
         assert!(
-            body.contains("k2so connections add"),
-            "empty-peers hint must teach `k2so connections add`:\n{body}"
+            body.contains("k2 connections add"),
+            "empty-peers hint must teach `k2 connections add`:\n{body}"
         );
     }
 
@@ -1775,19 +1777,19 @@ mod tests {
     }
 
     #[test]
-    fn manager_team_section_teaches_k2so_msg_syntax() {
+    fn manager_team_section_teaches_k2_msg_syntax() {
         let project_path = format!("/tmp/manager-team-msg-{}", Uuid::new_v4());
         let body = generate_manager_skill_content(&project_path, "MsgTeach");
 
         // Both forms must be teachable: plain live + tray flags. The
-        // workspace==agent model relies on `k2so msg <workspace>` as
+        // workspace==agent model relies on `k2 msg <workspace>` as
         // the primary peer-communication primitive.
         assert!(
-            body.contains("k2so msg <workspace-name> \"your message\""),
-            "team section must teach plain `k2so msg <workspace-name>` form:\n{body}"
+            body.contains("k2 msg <workspace-name> \"your message\""),
+            "team section must teach plain `k2 msg <workspace-name>` form:\n{body}"
         );
         assert!(
-            body.contains("k2so msg <workspace-name> --inbox-wake"),
+            body.contains("k2 msg <workspace-name> --inbox-wake"),
             "team section must teach `--inbox-wake` tray form:\n{body}"
         );
         assert!(
@@ -1883,7 +1885,7 @@ mod tests {
         );
         // Skill names must not appear as if they were team members.
         // (They may legitimately appear elsewhere in the body
-        // referencing `k2so skills profile <name>`; we only assert
+        // referencing `k2 skills profile <name>`; we only assert
         // they aren't listed as bullet entries in the team section.)
         let team_start = body.find("## Team — Connected Workspaces").unwrap();
         let after_team = &body[team_start..];
@@ -1913,8 +1915,8 @@ mod tests {
         assert!(body.contains("myagent"), "agent name must appear");
         assert!(body.contains("MyProject"), "project name must appear");
         assert!(
-            body.contains("K2SO Agent Skill"),
-            "custom-agent template must include 'K2SO Agent Skill' header (NOT the comprehensive variant)"
+            body.contains("K2 Agent Skill"),
+            "custom-agent template must include 'K2 Agent Skill' header (NOT the comprehensive variant)"
         );
     }
 
@@ -1926,7 +1928,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             &body,
             "generate_custom_agent_skill_content",
-            &["k2so inbox", "k2so organization update", "k2so done", "k2so msg"],
+            &["k2 inbox", "k2 organization update", "k2 done", "k2 msg"],
         );
     }
 
@@ -1959,12 +1961,12 @@ mod tests {
             &body,
             "generate_k2_agent_skill_content",
             &[
-                "k2so inbox",
-                "k2so organization update",
-                "k2so done",
-                "k2so msg",
-                "k2so heartbeat",
-                "k2so connections",
+                "k2 inbox",
+                "k2 organization update",
+                "k2 done",
+                "k2 msg",
+                "k2 heartbeat",
+                "k2 connections",
             ],
         );
     }
@@ -1996,8 +1998,8 @@ mod tests {
         ];
         for (generator, body) in &cases {
             assert!(
-                body.contains("k2so tickets ask"),
-                "{generator} must teach `k2so tickets ask`"
+                body.contains("k2 tickets ask"),
+                "{generator} must teach `k2 tickets ask`"
             );
             // Ticket HTML brief (prd-ticket-html-brief-v1 T12).
             assert!(
@@ -2005,12 +2007,12 @@ mod tests {
                 "{generator} must teach the HTML brief"
             );
             assert!(
-                body.contains("k2so project msg"),
-                "{generator} must teach `k2so project msg`"
+                body.contains("k2 project msg"),
+                "{generator} must teach `k2 project msg`"
             );
             assert!(
-                body.contains("k2so project read"),
-                "{generator} must teach `k2so project read`"
+                body.contains("k2 project read"),
+                "{generator} must teach `k2 project read`"
             );
             assert!(
                 body.contains("[project:"),
@@ -2215,7 +2217,7 @@ mod tests {
         // documents the communication verbs must teach: `K2_HOOK_TOKEN`
         // marks an API-launched session; reply with `k2 respond '<msg>'`;
         // final answers with `k2 respond --final '<msg>'`. (Versions
-        // SKILL_VERSION_MANAGER/K2SO_AGENT/CUSTOM_AGENT bumped 3→4 so
+        // SKILL_VERSION_MANAGER/K2_AGENT/CUSTOM_AGENT bumped 3→4 so
         // unmodified SKILL.md files re-roll with this section.)
         let project_path = format!("/tmp/manager-respond-{}", Uuid::new_v4());
         let cases: [(&str, String); 3] = [
@@ -2275,7 +2277,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             &body,
             "generate_template_skill_content",
-            &["k2so inbox", "k2so organization update", "k2so done"],
+            &["k2 inbox", "k2 organization update", "k2 done"],
         );
     }
 
@@ -2289,7 +2291,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             CUSTOM_AGENT_HEARTBEAT_DOCS,
             "CUSTOM_AGENT_HEARTBEAT_DOCS",
-            &["k2so heartbeat", "k2so done"],
+            &["k2 heartbeat", "k2 done"],
         );
     }
 

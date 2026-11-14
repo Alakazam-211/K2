@@ -1432,11 +1432,11 @@ pub fn ensure_all_skills_up_to_date(project_path: &str) {
 //
 // The previous CLI_TOOLS_DOCS + WORKFLOW_DOCS constants + the inline
 // manager-mode / AI-planner CLAUDE.md templates that lived here baked
-// the pre-A25 verb taxonomy (`k2so delegate`, `k2so work create`,
-// `k2so agents create`, `k2so heartbeat wake`, `k2so agent complete`,
+// the pre-A25 verb taxonomy (`k2 delegate`, `k2 work create`,
+// `k2 agents create`, `k2 heartbeat wake`, `k2 agent complete`,
 // …) into every regenerated SKILL.md. Phase 2.1 retired those verbs
-// in favor of the A25 surface (`k2so skills *`, `k2so workspace *`,
-// `k2so inbox compose`, `k2so msg --inbox-wake|--inbox-silent`, `k2so heartbeat signal
+// in favor of the A25 surface (`k2 skills *`, `k2 workspace *`,
+// `k2 inbox compose`, `k2 msg --inbox-wake|--inbox-silent`, `k2 heartbeat signal
 // wake`). Phase 2.5d moved the canonical bodies into
 // `skills/content.rs` and pinned them with the Tier 2.2
 // `assert_no_deprecated_verbs` snapshot tests; the body of
@@ -1533,13 +1533,13 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
         write_agent_skill_file(&project_path, "manager", "manager");
     }
 
-    // Auto-create K2SO agent if it doesn't exist (pre-unification only).
+    // Auto-create K2 agent if it doesn't exist (pre-unification only).
     // Post-0.37.0 the workspace agent lives at .k2so/agent/, not
     // .k2so/skills/k2so-agent/.
     let k2_agent_dir = k2_dir.join("skills").join("k2so-agent");
     if !post_unification && !k2_agent_dir.exists() {
         let _ = fs::create_dir_all(&k2_agent_dir);
-        let k2_role = "K2SO planner — builds PRDs, milestones, and technical plans";
+        let k2_role = "K2 planner — builds PRDs, milestones, and technical plans";
         let k2_body = generate_default_agent_body("k2so", "k2so-agent", k2_role, &project_path);
         let k2_md = format!(
             "---\nname: k2so-agent\nrole: {}\ntype: k2so\n---\n\n{}\n",
@@ -1648,7 +1648,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
 
 <!--
   PROJECT.md is the "what" half of agent context — the codebase facts
-  every agent needs regardless of role. K2SO ships this file as part of
+  every agent needs regardless of role. K2 ships this file as part of
   the agent's system prompt on every launch, via --append-system-prompt
   (injected alongside SKILL.md as a "Project Context (shared)" section).
   You don't need to reference it from wakeup.md — it's always there.
@@ -1715,8 +1715,8 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
 
     // Delegate to the canonical tier generator instead of inlining a
     // duplicate template. Phase 2.1 retired the legacy verb taxonomy
-    // (`k2so delegate`, `k2so work create`, `k2so agents create`,
-    // `k2so heartbeat wake`, `k2so agent complete`, …); the canonical
+    // (`k2 delegate`, `k2 work create`, `k2 agents create`,
+    // `k2 heartbeat wake`, `k2 agent complete`, …); the canonical
     // generators in `skills/content.rs` emit only A25 verbs.
     let canonical_body = if is_manager_mode {
         crate::skills::content::generate_manager_skill_content(&project_path, &project_name)
@@ -1733,7 +1733,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
 
     // Prepend a per-regen "Workspace Inbox" header so the manager /
     // planner has the live triage queue visible without having to
-    // re-run `k2so inbox`. The canonical body follows.
+    // re-run `k2 inbox`. The canonical body follows.
     let md = format!(
         "## Workspace Inbox\n\n{inbox_section}\n\n---\n\n{canonical_body}",
         inbox_section = inbox_section,
@@ -2004,9 +2004,9 @@ mod tests {
     // ── Tier 2.5d cleanup: no deprecated verbs in regen output ─────
     //
     // The previous CLI_TOOLS_DOCS + inline manager/AI-planner templates
-    // baked pre-A25 verbs (`k2so delegate`, `k2so work create`,
-    // `k2so agents create`, `k2so heartbeat wake`, `k2so agent complete`,
-    // …) into every workspace SKILL.md K2SO emitted. The fix routes
+    // baked pre-A25 verbs (`k2 delegate`, `k2 work create`,
+    // `k2 agents create`, `k2 heartbeat wake`, `k2 agent complete`,
+    // …) into every workspace SKILL.md K2 emitted. The fix routes
     // through `skills/content.rs` canonical generators — these tests
     // pin the property end-to-end through `regenerate_workspace_skill`
     // so a future inline-template regression breaks the build.
@@ -2019,19 +2019,19 @@ mod tests {
     /// list lives in a `cfg(test)` module and can't be referenced
     /// across compilation units).
     const DEPRECATED_REGEN_VERBS: &[&str] = &[
-        "k2so delegate",
-        "k2so work create",
-        "k2so work send",
-        "k2so work move",
-        "k2so work inbox",
-        "k2so signal",
-        "k2so app-update",
-        "k2so agents create",
-        "k2so agents delete",
-        "k2so agents list",
-        "k2so agents running",
-        "k2so agents work",
-        "k2so checkin",
+        "k2 delegate",
+        "k2 work create",
+        "k2 work send",
+        "k2 work move",
+        "k2 work inbox",
+        "k2 signal",
+        "k2 app-update",
+        "k2 agents create",
+        "k2 agents delete",
+        "k2 agents list",
+        "k2 agents running",
+        "k2 agents work",
+        "k2 checkin",
     ];
 
     fn assert_regen_body_has_no_deprecated_verbs(body: &str, context: &str) {
@@ -2074,10 +2074,10 @@ mod tests {
         // Sanity: at least one canonical A25 verb should appear so an
         // accidental empty-body regression doesn't trivially pass.
         assert!(
-            body.contains("k2so inbox")
-                && body.contains("k2so organization update")
-                && body.contains("k2so done"),
-            "regen body must reference canonical verbs (k2so inbox, k2so organization update, k2so done), got first 400 chars:\n{}",
+            body.contains("k2 inbox")
+                && body.contains("k2 organization update")
+                && body.contains("k2 done"),
+            "regen body must reference canonical verbs (k2 inbox, k2 organization update, k2 done), got first 400 chars:\n{}",
             &body[..body.len().min(400)],
         );
 
@@ -2205,7 +2205,7 @@ mod tests {
             "k2-cli skill must not teach a thrd alias"
         );
         assert!(
-            !body.contains("k2so msg"),
+            !body.contains("k2 msg"),
             "k2-cli skill must not use the legacy `k2so` CLI prefix",
         );
         // W1 (0.40.30): the API read-back contract is part of the k2 CLI

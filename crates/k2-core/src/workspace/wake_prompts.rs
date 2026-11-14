@@ -36,7 +36,7 @@ pub const WAKEUP_TEMPLATE_MANAGER: &str =
     include_str!("../../wakeup_templates/manager.md");
 pub const WAKEUP_TEMPLATE_CUSTOM: &str =
     include_str!("../../wakeup_templates/custom.md");
-pub const WAKEUP_TEMPLATE_K2: &str = include_str!("../../wakeup_templates/k2so.md");
+pub const WAKEUP_TEMPLATE_K2: &str = include_str!("../../wakeup_templates/k2.md");
 
 /// Resolve the shipped template for a given agent type. Returns `None`
 /// for agent types that don't use wake-up at all (currently just
@@ -142,7 +142,7 @@ pub fn compose_wake_prompt_for_workspace(project_path: &str) -> String {
 /// The heartbeat scheduler woke you..." preamble; this got
 /// surfaced inside Claude's chat panel and felt like noise from
 /// the user's perspective. The wakeup.md author already knows
-/// they're writing the wake instructions — they don't need K2SO
+/// they're writing the wake instructions — they don't need K2
 /// re-explaining the context to them.
 ///
 /// Returns `None` for: missing body input, OR body whose post-

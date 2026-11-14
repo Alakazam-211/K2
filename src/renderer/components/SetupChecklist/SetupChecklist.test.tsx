@@ -142,15 +142,50 @@ describe('SetupChecklist', () => {
     expect(document.querySelector('[data-setup-row="tunnel"]')!.innerHTML).not.toContain('opacity')
   })
 
-  it('Skip is always shown, after its row in keyboard order, and its room on the last line adds no words', async () => {
+  it('Skip is always shown, after its row in keyboard order, and the title holds only its words', async () => {
     render(<SetupChecklist />)
     const row = await screen.findByTestId('setup-row-phone')
     const skip = screen.getByTestId('setup-skip-phone')
     expect(row.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(skip.className).not.toMatch(/hidden|opacity-0|invisible/)
-    // The title holds only its words; the held room is drawn, not written.
     expect(row.querySelector('span.type-row')?.textContent).toBe(SETUP_CHECKLIST_COPY.phone.label)
     expect(row.querySelector('[data-setup-note]')?.textContent).toBe(NEEDS_TUNNEL_NOTE)
+  })
+
+  it("Skip stays on the step's own line: one unwrapped row, the step's column shrinks and wraps, Skip keeps its width", async () => {
+    // Every state: current, done, skipped, to do with a note.
+    const rows = body().rows.map((r) => (r.id === 'tunnel' ? { ...r, state: 'skipped' } : r))
+    h.daemonCliGet.mockResolvedValue(body({ rows }))
+    render(<SetupChecklist />)
+    await screen.findByTestId('setup-row-phone')
+    const classes = (el: Element): string[] => el.className.split(/\s+/)
+    for (const id of ['llm_sign_in', 'first_agent', 'tunnel', 'phone', 'own_sign_in']) {
+      const li = document.querySelector(`[data-setup-row="${id}"]`)!
+      const line = li.querySelector(':scope > [data-setup-line]')!
+      // The row button and Skip are siblings on one flex line that never wraps.
+      expect(classes(line)).toContain('flex')
+      expect(line.className).not.toMatch(/\bflex-wrap\b|\bflex-col\b/)
+      const button = screen.getByTestId(`setup-row-${id}`)
+      expect(button.parentElement).toBe(line)
+      // The step's column (title, line, note) takes what's left and can shrink.
+      expect(classes(button)).toEqual(expect.arrayContaining(['flex-1', 'min-w-0']))
+      const text = button.querySelector('[data-setup-text]')!
+      expect(classes(text)).toEqual(expect.arrayContaining(['flex-1', 'min-w-0']))
+      expect(text.contains(button.querySelector('[data-setup-title]'))).toBe(true)
+      expect(classes(button.querySelector('[data-setup-title]')!)).toContain('min-w-0')
+      const skip = screen.queryByTestId(`setup-skip-${id}`)
+      if (id === 'first_agent' || id === 'tunnel') {
+        expect(skip).toBeNull() // done or skipped: no Skip
+        continue
+      }
+      // Skip: after the row in the same line, in the flow (not laid over the
+      // row: the shared focus ring's `position: relative` beats an absolute
+      // class), never shrinking or breaking.
+      expect(skip!.parentElement).toBe(line)
+      expect(line.lastElementChild).toBe(skip)
+      expect(classes(skip!)).toEqual(expect.arrayContaining(['flex-none', 'whitespace-nowrap']))
+      expect(skip!.className).not.toMatch(/\b(absolute|fixed)\b/)
+    }
   })
 
   it('the hover wash and the brighter words hang off the same row group', async () => {

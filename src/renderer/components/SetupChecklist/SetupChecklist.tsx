@@ -24,13 +24,14 @@
 // the other rows to do stay quiet. A row's line and its note share one muted
 // voice, with one gap between title, line and note.
 //
-// Skip (or a skipped row's SKIPPED tag) sits on the title's line, its right
-// edge on Hide's; the title keeps clear of it and the line and note under it
-// use the row's full width. While the checklist shows, the sidebar is never
-// narrower than SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH (260), where every title
-// fits one line in every Style. Skip is always shown and comes after its row
-// in keyboard order. A skipped row reads through its mark and its tag, never
-// by fading. Done rows drop their line and go muted. Under the pointer the
+// Skip (or a skipped row's SKIPPED tag) sits on the title's first line, its
+// right edge on Hide's. A row is one line that never wraps: the step's
+// column (title, then its line and note) takes what's left and wraps inside
+// itself, and Skip keeps its own width beside it, so no zoom or long title
+// pushes Skip under the step. While the checklist shows, the sidebar is
+// never narrower than SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH (260). Skip is always
+// shown and comes after its row in keyboard order. A skipped row reads
+// through its mark and its tag, never by fading. Done rows drop their line and go muted. Under the pointer the
 // muted words (and the marks) step up to secondary, so they keep 4.5:1 on
 // the hover wash: the wash is the row's own :hover and the step-up is
 // `group-hover/row`, a named group on that same row (not any outer group),
@@ -224,56 +225,78 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
       data-state={row.state}
       data-current={current ? '' : undefined}
     >
-      <button
-        type="button"
-        data-testid={`setup-row-${row.id}`}
-        data-k2-focus=""
-        aria-current={current ? 'step' : undefined}
-        className="relative no-drag w-full min-w-0 flex items-start gap-1.5 pl-3 pr-2 py-1.5 text-left cursor-pointer disabled:cursor-default"
-        disabled={!opens}
-        onClick={() => void openFirstRunTarget(row.opens)}
-      >
-        <StepMark state={row.state} current={current} lift={opens} />
-        <span className="min-w-0 flex-1">
-          {/* The title line: the title, then Skip (drawn over the row's
-              top right, so the title keeps clear of it) or the SKIPPED tag.
-              The line and note under it use the full width. */}
-          <span className="flex items-start gap-2">
-            <span
-              className={cx(
-                'min-w-0 flex-1 type-row leading-snug',
-                todo && 'pr-10',
-                current
-                  ? 'font-semibold text-[var(--color-text-primary)]'
-                  : todo
-                    ? 'text-[var(--color-text-secondary)]'
-                    : muted,
-              )}
-              data-setup-title=""
-            >
-              {copy.label}
-            </span>
-            {skipped ? (
-              <Tag
-                tone="muted"
-                aria-hidden="true"
-                className="mr-1.5 mt-px group-hover/row:[--k2-tag-ink:var(--color-text-secondary)]!"
-                data-testid={`setup-skipped-${row.id}`}
+      {/* One line, never wrapping: the row's button takes what's left and
+          its words wrap inside it; Skip keeps its own width at the right,
+          on the title's first line. Skip is in the flow, not laid over the
+          row: the shared focus ring makes every data-k2-focus box
+          `position: relative` from outside Tailwind's layer, which beats an
+          `absolute` class and dropped Skip under the row. */}
+      <div className="flex items-start" data-setup-line="">
+        <button
+          type="button"
+          data-testid={`setup-row-${row.id}`}
+          data-setup-row-button=""
+          data-k2-focus=""
+          aria-current={current ? 'step' : undefined}
+          className="relative no-drag flex-1 min-w-0 flex items-start gap-1.5 pl-3 pr-2 py-1.5 text-left cursor-pointer disabled:cursor-default"
+          disabled={!opens}
+          onClick={() => void openFirstRunTarget(row.opens)}
+        >
+          <StepMark state={row.state} current={current} lift={opens} />
+          <span className="min-w-0 flex-1" data-setup-text="">
+            {/* The title line: the title, then a skipped row's SKIPPED tag.
+                The line and note sit under it in the same column. */}
+            <span className="flex items-start gap-2">
+              <span
+                className={cx(
+                  'min-w-0 flex-1 type-row leading-snug',
+                  current
+                    ? 'font-semibold text-[var(--color-text-primary)]'
+                    : todo
+                      ? 'text-[var(--color-text-secondary)]'
+                      : muted,
+                )}
+                data-setup-title=""
               >
-                {STATE_TEXT.skipped}
-              </Tag>
+                {copy.label}
+              </span>
+              {skipped ? (
+                <Tag
+                  tone="muted"
+                  aria-hidden="true"
+                  className="mr-1.5 mt-px group-hover/row:[--k2-tag-ink:var(--color-text-secondary)]!"
+                  data-testid={`setup-skipped-${row.id}`}
+                >
+                  {STATE_TEXT.skipped}
+                </Tag>
+              ) : null}
+            </span>
+            {/* Balanced, so a hint never leaves one word alone on its last line. */}
+            {todo && <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)}>{rowLine(row)}</span>}
+            {note ? (
+              <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)} data-setup-note={row.note}>
+                {note}
+              </span>
             ) : null}
           </span>
-          {/* Balanced, so a hint never leaves one word alone on its last line. */}
-          {todo && <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)}>{rowLine(row)}</span>}
-          {note ? (
-            <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)} data-setup-note={row.note}>
-              {note}
-            </span>
-          ) : null}
-        </span>
-        <span className="sr-only">{STATE_TEXT[row.state]}</span>
-      </button>
+          <span className="sr-only">{STATE_TEXT[row.state]}</span>
+        </button>
+        {todo && (
+          <button
+            type="button"
+            data-k2-focus=""
+            className={cx(
+              'relative flex-none mt-1 mr-2 no-drag px-1.5 py-0.5 type-hint leading-snug whitespace-nowrap text-[var(--color-text-muted)] transition-colors cursor-pointer',
+              'group-hover/row:text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]!',
+            )}
+            aria-label={`Skip: ${copy.label}`}
+            data-testid={`setup-skip-${row.id}`}
+            onClick={() => void useFirstRunStore.getState().skip(row.id)}
+          >
+            Skip
+          </button>
+        )}
+      </div>
       {/* Linux's install line: outside the row's button so it can be
           selected and copied; lined up with the title. */}
       {command ? (
@@ -285,21 +308,6 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
           {command}
         </code>
       ) : null}
-      {todo && (
-        <button
-          type="button"
-          data-k2-focus=""
-          className={cx(
-            'absolute right-2 top-1 no-drag px-1.5 py-0.5 type-hint leading-snug text-[var(--color-text-muted)] transition-colors cursor-pointer',
-            'group-hover/row:text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]!',
-          )}
-          aria-label={`Skip: ${copy.label}`}
-          data-testid={`setup-skip-${row.id}`}
-          onClick={() => void useFirstRunStore.getState().skip(row.id)}
-        >
-          Skip
-        </button>
-      )}
     </li>
   )
 }
@@ -416,7 +424,7 @@ function GetStartedSlot({
     const list = listRef.current
     const target = openRef.current
       ? (list?.querySelector<HTMLElement>('[aria-current="step"]') ??
-        list?.querySelector<HTMLElement>('[data-setup-row] > button:not(:disabled)') ??
+        list?.querySelector<HTMLElement>('[data-setup-row-button]:not(:disabled)') ??
         list?.querySelector<HTMLElement>('[data-testid="setup-hide"]'))
       : buttonRef.current
     if (!target) return false

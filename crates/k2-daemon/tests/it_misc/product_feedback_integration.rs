@@ -28,6 +28,9 @@
 //!   and a different hash is refused; the intake gets the stored bytes;
 //!   sent and refused and cancelled delete the picture from the box, a
 //!   failed attempt keeps it and Retry resends the same bytes.
+//! - rows that failed because the service couldn't be reached go again by
+//!   themselves once it answers (the oldest is the probe), oldest first;
+//!   a person's switch or a row older than 90 days stays failed.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -952,4 +955,89 @@ async fn a_screenshot_is_seen_then_sent_then_deleted_from_the_box() {
         conn.query_row("SELECT COUNT(*) FROM product_feedback_screenshots", [], |r| r.get(0)).unwrap()
     };
     assert_eq!(left, 0, "no picture left on the box");
+}
+
+// ── 7. failed rows go again once the service answers ─────────────────
+
+/// Make a row `failed` after 7 days of trying, created `days_ago`, with
+/// `error` as its last reason.
+fn fail_row(id: &str, days_ago: i64, error: &str) {
+    let now = k2_core::product_feedback::now_ms();
+    let created = now - days_ago * 86_400_000;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE product_feedback_outbox SET state = 'failed', created_at = ?2, queued_at = ?2, attempts = 40, \
+             last_error = ?3, updated_at = ?4 WHERE id = ?1",
+            rusqlite::params![id, created, error, now - 86_400_000],
+        )
+        .unwrap();
+    assert_eq!(n, 1, "{id} exists");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_rows_go_again_by_themselves_once_the_service_answers() {
+    let e = setup(true);
+    let port = e.port;
+
+    // Five rows saved while the service wasn't there.
+    e.intake.set(|_| (502, "bad gateway".into()));
+    let mut ids = Vec::new();
+    for t in ["oldest", "second", "third", "turned off", "too old"] {
+        let (s, v) = send(port, OWNER, json!({"text": t}));
+        assert_eq!(s, 200, "{v}");
+        let id = v["id"].as_str().unwrap().to_string();
+        wait_row(port, OWNER, &id, "tried once", |it| it["error"] == json!("service_unreachable"));
+        ids.push(id);
+    }
+    let [oldest, second, third, off, old] = <[String; 5]>::try_from(ids).unwrap();
+    // After 7 days of trying they are failed, for these reasons.
+    fail_row(&oldest, 30, "service_unreachable: connection refused");
+    fail_row(&second, 20, "relay_not_ready: the K2 Connect relay isn't ready");
+    fail_row(&third, 10, "intake_paused: maintenance");
+    fail_row(&off, 15, "disabled: Sending feedback to K2 is turned off on this server");
+    fail_row(&old, 91, "service_unreachable: connection refused");
+
+    // Still unreachable: the oldest one goes as a probe and stays failed.
+    drain::reset_for_tests();
+    let n = e.intake.requests().len();
+    assert_eq!(drain_now(), Pass::Ran { sent: 0, refused: 0, retried: 1 });
+    let probes = e.intake.requests();
+    assert_eq!(probes.len(), n + 1, "one probe");
+    assert_eq!(probes.last().unwrap().header("Idempotency-Key"), Some(oldest.as_str()), "the oldest goes first");
+    for id in [&oldest, &second, &third, &off, &old] {
+        assert_eq!(show(port, OWNER, id)["state"], json!("failed"), "{id}");
+    }
+    // The probe waits before it goes again.
+    assert_eq!(drain_now(), Pass::BackingOff, "no second probe at once");
+
+    // The service answers: the probe is sent, and the rest that failed for
+    // the service being unreachable are queued again with a fresh window.
+    e.intake.set(intake_created);
+    drain::reset_for_tests();
+    assert_eq!(drain_now(), Pass::Ran { sent: 1, refused: 0, retried: 0 });
+    assert_eq!(show(port, OWNER, &oldest)["state"], json!("sent"));
+    for id in [&second, &third] {
+        let it = show(port, OWNER, id);
+        assert_eq!((it["state"].clone(), it["attempts"].clone()), (json!("queued"), json!(0)), "{id}: {it}");
+    }
+    assert_eq!(show(port, OWNER, &off)["state"], json!("failed"), "a person's switch is not overridden");
+    assert_eq!(show(port, OWNER, &old)["state"], json!("failed"), "older than 90 days");
+
+    // They go through the normal drain, oldest first.
+    let n = e.intake.requests().len();
+    assert_eq!(drain_now(), Pass::Ran { sent: 2, refused: 0, retried: 0 });
+    let keys: Vec<String> = e.intake.requests()[n..].iter().map(|r| r.header("Idempotency-Key").unwrap().to_string()).collect();
+    assert_eq!(keys, vec![second.clone(), third.clone()]);
+    for id in [&second, &third] {
+        assert_eq!(show(port, OWNER, id)["state"], json!("sent"), "{id}");
+    }
+    assert_eq!(drain_now(), Pass::Empty, "nothing else goes by itself");
+    assert_eq!(show(port, OWNER, &off)["state"], json!("failed"));
+
+    // Retry by hand still works for the rest.
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/retry", OWNER), Some(json!({"id": off})));
+    assert_eq!((s, v["state"].clone()), (200, json!("queued")), "{v}");
+    wait_row(port, OWNER, &off, "sent after retry", |it| it["state"] == json!("sent"));
 }

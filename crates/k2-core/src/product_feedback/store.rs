@@ -397,6 +397,51 @@ pub fn give_up_stale(conn: &Connection, now: i64) -> rusqlite::Result<Vec<String
     Ok(ids)
 }
 
+/// A `failed` row whose last reason is one of these codes goes again by
+/// itself once the service answers: the service or the relay couldn't be
+/// reached, was paused or asked to wait. Anything else (a person's
+/// switch, air-gap, no K2 Connect pairing, a rejected token) stays
+/// `failed` until someone presses Retry.
+pub const RESEND_BY_ITSELF: &[&str] = &[
+    super::wire::E_UNREACHABLE,
+    super::wire::E_RELAY_NOT_READY,
+    super::wire::E_PAUSED,
+    super::wire::E_RATE_LIMITED,
+];
+/// Only rows created this recently go again by themselves (the same 90
+/// days a final row is kept).
+pub const RESEND_MAX_AGE_MS: i64 = KEEP_FINAL_MS;
+
+/// Whether a `failed` row with this `last_error` goes again by itself.
+pub fn resends_by_itself(_last_error: Option<&str>) -> bool {
+    false
+}
+
+/// The service answered: every `failed` row that [`resends_by_itself`] and
+/// was created within [`RESEND_MAX_AGE_MS`] goes back to `queued`, due now,
+/// with a fresh 7-day window (as Retry does). Returns their ids, oldest
+/// first.
+pub fn requeue_unreachable_failed(_conn: &Connection, _now: i64) -> rusqlite::Result<Vec<String>> {
+    Ok(Vec::new())
+}
+
+/// The oldest `failed` row that would go again by itself: the drain sends
+/// it to learn whether the service answers yet.
+pub fn probe_candidate(_conn: &Connection, _now: i64) -> rusqlite::Result<Option<Row>> {
+    Ok(None)
+}
+
+/// `failed` → `sending` for that probe. `updated_at` stays, so the 90-day
+/// prune still counts from when it failed.
+pub fn mark_probe_sending(_conn: &Connection, _id: &str) -> rusqlite::Result<bool> {
+    Ok(false)
+}
+
+/// The probe wasn't answered: `sending` → `failed`, as it was.
+pub fn mark_probe_failed(_conn: &Connection, _id: &str) -> rusqlite::Result<bool> {
+    Ok(false)
+}
+
 /// Delete final rows older than [`KEEP_FINAL_MS`]; clear the diagnostics
 /// of rows sent more than [`KEEP_SENT_DIAGNOSTICS_MS`] ago; then
 /// [`prune_screenshots`]. Returns `(deleted, cleared)`.
@@ -710,6 +755,141 @@ mod tests {
         }
         assert_eq!(agent_limit(&c, "agent:new", t + 400_000).unwrap(), Some(AgentLimit::BoxPerDay));
         assert_eq!(agent_limit(&c, "agent:new", t + 86_400_000 + 400_000).unwrap(), None, "a day later");
+    }
+
+    /// A row that tried for 7 days and failed with `error`, created at
+    /// `created`.
+    fn failed_row(c: &Connection, id: &str, created: i64, error: &str) {
+        insert(c, &new(id, "owner", "person"), created).unwrap();
+        mark_sending(c, id, created + 1).unwrap();
+        assert!(mark_retry(c, id, created + 2, error, created + 2).unwrap());
+        let n = c
+            .execute(
+                "UPDATE product_feedback_outbox SET state = 'failed', updated_at = ?2 WHERE id = ?1 AND state = 'queued'",
+                params![id, created + GIVE_UP_AFTER_MS + 1],
+            )
+            .unwrap();
+        assert_eq!(n, 1, "{id} failed");
+    }
+
+    #[test]
+    fn which_failed_reasons_go_again_by_themselves() {
+        for e in [
+            "service_unreachable: connection refused",
+            "relay_not_ready: 404",
+            "intake_paused: maintenance",
+            "rate_limited: scope box",
+        ] {
+            assert!(resends_by_itself(Some(e)), "{e}");
+        }
+        for e in [
+            "disabled: Sending feedback to K2 is turned off on this server",
+            "airgap: Air-gap is on",
+            "needs_connect: This server isn't paired with K2 Connect",
+            "relay_refused: forbidden",
+            "token_rejected: replayed",
+            "bad_body: no",
+            "service_unreachable",
+            "not sent within 7 days",
+            "",
+        ] {
+            assert!(!resends_by_itself(Some(e)), "{e:?}");
+        }
+        assert!(!resends_by_itself(None));
+    }
+
+    #[test]
+    fn the_service_answering_requeues_unreachable_failed_rows_oldest_first() {
+        let c = db();
+        let day = 86_400_000;
+        let now = 200 * day;
+        // Inserted newest first, so the order below is the requeue's own.
+        failed_row(&c, "pf_r3", now - 10 * day, "intake_paused: maintenance");
+        failed_row(&c, "pf_r2", now - 20 * day, "relay_not_ready: 404");
+        failed_row(&c, "pf_r1", now - 30 * day, "service_unreachable: connection refused");
+        insert(&c, &with_shot("pf_r0", b"kept"), now - 40 * day).unwrap();
+        c.execute(
+            "UPDATE product_feedback_outbox SET state = 'failed', attempts = 9, last_error = 'rate_limited: wait' WHERE id = 'pf_r0'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            probe_candidate(&c, now).unwrap().map(|r| r.id),
+            Some("pf_r0".to_string()),
+            "the oldest one is the probe"
+        );
+        let ids = requeue_unreachable_failed(&c, now).unwrap();
+        assert_eq!(ids, ["pf_r0", "pf_r1", "pf_r2", "pf_r3"].map(String::from).to_vec());
+        for id in &ids {
+            let r = get(&c, id).unwrap().unwrap();
+            assert_eq!(
+                (r.state, r.queued_at, r.next_attempt_at, r.attempts, r.updated_at),
+                (State::Queued, now, now, 0, now),
+                "{id}: queued, due now, a fresh 7-day window"
+            );
+        }
+        assert!(has_screenshot(&c, "pf_r0").unwrap(), "the picture goes with it");
+        let due_ids: Vec<String> = due(&c, now, 10).unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(due_ids, ids, "and they go oldest first");
+        assert!(requeue_unreachable_failed(&c, now).unwrap().is_empty(), "once");
+        assert_eq!(probe_candidate(&c, now).unwrap(), None);
+    }
+
+    #[test]
+    fn a_refused_or_a_persons_failed_row_stays_failed() {
+        let c = db();
+        let now = 200 * 86_400_000;
+        failed_row(&c, "pf_k1", now - 86_400_000, "disabled: Sending feedback to K2 is turned off on this server");
+        failed_row(&c, "pf_k2", now - 86_400_000, "airgap: Air-gap is on");
+        failed_row(&c, "pf_k3", now - 86_400_000, "needs_connect: not paired");
+        failed_row(&c, "pf_k4", now - 86_400_000, "token_rejected: replayed");
+        failed_row(&c, "pf_k5", now - 86_400_000, "relay_refused: forbidden");
+        insert(&c, &new("pf_k6", "owner", "person"), now - 86_400_000).unwrap();
+        assert!(mark_refused(&c, "pf_k6", "bad_category: no", now - 1).unwrap());
+        insert(&c, &new("pf_k7", "owner", "person"), now - 86_400_000).unwrap();
+        assert!(cancel(&c, "pf_k7", now - 1).unwrap());
+        assert_eq!(probe_candidate(&c, now).unwrap(), None);
+        assert!(requeue_unreachable_failed(&c, now).unwrap().is_empty());
+        for id in ["pf_k1", "pf_k2", "pf_k3", "pf_k4", "pf_k5"] {
+            assert_eq!(get(&c, id).unwrap().unwrap().state, State::Failed, "{id}");
+        }
+        assert_eq!(get(&c, "pf_k6").unwrap().unwrap().state, State::Refused);
+        assert_eq!(get(&c, "pf_k7").unwrap().unwrap().state, State::Cancelled);
+        // Retry still puts any failed one back by hand.
+        assert!(retry(&c, "pf_k1", now).unwrap());
+        assert_eq!(get(&c, "pf_k1").unwrap().unwrap().state, State::Queued);
+    }
+
+    #[test]
+    fn only_rows_created_within_90_days_go_again_by_themselves() {
+        let c = db();
+        let now = 400 * 86_400_000;
+        failed_row(&c, "pf_old", now - RESEND_MAX_AGE_MS - 1, "service_unreachable: timeout");
+        failed_row(&c, "pf_edge", now - RESEND_MAX_AGE_MS, "service_unreachable: timeout");
+        assert_eq!(probe_candidate(&c, now).unwrap().map(|r| r.id), Some("pf_edge".to_string()));
+        assert_eq!(requeue_unreachable_failed(&c, now).unwrap(), vec!["pf_edge".to_string()]);
+        assert_eq!(get(&c, "pf_old").unwrap().unwrap().state, State::Failed);
+    }
+
+    #[test]
+    fn a_probe_goes_from_failed_and_comes_back_failed_as_it_was() {
+        let c = db();
+        let now = 200 * 86_400_000;
+        failed_row(&c, "pf_p1", now - 86_400_000, "service_unreachable: timeout");
+        let before = get(&c, "pf_p1").unwrap().unwrap();
+        assert!(!mark_probe_failed(&c, "pf_p1").unwrap(), "only from sending");
+        assert!(mark_probe_sending(&c, "pf_p1").unwrap());
+        assert!(!mark_probe_sending(&c, "pf_p1").unwrap(), "only from failed");
+        assert_eq!(get(&c, "pf_p1").unwrap().unwrap().state, State::Sending);
+        assert!(mark_probe_failed(&c, "pf_p1").unwrap());
+        assert_eq!(get(&c, "pf_p1").unwrap().unwrap(), before, "nothing else changed: the prune still counts from the failure");
+        // A queued row is never a probe.
+        insert(&c, &new("pf_p2", "owner", "person"), now).unwrap();
+        assert!(!mark_probe_sending(&c, "pf_p2").unwrap());
+        // An answered probe is sent from sending, as any row is.
+        assert!(mark_probe_sending(&c, "pf_p1").unwrap());
+        assert!(mark_sent(&c, "pf_p1", "remote-p1", now).unwrap());
+        assert_eq!(get(&c, "pf_p1").unwrap().unwrap().state, State::Sent);
     }
 
     #[test]

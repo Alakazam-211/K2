@@ -193,11 +193,8 @@ fn imap_setacl(mailbox: &str, identifier: &str, rights: Option<&str>) -> Result<
 }
 
 fn imap_run(host: &str, port: u16, user: &str, password: &str, cmd: &str) -> Result<(), String> {
-    use imap::{ClientBuilder, ConnectionMode, TlsKind};
-    let client = ClientBuilder::new(host, port)
-        .mode(ConnectionMode::StartTls)
-        .tls_kind(TlsKind::Rust)
-        .connect()
+    use crate::mail::imap_tls::{self, ImapTlsMode};
+    let client = imap_tls::connect(host, port, ImapTlsMode::StartTls)
         .map_err(|e| format!("IMAP connect {host}:{port}: {e}"))?;
     let mut session = client
         .login(user, password)

@@ -51,7 +51,9 @@ use crate::mail::oauth::{OauthProvider, ReqwestHttp};
 use crate::mail::oauth;
 use crate::mail::secrets::FileSecretStore;
 use imap::types::{Flag, Name};
-use imap::{ClientBuilder, ConnectionMode, TlsKind};
+#[cfg(test)]
+use imap::{ClientBuilder, ConnectionMode};
+use crate::mail::imap_tls::{self, ImapTlsMode};
 use imap_proto::types::NameAttribute;
 use k2_core::db::schema::MailExternalInbox;
 use mail_parser::MessageParser;
@@ -67,20 +69,17 @@ fn imap_err(what: &str, e: impl std::fmt::Display) -> String {
     format!("{what}: {e}")
 }
 
-/// Connect per the row's TLS kind. rustls (`TlsKind::Rust`) with full
-/// certificate verification — `danger_skip_tls_verify` is never
-/// called, and there is no plaintext arm (the 0074 CHECK makes any
-/// other value unreachable; fail loud if the impossible happens).
+/// Connect per the row's TLS kind, through [`imap_tls`] (rustls with
+/// full certificate and name verification against the system's roots).
+/// There is no plaintext arm (the 0074 CHECK makes any other value
+/// unreachable; fail loud if the impossible happens).
 fn connect(inbox: &MailExternalInbox) -> Result<imap::Client<imap::Connection>, String> {
     let mode = match inbox.tls.as_str() {
-        TLS_IMPLICIT => ConnectionMode::Tls,
-        TLS_STARTTLS => ConnectionMode::StartTls,
+        TLS_IMPLICIT => ImapTlsMode::Implicit,
+        TLS_STARTTLS => ImapTlsMode::StartTls,
         other => return Err(format!("unsupported tls kind '{other}' (schema drift?)")),
     };
-    ClientBuilder::new(inbox.host.as_str(), inbox.port as u16)
-        .mode(mode)
-        .tls_kind(TlsKind::Rust)
-        .connect()
+    imap_tls::connect(inbox.host.as_str(), inbox.port as u16, mode)
         .map_err(|e| imap_err("connect", e))
 }
 
@@ -125,10 +124,7 @@ pub fn fetch_all_rfc822(
     user: &str,
     password: &str,
 ) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let client = ClientBuilder::new(host, port)
-        .mode(ConnectionMode::Tls)
-        .tls_kind(TlsKind::Rust)
-        .connect()
+    let client = imap_tls::connect(host, port, ImapTlsMode::Implicit)
         .map_err(|e| imap_err("connect", e))?;
     let mut session = client
         .login(user, password)

@@ -308,8 +308,10 @@ hickory-resolver = "0.26"
 # K2 Mail S9 — external assistant inboxes (prd-email-server-v1 §17.5): a
 # sync IMAP client for the user's OWN accounts (Gmail app-passwords,
 # Fastmail, company IMAP). `imap` 3.x is the maintained line (2.x is
-# frozen); rustls-tls ONLY — TLS verification is always on (rustls-connector
-# + platform root store), and native-tls stays out of the tree. Every
+# frozen). No TLS feature on it: `mail::imap_tls` dials the server, runs
+# the handshake on the daemon's own rustls 0.23 (verification always on,
+# platform root store via rustls-native-certs) and hands the stream to
+# `imap::Client::new`. native-tls stays out of the tree. Every
 # protocol effect is wrapped behind `mail::external::ImapOps`, so unit
 # tests use fakes / a scripted loopback mock — never a real mail host.
 # imap-proto is imap's wire-type crate (NameAttribute::Drafts for the
@@ -319,8 +321,11 @@ hickory-resolver = "0.26"
 # bytes into text/html/attachments; `full_encoding` pulls encoding_rs so
 # non-UTF-8 charsets in real human inboxes (ISO-8859-*, Shift-JIS, …)
 # decode instead of mojibake.
-imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
+imap = { version = "3.0.0-alpha.15", default-features = false }
 imap-proto = "0.16"
+# The system's trust roots for `mail::imap_tls` (already in the tree via
+# hyper-rustls).
+rustls-native-certs = "0.8"
 mail-parser = { version = "0.11", default-features = false, features = ["full_encoding"] }
 
 # K2 Mail — LINKED inbox SEND (prd-email-server-v1 §17.5): a blocking SMTP

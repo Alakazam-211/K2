@@ -956,6 +956,8 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
         ingress: ingress.clone(),
         clock: Mutex::new(Clock { started: now, last_input: now, hidden_since: None, control: (a.may_control, now), last_refusal_log: None }),
     });
+    // From here the viewer is let go however this ends (see [`Leave`]).
+    let left = Leave(Some(ctx.clone()));
     viewers::register(info, Arc::new(PushClose(push_tx.clone())));
     // A virtual desktop counts its viewers' presence (LD-24): joining is
     // present; an Owner's or Admin's presence wakes it.
@@ -1006,7 +1008,7 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
         }
     };
     let served = crate::stream::serve(stream, source, offer, path, hooks).await;
-    leave(&ctx);
+    left.now();
     match served {
         Ok(()) => {}
         Err(ServeError::Join(JoinError::Open(e))) | Err(ServeError::Join(JoinError::Thread(e))) | Err(ServeError::Task(e)) => {
@@ -1161,6 +1163,29 @@ fn recheck(ctx: &Arc<Ctx>, limits: Limits) -> Verdict {
         lease_changed(&ctx.desktop, &ctx.deskd, c, why);
     }
     Verdict::Keep
+}
+
+/// Runs [`leave`] once for a viewer, however its serve ends: the socket
+/// closing, or the serve dropped before it returned (an aborted or
+/// shut-down connection task, a panic in the engine). Dropped, a serve
+/// that only called `leave` after its last await left the viewer in the
+/// registry and the session, holding the control lease, with the
+/// desktop's event pump kept alive by a member that was gone.
+struct Leave(Option<Arc<Ctx>>);
+
+impl Leave {
+    /// The serve returned: let the viewer go now, before its last reply.
+    fn now(self) {
+        drop(self);
+    }
+}
+
+impl Drop for Leave {
+    fn drop(&mut self) {
+        if let Some(ctx) = self.0.take() {
+            leave(&ctx);
+        }
+    }
 }
 
 /// Tests: wait (at most `within`) until nothing of `desktop`'s viewers is

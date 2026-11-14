@@ -1458,3 +1458,61 @@ describe('the tooltip of a row on another server (Z3, Z5)', () => {
     expect(otherRowOpenTitle(false, 'use', 'Bee', 'Box B')).toBe('Switch this window to Box B and open Bee')
   })
 })
+
+describe('the selected agent row drops the dividers around it (Home nav)', () => {
+  // The rule in globals.css (the Agents nav's case and the rule's own shape
+  // are in components/Sidebar/nav-selected-dividers.test.tsx).
+  function hideSelectors(): string[] {
+    const dir = dirname(fileURLToPath(import.meta.url))
+    const globals = readFileSync(join(dir, '..', '..', 'globals.css'), 'utf8')
+    const at = globals.indexOf('Row dividers beside the selected agent row')
+    if (at < 0) throw new Error('missing the "Row dividers beside the selected agent row" rule')
+    const start = globals.indexOf('*/', at) + 2
+    return globals.slice(start, globals.indexOf('{', start)).split(',').map((s) => s.trim()).filter(Boolean)
+  }
+  function lines(): Array<'hidden' | 'shown'> {
+    const sels = hideSelectors()
+    return Array.from(homeSidebar().querySelectorAll('[data-home-row] > [data-row-divider]')).map((el) =>
+      sels.some((s) => el.matches(s)) ? 'hidden' : 'shown',
+    )
+  }
+  function rowsOf(labels: string[]): void {
+    const home = useHomesStore.getState().homes[0]
+    for (const r of [...home.rows]) useHomesStore.getState().removeRow(home.id, r.address)
+    const all: Record<string, { address: string; workspaceId: string; label: string }> = {
+      Nova: { address: 'nova::local', workspaceId: 'pn', label: 'Nova' },
+      Cortana: { address: 'cortana::local', workspaceId: 'pl', label: 'Cortana' },
+      Bee: { address: 'bee::b.k2.dev', workspaceId: 'pb', label: 'Bee' },
+      Cee: { address: 'cee::c.k2.dev', workspaceId: 'pc', label: 'Cee' },
+    }
+    for (const l of labels) useHomesStore.getState().addRow(home.id, all[l])
+  }
+
+  it('a middle row: the line over it and the line under it go; the rest show', () => {
+    rowsOf(['Nova', 'Cortana', 'Bee', 'Cee'])
+    useProjectsStore.getState().setActiveProject('pl')
+    render(<Shell />)
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+    // Lines under Nova, Cortana and Bee (none under the last row).
+    expect(lines()).toEqual(['hidden', 'hidden', 'shown'])
+  })
+
+  it('the first row: only the line under it goes', () => {
+    rowsOf(['Cortana', 'Nova', 'Bee', 'Cee'])
+    useProjectsStore.getState().setActiveProject('pl')
+    render(<Shell />)
+    expect(lines()).toEqual(['hidden', 'shown', 'shown'])
+  })
+
+  it('the last pin: the line over it goes; the "Agents" caption below keeps no line to lose', () => {
+    rowsOf(['Nova', 'Cortana', 'Bee', 'Cee'])
+    const home = useHomesStore.getState().homes[0]
+    useHomesStore.getState().pinRow(home.id, 'nova::local')
+    useHomesStore.getState().pinRow(home.id, 'cortana::local')
+    useProjectsStore.getState().setActiveProject('pl')
+    render(<Shell />)
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+    // Under Nova (pin), none under the last pin, under Bee.
+    expect(lines()).toEqual(['hidden', 'shown'])
+  })
+})

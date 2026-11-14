@@ -50,7 +50,7 @@ import { homeRowHoverPrefetch } from '@/lib/home-row-prefetch'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
-import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
+import { AgentRowButton, NavRowDivider, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
@@ -481,6 +481,7 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
         <div
           key={row.address}
           {...(drag ? { 'data-home-row': row.address } : { 'data-home-row-preview': row.address })}
+          data-nav-row=""
           data-pinned={isPinned(row) ? '' : undefined}
           data-just-added={drag && justAdded === row.address ? '' : undefined}
           className={drag && justAdded === row.address ? 'bg-[var(--color-row-hover)]' : undefined}
@@ -503,9 +504,7 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
           onMouseLeave={drag ? () => homeRowHoverPrefetch.leave() : undefined}
         >
           <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
-          {idx < rows.length - 1 && idx !== pinCount - 1 && !gapAt(idx + 1) && (
-            <div className="border-b border-[var(--color-border)]" />
-          )}
+          {idx < rows.length - 1 && idx !== pinCount - 1 && !gapAt(idx + 1) && <NavRowDivider />}
         </div>,
       ])}
       {gapAt(rows.length) && dropGap('gap-end')}

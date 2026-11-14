@@ -122,7 +122,7 @@ const NavWorktreeRow = React.memo(function NavWorktreeRow({
 
   return (
     <>
-      <div className="border-t border-[var(--color-border)]" />
+      <NavRowDivider />
       <button
         className={`w-full flex items-center gap-2 px-3 text-left text-[11px] transition-colors cursor-default no-drag ${
           isSelected
@@ -185,6 +185,14 @@ export function ShortcutIndexBadge({ index, combo }: { index?: number; combo?: s
 export { ShortcutRangeHint }
 
 // ── Agent row shell (one workspace / agent in the nav) ──────────────────────
+
+/** The hairline between two nav rows. Each list wraps a row and the line
+ *  under it in a `data-nav-row` box, so the styles can hide the lines that
+ *  touch the selected row, as the tab strip does beside its selected tab
+ *  (globals.css, "Row dividers beside the selected agent row"). */
+export function NavRowDivider(): React.JSX.Element {
+  return <div className="border-b border-[var(--color-border)]" data-row-divider="" />
+}
 
 /** The nav row every agent list paints: 32px avatar, name + presence on
  *  the first line, a 14px second line 2px below it (tags, working glyph,
@@ -686,7 +694,7 @@ export default function Sidebar(): React.JSX.Element {
         const SCROLL_MAX_HEIGHT = 360 // ~7-8 items visible before scrolling
         const useScroll = totalCount > SCROLL_THRESHOLD
         return (
-        <div className="border-b border-[var(--color-border)]">
+        <div data-nav-section="pinned">
           <button
             type="button"
             onClick={() => setAgentsPinnedCollapsed((v) => !v)}
@@ -722,6 +730,7 @@ export default function Sidebar(): React.JSX.Element {
               <div
                 key={project.id}
                 data-project-id={project.id}
+                data-nav-row=""
                 style={{ opacity: rowDrag.isDragging('pinned', idx) ? 0.4 : 1 }}
                 onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'pinned', idx)}
                 onClickCapture={rowDrag.onRowClickCapture}
@@ -743,6 +752,9 @@ export default function Sidebar(): React.JSX.Element {
           </div>
             </div>{/* scroll wrapper */}
           </div>{/* collapse wrapper */}
+          {/* The section's end rule: a row line, so it drops under a
+              selected last pin like the lines between rows. */}
+          <NavRowDivider />
         </div>
         )
       })()}
@@ -757,6 +769,7 @@ export default function Sidebar(): React.JSX.Element {
             <div
               key={project.id}
               data-project-id={project.id}
+              data-nav-row=""
               style={{ opacity: rowDrag.isDragging('unpinned', idx) ? 0.4 : 1 }}
               onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'unpinned', idx)}
               onClickCapture={rowDrag.onRowClickCapture}
@@ -767,9 +780,7 @@ export default function Sidebar(): React.JSX.Element {
                 isActive={project.id === activeProjectId}
                 onContextMenu={handleContextMenu}
               />
-              {idx < filteredProjects.length - 1 && !rowDrag.showsDropLineAt('unpinned', idx + 1) && (
-                <div className="border-b border-[var(--color-border)]" />
-              )}
+              {idx < filteredProjects.length - 1 && !rowDrag.showsDropLineAt('unpinned', idx + 1) && <NavRowDivider />}
             </div>
           ))}
           {rowDrag.showsDropLineAt('unpinned', filteredProjects.length) && <RowDropLine />}

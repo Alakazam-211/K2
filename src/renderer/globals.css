@@ -1530,6 +1530,26 @@ html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not(
   background: var(--color-wash-1);
 }
 
+/* Row dividers beside the selected agent row, every Style (Rosson
+   2026-11-14). The Home and Agents navs drop the hairlines that touch the
+   selected row, as the tab strip drops the dividers beside its selected tab:
+   - the line under it: the next one in its own box (a worktree row's line)
+     or, when the row ends its box, the box's line;
+   - the line over it: the line ending the box before;
+   - a section's end rule (the Agents nav's Pinned), when the section is
+     open and its last row is the selected one: that rule touches the row.
+   Each list wraps a row and its line in a data-nav-row box (NavRowDivider).
+   Home's captions carry no line, so a row beside one has none to lose.
+   Hidden, not removed, so no row moves. Hover changes nothing here, so a
+   pointer on a neighbouring row never flickers a line. Gardens keep their
+   own look. */
+[data-agent-row][aria-current="true"] + [data-row-divider]:not([data-zen-root] *),
+[data-nav-row]:has([data-agent-row][aria-current="true"]:last-child) > [data-row-divider]:not([data-zen-root] *),
+[data-nav-row]:has(+ [data-nav-row] [data-agent-row][aria-current="true"]) > [data-row-divider]:not([data-zen-root] *),
+[data-nav-section]:has(> [aria-expanded="true"]):has([data-nav-row]:last-child [data-agent-row][aria-current="true"]:last-child) > [data-row-divider]:not([data-zen-root] *) {
+  visibility: hidden;
+}
+
 /* Muted text on a hovered or selected row steps up to the secondary tier,
    every Style. A row's band (the hover wash, the selected wash, the accent
    wash under a selected Settings row) takes muted text under 4.5:1 (3.9:1 on

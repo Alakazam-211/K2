@@ -517,8 +517,8 @@ try:
         reason = r.get('waitReason')
         if not reason: return '-'
         detail = r.get('waitDetail')
-        # S5's two reasons keep their own line below.
-        if detail and reason not in ('wakeup_empty', 'schedule_error'):
+        # These reasons keep their own line below.
+        if detail and reason not in ('wakeup_empty', 'schedule_error', 'wakeup_waiting'):
             return f'{reason}: {detail}'
         return reason
     print(f'{\"Name\":<20} {\"Frequency\":<10} {\"Schedule\":<30} {\"Last Fired\":<22} {\"Enabled\":<8} {\"Next\":<17} Waiting')
@@ -545,7 +545,8 @@ try:
             sched_parts.append(f\"{spec.get('start', '00:00')}-{spec.get('end', '23:59')}\")
         sched = ' '.join(sched_parts) or '-'
         last = (r.get('lastFired') or 'never')[:19].replace('T', ' ')
-        en = 'yes' if r.get('enabled') else 'no'
+        # A schedule K2 turned off reads auto-off, not a person's no.
+        en = 'yes' if r.get('enabled') else ('auto-off' if r.get('disabledReason') else 'no')
         print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {last:<22} {en:<8} {hb_next(r):<17} {hb_waiting(r)}')
         # S5: the two creation-trap reasons get a line that says what to do.
         wr = r.get('waitReason')
@@ -553,8 +554,26 @@ try:
             print('    waiting: WAKEUP.md is empty (needs instructions)')
         elif wr == 'schedule_error':
             print(f\"    invalid schedule: {r.get('waitDetail') or r.get('scheduleError') or '?'}\")
-        if not r.get('enabled') and r.get('disabledReason') == 'wakeup_empty':
-            print('    disabled: WAKEUP.md was empty (add instructions, then enable)')
+        elif wr == 'wakeup_waiting':
+            print(f\"    {r.get('waitDetail') or 'waiting for WAKEUP.md'}\")
+        # Turned off by K2, not a person: why, since when, how to turn it on.
+        dr = r.get('disabledReason')
+        if not r.get('enabled') and dr:
+            why = {
+                'failures': 'its fires failed too many times in a row',
+                'wakeup_missing': 'WAKEUP.md could not be read (an older K2 did this; K2 now waits and retries instead)',
+                'wakeup_empty': 'WAKEUP.md was empty (add instructions first)',
+            }.get(dr, dr)
+            # waitSince = when the row's wait reason became this disable.
+            since = r.get('waitSince')
+            when = ''
+            if since:
+                try:
+                    when = ' (off since ' + datetime.fromisoformat(since.replace('Z', '+00:00')).astimezone().strftime('%Y-%m-%d %H:%M') + ')'
+                except ValueError:
+                    when = ' (off since ' + since + ')'
+            print(f\"    auto-disabled by K2{when}: {why}\")
+            print(f\"    it stays off until it is turned on: k2 heartbeat enable {r.get('name', '?')}\")
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 "

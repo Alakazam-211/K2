@@ -62,6 +62,9 @@ const DISABLED_COPY: Record<string, string> = {
 
 const STATIC_COPY: Record<string, { text: string; tone: HeartbeatStatusTone }> = {
   wakeup_empty: { text: 'waiting: WAKEUP.md is empty', tone: 'waiting' },
+  // Missing or unreadable: the heartbeat stays on, skips each fire and
+  // retries (the daemon never turns it off for this).
+  wakeup_waiting: { text: 'waiting: WAKEUP.md missing, K2 keeps retrying', tone: 'problem' },
   no_agent: { text: 'waiting: no agent in this workspace', tone: 'waiting' },
   no_project: { text: 'waiting: workspace folder not found', tone: 'problem' },
 }

@@ -258,6 +258,10 @@ export function describeDecision(decision: string): { text: string; tone: Tone }
       return { text: 'Skipped: more than 12 hours late', tone: 'problem' }
     case 'not_due':
       return { text: 'Not due yet', tone: 'skip' }
+    case 'wakeup_notice':
+      return { text: 'Told the workspace its wakeup file is missing', tone: 'problem' }
+    case 'wakeup_back':
+      return { text: 'Its wakeup file is back', tone: 'ok' }
   }
   const SKIPS: Record<string, string> = {
     skipped_locked: 'another check was already running',
@@ -270,6 +274,8 @@ export function describeDecision(decision: string): { text: string; tone: Tone }
     skipped_empty: 'its wakeup file is empty',
     skipped_custom_timing: 'it wasn’t its time yet',
     skipped_busy: 'the agent was busy',
+    skipped_wakeup_waiting: 'its wakeup file was missing or unreadable; K2 retries',
+    skipped_wakeup_unavailable: 'its wakeup file was missing or unreadable; K2 retries',
   }
   if (decision.startsWith('skipped_')) {
     return { text: `Skipped: ${SKIPS[decision] ?? decision.slice('skipped_'.length).replace(/_/g, ' ')}`, tone: 'skip' }

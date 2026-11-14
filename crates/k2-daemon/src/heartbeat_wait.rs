@@ -32,6 +32,14 @@ const WAIT_PASS_INTERVAL: Duration = Duration::from_secs(60);
 pub fn install_listener() {
     wait::set_change_listener(emit_roster_changed);
     k2_core::heartbeats::reminders::set_note_sink(post_reminder_note);
+    k2_core::heartbeats::wakeup_wait::set_thread_sink(post_wakeup_note);
+}
+
+/// A heartbeat's "waiting for WAKEUP.md" / "back" note on the workspace's
+/// Thread. Used only while the workspace folder is gone, so its inbox
+/// can't be written; the caller logs a failure and retries next tick.
+fn post_wakeup_note(project_path: &str, text: &str) -> Result<(), String> {
+    crate::overlay_routes::post_workspace_note(project_path, text, "k2-heartbeat")
 }
 
 /// A reminder's note to the people on this workspace's Thread (fired,

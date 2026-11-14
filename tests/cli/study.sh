@@ -166,7 +166,7 @@ while IFS= read -r reason; do
         fail=$((fail + 1))
     fi
 done <<< "$reasons"
-assert_eq "fixture lists 14 reasons" "$reason_count" "14"
+assert_eq "fixture lists 15 reasons" "$reason_count" "15"
 assert_contains "list route" "$hb_out" "GET  /cli/heartbeat/list?workspace="
 assert_contains "show route" "$hb_out" "GET  /cli/heartbeat/show?workspace=&name="
 assert_contains "fire route" "$hb_out" "POST /cli/heartbeat/fire"

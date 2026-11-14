@@ -103,6 +103,9 @@ describe('listReply / describeDecision', () => {
     expect(describeDecision('wakeup_file_missing').tone).toBe('problem')
     expect(describeDecision('skipped_busy')).toEqual({ text: 'Skipped: the agent was busy', tone: 'skip' })
     expect(describeDecision('skipped_new_thing').text).toBe('Skipped: new thing')
+    // A missing or unreadable WAKEUP.md is a skip that K2 retries, never a pause.
+    expect(describeDecision('skipped_wakeup_waiting')).toEqual({ text: 'Skipped: its wakeup file was missing or unreadable; K2 retries', tone: 'skip' })
+    expect(describeDecision('wakeup_back').tone).toBe('ok')
   })
 
   it('explains a run’s reason in plain words with the next step, never the raw text', () => {

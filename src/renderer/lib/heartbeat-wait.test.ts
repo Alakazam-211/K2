@@ -55,7 +55,7 @@ function rowFor(reason: string, nextFireAt: string | null): HeartbeatWaitFields 
 
 describe('the vocabulary contract (T-S3f, renderer half)', () => {
   it('the fixture is the daemon list and non-empty', () => {
-    expect(REASONS.length).toBe(14)
+    expect(REASONS.length).toBe(15)
     expect(REASONS).toContain('no_ticks')
   })
 
@@ -131,6 +131,7 @@ describe('each wait_reason renders its text', () => {
     expect(text(rowFor('wakeup_empty', iso(NOW + HOUR)))).toBe('waiting: WAKEUP.md is empty')
     expect(text(rowFor('no_agent', iso(NOW - HOUR)))).toBe('waiting: no agent in this workspace')
     expect(text(rowFor('no_project', iso(NOW - HOUR)))).toBe('waiting: workspace folder not found')
+    expect(text(rowFor('wakeup_waiting', iso(NOW - HOUR)))).toBe('waiting: WAKEUP.md missing, K2 keeps retrying')
   })
 
   it('no_ticks says how long the scheduler has been quiet', () => {

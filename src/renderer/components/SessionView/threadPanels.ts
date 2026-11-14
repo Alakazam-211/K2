@@ -116,6 +116,8 @@ const DECISION_LABEL: Record<string, string> = {
   auto_disabled: 'Turned off',
   auto_disabled_failing: 'Turned off after failures',
   tick_gap: 'Missed while asleep',
+  wakeup_notice: 'Wakeup file missing: told the workspace',
+  wakeup_back: 'Wakeup file back',
 }
 
 export function heartbeatDecisionLabel(decision: string): string {

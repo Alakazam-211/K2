@@ -808,7 +808,7 @@ fn run_fresh_fire(
     cause: FreshCause,
 ) -> serde_json::Value {
     let Some(delivery) = row_delivery(hb, wakeup_abs) else {
-        return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
+        return skip_unavailable_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
     let prompt = delivery.prompt.clone();
 
@@ -1104,7 +1104,7 @@ fn run_workspace_session_delivery(
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
     let Some(delivery) = row_delivery(hb, wakeup_abs) else {
-        return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
+        return skip_unavailable_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
     // 0.38.6: heartbeat-initiated delivery is internal-to-daemon, not
@@ -1197,17 +1197,14 @@ fn run_inject(
     let delivery = if hb.kind != k2_core::db::schema::HEARTBEAT_KIND {
         match row_delivery(hb, wakeup_abs) {
             Some(d) => d,
-            None => return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs),
+            None => return skip_unavailable_wakeup(project_id, agent_name, hb, wakeup_abs),
         }
     } else {
         let body_raw = match std::fs::read_to_string(wakeup_abs) {
             Ok(s) => s,
-            Err(e) => {
-                return record_fire_failure(
-                    project_id, agent_name, hb,
-                    &format!("inject failed reading WAKEUP.md: {e}"),
-                );
-            }
+            // A WAKEUP.md that can't be read is a skip, never a failure
+            // that could count toward an auto-disable.
+            Err(_) => return skip_unavailable_wakeup(project_id, agent_name, hb, wakeup_abs),
         };
         let body = wake::strip_frontmatter(&body_raw);
         let body_trimmed = body.trim();
@@ -1215,7 +1212,7 @@ fn run_inject(
             // S5 HB33: empty is a wait, not a failure (no backoff, no
             // failure count). The helper sees the empty file and answers
             // `wakeup_empty` without disabling.
-            return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
+            return skip_unavailable_wakeup(project_id, agent_name, hb, wakeup_abs);
         }
         // 0.45.6: a long body goes as a pointer to the file, never pasted
         // where the TUI could keep only its tail.
@@ -1347,7 +1344,7 @@ fn run_resume_and_fire(
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
     let Some(delivery) = row_delivery(hb, wakeup_abs) else {
-        return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
+        return skip_unavailable_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
     // Slice 3b: the resume argv + prompt-delivery mode come from the
@@ -1786,67 +1783,55 @@ fn error_value(decision: &str, reason: &str, name: &str) -> serde_json::Value {
     })
 }
 
-/// 0.38.12: when `compose_wake_prompt_from_path` returns None
-/// (almost always because WAKEUP.md is missing or unreadable),
-/// auto-disable the heartbeat so the daemon doesn't keep firing
-/// every tick.
+/// The fire found no wake text: WAKEUP.md is empty, missing or can't be
+/// read. Nothing is turned off and no failure is counted.
 ///
-/// Before this, every tick would re-attempt compose, fail, write
-/// `failed to compose wake prompt` to the audit log, and try again
-/// next tick — producing the chronic log spam noted in the
-/// memory-leak C3PO ticket (`c9b0d9a9`).
+/// - Empty (S5 HB33): the row stays enabled and waits; the launch says
+///   `wakeup_empty`.
+/// - Missing or unreadable: the launch is skipped with
+///   `wakeup_unavailable`. A scheduled fire's slot stays due (`last_fired`
+///   is not stamped), so the tick checks again and fires as soon as the
+///   file can be read; the tick also keeps the outage's audit rows and its
+///   one notice (`k2_core::heartbeats::wakeup_wait`).
 ///
-/// Flipping `enabled=false` takes the row out of
-/// `AgentHeartbeat::list_enabled` so subsequent ticks skip it
-/// entirely. The user can re-enable from Settings → Heartbeats
-/// after they restore WAKEUP.md. The audit entry uses the distinct
-/// `auto_disabled` decision so it shows up clearly in the fires
-/// table + sidebar.
-fn auto_disable_missing_wakeup(
+/// Before, this turned the heartbeat off (`wakeup_missing`) on the first
+/// read that failed, for any reason, with no notice. A field report had
+/// every heartbeat on a box turned off that way during a short host
+/// outage, and they stayed off for hours.
+fn skip_unavailable_wakeup(
     project_id: &str,
     agent_name: &str,
     hb: &AgentHeartbeat,
     wakeup_abs: &Path,
 ) -> serde_json::Value {
+    use k2_core::heartbeats::wait::{self, WakeupBody};
     release_lease(project_id, &hb.name);
-    // S5 HB33: an EMPTY WAKEUP.md is not a missing one. The row stays
-    // enabled, no failure is counted, and the launch says why. The
-    // scheduler tick already skips empty bodies, so only a manual
-    // Launch (or a body emptied between tick and fire) lands here.
-    if k2_core::heartbeats::wait::wakeup_body(wakeup_abs)
-        == k2_core::heartbeats::wait::WakeupBody::Empty
-    {
-        let detail = k2_core::heartbeats::wait::WAKEUP_EMPTY_DETAIL;
-        write_audit(
-            project_id,
-            agent_name,
-            hb,
-            k2_core::heartbeats::wait::DECISION_WAKEUP_EMPTY,
-            detail,
-        );
-        return error_value(k2_core::heartbeats::WAIT_WAKEUP_EMPTY, detail, &hb.name);
-    }
-    let reason = format!(
-        "WAKEUP.md missing or unreadable at {}; heartbeat auto-disabled",
-        wakeup_abs.display()
-    );
-    write_audit(project_id, agent_name, hb, "auto_disabled", &reason);
-    {
-        // 0062: record WHY via disabled_reason so Settings shows a
-        // "WAKEUP.md missing" badge instead of a silently-off toggle.
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let _ = AgentHeartbeat::auto_disable(&conn, project_id, &hb.name, "wakeup_missing");
-    }
+    let reason = match wait::wakeup_body(wakeup_abs) {
+        WakeupBody::Empty => {
+            let detail = wait::WAKEUP_EMPTY_DETAIL;
+            write_audit(project_id, agent_name, hb, wait::DECISION_WAKEUP_EMPTY, detail);
+            return error_value(k2_core::heartbeats::WAIT_WAKEUP_EMPTY, detail, &hb.name);
+        }
+        WakeupBody::Missing => format!("WAKEUP.md not found at {}", hb.wakeup_path),
+        WakeupBody::Unreadable | WakeupBody::Present => {
+            format!("WAKEUP.md at {} can't be read", hb.wakeup_path)
+        }
+    };
+    let reason = format!("{reason}; skipped, the heartbeat stays on and K2 retries");
+    write_audit(project_id, agent_name, hb, DECISION_WAKEUP_UNAVAILABLE, &reason);
     k2_core::log_debug!(
-        "[heartbeat] auto-disabled hb={} project={} agent={} reason=missing-wakeup path={}",
+        "[heartbeat] skipped hb={} project={} agent={}: {}",
         hb.name,
         project_id,
         agent_name,
-        wakeup_abs.display()
+        reason
     );
-    error_value("auto_disabled", &reason, &hb.name)
+    error_value(DECISION_WAKEUP_UNAVAILABLE, &reason, &hb.name)
 }
+
+/// Launch decision (and audit row) for a fire skipped because WAKEUP.md
+/// is missing or can't be read. A skip, never a disable.
+pub const DECISION_WAKEUP_UNAVAILABLE: &str = "skipped_wakeup_unavailable";
 
 #[cfg(test)]
 mod decision_tests {

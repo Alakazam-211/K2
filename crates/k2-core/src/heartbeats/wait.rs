@@ -47,6 +47,10 @@ use crate::db::schema::{AgentHeartbeat, HeartbeatFire, SchedulerMeta};
 
 /// HB20 `wait_reason`: the WAKEUP.md body is empty.
 pub const WAIT_WAKEUP_EMPTY: &str = "wakeup_empty";
+/// HB20 `wait_reason`: WAKEUP.md is missing or can't be read. The row
+/// stays enabled and each due fire is skipped until it can be read
+/// (`wakeup_wait`). `wait_detail` says since when and how many fires.
+pub const WAIT_WAKEUP_WAITING: &str = "wakeup_waiting";
 /// HB20 `wait_reason`: the schedule can never fire.
 pub const WAIT_SCHEDULE_ERROR: &str = "schedule_error";
 /// `wait_detail` for [`WAIT_WAKEUP_EMPTY`].
@@ -66,31 +70,34 @@ pub const DISABLED_WAKEUP_MISSING: &str = "wakeup_missing";
 /// What is on disk at a heartbeat's WAKEUP.md path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WakeupBody {
-    /// No file.
+    /// No file (NotFound).
     Missing,
+    /// The file could not be read for another reason. It waits like a
+    /// missing file (see `wakeup_wait`); never a disable.
+    Unreadable,
     /// The file exists; with frontmatter stripped, nothing is left.
     Empty,
-    /// The file has instructions (or could not be read — the launcher
-    /// reports an unreadable file itself, as before S5).
+    /// The file has instructions.
     Present,
 }
 
-/// Classify the WAKEUP.md at `path`. Same emptiness test the launcher's
+/// The body test for a file's text. Same emptiness test the launcher's
 /// composer uses (`compose_agent_wake_from_body`), so the tick and the
 /// fire path can never disagree about "empty".
-pub fn wakeup_body(path: &Path) -> WakeupBody {
-    if !path.exists() {
-        return WakeupBody::Missing;
+pub fn body_of(raw: &str) -> WakeupBody {
+    if crate::workspace::wake_prompts::compose_agent_wake_from_body(Some(raw)).is_none() {
+        WakeupBody::Empty
+    } else {
+        WakeupBody::Present
     }
-    match std::fs::read_to_string(path) {
-        Ok(raw) => {
-            if crate::workspace::wake_prompts::compose_agent_wake_from_body(Some(&raw)).is_none() {
-                WakeupBody::Empty
-            } else {
-                WakeupBody::Present
-            }
-        }
-        Err(_) => WakeupBody::Present,
+}
+
+/// Classify the WAKEUP.md at `path`.
+pub fn wakeup_body(path: &Path) -> WakeupBody {
+    match super::wakeup_wait::read_file(path) {
+        Ok(raw) => body_of(&raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => WakeupBody::Missing,
+        Err(_) => WakeupBody::Unreadable,
     }
 }
 
@@ -173,6 +180,7 @@ pub const ALL_REASONS: &[&str] = &[
     WAIT_BACKOFF,
     WAIT_SCHEDULE_ERROR,
     WAIT_WAKEUP_EMPTY,
+    WAIT_WAKEUP_WAITING,
     WAIT_NO_AGENT,
     WAIT_NO_PROJECT,
     WAIT_DISABLED_USER,
@@ -193,11 +201,14 @@ pub const NO_TICKS_AFTER_SECS: i64 = 180;
 pub const MAX_CONSECUTIVE_FAILURES: i64 = 5;
 
 /// Facts about the workspace the pure derivation needs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaitInputs {
     pub project_dir_exists: bool,
     pub agent_resolvable: bool,
     pub wakeup: WakeupBody,
+    /// WAKEUP.md is missing or unreadable: the detail to show (the open
+    /// outage's since + skipped count, or what the next fire will find).
+    pub wakeup_waiting: Option<String>,
 }
 
 /// One row's derived wait state.
@@ -228,8 +239,8 @@ fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
 /// as the evaluator should see it (an open S5 `wakeup_added` episode
 /// already shifted by [`with_reference`]).
 ///
-/// Precedence (first match wins): disabled → invalid schedule → project
-/// folder gone → lease held → empty WAKEUP.md → no agent → failure
+/// Precedence (first match wins): disabled → invalid schedule → WAKEUP.md
+/// missing or unreadable → project folder gone → lease held → empty WAKEUP.md → no agent → failure
 /// backoff → the evaluator's own answer (scheduled / window closed).
 /// Archived rows are not derived (the caller skips them).
 pub fn derive(hb: &AgentHeartbeat, inputs: &WaitInputs, now: DateTime<Local>) -> WaitState {
@@ -294,6 +305,13 @@ pub fn derive(hb: &AgentHeartbeat, inputs: &WaitInputs, now: DateTime<Local>) ->
             }
         };
 
+    // A WAKEUP.md that is missing or can't be read comes first, before a
+    // missing workspace folder: a folder that went away makes every file
+    // unreadable, and this says what the row is doing about it (skipping
+    // fires, retrying, still on).
+    if let Some(detail) = &inputs.wakeup_waiting {
+        return WaitState::new(slot, WAIT_WAKEUP_WAITING, Some(detail.clone()));
+    }
     if !inputs.project_dir_exists {
         return WaitState::new(slot, WAIT_NO_PROJECT, Some("workspace folder not found".to_string()));
     }
@@ -420,10 +438,25 @@ fn refresh_rows(project_path: &str, now: DateTime<Local>) -> Result<bool, String
     for hb in rows {
         // W6: a reminder's text is in the row, so it has no file to be
         // missing or empty (a digest's WAKEUP.md is optional).
-        let wakeup = if hb.kind == crate::db::schema::HEARTBEAT_KIND {
-            wakeup_body(&Path::new(project_path).join(&hb.wakeup_path))
+        let (wakeup, wakeup_waiting) = if hb.kind == crate::db::schema::HEARTBEAT_KIND {
+            use super::wakeup_wait::{self, WakeupRead};
+            match wakeup_wait::read_wakeup(Path::new(project_path), &hb.wakeup_path) {
+                WakeupRead::Readable(raw) => (body_of(&raw), None),
+                read => {
+                    let body = if read == WakeupRead::Missing {
+                        WakeupBody::Missing
+                    } else {
+                        WakeupBody::Unreadable
+                    };
+                    let detail = match wakeup_wait::open_waiting(&conn, &project_id, &hb.name) {
+                        Some(ep) => ep.detail(),
+                        None => wakeup_wait::not_yet_detail(&read, &hb.wakeup_path),
+                    };
+                    (body, Some(detail))
+                }
+            }
         } else {
-            WakeupBody::Present
+            (WakeupBody::Present, None)
         };
         // S5 D4: while a `wakeup_added` episode is open the schedule
         // counts from when the instructions were seen. A body that
@@ -442,6 +475,7 @@ fn refresh_rows(project_path: &str, now: DateTime<Local>) -> Result<bool, String
             project_dir_exists,
             agent_resolvable: agent_name.is_some(),
             wakeup,
+            wakeup_waiting,
         };
         let mut state = derive(&eval_hb, &inputs, now);
 
@@ -848,16 +882,41 @@ mod tests {
         assert_waiting_enabled(&ws, "morning");
     }
 
-    /// A missing file keeps today's behaviour: auto-disable as
-    /// `wakeup_missing`.
+    /// A missing file is never a disable: the fire is skipped, the row
+    /// stays on and waits as `wakeup_waiting`.
     #[test]
-    fn missing_wakeup_still_disables_as_missing() {
+    fn missing_wakeup_waits_enabled_and_is_not_disabled() {
         let ws = workspace("missing");
         seed(&ws, "gone", "hourly", r#"{"every_seconds":60}"#, 630, None);
         assert_eq!(candidate_names(&ws), Vec::<String>::new());
         let hb = row(&ws, "gone");
-        assert!(!hb.enabled);
+        assert!(hb.enabled, "a missing WAKEUP.md must not disable the row");
+        assert_eq!(hb.disabled_reason, None);
+        let listed = listed(&ws, "gone");
+        assert_eq!(listed.wait_reason.as_deref(), Some(WAIT_WAKEUP_WAITING));
+        let detail = listed.wait_detail.expect("detail");
+        assert!(detail.contains("1 fire skipped"), "{detail}");
+        assert!(detail.contains("WAKEUP.md not found at"), "{detail}");
+    }
+
+    /// A row an older K2 turned off as `wakeup_missing` stays off (no
+    /// silent re-enable), even with its file back, and still reads as
+    /// that auto-disable.
+    #[test]
+    fn old_wakeup_missing_disable_stays_off() {
+        let ws = workspace("old-off");
+        seed(&ws, "was-off", "hourly", r#"{"every_seconds":60}"#, 630, Some("do things\n"));
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::auto_disable(&conn, &ws.project_id, "was-off", DISABLED_WAKEUP_MISSING)
+                .unwrap();
+        }
+        assert_eq!(candidate_names(&ws), Vec::<String>::new());
+        let hb = row(&ws, "was-off");
+        assert!(!hb.enabled, "stays off");
         assert_eq!(hb.disabled_reason.as_deref(), Some(DISABLED_WAKEUP_MISSING));
+        assert_eq!(listed(&ws, "was-off").wait_reason.as_deref(), Some(WAIT_DISABLED_WAKEUP_MISSING));
     }
 
     /// A body present from the start fires on its slot (no episode).
@@ -981,7 +1040,12 @@ mod s3_derive_tests {
     }
 
     fn ok_inputs() -> WaitInputs {
-        WaitInputs { project_dir_exists: true, agent_resolvable: true, wakeup: WakeupBody::Present }
+        WaitInputs {
+            project_dir_exists: true,
+            agent_resolvable: true,
+            wakeup: WakeupBody::Present,
+            wakeup_waiting: None,
+        }
     }
 
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
@@ -1083,10 +1147,20 @@ mod s3_derive_tests {
         let st = derive(&hb, &empty, now);
         assert_eq!(st.reason, WAIT_WAKEUP_EMPTY);
         assert_eq!(st.detail.as_deref(), Some(WAKEUP_EMPTY_DETAIL), "S5's copy is kept");
-        let empty_no_agent = WaitInputs { agent_resolvable: false, ..empty };
+        let empty_no_agent = WaitInputs { agent_resolvable: false, ..empty.clone() };
         assert_eq!(derive(&hb, &empty_no_agent, now).reason, WAIT_WAKEUP_EMPTY);
         let gone = WaitInputs { project_dir_exists: false, ..empty_no_agent };
         assert_eq!(derive(&hb, &gone, now).reason, WAIT_NO_PROJECT);
+        // A WAKEUP.md that can't be read says so even with the folder
+        // gone (a folder that went away is why every file is unreadable).
+        let waiting = WaitInputs {
+            wakeup: WakeupBody::Unreadable,
+            wakeup_waiting: Some("waiting for WAKEUP.md since x".to_string()),
+            ..gone
+        };
+        let st = derive(&hb, &waiting, now);
+        assert_eq!(st.reason, WAIT_WAKEUP_WAITING);
+        assert_eq!(st.detail.as_deref(), Some("waiting for WAKEUP.md since x"));
         hb.in_flight_started_at = Some(now.to_rfc3339());
         assert_eq!(derive(&hb, &empty, now).reason, WAIT_IN_FLIGHT);
         // Every gate keeps the evaluator's slot as next_fire_at.

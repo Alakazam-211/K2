@@ -110,10 +110,9 @@ fn audit_count(ws: &Ws, decision: &str) -> i64 {
     .expect("count audit rows")
 }
 
-/// Every inbox item's body text, oldest first.
+/// Every inbox item's text (any order).
 fn inbox_texts(ws: &Ws) -> Vec<String> {
-    let mut items = crate::inbox::list_root(&ws.dir);
-    items.sort_by(|a, b| a.filename.cmp(&b.filename));
+    let items = crate::inbox::list_root(&ws.dir);
     items
         .iter()
         .map(|i| {
@@ -121,6 +120,11 @@ fn inbox_texts(ws: &Ws) -> Vec<String> {
             std::fs::read_to_string(&p).expect("read inbox item")
         })
         .collect()
+}
+
+/// How many of `texts` contain `needle`.
+fn with(texts: &[String], needle: &str) -> usize {
+    texts.iter().filter(|t| t.contains(needle)).count()
 }
 
 /// Move the schedule's reference back a little, so the latest due slot is
@@ -186,15 +190,15 @@ fn missing_for_two_fires_then_back_never_disables() {
 
     let notices = inbox_texts(&ws);
     assert_eq!(notices.len(), 1, "one notice for the outage: {notices:?}");
-    assert!(notices[0].contains("WAKEUP.md not found"), "{}", notices[0]);
-    assert!(notices[0].contains("keeps retrying"), "{}", notices[0]);
+    assert_eq!(with(&notices, "WAKEUP.md not found"), 1, "{notices:?}");
+    assert_eq!(with(&notices, "keeps retrying"), 1, "{notices:?}");
 
     std::fs::write(ws.wakeup(), BODY).expect("restore WAKEUP.md");
     assert_eq!(tick(&ws), vec!["hb".to_string()], "fires as soon as the file is back");
     assert_on(&ws, "after the file is back");
     let notices = inbox_texts(&ws);
     assert_eq!(notices.len(), 2, "one notice + one back line: {notices:?}");
-    assert!(notices[1].contains("is back"), "{}", notices[1]);
+    assert_eq!(with(&notices, "is back"), 1, "{notices:?}");
     assert_eq!(audit_count(&ws, "wakeup_back"), 1);
 }
 
@@ -226,7 +230,126 @@ fn long_outage_one_notice_one_recovery_and_fires_resume() {
     assert_eq!(tick(&ws), vec!["hb".to_string()], "fires resume");
     let notices = inbox_texts(&ws);
     assert_eq!(notices.len(), 2, "one notice + one back line: {notices:?}");
-    assert!(notices[1].contains("17"), "the back line counts the skipped fires: {}", notices[1]);
+    assert_eq!(with(&notices, "17 fires skipped"), 1, "the back line counts the skipped fires: {notices:?}");
     assert_eq!(audit_count(&ws, "wakeup_back"), 1);
     assert_ne!(listed(&ws).wait_reason.as_deref(), Some("wakeup_waiting"));
+}
+
+// ── New-API tests (the fault seam and the Thread fallback) ─────────────
+
+use super::wakeup_wait;
+
+/// A transient read error (permission denied, an I/O error) skips the fire
+/// and keeps the schedule on. No notice for a short blip; one once it has
+/// lasted the grace; the next readable fire runs.
+#[test]
+fn unreadable_wakeup_skips_keeps_on_and_tells_once_after_the_grace() {
+    for (i, kind) in [std::io::ErrorKind::PermissionDenied, std::io::ErrorKind::Other].into_iter().enumerate() {
+        let ws = seed(&format!("fault{i}"));
+        wakeup_wait::set_read_fault(Some((ws.wakeup(), kind)));
+        assert_eq!(tick(&ws), Vec::<String>::new(), "{kind:?}: skipped");
+        assert_on(&ws, &format!("{kind:?}: first skip"));
+        assert_eq!(inbox_texts(&ws).len(), 0, "{kind:?}: a short blip says nothing");
+        let hb = listed(&ws);
+        assert_eq!(hb.wait_reason.as_deref(), Some("wakeup_waiting"), "{kind:?}");
+        assert!(hb.wait_detail.as_deref().unwrap_or_default().contains("can't be read"), "{kind:?}: {:?}", hb.wait_detail);
+
+        // The outage has lasted past the grace.
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let earlier = (chrono::Local::now()
+                - chrono::Duration::seconds(wakeup_wait::UNREADABLE_NOTICE_AFTER_SECS + 60))
+            .to_rfc3339();
+            conn.execute(
+                "UPDATE heartbeat_fires SET fired_at = ?1 WHERE project_id = ?2 AND decision = ?3",
+                rusqlite::params![earlier, ws.project_id, wakeup_wait::DECISION_SKIPPED_WAKEUP],
+            )
+            .unwrap();
+        }
+        assert_eq!(tick(&ws), Vec::<String>::new(), "{kind:?}: still skipped");
+        assert_eq!(tick(&ws), Vec::<String>::new(), "{kind:?}: still skipped");
+        assert_on(&ws, &format!("{kind:?}: after the grace"));
+        let notices = inbox_texts(&ws);
+        assert_eq!(notices.len(), 1, "{kind:?}: one notice: {notices:?}");
+        assert_eq!(with(&notices, "can't be read"), 1, "{notices:?}");
+        // Three ticks; a minute boundary may pass between them, so count
+        // slots, not ticks: every skipped row names a different slot.
+        let (rows, slots): (i64, i64) = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT substr(reason, 1, instr(reason, ': '))) FROM heartbeat_fires \
+                 WHERE project_id = ?1 AND decision = ?2",
+                rusqlite::params![ws.project_id, wakeup_wait::DECISION_SKIPPED_WAKEUP],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(rows, slots, "{kind:?}: one row per slot, not per tick");
+        assert!(rows < 3, "{kind:?}: three ticks wrote {rows} rows");
+
+        wakeup_wait::set_read_fault(None);
+        assert_eq!(tick(&ws), vec!["hb".to_string()], "{kind:?}: the next readable fire runs");
+        assert_eq!(with(&inbox_texts(&ws), "is back"), 1, "{kind:?}");
+        assert_on(&ws, &format!("{kind:?}: back"));
+    }
+}
+
+static THREAD_NOTES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn record_thread_note(project_path: &str, text: &str) -> Result<(), String> {
+    THREAD_NOTES.lock().expect("notes lock").push((project_path.to_string(), text.to_string()));
+    Ok(())
+}
+
+fn thread_notes(ws: &Ws) -> Vec<String> {
+    THREAD_NOTES
+        .lock()
+        .expect("notes lock")
+        .iter()
+        .filter(|(p, _)| *p == ws.path)
+        .map(|(_, t)| t.clone())
+        .collect()
+}
+
+/// The field case end to end: the workspace folder is moved away for a
+/// long time. The heartbeat stays on, the one notice goes to the Thread
+/// (the inbox lives in the folder that is gone, and K2 must not recreate
+/// it), the "back" line follows it there, and fires resume.
+#[test]
+fn folder_moved_away_long_outage_tells_the_thread_once_and_resumes() {
+    wakeup_wait::set_thread_sink(record_thread_note);
+    let ws = seed("moved");
+    std::fs::rename(&ws.dir, ws.away()).expect("move the folder away");
+    for i in 0..5 {
+        if i > 0 {
+            next_slot(&ws);
+        }
+        if i == 2 {
+            // Past the grace for a read error.
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let earlier = (chrono::Local::now() - chrono::Duration::minutes(76)).to_rfc3339();
+            conn.execute(
+                "UPDATE heartbeat_fires SET fired_at = ?1 WHERE project_id = ?2 AND decision = ?3",
+                rusqlite::params![earlier, ws.project_id, wakeup_wait::DECISION_SKIPPED_WAKEUP],
+            )
+            .unwrap();
+        }
+        assert_eq!(tick(&ws), Vec::<String>::new(), "fire {i} skipped");
+        assert_on(&ws, &format!("fire {i}"));
+    }
+    assert!(!ws.dir.exists(), "K2 must not recreate the folder (no inbox written there)");
+    let notes = thread_notes(&ws);
+    assert_eq!(notes.len(), 1, "one notice per outage: {notes:?}");
+    assert_eq!(with(&notes, "workspace folder not found"), 1, "{notes:?}");
+    assert_eq!(audit_count(&ws, wakeup_wait::DECISION_WAKEUP_NOTICE), 1);
+
+    std::fs::rename(ws.away(), &ws.dir).expect("put the folder back");
+    assert_eq!(tick(&ws), vec!["hb".to_string()], "fires resume");
+    let notes = thread_notes(&ws);
+    assert_eq!(notes.len(), 2, "one notice + one back line: {notes:?}");
+    assert_eq!(with(&notes, "5 fires skipped"), 1, "{notes:?}");
+    assert_on(&ws, "back");
 }

@@ -34,6 +34,9 @@ pub mod control;
 // the boot relabel/flag pass. S3 (HB18–HB24): the stored next_fire_at +
 // wait_reason, their one writer, and the overdue watchdog.
 pub mod wait;
+// A missing or unreadable WAKEUP.md waits (skip, retry, one notice); it
+// never turns a heartbeat off.
+pub mod wakeup_wait;
 
 /// 0278: one-time Reminders (`kind = 'reminder'`).
 pub mod reminders;
@@ -1011,12 +1014,13 @@ pub struct HeartbeatFireCandidate {
 /// tick wrote a `not_due`/`skipped_schedule` row per heartbeat (1,440
 /// rows/heartbeat/day) and real fires drowned. Rows are written only
 /// for decisions that carry information: fires (by the launcher),
-/// `schedule_invalid` (on state transition), `wakeup_file_missing`.
+/// `schedule_invalid` (on state transition), one `skipped_wakeup_waiting`
+/// per skipped slot.
 ///
-/// Auto-disables a heartbeat whose `WAKEUP.md` has been deleted from
-/// disk — filesystem tampering recovery so the user notices. An EMPTY
-/// WAKEUP.md is different (S5 HB33): the row stays enabled and waits;
-/// see [`wait`].
+/// A heartbeat whose `WAKEUP.md` is missing or can't be read is never
+/// turned off: the fire is skipped, the slot stays due, and the workspace
+/// hears once per outage (see [`wakeup_wait`]). An EMPTY WAKEUP.md waits
+/// too (S5 HB33); see [`wait`].
 ///
 /// Heartbeat S3 (HB19): every tick then rewrites the stored wait state
 /// of every row in the workspace (only what changed) — including the
@@ -1063,9 +1067,9 @@ fn heartbeat_tick_candidates(project_path: &str) -> Vec<HeartbeatFireCandidate> 
             }
         }
 
-        let mut catchup_of = match cron::evaluate(&hb) {
-            cron::DueStatus::Due { .. } => None,
-            cron::DueStatus::DueCatchUp { missed_at } => Some(missed_at.to_rfc3339()),
+        let (mut catchup_of, slot) = match cron::evaluate(&hb) {
+            cron::DueStatus::Due { scheduled_for } => (None, scheduled_for),
+            cron::DueStatus::DueCatchUp { missed_at } => (Some(missed_at.to_rfc3339()), missed_at),
             cron::DueStatus::NotYet { .. } | cron::DueStatus::HoldWindow { .. } => {
                 // Not due / holding for the firing window: quiet.
                 clear_schedule_error_if_set(&conn, &project_id, &hb);
@@ -1148,30 +1152,18 @@ fn heartbeat_tick_candidates(project_path: &str) -> Vec<HeartbeatFireCandidate> 
         }
 
         let wakeup_abs = std::path::Path::new(project_path).join(&hb.wakeup_path);
-        if !wakeup_abs.exists() {
-            let _ = AgentHeartbeat::auto_disable(
-                &conn, &project_id, &hb.name, "wakeup_missing",
-            );
-            let _ = HeartbeatFire::insert_with_schedule(
-                &conn,
-                &project_id,
-                Some(&agent_name),
-                Some(&hb.name),
-                &hb.frequency,
-                "wakeup_file_missing",
-                Some(&format!(
-                    "auto-disabled: {} not found",
-                    hb.wakeup_path
-                )),
-                None,
-                None,
-                Some(tick_start.elapsed().as_millis() as i64),
-            );
-            log_debug!(
-                "[heartbeat-tick] {} wakeup file missing ({}), auto-disabled",
-                hb.name,
-                hb.wakeup_path
-            );
+        // A WAKEUP.md that is missing or can't be read skips this fire and
+        // keeps the schedule on: the slot stays due, so the next tick that
+        // can read it fires. Never a disable (see `wakeup_wait`).
+        if wakeup_wait::skip_due_fire(
+            &conn,
+            project_path,
+            &project_id,
+            &agent_name,
+            &hb,
+            slot,
+            chrono::Utc::now(),
+        ) {
             continue;
         }
 
@@ -1199,7 +1191,7 @@ fn heartbeat_tick_candidates(project_path: &str) -> Vec<HeartbeatFireCandidate> 
                 }
                 continue;
             }
-            wait::WakeupBody::Missing | wait::WakeupBody::Present => {}
+            wait::WakeupBody::Missing | wait::WakeupBody::Unreadable | wait::WakeupBody::Present => {}
         }
         match episode {
             Some(wait::WakeupEpisode::Empty) => {

@@ -104,6 +104,7 @@ interface FileViewerPaneProps {
 import {
   getFileCategory,
   getDefaultViewMode,
+  liveKeepsPreview,
   isBinaryPreviewCategory,
   supportsViewToggle,
   type ViewMode,
@@ -332,12 +333,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const anyFile = liveCore.status === 'any-file'
   const [anyFilePanelOpen, setAnyFilePanelOpen] = useState(true)
   // Opening a live file shows the Live editor (not a Markdown preview).
+  // An HTML document keeps its page preview: the Live editor is its Edit.
   useEffect(() => {
     if (liveCore.status === 'live') {
-      setViewMode('raw')
+      if (!liveKeepsPreview(getFileCategory(filePath))) setViewMode('raw')
       setLiveEnded(false)
     }
-  }, [liveCore.status])
+  }, [liveCore.status, filePath])
 
   // The toolbar pin pins THIS viewer's tab — the same pin as the tab
   // strip's (right-click Pin Tab / the tab's pin), for every file kind.

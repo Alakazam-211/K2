@@ -131,6 +131,13 @@ export function getDefaultViewMode(category: FileCategory): ViewMode {
   return 'raw'
 }
 
+/** A file whose multiplayer core is on opens in the Live editor, except an
+ *  HTML document: it opens as its page (the preview), with the Live editor
+ *  behind Edit, like its source is when the core is off. */
+export function liveKeepsPreview(category: FileCategory): boolean {
+  return category === 'html'
+}
+
 /** Categories that load bytes (not text) and skip the text poll/save path. */
 export function isBinaryPreviewCategory(category: FileCategory): boolean {
   return (

@@ -1103,7 +1103,7 @@ pub fn commands_called(argv: &[String]) -> Vec<String> {
     for seg in text.split(|c: char| matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}' | '`' | '\n')) {
         let word = seg
             .split_whitespace()
-            .map(|w| w.trim_matches(|c| c == '"' || c == '\''))
+            .map(|w| w.trim_matches(|c: char| c == '"' || c == '\''))
             .filter(|w| !w.is_empty() && *w != "$")
             .find(|w| !PREFIX_WORDS.contains(w) && !is_assignment(w) && !w.starts_with('-') && !w.bytes().all(|b| b.is_ascii_digit()));
         if let Some(w) = word {
@@ -1142,7 +1142,7 @@ pub fn missing_tool_hints(argv: &[String], env: &[(String, String)], explicit: &
         if named.contains(need) || need_asked(need, explicit) || crate::sysinfo::which(&cmd, env).is_some() {
             continue;
         }
-        named.push(need);
+        named.push(*need);
         out.push(format!("{cmd} isn't on this node's PATH for jobs; add --needs {need}"));
     }
     out

@@ -142,8 +142,8 @@ export PATH="$SHIMS:$PATH"
 V=0.46.13
 DA="k2-daemon-linux-x86_64"
 RA="k2-root-helper-linux-x86_64"
-fake_helper() { # <out> <version>
-	{ printf '\177ELF'; printf 'pad\0'; printf 'K2_ROOT_HELPER_BUILD v=%s proto=13 arch=x86_64;' "$2"; printf '\0tail'; } >"$1"
+fake_helper() { # <out> <version> [protocol]
+	{ printf '\177ELF'; printf 'pad\0'; printf 'K2_ROOT_HELPER_BUILD v=%s proto=%s arch=x86_64;' "$2" "${3:-13}"; printf '\0tail'; } >"$1"
 }
 release() { # <version>: daemon + manifest + root helper (+ .sig + .sha256) in rel/v<version>
 	local v="$1" d="$WORK/rel/v$1"
@@ -247,14 +247,49 @@ mv "$WORK/good.sig" "$WORK/rel/v$V/$RA.sig"
 [ ! -e "$BIN" ] || fail "daemon installed despite the helper failure"
 ok "bad signature: non-zero, clear message, no helper, daemon not installed"
 
-echo "== no sudo rights (the daemon's service user): loud, daemon unchanged =="
+echo "== the fleet's non-root form (no sudo rights): missing helper is loud, daemon unchanged =="
 B4="$WORK/box4"
 SHIM_SUDO_FAIL=1 run "$B4" --version "$V" --no-service
 [ "$rc" -ne 0 ] || fail "sudo failure must fail: $out"
 <<<"$out" grep -q "ROOT HELPER NOT INSTALLED" || fail "message: $out"
 <<<"$out" grep -q "sudo sh install-daemon.sh --user k2 --version $V" || fail "names the root command: $out"
 [ ! -e "$BIN" ] || fail "daemon installed despite the helper failure"
-ok "sudo refused: non-zero, names the one root command, daemon not installed"
+ok "missing helper, sudo refused: non-zero, names the one root command, daemon not installed"
+
+echo "== the fleet's non-root form: an older healthy helper is left to auto-heal =="
+old_box() { # <box> <version> <protocol> <toml user>
+	mkdir -p "$1/usr/local/libexec" "$1/etc/k2-root-helper"
+	fake_helper "$1/usr/local/libexec/k2-root-helper" "$2" "$3"
+	printf 'user = "%s"\nunit = "k2-daemon.service"\nscope = "system"\n' "$4" >"$1/etc/k2-root-helper/daemon.toml"
+}
+B4b="$WORK/box4b"
+old_box "$B4b" 0.46.12 13 k2
+rm -rf "$WORK/home/k2/.local"
+SHIM_DOOR=0 SHIM_SUDO_FAIL=1 run "$B4b" --version "$V" --no-service
+[ "$rc" -eq 0 ] || fail "older healthy helper must not stop the roll: $out"
+[ ! -e "$WORK/sudo.log" ] && [ "$(irh_runs)" = 0 ] || fail "no sudo, no install for an auto-healable helper"
+<<<"$out" grep -qF "Root helper: v0.46.12 is older; the daemon will update it after it starts (auto-heal). To do it now: sudo sh install-daemon.sh --user k2 --version $V" \
+	|| fail "the auto-heal note: $out"
+cmp -s "$WORK/rel/v$V/$DA" "$BIN" || fail "the daemon must still install"
+[ "$(helper_v "$B4b/usr/local/libexec/k2-root-helper")" = 0.46.12 ] || fail "helper changed"
+ok "older, root-owned, protocol 13, names k2, door open: daemon installs, one note, helper left to auto-heal"
+for bad in "legacy:0.45.0:2:k2:0" "not_allowed:0.46.12:13:k2:1" "other user:0.46.12:13:acme:0"; do
+	IFS=: read -r label ver proto who door <<<"$bad"
+	box="$WORK/box4-${label// /-}"
+	old_box "$box" "$ver" "$proto" "$who"
+	rm -rf "$WORK/home/k2/.local"
+	SHIM_DOOR="$door" SHIM_SUDO_FAIL=1 run "$box" --version "$V" --no-service
+	[ "$rc" -ne 0 ] && <<<"$out" grep -q "ROOT HELPER NOT INSTALLED" || fail "$label helper must fail loudly: $out"
+	[ ! -e "$BIN" ] || fail "$label: daemon installed despite the helper"
+done
+ok "legacy (protocol 2), not allowed by sudoers, or named for another user: loud, daemon unchanged"
+B4c="$WORK/box4c"
+mkdir -p "$B4c/usr/local/libexec"
+ln -s "$B4c/usr/lib/k2/gone" "$B4c/usr/local/libexec/k2-root-helper"
+SHIM_SUDO_FAIL=1 run "$B4c" --version "$V"
+[ "$rc" -ne 0 ] && <<<"$out" grep -q "a link to a file that is gone" || fail "broken package link: $out"
+[ ! -e "$BIN" ] || fail "broken package link: daemon installed"
+ok "a broken package-owned link: loud, daemon unchanged"
 
 echo "== a package-owned helper is left alone =="
 B5="$WORK/box5"

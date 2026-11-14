@@ -498,6 +498,16 @@ rh_marker_version() {
     LC_ALL=C grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "$1" 2>/dev/null \
         | head -n1 | sed 's/^K2_ROOT_HELPER_BUILD v=\([0-9.]*\) .*/\1/' || true
 }
+# rh_marker_protocol <file>: the protocol in the build marker (0 if none).
+rh_marker_protocol() {
+    _p=""
+    [ -f "$1" ] && _p="$(LC_ALL=C grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]*' "$1" 2>/dev/null \
+        | head -n1 | sed 's/.* proto=//' || true)"
+    echo "${_p:-0}"
+}
+# The first protocol that can update itself (k2_root_proto
+# SELF_UPDATE_MIN_PROTOCOL); 1 and 2 are the legacy helpers.
+RH_SELF_UPDATE_MIN_PROTOCOL=3
 # A package-owned helper: the canonical path is a link into the package's
 # own folder (the helper then reports packageOwned and the daemon never
 # updates it), or dpkg owns the path.
@@ -529,6 +539,9 @@ root_helper_step() {
         return 0
     fi
     if rh_package_owned; then
+        if [ "$(id -u)" != "0" ] && [ -L "$RH_PATH" ] && [ ! -e "$RH_PATH" ]; then
+            rh_failed "$RH_CANON is a link to a file that is gone (a package helper, broken); reinstall that package."
+        fi
         echo "Root helper: $RH_CANON is managed by your package manager; left alone."
         return 0
     fi
@@ -538,6 +551,18 @@ root_helper_step() {
         && [ "$RH_TOML_USER" = "$DAEMON_USER" ] && [ "$RH_TOML_UNIT" = "$RH_UNIT" ] \
         && [ "$RH_TOML_SCOPE" = "$RH_SCOPE" ] && rh_door_ok; then
         echo "Root helper: v$_have is installed for $DAEMON_USER ($RH_UNIT, $RH_SCOPE scope); nothing to change."
+        return 0
+    fi
+    # Not root (the fleet's `sudo -u <daemon user>` form): an older helper
+    # that is root-owned, can update itself (protocol 3+), names this user
+    # in daemon.toml and lets this user in is the daemon's auto-heal's job
+    # after it starts. Anything else (missing, legacy, not allowed) still
+    # needs the root step below, which fails loudly without sudo.
+    if [ "$(id -u)" != "0" ] && [ -n "$_have" ] \
+        && [ "$(rh_marker_protocol "$RH_PATH")" -ge "$RH_SELF_UPDATE_MIN_PROTOCOL" ] 2>/dev/null \
+        && case "$(stat -c '%U:%G %a' "$RH_PATH" 2>/dev/null)" in root:*) true ;; *) false ;; esac \
+        && [ "$RH_TOML_USER" = "$DAEMON_USER" ] && rh_door_ok; then
+        echo "Root helper: v$_have is older; the daemon will update it after it starts (auto-heal). To do it now: sudo sh install-daemon.sh --user $DAEMON_USER --version $MVER"
         return 0
     fi
     if [ -n "$RH_SRC" ]; then

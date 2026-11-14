@@ -231,6 +231,22 @@ pub fn hub_for(key: &SourceKey) -> Option<Arc<Hub>> {
     lock(hubs()).get(key).filter(|h| lock(&h.state).ended.is_none()).cloned()
 }
 
+/// Tests: end `key`'s hub now if nobody watches it, instead of after its
+/// [`IDLE_GRACE`], so the next viewer starts a capture of its own (from
+/// the next test's source). `false` while it still has viewers.
+#[cfg(test)]
+pub(crate) fn end_idle_hub_for_test(key: &SourceKey) -> bool {
+    let mut map = lock(hubs());
+    let Some(h) = map.get(key).cloned() else { return true };
+    let mut st = lock(&h.state);
+    if !st.viewers.is_empty() {
+        return false;
+    }
+    st.ended = Some("no viewers".into());
+    map.remove(key);
+    true
+}
+
 /// Why [`join`] failed.
 #[derive(Debug)]
 pub enum JoinError<E> {

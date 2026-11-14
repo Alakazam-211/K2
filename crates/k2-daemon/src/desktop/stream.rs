@@ -1190,16 +1190,16 @@ impl Drop for Leave {
 
 /// Tests: wait (at most `within`) until nothing of `desktop`'s viewers is
 /// left (none registered, no session member, its event pump stopped, its
-/// capture ended), then forget its session (display, lease, local hold,
-/// cursor) as a fresh daemon has none. The hub, the registry and the
-/// sessions are process-wide; tests in one process run one after another.
-/// `Err` says what is still there.
+/// capture ended: ended at once once nobody watches it), then forget its
+/// session (display, lease, local hold, cursor) as a fresh daemon has
+/// none. The hub, the registry and the sessions are process-wide; tests in
+/// one process run one after another. `Err` says what is still there.
 #[cfg(test)]
 pub(crate) fn settle_for_test(desktop: &str, within: Duration) -> Result<(), String> {
     let deadline = Instant::now() + within;
     loop {
         let viewers_left = viewers::count(desktop);
-        let hub = crate::stream::hub_for(&SourceKey::Desktop { desktop: desktop.to_string() }).is_some();
+        let hub = !crate::stream::end_idle_hub_for_test(&SourceKey::Desktop { desktop: desktop.to_string() });
         let session = {
             let mut m = sessions().lock().unwrap_or_else(|p| p.into_inner());
             let busy = m.get(desktop).map(|s| (s.members.len(), s.pump)).unwrap_or((0, false));

@@ -315,8 +315,13 @@ describe("the header's picture and name while the Thread is empty", () => {
     expect(rule).not.toBeNull()
     expect(rule![1]).toMatch(/opacity: 0/)
     expect(rule![1]).toMatch(/visibility: hidden/)
-    // No other float is hidden by the empty start.
-    expect(css.match(/:has\(\[data-thread-centred\]\)[^{]*\{/g)).toHaveLength(1)
+    // No other float is hidden by the empty start. (The merged glass and
+    // Terminal's joined bar only stand down meanwhile, `:not(:has(…))`, so
+    // each object shows its own look.)
+    expect(css.match(/(?<!:not\():has\(\[data-thread-centred\]\)[^{]*\{/g)).toHaveLength(1)
+    const standDown = css.match(/:not\(:has\(\[data-thread-centred\]\)\)[^{]*\{/g) ?? []
+    expect(standDown.length).toBeGreaterThan(0)
+    for (const sel of standDown) expect(sel).toMatch(/\[data-k2-(merged|joined)\]/)
   })
 
   it('the drift uses the Style motion tokens and reduced motion turns it off', () => {

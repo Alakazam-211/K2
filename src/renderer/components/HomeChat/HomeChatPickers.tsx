@@ -42,6 +42,7 @@ import { refreshHomeChatHost, refreshHomeChatPeople, scopeForChatHost, useHomeCh
 import { SearchableAgentList, tokenAndMatch, type AgentListRow, type AgentListSection } from '@/components/ui/SearchableAgentList'
 import { AgentListStatus, agentListStatusClass } from '@/components/ui/AgentListStatus'
 import { serverLabelFor } from './serverLabel'
+import { Radio } from '@/components/ui/Radio'
 
 const itemClass =
   'no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
@@ -425,11 +426,11 @@ export function NewChannelPanel({ onAddRow, onBack, onDone }: HomeChatSectionPro
             </label>
             <fieldset className="flex flex-col gap-0.5">
               <label className="flex items-center gap-2">
-                <input type="radio" name="hc-visibility" checked={!open} onChange={() => setOpen(false)} data-testid="home-chat-invite-only" />
+                <Radio name="hc-visibility" checked={!open} onChange={() => setOpen(false)} data-testid="home-chat-invite-only" />
                 Invite-only: only the people in it see it
               </label>
               <label className="flex items-center gap-2">
-                <input type="radio" name="hc-visibility" checked={open} onChange={() => setOpen(true)} data-testid="home-chat-open" />
+                <Radio name="hc-visibility" checked={open} onChange={() => setOpen(true)} data-testid="home-chat-open" />
                 Open to everyone on this server
               </label>
               <span className="text-[10px] text-[var(--color-text-muted)]">This can't be changed later.</span>

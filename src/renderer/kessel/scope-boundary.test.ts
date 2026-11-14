@@ -317,6 +317,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/feedback.ts',
   'stores/focus-groups.ts',
   'stores/grokbots.ts',
+  // People and channels on Home: a chat row on the window's own server
+  // uses the window's scope (as Grok Bot rows do), other servers a pinned one.
+  'stores/home-chat.ts',
   'stores/heartbeat-sessions.ts',
   // Heartbeat S6: Keep awake is a server's machine. 0.43.2 Z17: the
   // window's own entry; a focused room's entry uses the room's scope.

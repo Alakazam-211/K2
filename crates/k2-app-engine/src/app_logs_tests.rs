@@ -1,5 +1,6 @@
 use super::*;
-use k2_root_proto::engine::{IoMax, Request, Resources, StartSpec, Wall};
+use k2_root_proto::apps::IoMax;
+use k2_root_proto::engine::{Request, Resources, StartSpec, Wall};
 
 fn app() -> AppId {
     AppId::parse("acme-skin").unwrap()

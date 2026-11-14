@@ -458,7 +458,18 @@ pub fn projects_list_with_workspaces() -> Result<Vec<ProjectWithWorkspaces>, Str
         let conn = db.lock();
         project_rows_with_workspaces(&conn)?
     };
-    Ok(rows
+    Ok(finish_project_rows(rows))
+}
+
+/// [`projects_list_with_workspaces`] read on a read-only connection
+/// ([`db::read`]): `GET /cli/projects/list`, which writes nothing.
+pub fn projects_list_with_workspaces_read() -> Result<Vec<ProjectWithWorkspaces>, String> {
+    let rows = db::read(project_rows_with_workspaces)?;
+    Ok(finish_project_rows(rows))
+}
+
+fn finish_project_rows(rows: Vec<(Project, Vec<Workspace>)>) -> Vec<ProjectWithWorkspaces> {
+    rows
         .into_iter()
         .map(|(project, workspaces)| {
             let icon_rev = project_icon_rev(project.icon_url.as_deref(), &project.path);
@@ -466,7 +477,7 @@ pub fn projects_list_with_workspaces() -> Result<Vec<ProjectWithWorkspaces>, Str
                 crate::workspace::display::agent_display_name_with_name(&project.path, &project.name);
             ProjectWithWorkspaces { project, workspaces, icon_rev, agent_display_name }
         })
-        .collect())
+        .collect()
 }
 
 /// The visible projects (sentinels dropped), each with its workspaces, from
@@ -672,6 +683,17 @@ pub fn projects_reorder(ids: &[String]) -> Result<(), String> {
 pub fn active_project_rows() -> Result<Vec<crate::active::ProjectRow>, String> {
     let db = db::shared();
     let conn = db.lock();
+    active_project_rows_on(&conn)
+}
+
+/// [`compute_active_project_ids`] on a read-only connection ([`db::read`]):
+/// `GET /cli/projects/active`, which writes nothing.
+pub fn compute_active_project_ids_read(now_ms: i64, active_window_hours: u32) -> Result<Vec<String>, String> {
+    let rows = db::read(active_project_rows_on)?;
+    Ok(crate::active::active_project_ids(now_ms, &rows, active_window_hours))
+}
+
+fn active_project_rows_on(conn: &rusqlite::Connection) -> Result<Vec<crate::active::ProjectRow>, String> {
     let mut stmt = conn
         .prepare("SELECT id, manually_active, last_interaction_at FROM projects")
         .map_err(|e| e.to_string())?;
@@ -790,6 +812,20 @@ pub fn projects_add_from_path_ex(
         return Err(format!("Path does not exist: {}", path));
     }
 
+    // git runs before the database lock is taken (speed pass P1): a slow
+    // repo must not hold every other database caller.
+    let current_branch = if git_ready {
+        crate::git_safe::git(path)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    } else {
+        crate::git_tools::head_branch_without_cli(path)
+    }
+    .unwrap_or_else(|| "main".to_string());
+
     let db = db::shared();
     let conn = db.lock();
     let existing_projects = Project::list(&conn).unwrap_or_default();
@@ -820,18 +856,6 @@ pub fn projects_add_from_path_ex(
     let project_id = Uuid::new_v4().to_string();
     let workspace_id = Uuid::new_v4().to_string();
     let tab_order = next_tab_order(&conn);
-
-    let current_branch = if git_ready {
-        crate::git_safe::git(path)
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    } else {
-        crate::git_tools::head_branch_without_cli(path)
-    }
-    .unwrap_or_else(|| "main".to_string());
 
     let result = with_transaction(&conn, || {
         Project::create(
@@ -1098,9 +1122,16 @@ pub(crate) fn init_and_first_commit(path: &str, branch_name: &str, unattended: b
 // ── Worktree enablement ────────────────────────────────────────────────
 
 pub fn projects_enable_worktrees(project_id: &str) -> Result<Project, String> {
+    // `git worktree list` runs before the lock is taken (speed pass P1).
+    let project_path = db::read(|conn| Project::get(conn, project_id).map(|p| p.path)).map_err(|e| e.to_string())?;
+    let worktrees = crate::git::list_worktrees(&project_path);
+
     let db = db::shared();
     let conn = db.lock();
     let project = Project::get(&conn, project_id).map_err(|e| e.to_string())?;
+    if project.path != project_path {
+        return Err(format!("workspace {project_id} moved while its worktrees were read; try again"));
+    }
 
     with_transaction(&conn, || {
         Project::update(
@@ -1110,7 +1141,6 @@ pub fn projects_enable_worktrees(project_id: &str) -> Result<Project, String> {
         .map_err(|e| e.to_string())?;
 
         let existing_workspaces = Workspace::list(&conn, project_id).unwrap_or_default();
-        let worktrees = crate::git::list_worktrees(&project.path);
 
         for wt in &worktrees {
             if wt.is_main {

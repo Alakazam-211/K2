@@ -14892,7 +14892,7 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
-            let resp = crate::cli::dispatch(p, &params);
+            let resp = crate::rt::blocking(|| crate::cli::dispatch(p, &params));
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
@@ -14917,7 +14917,7 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
-            let resp = crate::cli::dispatch(p, &params);
+            let resp = crate::rt::blocking(|| crate::cli::dispatch(p, &params));
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
@@ -15610,8 +15610,8 @@ async fn handle_one_request(
                 }
                 let mut params = super::http::parse_params(&path, &query);
                 crate::heartbeat_app_routes::fold_json_body(&mut params, &post_body);
-                let resp = crate::heartbeat_routes::with_request_actor(actor, || {
-                    crate::cli::dispatch(p, &params)
+                let resp = crate::rt::blocking(|| {
+                    crate::heartbeat_routes::with_request_actor(actor, || crate::cli::dispatch(p, &params))
                 });
                 super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                     .await;
@@ -16084,7 +16084,7 @@ async fn handle_one_request(
             } else {
                 read_person_login(&query, bearer_token.as_deref(), state.token.as_str())
             };
-            let resp = crate::read_routes::with_read_login(read_login, || crate::cli::dispatch(p, &params));
+            let resp = crate::rt::blocking(|| crate::read_routes::with_read_login(read_login, || crate::cli::dispatch(p, &params)));
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
         // Unified /cli/* dispatch. Auth + param validation +
@@ -16133,7 +16133,10 @@ async fn handle_one_request(
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
-            let resp = crate::cli::dispatch(p, &params);
+            // Off the async worker (speed pass P1): a handler waiting on the
+            // database lock must not park every worker and stall the accept
+            // loop and every socket.
+            let resp = crate::rt::blocking(|| crate::cli::dispatch(p, &params));
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
         "/events" => {

@@ -616,6 +616,22 @@ pub fn totals(conn: &Connection, person: &Person, now: i64) -> Result<Totals, Re
 /// is past the cursor, that hold a waiting card, or that are muted.
 pub fn summary(conn: &Connection, person: &Person, now: i64) -> Result<Summary, ReadError> {
     ensure_person(conn, &person.key)?;
+    summary_seen(conn, person, now)
+}
+
+/// Has this person been seen ([`ensure_person`])? A read only.
+pub fn person_known(conn: &Connection, person: &str) -> Result<bool, ReadError> {
+    let person = person.trim();
+    if person.is_empty() {
+        return Err(ReadError::Usage("read state belongs to a person".into()));
+    }
+    conn.query_row("SELECT COUNT(*) > 0 FROM read_people WHERE person = ?1", params![person], |r| r.get(0))
+        .map_err(store_err)
+}
+
+/// [`summary`] for a person already seen: reads only, so it can run on a
+/// read-only connection (`GET /cli/thread/unread`, speed pass P1).
+pub fn summary_seen(conn: &Connection, person: &Person, now: i64) -> Result<Summary, ReadError> {
     let mut waiting: HashMap<String, i64> = HashMap::new();
     for (conv, _) in waiting_for(person, None, now)? {
         *waiting.entry(conv).or_default() += 1;

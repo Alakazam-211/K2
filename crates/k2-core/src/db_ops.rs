@@ -484,12 +484,30 @@ pub fn workspace_layout_load_with_revision(
     let result = {
         let db = db::shared();
         let conn = db.lock();
-        conn.query_row(
-            "SELECT layout_json, revision FROM workspace_layouts WHERE project_id = ?1 AND workspace_id = ?2",
-            rusqlite::params![project_id, workspace_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        )
+        layout_row_on(&conn, project_id, workspace_id)
     };
+    repaired_layout(project_id, result)
+}
+
+/// [`workspace_layout_load_with_revision`] on a read-only connection
+/// ([`db::read`]): `GET /cli/workspace-layouts/load`, which writes nothing.
+pub fn workspace_layout_load_with_revision_read(
+    project_id: &str,
+    workspace_id: &str,
+) -> Result<(Option<String>, i64), String> {
+    let result = db::read(|conn| layout_row_on(conn, project_id, workspace_id));
+    repaired_layout(project_id, result)
+}
+
+fn layout_row_on(conn: &rusqlite::Connection, project_id: &str, workspace_id: &str) -> rusqlite::Result<(String, i64)> {
+    conn.query_row(
+        "SELECT layout_json, revision FROM workspace_layouts WHERE project_id = ?1 AND workspace_id = ?2",
+        rusqlite::params![project_id, workspace_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+    )
+}
+
+fn repaired_layout(project_id: &str, result: rusqlite::Result<(String, i64)>) -> Result<(Option<String>, i64), String> {
     match result {
         // 0.39.45 (#27): read-repair — serve a healed view of layouts
         // whose pinned tab carries a foreign workspace's identity
@@ -529,16 +547,14 @@ pub fn workspace_layout_load_with_revision(
 pub fn heal_system_agent_tab_identity(project_id: &str, layout_json: &str) -> Option<String> {
     // Owning identity — scoped lock, dropped before agent_display_name
     // (which takes its own DB lock on the fallback path).
-    let path: String = {
-        let db = db::shared();
-        let conn = db.lock();
+    let path: String = db::read(|conn| {
         conn.query_row(
             "SELECT path FROM projects WHERE id = ?1",
             rusqlite::params![project_id],
             |r| r.get::<_, String>(0),
         )
-        .ok()?
-    };
+        .ok()
+    })?;
     if path.is_empty() {
         return None;
     }
@@ -690,9 +706,7 @@ pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<Str
     // Pane groups with a resumable saved session — their tabs restore
     // real work (claude --resume …) and are never pruned. One query,
     // scoped lock (same idiom as the identity heal above).
-    let resumable: std::collections::HashSet<String> = {
-        let db = db::shared();
-        let conn = db.lock();
+    let resumable: std::collections::HashSet<String> = db::read(|conn| {
         let mut stmt = conn
             .prepare(
                 "SELECT pane_group_id FROM workspace_tab_sessions \
@@ -702,8 +716,8 @@ pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<Str
         let rows = stmt
             .query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))
             .ok()?;
-        rows.filter_map(|r| r.ok()).collect()
-    };
+        Some(rows.filter_map(|r| r.ok()).collect())
+    })?;
 
     // Is this tab the leak's shape? (See the doc comment's predicate.)
     let is_prunable = |tab: &serde_json::Value| -> bool {
@@ -781,6 +795,16 @@ pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<Str
 pub fn workspace_layout_load_all() -> Result<Vec<WorkspaceLayout>, String> {
     let db = db::shared();
     let conn = db.lock();
+    layouts_on(&conn)
+}
+
+/// [`workspace_layout_load_all`] on a read-only connection ([`db::read`]):
+/// `GET /cli/workspace-layouts/load-all`, which writes nothing.
+pub fn workspace_layout_load_all_read() -> Result<Vec<WorkspaceLayout>, String> {
+    db::read(layouts_on)
+}
+
+fn layouts_on(conn: &rusqlite::Connection) -> Result<Vec<WorkspaceLayout>, String> {
     let mut stmt = conn
         .prepare("SELECT project_id, workspace_id, layout_json, revision FROM workspace_layouts")
         .map_err(|e| e.to_string())?;

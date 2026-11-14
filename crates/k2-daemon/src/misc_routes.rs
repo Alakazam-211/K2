@@ -1299,7 +1299,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 // A failed load is not an empty registry. Empty paths would
                 // make every longest-prefix match and return the nested
                 // project's sessions. 500 instead of `[]`.
-                let project_paths = match k2_core::projects_ops::projects_list() {
+                let project_paths = match k2_core::db::read(k2_core::projects_ops::projects_list_on) {
                     Ok(rows) => rows.into_iter().map(|p| p.path).collect::<Vec<_>>(),
                     Err(e) => {
                         return Some(CliResponse::internal_error(format!(

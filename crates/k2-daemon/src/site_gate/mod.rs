@@ -811,15 +811,16 @@ fn on_map(map: &k2_core::tunnel::subdomains::SubdomainMap, fetched: bool) {
         return;
     }
     let db = k2_core::db::shared();
-    let conn = db.lock();
     let labels: Vec<&str> = map.targets.keys().map(String::as_str).collect();
     // A locked database gets a few tries: on failure these sites read as
-    // private until the next map, which tries again.
+    // private until the next map, which tries again. The lock is taken per
+    // try, never held across the sleep (speed pass P1).
     let mut last = None;
     for attempt in 0..5u64 {
         if attempt > 0 {
             std::thread::sleep(Duration::from_millis(200 * attempt));
         }
+        let conn = db.lock();
         match sv::grandfather_map(&conn, &map.primary, labels.iter().copied(), fetched) {
             Ok(n) => {
                 if n > 0 {
@@ -835,7 +836,7 @@ fn on_map(map: &k2_core::tunnel::subdomains::SubdomainMap, fetched: bool) {
         k2_core::log_debug!("ERROR [site_gate] the upgrade's pass over the routing map failed ({e}): these sites read as private until the next map");
         return;
     }
-    if matches!(sv::grandfather_pending(&conn), Ok(false)) {
+    if matches!(sv::grandfather_pending(&db.lock()), Ok(false)) {
         SETTLED.store(true, Ordering::Relaxed);
     }
 }

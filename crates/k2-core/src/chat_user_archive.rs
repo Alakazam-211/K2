@@ -190,11 +190,19 @@ pub fn is_archived(provider: &str, session_id: &str) -> bool {
 }
 
 /// All archived rows, optionally filtered to a project family.
+///
+/// A pure read, on a read-only connection ([`crate::db::read`]): the Chat
+/// list (`GET /cli/chat/list`) reads it on every refresh.
 pub fn list_archived_rows(
     project_filter: Option<&str>,
 ) -> Result<Vec<ArchivedSessionMeta>, String> {
-    let db = crate::db::shared();
-    let conn = db.lock();
+    crate::db::read(|conn| list_archived_rows_on(conn, project_filter))
+}
+
+fn list_archived_rows_on(
+    conn: &rusqlite::Connection,
+    project_filter: Option<&str>,
+) -> Result<Vec<ArchivedSessionMeta>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT provider, session_id, archived_at, archive_project_path, \

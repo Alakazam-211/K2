@@ -1119,8 +1119,9 @@ fn note_held(tool: Tool, taken: bool) {
 }
 
 /// Does this thread hold the daemon's database lock right now?
+/// ([`crate::db::held_here`].)
 pub fn db_held_here() -> bool {
-    crate::db::try_shared().is_some_and(|h| h.is_owned_by_current_thread())
+    crate::db::held_here()
 }
 
 /// Does this thread hold `tool`'s lock?

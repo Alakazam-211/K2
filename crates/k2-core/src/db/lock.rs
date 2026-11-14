@@ -39,6 +39,9 @@ pub struct DbLock {
     /// Holds on the owning thread. Changed only by the thread that holds
     /// `inner`, so it is 0 whenever a thread takes the lock from free.
     depth: AtomicU32,
+    /// The read-only connections beside this one ([`DbLock::read`]); `None`
+    /// for a database that has none (in memory, not WAL, switched off).
+    pub(super) readers: parking_lot::RwLock<Option<std::sync::Arc<super::read_pool::ReadPool>>>,
 }
 
 /// A held [`DbLock`]. Derefs to the connection.
@@ -56,7 +59,7 @@ struct OuterHold {
 
 impl DbLock {
     pub fn new(conn: Connection) -> Self {
-        Self { inner: ReentrantMutex::new(conn), depth: AtomicU32::new(0) }
+        Self { inner: ReentrantMutex::new(conn), depth: AtomicU32::new(0), readers: parking_lot::RwLock::new(None) }
     }
 
     /// Take the lock, waiting as long as it takes.

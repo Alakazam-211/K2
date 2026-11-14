@@ -1,8 +1,10 @@
 pub mod home_switch;
 pub mod lock;
+pub mod read_pool;
 pub mod schema;
 
 pub use lock::{DbGuard, DbLock};
+pub use read_pool::READERS;
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -110,6 +112,26 @@ pub fn shared() -> Arc<DbLock> {
     {
         panic!("db::init_database must run before db::shared()");
     }
+}
+
+/// Run a pure read of the main database on one of its read-only
+/// connections, so it never waits behind a writer ([`read_pool`]). The
+/// closure sees one committed snapshot. Never write based on what it read:
+/// a read-then-write takes [`shared`]'s lock for both.
+///
+/// On a thread that holds [`shared`]'s lock, inside a `read`, or with no
+/// pool (tests' in-memory DB, `K2_DB_READ_POOL=0`) it runs where it must:
+/// on the main connection, or the outer read's.
+#[track_caller]
+pub fn read<T>(f: impl FnOnce(&Connection) -> T) -> T {
+    shared().read(f)
+}
+
+/// Does this thread hold the main database's lock right now? A [`read`]
+/// on such a thread runs on the main connection (it sees its own
+/// uncommitted writes).
+pub fn held_here() -> bool {
+    try_shared().is_some_and(|h| h.is_owned_by_current_thread())
 }
 
 /// Like [`shared`], but `None` when the process-wide DB has not been
@@ -428,6 +450,7 @@ pub fn init_home_database(
     let db_path = report.path.clone();
     let conn = open_private_with_resilience(&db_path)?;
     crate::log_debug!("{}", durability_line(&conn));
+    set_main_durability(&conn);
 
     // Self-heal: clean orphan rows whose parent `projects` row was
     // deleted under earlier versions where FK enforcement was off
@@ -449,6 +472,7 @@ pub fn init_home_database(
     crate::workspace::handle::backfill_workspace_handles(&conn);
 
     let handle = Arc::new(DbLock::new(conn));
+    read_pool::start_for_main(&handle, &db_path);
     // Race-free publish: whoever wins gets their handle stored, losers
     // drop theirs and return the winner's. In practice only one thread
     // calls init_database during startup.
@@ -471,6 +495,31 @@ pub fn durability_line(conn: &Connection) -> String {
         Err(_) => "?".to_string(),
     };
     format!("[db] main database: journal_mode={} synchronous={sync}", mode.to_ascii_lowercase())
+}
+
+/// The main database (only; the vault keeps its own `FULL`) commits with
+/// `synchronous = NORMAL` when it is in WAL mode, and caps its WAL file at
+/// 128 MiB after a checkpoint.
+///
+/// Why NORMAL is safe here: in WAL mode SQLite syncs the WAL at every
+/// checkpoint, not at every commit. A crash of K2 itself (or `kill -9`)
+/// loses nothing: a commit is in the WAL file as soon as it returns. A power
+/// cut or an OS crash can lose the last commits before the next checkpoint,
+/// and can never corrupt the file. In return a commit, which is what holds
+/// the main lock, no longer waits for an fsync. Outside WAL mode NORMAL
+/// could corrupt on a power cut, so then nothing changes.
+pub fn set_main_durability(conn: &Connection) {
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap_or_else(|_| "?".to_string());
+    if !mode.eq_ignore_ascii_case("wal") {
+        crate::log_debug!("[db] main database not in WAL mode ({mode}): synchronous stays as it is");
+        return;
+    }
+    match conn.execute_batch("PRAGMA synchronous = NORMAL;\nPRAGMA journal_size_limit = 134217728;") {
+        Ok(()) => crate::log_debug!("{} (set)", durability_line(conn)),
+        Err(e) => crate::log_debug!("[db] WARN setting synchronous = NORMAL on the main database: {e}"),
+    }
 }
 
 /// SQLite's name for a `PRAGMA synchronous` value.

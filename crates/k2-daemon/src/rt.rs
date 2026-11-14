@@ -61,3 +61,45 @@ where
         f()
     })
 }
+
+/// Run blocking work (a wait on the database lock, a file walk) from an
+/// async task without starving the runtime. On the daemon's multi-thread
+/// runtime this is `tokio::task::block_in_place`: the worker hands its other
+/// tasks (the accept loop, sockets) to another thread first, so a slow
+/// handler can't park every worker. On a current-thread runtime (some tests)
+/// or with no runtime, `f` just runs, as before (vs-live SP-5).
+pub fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    match Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
+#[cfg(test)]
+mod blocking_tests {
+    use super::blocking;
+
+    #[test]
+    fn without_a_runtime_it_just_runs() {
+        assert_eq!(blocking(|| 7), 7);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn on_a_current_thread_runtime_it_just_runs() {
+        assert_eq!(blocking(|| 8), 8);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn on_a_multi_thread_runtime_other_tasks_keep_running() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Both tasks share the one worker. Without block_in_place the
+        // blocking wait holds that worker and the sender never runs.
+        let waiter = tokio::spawn(async move { blocking(|| rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok()) });
+        tokio::task::yield_now().await;
+        let sender = tokio::spawn(async move {
+            tx.send(()).expect("send");
+        });
+        assert!(waiter.await.expect("join waiter"), "the other task ran while this one blocked");
+        sender.await.expect("join sender");
+    }
+}

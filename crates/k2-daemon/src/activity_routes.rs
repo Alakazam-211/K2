@@ -45,27 +45,24 @@ fn workspace_key(token: &str) -> Result<WorkspaceKey, CliResponse> {
     if k2_core::paths::is_path_token(token) {
         let path = token.trim_end_matches('/');
         let path = if path.is_empty() { "/" } else { path };
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let project_id = conn
-            .query_row(
+        let project_id = k2_core::db::read(|conn| {
+            conn.query_row(
                 "SELECT id FROM projects WHERE path = ?1 OR path = ?2",
                 rusqlite::params![path, format!("{path}/")],
                 |r| r.get::<_, String>(0),
             )
-            .ok();
+            .ok()
+        });
         return Ok(WorkspaceKey { project_id, workspace_path: Some(path.to_string()) });
     }
-    let by_id = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
+    let by_id = k2_core::db::read(|conn| {
         conn.query_row(
             "SELECT path FROM projects WHERE id = ?1",
             rusqlite::params![token],
             |r| r.get::<_, String>(0),
         )
         .ok()
-    };
+    });
     if let Some(path) = by_id {
         return Ok(WorkspaceKey { project_id: Some(token.to_string()), workspace_path: Some(path) });
     }

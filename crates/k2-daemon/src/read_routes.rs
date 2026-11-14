@@ -708,17 +708,31 @@ fn handle_unread(person: &Person, f: &Fields) -> CliResponse {
             return usage(format!("kind must be 'thread' or 'project', got '{k}'"));
         }
     }
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let summary = match read_state::summary(&conn, person, read_state::now_secs()) {
-        Ok(s) => s,
+    // The read pool (speed pass P1): the summary reads every Thread's head
+    // and parses the unread ones, so it runs on a read-only connection and
+    // never holds the main lock. Seeing a person for the first time writes
+    // (their cursors start at every head); that one write takes the main
+    // lock first, and is idempotent.
+    match k2_core::db::read(|conn| read_state::person_known(conn, &person.key)) {
+        Ok(true) => {}
+        Ok(false) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            if let Err(e) = read_state::ensure_person(&conn, &person.key) {
+                return read_error(e);
+            }
+        }
+        Err(e) => return read_error(e),
+    }
+    let read = k2_core::db::read(|conn| {
+        let summary = read_state::summary_seen(conn, person, read_state::now_secs())?;
+        let badge_key = read_state::badge_key_for(conn, &person.key)?;
+        Ok::<_, read_state::ReadError>((summary, badge_key))
+    });
+    let (summary, badge_key) = match read {
+        Ok(v) => v,
         Err(e) => return read_error(e),
     };
-    let badge_key = match read_state::badge_key_for(&conn, &person.key) {
-        Ok(k) => k,
-        Err(e) => return read_error(e),
-    };
-    drop(conn);
     let items: Vec<&ReadItem> = summary.items.iter().filter(|i| kind.as_deref().is_none_or(|k| i.kind == k)).collect();
     let muted: Vec<serde_json::Value> = items
         .iter()

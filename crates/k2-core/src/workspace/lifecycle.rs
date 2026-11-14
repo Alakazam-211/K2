@@ -73,6 +73,10 @@ pub fn register_workspace_ex(
     seed_agents_md: bool,
     fanout: bool,
 ) -> Result<String, String> {
+    // git runs before the database lock is taken (speed pass P1).
+    let branch =
+        run_git(&["rev-parse", "--abbrev-ref", "HEAD"], path).unwrap_or_else(|| "main".to_string());
+
     let db = crate::db::shared();
     let conn = db.lock();
 
@@ -94,9 +98,6 @@ pub fn register_workspace_ex(
 
     let project_id = uuid::Uuid::new_v4().to_string();
     let workspace_id = uuid::Uuid::new_v4().to_string();
-
-    let branch =
-        run_git(&["rev-parse", "--abbrev-ref", "HEAD"], path).unwrap_or_else(|| "main".to_string());
 
     let tab_order: i64 = conn
         .query_row(

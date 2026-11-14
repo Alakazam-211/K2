@@ -134,14 +134,14 @@ fn resolve_uncached(agent_md: &PathBuf, project_name: impl FnOnce() -> Option<St
 }
 
 fn lookup_project_name(project_path: &str) -> Option<String> {
-    let db = crate::db::shared();
-    let conn = db.lock();
-    conn.query_row(
-        "SELECT name FROM projects WHERE path = ?1",
-        rusqlite::params![project_path],
-        |r| r.get::<_, String>(0),
-    )
-    .ok()
+    crate::db::read(|conn| {
+        conn.query_row(
+            "SELECT name FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    })
 }
 
 /// Validate a candidate display name. Returns `Ok(())` if the input

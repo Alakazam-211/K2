@@ -107,18 +107,19 @@ pub fn handle_layout_load(params: &HashMap<String, String>) -> CliResponse {
     // `Option<String>` old clients parse.
     let with_revision = matches!(str_param(params, "with_revision").as_str(), "1" | "true");
     if with_revision {
-        return match dops::workspace_layout_load_with_revision(&project_id, &workspace_id) {
+        return match dops::workspace_layout_load_with_revision_read(&project_id, &workspace_id) {
             Ok((layout_json, revision)) => CliResponse::ok_json(
                 serde_json::json!({ "layoutJson": layout_json, "revision": revision }).to_string(),
             ),
             Err(e) => CliResponse::bad_request(e),
         };
     }
-    serialized(dops::workspace_layout_load(&project_id, &workspace_id))
+    // The read pool (speed pass P1): this route writes nothing.
+    serialized(dops::workspace_layout_load_with_revision_read(&project_id, &workspace_id).map(|(json, _)| json))
 }
 
 pub fn handle_layout_load_all() -> CliResponse {
-    serialized(dops::workspace_layout_load_all())
+    serialized(dops::workspace_layout_load_all_read())
 }
 
 // ── Tab titles (0.39.39 #676, daemon-canonical) ────────────────────────
@@ -320,7 +321,8 @@ pub fn handle_window_state_get() -> CliResponse {
 // ── Projects ──────────────────────────────────────────────────────────
 
 pub fn handle_projects_list() -> CliResponse {
-    serialized(pops::projects_list_with_workspaces())
+    // The read pool (speed pass P1): this route writes nothing.
+    serialized(pops::projects_list_with_workspaces_read())
 }
 
 pub fn handle_projects_get_icon(params: &HashMap<String, String>) -> CliResponse {
@@ -1072,7 +1074,7 @@ struct ActiveSnapshot {
 /// host-switch. Reads `active_window_hours` from app_settings.
 pub fn handle_projects_active() -> CliResponse {
     let window = k2_core::app_settings::load().active_window_hours;
-    match pops::compute_active_project_ids(now_ms(), window) {
+    match pops::compute_active_project_ids_read(now_ms(), window) {
         Ok(ids) => ok_serialized(ActiveSnapshot {
             project_ids: ids,
             active_window_hours: window,

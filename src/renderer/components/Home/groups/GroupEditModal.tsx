@@ -196,7 +196,7 @@ export default function GroupEditModal({
                   title="All groups"
                   data-k2-focus=""
                   data-group-edit-back=""
-                  className="-ml-3 flex h-[26px] w-[26px] flex-shrink-0 cursor-pointer items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-full"
+                  className="-ml-3 flex h-[26px] w-[26px] flex-shrink-0 cursor-pointer items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-[var(--radius-pill)]"
                   onClick={() => setView('list')}
                 >
                   <ArrowLeftIcon size={K2_ICON_PX} strokeWidth={K2_ICON_STROKE} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true" />

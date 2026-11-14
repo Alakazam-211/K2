@@ -39,7 +39,7 @@ export function moveId(ids: readonly string[], from: number, to: number): string
 }
 
 const ROW =
-  'relative flex h-[34px] w-full cursor-pointer items-center gap-2.5 px-2.5 text-left text-[12px] text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-[8px]'
+  'relative flex h-[34px] w-full cursor-pointer items-center gap-2.5 px-2.5 text-left text-[12px] text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-[calc(var(--radius-box)/2)]'
 const ROW_SELECTED = 'bg-[var(--color-wash-2)] font-semibold text-[var(--color-text-primary)]'
 
 function DropLine(): React.JSX.Element {
@@ -181,7 +181,7 @@ export default function GroupList({
           type="button"
           data-group-create=""
           data-k2-focus=""
-          className="no-drag flex h-7 cursor-pointer items-center gap-1.5 px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-full"
+          className="no-drag flex h-7 cursor-pointer items-center gap-1.5 px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-[var(--radius-pill)]"
           onClick={() => {
             const id = onCreate()
             if (id) onSelectGroup(id)

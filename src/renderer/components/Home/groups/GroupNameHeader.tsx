@@ -36,7 +36,7 @@ export default function GroupNameHeader({ name, count, onEdit }: GroupNameHeader
         title="Edit groups"
         data-group-edit-open=""
         data-k2-focus=""
-        className="no-drag flex h-[26px] w-[26px] flex-shrink-0 cursor-pointer items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-full"
+        className="no-drag flex h-[26px] w-[26px] flex-shrink-0 cursor-pointer items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-primary)] focus:outline-none [[data-style=glass]_&]:rounded-[var(--radius-pill)]"
         onClick={() => onEdit()}
       >
         <EllipsisIcon size={K2_ICON_PX} strokeWidth={K2_ICON_STROKE} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true" focusable="false" />

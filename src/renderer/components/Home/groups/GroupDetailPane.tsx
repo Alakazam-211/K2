@@ -156,7 +156,7 @@ export default function GroupDetailPane({
               aria-describedby={canDelete ? undefined : `${uid}-why`}
               data-group-delete=""
               data-k2-focus=""
-              className="no-drag -ml-2 inline-flex h-7 cursor-pointer items-center gap-1.5 px-2 text-[11px] text-[var(--color-status-error-text)] hover:bg-[var(--color-row-hover)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--color-text-muted)] disabled:hover:bg-transparent [[data-style=glass]_&]:rounded-full"
+              className="no-drag -ml-2 inline-flex h-7 cursor-pointer items-center gap-1.5 px-2 text-[11px] text-[var(--color-status-error-text)] hover:bg-[var(--color-row-hover)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--color-text-muted)] disabled:hover:bg-transparent [[data-style=glass]_&]:rounded-[var(--radius-pill)]"
               onClick={() => setConfirming(true)}
             >
               <Trash2Icon size={K2_ICON_PX} {...SQUARE} aria-hidden="true" />

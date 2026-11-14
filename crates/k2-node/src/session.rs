@@ -812,22 +812,10 @@ where
                 node.revoke(&tenant, &r.reason);
                 break SessionEnd::Revoked(r.reason);
             }
-            // Sim sessions (protocol 11). This node offers no `sim-ios` yet
-            // (the Simulator service lands after the S0 spike), so a server
-            // never sends these; one that does gets a clear refusal, never a
-            // dropped session.
-            Frame::SimOpen(o) => {
-                let st = k2_node_proto::sim::SimStateFrame {
-                    session: o.session,
-                    state: k2_node_proto::sim::SessionState::Refused,
-                    code: Some(k2_node_proto::sim::codes::NOT_ENABLED.into()),
-                    message: Some("this node doesn't run iPhones yet".into()),
-                };
-                if tenant.protocol.load(std::sync::atomic::Ordering::SeqCst) >= k2_node_proto::sim::PROTOCOL_SIM {
-                    let _ = tx.send(Frame::SimState(st)).await;
-                }
-            }
-            Frame::SimClose(_) | Frame::SimErase(_) | Frame::SimSync(_) => {}
+            // Sim sessions (protocol 11): admitted or refused against this
+            // node's own state; a slot the owner didn't turn on is refused
+            // `sim_not_enabled` (node/sim_glue.rs).
+            f @ (Frame::SimOpen(_) | Frame::SimClose(_) | Frame::SimErase(_) | Frame::SimSync(_)) => node.on_sim_frame(&tenant, f),
             Frame::Welcome(_) => break SessionEnd::ProtocolError("second welcome".into()),
             other => break SessionEnd::ProtocolError(format!("{} can't come from the controller", other.kind())),
         }

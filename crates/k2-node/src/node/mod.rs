@@ -61,6 +61,7 @@ pub mod pkgreq;
 pub mod provenance;
 pub mod roster;
 mod run;
+mod sim_glue;
 mod sync_src;
 pub mod tenant;
 
@@ -138,6 +139,9 @@ pub struct NodeOptions {
     /// How long a tenant slot that should open again may take before the
     /// jobs it left running are stopped (C2; tests shorten it).
     pub tenant_adopt_wait: Duration,
+    /// iPhone sessions (prd-ios-on-mac-node-0467-v1 S2): the Simulator
+    /// service's socket and folders, and the watch's pace.
+    pub sim: crate::sim::node_side::SimOptions,
     /// Tests only: a scripted package manager and the host it pretends to
     /// be (both, or neither). A real node never sets them.
     pub pkg_backend: Option<Arc<dyn crate::pkgsys::Backend>>,
@@ -209,6 +213,7 @@ impl NodeOptions {
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
+            sim: crate::sim::node_side::SimOptions::system(),
             pkg_backend: None,
             lanes: None,
             ptrace_scope: None,
@@ -517,6 +522,8 @@ pub struct Node {
     /// Trusted attempts whose main repo the node fetched from its remote
     /// itself (rule 5), by (slot, job, gen).
     own_fetches: Mutex<std::collections::HashSet<(Slot, String, u32)>>,
+    /// iPhone sessions on this Mac (module `sim_glue`).
+    pub sim: crate::sim::node_side::NodeSim,
 }
 
 /// The running-jobs key prefix of a stand-in for a lingering unit, and the
@@ -691,6 +698,7 @@ impl Node {
             gens,
             gens_forks: Mutex::new(HashMap::new()),
             own_fetches: Mutex::new(Default::default()),
+            sim: crate::sim::node_side::NodeSim::new(opts.sim.clone()),
             opts,
         });
         node.hold_lingering(OWNER_SLOT, lingering);
@@ -944,8 +952,11 @@ impl Node {
             crate::wall::homes_root().to_path_buf(),
             PathBuf::from("/Library/Keychains"),
             PathBuf::from("/private/var/root"),
+            // The Simulator user's home and its socket: jobs share this
+            // node's uid, so only the wall keeps them off it (§3.3).
+            self.sim.opts.root.root.clone(),
         ];
-        (dirs, vec![self.opts.admin_socket.clone()])
+        (dirs, vec![self.opts.admin_socket.clone(), self.sim.opts.socket.clone()])
     }
 
     /// One job-wall op on the executor (Linux), off the async runtime.
@@ -1131,8 +1142,9 @@ impl Node {
     fn used(&self, cap_cpu: u64, cap_mem: u64, par: u32) -> (u64, u64, u32, bool) {
         let jobs = self.jobs.lock().unwrap();
         let share = |cap: u64| cap / par.max(1) as u64;
-        let cpu: u64 = jobs.values().map(|j| j.cpu_millis.unwrap_or_else(|| share(cap_cpu))).sum();
-        let mem: u64 = jobs.values().map(|j| j.mem_bytes.unwrap_or_else(|| share(cap_mem))).sum();
+        // A running iPhone session reserves its share too (IR-8).
+        let cpu: u64 = jobs.values().map(|j| j.cpu_millis.unwrap_or_else(|| share(cap_cpu))).sum::<u64>() + self.sim.reserved_millicpu();
+        let mem: u64 = jobs.values().map(|j| j.mem_bytes.unwrap_or_else(|| share(cap_mem))).sum::<u64>() + self.sim.reserved_bytes();
         (cpu, mem, jobs.len() as u32, jobs.values().any(|j| j.exclusive))
     }
 
@@ -1271,8 +1283,14 @@ impl Node {
     pub fn write_status(&self) {
         let pin = self.owner().pin.lock().unwrap().clone();
         let l = self.local.lock().unwrap().clone();
-        let running = self.running_ids();
-        let until = running_until(&self.jobs.lock().unwrap());
+        let mut running = self.running_ids();
+        let mut until = running_until(&self.jobs.lock().unwrap());
+        // iPhone sessions count as running: an update or drain waits for
+        // them, up to their lease's end (IR-7).
+        for (id, ends) in self.sim.running() {
+            running.push(id);
+            until = Some(until.map_or(ends as i64, |u| u.max(ends as i64)));
+        }
         let mut s = self.status.lock().unwrap();
         s.name = pin.as_ref().map(|p| p.name.clone());
         s.node_id = pin.as_ref().map(|p| p.node_id.clone());
@@ -1338,6 +1356,7 @@ impl Node {
     pub fn spawn_background(self: &Arc<Self>) {
         crate::fairq::spawn(self);
         self.spawn_disk_guard();
+        self.spawn_sim();
         // Another server's queue waits while its wall isn't there (or it's
         // over its disk budget); the `team` disk scan (V74).
         self.spawn_tenant_wall_watch(Duration::from_secs(60));

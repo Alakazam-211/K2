@@ -34,6 +34,7 @@ pub mod request;
 pub mod runner;
 pub mod session;
 pub mod setup;
+pub mod sim;
 pub mod slots;
 pub mod spool;
 pub mod statement;

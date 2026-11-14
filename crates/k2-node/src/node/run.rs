@@ -953,7 +953,9 @@ impl Node {
         }
 
         // Smoke lock + spawn, behind the wall.
-        let mem_limit = a.plan.limits.mem_bytes.unwrap_or_else(|| self.local.lock().unwrap().policy.mem_cap_bytes);
+        // While an iPhone runs, a job with no --mem gets the cap minus its
+        // reservation, not the whole cap (IR-8).
+        let mem_limit = a.plan.limits.mem_bytes.unwrap_or_else(|| self.sim.default_job_mem(self.local.lock().unwrap().policy.mem_cap_bytes));
         self.take_smoke_lock(&job);
         let key = t.job_key(&job, gen);
         // Update continuity (prd-compute-update-continuity-v1 §5.1–§5.3):

@@ -21,6 +21,10 @@ Install (root, once; the installers are inside this binary):
   --no-job-wall is the explicit way out. Nodes on 0.46.3 or older need this
   0.46.4 install once by hand before remote updates work.
   sudo k2-node uninstall
+  sudo k2-node setup --sim [--server <slot|label>] [--private-home]
+                     iPhones on this Mac for your own servers (Xcode and an iOS runtime first;
+                     k2-node sim status says what's missing; --remove takes it away)
+  sudo k2-node sim enable|disable --server <slot|label>    iPhones for one of your own servers
   Over SSH: one sudo call, password on stdin (never in argv):
     ssh host 'sudo -S -p "" /path/to/k2-node setup --no-private-home …' < password-file
     (the password comes from stdin, e.g. a secret file you delete after)
@@ -147,6 +151,7 @@ const SWITCHES: &[&str] = &[
     "--private-home",
     "--no-private-home",
     "--sim",
+    "--remove",
     "--no-job-wall",
     "--no-package-installs",
     "--reenroll",
@@ -1386,6 +1391,18 @@ pub fn main() -> ExitCode {
         };
         return ExitCode::from(k2_node::hold::main(std::path::Path::new(dir)) as u8);
     }
+    // The Simulator service (iPhones on a Mac node): plain threads, no runtime.
+    if raw.first().map(String::as_str) == Some("simhost") {
+        let r = parse(&raw).and_then(|a| {
+            let get = |k: &str| a.get(k).map(str::to_string);
+            k2_node::sim::cli::run(&a.positional, &get, false, std::path::Path::new(DEFAULT_CONFIG_DIR))
+        });
+        if let Err(e) = r {
+            eprintln!("k2-node simhost: {e}");
+            return ExitCode::from(1);
+        }
+        return ExitCode::SUCCESS;
+    }
     match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt.block_on(main_async(raw)),
         Err(e) => {
@@ -1426,6 +1443,11 @@ async fn main_async(raw: Vec<String>) -> ExitCode {
         Some("policy") => cmd_policy(&a),
         Some("gc") => cmd_gc(&a).await,
         Some("servers") => cmd_servers(&a),
+        Some("sim") => {
+            let get = |k: &str| a.get(k).map(str::to_string);
+            let cfg = a.get("config-dir").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_DIR));
+            k2_node::sim::cli::run(&a.positional, &get, a.has("--json"), &cfg)
+        }
         Some("install-files") => cmd_install_files(&a),
         Some("request") => cmd_request(&a),
         Some("tools") => cmd_tools(&a).await,

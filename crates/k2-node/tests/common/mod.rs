@@ -4,6 +4,8 @@
 
 #![allow(dead_code)]
 
+pub mod sim;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -105,7 +107,13 @@ pub struct Fake {
     /// What it says in `Challenge.protocol` (default this build's
     /// `PROTOCOL`; mixed-version tests set an older one).
     pub server_protocol: Arc<std::sync::atomic::AtomicU32>,
+    /// Sim streams the node dialed (`/cli/compute/sim-stream`), handed to
+    /// the test as they are: it plays the server's half of the handshake.
+    pub sim_streams: mpsc::UnboundedReceiver<SimWs>,
 }
+
+/// One dialed sim stream, server side.
+pub type SimWs = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
 
 impl Fake {
     pub async fn start() -> Self {
@@ -122,11 +130,13 @@ impl Fake {
         let server_protocol = Arc::new(std::sync::atomic::AtomicU32::new(frames::PROTOCOL));
         let sp = server_protocol.clone();
         let (ctx, crx) = mpsc::unbounded_channel();
+        let (stx, srx) = mpsc::unbounded_channel::<SimWs>();
         let (k, n, c, r, a, s) = (key.clone(), nodes.clone(), codes.clone(), resume.clone(), attaches.clone(), last_sas.clone());
         tokio::spawn(async move {
             loop {
                 let Ok((tcp, _)) = listener.accept().await else { return };
                 let (k, n, c, r, a, s, ctx, wr, sp) = (k.clone(), n.clone(), c.clone(), r.clone(), a.clone(), s.clone(), ctx.clone(), wr.clone(), sp.clone());
+                let stx = stx.clone();
                 tokio::spawn(async move {
                     let path = Arc::new(Mutex::new(String::new()));
                     let p2 = path.clone();
@@ -143,11 +153,13 @@ impl Fake {
                     } else if p == "/cli/compute/attach" {
                         a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         serve_attach(ws, k, n, r, ctx, wr, sp.load(std::sync::atomic::Ordering::SeqCst)).await;
+                    } else if p == "/cli/compute/sim-stream" {
+                        let _ = stx.send(ws);
                     }
                 });
             }
         });
-        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas, welcome_routes, server_protocol }
+        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas, welcome_routes, server_protocol, sim_streams: srx }
     }
 
     pub async fn next_conn(&mut self) -> Conn {

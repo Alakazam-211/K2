@@ -113,9 +113,9 @@ impl Node {
             features: self.session_features(t),
             host,
             pkg: if t.speaks_host() { self.pkg_status(t) } else { None },
-            // Sim sessions (protocol 11): the Simulator service's facts
-            // (S2, after the spike).
-            sim: None,
+            // Sim sessions (protocol 11): only to a server whose slot the
+            // owner turned on, on a Mac (prd-ios-on-mac-node-0467-v1 §3.8).
+            sim: self.sim_offer(t, free_mem),
         };
         let mut last = t.last_offer.lock().unwrap();
         let same = last.as_ref().is_some_and(|p| {
@@ -150,6 +150,10 @@ impl Node {
     /// What `t`'s session is told this node understands (§10.1, V52).
     pub fn session_features(&self, t: &Tenant) -> Vec<String> {
         let mut f = self.features();
+        // iPhones on this Mac for this server (protocol 11, §3.8).
+        if self.sim_feature(t) {
+            f.push(k2_node_proto::sim::FEATURE_SIM_IOS.to_string());
+        }
         if !t.is_owner() {
             f.retain(|x| !OWNER_ONLY_FEATURES.contains(&x.as_str()));
         }

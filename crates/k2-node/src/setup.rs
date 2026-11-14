@@ -19,6 +19,8 @@ pub const LINUX_INSTALL: &str = include_str!("../../../scripts/node/install-node
 pub const MACOS_INSTALL: &str = include_str!("../../../scripts/node/install-node-macos.sh");
 pub const LINUX_UNINSTALL: &str = include_str!("../../../scripts/node/uninstall-node-linux.sh");
 pub const MACOS_UNINSTALL: &str = include_str!("../../../scripts/node/uninstall-node-macos.sh");
+/// `setup --sim`: the iPhone service on a Mac node (prd-ios-on-mac-node-0467-v1 §3.3).
+pub const MACOS_SIM: &str = include_str!("../../../scripts/node/install-sim-macos.sh");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -72,12 +74,10 @@ pub fn sim_preflight(macos: bool, open_homes: &[(PathBuf, u32)], private_home: b
 
 /// Run the embedded installer as root. Returns its exit code.
 pub fn run(kind: Kind, user_args: &[String]) -> Result<i32, String> {
-    if kind == Kind::Install && user_args.iter().any(|a| a == "--sim") {
+    let sim = kind == Kind::Install && user_args.iter().any(|a| a == "--sim");
+    if sim && !user_args.iter().any(|a| a == "--remove") {
         let private = user_args.iter().any(|a| a == "--private-home");
         sim_preflight(cfg!(target_os = "macos"), &crate::wall::open_homes_in(crate::wall::homes_root()), private)?;
-        // The Simulator user and service come after the S0 spike proves a
-        // hidden user can run the Simulator; until then, change nothing.
-        return Err("--sim: this k2-node build checks the Mac but can't set up the Simulator user yet. Nothing was changed.".into());
     }
     if unsafe { libc::geteuid() } != 0 {
         let verb = if kind == Kind::Install { "setup" } else { "uninstall" };
@@ -88,7 +88,14 @@ pub fn run(kind: Kind, user_args: &[String]) -> Result<i32, String> {
         ));
     }
     let os = crate::sysinfo::os_label();
-    let body = script(kind, os)?;
+    let body = if sim {
+        if os != "macos" {
+            return Err("--sim is for a Mac node: the iOS Simulator needs macOS and Xcode.".into());
+        }
+        MACOS_SIM
+    } else {
+        script(kind, os)?
+    };
     let me = std::env::current_exe().map_err(|e| format!("own path: {e}"))?;
     let me = std::fs::canonicalize(&me).unwrap_or(me);
     let id = k2_node_proto::crypto::random_id()?;
@@ -157,6 +164,32 @@ mod tests {
             assert!(s.contains("\ncd /\n"), "{k:?} {os}: every installer must cd / first");
         }
         assert!(script(Kind::Install, "windows").is_err());
+        assert!(MACOS_SIM.starts_with("#!/usr/bin/env bash") && MACOS_SIM.contains("\ncd /\n"));
+    }
+
+    /// `setup --sim` (IR-9): the socket's folder is reachable by k2simctl
+    /// only, the node user is its one member, the Simulator user is in
+    /// neither control group, and the home check (IR-4) refuses open homes.
+    #[test]
+    fn the_sim_installer_keeps_the_simulator_user_apart() {
+        let s = MACOS_SIM;
+        for want in [
+            "SIM_USER=\"_k2sim\"",
+            "CTL_GROUP=\"k2simctl\"",
+            "install -d -m 0710 -o \"$SIM_USER\" -g \"$CTL_GROUP\" \"$ROOT\"",
+            "install -d -m 0750 -o \"$SIM_USER\" -g \"$CTL_GROUP\" \"$ROOT/run\"",
+            "dseditgroup -o edit -a \"$NODE_USER\" -t user \"$CTL_GROUP\"",
+            "for g in k2nodectl \"$CTL_GROUP\"; do",
+            "dscl . -create \"/Users/$SIM_USER\" UserShell /usr/bin/false",
+            "dscl . -create \"/Users/$SIM_USER\" IsHidden 1",
+            "\"$BIN\" admin homes --json",
+            "\"$BIN\" sim enable --server \"$SERVER\"",
+            "launchctl kickstart -k system/dev.k2.node",
+        ] {
+            assert!(s.contains(want), "install-sim-macos.sh must contain {want:?}");
+        }
+        let un = MACOS_UNINSTALL;
+        assert!(un.contains("dev.k2.simhost") && un.contains("_k2sim") && un.contains("k2simctl") && un.contains("/var/k2sim"), "uninstall removes the iPhone service too");
     }
 
     /// `sudo k2-node …` works on Linux (0.46.6): the installer links

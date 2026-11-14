@@ -13,6 +13,12 @@
 // Thread is open for that agent, else the agent message box. Never while
 // a dialog is open or the user is typing in some other field; `off` moves
 // nothing (Rosson 2026-10-16).
+//
+// The watch after a switch only moves focus when the room itself changes
+// (a compose bar mounts); a name tip, tooltip or popover mounting is not a
+// page change. And the moment the user moves focus themselves (a key or a
+// pointer, then focus lands somewhere), the pending auto-focus is dropped:
+// keyboard-focusing a Home group icon must not jump to the message box.
 
 import { usePageViewStore, isRoomPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
@@ -22,6 +28,19 @@ import { useRunningAgentsStore } from '@/stores/running-agents'
 let applyGen = 0
 let observer: MutationObserver | null = null
 let observerTimer: ReturnType<typeof setTimeout> | null = null
+let removeUserFocusGuard: (() => void) | null = null
+/** True while this module calls `.focus()`, so the guard can tell our own
+ *  focus moves from the user's. */
+let selfFocusing = false
+
+function focusOwn(el: HTMLElement): void {
+  selfFocusing = true
+  try {
+    el.focus()
+  } finally {
+    selfFocusing = false
+  }
+}
 
 /** How long one apply keeps watching for a late compose bar (a remote
  *  room's Thread loads over the network). After that, a bar that mounts
@@ -101,7 +120,7 @@ function focusVisibleTerminal(): boolean {
   for (const el of terminals) {
     if (!(el instanceof HTMLElement)) continue
     if (isEffectivelyHidden(el)) continue
-    el.focus()
+    focusOwn(el)
     return true
   }
   return false
@@ -232,7 +251,7 @@ export function tryFocusPreferredWorkspaceInput(): boolean {
   if (preferredWorkspaceSwitchFocus() === 'composer') {
     const textarea = findVisibleComposeTextarea()
     if (textarea) {
-      textarea.focus()
+      focusOwn(textarea)
       return true
     }
     return false
@@ -251,11 +270,70 @@ function stopWatching(): void {
   }
 }
 
+function stopUserFocusGuard(): void {
+  if (removeUserFocusGuard) {
+    removeUserFocusGuard()
+    removeUserFocusGuard = null
+  }
+}
+
+/** Drop everything still pending from the last apply. */
+function cancelPendingSwitchFocus(): void {
+  applyGen++
+  stopWatching()
+  stopUserFocusGuard()
+}
+
+/** For one apply's watch: once the user presses a key or a pointer and
+ *  focus then lands anywhere we did not put it, the user chose where they
+ *  are; cancel the pending moves. Focus moved by other code without a user
+ *  gesture (a list restoring its own focus after the switch) does not
+ *  count, so the composer still wins those. */
+function startUserFocusGuard(gen: number): void {
+  stopUserFocusGuard()
+  let userInput = false
+  const onUserInput = (): void => {
+    userInput = true
+  }
+  const onFocusIn = (): void => {
+    if (gen !== applyGen || selfFocusing || !userInput) return
+    cancelPendingSwitchFocus()
+  }
+  const timer = setTimeout(() => {
+    if (gen === applyGen) stopUserFocusGuard()
+  }, COMPOSE_WATCH_MS)
+  document.addEventListener('keydown', onUserInput, true)
+  document.addEventListener('pointerdown', onUserInput, true)
+  document.addEventListener('mousedown', onUserInput, true)
+  document.addEventListener('focusin', onFocusIn, true)
+  removeUserFocusGuard = () => {
+    clearTimeout(timer)
+    document.removeEventListener('keydown', onUserInput, true)
+    document.removeEventListener('pointerdown', onUserInput, true)
+    document.removeEventListener('mousedown', onUserInput, true)
+    document.removeEventListener('focusin', onFocusIn, true)
+  }
+}
+
+/** Did this batch of DOM changes bring a compose bar (or its textarea)
+ *  onto the page? Name tips, tooltips and popovers portalled into body
+ *  are not a page change. */
+function addsComposeBar(records: MutationRecord[]): boolean {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) continue
+      if (node.matches(COMPOSE_TEXTAREA) || node.querySelector(COMPOSE_TEXTAREA)) return true
+    }
+  }
+  return false
+}
+
 function watchForComposeBar(gen: number): void {
   stopWatching()
   if (typeof MutationObserver === 'undefined' || !document.body) return
-  observer = new MutationObserver(() => {
+  observer = new MutationObserver((records) => {
     if (gen !== applyGen) return
+    if (!addsComposeBar(records)) return
     if (tryFocusPreferredWorkspaceInput()) {
       stopWatching()
     }
@@ -275,6 +353,7 @@ export function applyWorkspaceSwitchFocus(): void {
 
   const gen = ++applyGen
   stopWatching()
+  startUserFocusGuard(gen)
 
   const run = (giveUpToTerminal: boolean): void => {
     if (gen !== applyGen) return
@@ -327,6 +406,5 @@ export function installRoomPageSwitchFocus(): () => void {
 
 /** Cancel in-flight retries (jsdom tests). */
 export function __resetWorkspaceSwitchFocusForTests(): void {
-  applyGen++
-  stopWatching()
+  cancelPendingSwitchFocus()
 }

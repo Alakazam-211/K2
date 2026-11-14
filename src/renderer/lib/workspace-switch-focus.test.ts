@@ -292,6 +292,123 @@ describe('applyWorkspaceSwitchFocus', () => {
   })
 })
 
+describe('applyWorkspaceSwitchFocus: the 10 s watch after a switch', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame'],
+    })
+    workspaceSwitchFocus = 'composer'
+    settingsOpen = false
+    page = 'home'
+    document.body.innerHTML = ''
+    __resetWorkspaceSwitchFocusForTests()
+  })
+
+  afterEach(() => {
+    __resetWorkspaceSwitchFocusForTests()
+    document.body.innerHTML = ''
+    vi.useRealTimers()
+  })
+
+  /** The Home groups bar: one focusable group icon. */
+  function mountGroupIcon(): HTMLButtonElement {
+    const bar = document.createElement('div')
+    bar.setAttribute('data-home-group-bar', '')
+    const icon = document.createElement('button')
+    icon.textContent = 'Ops'
+    bar.appendChild(icon)
+    document.body.appendChild(bar)
+    return icon
+  }
+
+  /** The name tip GroupBarTip portals into body on keyboard focus. */
+  function mountNameTip(): HTMLDivElement {
+    const tip = document.createElement('div')
+    tip.setAttribute('aria-hidden', 'true')
+    tip.setAttribute('data-group-bar-tip', '')
+    tip.textContent = 'Ops ⌥⌘1'
+    document.body.appendChild(tip)
+    return tip
+  }
+
+  function mountComposeBar(): HTMLTextAreaElement {
+    const bar = document.createElement('div')
+    bar.setAttribute('data-compose-bar', '')
+    const textarea = document.createElement('textarea')
+    bar.appendChild(textarea)
+    document.body.appendChild(bar)
+    return textarea
+  }
+
+  it('the user does nothing: the message box gets focus when it mounts late', async () => {
+    mountPair({ compose: false })
+    applyWorkspaceSwitchFocus()
+    await vi.advanceTimersByTimeAsync(3_000)
+
+    const textarea = mountComposeBar()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('the user does nothing: the message box already on screen gets focus and keeps it', async () => {
+    const { textarea } = mountPair({ compose: true })
+    applyWorkspaceSwitchFocus()
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('keyboard focus on a group icon inside the window stays there (its name tip, the late bar and the retries move nothing)', async () => {
+    mountPair({ compose: false })
+    const icon = mountGroupIcon()
+    applyWorkspaceSwitchFocus()
+    await vi.advanceTimersByTimeAsync(20)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    icon.focus()
+    mountNameTip()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(document.activeElement).toBe(icon)
+
+    mountComposeBar()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(document.activeElement).toBe(icon)
+  })
+
+  it('focus the user moves off the message box (pointer) is not pulled back by the retries', async () => {
+    const { textarea } = mountPair({ compose: true })
+    const icon = mountGroupIcon()
+    applyWorkspaceSwitchFocus()
+    expect(document.activeElement).toBe(textarea)
+
+    icon.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    icon.focus()
+    mountNameTip()
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(document.activeElement).toBe(icon)
+  })
+
+  it('a name tip or overlay mounting is not a page change: it moves nothing', async () => {
+    const { textarea } = mountPair({ compose: true, composeHidden: true })
+    applyWorkspaceSwitchFocus()
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(document.activeElement).not.toBe(textarea)
+
+    // The bar's tab comes forward without remounting (only a style
+    // change); then a tip and a popover mount.
+    ;(textarea!.parentElement as HTMLElement).style.display = ''
+    mountNameTip()
+    const popover = document.createElement('div')
+    popover.setAttribute('role', 'tooltip')
+    document.body.appendChild(popover)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(document.activeElement).not.toBe(textarea)
+  })
+})
+
 function mountDashPane(
   workspaceId: string,
   opts: { compose?: boolean; threadCompose?: boolean; otherPane?: boolean } = {},

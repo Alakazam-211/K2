@@ -157,6 +157,7 @@ export function ThreadChatBubble({
   attachments,
   runStart,
   tail,
+  quote,
 }: {
   id: string
   seq?: number
@@ -174,6 +175,8 @@ export function ThreadChatBubble({
   /** The first and last bubble of its run (threadRunWindow). */
   runStart?: boolean
   tail?: boolean
+  /** Drawn first inside the bubble (a reply's quote strip, `ThreadReplyQuote`). */
+  quote?: ReactNode
 }): JSX.Element {
   const inZen = useContext(ThreadChatZenContext)
   // One item per message (not per render), so the memoized bubble skips.
@@ -192,6 +195,7 @@ export function ThreadChatBubble({
       still={still}
       runStart={inZen ? undefined : runStart}
       tail={inZen ? undefined : tail}
+      quote={quote}
     />
   )
 }

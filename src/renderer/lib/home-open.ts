@@ -39,6 +39,8 @@ import type { HomeRow } from '@/stores/homes'
 import { grokBotIdFromAddress } from '@/lib/grokbots'
 import { closeGrokChat, useGrokBotsStore } from '@/stores/grokbots'
 import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
+import { homeChatTarget } from '@/lib/home-chat/address'
+import { closeHomeChat, useHomeChatStore } from '@/stores/home-chat'
 import { homeAvatarSync } from '@/lib/home-avatars'
 
 export { switchTargetForHost } from '@/lib/home-switch'
@@ -53,6 +55,14 @@ function unknownServer(host: string): OpenResult {
 export function openHomeRow(row: HomeRow): OpenResult {
   const parsed = parseHomeAddress(row.address)
   if (!parsed) return 'not-found'
+  // People and channels (prd-home-people-channels-v1): the chat in the main
+  // area, on whichever server the row lives (no window switch, no room).
+  const chat = homeChatTarget(row)
+  if (chat) {
+    usePageViewStore.getState().setPage('home')
+    useHomeChatStore.getState().openChat(chat)
+    return 'selected'
+  }
   // Local Grok Bots (0.45.7): open the chat in the main area, on whichever
   // server the row lives (no window switch, no room).
   const grokId = grokBotIdFromAddress(row.address)
@@ -63,6 +73,7 @@ export function openHomeRow(row: HomeRow): OpenResult {
     return 'selected'
   }
   closeGrokChat()
+  closeHomeChat()
   // Opening a row is an explicit ask: a row whose picture the cache calls
   // missing is re-checked now, not on the miss backoff (no-op otherwise).
   void homeAvatarSync.recheck([row.address], 'user')

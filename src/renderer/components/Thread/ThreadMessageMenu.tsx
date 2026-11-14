@@ -275,8 +275,17 @@ export function useThreadReply(key: string | null): { target: (ThreadReplyTarget
   return useMemo(() => ({ target, clear }), [target, clear])
 }
 
-/** Above the message box: what the next send replies to, with its ×. */
-export function ThreadReplyChip({ target, onCancel }: { target: ThreadReplyTarget; onCancel: () => void }): JSX.Element {
+/** Above the message box: what the next send replies to, with its ×.
+ *  `named`: the bar leads with "Replying to <who>:" (Home chat's reply bar). */
+export function ThreadReplyChip({
+  target,
+  onCancel,
+  named = false,
+}: {
+  target: ThreadReplyTarget
+  onCancel: () => void
+  named?: boolean
+}): JSX.Element {
   const line = threadReplyFirstLine(threadReplyQuote(target))
   const what = target.part ? 'Replying to part of' : 'Replying to'
   return (
@@ -298,7 +307,14 @@ export function ThreadReplyChip({ target, onCancel }: { target: ThreadReplyTarge
     >
       <ReplyGlyph size={12} />
       <span className="min-w-0 flex-1 truncate" data-reply-chip-text="" style={{ opacity: 0.85 }}>
-        {line}
+        {named ? (
+          <>
+            <span data-reply-chip-who="">{`${what} ${target.from}: `}</span>
+            {line}
+          </>
+        ) : (
+          line
+        )}
       </span>
       <button
         type="button"
@@ -318,14 +334,36 @@ export function ThreadReplyChip({ target, onCancel }: { target: ThreadReplyTarge
   )
 }
 
-/** On a sent reply, inside its bubble: the quoted message's first line. */
-export function ThreadReplyQuote({ reply }: { reply: ParsedThreadReply }): JSX.Element {
+/** On a sent reply, inside its bubble: the quoted message's first line.
+ *  `onJump`: the strip is a button that goes to the original (Home chat). */
+export function ThreadReplyQuote({ reply, onJump }: { reply: ParsedThreadReply; onJump?: () => void }): JSX.Element {
   const line = threadReplyFirstLine(reply.quote)
   return (
     <div
       data-thread-reply-quote=""
-      title={reply.quote}
-      className="flex min-w-0 items-center gap-1.5"
+      title={onJump ? `${reply.quote}\n\nShow the original` : reply.quote}
+      role={onJump ? 'button' : undefined}
+      tabIndex={onJump ? 0 : undefined}
+      data-reply-jump={onJump ? '' : undefined}
+      onClick={
+        onJump
+          ? (e) => {
+              e.stopPropagation()
+              onJump()
+            }
+          : undefined
+      }
+      onKeyDown={
+        onJump
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onJump()
+              }
+            }
+          : undefined
+      }
+      className={onJump ? 'flex min-w-0 cursor-pointer items-center gap-1.5' : 'flex min-w-0 items-center gap-1.5'}
       style={{
         marginBottom: 4,
         paddingLeft: 8,

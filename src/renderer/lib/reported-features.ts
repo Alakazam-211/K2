@@ -206,6 +206,11 @@ export const REPORTED_FEATURES = {
    *  The projects store sends its stored list's tag only to a server with
    *  it. */
   'projects-etag': 'projects-etag',
+  /** prd-home-people-channels-v1 (0.46.13): people and channels on Home:
+   *  `/cli/home-chat/*` and `WS /cli/home-chat/events`. Listed only while
+   *  the server's `homeChat` switch is on and Sew runs there. Home's Add
+   *  picker offers Add a person, New channel and Add a channel only then. */
+  'home-chat-v1': 'home-chat-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

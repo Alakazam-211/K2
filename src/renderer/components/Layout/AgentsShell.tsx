@@ -39,6 +39,8 @@ import { RoomSlot } from '@/components/Home/room/HomeRoomsHost'
 import { useRoomWorkspaceName } from '@/components/TopBar/TopBarTitle'
 import GrokBotChatView from '@/components/GrokBots/GrokBotChatView'
 import { useGrokBotsStore } from '@/stores/grokbots'
+import HomeChatView from '@/components/HomeChat/HomeChatView'
+import { useHomeChatStore } from '@/stores/home-chat'
 
 interface ShellProject {
   name: string
@@ -100,8 +102,13 @@ export default function AgentsShell({
   const remoteBranch = useRoomWorkspaceName(remoteRoom)
   // Local Grok Bots (0.45.7): a Grok Bot chat takes the main area (no room,
   // no drawers — it is not a workspace). Picking a K2 agent closes it.
+  // People and channels on Home: a DM or channel takes the main area the
+  // same way (its data is Sew's through the daemon, never a room).
+  const chat = useHomeChatStore((s) => s.open)
   const grok = useGrokBotsStore((s) => s.open)
-  const roomShown = useRoomShown() && remote === null && grok === null
+  // One overlay at a time: a Home chat counts like a Grok Bot chat below.
+  const overlay = grok ?? chat
+  const roomShown = useRoomShown() && remote === null && overlay === null
   const hasRoom = !!(activeProject && activeWorkspace)
   const rootPath = activeWorkspace?.worktreePath ?? activeProject?.path
   const emptyHint = onHome
@@ -132,9 +139,10 @@ export default function AgentsShell({
       workspaceName={remote ? (remoteBranch ?? undefined) : roomShown ? activeWorkspace?.name : undefined}
       remoteServer={remote ? { hostKey: remote.entry.hostKey, phase: remote.entry.phase } : undefined}
     >
-      <RoomSlot visible={remote !== null && grok === null} />
+      <RoomSlot visible={remote !== null && overlay === null} />
       {grok !== null && <GrokBotChatView key={`${grok.hostKey}|${grok.agentId}`} hostKey={grok.hostKey} agentId={grok.agentId} />}
-      <RoomProvider room={room} shown={remote === null && grok === null}>
+      {grok === null && chat !== null && <HomeChatView key={chat.address} target={chat} />}
+      <RoomProvider room={room} shown={remote === null && overlay === null}>
         {hasRoom ? (
           <>
             {/* Same tree with or without a Grok Bot chat: the room stays
@@ -147,9 +155,9 @@ export default function AgentsShell({
             >
               <TerminalArea cwd={cwd} />
             </div>
-            {!roomShown && remote === null && grok === null && <RoomEmptyState hint={emptyHint} />}
+            {!roomShown && remote === null && overlay === null && <RoomEmptyState hint={emptyHint} />}
           </>
-        ) : remote === null && grok === null ? (
+        ) : remote === null && overlay === null ? (
           <RoomEmptyState hint={emptyHint} drawerToggles={roomShown} />
         ) : null}
       </RoomProvider>

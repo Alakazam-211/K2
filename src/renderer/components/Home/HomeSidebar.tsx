@@ -70,6 +70,8 @@ import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStat
 import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
 import { GrokBotHomeRow } from '@/components/GrokBots/GrokBotRows'
 import { isGrokBotAddress } from '@/lib/grokbots'
+import { isHomeChatRow } from '@/lib/home-chat/address'
+import { HomeChatHomeRow } from '@/components/HomeChat/HomeChatRow'
 
 /** Avatar color for an agent on another server whose own color this
  *  computer doesn't know yet (`useHomeRowColor` is null). A known color
@@ -387,6 +389,8 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
  *  selects `rows[N - 1]` on Home), shown for the first nine rows like the
  *  Agents pinned area. */
 function HomeRowView({ home, row, index }: { home: Home; row: HomeRow; index: number }): React.JSX.Element {
+  // People and channels (prd-home-people-channels-v1 §5): not agents.
+  if (isHomeChatRow(row)) return <HomeChatHomeRow home={home} row={row} index={index} />
   // Local Grok Bots (0.45.7): not a workspace, its own row.
   if (isGrokBotAddress(row.address)) return <GrokBotHomeRow home={home} row={row} index={index} />
   return <WorkspaceHomeRowView home={home} row={row} index={index} />
@@ -487,7 +491,7 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
           }
           onClickCapture={drag?.reorder.onRowClickCapture}
           // Read a remote row's Thread ahead (remote Thread load Fix 4).
-          onMouseEnter={drag ? () => homeRowHoverPrefetch.enter(row.address) : undefined}
+          onMouseEnter={drag && !isHomeChatRow(row) ? () => homeRowHoverPrefetch.enter(row.address) : undefined}
           onMouseLeave={drag ? () => homeRowHoverPrefetch.leave() : undefined}
         >
           {lineAt(idx) && <RowDropLine />}

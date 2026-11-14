@@ -47,6 +47,7 @@ import { KeyCombo } from '@/components/KeySymbol'
 import { primaryScope } from '@/kessel/server-scope'
 import { GrokBotSidebarSection } from '@/components/GrokBots/GrokBotRows'
 import { closeGrokChat } from '@/stores/grokbots'
+import { closeHomeChat } from '@/stores/home-chat'
 import { WorkspaceThreadUnreadBadge } from '@/components/common/UnreadBadge'
 import { threadSumForProject, useUnreadStore } from '@/stores/unread'
 import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
@@ -282,8 +283,10 @@ export function SingleProjectItem({
   )
 
   const handleClick = useCallback(() => {
-    // Picking a K2 agent gives the main area back from a Grok Bot chat.
+    // Picking a K2 agent gives the main area back from a Grok Bot chat or
+    // a Home chat (people and channels).
     closeGrokChat()
+    closeHomeChat()
     if (firstWorkspace) {
       setActiveWorkspace(project.id, firstWorkspace.id)
     }

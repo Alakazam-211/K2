@@ -474,6 +474,10 @@ export interface ThreadBubbleProps {
   /** No Reply in the message menu (the Chatter view: the mailbox has no
    *  message box of its own, and its words are not the person's Thread). */
   noReply?: boolean
+  /** Drawn first inside the bubble, where a parsed reply's quote goes: a
+   *  chat whose replies ride beside the text, not in it (Home chat's quote
+   *  strip from Sew's `reference`). */
+  quote?: ReactNode
   /** The desktop Thread only: a dismissed or withdrawn card's question is
    *  dimmed with its card. Off by default, so a Garden's Thread widget
    *  (which themes itself) draws it as it always has. */
@@ -597,6 +601,7 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     (a.receipt ?? null) === (b.receipt ?? null) &&
     (a.to ?? null) === (b.to ?? null) &&
     !!a.noReply === !!b.noReply &&
+    sameChatNode(a.quote, b.quote) &&
     sameSenderSlot(a.sender, b.sender) &&
     shallowSame(a.secret, b.secret) &&
     sameChatNode(a.footer, b.footer)
@@ -626,6 +631,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   to = null,
   noReply = false,
   dimClosedCards = false,
+  quote,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -747,7 +753,7 @@ export const ThreadBubble = memo(function ThreadBubble({
         }),
       }}
     >
-      {reply && <ThreadReplyQuote reply={reply} />}
+      {quote ?? (reply && <ThreadReplyQuote reply={reply} />)}
       {bodyText && <ChatMessageBody text={bodyText} style={cardClosed ? BUBBLE_BODY_CLOSED_STYLE : BUBBLE_BODY_STYLE} />}
       {kind === 'choice' && item.doc.choice && (
         <ChoiceCard

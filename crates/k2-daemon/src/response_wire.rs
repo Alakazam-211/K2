@@ -115,10 +115,15 @@ pub struct Shaped {
     pub has_body: bool,
 }
 
-/// The weak ETag of a JSON answer.
+/// The weak ETag of a JSON answer: the first 32 hex digits of the SHA-256
+/// of its bytes. A web client works out the same tag from the list it holds
+/// (`src/renderer/lib/projects-list-cache.ts`, `projectsListTag`), so it
+/// needs no response header to ask "changed?" next time.
 pub fn etag_of(body: &str) -> String {
-    let h = blake3::hash(body.as_bytes());
-    format!("W/\"{}\"", &h.to_hex()[..32])
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(body.as_bytes());
+    let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    format!("W/\"{hex}\"")
 }
 
 fn is_json(ct: &str) -> bool {
@@ -300,6 +305,14 @@ mod tests {
         let s = shape(&r, "200 OK", "application/json", &body);
         assert!(s.headers.contains(&format!("ETag: {tag}\r\n")), "the tag names the JSON, not its gzip bytes");
         assert_eq!(gunzip(&s.body), body);
+    }
+
+    /// The renderer's `projectsListTag` test holds the same fixture and tag:
+    /// the two must agree, or a web client never gets a 304.
+    #[test]
+    fn etag_matches_the_renderer_fixture() {
+        let body = "[{\"id\":\"p1\",\"name\":\"Caf\u{e9} \\\"one\\\"\",\"tabOrder\":3,\"iconUrl\":null,\"workspaces\":[]}]";
+        assert_eq!(etag_of(body), "W/\"a9de4e57e561bbb8bdc197b3faee8112\"");
     }
 
     #[test]

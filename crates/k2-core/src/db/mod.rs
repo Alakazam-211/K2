@@ -419,7 +419,30 @@ pub fn init_home_database(
     if let Some(existing) = SHARED.get() {
         return Ok((existing.clone(), None));
     }
+    let (handle, report) = open_home_database(opts)?;
+    // Race-free publish: whoever wins gets their handle stored, losers
+    // drop theirs and return the winner's. In practice only one thread
+    // calls init_database during startup.
+    match SHARED.set(handle.clone()) {
+        Ok(()) => Ok((handle, Some(report))),
+        Err(_) => Ok((SHARED.get().expect("SHARED just populated").clone(), Some(report))),
+    }
+}
 
+/// Test-only: open the K2 home database under the current `$HOME` exactly
+/// as [`init_database`] does (home switch, pragmas, migrations, seed, read
+/// pool per `K2_DB_READ_POOL`) WITHOUT publishing it as the process-wide
+/// handle. A test installs it as its threads' scoped DB
+/// ([`set_thread_scoped_handle_for_test`], a runtime's `on_thread_start`),
+/// so tests in one process each get their own file database.
+#[cfg(any(test, feature = "test-util"))]
+pub fn open_home_database_for_test() -> Result<Arc<DbLock>> {
+    open_home_database(&home_switch::SwitchOpts { defer: None, by: "test".to_string() }).map(|(h, _)| h)
+}
+
+/// Open (or create) `~/.k2/k2.db`: the home switch, the main database's
+/// pragmas, migrations, seed and its read pool. Publishes nothing.
+fn open_home_database(opts: &home_switch::SwitchOpts) -> Result<(Arc<DbLock>, home_switch::SwitchReport)> {
     let db_dir = crate::paths::home_dir()
         .ok_or_else(|| rusqlite::Error::InvalidParameterName("Could not determine home directory".to_string()))?
         .join(".k2");
@@ -473,13 +496,7 @@ pub fn init_home_database(
 
     let handle = Arc::new(DbLock::new(conn));
     read_pool::start_for_main(&handle, &db_path);
-    // Race-free publish: whoever wins gets their handle stored, losers
-    // drop theirs and return the winner's. In practice only one thread
-    // calls init_database during startup.
-    match SHARED.set(handle.clone()) {
-        Ok(()) => Ok((handle, Some(report))),
-        Err(_) => Ok((SHARED.get().expect("SHARED just populated").clone(), Some(report))),
-    }
+    Ok((handle, report))
 }
 
 /// The main database's journal mode and `synchronous` level, logged once at

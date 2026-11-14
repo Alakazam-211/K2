@@ -40,6 +40,9 @@ A one-page map. K2 is daemon-first: one long-running daemon (`crates/k2-daemon`,
   | `/cli/sessions/grid`, terminal grid snapshots and deltas | `sessions_grid_ws.rs` |
   | `/cli/awareness/subscribe`, the awareness bus | `awareness_ws.rs` |
   | `/cli/overlay/events`, Thread and overlay pushes | `overlay_ws.rs` |
+  | `/cli/activity/events`, agents at work in one workspace | `activity_events_ws.rs` |
+  | `/cli/fs/events`, file changes in one workspace | `fs_events_ws.rs` |
+  | `/cli/ops/stream`, session and awareness events on one socket, read only | `ops_stream_ws.rs` |
 
 - **`/boot-status` comes first.** The daemon binds its port before it runs migrations, and the dispatcher answers `503` to every route except `/ping`, `/health`, `/boot-status` and the two public key routes until the boot is done (`crates/k2-daemon/src/boot_status.rs`, `is_ready`). The body gives a `phase` (`starting`, `migrating`, `ready` or `error`), the `protocol` range, and for a signed-in or local caller the `version` and `features`. The desktop app mounts only against a local daemon of its own version in phase `ready` (`src/renderer/components/ConnectionGate.tsx`). The CLI polls the same route after a restart (`cli/src/daemon.sh`).
 - **Finding the local daemon.** At start the daemon writes `daemon.port` and `daemon.token` into the K2 home, `~/.k2` by default (`crates/k2-daemon/src/daemon_main.rs`). The port is kept across restarts when it can be (`crates/k2-core/src/port_claim.rs`). The token is new on every boot. The desktop shell reads both files in `src-tauri/src/daemon_client.rs`, the CLI in `cli/src/daemon.sh`.

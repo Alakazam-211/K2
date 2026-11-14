@@ -111,7 +111,7 @@ pub fn is_ts_net_host(host: &str) -> bool {
 /// `k2.dev` or `*.k2.dev` (Connect zone).
 pub fn is_k2_dev_host(host: &str) -> bool {
     let h = hostname_only(host).to_ascii_lowercase();
-    h == "k2.dev" || h.ends_with(".k2.dev")
+    crate::hosts::in_zone(&h)
 }
 
 /// Bare Connect routing label: no dot, no colon, not a URL (e.g. `"rpm"`).
@@ -215,7 +215,7 @@ pub fn resolve_peer_base_url(subdomain: &str, base_url: &str) -> String {
         return format!("http://{}", hint.trim_end_matches('/'));
     }
     let n = crate::connections::normalize_remote_host(hint);
-    if n.ends_with(".k2.dev") {
+    if n.ends_with(crate::hosts::ZONE_SUFFIX) {
         format!("https://{n}")
     } else if n.is_empty() {
         n

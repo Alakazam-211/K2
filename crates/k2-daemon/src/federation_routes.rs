@@ -1275,11 +1275,11 @@ pub(crate) fn handle_for_workspace_in_roster_body(body: &str, workspace_id: &str
 fn bare_host(h: &str) -> String {
     let mut h = h.trim().to_ascii_lowercase();
     while h.ends_with(".k2.dev.k2.dev") {
-        let new_len = h.len().saturating_sub(".k2.dev".len());
+        let new_len = h.len().saturating_sub(k2_core::hosts::ZONE_SUFFIX.len());
         h.truncate(new_len);
     }
-    if h.ends_with(".k2.dev") {
-        let new_len = h.len().saturating_sub(".k2.dev".len());
+    if h.ends_with(k2_core::hosts::ZONE_SUFFIX) {
+        let new_len = h.len().saturating_sub(k2_core::hosts::ZONE_SUFFIX.len());
         h.truncate(new_len);
     }
     h
@@ -1304,7 +1304,7 @@ pub(crate) fn peer_matches_user_host(peer: &k2_core::federation::FederationPeer,
     }
     let sub = peer.subdomain.to_ascii_lowercase();
     host.eq_ignore_ascii_case(&sub)
-        || host.eq_ignore_ascii_case(&format!("{sub}.k2.dev"))
+        || host.eq_ignore_ascii_case(&k2_core::hosts::box_host(&sub))
         || want.eq_ignore_ascii_case(&format!("{}.k2.dev", bare_host(&peer.subdomain)))
 }
 

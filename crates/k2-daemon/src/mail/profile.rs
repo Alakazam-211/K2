@@ -284,7 +284,7 @@ pub fn build_mobileconfig(spec: &ProfileSpec<'_>) -> String {
 
 fn is_k2_dev(host: &str) -> bool {
     let lower = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    lower == "k2.dev" || lower.ends_with(".k2.dev")
+    k2_core::hosts::in_zone(&lower)
 }
 
 /// The profile's server name: the apex's mail host (the name on the mail

@@ -91,7 +91,7 @@ fn split_federated_user_target(token: &str) -> Option<(String, String)> {
 }
 
 fn looks_like_host(s: &str) -> bool {
-    s.contains('.') || s.contains(':') || s.to_ascii_lowercase().ends_with(".k2.dev")
+    s.contains('.') || s.contains(':') || s.to_ascii_lowercase().ends_with(k2_core::hosts::ZONE_SUFFIX)
 }
 
 fn caller_from_workspace(params: &HashMap<String, String>) -> Option<String> {

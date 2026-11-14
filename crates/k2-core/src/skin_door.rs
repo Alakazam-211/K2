@@ -494,7 +494,7 @@ pub fn host_from_front_door_url(raw: &str) -> Option<String> {
     if host.is_empty() || host == "localhost" || host == "127.0.0.1" || host == "::1" {
         return None;
     }
-    if host == "k2.dev" || host.ends_with(".k2.dev") {
+    if crate::hosts::in_zone(&host) {
         return None;
     }
     Some(host)

@@ -151,7 +151,7 @@ pub fn retire_listener(desired: Option<&str>) -> Option<Retired> {
          and the cert renewer for {}.k2.dev (now: {})",
         l.port,
         l.subdomain,
-        desired.map(|d| format!("{d}.k2.dev")).unwrap_or_else(|| "no listener".into())
+        desired.map(|d| k2_core::hosts::box_host(&d)).unwrap_or_else(|| "no listener".into())
     );
     Some(Retired {
         subdomain: l.subdomain,

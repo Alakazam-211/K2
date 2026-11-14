@@ -141,7 +141,7 @@ pub fn verify_with(
     }
     let own = own_sub.trim().to_ascii_lowercase();
     let theirs = t.controller_sub.trim().to_ascii_lowercase();
-    if own.is_empty() || (theirs != own && format!("{theirs}.k2.dev") != own && theirs != format!("{own}.k2.dev")) {
+    if own.is_empty() || (theirs != own && crate::hosts::box_host(&theirs) != own && theirs != crate::hosts::box_host(&own)) {
         return Err(TicketRefusal::WrongController);
     }
     if t.node_fp != node_fp || t.node_name != node_name {

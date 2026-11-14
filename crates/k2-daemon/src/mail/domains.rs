@@ -738,7 +738,7 @@ pub fn apply_dmarc_p_none(rows: &mut [RecordRow], domain: &str) {
 /// (`domains::acme::check_extra_name_issuable`).
 pub fn zone_is_k2_hosted(conn: &Connection, domain: &str) -> bool {
     let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    if d == "k2.dev" || d.ends_with(".k2.dev") {
+    if k2_core::hosts::in_zone(&d) {
         return true;
     }
     matches!(

@@ -110,7 +110,7 @@ pub const NAME_IN_USE: &str = "hostname_in_use";
 /// the hostname is already bound (a `mail` / `direct` row is that use).
 pub fn bind_conflict(hostname: &str, existing_role: Option<&str>) -> Result<(), Refusal> {
     let h = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
-    if h == "k2.dev" || h.ends_with(".k2.dev") {
+    if k2_core::hosts::in_zone(&h) {
         return Err(refuse(
             400,
             K2_DEV_NAME,

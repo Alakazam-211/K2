@@ -403,7 +403,7 @@ pub fn looks_like_host(host: &str) -> bool {
         return false;
     }
     let lower = h.to_ascii_lowercase();
-    h.contains('.') || lower.ends_with(".k2.dev")
+    h.contains('.') || lower.ends_with(crate::hosts::ZONE_SUFFIX)
 }
 
 /// Whether `target` is a REMOTE (cross-daemon) **user** address.
@@ -441,7 +441,7 @@ pub fn is_remote_target(target: &str) -> bool {
 }
 
 /// K2 Connect zone suffix (canonical remote hosts are `<subdomain>.k2.dev`).
-const K2_ZONE: &str = ".k2.dev";
+const K2_ZONE: &str = crate::hosts::ZONE_SUFFIX;
 
 /// Normalize a remote host for storage/matching.
 ///

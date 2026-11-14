@@ -271,9 +271,9 @@ impl ExportOptions {
 /// (`rosson.k2.dev`), else the machine's host name, else "this computer".
 pub fn default_source_host() -> String {
     let sub = crate::federation::address_notice::local_address().subdomain;
-    let sub = sub.trim().trim_end_matches(".k2.dev");
+    let sub = sub.trim().trim_end_matches(crate::hosts::ZONE_SUFFIX);
     if !sub.is_empty() {
-        return format!("{sub}.k2.dev");
+        return crate::hosts::box_host(&sub);
     }
     machine_host_name().unwrap_or_else(|| "this computer".to_string())
 }

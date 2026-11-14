@@ -246,7 +246,7 @@ pub fn decide(offer: &Offer, local_status: &serde_json::Value, now: i64) -> Deci
     if !crate::compute::enroll::valid_name(&t.node_name) {
         return Decision::Skip { ok: false, code: "bad_offer" };
     }
-    let host = format!("{sub}.k2.dev");
+    let host = crate::hosts::box_host(&sub);
     let state = node["state"].as_str().unwrap_or("unenrolled");
     if enrolled_state(state) {
         let current = node["controller"].as_str().map(host_of).unwrap_or_default();

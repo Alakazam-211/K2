@@ -584,7 +584,7 @@ pub fn calendar_reach(
         );
     };
     let lower = host.trim_end_matches('.').to_ascii_lowercase();
-    if lower == "k2.dev" || lower.ends_with(".k2.dev") {
+    if k2_core::hosts::in_zone(&lower) {
         return (
             false,
             Some(format!(
@@ -607,7 +607,7 @@ pub fn calendar_reach(
 pub fn caldav_url(host: Option<&str>) -> Option<String> {
     let host = host.map(str::trim).filter(|h| !h.is_empty())?;
     let lower = host.trim_end_matches('.').to_ascii_lowercase();
-    if lower == "k2.dev" || lower.ends_with(".k2.dev") {
+    if k2_core::hosts::in_zone(&lower) {
         return None;
     }
     Some(format!(

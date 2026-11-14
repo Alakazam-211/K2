@@ -530,7 +530,7 @@ impl SewOps for RealOps {
         } else {
             primary
         };
-        let label = label.strip_suffix(".k2.dev").map(str::to_string).unwrap_or(label);
+        let label = label.strip_suffix(k2_core::hosts::ZONE_SUFFIX).map(str::to_string).unwrap_or(label);
         (!label.is_empty() && !label.contains('.')).then_some(label)
     }
     fn bound_apexes(&self) -> Vec<String> {

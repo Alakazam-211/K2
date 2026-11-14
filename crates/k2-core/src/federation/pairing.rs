@@ -209,9 +209,9 @@ fn empty_pair_err() -> String {
 fn normalize_connect_label(raw: &str) -> String {
     let mut n = raw.trim().to_lowercase();
     while n.ends_with(".k2.dev.k2.dev") {
-        n.truncate(n.len() - ".k2.dev".len());
+        n.truncate(n.len() - crate::hosts::ZONE_SUFFIX.len());
     }
-    n.strip_suffix(".k2.dev").unwrap_or(&n).to_string()
+    n.strip_suffix(crate::hosts::ZONE_SUFFIX).unwrap_or(&n).to_string()
 }
 
 pub(crate) fn normalize_pair_routing(subdomain: &str, base_url: &str) -> Result<(String, String), String> {

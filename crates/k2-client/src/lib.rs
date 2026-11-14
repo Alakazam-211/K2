@@ -47,6 +47,7 @@ pub mod daemon_lifecycle;
 pub mod download_file;
 pub mod editors;
 pub mod events;
+pub mod hosts;
 pub mod login_path;
 #[cfg(target_os = "macos")]
 pub mod macos_keychain;

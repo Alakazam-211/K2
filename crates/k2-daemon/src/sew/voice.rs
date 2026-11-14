@@ -194,7 +194,7 @@ fn under(host: &str, base: &str) -> bool {
 /// custom domain bound to it. Never `turn-*` hosts.
 pub fn host_allowed(host: &str, label: Option<&str>, apexes: &[String]) -> bool {
     let h = host.to_ascii_lowercase();
-    if label.is_some_and(|l| under(&h, &format!("{l}.k2.dev"))) {
+    if label.is_some_and(|l| under(&h, &k2_core::hosts::box_host(&l))) {
         return true;
     }
     apexes.iter().any(|a| !a.is_empty() && under(&h, &a.to_ascii_lowercase()))
@@ -210,7 +210,7 @@ fn not_ours(url: &str, label: Option<&str>) -> Fail {
         400,
         format!(
             "{url} is not on this box: use a host under {} or a custom domain bound to this box (k2 domain attach)",
-            label.map(|l| format!("{l}.k2.dev")).unwrap_or_else(|| "<label>.k2.dev".into())
+            label.map(|l| k2_core::hosts::box_host(&l)).unwrap_or_else(|| "<label>.k2.dev".into())
         ),
     )
 }

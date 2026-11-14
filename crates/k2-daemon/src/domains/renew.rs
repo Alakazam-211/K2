@@ -384,7 +384,7 @@ pub fn qualifies(row: &AttachedRow) -> Result<(), String> {
         return Err("the apex is no longer attached".into());
     };
     let host = norm(&row.hostname);
-    if host == "k2.dev" || host.ends_with(".k2.dev") {
+    if k2_core::hosts::in_zone(&host) {
         return Err("Connect *.k2.dev names stay on cert.k2.dev".into());
     }
     if !k2_core::domains::hostname_under_apex(&host, &b.apex) {

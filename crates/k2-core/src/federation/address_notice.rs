@@ -303,7 +303,7 @@ pub struct Applied {
 
 fn label_of(s: &str) -> String {
     let h = crate::connections::normalize_remote_host(&super::dial::host_port(s));
-    h.strip_suffix(".k2.dev").unwrap_or(&h).to_string()
+    h.strip_suffix(crate::hosts::ZONE_SUFFIX).unwrap_or(&h).to_string()
 }
 
 fn same_subdomain(a: &str, b: &str) -> bool {
@@ -351,7 +351,7 @@ impl LocalIdentity {
 /// followed by `.k2.dev`. Never a URL, a host:port or another zone.
 fn valid_connect_subdomain(s: &str) -> bool {
     let s = s.trim().to_ascii_lowercase();
-    let label = s.strip_suffix(".k2.dev").unwrap_or(&s);
+    let label = s.strip_suffix(crate::hosts::ZONE_SUFFIX).unwrap_or(&s);
     let b = label.as_bytes();
     !b.is_empty()
         && b.len() <= 63

@@ -287,7 +287,7 @@ pub fn this_host() -> String {
     } else if p.contains('.') {
         p.to_string()
     } else {
-        format!("{p}.k2.dev")
+        k2_core::hosts::box_host(&p)
     }
 }
 

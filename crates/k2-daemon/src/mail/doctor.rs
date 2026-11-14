@@ -843,7 +843,7 @@ pub fn caldav_check(env: &dyn DoctorEnv, host: &str) -> DoctorCheck {
     };
     let host = host.trim().trim_end_matches('.');
     let lower = host.to_ascii_lowercase();
-    if lower == "k2.dev" || lower.ends_with(".k2.dev") {
+    if k2_core::hosts::in_zone(&lower) {
         return mk(
             ST_WARN,
             format!(

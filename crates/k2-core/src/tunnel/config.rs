@@ -59,7 +59,7 @@ pub const LEGACY_RELAY_HOSTS: &[&str] = &["178.156.232.105", "40.160.53.25"];
 pub const DEFAULT_SERVER_PORT: u16 = 7000;
 
 /// The hosted subdomain zone. Every user lands under `<sub>.k2.dev`.
-pub const SUBDOMAIN_HOST: &str = "k2.dev";
+pub const SUBDOMAIN_HOST: &str = crate::hosts::ZONE;
 
 /// One frps relay endpoint (host + frpc dial-in port) in the ordered
 /// fallback list. The edge relays are PEERS — they share one frps auth

@@ -243,7 +243,7 @@ fn rules(params: &HashMap<String, String>, port: u16) -> Result<CliResponse, Cli
     let f = params.get("format").map(String::as_str).unwrap_or("nft");
     let fmt = RulesFormat::parse(f).ok_or_else(|| refuse(400, "bad_format", format!("--format nft or ufw (got '{f}')")))?;
     let v = view_or_500(port)?;
-    let label = v.box_info.label.clone().map(|l| format!("{l}.k2.dev")).unwrap_or_else(|| "this box".into());
+    let label = v.box_info.label.clone().map(|l| k2_core::hosts::box_host(&l)).unwrap_or_else(|| "this box".into());
     Ok(CliResponse::ok_text(fw::rules(&v.public, fmt, &label, &v.hash)))
 }
 

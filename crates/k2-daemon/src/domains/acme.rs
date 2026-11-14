@@ -72,7 +72,7 @@ fn acme_directory(cfg: &AcmeConfig) -> String {
 }
 
 fn reject_k2_dev(hostname: &str) -> Result<(), String> {
-    if hostname == "k2.dev" || hostname.ends_with(".k2.dev") {
+    if k2_core::hosts::in_zone(&hostname) {
         return Err(
             "Connect {label}.k2.dev names stay on cert.k2.dev — do not issue them here".into(),
         );

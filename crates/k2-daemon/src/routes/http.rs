@@ -763,7 +763,7 @@ pub(crate) fn origin_allowed(origin: &str, headers_blob: &str) -> bool {
             continue;
         }
         let bare = host_no_port(host).to_string();
-        let k2_dev_host = bare.ends_with(".k2.dev");
+        let k2_dev_host = bare.ends_with(k2_core::hosts::ZONE_SUFFIX);
         // 1. Same origin (default ports folded with the Origin's scheme).
         if origin_authority == fold_default_port(&scheme, host)
             && (scheme == "https" || (!https_only && !k2_dev_host))
@@ -772,7 +772,7 @@ pub(crate) fn origin_allowed(origin: &str, headers_blob: &str) -> bool {
         }
         // 2. Hosted web client: Host `<label>.k2.dev` ↔ `https://<label>.app.k2.dev`.
         if scheme == "https" {
-            if let Some(label) = bare.strip_suffix(".k2.dev") {
+            if let Some(label) = bare.strip_suffix(k2_core::hosts::ZONE_SUFFIX) {
                 if !label.is_empty() && !label.contains('.') {
                     if let Some(loc) = super::dispatcher::app_web_root_location(label) {
                         let want = loc.trim_end_matches('/').trim_start_matches("https://");

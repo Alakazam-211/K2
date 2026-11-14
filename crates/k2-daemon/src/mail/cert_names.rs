@@ -71,7 +71,7 @@ pub const RENEW_BEFORE_SECS: i64 = crate::domains::renew::RENEW_WINDOW_SECS;
 /// the default).
 pub fn extra_names_for_apex(apex: &str, mail_host: Option<&str>) -> Vec<String> {
     let apex = norm(apex);
-    if apex.is_empty() || !apex.contains('.') || apex == "k2.dev" || apex.ends_with(".k2.dev") {
+    if apex.is_empty() || !apex.contains('.') || k2_core::hosts::in_zone(&apex) {
         return Vec::new();
     }
     let mail = mail_host.map(norm);

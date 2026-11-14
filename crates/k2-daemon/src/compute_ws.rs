@@ -215,7 +215,7 @@ pub fn controller_label() -> String {
             if s.contains('.') {
                 s.to_string()
             } else {
-                format!("{s}.k2.dev")
+                k2_core::hosts::box_host(&s)
             }
         }
         _ => hostname(),

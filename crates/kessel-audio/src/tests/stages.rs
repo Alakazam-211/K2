@@ -1,5 +1,6 @@
 //! Capture stages for the tests: a pass-through (a pure 10 ms delay), a
-//! scripted pass-through that can sleep, spin, panic or return NaN on cue,
+//! scripted pass-through that can take time (on a manual clock), panic or
+//! return NaN on cue,
 //! and an RNNoise-like denoiser of about RNNoise's cost.
 //!
 //! No real RNNoise model is used (it would be a new dependency). The
@@ -20,13 +21,12 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::frame::BLOCK_SAMPLES;
-use crate::stage::CaptureStage;
+use crate::stage::{CaptureStage, StageClock};
 use crate::testkit::Rng;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 const N: usize = BLOCK_SAMPLES;
 
@@ -61,18 +61,35 @@ pub(crate) struct Script {
     pub(crate) calls: AtomicU64,
     /// `reset` calls so far.
     pub(crate) resets: AtomicU64,
-    /// Sleep this long (µs) in every call while non-zero.
-    pub(crate) sleep_us: AtomicU64,
-    /// Busy-wait `spin_us` on every call whose number (from 1) is a
-    /// multiple of this (0: never).
-    pub(crate) spin_every: AtomicU64,
-    pub(crate) spin_us: AtomicU64,
+    /// The stage's clock (nanoseconds; see [`Script::clock`]). The stage
+    /// "takes" time by advancing it, never by sleeping, so the budget tests
+    /// don't depend on the machine's load.
+    pub(crate) now_ns: Arc<AtomicU64>,
+    /// Every call takes this long (µs) while non-zero.
+    pub(crate) cost_us: AtomicU64,
+    /// Calls whose number (from 1) is a multiple of this (0: never) take
+    /// `slow_us` instead.
+    pub(crate) slow_every: AtomicU64,
+    pub(crate) slow_us: AtomicU64,
     /// Panic on this call number (0: never).
     pub(crate) panic_on: AtomicU64,
     /// Return a NaN on this call number (0: never).
     pub(crate) nan_on: AtomicU64,
     /// Panic in `reset`.
     pub(crate) panic_on_reset: AtomicBool,
+}
+
+impl Script {
+    /// The clock to time this script's stage with.
+    pub(crate) fn clock(&self) -> StageClock {
+        StageClock::Manual(self.now_ns.clone())
+    }
+}
+
+/// A clock that never moves: every call takes no time, so a stage is never
+/// over budget, whatever the machine's load.
+pub(crate) fn still_clock() -> StageClock {
+    StageClock::Manual(Arc::new(AtomicU64::new(0)))
 }
 
 /// A [`PassThrough`] that follows a [`Script`].
@@ -101,17 +118,13 @@ impl CaptureStage for Scripted {
         if s.panic_on.load(Ordering::Relaxed) == n {
             panic!("scripted stage panic on call {n}");
         }
-        let sleep = s.sleep_us.load(Ordering::Relaxed);
-        if sleep > 0 {
-            std::thread::sleep(Duration::from_micros(sleep));
-        }
-        let every = s.spin_every.load(Ordering::Relaxed);
-        if every > 0 && n.is_multiple_of(every) {
-            let until = Instant::now() + Duration::from_micros(s.spin_us.load(Ordering::Relaxed));
-            while Instant::now() < until {
-                std::hint::spin_loop();
-            }
-        }
+        let every = s.slow_every.load(Ordering::Relaxed);
+        let took_us = if every > 0 && n.is_multiple_of(every) {
+            s.slow_us.load(Ordering::Relaxed)
+        } else {
+            s.cost_us.load(Ordering::Relaxed)
+        };
+        s.now_ns.fetch_add(took_us * 1_000, Ordering::Relaxed);
         self.inner.process(block);
         if s.nan_on.load(Ordering::Relaxed) == n {
             block[7] = f32::NAN;

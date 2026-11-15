@@ -174,7 +174,7 @@ pub(crate) fn run_core_staged(
     n_samples: usize,
     mic: Option<&[f32]>,
 ) -> CallRun {
-    let mut core = Core::with_stage(cfg.clone(), stage).expect("core");
+    let mut core = Core::with_stage_clock(cfg.clone(), stage, stages::still_clock()).expect("core");
     core.add(Participant::new(FAR_ID, cfg).expect("participant"))
         .unwrap_or_else(|_| panic!("add participant"));
     let t0 = Instant::now();

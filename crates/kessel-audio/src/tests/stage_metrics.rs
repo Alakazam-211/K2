@@ -89,7 +89,7 @@ fn processed(kind: Kind, rendered: &[f32], mic: &[f32]) -> Vec<f32> {
     let settings = kind.processing().settings();
     let mut apm = match kind.stage() {
         None => Apm::new(settings),
-        Some(s) => Apm::with_stage(settings, s).expect("stage"),
+        Some(s) => Apm::with_stage_clock(settings, s, super::stages::still_clock()).expect("stage"),
     };
     let mut out = vec![0.0f32; mic.len()];
     let blocks = rendered

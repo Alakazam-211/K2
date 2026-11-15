@@ -64,8 +64,8 @@ pub struct ProcessingConfig {
     /// noise suppression already runs before the stage). The suppressor
     /// runs on every block in its own sonora instance, so it is converged
     /// the moment it is needed; it allocates nothing per block, and costs
-    /// its band split and merge on top of the suppression 0.1 ran (see the
-    /// changelog for the measured figure). Its own delay (334 samples,
+    /// its band split and merge on top of the suppression 0.1 ran: about
+    /// 0.5% of a core (50–54 µs per 10 ms block, measured on x86-64). Its own delay (334 samples,
     /// 7 ms) is taken out of the stage's latency, so the timing holds for a
     /// stage with at least that much latency (a shorter one: the suppressed
     /// signal is that much later). `None` turns the floor off: a bypassed
@@ -400,8 +400,20 @@ impl Apm {
         cfg: impl Into<ApmSettings>,
         stage: Box<dyn CaptureStage>,
     ) -> Result<Self, AudioError> {
-        let cfg = cfg.into();
-        let stage = StageRunner::new(stage)?;
+        Self::with_runner(cfg.into(), StageRunner::new(stage)?)
+    }
+
+    /// [`Apm::with_stage`] with the stage timed by `clock` (tests).
+    #[cfg(test)]
+    pub(crate) fn with_stage_clock(
+        cfg: impl Into<ApmSettings>,
+        stage: Box<dyn CaptureStage>,
+        clock: crate::stage::StageClock,
+    ) -> Result<Self, AudioError> {
+        Self::with_runner(cfg.into(), StageRunner::with_clock(stage, clock)?)
+    }
+
+    fn with_runner(cfg: ApmSettings, stage: StageRunner) -> Result<Self, AudioError> {
         let pre = ApmSettings {
             gain_control: false,
             stage_fallback_ns: None,

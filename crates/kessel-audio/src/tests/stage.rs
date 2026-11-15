@@ -2,7 +2,7 @@
 //! (the echo canceller's output, delayed by the stage's latency, bit for
 //! bit), the budget rules, faults, retries and resets.
 
-use super::stages::{PassThrough, Scripted};
+use super::stages::{still_clock, PassThrough, Script, Scripted};
 use super::{aec_only, core_cfg};
 use crate::apm::{
     Apm, ApmSettings, NoiseSuppressionStrength, ProcessingConfig, STEP_DOWN_NS_DELAY,
@@ -10,7 +10,7 @@ use crate::apm::{
 use crate::error::ErrorCode;
 use crate::frame::{EncoderCfg, BLOCK_SAMPLES};
 use crate::pipeline::{Core, CoreConfig};
-use crate::stage::{CaptureStage, CaptureStageStats, StageBypassReason, RETRY_BLOCKS};
+use crate::stage::{CaptureStage, CaptureStageStats, StageBypassReason, StageClock, RETRY_BLOCKS};
 use crate::stats::Stats;
 use crate::testkit::{add_into, delay, floor_noise, scale, talker_track, Rng, TALKERS};
 use std::sync::atomic::Ordering;
@@ -79,8 +79,14 @@ fn stage_stats(apm: &mut Apm) -> CaptureStageStats {
     apm.stage_stats().expect("a stage is set")
 }
 
+/// The stage on a clock that never moves: never over budget.
 fn staged(settings: ApmSettings, stage: impl CaptureStage) -> Apm {
-    Apm::with_stage(settings, Box::new(stage)).expect("stage accepted")
+    Apm::with_stage_clock(settings, Box::new(stage), still_clock()).expect("stage accepted")
+}
+
+/// A scripted stage, timed by its script's clock.
+fn staged_with(settings: ApmSettings, stage: Scripted, script: &Script) -> Apm {
+    Apm::with_stage_clock(settings, Box::new(stage), script.clock()).expect("stage accepted")
 }
 
 /// No processing, latency 0.
@@ -162,66 +168,118 @@ fn a_stage_with_no_latency_and_no_change_changes_nothing() {
 }
 
 #[test]
-fn a_9_ms_stage_is_bypassed_at_once_retried_twice_then_bypassed_for_good() {
+fn a_9_ms_stage_is_bypassed_on_its_second_slow_call_retried_twice_then_bypassed_for_good() {
     let (stage, script) = Scripted::new();
-    let mut apm = staged(settings(aec_only()), stage);
-    let retry = RETRY_BLOCKS as usize;
-    // Block 100 is the first slow one; the stage stays slow.
-    let (s1, s2, s3) = (100, 100 + retry, 100 + 2 * retry);
-    let mut seen: Vec<(usize, CaptureStageStats)> = Vec::new();
+    let mut apm = staged_with(settings(aec_only()), stage, &script);
+    // Block 100 is the first slow call; the stage stays slow. Each strike
+    // takes two slow calls in a row: block 101, then (after each 10 s
+    // retry, whose warm-up call is the first slow one) blocks 1102, 2103.
+    let (s1, s2, s3) = (101, 1_102, 2_103);
+    let mut seen: Vec<CaptureStageStats> = Vec::new();
     let out = run(&mut apm, BLOCKS, |b, apm| {
-        if b == s1 {
-            script.sleep_us.store(9_000, Ordering::Relaxed);
+        if b == 100 {
+            script.cost_us.store(9_000, Ordering::Relaxed);
         }
-        if [s1, s1 + 1, s2 - 1, s2 + 1, s3 + 1].contains(&b) {
-            seen.push((b, stage_stats(apm)));
-        }
+        seen.push(stage_stats(apm));
     });
     assert_delayed(&out, &plain(settings(aec_only()), BLOCKS), B, "9 ms stage");
 
-    let at = |b: usize| seen.iter().find(|(x, _)| *x == b).expect("reading").1;
-    assert!(at(s1).active && at(s1).strikes == 0, "{:?}", at(s1));
-    // The bypass flag is set by the slow block itself.
-    let a = at(s1 + 1);
+    // `seen[b]` is the reading before block b.
+    let a = seen[s1];
+    assert!(a.active && a.strikes == 0, "one slow call is not a strike: {a:?}");
+    assert!(a.max_block_us >= 9_000, "{a:?}");
+    // The flag is set by the second slow call itself.
+    let a = seen[s1 + 1];
     assert!(
         !a.active && a.bypassed == Some(StageBypassReason::Budget) && a.strikes == 1,
         "{a:?}"
     );
-    assert!(a.max_block_us >= 9_000, "{a:?}");
     assert!(!a.permanent);
-    let a = at(s2 - 1);
+    let a = seen[s2 - 1];
     assert!(
         !a.active && a.strikes == 1,
-        "still waiting for the retry: {a:?}"
+        "retried, one slow call so far: {a:?}"
     );
-    let a = at(s2 + 1);
+    let a = seen[s2 + 1];
     assert!(!a.active && a.strikes == 2 && !a.permanent, "{a:?}");
-    let a = at(s3 + 1);
-    assert!(!a.active && a.strikes == 3 && a.permanent, "{a:?}");
+    let a = seen[s3 + 1];
+    assert!(
+        !a.active && a.strikes == 3 && a.permanent,
+        "three strikes within 60 s: {a:?}"
+    );
 
-    // 100 good calls, then one per strike; reset once before the first
+    // 100 good calls, then two per strike; reset once before the first
     // call and before each retry.
-    assert_eq!(script.calls.load(Ordering::Relaxed), 103);
+    assert_eq!(script.calls.load(Ordering::Relaxed), 106);
     assert_eq!(script.resets.load(Ordering::Relaxed), 3);
     let s = stage_stats(&mut apm);
-    assert_eq!(s.blocks_processed, 103);
-    assert_eq!(s.blocks_bypassed, BLOCKS as u64 - 100);
+    assert_eq!(s.blocks_processed, 106);
+    // Block 100's output was the stage's (it finished, if late).
+    assert_eq!(s.blocks_bypassed, BLOCKS as u64 - 101);
+}
+
+/// Strikes more than 60 s apart don't add up: the count decays.
+#[test]
+fn strikes_more_than_60_s_apart_never_make_the_bypass_permanent() {
+    let (stage, script) = Scripted::new();
+    let mut apm = staged_with(settings(ProcessingConfig::off()), stage, &script);
+    // A pair of slow calls every 35 s: any three strikes span 70 s.
+    let mut strikes = 0;
+    let _ = run(&mut apm, 12_000, |b, apm| {
+        let slow = b % 3_500 == 100 || b % 3_500 == 101;
+        script
+            .cost_us
+            .store(if slow { 9_000 } else { 0 }, Ordering::Relaxed);
+        strikes = stage_stats(apm).strikes;
+    });
+    let s = stage_stats(&mut apm);
+    assert_eq!(strikes, 4, "{s:?}");
+    assert!(!s.permanent, "{s:?}");
+    assert!(s.active, "back after each retry: {s:?}");
+
+    // The same three strikes within 60 s: permanent.
+    let (stage, script) = Scripted::new();
+    let mut apm = staged_with(settings(ProcessingConfig::off()), stage, &script);
+    let _ = run(&mut apm, 7_000, |b, _| {
+        let slow = b % 1_500 == 100 || b % 1_500 == 101;
+        script
+            .cost_us
+            .store(if slow { 9_000 } else { 0 }, Ordering::Relaxed);
+    });
+    let s = stage_stats(&mut apm);
+    assert!(s.permanent && s.strikes == 3, "{s:?}");
+}
+
+/// One late call now and then, as a preempted thread gives, never strikes.
+#[test]
+fn single_late_calls_are_not_strikes() {
+    let (stage, script) = Scripted::new();
+    // One call in every 100 is 20 ms late.
+    script.slow_every.store(100, Ordering::Relaxed);
+    script.slow_us.store(20_000, Ordering::Relaxed);
+    let mut apm = staged_with(settings(ProcessingConfig::off()), stage, &script);
+    let _ = run(&mut apm, 2_000, |_, _| {});
+    let s = stage_stats(&mut apm);
+    assert!(s.active && s.strikes == 0, "{s:?}");
+    assert!(s.max_block_us >= 20_000, "{s:?}");
 }
 
 #[test]
 fn a_bypassed_stage_comes_back_after_10_s_without_a_seam() {
     let (stage, script) = Scripted::new();
-    let mut apm = staged(settings(aec_only()), stage);
+    let mut apm = staged_with(settings(aec_only()), stage, &script);
     let retry = RETRY_BLOCKS as usize;
     let mut seen: Vec<(usize, CaptureStageStats)> = Vec::new();
     let blocks = 100 + retry + 300;
     let out = run(&mut apm, blocks, |b, apm| {
+        // Two slow calls (blocks 100 and 101): a strike on block 101, and
+        // the retry on block 101 + 10 s.
         match b {
-            100 => script.sleep_us.store(9_000, Ordering::Relaxed),
-            101 => script.sleep_us.store(0, Ordering::Relaxed),
+            100 => script.cost_us.store(9_000, Ordering::Relaxed),
+            102 => script.cost_us.store(0, Ordering::Relaxed),
             _ => {}
         }
-        if b == 101 || b == 100 + retry || b == 100 + retry + 1 {
+        if b == 102 || b == 101 + retry || b == 102 + retry {
             seen.push((b, stage_stats(apm)));
         }
     });
@@ -240,14 +298,14 @@ fn a_bypassed_stage_comes_back_after_10_s_without_a_seam() {
     );
     let (_, a) = seen[1];
     assert!(
-        !a.active && a.blocks_processed == 101,
+        !a.active && a.blocks_processed == 102,
         "not retried yet: {a:?}"
     );
     // The retry block resets the stage and runs it to fill its latency
     // (the delayed input goes on for that block); its output is used from
     // the next block.
     let (_, a) = seen[2];
-    assert_eq!(a.blocks_processed, 102);
+    assert_eq!(a.blocks_processed, 103);
     assert!(a.active, "back: {a:?}");
     assert_eq!(
         a.bypassed,
@@ -263,9 +321,9 @@ fn a_bypassed_stage_comes_back_after_10_s_without_a_seam() {
 #[test]
 fn two_calls_over_6_ms_in_100_are_a_strike_and_one_is_not() {
     let (stage, script) = Scripted::new();
-    script.spin_every.store(50, Ordering::Relaxed);
-    script.spin_us.store(6_300, Ordering::Relaxed);
-    let mut apm = staged(settings(ProcessingConfig::off()), stage);
+    script.slow_every.store(50, Ordering::Relaxed);
+    script.slow_us.store(6_300, Ordering::Relaxed);
+    let mut apm = staged_with(settings(ProcessingConfig::off()), stage, &script);
     let mut first_strike = None;
     let _ = run(&mut apm, 300, |b, apm| {
         if first_strike.is_none() && stage_stats(apm).strikes > 0 {
@@ -280,9 +338,9 @@ fn two_calls_over_6_ms_in_100_are_a_strike_and_one_is_not() {
     assert_eq!(s.strikes, 1);
 
     let (stage, script) = Scripted::new();
-    script.spin_every.store(100, Ordering::Relaxed);
-    script.spin_us.store(6_300, Ordering::Relaxed);
-    let mut apm = staged(settings(ProcessingConfig::off()), stage);
+    script.slow_every.store(100, Ordering::Relaxed);
+    script.slow_us.store(6_300, Ordering::Relaxed);
+    let mut apm = staged_with(settings(ProcessingConfig::off()), stage, &script);
     let _ = run(&mut apm, 450, |_, _| {});
     let s = stage_stats(&mut apm);
     assert!(s.active && s.strikes == 0, "one slow call in 100: {s:?}");
@@ -294,7 +352,7 @@ fn two_calls_over_6_ms_in_100_are_a_strike_and_one_is_not() {
 fn fault(script_setup: impl FnOnce(&super::stages::Script), what: &str) {
     let (stage, script) = Scripted::new();
     script_setup(&script);
-    let mut apm = staged(settings(aec_only()), stage);
+    let mut apm = staged_with(settings(aec_only()), stage, &script);
     let out = run(&mut apm, 300, |_, _| {});
     assert_delayed(&out, &plain(settings(aec_only()), 300), B, what);
     let s = stage_stats(&mut apm);
@@ -324,7 +382,7 @@ fn a_nan_is_a_fault_with_no_retry() {
 #[test]
 fn a_panic_in_reset_is_a_fault() {
     let (stage, script) = Scripted::new();
-    let mut apm = staged(settings(aec_only()), stage);
+    let mut apm = staged_with(settings(aec_only()), stage, &script);
     // After the first reset (the one before any audio), which went well.
     script.panic_on_reset.store(true, Ordering::Relaxed);
     let out = run(&mut apm, 200, |b, apm| {
@@ -348,7 +406,7 @@ fn a_panic_in_reset_is_a_fault() {
 #[test]
 fn a_reset_clears_the_stage_and_it_runs_on() {
     let (stage, script) = Scripted::new();
-    let mut apm = staged(settings(aec_only()), stage);
+    let mut apm = staged_with(settings(aec_only()), stage, &script);
     let out = run(&mut apm, 300, |b, apm| {
         if b == 100 {
             apm.reset_stage();
@@ -366,10 +424,10 @@ fn a_reset_clears_the_stage_and_it_runs_on() {
 #[test]
 fn a_reset_of_a_bypassed_stage_waits_for_the_retry() {
     let (stage, script) = Scripted::new();
-    let mut apm = staged(settings(ProcessingConfig::off()), stage);
+    let mut apm = staged_with(settings(ProcessingConfig::off()), stage, &script);
     let _ = run(&mut apm, 200, |b, apm| match b {
-        50 => script.sleep_us.store(9_000, Ordering::Relaxed),
-        51 => script.sleep_us.store(0, Ordering::Relaxed),
+        50 => script.cost_us.store(9_000, Ordering::Relaxed),
+        52 => script.cost_us.store(0, Ordering::Relaxed),
         100 => apm.reset_stage(),
         _ => {}
     });
@@ -491,26 +549,29 @@ fn max_step(x: &[f32]) -> f32 {
 #[test]
 fn a_bypass_steps_down_to_noise_suppression_and_a_retry_steps_back() {
     let (stage, script) = Scripted::new();
-    let mut apm = staged(step_down_settings(), stage);
+    let mut apm = staged_with(step_down_settings(), stage, &script);
     let retry = RETRY_BLOCKS as usize;
-    let blocks = 100 + retry + 200;
+    // Slow calls on blocks 100 and 101: the strike (and the crossfade) is
+    // block k = 101; the retry's warm-up block is k + retry.
+    let k = 101;
+    let blocks = k + retry + 200;
     let mut seen: Vec<(usize, CaptureStageStats)> = Vec::new();
     let out = run(&mut apm, blocks, |b, apm| {
         match b {
-            100 => script.sleep_us.store(9_000, Ordering::Relaxed),
-            101 => script.sleep_us.store(0, Ordering::Relaxed),
+            100 => script.cost_us.store(9_000, Ordering::Relaxed),
+            102 => script.cost_us.store(0, Ordering::Relaxed),
             _ => {}
         }
-        if [100, 101, 100 + retry, 100 + retry + 1, 100 + retry + 2].contains(&b) {
+        if [k, k + 1, k + retry, k + retry + 1, k + retry + 2].contains(&b) {
             seen.push((b, stage_stats(apm)));
         }
     });
     let at = |b: usize| seen.iter().find(|(x, _)| *x == b).expect("reading").1;
-    assert!(!at(100).fallback_noise_suppression, "{:?}", at(100));
-    assert!(at(101).fallback_noise_suppression, "{:?}", at(101));
+    assert!(!at(k).fallback_noise_suppression, "{:?}", at(k));
+    assert!(at(k + 1).fallback_noise_suppression, "{:?}", at(k + 1));
     // The retry's warm-up block is still the suppressor's.
-    assert!(at(100 + retry + 1).active);
-    assert!(!at(100 + retry + 2).fallback_noise_suppression);
+    assert!(at(k + retry + 1).active);
+    assert!(!at(k + retry + 2).fallback_noise_suppression);
 
     let delayed = {
         let p = plain(settings(aec_only()), blocks);
@@ -521,21 +582,21 @@ fn a_bypass_steps_down_to_noise_suppression_and_a_retry_steps_back() {
     let ns = suppressed_reference(blocks);
     let block = |x: &[f32], b: usize| x[b * B..(b + 1) * B].to_vec();
     let same = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
-    // Before: the stage (a pure delay). After the crossfade block 100 and
-    // until the stage is back: the suppressor. From block 100 + retry + 2:
+    // Before: the stage (a pure delay). After the crossfade block k and
+    // until the stage is back: the suppressor. From block k + retry + 2:
     // the stage again.
-    for b in 0..100 {
+    for b in 0..k {
         assert!(same(&block(&out, b), &block(&delayed, b)), "block {b}");
     }
-    for b in 101..=100 + retry {
+    for b in k + 1..=k + retry {
         assert!(same(&block(&out, b), &block(&ns, b)), "block {b}");
     }
-    for b in 100 + retry + 2..blocks {
+    for b in k + retry + 2..blocks {
         assert!(same(&block(&out, b), &block(&delayed, b)), "block {b}");
     }
     // The two crossfade blocks lie between their two sources, sample by
     // sample, and step no further than the sources do.
-    for (b, from, to) in [(100, &delayed, &ns), (100 + retry + 1, &ns, &delayed)] {
+    for (b, from, to) in [(k, &delayed, &ns), (k + retry + 1, &ns, &delayed)] {
         for i in b * B..(b + 1) * B {
             let (lo, hi) = (from[i].min(to[i]), from[i].max(to[i]));
             assert!(
@@ -567,7 +628,7 @@ fn a_bypass_steps_down_to_noise_suppression_and_a_retry_steps_back() {
 fn a_fault_steps_down_for_good_and_suppression_already_on_is_left_alone() {
     let (stage, script) = Scripted::new();
     script.nan_on.store(50, Ordering::Relaxed);
-    let mut apm = staged(step_down_settings(), stage);
+    let mut apm = staged_with(step_down_settings(), stage, &script);
     let out = run(&mut apm, 300, |_, _| {});
     let s = stage_stats(&mut apm);
     assert!(s.permanent && s.fallback_noise_suppression, "{s:?}");
@@ -583,7 +644,7 @@ fn a_fault_steps_down_for_good_and_suppression_already_on_is_left_alone() {
         noise_suppression: Some(NoiseSuppressionStrength::Moderate),
         ..step_down_settings()
     };
-    let mut apm = staged(with_ns, stage);
+    let mut apm = staged_with(with_ns, stage, &script);
     let out = run(&mut apm, 300, |_, _| {});
     let s = stage_stats(&mut apm);
     assert!(s.permanent && !s.fallback_noise_suppression, "{s:?}");
@@ -599,6 +660,56 @@ fn a_fault_steps_down_for_good_and_suppression_already_on_is_left_alone() {
         B,
         "suppression before the stage",
     );
+}
+
+/// The wall clock, end to end (the other budget tests use a manual clock).
+/// Tolerant of a loaded machine: the stage sleeps 30 ms when armed, and a
+/// sleep only ever runs long, so two armed calls are always a strike; before
+/// arming, load may cause a strike of its own, so this only asserts what
+/// arming must do.
+#[test]
+fn wall_clock_smoke_a_sleeping_stage_is_bypassed() {
+    use std::sync::atomic::AtomicBool;
+    struct Sleepy {
+        armed: Arc<AtomicBool>,
+        prev: [f32; B],
+    }
+    impl CaptureStage for Sleepy {
+        fn process(&mut self, block: &mut [f32; B]) {
+            if self.armed.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            std::mem::swap(block, &mut self.prev);
+        }
+        fn latency_samples(&self) -> usize {
+            B
+        }
+        fn reset(&mut self) {
+            self.prev.fill(0.0);
+        }
+    }
+    let armed = Arc::new(AtomicBool::new(false));
+    let mut apm = Apm::with_stage(
+        settings(ProcessingConfig::off()),
+        Box::new(Sleepy {
+            armed: armed.clone(),
+            prev: [0.0; B],
+        }),
+    )
+    .expect("stage");
+    let out = run(&mut apm, 60, |b, _| {
+        if b == 50 {
+            armed.store(true, Ordering::Relaxed);
+        }
+    });
+    let s = stage_stats(&mut apm);
+    assert!(
+        !s.active && s.bypassed == Some(StageBypassReason::Budget) && s.strikes >= 1,
+        "{s:?}"
+    );
+    // Whatever happened, the output is the input 480 samples late.
+    let (_, mic) = signals();
+    assert_delayed(&out, &mic[..60 * B], B, "wall clock");
 }
 
 #[test]
@@ -633,8 +744,9 @@ fn no_dtx(processing: ProcessingConfig) -> CoreConfig {
 #[test]
 fn the_stage_does_not_move_ts48k() {
     let (_, mic) = signals();
-    let stamps = |stage: Option<Box<dyn CaptureStage>>| -> Vec<u32> {
-        let mut core = Core::with_stage(no_dtx(ProcessingConfig::off()), stage).expect("core");
+    let stamps = |stage: Option<Box<dyn CaptureStage>>, clock: StageClock| -> Vec<u32> {
+        let mut core = Core::with_stage_clock(no_dtx(ProcessingConfig::off()), stage, clock)
+            .expect("core");
         let mut ts = Vec::new();
         for b in mic.as_chunks::<B>().0.iter().take(400) {
             if let Some(f) = core.capture_block(b) {
@@ -644,18 +756,23 @@ fn the_stage_does_not_move_ts48k() {
         ts
     };
     let (slow, script) = Scripted::new();
-    script.sleep_us.store(9_000, Ordering::Relaxed);
-    let none = stamps(None);
+    script.cost_us.store(9_000, Ordering::Relaxed);
+    let none = stamps(None, still_clock());
     assert_eq!(none.len(), 200);
-    assert_eq!(stamps(Some(Box::new(PassThrough::new()))), none);
-    assert_eq!(stamps(Some(Box::new(slow))), none);
+    assert_eq!(
+        stamps(Some(Box::new(PassThrough::new())), still_clock()),
+        none
+    );
+    assert_eq!(stamps(Some(Box::new(slow)), script.clock()), none);
+    assert_eq!(script.calls.load(Ordering::Relaxed), 2, "struck on the second");
 }
 
 #[test]
 fn stats_carry_the_stage() {
-    let mut core = Core::with_stage(
+    let mut core = Core::with_stage_clock(
         no_dtx(ProcessingConfig::off()),
         Some(Box::new(PassThrough::new())),
+        still_clock(),
     )
     .expect("core");
     let (_, mic) = signals();
@@ -679,13 +796,15 @@ fn stats_carry_the_stage() {
 fn capture_goes_on_through_a_bypass_and_a_fault() {
     let (_, mic) = signals();
     let setups: [fn(&super::stages::Script); 2] = [
-        |s| s.sleep_us.store(9_000, Ordering::Relaxed),
+        |s| s.cost_us.store(9_000, Ordering::Relaxed),
         |s| s.panic_on.store(3, Ordering::Relaxed),
     ];
     for setup in setups {
         let (stage, script) = Scripted::new();
         setup(&script);
-        let mut core = Core::with_stage(no_dtx(aec_only()), Some(Box::new(stage))).expect("core");
+        let mut core =
+            Core::with_stage_clock(no_dtx(aec_only()), Some(Box::new(stage)), script.clock())
+                .expect("core");
         let mut frames = 0;
         for b in mic.as_chunks::<B>().0.iter().take(400) {
             if core.capture_block(b).is_some() {

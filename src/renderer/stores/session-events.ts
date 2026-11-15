@@ -1505,6 +1505,7 @@ type TunnelStatusHandler = (e: TunnelStatusChangedEvent) => void
 type TunnelSubdomainsHandler = (e: TunnelSubdomainsChangedEvent) => void
 type TunnelIdentityHandler = (e: TunnelIdentityChangedEvent) => void
 type PublishServicesHandler = (e: PublishServicesChangedEvent) => void
+type AppDeployedHandler = (e: AppDeployedEvent) => void
 type WorkspaceResourcesHandler = (e: WorkspaceResourcesChangedEvent) => void
 type AgentIdentityHandler = (e: AgentIdentityChangedEvent) => void
 /** RL4/A28: receives the hello frame (its `instance_id` tells a restart). */
@@ -1625,6 +1626,7 @@ interface AppBusHandlers {
   tunnelSubdomains: Set<TunnelSubdomainsHandler>
   tunnelIdentity: Set<TunnelIdentityHandler>
   publishServices: Set<PublishServicesHandler>
+  appDeployed: Set<AppDeployedHandler>
   workspaceResources: Set<WorkspaceResourcesHandler>
   agentIdentity: Set<AgentIdentityHandler>
   appHello: Set<AppHelloHandler>
@@ -1695,6 +1697,7 @@ function createBusState(scopeId: string): BusState {
       tunnelSubdomains: new Set(),
       tunnelIdentity: new Set(),
       publishServices: new Set(),
+      appDeployed: new Set(),
       workspaceResources: new Set(),
       agentIdentity: new Set(),
       appHello: new Set(),
@@ -1818,6 +1821,14 @@ export function onPublishServicesChanged(
   fn: PublishServicesHandler,
 ): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.publishServices, fn)
+}
+
+/** Subscribe to APP-LEVEL `app_deployed` (an App's live deployment changed:
+ *  a deploy, start, restart, re-host or rollback; carries `projectId`, the
+ *  App's workspace). The Workspace drawer's Apps section re-reads on it.
+ *  Returns an unsubscribe fn. */
+export function onAppDeployed(scope: ServerScope, fn: AppDeployedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.appDeployed, fn)
 }
 
 /** Subscribe to APP-LEVEL `workspace_resources_changed` (Files drawer +
@@ -2284,6 +2295,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   publish_services_changed: (h, m) => {
     for (const fn of h.publishServices) fn(m)
+  },
+  app_deployed: (h, m) => {
+    for (const fn of h.appDeployed) fn(m)
   },
   workspace_resources_changed: (h, m) => {
     for (const fn of h.workspaceResources) fn(m)

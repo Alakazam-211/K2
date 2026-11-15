@@ -13,7 +13,8 @@
 //             parked | waiting_engine | restarting
 //   stateReason  why, when the daemon has one (the state's tooltip)
 //   url       the App's k2 address, or null
-//   hosts     the url's host, then the App's active custom domains
+//   hosts     always present: the url's host, then the custom domains K2
+//             serves for it ([] when none; then the url, if any, is shown)
 
 /** The command the empty state names (Published's voice). */
 export const APP_DEPLOY_EXAMPLE = 'k2 app deploy'

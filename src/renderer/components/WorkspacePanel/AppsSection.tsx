@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useRoom } from '@/components/Room/RoomContext'
-import { onAppHello, onPublishServicesChanged } from '@/stores/session-events'
+import { onAppDeployed, onAppHello, onPublishServicesChanged } from '@/stores/session-events'
 import { useSettingsStore } from '@/stores/settings'
 import { openSite } from '@/lib/published-sites'
 import { scopedKey } from '@/kessel/server-scope'
@@ -46,11 +46,6 @@ const WORD: Record<AppStateTone, string> = {
   danger: 'text-[var(--color-status-error-text)]',
   quiet: 'text-[var(--color-text-muted)]',
 }
-
-/** Until the daemon sends publish_services_changed on its own App state
- *  changes (crash, restart, park), re-read on the heartbeat badge's 30 s.
- *  Drop this poll once that event covers state changes. */
-const POLL_MS = 30_000
 
 export function AppsSection({ projectId }: { projectId: string }): React.JSX.Element {
   const room = useRoom()
@@ -105,16 +100,22 @@ export function AppsSection({ projectId }: { projectId: string }): React.JSX.Ele
     const offHello = onAppHello(scope, () => {
       void refresh()
     })
+    // The daemon sends publish_services_changed for every App state change
+    // (crash, restart, park; coalesced per App) and app_deployed when what's
+    // live changes, so no poll.
     const offChanged = onPublishServicesChanged(scope, (e) => {
       if (e.projectId && e.projectId !== projectId) return
       void refresh()
     })
-    const poll = setInterval(() => void refresh(), POLL_MS)
+    const offDeployed = onAppDeployed(scope, (e) => {
+      if (e.projectId && e.projectId !== projectId) return
+      void refresh()
+    })
     return () => {
       cancelled = true
       offHello()
       offChanged()
-      clearInterval(poll)
+      offDeployed()
     }
   }, [projectId])
 

@@ -25,6 +25,7 @@ vi.mock('@/stores/session-events', () => ({
   onAppHello: () => () => {},
   onTunnelSubdomainsChanged: () => () => {},
   onPublishServicesChanged: () => () => {},
+  onAppDeployed: () => () => {},
 }))
 
 import { UrlsPortsSection } from './UrlsPortsSection'

@@ -24,6 +24,7 @@ vi.mock('@/lib/published-sites', async (orig) => ({
 
 let publishChanged: ((e: { kind: string; projectId: string }) => void) | null = null
 let hello: (() => void) | null = null
+let deployed: ((e: { kind: string; projectId: string; appId: string }) => void) | null = null
 
 vi.mock('@/stores/session-events', async () => {
   const { expectPrimaryScope } = await import('@/test-utils/scope')
@@ -40,6 +41,13 @@ vi.mock('@/stores/session-events', async () => {
       publishChanged = cb
       return () => {
         publishChanged = null
+      }
+    },
+    onAppDeployed: (scope: unknown, cb: (e: { kind: string; projectId: string; appId: string }) => void) => {
+      expectPrimaryScope(scope)
+      deployed = cb
+      return () => {
+        deployed = null
       }
     },
   }
@@ -83,6 +91,7 @@ describe('AppsSection', () => {
     openSite.mockClear()
     publishChanged = null
     hello = null
+    deployed = null
     localStorage.clear()
   })
   afterEach(() => {
@@ -138,6 +147,13 @@ describe('AppsSection', () => {
     expect(openSite).toHaveBeenCalledWith(primaryScope(), 'https://shop.rosson.k2.dev')
   })
 
+  it('+N comes from hosts: the first host, then +N for the rest', async () => {
+    serve({ p1: [app({ appId: 'shop', url: 'https://shop.rosson.k2.dev', hosts: ['shop.rosson.k2.dev', 'shop.example.com', 'www.shop.example.com'] })] })
+    renderInRoom(room, <AppsSection projectId="p1" />)
+    expect((await screen.findByTestId('app-open')).textContent).toBe('shop.rosson.k2.dev')
+    expect(screen.getByTestId('app-more-hosts').textContent).toBe('+2')
+  })
+
   it('two addresses: the first, then +1 with the full list in the tooltip', async () => {
     serve({ p1: [app({ appId: 'shop', hosts: ['shop.rosson.k2.dev', 'shop.example.com'] })] })
     renderInRoom(room, <AppsSection projectId="p1" />)
@@ -181,16 +197,37 @@ describe('AppsSection', () => {
     await waitFor(() => expect(daemonCliGet.mock.calls.length).toBe(n + 1))
   })
 
-  it('re-reads every 30 s until the daemon sends state changes', async () => {
+  it('re-reads on app_deployed for this workspace, not another', async () => {
+    serve({ p1: [app({ appId: 'shop', state: 'installing' })] })
+    renderInRoom(room, <AppsSection projectId="p1" />)
+    await waitFor(() => expect(screen.getByText('Installing')).toBeTruthy())
+    expect(deployed).toBeTruthy()
+    const before = daemonCliGet.mock.calls.length
+    serve({ p1: [app({ appId: 'shop', state: 'running' })] })
+    act(() => deployed!({ kind: 'app_deployed', projectId: 'p2', appId: 'other' }))
+    expect(daemonCliGet.mock.calls.length).toBe(before)
+    act(() => deployed!({ kind: 'app_deployed', projectId: 'p1', appId: 'shop' }))
+    await waitFor(() => expect(screen.getByText('Running')).toBeTruthy())
+  })
+
+  it('does not poll: the daemon’s events are the only re-reads', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     serve({ p1: [app({ appId: 'shop' })] })
     renderInRoom(room, <AppsSection projectId="p1" />)
     await waitFor(() => expect(rows()).toEqual(['shop']))
     const before = daemonCliGet.mock.calls.length
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(120_000)
     })
-    expect(daemonCliGet.mock.calls.length).toBe(before + 1)
+    expect(daemonCliGet.mock.calls.length).toBe(before)
+  })
+
+  it('no hosts: the url’s host shows, with no +N', async () => {
+    serve({ p1: [app({ appId: 'shop', hosts: [] })] })
+    renderInRoom(room, <AppsSection projectId="p1" />)
+    const open = await screen.findByTestId('app-open')
+    expect(open.textContent).toBe('shop.rosson.k2.dev')
+    expect(screen.queryByTestId('app-more-hosts')).toBeNull()
   })
 
   it('Details opens Published’s details sheet for the App’s service row', async () => {

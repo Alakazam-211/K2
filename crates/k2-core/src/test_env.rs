@@ -35,6 +35,11 @@ use std::path::{Path, PathBuf};
 
 use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 
+/// Ending the processes a test's stub programs start (fake `frpc`), pass
+/// or fail, and a loud check that none outlives the test.
+pub mod procs;
+pub use procs::StubProcs;
+
 static ENV_LOCK: ReentrantMutex<()> = parking_lot::const_reentrant_mutex(());
 
 thread_local! {

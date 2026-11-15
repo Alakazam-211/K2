@@ -1,5 +1,5 @@
 use super::*;
-use crate::tunnel::test_support::with_temp_home;
+use crate::tunnel::test_support::{stub_dir, with_temp_home, write_stub};
 
 /// A real, always-present no-op executable to stand in for `frpc` when a
 /// test needs to get PAST frpc resolution (and possibly spawn a harmless
@@ -39,7 +39,7 @@ fn resolve_frpc_auto_missing_surfaces_install_hint() {
     // common locations resolve — we must get the install guidance,
     // not a silent success.
     with_temp_home(|| {
-        let empty = crate::test_env::unique_temp_path("frpc-empty");
+        let empty = stub_dir("frpc-empty");
         std::fs::create_dir_all(&empty).expect("mk empty dir");
         // Per-thread lookup PATH: the process PATH is never changed.
         let res = crate::terminal::path_env::with_lookup_path(&empty, || {
@@ -61,10 +61,10 @@ fn resolve_frpc_auto_missing_surfaces_install_hint() {
 #[test]
 fn resolve_frpc_finds_executable_on_path() {
     with_temp_home(|| {
-        let bin_dir = crate::test_env::unique_temp_path("frpc-bin");
+        let bin_dir = stub_dir("frpc-bin");
         std::fs::create_dir_all(&bin_dir).expect("mk bin dir");
         let fake = bin_dir.join("frpc");
-        crate::test_env::write_executable(&fake, "#!/bin/sh\nexit 0\n");
+        write_stub(&fake, "#!/bin/sh\nexit 0\n");
         let res = crate::terminal::path_env::with_lookup_path(&bin_dir, || {
             resolve_frpc(&FrpcBinary::Auto)
         });
@@ -305,10 +305,10 @@ fn watchdog_kills_stuck_midsession_child_and_supervisor_rotates() {
         // Fake frpc: one success line, then an error storm, never exits.
         // The storm rate (10 lines/s) crosses the watchdog threshold
         // (3 in 30s) almost immediately.
-        let dir = crate::test_env::unique_temp_path("fake-frpc");
+        let dir = stub_dir("fake-frpc");
         std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
         let script = dir.join("frpc-stuck");
-        crate::test_env::write_executable(&script, "#!/bin/sh\n\
+        write_stub(&script, "#!/bin/sh\n\
                  echo '[I] [service.go:299] login to server success, get run id [test]'\n\
                  while true; do\n\
                  \techo '[W] [service.go:132] connect to server error: dial tcp 10.0.0.1:7000: i/o timeout'\n\
@@ -440,7 +440,7 @@ fn a_legacy_tunnel_json_dials_the_relay_name() {
             })
             .expect("seed a 0.46.5 tunnel.json");
             let before = std::fs::read(config::config_path()).expect("read");
-            let dir = crate::test_env::unique_temp_path("fake-frpc-name");
+            let dir = stub_dir("fake-frpc-name");
             let st = start(None, 57839, &FrpcBinary::Explicit(long_lived_frpc(&dir)))
                 .expect("start");
             let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
@@ -657,10 +657,10 @@ fn dns_supervisor_fails_back_fast_once_k2dev_points_the_name_at_the_primary() {
         // The name is on the standby (DNS flipped during the outage).
         super::super::relay_list::set_dns_for_test(Some(f_ep.clone()), Duration::ZERO);
 
-        let dir = crate::test_env::unique_temp_path("fake-frpc-dns-failback");
+        let dir = stub_dir("fake-frpc-dns-failback");
         std::fs::create_dir_all(&dir).expect("mk dir");
         let script = dir.join("frpc-pick");
-        crate::test_env::write_executable(
+        write_stub(
             &script,
             &format!(
                 "#!/bin/sh\nport=$(grep '^serverPort' \"$2\" | tr -dc 0-9)\n\
@@ -713,11 +713,11 @@ fn dns_supervisor_with_no_relay_reachable_stays_on_the_primary_and_backs_off() {
         super::super::relay_list::set_dns_for_test(Some(ten(2)), Duration::ZERO);
         let _gate = TestDnsMinOutage::install(Duration::ZERO);
         let _reach = TestReachability::install(|_| false);
-        let dir = crate::test_env::unique_temp_path("fake-frpc-offline");
+        let dir = stub_dir("fake-frpc-offline");
         std::fs::create_dir_all(&dir).expect("mk dir");
         let script = dir.join("frpc-offline");
         // Every dial fails; each one is recorded (host per line).
-        crate::test_env::write_executable(
+        write_stub(
             &script,
             &format!(
                 "#!/bin/sh\ngrep '^serverAddr' \"$2\" | tr -d '\" ' | cut -d= -f2 >> '{dials}'\nexit 1\n",
@@ -787,7 +787,7 @@ fn solo_relay_reports_no_failover() {
 fn long_lived_frpc(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).expect("mk fake-frpc dir");
     let script = dir.join("frpc-up");
-    crate::test_env::write_executable(
+    write_stub(
         &script,
         &format!(
             "#!/bin/sh\necho spawn >> '{}'\nexec sleep 600\n",
@@ -832,7 +832,7 @@ fn a_dropped_relay_moves_a_running_tunnel_once_without_a_penalty() {
         })
         .expect("seed legacy config");
 
-        let dir = crate::test_env::unique_temp_path("fake-frpc-up");
+        let dir = stub_dir("fake-frpc-up");
         let frpc = long_lived_frpc(&dir);
         let st = start(None, 57839, &FrpcBinary::Explicit(frpc.clone()))
             .expect("start on legacy endpoint");
@@ -884,7 +884,7 @@ fn a_running_tunnel_adopts_a_reordered_list_live_then_fails_back() {
         let y = std::net::TcpListener::bind("127.0.0.1:0").expect("bind Y");
         let y_port = y.local_addr().expect("addr").port();
         let z = crate::test_env::ClosedPort::new();
-        let dir = crate::test_env::unique_temp_path("fake-frpc-reorder");
+        let dir = stub_dir("fake-frpc-reorder");
         let frpc = long_lived_frpc(&dir);
         config::save(&TunnelConfig {
             relays: vec![ep("127.0.0.1", x_port), ep("127.0.0.1", z.port())],
@@ -931,7 +931,7 @@ fn a_running_tunnel_adopts_a_reordered_list_live_then_fails_back() {
 #[test]
 fn a_solo_tunnel_becomes_multi_relay_without_a_restart() {
     with_temp_home(|| {
-        let dir = crate::test_env::unique_temp_path("fake-frpc-solo-multi");
+        let dir = stub_dir("fake-frpc-solo-multi");
         let frpc = long_lived_frpc(&dir);
         config::save(&TunnelConfig {
             server_addr: "10.0.0.1".to_string(),
@@ -971,7 +971,7 @@ fn a_solo_tunnel_becomes_multi_relay_without_a_restart() {
 fn an_adopted_frpc_on_the_old_ip_moves_to_the_name_with_jitter() {
     with_temp_home(|| {
         let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
-        let dir = crate::test_env::unique_temp_path("adopt-frpc-old-ip");
+        let dir = stub_dir("adopt-frpc-old-ip");
         std::fs::create_dir_all(&dir).expect("mk dir");
         let script = registering_frpc(&dir);
         config::save(&TunnelConfig {
@@ -1068,10 +1068,10 @@ fn a_changed_relay_list_is_applied_at_the_next_reconnect() {
 #[test]
 fn solo_dead_session_reconnects_only_when_the_list_gains_relays() {
     with_temp_home(|| {
-        let dir = crate::test_env::unique_temp_path("fake-frpc-solo");
+        let dir = stub_dir("fake-frpc-solo");
         std::fs::create_dir_all(&dir).expect("mk dir");
         let script = dir.join("frpc-stuck");
-        crate::test_env::write_executable(
+        write_stub(
             &script,
             &format!(
                 "#!/bin/sh\necho spawn >> '{}'\n\
@@ -1159,12 +1159,12 @@ fn supervisor_fails_back_to_the_primary_after_healthy_probes() {
         let fallback = crate::test_env::ClosedPort::new();
         let f_port = fallback.port();
 
-        let dir = crate::test_env::unique_temp_path("fake-frpc-failback");
+        let dir = stub_dir("fake-frpc-failback");
         std::fs::create_dir_all(&dir).expect("mk dir");
         let script = dir.join("frpc-pick");
         // Dials to the primary fail fast until `allow` exists; dials
         // anywhere else stay up. Every dial is recorded.
-        crate::test_env::write_executable(
+        write_stub(
             &script,
             &format!(
                 "#!/bin/sh\nport=$(grep '^serverPort' \"$2\" | tr -dc 0-9)\n\
@@ -1221,7 +1221,7 @@ fn no_failback_probes_while_on_the_primary() {
         let primary = std::net::TcpListener::bind("127.0.0.1:0").expect("bind primary");
         primary.set_nonblocking(true).expect("nonblocking");
         let p_port = primary.local_addr().expect("addr").port();
-        let dir = crate::test_env::unique_temp_path("fake-frpc-onprimary");
+        let dir = stub_dir("fake-frpc-onprimary");
         let frpc = long_lived_frpc(&dir);
         config::save(&TunnelConfig {
             relays: vec![
@@ -1479,11 +1479,11 @@ fn the_registration_clears_when_the_frps_session_is_lost() {
 fn a_respawn_clears_the_proxy_registration() {
     with_temp_home(|| {
         // Run 1 registers then exits; every later run is refused.
-        let dir = crate::test_env::unique_temp_path("fake-frpc");
+        let dir = stub_dir("fake-frpc");
         std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
         let counter = dir.join("runs");
         let script = dir.join("frpc");
-        crate::test_env::write_executable(
+        write_stub(
             &script,
             &format!(
                 "#!/bin/sh\n\
@@ -1559,13 +1559,13 @@ fn wait_until(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
 #[test]
 fn supervisor_rerenders_a_deleted_config_and_status_reports_a_crash_loop() {
     with_temp_home(|| {
-        let dir = crate::test_env::unique_temp_path("fake-frpc");
+        let dir = stub_dir("fake-frpc");
         std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
         let starts = dir.join("starts");
         let broken = dir.join("broken");
         let hold = dir.join("hold");
         let script = dir.join("frpc");
-        crate::test_env::write_executable(
+        write_stub(
             &script,
             &format!(
                 "#!/bin/sh\n\
@@ -1729,10 +1729,10 @@ fn stop_reaps_stray_frpc_even_when_child_slot_empty() {
 
         // Binary MUST be named `frpc` so the full cmdline contains the
         // pkill pattern `frpc -c <cfg>` (same as a real frpc spawn).
-        let dir = crate::test_env::unique_temp_path("orphan-frpc");
+        let dir = stub_dir("orphan-frpc");
         std::fs::create_dir_all(&dir).expect("mk orphan-frpc dir");
         let frpc = dir.join("frpc");
-        crate::test_env::write_executable(&frpc, "#!/bin/sh\nsleep 300\n");
+        write_stub(&frpc, "#!/bin/sh\nsleep 300\n");
 
         let mut child = crate::bg_proc::command(&frpc)
             .arg("-c")
@@ -1791,11 +1791,11 @@ fn stop_reaps_stray_frpc_even_when_child_slot_empty() {
 #[test]
 fn solo_stop_kills_long_lived_supervised_child() {
     with_temp_home(|| {
-        let dir = crate::test_env::unique_temp_path("solo-stop");
+        let dir = stub_dir("solo-stop");
         std::fs::create_dir_all(&dir).expect("mk solo-stop dir");
         // Named `frpc` so stop()'s pattern reap is a second line of defense.
         let script = dir.join("frpc");
-        crate::test_env::write_executable(&script, "#!/bin/sh\nsleep 300\n");
+        write_stub(&script, "#!/bin/sh\nsleep 300\n");
 
         config::save(&TunnelConfig {
             token: "tok".to_string(),
@@ -1903,7 +1903,7 @@ fn start_path_b_tunnel(names: Vec<String>) -> PathBTunnel {
     })
     .expect("seed config");
     super::super::custom_names::set(names);
-    let dir = crate::test_env::unique_temp_path("fake-frpc-names");
+    let dir = stub_dir("fake-frpc-names");
     let frpc = long_lived_frpc(&dir);
     let tunnel = PathBTunnel { dir, _e2e: e2e_env, _lease: lease, _listener: listener };
     start(None, 57839, &FrpcBinary::Explicit(frpc)).expect("start");
@@ -1993,7 +1993,7 @@ fn a_respawn_after_frpc_exits_carries_a_changed_name_without_another_restart() {
 /// the file the connector hands it.
 fn registering_frpc(dir: &Path) -> PathBuf {
     let script = dir.join("frpc");
-    crate::test_env::write_executable(
+    write_stub(
         &script,
         "#!/bin/sh\n\
              echo '[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success'\n\
@@ -2023,7 +2023,7 @@ fn hand_off_and_forget() -> i32 {
 #[test]
 fn a_restarted_daemon_adopts_the_running_frpc() {
     with_temp_home(|| {
-        let dir = crate::test_env::unique_temp_path("adopt-frpc");
+        let dir = stub_dir("adopt-frpc");
         std::fs::create_dir_all(&dir).expect("mk dir");
         let script = registering_frpc(&dir);
         config::save(&TunnelConfig {
@@ -2087,7 +2087,7 @@ fn a_restarted_daemon_adopts_the_running_frpc() {
 #[test]
 fn a_changed_config_is_not_adopted() {
     with_temp_home(|| {
-        let dir = crate::test_env::unique_temp_path("adopt-frpc-changed");
+        let dir = stub_dir("adopt-frpc-changed");
         std::fs::create_dir_all(&dir).expect("mk dir");
         let script = registering_frpc(&dir);
         config::save(&TunnelConfig {

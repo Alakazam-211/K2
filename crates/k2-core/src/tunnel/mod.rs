@@ -542,18 +542,45 @@ pub(crate) mod test_support {
     //! holds the ONE crate-wide env lock, so we never race the other
     //! HOME-mutating test suites (app_settings, themes, companion).
 
-    /// Run `f` with `$HOME` pointed at a fresh tempdir, under the global
-    /// env lock, and clean up afterward. Also clears any prior tunnel
-    /// connector singleton state so start/stop tests don't bleed.
-    pub fn with_temp_home<F: FnOnce()>(f: F) {
-        // Restores HOME and removes the dir on drop (after the teardown
-        // below, which still needs the temp HOME), even on panic.
-        let _home = crate::test_env::TempHome::new();
-        // 0.46.8: the fake control plane confirms the requested label.
-        *super::confirmed_label::TEST_SOURCE.lock().unwrap_or_else(|p| p.into_inner()) =
-            Some(super::confirmed_label::confirms_requested);
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
 
-        // Ensure a clean connector singleton for this test.
+    use crate::test_env::StubProcs;
+
+    /// The running [`with_temp_home`]'s stub guard ([`stub_dir`] and
+    /// [`write_stub`] use it). One at a time: the temp home holds the env lock.
+    static CURRENT: Mutex<Option<Arc<StubProcs>>> = Mutex::new(None);
+
+    fn current() -> Arc<StubProcs> {
+        CURRENT
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .expect("stub helpers run inside tunnel::test_support::with_temp_home")
+    }
+
+    /// A fresh folder for a test's fake programs. When the test ends, no
+    /// process whose argv or cwd is under it may still run.
+    pub fn stub_dir(tag: &str) -> PathBuf {
+        let dir = crate::test_env::unique_temp_path(tag);
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+        current().watch(&dir);
+        dir
+    }
+
+    /// Write a `#!/bin/sh` stub that first records its pid with the test's
+    /// guard, which ends it when the test ends (pass or fail), however it
+    /// was started (the connector `setsid`s frpc out of the test's group).
+    pub fn write_stub(path: &Path, script: &str) {
+        let procs = current();
+        if let Some(dir) = path.parent() {
+            procs.watch(dir);
+        }
+        crate::test_env::write_executable(path, &procs.with_record_line(script));
+    }
+
+    /// Stop the connector and the voice lane, as at the start of a test.
+    fn teardown() {
         let _ = super::connector::stop("test teardown");
         super::voice_lane::disarm("test teardown");
         crate::voice_rooms::set_tunnel_enabled(false);
@@ -561,13 +588,48 @@ pub(crate) mod test_support {
         // lookups) is a process global that decides what the tunnel dials;
         // no test may inherit another's.
         super::relay_list::reset_state_for_test();
+    }
+
+    /// [`teardown`] on drop, so a panicking test's supervisors stop
+    /// respawning stubs before the stub guard ends them.
+    struct Teardown;
+
+    impl Drop for Teardown {
+        fn drop(&mut self) {
+            teardown();
+            *CURRENT.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        }
+    }
+
+    /// Run `f` with `$HOME` pointed at a fresh tempdir, under the global
+    /// env lock, and clean up afterward. Also clears any prior tunnel
+    /// connector singleton state so start/stop tests don't bleed.
+    ///
+    /// Every process the test's stubs start ([`write_stub`]) is ended when
+    /// `f` returns or panics; then no process under the temp home or a
+    /// [`stub_dir`] may still run, or the test fails naming it.
+    pub fn with_temp_home<F: FnOnce()>(f: F) {
+        // Restores HOME and removes the dir on drop (after the teardown
+        // below, which still needs the temp HOME), even on panic.
+        let home = crate::test_env::TempHome::new();
+        // Dropped after the teardown, before the home: ends the stubs, then
+        // checks that nothing under the home or a stub folder still runs.
+        let procs = Arc::new(StubProcs::new());
+        procs.watch(home.path());
+        *CURRENT.lock().unwrap_or_else(|p| p.into_inner()) = Some(procs.clone());
+        // 0.46.8: the fake control plane confirms the requested label.
+        *super::confirmed_label::TEST_SOURCE.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(super::confirmed_label::confirms_requested);
+
+        // Ensure a clean connector singleton for this test.
+        teardown();
+        let stop_on_exit = Teardown;
 
         f();
 
-        // Best-effort connector teardown.
-        let _ = super::connector::stop("test teardown");
-        super::voice_lane::disarm("test teardown");
-        crate::voice_rooms::set_tunnel_enabled(false);
-        super::relay_list::reset_state_for_test();
+        // In this order on a panic too (locals drop in reverse).
+        drop(stop_on_exit);
+        drop(procs);
+        drop(home);
     }
 }

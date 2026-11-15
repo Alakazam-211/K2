@@ -4,7 +4,7 @@
 use super::*;
 use crate::tunnel::config::{self, TunnelConfig};
 use crate::tunnel::connector::{self, FrpcBinary};
-use crate::tunnel::test_support::with_temp_home;
+use crate::tunnel::test_support::{stub_dir, with_temp_home, write_stub};
 use std::sync::atomic::AtomicU64;
 
 #[test]
@@ -38,7 +38,7 @@ fn fake_frpc(dir: &Path) -> PathBuf {
 fn fake_frpc_main_named(dir: &Path, main_proxy: &str) -> PathBuf {
     std::fs::create_dir_all(dir).expect("mk dir");
     let script = dir.join("frpc");
-    crate::test_env::write_executable(
+    write_stub(
         &script,
         &format!(
             "#!/bin/sh\n\
@@ -91,7 +91,7 @@ fn with_the_preview_off_nothing_starts() {
     with_temp_home(|| {
         let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
         let _env = crate::test_env::EnvVar::remove(PREVIEW_ENV);
-        let dir = crate::test_env::unique_temp_path("voice-lane-off");
+        let dir = stub_dir("voice-lane-off");
         start_tunnel(&fake_frpc(&dir));
         let err = arm().expect_err("arming needs the preview");
         assert!(err.contains("preview is off"), "{err}");
@@ -113,7 +113,7 @@ fn with_the_preview_off_nothing_starts() {
 fn the_lane_follows_the_tunnel_restarts_at_once_and_stops_with_it() {
     with_temp_home(|| {
         let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
-        let dir = crate::test_env::unique_temp_path("voice-lane-run");
+        let dir = stub_dir("voice-lane-run");
         let script = fake_frpc(&dir);
         start_tunnel(&script);
         set_listener(heard);
@@ -221,7 +221,7 @@ fn by_default_the_main_frpc_keeps_its_name_and_the_voice_lane_gets_the_confirmed
     with_temp_home(|| {
         let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
         let _naming = crate::test_env::EnvVar::remove(crate::tunnel::confirmed_label::PROXY_NAME_ENV);
-        let dir = crate::test_env::unique_temp_path("voice-lane-default-names");
+        let dir = stub_dir("voice-lane-default-names");
         let script = fake_frpc_main_named(&dir, "k2so-old-box");
         set_source(confirms_nothing);
         config::save(&TunnelConfig {
@@ -268,7 +268,7 @@ fn both_frpcs_are_named_from_the_confirmed_label_and_none_means_no_proxy() {
     with_temp_home(|| {
         let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
         let _naming = crate::test_env::EnvVar::set(crate::tunnel::confirmed_label::PROXY_NAME_ENV, "confirmed");
-        let dir = crate::test_env::unique_temp_path("voice-lane-names");
+        let dir = stub_dir("voice-lane-names");
         let script = fake_frpc(&dir);
         set_source(confirms_rosson);
         config::save(&TunnelConfig {
@@ -330,7 +330,7 @@ fn both_frpcs_are_named_from_the_confirmed_label_and_none_means_no_proxy() {
 fn a_restarted_daemon_adopts_the_running_frpc_voice() {
     with_temp_home(|| {
         let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
-        let dir = crate::test_env::unique_temp_path("voice-lane-adopt");
+        let dir = stub_dir("voice-lane-adopt");
         let script = fake_frpc(&dir);
         start_tunnel(&script);
         crate::voice_rooms::set_tunnel_enabled(true);

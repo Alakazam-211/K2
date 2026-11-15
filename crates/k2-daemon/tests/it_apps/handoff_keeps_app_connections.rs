@@ -373,6 +373,13 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     .to_string();
 
     let home = scratch_home();
+    // The frpc stand-in and the App record their pids here; on the way out
+    // (pass or fail, after the reaper has stopped the daemons, so nothing
+    // respawns them) every one still running is ended, and then nothing
+    // under the scratch HOME may still run. frpc runs in its own session,
+    // so the test process's exit never takes it.
+    let procs = k2_core::test_env::StubProcs::new();
+    procs.watch(&home);
     let k2 = home.join(".k2");
     let bin = home.join("bin");
     let run = home.join("run");
@@ -404,7 +411,9 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     let frpc = bin.join("frpc");
     std::fs::write(
         &frpc,
-        format!("#!/bin/sh\necho '[I] [proxy_wrapper.go:204] [x] [k2so-{SUB}] start proxy success'\nwhile :; do sleep 1; done\n"),
+        procs.with_record_line(&format!(
+            "#!/bin/sh\necho '[I] [proxy_wrapper.go:204] [x] [k2so-{SUB}] start proxy success'\nwhile :; do sleep 1; done\n"
+        )),
     )
     .unwrap();
     {
@@ -503,7 +512,8 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     );
     assert_eq!(st, 200, "{}", dump(&format!("workspace add: {body}")));
     let cmd = format!(
-        "exec {python} {} {app_port} {STREAM_CHUNKS} {STREAM_MS}",
+        "{}exec {python} {} {app_port} {STREAM_CHUNKS} {STREAM_MS}",
+        procs.record_line().replace('\n', "; "),
         app_py.display()
     );
     let (st, body) = http(

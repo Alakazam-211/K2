@@ -92,6 +92,17 @@ pub trait Platform: Send + Sync {
     fn jobs_outlive_node(&self, paths: &ExecPaths) -> bool {
         cfg!(target_os = "macos") || (cfg!(target_os = "linux") && matches!(super::jobs::read_jobs_file(&paths.config_dir), Ok(Some(_))))
     }
+    /// The node's service file as this build's installer writes it, when
+    /// the executor keeps it up to date on this OS (macOS: the
+    /// LaunchDaemon plist; see [`super::service`]). `None`: not kept.
+    fn node_service_file(&self, _paths: &ExecPaths, _node_user: &str) -> Option<super::service::ServiceFile> {
+        None
+    }
+    /// Load the node service again from its (rewritten) file: launchd
+    /// reads a plist only when the job loads (`bootout` + `bootstrap`).
+    fn reload_node(&self, _path: &Path) -> Result<(), String> {
+        Err("reloading the node service from its file isn't supported here".into())
+    }
     /// `wall.enable`'s root half: the job user, the home ACL, jobs.toml.
     fn enable_job_wall(&self, paths: &ExecPaths, node_user: &str, job_user: &str) -> Result<super::jobs::WallSetup, AdminRefusal> {
         super::jobs::system_enable_job_wall(paths, node_user, job_user)
@@ -284,7 +295,32 @@ impl Platform for SystemPlatform {
     fn preflight(&self, staged: &Path, node_user: &str) -> Result<String, String> {
         preflight_exec(staged, preflight_user(node_user)?, std::time::Duration::from_secs(PREFLIGHT_SECS))
     }
+    fn node_service_file(&self, paths: &ExecPaths, node_user: &str) -> Option<super::service::ServiceFile> {
+        cfg!(target_os = "macos").then(|| super::service::macos_service_file(paths, node_user, Path::new(NODE_PLIST)))
+    }
+    fn reload_node(&self, path: &Path) -> Result<(), String> {
+        if !cfg!(target_os = "macos") {
+            return Err("reload_node is macOS only".into());
+        }
+        let p = path.to_str().ok_or("plist path is not UTF-8")?;
+        // Not loaded is fine (bootout fails then): bootstrap loads it.
+        let _ = run_fixed("/bin/launchctl", &["bootout", "system/dev.k2.node"]);
+        // bootout can return while launchd still unloads the job; bootstrap
+        // fails with EIO meanwhile, so try a few times.
+        let mut last = String::new();
+        for _ in 0..10 {
+            match run_fixed("/bin/launchctl", &["bootstrap", "system", p]) {
+                Ok(()) => return Ok(()),
+                Err(x) => last = x,
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        Err(last)
+    }
 }
+
+/// The node's LaunchDaemon plist (the installer's `PLIST`).
+pub const NODE_PLIST: &str = "/Library/LaunchDaemons/dev.k2.node.plist";
 
 /// Test-keys builds only: a hook program replaces the service manager
 /// (`<hook> restart-node` / `<hook> restart-unit <name>`), so the Linux

@@ -17,6 +17,7 @@
 //! - [`servers`]: `servers.toml` (node sharing): the `servers.*` verbs.
 //! - [`owner`]: `servers.owner`, moving the owner server (step file, drain).
 //! - [`units`]: systemd/launchd files for the executor.
+//! - [`service`]: the node's own plist, rewritten when this build's differs.
 
 pub mod cli;
 pub mod config;
@@ -34,6 +35,7 @@ pub mod owner;
 pub mod policy;
 pub mod server;
 pub mod servers;
+pub mod service;
 pub mod store;
 pub mod tenants;
 pub mod units;

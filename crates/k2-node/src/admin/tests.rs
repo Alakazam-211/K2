@@ -27,6 +27,10 @@ pub struct RecPlatform {
     pub on_restart: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// What `jobs_outlive_node` says (false: today's drain/restart paths).
     pub adopt: std::sync::atomic::AtomicBool,
+    /// What `node_service_file` answers (`None`: not kept, like Linux).
+    pub service: Mutex<Option<super::service::ServiceFile>>,
+    /// Fail this many `reload_node` calls first.
+    pub fail_reload: Mutex<Option<u32>>,
 }
 
 /// The node pid [`RecPlatform`] reports: this test process, so the mark
@@ -64,6 +68,20 @@ impl Platform for RecPlatform {
     }
     fn jobs_outlive_node(&self, _paths: &ExecPaths) -> bool {
         self.adopt.load(Ordering::SeqCst)
+    }
+    fn node_service_file(&self, _paths: &ExecPaths, _node_user: &str) -> Option<super::service::ServiceFile> {
+        self.service.lock().unwrap().clone()
+    }
+    fn reload_node(&self, path: &std::path::Path) -> Result<(), String> {
+        self.calls.lock().unwrap().push(format!("reload-node {}", path.display()));
+        let mut f = self.fail_reload.lock().unwrap();
+        match *f {
+            Some(n) if n > 0 => {
+                *f = Some(n - 1);
+                Err("bootstrap: Input/output error".into())
+            }
+            _ => Ok(()),
+        }
     }
     /// Fake builds aren't executable: answer what the staged build's marker says.
     /// No real units: the machine running the tests may be a node itself.
@@ -139,6 +157,8 @@ impl Rig {
             walls: Mutex::new(vec![]),
             on_restart: Mutex::new(None),
             adopt: std::sync::atomic::AtomicBool::new(false),
+            service: Mutex::new(None),
+            fail_reload: Mutex::new(None),
         });
         let mut exec = Executor::new(paths, plat.clone());
         exec.drain_settle = std::time::Duration::from_millis(60);

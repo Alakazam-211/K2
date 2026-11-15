@@ -214,36 +214,36 @@ fn a_loose_cache_dir_is_tightened() {
     assert!(matches!(private_dir(&link), Err(FetchError::Cache(ref m)) if m.contains("not a directory")));
 }
 
-/// The real pin (0.9.3, the release table, not the test fixtures): the URL
+/// The real pin (0.10.0, the release table, not the test fixtures): the URL
 /// a box downloads and the words an offline box gets.
 #[test]
 fn release_files_name_the_published_assets() {
     let rel = k2_root_proto::sew::SEW_RELEASES.last().unwrap();
-    assert_eq!(rel.version, "0.9.3");
+    assert_eq!(rel.version, "0.10.0");
     let a = rel.artifacts.iter().find(|a| a.arch == "x86_64").unwrap();
     let core = ReleaseFile::core(rel.version, a);
     assert_eq!(
         core.url(),
-        "https://github.com/Alakazam-211/sew-releases/releases/download/v0.9.3/sew-0.9.3-x86_64-unknown-linux-gnu.tar.gz"
+        "https://github.com/Alakazam-211/sew-releases/releases/download/v0.10.0/sew-0.10.0-x86_64-unknown-linux-gnu.tar.gz"
     );
-    assert_eq!(core.sha256, "2e7e4b11baf7cc03f88f56d25a51fcf0980b9894a661961608859b04230b7ecb");
+    assert_eq!(core.sha256, "befdaa2b0fea78044e9acc060851328a942cf68e45c070b2e2ad41e71cd3fd06");
     let m = rel.media.as_ref().unwrap();
     let media = ReleaseFile::media(rel.version, m.version, m.artifacts.iter().find(|a| a.arch == "x86_64").unwrap());
     assert_eq!(
         media.url(),
-        "https://github.com/Alakazam-211/sew-releases/releases/download/v0.9.3/sew-media-0.9.3-x86_64-unknown-linux-gnu.tar.gz"
+        "https://github.com/Alakazam-211/sew-releases/releases/download/v0.10.0/sew-media-0.10.0-x86_64-unknown-linux-gnu.tar.gz"
     );
     let pin_kit = k2_root_proto::sew::SEW_APP_KITS.iter().find(|k| k.version == rel.version).expect("the pin has its App kit");
     let kit = ReleaseFile::app_kit(rel.version, pin_kit);
-    assert_eq!(kit.url(), "https://github.com/Alakazam-211/sew-releases/releases/download/v0.9.3/sew-app-kit-0.9.3.tar.gz");
-    assert_eq!(kit.sha256, "7e956da38e07dc2a20c63b87c6b64c965f48f69eebbd5dd95cd0bd27fc8378e0");
+    assert_eq!(kit.url(), "https://github.com/Alakazam-211/sew-releases/releases/download/v0.10.0/sew-app-kit-0.10.0.tar.gz");
+    assert_eq!(kit.sha256, "61ff6ca52f74c2f3ef77060730b808602038629560bc684b52d306d4f55d502e");
     let words = core.by_hand("k2 hostchat enable --tarball");
     assert_eq!(
         words,
         "On a box without internet: download \
-         https://github.com/Alakazam-211/sew-releases/releases/download/v0.9.3/sew-0.9.3-x86_64-unknown-linux-gnu.tar.gz \
-         (sha256 2e7e4b11baf7cc03f88f56d25a51fcf0980b9894a661961608859b04230b7ecb) on another machine, copy it here, \
-         then run k2 hostchat enable --tarball /path/to/sew-0.9.3-x86_64-unknown-linux-gnu.tar.gz"
+         https://github.com/Alakazam-211/sew-releases/releases/download/v0.10.0/sew-0.10.0-x86_64-unknown-linux-gnu.tar.gz \
+         (sha256 befdaa2b0fea78044e9acc060851328a942cf68e45c070b2e2ad41e71cd3fd06) on another machine, copy it here, \
+         then run k2 hostchat enable --tarball /path/to/sew-0.10.0-x86_64-unknown-linux-gnu.tar.gz"
     );
     assert_eq!(size_words(24_667_386), "24.7 MB");
 }

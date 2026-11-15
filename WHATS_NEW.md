@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.13 — Chat with people on Home
+
+### Chat / Voice Hosting
+- **Sew 0.10.0: recommended update.** Chat with people: add or remove members, leave channels, see who's typing and how many messages are unread. The caller can cancel a DM call while it rings, so the other person doesn't see a missed call. Calls get upstream WebRTC fixes for congestion feedback. If PostgreSQL was updated underneath Sew, it now says plainly to restart the database first. The update changes how Sew stores chat, so going back to 0.9.3 afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
+
 ## 0.46.12 — Inbox fixes, and Themes
 
 ### Look and feel

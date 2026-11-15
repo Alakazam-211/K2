@@ -177,6 +177,15 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'sim/boot': 'Start on the Mobile tab boots the room’s device on B',
   'sim/stop': 'Stop on the Mobile tab stops the room’s device on B',
   'sim/screenshot': 'the Mobile tab saves a screenshot under .k2/sim/shots/ in B’s workspace',
+
+  // The Desktop tab (prd-remote-desktop-tab-v1 §8). Ask at the Mac only has
+  // B's K2 Screen show macOS's permission prompt (or System Settings) to
+  // whoever is at B; B refuses it while Remote desktop is off there and for
+  // anyone but an Owner. Turning sharing on (`desktop/enable`) stays off
+  // this list: that is done at B itself.
+  'desktop/ask': 'Ask at the Mac on a Desktop tab re-asks B’s K2 Screen for its macOS permission (Owner on B; refused while B’s switch is off)',
+  'desktop/ticket':
+    'a Desktop tab watching B gets its 60 s stream ticket from B; B checks this login (Owners and Admins, a Member only with a grant) and that the switch is on',
 })
 
 /** The routes, as the request layer checks them. */

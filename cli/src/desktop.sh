@@ -14,8 +14,18 @@ on a Linux server, to put windows on.
 
   k2 desktop [status] [--json]      on or off, the machine's state, what you may do;
                                     the owner also sees viewers, grants, hidden apps
-  k2 desktop enable [--json]        turn it on (Owner); prints what that allows
+  k2 desktop enable [--json]        turn it on (Owner); prints what that allows.
+                                    On a Mac, K2 Screen asks macOS for Screen
+                                    Recording and Accessibility at once; when
+                                    someone at the Mac allows them, K2 restarts
+                                    K2 Screen by itself (status shows the steps)
   k2 desktop disable [--json]       turn it off (Owner); closes every viewer
+  k2 desktop ask [--open screen|accessibility | --check] [--json]
+                                    a Mac with it on (Owner): show macOS's prompt
+                                    for K2 Screen again (macOS shows it once; after
+                                    that K2 opens System Settings at the pane),
+                                    open one System Settings pane, or check again
+                                    after K2 stopped checking (10 minutes)
   k2 desktop policy --hide-app <bundle id> [--hide-app …] | --no-hide-apps [--json]
                                     the apps viewers never see on macOS (Owner);
                                     replaces the list (default: Passwords,
@@ -144,6 +154,12 @@ def at(s):
         return datetime.datetime.fromtimestamp(s).strftime("%Y-%m-%d %H:%M")
     except Exception:
         return "-"
+def mac_permission_lines(d):
+    p = d.get("macPermission")
+    if not isinstance(p, dict) or p.get("step") == "ready":
+        return
+    print("permission     : Screen Recording %s, Accessibility %s (to type and click)" % (p.get("screen"), p.get("accessibility")))
+    print("               : %s%s" % (p.get("line") or "", " K2 notices by itself when they do." if p.get("checking") else " (k2 desktop ask --check)"))
 def virtual_lines(d):
     v = d.get("virtual")
     if not isinstance(v, dict):
@@ -183,6 +199,7 @@ if verb in ("status", "start"):
     print("desktop        : %s (%s%s)" % (d.get("desktop"), d.get("name") or "This server", ", an agent" if d.get("kind") == "agent" else ""))
     print("state          : %s (%s)" % (d.get("state"), d.get("message") or ""))
     print("backend        : %s, lane %s" % (d.get("backend"), d.get("lane")))
+    mac_permission_lines(d)
     virtual_lines(d)
     if y.get("sameMachine"):
         you = "you are on this computer: you can manage it, but you watch it from another device"
@@ -204,11 +221,16 @@ if verb in ("status", "start"):
 elif verb in ("enable", "disable"):
     if d.get("enabled"):
         print("Remote desktop is on%s. State: %s (%s)" % ("" if d.get("changed") else " (it already was)", d.get("state"), d.get("message") or ""))
+        mac_permission_lines(d)
         if d.get("card"):
             print()
             print(d["card"])
     else:
         print("Remote desktop is off%s; closed %s viewer(s)." % ("" if d.get("changed") else " (it already was)", d.get("closed", 0)))
+elif verb == "ask":
+    said = {"prompt": "Asked K2 Screen to show macOS\x27s prompt at the Mac.", "open_screen": "Opened System Settings at Screen Recording on the Mac.", "open_accessibility": "Opened System Settings at Accessibility on the Mac.", "check": "Checking again."}
+    print(said.get(d.get("asked"), "Asked."))
+    mac_permission_lines(d)
 elif verb == "policy":
     print("hidden apps: %s" % (", ".join(d.get("hideApps") or []) or "none"))
 elif verb == "grant":
@@ -416,7 +438,7 @@ cmd_desktop() {
         help|--help|-h) _desktop_usage; return 0 ;;
         --json) sub=status; set -- --json "$@" ;;
     esac
-    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size="" wait_for="" no_wait=0 ws="" release=0
+    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size="" wait_for="" no_wait=0 ws="" release=0 pane="" check=0
     local args=() hides=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -429,6 +451,9 @@ cmd_desktop() {
             --timeout=*) wait_for="${1#--timeout=}"; shift ;;
             --no-wait) no_wait=1; shift ;;
             --release) release=1; shift ;;
+            --open) pane="${2:-}"; shift 2 || { echo "usage: --open screen|accessibility (k2 desktop ask)" >&2; exit 2; } ;;
+            --open=*) pane="${1#--open=}"; shift ;;
+            --check) check=1; shift ;;
             --workspace) ws="${2:-}"; shift 2 || { echo "usage: --workspace <path|name> (k2 desktop allow)" >&2; exit 2; } ;;
             --workspace=*) ws="${1#--workspace=}"; shift ;;
             --since) since="${2:-}"; shift 2 || { echo "usage: --since 1d|2h|30m|<RFC 3339 time>" >&2; exit 2; } ;;
@@ -473,6 +498,9 @@ cmd_desktop() {
     if [ -n "$ws" ] && [ "$sub" != "allow" ]; then
         echo "usage: --workspace goes with k2 desktop allow" >&2; exit 2
     fi
+    if { [ -n "$pane" ] || [ "$check" = 1 ]; } && [ "$sub" != "ask" ]; then
+        echo "usage: --open and --check go with k2 desktop ask" >&2; exit 2
+    fi
     case "$sub" in
         status)
             raw="$(_sidecar_send GET /cli/desktop/status "$dq")" ;;
@@ -495,6 +523,17 @@ cmd_desktop() {
         enable|on)
             sub=enable
             raw="$(_sidecar_send POST /cli/desktop/enable "$(_desktop_body "{}" "$desk")")" ;;
+        ask)
+            [ "${#args[@]}" -eq 0 ] || { echo "usage: k2 desktop ask [--open screen|accessibility | --check]" >&2; exit 2; }
+            if [ -n "$pane" ] && [ "$check" = 1 ]; then
+                echo "usage: k2 desktop ask takes --open or --check, not both" >&2; exit 2
+            fi
+            case "$pane" in
+                "") if [ "$check" = 1 ]; then body='{"check":true}'; else body="{}"; fi ;;
+                screen|accessibility) body="{\"open\":\"$pane\"}" ;;
+                *) echo "usage: --open screen|accessibility" >&2; exit 2 ;;
+            esac
+            raw="$(_sidecar_send POST /cli/desktop/ask "$body")" ;;
         disable|off)
             sub=disable
             raw="$(_sidecar_send POST /cli/desktop/disable "$(_desktop_body "{}" "$desk")")" ;;
@@ -560,7 +599,7 @@ cmd_desktop() {
                 *) echo "usage: k2 desktop allow [on|off] [--workspace <ws>]" >&2; exit 2 ;;
             esac ;;
         *)
-            echo "usage: unknown desktop verb '$sub' (status|enable|disable|policy|grant|revoke|grants|viewers|kick|audit|open|displays|list|start|stop|setup|allow)" >&2
+            echo "usage: unknown desktop verb '$sub' (status|enable|disable|ask|policy|grant|revoke|grants|viewers|kick|audit|open|displays|list|start|stop|setup|allow)" >&2
             exit 2 ;;
     esac
     _desktop_render "$as_json" "$sub" "$raw"

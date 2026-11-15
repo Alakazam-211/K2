@@ -3,9 +3,13 @@
 //! - **Preflight:** `CGPreflightScreenCaptureAccess()` and
 //!   `AXIsProcessTrusted()`.
 //! - **Request:** `CGRequestScreenCaptureAccess()` and
-//!   `AXIsProcessTrustedWithOptions({prompt: true})`, then open the System
-//!   Settings pane for what is still missing. Someone at the Mac clicks.
-//! - **Re-check every 5 s** (server::TCC_RECHECK).
+//!   `AXIsProcessTrustedWithOptions({prompt: true})` for what is missing:
+//!   macOS adds K2 Screen to both lists and shows its own prompts (once per
+//!   app). The daemon opens System Settings itself when it asked before
+//!   (`k2-daemon` `desktop::permission`). Someone at the Mac clicks.
+//! - **Re-check:** in the background every 5 s with this process's own
+//!   preflight only (server::TCC_RECHECK, no child); the daemon's
+//!   `tcc_status`, while it waits for a grant, uses [`current`] (the probe).
 //!
 //! **Why a probe child.** The screen-capture preflight can keep returning a
 //! process's first answer until it restarts (seen on 10.15–14; to confirm
@@ -20,9 +24,6 @@ use std::time::Duration;
 use k2_deskd_proto::msg::Tcc;
 
 use super::ffi::*;
-
-pub const PANE_SCREEN: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-pub const PANE_ACCESSIBILITY: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 /// This process's own answer (what `--tcc-probe` prints).
 pub fn preflight_self() -> Tcc {
@@ -81,8 +82,10 @@ fn probe_child(timeout: Duration) -> Option<Tcc> {
     parse_probe(&out)
 }
 
-/// Fires the prompts and opens the panes for what's missing. Returns the
-/// state right after (usually still missing: the person hasn't clicked).
+/// Fires macOS's prompts for what's missing (no windows of K2's own: the
+/// daemon opens System Settings when macOS won't prompt again). Returns
+/// the state right after (usually still missing: the person hasn't
+/// clicked).
 pub fn request() -> Tcc {
     let before = current();
     // SAFETY: CF objects created here are released by `Cf`; the keys are
@@ -98,16 +101,7 @@ pub fn request() -> Tcc {
             AXIsProcessTrustedWithOptions(opts.0);
         }
     }
-    if !before.screen {
-        open_pane(PANE_SCREEN);
-    } else if !before.accessibility {
-        open_pane(PANE_ACCESSIBILITY);
-    }
     current()
-}
-
-fn open_pane(url: &str) {
-    let _ = Command::new("/usr/bin/open").arg(url).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
 }
 
 #[cfg(test)]

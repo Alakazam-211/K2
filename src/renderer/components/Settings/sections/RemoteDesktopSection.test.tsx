@@ -23,6 +23,8 @@ const daemon = vi.hoisted(() => ({
   posts: [] as Array<{ route: string; body: unknown }>,
   gets: [] as string[],
   postError: null as Error | null,
+  /** What a POST answers (default `{}`). */
+  postReply: {} as unknown,
 }))
 vi.mock('@/lib/daemon-cli', async () => {
   const actual = await vi.importActual<typeof import('@/lib/daemon-cli')>('@/lib/daemon-cli')
@@ -38,7 +40,7 @@ vi.mock('@/lib/daemon-cli', async () => {
     daemonCliPost: vi.fn(async (_scope: unknown, route: string, body: unknown) => {
       daemon.posts.push({ route, body })
       if (daemon.postError) throw daemon.postError
-      return {}
+      return daemon.postReply
     }),
   }
 })
@@ -47,7 +49,7 @@ import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { RemoteDesktopSection, auditSentence } from './RemoteDesktopSection'
 import { settingsNav } from '../Settings'
-import { DESKTOP_ENABLE_CARD, VIRTUAL_ENABLE_CARD, type DesktopStatus } from '@/components/Desktop/desktop-state'
+import { DESKTOP_ENABLE_CARD, VIRTUAL_ENABLE_CARD, type DesktopPermission, type DesktopStatus } from '@/components/Desktop/desktop-state'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { __resetServerScopesForTests, noteServerVersion } from '@/kessel/server-scope'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -96,6 +98,7 @@ beforeEach(() => {
   daemon.posts = []
   daemon.gets = []
   daemon.postError = null
+  daemon.postReply = {}
 })
 afterEach(() => {
   cleanup()
@@ -253,5 +256,100 @@ describe('Remote Desktop availability', () => {
     expect(access()).toEqual({ id: 'remote-desktop', label: 'Remote Desktop', beta: true, hide: true })
     noteServerVersion('local', '0.46.11', ['remote-desktop-v1'])
     expect(access()?.hide).toBe(false)
+  })
+})
+
+// One action (Rosson 2026-11-15): the switch has K2 Screen ask macOS; the
+// row shows the two permissions as steps, each with its System Settings
+// button, and updates itself.
+function permission(over: Partial<DesktopPermission> = {}): DesktopPermission {
+  return {
+    step: 'waiting_screen',
+    screen: 'waiting',
+    accessibility: 'waiting',
+    opened: 'screen',
+    checking: true,
+    line: 'Allow K2 Screen in the window that just opened.',
+    ...over,
+  }
+}
+
+function word(pane: 'screen' | 'accessibility'): string | undefined {
+  return screen.getByTestId(`remote-desktop-permission-${pane}`).querySelector<HTMLElement>('[data-permission-word]')?.dataset.permissionWord
+}
+
+describe('RemoteDesktopSection: allowing K2 Screen on a Mac', () => {
+  it('shows each permission as a step with the daemon’s line, and a button to its pane', async () => {
+    daemon.status = status({ enabled: true, state: 'needs_permission', message: 'Someone at this Mac has to allow K2 Screen once.', macPermission: permission(), ...OWNER_EXTRA })
+    await show()
+    expect(screen.getByTestId('remote-desktop-permission-line').textContent).toBe(
+      'Allow K2 Screen in the window that just opened. K2 notices by itself when you do.',
+    )
+    expect([word('screen'), word('accessibility')]).toEqual(['waiting', 'waiting'])
+    expect(screen.getByTestId('remote-desktop-permission-screen').textContent).toContain('Screen Recording')
+    expect(screen.getByTestId('remote-desktop-permission-accessibility').textContent).toContain('type and click')
+    expect(screen.queryByTestId('remote-desktop-permission-check')).toBeNull()
+    await click(screen.getByTestId('remote-desktop-permission-open-screen'))
+    expect(daemon.posts).toEqual([{ route: 'desktop/ask', body: { open: 'screen' } }])
+    expect(screen.getByTestId('remote-desktop-permission-note').textContent).toContain('Opened System Settings on office-mini')
+    const text = screen.getByTestId('remote-desktop-section').textContent ?? ''
+    for (const jargon of ['TCC', 'deskd', 'tcc']) expect([jargon, text.includes(jargon)]).toEqual([jargon, false])
+  })
+
+  it('Screen Recording allowed: only Accessibility waits, with its button', async () => {
+    daemon.status = status({
+      enabled: true,
+      state: 'needs_permission',
+      macPermission: permission({ step: 'waiting_accessibility', screen: 'allowed', opened: 'accessibility' }),
+      ...OWNER_EXTRA,
+    })
+    await show()
+    expect([word('screen'), word('accessibility')]).toEqual(['allowed', 'waiting'])
+    expect(screen.queryByTestId('remote-desktop-permission-open-screen')).toBeNull()
+    await click(screen.getByTestId('remote-desktop-permission-open-accessibility'))
+    expect(daemon.posts).toEqual([{ route: 'desktop/ask', body: { open: 'accessibility' } }])
+  })
+
+  it('once K2 stopped checking by itself, Check again asks it to look again', async () => {
+    const line = 'Still waiting. Allow K2 Screen in System Settings, then press Check again.'
+    daemon.status = status({ enabled: true, state: 'needs_permission', macPermission: permission({ checking: false, opened: null, line }), ...OWNER_EXTRA })
+    await show()
+    expect(screen.getByTestId('remote-desktop-permission-line').textContent).toBe(line)
+    await click(screen.getByTestId('remote-desktop-permission-check'))
+    expect(daemon.posts).toEqual([{ route: 'desktop/ask', body: { check: true } }])
+  })
+
+  it('ready, off or Linux: no steps', async () => {
+    daemon.status = status({ enabled: true, state: 'ready', macPermission: permission({ step: 'ready', screen: 'allowed', accessibility: 'allowed' }), ...OWNER_EXTRA })
+    await show()
+    expect(screen.queryByTestId('remote-desktop-permission')).toBeNull()
+    cleanup()
+    daemon.status = status({ enabled: false, macPermission: permission(), ...OWNER_EXTRA })
+    await show()
+    expect(screen.queryByTestId('remote-desktop-permission')).toBeNull()
+    cleanup()
+    daemon.status = status({ enabled: true, backend: 'linux', state: 'ready', ...OWNER_EXTRA })
+    await show()
+    expect(screen.queryByTestId('remote-desktop-permission')).toBeNull()
+  })
+
+  it('someone who can’t manage it sees the steps without buttons', async () => {
+    daemon.status = status({ enabled: true, state: 'needs_permission', macPermission: permission({ checking: false }), you: { role: 'admin', mayManage: false } })
+    await show()
+    expect([word('screen'), word('accessibility')]).toEqual(['waiting', 'waiting'])
+    expect(screen.queryByTestId('remote-desktop-permission-open-screen')).toBeNull()
+    expect(screen.queryByTestId('remote-desktop-permission-check')).toBeNull()
+  })
+
+  it('Turn on on a Mac says what happens next: allow K2 Screen in macOS’s prompts', async () => {
+    daemon.status = status({ ...OWNER_EXTRA })
+    daemon.postReply = { enabled: true, state: 'needs_permission', macPermission: permission({ step: 'asking', opened: null, line: 'Starting K2 Screen to ask macOS…' }) }
+    await show()
+    await click(screen.getByTestId('remote-desktop-switch'))
+    await answer('Turn on')
+    expect(daemon.posts).toEqual([{ route: 'desktop/enable', body: {} }])
+    expect(screen.getByTestId('remote-desktop-switch-note').textContent).toContain(
+      'Remote Desktop is on. Allow K2 Screen in the macOS prompts on this Mac; this page updates by itself.',
+    )
   })
 })

@@ -317,6 +317,9 @@ pub(super) const ROWS: &[Route] = &[
     // are Member-floor: the handler then admits Owners and Admins, and a
     // Member only with a grant (`k2_core::desktop::policy`). Voice & Chat
     // only is refused here (Member floor).
+    // Ask K2 Screen for its macOS permission again (the Owner's, like the
+    // switch; refused while the switch is off).
+    post("/cli/desktop/ask", Owner),
     get("/cli/desktop/audit", Owner),
     post("/cli/desktop/disable", Owner),
     get("/cli/desktop/displays", Member),

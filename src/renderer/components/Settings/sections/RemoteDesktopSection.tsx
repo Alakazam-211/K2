@@ -16,6 +16,7 @@ import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { onDesktopState } from '@/stores/session-events'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
+  askDesktop,
   disableDesktop,
   enableDesktop,
   fetchDesktopAudit,
@@ -33,8 +34,10 @@ import {
   VIRTUAL_ENABLE_CARD,
   readDesktopStatus,
   type DesktopGrant,
+  type DesktopPermission,
   type DesktopStatus,
   type DesktopViewer,
+  type PermissionPane,
 } from '@/components/Desktop/desktop-state'
 import {
   SETTING_FIELD_WIDTH,
@@ -136,6 +139,89 @@ export function auditSentence(l: DesktopAuditLine): string {
   return `${who} ${verb}${outcome}`
 }
 
+/** The two macOS permissions as steps a person follows at a glance. */
+export const PERMISSION_STEPS: ReadonlyArray<{ pane: PermissionPane; label: string; hint: string }> = [
+  { pane: 'screen', label: 'Screen Recording', hint: 'Lets K2 Screen show this screen to the people you allow.' },
+  {
+    pane: 'accessibility',
+    label: 'Accessibility',
+    hint: 'Lets the people you allow type and click on this Mac from another computer.',
+  },
+]
+
+/** After the switch went on: what to do next, in one line. */
+export function turnedOnNote(permission: DesktopPermission | undefined): string {
+  if (!permission || permission.step === 'ready') return 'Remote Desktop is on. Owners and Admins can open this screen now.'
+  return 'Remote Desktop is on. Allow K2 Screen in the macOS prompts on this Mac; this page updates by itself.'
+}
+
+function PermissionSteps({
+  permission,
+  manage,
+  busy,
+  machine,
+  sameMachine,
+  onOpen,
+  onCheck,
+  note,
+}: {
+  permission: DesktopPermission
+  manage: boolean
+  busy: boolean
+  machine: string
+  sameMachine: boolean
+  onOpen: (pane: PermissionPane) => void
+  onCheck: () => void
+  note: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div data-testid="remote-desktop-permission" data-step={permission.step}>
+      <SettingRow
+        label="Allow K2 Screen on this Mac"
+        hint={
+          <span data-testid="remote-desktop-permission-line">
+            {permission.line}
+            {permission.checking ? ' K2 notices by itself when you do.' : ''}
+          </span>
+        }
+        testId="remote-desktop-permission-head"
+        below={note ?? undefined}
+      >
+        {manage && !permission.checking ? (
+          <Button disabled={busy} data-testid="remote-desktop-permission-check" onClick={onCheck}>
+            Check again
+          </Button>
+        ) : (
+          <span className="type-row text-[var(--color-text-secondary)]">{permission.checking ? 'Checking…' : ''}</span>
+        )}
+      </SettingRow>
+      {PERMISSION_STEPS.map(({ pane, label, hint }) => {
+        const allowed = (pane === 'screen' ? permission.screen : permission.accessibility) === 'allowed'
+        return (
+          <SettingRow
+            key={pane}
+            label={label}
+            hint={!sameMachine && manage && !allowed ? `${hint} The button opens System Settings on ${machine}.` : hint}
+            testId={`remote-desktop-permission-${pane}`}
+          >
+            <span className="inline-flex items-center gap-3 type-row">
+              <span className="inline-flex items-center gap-2" data-permission-word={allowed ? 'allowed' : 'waiting'}>
+                <StatusDot tone={allowed ? 'ok' : 'warn'} />
+                <HealthWord tone={allowed ? 'ok' : 'warn'}>{allowed ? 'Allowed' : 'Waiting'}</HealthWord>
+              </span>
+              {manage && !allowed ? (
+                <Button disabled={busy} data-testid={`remote-desktop-permission-open-${pane}`} onClick={() => onOpen(pane)}>
+                  Open System Settings
+                </Button>
+              ) : null}
+            </span>
+          </SettingRow>
+        )
+      })}
+    </div>
+  )
+}
+
 export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: ServerScope }): React.JSX.Element {
   const [status, setStatus] = useState<DesktopStatus | null>(null)
   const [loadError, setLoadError] = useState<unknown>(null)
@@ -149,6 +235,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
   const hideNote = useActionNote()
   const grantNote = useActionNote()
   const viewerNote = useActionNote()
+  const permissionNote = useActionNote()
 
   const loadAudit = useCallback(async () => {
     try {
@@ -179,13 +266,18 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
   }, [scope, load, supported])
 
   /** One write: busy while it runs, a note after, and a fresh read. */
-  const act = async (fn: () => Promise<unknown>, note: ReturnType<typeof useActionNote>, ok: string, fail: string): Promise<boolean> => {
+  const act = async (
+    fn: () => Promise<unknown>,
+    note: ReturnType<typeof useActionNote>,
+    ok: string | ((reply: unknown) => string),
+    fail: string,
+  ): Promise<boolean> => {
     setBusy(true)
     note.clear()
     let landed = false
     try {
-      await fn()
-      note.done(ok)
+      const reply = await fn()
+      note.done(typeof ok === 'function' ? ok(reply) : ok)
       landed = true
     } catch (err) {
       note.failed(fail, err)
@@ -271,7 +363,14 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
     if (next) {
       const yes = await confirm({ title: 'Turn on Remote Desktop?', message: virtual ? VIRTUAL_ENABLE_CARD : DESKTOP_ENABLE_CARD, confirmLabel: 'Turn on' })
       if (!yes) return
-      await act(() => enableDesktop(scope, virtual ? 'virtual' : undefined), switchNote, 'Remote Desktop is on. Owners and Admins can open this screen now.', 'Couldn’t turn on Remote Desktop. It’s still off.')
+      // One action (Rosson 2026-11-15): on a Mac the daemon starts K2
+      // Screen, which asks macOS for its permission at once.
+      await act(
+        () => enableDesktop(scope, virtual ? 'virtual' : undefined),
+        switchNote,
+        (r) => turnedOnNote((r as { macPermission?: DesktopPermission } | undefined)?.macPermission),
+        'Couldn’t turn on Remote Desktop. It’s still off.',
+      )
       return
     }
     if (viewers.length > 0) {
@@ -316,6 +415,18 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
     })
     if (!yes) return
     await act(() => kickDesktopViewer(scope, v.id), viewerNote, `${v.user} was disconnected.`, `Couldn’t disconnect ${v.user}. They’re still connected.`)
+  }
+
+  const openPane = (pane: PermissionPane): void => {
+    void act(
+      () => askDesktop(scope, { open: pane }),
+      permissionNote,
+      `Opened System Settings on ${machine}. Allow K2 Screen there.`,
+      'Couldn’t open System Settings.',
+    )
+  }
+  const checkAgain = (): void => {
+    void act(() => askDesktop(scope, { check: true }), permissionNote, 'Checking again.', 'Couldn’t check again.')
   }
 
   const saveHidden = async (): Promise<void> => {
@@ -366,6 +477,18 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
             <HealthWord tone={h.tone}>{h.word}</HealthWord>
           </span>
         </SettingRow>
+        {status.enabled && status.macPermission && status.macPermission.step !== 'ready' ? (
+          <PermissionSteps
+            permission={status.macPermission}
+            manage={manage}
+            busy={busy}
+            machine={machine}
+            sameMachine={status.you.sameMachine}
+            onOpen={openPane}
+            onCheck={checkAgain}
+            note={permissionNote.note ? <ActionNote note={permissionNote.note} testId="remote-desktop-permission-note" /> : null}
+          />
+        ) : null}
         {!manage ? (
           <SettingRow label="Who can change this" hint="Only the server’s owner can turn Remote Desktop on or off and choose who may watch." testId="remote-desktop-readonly">
             <span className="type-row text-[var(--color-text-secondary)]">The owner</span>

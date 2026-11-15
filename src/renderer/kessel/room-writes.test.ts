@@ -87,6 +87,8 @@ const ABOVE_MEMBER_ROOM_WRITES = new Map([
   ['vault/confirm/finish', 'Admin'],
   // Moving a pinned chat to another harness (0.46.6): owner or Admin.
   ['agent/harness', 'Admin'],
+  // Ask at the Mac on a Desktop tab: the switch's floor (Owner) on B.
+  ['desktop/ask', 'Owner'],
 ])
 
 describe('the room write allowlist', () => {
@@ -136,9 +138,25 @@ describe('the room write allowlist', () => {
       'docs/unshare',
       'docs/comments/purge',
       'docs/erase',
+      // Remote desktop's switch, policy and grants are done at B itself.
+      'desktop/enable',
+      'desktop/disable',
+      'desktop/policy',
+      'desktop/grant',
+      'desktop/revoke',
+      'desktop/kick',
     ]) {
       expect([route, ROOM_WRITE_ROUTES.has(route)]).toEqual([route, false])
     }
+  })
+
+  it('a Desktop tab in a room asks at the Mac and watches, but never turns sharing on', () => {
+    expect(ROOM_WRITE_ROUTES.has('desktop/ask')).toBe(true)
+    expect(ROOM_WRITE_ROUTES.has('desktop/ticket')).toBe(true)
+    expect(ROOM_WRITE_ROUTES.has('desktop/enable')).toBe(false)
+    const room = remoteRoomScope(scopeForHost(B))
+    expect(() => assertScopeMayWrite(room, 'desktop/ask')).not.toThrow()
+    expect(() => assertScopeMayWrite(room, 'desktop/enable')).toThrow(RoomWriteRefusedError)
   })
 })
 

@@ -18,6 +18,9 @@ use crate::desktop::deskd::{self, Deskd};
 
 struct FakeDeskd {
     calls: Mutex<Vec<&'static str>>,
+    /// A Mac's permission steps (`None`: a Linux K2 Screen, none needed).
+    perm: Mutex<Option<deskd::Permission>>,
+    asks: Mutex<Vec<deskd::Ask>>,
 }
 
 impl Deskd for FakeDeskd {
@@ -33,6 +36,16 @@ impl Deskd for FakeDeskd {
     }
     fn disable(&self) -> Result<(), String> {
         self.calls.lock().unwrap().push("disable");
+        Ok(())
+    }
+    fn permission(&self) -> Option<deskd::Permission> {
+        self.perm.lock().unwrap().clone()
+    }
+    fn ask(&self, what: deskd::Ask) -> Result<(), deskd::AskError> {
+        if self.perm.lock().unwrap().is_none() {
+            return Err(deskd::AskError::NotNeeded);
+        }
+        self.asks.lock().unwrap().push(what);
         Ok(())
     }
     fn displays(&self) -> Vec<Display> {
@@ -63,7 +76,7 @@ struct Env {
 fn env() -> Env {
     let home = k2_core::test_env::TempHome::new();
     let db = k2_core::db::scoped_for_test();
-    let fake = Arc::new(FakeDeskd { calls: Mutex::new(Vec::new()) });
+    let fake = Arc::new(FakeDeskd { calls: Mutex::new(Vec::new()), perm: Mutex::new(None), asks: Mutex::new(Vec::new()) });
     let guard = deskd::set_for_test(fake.clone());
     // The console desktop (a Mac, or a Linux box with someone at its
     // screen); the virtual desktop tests below pick Linux with no screen.
@@ -175,7 +188,7 @@ fn methods_are_checked_first() {
         assert_eq!(r.status, "405 Method Not Allowed", "{path}");
     }
     assert!(!store::is_enabled(CONSOLE).unwrap());
-    assert_eq!(POST_ROUTES.len(), 12);
+    assert_eq!(POST_ROUTES.len(), 13);
 }
 
 /// Owner login over Connect: on, the card, an audit line, a push to the
@@ -550,7 +563,7 @@ fn venv() -> VEnv {
     let m = vdm::set_for_test(rig.m.clone());
     let mut screens = Vec::new();
     for id in ["virtual", "virtual:w1"] {
-        let f = Arc::new(FakeDeskd { calls: Mutex::new(Vec::new()) });
+        let f = Arc::new(FakeDeskd { calls: Mutex::new(Vec::new()), perm: Mutex::new(None), asks: Mutex::new(Vec::new()) });
         let g = deskd::set_for_test_desktop(id, f.clone());
         screens.push((f, g));
     }
@@ -1047,4 +1060,129 @@ fn status_by_workspace_names_the_agents_desktop_and_its_switch() {
     assert_eq!((s, code(&r)), (404, "workspace_not_found"), "{r}");
     let (s, r) = get_q(&owner, "/cli/desktop/status", &[("workspace", "w1"), ("desktop", "virtual")]);
     assert_eq!((s, code(&r)), (400, "bad_request"), "one or the other: {r}");
+}
+
+// ── Ask at the Mac (`/cli/desktop/ask`, Rosson 2026-11-15) ────────────
+
+fn mac_waiting() -> deskd::Permission {
+    use super::super::permission::{Permission, Step, LINE_PROMPTED};
+    Permission { step: Step::WaitingScreen, screen: "waiting", accessibility: "waiting", opened: None, checking: true, line: LINE_PROMPTED }
+}
+
+/// The Owner asks K2 Screen again, opens a pane, or checks again, only
+/// while the switch is on; each writes an access-log line and tells every
+/// view.
+#[test]
+fn ask_is_the_owners_and_needs_the_switch_on() {
+    use super::super::permission::Pane;
+    let e = env();
+    *e.fake.perm.lock().unwrap() = Some(mac_waiting());
+    let owner = login("rosson", Role::Owner);
+
+    // Off: refused, and nothing asked or logged.
+    let (s, v) = call(&owner, "/cli/desktop/ask", json!({}));
+    assert_eq!((s, code(&v)), (409, "desktop_off"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("Settings → Remote desktop"), "{v}");
+    assert!(e.fake.asks.lock().unwrap().is_empty());
+    assert!(audit_events().is_empty(), "{:?}", audit_events());
+
+    let (s, _) = call(&owner, "/cli/desktop/enable", json!({}));
+    assert_eq!(s, 200);
+    let mut events = crate::session_events::subscribe();
+    let (s, v) = call(&owner, "/cli/desktop/ask", json!({}));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!((v["asked"].as_str(), v["desktop"].as_str()), (Some("prompt"), Some("console")), "{v}");
+    assert_eq!(v["macPermission"]["step"], "waiting_screen", "{v}");
+    let mut kinds = Vec::new();
+    while let Ok(ev) = events.try_recv() {
+        kinds.push(ev.kind_name());
+    }
+    assert!(kinds.contains(&"desktop_state"), "{kinds:?}");
+
+    let (s, v) = call(&owner, "/cli/desktop/ask", json!({"open": "screen"}));
+    assert_eq!((s, v["asked"].as_str()), (200, Some("open_screen")), "{v}");
+    let (s, v) = call(&owner, "/cli/desktop/ask", json!({"open": "accessibility"}));
+    assert_eq!((s, v["asked"].as_str()), (200, Some("open_accessibility")), "{v}");
+    let (s, v) = call(&owner, "/cli/desktop/ask", json!({"check": true}));
+    assert_eq!((s, v["asked"].as_str()), (200, Some("check")), "{v}");
+    assert_eq!(
+        *e.fake.asks.lock().unwrap(),
+        vec![deskd::Ask::Prompt, deskd::Ask::Open(Pane::Screen), deskd::Ask::Open(Pane::Accessibility), deskd::Ask::Check]
+    );
+    let asks: Vec<String> = audit::read(None, 1000)
+        .unwrap()
+        .iter()
+        .filter(|l| l["event"] == "ask")
+        .map(|l| l["mode"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(asks, vec!["check", "open_accessibility", "open_screen", "prompt"], "newest first");
+
+    // Bad bodies ask nothing.
+    for body in [json!({"open": "camera"}), json!({"open": "screen", "check": true}), json!({"check": false}), json!({"check": "yes"})] {
+        let (s, v) = call(&owner, "/cli/desktop/ask", body.clone());
+        assert_eq!((s, code(&v)), (400, "bad_request"), "{body}: {v}");
+    }
+    assert_eq!(e.fake.asks.lock().unwrap().len(), 4, "a bad body asks nothing");
+
+    // The owner at this computer: the token and a K2 shell tab.
+    for who in [Who::Owner, shell()] {
+        let (s, v) = call_at(&who, "/cli/desktop/ask", json!({}), "loopback");
+        assert_eq!(s, 200, "{who:?}: {v}");
+    }
+}
+
+/// Admins and Members never ask (the switch's floor), Voice & Chat only
+/// never reaches it, and agents get people-only.
+#[test]
+fn ask_refuses_admins_members_and_agents() {
+    let e = env();
+    *e.fake.perm.lock().unwrap() = Some(mac_waiting());
+    store::enable(CONSOLE, true, "owner").unwrap();
+    let admin = login("ann", Role::Admin);
+    let member = login("max", Role::Member);
+    let voice = login("vic", Role::VoiceChat);
+    for who in [admin, member] {
+        let (s, v) = call(&who, "/cli/desktop/ask", json!({}));
+        assert_eq!((s, code(&v)), (403, "owner_only"), "{who:?}: {v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("K2 Screen's permission"), "{v}");
+    }
+    let (s, v) = call(&voice, "/cli/desktop/ask", json!({}));
+    assert_eq!((s, code(&v)), (403, "role_required"), "{v}");
+    let (s, v) = call(&agent(), "/cli/desktop/ask", json!({}));
+    assert_eq!((s, code(&v)), (403, PEOPLE_ONLY), "{v}");
+    assert!(e.fake.asks.lock().unwrap().is_empty());
+    assert!(audit_events().is_empty(), "{:?}", audit_events());
+}
+
+/// A K2 Screen that needs no permission (Linux): nothing to ask.
+#[test]
+fn ask_where_no_permission_is_needed_says_so() {
+    let e = env();
+    store::enable(CONSOLE, true, "owner").unwrap();
+    let owner = login("rosson", Role::Owner);
+    let (s, v) = call(&owner, "/cli/desktop/ask", json!({}));
+    assert_eq!((s, code(&v)), (409, "no_permission_needed"), "{v}");
+    assert!(e.fake.asks.lock().unwrap().is_empty());
+}
+
+/// Status and the switch's answer carry the steps on a Mac with the
+/// switch on; never with it off.
+#[test]
+fn status_and_enable_carry_the_permission_steps() {
+    let e = env();
+    *e.fake.perm.lock().unwrap() = Some(mac_waiting());
+    let owner = login("rosson", Role::Owner);
+    let (_, v) = call(&owner, "/cli/desktop/status", json!({}));
+    assert!(v.get("macPermission").is_none(), "off: no steps: {v}");
+    let (_, v) = call(&owner, "/cli/desktop/enable", json!({}));
+    assert_eq!(v["macPermission"]["screen"], "waiting", "{v}");
+    let (_, v) = call(&owner, "/cli/desktop/status", json!({}));
+    assert_eq!(
+        v["macPermission"],
+        json!({"step": "waiting_screen", "screen": "waiting", "accessibility": "waiting", "opened": null, "checking": true, "line": super::super::permission::LINE_PROMPTED}),
+        "{v}"
+    );
+    *e.fake.perm.lock().unwrap() = None;
+    let (_, v) = call(&owner, "/cli/desktop/status", json!({}));
+    assert!(v.get("macPermission").is_none(), "Linux: no steps: {v}");
 }

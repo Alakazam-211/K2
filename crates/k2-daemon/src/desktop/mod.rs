@@ -10,12 +10,15 @@
 //! - [`stream`]: `/cli/desktop/stream` on K2 Render's engine, D6.
 //! - [`managed`]: [`deskd::Deskd`] and [`stream::StreamDeskd`] over
 //!   [`deskd_link::manager`], installed at boot.
+//! - [`permission`]: a Mac's switch asks macOS for K2 Screen's permission,
+//!   notices the grant and restarts K2 Screen so it applies.
 
 pub mod deskd;
 pub mod deskd_link;
 pub mod env_routes;
 pub mod launch_agent;
 pub mod managed;
+pub mod permission;
 pub mod routes;
 pub mod stream;
 pub mod virtual_desktop;

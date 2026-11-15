@@ -280,23 +280,47 @@ struct Inner {
     link: Option<Arc<Link>>,
     frames: Option<File>,
     mismatches: u32,
+    /// K2 Screen's two flags as it last said (hello, `tcc_changed`).
+    tcc: Option<Tcc>,
 }
+
+/// Told K2 Screen's flags whenever it says them (the permission flow).
+pub type TccHook = Arc<dyn Fn(Tcc) + Send + Sync>;
 
 pub struct DeskdManager {
     transport: Arc<dyn Transport>,
     inner: Mutex<Inner>,
     changed: Condvar,
     subs: Mutex<Vec<mpsc::Sender<DeskdEvent>>>,
+    on_tcc: Mutex<Option<TccHook>>,
 }
 
 impl DeskdManager {
     pub fn new(transport: Arc<dyn Transport>) -> Arc<Self> {
         Arc::new(DeskdManager {
             transport,
-            inner: Mutex::new(Inner { enabled: false, gen: 0, state: DeskdState::Off, link: None, frames: None, mismatches: 0 }),
+            inner: Mutex::new(Inner { enabled: false, gen: 0, state: DeskdState::Off, link: None, frames: None, mismatches: 0, tcc: None }),
             changed: Condvar::new(),
             subs: Mutex::new(Vec::new()),
+            on_tcc: Mutex::new(None),
         })
+    }
+
+    /// K2 Screen's flags as it last said them (`None` before a hello).
+    pub fn tcc(&self) -> Option<Tcc> {
+        self.inner.lock().unwrap().tcc
+    }
+
+    /// Calls `f` with K2 Screen's flags each time it says them.
+    pub fn on_tcc(&self, f: TccHook) {
+        *self.on_tcc.lock().unwrap() = Some(f);
+    }
+
+    fn tell_tcc(&self, t: Tcc) {
+        let hook = self.on_tcc.lock().unwrap().clone();
+        if let Some(h) = hook {
+            h(t);
+        }
     }
 
     pub fn state(&self) -> DeskdState {
@@ -485,8 +509,10 @@ impl DeskdManager {
             g.mismatches = 0;
             g.link = Some(Arc::clone(&link));
             g.frames = o.frames;
+            g.tcc = Some(hello.tcc);
             self.set_state_locked(&mut g, DeskdState::from_hello(&hello));
         }
+        self.tell_tcc(hello.tcc);
         let me = Arc::clone(self);
         let mut reader = o.reader;
         let l2 = Arc::clone(&link);
@@ -523,12 +549,16 @@ impl DeskdManager {
         let Ok(ev) = serde_json::from_value::<Event>(v) else { return };
         match ev {
             Event::TccChanged { tcc } => {
-                let mut g = self.inner.lock().unwrap();
-                let backend = g.link.as_ref().map(|l| l.hello.backend.clone()).unwrap_or_default();
-                let mut h = link.hello.clone();
-                h.tcc = tcc;
-                h.backend = backend;
-                self.set_state_locked(&mut g, DeskdState::from_hello(&h));
+                {
+                    let mut g = self.inner.lock().unwrap();
+                    let backend = g.link.as_ref().map(|l| l.hello.backend.clone()).unwrap_or_default();
+                    let mut h = link.hello.clone();
+                    h.tcc = tcc;
+                    h.backend = backend;
+                    g.tcc = Some(tcc);
+                    self.set_state_locked(&mut g, DeskdState::from_hello(&h));
+                }
+                self.tell_tcc(tcc);
             }
             Event::LocalInput { hold } => self.broadcast(DeskdEvent::LocalInput { hold }),
             Event::BannerDisconnect => self.broadcast(DeskdEvent::BannerDisconnect),
@@ -640,11 +670,36 @@ impl DeskdManager {
         self.call(Op::Banner { text }, CALL_TIMEOUT).map(|_| ())
     }
 
-    /// The TCC card's button: fire the prompts and open the panes on the
-    /// Mac. Returns the grants right after (usually still missing).
+    /// Fires macOS's prompts for what K2 Screen is missing (macOS shows
+    /// each one once; the daemon opens System Settings itself after that,
+    /// `super::permission`). Returns the grants right after (usually still
+    /// missing).
     pub fn request_permission(&self) -> Result<Tcc, DeskdError> {
         let v = self.call(Op::TccRequest, CALL_TIMEOUT)?;
         serde_json::from_value(v["tcc"].clone()).map_err(|e| DeskdError::new("deskd_bad_reply", e.to_string()))
+    }
+
+    /// K2 Screen's two flags now (`tcc_status`). Doesn't change the state:
+    /// a new Screen Recording grant reaches capture only after
+    /// [`Self::restart_helper`], and the fresh hello says so.
+    pub fn check_permission(&self) -> Result<Tcc, DeskdError> {
+        let v = self.call(Op::TccStatus, CALL_TIMEOUT)?;
+        serde_json::from_value(v["tcc"].clone()).map_err(|e| DeskdError::new("deskd_bad_reply", e.to_string()))
+    }
+
+    /// Restarts K2 Screen (macOS applies a new Screen Recording grant to a
+    /// fresh process only): `launchctl kickstart -k`, or a fresh child on
+    /// Linux. The supervisor reconnects and the new hello sets the state.
+    pub fn restart_helper(&self) -> Result<(), DeskdError> {
+        if !self.enabled() {
+            return Err(DeskdError::new("desktop_off", DeskdState::Off.message()));
+        }
+        let restarted = self.transport.restart().map_err(|e| DeskdError::new("deskd_restart_failed", e.state().message()));
+        let link = self.inner.lock().unwrap().link.clone();
+        if let Some(l) = link {
+            l.close();
+        }
+        restarted
     }
 
     pub fn displays(&self) -> Result<Vec<Display>, DeskdError> {
@@ -1243,6 +1298,7 @@ mod tests {
                         "release_all" => json!({"id": id, "ok": true, "released": 2}),
                         "displays" => json!({"id": id, "ok": true, "displays": [{"id": 1, "name": "Built-in display", "x": 0.0, "y": 0.0, "width_pt": 1512.0, "height_pt": 982.0, "width_px": 3024, "height_px": 1964, "scale": 2.0, "main": true}]}),
                         "tcc_request" => json!({"id": id, "ok": true, "tcc": {"required": true, "screen": false, "accessibility": true}}),
+                        "tcc_status" => json!({"id": id, "ok": true, "tcc": {"required": true, "screen": true, "accessibility": true}}),
                         "idle" => json!({"id": id, "ok": true, "hid_idle_ms": 10, "local_idle_ms": null, "hold": false}),
                         "nope" => json!({"id": id, "ok": false, "code": "bad_request", "error": "no"}),
                         _ => json!({"id": id, "ok": true}),
@@ -1322,6 +1378,33 @@ mod tests {
         assert_eq!(m.request_permission().unwrap(), Tcc { required: true, screen: false, accessibility: true });
         fake.push_event(json!({"event": "tcc_changed", "tcc": {"required": true, "screen": true, "accessibility": true}}));
         assert_eq!(wait_for(&m, |s| s.name() == "ready"), DeskdState::Ready { backend: "macos".into() });
+        m.disable().unwrap();
+    }
+
+    /// The permission flow's calls: the hook hears every hello and
+    /// `tcc_changed`, `check_permission` reads `tcc_status`, and
+    /// `restart_helper` restarts K2 Screen and reconnects to the fresh one.
+    #[test]
+    fn the_permission_flow_hears_k2_screen_checks_it_and_restarts_it() {
+        let none = Tcc { required: true, screen: false, accessibility: false };
+        let fake = Fake::with(vec![hello(PROTOCOL_VERSION, none, "macos"), hello(PROTOCOL_VERSION, granted(), "macos")]);
+        let m = DeskdManager::new(fake.clone());
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let h2 = Arc::clone(&heard);
+        m.on_tcc(Arc::new(move |t: Tcc| h2.lock().unwrap().push(t)));
+        assert_eq!(m.restart_helper().unwrap_err().code, "desktop_off", "nothing to restart while off");
+        assert_eq!(m.enable(SETTLE), DeskdState::NeedsPermission { screen: false, accessibility: false });
+        assert_eq!(m.tcc(), Some(none));
+        assert_eq!(*heard.lock().unwrap(), vec![none], "the hello");
+        assert_eq!(m.check_permission().unwrap(), granted(), "tcc_status");
+        assert_eq!(m.state().name(), "needs_permission", "a check alone doesn't change the state: the grant needs a fresh K2 Screen");
+
+        m.restart_helper().unwrap();
+        assert_eq!(fake.restarts.load(Ordering::SeqCst), 1);
+        assert_eq!(wait_for(&m, |s| s.name() == "ready"), DeskdState::Ready { backend: "macos".into() });
+        assert_eq!(fake.opens.load(Ordering::SeqCst), 2, "reconnected to the fresh K2 Screen");
+        assert_eq!(*heard.lock().unwrap(), vec![none, granted()], "and heard its hello");
+        assert_eq!(m.tcc(), Some(granted()));
         m.disable().unwrap();
     }
 

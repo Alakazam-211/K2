@@ -37,6 +37,9 @@ impl Host for MacHost {
     fn tcc(&self) -> Tcc {
         tcc::current()
     }
+    fn tcc_self(&self) -> Tcc {
+        tcc::preflight_self()
+    }
     fn request_tcc(&self) -> Tcc {
         tcc::request()
     }

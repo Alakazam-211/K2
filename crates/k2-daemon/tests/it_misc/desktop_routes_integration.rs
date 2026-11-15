@@ -84,6 +84,7 @@ fn login(name: &str, role: Role) -> String {
 }
 
 const POST_ROUTES: &[&str] = &[
+    "/cli/desktop/ask",
     "/cli/desktop/disable",
     "/cli/desktop/enable",
     "/cli/desktop/grant",
@@ -178,6 +179,14 @@ async fn desktop_routes_on_the_wire() {
     assert_eq!(r.status, 403, "Voice & Chat only never reaches the desktop: {}", r.raw);
     let r = send(port, "/cli/desktop/status", OWNER, "", false);
     assert_eq!(r.body["enabled"], false, "{}", r.raw);
+    // Ask at the Mac: the Owner's too, and nothing to ask while it's off.
+    let r = send(port, "/cli/desktop/ask", &admin, "{}", true);
+    assert_eq!((r.status, r.body["required"].as_str()), (403, Some("owner")), "{}", r.raw);
+    let r = send(port, "/cli/desktop/ask", &member, "{}", true);
+    assert_eq!(r.status, 403, "{}", r.raw);
+    let r = send(port, "/cli/desktop/ask", OWNER, "{}", false);
+    assert_eq!((r.status, r.body["error"]["code"].as_str()), (409, Some("desktop_off")), "{}", r.raw);
+    assert!(audit_events().is_empty(), "a refused ask writes nothing");
 
     // 5. The switch isn't in AppSettings.
     let r = http(port, "POST", &q("/cli/settings/update", &admin), Some(r#"{"remoteDesktopEnabled":true,"desktopEnabled":true}"#), true);
@@ -196,6 +205,9 @@ async fn desktop_routes_on_the_wire() {
     assert_eq!(r.status, 200, "{}", r.raw);
     assert_eq!(r.body["enabled"], true);
     assert!(r.body["card"].as_str().is_some_and(|c| c.contains("passwords")), "{}", r.raw);
+    // No K2 Screen in this harness: nothing to ask macOS.
+    let r = send(port, "/cli/desktop/ask", OWNER, "{}", false);
+    assert_eq!((r.status, r.body["error"]["code"].as_str()), (409, Some("no_permission_needed")), "{}", r.raw);
     let r = send(port, "/cli/desktop/status", OWNER, "", false);
     assert_eq!(r.status, 200, "{}", r.raw);
     assert_eq!((r.body["enabled"].as_bool(), r.body["state"].as_str()), (Some(true), Some("unavailable")), "no deskd yet: {}", r.raw);

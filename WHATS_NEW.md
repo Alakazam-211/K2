@@ -5,6 +5,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.46.13 — Chat with people on Home
 
+### Remote desktop
+- **Turning on Remote desktop on a Mac is one step.** The switch in Settings → Remote desktop (or `k2 desktop enable`) now has K2 Screen ask macOS for Screen Recording and Accessibility right away, so K2 Screen shows up in both System Settings lists. If macOS asked before, K2 opens System Settings at the right pane. When someone at the Mac allows it, K2 notices within seconds and restarts K2 Screen so the permission takes effect. The Settings row shows each step, with a button to its System Settings pane.
+- **Ask at the Mac works from another computer** while Remote desktop is on there (`k2 desktop ask`), and a Desktop tab in a room on Home can now open the stream. Turning Remote desktop on is still done at that computer.
+
 ### Chat / Voice Hosting
 - **Sew 0.10.0: recommended update.** Chat with people: add or remove members, leave channels, see who's typing and how many messages are unread. The caller can cancel a DM call while it rings, so the other person doesn't see a missed call. Calls get upstream WebRTC fixes for congestion feedback. If PostgreSQL was updated underneath Sew, it now says plainly to restart the database first. The update changes how Sew stores chat, so going back to 0.9.3 afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
 

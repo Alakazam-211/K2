@@ -7,6 +7,10 @@
 //! GET  /cli/desktop/displays   ?desktop=   the display list
 //! POST /cli/desktop/enable     {desktop?}                 Owner
 //! POST /cli/desktop/disable    {desktop?}                 Owner; closes every viewer 4410
+//! POST /cli/desktop/ask        {} | {open: screen|accessibility} | {check: true}
+//!                                                         Owner; a Mac with the switch on:
+//!                                                         macOS's prompts again, a System
+//!                                                         Settings pane, or check again
 //! POST /cli/desktop/policy     {hideApps: [bundle id]}    Owner
 //! POST /cli/desktop/grant      {user, mode: "view", desktop?}  Owner; Members only, view only
 //! POST /cli/desktop/revoke     {user, desktop?}           Owner; closes that login's viewers 4401
@@ -62,6 +66,7 @@ use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 
 pub const ROUTES: &[&str] = &[
+    "/cli/desktop/ask",
     "/cli/desktop/audit",
     "/cli/desktop/disable",
     "/cli/desktop/displays",
@@ -83,6 +88,7 @@ pub const ROUTES: &[&str] = &[
 ];
 
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/desktop/ask",
     "/cli/desktop/disable",
     "/cli/desktop/enable",
     "/cli/desktop/env",
@@ -465,12 +471,14 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
         "/cli/desktop/stop" => super::virtual_routes::stop(&p, req, &desktop),
         _ if !a.may_manage => owner_only(match req.path {
             "/cli/desktop/enable" | "/cli/desktop/disable" => "Turning Remote desktop on or off",
+            "/cli/desktop/ask" => "Asking for K2 Screen's permission at the Mac",
             "/cli/desktop/policy" => "Remote desktop's policy",
             "/cli/desktop/grant" | "/cli/desktop/revoke" | "/cli/desktop/grants" => "Remote desktop grants",
             "/cli/desktop/kick" | "/cli/desktop/viewers" => "Seeing and closing viewers",
             _ => "The Remote desktop access log",
         }),
         "/cli/desktop/enable" => set_switch(&p, true, req, &desktop),
+        "/cli/desktop/ask" => ask(&p, &body, req, &desktop),
         "/cli/desktop/disable" => set_switch(&p, false, req, &desktop),
         "/cli/desktop/policy" => set_policy(&p, &body, req),
         "/cli/desktop/grant" => grant(&p, &body, req, &desktop),
@@ -515,6 +523,12 @@ fn status(p: &Principal, a: &Access, desktop: &str) -> CliResponse {
     });
     if vd::is_virtual(desktop) {
         super::virtual_routes::fill_status(&mut v, desktop, state.as_wire());
+    }
+    // A Mac: K2 Screen's permission steps (the Settings row).
+    if desktop == CONSOLE && s.enabled {
+        if let Some(perm) = d.permission() {
+            v["macPermission"] = json!(perm);
+        }
     }
     if a.may_manage {
         if desktop == CONSOLE {
@@ -584,8 +598,71 @@ fn set_switch(p: &Principal, on: bool, req: &Req<'_>, desktop: &str) -> CliRespo
     let mut v = json!({"ok": true, "desktop": switch, "enabled": on, "changed": was != on, "state": state, "message": message});
     if on {
         v["card"] = json!(if virtual_switch { VIRTUAL_ENABLE_CARD } else { ENABLE_CARD });
+        if !virtual_switch {
+            if let Some(perm) = deskd::current().permission() {
+                v["macPermission"] = json!(perm);
+            }
+        }
     } else {
         v["closed"] = json!(closed);
+    }
+    ok(v)
+}
+
+/// `POST /cli/desktop/ask`: the Owner asks K2 Screen, at a Mac whose switch
+/// is on, to show macOS's prompts again (`{}`), opens System Settings at a
+/// pane (`{open}`), or checks again (`{check: true}`). It can't turn sharing
+/// on, so a remote room may send it (`room-writes.ts`); Turn on stays the
+/// Owner's at that computer (or from a window on that server).
+fn ask(p: &Principal, body: &Value, req: &Req<'_>, desktop: &str) -> CliResponse {
+    use super::deskd::{Ask, AskError};
+    use super::permission::Pane;
+    let open = body.get("open");
+    let check = body.get("check");
+    if open.is_some() && check.is_some() {
+        return refuse(400, "bad_request", r#"send {} (ask again), {"open": "screen"|"accessibility"}, or {"check": true}; not both"#);
+    }
+    let what = match (open, check) {
+        (Some(o), _) => match o.as_str().and_then(Pane::parse) {
+            Some(pane) => Ask::Open(pane),
+            None => return refuse(400, "bad_request", "open is screen or accessibility"),
+        },
+        (None, Some(Value::Bool(true))) => Ask::Check,
+        (None, Some(_)) => return refuse(400, "bad_request", "check is true"),
+        (None, None) => Ask::Prompt,
+    };
+    if desktop != CONSOLE {
+        return refuse(409, "no_permission_needed", "A virtual desktop needs no permission: its K2 Screen asks nobody.");
+    }
+    match store::is_enabled(CONSOLE) {
+        Ok(true) => {}
+        Ok(false) => {
+            return refuse(
+                409,
+                "desktop_off",
+                "Remote desktop is off on this computer, so there's nothing to ask. Turn it on at that computer: Settings → Remote desktop, or k2 desktop enable there.",
+            )
+        }
+        Err(e) => return refuse(500, "store_error", e),
+    }
+    let d = deskd::current();
+    let not_needed = || refuse(409, "no_permission_needed", "K2 Screen on this computer needs no permission from macOS (or there is no K2 Screen here).");
+    if d.permission().is_none() {
+        return not_needed();
+    }
+    if let Err(r) = audit_first(&line(Event::Ask, CONSOLE, p, req).mode(what.as_wire())) {
+        return r;
+    }
+    match d.ask(what) {
+        Ok(()) => {}
+        Err(AskError::Off) => return refuse(409, "desktop_off", "Remote desktop is off on this computer, so there's nothing to ask."),
+        Err(AskError::NotNeeded) => return not_needed(),
+    }
+    emit_state_for(CONSOLE);
+    let s = d.state();
+    let mut v = json!({"ok": true, "desktop": CONSOLE, "asked": what.as_wire(), "state": s.as_wire(), "message": s.message()});
+    if let Some(perm) = d.permission() {
+        v["macPermission"] = json!(perm);
     }
     ok(v)
 }

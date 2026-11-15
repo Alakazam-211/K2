@@ -69,6 +69,9 @@ pub enum Event {
     AgentSwitch,
     /// An agent's hold on its desktop (taken, renewed or released).
     AgentHold,
+    /// The Owner asked K2 Screen for its macOS permission (`mode`: prompt,
+    /// open_screen, open_accessibility or check).
+    Ask,
 }
 
 impl Event {
@@ -99,6 +102,7 @@ impl Event {
             Event::DesktopSetup => "desktop_setup",
             Event::AgentSwitch => "agent_switch",
             Event::AgentHold => "agent_hold",
+            Event::Ask => "ask",
         }
     }
 }

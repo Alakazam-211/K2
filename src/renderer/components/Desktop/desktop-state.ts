@@ -74,6 +74,38 @@ export interface DesktopStatus {
   /** Only with `closed`, when K2 closed it (`message` holds the sentence). */
   reason?: DesktopCloseReason | null
   virtual?: VirtualDesktopInfo
+  /** A Mac with the switch on: K2 Screen's two macOS permissions, as steps
+   *  (the daemon asks, notices the grant and restarts K2 Screen itself). */
+  macPermission?: DesktopPermission
+}
+
+/** `status.macPermission` (desktop/permission.rs `Permission`). */
+export interface DesktopPermission {
+  step: 'asking' | 'waiting_screen' | 'waiting_accessibility' | 'ready' | string
+  screen: 'allowed' | 'waiting'
+  accessibility: 'allowed' | 'waiting'
+  /** The System Settings pane K2 opened at the Mac, if any. */
+  opened: PermissionPane | null
+  /** K2 is still checking by itself (else the row offers Check again). */
+  checking: boolean
+  /** One plain line from the daemon ("Allow K2 Screen in the window that
+   *  just opened."). */
+  line: string
+}
+
+export type PermissionPane = 'screen' | 'accessibility'
+
+function permissionOf(v: unknown): DesktopPermission | undefined {
+  if (!isObj(v) || typeof v.step !== 'string') return undefined
+  const word = (x: unknown): 'allowed' | 'waiting' => (x === 'allowed' ? 'allowed' : 'waiting')
+  return {
+    step: v.step,
+    screen: word(v.screen),
+    accessibility: word(v.accessibility),
+    opened: v.opened === 'screen' || v.opened === 'accessibility' ? v.opened : null,
+    checking: v.checking === true,
+    line: text(v.line),
+  }
 }
 
 /** Who may start, wake and close a virtual desktop (`you.mayStart`):
@@ -250,6 +282,8 @@ export function readDesktopStatus(body: unknown): DesktopStatus {
   if (body.reason === null) out.reason = null
   else if (isObj(body.reason)) out.reason = body.reason as unknown as DesktopCloseReason
   if (isObj(body.virtual)) out.virtual = body.virtual as VirtualDesktopInfo
+  const permission = permissionOf(body.macPermission)
+  if (permission) out.macPermission = permission
   return out
 }
 
@@ -530,4 +564,27 @@ export function openDesktopIsForMe(
   if (!username) return false
   if (forField === username) return true
   return forField === 'owner' && Array.isArray(owners) && owners.includes(username)
+}
+
+/** The toast after Ask at the Mac went through. */
+export const ASKED_AT_MAC =
+  'Asked at the Mac: K2 Screen is showing macOS’s permission prompt there. Someone at that Mac allows it once, and this tab connects by itself.'
+
+/** Why Ask at the Mac (`POST /cli/desktop/ask`) didn't go through, in plain
+ *  words. `hostKey` names the computer. */
+export function askRefusalText(err: unknown, hostKey: string): string {
+  const e = (err ?? {}) as { code?: unknown; status?: unknown; message?: unknown }
+  const code = typeof e.code === 'string' ? e.code : ''
+  const hint = typeof e.message === 'string' ? e.message.trim() : ''
+  const atTheMac = 'allow K2 Screen in System Settings → Privacy & Security (Screen & System Audio Recording, and Accessibility)'
+  if (code === 'desktop_off') {
+    return `Remote desktop is off on ${hostKey}. Turn it on at that computer itself: Settings → Remote desktop (or run k2 desktop enable there).`
+  }
+  if (code === 'owner_only' || code === 'role_required') return `Only an Owner of ${hostKey} can ask at the Mac.`
+  // An older K2 there has no ask route: the person at the Mac does it by hand.
+  if (e.status === 404 || e.status === 405 || code === 'not_found') {
+    return `K2 on ${hostKey} is older and can’t ask from here. At that Mac, ${atTheMac}.`
+  }
+  if (code === 'no_permission_needed') return hint || `K2 Screen on ${hostKey} needs no permission.`
+  return `Couldn’t ask at the Mac: ${hint || 'K2 couldn’t reach it'}. At that Mac, ${atTheMac}.`
 }

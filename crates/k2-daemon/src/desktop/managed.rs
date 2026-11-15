@@ -36,10 +36,11 @@ use k2_core::sim::stream::Codec;
 use k2_core::sim::video::link::{Encoder as LinkEncoder, HelloFields, Request as LinkRequest};
 use k2_core::stream::link_source::{DisplaySize, LinkClock, LinkFeed, LinkSource, SendRequest, SizesFn};
 use k2_core::stream::EncodedSource;
-use k2_deskd_proto::msg::{Display as DeskdDisplay, InputEvent, ReleaseReason};
+use k2_deskd_proto::msg::{Display as DeskdDisplay, InputEvent, ReleaseReason, Tcc};
 
-use super::deskd::{os_backend, Deskd};
+use super::deskd::{os_backend, Ask, AskError, Deskd, Permission};
 use super::deskd_link::{DeskdEvent, DeskdManager, DeskdState, CALL_TIMEOUT};
+use super::permission::{self, Watcher};
 use super::stream::{StreamDeskd, StreamEvent};
 
 /// How long `enable` waits for deskd to settle before answering.
@@ -48,6 +49,10 @@ const ENABLE_WAIT: Duration = Duration::from_secs(3);
 /// [`Deskd`] over the manager.
 pub struct ManagedDeskd {
     inner: Arc<Link>,
+    /// macOS: asking for K2 Screen's permission when the switch goes on,
+    /// and restarting it when a grant comes through
+    /// ([`permission`]). `None` on Linux (no TCC).
+    permission: Option<Arc<Watcher>>,
 }
 
 /// [`StreamDeskd`] over the manager.
@@ -57,8 +62,24 @@ pub struct Link {
 }
 
 impl ManagedDeskd {
+    /// No permission flow (Linux, a virtual desktop's K2 Screen).
     pub fn new(m: Arc<DeskdManager>) -> Self {
-        ManagedDeskd { inner: Arc::new(Link { m, feed: Mutex::new(None) }) }
+        ManagedDeskd { inner: Arc::new(Link { m, feed: Mutex::new(None) }), permission: None }
+    }
+
+    /// This Mac's K2 Screen, with the permission flow over `w` (which
+    /// hears K2 Screen's flags from the manager).
+    pub fn with_permission(m: Arc<DeskdManager>, w: Arc<Watcher>) -> Self {
+        let w2 = Arc::clone(&w);
+        m.on_tcc(Arc::new(move |t: Tcc| w2.saw(t)));
+        ManagedDeskd { inner: Arc::new(Link { m, feed: Mutex::new(None) }), permission: Some(w) }
+    }
+
+    /// The boot path: the switch was left on (nothing is asked at boot).
+    pub fn resume_permission(&self) {
+        if let Some(w) = &self.permission {
+            w.resume();
+        }
     }
 }
 
@@ -85,11 +106,33 @@ impl Deskd for ManagedDeskd {
     fn enable(&self) -> Result<(), String> {
         // Whatever it settles on (needs_permission, …) shows as the state.
         self.inner.m.enable(ENABLE_WAIT);
+        // One action (Rosson 2026-11-15): K2 Screen asks macOS now, and a
+        // grant that comes through restarts it.
+        if let Some(w) = &self.permission {
+            w.turned_on();
+        }
         Ok(())
     }
     fn disable(&self) -> Result<(), String> {
+        if let Some(w) = &self.permission {
+            w.turned_off();
+        }
         *self.inner.feed.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.inner.m.disable().map_err(|e| e.to_string())
+    }
+    fn permission(&self) -> Option<Permission> {
+        self.permission.as_ref()?.view(self.inner.m.tcc())
+    }
+    fn ask(&self, what: Ask) -> Result<(), AskError> {
+        let Some(w) = &self.permission else { return Err(AskError::NotNeeded) };
+        if self.inner.m.tcc().is_some_and(|t| !t.required) {
+            return Err(AskError::NotNeeded);
+        }
+        if w.ask(what) {
+            Ok(())
+        } else {
+            Err(AskError::Off)
+        }
     }
     fn displays(&self) -> Vec<Display> {
         match self.inner.m.displays() {
@@ -257,7 +300,25 @@ impl StreamDeskd for Link {
 /// Daemon boot: the routes and the stream talk to the real deskd, and a
 /// switch left on turns deskd back on.
 pub fn boot() {
-    super::deskd::install(Arc::new(ManagedDeskd::new(super::deskd_link::manager().clone())));
+    let m = super::deskd_link::manager().clone();
+    let console = if cfg!(target_os = "macos") {
+        let w = Watcher::new(Arc::new(permission::DeskdHost { m: m.clone() }), Box::new(|| super::routes::emit_state_for(CONSOLE)));
+        ManagedDeskd::with_permission(m.clone(), w)
+    } else {
+        ManagedDeskd::new(m.clone())
+    };
+    // Every state K2 Screen reaches (ready after a restart, needs
+    // permission, …) reaches every open view as `desktop_state`.
+    let rx = m.subscribe();
+    let _ = std::thread::Builder::new().name("k2-deskd-state".into()).spawn(move || {
+        while let Ok(e) = rx.recv() {
+            if let DeskdEvent::State(_) = e {
+                super::routes::emit_state_for(CONSOLE);
+            }
+        }
+    });
+    let console = Arc::new(console);
+    super::deskd::install(console.clone());
     // Virtual desktops (Linux, LD-22): one K2 Screen per desktop, made on
     // first use; the manager tells K2 Screen, the viewers and the clients.
     #[cfg(target_os = "linux")]
@@ -265,6 +326,7 @@ pub fn boot() {
     super::virtual_routes::install_hooks(&super::virtual_desktop::manager());
     match store::is_enabled(CONSOLE) {
         Ok(true) => {
+            console.resume_permission();
             let _ = std::thread::Builder::new().name("k2-deskd-boot".into()).spawn(|| {
                 let st = super::deskd_link::manager().enable(ENABLE_WAIT);
                 k2_core::log_debug!("[desktop] the switch is on: K2 Screen is {}", st.name());

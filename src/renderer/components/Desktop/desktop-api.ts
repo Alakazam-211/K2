@@ -3,7 +3,16 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
-import { readDesktopList, readDesktopStatus, type DesktopGrant, type DesktopList, type DesktopStatus, type DesktopViewer } from './desktop-state'
+import {
+  readDesktopList,
+  readDesktopStatus,
+  type DesktopGrant,
+  type DesktopList,
+  type DesktopPermission,
+  type DesktopStatus,
+  type DesktopViewer,
+  type PermissionPane,
+} from './desktop-state'
 import type { Display } from './desktop-wire'
 
 export interface DesktopAuditLine {
@@ -58,8 +67,23 @@ export async function fetchDesktopDisplays(scope: ServerScope): Promise<Display[
 
 /** `desktop`: the switch to turn on (`virtual`: every virtual desktop on
  *  the server, §4 item 2); left out, This server's. */
-export function enableDesktop(scope: ServerScope, desktop?: string): Promise<{ enabled: boolean; state: string; card?: string }> {
+export function enableDesktop(
+  scope: ServerScope,
+  desktop?: string,
+): Promise<{ enabled: boolean; state: string; card?: string; macPermission?: DesktopPermission }> {
   return daemonCliPost(scope, 'desktop/enable', desktop ? { desktop } : {})
+}
+
+/** Ask at the Mac (`POST /cli/desktop/ask`, the Owner's, only while the
+ *  switch is on): `{}` has K2 Screen show macOS's prompts again (or open
+ *  System Settings when macOS won't prompt twice), `{open}` opens a pane at
+ *  the Mac, `{check: true}` checks again. It can't turn sharing on, so a
+ *  remote room may send it (`kessel/room-writes.ts`). */
+export function askDesktop(
+  scope: ServerScope,
+  what: { open: PermissionPane } | { check: true } | Record<string, never> = {},
+): Promise<{ asked: string; state: string; macPermission?: DesktopPermission }> {
+  return daemonCliPost(scope, 'desktop/ask', what)
 }
 
 export function disableDesktop(scope: ServerScope): Promise<{ enabled: boolean; closed: number }> {

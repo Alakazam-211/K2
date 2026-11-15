@@ -38,11 +38,13 @@ import type { DesktopItemData } from '@/stores/tabs'
 import { CursorOverlay } from './cursor-overlay'
 import { DesktopStateCard } from './DesktopStateCard'
 import { DesktopToolbar } from './DesktopToolbar'
-import { enableDesktop, fetchDesktopDisplays, setupDesktop, startDesktop, stopDesktop } from './desktop-api'
+import { askDesktop, enableDesktop, fetchDesktopDisplays, setupDesktop, startDesktop, stopDesktop } from './desktop-api'
 import { checkInput, keyCodeToSend, mapPointer, oneToOneCssPerPt, pictureLayout, pointerButton, splitText, wheelMode, type Fit } from './desktop-input'
 import { chordEvents, keysMenu, routeKey, type KeysMenuEntry } from './desktop-keymap'
 import { isServerDesktop, sameDesktop, SERVER_DESKTOP_ID, type DesktopFit } from './desktop-serialize'
 import {
+  ASKED_AT_MAC,
+  askRefusalText,
   cardText,
   desktopStateLabel,
   DESKTOP_FEATURE,
@@ -445,8 +447,23 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
         post('Couldn’t set up the desktop', () => setupDesktop(scope))
         return
       }
-      if (action === 'turn-on' || action === 'ask-at-mac') {
-        // Ask at the Mac re-arms K2 Screen, which asks for its permission.
+      if (action === 'ask-at-mac') {
+        // Ask at the Mac: the Mac's K2 Screen shows macOS's prompt (or
+        // System Settings) to whoever is at that Mac. Its own route, so a
+        // remote room may send it; it can't turn sharing on.
+        setBusy(true)
+        askDesktop(scope)
+          .then(
+            () => useToastStore.getState().addToast(ASKED_AT_MAC, 'info'),
+            (err: unknown) => useToastStore.getState().addToast(askRefusalText(err, scope.hostKey), 'error'),
+          )
+          .finally(() => {
+            setBusy(false)
+            refresh()
+          })
+        return
+      }
+      if (action === 'turn-on') {
         setBusy(true)
         enableDesktop(scope, isVirtual ? 'virtual' : undefined)
           .then(
@@ -457,10 +474,7 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
               // A remote room never switches on screen sharing for another
               // machine (prd-remote-desktop-tab S1): say where to do it.
               if (err instanceof RoomWriteRefusedError) {
-                const text =
-                  action === 'ask-at-mac'
-                    ? `The Mac's permission prompt can only be started at that Mac: on ${err.hostKey}, open a Desktop tab for that computer and press Ask at the Mac, or allow K2 Screen in System Settings → Privacy & Security (Screen & System Audio Recording, and Accessibility).`
-                    : `Remote desktop is turned on at that computer itself: on ${err.hostKey}, open Settings → Remote desktop (or run k2 desktop enable there).`
+                const text = `Remote desktop is turned on at that computer itself: on ${err.hostKey}, open Settings → Remote desktop (or run k2 desktop enable there).`
                 useToastStore.getState().addToast(text, 'error')
                 return
               }

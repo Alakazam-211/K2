@@ -1115,6 +1115,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/desktop/displays",
         "/cli/desktop/enable",
         "/cli/desktop/disable",
+        "/cli/desktop/ask",
         "/cli/desktop/policy",
         "/cli/desktop/grant",
         "/cli/desktop/revoke",

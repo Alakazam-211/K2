@@ -13,6 +13,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 use k2_core::desktop::wire::Display;
 use k2_core::desktop::MachineState;
 
+pub use super::permission::{Ask, Permission};
+
 /// What the routes need from deskd.
 pub trait Deskd: Send + Sync {
     /// `macos` | `linux` | `windows`.
@@ -30,6 +32,27 @@ pub trait Deskd: Send + Sync {
     fn stream(&self) -> Option<Arc<dyn super::stream::StreamDeskd>> {
         None
     }
+    /// The Mac's permission steps for the Settings row (`status.macPermission`);
+    /// `None` where K2 Screen needs no permission (Linux) or the switch is
+    /// off.
+    fn permission(&self) -> Option<Permission> {
+        None
+    }
+    /// The Owner's ask (`POST /cli/desktop/ask`): fire macOS's prompts
+    /// again, open a System Settings pane, or check again.
+    fn ask(&self, _what: Ask) -> Result<(), AskError> {
+        Err(AskError::NotNeeded)
+    }
+}
+
+/// Why an ask did nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AskError {
+    /// This computer's K2 Screen needs no permission (Linux), or there is
+    /// no K2 Screen here.
+    NotNeeded,
+    /// The switch is off.
+    Off,
 }
 
 /// This OS's backend name.

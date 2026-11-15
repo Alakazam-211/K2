@@ -192,8 +192,9 @@ pub enum ReleaseReason {
 pub enum Op {
     /// Reply: `{tcc}`.
     TccStatus,
-    /// Fires `CGRequestScreenCaptureAccess()` and the Accessibility prompt,
-    /// and opens the matching System Settings pane. Reply: `{tcc}`.
+    /// Fires `CGRequestScreenCaptureAccess()` and the Accessibility prompt
+    /// for what's missing (macOS shows each once; the daemon opens System
+    /// Settings itself after that). Reply: `{tcc}`.
     TccRequest,
     /// Usually `nr`. Dropped (not queued) during a local hold (R14).
     Inject { ev: InputEvent },

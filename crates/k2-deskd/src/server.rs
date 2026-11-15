@@ -36,8 +36,17 @@ pub trait Host: Send + Sync + 'static {
     /// `macos`, `x11`, `wayland` or `none`.
     fn backend(&self) -> String;
     fn frames_via(&self) -> FramesVia;
+    /// The live answer (`tcc_status`, the hello): on macOS this may run
+    /// the short `--tcc-probe` copy while Screen Recording reads "no".
     fn tcc(&self) -> Tcc;
-    /// Fire the OS prompts (and open the Settings panes) for what's missing.
+    /// This process's own answer, with nothing started: the background
+    /// re-check's. The daemon checks with [`Host::tcc`] while it waits
+    /// for a grant (and for a bounded time only).
+    fn tcc_self(&self) -> Tcc {
+        self.tcc()
+    }
+    /// Fire the OS prompts for what's missing (the daemon opens System
+    /// Settings itself when the OS won't prompt again).
     fn request_tcc(&self) -> Tcc;
     fn displays(&self) -> Result<Vec<Display>, String>;
     /// The OS's idle clock (HID idle on macOS, XScreenSaver on X11). Note:
@@ -355,9 +364,11 @@ impl<H: Host> Deskd<H> {
         }
     }
 
-    /// One step of the TCC re-check: an event when the grants changed.
+    /// One step of the background TCC re-check: an event when the grants
+    /// changed. This process's own preflight only ([`Host::tcc_self`]):
+    /// nothing is started every 5 s for as long as deskd runs.
     pub fn tick_tcc(&self, last: &mut Tcc) {
-        let now = self.host.tcc();
+        let now = self.host.tcc_self();
         if now != *last {
             *last = now;
             self.out.event(&Event::TccChanged { tcc: now });
@@ -381,7 +392,7 @@ impl<H: Host> Deskd<H> {
         std::thread::Builder::new()
             .name("k2-deskd-tcc".into())
             .spawn(move || {
-                let mut last = me.host.tcc();
+                let mut last = me.host.tcc_self();
                 loop {
                     std::thread::sleep(TCC_RECHECK);
                     me.tick_tcc(&mut last);

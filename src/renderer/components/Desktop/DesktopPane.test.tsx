@@ -23,7 +23,8 @@ const daemon = vi.hoisted(() => ({
   status: null as unknown,
   gets: [] as Array<{ scope: string; route: string }>,
   posts: [] as Array<{ scope: string; route: string; body: unknown }>,
-  refuseEnableAsRoom: false,
+  /** What `desktop/ask` throws (a refusal), else it answers ok. */
+  askError: null as unknown,
 }))
 const events = vi.hoisted(() => ({ fns: new Set<() => void>() }))
 vi.mock('@/stores/session-events', async () => {
@@ -38,6 +39,10 @@ vi.mock('@/stores/session-events', async () => {
 })
 vi.mock('@/lib/daemon-cli', async () => {
   const actual = await vi.importActual<typeof import('@/lib/daemon-cli')>('@/lib/daemon-cli')
+  // The real request layer's room check: a remote room sends only the room
+  // allowlist (kessel/room-writes.ts). Loaded once here, so a POST answers
+  // within the click's act().
+  const { assertScopeMayWrite } = await vi.importActual<typeof import('@/kessel/server-scope')>('@/kessel/server-scope')
   return {
     ...actual,
     daemonCliGet: vi.fn(async (scope: { hostKey: string }, route: string) => {
@@ -49,14 +54,15 @@ vi.mock('@/lib/daemon-cli', async () => {
       throw new Error(`unexpected GET ${route}`)
     }),
     daemonCliPost: vi.fn(async (scope: { hostKey: string }, route: string, body: unknown) => {
+      assertScopeMayWrite(scope as never, route)
       // The stream's ticket: this suite has no socket (DesktopPane.stream.test.tsx has).
       if (route === 'desktop/ticket') throw new Error('no stream in this suite')
       daemon.posts.push({ scope: scope.hostKey, route, body })
-      if (route === 'desktop/enable' && daemon.refuseEnableAsRoom) {
-        const { RoomWriteRefusedError } = await vi.importActual<typeof import('@/kessel/server-scope')>('@/kessel/server-scope')
-        throw new RoomWriteRefusedError(scope.hostKey, route)
-      }
       if (route === 'desktop/enable') return { enabled: true, state: 'ready', card: 'CARD FROM DAEMON' }
+      if (route === 'desktop/ask') {
+        if (daemon.askError) throw daemon.askError
+        return { ok: true, asked: 'prompt', state: 'needs_permission' }
+      }
       throw new Error(`unexpected POST ${route}`)
     }),
   }
@@ -70,6 +76,13 @@ import { DESKTOP_ENABLE_CARD, STATE_CARDS, type DesktopStatus, type TabState } f
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 import type { ServerScope } from '@/kessel/server-scope'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { ASKED_AT_MAC } from './desktop-state'
+
+/** A usable remote room's scope on b.k2.dev (the room allowlist applies). */
+function roomScope(): ServerScope {
+  return { ...fakeScope('b.k2.dev'), remoteRoom: true } as ServerScope
+}
 
 const setDesktopItemState = vi.fn()
 const tabs = { getState: () => ({ setDesktopItemState }) }
@@ -160,43 +173,74 @@ describe('DesktopPane states', () => {
 
   it('Turn on from a remote room says to turn it on at that computer', async () => {
     daemon.status = status({ enabled: false })
-    daemon.refuseEnableAsRoom = true
+    useToastStore.setState({ toasts: [] })
+    await render(roomScope())
+    const button = (): HTMLElement => card().querySelector<HTMLElement>('[data-desktop-card-action="turn-on"]')!
+    fireEvent.click(button())
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    await act(async () => {})
+    const toasts = useToastStore.getState().toasts.map((t) => t.message)
+    expect(toasts).toContain(
+      'Remote desktop is turned on at that computer itself: on b.k2.dev, open Settings → Remote desktop (or run k2 desktop enable there).',
+    )
+    expect(toasts.some((m) => m.includes('is not something a room sends'))).toBe(false)
+    expect(daemon.posts.map((p) => p.route)).toEqual([])
+  })
+
+  it('Ask at the Mac from a remote room asks that Mac (its own route, never Turn on)', async () => {
+    daemon.status = status({ state: 'needs_permission' })
+    useToastStore.setState({ toasts: [] })
+    await render(roomScope())
+    const ask = card().querySelector<HTMLElement>('[data-desktop-card-action="ask-at-mac"]')
+    expect(ask).not.toBeNull()
+    await act(async () => {
+      fireEvent.click(ask!)
+    })
+    await act(async () => {})
+    expect(daemon.posts).toEqual([{ scope: 'b.k2.dev', route: 'desktop/ask', body: {} }])
+    const toasts = useToastStore.getState().toasts.map((t) => t.message)
+    expect(toasts).toEqual([ASKED_AT_MAC])
+    // It re-reads status after.
+    expect(daemon.gets.filter((g) => g.route === 'desktop/status').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('Ask at the Mac when that Mac switched it off says to turn it on there', async () => {
+    daemon.status = status({ state: 'needs_permission' })
+    daemon.askError = new DaemonHttpError('Remote desktop is off on this computer', 409, 'desktop_off')
     useToastStore.setState({ toasts: [] })
     try {
-      await render()
-      const button = (): HTMLElement => card().querySelector<HTMLElement>('[data-desktop-card-action="turn-on"]')!
-      fireEvent.click(button())
+      await render(roomScope())
       await act(async () => {
-        fireEvent.click(button())
+        fireEvent.click(card().querySelector<HTMLElement>('[data-desktop-card-action="ask-at-mac"]')!)
       })
-      const want =
-        'Remote desktop is turned on at that computer itself: on b.k2.dev, open Settings → Remote desktop (or run k2 desktop enable there).'
-      await vi.waitFor(() => expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(want))
+      await act(async () => {})
       const toasts = useToastStore.getState().toasts.map((t) => t.message)
-      expect(toasts.some((m) => m.includes('is not something a room sends'))).toBe(false)
+      expect(toasts).toEqual([
+        'Remote desktop is off on b.k2.dev. Turn it on at that computer itself: Settings → Remote desktop (or run k2 desktop enable there).',
+      ])
     } finally {
-      daemon.refuseEnableAsRoom = false
+      daemon.askError = null
     }
   })
 
-  it('Ask at the Mac from a remote room says to start the prompt at that Mac', async () => {
+  it('Ask at the Mac on an older K2 (no ask route) says to allow it at that Mac', async () => {
     daemon.status = status({ state: 'needs_permission' })
-    daemon.refuseEnableAsRoom = true
+    daemon.askError = new DaemonHttpError('not found', 404, null)
     useToastStore.setState({ toasts: [] })
     try {
       await render()
-      const ask = card().querySelector<HTMLElement>('[data-desktop-card-action="ask-at-mac"]')
-      expect(ask).not.toBeNull()
       await act(async () => {
-        fireEvent.click(ask!)
+        fireEvent.click(card().querySelector<HTMLElement>('[data-desktop-card-action="ask-at-mac"]')!)
       })
-      const askLine = (m: string): boolean => m.startsWith("The Mac's permission prompt can only be started at that Mac: on b.k2.dev")
-      await vi.waitFor(() => expect(useToastStore.getState().toasts.some((t) => askLine(t.message))).toBe(true))
-      // The ask action's own toast is the newest one, not Turn on's line.
+      await act(async () => {})
       const toasts = useToastStore.getState().toasts.map((t) => t.message)
-      expect(askLine(toasts[toasts.length - 1]!)).toBe(true)
+      expect(toasts).toEqual([
+        'K2 on b.k2.dev is older and can’t ask from here. At that Mac, allow K2 Screen in System Settings → Privacy & Security (Screen & System Audio Recording, and Accessibility).',
+      ])
     } finally {
-      daemon.refuseEnableAsRoom = false
+      daemon.askError = null
     }
   })
 

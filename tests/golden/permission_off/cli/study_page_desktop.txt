@@ -33,8 +33,11 @@ TURN IT ON (the owner, at this computer or over K2 Connect)
   1. k2 desktop enable          (or Settings → Remote Desktop → Turn on).
      It prints what that allows: anyone allowed can see and do anything you
      can on this computer, mail, files and passwords included.
-  2. On a Mac, someone at the Mac allows "K2 Screen" once for Screen
-     Recording and Accessibility (System Settings asks).
+  2. On a Mac, step 1 also has "K2 Screen" ask macOS for Screen Recording
+     and Accessibility; someone at the Mac allows both once. If macOS asked
+     before, K2 opens System Settings at the pane instead. K2 notices the
+     grant and restarts K2 Screen by itself (k2 desktop status shows the
+     steps). Again later: k2 desktop ask (or Ask at the Mac in the tab).
   3. On another device: + → Desktop (Beta) in any tab strip, or
      k2 desktop open from that device's own K2.
   It stays on until an Owner turns it off: k2 desktop disable (every

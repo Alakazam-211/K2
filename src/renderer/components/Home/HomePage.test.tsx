@@ -1527,3 +1527,148 @@ describe('the selected agent row drops the dividers around it (Home nav)', () =>
     expect(lines()).toEqual(['hidden', 'shown'])
   })
 })
+
+// Rosson 2026-11-14, on the collapsed rail: the pane showed one agent (a
+// room from another server), the rail lit a different one (the window's
+// own agent behind that room), and clicking the right icon did nothing.
+// The rail and the nav read one answer for "which row is on screen" and
+// open a row the same way (lib/home-open's `openHomeRow`, as ⌘N does).
+describe('the collapsed rail and the nav agree on the agent on screen', () => {
+  afterEach(async () => {
+    await act(async () => {
+      await homeRooms.closeAll()
+    })
+    const st = useHomesStore.getState()
+    for (const g of st.homes.slice(1)) st.deleteHome(g.id)
+  })
+
+  function railStage(): HTMLElement {
+    const el = document.querySelector('[data-home-rail-stage]')
+    if (!(el instanceof HTMLElement)) throw new Error('the collapsed rail is not mounted')
+    return el
+  }
+
+  /** A rail icon by its row's label (the first part of its tooltip). */
+  function railIcon(label: string): HTMLElement {
+    const hit = Array.from(railStage().querySelectorAll('button')).find(
+      (b) => (b.getAttribute('title') ?? '').split(' • ')[0] === label,
+    )
+    if (!hit) throw new Error(`no rail icon for ${label}`)
+    return hit
+  }
+
+  /** The labels the rail lights as selected, in rail order. */
+  function railSelected(): string[] {
+    return Array.from(railStage().querySelectorAll('button'))
+      .filter((b) => b.classList.contains('icon-rail-active') || b.getAttribute('aria-current') === 'true')
+      .map((b) => (b.getAttribute('title') ?? '').split(' • ')[0])
+  }
+
+  /** The labels the nav marks as selected, in nav order. */
+  function navSelected(): string[] {
+    return Array.from(homeSidebar().querySelectorAll('[data-agent-row][aria-current="true"]')).map((r) => {
+      const name = r.querySelector('span.truncate')
+      if (!name) throw new Error('a selected nav row has no name')
+      return name.textContent ?? ''
+    })
+  }
+
+  function collapse(collapsed: boolean): void {
+    act(() => useSidebarStore.setState({ isCollapsed: collapsed }))
+  }
+
+  async function openBeeRoomFromNav(): Promise<void> {
+    await act(async () => {
+      fireEvent.click(rowOf('Bee'))
+    })
+    expect(homeRooms.store.getState().shown).toBe('bee::b.k2.dev')
+  }
+
+  it('a room from another server on screen: the rail lights that agent, not the window\'s own agent behind it', async () => {
+    useRemoteRoomsPreviewStore.setState({ enabled: true })
+    render(<Shell />)
+    // Entering Home opened the top row: Cortana, the window's own agent.
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    await openBeeRoomFromNav()
+    expect(navSelected()).toEqual(['Bee'])
+
+    collapse(true)
+    expect(railSelected()).toEqual(['Bee'])
+    expect(railIcon('Bee').getAttribute('aria-current')).toBe('true')
+    expect(railIcon('Cortana').getAttribute('aria-current')).toBeNull()
+  })
+
+  it('a rail click on another server\'s agent opens its room and lights it', async () => {
+    useRemoteRoomsPreviewStore.setState({ enabled: true })
+    useSidebarStore.setState({ isCollapsed: true })
+    render(<Shell />)
+    expect(railSelected()).toEqual(['Cortana'])
+    await act(async () => {
+      fireEvent.click(railIcon('Bee'))
+    })
+    expect(homeRooms.store.getState().shown).toBe('bee::b.k2.dev')
+    expect(railSelected()).toEqual(['Bee'])
+  })
+
+  it('a rail click on the window\'s own agent while a room is on screen gives the pane back to it', async () => {
+    useRemoteRoomsPreviewStore.setState({ enabled: true })
+    render(<Shell />)
+    await openBeeRoomFromNav()
+    collapse(true)
+    await act(async () => {
+      fireEvent.click(railIcon('Cortana'))
+    })
+    expect(homeRooms.store.getState().shown).toBeNull()
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    expect(railSelected()).toEqual(['Cortana'])
+    collapse(false)
+    expect(navSelected()).toEqual(['Cortana'])
+  })
+
+  it('across collapse, expand and group switches, the rail lights what the nav marks', async () => {
+    useRemoteRoomsPreviewStore.setState({ enabled: true })
+    // Group "Work": Cortana again, under a top row that can't open now (its
+    // agent is gone), so entering Work keeps Bee's room on screen: the
+    // agent on screen is then in Group 1, not in the group shown.
+    const st = useHomesStore.getState()
+    const first = st.homes[0].id
+    const work = st.createHome('Work')
+    if (!work) throw new Error('createHome refused')
+    useHomesStore.getState().addRow(work, { address: 'ghost::local', workspaceId: 'px', label: 'Ghost' })
+    useHomesStore.getState().addRow(work, { address: 'cortana::local', workspaceId: 'pl', label: 'Cortana' })
+    useHomesStore.getState().addRow(work, { address: 'nova::local', workspaceId: 'pn', label: 'Nova' })
+    useHomesStore.getState().selectHome(first)
+
+    render(<Shell />)
+    await openBeeRoomFromNav()
+    expect(navSelected()).toEqual(['Bee'])
+    collapse(true)
+    expect(railSelected()).toEqual(['Bee'])
+
+    // The agent on screen (Bee's room) is not in Work: nothing is lit in
+    // either, never Cortana (the window's own agent, behind the room).
+    act(() => useHomesStore.getState().selectHome(work))
+    expect(homeRooms.store.getState().shown).toBe('bee::b.k2.dev')
+    expect(railSelected()).toEqual([])
+    collapse(false)
+    expect(navSelected()).toEqual([])
+    collapse(true)
+    expect(railSelected()).toEqual([])
+
+    // A rail click in Work opens and lights that agent, in both.
+    await act(async () => {
+      fireEvent.click(railIcon('Nova'))
+    })
+    expect(homeRooms.store.getState().shown).toBeNull()
+    expect(useProjectsStore.getState().activeProjectId).toBe('pn')
+    expect(railSelected()).toEqual(['Nova'])
+    collapse(false)
+    expect(navSelected()).toEqual(['Nova'])
+
+    // Back to Group 1 (Nova is not on it: its top row, Cortana, opens).
+    act(() => useHomesStore.getState().selectHome(first))
+    expect(navSelected()).toEqual(['Cortana'])
+    collapse(true)
+    expect(railSelected()).toEqual(['Cortana'])
+  })
+})

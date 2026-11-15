@@ -35,6 +35,7 @@ import { AgentRowButton } from '@/components/Sidebar/Sidebar'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { grokAgentStatus } from '@/lib/home-agent-status'
 import { MachineChip } from '@/components/Home/MachineChip'
+import { useHomeRowOnScreen } from '@/components/Home/home-row-on-screen'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { useHomeRowAvatar } from '@/lib/home-avatars'
 import { GrokBotTag } from './GrokBotTag'
@@ -164,7 +165,8 @@ export function GrokBotHomeRow({ home, row, index }: { home: Home; row: HomeRow;
   // The window's server gets events; other servers are polled while shown.
   useGrokBotsSync(scope, onConnected ? 0 : 15000, !(isWebClient() && !onConnected))
   const hostState = useGrokBotsStore((s) => s.byHost[hostKey])
-  const open = useGrokBotsStore((s) => s.open)
+  // The same answer as the collapsed rail's icon.
+  const isActive = useHomeRowOnScreen(row, null)
   const cachedAvatar = useHomeRowAvatar(row.address)
   const agent = grokAgentOn(hostState, agentId)
   const list = hostState?.list ?? null
@@ -179,7 +181,6 @@ export function GrokBotHomeRow({ home, row, index }: { home: Home; row: HomeRow;
           : list && !agent
             ? `${row.label} is not on that server any more`
             : null
-  const isActive = open?.hostKey === hostKey && open.agentId.toLowerCase() === agentId
   return (
     <div className="no-drag" data-grokbot-home-row={row.address}>
       <AgentRowButton

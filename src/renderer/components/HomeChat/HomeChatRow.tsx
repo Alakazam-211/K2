@@ -35,6 +35,7 @@ import { AgentRowButton } from '@/components/Sidebar/Sidebar'
 import { UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { HomeRowPinMark } from '@/components/Home/groups/HomeRowCaption'
+import { useHomeRowOnScreen } from '@/components/Home/home-row-on-screen'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 
@@ -110,7 +111,8 @@ export function HomeChatHomeRow({ home, row }: { home: Home; row: HomeRow; index
   const target = homeChatTarget(row)
   const hostKey = target?.hostKey ?? null
   const host = useHomeChatHost(hostKey)
-  const open = useHomeChatStore((s) => s.open)
+  // The same answer as the collapsed rail's icon.
+  const isActive = useHomeRowOnScreen(row, null)
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const hosts = useConnectHostStore((s) => s.hosts)
   const peopleByHost = usePeopleByHost()
@@ -132,7 +134,6 @@ export function HomeChatHomeRow({ home, row }: { home: Home; row: HomeRow; index
   // one of your servers.
   const showChip = hostKey !== connectedKey || also.length > 0
   const place = serverLabelFor(hostKey, hosts)
-  const isActive = open?.address === row.address
   const title = noChat
     ? `No chat on ${place}`
     : unreachable

@@ -49,7 +49,8 @@ import { openHomeRow } from '@/lib/home-open'
 import { homeRowHoverPrefetch } from '@/lib/home-row-prefetch'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
-import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
+import { homeRooms } from '@/stores/home-rooms'
+import { useHomeRowOnScreen } from './home-row-on-screen'
 import { AgentRowButton, NavRowDivider, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
@@ -263,7 +264,7 @@ export function openOtherHomeRow(row: HomeRow, kind: RowStatus['kind']): void {
 function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: number }): React.JSX.Element {
   const { status, place, onConnected } = useRowStatus(row)
   const preview = useRemoteRoomsPreview()
-  const shownRoom = useShownHomeRoom()
+  const isActive = useHomeRowOnScreen(row, null)
   const rowHost = parseHomeAddress(row.address)?.host ?? ''
   const boot = useStore(hostPool.store, (s) => s.entries[rowHost]?.boot ?? null)
   const verdict = homeRoomVerdict(boot)
@@ -325,7 +326,7 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
 
   return (
     <AgentRowButton
-      isActive={preview && shownRoom === row.address}
+      isActive={isActive}
       color={color}
       dimmed={status.kind === 'offline' || status.kind === 'not-found'}
       onClick={() => {
@@ -401,7 +402,6 @@ function WorkspaceHomeRowView({ home, row, index }: { home: Home; row: HomeRow; 
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
   const projects = useProjectsStore((s) => s.projects)
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const parsed = parseHomeAddress(row.address)
   const ws =
     parsed && parsed.host === connectedKey && connectionStatus === 'connected'
@@ -409,9 +409,9 @@ function WorkspaceHomeRowView({ home, row, index }: { home: Home; row: HomeRow; 
       : null
   const note = useConnectedRowNote(row)
   // Home M4: while a remote room is on screen, no connected row is active;
-  // clicking one gives the main area back to the window's own room.
-  const remoteShown = useShownHomeRoom() !== null
-  const isActive = !!ws && ws.id === activeProjectId && !remoteShown
+  // clicking one gives the main area back to the window's own room. The
+  // collapsed rail reads the same answer (home-row-on-screen).
+  const isActive = useHomeRowOnScreen(row, ws)
   if (ws && !note) {
     return (
       <div onClickCapture={() => homeRooms.showPrimary()}>

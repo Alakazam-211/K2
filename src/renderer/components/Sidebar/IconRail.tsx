@@ -83,6 +83,7 @@ export function ProjectIcon({
       onClick={onClick}
       onContextMenu={onContextMenu}
       title={tooltip}
+      aria-current={isActive ? 'true' : undefined}
     >
       <ProjectAvatar
         projectPath={project.path}

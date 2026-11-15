@@ -33,25 +33,35 @@ import GroupNameFlash from './groups/GroupNameFlash'
 import { displayRows, isPinned } from '@/lib/home-row-order'
 import { useHomeGroups } from './groups/useHomeGroups'
 import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
+import { useHomeRowOnScreen } from './home-row-on-screen'
+import { openHomeRow } from '@/lib/home-open'
 
 const RAIL_WIDTH = 48
 
-function OtherRowIcon({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element {
+/** A row that isn't a workspace on the connected server: another server's
+ *  agent, a person or channel, a Grok Bot. Lit like `ProjectIcon` while it
+ *  is the one on screen (its room or chat). */
+function OtherRowIcon({ home, row, isActive }: { home: Home; row: HomeRow; isActive: boolean }): React.JSX.Element {
   const { status, place, onConnected } = useRowStatus(row)
-  const canOpen = !(isWebClient() && !onConnected) && status.kind !== 'not-found'
+  // As the nav's row: "No access" rows never open a room (MS83).
+  const canOpen = !(isWebClient() && !onConnected) && status.kind !== 'not-found' && status.kind !== 'no-access'
   const title = [row.label, place, status.label].filter(Boolean).join(' • ')
   const avatarUrl = useHomeRowAvatar(row.address)
   const color = useHomeRowColor(row.address) ?? OTHER_SERVER_AVATAR_COLOR
   return (
     <button
-      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 transition-colors text-[var(--color-text-muted)] hover:bg-white/[0.06] hover:text-[var(--color-text-secondary)]${
-        status.kind === 'offline' || status.kind === 'not-found' ? ' opacity-60' : ''
-      }`}
+      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 transition-colors ${
+        isActive
+          ? 'bg-white/[0.12] text-[var(--color-text-primary)] icon-rail-active'
+          : 'text-[var(--color-text-muted)] hover:bg-white/[0.06] hover:text-[var(--color-text-secondary)]'
+      }${status.kind === 'offline' || status.kind === 'not-found' ? ' opacity-60' : ''}`}
+      style={isActive ? ({ '--accent-color': color } as React.CSSProperties) : undefined}
       onClick={() => {
         if (canOpen) openOtherHomeRow(row, status.kind)
       }}
       onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
       title={title}
+      aria-current={isActive ? 'true' : undefined}
       data-home-rail-row={row.address}
       data-row-status={status.kind}
     >
@@ -71,23 +81,27 @@ function RailRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
   const projects = useProjectsStore((s) => s.projects)
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const parsed = parseHomeAddress(row.address)
   const ws =
     parsed && parsed.host === connectedKey && connectionStatus === 'connected'
       ? findWorkspaceForRow(projects, row)
       : null
+  // The nav's answer, not just the active workspace: with another server's
+  // room on screen, that room's icon is the lit one (home-row-on-screen).
+  const isActive = useHomeRowOnScreen(row, ws)
   if (ws) {
     return (
       <ProjectIcon
         project={ws}
-        isActive={ws.id === activeProjectId}
-        onClick={() => useProjectsStore.getState().setActiveProject(ws.id)}
+        isActive={isActive}
+        // As ⌘N and the nav's row: give the main area back from a room or
+        // chat, then select the workspace.
+        onClick={() => void openHomeRow(row)}
         onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
       />
     )
   }
-  return <OtherRowIcon home={home} row={row} />
+  return <OtherRowIcon home={home} row={row} isActive={isActive} />
 }
 
 /** A group's rail icons, pins first under a short rule. An empty group

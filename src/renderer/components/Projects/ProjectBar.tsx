@@ -6,9 +6,12 @@
 //            contact: Atlas"). While the nav is a rail the name opens a
 //            project switcher.
 //   middle = the dashboards as tabs; "+" adds one (owners and admins) and
-//            leaves its tab ready to rename; the open tab's "…" menu has
-//            Rename and Delete (with the shared confirm). A divider, then
-//            Feedback, which is a different kind of page (owner call Q2).
+//            leaves its tab ready to rename. Any tab's menu (right-click,
+//            or Shift+F10 / the context-menu key on a focused tab) has
+//            Rename and Delete (with the shared confirm); F2 or a
+//            double-click renames. Nothing sits beside a tab, so switching
+//            tabs never moves one. A divider, then Feedback, which is a
+//            different kind of page (owner call Q2).
 //   right  = Layout (the presets menu), Settings ⚙ (the project's
 //            settings, as the nav's right-click opens them), Chat (opens the
 //            chat, with the unread count; hidden while the chat is open,
@@ -26,7 +29,9 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { useUnreadEntry } from '@/stores/unread'
-import { Button, Input, OverflowMenu, SearchField, cx } from '@/components/ui'
+import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
+import { showContextMenu } from '@/lib/context-menu'
+import { Button, Input, SearchField, cx } from '@/components/ui'
 import { ConversationUnreadBadge } from '@/components/common/UnreadBadge'
 import { AVATAR_ROUND } from '@/components/Settings/controls/SettingControls'
 import { ConfirmSheet } from '@/components/Settings/sections/AccessDialogs'
@@ -138,10 +143,13 @@ function TabPicker({
   dashboards,
   activeTab,
   onTab,
+  menuProps,
 }: {
   dashboards: ProjectGroupDashboard[]
   activeTab: string | null
   onTab: (id: string) => void
+  /** The open dashboard's menu on the picker (right-click, keys). */
+  menuProps: TabMenuProps
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const menu = useBarMenu(open, setOpen, { minWidth: 220, align: 'start', estimatedHeight: 60 + dashboards.length * 30 })
@@ -158,6 +166,8 @@ function TabPicker({
         aria-label={`Dashboards and Feedback: ${current} is open`}
         title="Dashboards and Feedback"
         onClick={() => setOpen(!open)}
+        onContextMenu={menuProps.onContextMenu}
+        onKeyDown={menuProps.onKeyDown}
         className={cx(tabClass(true), 'min-w-0 gap-1')}
         data-tab-picker=""
       >
@@ -350,6 +360,13 @@ function Identity({
 const TAB =
   'relative flex items-center px-3 type-control whitespace-nowrap border-b-2 -mb-px transition-colors no-drag cursor-pointer outline-none'
 
+/** What opens a dashboard's menu: right-click, Shift+F10 or the
+ *  context-menu key; F2 renames. */
+interface TabMenuProps {
+  onContextMenu: (e: React.MouseEvent<HTMLElement>) => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => void
+}
+
 function tabClass(active: boolean): string {
   return cx(
     TAB,
@@ -478,10 +495,14 @@ function DashboardTabs({
     setConfirmDelete(null)
     try {
       await deleteProjectGroupDashboard(primaryScope(), show.id, d.id)
-      onTab(null)
+      // Any tab can be deleted from its menu: the open one stays open
+      // unless it was the one deleted.
+      const wasOpen = activeTab === d.id
+      if (wasOpen) onTab(null)
       onChanged()
       toast(`Deleted the dashboard “${d.name}”.`, 'success')
-      focusTab(dashboards.find((x) => x.id !== d.id)?.id ?? null)
+      const stillOpen = wasOpen ? null : dashboards.find((x) => x.id === activeTab)
+      focusTab(stillOpen?.id ?? dashboards.find((x) => x.id !== d.id)?.id ?? null)
     } catch (err) {
       const { code } = daemonErrorInfo(err)
       toast(
@@ -506,34 +527,51 @@ function DashboardTabs({
 
   const active = dashboards.find((d) => d.id === activeTab) ?? null
 
-  const tabMenu = (d: ProjectGroupDashboard): React.JSX.Element => (
-    // The menu is portalled; its Esc stops here so the dashboard's
-    // Esc-to-tile doesn't take the focus back.
-    <span
-      className="flex items-center pr-1 flex-shrink-0"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') e.stopPropagation()
-      }}
-    >
-      <OverflowMenu
-        label={`More actions for the dashboard ${d.name}`}
-        className="!border-transparent !py-0.5 !px-1"
-        triggerProps={{ 'data-tab-menu': d.id }}
-        items={[
-          { id: 'rename', label: 'Rename', onSelect: () => setEditing(d.id) },
-          {
-            id: 'delete',
-            label: 'Delete…',
-            danger: true,
-            group: true,
-            disabled: lastOne,
-            hint: lastOne ? 'A project keeps at least one dashboard.' : 'Removes this tab. The agents and files stay.',
-            onSelect: () => setConfirmDelete(d),
-          },
-        ]}
-      />
-    </span>
-  )
+  // A dashboard's menu: Rename, then Delete… (owners and admins). It is the
+  // app's shared right-click menu, so no button sits beside a tab and
+  // switching tabs never moves one. From the keyboard it opens under the
+  // tab (`at`); from a right-click, at the pointer.
+  const openTabMenu = async (d: ProjectGroupDashboard, at?: HTMLElement): Promise<void> => {
+    const items: ContextMenuItemDef[] = [
+      { id: 'rename', label: 'Rename', shortcut: 'F2' },
+      { id: 'sep', label: '', type: 'separator' },
+      {
+        id: 'delete',
+        label: 'Delete…',
+        danger: true,
+        ...(lastOne ? { enabled: false, hint: 'A project keeps at least one dashboard.' } : {}),
+      },
+    ]
+    const r = at?.getBoundingClientRect()
+    const picked = await (r ? useContextMenuStore.getState().show(r.left, r.bottom, items) : showContextMenu(items))
+    if (picked === 'rename') setEditing(d.id)
+    else if (picked === 'delete' && !lastOne) setConfirmDelete(d)
+  }
+
+  // Right-click, Shift+F10, the context-menu key and F2 on a dashboard's
+  // tab (or on the picker, for the open one). A Member gets none of them,
+  // and never the browser's own menu.
+  const menuProps = (d: ProjectGroupDashboard | null): TabMenuProps => ({
+    onContextMenu: (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      // The context-menu key can also fire a contextmenu after its keydown
+      // opened the menu under the tab: keep that one, not one at the pointer.
+      if (useContextMenuStore.getState().isOpen) return
+      if (canEdit && d) void openTabMenu(d)
+    },
+    onKeyDown: (e) => {
+      if (!canEdit || !d) return
+      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+        e.preventDefault()
+        e.stopPropagation()
+        void openTabMenu(d, e.currentTarget)
+      } else if (e.key === 'F2') {
+        e.preventDefault()
+        setEditing(d.id)
+      }
+    },
+  })
 
   const plus = canEdit ? (
     <div className="flex items-center pl-1 flex-shrink-0">
@@ -569,8 +607,7 @@ function DashboardTabs({
               {d.name}
             </span>
           ))}
-          {/* The open tab's … menu, the +, the divider and Feedback. */}
-          <span className="inline-block w-7 flex-shrink-0" />
+          {/* The +, the divider and Feedback. */}
           {canEdit && <span className="inline-block w-8 flex-shrink-0" />}
           <span className="inline-block w-[17px] flex-shrink-0" />
           <span className={tabClass(false)}>
@@ -601,15 +638,16 @@ function DashboardTabs({
                     aria-selected={isActive}
                     tabIndex={isActive ? 0 : -1}
                     data-k2-focus=""
+                    aria-haspopup={canEdit ? 'menu' : undefined}
                     className={tabClass(isActive)}
                     onClick={() => onTab(d.id)}
                     onDoubleClick={() => canEdit && setEditing(d.id)}
-                    title={canEdit ? `${d.name} (double-click to rename)` : d.name}
+                    {...menuProps(d)}
+                    title={canEdit ? `${d.name} · Right-click to rename or delete` : d.name}
                   >
                     {d.name}
                   </button>
                 )}
-                {isActive && canEdit && editing !== d.id && tabMenu(d)}
               </div>
             )
           })}
@@ -637,9 +675,8 @@ function DashboardTabs({
           {active && editing === active.id ? (
             <RenameField dashboard={active} onDone={(name) => void rename(active, name)} />
           ) : (
-            <TabPicker dashboards={dashboards} activeTab={activeTab} onTab={onTab} />
+            <TabPicker dashboards={dashboards} activeTab={activeTab} onTab={onTab} menuProps={menuProps(active)} />
           )}
-          {active && canEdit && editing !== active.id && tabMenu(active)}
           {plus}
         </div>
       )}

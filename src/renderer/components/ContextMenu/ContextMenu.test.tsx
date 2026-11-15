@@ -63,4 +63,22 @@ describe('the right-click menu', () => {
     expect(sub?.parentElement?.getAttribute('data-k2-chamfer-float')).toBe('menu')
     expect(screen.getByRole('button', { name: 'Top' })).toBeTruthy()
   })
+
+  it('a danger row is quiet at rest and red when lit (as OverflowMenu draws one)', () => {
+    render(<ContextMenu />)
+    act(() => {
+      void useContextMenuStore.getState().show(40, 40, [
+        { id: 'rename', label: 'Rename' },
+        { id: 'delete', label: 'Delete…', danger: true },
+      ])
+    })
+    const del = screen.getByRole('button', { name: 'Delete…' })
+    expect(del.style.color).toBe('var(--color-text-secondary)')
+    fireEvent.mouseEnter(del)
+    expect(del.style.color).toBe('var(--color-status-error-soft)')
+    // A plain row lit is not red.
+    const rename = screen.getByRole('button', { name: 'Rename' })
+    fireEvent.mouseEnter(rename)
+    expect(rename.style.color).toBe('var(--color-text-secondary)')
+  })
 })

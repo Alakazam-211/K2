@@ -125,7 +125,11 @@ function RowButton({
         padding: '5px 12px',
         border: 'none',
         background: focused || open ? 'var(--color-overlay-soft-border)' : 'transparent',
-        color: looksDisabled ? 'var(--color-text-muted)' : 'var(--color-text-secondary)',
+        color: looksDisabled
+          ? 'var(--color-text-muted)'
+          : item.danger && (focused || open)
+            ? 'var(--color-status-error-soft)'
+            : 'var(--color-text-secondary)',
         fontSize: '12px',
         fontFamily: 'inherit',
         textAlign: 'left',

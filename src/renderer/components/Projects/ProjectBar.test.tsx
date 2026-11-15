@@ -8,8 +8,12 @@
 //     with each agent's files folded under it, and "Add an agent…" (the
 //     Settings picker in a dialog);
 //   - the bar: identity ("N agents · Point of contact: X"), the dashboards
-//     as tabs + "+" (owners and admins) + the open tab's Rename / Delete
-//     menu, a divider and Feedback; then Layout, ⚙, Chat;
+//     as tabs + "+" (owners and admins), a divider and Feedback; then
+//     Layout, ⚙, Chat;
+//   - a dashboard tab's Rename / Delete are on its right-click (any tab,
+//     not only the open one), Shift+F10 or the context-menu key; F2 and a
+//     double-click rename. No "…" sits beside a tab, so switching tabs
+//     never moves one;
 //   - a Member login sees no "+", no tab menu and no Layout;
 //   - with the nav as a rail, the project's name opens a switcher and the
 //     agents stay as pictures;
@@ -121,6 +125,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useUnreadStore } from '@/stores/unread'
 import { useToastStore } from '@/stores/toast'
+import { useContextMenuStore } from '@/stores/context-menu'
 import { fetchProjectGroupShow } from './projects-api'
 import type { ProjectGroup, ProjectGroupShow } from './projects-api'
 
@@ -206,6 +211,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  act(() => useContextMenuStore.getState().close())
   cleanup()
 })
 
@@ -409,7 +415,7 @@ describe('the project bar', () => {
     expect(b.querySelector('[data-agents-menu-button]')).toBeNull()
   })
 
-  it('a Member login sees no +, no tab menu and no Layout (Settings and Chat stay)', async () => {
+  it('a Member login sees no + and no Layout (Settings and Chat stay)', async () => {
     viewer.role = 'member'
     await renderPage()
     await waitFor(() => expect(bar().querySelector('[data-layout-menu]')).toBeNull())
@@ -444,29 +450,166 @@ describe('the project bar', () => {
     )
   })
 
-  it('the open tab\'s menu deletes after the shared confirm', async () => {
+})
+
+describe('a dashboard tab\'s menu (right-click, Shift+F10, F2)', () => {
+  type Item = { id: string; label: string; type?: string; enabled?: boolean; hint?: string; danger?: boolean }
+
+  /** An owner's bar, once the role is known (the + shows). */
+  async function renderOwner(): Promise<void> {
     await renderPage()
-    fireEvent.click(bar().querySelector('[data-tab-menu="d1"]') as HTMLElement)
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Delete/ }))
-    const confirm = await screen.findByTestId('delete-dashboard-confirm')
-    expect(confirm.textContent).toContain('Delete the dashboard “Main”?')
-    expect(daemon.posts.some((p) => p.route === 'project-group/dashboard/delete')).toBe(false)
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Delete dashboard' }))
+    await waitFor(() => expect(within(bar()).getByRole('button', { name: 'New dashboard' })).toBeTruthy())
+  }
+  const tab = (name: string): HTMLElement => within(bar()).getByRole('tab', { name })
+  async function rightClick(name: string, pick: string | null): Promise<Item[]> {
+    ctxMenu.pick = pick
+    const shown = vi.mocked(showContextMenu)
+    shown.mockClear()
+    fireEvent.contextMenu(tab(name))
+    await waitFor(() => expect(shown).toHaveBeenCalledTimes(1))
+    return shown.mock.calls[0][0] as Item[]
+  }
+
+  it('no tab has a "…" beside it', async () => {
+    await renderOwner()
+    expect(bar().querySelectorAll('[data-tab-menu]')).toHaveLength(0)
+    fireEvent.click(tab('Release'))
+    expect(bar().querySelectorAll('[data-tab-menu]')).toHaveLength(0)
+  })
+
+  it('switching tabs moves no tab: the same elements, in the same order, nothing between them', async () => {
+    await renderOwner()
+    const list = within(bar()).getByRole('tablist')
+    const before = Array.from(list.children)
+    const tabsBefore = within(list).getAllByRole('tab')
+    const slots = (): number[] => Array.from(list.querySelectorAll('[data-dashboard-tab]')).map((s) => s.children.length)
+    expect(slots()).toEqual([1, 1])
+    fireEvent.click(tab('Release'))
+    expect(tab('Release').getAttribute('aria-selected')).toBe('true')
+    expect(Array.from(list.children)).toEqual(before)
+    expect(within(list).getAllByRole('tab')).toEqual(tabsBefore)
+    expect(slots()).toEqual([1, 1])
+  })
+
+  it('right-clicking a tab that isn\'t open offers Rename and Delete… for that tab', async () => {
+    await renderOwner()
+    expect(tab('Main').getAttribute('aria-selected')).toBe('true')
+    const items = await rightClick('Release', null)
+    expect(items.map((i) => i.label)).toEqual(['Rename', '', 'Delete…'])
+    const del = items.find((i) => i.id === 'delete')!
+    expect(del.danger).toBe(true)
+    expect(del.enabled).not.toBe(false)
+    // The open tab stays open.
+    expect(tab('Main').getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('Rename puts that tab\'s name field in its place', async () => {
+    await renderOwner()
+    await rightClick('Release', 'rename')
+    const field = (await waitFor(() => screen.getByLabelText('Dashboard name'))) as HTMLInputElement
+    expect(field.value).toBe('Release')
+    expect(field.closest('[data-dashboard-tab]')!.getAttribute('data-dashboard-tab')).toBe('d2')
+    fireEvent.change(field, { target: { value: 'Ship it' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
     await waitFor(() =>
-      expect(daemon.posts.find((p) => p.route === 'project-group/dashboard/delete')!.body).toMatchObject({ group: 'g1', dashboardId: 'd1' }),
+      expect(daemon.posts.find((p) => p.route === 'project-group/dashboard/rename')!.body).toMatchObject({
+        group: 'g1',
+        dashboardId: 'd2',
+        name: 'Ship it',
+      }),
     )
   })
 
-  it('the menu\'s Rename turns the tab into its name field', async () => {
-    await renderPage()
-    fireEvent.click(bar().querySelector('[data-tab-menu="d1"]') as HTMLElement)
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }))
-    const field = screen.getByLabelText('Dashboard name') as HTMLInputElement
-    expect(field.value).toBe('Main')
-    // Escape keeps the old name and writes nothing.
+  it('Delete… asks with the shared confirm, then deletes that tab and keeps the open one', async () => {
+    await renderOwner()
+    await rightClick('Release', 'delete')
+    const confirm = await screen.findByTestId('delete-dashboard-confirm')
+    expect(confirm.textContent).toContain('Delete the dashboard “Release”?')
+    expect(daemon.posts.some((p) => p.route === 'project-group/dashboard/delete')).toBe(false)
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Delete dashboard' }))
+    await waitFor(() =>
+      expect(daemon.posts.find((p) => p.route === 'project-group/dashboard/delete')!.body).toMatchObject({ group: 'g1', dashboardId: 'd2' }),
+    )
+    expect(tab('Main').getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('cancelling the confirm puts focus back on the tab', async () => {
+    await renderOwner()
+    await rightClick('Release', 'delete')
+    const confirm = await screen.findByTestId('delete-dashboard-confirm')
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.activeElement).toBe(tab('Release')))
+    expect(daemon.posts.some((p) => p.route === 'project-group/dashboard/delete')).toBe(false)
+  })
+
+  it('the last dashboard\'s Delete is disabled, and says why', async () => {
+    state.show = { ...BASE_SHOW, dashboards: [dash('d1', 'Main', 0)] }
+    await renderOwner()
+    const del = (await rightClick('Main', null)).find((i) => i.id === 'delete')!
+    expect(del.enabled).toBe(false)
+    expect(del.hint).toBe('A project keeps at least one dashboard.')
+  })
+
+  it('Shift+F10 and the context-menu key open it at the tab; F2 renames', async () => {
+    await renderOwner()
+    const release = tab('Release')
+    release.focus()
+    fireEvent.keyDown(release, { key: 'F10', shiftKey: true })
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(useContextMenuStore.getState().items.map((i) => i.label)).toEqual(['Rename', '', 'Delete…'])
+    act(() => useContextMenuStore.getState().close())
+
+    fireEvent.keyDown(release, { key: 'ContextMenu' })
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    act(() => useContextMenuStore.getState().selectItem('rename'))
+    const field = (await waitFor(() => screen.getByLabelText('Dashboard name'))) as HTMLInputElement
+    expect(field.value).toBe('Release')
     fireEvent.keyDown(field, { key: 'Escape' })
     expect(screen.queryByLabelText('Dashboard name')).toBeNull()
     expect(daemon.posts.some((p) => p.route === 'project-group/dashboard/rename')).toBe(false)
+
+    const main = tab('Main')
+    main.focus()
+    fireEvent.keyDown(main, { key: 'F2' })
+    expect(((await waitFor(() => screen.getByLabelText('Dashboard name'))) as HTMLInputElement).value).toBe('Main')
+  })
+
+  it('double-click still renames', async () => {
+    await renderOwner()
+    fireEvent.doubleClick(tab('Release'))
+    expect((screen.getByLabelText('Dashboard name') as HTMLInputElement).value).toBe('Release')
+  })
+
+  it('the tooltip says so, and the tab says it has a menu', async () => {
+    await renderOwner()
+    expect(tab('Release').title).toBe('Release · Right-click to rename or delete')
+    expect(tab('Release').getAttribute('aria-haspopup')).toBe('menu')
+  })
+
+  it('a Member gets no menu, no rename and no browser menu', async () => {
+    viewer.role = 'member'
+    await renderPage()
+    await waitFor(() => expect(bar().querySelector('[data-layout-menu]')).toBeNull())
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    const shown = vi.mocked(showContextMenu)
+    shown.mockClear()
+    const release = tab('Release')
+    expect(release.title).toBe('Release')
+    expect(release.hasAttribute('aria-haspopup')).toBe(false)
+    // fireEvent returns false when the default (the browser's menu) was prevented.
+    expect(fireEvent.contextMenu(release)).toBe(false)
+    release.focus()
+    fireEvent.keyDown(release, { key: 'F10', shiftKey: true })
+    fireEvent.keyDown(release, { key: 'F2' })
+    fireEvent.doubleClick(release)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(shown).not.toHaveBeenCalled()
+    expect(useContextMenuStore.getState().isOpen).toBe(false)
+    expect(screen.queryByLabelText('Dashboard name')).toBeNull()
   })
 })
 
@@ -488,6 +631,29 @@ describe('tabs that don\'t fit', () => {
       fireEvent.click(within(menu).getByRole('menuitem', { name: 'Feedback' }))
       expect(screen.getByTestId('feedback-stub')).toBeTruthy()
       expect((bar().querySelector('[data-tab-picker]') as HTMLElement).textContent).toContain('Feedback')
+    } finally {
+      if (sw) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', sw)
+      if (cw) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cw)
+    }
+  })
+
+  it('no "…" beside the picker; right-clicking it gives the open dashboard\'s menu', async () => {
+    const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollWidth')
+    const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', { configurable: true, get: () => 500 })
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 100 })
+    try {
+      await renderPage()
+      await waitFor(() => expect(within(bar()).getByRole('button', { name: 'New dashboard' })).toBeTruthy())
+      const picker = await waitFor(() => bar().querySelector('[data-tab-picker]') as HTMLElement)
+      expect(bar().querySelectorAll('[data-tab-menu]')).toHaveLength(0)
+      ctxMenu.pick = 'rename'
+      const shown = vi.mocked(showContextMenu)
+      shown.mockClear()
+      fireEvent.contextMenu(picker)
+      await waitFor(() => expect(shown).toHaveBeenCalledTimes(1))
+      expect((shown.mock.calls[0][0] as Array<{ label: string }>).map((i) => i.label)).toEqual(['Rename', '', 'Delete…'])
+      expect(((await waitFor(() => screen.getByLabelText('Dashboard name'))) as HTMLInputElement).value).toBe('Main')
     } finally {
       if (sw) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', sw)
       if (cw) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cw)

@@ -208,7 +208,7 @@ fn agent_parity() {
         .unwrap_or_else(|f| panic!("{}", parity::render(&f)));
     let rows = parity();
     let live = rows.iter().filter(|r| r.status == RowStatus::Live).count();
-    assert_eq!(live, 28, "P24 Export is live since kit v0.9.7");
+    assert_eq!(live, 28, "the Export row is live since kit v0.9.7");
     assert!(report.not_applicable.is_empty());
     let deferred: Vec<PersonAction> = report.deferred.iter().map(|d| d.0).collect();
     assert_eq!(
@@ -230,7 +230,7 @@ fn agent_parity() {
         }
     }
     assert_eq!(report.matched.iter().filter(|m| m.1 == VERB).count(), 6);
-    // P22 (live since base v0.3.0): the gutter and the verb, -L, and the history right
+    // blame (live since base v0.3.0): the gutter and the verb, -L, and the history right
     assert_eq!(
         report
             .matched
@@ -247,7 +247,7 @@ fn agent_parity() {
     );
 }
 
-/// The pack's registry has its own verb, serving P13, and covers every live row.
+/// The pack's registry has its own verb, serving `P13`, and covers every live row.
 #[test]
 fn registry_covers_actions() {
     let r = Registry::for_pack(&PACK).unwrap();
@@ -384,7 +384,7 @@ fn unmapping_replace_section_fails() {
     );
 }
 
-/// Negative control: v0.1.0's P22 row (deferred, `blame` absent) fails now that the base
+/// Negative control: v0.1.0's blame row (deferred, `blame` absent) fails now that the base
 /// registers `blame` and has cases for it; and with `blame` out of the registry the live row
 /// is reported missing.
 #[test]
@@ -462,7 +462,7 @@ fn every_pack_has_a_table() {
     assert_eq!(
         numbers,
         (1..=31).collect::<Vec<u8>>(),
-        "PARITY.md rows P1..P31 in order"
+        "PARITY.md has the text tier's 31 rows, in order"
     );
     for row in parity() {
         let ParityRow { action, verbs, .. } = row;

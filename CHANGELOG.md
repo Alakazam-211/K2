@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.7.23: pairs with kit v0.19.0
+
+**Requires `k2-mpc-base` v0.19.0**. This pack's behaviour is unchanged from v0.7.22.
+
+- Pairs with kit v0.19.0. Its changes for a pack: `ContainerFields`, `BlobView` and `ViewSchema`
+  gain fields (build them with `..X::NONE`); a claim's end events carry its element addresses and
+  an outside save that removes a claim's elements ends it `gone_outside_save`; presence gains a
+  view address and a time position; the keyed watch gains the `outside_save` and `verb_refused`
+  frames; chunked version storage, off by default. This pack's text docs use none of them, so it
+  behaves as in v0.7.22.
+- Public text: the CHANGELOG, docs, doc comments and test messages name parity rows by their
+  action and the demo's findings in words; `scripts/check-labels.sh` also blocks parity-row,
+  finding and run labels, branch names and engine codes.
+- `Cargo.lock`: k2-mpc-base 0.19.0 (only the kit's crate version moves); the crate version.
+
 ## v0.7.22 (2026-11-12): pairs with kit v0.18.0
 
 **Requires `k2-mpc-base` v0.18.0**. This pack's behaviour is unchanged from v0.7.21.
@@ -180,7 +195,7 @@ This pack gets no grid and no new verb; what changed for it:
   a Markdown doc stays a text root, and its tests and goldens are unchanged (checked on a build
   node).
 - **Breaking items absorbed:**
-  - `PersonAction` gained the grid tier's rows P35-P44 (`RowInsert` … `DropDeleted`):
+  - `PersonAction` gained the grid tier's rows (`RowInsert` … `DropDeleted`):
     `parity_row` maps them **N/A** (a Markdown doc has no rows or columns), listing the grid verbs
     as absent (`row insert` … `rows drop-deleted`); `docs/PARITY.md` has the row.
   - `At` is no longer `Copy` (it gained `At::Elem`, a grid cell by key): the demo clones
@@ -190,7 +205,7 @@ This pack gets no grid and no new verb; what changed for it:
   byte for byte, so a kit v0.9.7.1 build still reads and writes it.
 - **Error ids:** `MPC-E806 header_names_unrendered` and `MPC-E807 header_only_row_blank`
   come from the grid's `header on` verb, which this pack doesn't list: not visible here.
-  P24 (`export`, `export --version`) stays live as in v0.7.6.
+  The Export row (`export`, `export --version`) stays live as in v0.7.6.
 - `Cargo.lock`: k2-mpc-base 0.10.0; the crate version.
 
 ## v0.7.7 (2026-10-30): pairs with kit v0.9.7.1
@@ -212,11 +227,11 @@ corruption, kit v0.1.0 through v0.9.7). What changes:
 ## v0.7.6 (2026-10-29): pairs with kit v0.9.7
 
 **Requires `k2-mpc-base` v0.9.7** (it skips v0.9.6, a one-fix release). Pack changes:
-- **Parity row P24 "Export" is live:** `ParityRow::live(a, &["export", "export --version"])`.
+- **The parity row "Export" is live:** `ParityRow::live(a, &["export", "export --version"])`.
   The kit now exports: `export` (needs read) and `export --version V` (needs history) give the
   file through the kit's export registry (as-is in the kit; format exporters are the host's).
   The old N/A row listed `export` as a verb that must not exist, which the kit's registry now
-  has, so the parity check would fail against it. `docs/PARITY.md`'s P24 row (the parity test
+  has, so the parity check would fail against it. `docs/PARITY.md`'s Export row (the parity test
   checks the table names each verb) and the parity test's counts (28 live rows, no N/A) follow.
 - **The demo's golden transcript** (`tests/golden/multiplayer_demo.txt`) changes by one
   line: agent-b's refused `replace --old TODO` (two matches, exit 1) now ends its stderr
@@ -237,7 +252,7 @@ The kit's changes since v0.9.5 (its CHANGELOG has the details):
   viewers, roster push, participant overflow); an undo never changes a word someone
   else wrote, and says so instead; speed work (incremental write-back and blame, the
   engine's position index); outside saves merged line by line; exports (`Session::file_at`,
-  the export contract, the P24 verbs); stable error ids (`MPC-Ennn`, `docs/ERRORS.md`); host
+  the export contract, the export verbs); stable error ids (`MPC-Ennn`, `docs/ERRORS.md`); host
   guidance per surface, relative paths in refusals and hard-linked files declined; the vendored
   engine at k2-yrs k2.6.3.
 
@@ -285,18 +300,19 @@ changes for this pack. No store format change.
 
 **Requires `k2-mpc-base` v0.9.2** (additive: tier 0 → text promotion keeping history,
 `approvals --all`, claims that never overlap at a shared edge, the engine's text cache; no
-store format change). No pack code change: the P30 row picks up the kit's `--all` cases with
-no list change. `scripts/check.sh` now checks this crate's formatting only (`cargo fmt -p
-k2-mpc-markdown`), so the kit's own style and its vendored model don't fail the pack's check.
+store format change). No pack code change: the pending-approvals row picks up the kit's
+`--all` cases with no list change. `scripts/check.sh` now checks this crate's formatting only
+(`cargo fmt -p k2-mpc-markdown`), so the kit's own style and its vendored model don't fail the
+pack's check.
 
 ## v0.7.1 (2026-10-28)
 
 **Requires `k2-mpc-base` v0.9.1** (additive: `edit_with_options`, the `run_tool` flag, the
 `approvals` alias of `log --pending`, one BOM on `write`; fixes for blame's `restored by` on a
 partly restored line and for last-edit notes). No pack code change: the double-BOM fix comes
-through the kit's `TextFilePack`, and the P30 row may leave the `approvals` alias out. The
-demo's transcript now shows both demo findings fixed (`restored by` on scenes 6 and 8; no
-`edited lines 25–26` notes), and the demo fails if a partly restored line lacks it.
+through the kit's `TextFilePack`, and the pending-approvals row may leave the `approvals` alias
+out. The demo's transcript now shows both demo findings fixed (`restored by` on scenes 6 and 8;
+no `edited lines 25–26` notes), and the demo fails if a partly restored line lacks it.
 
 **A multiplayer demo** (`docs/DEMO.md`): three agents and one person on one Markdown doc through the
 kit's sessions, headless and deterministic. It covers presence notes; a claim, a bounce and a retry
@@ -331,40 +347,41 @@ pack parses argv, so `replace-section` takes it too). The usage line and `docs/P
 
 ## v0.5.0 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.7.0** (agent presence). P8 lists `cursor`, `claim`, `claim --renew`,
-`claim --release`; P6 adds `activity`; `docs/PARITY.md` updated. No other change.
+**Requires `k2-mpc-base` v0.7.0** (agent presence). The caret row lists `cursor`, `claim`,
+`claim --renew`, `claim --release`; the "See who's here" row adds `activity`;
+`docs/PARITY.md` updated. No other change.
 
 ## v0.4.0 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.6.0**, whose `replace` also serves P12 (exact text,
-`replace --old TEXT --new TEXT [--all]`). The P12 row lists `replace` beside `sed -i`
+**Requires `k2-mpc-base` v0.6.0**, whose `replace` also serves find and replace (exact text,
+`replace --old TEXT --new TEXT [--all]`). The find-and-replace row lists `replace` beside `sed -i`
 (`parity.rs`, `docs/PARITY.md`) and `Cargo.lock` moves to base 0.6.0. No other change.
 
 ## v0.3.1 (2026-10-27)
 
-**Requires `k2-mpc-base` v0.5.0** (store format 4; P29/P30 gain blob rows, text packs unaffected).
-Only `Cargo.lock` and the crate version change; no code change.
+**Requires `k2-mpc-base` v0.5.0** (store format 4; the two approval rows gain blob rows, text packs
+unaffected). Only `Cargo.lock` and the crate version change; no code change.
 
 ## v0.3.0 (2026-10-27)
 
-**Requires `k2-mpc-base` v0.4.0.** The base added tier 0's lease rows (P32-P34) to
+**Requires `k2-mpc-base` v0.4.0.** The base added tier 0's lease rows to
 `PersonAction`: `parity_row` maps them N/A (a Markdown doc merges; leases are tier 0's) and
 `parity()` lists the text tier's actions (`PersonAction::for_tier(Tier::Text)`), so the list,
-`docs/PARITY.md` and the tests stay P1-P31. No other change.
+`docs/PARITY.md` and the tests stay on the text tier's 31 rows. No other change.
 
 ## v0.2.0 (2026-10-27)
 
-P22 (blame) is live. **Requires `k2-mpc-base` v0.3.0**, checked out beside this repo
+Blame is live. **Requires `k2-mpc-base` v0.3.0**, checked out beside this repo
 (`../k2-mpc-base`).
 
 - **`parity_row(P22)`** is `live(&["blame"])`, and `docs/PARITY.md` names `blame [-L a,b]`
-  on `Session::blame`. The kit's three P22 cases run through `tests/agent_parity.rs` on the
+  on `Session::blame`. The kit's three blame cases run through `tests/agent_parity.rs` on the
   Markdown pack: the tab's blame gutter against the verb, the lines in view against `-L`, and
   both refused without the history right.
-- **Negative control:** v0.1.0's deferred P22 row now fails against base v0.3.0
+- **Negative control:** v0.1.0's deferred blame row now fails against base v0.3.0
   (`UnexpectedVerb`, `StaleDeferral`), and the live row fails when `blame` is taken out of
   the registry (`MissingVerb`).
-- The deferred rows are now annotations (P23, P27) and purge (P28).
+- The deferred rows are now annotations (comments and mentions) and purge.
 
 ## v0.1.0 (2026-10-27)
 
@@ -378,6 +395,6 @@ v0.1.0, checked out beside this repo (`../k2-mpc-base`).
   fenced code and front matter, and supports `--nth` and `--include-heading`.
 - **Fidelity corpus:** byte-exact through doc and store; a one-word edit changes only that
   word.
-- **`docs/PARITY.md` P1–P31 as data,** with `tests/agent_parity.rs` running the base harness.
-  The deferred rows (blame, annotations, purge) are asserted absent.
+- **`docs/PARITY.md`'s 31 text-tier rows as data,** with `tests/agent_parity.rs` running the base
+  harness. The deferred rows (blame, annotations, purge) are asserted absent.
 - **`scripts/check.sh`:** tests, the licence gate, and the base's engine-free check.

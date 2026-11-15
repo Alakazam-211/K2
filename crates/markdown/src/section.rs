@@ -1,4 +1,4 @@
-//! Markdown sections: finding headings, and `replace-section` (parity row P13).
+//! Markdown sections: finding headings, and `replace-section` (the parity row "Paste a block").
 //!
 //! A **section** is a heading and the lines after it, up to the next heading of the same or
 //! a higher level (fewer `#`), or the end of the doc. Subsections belong to it.
@@ -333,7 +333,7 @@ pub fn replace_section(text: &str, req: &SectionRequest, body: &str) -> SectionO
     SectionOutcome::Replaced(out)
 }
 
-/// The `replace-section` verb (P13), for [`crate::MarkdownPack`].
+/// The `replace-section` verb (the parity row "Paste a block"), for [`crate::MarkdownPack`].
 ///
 /// `--nth K` is a position: the Kth section that matches, counted in the version the edit
 /// applies to. The verb declares it (its unit, and where to find it in a call), so an agent's

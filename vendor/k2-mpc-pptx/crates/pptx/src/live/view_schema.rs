@@ -59,6 +59,7 @@ pub const VIEW: ViewSchema = ViewSchema {
         title: Src::Derived("slide_title"),
         hidden: Src::Field(f::HIDDEN),
         layout: Src::Field(f::LAYOUT),
+        ..ContainerFields::NONE
     },
     unit_fields: UnitFields {
         kind: Src::ListValue,

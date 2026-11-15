@@ -13,7 +13,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # The kit (k2-mpc-base), by path: checked out side by side, as the other type packs do (a host
-# vendors both repos under one folder). Pinned to the kit's v0.18.0 (efc6377e, its public cut):
+# vendors both repos under one folder). Pinned to the kit's v0.19.0 (b8db699e, its public cut):
 # v0.15.0's keyed limits (MPC-E415 and MPC-E822), the keyed outside-save rule and the carrier
 # hook (`Pack::wants_carrier` and `Pack::encode_from`, which the live pack needs), v0.15.1's
 # keyed costs and the carrier row's judge (`session::test_support::carrier_judge`, feature

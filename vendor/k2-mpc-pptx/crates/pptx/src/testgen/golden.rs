@@ -1,10 +1,10 @@
-//! The golden sample deck (`golden-review.pptx`), generated: four slides
+//! The golden sample deck, generated: four slides
 //! on one master with three layouts, theme fonts "Liberation Sans" (major) and "Liberation
 //! Serif" (minor), a group turned 90°, a turned and flipped arrow that links to slide 4, a
 //! table on a table style, a slide-number field. Every name and text in it is synthetic.
 //!
-//! [`Extra`] appends one of the untested cases as a fifth slide: D (`approx_box`),
-//! D2 (one group flip with a turned child) or D3 (approx inherited by a nested child).
+//! [`Extra`] appends one of the untested cases as a fifth slide: `D` (`approx_box`),
+//! `D2` (one group flip with a turned child) or `D3` (approx inherited by a nested child).
 
 use super::{esc, r3, rels, stored_zip, A, CT, HEAD, P, R};
 
@@ -18,16 +18,16 @@ pub const TITLE_ONLY: u64 = 2_147_483_651;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extra {
     None,
-    /// Case D: `@sld:261`, a group scaled (2, 0.5) holding a square at 0°, one at 45° and one
+    /// Case `D`: `@sld:261`, a group scaled (2, 0.5) holding a square at 0°, one at 45° and one
     /// at 90°.
     D,
-    /// Case D2: `@sld:263`, a group turned 90° and flipped across, holding a box turned 30°.
+    /// Case `D2`: `@sld:263`, a group turned 90° and flipped across, holding a box turned 30°.
     D2,
-    /// Case D2's variant: the same group at 0°.
+    /// Case `D2`'s variant: the same group at 0°.
     D2Rot0,
-    /// Case D3: `@sld:262`, a group scaled (2, 0.5) holding a group turned 45° holding a box.
+    /// Case `D3`: `@sld:262`, a group scaled (2, 0.5) holding a group turned 45° holding a box.
     D3,
-    /// Case D3 with the box counter-turned (315°), so its angle at the scaled level is 0°:
+    /// Case `D3` with the box counter-turned (315°), so its angle at the scaled level is 0°:
     /// only step 8 (approx inherited) flags it. Not one of the hand-made goldens.
     D3Counter,
 }

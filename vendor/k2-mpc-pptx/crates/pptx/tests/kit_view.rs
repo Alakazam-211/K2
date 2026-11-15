@@ -1,6 +1,6 @@
 //! The kit's view index of a deck (the pack's view schema, addresses, and the kit's `ViewIndex`
-//! built from it) against the hand-made golden `index-rev40.json`, field by field, and the blob
-//! tier's index against the live one.
+//! built from it) against the hand-made expected index kept in the test, field by field, and the
+//! blob tier's index against the live one.
 //!
 //! On the live tier the pack reads what only the file's bytes hold (fonts, render hashes, field
 //! kinds, inherited boxes, a group's children) from the carrier the kit hands its derive hook
@@ -263,7 +263,7 @@ fn indexes() -> Result<(ViewIndex, ViewIndex, u64), String> {
     Ok((live, blob, rev))
 }
 
-/// The live tier against `index-rev40.json`, field by field. The golden's `rev` is its
+/// The live tier against the expected index, field by field. The golden's `rev` is its
 /// script's: the index's own is checked to be the session's version, then set to 40.
 pub fn row_live_rev40() -> Result<(), String> {
     let (mut live, _, rev) = indexes()?;

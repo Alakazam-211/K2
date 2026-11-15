@@ -1,7 +1,7 @@
-//! The render hash's rows, on the golden sample deck: which slides' hashes change at each frame
-//! of the golden turn (revs 41 to 46, `expected-dirty-and-hashes.json`) and in the golden's
-//! variants V1, V2, V3, V5 and V6. "Events say where to look; the hash says whether to
-//! re-render": a slide's hash changes exactly when something in its render closure does.
+//! The render hash's rows, on the golden sample deck: which slides' hashes change at each frame of
+//! the golden turn (revs 41 to 46; the expected hashes are listed in these rows) and in the
+//! golden's variants `V1`, `V2`, `V3`, `V5` and `V6`. "Events say where to look; the hash says
+//! whether to re-render": a slide's hash changes exactly when something in its render closure does.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -112,7 +112,7 @@ pub fn row_turn() -> Result<(), String> {
     check(ROW, "rev 46 shape text", &r45, &r46, &["@sld:260"])
 }
 
-/// V1: `slide add --first` from rev 42: every slide shifts, only 259 shows its number.
+/// Variant `V1`: `slide add --first` from rev 42: every slide shifts, only 259 shows its number.
 pub fn row_v1_slide_added_first() -> Result<(), String> {
     const ROW: &str = "row_v1_slide_added_first";
     let r40 = golden::deck(Extra::None);
@@ -155,7 +155,7 @@ fn variant(part: &str, from: &str, to: &str) -> Result<Vec<u8>, String> {
     )))
 }
 
-/// V2: a save that changes only `tableStyles.xml`: only the slide with a table.
+/// Variant `V2`: a save that changes only `tableStyles.xml`: only the slide with a table.
 pub fn row_v2_table_style() -> Result<(), String> {
     const ROW: &str = "row_v2_table_style";
     let v2 =
@@ -163,8 +163,8 @@ pub fn row_v2_table_style() -> Result<(), String> {
     check(ROW, "V2", &golden::deck(Extra::None), &v2, &["@sld:258"])
 }
 
-/// V3: a save that changes only the Title Only layout: its two slides, never the others under
-/// the same master.
+/// Variant `V3`: a save that changes only the Title Only layout: its two slides, never the
+/// others under the same master.
 pub fn row_v3_one_layout() -> Result<(), String> {
     const ROW: &str = "row_v3_one_layout";
     let v3 = variant(
@@ -182,7 +182,7 @@ pub fn row_v3_one_layout() -> Result<(), String> {
     )
 }
 
-/// V5: a save that changes only the theme: every slide.
+/// Variant `V5`: a save that changes only the theme: every slide.
 pub fn row_v5_theme() -> Result<(), String> {
     const ROW: &str = "row_v5_theme";
     let v5 =
@@ -196,7 +196,7 @@ pub fn row_v5_theme() -> Result<(), String> {
     )
 }
 
-/// V6: an edit of slide 259, which slide 257's arrow links to: only 259.
+/// Variant `V6`: an edit of slide 259, which slide 257's arrow links to: only 259.
 pub fn row_v6_linked_slide() -> Result<(), String> {
     const ROW: &str = "row_v6_linked_slide";
     let r40 = golden::deck(Extra::None);

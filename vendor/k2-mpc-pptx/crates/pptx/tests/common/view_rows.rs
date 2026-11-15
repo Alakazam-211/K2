@@ -1,5 +1,5 @@
-//! The rows of the pack's view index against the hand-made goldens: `index-rev40.json` and the
-//! cases D, D2 and D3 of `cases-untested.json`, transcribed field by field (the goldens are
+//! The rows of the pack's view index against the hand-made expected values, kept in these rows
+//! field by field: the index at rev 40 and the cases `D`, `D2` and `D3` (the expected values are
 //! hand-made; where the pack disagrees with one, the disagreement is listed in [`DISAGREE`] with
 //! why, and printed).
 //!
@@ -70,7 +70,7 @@ const fn w(
 const NF: (bool, bool) = (false, false);
 const TITLE: (i64, i64, i64, i64) = (838_200, 365_125, 10_515_600, 1_325_563);
 
-/// `index-rev40.json`'s units.
+/// The expected index's units at rev 40.
 pub const REV40: &[Want] = &[
     w(
         "@sld:256/sp:2",
@@ -278,7 +278,7 @@ pub const REV40: &[Want] = &[
     ),
 ];
 
-/// Case D's units (`@sld:261`).
+/// Case `D`'s units (`@sld:261`).
 pub const CASE_D: &[Want] = &[
     w(
         "@sld:261/sp:10",
@@ -350,7 +350,7 @@ pub const CASE_D: &[Want] = &[
     ),
 ];
 
-/// Case D2's units (`@sld:263`).
+/// Case `D2`'s units (`@sld:263`).
 pub const CASE_D2: &[Want] = &[
     w(
         "@sld:263/sp:30",
@@ -388,7 +388,7 @@ pub const CASE_D2: &[Want] = &[
     ),
 ];
 
-/// Case D2's variant: the group at 0°.
+/// Case `D2`'s variant: the group at 0°.
 pub const CASE_D2_ROT0: &[Want] = &[
     w(
         "@sld:263/sp:30",
@@ -426,7 +426,7 @@ pub const CASE_D2_ROT0: &[Want] = &[
     ),
 ];
 
-/// Case D3's units (`@sld:262`).
+/// Case `D3`'s units (`@sld:262`).
 pub const CASE_D3: &[Want] = &[
     w(
         "@sld:262/sp:20",
@@ -481,9 +481,9 @@ pub const CASE_D3: &[Want] = &[
     ),
 ];
 
-/// Case D3 with `sp:22` counter-turned (315°): its angle at the scaled level is 0°, so step 6
+/// Case `D3` with `sp:22` counter-turned (315°): its angle at the scaled level is 0°, so step 6
 /// alone would give an exact box; step 8 (approx inherited) flags it. Worked from the
-/// geometry rule (`geom`), not from a golden: the centre and extent are case D3's, `rot` is
+/// geometry rule (`geom`), not from a golden: the centre and extent are case `D3`'s, `rot` is
 /// 45° + 315° = 0°.
 pub const CASE_D3_COUNTER: &[Want] = &[
     w(
@@ -709,7 +709,7 @@ fn fail(row: &str, diffs: Vec<String>) -> Result<(), String> {
     }
 }
 
-/// `index-rev40.json`, field by field: page, fonts, layouts, containers (all but the hash
+/// The expected index at rev 40, field by field: page, fonts, layouts, containers (all but the hash
 /// tokens, which only must differ) and units.
 pub fn row_index_rev40() -> Result<(), String> {
     const ROW: &str = "row_index_rev40";
@@ -836,25 +836,25 @@ fn row_case(row: &str, extra: Extra, want: &[Want], key: &str, count: u32) -> Re
     fail(row, diffs)
 }
 
-/// Case D: `approx_box` exactly on the 45° child of an unevenly scaled group; the 90° child an
+/// Case `D`: `approx_box` exactly on the 45° child of an unevenly scaled group; the 90° child an
 /// exact box with its extent swapped.
 pub fn row_case_d() -> Result<(), String> {
     row_case("row_case_d", Extra::D, CASE_D, "@sld:261", 4)
 }
 
-/// Case D2: under one group flip, `rot = group.rot − child.rot` (and its variant at 0°).
+/// Case `D2`: under one group flip, `rot = group.rot − child.rot` (and its variant at 0°).
 pub fn row_case_d2() -> Result<(), String> {
     row_case("row_case_d2", Extra::D2, CASE_D2, "@sld:263", 2)?;
     row_case("row_case_d2", Extra::D2Rot0, CASE_D2_ROT0, "@sld:263", 2)
 }
 
-/// Case D3: a child of an approximate group is approximate, its centre the true one.
+/// Case `D3`: a child of an approximate group is approximate, its centre the true one.
 pub fn row_case_d3() -> Result<(), String> {
     row_case("row_case_d3", Extra::D3, CASE_D3, "@sld:262", 3)
 }
 
-/// Case D3 counter-turned: approx inherited where step 6 alone gives an exact box (step 8). This
-/// is the row that catches `ApproxNotInherited`: in D3 itself, `sp:22`'s angle at the scaled
+/// Case `D3` counter-turned: approx inherited where step 6 alone gives an exact box (step 8). This
+/// is the row that catches `ApproxNotInherited`: in `D3` itself, `sp:22`'s angle at the scaled
 /// level is 45°, so step 6 flags it whether or not step 8 does.
 pub fn row_case_d3_counter() -> Result<(), String> {
     row_case(

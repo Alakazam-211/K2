@@ -525,11 +525,11 @@ fn identities_and_the_stale_buffer_guard() {
     );
 }
 
-/// An app's save over a version the kit may have written keeps both. The kit wrote V1 (an
-/// agent's change W1) to the file; an agent's W2 is pending (the head is V2; the file and the
-/// kit's base are V1); an app that read the file before V1 saves its buffer. A merge from V1
-/// reads that save as the person undoing W1 and drops it with no conflict. The pack can't tell
-/// this save from one made on V1, so it keeps both.
+/// An app's save over a version the kit may have written keeps both. The kit wrote `v1` (an
+/// agent's change W1) to the file; an agent's W2 is pending (the head is `v2`; the file and
+/// the kit's base are `v1`); an app that read the file before `v1` saves its buffer. A merge
+/// from `v1` reads that save as the person undoing W1 and drops it with no conflict. The pack
+/// can't tell this save from one made on `v1`, so it keeps both.
 #[test]
 fn a_stale_save_after_a_kit_write_keeps_both() {
     let v0 = base();
@@ -550,7 +550,7 @@ fn a_stale_save_after_a_kit_write_keeps_both() {
     let pack = PptxPack::default();
     assert_eq!(pack.merge3_bytes(&b1, &b2, &s), BlobMerge::Conflict);
     assert!(pack.conflicts.list().is_empty());
-    // the same save made on V1 is kept both too: the pack can't tell it from the stale one
+    // the same save made on `v1` is kept both too: the pack can't tell it from the stale one
     let mut fresh = v1.clone();
     move_to(&mut fresh, 258, 5, 6_000_000);
     let f = d(&fresh);

@@ -94,10 +94,13 @@ fn pending_state() -> &'static Mutex<HashMap<String, usize>> {
     })
 }
 
+/// The names the queue root's override is read under, newest first.
+const ROOT_NAMES: &[&str] = &["K5_PENDING_LIVE_ROOT", "K2SO_PENDING_LIVE_ROOT"];
+
 /// Resolve the queue root. Daemon's `~/.k2so/daemon.pending-live/`.
 /// Tests override via env var; production uses `k2_core::paths::home_dir()`.
 pub fn queue_root() -> PathBuf {
-    if let Ok(override_path) = std::env::var("K2SO_PENDING_LIVE_ROOT") {
+    if let Some((_, override_path)) = k2_core::env_names::first_set(ROOT_NAMES) {
         return PathBuf::from(override_path);
     }
     k2_core::paths::home_dir()
@@ -402,6 +405,26 @@ mod tests {
     /// but any bug that re-introduces the disk hit would still work
     /// "correctly" — so the meaningful check is a benchmark, not a
     /// unit assertion. This unit test just pins down the behavior.
+    /// The root's override is read as `K5_PENDING_LIVE_ROOT` first and
+    /// `K2SO_PENDING_LIVE_ROOT` after it.
+    #[test]
+    fn queue_root_is_read_under_the_k5_name_first_and_the_old_name_after() {
+        assert_eq!(ROOT_NAMES, &["K5_PENDING_LIVE_ROOT", "K2SO_PENDING_LIVE_ROOT"]);
+        let _new_unset = k2_core::test_env::EnvVar::remove("K5_PENDING_LIVE_ROOT");
+        let _old = k2_core::test_env::EnvVar::set("K2SO_PENDING_LIVE_ROOT", "/old/root");
+        assert_eq!(queue_root(), PathBuf::from("/old/root"));
+        let _new = k2_core::test_env::EnvVar::set("K5_PENDING_LIVE_ROOT", "/new/root");
+        assert_eq!(queue_root(), PathBuf::from("/new/root"), "the new name wins when both are set");
+    }
+
+    /// With neither name set the root is under the home.
+    #[test]
+    fn queue_root_without_an_override_is_under_the_home() {
+        let _a = k2_core::test_env::EnvVar::remove("K5_PENDING_LIVE_ROOT");
+        let _b = k2_core::test_env::EnvVar::remove("K2SO_PENDING_LIVE_ROOT");
+        assert!(queue_root().ends_with(".k2so/daemon.pending-live"), "{:?}", queue_root());
+    }
+
     #[test]
     fn drain_for_unknown_agent_is_fast_path_empty() {
         // Use a deliberately nonexistent path so any disk read would

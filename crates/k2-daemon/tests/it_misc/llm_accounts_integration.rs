@@ -76,7 +76,7 @@ fn shim_script(log: &Path) -> String {
 n=$(/usr/bin/basename "$0")
 f="{log}/$n-$$"
 printf 'HOOK=%s\nCELL=%s\nCLAUDE_CONFIG_DIR=%s\nCODEX_HOME=%s\nGROK_HOME=%s\nHOME=%s\nKEYSET=%s\n' "$K2_HOOK_TOKEN" "$K2_CELL" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$GROK_HOME" "$HOME" "${{ANTHROPIC_API_KEY:+yes}}${{CODEX_API_KEY:+yes}}" > "$f.env"
-printf '%s\n' "$@" > "$f.argv"
+printf '%s\n' "$@" > "$f.argv-part" && /bin/mv "$f.argv-part" "$f.argv"
 case "$n" in
   claude)
     if [ "$1" != "auth" ]; then exec /bin/cat; fi
@@ -772,6 +772,11 @@ async fn codex_device_code_and_cancel_discards_a_half_made_login() {
     let v = js(&r);
     let login_id = v["login"]["loginId"].as_str().unwrap().to_string();
     let gid = v["account"]["id"].as_str().unwrap().to_string();
+    // The sign-in is under way once the grok shim has written its argv.
+    // Cancelling before that killed the shim before its first line ran on
+    // a busy Mac, and the argv check below found no file (11-14, 11-15).
+    let gargv = wait_for_argv(&env, "grok");
+    assert!(gargv.contains("--leader-socket"), "isolated leader: {gargv}");
     let r = post(port, "/cli/llm/accounts/login/cancel", OWNER, json!({"loginId": login_id}));
     assert_eq!(r.status, 200, "{}", r.body);
     let st = poll_login(port, &login_id, |l| l["done"] == true);
@@ -779,13 +784,24 @@ async fn codex_device_code_and_cancel_discards_a_half_made_login() {
     let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
     assert!(tool_doc(&list, "grok")["accounts"].as_array().unwrap().is_empty(), "{list}");
     assert!(!env.home.join(format!(".k2/llm-accounts/grok/{gid}")).exists());
-    let gargv = std::fs::read_dir(&env.log)
-        .unwrap()
-        .flatten()
-        .find(|e| e.file_name().to_string_lossy().starts_with("grok-") && e.file_name().to_string_lossy().ends_with(".argv"))
-        .map(|e| std::fs::read_to_string(e.path()).unwrap())
-        .expect("grok argv");
-    assert!(gargv.contains("--leader-socket"), "isolated leader: {gargv}");
+}
+
+/// The argv the `name` shim recorded, once it has (the shim renames a
+/// finished file into place, so `.argv` is never half written).
+fn wait_for_argv(env: &TestEnv, name: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let found = std::fs::read_dir(&env.log)
+            .unwrap()
+            .flatten()
+            .find(|e| e.file_name().to_string_lossy().starts_with(&format!("{name}-")) && e.file_name().to_string_lossy().ends_with(".argv"))
+            .map(|e| std::fs::read_to_string(e.path()).unwrap());
+        if let Some(argv) = found {
+            return argv;
+        }
+        assert!(Instant::now() < deadline, "the {name} shim never started");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

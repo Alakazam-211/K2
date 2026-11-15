@@ -628,6 +628,14 @@ pub fn workspace_bin(env: &str, package: &str, bin: &str) -> PathBuf {
 ///
 /// A failed build, or a program the build didn't make, panics with what
 /// went wrong; nothing is skipped.
+///
+/// The path returned is this process's own hard link to the program
+/// (`<profile>/k2-test-bins/<pid>/<bin>`), made under the same file lock
+/// as the build. Every test process runs this build, and cargo replaces
+/// `<profile>/<bin>` (remove, then link) as it finishes, so a test that
+/// started the shared path while another test's cargo was finishing got
+/// "No such file or directory" (ptyd_backend on the Mac nodes, 11-15).
+/// The private link keeps the program this process built.
 pub fn built_workspace_bin(package: &str, bin: &str) -> PathBuf {
     // Env lock first, then BUILT: a test holding the env lock may call this.
     // Holding it also keeps HOME (cargo's and rustup's homes) steady.
@@ -642,9 +650,84 @@ pub fn built_workspace_bin(package: &str, bin: &str) -> PathBuf {
             dir
         }
     };
-    let p = profile_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
+    let name = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
+    let _build = BuildLock::take(&profile_dir);
+    let p = profile_dir.join(&name);
     assert!(p.is_file(), "`cargo build -p {package} --bins` made no {}", p.display());
-    p
+    private_link(&profile_dir, &p, &name)
+}
+
+/// A cross-process lock on `<profile>/k2-test-bins.lock` (unix `flock`),
+/// held across a test's `cargo build -p` and while it links the result,
+/// so no other test's build replaces the program in between. Released on
+/// drop (and by the kernel if the process dies).
+struct BuildLock {
+    #[cfg(unix)]
+    _file: std::fs::File,
+}
+
+impl BuildLock {
+    fn take(profile_dir: &Path) -> BuildLock {
+        let path = profile_dir.join("k2-test-bins.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            loop {
+                // SAFETY: flock on a descriptor this File owns.
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                    break;
+                }
+                let e = std::io::Error::last_os_error();
+                assert_eq!(e.kind(), std::io::ErrorKind::Interrupted, "flock {}: {e}", path.display());
+            }
+            BuildLock { _file: file }
+        }
+        #[cfg(not(unix))]
+        {
+            drop(file);
+            BuildLock {}
+        }
+    }
+}
+
+/// This process's own link to `program` (see [`built_workspace_bin`]),
+/// made once. The folders of processes that are gone are removed first.
+#[cfg(unix)]
+fn private_link(profile_dir: &Path, program: &Path, name: &str) -> PathBuf {
+    let root = profile_dir.join("k2-test-bins");
+    let mine = root.join(std::process::id().to_string());
+    let dst = mine.join(name);
+    if dst.is_file() {
+        return dst;
+    }
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for e in entries.flatten() {
+            let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else { continue };
+            // SAFETY: signal 0 only checks whether the pid exists.
+            let gone = unsafe { libc::kill(pid, 0) } != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    std::fs::create_dir_all(&mine).unwrap_or_else(|e| panic!("create {}: {e}", mine.display()));
+    if std::fs::hard_link(program, &dst).is_err() {
+        std::fs::copy(program, &dst).unwrap_or_else(|e| panic!("copy {} to {}: {e}", program.display(), dst.display()));
+    }
+    dst
+}
+
+/// Windows: the shared path, as before (a running program there can't be
+/// replaced under it).
+#[cfg(not(unix))]
+fn private_link(_profile_dir: &Path, program: &Path, _name: &str) -> PathBuf {
+    program.to_path_buf()
 }
 
 fn build_workspace_bins(package: &str) -> PathBuf {
@@ -675,7 +758,10 @@ fn build_workspace_bins(package: &str) -> PathBuf {
             cmd.args(["--profile", other]);
         }
     }
-    let out = cmd.output().unwrap_or_else(|e| panic!("run {} to build {package}: {e}", Path::new(&cargo).display()));
+    let out = {
+        let _build = BuildLock::take(profile_dir);
+        cmd.output().unwrap_or_else(|e| panic!("run {} to build {package}: {e}", Path::new(&cargo).display()))
+    };
     assert!(
         out.status.success(),
         "`cargo build -p {package} --bins --target-dir {}` for this test failed ({}):\n{}",

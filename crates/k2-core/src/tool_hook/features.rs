@@ -16,8 +16,12 @@
 //! | [`SERVER_GOVERNED_SPACE`], [`MGMT_VOICE_STATES`], [`VOICE_CHANNEL_CLOSING`], [`TURN_RELAY_ONLY`], [`VOICE_MEDIA_PATH`], [`IMPORT_IDENTITY_MAP`] | Sew 0.7.0 (K2 voice rooms, sew-56): read together as [`VoiceFeatures`] (`tool_hook::sew_voice_features()`), one read of the list the last status refresh recorded |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //! | [`APP_RECORDING`], [`VOICE_RECORD_CAP`], [`RECORDING_REQUIRED`], [`MGMT_RECORDING_READS`] | Sew 0.9.0 (recording in Apps): read together as [`RecordingFeatures`] (`tool_hook::sew_recording_features()`). Sew 0.8.x reports none, so every recording change is inert there |
+//! | [`CHANNEL_MEMBER_ADD_REMOVE`], [`CHANNEL_MEMBERS_CAN_LEAVE`], [`HTTP_TYPING`], [`READ_STATE_UNREAD_COUNT`], [`MEMBER_CHANNELS_LEVEL_ONLY`], [`AGENTS_DM_WITH_BOX_PEOPLE`], [`CALL_CANCEL`] | Sew 0.10.0 (people and channels on Home, HOME1; DM call cancel): read together as [`HomeChatFeatures`] (`tool_hook::sew_home_chat_features()`). Before 0.10.0 each Home path takes its fallback |
 //!
-//! Sew 0.9.2 reports thirty-seven flags: 0.9.0's thirty-five plus `group_dm_names` and
+//! The pin, Sew 0.10.0, reports forty-five flags: 0.9.2's (and 0.9.3's)
+//! thirty-seven plus the seven Home flags above and `recording_controls`
+//! (Sew computes each person's Record and Stop; the voice plugin takes them,
+//! K2 doesn't gate on it). Sew 0.9.2 reports thirty-seven flags: 0.9.0's thirty-five plus `group_dm_names` and
 //! `dm_order_activity` (group DM names and DMs listed by latest activity; K2 uses neither). 0.9.0's
 //! thirty-five are 0.8.2's and 0.8.3's thirty-one plus the four
 //! recording flags above (each release's own `sew version --json`, held in a test). 0.8.2's thirty-one are
@@ -565,6 +569,68 @@ mod tests {
         for flag in [APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, APP_RECORDING, VOICE_RECORD_CAP, RECORDING_REQUIRED, MGMT_RECORDING_READS] {
             assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
         }
+        // Before 0.10.0 every Home chat path takes its fallback.
+        assert_eq!(HomeChatFeatures::read(&conn, "chat").unwrap(), HomeChatFeatures::default());
+    }
+
+    /// The pin, Sew 0.10.0, exactly as it lists its flags (`FEATURES` in
+    /// sew-proto 0.10.0's `mgmt.rs`, the release's sew-crates mirror commit
+    /// 8b5a2ff4; Sew's pin note: "45 in all"): 0.9.2's thirty-seven plus the
+    /// seven HOME1 flags and `recording_controls`. Every older gate stays
+    /// open, and every Home chat gate opens: the member-channels level sync
+    /// sends no list, the DM call's Cancel is Sew's cancel (not a leave), the
+    /// kit door passes `call/cancel`, K2 sets `agents.dm_with_box_people`.
+    #[test]
+    fn sew_0_10_0_opens_every_home_chat_gate() {
+        const REPORTED: [&str; 45] = [
+            "agents_dm_with_box_people", "app_channel_create", "app_controls", "app_governed_spaces",
+            "app_member_channels", "app_mode_gate", "app_origin", "app_origins", "app_participant_links", "app_quotas",
+            "app_recording", "app_scoped_sessions", "app_session_member_role", "app_voice_channel_create", "call_cancel",
+            "call_credential", "call_stats_native", "channel_member_add_remove", "channel_members_can_leave",
+            "dm_order_activity", "group_dm_names", "home_client", "home_client_owner_approval", "http_typing",
+            "import_identity_map", "k2_managed_avatar", "k2_managed_guard", "member_channels_level_only",
+            "member_external_id", "mgmt_recording_reads", "mgmt_voice_states", "person_notifications", "principal_erase",
+            "principal_relink", "private_spaces", "read_state_unread_count", "recording_controls", "recording_required",
+            "server_governed_space", "space_unbind", "turn_relay_only", "voice_channel_closing", "voice_media_path",
+            "voice_record_cap", "voice_video_cap",
+        ];
+        let mut want: Vec<String> = sew_0_8_2();
+        want.extend(
+            [
+                "app_recording", "voice_record_cap", "recording_required", "mgmt_recording_reads", "group_dm_names", "dm_order_activity",
+                CHANNEL_MEMBER_ADD_REMOVE, CHANNEL_MEMBERS_CAN_LEAVE, HTTP_TYPING, READ_STATE_UNREAD_COUNT, MEMBER_CHANNELS_LEVEL_ONLY,
+                AGENTS_DM_WITH_BOX_PEOPLE, CALL_CANCEL, "recording_controls",
+            ]
+            .map(String::from),
+        );
+        want.sort();
+        let got: Vec<String> = REPORTED.iter().map(|s| s.to_string()).collect();
+        let mut sorted = got.clone();
+        sorted.sort();
+        assert_eq!(got, sorted, "Sew lists its flags sorted");
+        assert_eq!(got, want, "K2's view of Sew's flags is what 0.10.0 lists");
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(note(&conn, "chat", &got, 1).unwrap());
+        assert_eq!(list(&conn, "chat").unwrap().len(), 45);
+        assert!(RecordingFeatures::read(&conn, "chat").unwrap().any());
+        assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
+        for flag in [APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, APP_RECORDING, VOICE_RECORD_CAP, RECORDING_REQUIRED, MGMT_RECORDING_READS] {
+            assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
+        }
+        assert_eq!(
+            HomeChatFeatures::read(&conn, "chat").unwrap(),
+            HomeChatFeatures {
+                channel_member_add_remove: true,
+                channel_members_can_leave: true,
+                http_typing: true,
+                read_state_unread_count: true,
+                member_channels_level_only: true,
+                agents_dm_with_box_people: true,
+                call_cancel: true,
+            }
+        );
+        assert!(has(&conn, "chat", CALL_CANCEL).unwrap(), "the kit door's call/cancel gate (tool_hook::sew_has)");
     }
 
     /// Sew 0.7.0's six voice flags (sew-56 v1.1d §5), read from one list.

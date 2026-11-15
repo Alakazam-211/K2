@@ -160,6 +160,21 @@ fn full_list_sync_without_the_single_flag() {
     assert_eq!(state_of("c-aaaaaaaaaa", SAM), None, "out of the ledger");
 }
 
+/// `member_channels_level_only` alone (no `channel_member_add_remove`): a
+/// membership change still sends the whole list; only a level change goes
+/// without one. A level-only body would leave the change undone.
+#[test]
+fn a_membership_change_sends_the_list_even_when_sew_takes_a_level_alone() {
+    let _e = setup(&[features::MEMBER_CHANNELS_LEVEL_ONLY]);
+    live_channel("c-aaaaaaaaaa", "9001", false, &[ALEX]);
+    live_channel("c-bbbbbbbbbb", "9002", false, &[SAM]);
+    assert_eq!(with(|c| request_add(c, "c-aaaaaaaaaa", SAM, 5)), "added");
+    let ops = plan_home(&HashSet::new(), &levels(&[ALEX, SAM]));
+    assert_eq!(ops.len(), 1, "{ops:?}");
+    assert_eq!(ops[0].op, Op::AdminMemberLevel);
+    assert_eq!(ops[0].payload, json!({"channel_ids": ["9001", "9002"], "level": "member"}));
+}
+
 /// With `channel_member_add_remove`: one mgmt add or remove per change, on
 /// the person's queue, with the channel in the path, never a list.
 #[test]

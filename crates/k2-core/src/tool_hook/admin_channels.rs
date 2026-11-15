@@ -632,7 +632,10 @@ fn plan_members(
             if busy.contains(&subject) || planned.contains(&subject) {
                 continue;
             }
-            let body = level_body(conn, flags, &ext, level)?;
+            // A membership change goes as the whole list even when Sew
+            // takes a level alone (`member_channels_level_only` without
+            // `channel_member_add_remove`): a level-only body would drop it.
+            let body = ServerMemberChannelsRequest { channel_ids: Some(want_list(conn, &ext)?), level: level.to_string() };
             if let Some(l) = &body.channel_ids {
                 note_want(conn, &ext, l, now)?;
             }

@@ -85,6 +85,12 @@ pub struct PolicyFile {
     /// every job to its N and the node stops offering `cpu-burst`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_burst: Option<bool>,
+    /// prd-compute-mac-no-lan-v1 §5.7: what a `no-lan` job gets on a Mac.
+    /// `"proxy"` (default): the internet over HTTPS/TCP through its own
+    /// egress proxy on loopback, never the local network. `"none"`: no
+    /// network at all (before 0.46.14). Ignored on Linux.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac_no_lan: Option<String>,
 }
 
 /// The default tool-cache cap: 15% of the disk budget, 1–60 GB.
@@ -131,6 +137,17 @@ pub struct Policy {
     /// off).
     #[serde(skip_serializing_if = "is_true")]
     pub cpu_burst: bool,
+    /// `proxy` (default; shown only when `none`) or `none`.
+    #[serde(skip_serializing_if = "is_mac_no_lan_default")]
+    pub mac_no_lan: String,
+}
+
+/// `mac_no_lan`'s values.
+pub const MAC_NO_LAN_PROXY: &str = "proxy";
+pub const MAC_NO_LAN_NONE: &str = "none";
+
+fn is_mac_no_lan_default(s: &str) -> bool {
+    s == MAC_NO_LAN_PROXY
 }
 
 fn is_true(b: &bool) -> bool {
@@ -174,6 +191,10 @@ impl Policy {
                 vec!["/home/sew-ci/sew-build/.job.lock".to_string()]
             }
         });
+        let mac_no_lan = f.mac_no_lan.clone().unwrap_or_else(|| MAC_NO_LAN_PROXY.into());
+        if mac_no_lan != MAC_NO_LAN_PROXY && mac_no_lan != MAC_NO_LAN_NONE {
+            return Err(format!("mac_no_lan must be \"proxy\" or \"none\", got {mac_no_lan:?}"));
+        }
         if f.toolchain_budget_gb == Some(0) {
             return Err("toolchain_budget_gb must be at least 1".into());
         }
@@ -202,6 +223,7 @@ impl Policy {
             },
             tenant_git_access: f.tenant_git_access.unwrap_or(true),
             cpu_burst: f.cpu_burst.unwrap_or(true),
+            mac_no_lan,
         })
     }
 
@@ -369,6 +391,9 @@ pub fn default_policy_toml() -> String {
 # network = "full"              # full | none: none keeps jobs off the network (loopback only);
 #                               # it needs the job wall (k2-node 0.46.3+ setup); a node without
 #                               # it takes no jobs under "none" (network_none_not_enforced_yet)
+# mac_no_lan = "proxy"          # macOS: a server's no-lan share reaches the internet through a
+#                               # per-job proxy (HTTPS/TCP, never the local network); "none" = no
+#                               # network at all for no-lan jobs (the old behaviour)
 # repo_toolchains = true        # install what a job's repo declares (mise.toml, .tool-versions,
 #                               # .nvmrc, rust-toolchain.toml); --needs are installed either way
 # toolchain_budget_gb = 22      # disk for installed tool versions (default: 15% of

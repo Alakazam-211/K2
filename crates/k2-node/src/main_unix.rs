@@ -478,6 +478,9 @@ fn cmd_status(a: &Args) -> Result<(), String> {
     }
     println!("running: {}", if s.running.is_empty() { "-".to_string() } else { s.running.join(", ") });
     println!("caps: {}", if s.caps_hard { "hard (cgroups)" } else { "soft" });
+    if let Some(line) = no_lan_line(s.no_lan.as_deref(), s.no_lan_proxies) {
+        println!("{line}");
+    }
     if !s.adopted.is_empty() {
         let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
         for a in &s.adopted {
@@ -503,6 +506,16 @@ fn cmd_status(a: &Args) -> Result<(), String> {
         println!("last error: {e}");
     }
     Ok(())
+}
+
+/// `k2-node status`'s no-lan line (prd-compute-mac-no-lan-v1 §5.7).
+fn no_lan_line(fact: Option<&str>, proxies: u32) -> Option<String> {
+    let running = if proxies > 0 { format!("; {proxies} running now") } else { String::new() };
+    match fact? {
+        "proxy" => Some(format!("no-lan: proxy (no-lan jobs reach the internet over HTTPS/TCP through a per-job proxy on loopback, never the local network{running})")),
+        "none" => Some("no-lan: none (no-lan jobs get no network on this Mac: policy mac_no_lan = \"none\", or the proxy can't run here)".into()),
+        _ => None,
+    }
 }
 
 fn server_line(l: &k2_node::status::ServerLine) -> String {

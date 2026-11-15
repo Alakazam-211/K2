@@ -244,6 +244,32 @@ fn a_taken_port_is_reported_as_taken() {
     }
 }
 
+/// §7.6 / §10.3 item 11: nothing here touches the Mac's packet filter (it
+/// is shared with other people's VM networking): no k2-node source names
+/// `pfctl` or `/etc/pf.conf`.
+#[test]
+fn k2_node_never_runs_pfctl() {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut hits = Vec::new();
+    let mut stack = vec![src];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                let text = std::fs::read_to_string(&p).unwrap();
+                for (i, l) in text.lines().enumerate() {
+                    if l.contains("pfctl") || l.contains("pf.conf") {
+                        hits.push(format!("{}:{}: {l}", p.display(), i + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(hits.is_empty(), "k2-node must never run pfctl or touch pf.conf:\n{}", hits.join("\n"));
+}
+
 /// A restarted k2-node finds the proxy again from its files: the facts
 /// once, then the log on from where the last node got to.
 #[test]

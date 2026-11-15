@@ -184,7 +184,7 @@ pub struct SeatbeltTenant {
 /// between servers' jobs are **not** stopped (a
 /// Seatbelt `signal` deny would also stop a job signalling its own
 /// children; V60): that's why Macs take only your own servers in 0.46.3.
-pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], network_none: bool, t: &SeatbeltTenant) -> String {
+pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], net: NetworkMode, t: &SeatbeltTenant) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");
     let rw = |p: &mut String, verb: &str, d: &Path| p.push_str(&format!("({verb} file-read* file-write* (subpath {}))\n", sb_str(&real_path(d))));
     for d in deny_dirs {
@@ -250,10 +250,46 @@ pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], 
     for s in deny_sockets {
         p.push_str(&format!("(deny network-outbound (literal {}))\n", sb_str(&real_path(s))));
     }
-    if network_none {
-        push_network_none(&mut p);
+    match net {
+        NetworkMode::On => push_pool_denies(&mut p, false),
+        NetworkMode::None => {
+            push_network_none(&mut p);
+            push_pool_denies(&mut p, true);
+        }
+        NetworkMode::NoLanProxy { own_port } => {
+            push_network_none(&mut p);
+            push_pool_denies(&mut p, true);
+            p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{own_port}\"))\n"));
+        }
     }
     p
+}
+
+/// A job's network under its Seatbelt profile (prd-compute-mac-no-lan-v1
+/// §5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkMode {
+    /// The machine's network.
+    On,
+    /// `no-lan` on a Mac: the `none` rules (no remote IP, no DNS, loopback
+    /// open), and of the egress proxy pool only its own proxy's port.
+    NoLanProxy { own_port: u16 },
+    /// Loopback only, no DNS.
+    None,
+}
+
+/// The egress proxy pool (Mac no-lan): no job binds a pool port (none can
+/// squat a proxy's), and with `connect` none reaches one (another job's
+/// proxy; its own is allowed after this, by the caller). After the
+/// loopback allows: Seatbelt takes the last match. Seatbelt's `localhost`
+/// covers 127.0.0.1, ::1 and the Mac's own addresses (M0, macOS 26 and 27).
+fn push_pool_denies(p: &mut String, connect: bool) {
+    for port in crate::egress::pool_ports() {
+        if connect {
+            p.push_str(&format!("(deny network-outbound (remote ip \"localhost:{port}\"))\n"));
+        }
+        p.push_str(&format!("(deny network-bind (local ip \"localhost:{port}\"))\n"));
+    }
 }
 
 /// Shared scratch a tenant's job can't use on a one-uid Mac (another
@@ -1220,7 +1256,7 @@ mod tests {
     fn tenant_profile(slot: u8, home: &str) -> String {
         let home = PathBuf::from(home);
         let tenants_root = PathBuf::from(format!("{}-t", home.display()));
-        seatbelt_tenant_profile(&[], &[], false, &SeatbeltTenant { slot, home, tenants_root, own_fork: None })
+        seatbelt_tenant_profile(&[], &[], NetworkMode::On, &SeatbeltTenant { slot, home, tenants_root, own_fork: None })
     }
 
     fn at(p: &str, line: &str) -> usize {
@@ -1283,6 +1319,51 @@ mod tests {
         let top = if cfg!(target_os = "macos") { "/private/var" } else { "/var" };
         assert!(p.contains(&format!("(allow file-read-metadata (literal \"{top}/nonexistent-k2node-t\"))")), "{p}");
         assert!(p.contains(&format!("(allow file-read-metadata (literal \"{top}/nonexistent-k2node\"))")), "{p}");
+    }
+
+    /// prd-compute-mac-no-lan-v1 §5.3 (goldens): `none` keeps the DNS denies
+    /// and loopback, and closes the whole proxy pool (connect and bind);
+    /// `no-lan` is the same plus its own proxy's port, allowed last; `on`
+    /// only can't bind a pool port.
+    #[test]
+    fn network_modes_close_the_proxy_pool_but_a_no_lan_jobs_own_port() {
+        let who = |slot| SeatbeltTenant { slot, home: PathBuf::from("/nonexistent-k2/k2node"), tenants_root: PathBuf::from("/nonexistent-k2/k2node-t"), own_fork: None };
+        let tail = |p: &str, n: usize| p.lines().rev().take(n).collect::<Vec<_>>().into_iter().rev().map(str::to_string).collect::<Vec<_>>();
+        let pool = crate::egress::pool_ports().count();
+        let none_rules = [
+            "(deny mach-lookup (global-name \"com.apple.dnssd.service\"))",
+            "(deny network-outbound (literal \"/private/var/run/mDNSResponder\"))",
+            "(deny network-outbound (remote ip))",
+            "(deny network-bind (local ip))",
+            "(deny network-inbound (local ip))",
+            "(allow network-outbound (remote ip \"localhost:*\"))",
+            "(allow network-bind (local ip \"localhost:*\"))",
+            "(allow network-inbound (local ip \"localhost:*\"))",
+            "(deny network-outbound (remote ip \"localhost:19880\"))",
+            "(deny network-bind (local ip \"localhost:19880\"))",
+        ];
+        for slot in [0u8, 2] {
+            let none = seatbelt_tenant_profile(&[], &[], NetworkMode::None, &who(slot));
+            let start = at(&none, none_rules[0]);
+            let block: Vec<&str> = none[start..].lines().take(none_rules.len()).collect();
+            assert_eq!(block, none_rules, "slot {slot}");
+            assert_eq!(tail(&none, 2), vec!["(deny network-outbound (remote ip \"localhost:19999\"))", "(deny network-bind (local ip \"localhost:19999\"))"]);
+            assert_eq!(none.matches("(deny network-outbound (remote ip \"localhost:").count(), pool);
+            assert_eq!(none.matches("(deny network-bind (local ip \"localhost:").count(), pool);
+            assert!(!none.contains("(allow network-outbound (remote ip \"localhost:19"), "no pool port is open under none");
+
+            let nl = seatbelt_tenant_profile(&[], &[], NetworkMode::NoLanProxy { own_port: 19883 }, &who(slot));
+            assert_eq!(nl, format!("{none}(allow network-outbound (remote ip \"localhost:19883\"))\n"), "none + its own proxy, allowed last");
+            assert!(nl.contains("com.apple.dnssd.service"), "DNS stays denied: the proxy resolves");
+            let own_deny = at(&nl, "(deny network-outbound (remote ip \"localhost:19883\"))");
+            assert!(own_deny < at(&nl, "(allow network-outbound (remote ip \"localhost:19883\"))"), "its own port's allow comes after the pool deny");
+            assert!(nl.contains("(deny network-bind (local ip \"localhost:19883\"))"), "it may connect to its proxy, never bind its port");
+
+            let on = seatbelt_tenant_profile(&[], &[], NetworkMode::On, &who(slot));
+            assert!(!on.contains("(deny network-outbound (remote ip") && !on.contains("dnssd") && !on.contains("localhost:*"), "on keeps the network: {on}");
+            assert_eq!(on.matches("(deny network-bind (local ip \"localhost:").count(), pool, "but squats no proxy port");
+            assert_eq!(tail(&on, 1), vec!["(deny network-bind (local ip \"localhost:19999\"))"]);
+        }
     }
 
     /// The owner's jobs never go through the tenants root, so it stays

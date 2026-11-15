@@ -38,6 +38,7 @@ pub const FIELDS: &[&str] = &[
     "toolchain_budget_gb",
     "tenant_git_access",
     "cpu_burst",
+    "mac_no_lan",
 ];
 
 fn bad(m: impl Into<String>) -> AdminRefusal {
@@ -197,6 +198,10 @@ pub fn widened(old: &Policy, new: &Policy) -> Vec<&'static str> {
     // Jobs using idle cores past their --cpus again (R2).
     if !old.cpu_burst && new.cpu_burst {
         w.push("cpu_burst");
+    }
+    // Mac no-lan jobs reaching the internet through their proxy again.
+    if old.mac_no_lan != new.mac_no_lan && new.mac_no_lan != crate::config::MAC_NO_LAN_NONE {
+        w.push("mac_no_lan");
     }
     w
 }
@@ -375,6 +380,25 @@ mod tests {
         assert_eq!(show(&l, &m, &NodeLimits::default())["policy"]["cpu_burst"], json!(false));
         assert_eq!(class(&l, &m, json!({"cpu_burst": true})), Class::Privileged);
         assert_eq!(class(&l, &m, json!({"cpu_burst": null})), Class::Privileged, "back to the default widens too");
+    }
+
+    /// prd-compute-mac-no-lan-v1 §5.7: Mac no-lan goes through the proxy by
+    /// default (not shown); `none` gives back the old mapping and narrows at
+    /// once; `proxy` again widens (a person's call). Other values are refused.
+    #[test]
+    fn mac_no_lan_none_narrows_and_proxy_again_widens() {
+        let (l, m) = rig();
+        let default = Policy::resolve(&PolicyFile::default(), &m).unwrap();
+        assert_eq!(default.mac_no_lan, "proxy");
+        assert!(serde_json::to_value(&default).unwrap().get("mac_no_lan").is_none(), "the default policy reads as before");
+        assert_eq!(class(&l, &m, json!({"mac_no_lan": "none"})), Class::Operate);
+        apply_set_with(&l, &json!({"mac_no_lan": "none"}), &m).unwrap();
+        assert_eq!(config::read_policy_file(&l.policy()).unwrap().mac_no_lan.as_deref(), Some("none"));
+        assert_eq!(show(&l, &m, &NodeLimits::default())["policy"]["mac_no_lan"], json!("none"));
+        assert_eq!(class(&l, &m, json!({"mac_no_lan": "proxy"})), Class::Privileged);
+        assert_eq!(class(&l, &m, json!({"mac_no_lan": null})), Class::Privileged, "back to the default widens too");
+        let e = apply_set_with(&l, &json!({"mac_no_lan": "on"}), &m).unwrap_err();
+        assert!(e.message.contains("mac_no_lan must be"), "{}", e.message);
     }
 
     /// Without the job wall `network = "none"` isn't enforced: policy.set

@@ -50,6 +50,7 @@ mod assign;
 pub mod cpu;
 pub mod ci;
 mod disk;
+pub mod egress_run;
 pub mod gens_run;
 pub mod git_access;
 mod gpu;
@@ -522,6 +523,9 @@ pub struct Node {
     /// Trusted attempts whose main repo the node fetched from its remote
     /// itself (rule 5), by (slot, job, gen).
     own_fetches: Mutex<std::collections::HashSet<(Slot, String, u32)>>,
+    /// The egress proxy ports of running Mac no-lan jobs
+    /// (prd-compute-mac-no-lan-v1 §5.2).
+    egress_ports: Mutex<std::collections::BTreeSet<u16>>,
     /// iPhone sessions on this Mac (module `sim_glue`).
     pub sim: crate::sim::node_side::NodeSim,
 }
@@ -698,6 +702,7 @@ impl Node {
             gens,
             gens_forks: Mutex::new(HashMap::new()),
             own_fetches: Mutex::new(Default::default()),
+            egress_ports: Mutex::new(Default::default()),
             sim: crate::sim::node_side::NodeSim::new(opts.sim.clone()),
             opts,
         });
@@ -722,6 +727,7 @@ impl Node {
             s.caps_hard = node.caps_hard();
             s.wall = node.wall.label().to_string();
             s.network_none = node.wall.network_none();
+            s.no_lan = Some(node.no_lan_fact().to_string());
             s.since = crate::util::now();
             s.notes = vec!["idle-based availability is not built yet; idle modes act like always / plugged_in".into()];
         }
@@ -1305,6 +1311,8 @@ impl Node {
         s.unavailable = l.unavailable.clone();
         s.holding_lock = l.locks.holding.clone();
         s.stale_locks = l.locks.stale.clone();
+        s.no_lan = Some(self.no_lan_fact().to_string());
+        s.no_lan_proxies = self.egress_ports.lock().unwrap().len() as u32;
         s.updated_at = crate::util::now();
         if s.state.is_empty() {
             s.state = if pin.is_none() { "unenrolled".into() } else { "connecting".into() };

@@ -150,6 +150,11 @@ pub struct RunFacts {
     /// true when it started. Absent otherwise (older rows read as none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_run: Option<k2_node_proto::ci::RunFacts>,
+    /// A Mac no-lan job's egress proxy (prd-compute-mac-no-lan-v1 §5.2):
+    /// it outlives this k2-node like the job, and the next one tails its
+    /// log on from `offset`. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<super::egress_run::EgressRun>,
 }
 
 /// Phase 1's sort of this boot's open rows with run facts.
@@ -186,6 +191,11 @@ pub fn sort(rows: Vec<Row>, wall: &Wall) -> Sorted {
 /// job's group) or nothing more (a unit is released by the caller like
 /// every interrupted row's).
 pub fn stop_named(f: &RunFacts) {
+    // Its egress proxy goes with it (it would end with the job's group or
+    // at its deadline anyway).
+    if let Some(e) = &f.egress {
+        crate::egress::proc::terminate(&e.facts);
+    }
     if let Some(h) = &f.holder {
         if crate::hold::alive(h.pid, h.start) {
             crate::hold::terminate(h.pid, h.start);
@@ -347,6 +357,10 @@ impl Node {
             }
         }
         sys(&mut journal, format!("adopted by k2-node {} (started by k2-node {}); the job kept running through the update", super::NODE_VERSION, f.node_version));
+        let egress = f.egress.clone();
+        if let Some(e) = &egress {
+            self.egress_reserve(e.port());
+        }
         self.status.lock().unwrap().adopted.push(crate::status::AdoptedJob { job: key.clone(), from: f.node_version.clone() });
         crate::nlog!("job {job} gen {gen}: adopted ({:?}, started by k2-node {})", f.kind, f.node_version);
         let remaining = (f.deadline - self.now()).max(0) as u64;
@@ -374,6 +388,7 @@ impl Node {
             adopted: true,
             gpu: None,
             host_start: None,
+            egress,
         };
         self.jobs_changed();
         let (node, tenant) = (self.clone(), t.clone());
@@ -403,6 +418,23 @@ impl Node {
                 let name = e.file_name().to_string_lossy().into_owned();
                 let key = name.rsplit_once('.').map(|(k, _)| k.to_string()).unwrap_or_default();
                 if !keep.contains(&key) && e.file_type().is_ok_and(|ft| ft.is_file() || ft.is_symlink()) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        // Mac no-lan proxies of jobs no one adopted: stopped, folders gone.
+        if let Ok(rd) = std::fs::read_dir(t.paths.state().join("egress")) {
+            for e in rd.flatten() {
+                let key = e.file_name().to_string_lossy().into_owned();
+                if keep.contains(&key) {
+                    continue;
+                }
+                if let Some(f) = crate::egress::proc::read_facts(&e.path()) {
+                    crate::egress::proc::terminate(&f);
+                }
+                if e.file_type().is_ok_and(|ft| ft.is_dir()) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                } else {
                     let _ = std::fs::remove_file(e.path());
                 }
             }

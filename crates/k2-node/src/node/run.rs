@@ -165,6 +165,8 @@ pub(super) struct Live {
     /// verdict is the job's `K2_QUIET_HOST`); the steal window fills in
     /// after. An adopted job, or an older server's: none.
     pub host_start: Option<k2_node_proto::results::HostSample>,
+    /// A Mac no-lan job's egress proxy (prd-compute-mac-no-lan-v1).
+    pub egress: Option<super::egress_run::EgressRun>,
 }
 
 /// One spool tailer's inputs.
@@ -261,23 +263,41 @@ pub fn with_host_env(mut env: Vec<(String, String)>, h: &k2_node_proto::host::Ho
     env
 }
 
+/// How a Mac's `no-lan` came out for one job (prd-compute-mac-no-lan-v1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacNoLan {
+    /// Not a Mac no-lan job.
+    No,
+    /// Its own egress proxy on this port.
+    Proxy(u16),
+    /// `none` instead: the owner's `mac_no_lan = "none"`, or no proxy here.
+    AsNone(String),
+    /// `none` instead: its proxy couldn't start (never `on`).
+    ProxyFailed(String),
+}
+
 /// The job-log line for a job's network (`None` when it's full). Says
 /// which setting closed it (the node's policy, or the owner's share for
 /// this server) and what fails, so a missing DNS isn't a mystery.
-/// `mac_no_lan`: the share says `no-lan`, which a Mac can't keep (Seatbelt
-/// can't tell the LAN from the internet), so the job got `none`.
-pub fn network_line(network: Network, by_policy: bool, mac_no_lan: bool) -> Option<String> {
+/// `mac`: a Mac no-lan job's proxy, or why it got `none`.
+pub fn network_line(network: Network, by_policy: bool, mac: &MacNoLan) -> Option<String> {
     const FAILS: &str = "no DNS, so downloads from crates.io, npm, PyPI or GitHub fail";
-    match network {
-        Network::On => None,
-        Network::NoLan => Some("network: no-lan: this job reaches the internet but not the node's local network (the node owner's setting for this server)".into()),
-        Network::None if mac_no_lan => Some(format!(
-            "network: none: the node's owner set this server's share here to no-lan, and a Mac can't close only the local network, so this job has no network at all ({FAILS}). Run it on a Linux node (no-lan keeps the internet there), or ask the node's owner (k2-node servers limits <server> --network on)"
+    match (network, mac) {
+        (Network::On, _) => None,
+        (Network::NoLan, MacNoLan::Proxy(port)) => Some(format!(
+            "network: no-lan: this job reaches the internet over TCP through the node's proxy (HTTPS_PROXY=http://127.0.0.1:{port}), not the node's local network. Loopback is open. The job has no DNS of its own (the proxy resolves). UDP and plain HTTP aren't carried; tools that ignore HTTPS_PROXY (git over ssh, SwiftPM binary downloads, Java without -Dhttps.proxyHost) fail with \"Operation not permitted\". To check from inside the job: echo $K2_JOB_PROXY (set only behind this proxy)"
         )),
-        Network::None if by_policy => Some(format!(
+        (Network::NoLan, _) => Some("network: no-lan: this job reaches the internet but not the node's local network (the node owner's setting for this server)".into()),
+        (Network::None, MacNoLan::ProxyFailed(why)) => Some(format!(
+            "network: none: the no-lan proxy couldn't start ({why}), so this job has no network ({FAILS}). Run it again, or on a Linux node"
+        )),
+        (Network::None, MacNoLan::AsNone(why)) => Some(format!(
+            "network: none: the node's owner set this server's share here to no-lan, and this Mac gives no-lan jobs no network ({why}), so this job has no network at all ({FAILS}). Run it on a Linux node (no-lan keeps the internet there), or ask the node's owner (k2-node servers limits <server> --network on)"
+        )),
+        (Network::None, _) if by_policy => Some(format!(
             "network: none: this node's policy keeps jobs off the network, loopback only ({FAILS}). Its owner sets network in policy.toml; or run the job on another node"
         )),
-        Network::None => Some(format!(
+        (Network::None, _) => Some(format!(
             "network: none: the node's owner keeps this server's jobs off the network here, loopback only ({FAILS}). Run the job on another node, or ask the node's owner (k2-node servers limits <server> --network on)"
         )),
     }
@@ -423,8 +443,10 @@ impl Node {
     }
 
     /// A job's network: the node policy's for the owner; for a tenant the
-    /// narrower of the policy's and its share's (V65). macOS can't close
-    /// only the LAN, so a tenant's `no-lan` is `none` there.
+    /// narrower of the policy's and its share's (V65). On a Mac a tenant's
+    /// `no-lan` stays `no-lan` only where its job can get its own egress
+    /// proxy (prd-compute-mac-no-lan-v1); else it is `none` (Seatbelt alone
+    /// can't close only the LAN).
     pub fn job_network(&self, t: &Tenant) -> Result<Network, (String, String)> {
         let policy = Network::of_policy(&self.local.lock().unwrap().policy.network);
         if t.is_owner() || self.dev_unwalled() {
@@ -432,7 +454,7 @@ impl Node {
         }
         let entry = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map_err(|r| (r.code, r.message))?;
         let n = policy.min(entry.network);
-        Ok(if cfg!(target_os = "macos") && n == Network::NoLan { Network::None } else { n })
+        Ok(if cfg!(target_os = "macos") && n == Network::NoLan && self.no_lan_proxy_ready().is_err() { Network::None } else { n })
     }
 
     /// The job-log line for a job that starts with less than full network
@@ -441,7 +463,8 @@ impl Node {
         let policy = Network::of_policy(&self.local.lock().unwrap().policy.network);
         let by_policy = t.is_owner() || self.dev_unwalled() || policy == network;
         let mac_no_lan = cfg!(target_os = "macos") && !by_policy && network == Network::None && policy.min(crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map(|e| e.network).unwrap_or(Network::None)) == Network::NoLan;
-        network_line(network, by_policy, mac_no_lan)
+        let mac = if mac_no_lan { MacNoLan::AsNone(self.no_lan_proxy_ready().err().unwrap_or_default()) } else { MacNoLan::No };
+        network_line(network, by_policy, &mac)
     }
 
     /// May a job of `t` start behind this node's wall? Always for the
@@ -785,7 +808,10 @@ impl Node {
         // The network, cargo's target dir and missing-tool lines (0.46.13)
         // go to a server that speaks easy mode, like the cpus and tools
         // lines: an older one gets its own release's log (golden_solo).
-        if let Some(line) = t.speaks_easy().then(|| self.job_network_line(&t, network)).flatten() {
+        // A Mac no-lan job's line comes with its proxy, right before it
+        // starts (or the line of the `none` it falls back to).
+        let mac_no_lan = cfg!(target_os = "macos") && network == Network::NoLan;
+        if let Some(line) = (t.speaks_easy() && !mac_no_lan).then(|| self.job_network_line(&t, network)).flatten() {
             sys(&mut journal, &line);
         }
         // Toolchains: explicit needs (required) + what the repo declares
@@ -1064,6 +1090,7 @@ impl Node {
             log_dropped: 0,
             rust: self.jobs.lock().unwrap().get(&(t.slot, job.clone())).map(|j| j.rust.clone()).unwrap_or_default(),
             ci_run: self.ci_run(&t, &job, gen),
+            egress: None,
         });
         // C18: the provisional facts are on disk before anything starts, so
         // a crash between the spawn and `set_running` still leaves what the
@@ -1111,6 +1138,49 @@ impl Node {
             Some(h) => with_quiet_env(env, h),
             None => env,
         };
+        // prd-compute-mac-no-lan-v1 §5.2–§5.4: a Mac no-lan job reaches the
+        // internet only through its own egress proxy on loopback. No proxy
+        // (the owner's switch, or it couldn't start): `none`, never `on`.
+        let (env, network, egress) = if mac_no_lan {
+            let proxy = match self.no_lan_proxy_ready() {
+                Ok(bin) => {
+                    let dir = self.egress_dir(&t, &key);
+                    self.egress_start(bin, dir, &key, port_block, deadline_unix.saturating_add(crate::hold::DEADLINE_SLACK_SECS)).await.map_err(MacNoLan::ProxyFailed)
+                }
+                Err(why) => Err(MacNoLan::AsNone(why)),
+            };
+            match proxy {
+                Ok(r) => {
+                    let (env, replaced) = super::egress_run::with_proxy_env(env, &a.plan.env, r.port());
+                    if easy {
+                        if let Some(line) = network_line(Network::NoLan, true, &MacNoLan::Proxy(r.port())) {
+                            sys(&mut journal, &line);
+                        }
+                        if let Some(line) = super::egress_run::replaced_line(&replaced) {
+                            sys(&mut journal, &line);
+                        }
+                    }
+                    // On disk before the job starts: a crash from here on
+                    // still leaves what stops the proxy (`stop_named`).
+                    if let Some(f) = facts.as_mut() {
+                        f.egress = Some(r.clone());
+                        self.save_run(&t, &job, gen, f);
+                    }
+                    (env, Network::NoLan, Some(r))
+                }
+                Err(mac) => {
+                    crate::nlog!("job {job} gen {gen}: no-lan runs as none: {mac:?}");
+                    self.set_prov_start(&t, &job, gen, &a.plan, Network::None);
+                    if let Some(line) = easy.then(|| network_line(Network::None, false, &mac)).flatten() {
+                        sys(&mut journal, &line);
+                    }
+                    (env, Network::None, None)
+                }
+            }
+        } else {
+            (env, network, None)
+        };
+        let proxy_port = egress.as_ref().map(|r| r.port());
         // GPU jobs (0.46.11): only a walled unit gets a GPU (root leases the
         // device); never a GPU job run anywhere else without one.
         let started = if a.plan.gpu.is_some() && !unit_mode {
@@ -1128,9 +1198,9 @@ impl Node {
             }
             self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref(), writers, uid_share == UidShare::Own).await
         } else if let (Some(bin), Some((out_w, err_w))) = (holder_bin.as_ref(), writers) {
-            self.start_held(&t, &a, &cwd, &env, network, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None, None, None))
+            self.start_held(&t, &a, &cwd, &env, network, proxy_port, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None, None, None))
         } else {
-            self.start_local(&t, &a, &cwd, &env, network).map(|(p, o, e)| (p, o, e, None, None))
+            self.start_local(&t, &a, &cwd, &env, network, proxy_port).map(|(p, o, e)| (p, o, e, None, None))
         };
         // SE19: the plaintext goes as soon as the unit has it (the
         // redactor's copy stays until the job ends).
@@ -1139,10 +1209,17 @@ impl Node {
             Ok(s) => s,
             Err(e) => {
                 sys(&mut journal, &e);
+                if let Some(r) = &egress {
+                    self.egress_release(r);
+                }
                 self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some("spawn_failed"), Some(&e), src_ran, None, Some(journal), lease, None).await;
                 return;
             }
         };
+        // The proxy ends with the job's process group.
+        if let Some(r) = &egress {
+            self.egress_job_started(r, proc.pgid());
+        }
         // GPU jobs: which GPU root leased to it.
         if let Some(pci) = &gpu {
             sys(&mut journal, &format!("GPU: {pci} ($K2_GPU_RENDER is its render node; no other job holds it)"));
@@ -1207,6 +1284,7 @@ impl Node {
             adopted: false,
             gpu,
             host_start,
+            egress,
         };
         // An update's drain waits for this (the status file's running_until).
         self.job_ends_by(t.slot, &job, self.now().saturating_add(a.plan.limits.max_secs.max(1) as i64));
@@ -1217,7 +1295,7 @@ impl Node {
     /// k2-node process, §5.6): the output, the wait (exit, stop, timeout,
     /// stall, memory), a detach for an update, the artifacts and the end.
     pub(super) async fn supervise(self: Arc<Self>, t: Arc<Tenant>, a: Assign, live: Live, mut stop: watch::Receiver<Option<StopReason>>) {
-        let Live { dirs, cwd, target, src_ran, lease, mut proc, outs, journal, redactor, mem_limit, easy, tools_used, deadline, facts, preset, preset_detail, adopted, gpu, host_start } = live;
+        let Live { dirs, cwd, target, src_ran, lease, mut proc, outs, journal, redactor, mem_limit, easy, tools_used, deadline, facts, preset, preset_detail, adopted, gpu, host_start, egress } = live;
         // GPU jobs S2: what the end stamp looks at beyond load and jobs.
         let host_extra = || crate::jobstat::HostExtra { foreign_lock: self.local.lock().unwrap().locks.holding.is_some(), gpu_pcis: gpu.iter().cloned().collect() };
         let job = a.fence.job_id.clone();
@@ -1277,6 +1355,9 @@ impl Node {
                 })),
             }
         }
+        // A Mac no-lan job's proxy: its refusals into the log as they happen.
+        let egress_keep = egress.clone();
+        let egress_watch = egress.map(|r| self.spawn_egress_watch(r, journal.clone(), t.clone(), facts.clone(), job.clone(), gen, tail_rx.clone()));
 
         // CE-19: the host at the start was read before the spawn (the job's
         // K2_QUIET_HOST); the steal window runs here, off the job's path,
@@ -1418,6 +1499,10 @@ impl Node {
             for p in tailers {
                 let _ = tokio::time::timeout(Duration::from_secs(10), p).await;
             }
+            // Its proxy keeps running too; the next k2-node reads its log on.
+            if let Some(w) = egress_watch {
+                let _ = tokio::time::timeout(Duration::from_secs(10), w).await;
+            }
             for p in pumps {
                 p.abort();
             }
@@ -1502,6 +1587,35 @@ impl Node {
         let _ = tail_tx.send(TailCmd::Finish);
         for p in tailers {
             let _ = tokio::time::timeout(Duration::from_secs(60), p).await;
+        }
+        // Mac no-lan (§5.6): the proxy goes, then the summary and the list of
+        // every host the job reached or tried; the summary is also a note.
+        let mut egress_note: Option<String> = None;
+        if let Some(mut w) = egress_watch {
+            match tokio::time::timeout(Duration::from_secs(30), &mut w).await {
+                Ok(Ok(Some((list, run)))) => {
+                    let (summary, rows) = super::egress_run::end_lines(&list);
+                    {
+                        let mut j = journal.lock().unwrap();
+                        for l in std::iter::once(&summary).chain(rows.iter()) {
+                            let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {l}\n").as_bytes());
+                        }
+                    }
+                    self.egress_release(&run);
+                    egress_note = Some(summary);
+                }
+                r => {
+                    // It never finished: no summary, but nothing is left behind
+                    // (and its journal handle goes).
+                    if r.is_err() {
+                        w.abort();
+                        let _ = w.await;
+                    }
+                    if let Some(e) = &egress_keep {
+                        self.egress_release(e);
+                    }
+                }
+            }
         }
         for mut p in pumps {
             if tokio::time::timeout(Duration::from_secs(2), &mut p).await.is_err() {
@@ -1604,6 +1718,10 @@ impl Node {
         // What the node cleared for this server's share while the job ran.
         let evicted = if t.is_owner() { Default::default() } else { self.evicted_since(t.slot, self.now() - t0.elapsed().as_secs() as i64) };
         let mut outputs = outputs;
+        if let (Some(n), Some(o)) = (egress_note, outputs.as_mut()) {
+            o.notes.push(n);
+        }
+        outputs = outputs.map(|o| o.capped());
         if let Some(line) = evicted.line() {
             if let Some(j) = journal.as_mut() {
                 let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {line}\n").as_bytes());
@@ -1647,7 +1765,9 @@ impl Node {
 
     /// The argv of a job that runs as the node user: the plan's, inside
     /// its Seatbelt profile on macOS. Refuses what this node can't wall.
-    fn local_argv(&self, t: &Tenant, a: &Assign, network: Network) -> Result<Vec<String>, String> {
+    /// `proxy`: a Mac no-lan job's own egress proxy port; no-lan without
+    /// one gets the `none` profile (never more).
+    fn local_argv(&self, t: &Tenant, a: &Assign, network: Network, proxy: Option<u16>) -> Result<Vec<String>, String> {
         let network_none = network != Network::On;
         if network_none && !self.wall.network_none() {
             return Err(refusal::NETWORK_NONE_MESSAGE.to_string());
@@ -1664,7 +1784,12 @@ impl Node {
                     tenants_root: self.layout().tenants_root(),
                     own_fork: self.fork_dir_of(t, &a.fence.job_id, a.fence.generation),
                 };
-                crate::wall::seatbelt_argv(&crate::wall::seatbelt_tenant_profile(&dirs, &sockets, network_none, &who), &a.plan.argv)
+                let net = match (network, proxy) {
+                    (Network::On, _) => crate::wall::NetworkMode::On,
+                    (Network::NoLan, Some(own_port)) => crate::wall::NetworkMode::NoLanProxy { own_port },
+                    _ => crate::wall::NetworkMode::None,
+                };
+                crate::wall::seatbelt_argv(&crate::wall::seatbelt_tenant_profile(&dirs, &sockets, net, &who), &a.plan.argv)
             }
             _ => a.plan.argv.clone(),
         })
@@ -1680,13 +1805,14 @@ impl Node {
         cwd: &Path,
         env: &[(String, String)],
         network: Network,
+        proxy: Option<u16>,
         bin: &Path,
         dir: &Path,
         out: std::os::fd::OwnedFd,
         err: std::os::fd::OwnedFd,
         deadline_unix: i64,
     ) -> Result<Proc, String> {
-        let argv = self.local_argv(t, a, network)?;
+        let argv = self.local_argv(t, a, network, proxy)?;
         let spec = crate::hold::HoldSpec {
             v: crate::hold::HOLD_V,
             argv,
@@ -1703,8 +1829,8 @@ impl Node {
     }
 
     /// A plain child process (no wall, or the Seatbelt profile around it).
-    fn start_local(&self, t: &Tenant, a: &Assign, cwd: &Path, env: &[(String, String)], network: Network) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
-        let argv = self.local_argv(t, a, network)?;
+    fn start_local(&self, t: &Tenant, a: &Assign, cwd: &Path, env: &[(String, String)], network: Network, proxy: Option<u16>) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+        let argv = self.local_argv(t, a, network, proxy)?;
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
         // R2: the ceiling is the burst where it applies; the weight keeps
         // every other leaf its guarantee.
@@ -2758,16 +2884,23 @@ pub(super) mod tests {
     /// nothing.
     #[test]
     fn network_line_names_the_setting_and_what_fails() {
-        assert_eq!(network_line(Network::On, true, false), None);
-        assert_eq!(network_line(Network::On, false, false), None);
-        let mac = network_line(Network::None, false, true).unwrap();
-        assert!(mac.starts_with("network: none: the node's owner set this server's share here to no-lan, and a Mac can't close only the local network"), "{mac}");
+        let no = &MacNoLan::No;
+        assert_eq!(network_line(Network::On, true, no), None);
+        assert_eq!(network_line(Network::On, false, no), None);
+        let mac = network_line(Network::None, false, &MacNoLan::AsNone("the node's owner set mac_no_lan = \"none\"".into())).unwrap();
+        assert!(mac.starts_with("network: none: the node's owner set this server's share here to no-lan, and this Mac gives no-lan jobs no network (the node's owner set mac_no_lan = \"none\")"), "{mac}");
         assert!(mac.contains("no DNS") && mac.contains("crates.io") && mac.contains("--network on"), "{mac}");
-        let share = network_line(Network::None, false, false).unwrap();
+        let share = network_line(Network::None, false, no).unwrap();
         assert!(share.starts_with("network: none: the node's owner keeps this server's jobs off the network here"), "{share}");
-        let policy = network_line(Network::None, true, false).unwrap();
+        let policy = network_line(Network::None, true, no).unwrap();
         assert!(policy.starts_with("network: none: this node's policy keeps jobs off the network") && policy.contains("policy.toml"), "{policy}");
-        assert!(network_line(Network::NoLan, false, false).unwrap().starts_with("network: no-lan: this job reaches the internet"));
+        assert!(network_line(Network::NoLan, false, no).unwrap().starts_with("network: no-lan: this job reaches the internet but not the node's local network"));
+        // prd-compute-mac-no-lan-v1 §5.6: the proxy's line, and its fallback.
+        let proxy = network_line(Network::NoLan, false, &MacNoLan::Proxy(19883)).unwrap();
+        assert!(proxy.starts_with("network: no-lan: this job reaches the internet over TCP through the node's proxy (HTTPS_PROXY=http://127.0.0.1:19883), not the node's local network. Loopback is open."), "{proxy}");
+        assert!(proxy.contains("no DNS of its own") && proxy.contains("UDP and plain HTTP aren't carried") && proxy.contains("git over ssh") && proxy.ends_with("echo $K2_JOB_PROXY (set only behind this proxy)"), "{proxy}");
+        let failed = network_line(Network::None, false, &MacNoLan::ProxyFailed("no free proxy port".into())).unwrap();
+        assert!(failed.starts_with("network: none: the no-lan proxy couldn't start (no free proxy port), so this job has no network"), "{failed}");
     }
 
     /// M8.2 (11-07 review): a secret job asked to run as a uid of its own,
@@ -2960,6 +3093,7 @@ pub(super) mod tests {
             adopted: false,
             gpu: None,
             host_start: None,
+            egress: None,
         };
         let (_stop_tx, stop_rx) = watch::channel(None);
         tokio::time::timeout(Duration::from_secs(60), n.clone().supervise(t.clone(), a.clone(), live, stop_rx)).await.expect("supervise ended within a minute");

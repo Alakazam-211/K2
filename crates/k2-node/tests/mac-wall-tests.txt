@@ -12,3 +12,4 @@
 job_wall_e2e        the seatbelt:: tests run probes under sandbox-exec
 servers_e2e         starts nodes with Wall::Seatbelt; their jobs run under sandbox-exec
 tenant_wall_macos   the wall between servers, under sandbox-exec
+no_lan_macos        starts nodes with Wall::Seatbelt; their no-lan jobs and proxies run under sandbox-exec

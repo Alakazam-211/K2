@@ -37,6 +37,15 @@ pub struct Status {
     /// owner set it only then).
     #[serde(default)]
     pub network_none: bool,
+    /// What a `no-lan` job gets here (prd-compute-mac-no-lan-v1 §5.7):
+    /// `proxy` (a Mac: the internet over HTTPS/TCP through its own proxy on
+    /// loopback, never the local network), `none` (a Mac without it: no
+    /// network), `n/a` (Linux: the kernel's address filter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_lan: Option<String>,
+    /// Mac no-lan proxies running now.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub no_lan_proxies: u32,
     /// Shown while pending.
     pub sas: Option<String>,
     pub notes: Vec<String>,
@@ -160,4 +169,8 @@ mod tests {
         let left: Vec<_> = std::fs::read_dir(p.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).filter(|n| n.to_string_lossy().contains(".tmp-")).collect();
         assert!(left.is_empty(), "no temp files left: {left:?}");
     }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }

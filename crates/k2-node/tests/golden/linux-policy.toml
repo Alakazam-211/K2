@@ -17,6 +17,9 @@
 # network = "full"              # full | none: none keeps jobs off the network (loopback only);
 #                               # it needs the job wall (k2-node 0.46.3+ setup); a node without
 #                               # it takes no jobs under "none" (network_none_not_enforced_yet)
+# mac_no_lan = "proxy"          # macOS: a server's no-lan share reaches the internet through a
+#                               # per-job proxy (HTTPS/TCP, never the local network); "none" = no
+#                               # network at all for no-lan jobs (the old behaviour)
 # repo_toolchains = true        # install what a job's repo declares (mise.toml, .tool-versions,
 #                               # .nvmrc, rust-toolchain.toml); --needs are installed either way
 # toolchain_budget_gb = 22      # disk for installed tool versions (default: 15% of

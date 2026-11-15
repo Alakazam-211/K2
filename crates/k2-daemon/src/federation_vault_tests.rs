@@ -123,7 +123,7 @@ fn code_of(r: &CliResponse) -> String {
 #[test]
 fn receiver_pends_without_opt_in_and_lands_only_with_accept_from_and_a_connection() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (_d, sender) = other_vault("fed-sender");
         let (ws, path) = receiving_workspace();
@@ -534,7 +534,7 @@ fn revoke_envelope(peer_key: &rcgen::KeyPair, to_ws: &str, delivery_id: &str) ->
 #[test]
 fn only_the_sending_peer_can_unsend_and_it_disables_the_copy() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (_d, sender) = other_vault("fed-revoke");
         let (ws, path) = receiving_workspace();

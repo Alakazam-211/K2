@@ -137,7 +137,7 @@ fn surfaces(v: &LocalVault, ws: &[&Ws]) -> String {
 #[test]
 fn same_server_send_pends_then_lands_with_accept_from_and_rotates_on_resend() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sales, ops) = (workspace("sales"), workspace("ops"));
         link(&sales, &ops);
@@ -240,7 +240,7 @@ fn same_server_send_pends_then_lands_with_accept_from_and_rotates_on_resend() {
 #[test]
 fn local_gate_and_never_sendable_refusals() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sales, ops, stranger) = (workspace("sales"), workspace("ops"), workspace("stranger"));
         link(&sales, &ops);
@@ -305,7 +305,7 @@ fn local_gate_and_never_sendable_refusals() {
 #[test]
 fn person_given_secrets_pend_even_from_an_allow_listed_sender() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sales, ops) = (workspace("sales"), workspace("ops"));
         link(&sales, &ops);
@@ -323,7 +323,7 @@ fn person_given_secrets_pend_even_from_an_allow_listed_sender() {
 #[test]
 fn decline_clash_and_accept_from_lists() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sales, ops) = (workspace("sales"), workspace("ops"));
         link(&sales, &ops);
@@ -365,7 +365,7 @@ fn decline_clash_and_accept_from_lists() {
 #[test]
 fn expiry_closes_pending_copies_and_logs_it() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sales, ops) = (workspace("sales"), workspace("ops"));
         link(&sales, &ops);
@@ -477,7 +477,7 @@ fn route_walk_policy_post_guard_and_passport_rows() {
 #[test]
 fn a_reply_to_your_own_ask_lands_straight_in_and_unsend_takes_it_back() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sales, ops, other) = (workspace("sales"), workspace("ops"), workspace("other"));
         link(&sales, &ops);
@@ -545,7 +545,7 @@ fn a_reply_to_your_own_ask_lands_straight_in_and_unsend_takes_it_back() {
 #[test]
 fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let run = k2_vault::fsutil::TestDir::new("ho-file-run");
         let _rt = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, run.path().join("run"));
         let v = crate::vault::ensure_test_vault();
@@ -652,7 +652,7 @@ fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
 #[test]
 fn a_widget_origin_never_answers_a_persons_card() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sales, ops) = (workspace("sales"), workspace("ops"));
         link(&sales, &ops);
@@ -713,7 +713,7 @@ fn a_widget_origin_never_answers_a_persons_card() {
 #[test]
 fn an_accepted_cli_code_is_usable_and_every_answer_says_how() {
     with_temp_home(|| {
-        k2_core::db::init_for_tests();
+        let _db = k2_core::db::scoped_for_test();
         let v = crate::vault::ensure_test_vault();
         let (sew, web, other) = (workspace("sew"), workspace("web"), workspace("other"));
         link(&sew, &web);

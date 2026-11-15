@@ -40,6 +40,11 @@ fn ci_on() -> k2_core::test_env::EnvLock {
     g
 }
 
+/// A 64-hex peer fingerprint no other test uses.
+fn unique_fp() -> String {
+    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+}
+
 /// Run `f` as one server: its DB and its host.
 fn on<T>(db: &Db, host: &str, f: impl FnOnce() -> T) -> T {
     let prev = test_seams::owner_id_now();
@@ -1294,7 +1299,11 @@ fn a_client_that_missed_a_roster_gets_it_at_the_next_tick() {
     let _ci = ci_on();
     let _db = k2_core::db::scoped_for_test();
     test_seams::set_owner_id(Some(OWNER));
-    let cfp = "d".repeat(64);
+    // The owner's per-client delivery memory (what was handed, the retry
+    // backoff) is process-wide and keyed by the client's fingerprint: a
+    // fixed one inherits another test's "already handed" or backoff
+    // (shuffled soak, seed 2). A fingerprint of its own.
+    let cfp = unique_fp();
     {
         let h = k2_core::db::shared();
         let t = compute::now();
@@ -1365,7 +1374,9 @@ fn an_expired_lanes_plan_is_sealed_again_when_the_node_is_back() {
         let row = SeatRow {
             id: "s-m7".into(),
             side: "owner".into(),
-            peer_fp: "d".repeat(64),
+            // Its own fingerprint: the owner's per-client delivery memory
+            // is process-wide (see a_client_that_missed_a_roster_…).
+            peer_fp: unique_fp(),
             peer_host: CLIENT.into(),
             owner_id: OWNER.into(),
             owner_key_fp: None,

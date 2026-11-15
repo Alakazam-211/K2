@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-markdown"
-version = "0.7.22"
+version = "0.7.23"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

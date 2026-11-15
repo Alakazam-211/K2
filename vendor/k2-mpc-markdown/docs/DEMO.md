@@ -120,7 +120,8 @@ what bounces agent-b in scene 3.
 - agent-b: `<host> doc replace --old 'one socket' --new 'a shared socket' plan.md`.
 - Sam: `<host> doc blame -L 25,25 plan.md` (Agent B).
 - agent-b: `<host> doc undo plan.md`.
-- Sam: `<host> doc blame -L 25,25 plan.md`. Expect Agent A, restored by Agent B (F1 below, fixed in base v0.9.1).
+- Sam: `<host> doc blame -L 25,25 plan.md`. Expect Agent A, restored by Agent B (the first
+  finding below, fixed in base v0.9.1).
 - agent-a: `<host> doc undo plan.md`. Expect exit 0, and the sentence gone.
 - Sam: delete the line `TODO: link the spike report.` in the editor, then press Ctrl+Z.
 - Sam: `<host> doc blame -L 24,24 plan.md`. Expect `(restored by Sam in …)`.
@@ -149,13 +150,13 @@ record those differences as expected, not as findings.
 Both are fixed in `k2-mpc-base` v0.9.1 (this pack's v0.7.1); the transcript shows the fixed
 behaviour, and the demo now fails if a partly restored line lacks `restored by`.
 
-- **F1 (fixed): a line put back only in part didn't say "restored by".** After agent-b's
+- **Fixed: a line put back only in part didn't say "restored by".** After agent-b's
   undo in scene 6, part of the sentence (`one`) is text put back by an undo. Blame by root
   rightly names agent-a, but a line went to the **first** of its characters tied on the
   newest root, which wasn't put back, so the line had no `restored_by` (the same for the
   line Sam's revert puts `engine` back into in scene 8). The kit now prefers a restored
   character among tied ones.
-- **F2 (fixed): a pure deletion's "last edit" grew over others' new text.** After agent-b's
+- **Fixed: a pure deletion's "last edit" grew over others' new text.** After agent-b's
   and agent-c's undos removed their lines at the end of Notes, agent-a appended a sentence
   there, and the next notes said `Agent B (agent-b) edited lines 25–26` and `Agent C …
   edited lines 25–26`: agent-a's new line plus a line past the end. Last-edit ranges no

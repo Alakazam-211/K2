@@ -54,7 +54,7 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P31 | Reverse one specific change, even days later, inside the revert window (older: `restore --version`) | `revert <change> [--partial]` (too old: exit 8) | E (author, the `on_behalf_of` person, or owner) | `revert` | live |
 | P35–P44 | The grid tier's own actions: insert, move or delete rows; insert, move, delete or rename columns; sort; bring back a deleted row or column; remove deleted rows to free space | `row …`, `col …`, `sort`, `rows drop-deleted` (a grid pack's and the kit's grid verbs) | — | — | N/A: a Markdown doc has no rows or columns (kit v0.10.0: `PersonAction` gained these rows; mapped N/A in the same bump) |
 
-## `replace-section` (P13)
+## `replace-section` (Paste a block)
 
 `replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V]`, the new body on stdin.
 

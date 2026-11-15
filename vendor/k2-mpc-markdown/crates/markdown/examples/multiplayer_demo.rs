@@ -1040,8 +1040,8 @@ fn scene_6(d: &mut Demo) -> R {
 }
 
 /// Blame by root: the line's author is the text's first author, and its `restored_by`
-/// names who put it back, also when only part of the line was put back (base v0.9.1 fixed
-/// finding F1).
+/// names who put it back, also when only part of the line was put back (a demo finding,
+/// fixed in base v0.9.1).
 fn restored(_d: &mut Demo, b: &Blame, author: &str, by: &str) -> R {
     let line = b.lines.first().ok_or("blame: no line")?;
     if line.author != author {
@@ -1053,7 +1053,7 @@ fn restored(_d: &mut Demo, b: &Blame, author: &str, by: &str) -> R {
     match line.restored_by.as_deref() {
         Some(r) if r == by => Ok(()),
         None => Err(format!(
-            "blame: no 'restored by {by}' (finding F1, fixed in base v0.9.1)"
+            "blame: no 'restored by {by}' (a partly restored line; fixed in base v0.9.1)"
         )),
         Some(r) => Err(format!("blame: restored by {r}, the script expects {by}")),
     }

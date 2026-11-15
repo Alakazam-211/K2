@@ -7,6 +7,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { httpCodeOf, httpDetailsOf } from '@/lib/daemon-http-error'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { RecordingPerms } from './recording-controls'
+import { convOfDmRoom } from '@/lib/home-chat/calls'
 import {
   parseJoinAnswer,
   parseVoiceRooms,
@@ -56,11 +57,15 @@ export interface JoinOptions {
   onLateAnswer?: (answer: VoiceJoinAnswer) => void
 }
 
-/** `POST /cli/voice/join {room, join?}`. Throws a `VoiceRequestError`. */
+/** `POST /cli/voice/join {room, join?}`, or `{dm, join?}` for a DM call
+ *  (room `dm:<conversation id>`: it rings, or answers a ring). Throws a
+ *  `VoiceRequestError`. */
 export async function joinVoiceRoom(scope: ServerScope, roomId: string, opts: JoinOptions = {}): Promise<VoiceJoinAnswer> {
   const timeoutMs = opts.timeoutMs ?? JOIN_TIMEOUT_MS
   let timedOut = false
-  const body = opts.selfMute ? { room: roomId, join: { self_mute: true } } : { room: roomId }
+  const dm = convOfDmRoom(roomId)
+  const place = dm ? { dm } : { room: roomId }
+  const body = opts.selfMute ? { ...place, join: { self_mute: true } } : place
   const request = daemonCliPost(scope, 'voice/join', body).then(parseJoinAnswer)
   let timer: ReturnType<typeof setTimeout> | null = null
   const timeout = new Promise<never>((_, reject) => {

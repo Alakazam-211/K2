@@ -32,6 +32,7 @@ import {
 } from '@/lib/home-chat/api'
 import { subscribeHomeChatEvents, type HomeChatFrame } from '@/lib/home-chat/events-socket'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
+import { applyCallFrame, resetHomeChatCallsForTests } from '@/stores/home-chat-calls'
 
 /** A name clears this long after its last typing frame (§9.1). */
 export const TYPING_CLEAR_MS = 10_000
@@ -259,13 +260,23 @@ export function applyHomeChatFrame(hostKey: string, f: HomeChatFrame, now: numbe
   const st = useHomeChatStore.getState()
   switch (f.type) {
     case 'hello':
+      applyCallFrame(hostKey, f, now)
+      summarySoon(hostKey)
+      break
     case 'status':
       summarySoon(hostKey)
       break
     case 'summary_changed':
     case 'read':
     case 'member_removed':
+    case 'message_updated':
       summarySoon(hostKey)
+      break
+    case 'call_ring':
+    case 'call_updated':
+      // DM calls (§11a.3): every window's socket gets each, so a ring shows
+      // and stops everywhere at once.
+      applyCallFrame(hostKey, f, now)
       break
     case 'typing':
       st.noteTyping(hostKey, f.conv, f.member, now)
@@ -379,4 +390,5 @@ export function resetHomeChatForTests(): void {
   if (typingTimer) clearInterval(typingTimer)
   typingTimer = null
   useHomeChatStore.setState({ byHost: {}, open: null, typing: {} })
+  resetHomeChatCallsForTests()
 }

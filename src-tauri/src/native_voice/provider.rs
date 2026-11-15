@@ -204,8 +204,21 @@ pub fn join_body(req: &JoinRequest) -> Value {
     if let Some(notice) = &req.recording_notice {
         join["recording_notice"] = json!(notice);
     }
+    // A DM call (prd-home-people-channels-v1 §11a.2): the room is
+    // `dm:<conversation id>`; the daemon rings or answers.
+    if let Some(dm) = req.room.strip_prefix(DM_ROOM_PREFIX) {
+        return json!({ "dm": dm, "join": join, "callAnswer": CALL_CLIENT_TAKES_CALL_ANSWER });
+    }
     json!({ "room": req.room, "join": join })
 }
+
+/// A DM call's room as the webview names it.
+pub const DM_ROOM_PREFIX: &str = "dm:";
+
+/// Whether this build's call client takes Sew's `CallJoinResponse` as is
+/// (Sew 0.10.0's fix to sew-call-client and the plugin). Until K2 pins that
+/// release the daemon unwraps `.voice` for it; then this turns true.
+pub const CALL_CLIENT_TAKES_CALL_ANSWER: bool = false;
 
 /// The door the engine uses for this login's server.
 pub fn api_base(base_url: &str) -> Result<url::Url, ProviderError> {

@@ -35,6 +35,7 @@ import {
 } from '@/lib/voice/voice-wire'
 import { reportsVoice, voiceServers, type VoiceServer } from '@/lib/voice/voice-servers'
 import { canonicalHostKey } from '@/lib/host-key'
+import { convOfDmRoom } from '@/lib/home-chat/calls'
 import { VoiceRequestError, voiceCodeOfError, type JoinOptions } from '@/lib/voice/voice-api'
 import {
   DEFAULT_DEVICE,
@@ -338,6 +339,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const checkSeat = (hostKey: string, list: VoiceRoomsList): void => {
     const c = store.getState().call
     if (native || nativeCall || !c || c.phase !== 'connected' || canon(c.hostKey) !== canon(hostKey) || !list.feedLive) return
+    // A DM call is on no rooms list: its seat isn't checked there.
+    if (convOfDmRoom(c.roomId)) return
     if (c.connectedAt === null || deps.now() - c.connectedAt < VOICE_SEAT_GRACE_MS) return
     const names = deps.selfNames(hostKey).map((n) => n.toLowerCase())
     if (names.length === 0) return
@@ -540,6 +543,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const followNativeRoom = (room: string | undefined): void => {
     const c = store.getState().call
     if (!room || !c || c.roomId === room) return
+    // A DM call's engine names its room by the DM's channel id: the same call.
+    if (convOfDmRoom(c.roomId) === room) return
     const known = roomOnList(c.hostKey, room)
     if (known) {
       if (known.id !== c.roomId) {
@@ -709,7 +714,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const readRecordingPerms = async (): Promise<void> => {
     const c = store.getState().call
     const read = deps.api.recordingControls
-    if (!c || !read) return
+    // DM calls record only by Sew's DM policy (off by default): no Record here.
+    if (!c || !read || convOfDmRoom(c.roomId)) return
     const gen = callGen
     try {
       const perms = await read(deps.scopeFor(c.hostKey), c.roomId)

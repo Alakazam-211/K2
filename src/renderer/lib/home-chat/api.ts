@@ -9,6 +9,7 @@
 
 import type { ServerScope } from '@/kessel/server-scope'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { parseCallSummary, type HomeChatCallSummary } from './calls'
 
 export const HOME_CHAT_FEATURE = 'home-chat-v1'
 
@@ -88,6 +89,8 @@ export interface HomeChatMessage {
   replyTo: string | null
   deleted: boolean
   nonce: string | null
+  /** A DM call's record (Sew's CallSummary): drawn as a line, not a bubble. */
+  call?: HomeChatCallSummary | null
 }
 
 export interface HomeChatPage {
@@ -177,6 +180,7 @@ export function parseHomeChatMessage(v: unknown): HomeChatMessage | null {
     replyTo: ref && ref.kind === 'reply' ? idOf(ref.message_id) : null,
     deleted: m.deleted_at !== undefined && m.deleted_at !== null,
     nonce: typeof m.nonce === 'string' ? m.nonce : null,
+    call: m.call ? parseCallSummary(m.call) : null,
   }
 }
 

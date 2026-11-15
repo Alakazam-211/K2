@@ -216,4 +216,30 @@ describe('Home chat view', () => {
     expect(screen.getByTestId('home-chat-typing').hasAttribute('data-on')).toBe(false)
     expect(screen.getByTestId('home-chat-typing').textContent).toBe('')
   })
+  it('a DM draws each call as a record line with Call back, updated in place, and has a Call button', async () => {
+    const DM: HomeChatTarget = { kind: 'person', hostKey: 'local', ext: 'k2:connect:a', address: 'k2:connect:a::local' }
+    const record = (summary: Record<string, unknown>) => m('40', ALEX, '', { call: { call_id: '88', started_by: ALEX, rung_ids: [ME], joined_ids: [ALEX], declined_ids: [], missed_ids: [], ...summary } })
+    h.post.mockImplementation(async (_s, route) => (route === 'home-chat/dm' ? { ok: true, conv: '600' } : { ok: true }))
+    h.get.mockImplementation(async (_s, route) => {
+      if (route === 'home-chat/messages') return { ok: true, conv: '600', page: { items: [m('39', ALEX, 'call me'), record({ ended_at: '2026-11-14T10:01:00Z', end_reason: 'no_answer', missed_ids: [ME] })], has_more: false } }
+      if (route === 'home-chat/status') return { ok: true, on: true, reason: null, flags: {} }
+      if (route === 'home-chat/summary') return { ok: true, chat: 'live', convs: [] }
+      if (route === 'home-chat/people') return { ok: true, me: { ext: 'k2:connect:me', memberId: ME }, people: [{ ext: 'k2:connect:a', username: 'alex', displayName: 'Alex', ready: true, memberId: ALEX }] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<HomeChatView target={DM} />)
+    await screen.findByText('call me')
+    const line = await screen.findByTestId('home-chat-call-record')
+    expect(line.dataset.kind).toBe('missed')
+    expect(screen.getByTestId('home-chat-call-record-text').textContent).toBe('Missed call')
+    expect(screen.getByTestId('home-chat-call-back')).toBeTruthy()
+    // Not a bubble: no reaction or reply row on it.
+    expect(line.closest('[data-zen-message="40"]')?.querySelector('[data-testid="home-chat-hover-row"]')).toBeFalsy()
+    await waitFor(() => expect((screen.getByTestId('home-chat-call-button') as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect(h.frames).not.toBeNull())
+    await act(async () => {
+      h.frames?.({ type: 'message_updated', conv: '600', message: record({ ended_at: '2026-11-14T10:02:00Z', end_reason: 'empty', joined_ids: [ALEX, ME], duration_ms: 5_000 }) })
+    })
+    await waitFor(() => expect(screen.getByTestId('home-chat-call-record-text').textContent).toBe('Call · 0:05'))
+  })
 })

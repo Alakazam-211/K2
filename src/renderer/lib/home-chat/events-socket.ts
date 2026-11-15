@@ -1,8 +1,10 @@
 // `WS /cli/home-chat/events` (prd-home-people-channels-v1 §14.4): one
 // person's Home chat frames from one server. The daemon follows Sew for the
-// person and sends `hello`, `message`, `deleted`, `read`, `reaction`,
-// `typing`, `member_removed`, `summary_changed`, `status` and forwarded
-// `event`s. Nothing from any other person or server.
+// person and sends `hello` (with the DM calls already ringing), `message`,
+// `message_updated` (a call's record), `deleted`, `read`, `reaction`,
+// `typing`, `member_removed`, `summary_changed`, `status`, and the DM call
+// frames `call_ring` and `call_updated` (§11a.3). Nothing from any other
+// person or server.
 //
 // A Home chat socket of its own (not the app socket): a Voice & Chat only
 // login never gets `/cli/sessions/events`. One per server per window
@@ -16,6 +18,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { withCliTokenQuery } from '@/web/session-token'
 import { notePoolSocketClose } from '@/lib/pool-hooks'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
+import { parseCall, parseRing, type HomeChatCall, type HomeChatRing } from './calls'
 
 export const HOME_CHAT_EVENTS_PATH = '/cli/home-chat/events'
 
@@ -27,8 +30,11 @@ export const HOME_CHAT_EVENTS_MAX_DEAD_TRIES = 4
 
 /** One frame, parsed. Unknown frames are dropped. */
 export type HomeChatFrame =
-  | { type: 'hello'; chat: string | null }
+  | { type: 'hello'; chat: string | null; rings?: HomeChatRing[] }
   | { type: 'message'; conv: string; message: unknown }
+  | { type: 'message_updated'; conv: string; message: unknown }
+  | { type: 'call_ring'; conv: string; ring: HomeChatRing }
+  | { type: 'call_updated'; conv: string; call: HomeChatCall }
   | { type: 'deleted'; conv: string; id: string }
   | { type: 'read'; conv: string }
   | { type: 'reaction'; conv: string; msg: string; emoji: string; on: boolean; count: number; member: string | null; mine: boolean }
@@ -61,11 +67,29 @@ export function parseHomeChatFrame(data: unknown): HomeChatFrame | null {
   if (!v || typeof v !== 'object') return null
   const conv = idOf(v.conv)
   switch (v.type) {
-    case 'hello':
+    case 'hello': {
+      // The calls already ringing for this person when the socket opened.
+      const rings: HomeChatRing[] = []
+      for (const c of Array.isArray(v.calls) ? (v.calls as Array<Record<string, unknown>>) : []) {
+        const r = parseRing({ call_id: c.callId, channel_id: c.conv, started_by: c.startedBy, ringing: c.ringing, silent: c.silent, expires_at: c.expiresAt })
+        if (r?.ringing) rings.push(r)
+      }
+      return { type: 'hello', chat: typeof v.chat === 'string' ? v.chat : null, rings }
+    }
     case 'status':
-      return { type: v.type, chat: typeof v.chat === 'string' ? v.chat : null }
+      return { type: 'status', chat: typeof v.chat === 'string' ? v.chat : null }
     case 'message':
       return conv ? { type: 'message', conv, message: v.message } : null
+    case 'message_updated':
+      return conv ? { type: 'message_updated', conv, message: v.message } : null
+    case 'call_ring': {
+      const ring = parseRing(v.d)
+      return ring ? { type: 'call_ring', conv: ring.conv, ring } : null
+    }
+    case 'call_updated': {
+      const call = parseCall(v.d)
+      return call ? { type: 'call_updated', conv: call.conv, call } : null
+    }
     case 'deleted': {
       const id = idOf(v.id)
       return conv && id ? { type: 'deleted', conv, id } : null

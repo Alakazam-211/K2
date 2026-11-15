@@ -465,6 +465,18 @@ fn the_join_body_asks_for_the_credential_and_sends_no_e2ee() {
     }
 }
 
+/// A DM call's room (`dm:<conversation id>`) goes as `{dm}`, and says whether
+/// this build's call client takes Sew's `CallJoinResponse` as is (not yet:
+/// the daemon unwraps `.voice` for it).
+#[test]
+fn a_dm_call_joins_by_dm_and_says_how_its_answer_is_read() {
+    let req = JoinRequest { target: "h".into(), room: "dm:900".into(), muted: true, deafened: false, rejoin: None, recording_notice: None };
+    assert_eq!(
+        join_body(&req),
+        json!({"dm": "900", "join": {"call_credential": true, "self_mute": true, "self_deaf": false}, "callAnswer": false})
+    );
+}
+
 /// The person's answer to a recording notice reaches Sew's join as given, and
 /// no answer sends no key.
 #[test]

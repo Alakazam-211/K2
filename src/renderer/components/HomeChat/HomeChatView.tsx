@@ -15,7 +15,10 @@
 //     Sew's inline `reference {message_id, kind:"reply"}` (§11); the sent
 //     bubble's quote strip jumps to the original, paging back for it;
 //   - names over every run in a channel; in a DM only the other person's;
-//   - no @mentions: `@name` is plain text (D18).
+//   - no @mentions: `@name` is plain text (D18);
+//   - a DM has a Call button, the caller's "Calling…" bar, the in-call strip,
+//     and each call's record as a line ("Missed call", "Call · 12:04") with
+//     Call back, never a bubble (§11a.4).
 //
 // Opening tells the daemon the chat is on screen (`view`, which subscribes
 // typing and joins an open channel not joined yet); it acks the newest
@@ -87,6 +90,9 @@ import { HomeChatTyping } from './HomeChatTyping'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 import { EyeIcon } from 'lucide-react'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
+import { HomeChatCallButton, HomeChatCallRecord } from './HomeChatCall'
+import { HomeChatDmCallBars, useDmCall } from './HomeChatCallControls'
+import { callRecordLine } from '@/lib/home-chat/calls'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 
@@ -212,7 +218,8 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
     if (!conv) return
     return onHomeChatFrame(hostKey, (f) => {
       if (!('conv' in f) || f.conv !== conv) return
-      if (f.type === 'message') {
+      if (f.type === 'message' || f.type === 'message_updated') {
+        // A call's record updates in place (§11a.4).
         const m = parseHomeChatMessage(f.message)
         if (m) setMessages((prev) => mergeHomeChatMessages(prev ?? [], [m]))
       } else if (f.type === 'deleted') {
@@ -437,6 +444,19 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
     target.kind === 'person' ? (person?.displayName ?? labelOf(target)) : (channel?.name ?? labelOf(target))
   const nowSec = Math.floor(Date.now() / 1000)
   const dm = target.kind === 'person'
+  // DM calls (§11a): the Call button says why when it can't call.
+  const dmCall = useDmCall(hostKey, dm ? conv : null, title, me)
+  const callBlocked = !dm
+    ? null
+    : chatOff
+      ? status?.reason === 'mac'
+        ? 'calls need a Linux server'
+        : 'chat is off on this server'
+      : readOnly
+        ? 'this conversation is read-only'
+        : !conv || !me
+          ? 'opening the conversation'
+          : null
   const chatState: 'loading' | 'error' | 'off' | null = chatOff
     ? 'off'
     : convError || loadError
@@ -467,6 +487,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
           </span>
         )}
         <div className="flex-1" />
+        {dm && <HomeChatCallButton disabledReason={callBlocked} onCall={dmCall.call} />}
         {target.kind === 'channel' && (
           <button
             type="button"
@@ -478,6 +499,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
           </button>
         )}
       </div>
+      {dm && <HomeChatDmCallBars view={dmCall} name={title} />}
       {membersOpen && target.kind === 'channel' && (
         <HomeChatMembersSheet target={target} onClose={() => setMembersOpen(false)} onChanged={reloadChannel} />
       )}
@@ -520,6 +542,17 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                 )}
                 <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
                 {messages.slice(win.lo, win.hi).map((m, j) => {
+                  if (m.call) {
+                    return (
+                      <div key={m.id} data-home-chat-message="" data-zen-message={m.id}>
+                        <HomeChatCallRecord
+                          line={callRecordLine(m.call, me)}
+                          timeLabel={formatRelativeTime(m.createdAt, nowSec)}
+                          onCallBack={dm && callBlocked === null ? dmCall.call : undefined}
+                        />
+                      </div>
+                    )
+                  }
                   const mine = !!me && m.authorId === me
                   // In a DM only the other person's name shows (§8.2).
                   const author = mine ? 'You' : authorName(m.authorId, me, names)

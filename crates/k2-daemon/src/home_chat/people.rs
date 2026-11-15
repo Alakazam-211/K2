@@ -160,6 +160,18 @@ pub fn check_target(ext: &str) -> Result<(), Refusal> {
     }
 }
 
+/// How this server names the person behind Sew member `member_id` (a DM
+/// call push's title): the owner's name, or a Connect login's full name.
+/// Empty when K2 doesn't know the member.
+pub fn name_of_member(member_id: &str) -> String {
+    let Ok(Some(m)) = hook::chat_member_by_id(member_id) else { return String::new() };
+    if m.external_id == "k2:owner" {
+        return crate::workspace_msg::resolve_owner_from();
+    }
+    let Some(uuid) = m.external_id.strip_prefix("k2:connect:") else { return String::new() };
+    logins().ok().and_then(|all| all.into_iter().find(|l| l.id == uuid)).map(|l| l.display_name).unwrap_or_default()
+}
+
 /// The Sew member id of box person `ext` (from K2's identity map).
 pub fn member_id(ext: &str) -> Result<String, Refusal> {
     match hook::chat_member(ext) {

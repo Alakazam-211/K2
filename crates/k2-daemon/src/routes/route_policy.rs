@@ -129,6 +129,12 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     // older client's Home pool doesn't loop on sign-in.
     ("GET", "/cli/presence/summary"),
     // Voice rooms (the role's core).
+    // DM calls with the people they chat with (HP-39): start and answer
+    // through join; decline, ring again, cancel and leave here.
+    ("POST", "/cli/voice/call/cancel"),
+    ("POST", "/cli/voice/call/decline"),
+    ("POST", "/cli/voice/call/leave"),
+    ("POST", "/cli/voice/call/ring"),
     ("GET", "/cli/voice/events"),
     ("GET", "/cli/voice/rooms"),
     ("POST", "/cli/voice/join"),
@@ -1706,8 +1712,9 @@ mod tests {
         assert_eq!(list.len(), VOICE_CHAT_ALLOWLIST.len(), "the allowlist has a duplicate");
         assert_eq!(table, list, "VoiceChat rows in ROUTES vs VOICE_CHAT_ALLOWLIST");
         // The PRD's 14 rows plus the reviewer shares (3 + 8 Garden reads),
-        // plus Home chat's 21 (prd-home-people-channels-v1 HP-11).
-        assert_eq!(list.len(), 14 + 3 + 8 + 21);
+        // plus Home chat's 21 (prd-home-people-channels-v1 HP-11), plus its
+        // 4 DM call rows (HP-39).
+        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4);
         for p in VOICE_CHAT_PUBLIC {
             let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
             assert!(

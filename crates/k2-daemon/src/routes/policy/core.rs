@@ -1289,6 +1289,12 @@ pub(super) const ROWS: &[Route] = &[
     // login's (the handler refuses the bare owner token and passports);
     // moderation, the count, renames and closing are Owner/Admin; status is
     // Owner/Admin (agents read it with a passport, which this table never gates).
+    // DM calls (prd-home-people-channels-v1 §11a.1, HP-39): a person's own
+    // login only (the handler), Voice & Chat only logins included.
+    post("/cli/voice/call/cancel", VoiceChat),
+    post("/cli/voice/call/decline", VoiceChat),
+    post("/cli/voice/call/leave", VoiceChat),
+    post("/cli/voice/call/ring", VoiceChat),
     get("/cli/voice/events", VoiceChat),
     post("/cli/voice/join", VoiceChat),
     post("/cli/voice/moderate", Admin),

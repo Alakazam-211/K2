@@ -18,9 +18,11 @@
 //! read states; on `410 resync_required` it reads `GET /api/v1/me/sync` and
 //! rebuilds every read state ([`catch_up`]). Then it IDENTIFYs again.
 //!
-//! **Fan-out is generic**: besides the chat events, [`FORWARD`] events
-//! (`call_ring`, `call_updated`) go to the person's clients as they came,
-//! so DM calls can ride the same events socket later.
+//! **DM calls** (§11a.3): [`FORWARD`] events (`call_ring`, `call_updated`)
+//! move the person's call state and go to every one of their client sockets
+//! as `{type: "call_ring" | "call_updated", conv, d}` with Sew's `d` as it
+//! came, so a ring shows, and stops, in every window at once. Each ring and
+//! its stop also reach the phone pusher ([`super::call_push`]).
 //!
 //! **Close 4005** (`already_authenticated`: past Sew's per-login socket
 //! cap) is a bug in K2 and is logged loudly.
@@ -50,8 +52,8 @@ use crate::voice::bff::Refusal;
 /// The supervisor's tick (a disabled login's session ends within one).
 pub const TICK: Duration = Duration::from_secs(5);
 pub use crate::sew::gateway::op;
-/// Sew events passed to the person's clients as they came (`{"type":
-/// "event", "t", "d"}`), beside the chat frames.
+/// Sew's DM call events, passed to the person's clients as `{"type": <t>,
+/// "conv", "d"}` beside the chat frames.
 pub const FORWARD: &[&str] = &["call_ring", "call_updated"];
 /// Sew's close code past its per-login socket cap.
 pub const CLOSE_ALREADY_AUTHENTICATED: u16 = 4005;
@@ -568,7 +570,12 @@ async fn connect_once(h: &Arc<Held>, token: &str, resume: bool) -> Ended {
                                             st.apply_ready(&v["d"]);
                                             vec![json!({"type": "summary_changed"})]
                                         }
-                                        e if FORWARD.contains(&e) => vec![json!({"type": "event", "t": e, "d": v["d"]})],
+                                        e if FORWARD.contains(&e) => {
+                                            if e == "call_ring" {
+                                                super::call_push::ring_seen(&h.ext, &v["d"]);
+                                            }
+                                            st.apply_call_event(e, &v["d"])
+                                        }
                                         _ => st.apply_event(ev, &v["d"], unread_flag),
                                     }
                                 };

@@ -91,6 +91,22 @@ pub mod paths {
     pub fn channel(channel_id: &str) -> String {
         format!("/api/v1/channels/{channel_id}")
     }
+    /// Start or answer a DM call (Sew 0.9.2 `CALL_JOIN`).
+    pub fn call_join(dm: &str) -> String {
+        format!("/api/v1/channels/{dm}/call/join")
+    }
+    /// Decline a DM call that rings for the person.
+    pub fn call_decline(dm: &str) -> String {
+        format!("/api/v1/channels/{dm}/call/decline")
+    }
+    /// Ring the callee again (at most 3 times each, Sew's limit).
+    pub fn call_ring(dm: &str) -> String {
+        format!("/api/v1/channels/{dm}/call/ring")
+    }
+    /// The caller's Cancel while it rings (Sew 0.10.0, flag `call_cancel`).
+    pub fn call_cancel(dm: &str) -> String {
+        format!("/api/v1/channels/{dm}/call/cancel")
+    }
 }
 
 /// Seconds a client waits before retrying a "pending" answer.
@@ -781,34 +797,7 @@ pub fn join(p: &Person, room_key: &str, join_body: &Value, rooms: &[RoomRow], d:
     if !a.ok() {
         return Err(sew_refusal(&a));
     }
-    let call_id = new_call_id();
-    {
-        let mut g = calls().lock().unwrap_or_else(|e| e.into_inner());
-        // One call per person (Sew keeps one voice state per member): a join
-        // from this session elsewhere is a move, and a join from another of
-        // the person's devices or sessions takes the call over from it.
-        let me = p.ext.to_string();
-        end_calls(&mut g, |c| {
-            if c.sid == p.ident.sid {
-                Some(ended::MOVED)
-            } else if c.person == me {
-                Some(ended::JOINED_ELSEWHERE)
-            } else {
-                None
-            }
-        });
-        g.insert(
-            call_id.clone(),
-            Call {
-                sid: p.ident.sid.clone(),
-                person: me,
-                channel_id: channel.clone(),
-                room: room.slug.clone(),
-                client: p.client.clone(),
-                at: Instant::now(),
-            },
-        );
-    }
+    let call_id = note_call(p, &channel, &room.slug);
     let relay_only = a.body.pointer("/media/relay_only").and_then(Value::as_bool).unwrap_or(false);
     Ok(json!({
         "ok": true,
@@ -819,6 +808,32 @@ pub fn join(p: &Person, room_key: &str, join_body: &Value, rooms: &[RoomRow], d:
         // Sew's join answer as is (url, token, e2ee, media.relay_only …).
         "join": a.body,
     }))
+}
+
+/// Record a call this login session just joined (a room, or a DM call whose
+/// `room` is `dm:<channel id>`), and return K2's call id for it. One call per
+/// person (Sew keeps one voice state per member): a join from this session
+/// elsewhere is a move, and a join from another of the person's devices or
+/// sessions takes the call over from it. The leave and the call's own
+/// routes find it by that id.
+pub fn note_call(p: &Person, channel: &str, room: &str) -> String {
+    let call_id = new_call_id();
+    let mut g = calls().lock().unwrap_or_else(|e| e.into_inner());
+    let me = p.ext.to_string();
+    end_calls(&mut g, |c| {
+        if c.sid == p.ident.sid {
+            Some(ended::MOVED)
+        } else if c.person == me {
+            Some(ended::JOINED_ELSEWHERE)
+        } else {
+            None
+        }
+    });
+    g.insert(
+        call_id.clone(),
+        Call { sid: p.ident.sid.clone(), person: me, channel_id: channel.to_string(), room: room.to_string(), client: p.client.clone(), at: Instant::now() },
+    );
+    call_id
 }
 
 fn own_call(p: &Person, call_id: &str) -> Result<Call, Refusal> {

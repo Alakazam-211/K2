@@ -137,6 +137,50 @@ pub enum PushEvent {
         kind_id: String,
         owners: Vec<String>,
     },
+    /// A DM call for one person (prd-home-people-channels-v1 §11a.3, S14):
+    /// the ring, then a missed or ended push that REPLACES it (the same
+    /// `collapseId`, `call:<call id>`). Ids and the caller's name only.
+    Call(CallPush),
+}
+
+/// Where a DM call push is (S14). A ring is replaced by exactly one of the
+/// others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallPushState {
+    /// It rings now (an alert with sound).
+    Ringing,
+    /// Nobody answered in time (Sew wrote `call_missed`).
+    Missed,
+    /// The ring stopped without a missed call: answered on another device,
+    /// declined, cancelled by the caller, or the call ended.
+    Ended,
+}
+
+impl CallPushState {
+    /// `data.callState`.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Ringing => "ringing",
+            Self::Missed => "missed",
+            Self::Ended => "ended",
+        }
+    }
+}
+
+/// One person's DM call push (S14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallPush {
+    /// The recipient person key.
+    pub principal: String,
+    /// That person's device logins. Empty = nobody, never "everyone".
+    pub device_usernames: Vec<String>,
+    /// Sew's call id (the collapse key: each call has one banner).
+    pub call_id: String,
+    /// The DM's channel id (tap opens it).
+    pub channel_id: String,
+    /// Who calls, as this server names them (empty when not known).
+    pub caller: String,
+    pub state: CallPushState,
 }
 
 /// One person's project chat push (thread-read-v1).
@@ -596,6 +640,8 @@ impl PushEvent {
             | Self::ProjectPost(_)
             | Self::ChatApprovalRequested { .. } => "K2".to_string(),
             Self::DesktopNotice { .. } => "Remote desktop".to_string(),
+            Self::Call(c) if !c.caller.trim().is_empty() => c.caller.trim().to_string(),
+            Self::Call(_) => "K2".to_string(),
             // Silent: no visible text.
             Self::Badge(_) => String::new(),
             // Permission cards (rev 3.1 §17.7): "billing asks for a permission".
@@ -631,6 +677,11 @@ impl PushEvent {
                 format!("{agent_name} has a chat post waiting for your approval")
             }
             Self::DesktopNotice { line, .. } => line.clone(),
+            Self::Call(c) => match c.state {
+                CallPushState::Ringing => "Incoming call".to_string(),
+                CallPushState::Missed => "Missed call".to_string(),
+                CallPushState::Ended => "Call ended".to_string(),
+            },
         }
     }
 
@@ -646,7 +697,8 @@ impl PushEvent {
             | Self::Badge(_)
             | Self::ThreadPost(_)
             | Self::ChatApprovalRequested { .. }
-            | Self::DesktopNotice { .. } => "",
+            | Self::DesktopNotice { .. }
+            | Self::Call(_) => "",
         }
     }
 
@@ -669,6 +721,8 @@ impl PushEvent {
             Self::ChatApprovalRequested { approvers, .. } => Some(approvers.as_slice()),
             // Always targeted: the Owner logins' phones only.
             Self::DesktopNotice { owners, .. } => Some(owners.as_slice()),
+            // Always targeted: the called person's own phones.
+            Self::Call(c) => Some(c.device_usernames.as_slice()),
             _ => None,
         }
     }
@@ -747,6 +801,7 @@ impl PushEvent {
             }
             Self::ThreadPost(_) => budget::BudgetClass::Thread,
             Self::Badge(_) => budget::BudgetClass::Badge,
+            Self::Call(_) => budget::BudgetClass::Call,
             _ => budget::BudgetClass::Other,
         }
     }
@@ -764,6 +819,9 @@ impl PushEvent {
     /// over-long conversation id is hashed instead of cut (a cut could
     /// make two Threads collide).
     pub fn collapse_id(&self) -> Option<String> {
+        if let Self::Call(c) = self {
+            return Some(Self::capped_collapse("call:", &c.call_id));
+        }
         let id = self.thread_id()?;
         if id.len() <= COLLAPSE_ID_MAX {
             return Some(id);
@@ -772,6 +830,17 @@ impl PushEvent {
         let digest = Sha256::digest(id.as_bytes());
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         Some(format!("thread:{}", &hex[..COLLAPSE_ID_MAX - "thread:".len()]))
+    }
+
+    /// `<prefix><id>` within [`COLLAPSE_ID_MAX`] bytes (hashed when longer).
+    fn capped_collapse(prefix: &str, id: &str) -> String {
+        let whole = format!("{prefix}{id}");
+        if whole.len() <= COLLAPSE_ID_MAX {
+            return whole;
+        }
+        use sha2::{Digest, Sha256};
+        let hex: String = Sha256::digest(id.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+        format!("{prefix}{}", &hex[..COLLAPSE_ID_MAX - prefix.len()])
     }
 
     /// The mobile deep-link `data` object ([`K2Cloud`] payloads): IDs
@@ -823,6 +892,12 @@ impl PushEvent {
             Self::DesktopNotice { kind_id, .. } => PushData::of(&[
                 ("kind", PUSH_KIND_DESKTOP.to_string()),
                 ("desktopEvent", kind_id.clone()),
+            ]),
+            Self::Call(c) => PushData::of(&[
+                ("kind", PUSH_KIND_CALL.to_string()),
+                ("callId", c.call_id.clone()),
+                ("conversationId", c.channel_id.clone()),
+                ("callState", c.state.as_wire().to_string()),
             ]),
             // Legacy desktop-era events carry no mobile deep link.
             Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => PushData::default(),
@@ -911,6 +986,11 @@ pub const PUSH_KIND_CHAT_APPROVAL: &str = "chat_approval";
 
 /// Push `data.kind` for a remote desktop notice (prd-remote-desktop-tab-v1).
 pub const PUSH_KIND_DESKTOP: &str = "desktop";
+
+/// Push `data.kind` for a DM call (prd-home-people-channels-v1 §11a.3, S14):
+/// `callState` `ringing`, then `missed` or `ended` with the same
+/// `collapseId` (`call:<callId>`), so the ring's banner is replaced.
+pub const PUSH_KIND_CALL: &str = "call";
 
 /// What happens when a push attempt fails. Adapters return `Err` after
 /// exhausting their own retry policy; the daemon does not queue events for
@@ -2885,6 +2965,56 @@ mod tests {
         });
         assert_eq!(empty.target_usernames(), Some(&[][..]));
         assert_eq!(empty.budget_class(), budget::BudgetClass::Thread);
+    }
+
+    /// S14: a DM call push is an alert with sound and the caller's name; its
+    /// missed or ended push carries the SAME collapse id (the call), so it
+    /// replaces the ring's banner. Ids and the name only; its own budget;
+    /// always targeted; sealed as kind `call`.
+    #[test]
+    fn a_call_push_rings_then_is_replaced() {
+        let stamp = PushStamp { subdomain: "acme".into(), instance_id: TEST_INSTANCE.into() };
+        let ring = |state| {
+            PushEvent::Call(CallPush {
+                principal: "sam".into(),
+                device_usernames: vec!["sam".into()],
+                call_id: "88001".into(),
+                channel_id: "900".into(),
+                caller: "Alex Doe".into(),
+                state,
+            })
+        };
+        let r = K2Cloud::payload(&ring(CallPushState::Ringing), &stamp, TEST_KEY);
+        assert_eq!(r["title"], "Alex Doe");
+        assert_eq!(r["body"], "Incoming call");
+        assert_eq!(r["sound"], "default");
+        assert_eq!(r["collapseId"], "call:88001");
+        assert_eq!(r["data"]["kind"], "call");
+        assert_eq!(r["data"]["callId"], "88001");
+        assert_eq!(r["data"]["conversationId"], "900");
+        assert_eq!(r["data"]["callState"], "ringing");
+        for (state, body, wire) in [(CallPushState::Missed, "Missed call", "missed"), (CallPushState::Ended, "Call ended", "ended")] {
+            let p = K2Cloud::payload(&ring(state), &stamp, TEST_KEY);
+            assert_eq!(p["collapseId"], r["collapseId"], "{wire}: replaces the ring");
+            assert_eq!(p["body"], body);
+            assert_eq!(p["data"]["callState"], wire);
+        }
+        assert_eq!(ring(CallPushState::Ringing).budget_class(), budget::BudgetClass::Call);
+        assert_eq!(ring(CallPushState::Ringing).target_usernames(), Some(&["sam".to_string()][..]));
+        assert_eq!(e2e::alert_kind(&ring(CallPushState::Ringing)), Some(PUSH_KIND_CALL));
+        let long = "9".repeat(80);
+        let c = PushEvent::Call(CallPush { call_id: long, ..match ring(CallPushState::Ringing) {
+            PushEvent::Call(c) => c,
+            _ => unreachable!(),
+        } })
+        .collapse_id()
+        .expect("collapse");
+        assert!(c.len() <= COLLAPSE_ID_MAX && c.starts_with("call:"), "{c}");
+        let nameless = PushEvent::Call(CallPush { caller: " ".into(), ..match ring(CallPushState::Missed) {
+            PushEvent::Call(c) => c,
+            _ => unreachable!(),
+        } });
+        assert_eq!(nameless.title(), "K2");
     }
 
     /// Communication Notifications: `avatarRev` + `agentColor` ride every

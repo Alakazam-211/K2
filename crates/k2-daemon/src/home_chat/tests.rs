@@ -21,14 +21,14 @@ use k2_core::home_chat::Badge;
 use k2_core::tool_hook::features::HomeChatFeatures;
 
 /// One test at a time: the deps seam and the held people are process-wide.
-static SERIAL: Mutex<()> = Mutex::new(());
+pub(crate) static SERIAL: Mutex<()> = Mutex::new(());
 
-const ALEX: &str = "k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e";
+pub(crate) const ALEX: &str = "k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e";
 
 /// The fake Sew client API. `auth/k2` answers a session that is already
 /// due for renewal (expires in 200 s), `auth/renew` a fresh hour.
 #[derive(Default)]
-struct FakeApi {
+pub(crate) struct FakeApi {
     calls: Mutex<Vec<(String, String, Option<String>, Value)>>,
     /// Path → (status, body) overrides.
     answers: Mutex<HashMap<String, (u16, Value)>>,
@@ -41,10 +41,10 @@ struct FakeApi {
 }
 
 impl FakeApi {
-    fn answer(&self, path: &str, status: u16, body: Value) {
+    pub(crate) fn answer(&self, path: &str, status: u16, body: Value) {
         self.answers.lock().unwrap().insert(path.to_string(), (status, body));
     }
-    fn calls_to(&self, path: &str) -> Vec<(Option<String>, Value)> {
+    pub(crate) fn calls_to(&self, path: &str) -> Vec<(Option<String>, Value)> {
         self.calls.lock().unwrap().iter().filter(|c| c.1 == path).map(|c| (c.2.clone(), c.3.clone())).collect()
     }
     fn reply(&self, method: &str, bearer: Option<&str>, path: &str, body: &Value) -> SewAnswer {
@@ -117,13 +117,15 @@ async fn fake_gateway(ready: Value) -> FakeGateway {
     FakeGateway { addr, frames, connections }
 }
 
-fn deps_with(api: Arc<FakeApi>, gateway: String, flags: HomeChatFeatures) -> Arc<Deps> {
+pub(crate) fn deps_with(api: Arc<FakeApi>, gateway: String, flags: HomeChatFeatures) -> Arc<Deps> {
     Arc::new(Deps {
         sew: api,
         mint: Arc::new(|ext, sid| Ok(format!("pass:{ext}:{sid}"))),
         gateway_addr: Arc::new(move || gateway.clone()),
         flags: Arc::new(move || flags),
         platform_ok: true,
+        feed: Arc::new(|_, _| Err("no feed in this test".to_string())),
+        devices: Arc::new(|_| None),
     })
 }
 

@@ -134,6 +134,11 @@ pub fn kind_label(event: &PushEvent, lane: Lane) -> &'static str {
         PushEvent::HeartbeatFailed { .. } => "heartbeat_failed",
         PushEvent::ChatApprovalRequested { .. } => "chat_approval",
         PushEvent::DesktopNotice { .. } => "desktop",
+        PushEvent::Call(c) => match c.state {
+            super::CallPushState::Ringing => "call_ring",
+            super::CallPushState::Missed => "call_missed",
+            super::CallPushState::Ended => "call_ended",
+        },
     }
 }
 

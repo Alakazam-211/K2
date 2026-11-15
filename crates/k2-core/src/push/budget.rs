@@ -12,6 +12,10 @@
 //! - [`BudgetClass::Other`] (tickets, project chat): [`OTHER_PER_HOUR`].
 //!   Thread pushes can never use it, so a chatty agent never blocks a
 //!   ticket.
+//! - [`BudgetClass::Call`] (DM call rings and the missed or ended push that
+//!   replaces each, prd-home-people-channels-v1 §11a.3): [`CALL_PER_HOUR`],
+//!   apart from every other bucket, so a ring never waits behind Thread or
+//!   badge pushes.
 //! - [`BudgetClass::Permission`] (permission cards, prd-agent-settings-cards-v1
 //!   rev 3.1 §6.7, §17.7): [`PERMISSION_PER_HOUR`] pushes an hour **per
 //!   person** (keyed by the person key), apart from the Thread bucket, so a
@@ -36,6 +40,8 @@ pub const OTHER_PER_HOUR: usize = 30;
 /// a person reading on several devices can never starve a Thread or
 /// ticket push. The relay allows 600/h per server.
 pub const BADGE_PER_HOUR: usize = 240;
+/// DM call pushes an hour: a ring and its replacement are two.
+pub const CALL_PER_HOUR: usize = 120;
 /// Permission-card pushes an hour, per person (§6.7, §17.7).
 pub const PERMISSION_PER_HOUR: usize = 30;
 /// The sliding window.
@@ -48,6 +54,8 @@ pub enum BudgetClass {
     Other,
     /// Silent badge corrections (thread-read-v1).
     Badge,
+    /// DM call rings and their missed / ended replacements.
+    Call,
     /// Permission-card pushes (rev 3.1 §6.7): one window per person; see
     /// [`Budgets::try_take_for`].
     Permission,
@@ -59,6 +67,7 @@ pub struct Budgets {
     thread: Mutex<VecDeque<Instant>>,
     other: Mutex<VecDeque<Instant>>,
     badge: Mutex<VecDeque<Instant>>,
+    call: Mutex<VecDeque<Instant>>,
     /// [`BudgetClass::Permission`], one window per person key.
     permission: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
@@ -90,6 +99,7 @@ impl Budgets {
             BudgetClass::Thread => Some(&self.thread),
             BudgetClass::Other => Some(&self.other),
             BudgetClass::Badge => Some(&self.badge),
+            BudgetClass::Call => Some(&self.call),
             BudgetClass::Permission => None,
         }
     }
@@ -168,6 +178,23 @@ mod tests {
             assert!(b.try_take(BudgetClass::Other, OTHER_PER_HOUR, t0), "ticket send {i}");
         }
         assert!(!b.try_take(BudgetClass::Other, OTHER_PER_HOUR, t0));
+    }
+
+    /// S14: DM call pushes have their own bucket: a spent Thread or badge
+    /// bucket never holds back a ring, and rings never spend theirs.
+    #[test]
+    fn call_budget_is_its_own() {
+        let b = Budgets::new();
+        let t0 = Instant::now();
+        for _ in 0..THREAD_PER_HOUR {
+            assert!(b.try_take(BudgetClass::Thread, THREAD_PER_HOUR, t0));
+        }
+        for _ in 0..BADGE_PER_HOUR {
+            assert!(b.try_take(BudgetClass::Badge, BADGE_PER_HOUR, t0));
+        }
+        assert!(b.try_take(BudgetClass::Call, CALL_PER_HOUR, t0), "a ring still goes");
+        assert_eq!(b.used(BudgetClass::Call, t0), 1);
+        assert_eq!(b.used(BudgetClass::Thread, t0), THREAD_PER_HOUR, "untouched by the ring");
     }
 
     #[test]

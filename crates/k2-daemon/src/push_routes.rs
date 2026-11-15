@@ -847,6 +847,43 @@ pub fn notify_desktop(kind_id: &str, line: &str, owners: Vec<String>) {
     dispatch_push(PushEvent::DesktopNotice { line: line.to_string(), kind_id: kind_id.to_string(), owners });
 }
 
+/// DM calls (prd-home-people-channels-v1 §11a.3, S14): one person's ring,
+/// or the missed / ended push that replaces it. Its own budget
+/// ([`budget::BudgetClass::Call`]), so a ring never waits behind Thread or
+/// badge pushes; over it, the push is dropped (never queued).
+pub fn notify_call(push: k2_core::push::CallPush) {
+    let event = PushEvent::Call(push);
+    if airgap_blocks() {
+        note_airgap_drop();
+        return;
+    }
+    if !budget::global().try_take(budget::BudgetClass::Call, budget::CALL_PER_HOUR, Instant::now()) {
+        note_budget_drop(budget::BudgetClass::Call);
+        return;
+    }
+    #[cfg(test)]
+    {
+        test_push_capture::capture(&event);
+    }
+    #[cfg(not(test))]
+    {
+        let Some(cloud) = current_cloud() else {
+            return;
+        };
+        let PushEvent::Call(c) = &event else {
+            return;
+        };
+        let principal = c.principal.clone();
+        let logins = c.device_usernames.clone();
+        std::thread::spawn(move || {
+            let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
+            if let Err(e) = cloud.dispatch_rechecked(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
+                k2_core::log_debug!("[push] call dispatch failed ({}): {e}", cloud.label());
+            }
+        });
+    }
+}
+
 /// How long a resolved gateway config is reused before it is read again
 /// (settings JSON + `tunnel.json`, maybe the token vault). Short, so a
 /// pairing or a settings change applies without a restart.

@@ -163,7 +163,13 @@ fn skin<T>(f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>) -> R<T> {
 /// One call to Sew as the person, on their held session; a 401 signs in
 /// again once.
 fn as_person(c: &Caller, method: &str, path: &str, body: Option<&Value>) -> R<SewAnswer> {
-    let h = follower::hold(&c.ext);
+    sew_as(&c.ext, method, path, body)
+}
+
+/// One call to Sew as box person `ext` on their held session (DM calls use
+/// it too: `voice::dm_call`); a 401 signs in again once.
+pub(crate) fn sew_as(ext: &str, method: &str, path: &str, body: Option<&Value>) -> R<SewAnswer> {
+    let h = follower::hold(ext);
     let d = deps();
     let call = |tok: &str| match (method, body) {
         ("GET", _) => d.sew.get(Some(tok), path),

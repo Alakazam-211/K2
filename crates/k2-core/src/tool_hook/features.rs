@@ -110,6 +110,11 @@ pub const MEMBER_CHANNELS_LEVEL_ONLY: &str = "member_channels_level_only";
 /// Sew refuses opening a new DM between an agent and a box person. K2's own
 /// `dm_not_for_agents` refusal holds with or without it.
 pub const AGENTS_DM_WITH_BOX_PEOPLE: &str = "agents_dm_with_box_people";
+/// Sew 0.10.0 (A): `POST /api/v1/channels/{id}/call/cancel {call_id}`, the
+/// caller's own Cancel while a DM call rings (ends `cancelled`, no missed
+/// call). Without it K2's Cancel is a leave, and the callee sees a missed
+/// call.
+pub const CALL_CANCEL: &str = "call_cancel";
 
 /// Sew 0.10.0's Home flags, read together from ONE feature list (like
 /// [`VoiceFeatures`]). Each Home chat path turns on from its field here,
@@ -129,6 +134,8 @@ pub struct HomeChatFeatures {
     pub member_channels_level_only: bool,
     /// [`AGENTS_DM_WITH_BOX_PEOPLE`].
     pub agents_dm_with_box_people: bool,
+    /// [`CALL_CANCEL`].
+    pub call_cancel: bool,
 }
 
 impl HomeChatFeatures {
@@ -143,6 +150,7 @@ impl HomeChatFeatures {
             read_state_unread_count: has(READ_STATE_UNREAD_COUNT),
             member_channels_level_only: has(MEMBER_CHANNELS_LEVEL_ONLY),
             agents_dm_with_box_people: has(AGENTS_DM_WITH_BOX_PEOPLE),
+            call_cancel: has(CALL_CANCEL),
         }
     }
 

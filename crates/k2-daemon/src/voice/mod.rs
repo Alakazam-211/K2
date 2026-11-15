@@ -6,6 +6,8 @@
 //!   `voice_rooms_preview` / `K2_VOICE_ROOMS` switch is on.
 //! - [`bff`]: a person's Sew session held by this daemon; join, leave, the
 //!   call's own Sew routes, moderation through the moderator's own session.
+//! - [`dm_call`]: 1-to-1 calls in a Home chat DM (start, answer, decline,
+//!   ring again, cancel), on the person's held Home chat session.
 //! - [`occupancy`]: the SW-3 follower (who is in which room), headless,
 //!   publishing `voice_rooms_changed {rev}` (hosting changes ride it too).
 //! - [`sew_lane`]: the call door `/_k2/voice/sew/`: the native engine's
@@ -21,6 +23,7 @@
 //! read its ledger and call its owner actions (count, rename, Close now).
 
 pub mod bff;
+pub mod dm_call;
 pub mod events_ws;
 pub mod kit_door;
 pub mod kit_feed;

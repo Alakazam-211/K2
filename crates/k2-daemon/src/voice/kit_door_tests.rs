@@ -383,6 +383,30 @@ fn body_json(out: &str) -> Value {
 
 // ── the allowlist ────────────────────────────────────────────────────
 
+/// DM calls (HP-39): a phone rings again on R2's door; Cancel only when Sew
+/// reports `call_cancel`, else 404 (never reaches Sew). Both are POSTs, ids
+/// exact, no query.
+#[test]
+fn dm_call_ring_and_cancel_on_the_kit_door() {
+    let ring = kit_route_flags("POST", "/api/v1/channels/900/call/ring", None, false, false);
+    assert_eq!(ring, Some(KitRoute::CallRing));
+    assert_eq!(kit_route_flags("POST", "/api/v1/channels/900/call/cancel", None, false, false), None, "no call_cancel: 404");
+    assert_eq!(kit_route_flags("POST", "/api/v1/channels/900/call/cancel", None, false, true), Some(KitRoute::CallCancel));
+    assert_eq!(kit_route_flags("POST", "/api/v1/channels/900/call/decline", None, false, false), Some(KitRoute::CallDecline));
+    for (m, p, q) in [
+        ("GET", "/api/v1/channels/900/call/ring", None),
+        ("GET", "/api/v1/channels/900/call/cancel", None),
+        ("POST", "/api/v1/channels/9x/call/ring", None),
+        ("POST", "/api/v1/channels/900/call/ring", Some("x=1")),
+        ("POST", "/api/v1/channels/900/call/join", None),
+        ("POST", "/api/v1/channels/900/call/cancel/now", None),
+    ] {
+        assert_eq!(kit_route_flags(m, p, q, true, true), None, "{m} {p} {q:?}");
+    }
+    assert!(KitRoute::CallRing.is_post() && KitRoute::CallCancel.is_post());
+    assert!(voice_chat_kit_refusal(KitRoute::CallRing).is_none() && voice_chat_kit_refusal(KitRoute::CallCancel).is_none(), "Voice & Chat only logins call too");
+}
+
 #[test]
 fn the_allowlist_is_exact() {
     for (m, p, q, want) in [

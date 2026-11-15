@@ -1211,11 +1211,17 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
     let recording = status.features.iter().any(|f| f == hook::features::APP_RECORDING);
     // Sew 0.10.0: K2 sets `agents.dm_with_box_people` false (HP-31).
     let agent_dm = status.features.iter().any(|f| f == hook::features::AGENTS_DM_WITH_BOX_PEOPLE);
+    // Home chat on: K2 keeps `calls.dm_enabled` on for DM calls (HP-42).
+    let calls_dm = kind == hook::CHAT_KIND && k2_core::home_chat::enabled();
     let mut recording_policies: Option<Value> = None;
     let mut agent_dm_policies: Option<Value> = None;
-    let policy_read = if managed || recording || agent_dm {
+    let mut calls_dm_policies: Option<Value> = None;
+    let policy_read = if managed || recording || agent_dm || calls_dm {
         match policy_read(client).await {
             Ok((v, body)) => {
+                if calls_dm {
+                    calls_dm_policies = Some(body.clone());
+                }
                 if agent_dm {
                     agent_dm_policies = Some(body.clone());
                 }
@@ -1255,6 +1261,11 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         if let Some(body) = &agent_dm_policies {
             if let Err(e) = hook::note_agent_dm_policy(body) {
                 log_debug!("[home-chat] agent DM policy: {e}");
+            }
+        }
+        if let Some(body) = &calls_dm_policies {
+            if let Err(e) = hook::note_calls_dm_policy(body) {
+                log_debug!("[home-chat] DM calls policy: {e}");
             }
         }
         if let Some(body) = &recording_policies {

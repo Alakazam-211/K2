@@ -23,6 +23,12 @@
 //! are `[0-9]{1,19}`; no query except R1's `ids=` list and the recording
 //! reads' one cursor. Anything else is 404 and never reaches Sew.
 //!
+//! **DM calls (prd-home-people-channels-v1 §11a.1, HP-39):** besides R2's
+//! decline, a phone rings again (`POST /channels/{id}/call/ring`) and, when
+//! Sew reports `call_cancel` (0.10.0), cancels its own ring (`POST
+//! /channels/{id}/call/cancel`); without the flag that route is 404 here.
+//! Joining stays on `/cli/voice/join`.
+//!
 //! **Recording reads (Sew 0.9.0, flag `app_recording`; K2 PRD
 //! prd-k2-bobbin-in-apps-v1 K-f):** the 0.9.0 kit's reads use Sew's own
 //! client routes, R10–R13: `GET /channels/{id}/recording` (the active one),
@@ -93,6 +99,11 @@ pub enum KitRoute {
     Members,
     /// R2 `POST /channels/{id}/call/decline`
     CallDecline,
+    /// `POST /channels/{id}/call/ring` (a DM call: ring again)
+    CallRing,
+    /// `POST /channels/{id}/call/cancel` (a DM call: the caller's Cancel;
+    /// Sew 0.10.0, `call_cancel`)
+    CallCancel,
     /// R3 `GET /channels/{id}`
     Channel,
     /// R4 `POST /channels/{id}/recording/start`
@@ -125,6 +136,8 @@ impl KitRoute {
         matches!(
             self,
             KitRoute::CallDecline
+                | KitRoute::CallRing
+                | KitRoute::CallCancel
                 | KitRoute::RecordingStart
                 | KitRoute::RecordingStop
                 | KitRoute::MemberVoice
@@ -160,15 +173,26 @@ fn cursor_query(q: Option<&str>, name: &str) -> bool {
     }
 }
 
-/// The kit route for a request on the door: `path` has the door prefix
-/// stripped (`/api/v1/…` or `/feed`), `query` is after `?` when there is one.
-/// The recording reads follow this box's Sew ([`recording_kit_on`]).
-pub fn kit_route(method: &str, path: &str, query: Option<&str>) -> Option<KitRoute> {
-    kit_route_with(method, path, query, recording_kit_on())
+/// Does this box's Sew report `call_cancel` (a DM call's Cancel)?
+pub fn call_cancel_on() -> bool {
+    k2_core::tool_hook::sew_has(k2_core::tool_hook::features::CALL_CANCEL).unwrap_or(false)
 }
 
-/// [`kit_route`] with Sew's `app_recording` given (pure).
+/// The kit route for a request on the door: `path` has the door prefix
+/// stripped (`/api/v1/…` or `/feed`), `query` is after `?` when there is one.
+/// The recording reads and a DM call's Cancel follow this box's Sew
+/// ([`recording_kit_on`], [`call_cancel_on`]).
+pub fn kit_route(method: &str, path: &str, query: Option<&str>) -> Option<KitRoute> {
+    kit_route_flags(method, path, query, recording_kit_on(), call_cancel_on())
+}
+
+/// [`kit_route`] with Sew's `app_recording` given and no `call_cancel` (pure).
 pub fn kit_route_with(method: &str, path: &str, query: Option<&str>, recording: bool) -> Option<KitRoute> {
+    kit_route_flags(method, path, query, recording, false)
+}
+
+/// [`kit_route`] with Sew's `app_recording` and `call_cancel` given (pure).
+pub fn kit_route_flags(method: &str, path: &str, query: Option<&str>, recording: bool, call_cancel: bool) -> Option<KitRoute> {
     if path == "/feed" {
         return (method == "GET" && query.is_none()).then_some(KitRoute::Feed);
     }
@@ -176,6 +200,8 @@ pub fn kit_route_with(method: &str, path: &str, query: Option<&str>, recording: 
     let route = match (method, segs.as_slice()) {
         ("GET", ["members"]) => KitRoute::Members,
         ("POST", ["channels", id, "call", "decline"]) if dec(id) => KitRoute::CallDecline,
+        ("POST", ["channels", id, "call", "ring"]) if dec(id) => KitRoute::CallRing,
+        ("POST", ["channels", id, "call", "cancel"]) if call_cancel && dec(id) => KitRoute::CallCancel,
         ("GET", ["channels", id]) if dec(id) => KitRoute::Channel,
         ("POST", ["channels", id, "recording", "start"]) if dec(id) => KitRoute::RecordingStart,
         ("POST", ["recordings", id, "stop"]) if dec(id) => KitRoute::RecordingStop,
@@ -721,7 +747,7 @@ pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     sew_addr: &str,
 ) {
     let recording = recording_kit_on();
-    let Some(route) = kit_route_with(method, sew_path, query, recording) else {
+    let Some(route) = kit_route_flags(method, sew_path, query, recording, call_cancel_on()) else {
         return refuse(client, &Refusal::new(404, "not_found", "no such route")).await;
     };
     // One credential and plain framing, or nothing: never two readings.
@@ -830,6 +856,8 @@ mod voice_chat_door_tests {
         for r in [
             KitRoute::Members,
             KitRoute::CallDecline,
+            KitRoute::CallRing,
+            KitRoute::CallCancel,
             KitRoute::Channel,
             KitRoute::MyDevices,
             KitRoute::DeviceRevoke,

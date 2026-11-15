@@ -2100,6 +2100,8 @@ async fn async_main() {
     // People and channels on Home: the held person sessions and their
     // followers. Idle (holds nothing) while the homeChat switch is off.
     crate::home_chat::follower::spawn();
+    // S14: phone pushes for DM call rings (idle while Home chat is off).
+    crate::home_chat::call_push::spawn();
 
     // Remote desktop (D6): the routes and the stream talk to the real
     // K2 Screen (k2-deskd); a switch left on starts it again.

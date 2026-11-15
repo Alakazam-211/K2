@@ -61,6 +61,16 @@ pub const AGENT_DM: &str = "agents.dm_with_box_people";
 /// Outbox subject of the agent DM `policy_set` row.
 pub const SUBJECT_AGENT_DM: &str = "policy:agents.dm_with_box_people";
 
+/// Sew's DM calls (since 0.9.2): 1-to-1 calls between people in their DM
+/// need the install policy `calls.dm_enabled` on. K2 makes sure it is on
+/// while Home chat is on (prd-home-people-channels-v1 §11a.1, HP-42), through
+/// the same `policy_set` row as the others. K2 never sets
+/// `recording.dm_enabled` here: recording a DM call stays off unless a
+/// person asks for it through the recording policy route.
+pub const CALLS_DM: &str = "calls.dm_enabled";
+/// Outbox subject of the DM calls `policy_set` row.
+pub const SUBJECT_CALLS_DM: &str = "policy:calls.dm_enabled";
+
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -168,6 +178,9 @@ pub fn after_done(conn: &Connection, row_id: &str, result: &str, now: i64) -> Re
         if let Some(seen) = v.get("policies").and_then(|p| p.get(AGENT_DM)) {
             note_agent_dm(conn, Some(seen), now)?;
         }
+        if let Some(seen) = v.get("policies").and_then(|p| p.get(CALLS_DM)) {
+            note_calls_dm(conn, Some(seen), now)?;
+        }
     }
     match managed_fields_in(result.as_bytes()) {
         Ok(seen) => note(conn, seen.as_ref(), now),
@@ -226,6 +239,51 @@ pub fn plan_agent_dm(conn: &Connection, busy: &std::collections::HashSet<String>
     }])
 }
 
+/// The `calls.dm_enabled` value in a `{"policies": {...}}` body (`None` =
+/// absent: K2 hasn't seen Sew say it is on).
+pub fn calls_dm_in(body: &Value) -> Option<Value> {
+    body.get("policies").unwrap_or(body).get(CALLS_DM).filter(|v| !v.is_null()).cloned()
+}
+
+/// Record what Sew showed for `calls.dm_enabled` (K2's value is `true`).
+pub fn note_calls_dm(conn: &Connection, seen: Option<&Value>, now: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO tool_sew_policy (key, seen, is_k2, seen_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(key) DO UPDATE SET seen = excluded.seen, is_k2 = excluded.is_k2, seen_at = excluded.seen_at",
+        params![CALLS_DM, seen.map(Value::to_string), (seen == Some(&Value::Bool(true))) as i64, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("sew policy write: {e}"))
+}
+
+/// Did Sew last show `calls.dm_enabled: true`? `None` = not read on this
+/// install.
+pub fn calls_dm_is_k2(conn: &Connection) -> Result<Option<bool>, String> {
+    conn.query_row("SELECT is_k2 FROM tool_sew_policy WHERE key = ?1", params![CALLS_DM], |r| r.get::<_, i64>(0))
+        .optional()
+        .map(|o| o.map(|v| v != 0))
+        .map_err(|e| format!("sew policy read: {e}"))
+}
+
+/// The sweep: one `policy_set {calls.dm_enabled: true}` while Home chat is
+/// on (`home_chat`), once K2 read the policy on this install and Sew doesn't
+/// show it on. Nothing while Home chat is off: K2 never turns it off.
+pub fn plan_calls_dm(conn: &Connection, busy: &std::collections::HashSet<String>, home_chat: bool) -> Result<Vec<NewOp>, String> {
+    if !home_chat || busy.contains(SUBJECT_CALLS_DM) || calls_dm_is_k2(conn)? != Some(false) {
+        return Ok(Vec::new());
+    }
+    Ok(vec![NewOp {
+        tool: CHAT_KIND,
+        op: Op::PolicySet,
+        subject_key: SUBJECT_CALLS_DM.to_string(),
+        payload: json!({ "changes": { CALLS_DM: true } }),
+        grant_id: None,
+        grant_rev: None,
+        cause: Cause::Reconcile,
+        after_subject: None,
+    }])
+}
+
 /// A new Sew install: K2 hasn't read its policy yet.
 pub fn forget(conn: &Connection) -> Result<(), String> {
     conn.execute("DELETE FROM tool_sew_policy", []).map(|_| ()).map_err(|e| format!("sew policy reset: {e}"))
@@ -259,6 +317,30 @@ mod tests {
         assert!(plan_agent_dm(&c, &busy).unwrap().is_empty(), "false: done");
         forget(&c).unwrap();
         assert!(plan_agent_dm(&c, &busy).unwrap().is_empty(), "a new install: read first");
+    }
+
+    /// HP-42: with Home chat on, K2 turns `calls.dm_enabled` on once it has
+    /// read the policy, and stops once Sew shows it on. Home chat off: K2
+    /// never sends it (and never turns it off). The body never names
+    /// `recording.dm_enabled`: recording a DM call stays off by default.
+    #[test]
+    fn calls_dm_policy_is_turned_on_with_home_chat() {
+        let c = Connection::open_in_memory().unwrap();
+        ensure_schema(&c).unwrap();
+        let busy = std::collections::HashSet::new();
+        assert!(plan_calls_dm(&c, &busy, true).unwrap().is_empty(), "not read yet: nothing");
+        note_calls_dm(&c, calls_dm_in(&json!({"policies": {}})).as_ref(), 1).unwrap();
+        assert!(plan_calls_dm(&c, &busy, false).unwrap().is_empty(), "Home chat off: nothing");
+        let ops = plan_calls_dm(&c, &busy, true).unwrap();
+        assert_eq!(ops.len(), 1, "absent: K2 turns it on");
+        assert_eq!(ops[0].payload, json!({"changes": {"calls.dm_enabled": true}}));
+        assert!(!ops[0].payload.to_string().contains("recording"), "recording in DM calls is never set here");
+        let busy_now: std::collections::HashSet<String> = [SUBJECT_CALLS_DM.to_string()].into();
+        assert!(plan_calls_dm(&c, &busy_now, true).unwrap().is_empty(), "one row at a time");
+        note_calls_dm(&c, calls_dm_in(&json!({"policies": {"calls.dm_enabled": false}})).as_ref(), 2).unwrap();
+        assert_eq!(plan_calls_dm(&c, &busy, true).unwrap().len(), 1, "off: set again");
+        note_calls_dm(&c, calls_dm_in(&json!({"policies": {"calls.dm_enabled": true}})).as_ref(), 3).unwrap();
+        assert!(plan_calls_dm(&c, &busy, true).unwrap().is_empty(), "on: done");
     }
 
     #[test]

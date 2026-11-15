@@ -8,6 +8,8 @@
 //! - [`state`]: the pure per-person state (unread, badges).
 //! - [`routes`]: `/cli/home-chat/*` (feature `home-chat-v1`).
 //! - [`events_ws`]: `WS /cli/home-chat/events`, the person's own socket.
+//! - [`call_push`]: phone pushes for DM call rings (S14), from Sew's person
+//!   feed.
 //!
 //! **Who.** Only a person's own login on this server: a Connect login
 //! (`k2:connect:<uuid>`) or the owner's linked login (`k2:owner`). The bare
@@ -23,6 +25,7 @@ use k2_core::tool_hook::features::HomeChatFeatures;
 
 use crate::voice::bff::{HttpSew, SewApi};
 
+pub mod call_push;
 pub mod events_ws;
 pub mod follower;
 pub mod people;
@@ -31,10 +34,14 @@ pub mod sessions;
 pub mod state;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// A pass minter: `(external id, sid)` → a signed chat pass.
 pub type MintFn = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync;
+/// One read of a person's Sew feed: `(external id, cursor)` → its answer.
+pub type FeedFn = dyn Fn(&str, Option<&str>) -> Result<serde_json::Value, String> + Send + Sync;
+/// A person's push devices: external id → (person key, device logins).
+pub type DevicesFn = dyn Fn(&str) -> Option<(String, Vec<String>)> + Send + Sync;
 
 /// What Home chat talks to. Production: [`Deps::live`]; tests install a
 /// fake Sew (HTTP and gateway) through [`set_deps`].
@@ -48,6 +55,10 @@ pub struct Deps {
     pub flags: Arc<dyn Fn() -> HomeChatFeatures + Send + Sync>,
     /// Sew runs here (Linux).
     pub platform_ok: bool,
+    /// The person feed DM call pushes follow ([`call_push::live_feed`]).
+    pub feed: Arc<FeedFn>,
+    /// Whose phones a call push reaches ([`call_push::live_devices`]).
+    pub devices: Arc<DevicesFn>,
 }
 
 fn live_mint(ext: &str, sid: &str) -> Result<String, String> {
@@ -64,6 +75,8 @@ impl Deps {
             gateway_addr: Arc::new(crate::sew::ops::client_addr),
             flags: Arc::new(|| k2_core::tool_hook::sew_home_chat_features().unwrap_or_default()),
             platform_ok: crate::sew::sew_supported(),
+            feed: Arc::new(call_push::live_feed),
+            devices: Arc::new(call_push::live_devices),
         }
     }
 }

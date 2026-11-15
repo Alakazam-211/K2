@@ -311,6 +311,8 @@ pub fn alert_kind(event: &PushEvent) -> Option<&'static str> {
         PushEvent::ChatApprovalRequested { .. } => Some(super::PUSH_KIND_CHAT_APPROVAL),
         // Remote desktop notices: sealed like the other alerts.
         PushEvent::DesktopNotice { .. } => Some(super::PUSH_KIND_DESKTOP),
+        // DM calls: sealed like the other alerts (the caller's name, ids).
+        PushEvent::Call(_) => Some(super::PUSH_KIND_CALL),
         PushEvent::Badge(_) | PushEvent::AgentNeedsAttention { .. } | PushEvent::HeartbeatFailed { .. } => None,
     }
 }
@@ -331,6 +333,7 @@ pub fn alert_group(event: &PushEvent) -> String {
         PushEvent::ProjectPost(p) => format!("project:{}", p.group_id),
         PushEvent::ChatApprovalRequested { outbox_id, .. } => format!("chat_approval:{outbox_id}"),
         PushEvent::DesktopNotice { .. } => "desktop".to_string(),
+        PushEvent::Call(c) => format!("call:{}", c.call_id),
         _ => String::new(),
     }
 }

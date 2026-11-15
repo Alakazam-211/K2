@@ -7,6 +7,9 @@
 //! POST /cli/voice/rooms/rename {room, name}
 //! POST /cli/voice/rooms/close {room, now?} close the top room (the count drops by one)
 //! POST /cli/voice/join {room, join?}       a person's own login only → callId + Sew's join answer
+//! POST /cli/voice/join {dm, join?, callAnswer?}  a DM call (`dm_call`): start or answer
+//! POST /cli/voice/call/decline|ring|cancel {dm, callId}  a DM call's ring (`dm_call`)
+//! POST /cli/voice/call/leave {callId?}     leave (today's leave)
 //! POST /cli/voice/session/leave {callId?}
 //! POST /cli/voice/session/state|stats|keys/key_packages|keys/join {callId, body}
 //! POST /cli/voice/moderate {room, person, action}   kick|mute|unmute|deafen|undeafen (owner/Admin login)
@@ -27,7 +30,8 @@
 //! ```
 //!
 //! Every route answers 404 `voice_rooms_off` while the preview is off (the
-//! family is dark, like compute's). Every POST route is POST-only (`if
+//! family is dark, like compute's), except DM calls while Home chat is on
+//! (a join with `dm`, `call/*`, and the call's own session routes). Every POST route is POST-only (`if
 //! !is_post { 405 }` here, and the dispatcher's `require_post`). Floors for
 //! logins live in `route_policy`; this handler classifies every caller:
 //!
@@ -97,6 +101,13 @@ pub const RECORDING_CONTROLS: &str = "/cli/voice/recording/controls";
 /// through `GET /cli/voice/status` (`recording`).
 pub const RECORDING_SETTINGS: &str = "/cli/voice/recording/settings";
 pub const REPAIR: &str = "/cli/voice/repair";
+/// DM calls (prd-home-people-channels-v1 §11a.1, `dm_call`).
+pub const CALL_DECLINE: &str = "/cli/voice/call/decline";
+pub const CALL_RING: &str = "/cli/voice/call/ring";
+pub const CALL_CANCEL: &str = "/cli/voice/call/cancel";
+pub const CALL_LEAVE: &str = "/cli/voice/call/leave";
+/// The DM call routes.
+pub const CALL_ROUTES: &[&str] = &[CALL_DECLINE, CALL_RING, CALL_CANCEL, CALL_LEAVE];
 
 pub const GET_ROUTES: &[&str] = &[ROOMS, STATUS];
 pub const POST_ROUTES: &[&str] = &[
@@ -116,6 +127,10 @@ pub const POST_ROUTES: &[&str] = &[
     RECORDING_CONTROLS,
     RECORDING_SETTINGS,
     REPAIR,
+    CALL_DECLINE,
+    CALL_RING,
+    CALL_CANCEL,
+    CALL_LEAVE,
 ];
 
 /// Largest body (KeyPackages ride `session/keys/key_packages`).
@@ -129,6 +144,48 @@ pub fn is_route(p: &str) -> bool {
 
 pub fn is_post_route(p: &str) -> bool {
     POST_ROUTES.contains(&p)
+}
+
+/// The routes a DM call uses: they answer while Home chat is on even with
+/// the voice rooms preview off (the handler then takes only a DM call).
+pub fn dm_capable(p: &str) -> bool {
+    CALL_ROUTES.contains(&p) || matches!(p, JOIN | LEAVE | SESSION_STATE | SESSION_STATS | SESSION_KEY_PACKAGES | SESSION_KEYS_JOIN)
+}
+
+/// Is this request a DM call's (with the voice rooms preview off, only
+/// these answer)? A join must name a `dm`.
+fn is_dm_call(path: &str, body: &[u8]) -> bool {
+    if path == JOIN {
+        return serde_json::from_slice::<Value>(body).ok().is_some_and(|b| b.get("dm").is_some());
+    }
+    dm_capable(path)
+}
+
+/// One DM call route for a person.
+fn dm_route(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliResponse {
+    let mut p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    if let Caller::Login { token, .. } = c {
+        p.client = client_of(token);
+    }
+    let ctx = super::dm_call::Ctx::live();
+    let r = match path {
+        JOIN => super::dm_call::join(&p, b, &ctx).map(|mut v| {
+            v["server"] = json!(label());
+            v
+        }),
+        CALL_DECLINE => super::dm_call::decline(&p, b, &ctx),
+        CALL_RING => super::dm_call::ring(&p, b, &ctx),
+        CALL_CANCEL => super::dm_call::cancel(&p, b, &ctx),
+        CALL_LEAVE => super::dm_call::leave(&p, b, &ctx),
+        _ => return CliResponse::not_found(),
+    };
+    match r {
+        Ok(v) => ok(v),
+        Err(r) => refuse(&r),
+    }
 }
 
 // ── answers ──────────────────────────────────────────────────────────
@@ -1083,7 +1140,7 @@ fn repair(c: &Caller) -> CliResponse {
 /// One `/cli/voice/*` call (blocking; the dispatcher runs it on the
 /// blocking pool: a held join waits up to 20 s).
 pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body: &[u8]) -> CliResponse {
-    if !k2_core::voice_preview::enabled() {
+    if !k2_core::voice_preview::enabled() && !(k2_core::home_chat::enabled() && is_dm_call(path, body)) {
         return dark();
     }
     if is_post_route(path) && !is_post {
@@ -1109,6 +1166,8 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
         Err(r) => return r,
     };
     match path {
+        JOIN if b.get("dm").is_some() => dm_route(&caller, owner_token, path, &b),
+        CALL_DECLINE | CALL_RING | CALL_CANCEL | CALL_LEAVE => dm_route(&caller, owner_token, path, &b),
         SETTINGS => settings(&caller, &b),
         ROOM_RENAME => rename(&caller, &b),
         ROOM_CLOSE => close(&caller, &b),

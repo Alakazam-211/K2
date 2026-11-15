@@ -3,6 +3,16 @@
 //! (when Sew has it) and the last message. Pure: the follower feeds it
 //! READY, gateway events and catch-up answers; the routes and the events
 //! socket read it. No chat text is kept (§16).
+//!
+//! **DM calls (§11a.3, §11a.4).** The DM calls the person can see now
+//! ([`CallSeen`]: READY `calls`, `call_ring`, `call_updated`), so a fresh
+//! client socket's `hello` shows a ring that started before it opened, and a
+//! join knows whether it answers a ring. A call's record message
+//! (`Message.call`, Sew's CallSummary) makes the DM unread from the call's
+//! start but counts nothing then; once it ends as a missed call for this
+//! person it adds one to the DM's `mention_count` (Sew's own count does the
+//! same), once per call. A decline adds nothing, and a cancelled ring is
+//! never a missed call.
 
 use std::collections::{HashMap, HashSet};
 
@@ -36,6 +46,46 @@ pub fn invite_only_of(visibility: &Value) -> Option<bool> {
     }
 }
 
+/// One DM call the person can see (§11a.3).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CallSeen {
+    pub call_id: String,
+    pub channel_id: String,
+    pub started_by: Option<String>,
+    /// It rings for this person now.
+    pub ringing_me: bool,
+    /// A silent ring (busy in another call, DND, a muted DM).
+    pub silent: bool,
+    pub expires_at: Option<String>,
+    /// Sew's last `Call` object for it (`call_updated`, READY).
+    pub call: Value,
+}
+
+impl CallSeen {
+    /// What `hello` and the routes show of it.
+    pub fn view(&self) -> Value {
+        json!({
+            "callId": self.call_id, "conv": self.channel_id, "startedBy": self.started_by,
+            "ringing": self.ringing_me, "silent": self.silent, "expiresAt": self.expires_at, "call": self.call,
+        })
+    }
+}
+
+/// Does this call record (Sew's CallSummary) end as a missed call for
+/// member `me`? Not when cancelled (Sew 0.10.0), not when they declined.
+pub fn missed_for(summary: &Value, me: &str) -> bool {
+    let has = |k: &str| summary[k].as_array().is_some_and(|a| a.iter().any(|x| id_of(x).is_some_and(|x| x == me)));
+    !me.is_empty() && summary["end_reason"].as_str() != Some("cancelled") && has("missed_ids") && !has("declined_ids")
+}
+
+/// One more on a DM's count (a missed call).
+fn bump(c: &mut Conv, unread_count_flag: bool) {
+    c.mention_count = c.mention_count.saturating_add(1);
+    if unread_count_flag {
+        c.unread_count = Some(c.unread_count.unwrap_or(0).saturating_add(1).min(k2_core::home_chat::BADGE_CAP));
+    }
+}
+
 /// The person's whole followed state.
 #[derive(Debug, Clone, Default)]
 pub struct PersonState {
@@ -50,6 +100,10 @@ pub struct PersonState {
     /// Conversations a client of this person has open (typing is
     /// subscribed for these only).
     pub viewing: HashSet<String>,
+    /// DM calls the person can see now, by Sew call id.
+    pub calls: HashMap<String, CallSeen>,
+    /// Call records already counted as a missed call (each once).
+    pub missed_counted: HashSet<String>,
 }
 
 fn id_of(v: &Value) -> Option<String> {
@@ -107,7 +161,10 @@ impl PersonState {
     /// READY: the whole state again (a fresh gateway session).
     pub fn apply_ready(&mut self, d: &Value) {
         let viewing = std::mem::take(&mut self.viewing);
-        *self = PersonState { viewing, ..Default::default() };
+        // A missed call counted before stays counted (Sew's read states in
+        // READY already hold it).
+        let missed_counted = std::mem::take(&mut self.missed_counted);
+        *self = PersonState { viewing, missed_counted, ..Default::default() };
         self.me = id_of(&d["member"]["id"]).unwrap_or_default();
         self.member_seq = d["member_seq"].as_u64().unwrap_or(0);
         self.gateway_session = d["session_id"].as_str().map(str::to_string);
@@ -115,12 +172,103 @@ impl PersonState {
         for rs in d["read_states"].as_array().into_iter().flatten() {
             self.apply_read_state(rs);
         }
+        for call in d["calls"].as_array().into_iter().flatten() {
+            self.apply_call(call);
+        }
+    }
+
+    /// One `Call` object (READY `calls`, `call_updated`): kept while live,
+    /// dropped once ended. Whether it rings for this person comes from its
+    /// `rings` (this member `ringing` or `busy`) or `my_ring`.
+    fn apply_call(&mut self, call: &Value) {
+        let Some(id) = id_of(&call["id"]) else { return };
+        if call["state"].as_str() == Some("ended") {
+            self.calls.remove(&id);
+            return;
+        }
+        let me = self.me.clone();
+        let my_ring = call["rings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|r| id_of(&r["member_id"]).is_some_and(|m| m == me))
+            .map(|r| (r["state"].as_str() == Some("ringing") || r["state"].as_str() == Some("busy"), r["state"].as_str() == Some("busy"), r["expires_at"].as_str().map(str::to_string)));
+        let c = self.calls.entry(id.clone()).or_insert_with(|| CallSeen { call_id: id, ..Default::default() });
+        c.channel_id = id_of(&call["channel_id"]).unwrap_or_else(|| c.channel_id.clone());
+        c.started_by = id_of(&call["started_by"]).or(c.started_by.take());
+        c.call = call.clone();
+        match my_ring {
+            Some((ringing, busy, expires)) => {
+                c.ringing_me = ringing;
+                c.silent = busy || call["my_ring"]["silent"].as_bool().unwrap_or(false);
+                c.expires_at = expires.or(c.expires_at.take());
+            }
+            None if call["my_ring"].is_object() => {
+                c.ringing_me = true;
+                c.silent = call["my_ring"]["silent"].as_bool().unwrap_or(false);
+            }
+            None => c.ringing_me = false,
+        }
+    }
+
+    /// `call_ring {call_id, channel_id, started_by, ringing, silent, reason?,
+    /// expires_at}`: it rings for this person, or stopped for any reason
+    /// (accepted, declined, timeout, call_ended, cancelled).
+    fn apply_call_ring(&mut self, d: &Value) {
+        let Some(id) = id_of(&d["call_id"]) else { return };
+        let ringing = d["ringing"].as_bool().unwrap_or(false);
+        if !ringing && !self.calls.contains_key(&id) {
+            return;
+        }
+        let c = self.calls.entry(id.clone()).or_insert_with(|| CallSeen { call_id: id.clone(), ..Default::default() });
+        c.channel_id = id_of(&d["channel_id"]).unwrap_or_else(|| c.channel_id.clone());
+        c.started_by = id_of(&d["started_by"]).or(c.started_by.take());
+        c.ringing_me = ringing;
+        c.silent = ringing && d["silent"].as_bool().unwrap_or(false);
+        c.expires_at = if ringing { d["expires_at"].as_str().map(str::to_string) } else { None };
+        // A ring that stopped because the call is over (and K2 never saw
+        // the call itself) leaves nothing to show.
+        let over = matches!(d["reason"].as_str(), Some("timeout" | "declined" | "call_ended" | "cancelled"));
+        if !ringing && over && c.call.is_null() {
+            self.calls.remove(&id);
+        }
+    }
+
+    /// A DM call event (`call_ring`, `call_updated`): the state moves, and the
+    /// frame for the person's clients is `{type, conv, d}` as Sew sent `d`.
+    pub fn apply_call_event(&mut self, t: &str, d: &Value) -> Vec<Value> {
+        let conv = match t {
+            "call_ring" => {
+                self.apply_call_ring(d);
+                id_of(&d["channel_id"])
+            }
+            "call_updated" => {
+                let call = if d.get("call").is_some() { &d["call"] } else { d };
+                self.apply_call(call);
+                id_of(&call["channel_id"])
+            }
+            _ => return Vec::new(),
+        };
+        vec![json!({"type": t, "conv": conv, "d": d})]
+    }
+
+    /// The call ringing for this person in `conv`, if one does.
+    pub fn incoming_ring(&self, conv: &str) -> Option<&CallSeen> {
+        self.calls.values().find(|c| c.channel_id == conv && c.ringing_me)
+    }
+
+    /// Every DM call the person can see now (the `hello` frame's `calls`).
+    pub fn calls_view(&self) -> Vec<Value> {
+        let mut v: Vec<&CallSeen> = self.calls.values().collect();
+        v.sort_by(|a, b| a.call_id.cmp(&b.call_id));
+        v.into_iter().map(CallSeen::view).collect()
     }
 
     /// `GET /api/v1/me/sync` after `410 resync_required`: every read state
     /// rebuilt (the gateway session is kept).
     pub fn apply_sync(&mut self, d: &Value) {
         let keep = (self.me.clone(), self.gateway_session.clone(), self.seq, std::mem::take(&mut self.viewing));
+        // The calls and the counted missed calls aren't in `me/sync`: kept.
         self.convs.clear();
         self.me = id_of(&d["member_id"]).unwrap_or(keep.0);
         self.member_seq = d["member_seq"].as_u64().unwrap_or(0);
@@ -150,7 +298,17 @@ impl PersonState {
                 });
                 c.last_message_id = id_of(&m["id"]).or(c.last_message_id.take());
                 c.last_at = m["created_at"].as_str().map(str::to_string).or(c.last_at.take());
-                if mine {
+                if m["call"].is_object() && !mine {
+                    // A call's record: unread from the call's start, counted
+                    // only once it ends as missed (message_updated).
+                    c.unread = true;
+                    let missed = id_of(&m["call"]["call_id"]).filter(|_| c.dm && missed_for(&m["call"], &self.me));
+                    if let Some(call) = missed {
+                        if self.missed_counted.insert(call) {
+                            bump(c, unread_count_flag);
+                        }
+                    }
+                } else if mine {
                     // Posting reads the channel (Sew moves the cursor).
                     c.unread = false;
                     c.mention_count = 0;
@@ -168,6 +326,22 @@ impl PersonState {
                 }
                 out.push(json!({"type": "message", "conv": cid, "message": m}));
                 out.push(json!({"type": "summary_changed", "conv": cid}));
+            }
+            "message_updated" => {
+                let m = if d.get("message").is_some() { &d["message"] } else { d };
+                let Some(cid) = id_of(&m["channel_id"]) else { return out };
+                // A call's record ended as a missed call for this person: one
+                // more on the DM's count (§11a.4), once per call.
+                if m["call"].is_object() && missed_for(&m["call"], &self.me) {
+                    if let (Some(call), Some(c)) = (id_of(&m["call"]["call_id"]), self.convs.get_mut(&cid)) {
+                        if c.dm && self.missed_counted.insert(call) {
+                            c.unread = true;
+                            bump(c, unread_count_flag);
+                            out.push(json!({"type": "summary_changed", "conv": cid}));
+                        }
+                    }
+                }
+                out.insert(0, json!({"type": "message_updated", "conv": cid, "message": m}));
             }
             "message_deleted" => {
                 let Some(cid) = id_of(&d["channel_id"]) else { return out };

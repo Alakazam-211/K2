@@ -1,8 +1,9 @@
 //! `WS /cli/home-chat/events` (§14.4): one person's Home chat frames, from
 //! their follower's broadcast. Frames: `hello` first, then `message`,
 //! `deleted`, `read`, `reaction`, `typing`, `member_removed`,
-//! `summary_changed`, `status` and forwarded `event`s (`call_ring`,
-//! `call_updated`). Nothing from any other person or server.
+//! `summary_changed`, `status`, `message_updated` (a call's record moved)
+//! and the DM call frames `call_ring` and `call_updated` (`hello` carries
+//! the calls already ringing). Nothing from any other person or server.
 //!
 //! The login is asked again before a frame when the login store moved, and
 //! on the 5 s tick (`socket_access`), at the `VoiceChat` floor: a removed,
@@ -66,7 +67,8 @@ pub async fn serve(stream: &mut TcpStream, ext: String, token: String, owner_tok
     let mut rx = held.events.subscribe();
     let still = |t: &str, o: &str| crate::routes::http::login_still_admitted(t, o, Floor::VoiceChat);
     let mut seen = k2_core::connect_users::auth_generation();
-    let hello = serde_json::json!({"type": "hello", "chat": held.status(), "flags": (super::deps().flags)()});
+    let calls = held.state.lock().unwrap_or_else(|p| p.into_inner()).calls_view();
+    let hello = serde_json::json!({"type": "hello", "chat": held.status(), "flags": (super::deps().flags)(), "calls": calls});
     if write.send(Message::Text(hello.to_string())).await.is_err() {
         return;
     }

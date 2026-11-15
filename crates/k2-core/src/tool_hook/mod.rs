@@ -1277,6 +1277,8 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
         ops.extend(policy::plan(&tx, &busy)?);
         // Sew 0.10.0: agents open no DM with a box person (HP-31).
         ops.extend(policy::plan_agent_dm(&tx, &busy)?);
+        // Sew's DM calls need `calls.dm_enabled` while Home chat is on (HP-42).
+        ops.extend(policy::plan_calls_dm(&tx, &busy, crate::home_chat::enabled())?);
         // Sew 0.9.0: the recording org policies a person asked for.
         ops.extend(recording::plan_policies(&tx, &busy)?);
         let mut n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
@@ -1308,6 +1310,16 @@ pub fn note_agent_dm_policy(body: &serde_json::Value) -> Result<(), String> {
     }
     let now = outbox::now_secs();
     crate::skin::with_skin_conn(|conn| policy::note_agent_dm(conn, policy::agent_dm_in(body).as_ref(), now))
+}
+
+/// Record what Sew's policies show for `calls.dm_enabled` (the sweep's
+/// policy read while Home chat is on; HP-42).
+pub fn note_calls_dm_policy(body: &serde_json::Value) -> Result<(), String> {
+    if !skin_store_exists() {
+        return Ok(());
+    }
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| policy::note_calls_dm(conn, policy::calls_dm_in(body).as_ref(), now))
 }
 
 /// Did the box's Sew report `flag` in its last status ([`features`])?

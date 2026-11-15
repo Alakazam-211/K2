@@ -30,6 +30,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useToastStore } from '@/stores/toast'
+import { RoomWriteRefusedError } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { isMacPlatform } from '@/lib/desktop-chrome'
@@ -453,6 +454,17 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
               if (r.card) setEnableCard(r.card)
             },
             (err: unknown) => {
+              // A remote room never switches on screen sharing for another
+              // machine (prd-remote-desktop-tab S1): say where to do it.
+              if (err instanceof RoomWriteRefusedError) {
+                useToastStore
+                  .getState()
+                  .addToast(
+                    `Remote desktop is turned on at that computer itself: on ${err.hostKey}, open Settings → Remote desktop (or run k2 desktop enable there).`,
+                    'error',
+                  )
+                return
+              }
               const msg = err instanceof Error ? err.message : String(err)
               useToastStore.getState().addToast(`Couldn’t turn on Remote desktop: ${msg}`, 'error')
             },

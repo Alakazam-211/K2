@@ -23,6 +23,7 @@ const daemon = vi.hoisted(() => ({
   status: null as unknown,
   gets: [] as Array<{ scope: string; route: string }>,
   posts: [] as Array<{ scope: string; route: string; body: unknown }>,
+  refuseEnableAsRoom: false,
 }))
 const events = vi.hoisted(() => ({ fns: new Set<() => void>() }))
 vi.mock('@/stores/session-events', async () => {
@@ -51,6 +52,10 @@ vi.mock('@/lib/daemon-cli', async () => {
       // The stream's ticket: this suite has no socket (DesktopPane.stream.test.tsx has).
       if (route === 'desktop/ticket') throw new Error('no stream in this suite')
       daemon.posts.push({ scope: scope.hostKey, route, body })
+      if (route === 'desktop/enable' && daemon.refuseEnableAsRoom) {
+        const { RoomWriteRefusedError } = await vi.importActual<typeof import('@/kessel/server-scope')>('@/kessel/server-scope')
+        throw new RoomWriteRefusedError(scope.hostKey, route)
+      }
       if (route === 'desktop/enable') return { enabled: true, state: 'ready', card: 'CARD FROM DAEMON' }
       throw new Error(`unexpected POST ${route}`)
     }),
@@ -58,6 +63,7 @@ vi.mock('@/lib/daemon-cli', async () => {
 })
 
 import { DesktopPane } from './DesktopPane'
+import { useToastStore } from '@/stores/toast'
 import { NEEDS_STREAM_TITLE } from './DesktopToolbar'
 import { DesktopStateCard } from './DesktopStateCard'
 import { DESKTOP_ENABLE_CARD, STATE_CARDS, type DesktopStatus, type TabState } from './desktop-state'
@@ -150,6 +156,27 @@ describe('DesktopPane states', () => {
     await act(async () => {})
     expect(daemon.posts).toEqual([{ scope: 'b.k2.dev', route: 'desktop/enable', body: {} }])
     expect(document.querySelector('[data-desktop-picture]')).not.toBeNull()
+  })
+
+  it('Turn on from a remote room says to turn it on at that computer', async () => {
+    daemon.status = status({ enabled: false })
+    daemon.refuseEnableAsRoom = true
+    try {
+      await render()
+      const button = (): HTMLElement => card().querySelector<HTMLElement>('[data-desktop-card-action="turn-on"]')!
+      fireEvent.click(button())
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      await act(async () => {})
+      const toasts = useToastStore.getState().toasts.map((t) => t.message)
+      expect(toasts).toContain(
+        'Remote desktop is turned on at that computer itself: on b.k2.dev, open Settings → Remote desktop (or run k2 desktop enable there).',
+      )
+      expect(toasts.some((m) => m.includes('is not something a room sends'))).toBe(false)
+    } finally {
+      daemon.refuseEnableAsRoom = false
+    }
   })
 
   it('Retry re-reads status; a desktop_state event does too', async () => {

@@ -72,7 +72,8 @@ use crate::v2_session_map;
 pub const DISMISS_REAP_GRACE_MS: u64 = 15_000;
 
 /// Reaper recompute cadence. Low-frequency on purpose (no tight loop).
-/// Overridable via `K2SO_ACTIVE_REAPER_TICK_SECS` for tests/tuning.
+/// Overridable via `K5_ACTIVE_REAPER_TICK_SECS` (or the older
+/// `K2SO_ACTIVE_REAPER_TICK_SECS`) for tests/tuning.
 const TICK_INTERVAL_SECS: u64 = 30;
 
 /// Cross-task signal channel: routes (`dismiss`) push project ids onto a
@@ -159,19 +160,21 @@ pub fn is_dismiss_armed(project_id: &str) -> bool {
         .contains(project_id)
 }
 
+/// The names each setting is read under, newest first.
+const TICK_SECS_NAMES: &[&str] = &["K5_ACTIVE_REAPER_TICK_SECS", "K2SO_ACTIVE_REAPER_TICK_SECS"];
+const GRACE_MS_NAMES: &[&str] = &["K5_ACTIVE_REAPER_GRACE_MS", "K2SO_ACTIVE_REAPER_GRACE_MS"];
+
 fn tick_interval() -> Duration {
-    let secs = std::env::var("K2SO_ACTIVE_REAPER_TICK_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
+    let secs = k2_core::env_names::first_set(TICK_SECS_NAMES)
+        .and_then(|(_, v)| v.parse::<u64>().ok())
         .filter(|&v| v > 0)
         .unwrap_or(TICK_INTERVAL_SECS);
     Duration::from_secs(secs)
 }
 
 fn grace() -> Duration {
-    let ms = std::env::var("K2SO_ACTIVE_REAPER_GRACE_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
+    let ms = k2_core::env_names::first_set(GRACE_MS_NAMES)
+        .and_then(|(_, v)| v.parse::<u64>().ok())
         .unwrap_or(DISMISS_REAP_GRACE_MS);
     Duration::from_millis(ms)
 }
@@ -643,11 +646,51 @@ mod tests {
         assert!(is_dismiss_armed(&pid));
     }
 
+    /// Every reaper setting unset, for the life of the guards.
+    fn clear_reaper_env() -> Vec<k2_core::test_env::EnvVar> {
+        TICK_SECS_NAMES.iter().chain(GRACE_MS_NAMES).map(k2_core::test_env::EnvVar::remove).collect()
+    }
+
     #[test]
     fn tick_interval_env_override() {
         // Default when unset.
-        let _unset = k2_core::test_env::EnvVar::remove("K2SO_ACTIVE_REAPER_TICK_SECS");
+        let _unset = clear_reaper_env();
         assert_eq!(tick_interval(), Duration::from_secs(TICK_INTERVAL_SECS));
+        assert_eq!(grace(), Duration::from_millis(DISMISS_REAP_GRACE_MS));
+    }
+
+    #[test]
+    fn each_setting_has_a_k5_name_first_and_keeps_its_old_one() {
+        for names in [TICK_SECS_NAMES, GRACE_MS_NAMES] {
+            assert_eq!(names.len(), 2);
+            assert!(names[0].starts_with("K5_ACTIVE_REAPER_"), "{}", names[0]);
+            assert_eq!(names[0].trim_start_matches("K5_"), names[1].trim_start_matches("K2SO_"));
+        }
+    }
+
+    #[test]
+    fn the_k5_names_and_the_old_names_both_set_the_values() {
+        let _unset = clear_reaper_env();
+        {
+            let _a = k2_core::test_env::EnvVar::set("K5_ACTIVE_REAPER_TICK_SECS", "7");
+            let _b = k2_core::test_env::EnvVar::set("K5_ACTIVE_REAPER_GRACE_MS", "70");
+            assert_eq!(tick_interval(), Duration::from_secs(7));
+            assert_eq!(grace(), Duration::from_millis(70));
+        }
+        let _a = k2_core::test_env::EnvVar::set("K2SO_ACTIVE_REAPER_TICK_SECS", "9");
+        let _b = k2_core::test_env::EnvVar::set("K2SO_ACTIVE_REAPER_GRACE_MS", "90");
+        assert_eq!(tick_interval(), Duration::from_secs(9));
+        assert_eq!(grace(), Duration::from_millis(90));
+    }
+
+    #[test]
+    fn a_k5_name_that_is_set_wins_over_the_old_one() {
+        let _unset = clear_reaper_env();
+        let _old = k2_core::test_env::EnvVar::set("K2SO_ACTIVE_REAPER_TICK_SECS", "9");
+        let _new = k2_core::test_env::EnvVar::set("K5_ACTIVE_REAPER_TICK_SECS", "7");
+        assert_eq!(tick_interval(), Duration::from_secs(7));
+        let _zero = k2_core::test_env::EnvVar::set("K5_ACTIVE_REAPER_TICK_SECS", "0");
+        assert_eq!(tick_interval(), Duration::from_secs(TICK_INTERVAL_SECS), "0 under the new name is the default, not the old name's value");
     }
 
     #[test]

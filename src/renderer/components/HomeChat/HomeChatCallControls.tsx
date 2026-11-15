@@ -11,7 +11,7 @@
 // `dm:<conversation id>`. The daemon rings when nobody rings for this person
 // in the DM, and answers the ring when one does.
 
-import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { voice, useVoice } from '@/stores/voice'
 import { useToastStore } from '@/stores/toast'
 import { daemonErrorText } from '@/lib/daemon-error'
@@ -29,6 +29,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { activeHomeHostKey } from '@/lib/home-address'
 import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard } from './HomeChatCall'
 import { serverLabelFor } from './serverLabel'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 function toastError(e: unknown): void {
   useToastStore.getState().addToast(daemonErrorText(e) || String(e), 'error')
@@ -156,9 +157,14 @@ export function HomeChatCallLayer(): JSX.Element | null {
     for (const h of hosts ? hosts.split('\n') : []) void refreshHomeChatPeople(h)
   }, [hosts])
 
+  // The ring cards float over whatever room is open, a live Browser page
+  // included, so they claim their box like any popover.
+  const layerRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: rings.length > 0, ref: layerRef, kind: 'popover', watch: rings.length })
+
   if (rings.length === 0) return null
   return (
-    <div className="pointer-events-none fixed right-4 top-14 z-50 flex flex-col gap-2" data-testid="home-chat-call-layer">
+    <div ref={layerRef} className="pointer-events-none fixed right-4 top-14 z-50 flex flex-col gap-2" data-testid="home-chat-call-layer">
       {rings.map((r) => {
         const people = byHost[r.hostKey]?.people?.people ?? []
         const who = people.find((p) => p.memberId !== null && p.memberId === r.startedBy) ?? null

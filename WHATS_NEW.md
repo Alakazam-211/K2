@@ -15,6 +15,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### The k2 command
 - **`k2 update` no longer downloads the CLI from GitHub; the CLI now updates only with K2 itself.** `k2 update --cli` shows the CLI's and the daemon's versions and how K2 updates, and changes nothing.
 
+### Compute
+- **no-lan works on Mac nodes.** A server's `no-lan` share on a Mac used to mean no network at all. Now each job there reaches the internet over HTTPS through its own small proxy on the Mac, never the local network: crates, git over https, rustup and npm work. Shares already set to `no-lan` get this with the node update; the node's owner can keep the old behaviour with `mac_no_lan = "none"` in the node's policy. UDP, plain HTTP and git over ssh still don't get out, and the job has no DNS of its own.
+- **A no-lan job on a Mac says where it went.** Each refused address is a line in the job's log as it happens, and the end of the log lists every host the job reached or tried, with bytes in and out. `k2 compute get` shows the list too (`networkHosts` in `--json`), and `k2 compute nodes` says "network no-lan (internet through the node's proxy)" for such a share.
+
 ## 0.46.12 — Inbox fixes, and Themes
 
 ### Look and feel

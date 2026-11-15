@@ -1079,6 +1079,15 @@ IN THE JOB
                            (a test skips its wall-time bound when not yes;
                            k2-node 0.46.13 on the node, an older one sets
                            neither)
+    K2_JOB_PROXY           a Mac node, when this server's share there is
+                           no-lan: the job's own egress proxy
+                           (http://127.0.0.1:<port>, also HTTPS_PROXY).
+                           Public HTTPS/TCP goes through it; the local
+                           network, UDP and plain HTTP don't, and the job
+                           has no DNS of its own (git over ssh and SwiftPM
+                           binary downloads fail). Unset everywhere else.
+                           The end of the log and k2 compute get list every
+                           host it reached or tried (networkHosts in --json)
   None of them reaches a daemon, no K2 token or socket ever does, and
   K2's own test guard ignores them. If your command refuses any K2_*
   variable, exclude them: env | grep -E '^K2(SO)?_' | grep -vE

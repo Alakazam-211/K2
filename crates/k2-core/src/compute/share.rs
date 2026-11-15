@@ -62,6 +62,13 @@ pub fn view(offer: &Offer) -> Option<&ShareView> {
     offer.share.as_ref()
 }
 
+/// A Mac whose `no-lan` jobs get the internet through their own egress
+/// proxy (`no-lan-proxy` feature, prd-compute-mac-no-lan-v1 §5.7). `None`
+/// (no offer heard yet) is false.
+pub fn no_lan_proxy(offer: Option<&Offer>) -> bool {
+    offer.is_some_and(|o| o.features.iter().any(|f| f == share::FEATURE_NO_LAN_PROXY))
+}
+
 /// The node keeps a queue for this server (`queue` feature).
 pub fn queue_on(offer: &Offer) -> bool {
     offer.features.iter().any(|f| f == share::FEATURE_QUEUE)
@@ -274,12 +281,16 @@ pub fn share_line(v: &ShareView) -> String {
 }
 
 /// [`share_line`] for a node of a known OS (`nodes`, `info`), ending with
-/// the share's network when it isn't full. `macos`: a Mac keeps `no-lan` as `none`
-/// (Seatbelt can't tell the LAN from the internet), so it says so.
-pub fn share_line_on(v: &ShareView, macos: bool) -> String {
+/// the share's network when it isn't full. `macos`: a Mac without
+/// `no_lan_proxy` (its offer's `no-lan-proxy` feature) keeps `no-lan` as
+/// `none` (Seatbelt can't tell the LAN from the internet), so it says so;
+/// with it, `no-lan` jobs get the internet through a per-job proxy
+/// (prd-compute-mac-no-lan-v1 §5.7).
+pub fn share_line_on(v: &ShareView, macos: bool, no_lan_proxy: bool) -> String {
     let net = match v.limits.network {
         share::Network::On => "",
-        share::Network::NoLan if macos => " · network none (the share says no-lan, which a Mac can't keep: no DNS, no downloads)",
+        share::Network::NoLan if macos && no_lan_proxy => " · network no-lan (internet through the node's proxy; HTTPS/TCP, no UDP)",
+        share::Network::NoLan if macos => " · network none (the share says no-lan, which this Mac can't keep: no DNS, no downloads)",
         share::Network::NoLan => " · network no-lan (internet only)",
         share::Network::None => " · network none (no DNS, no downloads)",
     };
@@ -830,12 +841,16 @@ mod tests {
         // A share without full network says so; a Mac keeps no-lan as none.
         let mut closed = view(vec![], 1, 2);
         closed.limits.network = share::Network::On;
-        assert_eq!(share_line_on(&closed, true), share_line(&closed), "full network adds nothing");
+        assert_eq!(share_line_on(&closed, true, true), share_line(&closed), "full network adds nothing");
         closed.limits.network = share::Network::NoLan;
-        assert!(share_line_on(&closed, false).ends_with(" · network no-lan (internet only)"), "{}", share_line_on(&closed, false));
-        assert!(share_line_on(&closed, true).ends_with(" · network none (the share says no-lan, which a Mac can't keep: no DNS, no downloads)"));
+        assert!(share_line_on(&closed, false, false).ends_with(" · network no-lan (internet only)"), "{}", share_line_on(&closed, false, false));
+        assert!(share_line_on(&closed, false, true).ends_with(" · network no-lan (internet only)"), "Linux: the feature changes nothing");
+        assert!(share_line_on(&closed, true, false).ends_with(" · network none (the share says no-lan, which this Mac can't keep: no DNS, no downloads)"));
+        // prd-compute-mac-no-lan-v1 §5.7: a Mac with `no-lan-proxy`.
+        assert!(share_line_on(&closed, true, true).ends_with(" · network no-lan (internet through the node's proxy; HTTPS/TCP, no UDP)"), "{}", share_line_on(&closed, true, true));
         closed.limits.network = share::Network::None;
-        assert!(share_line_on(&closed, false).ends_with(" · network none (no DNS, no downloads)"));
+        assert!(share_line_on(&closed, false, false).ends_with(" · network none (no DNS, no downloads)"));
+        assert!(share_line_on(&closed, true, true).ends_with(" · network none (no DNS, no downloads)"), "none stays none on a Mac with the proxy");
         assert_eq!(human_eta(360), "~6m");
         assert_eq!(human_eta(3900), "~1h05m");
     }

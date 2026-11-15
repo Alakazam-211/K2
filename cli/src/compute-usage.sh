@@ -289,7 +289,10 @@ Agents:
                                              artifacts + sha256, tests, receipt id,
                                              wait while unfinished: where, position,
                                              of, reason, words, etaSecs, etaBasis,
-                                             holdsQueue, since; k2 study compute RESULTS)
+                                             holdsQueue, since; k2 study compute RESULTS).
+                                             A Mac no-lan job lists every host it
+                                             reached or tried through its proxy, with
+                                             bytes (networkHosts in --json)
   k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay] [--attempt N]
                                              copy kept artifacts here (all, or NAMEs);
                                              --over-relay: files over 100 MB through
@@ -430,6 +433,8 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    [--for 7d|none] [--weight N] [--max-running N] [--max-queued N]
                    [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G]
                    [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
+                   no-lan on a Mac: the internet over HTTPS through a per-job
+                   proxy, never the local network (k2 study compute: IN THE JOB)
                    CODE.FP is what `k2 compute node add <node>` printed on the
                    NEW server. Held for your approval (Touch ID / vault
                    password); the new server's owner then confirms the SAS.

@@ -755,6 +755,11 @@ impl Node {
         if self.wall.network_none() {
             f.push(k2_node_proto::frames::FEATURE_NETWORK_NONE.to_string());
         }
+        // prd-compute-mac-no-lan-v1 §5.7: no-lan jobs here get the internet
+        // through their own proxy (the controller says so, not "none").
+        if self.no_lan_proxy_ready().is_ok() {
+            f.push(k2_node_proto::share::FEATURE_NO_LAN_PROXY.to_string());
+        }
         f
     }
 
@@ -1428,6 +1433,36 @@ mod wall_tests {
             assert_eq!(n.caps_hard(), matches!(wall, Wall::JobUser { .. }), "only the unit (or a leaf) is a hard cap");
             let s = crate::status::read(&n.layout().status()).unwrap();
             assert_eq!((s.wall.as_str(), s.network_none), (wall.label(), net));
+        }
+    }
+
+    /// prd-compute-mac-no-lan-v1 §5.7: `no-lan-proxy` is offered, and the
+    /// status says `proxy`, only on a Seatbelt Mac with a job-egress binary
+    /// whose owner left `mac_no_lan` at its default; Linux says `n/a`.
+    #[tokio::test]
+    async fn the_no_lan_proxy_feature_follows_the_mac_the_binary_and_the_switch() {
+        for (wall, bin, policy, want) in [
+            (Wall::Seatbelt, true, "", if cfg!(target_os = "macos") { "proxy" } else { "n/a" }),
+            (Wall::Seatbelt, true, "mac_no_lan = \"none\"\n", if cfg!(target_os = "macos") { "none" } else { "n/a" }),
+            (Wall::Seatbelt, false, "", if cfg!(target_os = "macos") { "none" } else { "n/a" }),
+            (Wall::None { why: "t".into() }, true, "", if cfg!(target_os = "macos") { "none" } else { "n/a" }),
+        ] {
+            let d = crate::util::temp_dir("nolan-feat");
+            let mut o = NodeOptions::new(Layout::new(d.join("home"), d.join("cfg")));
+            std::fs::create_dir_all(&o.layout.config).unwrap();
+            std::fs::write(o.layout.policy(), policy).unwrap();
+            o.dev = true;
+            o.health = false;
+            o.keep_awake = false;
+            o.use_cgroups = false;
+            o.wall = Some(wall.clone());
+            o.job_holder = bin.then(|| PathBuf::from("/nonexistent-k2/k2-node"));
+            let n = Node::open(o).await.unwrap();
+            let offered = n.features().iter().any(|x| x == k2_node_proto::share::FEATURE_NO_LAN_PROXY);
+            assert_eq!(offered, want == "proxy", "{wall:?} bin={bin} policy={policy:?}");
+            assert_eq!(n.no_lan_fact(), want, "{wall:?} bin={bin} policy={policy:?}");
+            let s = crate::status::read(&n.layout().status()).unwrap();
+            assert_eq!(s.no_lan.as_deref(), Some(want));
         }
     }
 

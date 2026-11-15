@@ -302,7 +302,33 @@ pub fn envelope(j: &JobRow, node: Option<&str>) -> Value {
     if let Some(c) = cache(j) {
         v["cache"] = c;
     }
+    // prd-compute-mac-no-lan-v1 §5.6: a Mac no-lan job's host list. Only
+    // from a job that had a proxy (absent otherwise).
+    if let Some(h) = network_hosts(j) {
+        v["networkHosts"] = h;
+    }
     v
+}
+
+/// `result.networkHosts`: every host a Mac no-lan job reached or tried
+/// through its egress proxy, `{host, port, verdict, reason, addr, conns,
+/// bytesIn, bytesOut}` (verdict `allowed`, `refused` or `failed`), from the
+/// node's `Outputs.network_hosts`.
+pub fn network_hosts(j: &JobRow) -> Option<Value> {
+    let rows = outputs_raw(j)?.get("network_hosts")?.as_array()?.clone();
+    if rows.is_empty() {
+        return None;
+    }
+    Some(Value::Array(
+        rows.iter()
+            .map(|r| {
+                json!({
+                    "host": r.get("host"), "port": r.get("port"), "verdict": r.get("verdict"), "reason": r.get("reason"), "addr": r.get("addr"),
+                    "conns": r.get("conns"), "bytesIn": r.get("bytes_in"), "bytesOut": r.get("bytes_out"),
+                })
+            })
+            .collect(),
+    ))
 }
 
 /// `result.cache`: `{lineage, seq, commit, forkSecs, committed,
@@ -433,6 +459,7 @@ mod tests {
         let mut j = row();
         // Nothing reported: null, never a made-up value.
         let v = envelope(&j, None);
+        assert!(v.get("networkHosts").is_none(), "no host list without a no-lan proxy: {v}");
         for k in ["tools", "resources", "host", "tag", "effective", "reportedLateSecs", "clock", "via"] {
             assert!(v.get(k).is_some_and(Value::is_null), "{k} present and null: {v}");
         }
@@ -512,5 +539,32 @@ mod tests {
         assert!(!ok(&j, None));
         let v = envelope(&j, None);
         assert_eq!(v["next"].as_array().unwrap().last().unwrap(), "k2 compute retry abcdef01");
+    }
+
+    /// prd-compute-mac-no-lan-v1 §5.6: the node's host list, in the
+    /// envelope's names, every row as the node sent it.
+    #[test]
+    fn a_no_lan_jobs_host_list_is_in_the_result() {
+        let mut j = row();
+        let o = Outputs {
+            notes: vec!["network: no-lan proxy: 3 connections to 1 host, 6.0 MB in, 3 KB out; refused 1 host: gitlab.office.lan:443 (192.168.1.20, private address)".into()],
+            network_hosts: vec![
+                crate::compute::proto::results::NetworkHost { host: "static.crates.io".into(), port: 443, verdict: "allowed".into(), reason: None, addr: Some("151.101.0.1".into()), conns: 3, bytes_in: 6 << 20, bytes_out: 3072 },
+                crate::compute::proto::results::NetworkHost { host: "gitlab.office.lan".into(), port: 443, verdict: "refused".into(), reason: Some("private address".into()), addr: Some("192.168.1.20".into()), conns: 2, bytes_in: 0, bytes_out: 0 },
+            ],
+            ..Default::default()
+        };
+        j.summary_json = Some(serde_json::to_string(&o).unwrap());
+        let v = envelope(&j, Some("mini"));
+        assert_eq!(
+            v["networkHosts"],
+            json!([
+                {"host": "static.crates.io", "port": 443, "verdict": "allowed", "reason": null, "addr": "151.101.0.1", "conns": 3, "bytesIn": 6 << 20, "bytesOut": 3072},
+                {"host": "gitlab.office.lan", "port": 443, "verdict": "refused", "reason": "private address", "addr": "192.168.1.20", "conns": 2, "bytesIn": 0, "bytesOut": 0},
+            ])
+        );
+        assert!(v["notes"][0].as_str().unwrap().starts_with("network: no-lan proxy: "));
+        j.summary_json = Some(json!({"artifacts": [], "notes": [], "network_hosts": []}).to_string());
+        assert!(envelope(&j, None).get("networkHosts").is_none(), "an empty list is no list");
     }
 }

@@ -41,6 +41,11 @@ pub const FEATURE_TENANT_WALL: &str = "tenant-wall";
 /// own servers already on the node (prd-macos-tenant-compute-v1 §6.4).
 /// The server sends the verb only to nodes offering it.
 pub const FEATURE_SERVERS_OWNER: &str = "servers-owner";
+/// Offer feature (prd-compute-mac-no-lan-v1 §5.7): on this Mac, a `no-lan`
+/// share's jobs reach the internet over HTTPS/TCP through a per-job egress
+/// proxy on loopback, never the local network. A Mac without it gives
+/// `no-lan` jobs no network at all (`none`).
+pub const FEATURE_NO_LAN_PROXY: &str = "no-lan-proxy";
 
 /// A tenant's number on one node (0–7). Every node-side name a tenant can
 /// touch carries its slot (V48).

@@ -376,6 +376,18 @@ async fn a_no_lan_job_reaches_the_internet_only_through_its_own_proxy() {
         assert!(row("refused", hp).is_some(), "no refused row for {hp}:\n{}", list.join("\n"));
     }
     assert!(!list.iter().any(|l| l.contains("1.1.1.1") || l.contains("2606:4700")), "a direct attempt never reaches the proxy, so never its list:\n{}", list.join("\n"));
+    // The result: the summary as a note, the whole list as network_hosts.
+    let row = tenant(&m.n, NO_LAN).ledger.lock().unwrap().get("nl1", 1).unwrap().expect("its row");
+    let o = row.outputs.expect("an easy-mode server gets outputs");
+    assert!(o.notes.iter().any(|n| n.starts_with("network: no-lan proxy: ")), "{:?}", o.notes);
+    let crates = o.network_hosts.iter().find(|h| h.host == "index.crates.io" && h.port == 443 && h.verdict == "allowed").unwrap_or_else(|| panic!("{:?}", o.network_hosts));
+    assert!(crates.conns >= 1 && crates.bytes_in > 0 && crates.bytes_out > 0, "{crates:?}");
+    assert!(
+        o.network_hosts.iter().any(|h| h.host == "192.168.1.1" && h.port == 443 && h.verdict == "refused" && h.reason.as_deref() == Some("private address")),
+        "{:?}",
+        o.network_hosts
+    );
+    assert!(!o.network_hosts.iter().any(|h| h.host == "1.1.1.1"), "{:?}", o.network_hosts);
     // The proxy is gone with the job, its port free, its folder removed.
     let egress = tenant(&m.n, NO_LAN).paths.state().join("egress");
     assert!(std::fs::read_dir(&egress).map(|d| d.count()).unwrap_or(0) == 0, "the proxy's folder is removed");

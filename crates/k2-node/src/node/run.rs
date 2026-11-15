@@ -1590,7 +1590,7 @@ impl Node {
         }
         // Mac no-lan (§5.6): the proxy goes, then the summary and the list of
         // every host the job reached or tried; the summary is also a note.
-        let mut egress_note: Option<String> = None;
+        let mut egress_end: Option<(String, Vec<k2_node_proto::results::NetworkHost>)> = None;
         if let Some(mut w) = egress_watch {
             match tokio::time::timeout(Duration::from_secs(30), &mut w).await {
                 Ok(Ok(Some((list, run)))) => {
@@ -1602,7 +1602,7 @@ impl Node {
                         }
                     }
                     self.egress_release(&run);
-                    egress_note = Some(summary);
+                    egress_end = Some((summary, list.rows));
                 }
                 r => {
                     // It never finished: no summary, but nothing is left behind
@@ -1718,8 +1718,11 @@ impl Node {
         // What the node cleared for this server's share while the job ran.
         let evicted = if t.is_owner() { Default::default() } else { self.evicted_since(t.slot, self.now() - t0.elapsed().as_secs() as i64) };
         let mut outputs = outputs;
-        if let (Some(n), Some(o)) = (egress_note, outputs.as_mut()) {
+        // The summary is a note; the whole list is `network_hosts` (an older
+        // controller ignores the field).
+        if let (Some((n, rows)), Some(o)) = (egress_end, outputs.as_mut()) {
             o.notes.push(n);
+            o.network_hosts = rows;
         }
         outputs = outputs.map(|o| o.capped());
         if let Some(line) = evicted.line() {

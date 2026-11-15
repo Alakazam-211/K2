@@ -4,34 +4,16 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-
 use super::{codes, hostport, plain_url, Decision};
+
+/// One row of the job's host list (the result's `network_hosts`).
+pub use k2_node_proto::results::NetworkHost as HostRow;
 
 /// Live lines per `host:port` before the rest are only counted.
 pub const LIVE_PER_HOST: u32 = 3;
-/// Host list rows in the job log (the result keeps them all, up to
-/// [`MAX_RESULT_ROWS`]).
+/// Host list rows in the job log (the result keeps up to
+/// [`k2_node_proto::results::MAX_NETWORK_HOSTS`]).
 pub const LOG_ROWS: usize = 100;
-/// Host list rows a result carries.
-pub const MAX_RESULT_ROWS: usize = 500;
-
-/// One row of the job's host list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HostRow {
-    pub host: String,
-    pub port: u16,
-    /// `allowed`, `refused` (the no-lan rule) or `failed` (DNS, connect).
-    pub verdict: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub addr: Option<String>,
-    /// Tunnels (allowed) or tries (refused, failed).
-    pub conns: u64,
-    pub bytes_in: u64,
-    pub bytes_out: u64,
-}
 
 /// A job's whole host list.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

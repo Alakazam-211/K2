@@ -523,8 +523,25 @@ elif verb == "get":
     if j.get("reason") == "tenant_disk_full" and r.get("detail"):
         print("  " + r["detail"])
     for n in r.get("notes") or []:
-        if n.startswith("evicted "):
+        if n.startswith("evicted ") or n.startswith("network: no-lan proxy: "):
             print("  " + n)
+    nh = r.get("networkHosts") or []
+    if nh:
+        # Mac no-lan: every host the job reached or tried through its proxy.
+        def hb(n):
+            n = n or 0
+            return "%d B" % n if n < 1024 else "%.0f KB" % (n / 1024) if n < 1 << 20 else "%.1f MB" % (n / (1 << 20)) if n < 1 << 30 else "%.1f GB" % (n / (1 << 30))
+        cnt = lambda v: sum(1 for h in nh if h.get("verdict") == v)
+        print("  hosts through the no-lan proxy (%d allowed, %d refused%s):" % (cnt("allowed"), cnt("refused"), (", %d unreachable" % cnt("failed")) if cnt("failed") else ""))
+        for h in nh[:40]:
+            hp = ("[%s]:%s" if ":" in (h.get("host") or "") else "%s:%s") % (h.get("host"), h.get("port"))
+            if h.get("verdict") == "allowed":
+                print("    allowed  %-36s %4d conn(s)  in %-9s out %s" % (hp, h.get("conns") or 0, hb(h.get("bytesIn")), hb(h.get("bytesOut"))))
+            else:
+                why = ", ".join(x for x in [h.get("addr") if h.get("addr") != h.get("host") else None, h.get("reason")] if x)
+                print("    %-7s  %-36s %4d try(s)   %s" % (h.get("verdict"), hp, h.get("conns") or 0, why))
+        if len(nh) > 40:
+            print("    and %d more (k2 compute get %s --json)" % (len(nh) - 40, j["short"]))
     t = r.get("tests")
     if t:
         print("  tests: %d passed, %d failed, %d errors, %d skipped" % (t["passed"], t["failed"], t["errors"], t["skipped"]))

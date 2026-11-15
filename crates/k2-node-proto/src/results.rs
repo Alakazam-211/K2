@@ -176,7 +176,35 @@ pub struct Outputs {
     /// §4.7.2 (`setup-snapshots`): each setup step's hit or run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setup: Vec<crate::gens::SetupResult>,
+    /// prd-compute-mac-no-lan-v1 §5.6: every host a Mac no-lan job reached
+    /// or tried through its egress proxy, allowed or refused, with bytes.
+    /// Absent otherwise (and from an older node; an older controller
+    /// ignores it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_hosts: Vec<NetworkHost>,
 }
+
+/// One row of a no-lan job's host list (`Outputs.network_hosts`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkHost {
+    pub host: String,
+    pub port: u16,
+    /// `allowed`, `refused` (the no-lan rule) or `failed` (DNS, connect).
+    pub verdict: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<String>,
+    /// Tunnels (allowed) or tries (refused, failed).
+    pub conns: u64,
+    /// Bytes from the host to the job.
+    pub bytes_in: u64,
+    /// Bytes from the job to the host.
+    pub bytes_out: u64,
+}
+
+/// Host list rows a result carries (the job log has its own cap).
+pub const MAX_NETWORK_HOSTS: usize = 200;
 
 /// CE-14: what one job used, all processes together.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,6 +385,12 @@ impl Outputs {
             c.why = clip(&c.why, 300);
         }
         self.setup.truncate(crate::gens::MAX_SETUP_STEPS);
+        self.network_hosts.truncate(MAX_NETWORK_HOSTS);
+        for h in &mut self.network_hosts {
+            h.host = clip(&h.host, 255);
+            h.reason = h.reason.as_deref().map(|r| clip(r, 300));
+            h.addr = h.addr.as_deref().map(|a| clip(a, 64));
+        }
         if let Some(t) = &mut self.tests {
             if t.failing.len() > MAX_FAILING {
                 t.failing.truncate(MAX_FAILING);

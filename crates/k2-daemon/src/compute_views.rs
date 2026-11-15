@@ -168,7 +168,7 @@ fn share_json(n: &store::NodeRow) -> Option<serde_json::Value> {
         "running": v.map(|v| v.running),
         "queued": v.map(|v| v.queued),
         "cpuSecsToday": v.map(|v| v.cpu_secs_today),
-        "line": v.map(|v| share::share_line_on(v, n.os.as_deref() == Some("macos"))),
+        "line": v.map(|v| share::share_line_on(v, n.os.as_deref() == Some("macos"), share::no_lan_proxy(n.last_offer.as_ref()))),
         // §14: the node's clock against this server's, only when worth
         // showing (order and ETAs never use it).
         "skewSecs": v.and_then(|v| v.skew_secs).filter(|s| s.abs() > pshare::SKEW_SHOW_SECS),

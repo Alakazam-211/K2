@@ -456,3 +456,134 @@ async fn a_proxy_that_cant_start_means_none_never_on() {
     assert_no_side_door(&c);
     assert!(r.sys.contains("network: none: the no-lan proxy couldn't start (every proxy port tried was taken"), "{}", r.sys);
 }
+
+// ── §10.3 item 8: through a k2-node update ──────────────────────────
+
+fn rt() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap()
+}
+
+/// One k2-node "process": its own runtime (shutting it down is the
+/// process exiting), as in adopt_e2e.
+struct NodeProc {
+    rt: Option<tokio::runtime::Runtime>,
+    n: Option<TestNode>,
+}
+
+impl NodeProc {
+    fn start(fake: &Fake, dir: &Path) -> Self {
+        let rt = rt();
+        let n = rt.block_on(start_node_in(fake, dir.to_path_buf(), "", |o| {
+            o.wall = Some(Wall::Seatbelt);
+            o.job_holder = Some(PathBuf::from(env!("CARGO_BIN_EXE_k2-node")));
+            o.tenant_adopt_wait = Duration::from_secs(5);
+        }));
+        Self { rt: Some(rt), n: Some(n) }
+    }
+
+    fn detach(&self) -> (usize, usize) {
+        let node = self.n.as_ref().unwrap().node.clone();
+        self.rt.as_ref().unwrap().block_on(async move { node.detach_for_update().await })
+    }
+
+    fn exit(mut self) {
+        drop(self.n.take());
+        self.rt.take().unwrap().shutdown_timeout(Duration::from_secs(5));
+    }
+}
+
+/// The proxy of the one no-lan job running in `slot`: (folder, pid, start).
+fn running_proxy(layout: &k2_node::paths::Layout, slot: Slot) -> (PathBuf, u32, u64) {
+    let root = layout.tenant(slot).state().join("egress");
+    let dirs: Vec<PathBuf> = std::fs::read_dir(&root).unwrap_or_else(|e| panic!("{}: {e}", root.display())).flatten().map(|e| e.path()).collect();
+    assert_eq!(dirs.len(), 1, "one proxy folder: {dirs:?}");
+    let f = k2_node::egress::proc::read_facts(&dirs[0]).expect("its egress.json");
+    (dirs[0].clone(), f.pid, f.start)
+}
+
+/// A no-lan job downloads through its proxy while k2-node restarts for an
+/// update: the job, its proxy (the same process) and the download keep
+/// going; the new k2-node tails the proxy's log on and ends the job's log
+/// with the summary and the host list.
+#[test]
+fn the_proxy_and_a_download_survive_a_node_restart() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let main = rt();
+    let fa = main.block_on(Fake::start());
+    let mut fb = main.block_on(Fake::start());
+    let dir = short_dir();
+    let a = NodeProc::start(&fa, &dir);
+    let layout = a.n.as_ref().unwrap().layout.clone();
+    let key = k2_node::identity::load_or_create_key(&layout.key()).unwrap();
+    fb.register_active(&key, "node-b", "mini-1");
+    let tl = layout.tenant(NO_LAN);
+    tl.ensure_state().unwrap();
+    for d in [tl.root(), tl.jobs(), tl.cache(), tl.repos(), tl.tmp()] {
+        k2_node::util::mkdir_mode(&d, 0o700).unwrap();
+    }
+    k2_node::identity::write_pin(&tl.pin(), &fb.pin_for("node-b", "mini-1")).unwrap();
+    let limits = ShareLimits { max_running: 4, max_queued: 10, weight: 1, ..ShareLimits::new_server(Trust::Own, true) };
+    let mut f = ServersFile::new(&fa.key.fingerprint(), "a.k2.dev", ShareLimits { network: Network::On, ..limits.clone() }, 8, k2_node::util::now(), "local:test");
+    let mut e = f.servers[0].clone();
+    e.slot = NO_LAN;
+    e.label = "b.k2.dev".into();
+    e.fp_prefix = fb.key.fingerprint()[..16].to_string();
+    e.trust = Trust::Own;
+    e.state = k2_node_proto::share::ShareState::Active;
+    e.set_limits(&limits);
+    e.network = Network::NoLan;
+    f.servers.push(e);
+    k2_node::admin::servers::write_file(&layout.config, &f).unwrap();
+    let mut cb = main.block_on(fb.next_conn());
+    main.block_on(ready(&mut cb));
+    // About 13 s of download at 60 KB/s, then one more fetch.
+    let script = "echo \"PORT ${K2_JOB_PROXY##*:}\"; /usr/bin/curl -sS --limit-rate 60k -o big.crate -w 'got %{size_download} rc' https://static.crates.io/crates/tokio/tokio-1.40.0.crate; echo \" $?\"; /usr/bin/curl -sS -o /dev/null -w 'after %{http_code}\\n' https://index.crates.io/config.json";
+    let mut p = plan("tb", &["/bin/sh", "-c", script]);
+    p.node_id = "node-b".into();
+    p.limits.max_secs = 600;
+    cb.send(k2_node_proto::frames::Frame::Assign(assign(p, 1)));
+    let mut out = String::new();
+    main.block_on(async {
+        cb.until(|fr| {
+            if let k2_node_proto::frames::Frame::Log(l) = fr {
+                if l.job_id == "tb" && l.stream == LogStream::Out {
+                    out.push_str(&String::from_utf8_lossy(&k2_node_proto::crypto::unb64(&l.data).unwrap()));
+                }
+            }
+            out.contains("PORT ")
+        })
+        .await
+    });
+    std::thread::sleep(Duration::from_secs(3));
+    let (pdir, pid, start) = running_proxy(&layout, NO_LAN);
+    assert_eq!(k2_node::util::process_start_time(pid), Some(start), "the proxy runs before the restart");
+    assert_eq!(a.detach(), (1, 0), "the no-lan job is kept for the next k2-node");
+    a.exit();
+    *fb.resume.lock().unwrap() = vec![k2_node_proto::frames::ResumeHint { job_id: "tb".into(), generation: 1, since_seq: 0 }];
+    assert_eq!(k2_node::util::process_start_time(pid), Some(start), "the proxy outlives the k2-node process");
+    let b = NodeProc::start(&fa, &dir);
+    let mut cb2 = main.block_on(fb.next_conn());
+    let (pdir2, pid2, start2) = running_proxy(&layout, NO_LAN);
+    assert_eq!((pdir2, pid2, start2), (pdir.clone(), pid, start), "the same proxy, adopted with its job");
+    let fr = main.block_on(run_to_receipt(&mut cb2, "tb"));
+    let logs = logs_of(&fr, "tb");
+    let (out, sys) = (text(&logs, LogStream::Out), text(&logs, LogStream::Sys));
+    let got = out.lines().find_map(|l| l.strip_prefix("got ")).unwrap_or_else(|| panic!("no download line:\n{out}\n{sys}"));
+    let (bytes, rc) = got.split_once(" rc ").unwrap();
+    assert_eq!(rc.trim(), "0", "the download finished through the restart:\n{out}\n{sys}");
+    assert!(bytes.parse::<u64>().unwrap() > 500_000, "{got}");
+    assert!(out.contains("after 200"), "a fetch after the restart: {out}");
+    assert!(sys.contains("adopted by k2-node"), "{sys}");
+    assert!(!sys.contains("this job's proxy stopped"), "the proxy never stopped: {sys}");
+    let summary = sys.lines().find(|l| l.starts_with("[k2-node] network: no-lan proxy: ")).unwrap_or_else(|| panic!("no summary:\n{sys}"));
+    assert!(summary.contains("2 connections to 2 hosts"), "{summary}");
+    assert!(sys.lines().any(|l| l.starts_with("[k2-node]   allowed  static.crates.io:443 ")), "{sys}");
+    assert!(sys.lines().any(|l| l.starts_with("[k2-node]   allowed  index.crates.io:443 ")), "{sys}");
+    let t0 = Instant::now();
+    while k2_node::util::process_start_time(pid) == Some(start) {
+        assert!(t0.elapsed() < Duration::from_secs(10), "the proxy ended with its job");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!pdir.exists(), "its folder is gone");
+    b.exit();
+}

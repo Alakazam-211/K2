@@ -93,8 +93,8 @@ part_web() {
 part_rust_check() {
     step "cargo check -D warnings, all targets"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2-node \
-        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export -p k2-deckrender -p k2-scenerender \
-        -p k2-deskd-proto -p k2-deskd --all-targets
+        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export \
+        -p k2-deskd-proto -p k2-deskd -p k2-deckrender -p k2-scenerender --all-targets
     step "cargo check airgap feature"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-daemon --features airgap --all-targets
 }

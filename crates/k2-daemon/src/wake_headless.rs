@@ -154,10 +154,7 @@ fn spawn_wake_headless_with(
     delivery: WakeDelivery,
     replace: bool,
 ) -> Result<WakeFired, WakeFireError> {
-    if std::env::var("K2SO_TRACE_WAKE_SPAWN")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-    {
+    if k2_core::workspace::wake_prompts::trace_wake_spawn() {
         let bt = std::backtrace::Backtrace::force_capture();
         eprintln!(
             "[wake-spawn-trace] spawn_wake_headless agent={agent_name:?} \

@@ -42,6 +42,15 @@ pub const WAKEUP_TEMPLATE_K2: &str = include_str!("../../wakeup_templates/k2.md"
 /// for agent types that don't use wake-up at all (currently just
 /// `agent-template`, which is always dispatched with explicit orders
 /// by a manager).
+/// The names the wake-spawn trace switch is read under, newest first.
+pub const TRACE_WAKE_SPAWN_NAMES: &[&str] = &["K5_TRACE_WAKE_SPAWN", "K2SO_TRACE_WAKE_SPAWN"];
+
+/// Whether the wake-spawn trace is on: the first of its names that is set
+/// is `1`. Off by default. For investigating who spawned a wake.
+pub fn trace_wake_spawn() -> bool {
+    crate::env_names::first_set(TRACE_WAKE_SPAWN_NAMES).is_some_and(|(_, v)| v == "1")
+}
+
 pub fn wakeup_template_for(agent_type: &str) -> Option<&'static str> {
     match agent_type {
         "manager" | "coordinator" | "pod-leader" => Some(WAKEUP_TEMPLATE_MANAGER),
@@ -387,8 +396,8 @@ pub fn spawn_wake_headless(
     wake_prompt: &str,
     heartbeat_name: Option<&str>,
 ) -> Result<String, String> {
-    // Opt-in trace for wake-spawn investigation. Set `K2SO_TRACE_WAKE_SPAWN=1` to enable.
-    if std::env::var("K2SO_TRACE_WAKE_SPAWN").map(|v| v == "1").unwrap_or(false) {
+    // Opt-in trace for wake-spawn investigation. Set `K5_TRACE_WAKE_SPAWN=1` to enable.
+    if trace_wake_spawn() {
         let bt = std::backtrace::Backtrace::force_capture();
         eprintln!(
             "[wake-spawn-trace] spawn_wake_headless agent={agent_name:?} project={project_path:?} \
@@ -605,6 +614,29 @@ pub fn spawn_wake_headless(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The trace switch is read as `K5_TRACE_WAKE_SPAWN` first and
+    /// `K2SO_TRACE_WAKE_SPAWN` after it; only `1` turns it on.
+    #[test]
+    fn the_wake_spawn_trace_is_read_under_the_k5_name_first() {
+        use crate::test_env::EnvVar;
+        assert_eq!(TRACE_WAKE_SPAWN_NAMES, &["K5_TRACE_WAKE_SPAWN", "K2SO_TRACE_WAKE_SPAWN"]);
+        let _new_unset = EnvVar::remove("K5_TRACE_WAKE_SPAWN");
+        {
+            let _old_unset = EnvVar::remove("K2SO_TRACE_WAKE_SPAWN");
+            assert!(!trace_wake_spawn(), "off by default");
+        }
+        let _old = EnvVar::set("K2SO_TRACE_WAKE_SPAWN", "1");
+        assert!(trace_wake_spawn(), "the old name still turns it on");
+        {
+            let _new = EnvVar::set("K5_TRACE_WAKE_SPAWN", "0");
+            assert!(!trace_wake_spawn(), "the new name wins when both are set");
+        }
+        let _old_off = EnvVar::set("K2SO_TRACE_WAKE_SPAWN", "true");
+        assert!(!trace_wake_spawn(), "only 1 turns it on");
+        let _new = EnvVar::set("K5_TRACE_WAKE_SPAWN", "1");
+        assert!(trace_wake_spawn());
+    }
 
     #[test]
     fn strip_frontmatter_drops_fm_and_keeps_body() {

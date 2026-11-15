@@ -242,26 +242,18 @@ pub fn orphaned_by<W>(
 
 /// The planted fault [`crate::differential::RefMutant::OrphanDropsLink`]: [`resolve_all`]
 /// leaves orphaned references out.
-#[cfg(any(test, feature = "differential"))]
 fn planted_orphan_drops_link() -> bool {
-    crate::differential::ref_mutant() == Some(crate::differential::RefMutant::OrphanDropsLink)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_orphan_drops_link() -> bool {
-    false
+    plant_on!(
+        crate::differential::ref_mutant() == Some(crate::differential::RefMutant::OrphanDropsLink)
+    )
 }
 
 /// The planted fault [`crate::differential::RefMutant::CycleByOrder`]: [`resolve_parents`]
 /// cuts a cycle at its first element in the list's order, not its smallest key.
-#[cfg(any(test, feature = "differential"))]
 fn planted_cycle_by_order() -> bool {
-    crate::differential::ref_mutant() == Some(crate::differential::RefMutant::CycleByOrder)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_cycle_by_order() -> bool {
-    false
+    plant_on!(
+        crate::differential::ref_mutant() == Some(crate::differential::RefMutant::CycleByOrder)
+    )
 }
 
 #[cfg(test)]

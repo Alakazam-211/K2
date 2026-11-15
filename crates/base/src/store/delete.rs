@@ -95,6 +95,20 @@ impl DocStore {
     /// Delete every doc in `space`, as [`DocStore::delete_doc`] does, in **one** durable
     /// transaction. Returns their keys (empty when the space has none).
     pub fn delete_space(&self, space: &str, now_ms: u64) -> Result<Vec<DocKey>, StoreError> {
+        Ok(self
+            .delete_space_ids(space, now_ms)?
+            .into_iter()
+            .map(|(_, k)| k)
+            .collect())
+    }
+
+    /// [`DocStore::delete_space`], with each deleted doc's id beside its key (for the blob
+    /// store, which removes their segment folders once this commits).
+    pub(crate) fn delete_space_ids(
+        &self,
+        space: &str,
+        now_ms: u64,
+    ) -> Result<Vec<(DocId, DocKey)>, StoreError> {
         let w = self.begin_write()?;
         let ids: Vec<DocId> = {
             let prefix = format!("{space}\u{0}");
@@ -118,7 +132,7 @@ impl DocStore {
         };
         let mut keys = Vec::with_capacity(ids.len());
         for id in ids {
-            keys.push(delete_in(&w, id, now_ms)?);
+            keys.push((id, delete_in(&w, id, now_ms)?));
         }
         w.commit()?;
         Ok(keys)

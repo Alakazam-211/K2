@@ -146,7 +146,7 @@ pub struct ToolDoc<'a> {
 pub struct ReadOutput {
     pub stdout: Vec<u8>,
     pub exit: u8,
-    /// Lines shown, 1-based inclusive, for the caller's viewing range (P4): `head -n`,
+    /// Lines shown, 1-based inclusive, for the caller's viewing range: `head -n`,
     /// `tail -n`, `view --lines`, `sed -n 'a,bp'`.
     pub view: Option<(usize, usize)>,
     /// The lines the call looked at (heads-up notes, the activity ring, `--for-edit`): the
@@ -458,6 +458,13 @@ pub struct StructOutput {
     /// moves the acting agent's cells presence to them after the change applied, so an
     /// agent's place shows with no watch open.
     pub cells: Option<crate::grid::CellsReport>,
+    /// An edit verb's unit, by address ([`StructOutput::addressing`]): what a refusal of the
+    /// call names on the keyed watch (`unit`, [`crate::session::WatchRefusal`]).
+    pub(crate) unit: Option<String>,
+    /// The view the acting agent is looking at, by address ([`StructOutput::viewing`]).
+    pub(crate) viewing: Option<String>,
+    /// The acting agent's playhead ([`StructOutput::time_position`]).
+    pub(crate) time: Option<crate::session::TimePosition>,
 }
 
 impl StructOutput {
@@ -469,7 +476,38 @@ impl StructOutput {
             shown: None,
             refusal: None,
             cells: None,
+            unit: None,
+            viewing: None,
+            time: None,
         }
+    }
+
+    /// The view this verb leaves its agent looking at, by address (a read verb that renders a
+    /// still of it, an edit verb that worked there): once the call succeeds, the kit sets the
+    /// acting agent's view address to it ([`crate::session::Session::set_view_address`]), as
+    /// it moves an agent's focus and selection. A person's presence is never moved. An address
+    /// the kit's grammar doesn't read is left out.
+    pub fn viewing(mut self, address: impl Into<String>) -> Self {
+        self.viewing = Some(address.into());
+        self
+    }
+
+    /// Where this verb leaves its agent's playhead: once the call succeeds, the kit sets the
+    /// acting agent's time position to it ([`crate::session::Session::set_time_position`],
+    /// stamped then), as [`StructOutput::viewing`].
+    pub fn time_position(mut self, time: crate::session::TimePosition) -> Self {
+        self.time = Some(time);
+        self
+    }
+
+    /// Name the unit this edit verb addresses, by its address ([`crate::session::Pack::address_of`]):
+    /// when the call is refused (the verb's own "no", or the session's), the keyed watch's
+    /// refusal names it (`unit`, [`crate::session::WatchRefusal`]). Without it the kit names
+    /// the first element the verb's edits touch (under the refusing claim, for a claim), or
+    /// none when it made none.
+    pub fn addressing(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
+        self
     }
 
     /// Set [`StructOutput::cells`].

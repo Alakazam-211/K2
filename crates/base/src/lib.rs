@@ -81,6 +81,26 @@ macro_rules! entry_visits {
     };
 }
 
+/// A chunked write's work count (test-only): with the `differential` feature (or in the kit's
+/// tests) it adds `$n` (a `u64`; 1 when left out) to `$field` of this thread's
+/// [`differential::ChunkWork`] ([`differential::take_chunk_work`]), when `$c` holds if given;
+/// otherwise it is nothing, and neither `$n` nor `$c` is evaluated.
+macro_rules! chunk_work {
+    ($field:ident) => {
+        chunk_work!($field, 1)
+    };
+    ($field:ident, $n:expr) => {
+        #[cfg(any(test, feature = "differential"))]
+        $crate::differential::count_chunk_work(|w| w.$field += $n);
+    };
+    ($field:ident, $n:expr, if $c:expr) => {
+        #[cfg(any(test, feature = "differential"))]
+        if $c {
+            $crate::differential::count_chunk_work(|w| w.$field += $n);
+        }
+    };
+}
+
 /// An engine visit count (test-only): as [`entry_visits`], for the engine adapter's bulk reads
 /// ([`differential::take_engine_visits`]).
 macro_rules! engine_visits {
@@ -92,6 +112,25 @@ macro_rules! engine_visits {
         #[cfg(not(any(test, feature = "differential")))]
         let _ = $n;
     };
+}
+
+/// Whether a planted fault is on (test-only): the one form of a plant reader, the `fn` that
+/// answers "is this plant on?" where the kit's code bends for it. With the `differential`
+/// feature (or in the kit's tests) it is `$on`, a `bool` read of the plant's switch (as
+/// `differential::keyed_mutant() == Some(KeyedMutant::CarrierStale)`), read once, each time the
+/// reader runs; in every other build it is `false`, and `$on` isn't compiled (the switches
+/// aren't there). A reader: `fn planted_carrier_stale() -> bool { plant_on!(..) }`.
+///
+/// One `cfg` pair, here, for every reader: not `#[cfg(..)] if $on { return true; } false` in
+/// each (clippy's `needless_bool`), nor a `#[cfg(..)]` and a `#[cfg(not(..))]` copy of each.
+macro_rules! plant_on {
+    ($on:expr) => {{
+        #[cfg(any(test, feature = "differential"))]
+        let on: bool = $on;
+        #[cfg(not(any(test, feature = "differential")))]
+        let on: bool = false;
+        on
+    }};
 }
 
 /// A production timer scope (v0.10.1, [`timers`]): times the rest of the enclosing block

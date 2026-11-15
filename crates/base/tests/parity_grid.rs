@@ -29,7 +29,8 @@ fn registry() -> Registry {
 }
 
 /// The grid pack's parity list: an exhaustive `match`, as every pack writes it. Rows a grid
-/// doesn't have (P15, the leases) are N/A; P23, P27 and P28 are deferred as for text.
+/// doesn't have (formatting, the leases) are N/A; annotations, mentions and purge are
+/// deferred as for text.
 fn row(a: PersonAction) -> ParityRow {
     use PersonAction as P;
     const TEXT_EDITS: &[&str] = &[
@@ -338,7 +339,7 @@ fn row_move_r2_person(p: &mut Person<'_>) -> R {
 fn row_move_r2_agent(a: &mut Agent<'_>) -> R {
     agent_op(a, &["row", "move", "--row", "r2", "--end"], "")
 }
-/// P2 claims row `r2`; the actor moves it (an agent under the host's `Respect` policy would
+/// `p2` claims row `r2`; the actor moves it (an agent under the host's `Respect` policy would
 /// be refused; `run_tool`'s default is `Ignore`): the change lands, p2's claim stays.
 fn p2_claims_r2(stage: &mut Stage) -> Result<(), String> {
     let c = stage.other("p2", k2_mpc_base::session::ParticipantKind::Person)?;
@@ -358,7 +359,7 @@ fn p2_claims_r2(stage: &mut Stage) -> Result<(), String> {
     Ok(())
 }
 
-/// The pack's own cases (P3's `cell get`, P9-P13, P35-P43).
+/// The pack's own cases (the read row's `cell get`, the edit rows, the row and column actions).
 fn pack_cases() -> Vec<GridCase> {
     use PersonAction as P;
     let c = GridCase::new;
@@ -521,11 +522,12 @@ fn agent_parity_grid_stage() {
         .iter()
         .filter(|r| r.status == RowStatus::Live)
         .count();
-    // every grid row is live but P15 and the leases (N/A: not grid rows) and P23, P27, P28
-    // (deferred); P24 (exports) is live since the merge with v0.9.7
+    // every grid row is live but formatting and the leases (N/A: not grid rows) and
+    // annotations, mentions, purge (deferred); export is live since the merge with v0.9.7
     assert_eq!(rows().len(), 40, "grid-tier rows");
     assert_eq!(live, 37, "rows live");
-    // P24 was the one N/A row the report saw (P15 is a text edit row, N/A by the list)
+    // export was the one N/A row the report saw (formatting is a text edit row, N/A by the
+    // list)
     assert_eq!(
         report.not_applicable.len(),
         0,
@@ -533,7 +535,7 @@ fn agent_parity_grid_stage() {
         report.not_applicable
     );
     assert_eq!(report.deferred.len(), 3);
-    // every grid row of the contract (P35-P44) ran
+    // every grid row of the contract (the grid's own actions) ran
     for a in PersonAction::for_tier(Tier::Grid).filter(|a| a.number() >= 35) {
         assert!(
             report.matched.iter().any(|m| m.0 == a),

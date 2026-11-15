@@ -1,7 +1,8 @@
 //! The kit's parity cases on a grid doc: for every grid-tier action the kit binds, the
 //! person path and the agent path through each kit verb, on [`super::GRID_DOC`]. One
-//! exhaustive `match` ([`kit_grid_cases`]); the grid actions' own verbs (P9-P13's `cell set`,
-//! `cells set`, `cells clear`; P35-P43) are a pack's, so their cases are the pack's.
+//! exhaustive `match` ([`kit_grid_cases`]); the grid actions' own verbs (the edit rows'
+//! `cell set`, `cells set`, `cells clear`; the row and column verbs) are a pack's, so their
+//! cases are the pack's.
 //!
 //! The agent edits only through registered verbs: the kit's grid edit verbs are `write --base
 //! V` (merged by key) and `rows drop-deleted`, so a case that needs the actor's own edit
@@ -64,7 +65,7 @@ fn p2(stage: &mut Stage) -> Result<(), String> {
     Ok(())
 }
 
-/// P2 (a person) sets `r2/c2` (`k2`'s city) to `Paris`.
+/// `p2` (a person) sets `r2/c2` (`k2`'s city) to `Paris`.
 fn p2_sets(stage: &mut Stage) -> Result<(), String> {
     stage.grid_as("p2", |t| t.set_cell(&k("r2"), &k("c2"), "Paris"))?;
     Ok(())
@@ -115,7 +116,7 @@ fn p30_all_grid_setup(stage: &mut Stage) -> Result<(), String> {
     Ok(())
 }
 
-// ---------- P4, P5: views and find on the rendered file ----------
+// ---------- views and find on the rendered file ----------
 
 fn grid_view_person(p: &mut Person<'_>, first: usize, last: usize) -> R {
     let c = p.conn()?;
@@ -197,7 +198,7 @@ fn g5_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-// ---------- P7, P8: carets and claims by key ----------
+// ---------- carets and claims by key ----------
 
 fn p2_caret(stage: &mut Stage) -> Result<(), String> {
     let c = stage.other("p2", ParticipantKind::Person)?;
@@ -422,7 +423,7 @@ fn g8_release_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["claim", "--release"], b"")?, grid_claim_out)
 }
 
-// ---------- P14: write --base, merged by key ----------
+// ---------- write --base, merged by key ----------
 
 /// A grid write's observable summary: exit, what applied (element counts), each conflict's
 /// rule, region, who wrote it and who claims it.
@@ -513,7 +514,7 @@ fn g14_expired_agent(a: &mut Agent<'_>) -> R {
     agent_grid_write(a, 99_999, GRID_BODY_ROMA)
 }
 
-// ---------- P16, P26: undo by element ----------
+// ---------- undo by element ----------
 
 /// The live cell holding `value` (the kit's cases find cells by their plain, unique values,
 /// so they hold whatever the pack's header setting makes of [`super::GRID_DOC`]).
@@ -559,7 +560,7 @@ fn agent_cells(a: &mut Agent<'_>, cells: &[(&str, &str)]) -> Result<(), String> 
         (None, x) => Err(format!("write --base exited {x}")),
     }
 }
-/// P2 sets the cell now holding `X` (the actor's) to `Nice`.
+/// `p2` sets the cell now holding `X` (the actor's) to `Nice`.
 fn p2_overwrites_x(stage: &mut Stage) -> Result<(), String> {
     let (r, c) = find_cell(&stage.table()?, "X")?;
     stage.grid_as("p2", |t| t.set_cell(&r, &c, "Nice"))?;
@@ -621,7 +622,7 @@ fn g26_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["undo", "--partial"], b"")?, undo_out)
 }
 
-// ---------- P17, P18, P25: saving, watching, live editing off ----------
+// ---------- saving, watching, live editing off ----------
 
 fn g17_status_person(p: &mut Person<'_>) -> R {
     person_cells(p, &[("Oslo", "X")])?;
@@ -669,7 +670,7 @@ fn g25_setup(stage: &mut Stage) -> Result<(), String> {
     Ok(())
 }
 
-// ---------- P19: history ----------
+// ---------- history ----------
 
 fn g19_show_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
@@ -705,7 +706,7 @@ fn g19_diff_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-// ---------- P22: blame by element ----------
+// ---------- blame by element ----------
 
 /// Every kind of author on the grid: p2 sets a cell, a bot inserts a row, an assistant
 /// sets a cell for the actor (pending), p2 moves a row (moves author no content), another
@@ -794,9 +795,9 @@ fn g22_structure_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-// ---------- P44: rows drop-deleted ----------
+// ---------- rows drop-deleted ----------
 
-/// P2 deletes row `r3`; the actor owns the doc.
+/// `p2` deletes row `r3`; the actor owns the doc.
 fn drop_setup(stage: &mut Stage) -> Result<(), String> {
     stage.grant(ACTOR, Rights::full().with_owner(true));
     stage.grid_as("p2", |t| t.delete_row(&k("r3")))?;
@@ -823,9 +824,10 @@ fn g44_agent(a: &mut Agent<'_>) -> R {
 }
 
 /// The kit's grid cases for `action`: each kit verb serving it on a grid doc, the
-/// person's way and the agent's way. Empty for the actions whose verbs are a pack's (P9-P13,
-/// P35-P43), the ones a grid doesn't have (P15 formatting; the leases), and the ones the kit
-/// doesn't bind yet (P23, P27 annotations, P28 purge): a grid pack's list maps those.
+/// person's way and the agent's way. Empty for the actions whose verbs are a pack's (the edit
+/// rows, the row and column actions), the ones a grid doesn't have (formatting; the leases),
+/// and the ones the kit doesn't bind yet (annotations, mentions, purge): a grid pack's list
+/// maps those.
 pub fn kit_grid_cases(action: PersonAction) -> Vec<GridCase> {
     use PersonAction as P;
     let c = GridCase::new;
@@ -1152,7 +1154,7 @@ pub fn kit_grid_cases(action: PersonAction) -> Vec<GridCase> {
             )
             .setup(grid_blame_setup),
         ],
-        // P24 on a grid: the rendered file through the export registry, now and at a version
+        // export on a grid: the rendered file through the export registry, now and at a version
         // (a grid's version renders with the codec it stored)
         P::Export => vec![
             c(

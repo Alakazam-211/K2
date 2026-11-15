@@ -94,7 +94,7 @@ fn row(a: PersonAction) -> ParityRow {
     }
 }
 
-/// The text actions' rows (P1-P31).
+/// The text actions' rows.
 fn rows() -> Vec<ParityRow> {
     PersonAction::for_tier(Tier::Text).map(row).collect()
 }
@@ -108,7 +108,7 @@ fn agent_parity_text_pack() {
         .iter()
         .filter(|r| r.status == RowStatus::Live)
         .count();
-    assert_eq!(live, 28, "rows live (P24 Export since exports P0)");
+    assert_eq!(live, 28, "rows live (Export live since the exports work)");
     assert_eq!(report.not_applicable.len(), 0);
     assert_eq!(report.deferred.len(), 3);
     assert_eq!(
@@ -118,7 +118,7 @@ fn agent_parity_text_pack() {
             .filter(|m| m.0 == PersonAction::Blame)
             .count(),
         3,
-        "P22's cases"
+        "the blame row's cases"
     );
     assert!(report.matched.len() >= 45, "{} cases", report.matched.len());
     eprintln!(
@@ -251,8 +251,8 @@ fn the_list_is_checked_both_ways() {
     );
 }
 
-/// Negative control: a deferred row whose verb now exists must be made live. P22 is the
-/// row that flipped (v0.3.0): kept deferred now that `blame` is registered and has cases,
+/// Negative control: a deferred row whose verb now exists must be made live. Blame is
+/// the row that flipped (v0.3.0): kept deferred now that `blame` is registered and has cases,
 /// the list fails both ways.
 #[test]
 fn a_landed_deferred_verb_fails() {
@@ -306,7 +306,7 @@ fn a_landed_deferred_verb_fails() {
         "{}",
         parity::render(&f)
     );
-    // without the verb in the registry, the deferred P22 row is consistent again
+    // without the verb in the registry, the deferred blame row is consistent again
     let mut r = rows();
     let i = r
         .iter()

@@ -1131,7 +1131,8 @@ impl Session {
         stream: &[ElemApplied],
         now: u64,
     ) {
-        self.elem_claims_after(st, stream, now);
+        // `actor` is `None` only for an outside save's apply
+        self.elem_claims_after(st, stream, now, actor.is_none());
         self.cell_claims_after(st, stream, now);
         if !self.is_grid() || stream.is_empty() {
             return;

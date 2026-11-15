@@ -118,14 +118,14 @@ describe("three clients converge", { timeout: 60_000 }, () => {
       refused += s.refused;
     }
     // competing text (rule 4 (b)) does happen in this mix of replacements at high latency;
-    // P2 (no bounce without competing text) is checked below on insert-only and delete-only work
+    // no bounce without competing text: checked below on insert-only and delete-only work
     expect(typed).toBeGreaterThan(runs * 10);
     expect(rejected).toBeGreaterThan(0);
     console.log(`runs ${runs}: ${typed} edits typed, ${rejected} rejected (${refused} refused by the server)`);
     runrec("client_converge", { runs, typed, rejected, refused });
   });
 
-  it("P2: typing anywhere, or deleting anything, never bounces", () => {
+  it("typing anywhere, or deleting anything, never bounces", () => {
     let typed = 0;
     let runs = 0;
     let rejected = 0;

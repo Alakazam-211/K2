@@ -40,55 +40,41 @@ use crate::store::{Released, VersionId, LIVE_SLOT};
 
 /// The planted fault [`crate::differential::KeyedMutant::SyncedContentStale`].
 fn planted_synced_content_stale() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::SyncedContentStale)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::SyncedContentStale)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::SpliceWithoutMatch`].
 fn planted_splice_without_match() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::SpliceWithoutMatch)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::SpliceWithoutMatch)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::CarrierStale`].
 pub(super) fn planted_carrier_stale() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant() == Some(crate::differential::KeyedMutant::CarrierStale) {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant() == Some(crate::differential::KeyedMutant::CarrierStale)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::SettleBeforeCarrier`].
 pub(super) fn planted_settle_before_carrier() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::SettleBeforeCarrier)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::SettleBeforeCarrier)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::PurgeKeepsCarrier`].
 fn planted_purge_keeps_carrier() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::PurgeKeepsCarrier)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::PurgeKeepsCarrier)
+    )
 }
 
 impl Session {

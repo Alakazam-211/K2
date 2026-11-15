@@ -30,10 +30,10 @@ commit, indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pendi
 `docs/MODEL-CHECK.md`, Provenance of the cited runs. A job with no mark ran a
 pushed commit its record names.
 
-**Status 2026-10-29:** the evidence baseline is **`20e65f7`** on `c1/structured` (k2-mpc-base
-v0.9.4 merged, plus fix (a) below). Every run here is at that commit. Spec: v1.10 §6a
-(`docs/SPEC-UNDO.md`, S1–S12, reviewed by K2 Engine), §8 (the structured case classes and
-mutants (xii)–(xxiii)).
+**Status 2026-10-29:** the evidence baseline is **`20e65f7`** on the structured kinds' side branch
+(k2-mpc-base v0.9.4 merged, plus fix (a) below). Every run here is at that commit. Spec: v1.10 §6a
+(`docs/SPEC-UNDO.md`, S1–S12, reviewed by K2 Engine), §8 (the structured case classes and mutants
+(xii)–(xxiii)).
 
 Every figure from a run with a record cites it (`[run JOB/RUN:field]`, records in
 `docs/evidence/runs/`, checked by `tools/evidence/check.py`). Sums of cited figures are marked

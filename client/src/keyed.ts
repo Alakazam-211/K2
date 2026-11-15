@@ -16,7 +16,9 @@ import type {
   SpaceJson,
   Transport,
   ViewSnapshotJson,
+  OutsideSaveFrame,
   ViewUnit,
+  VerbRefusedFrame,
   WatchOp,
   Welcome,
 } from "./wire";
@@ -270,6 +272,8 @@ export class KeyedWatch {
   private readonly snapshotCbs = new Set<(upto: number) => void>();
   private readonly resyncCbs = new Set<(why: ResyncReason, detail: string) => void>();
   private readonly refusedCbs = new Set<(e: ErrorReport) => void>();
+  private readonly verbRefusedCbs = new Set<(r: VerbRefusedFrame) => void>();
+  private readonly outsideSaveCbs = new Set<(o: OutsideSaveFrame) => void>();
 
   constructor(transport: Transport, welcome: Welcome, opts: KeyedWatchOptions = {}) {
     this.t = transport;
@@ -346,6 +350,18 @@ export class KeyedWatch {
     return this.kv.unit(unit)?.derived?.[name] ?? null;
   }
 
+  /**
+   * A container's derived value (one of the view schema's `container_derived`, such as a
+   * timeline track's label or kind) for the container with address `container`, `null` when it
+   * has none or the view doesn't show the container. The snapshot's containers carry each one's
+   * own; each change's `derived.containers` updates them (`null` there removes one). Always
+   * `null` from an older kit.
+   */
+  containerDerived(name: string, container: string): string | null {
+    if (!this.kv?.snapshot.schema.container_derived?.includes(name)) return null;
+    return this.kv.snapshot.containers.find((c) => c.key === container)?.derived?.[name] ?? null;
+  }
+
   /** The doc's space (a 3D slot), kept from the snapshot and each change's `view_space`;
    * `null` when the pack has none or from an older kit. */
   get space(): SpaceJson | null {
@@ -415,6 +431,20 @@ export class KeyedWatch {
     return () => this.refusedCbs.delete(cb);
   }
 
+  /** A verb on the doc was refused (`verb_refused`): who, the verb, the unit by address, the
+   * code and the holder. Unnumbered and data only: it changes nothing here. */
+  onVerbRefused(cb: (r: VerbRefusedFrame) => void): () => void {
+    this.verbRefusedCbs.add(cb);
+    return () => this.verbRefusedCbs.delete(cb);
+  }
+
+  /** What came of an outside save of the doc's file (`outside_save`): its outcome, after the
+   * save's own change. Unnumbered and data only: it changes nothing here. */
+  onOutsideSave(cb: (o: OutsideSaveFrame) => void): () => void {
+    this.outsideSaveCbs.add(cb);
+    return () => this.outsideSaveCbs.delete(cb);
+  }
+
   /** Ask for a fresh snapshot now (the host suspects lost frames). */
   resync(): void {
     this.ask("asked", "");
@@ -466,6 +496,12 @@ export class KeyedWatch {
         case "watch_refused":
           this.awaiting = false;
           for (const cb of this.refusedCbs) cb(f.error);
+          return;
+        case "verb_refused":
+          for (const cb of this.verbRefusedCbs) cb(f);
+          return;
+        case "outside_save":
+          for (const cb of this.outsideSaveCbs) cb(f);
           return;
       }
     } catch (e) {

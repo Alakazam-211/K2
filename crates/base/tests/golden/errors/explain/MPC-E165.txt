@@ -1,7 +1,7 @@
 MPC-E165 needs_state_transfer (sessions and edits)
 exit:     2
 message:  the peer's history is compacted past this doc's state: it needs a state transfer
-next:     Nothing was applied. The peer compacted the history this doc lacks (MPCE-E262), so no diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry the catch-up and don't close the peer: it isn't at fault.
+next:     Nothing was applied. The peer has compacted the history this doc asked for, so no diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry the catch-up and don't close the peer: it isn't at fault.
 rule:     the MPCE seam (stable codes): a replica behind a cut
 verbs:    an editor's sync connection (no verb)
 status:   live
@@ -12,7 +12,7 @@ status:   live
   "area": "sessions and edits",
   "exit": 2,
   "message": "the peer's history is compacted past this doc's state: it needs a state transfer",
-  "next": "Nothing was applied. The peer compacted the history this doc lacks (MPCE-E262), so no diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry the catch-up and don't close the peer: it isn't at fault.",
+  "next": "Nothing was applied. The peer has compacted the history this doc asked for, so no diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry the catch-up and don't close the peer: it isn't at fault.",
   "rule": "the MPCE seam (stable codes): a replica behind a cut",
   "verbs": ["(sync)"],
   "returned_by": [],

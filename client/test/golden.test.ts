@@ -315,12 +315,14 @@ function checkRoster(e: RosterEvent) {
       expect(isInt(e.started_ms)).toBe(true);
       return;
     case "claim_ended":
-      expect(["released", "edited", "expired", "left", "reset", "deleted"]).toContain(e.how);
+      expect(["released", "edited", "expired", "left", "reset", "deleted", "gone_outside_save"]).toContain(e.how);
       checkActor(e.actor, e.who);
       expect(isInt(e.at_ms)).toBe(true);
       // the change that ended it, exactly when one did
-      if (e.how === "edited" || e.how === "deleted") expect(isInt(e.at_rev)).toBe(true);
+      if (e.how === "edited" || e.how === "deleted" || e.how === "gone_outside_save") expect(isInt(e.at_rev)).toBe(true);
       else expect(e.at_rev).toBeNull();
+      // a claim on elements: its elements by address as they were, never an empty list
+      if ("keys" in e) expect(Array.isArray(e.keys) && e.keys.length > 0 && e.keys.every((k) => typeof k === "string")).toBe(true);
       return;
     case "claim_started_elems":
       expect(keys(e)).toEqual(["actor", "claim", "expires_ms", "hold", "keys", "kind", "note", "root", "started_ms", "version", "who"]);
@@ -413,6 +415,7 @@ describe("golden wire JSON written by the Rust kit", () => {
     "roster_events_devices.json",
     "roster_events_elem_presence.json",
     "roster_events_claims_elems.json",
+    "roster_events_claim_gone_outside.json",
     "roster_events_focus_range.json",
   ]) {
     it(`${name}: roster events parse and fold to the kit's own final roster`, () => {

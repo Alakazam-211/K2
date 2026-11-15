@@ -115,6 +115,7 @@ impl BlobSession {
             version: st.vid,
             next_waiter: None,
             waiters: Vec::new(),
+            addresses: c.keys.iter().map(|k| k.as_str().to_owned()).collect(),
         });
     }
 

@@ -897,6 +897,35 @@ pub enum ViewMutant {
     /// The view index kept through a change builds every unit again, touched or not: right,
     /// but the change costs the whole doc (the kept index's counts catch it).
     UpdateRebuildsAll,
+    /// A test build doesn't fail on a container's layout that isn't a layout reference (the
+    /// index still leaves it out and records it, as a release build does).
+    LayoutUnchecked,
+    /// A test build doesn't fail on a container's parent the index refused (the index still
+    /// leaves it out and records it, as a release build does).
+    ParentUnchecked,
+    /// The kit carries a container's parent without checking what it names: one that names
+    /// no container of the index, the container itself, or (live) is no key at all.
+    ParentNotValidated,
+    /// The kit doesn't break a cycle of containers' parents.
+    ParentCycleAccepted,
+    /// The kit doesn't bound how deep a container sits ([`crate::view_index::CONTAINER_DEPTH_MAX`]).
+    ParentDepthUnbounded,
+    /// The snapshot leaves a container's `parent` out.
+    ParentDroppedOnWire,
+    /// A keyed watch's change frame carries no container's `parent_after` (a container that
+    /// came, or whose parent changed).
+    FrameMissesParent,
+    /// The index keeps a container's derived value whose name the schema doesn't declare
+    /// ([`crate::view_index::ViewSchema::container_derived`]).
+    ContainerDerivedUndeclaredKept,
+    /// The index keeps a container's derived values in the order the pack set them, not the
+    /// schema's.
+    ContainerDerivedOrderLost,
+    /// The snapshot leaves a container's `derived` out.
+    ContainerDerivedDroppedOnWire,
+    /// A keyed watch's change frame carries none of the containers' derived values the change
+    /// set or removed (`derived.containers.<container>.<name>`).
+    FrameMissesContainerDerived,
 }
 
 thread_local! {
@@ -1448,6 +1477,12 @@ pub enum ClaimMutant {
     /// lands nothing leaves the mark, and the next change by anyone ends the claim (caught by "a
     /// change that doesn't land leaves the claim alone").
     MarkBeforeApply,
+    /// An element claim whose last live element an outside save removed ends
+    /// [`crate::session::ClaimEnd::Deleted`], as a live delete does, not
+    /// [`crate::session::ClaimEnd::GoneOutsideSave`].
+    OutsideEndReportedDeleted,
+    /// A claim's end events carry no element addresses (`addresses` empty).
+    EndAddressesDropped,
 }
 
 thread_local! {
@@ -2125,13 +2160,13 @@ pub enum LiveMutant {
     OwnChangeInWindow,
     /// The window holds each change's hunks widened to whole words (as D1's token
     /// expansion widens a change inside `edit_as`), not the authored ones (clarification
-    /// r2.1, F1): typing inside a multi-author word then bounces.
+    /// r2.1): typing inside a multi-author word then bounces.
     WindowHoldsExpandedHunks,
     /// r2.2's rule (1) on the server only: its rebase re-canonicalizes the carried change at
-    /// every step, the client's doesn't (E-LIVE r2.3): the two disagree (P1).
+    /// every step, the client's doesn't (E-LIVE r2.3): the two disagree.
     RecanonServerOnly,
     /// r2.2's rule (1) on both sides: rule 4 then judges merged and split shapes, not the
-    /// hunks as sent (a deletion bounces, a split replacement passes: P2, P2c).
+    /// hunks as sent (a deletion bounces, a split replacement passes).
     RecanonBothSides,
     /// "Strictly inside" judged by the tie-break's placement alone (`Bias::Right`), not under
     /// both placements (r2.3 S3): an insertion tied with another at its point bounces when a
@@ -2245,4 +2280,229 @@ pub fn with_grid_mutant<R>(mutant: GridMutant, f: impl FnOnce() -> R) -> R {
     }
     let _back = Back(GRID_MUTANT.with(|m| m.replace(Some(mutant))));
     f()
+}
+
+/// A fault planted in chunked tier-0 versions (`docs/design/version-storage-r2.md`), so the rows
+/// that should catch it (`tests/chunked_versions.rs`) can show they do, by name. Installed per
+/// thread by [`with_chunk_plant`]; a row reads its name from `MPC_CHUNK_PLANT`
+/// ([`ChunkPlant::named`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChunkPlant {
+    /// `gc-ignores-waiting-segment`: `gc` removes a segment file with no row even while a
+    /// write that is about to commit it marks it waiting.
+    GcIgnoresWaitingSegment,
+    /// `commit-skips-chunk-check`: a chunked commit doesn't check that the chunk rows the write
+    /// reuses are still there.
+    CommitSkipsChunkCheck,
+    /// `reader-skips-chunk-check`: a chunked read doesn't verify each chunk's keyed id.
+    ReaderSkipsChunkCheck,
+    /// `cheap-path-beyond-current`: a chunked write reuses any chunk the doc stores, not only
+    /// those of the versions its cheap set names.
+    CheapPathBeyondCurrent,
+    /// `reader-opens-lazily`: a chunked read opens each segment file when it reaches it,
+    /// not every one before its first byte.
+    ReaderOpensLazily,
+    /// `retention-ignores-chunk-marks`: retention removes a chunk row at no references even
+    /// while a write that reuses the chunk marks it waiting.
+    RetentionIgnoresChunkMarks,
+    /// `delete-space-leaves-segments`: deleting a space leaves its docs' segment folders for a
+    /// later `gc`.
+    DeleteSpaceLeavesSegments,
+    /// `purge-skips-compaction`: a purge drops rows but rewrites no segment, so the purged
+    /// chunks' bytes stay in the segment files.
+    PurgeSkipsCompaction,
+    /// `removal-list-not-finished-at-open`: an open leaves the removal list a stop after a
+    /// purge's commit left.
+    RemovalListNotFinishedAtOpen,
+    /// `compaction-skips-dead-ranges`: a purge compacts only the segments holding a chunk it
+    /// purged, not those with other dead ranges.
+    CompactionSkipsDeadRanges,
+    /// `compaction-output-not-waiting`: a compaction's output segment isn't marked waiting
+    /// before its commit, so `gc` may remove it.
+    CompactionOutputNotWaiting,
+    /// `purge-skips-doc-lock`: a purge doesn't take the doc's internal lock, so it runs beside a
+    /// write of the doc.
+    PurgeSkipsDocLock,
+    /// `history-chunk-cheap`: the blob store widens the cheap set a session gives it to every
+    /// version's chunks, so a chunk only history holds takes the cheap path for a writer
+    /// without the history right.
+    HistoryChunkCheap,
+    /// `manifest-reuse-skips-full-write`: a write whose whole file equals a stored version's
+    /// (its manifest is there) writes nothing and reuses every chunk, whatever the cheap set.
+    ManifestReuseSkipsFullWrite,
+    /// `cheap-set-ignores-history-right`: a session gives every chunked write the cheap set of
+    /// a connection with the history right, whatever the writer's rights.
+    CheapSetIgnoresHistoryRight,
+    /// `rechunk-keeps-old-blob`: a rechunk leaves the whole-file blob it dropped for `gc`,
+    /// instead of removing it at once.
+    RechunkKeepsOldBlob,
+    /// `hints-required`: a pack's cut hints are the only cut points: each span between two is
+    /// one chunk, however long (no content cut inside it, and none at the maximum).
+    HintsRequired,
+    /// `hints-unmerged`: hints closer than the chunk minimum are all kept as cut points.
+    HintsUnmerged,
+}
+
+impl ChunkPlant {
+    /// The plant `name` names (`MPC_CHUNK_PLANT`'s spelling).
+    pub fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "gc-ignores-waiting-segment" => Self::GcIgnoresWaitingSegment,
+            "commit-skips-chunk-check" => Self::CommitSkipsChunkCheck,
+            "reader-skips-chunk-check" => Self::ReaderSkipsChunkCheck,
+            "cheap-path-beyond-current" => Self::CheapPathBeyondCurrent,
+            "reader-opens-lazily" => Self::ReaderOpensLazily,
+            "retention-ignores-chunk-marks" => Self::RetentionIgnoresChunkMarks,
+            "delete-space-leaves-segments" => Self::DeleteSpaceLeavesSegments,
+            "purge-skips-compaction" => Self::PurgeSkipsCompaction,
+            "removal-list-not-finished-at-open" => Self::RemovalListNotFinishedAtOpen,
+            "compaction-skips-dead-ranges" => Self::CompactionSkipsDeadRanges,
+            "compaction-output-not-waiting" => Self::CompactionOutputNotWaiting,
+            "purge-skips-doc-lock" => Self::PurgeSkipsDocLock,
+            "history-chunk-cheap" => Self::HistoryChunkCheap,
+            "manifest-reuse-skips-full-write" => Self::ManifestReuseSkipsFullWrite,
+            "cheap-set-ignores-history-right" => Self::CheapSetIgnoresHistoryRight,
+            "rechunk-keeps-old-blob" => Self::RechunkKeepsOldBlob,
+            "hints-required" => Self::HintsRequired,
+            "hints-unmerged" => Self::HintsUnmerged,
+            _ => return None,
+        })
+    }
+}
+
+thread_local! {
+    static CHUNK_PLANT: std::cell::Cell<Option<ChunkPlant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The chunk fault planted on this thread, if any.
+pub fn chunk_plant() -> Option<ChunkPlant> {
+    CHUNK_PLANT.with(|m| m.get())
+}
+
+/// Run `f` with `plant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_chunk_plant<R>(plant: ChunkPlant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ChunkPlant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            CHUNK_PLANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(CHUNK_PLANT.with(|m| m.replace(Some(plant))));
+    f()
+}
+
+/// A step of a chunked write, where a test hook ([`with_chunk_hook`]) runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChunkStep {
+    /// The new segment's temp file is written and synced.
+    TempWritten,
+    /// The temp file is renamed into place.
+    Renamed,
+    /// The segment's folder is synced.
+    FolderSynced,
+    /// Just before the transaction that commits the version.
+    BeforeCommit,
+    /// The version's transaction committed.
+    Committed,
+    /// The write's waiting marks are released.
+    MarksReleased,
+    /// A compaction's output segment is renamed into place, before the commit that names it.
+    CompactionRenamed,
+    /// A purge's transaction committed, before its removal list is performed (a stop there
+    /// reports the purge as failed, as a process stop after the commit would leave it).
+    PurgeCommitted,
+    /// A chunked read has read its rows, before it opens its segments (first attempt only).
+    ReaderRowsRead,
+    /// A rechunk removed the whole-file blob of the version it converted (a stop there reports
+    /// the rechunk as failed).
+    OldBlobRemoved,
+}
+
+/// A chunked write's test hook: called at each [`ChunkStep`]; `true` stops the write there, as
+/// a process stop would (nothing is cleaned up).
+type ChunkHook = Box<dyn FnMut(ChunkStep) -> bool>;
+
+thread_local! {
+    static CHUNK_HOOK: RefCell<Option<ChunkHook>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with `hook` called at each step of every chunked write on this thread; removed
+/// afterwards, even if `f` unwinds.
+pub fn with_chunk_hook<R>(
+    hook: impl FnMut(ChunkStep) -> bool + 'static,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct Back(Option<ChunkHook>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            let old = self.0.take();
+            CHUNK_HOOK.with(|h| *h.borrow_mut() = old);
+        }
+    }
+    let _back = Back(CHUNK_HOOK.with(|h| h.borrow_mut().replace(Box::new(hook))));
+    f()
+}
+
+/// Run this thread's chunk hook at `step`: whether it stops the write there. The hook is taken
+/// out while it runs, so it may call into the blob store.
+pub(crate) fn chunk_hook(step: ChunkStep) -> bool {
+    let Some(mut h) = CHUNK_HOOK.with(|c| c.borrow_mut().take()) else {
+        return false;
+    };
+    let stop = h(step);
+    CHUNK_HOOK.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.is_none() {
+            *c = Some(h);
+        }
+    });
+    stop
+}
+
+/// The work of the chunked writes on this thread since the last [`take_chunk_work`], from
+/// test-only counters (counts, never timings): what the counted-work rows of
+/// `docs/design/version-storage-r2.md` (section 6) compare field for field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ChunkWork {
+    /// Bytes written to new segment files.
+    pub segment_bytes: u64,
+    /// Segment files synced.
+    pub file_syncs: u64,
+    /// Folders synced: a new segment's folder, and the parent of each folder made for it.
+    pub folder_syncs: u64,
+    /// Rows written (made or updated) by the transaction that commits a chunked version: the
+    /// doc's chunk key, each chunk row, the manifest (made, rewritten or its count raised), the
+    /// segment's list, each version, the reference it takes, and the file's sync state.
+    pub rows_written: u64,
+    /// Transactions committed with a chunked version.
+    pub commits: u64,
+}
+
+thread_local! {
+    static CHUNK_WORK: std::cell::Cell<ChunkWork> = const {
+        std::cell::Cell::new(ChunkWork {
+            segment_bytes: 0,
+            file_syncs: 0,
+            folder_syncs: 0,
+            rows_written: 0,
+            commits: 0,
+        })
+    };
+}
+
+/// Add to this thread's [`ChunkWork`] (the kit's `chunk_work!` counts).
+pub(crate) fn count_chunk_work(f: impl FnOnce(&mut ChunkWork)) {
+    CHUNK_WORK.with(|c| {
+        let mut w = c.get();
+        f(&mut w);
+        c.set(w);
+    });
+}
+
+/// This thread's [`ChunkWork`] since the last take, reset to nothing.
+pub fn take_chunk_work() -> ChunkWork {
+    CHUNK_WORK.with(|c| c.replace(ChunkWork::default()))
 }

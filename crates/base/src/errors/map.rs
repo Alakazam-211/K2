@@ -330,9 +330,36 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
         S::Newer { found } => rep(&r::STORE_NEWER, msg)
             .with("found", *found)
             .with("max", crate::store::STORE_FORMAT_READ),
+        S::NeverWritten { found } => rep(&r::STORE_CORRUPT, msg)
+            .with("found", *found)
+            .with("what", "a store format no kit writes"),
+        S::UnknownFeatures { found, unknown } => rep(&r::STORE_NEWER, msg)
+            .with("found", *found)
+            .with("max", crate::store::STORE_FORMAT_READ)
+            .with(
+                "features",
+                Value::List(
+                    crate::store::feature_names(*unknown)
+                        .into_iter()
+                        .map(Value::from)
+                        .collect(),
+                ),
+            ),
+        S::NativeWithoutEngine => rep(&r::STORE_NEWER, msg)
+            .with("found", crate::store::STORE_FORMAT_FEATURES)
+            .with("max", crate::store::STORE_FORMAT_READ)
+            .with(
+                "features",
+                Value::List(
+                    crate::store::feature_names(crate::store::FEATURE_NATIVE)
+                        .into_iter()
+                        .map(Value::from)
+                        .collect(),
+                ),
+            ),
         S::RewriteNewer { found } => rep(&r::STORE_NEWER, msg)
             .with("found", *found)
-            .with("max", crate::store::STORE_FORMAT),
+            .with("max", crate::store::STORE_FORMAT_READ),
         S::ForeignEngine {
             stored,
             stored_format,
@@ -378,6 +405,7 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
         S::PurgedVersion(d, v) => rep(&r::PURGED_VERSION, msg)
             .with("doc", *d)
             .with("version", *v),
+        S::ChunkGone | S::ChunkedPurge => rep(&r::STORE_FAILED, msg),
     }
 }
 

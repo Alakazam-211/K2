@@ -12,7 +12,7 @@
 //!   file and the blob folder finds no erased byte afterwards.
 //! - N−1 in process: a store with no carrier (as a previous release leaves it) and one whose
 //!   carrier an older write left stale both open, and the hook gets the file's bytes.
-//! - F5: an untouched live doc writes back byte for byte.
+//! - An untouched live doc writes back byte for byte.
 //! - A pack that doesn't opt in sees no change: no hook call, no blob.
 //!
 //! Plants (`KeyedMutant`): "carrier stale" (a kit write doesn't become the carrier), "purge
@@ -579,10 +579,10 @@ fn need(ok: bool, row: &str, what: impl FnOnce() -> String) -> Result<(), String
 /// (`encode` would write them sorted), so only a splice writes it back as it was.
 const F0: &str =
     "# deck v1 (opaque)\ns1\ttitle=A\n# speaker note for s1\ns2\tz=9\ttitle=B\n# end\n";
-/// F0 with s1's title `A2`: only that line changes.
+/// `F0` with s1's title `A2`: only that line changes.
 const F1: &str =
     "# deck v1 (opaque)\ns1\ttitle=A2\n# speaker note for s1\ns2\tz=9\ttitle=B\n# end\n";
-/// F1 with s2's title B2: that line is written in key order.
+/// `F1` with s2's title B2: that line is written in key order.
 const F2: &str =
     "# deck v1 (opaque)\ns1\ttitle=A2\n# speaker note for s1\ns2\ttitle=B2\tz=9\n# end\n";
 
@@ -959,7 +959,7 @@ fn n1_a_store_with_no_carrier_or_a_stale_one_opens() {
     assert_eq!(f.last().as_deref(), Some(older2.as_str()));
 }
 
-// ---------- F5: untouched is byte for byte ----------
+// ---------- untouched is byte for byte ----------
 
 /// An untouched live doc writes back byte for byte: opened and flushed, the file is as it was
 /// (opaque lines and field order kept); a change put back leaves it so; a change to one shape
@@ -1351,7 +1351,7 @@ fn row_a_waiting_put_of_the_same_bytes_survives_the_carriers_replacement() -> Re
     )?;
     // another writer's put of the same bytes, its reference not taken yet
     let theirs = f.blobs.put_bytes("ws", F1.as_bytes()).unwrap().id;
-    // the kit replaces the carrier F1
+    // the kit replaces the carrier `F1`
     set_field(&s, bot, "s2", "title", "B2");
     need(s.flush(bot).unwrap().written, ROW, || {
         "control: the kit's second write".into()
@@ -1561,7 +1561,7 @@ fn n1_person(s: &Session) -> ConnId {
     .conn
 }
 
-/// `name`'s file after the producer: F1 with s1's title `A2-<letter>` (three distinct carriers).
+/// `name`'s file after the producer: `F1` with s1's title `A2-<letter>` (three distinct carriers).
 fn n1_written(name: &str) -> String {
     F1.replace("title=A2", &format!("title=A2-{}", &name[..1]))
 }

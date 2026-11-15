@@ -38,6 +38,7 @@ use k2_mpc_base::view_index::{
     Unit, UnitFields, UnitText, ViewIndex, ViewPageError, ViewSchema, ViewSource, VIEW_PAGE_BUDGET,
     VIEW_PAGE_MIN, VIEW_TEXT_MAX,
 };
+use k2_mpc_base::view_index::{LayoutRefused, ViewRefusal};
 use k2_mpc_base::{Key, Value};
 
 const PAGES: &str = "pages";
@@ -85,6 +86,7 @@ const VIEW: ViewSchema = ViewSchema {
         title: Src::Field("title"),
         hidden: Src::Field("hidden"),
         layout: Src::Field("layout"),
+        parent: Src::None,
     },
     unit_fields: UnitFields {
         kind: Src::ListValue,
@@ -132,7 +134,10 @@ const VIEW: ViewSchema = ViewSchema {
         ..BlobView::NONE
     }),
     unit_derived: &[],
+    container_derived: &[],
     space: None,
+    nesting: &[],
+    time_unit: None,
 };
 
 // ----- the toy's file -----
@@ -636,6 +641,7 @@ fn expected(tier: Tier, rev: Option<u64>, version: Option<u64>) -> ViewIndex {
                 ..Unit::default()
             },
         ],
+        ..ViewIndex::default()
     }
 }
 
@@ -1803,4 +1809,205 @@ fn plant_frame_misses_render_hash_is_caught() {
         ),
         "caught, but not where the row says: {e}"
     );
+}
+
+// ----- a container's layout is a layout reference -----
+
+/// What `f` unwound with, or `None` when it returns.
+fn unwound_with<R>(f: impl FnOnce() -> R) -> Option<String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(_) => None,
+        Err(p) => Some(
+            p.downcast_ref::<String>()
+                .cloned()
+                .or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default(),
+        ),
+    }
+}
+
+/// The sample with page 3's layout `bad` (`-`: page 3 has none), and with no layout lines when
+/// `layouts` is false.
+fn layout_sample(bad: &str, layouts: bool) -> Vec<u8> {
+    let s = String::from_utf8(sample()).unwrap();
+    let s = s.replace("P|3|Empty|0|@lay:2", &format!("P|3|Empty|0|{bad}"));
+    let s = match layouts {
+        true => s,
+        false => s
+            .lines()
+            .filter(|l| !l.starts_with("L|"))
+            .map(|l| format!("{l}\n"))
+            .collect(),
+    };
+    s.into_bytes()
+}
+
+/// The live and the blob index of `bytes`, each in a fresh doc.
+fn both_of(tag: &str, bytes: &[u8]) -> (Result<ViewIndex, String>, Result<ViewIndex, String>) {
+    let f = fx(tag);
+    let live = {
+        let s = f.live(bytes);
+        let ada = join(&s, "ada", ParticipantKind::Person);
+        s.view_index(ada.conn)
+            .map_err(|e| format!("live: {e}"))
+            .and_then(|i| i.ok_or_else(|| "live: no view index".to_owned()))
+    };
+    let blob = {
+        let b = f.blob(bytes);
+        let bc = join_blob(&b, "ada");
+        b.view_index(bc, None)
+            .map_err(|e| format!("blob: {e}"))
+            .and_then(|i| i.ok_or_else(|| "blob: no view index".to_owned()))
+    };
+    (live, blob)
+}
+
+/// A page whose layout field holds `slideLayout2.xml`, where the index holds layouts, fails a
+/// test build loudly on both tiers, naming the page and the value; so does one that isn't an
+/// address at all (`@layout`), with no layouts.
+fn row_a_bad_layout_fails_a_test_build() -> Result<(), String> {
+    const ROW: &str = "row_a_bad_layout_fails_a_test_build";
+    let cases = [
+        ("slideLayout2.xml", true, "no_such_layout"),
+        ("@layout", false, "not_an_address"),
+    ];
+    for (bad, layouts, why) in cases {
+        let want = format!("@pg:3: the pack's layout \"{bad}\" isn't a layout reference ({why})");
+        for tier in ["live", "blob"] {
+            let got = unwound_with(|| {
+                let (live, blob) = both_of("bad-layout", &layout_sample(bad, layouts));
+                match tier {
+                    "live" => live.map(|_| ()),
+                    _ => blob.map(|_| ()),
+                }
+            });
+            match got {
+                None => {
+                    return Err(format!(
+                        "{ROW}: {tier}: the layout {bad:?} built and nothing refused it"
+                    ))
+                }
+                Some(e) if !e.contains(&want) => {
+                    return Err(format!(
+                        "{ROW}: {tier}: refused, but not as the kit says: {e}\nwant {want}"
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    // a change too: a good layout made bad on a live doc that kept its index
+    let f = fx("bad-layout-change");
+    let s = f.live(&sample());
+    let ada = join(&s, "ada", ParticipantKind::Person);
+    s.view_index(ada.conn).unwrap().unwrap();
+    let got = unwound_with(|| {
+        s.edit_ops(
+            ada.conn,
+            vec![Edit::Map {
+                root: PAGE_F.into(),
+                ops: vec![MapOp::Set {
+                    key: prop(&page_key(3), "layout"),
+                    value: Value::str("slideLayout2.xml"),
+                }],
+            }],
+            &EditOptions::new(),
+        )
+        .unwrap();
+        s.view_index(ada.conn)
+    });
+    let want =
+        "@pg:3: the pack's layout \"slideLayout2.xml\" isn't a layout reference (no_such_layout)";
+    match got {
+        None => Err(format!(
+            "{ROW}: a change: the layout built and nothing refused it"
+        )),
+        Some(e) if !e.contains(want) => Err(format!(
+            "{ROW}: a change: refused, but not as the kit says: {e}"
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
+#[test]
+fn a_bad_layout_fails_a_test_build() {
+    row_a_bad_layout_fails_a_test_build().unwrap();
+}
+
+#[test]
+fn plant_layout_unchecked_is_caught() {
+    row_a_bad_layout_fails_a_test_build().expect("the row passes as built");
+    let e = with_view_mutant(
+        ViewMutant::LayoutUnchecked,
+        row_a_bad_layout_fails_a_test_build,
+    )
+    .expect_err("the row passes with no layout check");
+    assert!(
+        e.starts_with(
+            "row_a_bad_layout_fails_a_test_build: live: the layout \"slideLayout2.xml\" built and \
+             nothing refused it"
+        ),
+        "{e}"
+    );
+}
+
+/// As a release build reads it (the test build's failure off): a bad layout is left out of
+/// its page and recorded, on both tiers, the other pages keep theirs; with no layouts in the
+/// index, a bare key is a layout reference and a malformed address isn't; the sample's own
+/// layouts are carried and nothing is refused.
+#[test]
+fn a_bad_layout_is_not_carried_and_is_recorded_where_unchecked() {
+    let refused = |container: &str, value: &str, why: LayoutRefused| ViewRefusal::Layout {
+        container: container.into(),
+        value: value.into(),
+        why,
+    };
+    let layout_of = |ix: &ViewIndex, c: &str| {
+        ix.containers
+            .iter()
+            .find(|x| x.key == c)
+            .unwrap_or_else(|| panic!("no container {c}"))
+            .layout
+            .clone()
+    };
+    // the sample: every layout carried, nothing refused
+    let (live, blob) = both_of("layout-good", &sample());
+    for (tier, ix) in [("live", live.unwrap()), ("blob", blob.unwrap())] {
+        assert!(ix.refusals.is_empty(), "{tier}: {:?}", ix.refusals);
+        assert_eq!(layout_of(&ix, "@pg:1").as_deref(), Some("@lay:1"), "{tier}");
+        assert_eq!(layout_of(&ix, "@pg:3").as_deref(), Some("@lay:2"), "{tier}");
+    }
+    let cases: [(&str, bool, Option<LayoutRefused>); 4] = [
+        ("slideLayout2.xml", true, Some(LayoutRefused::NoSuchLayout)),
+        ("@lay:9", true, Some(LayoutRefused::NoSuchLayout)),
+        ("slideLayout2.xml", false, None),
+        ("@layout", false, Some(LayoutRefused::NotAnAddress)),
+    ];
+    for (bad, layouts, why) in cases {
+        let (live, blob) = with_view_mutant(ViewMutant::LayoutUnchecked, || {
+            both_of("layout-unchecked", &layout_sample(bad, layouts))
+        });
+        for (tier, ix) in [("live", live.unwrap()), ("blob", blob.unwrap())] {
+            let what = format!("{tier}, {bad:?}, layouts {layouts}");
+            assert_eq!(
+                layout_of(&ix, "@pg:1").as_deref(),
+                Some("@lay:1"),
+                "{what}: page 1 keeps its own"
+            );
+            match why {
+                Some(w) => {
+                    assert_eq!(layout_of(&ix, "@pg:3"), None, "{what}: not carried");
+                    assert_eq!(ix.refusals, vec![refused("@pg:3", bad, w)], "{what}");
+                }
+                None => {
+                    assert_eq!(
+                        layout_of(&ix, "@pg:3").as_deref(),
+                        Some(bad),
+                        "{what}: carried"
+                    );
+                    assert!(ix.refusals.is_empty(), "{what}: {:?}", ix.refusals);
+                }
+            }
+        }
+    }
 }

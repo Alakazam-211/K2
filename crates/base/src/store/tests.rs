@@ -368,6 +368,12 @@ fn plant_row(w: &redb::WriteTransaction, t: DocRows, id: DocId) {
         DocRows::Named(d) => {
             w.open_table(d).unwrap().insert((id, "n"), v).unwrap();
         }
+        DocRows::Bytes(d) => {
+            w.open_table(d)
+                .unwrap()
+                .insert((id, [7u8; 32].as_slice()), v)
+                .unwrap();
+        }
     }
 }
 
@@ -413,6 +419,10 @@ fn the_orphan_sweep_covers_every_table_on_its_list() {
             },
             Additive {
                 rows: DocRows::Named(D::new("t_named")),
+                on_orphan: None,
+            },
+            Additive {
+                rows: DocRows::Bytes(D::new("t_bytes")),
                 on_orphan: None,
             },
         ];
@@ -969,8 +979,13 @@ fn older_formats_are_stamped_current_and_newer_refused() {
         // stamped the base format: format 6 comes only with a structured doc
         assert_eq!(f, STORE_FORMAT_BASE);
         assert_eq!(
-            (STORE_FORMAT_BASE, STORE_FORMAT, STORE_FORMAT_READ),
-            (5, 6, 7)
+            (
+                STORE_FORMAT_BASE,
+                STORE_FORMAT,
+                STORE_FORMAT_CHUNKED,
+                STORE_FORMAT_READ
+            ),
+            (5, 6, 8, 8)
         );
         drop(r);
         let w = s.begin_write().unwrap();
@@ -991,26 +1006,21 @@ fn older_formats_are_stamped_current_and_newer_refused() {
             .unwrap();
         w.commit().unwrap();
     }
-    // format 7 (v0.10.1: forward-declared, the native engine's) opens read-only and keeps
-    // its stamp; it isn't rewritten here
+    // format 7 was never written: refused at open (`features_tests.rs` has its rows)
+    let e = DocStore::open(d.db()).err().expect("refused");
+    assert_eq!(e, StoreError::NeverWritten { found: 7 });
     {
-        let s = DocStore::open(d.db()).unwrap();
-        assert_eq!(s.format().unwrap(), 7);
-        assert_eq!(s.rewrite_file(), Err(StoreError::RewriteNewer { found: 7 }));
-        assert_eq!(
-            s.check_rewritable(),
-            Err(StoreError::RewriteNewer { found: 7 })
-        );
-        let w = s.begin_write().unwrap();
+        let db = Database::open(d.db()).unwrap();
+        let w = db.begin_write().unwrap();
         w.open_table(META)
             .unwrap()
-            .insert("store_format", 8u64)
+            .insert("store_format", 9u64)
             .unwrap();
         w.commit().unwrap();
     }
     let e = DocStore::open(d.db()).err().expect("refused");
-    assert_eq!(e, StoreError::Newer { found: 8 });
-    assert_eq!(e.to_string(), "store is format 8; this build reads up to 7");
+    assert_eq!(e, StoreError::Newer { found: 9 });
+    assert_eq!(e.to_string(), "store is format 9; this build reads up to 8");
 }
 
 /// A blob doc in `s` (space `ws-1`) with its import by `kit:import`.
@@ -1441,6 +1451,13 @@ fn every_table_is_listed_once() {
         "carrier_pairings".to_owned(),
         // a demoted doc's live log, with the first demotion
         "demoted_changes".to_owned(),
+        // chunked versions, with a store's first (format 8)
+        "doc_chunk_keys".to_owned(),
+        "doc_chunks".to_owned(),
+        "doc_manifests".to_owned(),
+        "doc_segments".to_owned(),
+        // the removal list, with a store's first compaction
+        "doc_removals".to_owned(),
     ];
     let eager: Vec<String> = listed
         .iter()

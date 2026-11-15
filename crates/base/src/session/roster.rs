@@ -212,6 +212,20 @@ pub enum RosterEvent {
         cells: Option<crate::grid::Cells>,
         client: Option<ClientId>,
     },
+    /// The view they are looking at, by address ([`RosterEntry::view_address`]), or gone. As
+    /// [`RosterEvent::Selection`]; in a flush it comes after the viewport.
+    ViewAddress {
+        who: Who,
+        address: Option<String>,
+        client: Option<ClientId>,
+    },
+    /// Their place in time, a playhead ([`RosterEntry::time`]), or gone. As
+    /// [`RosterEvent::Selection`]; in a flush it comes after the view address.
+    TimePosition {
+        who: Who,
+        time: Option<super::participant::TimePosition>,
+        client: Option<ClientId>,
+    },
     /// A claim was taken (explicitly or by a read's `--for-edit`). Never coalesced.
     ClaimStarted {
         who: Who,
@@ -283,9 +297,14 @@ pub enum RosterEvent {
         actor: ClaimActor,
         /// When it ended, on the host's clock (wire 3).
         at_ms: u64,
-        /// The change that ended it ([`ClaimEnd::Edited`], [`ClaimEnd::Deleted`]), else `None`
-        /// (wire 3).
+        /// The change that ended it ([`ClaimEnd::Edited`], [`ClaimEnd::Deleted`],
+        /// [`ClaimEnd::GoneOutsideSave`]), else `None` (wire 3).
         at_rev: Option<Seq>,
+        /// A claim on elements (or a blob doc's nodes): its elements by address
+        /// ([`super::Pack::address_of`]), as they were when it was taken, in key order, so a
+        /// view can name what the claim was on after the elements went. Empty for a claim on
+        /// lines or cells. On the wire as `keys`, only when there are some.
+        addresses: Vec<String>,
     },
     /// A heads-up note was delivered to `to` (on a read or an edit): `from` is viewing,
     /// edited, claimed, or has a caret or selection on lines `to` touched.
@@ -329,6 +348,8 @@ struct Told {
     focus: ToldKind<ElemFocus>,
     range: ToldKind<ElemRange>,
     cells: ToldKind<crate::grid::Cells>,
+    view_address: ToldKind<String>,
+    time: ToldKind<super::participant::TimePosition>,
 }
 
 /// One presence kind as subscribers were last told it: the participant's value (what a consumer
@@ -525,6 +546,8 @@ impl RosterHub {
                             focus: ToldKind::default(),
                             range: ToldKind::default(),
                             cells: ToldKind::default(),
+                            view_address: ToldKind::default(),
+                            time: ToldKind::default(),
                         });
                     }
                     RosterEvent::Left { who, .. } => self.told.retain(|t| &t.who != who),
@@ -558,6 +581,8 @@ impl RosterHub {
                             focus: ToldKind::default(),
                             range: ToldKind::default(),
                             cells: ToldKind::default(),
+                            view_address: ToldKind::default(),
+                            time: ToldKind::default(),
                         });
                         self.told.len() - 1
                     }
@@ -680,7 +705,29 @@ fn told(r: &Row) -> Told {
             top: r.entry.cells.clone(),
             conns: cellses(&r.entry),
         },
+        view_address: ToldKind {
+            top: r.entry.view_address.clone(),
+            conns: view_addresses(&r.entry),
+        },
+        time: ToldKind {
+            top: r.entry.time.clone(),
+            conns: times(&r.entry),
+        },
     }
+}
+
+fn view_addresses(e: &RosterEntry) -> Vec<(ClientId, Option<String>)> {
+    e.devices
+        .iter()
+        .map(|d| (d.client, d.view_address.clone()))
+        .collect()
+}
+
+fn times(e: &RosterEntry) -> Vec<(ClientId, Option<super::participant::TimePosition>)> {
+    e.devices
+        .iter()
+        .map(|d| (d.client, d.time.clone()))
+        .collect()
 }
 
 fn cellses(e: &RosterEntry) -> Vec<(ClientId, Option<crate::grid::Cells>)> {
@@ -753,8 +800,9 @@ fn kind_events<T: Clone + PartialEq>(
     }
 }
 
-/// One participant's `Focus`, `Selection`, `Cells`, `Range`, `Pointer` and `Viewport` events for
-/// a flush (focus first: a view moves to the container before it draws what is selected there).
+/// One participant's `Focus`, `Selection`, `Cells`, `Range`, `Pointer`, `Viewport`,
+/// `ViewAddress` and `TimePosition` events for a flush (focus first: a view moves to the
+/// container before it draws what is selected there).
 fn elem_events(t: &mut Told, who: &Who, e: &RosterEntry, batch: &mut Vec<RosterEvent>) {
     kind_events(&mut t.focus, &e.focus, focuses(e), |x, c| {
         batch.push(RosterEvent::Focus {
@@ -795,6 +843,25 @@ fn elem_events(t: &mut Told, who: &Who, e: &RosterEntry, batch: &mut Vec<RosterE
         batch.push(RosterEvent::Viewport {
             who: who.clone(),
             viewport: x,
+            client: c,
+        })
+    });
+    kind_events(
+        &mut t.view_address,
+        &e.view_address,
+        view_addresses(e),
+        |x, c| {
+            batch.push(RosterEvent::ViewAddress {
+                who: who.clone(),
+                address: x,
+                client: c,
+            })
+        },
+    );
+    kind_events(&mut t.time, &e.time, times(e), |x, c| {
+        batch.push(RosterEvent::TimePosition {
+            who: who.clone(),
+            time: x,
             client: c,
         })
     });

@@ -78,6 +78,9 @@ impl DocStore {
         if p.entries.len() != p.changes.len() {
             return Err(StoreError::Corrupt("promotion: one change per entry"));
         }
+        let link = self.blob_link();
+        let blob_dir = link.as_ref().map(|l| l.dir.clone());
+        let waiting = |c: &super::ChunkId| link.as_ref().is_some_and(|l| (l.waiting)(id, c));
         let w = self.begin_write()?;
         let released = {
             let old = {
@@ -172,6 +175,14 @@ impl DocStore {
                 w.open_table(BLOB_VERSIONS)?.remove((id, vid))?;
                 w.open_table(BLOB_APPROVALS)?.remove((id, vid))?;
                 if let Some(k) = &space {
+                    // a chunked version drops its manifest's reference (its chunks' at none)
+                    let dir = blob_dir.as_deref();
+                    let erased = &mut Vec::new();
+                    if super::chunks::drop_ref(&w, id, k.no, &v.blob, dir, &waiting, erased)?
+                        .is_some()
+                    {
+                        continue;
+                    }
                     match blob::adjust_ref(&w, k.no, &v.blob, -1, p.now) {
                         Ok(()) => gone.push((k.no, v.blob, v.size)),
                         Err(StoreError::NoBlob(_)) => {}

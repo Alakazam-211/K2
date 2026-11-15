@@ -827,7 +827,7 @@ fn revert_after_restart_keeps_each_edges_taint() {
     assert_eq!(run(true), want, "a restart changed the revert's outcome");
 }
 
-// ---------- exact hunk sets (undo spec v1.7, U10; finding F3) ----------
+// ---------- exact hunk sets (undo spec v1.7, U10) ----------
 
 /// One hunk on the root, as an explicit `edit`.
 fn hunk_at(s: &Session, c: ConnId, start: usize, end: usize, insert: &str) -> u64 {
@@ -916,11 +916,11 @@ fn applied(o: UndoOutcome) {
     );
 }
 
-/// F3 (v0.8.2's finding): p2's insertion at the start of p1's region repeats its text. p1's
+/// v0.8.2's finding: p2's insertion at the start of p1's region repeats its text. p1's
 /// undo must turn back **its own** `b`, leaving p2's, so p2's undo then applies cleanly.
 /// A merge on diffed sides put p2's `b` after the region's own and deleted it.
 #[test]
-fn undo_exact_hunks_f3_insertion_at_a_region_start() {
+fn undo_exact_hunks_insertion_at_a_region_start() {
     letters();
     let f = fx("f3");
     let s = f.open("f3.md", b"ab");

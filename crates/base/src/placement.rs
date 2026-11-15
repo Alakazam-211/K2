@@ -842,23 +842,18 @@ pub enum Link<'a> {
 
 /// The planted fault [`crate::differential::PlaceMutant::F32AsF64Digits`].
 fn planted_f32_as_f64_digits() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::place_mutant() == Some(crate::differential::PlaceMutant::F32AsF64Digits)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::place_mutant()
+            == Some(crate::differential::PlaceMutant::F32AsF64Digits)
+    )
 }
 
 /// The planted fault [`crate::differential::PlaceMutant::MissingLinkIdentity`].
 fn planted_missing_link_identity() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::place_mutant()
-        == Some(crate::differential::PlaceMutant::MissingLinkIdentity)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::place_mutant()
+            == Some(crate::differential::PlaceMutant::MissingLinkIdentity)
+    )
 }
 
 /// The world matrix of `address`: `W(u) = W(relative_to(u)) · P(u)`, `P(u)` alone when

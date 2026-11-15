@@ -131,7 +131,8 @@
         "colour": "#0891b2"
       },
       "at_ms": 1700000000600,
-      "at_rev": 2
+      "at_rev": 2,
+      "keys": ["i3"]
     },
     {
       "kind": "role",
@@ -168,7 +169,8 @@
         "colour": "#0891b2"
       },
       "at_ms": 1700000000900,
-      "at_rev": null
+      "at_rev": null,
+      "keys": ["i1", "i2"]
     },
     {
       "kind": "claim_started_elems",

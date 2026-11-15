@@ -1,4 +1,4 @@
-//! Blame (P22) through sessions: every kind of author (the import, a
+//! Blame through sessions: every kind of author (the import, a
 //! person, agents, an assistant acting for someone, an outside edit), the most-recent rule
 //! inside one line, `-L` ranges, undo / redo / revert / restore attributed to whoever ran
 //! them (undo spec U18a), purged changes marked `erased` and erased participants shown by

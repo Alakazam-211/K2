@@ -161,7 +161,7 @@ impl BlobSession {
                     message: format!("{} bytes; text reads up to {max}", v.size),
                 })
             } else {
-                match self.blobs.read_to_vec(&space, &v.blob, max) {
+                match self.blobs.read_to_vec_of(&space, self.doc_id, &v.blob, max) {
                     Ok(b) => Ok(b),
                     Err(e) if current => return Err(e.into()),
                     Err(e) => Err(Declined {

@@ -19,11 +19,11 @@ fn tiny() -> Bound {
 
 /// The oracle of record at a tiny bound with a revert: it violates no rule, `own_only` and
 /// U12 (restated on exact hunk sets, v1.7) included. At v0.8.2 both were violated at depth
-/// 3 (findings F3 and F4, `docs/MODEL-CHECK.md`):
-/// - **F3, `own_only`:** seed `ab`; p1 replaces `a` with `b`; p2 inserts `b` at 0, pulled
+/// 3 (`docs/MODEL-CHECK.md`):
+/// - **`own_only`:** seed `ab`; p1 replaces `a` with `b`; p2 inserts `b` at 0, pulled
 ///   into p1's region at its start; p1's undo deleted p2's `b` (the merge's base→theirs
 ///   diff put p2's insertion after the region's own `b`). Exact sets: p2's `b` stays.
-/// - **F4, U12's old note:** whole-text merge3 of re-diffed sides differs from the window
+/// - **U12's old note:** whole-text merge3 of re-diffed sides differs from the window
 ///   form in repeated text; on exact sets the two forms agree.
 #[test]
 fn the_oracle_at_a_tiny_bound() {

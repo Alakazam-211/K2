@@ -3,6 +3,47 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.19.0 (kit tag v0.19.0)
+
+Still wire 3: every addition is optional, and with a kit that sends none the client behaves as
+0.18.0.
+
+- **A claim gone in an outside save** (WIRE.md, "Claims on elements"): `claim_ended` may say
+  `how: "gone_outside_save"` and carry `keys`, the claim's element addresses as they were.
+  `ClaimEndReason`, `claimEndReason` (a reason this client doesn't know is `deleted`),
+  `PresenceChannel.onClaimEnded(cb)` (`ClaimEnded {claim, who, how, keys}`). Tests:
+  `test/claim-gone-outside.test.ts` (the kit's golden
+  `test/golden/roster_events_claim_gone_outside.json`), and an N-1 row in `test/n1-wire.test.ts`.
+
+- **Outside saves** (WIRE.md, "Outside saves"): `wire.ts` gains `OutsideSaveFrame` (`outside_save`:
+  `outcome` `ingested`, `kept_both` with the copy, `declined` with the code, `missing`);
+  `KeyedWatch.onOutsideSave(cb)` hands each one on. Unnumbered: it changes nothing.
+
+- **View address and time position** (WIRE.md, "Presence frames"): `PresenceChannel.setViewAddress`
+  and `setTimePosition` (frames `view_address` and `time_position`, sent only when the host lists
+  those feature names; checked here first), `PresencePeer.viewAddress` and `timePosition` (folded
+  from the roster kinds of the same names), `TimePositionJson`, `TimePositionSet`. Tests:
+  `test/presence-view-time.test.ts`; an N-1 row in `test/n1-wire.test.ts`.
+
+- **Refused verbs** (WIRE.md, "Refused verbs"): `wire.ts` gains `VerbRefusedFrame`
+  (`verb_refused`: who, the verb, the unit by address, the code, the holder and claim);
+  `KeyedWatch.onVerbRefused(cb)` hands each one on. Unnumbered: it changes nothing.
+- **Derived values per container** (WIRE.md, "Derived values per container"):
+  `ViewContainer.derived`, `ViewSchemaJson.container_derived`,
+  `KeyedWatch.containerDerived(name, container)`; `KeyedView.applyDerived` applies a change's
+  `derived.containers`. Tests: `test/container-derived.test.ts` (the kit's golden
+  `test/golden/keyed_frames_container_derived.json`), and an N-1 row in `test/n1-wire.test.ts`.
+- **Containers in containers** (WIRE.md, "Containers in containers"): `ViewContainer.parent`
+  (by address; absent at the top level), `ContainerDelta.parent_after`,
+  `ViewSchemaJson.container_fields.parent`, `CONTAINER_DEPTH_MAX`. `KeyedView` applies
+  `parent_after` on `add`, `restore` and any other delta, and never reads a parent from the keyed
+  state (the store holds keys, the view addresses). Tests: `test/container-parent.test.ts` (the
+  kit's golden `test/golden/keyed_frames_container_parent.json`), and an N-1 row in
+  `test/n1-wire.test.ts`.
+- **Nesting** (WIRE.md, "Nesting"): `ViewSchemaJson.nesting` (`NestingJson {kind, parent}`),
+  which unit kinds nest inside which. Tests: `test/view-nesting.test.ts`, and an N-1 row in
+  `test/n1-wire.test.ts` (the previous client reads a snapshot that carries it).
+
 ## 0.18.0 (kit tag v0.18.0)
 
 Still wire 3: every addition is optional, and with a kit that sends none the client behaves as

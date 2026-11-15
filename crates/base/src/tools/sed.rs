@@ -229,7 +229,7 @@ impl Sed {
         })
     }
 
-    /// The viewing range for `sed -n 'a,bp'` / `sed -n 'Np'` with line numbers (P4).
+    /// The viewing range for `sed -n 'a,bp'` / `sed -n 'Np'` with line numbers.
     pub(crate) fn view(&self, count: usize) -> Option<(usize, usize)> {
         if !self.quiet || self.cmds.len() != 1 {
             return None;

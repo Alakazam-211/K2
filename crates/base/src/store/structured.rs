@@ -22,7 +22,7 @@
 use redb::{ReadableTable, TableDefinition};
 
 use super::enc::{R, W};
-use super::{DocId, DocStore, Seq, StoreError, META, STORE_FORMAT};
+use super::{DocId, DocStore, Seq, StoreError, META, STORE_FORMAT_STRUCTURED};
 use crate::elem::{Value, WriteId};
 
 /// `(doc, root, key, facet)` → [`ElemWrite`]. Format 6.
@@ -470,12 +470,13 @@ pub(super) fn dec_counts(r: &mut R<'_>, total: usize) -> Result<Vec<ElemCounts>,
 // ----- the lazy upgrade and the index -----
 
 /// Stamp the store format 6 and create its table, if it isn't already, in `w` (the
-/// transaction about to write the store's first structured record).
+/// transaction about to write the store's first structured record). A store already above 6
+/// (format 8) keeps its format.
 pub(super) fn upgrade(w: &redb::WriteTransaction) -> Result<(), StoreError> {
     let mut meta = w.open_table(META)?;
     let found = meta.get("store_format")?.map(|v| v.value()).unwrap_or(0);
-    if found < STORE_FORMAT {
-        meta.insert("store_format", STORE_FORMAT)?;
+    if found < STORE_FORMAT_STRUCTURED {
+        meta.insert("store_format", STORE_FORMAT_STRUCTURED)?;
     }
     drop(meta);
     w.open_table(ELEM_WRITES)?;
@@ -660,7 +661,8 @@ impl DocStore {
         self.row_mark(id, COL_REMAP)
     }
 
-    /// The store's format stamp (5: text docs only; 6: it holds structured docs).
+    /// The store's format stamp (5: text docs only; 6: it holds structured docs; 8: it holds
+    /// chunked versions, its features word saying so).
     pub fn format(&self) -> Result<u64, StoreError> {
         let r = self.begin_read()?;
         Ok(r.open_table(META)?

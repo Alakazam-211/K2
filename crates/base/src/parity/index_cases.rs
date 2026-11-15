@@ -17,8 +17,8 @@ use crate::tools;
 
 /// The cases for a pack whose index has `verbs`, on `first` then `second` (two versions of a
 /// file of its type). Pass them to [`super::check_blob`] as `extra`, with the registry
-/// [`super::Registry::for_blob_pack`] builds and a parity list whose P3, P8, P19 and P22 rows
-/// name these verbs.
+/// [`super::Registry::for_blob_pack`] builds and a parity list whose read, caret,
+/// history and blame rows name these verbs.
 pub fn kit_index_cases(
     verbs: &'static IndexVerbs,
     first: &'static [u8],

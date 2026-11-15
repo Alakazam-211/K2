@@ -24,9 +24,11 @@ mod annot;
 mod blob;
 mod blob_refs;
 mod blob_struct;
+mod chunks;
 mod delete;
 mod demoted;
 pub(crate) mod enc;
+mod features;
 mod history;
 mod live_carrier;
 mod live_copies;
@@ -43,8 +45,17 @@ pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
 pub(crate) use blob_refs::BlobRefScan;
 pub(crate) use blob_struct::{StructCommitted, StructPut};
+pub(crate) use chunks::{
+    apply_in, chunk_id, enc_entries, plan_in, read_at_file, read_entries, segment_dir,
+    segment_path, BlobLink, ChunkCommit, ChunkId, ChunkKey, ChunkRead, Compaction, EntriesError,
+    SegmentList, Select, SEGMENTS,
+};
 pub(crate) use demoted::DemoteRows;
 pub use demoted::DemotedChange;
+pub(crate) use features::feature_names;
+pub use features::{
+    FEATURE_CHUNKED, FEATURE_NATIVE, STORE_FORMAT_FEATURES, STORE_FORMAT_NEVER_WRITTEN,
+};
 pub use history::Redaction;
 pub(crate) use history::{
     window_plan, Carry, ClockSpan, HunkRoots, NewChange, ProvRow, RecordHunk, RecordRoot,
@@ -164,26 +175,53 @@ use enc::{R, W};
 ///   One more on the same terms, `doc_blob_refs` (the blobs a doc's values name; `blob_refs.rs`),
 ///   created lazily by the first name. Its counts are in `blobs`, so an older kit's blob GC
 ///   honours them. An older kit's own writes take none (`docs/SESSIONS.md`, "Blob references").
-/// - 7: **forward-declared, never written by this build** (v0.10.1): the native engine's
-///   store (its docs stamped by the native engine; tables this build doesn't know). This
-///   build reads a format-7 store ([`STORE_FORMAT_READ`]) and serves the Yrs docs in it, but
-///   never changes what it can't read: opening one writes nothing (no upgrade, no sweep, no
-///   pending rewrite finished: the file's bytes stay as they are), a rewrite and so a purge
-///   are refused ([`StoreError::RewriteNewer`], `MPC-E502`), and a doc another engine stamped
-///   is refused on open, delete and purge (`MPC-E520`).
+/// - 7: **retired, never written.** Declared (v0.10.1) for the native engine's stores; no
+///   shipped host turned that engine on, so no format-7 store exists in the field. Kits
+///   v0.10.1 to v0.17.0 read it; this build refuses it at open, before anything reads it, as a
+///   format no kit writes ([`StoreError::NeverWritten`], `MPC-E503`), its bytes unchanged.
+/// - 8: **the required-features word** (`features.rs`; `docs/design/version-storage-r2.md`,
+///   section 10). The store's `meta` holds a word of required features ([`FEATURE_CHUNKED`],
+///   [`FEATURE_NATIVE`]); a kit refuses a word naming a feature it doesn't know, by name,
+///   at open ([`StoreError::UnknownFeatures`], `MPC-E502`). From 8 on, a new on-disk
+///   capability is a feature, not a format number. **Written by this build**, lazily: the
+///   transaction that writes a store's first chunked version (`chunks.rs`; on only with
+///   `BlobConfig::chunked_versions`) stamps 8 with [`FEATURE_CHUNKED`] and creates the four
+///   chunk tables (`doc_chunk_keys`, `doc_chunks`, `doc_manifests`, `doc_segments`). Never
+///   lowered: a structured doc's upgrade keeps a format-8 store at 8. A format-8 store opens,
+///   is swept and is rewritten (with its meta, so its word) as any store this build writes.
+///   Kits v0.14.0 to v0.17.0 refuse a format-8 store at open ([`StoreError::Newer`]: "store is
+///   format 8; this build reads up to 7"), its bytes unchanged, so a host turns chunked
+///   versions on only once the release it would roll back to reads format 8.
 ///
-/// [`STORE_FORMAT`] is the highest format this build **writes** (stamps); it reads up to
-/// [`STORE_FORMAT_READ`] and refuses a store above that ([`StoreError::Newer`]).
+/// The format a store with no opt-in feature is stamped: 6, the highest a store reaches with
+/// text and structured docs ([`STORE_FORMAT_STRUCTURED`]; a store of text docs only stays at
+/// [`STORE_FORMAT_BASE`]). A store's first chunked version, an opt-in feature
+/// (`BlobConfig::chunked_versions`), stamps [`STORE_FORMAT_CHUNKED`]. This build reads up to
+/// [`STORE_FORMAT_READ`] and refuses a store above that ([`StoreError::Newer`]): a host's own
+/// "reads up to" message names that one.
 pub const STORE_FORMAT: u64 = 6;
 
-/// The highest store format this build **reads** (v0.10.1): one past what it writes
-/// ([`STORE_FORMAT`]), so the release before the native switch opens the switch's stores
-/// (the N−1 read) without writing their format.
-pub const STORE_FORMAT_READ: u64 = 7;
+/// The highest store format this build **reads**: format 8, the required-features word, which
+/// it also writes ([`STORE_FORMAT_CHUNKED`]). Format 7 is below it and still refused
+/// ([`STORE_FORMAT_NEVER_WRITTEN`]).
+pub const STORE_FORMAT_READ: u64 = 8;
+
+/// The highest format this build stamps. A store above it that this build still reads would
+/// be read as it is and never rewritten here ([`StoreError::RewriteNewer`]); none is now, as
+/// this build stamps every format it reads.
+pub(super) const STORE_FORMAT_WRITTEN: u64 = STORE_FORMAT_CHUNKED;
 
 /// The format of a store without structured docs: a new store starts here, an older one is
 /// stamped here when opened, and both stay here until their first structured doc.
 pub const STORE_FORMAT_BASE: u64 = 5;
+
+/// The format a store's first structured doc stamps (a store already at a higher format keeps
+/// it).
+pub const STORE_FORMAT_STRUCTURED: u64 = 6;
+
+/// The format a store's first chunked version stamps (`chunks.rs`): format 8 with the chunked
+/// feature in its required-features word. Never lowered.
+pub const STORE_FORMAT_CHUNKED: u64 = 8;
 
 pub type DocId = u64;
 /// Position in a doc's update log (1-based, increasing, never reused).
@@ -452,15 +490,11 @@ pub(super) fn sweep_orphans(
 
 /// The planted fault [`crate::differential::BlobRefMutant::SweepSkipsTable`]: the sweep leaves
 /// the last table on its list.
-#[cfg(any(test, feature = "differential"))]
 fn planted_sweep_skips_table() -> bool {
-    crate::differential::blob_ref_mutant()
-        == Some(crate::differential::BlobRefMutant::SweepSkipsTable)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_sweep_skips_table() -> bool {
-    false
+    plant_on!(
+        crate::differential::blob_ref_mutant()
+            == Some(crate::differential::BlobRefMutant::SweepSkipsTable)
+    )
 }
 
 const VERSIONS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("versions");
@@ -494,6 +528,9 @@ pub(super) enum DocRows {
     Elem(TableDefinition<'static, (u64, &'static str, &'static str, u8), &'static [u8]>),
     /// `(doc, name)` → record (`row_marks`, format 6: by row key).
     Named(TableDefinition<'static, (u64, &'static str), &'static [u8]>),
+    /// `(doc, id bytes)` → record (`doc_chunks`, `doc_manifests`, format 8: by chunk or file
+    /// id).
+    Bytes(TableDefinition<'static, (u64, &'static [u8]), &'static [u8]>),
 }
 
 /// How a doc delete erases a per-doc table's rows of the doc.
@@ -549,6 +586,13 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Pair(live_carrier::VERSION_CARRIERS), Erase::Blob),
     (DocRows::Pair(live_carrier::CARRIER_PAIRINGS), Erase::Range),
     (DocRows::Pair(demoted::DEMOTED_CHANGES), Erase::Range),
+    // format 8's chunked versions (`chunks.rs`): erased by `blob::delete_rows`, after it has
+    // told the doc's chunked versions from its whole-file ones
+    (chunks::CHUNK_TABLES[0], Erase::Blob),
+    (chunks::CHUNK_TABLES[1], Erase::Blob),
+    (chunks::CHUNK_TABLES[2], Erase::Blob),
+    (chunks::CHUNK_TABLES[3], Erase::Blob),
+    (chunks::CHUNK_TABLES[4], Erase::Blob),
 ];
 
 /// The tables not keyed by doc id: `meta` (the store's own), `paths` (key → doc: a delete
@@ -574,6 +618,7 @@ impl DocRows {
             Self::Clock(t) => t.name(),
             Self::Elem(t) => t.name(),
             Self::Named(t) => t.name(),
+            Self::Bytes(t) => t.name(),
         }
     }
 
@@ -605,6 +650,9 @@ impl DocRows {
             Self::Named(t) => w
                 .open_table(t)?
                 .retain_in((id, "")..(id + 1, ""), |_, _| false)?,
+            Self::Bytes(t) => w
+                .open_table(t)?
+                .retain_in((id, [].as_slice())..(id + 1, [].as_slice()), |_, _| false)?,
         }
         Ok(())
     }
@@ -658,6 +706,12 @@ impl DocRows {
                 .next()
                 .transpose()?
                 .map(|(k, _)| k.value().0),
+            Self::Bytes(t) => w
+                .open_table(t)?
+                .range((from, [].as_slice())..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value().0),
         })
     }
 
@@ -696,6 +750,11 @@ impl DocRows {
                 .range((id, "")..(id + 1, ""))?
                 .next()
                 .is_some(),
+            Self::Bytes(t) => r
+                .open_table(t)?
+                .range((id, [].as_slice())..(id + 1, [].as_slice()))?
+                .next()
+                .is_some(),
         })
     }
 }
@@ -707,14 +766,31 @@ pub enum StoreError {
     Db(String),
     #[error("store is format {found}; this build reads up to {STORE_FORMAT_READ}")]
     Newer { found: u64 },
-    /// A store of a format this build reads but doesn't write (above [`STORE_FORMAT`]; the
-    /// native engine's, format 7) can't be rewritten here: a rewrite would copy tables it
-    /// doesn't know, or drop them. So [`DocStore::rewrite_file`], a purge (which rewrites the
-    /// file), and an open that finds a rewrite a newer build left pending are refused before
-    /// anything changes (v0.10.1). `MPC-E502` `store_newer`. Exit 6.
+    /// A store stamped with a format no kit writes (format 7: declared for the native
+    /// engine's stores and retired unwritten): refused at open, before anything reads it, and
+    /// its bytes are left as they are. `MPC-E503` `store_corrupt`. Exit 6.
+    #[error("store is format {found}, which no kit writes")]
+    NeverWritten { found: u64 },
+    /// A format-8 store whose required-features word names a feature this build doesn't know
+    /// (`features.rs`): refused at open, before anything reads it, each unknown bit by name.
+    /// `MPC-E502` `store_newer`. Exit 6.
+    #[error("{}", features::unknown_features_message(*found, *unknown))]
+    UnknownFeatures { found: u64, unknown: u64 },
+    /// A format-8 store sets the native feature but holds no engine store (this kit stores
+    /// no engine records yet): refused at open, before anything reads it. A kit a host rolled
+    /// back to is the likely reader, so it is `MPC-E502` `store_newer` (details.features names
+    /// `native`). Exit 6.
+    #[error("store sets the native feature but holds no engine store: use the newer build")]
+    NativeWithoutEngine,
+    /// A store of a format this build reads but doesn't write can't be rewritten here: a
+    /// rewrite would copy tables it doesn't know, or drop them. So [`DocStore::rewrite_file`],
+    /// a purge (which rewrites the file), and an open that finds a rewrite a newer build left
+    /// pending are refused before anything changes (v0.10.1). This build stamps every format
+    /// it reads (up to [`STORE_FORMAT_READ`]), so no store reaches it now; the variant stays
+    /// for a later build's. `MPC-E502` `store_newer`. Exit 6.
     #[error(
         "store is format {found}; this build reads it but rewrites only up to format \
-         {STORE_FORMAT}: use the newer build"
+         {STORE_FORMAT_READ}: use the newer build"
     )]
     RewriteNewer { found: u64 },
     /// A doc another engine wrote (its stamp is one this build's engine doesn't read, and
@@ -741,7 +817,7 @@ pub enum StoreError {
     Corrupt(&'static str),
     /// A revert record's root run holds a units or clock value over `u32::MAX`, which its
     /// stored layout (u32, unchanged since format 5) can't hold: the change is refused at
-    /// encode, before anything is written, never stored truncated (v0.10.1, P2). A Yrs doc
+    /// encode, before anything is written, never stored truncated (v0.10.1). A Yrs doc
     /// never reaches it (Yrs clocks are u32). In the error registry this is `MPC-E501`
     /// `store_failed`. Exit 6.
     #[error("store: refused at encode: revert record clock {0} is over u32")]
@@ -782,6 +858,15 @@ pub enum StoreError {
     /// Tier 0: version {1} of blob doc {0} was purged; its content is gone.
     #[error("version {1} of doc {0} was purged")]
     PurgedVersion(DocId, VersionId),
+    /// A chunked write found, in its own transaction, that a chunk it reuses (or the doc's
+    /// chunk key it chunked with) is gone: the whole write is refused, nothing referenced
+    /// (fail closed). Write again. `MPC-E501` `store_failed`. Exit 6.
+    #[error("a chunk this write reuses is gone; nothing was stored: write again")]
+    ChunkGone,
+    /// A purge reached a chunked version: this build doesn't purge chunked versions yet. The
+    /// purge is refused before anything changes. `MPC-E501` `store_failed`. Exit 6.
+    #[error("this build doesn't purge chunked versions; nothing was purged")]
+    ChunkedPurge,
 }
 
 /// Tables a newer kit adds without a format bump, with the kit that adds them (none known
@@ -1292,6 +1377,10 @@ pub struct DocStore {
     /// the swap.
     db: RwLock<Database>,
     path: PathBuf,
+    /// What the store keeps of the [`crate::blob::BlobStore`] over it, if one is open: its
+    /// folder (where a chunked version's manifest is read when the store drops it), its lock
+    /// and its writes' waiting marks (`chunks.rs`).
+    blob_link: std::sync::Mutex<Option<chunks::BlobLink>>,
     /// Commits skip the sync to disk ([`DocStore::unsynced_for_tests`]).
     #[cfg(any(feature = "conformance", feature = "differential"))]
     unsynced: std::sync::atomic::AtomicBool,
@@ -1739,13 +1828,13 @@ impl DocStore {
         // a rewrite a crash interrupted left its temp file: the store itself is whole
         let _ = std::fs::remove_file(rewrite::temp_path(&path));
         let db = Database::create(&path)?;
-        // a store a newer build stamped (format 7, the native engine's): read as it is, never
-        // upgraded, swept or rewritten here; opening it writes nothing
-        if let Some(f) = Self::format_of(&db)? {
-            if f > STORE_FORMAT_READ {
-                return Err(StoreError::Newer { found: f });
-            }
-            if f > STORE_FORMAT {
+        // what the store says it is, checked from a read transaction before anything else
+        // reads or writes it (`features.rs`): format 7 (never written), a format above what
+        // this build reads, and format 8's features word. A format this build reads but
+        // doesn't write (none now: this build writes 8): read as it is, never upgraded, swept
+        // or rewritten here; opening it writes nothing
+        if let Some(f) = features::check_stamp(&db)? {
+            if f > STORE_FORMAT_WRITTEN {
                 return Self::open_newer(db, path, f);
             }
         }
@@ -1759,11 +1848,12 @@ impl DocStore {
                 }
                 Some(f) if f > STORE_FORMAT_READ => return Err(StoreError::Newer { found: f }),
                 // a format this build reads but doesn't write: handled above, read-only
-                Some(f) if f > STORE_FORMAT => return Err(StoreError::Newer { found: f }),
+                Some(f) if f > STORE_FORMAT_WRITTEN => return Err(StoreError::Newer { found: f }),
                 // 1 -> 2 -> 3: nothing to rewrite (older records still decode); new tables
                 // below. 3 -> 4: the blob approvals, backfilled below. 4 -> 5: the
                 // provenance table (below), empty: every existing element is its own root.
-                // 5 -> 6 never happens here: only a store's first structured doc does it.
+                // 5 -> 6 never happens here: only a store's first structured doc does it, and
+                // -> 8 only its first chunked version.
                 Some(f) if f < STORE_FORMAT_BASE => {
                     meta.insert("store_format", STORE_FORMAT_BASE)?;
                 }
@@ -1800,6 +1890,7 @@ impl DocStore {
         let s = Self {
             db: RwLock::new(db),
             path,
+            blob_link: std::sync::Mutex::new(None),
             #[cfg(any(feature = "conformance", feature = "differential"))]
             unsynced: std::sync::atomic::AtomicBool::new(false),
         };
@@ -1820,20 +1911,8 @@ impl DocStore {
         })
     }
 
-    /// The format stamp of an open database, read without writing (`None`: a new store).
-    fn format_of(db: &Database) -> Result<Option<u64>, StoreError> {
-        let r = db.begin_read()?;
-        let meta = match r.open_table(META) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let f = meta.get("store_format")?.map(|v| v.value());
-        Ok(f)
-    }
-
     /// Open a store of a format this build reads but doesn't write (`found`, above
-    /// [`STORE_FORMAT`]): read-only at open. No table is created, nothing is swept, and a
+    /// [`STORE_FORMAT_WRITTEN`]): read-only at open. No table is created, nothing is swept, and a
     /// rewrite a newer build left pending isn't finished here: the open is refused
     /// ([`StoreError::RewriteNewer`]) and the file is left as it is.
     fn open_newer(db: Database, path: PathBuf, found: u64) -> Result<Self, StoreError> {
@@ -1847,6 +1926,7 @@ impl DocStore {
         Ok(Self {
             db: RwLock::new(db),
             path,
+            blob_link: std::sync::Mutex::new(None),
             #[cfg(any(feature = "conformance", feature = "differential"))]
             unsynced: std::sync::atomic::AtomicBool::new(false),
         })
@@ -2799,5 +2879,7 @@ pub(crate) mod plant {
     }
 }
 
+#[cfg(test)]
+mod features_tests;
 #[cfg(test)]
 mod tests;

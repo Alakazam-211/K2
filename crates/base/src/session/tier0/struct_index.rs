@@ -131,7 +131,7 @@ impl IndexJob {
     /// on the calling thread, so only for packs a host trusts with hostile bytes in its own
     /// process.
     pub fn run(self) -> std::result::Result<IndexStatus, IndexJobError> {
-        let mut reader = self.blobs.reader(&self.space, &self.blob)?;
+        let mut reader = self.blobs.reader_of(&self.space, self.doc, &self.blob)?;
         let out = self.pack.index(&mut reader, self.size, &self.limits);
         drain(&mut reader)?;
         let outcome = match out {
@@ -144,7 +144,7 @@ impl IndexJob {
     /// For a sandboxed worker: the verified stream and the limits to run it under. Feed the
     /// stream to [`crate::index::index_to_wire`] in the worker.
     pub fn open(&mut self) -> std::result::Result<(IndexInput, IndexLimits), IndexJobError> {
-        let reader = self.blobs.reader(&self.space, &self.blob)?;
+        let reader = self.blobs.reader_of(&self.space, self.doc, &self.blob)?;
         Ok((
             IndexInput {
                 reader,
@@ -437,7 +437,10 @@ impl BlobSession {
         let Some(sp) = t.store.blob_space(&t.space)? else {
             return not_indexed(NotIndexedWhy::Purged);
         };
-        if t.store.blob_row(sp.no, &t.ver.blob)?.is_none() {
+        // a chunked version's manifest row stands in for the blob row
+        if t.store.blob_row(sp.no, &t.ver.blob)?.is_none()
+            && !self.blobs.is_chunked(self.doc_id, &t.ver.blob)?
+        {
             return not_indexed(NotIndexedWhy::Purged);
         }
         let status = |f| t.store.blob_struct_status(sp.no, &t.ver.blob, spec.pack, f);

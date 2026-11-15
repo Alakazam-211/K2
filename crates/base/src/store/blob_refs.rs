@@ -223,15 +223,11 @@ pub(super) fn claim_named(
 }
 
 /// The planted fault [`crate::differential::BlobRefMutant::GcIgnoresNames`].
-#[cfg(any(test, feature = "differential"))]
 fn planted_gc_ignores_names() -> bool {
-    crate::differential::blob_ref_mutant()
-        == Some(crate::differential::BlobRefMutant::GcIgnoresNames)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_gc_ignores_names() -> bool {
-    false
+    plant_on!(
+        crate::differential::blob_ref_mutant()
+            == Some(crate::differential::BlobRefMutant::GcIgnoresNames)
+    )
 }
 
 /// The references change `c` takes, in `w`: the change's own transaction.

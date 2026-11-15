@@ -31,7 +31,7 @@ Every ratio cites the run record that printed it (`[run JOB/RUN:field]`, checked
 | #13 | `db08bf5d` | `e04fe5c0` | shared (1.1–3.5) | 1,096 [run e04fe5c0/perfh_ratio_h10000_events_500:ratio_p50_milli] | 1,069 [run e04fe5c0/perfh_ratio_h10000_blame_doc:ratio_p50_milli] | AMBIGUOUS |
 | #13 rerun | `db08bf5d` | `522db6d5` | quiet (1.0–3.1) | 1,060 [run 522db6d5/perfh_ratio_h10000_events_500:ratio_p50_milli] | 1,056 [run 522db6d5/perfh_ratio_h10000_blame_doc:ratio_p50_milli] | SLOW |
 
-So the first-parent culprit was #13, `db08bf5d`, "Merge main ef511130 into feat/sl-s4". Its main side, from `77bda2d2` (the parent of its first commit) to `ef511130`, has seven first-parent commits m#1–m#7. Only three change the compiled kit (`crates/base/src`, `crates/base/Cargo.toml`, `Cargo.lock`, `vendor/yrs`): m#2 `de956b17` (grid key counters), m#4 `3263a3e0` (Merge kit main `5d037528`, which brings the production timers and the native engine's updates), m#6 `6d49128c` (a merge of Board work). The others are identical to their predecessors.
+So the first-parent culprit was #13, `db08bf5d`, the merge of main `ef511130` into the grid line's side branch. Its main side, from `77bda2d2` (the parent of its first commit) to `ef511130`, has seven first-parent commits m#1–m#7. Only three change the compiled kit (`crates/base/src`, `crates/base/Cargo.toml`, `Cargo.lock`, `vendor/yrs`): m#2 `de956b17` (grid key counters), m#4 `3263a3e0` (Merge kit main `5d037528`, which brings the production timers and the native engine's updates), m#6 `6d49128c` (a merge of Board work). The others are identical to their predecessors.
 
 | Step | B commit | Job | Node at submit (loads at the runs' starts) | events_500 B/A | blame_doc B/A | Call |
 |---|---|---|---|---|---|---|

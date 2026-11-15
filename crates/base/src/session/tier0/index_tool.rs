@@ -278,7 +278,7 @@ impl BlobSession {
     ///   and the refusal's `details.missing` say what exists. `<show> ADDR --text`: the one
     ///   node's text, whole, as it is; `<show> ADDR --whole`: the node and its ancestors in
     ///   full, as JSON (neither paged nor budgeted; `--text` exits 1 when there is none).
-    /// - `<diff> V1 [V2] [--cursor C] [--no-truncate] [--json]` (V2: the current version):
+    /// - `<diff> V1 [V2] [--cursor C] [--no-truncate] [--json]` (`V2`: the current version):
     ///   [`BlobSession::index_diff`].
     /// - `<blame> [--version V] [--cursor C] [--no-truncate] [--json]`:
     ///   [`BlobSession::index_blame`].

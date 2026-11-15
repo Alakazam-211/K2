@@ -1,3 +1,3 @@
 # The previous host release's pre-cut commit (its tag's parent): tools/check-public-cut.sh's text
 # rule scans the lines added since it. tools/README.md, "The public cut", says when to update it.
-9b04ba335aa0e7bd5effa8fc49d37705030380cb
+e5daca6eb18d555240f0d00c5fbcd2499065e42d

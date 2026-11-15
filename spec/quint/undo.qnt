@@ -71,7 +71,7 @@
 //   inv_own_only  hist.undo_own_only (U10a by root, v1.8): every character an undo, redo or
 //                 revert deletes has a root the change it reverses inserted (the base roots
 //                 its ours deletes), over the regions the step applied (v1.9). Enforced
-//                 since v1.7 (F3 fixed by exact hunk sets).
+//                 since v1.7 (by exact hunk sets).
 //   inv_I1        I1 (v1.8): at most one live element per root, in every state and after
 //                 every step of an undo or redo (v1.9: each step is its own change).
 //   inv_RT        restart transparency (U22a v1.6): a restart changes no revert's outcome

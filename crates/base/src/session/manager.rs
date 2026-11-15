@@ -18,8 +18,8 @@ use super::live::{
 use super::pack::{Declined, Pack};
 use super::participant::ConnId;
 use super::roster::RosterEvent;
-use super::tier0::{AnyFile, BlobPack, BlobSession, Promotion};
-use crate::blob::{BlobError, BlobInfo, BlobStore};
+use super::tier0::{AnyFile, BlobPack, BlobSession, PackHints, Promotion};
+use crate::blob::{BlobError, BlobStore, CheapSet, LockWait, VersionPut};
 use crate::store::{DocKey, DocStore, Seq, VersionId, BLOB_DOC_PACK};
 
 /// Returned by [`SessionManager::stats`] (for the host's doctor/status).
@@ -399,10 +399,17 @@ impl SessionManager {
             return Ok(s);
         }
         let src = initial.ok_or_else(|| SessionError::NotFound(key.clone()))?;
-        let info = blobs.put(&key.space, src)?;
-        let out = self.import_blob(pack, key, info, None);
+        let put = blobs.put_version(
+            &key.space,
+            None,
+            src,
+            LockWait::Wait,
+            &CheapSet::none(),
+            &PackHints(&*pack),
+        )?;
+        let out = self.import_blob(pack, key, &put, None);
         // the put no longer waits: referenced by the doc's first version, or given up
-        blobs.settle(&key.space, &info.id);
+        blobs.finish(&key.space, put);
         out
     }
 
@@ -442,7 +449,7 @@ impl SessionManager {
         &self,
         pack: Arc<dyn BlobPack>,
         key: &DocKey,
-        info: BlobInfo,
+        put: &VersionPut,
         from_file: Option<super::disk::FileStat>,
     ) -> Result<Arc<BlobSession>> {
         // someone may have created it while we uploaded: theirs wins, ours is collected
@@ -458,7 +465,7 @@ impl SessionManager {
             pack,
             store,
             key.clone(),
-            info,
+            put,
             from_file,
         )?);
         pool.blob_sessions.insert(key.clone(), s.clone());
@@ -511,8 +518,15 @@ impl SessionManager {
                     |e: std::io::Error| SessionError::Disk(format!("{}: {e}", real.display()));
                 let mut f = File::open(real).map_err(disk_err)?;
                 let stat = disk::FileStat::of(&f.metadata().map_err(disk_err)?);
-                let info = match blobs.put(&key.space, &mut f) {
-                    Ok(i) => i,
+                let put = match blobs.put_version(
+                    &key.space,
+                    None,
+                    &mut f,
+                    LockWait::Wait,
+                    &CheapSet::none(),
+                    &PackHints(&*pack),
+                ) {
+                    Ok(p) => p,
                     Err(BlobError::TooLarge { limit }) => {
                         return Err(SessionError::Declined(Declined {
                             code: "too_large",
@@ -521,9 +535,9 @@ impl SessionManager {
                     }
                     Err(e) => return Err(e.into()),
                 };
-                let out = self.import_blob(pack, key, info, Some(stat));
+                let out = self.import_blob(pack, key, &put, Some(stat));
                 // the put no longer waits: referenced by the doc's first version, or given up
-                blobs.settle(&key.space, &info.id);
+                blobs.finish(&key.space, put);
                 out?
             }
         };
@@ -985,6 +999,11 @@ impl SessionManager {
         store
             .delete_doc(id, self.host.now_ms())
             .map_err(engine_refusal)?;
+        // the doc's chunked versions' segments, once their rows are gone (a failure leaves
+        // files no row names, which `gc` removes)
+        if let Ok(blobs) = self.blobs() {
+            let _ = blobs.remove_doc_segments(&key.space, id);
+        }
         Ok(())
     }
 
@@ -1023,9 +1042,19 @@ impl SessionManager {
                 s.close_deleted();
             }
         }
-        store
-            .delete_space(space, self.host.now_ms())
-            .map_err(engine_refusal)
+        let gone = store
+            .delete_space_ids(space, self.host.now_ms())
+            .map_err(engine_refusal)?;
+        // the docs' chunked versions' segments, once their rows are gone, in the same step (a
+        // failure leaves files no row names, which `gc` removes)
+        if let Ok(blobs) = self.blobs() {
+            if !planted_leaves_segments() {
+                for (id, _) in &gone {
+                    let _ = blobs.remove_doc_segments(space, *id);
+                }
+            }
+        }
+        Ok(gone.into_iter().map(|(_, k)| k).collect())
     }
 
     /// Close idle connections in every loaded session ([`Session::expire_idle`]).
@@ -1286,6 +1315,15 @@ fn hard_linked(p: &Probe) -> Result<()> {
         })),
         _ => Ok(()),
     }
+}
+
+/// Whether the planted fault [`crate::differential::ChunkPlant::DeleteSpaceLeavesSegments`] is
+/// on (test builds only).
+fn planted_leaves_segments() -> bool {
+    plant_on!(
+        crate::differential::chunk_plant()
+            == Some(crate::differential::ChunkPlant::DeleteSpaceLeavesSegments)
+    )
 }
 
 /// A store's refusal of another engine's doc ([`StoreError::ForeignEngine`]) as the

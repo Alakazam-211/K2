@@ -876,11 +876,8 @@ fn copy_file(f: FileBytes, out: &mut dyn std::io::Write) -> Result<FileCopy> {
 
 /// The planted fault [`crate::differential::KeyedMutant::FileAtUsesEncode`].
 fn planted_file_at_uses_encode() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::FileAtUsesEncode)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::FileAtUsesEncode)
+    )
 }

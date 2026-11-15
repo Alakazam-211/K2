@@ -742,55 +742,41 @@ fn grows_past(before: usize, grow: isize, limit: usize) -> Option<usize> {
 
 /// The planted fault [`crate::differential::KeyedMutant::ReadEncodes`].
 fn planted_read_encodes() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant() == Some(crate::differential::KeyedMutant::ReadEncodes) {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant() == Some(crate::differential::KeyedMutant::ReadEncodes)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::LimitNotApplied`].
 fn keyed_limit_skipped() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::LimitNotApplied)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::LimitNotApplied)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::OutsideSaveAppliedSilently`].
 fn keyed_save_applied_silently() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::OutsideSaveAppliedSilently)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::OutsideSaveAppliedSilently)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::DirtySaveMergedByKey`].
 fn dirty_save_merged_by_key() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::DirtySaveMergedByKey)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::DirtySaveMergedByKey)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::HoldsFileCallsPack`].
 fn holds_file_calls_pack() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::HoldsFileCallsPack)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::HoldsFileCallsPack)
+    )
 }
 
 /// The decline of a keyed doc that isn't a table, past its live size limit `limit` with `n`
@@ -4140,8 +4126,10 @@ impl Session {
             });
         }
         // the save kept both: one event for the copy, and the host sees the conflict
+        let mut frame_copy = None;
         let out = match kept_copy {
             Some((copy, copy_path)) => {
+                frame_copy = self.outside_save_copy(copy.as_deref(), copy_path.as_deref());
                 let store = self.store(st)?.clone();
                 let kept = self.version_before(&store, before_seq).unwrap_or_default();
                 let current = store
@@ -4173,6 +4161,16 @@ impl Session {
         let settled = self.settle_saved(st, bytes, now);
         // the frame, built on the save's carrier and its pairing
         self.flush_watch(st);
+        // then what came of the save
+        let outcome = match &out {
+            DiskCheck::Conflict { version, kept, .. } => OutsideSaveOutcome::KeptBoth {
+                rev: *version,
+                kept: *kept,
+                copy: frame_copy,
+            },
+            _ => OutsideSaveOutcome::Ingested { rev: seq },
+        };
+        self.watch_outside_save(st, outcome);
         settled?;
         self.maybe_compact(st);
         Ok(out)
@@ -4968,13 +4966,9 @@ fn bump_counters(state: &mut KeyedState, live: &Table) {
 
 /// (xxxvii) planted ([`crate::differential::MergeMutant::KeyedWriteUnderUnknownKey`]): the cell
 /// key check is skipped. Without the `differential` feature there is no hook: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_keyed_write_under_unknown_key() -> bool {
-    crate::differential::merge_mutant()
-        == Some(crate::differential::MergeMutant::KeyedWriteUnderUnknownKey)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_keyed_write_under_unknown_key() -> bool {
-    false
+    plant_on!(
+        crate::differential::merge_mutant()
+            == Some(crate::differential::MergeMutant::KeyedWriteUnderUnknownKey)
+    )
 }

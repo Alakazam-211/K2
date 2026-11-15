@@ -36,7 +36,7 @@ pub fn parity_row(a: PersonAction) -> ParityRow {
     }
 }
 
-/// The rows of the pack's tier (a text pack: P1-P31).
+/// The rows of the pack's tier (a text pack: the 31 text rows).
 pub fn parity() -> Vec<ParityRow> {
     PersonAction::for_tier(Tier::Text).map(parity_row).collect()
 }

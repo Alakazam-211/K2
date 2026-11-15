@@ -210,6 +210,8 @@ pub(crate) fn fold_roster<'a, M: Deref<Target = Presence>>(
                 focus: None,
                 range: None,
                 cells: None,
+                view_address: None,
+                time: None,
             };
             (conns, entry, first_joined)
         })

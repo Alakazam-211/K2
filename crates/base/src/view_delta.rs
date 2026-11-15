@@ -130,12 +130,18 @@ pub struct ContainerDelta {
     /// For a schema whose 3D slot has container fields: its placement after the change, on
     /// `add` and `restore` always and otherwise when it changed (`Some(None)`: none now).
     pub placement_after: Option<Option<Placement>>,
+    /// For a doc whose containers nest ([`crate::view_index::Container::parent`]): its parent's
+    /// address after the change, on `add` and `restore` always and otherwise when it changed
+    /// (`Some(None)`: at the top level now). A container whose parent changed with no delta of
+    /// its own gets a `props` delta naming no field, with this ([`parent_deltas`]).
+    pub parent_after: Option<Option<String>>,
 }
 
 impl ContainerDelta {
-    /// As the change frame carries it.
+    /// As the change frame carries it: `placement_after` and `parent_after` only when it
+    /// carries them.
     pub fn to_value(&self) -> Json {
-        Json::obj([
+        let v = Json::obj([
             ("key", Json::from(&self.key)),
             ("op", Json::from(self.op.as_str())),
             ("position_before", Json::from(self.position_before)),
@@ -143,7 +149,14 @@ impl ContainerDelta {
             ("hidden_after", Json::from(self.hidden_after)),
             ("fields", Json::list(self.fields.iter())),
         ])
-        .with_placement(&self.placement_after)
+        .with_placement(&self.placement_after);
+        match (v, &self.parent_after) {
+            (Json::Obj(mut m), Some(p)) => {
+                m.push(("parent_after".into(), Json::from(p.as_ref())));
+                Json::Obj(m)
+            }
+            (v, _) => v,
+        }
     }
 }
 
@@ -642,13 +655,10 @@ impl<'c> Touches<'c> {
 macro_rules! place_plant {
     ($name:ident, $variant:ident) => {
         fn $name() -> bool {
-            #[cfg(any(test, feature = "differential"))]
-            if crate::differential::place_mutant()
-                == Some(crate::differential::PlaceMutant::$variant)
-            {
-                return true;
-            }
-            false
+            plant_on!(
+                crate::differential::place_mutant()
+                    == Some(crate::differential::PlaceMutant::$variant)
+            )
         }
     };
 }
@@ -753,6 +763,98 @@ pub(crate) fn place_deltas(
     named
 }
 
+/// For a doc whose containers nest (the schema declares [`ContainerFields::parent`], or a
+/// container of the index before or after has a parent), the parents of one change's deltas
+/// `d`, from the view index before it and after it, so a watcher keeps the containers' tree
+/// from the frames alone (it never maps a store's key to an address):
+///
+/// - a container that comes into view (`add`, `restore`) carries `parent_after`;
+/// - one with another delta (not a `delete`) carries it when its parent differs;
+/// - on the last change of a flush (`last`), every other container in both indexes whose parent
+///   differs gets a `props` delta naming no field, with its `parent_after` (a parent the pack
+///   derives from another root, one refused since): the frames then give the index's tree.
+///
+/// With no index before, every container counts as changed.
+///
+/// [`ContainerFields::parent`]: crate::view_index::ContainerFields::parent
+pub(crate) fn parent_deltas(
+    vs: &ViewSchema,
+    d: &mut ViewDeltas,
+    before: Option<&ViewIndex>,
+    after: &ViewIndex,
+    last: bool,
+) {
+    let has = |ix: &ViewIndex| ix.containers.iter().any(|c| c.parent.is_some());
+    let nests = vs.container_fields.parent != Src::None || has(after) || before.is_some_and(has);
+    if !nests || planted_frame_misses_parent() {
+        return;
+    }
+    let was: Option<HashMap<&str, Option<&String>>> = before.map(|b| {
+        b.containers
+            .iter()
+            .map(|c| (c.key.as_str(), c.parent.as_ref()))
+            .collect()
+    });
+    let now: HashMap<&str, Option<&String>> = after
+        .containers
+        .iter()
+        .map(|c| (c.key.as_str(), c.parent.as_ref()))
+        .collect();
+    // whether `key`'s parent differs from the index before (`true` without one)
+    let differs = |key: &str, p: Option<&String>| match &was {
+        Some(w) => w.get(key).map_or(true, |x| *x != p),
+        None => true,
+    };
+    let mut carried: HashSet<String> = HashSet::new();
+    for c in &mut d.containers {
+        let Some(&p) = now.get(c.key.as_str()) else {
+            continue;
+        };
+        let carry = match c.op {
+            ContainerOp::Delete => false,
+            ContainerOp::Add | ContainerOp::Restore => true,
+            _ => differs(c.key.as_str(), p),
+        };
+        if carry {
+            c.parent_after = Some(p.cloned());
+            carried.insert(c.key.clone());
+        }
+    }
+    if !last {
+        return;
+    }
+    for c in &after.containers {
+        if carried.contains(&c.key) {
+            continue;
+        }
+        // one that came during the flush had its `add` (or `restore`), which carried it
+        let came = was
+            .as_ref()
+            .is_some_and(|w| !w.contains_key(c.key.as_str()));
+        if came || !differs(c.key.as_str(), c.parent.as_ref()) {
+            continue;
+        }
+        d.containers.push(ContainerDelta {
+            key: c.key.clone(),
+            op: ContainerOp::Props,
+            position_before: None,
+            position_after: None,
+            hidden_after: None,
+            fields: Vec::new(),
+            placement_after: None,
+            parent_after: Some(c.parent.clone()),
+        });
+    }
+}
+
+/// The planted fault [`crate::differential::ViewMutant::FrameMissesParent`].
+fn planted_frame_misses_parent() -> bool {
+    plant_on!(
+        crate::differential::view_mutant()
+            == Some(crate::differential::ViewMutant::FrameMissesParent)
+    )
+}
+
 /// The containers of everything placed, directly or through others, relative to one of
 /// `moved` (a container placed through one counts as itself), in the index's order.
 fn placed_through(ix: &ViewIndex, moved: &[String]) -> Vec<String> {
@@ -787,12 +889,10 @@ fn placed_through(ix: &ViewIndex, moved: &[String]) -> Vec<String> {
 
 /// The planted fault [`crate::differential::WatchMutant::DeltaGeomStale`].
 fn planted_delta_geom_stale() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::watch_mutant() == Some(crate::differential::WatchMutant::DeltaGeomStale)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::watch_mutant()
+            == Some(crate::differential::WatchMutant::DeltaGeomStale)
+    )
 }
 
 fn class_of(vs: &ViewSchema, hidden: Src, field: &str) -> FieldClass {
@@ -918,6 +1018,7 @@ fn one<P: Pack + ?Sized>(
                 hidden_after: None,
                 fields: Vec::new(),
                 placement_after: None,
+                parent_after: None,
             });
         }
     }
@@ -959,6 +1060,7 @@ fn one<P: Pack + ?Sized>(
             hidden_after: hides.then(|| flag(after.read(CONTAINERS, k, chidden).as_deref())),
             fields: changed,
             placement_after: None,
+            parent_after: None,
         });
     }
 

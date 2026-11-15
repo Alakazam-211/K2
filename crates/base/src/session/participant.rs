@@ -371,6 +371,153 @@ impl Point {
     }
 }
 
+/// The longest address a presence value names ([`TimePosition::within`], a view address,
+/// [`super::Session::set_view_address`]), in bytes.
+pub const PRESENCE_ADDRESS_MAX: usize = 512;
+
+/// `address` as a presence value names one: 1 to [`PRESENCE_ADDRESS_MAX`] bytes, read by the
+/// kit's address grammar ([`crate::addr::parse`] with native IDs; a bare key is one), else
+/// [`super::SessionError::BadPosition`] naming `what`.
+pub(crate) fn presence_address(what: &str, address: &str) -> super::error::Result<String> {
+    let bad = |why: &str| {
+        Err(super::error::SessionError::BadPosition(format!(
+            "{what} {address:?} {why}"
+        )))
+    };
+    if address.len() > PRESENCE_ADDRESS_MAX {
+        return bad(&format!("is over {PRESENCE_ADDRESS_MAX} bytes"));
+    }
+    if crate::addr::parse(address, crate::addr::Forms::none().native()).is_err() {
+        return bad("is not an address");
+    }
+    Ok(address.to_owned())
+}
+
+/// A decimal integer as a time position writes one: an optional `-`, then digits with no
+/// leading zero (`0` alone), within an `i64`.
+fn decimal_int(s: &str) -> Option<i64> {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let canonical = !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'))
+        && s != "-0";
+    canonical.then(|| s.parse::<i64>().ok()).flatten()
+}
+
+/// Whether someone's time position is moving ([`TimePosition::state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlayState {
+    Playing,
+    Paused,
+}
+
+impl PlayState {
+    /// `playing` or `paused`, as the wire carries it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlayState::Playing => "playing",
+            PlayState::Paused => "paused",
+        }
+    }
+
+    /// The word back (`playing`, `paused`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "playing" => Some(PlayState::Playing),
+            "paused" => Some(PlayState::Paused),
+            _ => None,
+        }
+    }
+}
+
+/// A participant's place in time (a timeline's playhead), a presence value
+/// ([`super::Session::set_time_position`]). Generic: the kit reads no time, it carries the
+/// position in the pack's own unit (the view schema's
+/// [`crate::view_index::ViewSchema::time_unit`]: a timeline's ticks) as a decimal string, never
+/// a floating-point number. A follower extrapolates a playing one from `at_ms` at `rate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimePosition {
+    at: String,
+    state: PlayState,
+    at_ms: u64,
+    within: Option<String>,
+    rate: Option<String>,
+}
+
+impl TimePosition {
+    /// At `at` (a decimal integer in the pack's unit: an optional `-`, digits, no leading
+    /// zero, within an `i64`), playing or paused. [`super::SessionError::BadPosition`]
+    /// otherwise.
+    pub fn new(at: &str, state: PlayState) -> super::error::Result<Self> {
+        if decimal_int(at).is_none() {
+            return Err(super::error::SessionError::BadPosition(format!(
+                "the time {at:?} is not a decimal integer (an optional -, digits, no leading \
+                 zero, within 64 bits)"
+            )));
+        }
+        Ok(Self {
+            at: at.to_owned(),
+            state,
+            at_ms: 0,
+            within: None,
+            rate: None,
+        })
+    }
+
+    /// In what (a sequence, a track), by address ([`PRESENCE_ADDRESS_MAX`] bytes at most, read
+    /// by the kit's address grammar).
+    pub fn within(mut self, address: &str) -> super::error::Result<Self> {
+        self.within = Some(presence_address("the time position's `in`", address)?);
+        Ok(self)
+    }
+
+    /// The playback rate, a decimal ratio: `n` or `n/d` (`2`, `1/2`, `-1`, `1001/1000`), each a
+    /// decimal integer as [`TimePosition::new`] reads one, `d` above 0. None set: 1.
+    pub fn rate(mut self, rate: &str) -> super::error::Result<Self> {
+        let good = match rate.split_once('/') {
+            None => decimal_int(rate).is_some(),
+            Some((n, d)) => decimal_int(n).is_some() && decimal_int(d).is_some_and(|d| d > 0),
+        };
+        if !good {
+            return Err(super::error::SessionError::BadPosition(format!(
+                "the rate {rate:?} is not a decimal ratio (n or n/d, d above 0)"
+            )));
+        }
+        self.rate = Some(rate.to_owned());
+        Ok(self)
+    }
+
+    /// The position, a decimal integer in the pack's unit.
+    pub fn at(&self) -> &str {
+        &self.at
+    }
+
+    pub fn state(&self) -> PlayState {
+        self.state
+    }
+
+    /// When it was set (host clock, ms): stamped by the kit when it stores it; 0 before.
+    pub fn at_ms(&self) -> u64 {
+        self.at_ms
+    }
+
+    /// What it is in, by address; `None`: the doc's own time.
+    pub fn in_address(&self) -> Option<&str> {
+        self.within.as_deref()
+    }
+
+    /// The playback rate as given; `None`: 1.
+    pub fn rate_text(&self) -> Option<&str> {
+        self.rate.as_deref()
+    }
+
+    /// The same, stamped at `now` (the kit's, when it stores it).
+    pub(crate) fn stamped(mut self, now: u64) -> Self {
+        self.at_ms = now;
+        self
+    }
+}
+
 /// An area in the doc's own coordinates, which the kit doesn't interpret: `(x, y)` and a size.
 /// Always finite, never `-0.0`, and the size is never negative.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -473,6 +620,12 @@ pub struct RosterEntry {
     /// On a grid with a view schema's grid slot: the most active connection's cell caret and
     /// ranges that has one ([`super::Session::set_cells`]).
     pub cells: Option<crate::grid::Cells>,
+    /// The most active connection's view address that has one: the view they are looking at
+    /// ([`super::Session::set_view_address`]).
+    pub view_address: Option<String>,
+    /// The most active connection's time position that has one: their playhead
+    /// ([`super::Session::set_time_position`]).
+    pub time: Option<TimePosition>,
 }
 
 /// One connection of a participant, on a text doc's roster ([`RosterEntry::devices`]): the
@@ -502,6 +655,10 @@ pub struct Device {
     pub range: Option<ElemRange>,
     /// This connection's cell caret and ranges, if it has them.
     pub cells: Option<crate::grid::Cells>,
+    /// This connection's view address, if it has one.
+    pub view_address: Option<String>,
+    /// This connection's time position, if it has one.
+    pub time: Option<TimePosition>,
 }
 
 /// At most this many characters of a connection's label

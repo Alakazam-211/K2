@@ -4,35 +4,36 @@
 //! - **Each rule as a test**, through a session: the window and its refusals (E112), the
 //!   tie (the change applied first stays left), deletion vs deletion, competing text (E111
 //!   with the region), a deletion split around others' inserts, a replacement's text at the
-//!   left end, validation first (E151), a refusal applies nothing (P4), attribution and the
+//!   left end, validation first (E151), a refusal applies nothing, attribution and the
 //!   event, undo of the edit as applied.
 //! - **The property** (`live_clients_converge`): 3 clients, each the JS client's model (one
 //!   change in flight, the rest buffered; incoming changes carried through its pending ones
 //!   by the client mirror), typing random hunks at random times with random delivery and ack
 //!   timing, against a real session, with agent edits, undo and outside edits in the window.
-//!   Checked: at every ack the client's own prediction of its rebased change is the server's
-//!   (P1); every client's text converges on the server's, which is the serial replay of the
-//!   events (P1); a refusal changes nothing (P4) and the client predicted it; others'
-//!   inserted text (unique tokens) inserted after a base is never deleted by an edit made at
-//!   it (P3); streams of inserts only, or deletions only, are never refused (P2). **r2.3:**
+//!   Checked: at every ack the client's own prediction of its rebased change is the server's,
+//!   and every client's text converges on the server's, which is the serial replay of the
+//!   events (together, convergence); a refusal changes nothing and the client predicted it;
+//!   others' inserted text (unique tokens) inserted after a base is never deleted by an edit
+//!   made at it; streams of inserts only, or deletions only, are never refused. **r2.3:**
 //!   every live edit is also judged by an ID-level oracle that never uses the positional
-//!   rebase (K2 Engine's: P2, a refusal only on a conflict by intent; P2c, every conflict by
-//!   intent refused), in every stream, and a stream of mixed edits at overlapping ranges
+//!   rebase (K2 Engine's properties: a refusal only on a conflict by intent, every conflict
+//!   by intent refused), in every stream, and a stream of mixed edits at overlapping ranges
 //!   reaches the shapes r2.2's rule (1) got wrong (an insertion touching its own deletion, a
 //!   split replacement, a deletion of replaced text).
 //!   `LIVE_CASES` histories (default 128; ≥ 10^4 on a node), `LIVE_STEPS` steps each.
 //! - **The mutants** (`LiveMutant`: r2's six, r2.1's `window-holds-expanded-hunks`, and
-//!   r2.3's rule (1) on the server only (caught by P1) and on both sides (P2, P2c)) are each
+//!   r2.3's rule (1) on the server only (caught by convergence) and on both sides (caught by
+//!   the oracle)) are each
 //!   caught, and each catching history passes without its mutant.
-//! - **Clarification r2.1:** clients typing in the same multi-author word never bounce (F1:
-//!   the window holds the authored hunks); the window is exactly the hunk sets broadcast,
-//!   every kind of change (F2 (a), checked at the end of every history).
+//! - **Clarification r2.1:** clients typing in the same multi-author word never bounce (the
+//!   window holds the authored hunks); the window is exactly the hunk sets broadcast,
+//!   every kind of change (checked at the end of every history).
 //! - **Shared vectors** for the JS client (`tests/vectors/live_rebase.json`): written by
 //!   `LIVE_VECTORS_WRITE=1`, else checked (a stale file fails).
 //! - **The trace hook** for K2 Engine's exhaustive model (`LIVE_TRACES=<file>`): cases in the
 //!   vectors' format, replayed through the rebase.
-//! - **Parity:** a person's live edit and the agent verbs for the same rows (P9 `insert
-//!   --at`, P10 `replace --range`, P11 `delete --lines`) give the same text and attribution.
+//! - **Parity:** a person's live edit and the agent verbs for the same rows (`insert
+//!   --at`, `replace --range`, `delete --lines`) give the same text and attribution.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -215,7 +216,7 @@ fn ties_and_shared_deletions_never_bounce() {
     assert_eq!(r.result.version, v + 1);
 }
 
-/// Rule 4 (b): competing text refuses with MPC-E111 and the region; nothing applies (P4).
+/// Rule 4 (b): competing text refuses with MPC-E111 and the region; nothing applies.
 #[test]
 fn competing_text_refuses_with_the_region() {
     let f = fx("e111", "one two three\n");
@@ -373,8 +374,8 @@ fn events_since_replays_every_kind_of_change() {
 
 // ---------- parity ----------
 
-/// A person's live edit has the agent verbs of the same rows as its equivalent: P9 `insert
-/// --at`, P10 `replace --range`, P11 `delete --lines` give the same text, one change each,
+/// A person's live edit has the agent verbs of the same rows as its equivalent: `insert
+/// --at`, `replace --range`, `delete --lines` give the same text, one change each,
 /// attributed to the one who made it.
 #[test]
 fn parity_live_edit_and_agent_verbs() {
@@ -418,14 +419,14 @@ const BITS: &[&str] = &["a", "b", "c", " ", "\n", "é", "日"];
 enum Stream {
     /// Every kind of hunk, and the other channels in the window.
     Mixed,
-    /// Pure insertions only: never refused (P2).
+    /// Pure insertions only: never refused.
     InsertsOnly,
-    /// Pure deletions only: never refused (P2).
+    /// Pure deletions only: never refused.
     DeletesOnly,
     /// r2.3's classes: insertions, deletions and replacements of one or two characters on a
     /// short text, so ranges overlap (an insertion coming to touch its own change's deletion,
     /// a replacement split around others' text, a deletion of text another replaced); the
-    /// other channels too. Judged by the ID-level oracle (P2, P2c).
+    /// other channels too. Judged by the ID-level oracle.
     Overlapping,
 }
 
@@ -437,7 +438,7 @@ fn boundary(rng: &mut SmallRng, t: &str) -> usize {
     x
 }
 
-/// Random canonical hunks on `t`; inserted text sometimes a unique token `<n>` (P3).
+/// Random canonical hunks on `t`; inserted text sometimes a unique token `<n>` (kept text).
 fn random_hunks(rng: &mut SmallRng, t: &str, stream: Stream, tokens: &AtomicU64) -> Vec<Hunk> {
     let n = rng.gen_range(1..=3);
     let mut cuts: Vec<usize> = (0..2 * n).map(|_| boundary(rng, t)).collect();
@@ -513,7 +514,7 @@ impl Client {
         }
     }
 
-    /// P1, at every step: the editor's text is the confirmed text plus what is pending.
+    /// Convergence, at every step: the editor's text is the confirmed text plus what is pending.
     fn check(&self, why: &str) -> Result<(), String> {
         let mut t = self.confirmed.clone();
         if !self.doomed {
@@ -526,7 +527,7 @@ impl Client {
         }
         if self.display != t {
             return Err(format!(
-                "P1 ({why}): the editor reads {:?}, confirmed + pending is {t:?}",
+                "convergence ({why}): the editor reads {:?}, confirmed + pending is {t:?}",
                 self.display
             ));
         }
@@ -605,7 +606,7 @@ impl Client {
                 let p = self.inflight.take().expect("in flight").1.hunks();
                 if p != *applied || e.hunks != *applied {
                     return Err(format!(
-                        "P1: the client predicted {p:?}, the server applied {applied:?}"
+                        "convergence: the client predicted {p:?}, the server applied {applied:?}"
                     ));
                 }
                 self.answer = None;
@@ -694,7 +695,7 @@ struct Counts {
     /// P3's exposure: bytes others inserted after a base that an edit at it split its
     /// deletion around (kept).
     tokens_checked: u64,
-    /// P2, P2c (r2.3): live edits judged by the ID-level oracle, and those it found in
+    /// r2.3: live edits judged by the ID-level oracle, and those it found in
     /// conflict by intent.
     p2_judged: u64,
     id_conflicts: u64,
@@ -775,7 +776,7 @@ impl Shadow {
     }
 
     /// Does `ours` (as sent at `base`, whose text is `base_text`) conflict by intent with the
-    /// changes since (P2, P2c)? (i) a replacement some of whose deleted ids are gone now;
+    /// changes since? (i) a replacement some of whose deleted ids are gone now;
     /// (ii) an insertion, and some change since deletes the visible neighbours of both of its
     /// tie-break placements just before it ([`inside_both`]; r2.3 S3).
     fn conflict(
@@ -952,7 +953,7 @@ fn one(
             }
         })
         .collect();
-    // the text at every version (the P3 oracle's bases), from a subscription of its own
+    // the text at every version (the kept-text check's bases), from a subscription of its own
     let orx = f.s.subscribe(agent).unwrap();
     type Texts = (u64, HashMap<u64, String>, Shadow);
     let texts: Mutex<Texts> = Mutex::new({
@@ -981,7 +982,7 @@ fn one(
         let before = (text(&f.s, agent), version(&f.s, agent));
         let since = f.s.events_since(agent, base).map_err(|e| e.plain())?;
         n.rebased_through += since.len() as u64;
-        // P2, P2c: the ID-level verdict on ours as sent, against the changes since
+        // the ID-level verdict on ours as sent, against the changes since
         snap();
         let verdict = {
             let g = texts.lock().unwrap();
@@ -991,7 +992,8 @@ fn one(
             }
             if diff::validate(&bt, &hs).is_err() {
                 // not hunks on the base's text (a client's fault, as the planted
-                // own-change-in-window): no intent to judge; the session refuses or P1 fails
+                // own-change-in-window): no intent to judge; the session refuses or
+                // convergence fails
                 return Err(format!(
                     "the client sent {hs:?}, not hunks on version {base}'s text"
                 ));
@@ -1039,7 +1041,7 @@ fn one(
                 }
                 (Err(e), None) if e.id() == "MPC-E111" => {
                     return Err(format!(
-                        "P2: refused {hs:?} at base {base}, with no conflict by intent: {}",
+                        "refused {hs:?} at base {base}, with no conflict by intent: {}",
                         e.plain()
                     ))
                 }
@@ -1052,7 +1054,7 @@ fn one(
                 if r.hunks.is_empty() {
                     n.noops += 1;
                 }
-                // P3, by identity: the bytes the changes since the base inserted (labelled by
+                // kept text by identity: the bytes the changes since the base inserted (labelled by
                 // replaying them onto the base's text) are never in a range ours deletes
                 snap();
                 let base_text = texts
@@ -1082,7 +1084,7 @@ fn one(
                 for hk in r.hunks.iter().filter(|x| x.start < x.end) {
                     if let Some(k) = fresh[hk.start..hk.end].iter().position(|x| *x) {
                         return Err(format!(
-                            "P3: byte {} of the text, inserted after base {base}, was deleted by {hk:?}",
+                            "byte {} of the text, inserted after base {base}, was deleted by {hk:?}",
                             hk.start + k
                         ));
                     }
@@ -1100,11 +1102,11 @@ fn one(
             Err(e) if e.id() == "MPC-E111" => {
                 n.refused += 1;
                 if matches!(stream, Stream::InsertsOnly | Stream::DeletesOnly) {
-                    return Err(format!("P2: refused in a {stream:?} stream: {}", e.plain()));
+                    return Err(format!("refused in a {stream:?} stream: {}", e.plain()));
                 }
-                // P4
+                // a refusal changes nothing
                 if (text(&f.s, agent), version(&f.s, agent)) != before {
-                    return Err("P4: a refusal changed the doc".into());
+                    return Err("a refusal changed the doc".into());
                 }
                 c.answer = Some(Err(before.1));
             }
@@ -1188,16 +1190,16 @@ fn one(
         }
         if c.display != server || c.confirmed != server {
             return Err(format!(
-                "P1: client {k} reads {:?}, the server {server:?}",
+                "convergence: client {k} reads {:?}, the server {server:?}",
                 c.display
             ));
         }
         n.acks_checked += 1;
-        // F2 (a): the window holds exactly the hunk sets broadcast, every kind of change
+        // the window holds exactly the hunk sets broadcast, every kind of change
         let window = f.s.events_since(agent, c.joined).map_err(|e| e.plain())?;
         if window != c.seen {
             return Err(format!(
-                "F2: the window since {} isn't what was broadcast:\n window {window:?}\n seen {:?}",
+                "the window since {} isn't what was broadcast:\n window {window:?}\n seen {:?}",
                 c.joined, c.seen
             ));
         }
@@ -1205,7 +1207,7 @@ fn one(
     Ok(n)
 }
 
-/// Clarification r2.1 (F1), the case class: clients typing letters into (and backspacing
+/// Clarification r2.1, the case class: clients typing letters into (and backspacing
 /// in) the same word, which several people have written, all at one base, never bounce.
 fn word_case(seed: u64) -> Result<u64, String> {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -1238,7 +1240,7 @@ fn word_case(seed: u64) -> Result<u64, String> {
                 vec![h(p, p + 1, "")]
             };
             at(&f.s, c, base, hs)
-                .map_err(|e| format!("P2: bounced in a shared word: {}", e.plain()))?;
+                .map_err(|e| format!("bounced in a shared word (no conflict): {}", e.plain()))?;
             edits += 1;
         }
     }
@@ -1290,7 +1292,7 @@ fn run(cases: u64, seed: u64, stream: Stream, threads: u64) -> Counts {
     n
 }
 
-/// P1–P4 over random histories of 3 clients and the other channels (module docs).
+/// The properties over random histories of 3 clients and the other channels (module docs).
 #[test]
 fn live_clients_converge() {
     let cases = env("LIVE_CASES", 128);
@@ -1320,7 +1322,7 @@ fn live_clients_converge() {
         Stream::DeletesOnly,
         threads,
     );
-    // r2.3's classes (P2, P2c by intent): mixed edits at overlapping ranges
+    // r2.3's classes (judged by intent): mixed edits at overlapping ranges
     let ovl = run(cases, seed + 3_000_000, Stream::Overlapping, threads);
     eprintln!(
         "[live] inserts only: {ins:?}\n[live] deletes only: {del:?}\n[live] overlapping: {ovl:?}"
@@ -1401,8 +1403,8 @@ fn live_mutants_are_caught() {
             "window_holds_expanded_hunks",
             Stream::InsertsOnly,
         ),
-        // r2.3: rule (1) on the server only must fail P1 (judged without the ID oracle, so
-        // the catch is the client's and the server's disagreement); on both sides, P2 or P2c
+        // r2.3: rule (1) on the server only must fail convergence (judged without the ID oracle, so
+        // the catch is the client's and the server's disagreement); on both sides, the oracle
         (
             LiveMutant::RecanonServerOnly,
             "recanon_server_only",
@@ -1413,7 +1415,8 @@ fn live_mutants_are_caught() {
             "recanon_both_sides",
             Stream::Overlapping,
         ),
-        // r2.3 S3: the right placement alone (P2, by the ID oracle's both placements)
+        // r2.3 S3: the right placement alone (a false refusal, by the ID oracle's both
+        // placements)
         (
             LiveMutant::InsideByTieBreak,
             "inside_by_tie_break",
@@ -1453,10 +1456,10 @@ fn live_mutants_are_caught() {
             panic!("{name}: history {k} fails without the mutant too: {e}");
         }
         if m == LiveMutant::RecanonServerOnly {
-            // one-sided rule (1): the client's prediction and the server part (P1)
+            // one-sided rule (1): the client's prediction and the server part (convergence)
             assert!(
-                why.starts_with("P1") || why.contains("predicted"),
-                "{name}: caught, but not by P1: {why}"
+                why.starts_with("convergence") || why.contains("predicted"),
+                "{name}: caught, but not by convergence: {why}"
             );
         }
         eprintln!("[live mutant {name}] caught in history {k}: {why}");
@@ -1533,7 +1536,7 @@ fn vectors() -> String {
         }
         cases.push((base, ours, since));
     }
-    // r2.3 (appended, so the cases above keep their numbers): K2 Engine's P2 and P2c
+    // r2.3 (appended, so the cases above keep their numbers): K2 Engine's two
     // counterexamples to r2.2's rule (1), an insertion at each edge of a deleted range (S3),
     // and a change fully absorbed (S4: an empty result)
     let tail: Vec<Case> = vec![

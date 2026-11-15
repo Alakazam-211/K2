@@ -19,7 +19,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | `ConnId` | kit | one connection (a tab, a `watch`, a CLI caller); `Copy`, passed to every call |
 | `Config` | host | every limit below; `Config::default()` then set fields |
 | `tools` | kit | the text verbs (`cat`, `grep`, `sed`, `patch`...) and `Session::run_tool` ([Tools](#tools)) |
-| `parity` | kit | `PersonAction` (P1–P34, each for text, blob or both: `Tier`), the verb `Registry` (`for_pack`, `for_tier`), the harnesses `parity::check` and `check_blob` ([Parity](#parity)) |
+| `parity` | kit | `PersonAction` (one per parity row, each for text, blob or both: `Tier`), the verb `Registry` (`for_pack`, `for_tier`), the harnesses `parity::check` and `check_blob` ([Parity](#parity)) |
 | history | kit | `Session::undo_with`, `redo_with`, `revert`, `restore`, `name_version`, `versions`, `log`, `diff_version`, `show` ([Undo and redo](#undo-and-redo), [Versions and history](#versions-and-history), [Revert](#revert)) |
 | agent presence | kit | `Session::claim`, `renew_claim`, `release_claim`, `claims`, `claim_remaining_ms`, `register_waiter`, `cancel_waiter`, `activity`; `ClaimPolicy` on edits; `Notes` on `run_tool` ([Agent presence](#agent-presence-amendment-13)) |
 
@@ -228,9 +228,9 @@ the flag on, a person's (or App guest's) join with a **device key**
   New on-behalf edits are held past the pending cap ([Revert](#revert)).
 - `approval(conn, seq) -> Option<Approval>` and `approvals(conn)` (for `log --pending`) need
   read; the author and the person see their own records, everything else needs `history`.
-- **`approvals --all`** (= `log --pending --all`, v0.9.2): every approval record, settled
-  ones too (approved, declined), newest first; `approvals` alone stays pending-only (P30).
-  Bind it to `log(LogQuery::default().with_settled())` (`LogQuery::settled`); tier 0:
+- **`approvals --all`** (= `log --pending --all`, v0.9.2): every approval record, settled ones too
+  (approved, declined), newest first; `approvals` alone stays pending-only (the pending-approvals
+  row). Bind it to `log(LogQuery::default().with_settled())` (`LogQuery::settled`); tier 0:
   `BlobSession::log` keeping the entries with an `approval`, newest first.
 - `Approval { state, by, at_ms, author, on_behalf_of }` survives compaction (the log entry may
   not).
@@ -520,7 +520,7 @@ implemented once in `session/undo.rs` over the applied-hunk stream.
   the inverse of the change's own hunk, and theirs, every later hunk that touched the
   region's window, carried at element identity (`text::merge::merge3_hunks`). No string is
   diffed: in repeated text a diff can't tell another participant's identical element from
-  the region's own (finding F3), so **undo, redo and revert never remove an element they
+  the region's own (the re-diff finding), so **undo, redo and revert never remove an element they
   didn't write** (U10a). `at_end` holds only when the region ends at the root's end **and**
   the root was non-empty after the change (the merge's base, U10, m11). Within a step,
   regions apply back to front, and a clean region applies the merge's own hunks.
@@ -690,8 +690,8 @@ position, the stable change id) days later and after restarts, independent of un
 
 ## Blame
 
-`blame(conn, root, lines: Option<LineRange>) -> Blame` (P22) gives each line of a text root
-its **most recent author**. Needs read and **history** (otherwise `Forbidden { need: History }`
+`blame(conn, root, lines: Option<LineRange>) -> Blame` (the blame row) gives each line of a text
+root its **most recent author**. Needs read and **history** (otherwise `Forbidden { need: History }`
 and `AuditEvent::Refused { action: Blame }`). It only reads: nothing in the doc, the store or
 presence changes.
 
@@ -916,6 +916,13 @@ Carets and views (per connection):
     any more, for exactly the values that changed (from the index before and after the change,
     `ViewChange::unit_derived`; on the last change of a flush), beside the pack's own keys,
     which the kit never overwrites. A schema that names none encodes as before.
+  - **Derived values per container.** The container half of the units' derived values, under
+    the same rules (a timeline track's label and kind): `ViewSchema::container_derived` names
+    them (at most `CONTAINER_DERIVED_MAX`, 8), the derive hook sets them
+    (`Container::set_derived`), and the kit keeps the declared names only, in the schema's order,
+    cut. They ride the snapshot's containers (`derived`, only when there are some) and each
+    change frame's `derived.containers.<container>.<name>`, for exactly the values that changed
+    (`ViewChange::container_derived`).
   - **One unit, one container, without a page.** `Session::view_unit(conn, address)` (a nested
     unit too), `Session::view_container(conn, address)` and `Session::view_derived(conn,
     container)` (each unit's derived values, units with none left out) read the kept index;
@@ -942,6 +949,17 @@ Carets and views (per connection):
     geometry slot, as a scene's 3D transform): its change is a `move_resize` delta naming the
     field, with no box before or after. (The kit read the slot's parts for any geometry field,
     so with no slot it built no change frame.)
+  - **Containers in containers.** A container's parent (`Container::parent`, by address;
+    `None` at the top level), so an outliner draws the containers' tree from the index alone;
+    `position` stays the flat order. The pack names its source: `ContainerFields::parent` (a
+    value the kit reads is the parent's key, mapped to its address; `Src::Derived` for one the
+    derive hook sets) and `BlobView::container_parent` (the parent's node key). The kit checks
+    the tree when it builds the index, on both tiers: another container of the same index, no
+    cycle (broken at its first container in order), at most `CONTAINER_DEPTH_MAX` (32) levels.
+    A parent that fails is left out (the container is at the top level) and recorded
+    (`ViewRefusal::Parent`, `ParentRefused`); a test build fails on it loudly. On the wire only
+    when set: `parent` on a snapshot's container, `parent_after` on a change frame's container
+    delta (`client/WIRE.md`, "Containers in containers").
   - **Placements in 3D** (`k2_mpc_base::placement`; design `docs/design/view-3d-slot-r1.1.md`).
     A pack declares a 3D slot (`ViewSchema::space`: `SpaceSlot { unit_fields, container_fields,
     space, precision }`) and places each element from its own fields with
@@ -1087,9 +1105,10 @@ The kit (server side) and the JS client (`client/`) apply the same rebase
   - A refusal applies nothing.
 - **Shared vectors** for the JS client: `crates/base/tests/vectors/live_rebase.json`
   (`[start, end, insert]` hunks; the server's result or conflict, and the mirror's).
-- **Parity:** a person's live edit is rows P9–P11; the agent verbs are `insert --at`,
-  `replace --range` and `delete --lines` (same text, same attribution), and for an edit
-  made from an older read, `write --base V` (P14), which is merge3 (two inserts at one point
+- **Parity:** a person's live edit is the typing, typing-over and deleting rows; the agent
+  verbs are `insert --at`, `replace --range` and `delete --lines` (same text, same
+  attribution), and for an edit made from an older read, `write --base V` (the rewrite row),
+  which is merge3 (two inserts at one point
   conflict there, by O5: right for an agent rewriting a doc, wrong for live typing).
 
 ## Agent presence (amendment 13)
@@ -1576,7 +1595,7 @@ text (no I/O, no programs run, linear-time regexes with size limits, output at m
 - **Read verbs** need read. They read as `read` does, in the same lock: a **read base** is
   recorded (so `write_base(V)` works from the version printed), "contributors since last
   read" moves on, and line-ranged reads (`head -n`, `tail -n`, `view`, `sed -n 'a,bp'`)
-  set the connection's **viewing range** (P4). `ToolOutput.fence` carries the fence.
+  set the connection's **viewing range**. `ToolOutput.fence` carries the fence.
 - **Edit verbs** need edit and run inside `edit_with`: the tool computes on the live text
   and the result applies as **one change** (or nothing does). The caret ends at the last
   hunk; one `undo` reverts one verb. `patch --dry-run` is an edit verb that never applies
@@ -1593,7 +1612,7 @@ text (no I/O, no programs run, linear-time regexes with size limits, output at m
   report shows each failing hunk with the live lines where it was expected. `--partial`
   applies what fits and prints the rejects. Hunks are located as GNU patch does (offsets,
   fuzz up to `-F` (2), start/end anchoring for one-sided context).
-- **Exact replace** (`replace --old TEXT --new TEXT [--all]`, P12 find and replace): the
+- **Exact replace** (`replace --old TEXT --new TEXT [--all]`, the find-and-replace row): the
   agent's "replace this text with that", with no regex or escaping.
   - **Exact.** `--old` is matched byte for byte (case, whitespace, line breaks) on the doc
     text the other edit verbs see: `\n` line breaks, no BOM. A CRLF file's `\r\n` and its BOM
@@ -2202,11 +2221,13 @@ A conflict is not an error. It is a value (`WriteOutcome::Conflicts`, `UndoOutco
 `k2_mpc_base::parity` proves the parity rule: everything a person can do in an
 editor, an agent can do through a verb, with the same effect.
 
-- **`PersonAction`**: one variant per row, P1–P34 (`ALL`, `number()`, `describe()`,
-  `Display` = `P13`, `tiers()`, `in_tier(t)`, `for_tier(t)`). P32–P34 are tier 0's leases
-  (`Lease`, `ReleaseLease`, `BreakLease`); P1–P31 are text actions, and those a blob doc
-  also has are tagged both (P1–P4, P6, P14, P17–P22, P24, P25, P28–P30). **Not** `#[non_exhaustive]`, on purpose: packs map it with an
-  exhaustive `match`, so adding a row breaks every pack's build until it is mapped
+- **`PersonAction`**: one variant per row, 34 rows (`ALL`, `number()`, `describe()`,
+  `Display` = `P13`, `tiers()`, `in_tier(t)`, `for_tier(t)`). The last three are tier 0's
+  leases (`Lease`, `ReleaseLease`, `BreakLease`); the first 31 are text actions, and those a
+  blob doc also has are tagged both (`Open`, `Close`, `ReadAll`, `ViewRange`, `Who`,
+  `Rewrite`, `Saved`, `Watch`, `History`, `Restore`, `Rename`, `Blame`, `Export`, `WhyOff`,
+  `Purge`, `Approve`, `Pending`). **Not** `#[non_exhaustive]`, on purpose: packs map it with
+  an exhaustive `match`, so adding a row breaks every pack's build until it is mapped
   (a `compile_fail` doctest holds that).
 - **The verb registry**. `VerbSpec { name, kind: Read | Edit | History, needs:
   [Need], api: [Api], serves: [PersonAction], usage, exits, source: Kit | Pack, tiers:
@@ -2214,7 +2235,8 @@ editor, an agent can do through a verb, with the same effect.
   `runs_through_run_tool()`: whether a host routes it to `run_tool` (a flag per verb, as
   data: `RUN_TOOL_VERBS`, the kit's text tools, plus every pack verb; tests hold it to
   `run_tool` itself, both ways). `alias_of()`: `ALIASES`, verbs that are another name for a
-  verb, the same row and binding (`approvals` = `log --pending`, P30, host-neutral). Both tiers: `open`,
+  verb, the same row and binding (`approvals` = `log --pending`, the pending-approvals row,
+  host-neutral). Both tiers: `open`,
   `leave`, `cat` (tier 0: the file's bytes), `who`, `write`, `status`, `flush`, `log`,
   `show --version`, `restore`, `version --name`, `mv`, `blame`, `approve`, `decline`,
   `log --pending` and `approvals` (tier 0: by version); tier 0 only: `lease`,
@@ -2223,8 +2245,8 @@ editor, an agent can do through a verb, with the same effect.
   `follow`, `cursor`, `write`, `undo` / `redo` / `undo --drop` / `undo --partial`,
   `status`, `flush`, `watch`, `tail -f`, `log`, `diff --version`, `show --version`,
   `restore`, `version --name`, `mv`, `approve`, `decline`, `log --pending`, `approvals`, `revert`,
-  `blame`, `claim` / `claim --renew` / `claim --release` (P8), `activity` (P6), and tier
-  0's lease verbs).
+  `blame`, `claim` / `claim --renew` / `claim --release` (the caret row), `activity` (the
+  who's-here row), and tier 0's lease verbs).
   `Registry::for_tier(tier)` is the kit's verbs of one tier; `Registry::kit()` is the text
   tier, and `Registry::for_pack(&pack)` adds the pack's `verbs()` to it (refusing a name
   any kit verb has).
@@ -2248,7 +2270,7 @@ editor, an agent can do through a verb, with the same effect.
      Ctrl+Z as `undo_with(Partial)`) and the **agent path** (`Agent`: registered verbs
      only, `Agent::verb(argv, stdin)`; a form missing from the registry fails as
      `MissingVerb`; the reference binding may call only the declared `api` (any verb may
-     `join_shared`, P1); an exit not in `exits` fails, unless it is a session refusal).
+     `join_shared`, the open row); an exit not in `exits` fails, unless it is a session refusal).
      Then it compares the **text, file bytes, key, disk state, changes** (kind, author,
      on behalf of, ± lines, approval), **versions** (reason, name, authors; a
      `BeforeAgent` cut is an agent-only safety net and left out), **approvals**, the
@@ -2257,10 +2279,11 @@ editor, an agent can do through a verb, with the same effect.
   The actor has the same pid, name and colour in both worlds; a change by the actor that
   came through another surface than its path's handle fails the case.
 - **The kit's cases** are one exhaustive `match` over `PersonAction` (`kit_cases`): 61 cases
-  over the 27 rows the kit binds (amendment 13 added `view --for-edit` under P4, `activity`
-  under P6, and five claim cases under P8; the actor's roster entry now compares its claims:
-  `ClaimObs { lines, hold, note, ttl_ms }`); empty for annotations (P23, P27) and purge (P28), which a
-  pack lists as deferred. P22's person path is what a tab's blame gutter shows (the same
+  over the 27 rows the kit binds (amendment 13 added `view --for-edit` under the viewing-range
+  row, `activity` under the who's-here row, and five claim cases under the caret row; the
+  actor's roster entry now compares its claims: `ClaimObs { lines, hold, note, ttl_ms }`);
+  empty for annotations (the annotate and mention rows) and purge, which a pack lists as
+  deferred. The blame row's person path is what a tab's blame gutter shows (the same
   `Session::blame` call: every line, then the lines in view), its agent path the `blame` verb
   (`-L a,b`); a third case checks both are refused without the history right. A pack adds `Case`s for its own verbs.
   `check_list` runs steps 1–2 and case coverage without opening docs; `run_case` runs one.
@@ -2294,11 +2317,13 @@ editor, an agent can do through a verb, with the same effect.
 | P6 | `who`, `activity` | `roster` (one entry per pid, with a connection count, claims, last edit); `activity` |
 | P7 | `follow` | `roster` (`CursorAt` line:col; an agent's caret is at its last edit) |
 | P8 | `cursor --at L:C` / `--select`; `claim`, `claim --renew`, `claim --release`; on a grid also `select`, `pointer` | `set_cursor(At::Line(..))`; readers: `set_view`; `claim` / `renew_claim` / `release_claim`; `set_selection`, `set_pointer` |
-| P9–P11 | `insert`, `replace`, `delete` | `run_tool` (inside `edit_with`) |
+| P9 | `insert` | `run_tool` (inside `edit_with`) |
+| P10 | `replace` | `run_tool` (inside `edit_with`) |
+| P11 | `delete` | `run_tool` (inside `edit_with`) |
 | P12 | `replace --old/--new [--all]`, `sed -i` | `run_tool` (inside `edit_with`) |
 | P13 | `patch`, `apply`, `append`, `replace-section` | `run_tool` (inside `edit_with`); `replace-section` is the Markdown pack's (`Pack::verbs`) |
 | P14 | `write --base V` / `--base live` | `write_base(V)` / `replace_text` |
-| P15 | formatting | as P9–P13 (Markdown formatting is text) |
+| P15 | formatting | as the typing, typing-over, deleting, find-and-replace and paste rows (Markdown formatting is text) |
 | P16 | `undo`, `redo`, `undo --drop` | `undo` / `redo`, `undo_with` / `redo_with` (`UndoMode::All`, `Partial`, `Drop`; `for_person`) |
 | P17 | `status`, `flush` | `status` (`disk`); `flush(conn) -> FlushOutcome { written, hash, disk }` |
 | P18 | `watch`, `tail -f` | `join(Stay::Held)` + `subscribe` |
@@ -2306,7 +2331,8 @@ editor, an agent can do through a verb, with the same effect.
 | P20 | `restore`, `version --name` | `restore` (a forward change by the restorer, after a version), `name_version` |
 | P21 | `mv` | `SessionManager::rekey` + `Session::file_moved` |
 | P22 | `blame [-L a,b]` | `blame(conn, root, lines)` (needs history); tier 0: `BlobSession::blame` |
-| P23, P27 | `comment`, `suggest`... | later (the annotation layer) |
+| P23 | `comment`, `suggest`... | later (the annotation layer) |
+| P27 | as the annotate row | later (the annotation layer) |
 | P24 | `export [--to as-is]`, `export --version V [--to as-is]` | `file_now` / `file_at` (tier 0: `BlobSession::file_now_to` / `file_at_to`), then `export::ExportRegistry::export` (the kit's target: `as-is`); the person's export and the agent's give the same bytes, doc version and codec flag; `--version` needs history |
 | P25 | why live editing is off | `open` → `Declined { code, message }`; `status().declined` |
 | P26 | Ctrl+Z (`undo --partial`) | `undo_with(UndoMode::Partial)`; keystrokes grouped by `EditOptions::group` (U3, v0.9.7) |
@@ -2396,6 +2422,169 @@ doc never open as each other (`PackMismatch`; blob docs are stored with pack `ki
   bytes it just put gone when it references them (no `NoBlob`); a waiting blob stays and a
   purge reports it as `NotReached::SharedBlobs`.
 - `stats()` (and `PoolStats::blob_count`, `blob_bytes`, `blob_unreferenced_bytes`).
+
+### Chunked versions
+
+`BlobConfig::chunked_versions` (default **off**) stores a tier-0 version of
+`BlobConfig::chunk_min_bytes` (default 1 MiB) or more as **chunks**, so a small edit of a large
+file stores the few chunks it changed instead of the whole file again
+(`docs/design/version-storage-r2.md`). Smaller versions, a host's named blobs and blobs held
+by `retain` stay whole-file blobs. Off, nothing changes: no new table, no stamp. The versions
+chunked are a blob doc's: a write (`write`, `write_with`, `write_bytes`), a save recorded with
+`expect_save`/`record_saved`, an outside save taken in, a pack's merge, a restore, and the
+first version of an import. A live doc's carrier stays a whole-file blob.
+
+- **The cut.** A gear rolling hash with a minimum, an average and a maximum size: 16, 64 and
+  256 KiB for a doc whose first chunked version is under 64 MiB, 64 KiB, 256 KiB and 1 MiB
+  from 64 MiB. The sizes are fixed per doc at its first chunked version. The cut depends on
+  the bytes only, so an edit moves the cuts near it only.
+- **Cut hints.** A tier-0 pack may give **allowed cut points** from the file's own structure:
+  `BlobPack::chunk_hints(bytes) -> Vec<u64>` (default none), such as a zip's member
+  boundaries read from its central directory (the kit doesn't parse zips), asked only for a
+  version of at most `BlobPack::chunk_hints_up_to()` bytes (default 0: never), which the kit
+  reads into memory for it, possibly with the session locked. The kit checks the offsets (one
+  outside the file, or out of order, and all are ignored, counted in
+  `BlobStats::chunk_hints_ignored`), merges those closer than the chunk minimum (the first of a
+  run kept), caps their number at the file's length over the minimum, and cuts by content
+  between them: the chunker's own cut, restarted at each hint. A hint is an allowed cut point,
+  never a required one: a span longer than the maximum is still cut at the maximum, and
+  content cuts still happen inside spans, so a zip of 100,000 tiny members never makes
+  100,000 chunks. The hook is **pure** (the offsets depend on the bytes only), so the cut still
+  depends only on the version's bytes; a manifest says nothing of hints, and a version cut at
+  hints reads through any pack. With member boundaries as cut points, a change inside one
+  member of a zip leaves the other members' chunks shared.
+- **Ids.** A version's file id stays `HMAC-SHA256(space key, whole file)`: versions, conflict
+  copies, `file_at` and host cache keys name it as before. A chunk's id is
+  `HMAC-SHA256(doc chunk key, chunk)`, under a random key per doc. Chunks are shared within
+  one doc only.
+- **The layout.** A version is a **manifest** (its chunk ids and lengths, in order; that list
+  is itself cut and stored as chunks of the doc) and its chunks, which live in **segment
+  files**: `<blob dir>/segments/<space no>/<doc>/<n>.seg`, named by a counter per doc, never
+  by a hash. A chunk's location (segment, offset, length) is in its chunk row only. Four
+  tables, per doc, created by the store's first chunked version: `doc_chunk_keys`,
+  `doc_chunks`, `doc_manifests` (counted by the versions naming it) and `doc_segments`
+  (everything a segment file holds, a copy no chunk row points at included); a fifth,
+  `doc_removals` (the removal list), comes with the first compaction.
+- **A write** takes the doc's internal lock (never the person's lease, and only tried: a
+  writer that finds it busy stores a whole-file version, counted in
+  `BlobStats::chunked_busy_fallbacks`, in memory since the blob store's open), marks every chunk id it names and
+  its segment's file name **waiting**, writes the chunks it may not reuse to **one** new
+  segment (temp file, synced, renamed into place, its folder synced; a folder it makes has its
+  parent synced), and commits the manifest, the chunk rows, the segment row and the version
+  in **one** transaction. It **fails closed**: a chunk it reuses whose row is gone by then
+  refuses the whole write (`StoreError::ChunkGone`, `MPC-E501`, exit 6; write again), and
+  nothing is half-referenced. The marks and the lock are released after the commit or the
+  refusal.
+- **The cheap path** comes from the writing connection's rights, checked at each write, never
+  assumed. A write reuses (counts, writing no byte) only the chunks of the versions its writer
+  may read: with the **history** right, every version of the doc (so a restore of a large
+  version writes no second copy); without it, the doc's **current** version (a write's base
+  must be the current version anyway: any other is refused as stale before a byte is
+  stored). A write the kit makes for no connection (an outside save taken in, a pack's merge)
+  reuses the current version's. The session works the set out from the rights `Host::rights`
+  gives at that write (`recheck_rights` refreshes them too), so a connection that loses the
+  history right writes narrow from its next write; the blob store only refuses the cheap path
+  for every chunk outside the set it was given.
+- **What a writer without history can't learn.** Every chunk outside its set gets the work of
+  new content, even one the doc's history holds: written to the write's segment, synced with
+  it, listed in the segment's row (a copy no chunk row points at, reclaimed by a later
+  compaction), its row written in the same transaction. A write whose whole file equals an
+  older version's does the same work, then raises that version's manifest's count: the commit
+  writes every chunk row and the manifest either way. A write never starts a compaction. So a
+  write's work, its reply (`BlobWriteResult`), the doc's status and the host's events are the
+  same whether its bytes were new or only in the history. No reply, size or usage figure says
+  what a write newly stored; `BlobStore::stats` is the host's (show it to owners only). One
+  difference at whole-file grain remains, as before chunking: a version whose bytes equal an
+  older one's skips its structure index build, a large timing difference, and a whole file is
+  hard to guess. A write's wall time for a history-only chunk against a brand-new one is
+  published, not asserted: `docs/evidence/chunked-write-timing.md` (`tests/chunked_timing.rs`,
+  ignored by default, run in a release build).
+- **`gc` and opens.** `gc` removes a segment file no row names unless a write is waiting on
+  it; `BlobStore::open` removes every one (nothing waits after a restart) and the temp files.
+  `purge_space_key` removes the space's segments with its rows.
+- **Reads** (`BlobStore::reader_of`, `read_to_vec_of`, `copy_to_of`, by the doc's id: the
+  kit's own readers use them; `reader` stays for whole-file blobs): the manifest and chunk rows
+  are read in one transaction, and every segment file the version needs is opened before its
+  first byte streams, so a file unlinked under the read stays readable (a segment missing at
+  that point means the rows are read again, once). A thread reads ahead into a bounded
+  queue. Each chunk is checked against its id before its bytes are handed out, and the whole
+  file against its id at the end: a damaged segment fails the read, never with a wrong byte
+  first.
+- **Retention** (`DocStore::delete_blob_version`) lowers the manifest's count; at none the
+  manifest goes and each of its chunks loses one reference, a chunk at none its row (its
+  bytes stay, a range no row names, until a compaction). **A chunk a write waits on keeps
+  its row** at no references: retention holds the blob store's lock across its transaction
+  and reads the writes' marks there, and a write looks at a chunk's row only after marking
+  it, so a save never fails because retention ran beside it; the write's commit counts the
+  row, or `gc` removes it once nothing waits on it. Retention never compacts: the dropped
+  chunks' bytes stay in their segments as **dead ranges** (entries of a segment's list no
+  chunk row points at) until `gc` or the next purge compacts them.
+- **Compaction** takes a segment, writes a new one holding its kept chunks only (each checked
+  against its id; a temp file, synced, its name marked waiting from before its rename to its
+  commit so `gc` leaves it, renamed into place, its folder synced), and in one transaction
+  points the kept chunks' rows at it, writes its list, drops the old segment's row and puts
+  the old file on the **removal list** (`doc_removals`); a segment with nothing kept is just
+  removed. It runs under the doc's internal lock only: a purge's, and `gc`'s for a segment
+  less than half live (a doc whose lock is busy waits for the next `gc`). A write never
+  starts one. After the commit the kit deletes the listed files and clears them from the
+  list in its own transaction; **every open finishes a list it finds** (`BlobStore::open`,
+  before any session), and an entry whose file can't be deleted (an open file on some
+  systems) stays for the next try (`gc` retries it).
+- **A purge** (`BlobSession::purge`, and a live doc's tier-0 history) of chunked versions
+  takes the doc's internal lock before the session's, so it waits for a write between its
+  marks and its commit, and that write never finds a chunk it reuses gone. In one
+  transaction it redacts the versions, drops each one's reference on its manifest (at none
+  the manifest and the rows of the chunks only it held go: their ids are digests of the
+  content) and **compacts every segment of the doc holding a purged chunk or any other dead
+  range**: when the purge ends, every byte of every segment of the doc belongs to a kept
+  chunk, duplicate copies and the dead ranges retention left included. The doc changing
+  between the purge's plan and its commit means it plans again. After the commit come the
+  removal list and a **sweep of the doc's segment folder** (a segment no row names and a
+  temp file go), then the store file's rewrite, which copies the chunk tables without the
+  erased rows (the commit asks for that rewrite at the next open too, so a stop between the
+  commit and the rewrite leaves no purged byte past the next open). **Shared**
+  (`NotReached::SharedBlobs`) is reported only when another version still names the whole
+  manifest (the same bytes); chunks shared with kept versions are the normal case and are
+  not "not reached". A chunk row's `since` is reset whenever a version takes a reference to
+  it. With no blob store open, a purge of a chunked version is refused before anything
+  changes (`StoreError::ChunkedPurge`, `MPC-E501`).
+- **Reads beside a compaction**: a reader opens every segment it needs before its first byte
+  (an open file stays readable after its unlink); one whose rows a compaction moved before
+  its opens finds a segment gone and takes the rows again, once.
+- A **doc delete** erases its chunk rows (its chunk key with them) with its other rows, then
+  its segment folder; a **space delete** (`SessionManager::delete_space`) removes each of its
+  docs' segment folders in the same step, once its transaction commits.
+- **The stamp.** The transaction that writes a store's first chunked version stamps it
+  **format 8** with the `chunked` feature, never lowered. Kits up to v0.17.0 refuse a
+  format-8 store at open, so **turn chunked versions on only once the release a host would
+  roll back to reads format 8**: one chunked version and the older release can't open the
+  store at all.
+- **Rechunk** (`BlobStore::rechunk(space, doc) -> Result<RechunkReport, RechunkError>`): a
+  host's maintenance call that converts a doc's existing whole-file versions to chunked ones;
+  nothing converts on its own, and a whole-file version keeps reading as before. Each distinct
+  whole file of the doc at or over `chunk_min_bytes` is read back (verified), written as a
+  chunked write is (the doc's internal lock, waiting marks, one segment) and committed in its
+  own transaction, in which every version naming those bytes moves its reference from the
+  whole-file blob to the manifest; file ids don't change. **The whole-file blob it dropped is
+  removed at once**, not after the `gc` grace, when nothing else references it (another doc
+  of the space with the same bytes keeps it) and no put waits on it. Versions under the minimum
+  stay whole, purged ones are skipped, and the first conversion stamps the store as any
+  chunked version does. Its cheap set is a kit write's for no connection (the current
+  version), plus the versions it has converted already, so consecutive versions share chunks;
+  that opens no guess of history: the chunks reused are those of versions the doc already
+  holds, just written by this call, and the caller is the host, which may read every version
+  anyway (nothing it reports reaches a connection). It never waits on a write: a version
+  whose doc lock a write holds is skipped and counted in `RechunkReport::busy`. A stop at any
+  step leaves each version whole, as a whole file before the commit or chunked after it (its
+  old blob then at no references, for `gc` or the next rechunk); nothing is half-referenced.
+  Refused with `RechunkError::ChunkingOff` when `chunked_versions` is off, changing nothing.
+  It cuts by content only (a pack's hints don't reach the blob store). No way back yet
+  (rebuilding whole files is a later maintenance call); the stamp stays.
+- **The structure index** of a chunked version builds and reads as a whole-file version's: the
+  manifest row stands in for the blob row. A version's index row (keyed by its file id, so
+  shared by equal bytes) lives while a blob row or a manifest of its bytes does, and goes in
+  the transaction that drops the last of them (retention, a purge, a doc delete, the removal
+  of a whole-file blob by `gc` or a rechunk).
 
 ### Host cache keys
 
@@ -2936,7 +3125,7 @@ hands them to `run_annotation`: one line a thread and a comment, or JSON with `-
   ways (the typed call as a person, the verb as an agent) and compares the threads, comments,
   history, exit and output; the one documented difference is the re-anchor proposal.
   `check_blob` runs it for a registry that has the verbs (`for_blob_pack`), so a pack's blob
-  list names them under P23 and P27.
+  list names them under the annotate and mention rows.
 
 ### Reading the index
 
@@ -3010,14 +3199,14 @@ exit 1. Not a cursor: `MPC-E174 bad_cursor`, exit 2. `--no-truncate` past the bu
 over_budget`, exit 2, nothing read, whenever the whole answer is over the budget (more pages,
 or an item shortened). Rights are asked before a cursor is looked at.
 
-**The registry: `Registry::for_blob_pack(&pack)`.** `for_tier(Tier::Blob)` and, for a pack with
-an index, its verbs as kit verbs of tier 0 (`VerbSpec::is_index`), all but the export verb
-through `run_tool`. A pack with no index gets exactly `for_tier(Tier::Blob)`, and `for_tier` never
-lists these. Refused: a name that isn't two lowercase words, whose first word is a kit verb's
-(`outline`, `node` and `claim` included), or two of one name. The parity rows are P3 (list,
-show), P19 (diff), P22 (blame), P24 (export) and P8 (the claims, though P8 isn't a tier-0 row:
-a pack that indexes lists it). `parity::kit_index_cases(verbs, first, second)` checks them on two
-versions of a file the pack gives; the export verb's case is the pack's.
+**The registry: `Registry::for_blob_pack(&pack)`.** `for_tier(Tier::Blob)` and, for a pack with an
+index, its verbs as kit verbs of tier 0 (`VerbSpec::is_index`), all but the export verb through
+`run_tool`. A pack with no index gets exactly `for_tier(Tier::Blob)`, and `for_tier` never lists
+these. Refused: a name that isn't two lowercase words, whose first word is a kit verb's (`outline`,
+`node` and `claim` included), or two of one name. The parity rows are the whole-doc read (list,
+show), history (diff), blame, export and the caret row (the claims, though the caret row isn't a
+tier-0 row: a pack that indexes lists it). `parity::kit_index_cases(verbs, first, second)` checks
+them on two versions of a file the pack gives; the export verb's case is the pack's.
 
 **Export by node** is the host's export with `export::NODE_OPTION` (`node`, the key): the host
 resolves the address with `index_nodes` at the version it exports, so an exporter never sees a
@@ -3406,6 +3595,23 @@ transaction that writes its first one; a store that never holds one stays at 5
 (`STORE_FORMAT_BASE`) byte for byte, so v0.9.x reads and writes it as before (checked by a
 v0.9.2 build on a store this build used). A format-5 build refuses a format-6 store with
 one line: `store is format 6; this build reads up to 5`.
+
+**Store format 8, the required-features word** (`store/features.rs`;
+`docs/design/version-storage-r2.md`, section 10): the store's `meta` holds a word of required
+features, `chunked` (bit 0: the store holds chunked versions) and `native` (bit 1: it holds
+engine stores). At open, before anything reads or writes the store, a word naming a bit this
+build doesn't know is refused by name (`UnknownFeatures`, `MPC-E502`), a format-8 store
+without its word or a word below format 8 is damage (`MPC-E503`), and a store that sets
+`native` is refused (`NativeWithoutEngine`, `MPC-E502`): this build stores no engine records,
+so it holds no engine store. **Format 7 is retired, never written**: a store stamped 7 is
+refused at open (`NeverWritten`, `MPC-E503`), its bytes unchanged. This build writes format 8
+(`STORE_FORMAT_CHUNKED`): a store's first chunked version stamps it, in its own transaction
+([Chunked versions](#chunked-versions)); a structured doc still stamps 6
+(`STORE_FORMAT_STRUCTURED`), and a format-8 store keeps 8. `STORE_FORMAT` stays 6, the format
+a store with no opt-in feature is stamped; `STORE_FORMAT_READ` (8) is the highest this build
+reads, and the one a host's "reads up to" message names. A format-8 store opens, is swept
+and is rewritten (its word with it) as any store this build writes. Kits v0.14.0 to v0.17.0
+refuse a format-8 store at open with one line: `store is format 8; this build reads up to 7`.
 
 ### Outside saves on a keyed doc that isn't a table: keep both over a kit write
 
@@ -3857,7 +4063,7 @@ erases these rows**, so erasing them (a person's data, a deleted workspace) is t
   it outside and isn't touched by it (`Edited`, `Respect`). Was: both took it, and the two
   claims overlapped (the v0.9.1 soak's finding).
 - **`approvals --all`** (and `log --pending --all`): settled approval records too, newest
-  first; P30 gains a case for each name, both tiers. `LogQuery::settled` /
+  first; the pending-approvals row gains a case for each name, both tiers. `LogQuery::settled` /
   `LogQuery::with_settled()` (additive: `LogQuery` is `#[non_exhaustive]`).
 - **Tier 0 → text promotion keeping history** ([Tier 0 → text](#tier-0--text-v092)):
   `SessionManager::promote_blob_file` / `promote_blob` turn a blob doc that now reads as text
@@ -3873,8 +4079,8 @@ erases these rows**, so erasing them (a person's data, a deleted workspace) is t
   policy and `if_version`, both under the lock ([Editing](#editing)).
 - **`VerbSpec::runs_through_run_tool()`** (data: `parity::RUN_TOOL_VERBS`, plus pack verbs)
   and **`VerbSpec::alias_of()`** (`parity::ALIASES`).
-- **`approvals [--on-behalf-of me|P]`**: a host-neutral alias of `log --pending` (P30), both
-  tiers. Pack lists may leave it out.
+- **`approvals [--on-behalf-of me|P]`**: a host-neutral alias of `log --pending` (the
+  pending-approvals row), both tiers. Pack lists may leave it out.
 - **`Pack::writes_bom(root, codec)`** (provided) and `codec::text_file::BOM`: a `write` body
   read with `cat` no longer doubles the BOM ([Writing a BOM file](#writing-a-bom-file)).
 - **Fixed:** blame keeps `restored_by` on a partly restored line ([Blame](#blame): ties);
@@ -3923,9 +4129,10 @@ that ends. **Claims coordinate agents only:** `Respect` and reservations refuse
 `ParticipantKind::Agent` and nothing else.
 
 **Breaking (text parity lists, harness struct):** the registry gains `claim`, `claim
---renew`, `claim --release` (serving P8) and `activity` (P6). A text pack's P8 row must
-list the claim verbs (`ParityRow::live(P8, &["cursor", "claim", "claim --renew", "claim
---release"])`; the old `intent` placeholder goes) and its P6 row `activity`, or `check`
+--renew`, `claim --release` (serving the caret row) and `activity` (the who's-here row). A
+text pack's caret row must list the claim verbs (`ParityRow::live(P::Caret, &["cursor",
+"claim", "claim --renew", "claim --release"])`; the old `intent` placeholder goes) and its
+who's-here row `activity`, or `check`
 reports `VerbNotListed`. `parity::PresenceObs` gains `claims: Vec<ClaimObs>` (a pub struct
 without `#[non_exhaustive]`: a pack that builds one by hand must add it). `PersonAction`
 is unchanged.
@@ -3937,9 +4144,10 @@ is unchanged.
 more than one (nothing applied, report on `stdout`), 2 usage. No new type or error variant;
 `ToolOutput.stdout` / `EditOutput.stdout` now also carry its report. No store change.
 
-**Breaking (text parity lists only):** `replace` serves P12 (find and replace) besides
-P10 and P15, with exits `0, 1`, and P12 has three `replace` cases in `kit_cases`. A text
-pack's P12 row must list `replace` (`ParityRow::live(P12, &["sed -i", "replace"])`), or
+**Breaking (text parity lists only):** `replace` serves the find-and-replace row besides
+the typing-over and format rows, with exits `0, 1`, and the find-and-replace row has three
+`replace` cases in `kit_cases`. A text pack's find-and-replace row must list `replace`
+(`ParityRow::live(P::FindReplace, &["sed -i", "replace"])`), or
 `check` reports `VerbNotListed`. `PersonAction` is unchanged; tier 0 is unaffected.
 
 ### Amendment 11 (v0.5.0): approvals for on-behalf blob writes; store format 4
@@ -3952,9 +4160,9 @@ pack's P12 row must list `replace` (`ParityRow::live(P12, &["sed -i", "replace"]
 No new error variant: `NoApproval { seq }`, `StoreError::NoApproval(doc, seq)` and
 `AuditEvent::Approval { seq }` carry the version for a blob doc (as `ExternalEdit` does).
 
-**Breaking (tier-0 parity lists only):** `approve`, `decline` and `log --pending` serve both
-tiers (`VerbSpec::tiers`) and P29 and P30 have tier-0 cases (`kit_blob_cases`), so a tier-0
-list that defers them now fails (`StaleDeferral`, and the verbs are in
+**Breaking (tier-0 parity lists only):** `approve`, `decline` and `log --pending` serve both tiers
+(`VerbSpec::tiers`) and the approve and pending-approvals rows have tier-0 cases (`kit_blob_cases`),
+so a tier-0 list that defers them now fails (`StaleDeferral`, and the verbs are in
 `Registry::for_tier(Tier::Blob)`): make them live. A text pack's list is unchanged.
 
 **Store format 4** (reads 3; **no downgrade**): a new table `blob_approvals` keyed
@@ -3981,14 +4189,14 @@ is lost by a long pending list). Say if you want one.
 `BlobSession::set_approval` and print `restore_to` / `later` on a decline ("restore version N
 to undo it; versions M… came after it and would be replaced too"); `log --pending
 --on-behalf-of me` from `BlobSession::log` (`approval == Some(Pending)`), or the tab's list
-from `approvals`; show `approval` in the blob log and blame; make the P29/P30 rows of your
-tier-0 list live and run `parity::check_blob`.
+from `approvals`; show `approval` in the blob log and blame; make the approve and pending-approvals
+rows of your tier-0 list live and run `parity::check_blob`.
 
 ### Amendment 10 (v0.4.0): tier flags, lease verbs, the blob log, conflict copies
 
 **Breaking (Rust API):**
 1. `VerbSpec` gains `tiers: &'static [Tier]` (a struct literal needs it).
-2. `PersonAction` gains `Lease` (P32), `ReleaseLease` (P33), `BreakLease` (P34): every
+2. `PersonAction` gains `Lease`, `ReleaseLease` and `BreakLease`: every
    pack's exhaustive `match` must map them (a text pack: N/A), and a pack's list should keep
    to its tier (`PersonAction::for_tier(Tier::Text)`).
 3. `Registry::kit()` is the **text** tier's verbs (`KIT_VERBS` now holds tier 0's too);
@@ -4035,12 +4243,12 @@ No API or store change.
 **Hosts:** nothing to change if you print `session_exit`; a host matching exit 6 to say
 "store unavailable" no longer says it for a version that doesn't exist.
 
-### Amendment 8 (additive): blame (P22)
+### Amendment 8 (additive): blame
 
 **Additive:** `Session::blame`, `Blame` (`render`, `porcelain`), `BlameLine`, `UNKNOWN_PID`;
 `BlobSession::blame`, `BlobBlame`, `BlobAuthor`. Variants on `#[non_exhaustive]` enums:
 `Action::Blame`, `parity::Api::Blame`; `parity::VerbValue::Blame`. The `blame` verb in
-`KIT_VERBS` (history kind, needs read and history, serves P22) with kit parity cases.
+`KIT_VERBS` (history kind, needs read and history, serves the blame row) with kit parity cases.
 
 **Store:** one new table, `change_clocks` (client, first clock → end clock, change), written
 in each change's transaction, erased with the doc, copied by `rewrite_file`. **No format

@@ -27,7 +27,7 @@ pub enum Mutant {
     O5RegionBase,
     /// skip-U19: a purge doesn't clear the stacks.
     SkipU19,
-    /// F3 (v0.8.2 and earlier): undo, redo and revert find the merge's sides by diffing
+    /// Diffed sides (v0.8.2 and earlier): undo, redo and revert find the merge's sides by diffing
     /// strings (`diff(after, before)`, `diff(after, window)`) instead of merging the exact
     /// hunk sets (U10, v1.7).
     Rediff,

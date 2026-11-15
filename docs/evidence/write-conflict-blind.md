@@ -8,7 +8,7 @@ agent sees it, given with no other context to fresh agents.
 ## Setup
 
 - **The refusal:** from `mpc`, the kit's reference host (`crates/base/examples/mpc.rs`),
-  scenario `write-conflict`, built from release/v0.9.7.1 at ebbbe2c on a build node. The
+  scenario `write-conflict`, built from v0.9.7.1 at ebbbe2c on a build node. The
   agent read version 1 of `notes.md`; Sam then rewrote line 3 (`Status: draft` to
   `Status: in review (Sam)`), making version 2; the agent wrote `--base 1` with line 3 as
   `Status: ready` and line 4 as `Owner: agent`. The host prints `refusal_at(base, current)`.

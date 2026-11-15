@@ -1,7 +1,7 @@
 MPC-E164 vector_needs_parts (sessions and edits)
 exit:     2
 message:  the version vector ({entries} writers) doesn't fit one frame: send it in parts
-next:     Nothing was sent. The doc's version vector is past one frame (MPCE-E983): send it as parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never send a smaller or empty vector.
+next:     Nothing was sent. The doc's version vector is too large for one frame: send it as parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never send a smaller or empty vector.
 rule:     the MPCE seam (stable codes): a vector is never sent smaller or empty
 verbs:    an editor's sync connection (no verb)
 status:   live
@@ -12,7 +12,7 @@ status:   live
   "area": "sessions and edits",
   "exit": 2,
   "message": "the version vector ({entries} writers) doesn't fit one frame: send it in parts",
-  "next": "Nothing was sent. The doc's version vector is past one frame (MPCE-E983): send it as parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never send a smaller or empty vector.",
+  "next": "Nothing was sent. The doc's version vector is too large for one frame: send it as parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never send a smaller or empty vector.",
   "rule": "the MPCE seam (stable codes): a vector is never sent smaller or empty",
   "verbs": ["(sync)"],
   "returned_by": [],

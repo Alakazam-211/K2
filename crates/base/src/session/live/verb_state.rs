@@ -49,13 +49,10 @@ impl ChangeFrom {
 
 /// The planted fault [`crate::differential::VerbStateMutant::OutsideSaveSkipped`].
 fn planted_outside_save_skipped() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::verb_state_mutant()
-        == Some(crate::differential::VerbStateMutant::OutsideSaveSkipped)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::verb_state_mutant()
+            == Some(crate::differential::VerbStateMutant::OutsideSaveSkipped)
+    )
 }
 
 /// At most this much of a state's `Debug` in a check's assertion message.

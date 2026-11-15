@@ -1,0 +1,153 @@
+{
+  "about": "A claim on an element an outside save removed: `claim_started_elems`, then `claim_ended` with `how: gone_outside_save` and `keys`, the claim's element addresses as they were; `final`, a later subscription's snapshot, with no claim.",
+  "self": "ada",
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 1,
+      "members": [
+        {
+          "handle": "ada",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 9007199254740991,
+              "cursor": null
+            }
+          ]
+        },
+        {
+          "handle": "bot",
+          "name": "Bot",
+          "colour": "#0891b2",
+          "kind": "agent",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 5,
+              "cursor": null
+            }
+          ]
+        }
+      ],
+      "watching": 0
+    },
+    {
+      "kind": "claim_started_elems",
+      "who": "bot",
+      "claim": "claim-1",
+      "root": "items",
+      "keys": ["@item:i2"],
+      "note": "renaming",
+      "hold": true,
+      "expires_ms": 1700000030000,
+      "version": 1,
+      "actor": {
+        "id": "bot",
+        "name": "Bot",
+        "kind": "agent",
+        "colour": "#0891b2"
+      },
+      "started_ms": 1700000000000
+    },
+    {
+      "kind": "focus",
+      "who": "bot",
+      "focus": {
+        "root": "items",
+        "key": "@item:i2"
+      },
+      "client": 5
+    },
+    {
+      "kind": "selection",
+      "who": "bot",
+      "selection": {
+        "root": "items",
+        "keys": ["@item:i2"]
+      },
+      "client": 5
+    },
+    {
+      "kind": "claim_ended",
+      "who": "bot",
+      "claim": "claim-1",
+      "how": "gone_outside_save",
+      "lines": {
+        "root": "items",
+        "first": 1,
+        "last": 1
+      },
+      "version": 2,
+      "actor": {
+        "id": "bot",
+        "name": "Bot",
+        "kind": "agent",
+        "colour": "#0891b2"
+      },
+      "at_ms": 1700000000300,
+      "at_rev": 2,
+      "keys": ["@item:i2"]
+    },
+    {
+      "kind": "focus",
+      "who": "bot",
+      "focus": null,
+      "client": 5
+    },
+    {
+      "kind": "selection",
+      "who": "bot",
+      "selection": null,
+      "client": 5
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 2,
+    "members": [
+      {
+        "handle": "ada",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "viewer",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 9007199254740991,
+            "cursor": null
+          }
+        ]
+      },
+      {
+        "handle": "bot",
+        "name": "Bot",
+        "colour": "#0891b2",
+        "kind": "agent",
+        "role": "viewer",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 5,
+            "cursor": null
+          }
+        ]
+      }
+    ],
+    "watching": 0
+  }
+}

@@ -3,12 +3,30 @@
 
 export { LiveText, diffText, frameBytes, setDefaultLiveTimers } from "./live";
 export type { ChangeInfo, DuplicateRisk, Landed, LiveOptions, LiveTimers, OpId, Placement, Presence, ReapplyGuard, Rejection, RemoteCaret, UndoResult } from "./live";
-export { CLAIMS_FEATURE, CLAIM_KEYS_MAX, CLAIM_NOTE_MAX, ClaimRejected, ELEM_SELECTION_MAX, FOCUS_FEATURE, FRAME_MS, PRESENCE_FEATURE, PresenceChannel, RANGE_FEATURE, defaultScheduler, participantKind, rangeToUtf16 } from "./presence";
-export type { ClaimOptions, ClaimRejectedReason, ClaimView, FrameScheduler, InsertHereResult, InsertPreview, InsertRefusal, Mark, MarkPlacement, Participant, ParticipantKind, PresenceChannelOptions, PresenceFrameType, PresencePeer, PresenceRefusal, Range16 } from "./presence";
+export {
+  CLAIMS_FEATURE,
+  CLAIM_KEYS_MAX,
+  CLAIM_NOTE_MAX,
+  ClaimRejected,
+  ELEM_SELECTION_MAX,
+  FOCUS_FEATURE,
+  FRAME_MS,
+  PRESENCE_ADDRESS_MAX,
+  PRESENCE_FEATURE,
+  PresenceChannel,
+  RANGE_FEATURE,
+  TIME_POSITION_FEATURE,
+  VIEW_ADDRESS_FEATURE,
+  claimEndReason,
+  defaultScheduler,
+  participantKind,
+  rangeToUtf16,
+} from "./presence";
+export type { ClaimEnded, ClaimEndReason, ClaimOptions, ClaimRejectedReason, ClaimView, FrameScheduler, InsertHereResult, InsertPreview, InsertRefusal, Mark, MarkPlacement, Participant, ParticipantKind, PresenceChannelOptions, PresenceFrameType, PresencePeer, PresenceRefusal, Range16 } from "./presence";
 export { transform, Bias } from "./position";
 export { KEYED_WATCH_FEATURE, KeyedWatch, REPORT_EVERY, keyedStateJson, mapKey } from "./keyed";
 export type { KeyedRootState, KeyedState, KeyedWatchOptions, ResyncReason } from "./keyed";
-export { KeyedView, VIEW_TEXT_MAX } from "./view";
+export { CONTAINER_DEPTH_MAX, KeyedView, VIEW_TEXT_MAX } from "./view";
 export { mul, placementMatrix, stepMatrix, worldMatrix } from "./placement";
 export type { Mat4, PlacementLookup, Precision } from "./placement";
 export {
@@ -73,11 +91,16 @@ export type {
   KeyedUnitsPage,
   KeyedValue,
   OpsChangeFrame,
+  OutsideSaveFrame,
+  TimePositionJson,
+  TimePositionSet,
+  VerbRefusedFrame,
   WatchActor,
   WatchOp,
   ContainerDelta,
   UnitDelta,
   ViewContainer,
+  NestingJson,
   ViewSchemaJson,
   ViewSnapshotJson,
   ViewSrc,

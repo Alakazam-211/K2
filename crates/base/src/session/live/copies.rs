@@ -17,24 +17,18 @@ pub(super) type CopyBefore = (VersionId, LiveCopyRow, Option<Vec<u8>>);
 
 /// The planted fault [`crate::differential::KeyedMutant::PurgeSkipsLiveCopies`].
 fn purge_skips_live_copies() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::PurgeSkipsLiveCopies)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::PurgeSkipsLiveCopies)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::CopyComparedWithEncode`].
 fn copy_compared_with_encode() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::CopyComparedWithEncode)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::CopyComparedWithEncode)
+    )
 }
 
 impl Session {

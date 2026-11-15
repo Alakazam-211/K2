@@ -61,7 +61,7 @@ impl Session {
         if info.redacted {
             return Err(StoreError::PurgedVersion(self.doc_id, vid).into());
         }
-        let reader = blobs.reader(&st.key.space, &info.blob)?;
+        let reader = blobs.reader_of(&st.key.space, self.doc_id, &info.blob)?;
         Ok(BlobRead {
             version: vid,
             info,
@@ -172,7 +172,11 @@ impl Session {
         let mut not_reached = Vec::new();
         self.purge_tier0_rows(st, &store, &vids, now, &mut counts, &mut not_reached)?;
         let rewrite = match store.rewrite_file() {
-            Ok(r) => Some(r),
+            Ok(r) => {
+                // the rewrite a chunked purge's commit asked for at the next open is done
+                let _ = store.clear_rewrite_pending();
+                Some(r)
+            }
             Err(_) => {
                 not_reached.push(NotReached::StoreFile);
                 None
@@ -228,7 +232,16 @@ impl Session {
         not_reached: &mut Vec<NotReached>,
     ) -> Result<()> {
         let before = store.blob_versions(self.doc_id)?;
-        let (released, approvals, _anchors) = store.blob_purge_versions(self.doc_id, vids, now)?;
+        // with a blob store, chunked versions are erased from their segments too (under the
+        // doc's internal lock, which no write of a live doc holds); without one, a chunked
+        // version is refused before anything changes
+        let (released, approvals, _anchors) = match self.blob_store() {
+            Ok(blobs) => {
+                let _doc = blobs.lock_doc(self.doc_id);
+                blobs.purge_versions(&st.key.space, self.doc_id, vids, now)?
+            }
+            Err(_) => store.blob_purge_versions(self.doc_id, vids, now)?,
+        };
         counts.blob_versions += vids.len() as u64;
         counts.approvals += approvals;
         let purged: Vec<BlobId> = released.iter().map(|r| r.1).collect();

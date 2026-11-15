@@ -17,7 +17,7 @@ C="soak edit_paths edit_cost history presence sessions roster app_view overflow"
 E="error_ids tools_session pack_verbs"
 # base-d's (v0.9.7: the vendored engine's patch grew with k2.3): blame's incremental map and its
 # cost, position_index with the planted engine bugs, and disk, if_version and blame (in base-a1
-# on main from exports P0; with k2.6.3's patch and the merged kit, base-a1 with them needed
+# on main from the exports work; with k2.6.3's patch and the merged kit, base-a1 with them needed
 # 130,240 inline characters, over a job's 120,000; without them 96,728)
 D="disk if_version blame blame_incremental blame_cost position_index"
 case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wire-guard or evidence} in

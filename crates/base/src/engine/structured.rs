@@ -779,13 +779,10 @@ fn fast_on() -> bool {
 
 /// The planted fault [`crate::differential::ListPlanMutant::FastInsertAfterOffByOne`].
 fn planted_after_off_by_one() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::list_plan_mutant()
-        == Some(crate::differential::ListPlanMutant::FastInsertAfterOffByOne)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::list_plan_mutant()
+            == Some(crate::differential::ListPlanMutant::FastInsertAfterOffByOne)
+    )
 }
 
 /// What a change planned from the slot index does to it once the change is made.

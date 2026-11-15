@@ -583,6 +583,19 @@
       ],
       "derived": null,
       "render_hashes": null
+    },
+    {
+      "type": "outside_save",
+      "at_ms": 1700000011000,
+      "doc": "plan.board",
+      "outcome": "kept_both",
+      "rev": 14,
+      "kept": 2,
+      "copy": {
+        "name": "plan (conflict Atlas 2023-11-14 221331).board",
+        "path": "plan (conflict Atlas 2023-11-14 221331).board",
+        "doc": "plan (conflict Atlas 2023-11-14 221331).board"
+      }
     }
   ],
   "final_json": "{\"roots\":[{\"name\":\"shapes\",\"kind\":\"list\",\"live\":[[\"@sh:a4\",\"box\"],[\"@sh:a1\",\"box\"],[\"@sh:a2\",\"line\"],[\"@sh:g0\",\"grid cell 0\"],[\"@sh:g1\",\"grid cell 1\"],[\"@sh:g2\",\"grid cell 2\"],[\"@sh:g4\",\"grid cell 4\"],[\"@sh:g5\",\"grid cell 5\"],[\"@sh:g6\",\"grid cell 6\"],[\"@sh:g7\",\"grid cell 7\"],[\"@sh:g8\",\"grid cell 8\"],[\"@sh:g9\",\"grid cell 9\"],[\"@sh:g10\",\"grid cell 10\"],[\"@sh:g11\",\"grid cell 11\"],[\"@sh:g12\",\"grid cell 12\"],[\"@sh:g13\",\"grid cell 13\"],[\"@sh:g14\",\"grid cell 14\"],[\"@sh:g15\",\"grid cell 15\"],[\"@sh:g16\",\"grid cell 16\"],[\"@sh:g18\",\"grid cell 18\"],[\"@sh:g19\",\"grid cell 19\"],[\"@sh:g20\",\"grid cell 20\"],[\"@sh:g21\",\"grid cell 21\"],[\"@sh:g22\",\"grid cell 22\"],[\"@sh:g23\",\"grid cell 23\"],[\"@sh:g24\",\"grid cell 24\"],[\"@sh:g25\",\"grid cell 25\"],[\"@sh:g26\",\"grid cell 26\"],[\"@sh:g27\",\"grid cell 27\"],[\"@sh:g28\",\"grid cell 28\"],[\"@sh:g29\",\"grid cell 29\"],[\"@sh:g30\",\"grid cell 30\"],[\"@sh:g32\",\"grid cell 32\"],[\"@sh:g33\",\"grid cell 33\"],[\"@sh:g34\",\"grid cell 34\"],[\"@sh:g35\",\"grid cell 35\"],[\"@sh:g36\",\"grid cell 36\"],[\"@sh:g37\",\"grid cell 37\"],[\"@sh:g38\",\"grid cell 38\"],[\"@sh:g39\",\"grid cell 39\"],[\"@sh:g40\",\"grid cell 40\"],[\"@sh:g41\",\"grid cell 41\"],[\"@sh:g42\",\"grid cell 42\"],[\"@sh:g43\",\"grid cell 43\"],[\"@sh:g44\",\"grid cell 44\"],[\"@sh:g45\",\"grid cell 45\"],[\"@sh:g46\",\"grid cell 46\"],[\"@sh:g47\",\"grid cell 47\"],[\"@sh:g48\",\"grid cell 48\"],[\"@sh:g49\",\"grid cell 49\"],[\"@sh:g50\",\"grid cell 50\"],[\"@sh:g51\",\"grid cell 51\"],[\"@sh:g52\",\"grid cell 52\"],[\"@sh:g53\",\"grid cell 53\"],[\"@sh:g54\",\"grid cell 54\"],[\"@sh:g55\",\"grid cell 55\"],[\"@sh:g56\",\"grid cell 56\"],[\"@sh:g57\",\"grid cell 57\"],[\"@sh:g58\",\"grid cell 58\"],[\"@sh:g59\",\"grid cell 59\"],[\"@sh:g60\",\"grid cell 60\"],[\"@sh:g61\",\"grid cell 61\"],[\"@sh:g62\",\"grid cell 62\"],[\"@sh:g63\",\"grid cell 63\"],[\"@sh:g64\",\"grid cell 64\"],[\"@sh:g65\",\"grid cell 65\"],[\"@sh:g66\",\"grid cell 66\"],[\"@sh:g67\",\"grid cell 67\"],[\"@sh:g68\",\"grid cell 68\"],[\"@sh:g69\",\"grid cell 69\"],[\"@sh:g70\",\"grid cell 70\"],[\"@sh:g71\",\"grid cell 71\"],[\"@sh:g72\",\"grid cell 72\"],[\"@sh:g73\",\"grid cell 73\"],[\"@sh:g74\",\"grid cell 74\"],[\"@sh:g75\",\"grid cell 75\"],[\"@sh:g76\",\"grid cell 76\"],[\"@sh:g77\",\"grid cell 77\"],[\"@sh:g78\",\"grid cell 78\"],[\"@sh:g79\",\"grid cell 79\"]],\"hidden\":[[\"@sh:a3\",\"gone\"],[\"@sh:g17\",\"grid cell 17\"],[\"@sh:g3\",\"grid cell 3\"],[\"@sh:g31\",\"grid cell 31\"],[\"@sh:n1\",\"box\"]]},{\"name\":\"fields\",\"kind\":\"map\",\"entries\":[[\"@sh:a1\\u001fgeom\",\"1\"],[\"@sh:a1\\u001ftext\",\"Hello\"],[\"@sh:a2\\u001fgeom\",\"3\"],[\"@sh:a2\\u001ftext\",\"Café \\\"two\\\"\\t🎉\"],[\"@sh:a4\\u001ftext\",\"caf\\\\ é\"]]},{\"name\":\"meta\",\"kind\":\"map\",\"entries\":[[\"owner\",\"Owen\"],[\"theme\",\"dark\"]]},{\"name\":\"notes\",\"kind\":\"text\",\"text\":\"1st line\\nsecond 😀 line\\nénd\"}]}",

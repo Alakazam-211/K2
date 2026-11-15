@@ -127,6 +127,10 @@ impl<'a> R<'a> {
         }
         (0..n).map(|_| self.str()).collect()
     }
+    /// How many bytes are left to read.
+    pub fn left(&self) -> usize {
+        self.b.len() - self.at
+    }
     pub fn end(self) -> Result<(), StoreError> {
         if self.at == self.b.len() {
             Ok(())

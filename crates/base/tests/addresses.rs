@@ -119,7 +119,7 @@ fn keys_take_the_grammar_s_key_form() {
     }
 }
 
-/// P12: a bare number is a key or a name, never a position (`#N` is).
+/// A bare number is a key or a name, never a position (`#N` is).
 #[test]
 fn a_bare_number_is_never_a_position() {
     let f = fx("a,b\nx,y\n");

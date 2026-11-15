@@ -1,5 +1,430 @@
 # Changelog
 
+## v0.19.0
+
+A host release on v0.18.0. The crate version is `0.19.0`; the client's is `0.19.0`. The live
+wire stays version 3 (every addition optional). No store needs a migration: `STORE_FORMAT` stays
+6 and `STORE_FORMAT_BASE` 5. This build reads up to format 8 (`STORE_FORMAT_READ`), and writes it
+only once a host turns chunked versions on, which is off by default. Pairs with the markdown,
+text, board, csv, psd and pptx pack tags of this release.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.18.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The native engine stays off.
+
+### What changes for K2
+
+- **`RosterEvent::ClaimEnded` and `AuditEvent::ClaimEnded` gain `addresses`**, the claim's
+  element addresses as they were. A host that builds or matches either without `..` adds the
+  field. A host that encodes the roster for its clients adds `keys` to `claim_ended` when
+  `addresses` isn't empty, and maps `how` by `ClaimEnd::as_str`, as before. `ClaimEnd` gains
+  `GoneOutsideSave` (`"gone_outside_save"`; the enum is `non_exhaustive`): an element claim whose
+  last live element an outside save removed ends with it, where it ended `Deleted` before.
+- **`ContainerFields`, `BlobView` and `ViewSchema` gain fields** (`ContainerFields::parent`,
+  `BlobView::container_parent`, `ViewSchema::container_derived`, `ViewSchema::nesting` and
+  `ViewSchema::time_unit`): a full literal of any of them stops compiling, so build them with
+  `..X::NONE`, as v0.18.0 asked. `Container` (its `parent` and derived values), `ViewIndex`
+  (`refusals`) and `Device` (`view_address`, `time`) gain fields too: build them with
+  `..X::default()`.
+- **Chunked version storage, off by default.** `BlobConfig::chunked_versions` (and
+  `chunk_min_bytes`) store a large version as content-defined chunks. **Turning it on stamps the
+  store format 8 at its first chunked version, which v0.18.0 and earlier refuse to open:** turn
+  it on only once the release a host would roll back to reads format 8. Off, nothing changes,
+  byte for byte. A format-7 store (a format no kit writes) is refused at open, and a format-8
+  store's required-features word is checked before anything reads it. `StoreError` gains
+  variants; `BlobStats` gains counters; `BlobStore::rechunk` converts a doc's versions on a
+  host's request. No new error id.
+- **Two new frames on the keyed watch, both unnumbered:** `outside_save` (`WatchFrame::OutsideSave`,
+  after an outside save's change frame: ingested, kept both with the copy, declined or missing)
+  and `verb_refused` (`WatchFrame::Refused`, a structured edit verb a refusal stopped). Each goes
+  only to the watches whose connection may read the doc. `Host::document_at(file)` (default
+  `None`) lets the first name a conflict copy's doc. A host that forwards watch frames forwards
+  these; a client that doesn't know them ignores them.
+- **Two new presence values, behind wire feature names:** a participant's view address
+  (`Session::set_view_address`, feature `view_address`) and a time position, a generic playhead
+  (`Session::set_time_position`, feature `time_position`). A host that takes the client frames
+  lists the names in `welcome.features` and routes `view_address` and `time_position` to the
+  setters. An agent's are set from its verb's output; a person's presence is never moved.
+- **Additive, nothing to do:** containers inside containers and derived values per container on
+  the view index (snapshot and change frames, only when set), the view schema's `nesting`, a
+  container's layout checked as a layout reference when the index is built, and a pack's chunk
+  cut hints (`BlobPack::chunk_hints`, default none). Client 0.19.0 reads every new field and
+  frame; with a kit that sends none it behaves as 0.18.0.
+- **No store migration, wire still 3.** N−1 is checked both ways against v0.18.0 in every mode.
+
+### Overview
+
+New presence values (view address and time position) and two keyed-watch frames (outside saves,
+refused verbs), all additive on wire 3; a claim gone in an outside save gets its own end reason
+and its element addresses; containers inside containers, derived values per container and the
+view schema's nesting on the view index (additive API and wire fields, no store change); store
+format 8 (its required-features word) read, and written only by chunked tier-0 versions behind
+`BlobConfig::chunked_versions` (off by default); format 7 refused as never written; otherwise
+tests, text and tooling.
+
+### A claim gone in an outside save (additive)
+
+`client/WIRE.md`, "Claims on elements". Still wire 3, no store change.
+
+- **`ClaimEnd::GoneOutsideSave`** (`"gone_outside_save"`; `ClaimEnd` is `non_exhaustive`): an
+  element claim ends with it when an **outside save's** apply removed its last live element (an
+  app deleted it, or a pack's pairing gave a renamed element a new key, so the old key went). A
+  live delete still ends `ClaimEnd::Deleted`. Before this, both ended `Deleted`: the outside save's
+  apply (`ingest_structured`) runs the same end as a live change (`elem_claims_after`, through
+  `grid_presence_after`), so the person couldn't tell an app's save from a collaborator's delete.
+  A reservation still ends `ReservationEnd::Deleted` either way; claims on a grid's rows or cells
+  and a blob doc's node claims are unchanged.
+- **The end events carry the claim's element addresses as they were**:
+  `RosterEvent::ClaimEnded::addresses` and `AuditEvent::ClaimEnded::addresses` (by
+  `Pack::address_of`, in key order; a blob doc's node claim, its node keys; empty for a claim on
+  lines or cells), so a view can name what went. On the wire as `claim_ended`'s `keys`, only when
+  there are some. `at_rev` is the outside save's change for `gone_outside_save`.
+- **Older clients:** no feature name gates the new reason. A client reads a `how` it doesn't know
+  as an ended claim (`deleted`); the v0.18.0 client folds `claim_ended` by its `claim` alone, so
+  it drops the claim as before (`client/test/n1-wire.test.ts`).
+- **For hosts:** `RosterEvent::ClaimEnded` and `AuditEvent::ClaimEnded` gain a field
+  (`addresses`): a host that builds or matches them without `..` adds it. A host that encodes the
+  roster for its clients adds `keys` to `claim_ended` when `addresses` isn't empty
+  (`client/WIRE.md`), and maps `how` by `ClaimEnd::as_str`, as before.
+- The client: `ClaimEndReason`, `claimEndReason` (an unknown reason is `deleted`),
+  `PresenceChannel.onClaimEnded` (`ClaimEnded {claim, who, how, keys}`), `claim_ended.keys`.
+- **Tests:** `tests/claim_gone_outside.rs` (an outside save that removes a claim's last element
+  ends it `gone_outside_save` with its addresses; one that leaves one of two keeps it; a live
+  delete still ends `deleted`; plants `ClaimMutant::OutsideEndReportedDeleted` and
+  `EndAddressesDropped`, each caught by its row); `tests/wire_golden.rs`,
+  `a_claim_gone_in_an_outside_save_is_golden`
+  (`client/test/golden/roster_events_claim_gone_outside.json`;
+  `roster_events_claims_elems.json` gains `keys` on its two ends and nothing else); the test pack
+  `tests/keyed_pack::KeyedFile` (an outside save by key, addresses `@item:<key>`);
+  `client/test/claim-gone-outside.test.ts`; an N-1 row in `client/test/n1-wire.test.ts`.
+
+### Store format 8: the required-features word
+
+The first step of version storage by chunks (`docs/design/version-storage-r2.md`, section 10).
+A store's first chunked version stamps format 8
+([Chunked tier-0 versions](#chunked-tier-0-versions),
+below), behind a host setting that is off by default.
+
+- **Format 8** means the store's `meta` holds a word of required features. Two are defined:
+  `FEATURE_CHUNKED` (the store holds chunked versions) and `FEATURE_NATIVE` (the store holds
+  engine stores). From 8 on, a new on-disk capability is a feature, not a format number.
+  `DocStore::required_features` reads the word (0 below format 8).
+- **Checked at open, before anything reads or writes the store.** A word naming a bit this
+  build doesn't know is refused by name: `StoreError::UnknownFeatures` (`MPC-E502`, exit 6;
+  `details.features` lists the unknown bits, such as `bit 5`). A format-8 store without its
+  word, and a word in a store below format 8, are refused as damage (`MPC-E503`).
+- **The native bit.** This build stores no engine records, so a store that sets the bit holds
+  no engine store and is refused: `StoreError::NativeWithoutEngine` (`MPC-E502`, exit 6; a
+  rollback onto this kit is the likely reader, so it says to use the newer build, and
+  `details.features` names `native`). The check against the engine's own first record
+  replaces it with the change that first stores engine records.
+- **Format 7 is retired, never written.** It was declared for the native engine's stores, and
+  no shipped host turned that engine on. A format-7 store is now refused at open, before
+  anything reads it: `StoreError::NeverWritten` (`MPC-E503`, exit 6), "store is format 7,
+  which no kit writes". Kits v0.10.1 to v0.18.0 opened it read-only.
+- **Read and written.** `STORE_FORMAT_READ` is 8; the new `STORE_FORMAT_CHUNKED` (8) is what a
+  store's first chunked version stamps. `STORE_FORMAT` is unchanged at 6, the format a store
+  with no opt-in feature is stamped (`STORE_FORMAT_BASE` 5 for text docs only,
+  `STORE_FORMAT_STRUCTURED` 6 once it holds a structured doc; a format-8 store keeps 8). A
+  format-8 store naming only `chunked` opens, is swept and is rewritten (its word with it) as
+  any store this build writes, so a purge runs on it. A store past 8 is refused as before
+  (`MPC-E502`): "store is format 9; this build reads up to 8"; every message and detail saying
+  what this build reads or rewrites names `STORE_FORMAT_READ`.
+- **N-1.** Kits v0.14.0 to v0.18.0 read up to format 7 and refuse a format-8 store at open with
+  one line ("store is format 8; this build reads up to 7"), its bytes unchanged; this build
+  opens a store they wrote as before (`tools/n1/n1.sh layout-format`, then `node-format`).
+- **For hosts:** `StoreError` gains three variants (it is `non_exhaustive`); no new error id.
+  **`STORE_FORMAT` is unchanged at 6**; a host's own "reads up to" message names
+  `STORE_FORMAT_READ` (8), the highest format this build opens. A host that turns chunked
+  versions on must first have a rollback target that reads format 8.
+- **Tests:** `store/features_tests.rs` (plants `MPC_FORMAT_PLANT`: `format-7-read-only`,
+  `unknown-feature-ignored`, `native-unchecked`, each caught by its row);
+  `tests/engine_stamp.rs`: a format-8 store serves its Yrs doc and is rewritten and purged
+  with its stamp and word kept; a format-7 store is refused untouched.
+
+### Chunked tier-0 versions
+
+`BlobConfig::chunked_versions` (default off) stores a tier-0 version of
+`BlobConfig::chunk_min_bytes` (default 1 MiB) or more as content-defined chunks in segment
+files, so a small edit of a large file stores the few chunks it changed (`docs/SESSIONS.md`,
+"Chunked versions"; `docs/design/version-storage-r2.md`, sections 1, 5, 7 to 9). Off, nothing
+changes, byte for byte.
+
+- **What is chunked:** a blob doc's writes, saves recorded with a ticket, outside saves taken
+  in, merges, restores, and the first version of an import. Smaller versions, named blobs,
+  `retain`ed blobs and live carriers stay whole-file blobs. A version's file id is still the
+  whole file's keyed id.
+- **On disk:** `<blob dir>/segments/<space no>/<doc>/<n>.seg`; four per-doc tables
+  (`doc_chunk_keys`, `doc_chunks`, `doc_manifests`, `doc_segments`), created by a store's
+  first chunked version, in the transaction that stamps it format 8 with `FEATURE_CHUNKED`.
+- **Writes** mark what they name waiting, write one segment (synced, renamed, its folder
+  synced), and commit everything with the version in one transaction, refusing the whole write
+  when a chunk it reuses is gone (`StoreError::ChunkGone`, `MPC-E501`). `gc` and
+  `BlobStore::open` remove segments no row names (never one a write waits on).
+- **The cheap path comes from the writer's rights:** a write reuses only the chunks of the
+  versions its connection may read, worked out by the session at each write from the rights
+  then in force: every version's with the history right (a restore of a large version writes no
+  second copy), else the current version's; the kit's own writes (an outside save, a merge)
+  reuse the current version's. A writer without history does the work of new content for any
+  other chunk, and for a whole file equal to an older version (the commit writes every chunk
+  row and the manifest either way, then raises the manifest's count), so its work, reply,
+  status and events don't say whether its bytes were in the history. A write's wall time for a
+  history-only chunk against a brand-new one is published, not asserted
+  (`docs/evidence/chunked-write-timing.md`; `tests/chunked_timing.rs`, ignored by default).
+- **Reads** open every segment first, read ahead, and check each chunk before handing out its
+  bytes: `BlobStore::reader_of`, `read_to_vec_of` and `copy_to_of` read a version of a doc,
+  chunked or not; `reader`, `read_to_vec` and `copy_to` stay for whole-file blobs.
+- **Retention** lowers counts, and keeps the row of a chunk a write waits on (at no
+  references; `gc` removes it once nothing waits), so a save never fails because retention
+  ran beside it. It never compacts: dropped chunks stay as dead ranges until `gc` (a segment
+  less than half live) or the next purge compacts them.
+- **The structure index** of a chunked version builds and reads as a whole-file one's: the
+  manifest row stands in for the blob row, and the index row goes in the transaction that
+  drops the last manifest of its bytes.
+- **Purge** of chunked versions: under the doc's internal lock (taken before the session's,
+  so it waits for a write's commit), one transaction redacts the versions, erases the rows of
+  the chunks only they held and their manifests, and compacts every segment of the doc
+  holding a purged chunk or any dead range into a new one holding its kept chunks only: when
+  it ends, no byte of any segment of the doc is unnamed, duplicate copies and retention's dead
+  ranges included. The old segments go on a **removal list** (`doc_removals`, a fifth per-doc
+  table), deleted after the commit and finished by every open; the purge ends with a sweep of
+  the doc's segment folder, and the store file's rewrite (asked for at the next open too).
+  `NotReached::SharedBlobs` counts a version only when another one names the very same bytes.
+  A chunk's `since` is reset when a version takes a reference to it. With no blob store open,
+  a chunked purge is refused before anything changes (`StoreError::ChunkedPurge`, `MPC-E501`).
+- **Reads** beside a compaction take the rows again (once) when a segment they named is gone.
+- **Deletes:** a doc delete takes its chunk rows and segment folder; a space delete
+  (`SessionManager::delete_space`) removes its docs' segment folders in the same step.
+- **For hosts:** `BlobConfig` gains `chunked_versions` and `chunk_min_bytes` (it is
+  `non_exhaustive`: set them on `BlobConfig::default()`). **Turning the setting on stamps the
+  store format 8 at its first chunked version, which v0.18.0 and earlier refuse to open**:
+  turn it on only once the release a host would roll back to reads format 8. `StoreError`
+  gains `ChunkGone` and `ChunkedPurge`. `BlobStats` gains `chunked_busy_fallbacks`: the
+  versions stored whole since the blob store's open because a chunked write found its doc's
+  lock busy. `gc` also runs the compaction retention deferred and retries the removal list.
+- **Rechunk (additive):** `BlobStore::rechunk(space, doc)` converts a doc's existing
+  whole-file versions to chunked ones on request, each distinct file in its own transaction
+  (file ids unchanged; every version naming the bytes moves its reference to the manifest),
+  and removes the whole-file blob it dropped at once when nothing else references it. It skips
+  versions under the minimum, purged ones, and those whose doc lock a write holds (reported
+  busy, never waited on); a stop at any step leaves every version whole. Returns a
+  `RechunkReport`; refused with `RechunkError::ChunkingOff` when the setting is off. Only a
+  host calls it (no verb, tool or watch frame reaches it), so its refusal is a host-side error
+  with no error id. A rechunk cuts by content only: the blob store holds no pack, so a pack's
+  cut hints don't apply to it. A whole-file blob's removal (by `gc` or a rechunk) now keeps
+  the structure index rows of its bytes while a manifest of them remains.
+- **Cut hints (additive for packs):** `BlobPack::chunk_hints(bytes)` (a new default method:
+  none) gives allowed cut points from the file's own structure, such as a zip's member
+  boundaries, for versions of at most `BlobPack::chunk_hints_up_to()` bytes (default 0: never
+  asked). The kit checks them (any bad one and all are ignored, counted in the new
+  `BlobStats::chunk_hints_ignored`), merges those closer than the chunk minimum, caps their
+  number and cuts by content between them; a span over the maximum is still cut at it. The
+  hook is pure, and reading a version never needs it.
+- **Tests:** `tests/chunked_versions.rs` (plants `MPC_CHUNK_PLANT`:
+  `gc-ignores-waiting-segment`, `commit-skips-chunk-check`, `reader-skips-chunk-check`,
+  `cheap-path-beyond-current`, `reader-opens-lazily`, `retention-ignores-chunk-marks`,
+  `delete-space-leaves-segments`, `purge-skips-compaction`,
+  `removal-list-not-finished-at-open`, `compaction-skips-dead-ranges`,
+  `compaction-output-not-waiting`, `history-chunk-cheap`, `manifest-reuse-skips-full-write`,
+  `cheap-set-ignores-history-right`, `rechunk-keeps-old-blob`, `hints-required`,
+  `hints-unmerged`, each caught by its row after a passing control step; the
+  purge-beside-a-write row plants `purge-skips-doc-lock` itself). Test-only work counters,
+  `differential::ChunkWork` and `take_chunk_work` (segment bytes, file and folder syncs, rows
+  written, commits), back the equal-work rows.
+
+### The outside-save frame on the keyed watch (additive)
+
+`client/WIRE.md`, "Outside saves". Still wire 3; a client that doesn't know the frame ignores it.
+
+- **`outside_save`** (`WatchFrame::OutsideSave`, `WatchOutsideSave`, `OutsideSaveOutcome`,
+  `OutsideSaveCopy`): one unnumbered frame when the kit handles an outside save, after the save's
+  own change frame: `at_ms`, `doc`, `outcome` `ingested` (`rev`), `kept_both` (`rev`, `kept`,
+  `copy {name, path, doc?}`), `declined` (`code`, `message`) or `missing`; the last two once, when
+  the file stops decoding or goes. Nothing for an unchanged file or the kit's own write. Sent to
+  the watches whose connection may read the doc then.
+- **`Host::document_at(file)`** (default `None`): the doc a file is, when the host serves it as a
+  kit document; the frame names a conflict copy's doc address from it.
+- The keyed watch's goldens (`keyed_frames.json`) and vectors (`keyed_watch.json`) gain the
+  frame after their outside saves; the `ops_change` frames are unchanged.
+- The client: `OutsideSaveFrame`, `KeyedWatch.onOutsideSave`.
+- **Tests:** `tests/keyed_watch.rs`, `each_outside_save_is_one_outside_save_frame_with_its_outcome`.
+
+### View address and time position presence (additive)
+
+`client/WIRE.md`, "Presence frames". Still wire 3; every field optional, and a client or host that
+doesn't know them reads every frame as before.
+
+- **View address**: the view a participant is looking at, by address, on every participant's
+  presence: `Session::set_view_address(conn, Option<&str>)` (any address the kit's grammar reads,
+  at most `PRESENCE_ADDRESS_MAX`, 512 bytes; `MPC-E114` otherwise), `RosterEntry::view_address`,
+  `Device::view_address`, `RosterEvent::ViewAddress`. The line-range `view` is unchanged.
+- **Time position** (a playhead, generic): `TimePosition {at, state, at_ms, in?, rate?}` (`at` a
+  decimal integer string in the pack's unit, `PlayState::{Playing, Paused}`, `at_ms` stamped by the
+  kit, `rate` a decimal ratio, 1 when absent), `Session::set_time_position`, `RosterEntry::time`,
+  `Device::time`, `RosterEvent::TimePosition`. The pack names its unit:
+  `ViewSchema::time_unit` (`"tick"`), on the wire as `time_unit` only when declared, and checked.
+- **An agent's**, from its verb: `StructOutput::viewing(address)` (read and edit verbs: a still)
+  and `StructOutput::time_position(time)`, set on the acting agent once the call succeeds, as its
+  focus and selection are; a person's presence is never moved. A host sets an agent's directly
+  with the setters (when it renders a still for it).
+- **The wire**: client frames `view_address {req, address}` and `time_position {req,
+  time_position}` behind the feature names `view_address` and `time_position`; roster kinds
+  `view_address` and `time_position`; entries and devices carry them only when set.
+- **The client**: `PresenceChannel.setViewAddress`, `setTimePosition`, `PresencePeer.viewAddress`
+  and `timePosition`, `VIEW_ADDRESS_FEATURE`, `TIME_POSITION_FEATURE`, `PRESENCE_ADDRESS_MAX`,
+  `TimePositionJson`, `TimePositionSet`.
+- **Tests:** `tests/presence_view_time.rs`; `tests/wire_golden.rs`,
+  `view_address_and_time_position_are_golden` (`client/test/golden/roster_events_view_time.json`);
+  `client/test/presence-view-time.test.ts`; an N-1 row in `client/test/n1-wire.test.ts`.
+
+### A container's layout is a layout reference (checked when the index is built)
+
+- **`ContainerFields::layout`** is checked when the view index is built, on both tiers: the
+  value must parse as an address in the kit's grammar (`addr::parse` with native IDs; a bare
+  key is one) and, where the index holds layouts (`ViewIndex::layouts`), name one of them.
+- **One that isn't is not carried** (`Container::layout` is `None`) and is recorded on the
+  index for the host: `ViewIndex::refusals`, `ViewRefusal::Layout {container, value, why}`,
+  `LayoutRefused::NotAnAddress` / `NoSuchLayout`. A test build (and the `differential`
+  feature) fails on it loudly, naming the container and the value, as for a placement cycle;
+  the plant `ViewMutant::LayoutUnchecked` turns that off. An index kept through a change
+  refuses what a whole build does.
+- Not on the wire: the snapshot and frames are unchanged. A pack whose layouts resolve (the
+  deck's `@layout:<id>`) sees no change.
+- **Tests:** `tests/view_index.rs`, `a_bad_layout_fails_a_test_build`,
+  `plant_layout_unchecked_is_caught`,
+  `a_bad_layout_is_not_carried_and_is_recorded_where_unchecked`.
+
+### Refused verbs on the keyed watch (additive)
+
+`client/WIRE.md`, "Refused verbs". Still wire 3; a client that doesn't know the frame ignores it.
+
+- **`verb_refused`** (`WatchFrame::Refused`, `WatchRefusal`): a pack's structured edit verb that
+  a refusal stopped (another's claim, a stale version, a limit, rights, its arguments, its own
+  "no") is one unnumbered frame on every keyed watch: who (`actor`, `client`, `turn`), the
+  `verb`, the `unit` it addressed by address, the refusal's `code` (`MPC-E301` for a claim), and
+  the `holder` and `claim` when a claim or lease held by someone else refused it.
+- **Only to viewers who may read the doc** when it is refused: the kit asks the host's rights
+  then, so a watcher whose rights went since it opened gets none. An App viewer gets handles and
+  no turn, as on a change frame. A full queue drops the refusal, not the watch.
+- **The unit**: a pack may name it (`StructOutput::addressing`); else the kit names the first
+  element the verb's edits touched under the refusing claim, else the first one they touched.
+- `WatchFrame::seq` is 0 for the unnumbered frame; `WatchFrame::numbered` says which frames
+  count. The client: `VerbRefusedFrame`, `KeyedWatch.onVerbRefused`.
+- **Tests:** `tests/keyed_watch.rs`,
+  `a_refused_verb_is_one_refusal_frame_for_viewers_with_rights_only`.
+
+### Derived values per container (additive)
+
+`client/WIRE.md`, "Derived values per container". Still wire 3, no store change, no format bump:
+the container half of the units' derived values, under the same rules.
+
+- **`ViewSchema::container_derived`** names them (at most `CONTAINER_DERIVED_MAX`, 8; each 1 to
+  `DERIVED_NAME_MAX`, 64, bytes of ASCII letters, digits, `_`, `-` or `.`; none twice); the
+  derive hook sets them with `Container::set_derived` (`Container::derived`,
+  `Container::derived_value`). The kit keeps the declared names only, in the schema's order,
+  each once, each text cut to `VIEW_TEXT_MAX`. (`Derived::containers` is unchanged: it names
+  the view fields the hook sets, not values.)
+- **Carried** in the index (and `Session::view_container`), on the snapshot's containers
+  (`derived`, `{name: text}`, only when the container has some), and on each change frame's
+  `derived.containers.<container>.<name>` (the text, or `null` when it has none any more), for
+  exactly the values the change set or removed, beside the pack's own keys there, which win. The
+  schema's JSON names them in `container_derived` only when there are some.
+- **No format bump**: never stored; an older client ignores the new keys
+  (`client/test/n1-wire.test.ts`).
+- **For pack authors:** `ViewSchema` gains a field (build it with `..ViewSchema::NONE`).
+- The client: `ViewContainer.derived`, `ViewSchemaJson.container_derived`,
+  `KeyedWatch.containerDerived(name, container)`; `KeyedView.applyDerived` keeps them.
+- **Tests:** `tests/view_containers.rs` (plants `ViewMutant::ContainerDerivedUndeclaredKept`,
+  `ContainerDerivedOrderLost`, `ContainerDerivedDroppedOnWire`, `FrameMissesContainerDerived`,
+  each caught by its row); the client's golden
+  `test/golden/keyed_frames_container_derived.json` (`test/container-derived.test.ts`) and an
+  N-1 row.
+
+### Containers in containers (additive)
+
+`client/WIRE.md`, "Containers in containers". Still wire 3, no store change, no format bump.
+
+- **`Container::parent: Option<String>`**: the container a container sits inside, by address
+  (`None`: the top level), so an outliner draws the containers' tree (a scene's collections
+  inside collections) from the index alone. `position` stays the flat order.
+- **Where it comes from**: `ContainerFields::parent` (live: a value the kit reads is the
+  parent's **key**, which the kit maps to its address with `Pack::address_of`; `Src::Derived`:
+  the derive hook sets the address) and `BlobView::container_parent` (blob: the parent's node
+  key). Both default to none.
+- **Checked when the index is built, on both tiers, as one tree**: the parent must be another
+  container of the same index, no cycle, at most `CONTAINER_DEPTH_MAX` (32) levels deep. One
+  that isn't is not carried (the container is listed at the top level, in its place in the flat
+  order) and is recorded: `ViewRefusal::Parent {container, value, why}`, `ParentRefused`
+  `NotAKey` / `NoSuchContainer` / `OwnParent` / `Cycle` / `TooDeep`. A cycle is broken at its
+  first container in the containers' order (the others keep their parents); a container one
+  level too deep is at the top level and those inside it count from it. A test build (and the
+  `differential` feature) fails on a refused parent loudly, naming the container, the value and
+  why; an index kept through a change refuses what a whole build does.
+- **On the wire only when set**: a container's `parent` in the snapshot; the schema's
+  `container_fields.parent` only when declared; a change frame's container delta carries
+  `parent_after` (the address, or `null` at the top level now) on `add` and `restore` and when
+  the parent changed, and a container whose parent changed with no op of its own (a parent the
+  pack derives from another root) gets a `props` delta naming no field, with it. A new carrier
+  that changes a parent with no change frame cuts the watches (a fresh snapshot), as for a
+  placement.
+- **No format bump**: the view index is built on read and never stored; on the blob tier the
+  parent is read from the structure index row's node attributes, which every row format already
+  stores. An older kit reads the same rows; an older client ignores the new fields
+  (`client/test/n1-wire.test.ts` runs the previous client on the new frames).
+- **For pack authors:** `ContainerFields` and `BlobView` gain a field: a pack that builds either
+  as a full literal stops compiling; build them with `..ContainerFields::NONE` and
+  `..BlobView::NONE`.
+- The client: `ViewContainer.parent`, `ContainerDelta.parent_after`,
+  `ViewSchemaJson.container_fields.parent`, `CONTAINER_DEPTH_MAX`; `KeyedView` applies
+  `parent_after` and never reads a parent from the keyed state.
+- **Tests:** `tests/view_containers.rs` (plants `ViewMutant::ParentUnchecked`,
+  `ParentNotValidated`, `ParentCycleAccepted`, `ParentDepthUnbounded`, `ParentDroppedOnWire`,
+  `FrameMissesParent`, each caught by its row); the client's golden
+  `test/golden/keyed_frames_container_parent.json` (`test/container-parent.test.ts`) and an N-1
+  row.
+
+### Nesting in the view schema (additive)
+
+`client/WIRE.md`, "Nesting". Still wire 3, no store change.
+
+- **`ViewSchema::nesting`** (`Nesting {kind, parent}`): which unit kinds nest inside which, for a
+  view to draw the hierarchy (a unit's own `parent` still says which unit it is in). Checked:
+  at most `NESTING_MAX` (16), each kind 1 to `NESTING_KIND_MAX` (64) bytes, no pair twice.
+- **On the wire** as the schema's `nesting` only when there are some: a schema without it is
+  the same bytes as before, and an older client reads a snapshot that carries it as before
+  (`client/test/n1-wire.test.ts`).
+- **For pack authors:** a pack that builds its `ViewSchema` as a full literal stops compiling
+  (a new field); build it with `..ViewSchema::NONE`.
+- The client: `ViewSchemaJson.nesting`, `NestingJson`.
+- **Tests:** `tests/keyed_watch.rs`,
+  `a_view_schema_declares_nesting_and_one_without_it_is_unchanged` (and the client's golden
+  `test/golden/keyed_snapshot_nesting.json`); `client/test/view-nesting.test.ts`.
+
+### Engine, tooling and text
+
+- **One form for the kit's test plants, `plant_on!`.** Every function that answers "is this
+  plant on?" reads its switch through the macro (`crates/base/src/lib.rs`): the read itself with
+  the `differential` feature or in the kit's tests, `false` in every other build. The same
+  switches, read the same way. Clippy's `needless_bool` lint is enforced again across the
+  workspace. No behaviour change.
+- **The fuzz targets are built in every gate run** (main's tooling, not in this tag): the lint
+  part checks the fuzz crate as the fuzz runs build it, and a separate part builds every target
+  with the nightly toolchain and its fuzzing flags, so a fuzz target that doesn't build is
+  found at the commit that breaks it. A chunk table's fuzz entry passes its value to the
+  encoder.
+- **The conformance suite's coverage document names no dates** (main's suite, not in this tag):
+  each awaited rule says what it depends on, never when, and a test of the matrix fails on any
+  date in a target or in the document.
+- **The error registry's next steps for `MPC-E164` and `MPC-E165`** read in words (a version
+  vector too large for one frame; a peer that has compacted the history asked for). The ids,
+  messages and exit codes are unchanged.
+- **The labels rule** (`tools/check-public-cut.sh`) also blocks parity-row, finding and run
+  labels, branch names and engine codes with no entry in the public registry; docs, comments
+  and test names say them in words.
+- **The published wall time of a chunked write**, a history-only chunk against a brand-new one
+  (`docs/evidence/chunked-write-timing.md`; `tests/chunked_timing.rs`, ignored by default).
+- `tools/public-text-base` is v0.18.0's tag^ (`e5daca6e`): the text rule's base must be an
+  ancestor of the cut.
+
 ## v0.18.0 (2026-11-12)
 
 A host release on v0.17.0. The crate version is `0.18.0`; the client's is `0.18.0`. The live
@@ -50,10 +475,10 @@ commit is cut by `tools/public-cut.sh`; main keeps all of it). The native engine
 ### Overview
 
 New API and wire fields for the view index (additive: the live wire stays version 3, no store
-change); a keyed doc's live size limit per file type (additive API) and a fix to size limits
-past `i64::MAX`; a pack's verb state kept by the kit (additive API); four new kit error
-ids, `MPC-E162` to `MPC-E165`, and ten engine entries, all behind the `native` feature
-(not for hosts until the switch); the vendored engine moves to its main `5fc2a71f`; a
+change); a keyed doc's live size limit per file type (additive API) and a fix to size limits past
+`i64::MAX`; a pack's verb state kept by the kit (additive API); four new kit error ids, `MPC-E162`
+to `MPC-E165`, and ten engine entries, all behind the `native` feature (not for hosts until the
+switch); the vendored native engine moves to a newer version (off, and out of the public cut); a
 single list insert or delete planned in O(log n); otherwise text and tooling.
 
 ### View slots for a live structured doc (additive)
@@ -197,17 +622,17 @@ change, a 2D pack's frames unchanged.
   one full read the first time, and dropped by a merged update, a reset or a change that
   fails. `differential::with_list_plan_fast` (the full read for every change, the reference)
   and `differential::ListPlanMutant` are its test switch and plant (`tests/list_plan.rs`).
-- **The native engine at main `5fc2a71f`** (`tools/vendor-engine.sh`), with the adapter on its
-  store-head interface: the calls that read or write records take the doc's records; every
-  new store gets a **fresh 16-byte store nonce the kit makes** (a new doc, the relay-based
-  load, the empty replica after a failed reopen; never reused; the engine takes no
+- **The native engine is vendored at a newer version; it stays off and out of the public cut.** The
+  adapter is on its store-head interface: the calls that read or write records take the doc's
+  records; every new store gets a **fresh 16-byte store nonce the kit makes** (a new doc, the
+  relay-based load, the empty replica after a failed reopen; never reused; the engine takes no
   randomness); and the kit never raises the engine's load ceiling.
-- **A version vector past one frame goes in parts** (feature `native`; `MPCE-E983`, about
-  10,000 writers): `Doc::state_vector_parts` gives kind-4 parts, and the kit's own catch-up
-  sends them when the one frame won't do; the peer answers with diff parts, applied as one
-  request. Never a smaller or empty vector. A peer compacted past a replica's state
-  (`MPCE-E262`) is `MPC-E165 needs_state_transfer` (`DocError::NeedsStateTransfer`): not
-  retried, the peer not closed.
+- **A version vector past one frame goes in parts** (feature `native`; a vector too large for one
+  frame, about 10,000 writers): `Doc::state_vector_parts` gives kind-4 parts, and the kit's own
+  catch-up sends them when the one frame won't do; the peer answers with diff parts, applied as one
+  request. Never a smaller or empty vector. A peer that has compacted the history a replica asks for
+  is `MPC-E165 needs_state_transfer` (`DocError::NeedsStateTransfer`): not retried, the peer not
+  closed.
 - **`Doc::state_vector` is deprecated** (every build): use `Doc::try_state_vector` (new, typed:
   on the native engine past one frame it refuses as `MPC-E164 vector_needs_parts`; Yrs's never
   fails) or `Doc::state_vector_parts` (new: the native engine's kind-4 parts, Yrs's one
@@ -227,8 +652,6 @@ change, a 2D pack's frames unchanged.
   API).
 - **`MPC-E163 replica_lagging`**: `MPCE-E995` from the host (a relay, not a peer) means this
   replica runs an older engine than the host: upgrade it (`DocError::ReplicaLagging`).
-- **`tools/vendor-engine.sh --release`** also needs a tag made by the engine's
-  `tools/tag.sh` and refuses any `known_divergence_*` test; the switch will use it.
 - `tools/public-text-base` is v0.17.0's tag^ (`9b04ba33`, the twin of main's `9a246ccf`, same tree):
   the text rule's base must be an ancestor of the cut.
 - **`Engine::catch_up_from` without a one-arm match on the public cut:** its native-engine case is
@@ -247,12 +670,9 @@ change, a 2D pack's frames unchanged.
   without a break). Such a file type isn't switched to the native engine until lists get the
   engine's placement rules. Before, the same call refused with `MPC-E150 unsupported_kind`.
   Yrs is unchanged.
-- **`tools/vendor-engine.sh <engine-sha>`** vendors the native engine's crates at one commit of
-  the engine's main, and refuses a short or off-main sha, a changed crate set, the engine's
-  list/map-root test option turned on, a licence outside the allow-list, a new external
-  dependency, and anything that would change `Cargo.lock` (`tools/README.md`). Its self-test
-  is `tools/test-vendor-engine.sh`. `scripts/check-licences.sh --expr` checks licence
-  expressions with the same rule and no cargo.
+- **The native engine's vendoring is one checked step** (out of the public cut).
+  `scripts/check-licences.sh --expr` checks licence expressions with the dependency check's
+  rule and no cargo.
 - **Public text in plain words.** Comments, docs and test names say "the carrier" and "the
   carrier's pairing" where they used plan labels, and describe a process that stopped before its
   write-back, a corner outside the sheet and the like in plain words. One test of
@@ -1270,12 +1690,11 @@ of this release. No wire frame changes, and the store format is the same (`STORE
 `STORE_FORMAT_READ` 7, `STORE_FORMAT_BASE` 5): the structure index's and the comment threads'
 tables are additive and made by their first write, so a store needs no migration.
 
-**This tag's tree doesn't include the vendored native engine,** as in v0.12.0 (the release
-commit is cut by `tools/public-cut.sh`; main keeps all of it). The cut leaves out what
-v0.12.0's did: the native-engine crates (`vendor/mpce-core`, `vendor/mpce-codec`,
-`vendor/mpce-sync`, `vendor/mpce-licences`; `vendor/mpce-model` stays), the kit's
-native-engine adapter (features `native`, `fuzzing`), the conformance crate, the fuzz trees and
-the evidence run records; and the engine-feature guard with its self-test
+**This tag's tree doesn't include the vendored native engine,** as in v0.12.0 (the release commit is
+cut by `tools/public-cut.sh`; main keeps all of it). The cut leaves out what v0.12.0's did: the
+native engine's vendored crates and licence texts (`vendor/mpce-model` stays), the kit's
+native-engine adapter (features `native`, `fuzzing`), the conformance crate, the fuzz trees and the
+evidence run records; and the engine-feature guard with its self-test
 (`tools/check-engine-features.sh`, `tools/test-engine-features.sh`).
 
 For a host, in short (details below):
@@ -1441,14 +1860,14 @@ In detail:
 
 ### Guards: the engine's test hooks, and keys in `Debug`
 
-- `tools/check-engine-features.sh` also refuses `test-support` and `verify-...` on mpce-core,
-  mpce-codec and mpce-sync (a kit feature forwarding one, a dependency enabling one, one on the
+- `tools/check-engine-features.sh` also refuses `test-support` and `verify-...` on the native
+  engine's crates (a kit feature forwarding one, a dependency enabling one, one on the
   shipped graph). The allowed `verify-shortcuts` dev-dependencies and the kit's own `test-support`
   still pass. `tools/test-engine-features.sh` is its self-test (evidence part, `scripts/check.sh`).
   Both scripts are main-only: the public cut leaves them out.
 - A new test row, `key_debug_tests`: no kit type holding key material prints it in `Debug`
-  (`SpaceKey`, and with `native` `NativeKeys`, `EngineChoice`, `StoreSecret`, the engine's
-  `DigestKey`), in any spelling of known bytes, and each `Debug` is held to its exact layout.
+  (`SpaceKey`, and with `native` `NativeKeys`, `EngineChoice`, and the native engine's store secret
+  and digest key), in any spelling of known bytes, and each `Debug` is held to its exact layout.
 
 ## v0.12.0 (2026-11-07)
 
@@ -1458,12 +1877,11 @@ builds or reads a kit `LogEntry`:** its `update` bytes are now `body: EntryBody`
 wire frame changes, and the store format is the same: Yrs log entries stay record version 3,
 byte for byte, so a store needs no migration.
 
-**This tag's tree doesn't include the vendored native engine,** as in v0.11.1 (the release
-commit is cut by `tools/public-cut.sh`; main keeps all of it). The cut leaves out what
-v0.11.1's did: the native-engine crates (`vendor/mpce-core`, `vendor/mpce-codec`,
-`vendor/mpce-sync`, `vendor/mpce-licences`; `vendor/mpce-model` stays), the kit's
-native-engine adapter (features `native`, `fuzzing`), the conformance crate, the fuzz trees and
-the evidence run records.
+**This tag's tree doesn't include the vendored native engine,** as in v0.11.1 (the release commit is
+cut by `tools/public-cut.sh`; main keeps all of it). The cut leaves out what v0.11.1's did: the
+native engine's vendored crates and licence texts (`vendor/mpce-model` stays), the kit's
+native-engine adapter (features `native`, `fuzzing`), the conformance crate, the fuzz trees and the
+evidence run records.
 
 For a host, in short (details below):
 
@@ -1695,8 +2113,8 @@ The first host release after v0.10.2. The crate version is `0.11.0`; the client'
 Pairs with the markdown and text pack tags of this release. The production timers of the
 v0.10.1 line ship here, off by default.
 
-**This tag's tree doesn't include the vendored native engine** (`vendor/mpce-core`,
-`mpce-sync`, `mpce-codec`, `mpce-licences`, the `native` feature and the conformance crate,
+**This tag's tree doesn't include the vendored native engine** (its crates and licence texts,
+the `native` feature and the conformance crate,
 which needs it): the release commit is cut by `tools/public-cut.sh`, and
 `tools/check-public-cut.sh` blocks the tag if any of it is left, if the licence files are
 missing, or if a pinned regression test of an earlier host tag is gone. Main keeps all of it.
@@ -1948,8 +2366,8 @@ For a host, in short (details in the sections below):
 - `RosterEntry` and `Device` gain `selection`, `pointer` and `viewport`. `RosterEvent` gains
   `Selection`, `Pointer` and `Viewport`.
 - `MPC-E310 selection_too_large`. `MPC-E114` also covers these calls.
-- Grid verbs `select`, `pointer` and `viewport`, in the parity rows P8 and P4. A grid pack's parity
-  list names them.
+- Grid verbs `select`, `pointer` and `viewport`, in the caret and viewing-range parity rows. A
+  grid pack's parity list names them.
 - The client's `PresenceChannel`, `welcome.features` and the frames `select`, `pointer`,
   `viewport` and `presence_refused` (`client/CHANGELOG.md`).
 - A tier 0 doc (`BlobSession`) has none of the three calls.
@@ -2197,42 +2615,38 @@ For a host, in short (details in the sections below):
 
 ## v0.11.0: the native engine (test-only vendoring; feature `native`)
 
-### The engine at mpce-g2a-m3.1 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m3.1` (`2fa1f2a5`), by git
-  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits; `mpce-model` keeps its
-  own tag). Hardening.
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte (`mpce-model` keeps its own version). Hardening.
 - **The error table gains `MPCE-E568`.**
 
-### The engine at mpce-g2a-m3 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` and `mpce-codec` at `mpce-g2a-m3`
-  (`6101d664`), by git subtree, byte-for-byte (`mpce-sync` is the same split; `mpce-model` keeps
-  its own tag). Hardening and performance.
-- **The native adapter takes each refusal's code from the engine** (`Refusal::code`), with no
-  table of its own. A test walks `codes::ALL` through the kit's report path.
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte (`mpce-model` keeps its own version). Hardening and performance.
+- **The native adapter takes each refusal's code from the engine**, with no table of its own.
+  A test walks every code the engine lists through the kit's report path.
 
-### The engine at mpce-g2a-m2.4.7 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` and `mpce-codec` at `mpce-g2a-m2.4.7`
-  (`26765a8c`), by git subtree, byte-for-byte (`mpce-sync` is the same split; `mpce-model` keeps
-  its own tag). Hardening.
-- **`EngineChoice::Native` now requires a store secret** (`store_secret`, the engine's
-  `StoreSecret`, re-exported by the kit under feature `native`), and `EngineChoice` is `Clone`,
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte (`mpce-model` keeps its own version). Hardening.
+- **`EngineChoice::Native` now requires a store secret** (`store_secret`, the native engine's
+  store secret, re-exported by the kit under feature `native`), and `EngineChoice` is `Clone`,
   not `Copy`. Two new refusal codes in the error table: `MPCE-E566` and `MPCE-E567`.
 
-### The engine at mpce-g2a-m2.4.6 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.6` (`2dd1cede`), by git
-  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits). Test-only
-  additions: the feature `planted-shortcuts-checked`, and `Doc::planted_shortcut`,
-  `Doc::plant_hits` and `Doc::reset_plant_hits`. The default API is unchanged; no new refusal
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte. Test-only additions in the engine: a checked planted-shortcuts feature and
+  its plant counters. The default API is unchanged; no new refusal
   code (the error table is unchanged).
 
 ### Tests: the native engine's causal shortcuts cross-checked; planted shortcuts (test-only)
 
 - **`verify-shortcuts` in test builds:** `crates/base` and `crates/conformance` take
-  `mpce-core` as a dev-dependency with the engine's `verify-shortcuts` feature, so every test
+  the native engine as a dev-dependency with its `verify-shortcuts` feature, so every test
   that drives the native engine cross-checks each causal shortcut against the plain walk and
   fails on a disagreement. No behaviour change. A dev-dependency's features reach test builds
   only (resolver 2): a host's build and the kit's own non-test builds are unchanged.
@@ -2297,8 +2711,8 @@ v0.10.1 line are not in this release; they ship later after their overhead gate.
 version is `0.10.2`; the client's is `0.12.0`. Pairs with the paired markdown and text pack
 tags of this release.
 
-**This tag's tree doesn't include the vendored native engine** (`vendor/mpce-core`,
-`mpce-sync`, `mpce-codec`, `mpce-licences`, the `native` feature and the conformance crate,
+**This tag's tree doesn't include the vendored native engine** (its crates and licence texts,
+the `native` feature and the conformance crate,
 which needs it): the release commit is cut by `tools/public-cut.sh`, and
 `tools/check-public-cut.sh` blocks the tag if any of it is left, if the licence files are
 missing, or if a pinned regression test of the previous host tag is gone. Main keeps all of it.
@@ -2377,36 +2791,35 @@ For a host, in short (details in the sections below):
 
 ## v0.10.2: the conformance suite's engine half v2 rules
 
-### The engine at mpce-g2a-m2.4.5 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.5` (`c184284`), by git
-  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte.
   Hardening, and a test-only feature. Native-only; in no K2 build. No new refusal code (the error
   table is unchanged).
 
-### The engine at mpce-g2a-m2.4.4 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.4` (`40f7825`), by git
-  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte.
   Hardening. Native-only; in no K2 build. No new refusal code (the error table is unchanged).
 
-### The engine at mpce-g2a-m2.4.3 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.3` (`e68e1c2`), by git
-  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte.
   Hardening. No new refusal code and no public API change.
 
-### The engine at mpce-g2a-m2.4.2 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.2` (`be31995`), by git
-  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte.
   Hardening. No new refusal code (the error table is unchanged), no dependency or licence change.
 
-### The native engine at mpce-g2a-m2.4.1 (test-only vendoring; feature `native`)
+### The native engine re-vendored (test-only vendoring; feature `native`)
 
-- **Re-vendored** (`vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at
-  `mpce-g2a-m2.4.1` (`51577ad`: `mpce-g2a-m2.4`, `45ad5b6`, with comments changed only), by git
-  subtree, byte-for-byte; only mpce-core changed. Hardening, with two new refusal codes. No
+- **Re-vendored** (`vendor/README.md`): the native engine at a newer version, by git subtree,
+  byte-for-byte; only its core changed. Hardening, with two new refusal codes. No
   dependency or licence change.
 - **Error table** (append-only): the engine's table lists its first two codes, `MPCE-E199` and
   `MPCE-E980`; the native adapter names them. `docs/ERRORS.md` regenerated.
@@ -2572,42 +2985,39 @@ For a host, in short (details in the sections below):
   renumbers a line's ID) fail it. **Not yet:** refusing such a write at run time: it needs a
   pack hook and a new error id, so it waits for the first pack whose file carries native IDs.
 
-### The sync layer at the engine tag mpce-g2a-m2.3 (hardening; the engine's licence)
+### The native engine re-vendored (hardening; the engine's licence)
 
-- **Re-vendored** (test-only, `vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at
-  `mpce-g2a-m2.3` (`c958fc4`), by git subtree, byte-for-byte: hardening in mpce-core, no
-  public API change and no new refusal, so nothing in the conformance crate changes. No
-  dependency changed; the lockfile is unchanged.
+- **Re-vendored** (test-only, `vendor/README.md`): the native engine at a newer version, by git
+  subtree, byte-for-byte: hardening in its core, no public API change and no new refusal, so nothing
+  in the conformance crate changes. No dependency changed; the lockfile is unchanged.
 - **Licence**: the engine is now MIT OR Apache-2.0 (each manifest's `license` field). The
-  licence texts, at the engine repo's root, are copied byte-for-byte from the tag into
-  `vendor/mpce-licences/` (`LICENSE-MIT`, `LICENSE-APACHE`), outside the crate directories.
-  `scripts/check-licences.sh` still skips every `mpce-*` package by name (as "our own"), so
+  licence texts, at the engine repo's root, are copied byte-for-byte beside the vendored
+  crates (`LICENSE-MIT`, `LICENSE-APACHE`), outside the crate directories.
+  `scripts/check-licences.sh` still skips every native-engine package by name (as "our own"), so
   it doesn't check this field yet.
 
-### The sync layer at mpce-sync 0.1.1: the re-base epoch moves onto it
+### The native engine's sync layer: the re-base epoch moves onto it
 
-- **Re-vendored** (test-only, `vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at
-  the hardening tag `mpce-g2a-m2.2` (`76cdaa7`; mpce-sync 0.1.1, first tagged
-  `mpce-sync-v0.1.1` at `2631272`), by git subtree, byte-for-byte. mpce-core's refusals gain
-  `MPCE-E196`; the suite's two matches on `Refusal` (in `sync.rs`, on
-  `SendLog`'s results) name only `FalseReceipt` and keep a catch-all, as `Refusal` is
-  `#[non_exhaustive]`. Their manifests
+- **Re-vendored** (test-only, `vendor/README.md`): the native engine at a newer version, by git
+  subtree, byte-for-byte. The engine's refusals gain a new code; the suite's two matches on
+  them (in `sync.rs`, on the send log's results) name only the false-receipt refusal and keep a
+  catch-all, as the engine's refusal type is non-exhaustive. Their manifests
   are standalone now, so the kit's stand-in `vendor/Cargo.toml` is gone. No new dependency
   (`count-alloc` is only their dev-dependency and is not vendored); the lockfile is unchanged
-  but for mpce-sync's version.
-- **`sec.rebase_required` on mpce-sync's epoch**: `sync::SyncRebase` now takes `recvOp`'s
-  decision from `Tracker::route_op` (resend, equivocation, hold, inline; the fence
-  `u.ep < x.ep` inside it), the client's epoch from `Participant::ep` (raised by
-  `Tracker::on_rebase`, kept through reconnects) and the epoch a send carries from
-  `SendLog::send_in` / `epoch`. The host keeps what mpce-sync 0.1.1 leaves to it: the re-issue
-  over mpce-model's text and its ID map, the held queue (always empty), `route_op`'s inputs
-  (the update against the log, its dependency) and the typed frame.
-- **An overstated base**: a new step: an update whose base names a send never made is refused
-  as an implicit false receipt (`MPCE-E185`, `RebaseRefusal::FalseBase`). A base naming a send
-  that was made but whose content the update lacks is the engine's admission's (`MPCE-E182`,
-  mpce-core's graph), which this layer doesn't call: it waits for the kit on mpce-core.
-- **Negatives**: the no-fence negative is now mpce-sync's own planted
-  `TrackerMutant::NoEpochFence` (the host's `NoEpochFence` is gone); `EpochPerConnection` is a
+  but for the sync layer's version.
+- **`sec.rebase_required` on the native engine's epoch**: `sync::SyncRebase` now takes
+  `recvOp`'s decision from the engine's sync layer (resend, equivocation, hold, inline; the
+  fence `u.ep < x.ep` inside it), and the client's epoch and the epoch a send carries from it
+  too (raised on a re-base, kept through reconnects). The host keeps what the sync layer leaves
+  to it: the re-issue over mpce-model's text and its ID map, the held queue (always empty), the
+  decision's inputs (the update against the log, its dependency) and the typed frame.
+- **An overstated base**: a new step: an update whose base names a send never made is refused as an
+  implicit false receipt (the engine's false-receipt refusal). A base
+  naming a send that was made but whose content the update lacks is the engine's admission's (it
+  refuses an update that lacks a send's content; the native engine), which this layer doesn't
+  call: it waits for the kit on the native engine.
+- **Negatives**: the no-fence negative is now the native engine's own planted
+  no-epoch-fence mutant (the host's `NoEpochFence` is gone); `EpochPerConnection` is a
   host that makes each connection a new participant; `NoEpochBump` a host that appends a
   re-base without `on_rebase`; new `TrustClaimedBase` (the base taken as claimed, not through
   the send log). `IntegrateInline`, `NoDepMap`, `ForgetOnAck` and `ReadmitBelowS` as before.
@@ -2615,10 +3025,10 @@ For a host, in short (details in the sections below):
 ### The native engine behind a feature (a step of the engine migration, in progress)
 
 - **Feature `native`, off by default and not for hosts until the switch to the native
-  engine.** It adds the native engine (`mpce-core`, `mpce-codec`, vendored) behind the kit's
+  engine.** It adds the native engine (vendored) behind the kit's
   engine seam. Until a later step, **sessions refuse to store a doc on it**
   (`Doc::check_storable`, at import and promotion: it would be stamped as Yrs's). Without the
-  feature nothing changes, and the kit's normal dependency tree has no `mpce-*` crate:
+  feature nothing changes, and the kit's normal dependency tree has no native-engine crate:
   `tools/tests/wire-guard.sh` checks it, in the repo and as a host builds it.
 - **Seam prep, the same on Yrs:** `Engine::yrs()` is an `Option`; provenance counts in the
   doc's own units (`Prov` carries `Doc::units()`; the build-wide `UNITS` is gone); the edit
@@ -2627,7 +3037,7 @@ For a host, in short (details in the sections below):
   applying, uses the doc's `IdOrder` (a test checks both against blame).
 - **Hardening** in the native engine's adapter (client updates' rights and which ops a client
   may send). Native-only; in no host build.
-- **Errors (P10):** a native refusal is `DocError::Engine { code, message, kit }`: the kit's
+- **Errors:** a native refusal is `DocError::Engine { code, message, kit }`: the kit's
   id with `details.engine_code` where the kit has the meaning, else `MPC-E161
   engine_unlisted` with the code (no registry rows yet).
 - **The native conformance column** (`NativeText`, empty deviation list): the core rules,
@@ -2637,9 +3047,9 @@ For a host, in short (details in the sections below):
 
 ### `sec.rebase_required`: the re-base epoch as the engine's model has it
 
-K2 Engine's answer: `spec/quint/client_protocol.qnt` (engine `a156fef`) is right, and the rule
-now follows it (on `sync::SyncRebase`; mpce-sync 0.1.0 has no epochs, so the epoch is the test
-host's until mpce-sync carries it):
+K2 Engine's answer: the engine's client-protocol model is right, and the rule
+now follows it (on `sync::SyncRebase`; the engine's sync layer has no epochs yet, so the epoch
+is the test host's until it carries it):
 
 - **Every re-base raises the client's epoch by one** (`dRebase`, `ep: x.ep + 1`): the
   pipelined update is re-based in epoch 2, not again in epoch 1.
@@ -2656,32 +3066,31 @@ host's until mpce-sync carries it):
   model's `cp_lost_frame`); the old `NoEpochFence` (references to re-based events left
   unmapped) is `NoDepMap`.
 
-### The client protocol's rules on the engine's sync layer (mpce-sync 0.1.0, test-only)
+### The client protocol's rules on the native engine's sync layer (test-only)
 
-- **Vendored** (test-only, `vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at the
-  engine tag `mpce-sync-v0.1.0` (`a156fef`), by git subtree, byte-for-byte. Only
-  `k2-mpc-conformance` depends on them; the kit's build doesn't see them
-  (`cargo tree -p k2-mpc-base -e normal`: no `mpce-*`). New in the lockfile: `hmac` 0.12.1,
-  `sha2` 0.10.9 and their tree, all on the licence allow-list. `vendor/Cargo.toml` (ours)
-  carries the engine root's workspace fields the three crates inherit.
-- **`sec.false_receipt`** runs on mpce-sync's `SendLog` (`sync::SyncReceipts`): the refusal is
-  its `MPCE-E185` (`Refusal::FalseReceipt`), checked to record nothing, and a true report is
-  checked to resolve to the position the send carried.
-- **`sec.rebase_required`** runs on mpce-sync's `Tracker` (`sync::SyncRebase`): S, the joins,
+- **Vendored** (test-only, `vendor/README.md`): the native engine, by git subtree, byte-for-byte.
+  Only `k2-mpc-conformance` depends on it; the kit's build doesn't see it
+  (`cargo tree -p k2-mpc-base -e normal`: no native-engine crate). New in the lockfile: `hmac`
+  0.12.1, `sha2` 0.10.9 and their tree, all on the licence allow-list. `vendor/Cargo.toml` (ours) carries the engine
+  root's workspace fields the three crates inherit.
+- **`sec.false_receipt`** runs on the native engine's send log (`sync::SyncReceipts`): the refusal
+  is its false-receipt refusal, checked to record nothing, and a true report is checked to resolve
+  to the position the send carried.
+- **`sec.rebase_required`** runs on the native engine's tracker (`sync::SyncRebase`): S, the joins,
   the drop from S (a grace that ran out), the acks and the re-admission after them are the
-  tracker's, and an update integrates inline only when its base (an implicit report,
-  `SendLog::implicit`) is at or past S read before the step. The epoch and its fence, the
-  re-issue and the retry map are the host's in mpce-sync 0.1.0, so a test host over
+  tracker's, and an update integrates inline only when its base (an implicit report from the
+  send log) is at or past S read before the step. The epoch and its fence, the
+  re-issue and the retry map are the host's in that version of the sync layer, so a test host over
   mpce-model's text does them. The rule gains a third lagging client: one client's re-base
   must not take S back and let the next one's update in inline.
-- **The matrix**: a layer column, "mpce-sync 0.1.0 (sync layer)", that runs the Protocol
+- **The matrix**: a layer column, the native engine's sync layer, that runs the Protocol
   rules only ("–" for the others; a layer needs no Text). On the kit (Yrs) the rules still
   await the native engine; the reason names what the layer doesn't have.
 - **Negatives**: the re-base mutants (`IntegrateInline`, `NoEpochBump`, `NoEpochFence`,
   `ForgetOnAck`; with the epoch fix below, also `EpochPerConnection` and `NoDepMap`) are in the
-  sync layer's host; mpce-sync's own planted `ReadmitBelowS` (its
+  sync layer's host; the sync layer's own planted re-admission below S (its
   `planted` feature, a dev-dependency of the suite's tests) fails the rule; the receipt
-  mutants stay on `seams::RefReceipts` (mpce-sync's receipt check has no planted variant).
+  mutants stay on `seams::RefReceipts` (the sync layer's receipt check has no planted variant).
   `seams::RefRebase` is gone.
 
 ### Eight new conformance rules (engine half v2)
@@ -2711,7 +3120,7 @@ negative that must fail it.
   seam, `seams::GatedYrs`. Six mutants.
 - **`sec.false_receipt`**, **`sec.rebase_required`**: not
   applicable on Yrs (no stability frontier); awaiting the kit on the native engine's client
-  protocol; they run on the engine's sync layer, mpce-sync (below). Nine mutants.
+  protocol; they run on the native engine's sync layer (below). Nine mutants.
 - The kit Doc's deviation list is fifteen entries (`core.authorship`, `core.steady_plain`,
   `prov.record` added).
 - `tools/tests/wire-guard.sh` checks the hook can't leak: a host build without features has no
@@ -2772,7 +3181,7 @@ reads it, but never writes the format and never changes what it can't read.
     Format 8 is refused.
   - Existing tests that pinned "format 7 is refused" now use format 8.
 
-### Engine units: u64 clocks and `units_of` (P2; no stored byte changes)
+### Engine units: u64 clocks and `units_of` (no stored byte changes)
 
 Element IDs keep their `(client, clock)` shape, and **the clock is now a u64 in the engine's
 units**. `engine::Units` and `units_of` / `char_units` come from the engine, not from UTF-16.
@@ -2805,7 +3214,7 @@ and that clock spans and provenance past u32 round-trip under a u64 bound and ar
 under Yrs's. `session::live::blame` plants such rows in a Yrs doc's store: blame and revert
 refuse them as `Corrupt`.
 
-### The seam's `new` and `text` return `Result` (P14)
+### The seam's `new` and `text` return `Result`
 
 `EngineDoc::new` and `EngineDoc::text` are fallible, so an engine can refuse a schema it can't
 hold. A text root the doc doesn't hold is `DocError::Malformed`. `Doc::new` and `Doc::text` returned
@@ -3195,7 +3604,7 @@ be the same bytes), so safety no longer rests on pairing:
 - **`store::VersionReason` gains `BeforeDrop`** (stored as 8): `rows drop-deleted` cuts that version
   first; its cell map holds the dropped rows' and columns' cells (restoring an element from it
   arrives in v0.10.1). An exhaustive `match` needs the new arm.
-- **`PersonAction` gains the grid tier's rows P35-P44** (`RowInsert` … `DropDeleted`), on
+- **`PersonAction` gains the grid tier's ten rows** (`RowInsert` … `DropDeleted`), on
   purpose: the enum is exhaustive, so every pack's `match` stops compiling until it maps
   them. A text or Markdown pack maps them N/A (`ParityRow::not_applicable`, verbs absent:
   `row insert`, …, `rows drop-deleted`).
@@ -3367,10 +3776,10 @@ be the same bytes), so safety no longer rests on pairing:
   writes, so one coming back after a person's save is their save, not an echo.
 - **Undo grouping:** a structured edit never joins a person's open undo group (a step of
   its own).
-- **Exports reach grids; P24 is live for csv:** the `export` and `export --version` verbs
-  serve the grid tier too (a grid's version renders with the codec it stored), and a grid
-  pack's parity list maps P24 live.
-- **Exports on a grid (the merge with main's exports P0, 319a9af):** `Session::file_at` on
+- **Exports reach grids; the export row is live for csv:** the `export` and `export
+  --version` verbs serve the grid tier too (a grid's version renders with the codec it
+  stored), and a grid pack's parity list maps the export row live.
+- **Exports on a grid (the merge with main's first exports work, 319a9af):** `Session::file_at` on
   a structured doc encodes the version with the codec settings it stored (format 6) and
   says `FileCodec::Exact`; a text doc's versions are as on main. Tested at every version
   before and after structural changes (`tests/export.rs`,
@@ -3959,11 +4368,11 @@ The crate version is `0.9.7+1` (Cargo takes three numbers; the build metadata re
 ## v0.9.7 (2026-10-29)
 
 The Live-tab release: the kit's live typing APIs, D1, the speed work, outside saves merged
-line by line, exports P0 (the kit's side) and the vendored engine at k2-yrs k2.6.3.
+line by line, the first exports work (the kit's side) and the vendored engine at k2-yrs k2.6.3.
 
-**Breaking for packs:** markdown and text must map parity row P24 live (`export`,
-`export --version`); a pack that still lists P24 as N/A, with `export` among its absent
-verbs, fails its parity check (below, "Exports P0").
+**Breaking for packs:** markdown and text must map the export parity row live
+(`export`, `export --version`); a pack that still lists it as N/A, with `export` among its
+absent verbs, fails its parity check (below, "Exports, the kit's side").
 
 **Headlines**
 - **Live typing APIs:** the hunk channel (`ChangeEvent`'s hunks, what
@@ -3983,7 +4392,8 @@ verbs, fails its parity check (below, "Exports P0").
   hashes the doc). Below: "Speed".
 - **Outside saves merge line by line:** no line joined, spliced, lost or brought back by
   an outside save's merge (both fuzz corpora: 0 of each). Below: "Speed" (Fixed).
-- **Exports P0, the kit's side,** and the P24 `export` verbs. Below: "Exports P0".
+- **Exports, the kit's side,** and the export row's `export` verbs. Below: "Exports, the
+  kit's side".
 - **Host guidance, paths and hard links.** Below.
 - **Stable error ids** (`MPC-Ennn`, `docs/ERRORS.md`): the first tagged release with the
   registry. Below: "The agent error surface".
@@ -4192,7 +4602,7 @@ change (still 5); no dependency changes.
   start with the same characters; nothing is applied, and writing again against the current
   version succeeds (fixed in v0.9.8).
 
-### Exports P0, the kit's side
+### Exports, the kit's side
 
 **Additive** for hosts; no exit code changes; no store format change; no new dependency;
 no change to existing behaviour.
@@ -4235,7 +4645,7 @@ no change to existing behaviour.
   and `Refusal` for `ExportError`. The registry snapshot, `docs/ERRORS.md` and
   `capabilities` carry them.
 
-- **P24 "Export" is a live parity row** (was N/A, "cat is the file's bytes"): kit verbs
+- **"Export" is a live parity row** (was N/A, "cat is the file's bytes"): kit verbs
   `export [--to as-is]` (read) and `export --version V [--to as-is]` (history), on both tiers,
   bound to `file_now` / `file_at` (tier 0: `file_now_to` / `file_at_to`) and then
   `ExportRegistry::export` (`parity::Api::FileNow`, `Api::FileAt`; `VerbValue::Export`). The
@@ -4246,7 +4656,8 @@ no change to existing behaviour.
   exporters.
 
 **Breaking for packs' parity lists**
-- A pack that lists P24 as N/A with `export` among its absent verbs now fails its parity check
+- A pack that lists the export row as N/A with `export` among its absent verbs now fails its
+  parity check
   (the kit registers `export`): map it live, `ParityRow::live(a, &["export", "export
   --version"])` (k2-mpc-markdown and k2-mpc-text at their next kit bump).
 
@@ -4329,12 +4740,12 @@ are unchanged)
   (4 MiB); `MPC-E112` past them.
 - **`session::rebase`** (`rebase_ours`, `rebase_incoming`, `map_point`, `map_range`): the
   pure rules, shared with the JS client through `crates/base/tests/vectors/live_rebase.json`.
-- **Tests:** `tests/live_edit.rs`: each rule; the property (3 clients modelling the JS
-  client, mixed with agent edits, undo and outside edits) for P1–P4; the six mutants; the
-  vectors; a trace hook (`LIVE_TRACES`) for K2 Engine's exhaustive model. Clarification
-  r2.1: the window is exactly the hunk sets broadcast (checked against every subscriber, every
-  kind of change); clients typing in the same multi-author word never bounce; the mutant
-  `window-holds-expanded-hunks` is caught.
+- **Tests:** `tests/live_edit.rs`: each rule; the property (3 clients modelling the JS client, mixed
+  with agent edits, undo and outside edits) for convergence, refusals, others' text kept and a
+  refusal changing nothing; the six mutants; the vectors; a trace hook (`LIVE_TRACES`) for K2
+  Engine's exhaustive model. Clarification r2.1: the window is exactly the hunk sets broadcast
+  (checked against every subscriber, every kind of change); clients typing in the same multi-author
+  word never bounce; the mutant `window-holds-expanded-hunks` is caught.
 - **Live rules r2.3: each hunk is carried as sent** (r2.2's rule (1), "re-canonicalize at every
   step", withdrawn on both sides, after K2 Engine's exhaustive model found it wrong both ways
   at 2 clients × 2 changes). `session::rebase::Carried` (new): a change while it is carried,
@@ -4357,11 +4768,11 @@ are unchanged)
   by both placements (K2 Engine's markers); the mutant `inside-by-tie-break` (the right
   placement alone) is caught. K2 Engine's r2.3 exports (k2-mpc-engine 9e2dd2b: 2×1 539,
   3×1 21,399, 2×2 8,811 cases) replay with 0 server and 0 mirror disagreements.
-  - **Tests:** an ID-level oracle (K2 Engine's: P2, a refusal only on a conflict by intent;
-    P2c, every such conflict refused) judges every live edit of the property, every stream;
+  - **Tests:** an ID-level oracle (K2 Engine's: a refusal only on a conflict by intent,
+    and every such conflict refused) judges every live edit of the property, every stream;
     a new stream of mixed edits at overlapping ranges reaches the shapes rule (1) got wrong;
     the mutants `recanon-server-only` (caught by the client's and the server's disagreement)
-    and `recanon-both-sides` (caught by P2/P2c); the trace hook counts server and mirror
+    and `recanon-both-sides` (caught by the oracle); the trace hook counts server and mirror
     disagreements and replays K2 Engine's exported cases (`LIVE_TRACES`); a TP1 property
     along histories for the carried forms.
 - **Undo grouping for streamed edits** (undo spec U3): `EditOptions::group(token)`.
@@ -4969,8 +5380,8 @@ and run record).
     whole re-encode and reload (the kit);
   - blame's throwaway replica.
 - **The canary's p99 at 300k changes:** +3–8% across runs, from the edits around a sampled one.
-- **`c1/structured`:** when it is rebased on v0.9.3, its edit block moves to the doc itself,
-  with the canary and a differential test for the structured kinds.
+- **The structured kinds' branch:** when it is rebased on v0.9.3, its edit block moves to the doc
+  itself, with the canary and a differential test for the structured kinds.
 
 **Fixed**
 - **An undo after an outside edit could conflict on text nobody had touched** (found by the
@@ -5001,9 +5412,9 @@ and run record).
 - At equal history the new path is 55–68× faster per edit (40k–300k changes). v0.9.3 does
   **not** claim the soak condition; see "Open".
 
-**CSV `cell set` at 100k cells** (the measurement of the structured kinds on `c1/structured`;
+**CSV `cell set` at 100k cells** (the measurement of the structured kinds on their side branch;
 the same node for both): p99 185.1 ms → **1.3 ms**, peak extra heap per edit 57 MiB →
-0.8 MiB. These are from a scratch merge of `c1/structured` with this release's engine and
+0.8 MiB. These are from a scratch merge of that branch with this release's engine and
 edit path; the merged code will re-run it.
 
 **Tests and tools**
@@ -5071,9 +5482,10 @@ format change** (still 5). No new dependency. `docs/SESSIONS.md`, amendment 16.
   `AuditEvent::Promoted`. Errors change nothing: `NotFound`, `PackMismatch` (not a blob
   doc), `Leased`, `Declined` (the current version doesn't decode), `Disk`, `NoBlobStore`.
 - **`approvals --all`** (= `log --pending --all`): every approval record, settled ones too
-  (approved, declined), newest first. `approvals` alone stays pending-only (P30).
+  (approved, declined), newest first. `approvals` alone stays pending-only (the pending-approvals
+  row).
   `LogQuery::settled` / `LogQuery::with_settled()`; tier 0: the log's entries with an
-  `approval`, newest first. P30 gains a case for each name, both tiers.
+  `approval`, newest first. The pending-approvals row gains a case for each name, both tiers.
 - **`tests/edit_cost.rs`** (ignored): an agent edit's cost against the doc's history, through
   the public `Doc` API.
 
@@ -5184,10 +5596,10 @@ holds across restarts.
   (`parity::RUN_TOOL_VERBS`: the kit's text tools; every pack verb is one), held to
   `Session::run_tool` by a test both ways (each flagged verb runs there, every other
   registered verb is refused there with nothing applied).
-- **`approvals [--on-behalf-of me|P]`**: a host-neutral alias of `log --pending` (P30), both
-  tiers, the same row and binding (`parity::ALIASES`, `VerbSpec::alias_of()`). The kit's
-  parity harnesses run a case for each name. A pack's parity list may list it or leave it
-  out: **packs need no change**.
+- **`approvals [--on-behalf-of me|P]`**: a host-neutral alias of `log --pending` (the
+  pending-approvals row), both tiers, the same row and binding (`parity::ALIASES`,
+  `VerbSpec::alias_of()`). The kit's parity harnesses run a case for each name. A pack's parity list
+  may list it or leave it out: **packs need no change**.
 - **`Pack::writes_bom(root, codec)`** (a provided method) and `codec::text_file::BOM`.
 
 **Fixed**
@@ -5198,10 +5610,10 @@ holds across restarts.
   `writes_bom` (one text root: encode it empty and look for the BOM's bytes) covers a pack
   delegating to `TextFilePack` (Markdown) and a pack with its own BOM codec (a text pack):
   no pack change.
-- **Blame lost "restored by" on a partly restored line** (Markdown demo, F1). Characters tied
+- **Blame lost "restored by" on a partly restored line** (a Markdown demo finding). Characters tied
   on the newest root change kept the line's first, usually not a restored one. Ties now go
   to a restored character (the most recently restored, then the first).
-- **"Last edit" ranges grew over others' newer text** (Markdown demo, F2). A participant's
+- **"Last edit" ranges grew over others' newer text** (a Markdown demo finding). A participant's
   last-edit span was an expanding anchor, so after their text was undone and someone typed
   there, notes and the roster said they had edited the other's line, sometimes a line past
   the end. Last-edit spans no longer expand, are dropped once their text is all deleted or
@@ -5292,7 +5704,7 @@ undone text stays in history and can be restored. This holds across restarts. (c
 where noted below.
 
 **Fixed**
-- **F3: undo, redo and revert could delete another participant's identical element.** They
+- **Undo, redo and revert could delete another participant's identical element.** They
   found the merge's sides by re-diffing strings in the region's window; when someone's
   insertion at the region's start repeated its text (`b` and an inserted `b`), the diff put
   that insertion after the region's own element, and the undo deleted the other
@@ -5301,7 +5713,7 @@ where noted below.
   conflicted. Now each side is an **exact hunk set**: ours is the inverse of the change's own
   hunk, theirs the later hunks that touched the region's window, at element identity
   (`session/foreign.rs`); `diff::hunks` stays only for `restore` and `write --base`.
-- **Two conflicts the F3 fix alone would have brought** (they never shipped): with restored
+- **Two conflicts the exact-sides fix alone would have brought** (they never shipped): with restored
   text counted as the undoer's own new text (U18a), (a) a revert of a change that was undone
   and then redone conflicted, and (b) when b edited inside a's region and then undid it, a's
   undo of that region conflicted (b's restoration counted as b's), as did one person undoing
@@ -5331,7 +5743,7 @@ where noted below.
   with the newest root change. `render` adds `(restored by <who> in <change>)`; `porcelain`
   adds `restored-by` and `restored-in` lines. Before, restored text was blamed on the undoer.
 - Where an undo, redo or revert used to remove the wrong copy of repeated text, it now
-  removes its own: the resulting text can differ (F3).
+  removes its own: the resulting text can differ.
 - A conflict can appear where a re-diff saw none, and vice versa, wherever the elements in a
   region's window differ from what its text suggests.
 - An insertion at the start of a replaced region by someone else lands in front of the
@@ -5367,7 +5779,8 @@ where noted below.
   root, I1 and U10a by root compared on both sides; the new class hit 186 times.
 
 **Conformance**
-- `hist.undo_own_only` reads roots and covers F3, (a) and (b) with the expected outcomes.
+- `hist.undo_own_only` reads roots and covers the repeated-text case, (a) and (b) with the expected
+  outcomes.
 - `sec.client_provenance_refused` declared: on the kit it holds by construction (no API takes
   provenance); native: awaiting the engine's.
 - `text.blame_char` and `hist.blame_grain` restated: a character maps to its provenance-root
@@ -5407,10 +5820,10 @@ hosts; no store format change (still 4); no new dependency. Undo spec v1.6
   ITF replay 0 mismatches (the full bound included); TLC's exact counts equal the enumerator's at
   four small bounds; every mutant fails in both at the same depth. The full bound itself is
   beyond exhaustive reach; its plan is in the doc.
-- Two findings, reported, not fixed here: **F3**, undo can delete another participant's
-  identical character when their insertion at the region's start repeats its text
-  (`hist.undo_own_only` per element; the kit too); **F4**, U12's equivalence note fails in
-  repeated text.
+- Two findings, reported, not fixed here: **undo can delete another participant's
+  identical character** when their insertion at the region's start repeats its text
+  (`hist.undo_own_only` per element; the kit too); and **U12's equivalence note fails in
+  repeated text**.
 
 **Conformance**
 - `erase.span_includes_tombstones` runs on the reference model (mpce-model v0.4.1, vendored;
@@ -5573,9 +5986,9 @@ amendment 13.
   claims (who, verb, lines, when). It is dropped on unload, and erasure drops the pid's rows.
 - **Richer roster rows.** `RosterEntry::claims` and `last_edit` (anchored lines). Agents'
   carets are at their last edit, as before.
-- **Parity.** New verbs: `claim`, `claim --renew` and `claim --release` serve P8 ("say
-  what I'm working on"); `activity` serves P6. `--for-edit` is a flag on the read verbs. The
-  kit has 61 cases now, and the harness compares the actor's claims (`ClaimObs`).
+- **Parity.** New verbs: `claim`, `claim --renew` and `claim --release` serve the caret row ("say
+  what I'm working on"); `activity` serves the who's-here row. `--for-edit` is a flag on the read
+  verbs. The kit has 61 cases now, and the harness compares the actor's claims (`ClaimObs`).
 
 **For hosts**
 - **The policy parameter.** Pass a `ClaimPolicy` on agent edits: `run_tool_with(conn,
@@ -5625,9 +6038,9 @@ amendment 13.
 
 **For packs**
 - A text pack's parity list changes:
-  - P8 is `live(&["cursor", "claim", "claim --renew", "claim --release"])` (the `intent`
-    placeholder goes);
-  - P6 adds `activity`.
+  - the caret row is `live(&["cursor", "claim", "claim --renew", "claim --release"])` (the
+    `intent` placeholder goes);
+  - the who's-here row adds `activity`.
   Otherwise `check` fails with `VerbNotListed`.
 - `PersonAction` is unchanged; tier 0 is unaffected.
 - `parity::PresenceObs` gains `claims`, which matters only if you build one by hand.
@@ -5665,7 +6078,7 @@ test-only hooks (below). No store format change (still 4); no new dependency.
     - it would match with whitespace loosened, case ignored, or both (count and lines).
 - `--all` prints `replaced N matches in notes.md (at lines … before the edit)` on stdout.
   Otherwise a successful replace prints nothing on stdout, like the other edit verbs.
-- **Parity:** `replace` now serves P12 (find and replace) too, with three cases: one
+- **Parity:** `replace` now serves the find-and-replace row too, with three cases: one
   match, `--all`, and a two-line `--old` from stdin. Its exits are `0, 1`.
 
 **For hosts**
@@ -5682,11 +6095,11 @@ test-only hooks (below). No store format change (still 4); no new dependency.
   edit verb. `tools::exit` is unchanged.
 - `run_tool` has no `if_version` guard for any verb, and this mode adds none. The match is
   found in the live text, so a replace applies where the text is now.
-- **Parity list:** add `replace` to your P12 row (`["sed -i", "replace"]`), or `check`
+- **Parity list:** add `replace` to your find-and-replace row (`["sed -i", "replace"]`), or `check`
   fails with `VerbNotListed`. Hosts checking their command table against
   `Registry::kit()` see `replace`'s new usage line and exits.
 
-**For packs:** a text pack's P12 row must list `replace` (above). `PersonAction` is
+**For packs:** a text pack's find-and-replace row must list `replace` (above). `PersonAction` is
 unchanged; tier-0 lists are unaffected.
 
 **Conformance suite** (folded from Unreleased):
@@ -5718,8 +6131,8 @@ emoji (ZWJ, combining mark), CRLF and BOM, stdin for either side, both `-`, `old
 and the exclusion with `--lines`/`--range`. `tools_session`: `exact_replace_*`
 (attribution, caret, undo, `--all` as one change, refusals apply nothing, the no-op,
 stdin, a CRLF+BOM file round trip, the doc changing between read and replace, rights) and
-`concurrent_threads_exact_replace_and_typing_lose_nothing`. Parity: P12's three `replace`
-cases on both paths.
+`concurrent_threads_exact_replace_and_typing_lose_nothing`. Parity: the find-and-replace row's
+three `replace` cases on both paths.
 
 ## v0.5.0 (2026-10-27)
 
@@ -5742,8 +6155,9 @@ format and decides who may settle an approval. The API contract is `docs/SESSION
   replaces: blobs don't merge). Nothing is restored automatically.
 - **Surfaced:** `BlobLogEntry::approval`, `BlobBlame::approval` (current version); `who`
   shows the agent for the person, as before.
-- **Parity:** `approve`, `decline`, `log --pending` on both tiers; tier-0 cases for P29 and
-  P30 (31 cases over 16 live rows); the blob observation compares approval records.
+- **Parity:** `approve`, `decline`, `log --pending` on both tiers; tier-0 cases for the approve and
+  pending-approvals rows (31 cases over 16 live rows); the blob observation compares approval
+  records.
 - **Purge reaches it**: a purged version's approval record is kept as metadata
   (no content, no blob id) and counted (`PurgeCounts::approvals`); delete and the file
   rewrite cover the new table.
@@ -5762,7 +6176,8 @@ v0.4.0 code): to roll back, restore the store from a backup taken before the upg
 - `log --pending --on-behalf-of me` on a blob doc: `BlobSession::log` filtered to
   `approval == Some(Pending)` (and `on_behalf_of`); a tab's list: `approvals`.
   `AuditEvent::Approval { seq }` and `NoApproval { seq }` carry the version for a blob doc.
-- Tier-0 parity list: make P29 (`approve`, `decline`) and P30 (`log --pending`) live; a
+- Tier-0 parity list: make the approve row (`approve`, `decline`) and the
+  pending-approvals row (`log --pending`) live; a
   deferred row now fails as stale. Exit codes are unchanged (`tools::session_exit`).
 - Back up the store before the first open with v0.5.0 if you may need to roll back.
 
@@ -5793,7 +6208,7 @@ format stays 3**, no store change; no new dependency.
   `Registry::for_pack` keeps working (the text tier plus the pack's verbs).
 - **Lease verbs** (tier 0): `lease [--ttl MS]`, `lease --renew`, `lease --release`,
   `lease --break` (owner, as `BlobSession::break_lease`), and their person actions
-  **P32 `Lease`, P33 `ReleaseLease`, P34 `BreakLease`**.
+  **`Lease`, `ReleaseLease`, `BreakLease`**.
 - **Tier-aware parity.** Each `PersonAction` has `tiers()`; a list needs rows only for its
   registry's tier, so the Markdown pack doesn't cover the leases. A tier-0 harness
   (`parity::check_blob`, `kit_blob_cases`: 27 cases over 14 live rows, 8 for the leases)
@@ -5823,9 +6238,9 @@ format stays 3**, no store change; no new dependency.
   the text tier only.
 - Show `BlobStatus::conflict_copies`; route the lease verbs and `log` on blob docs.
 
-**For packs:** map P32–P34 in your `parity_row` match (a text pack: N/A, "leases are tier
-0's") and build your list with `PersonAction::for_tier(Tier::Text)`. `VerbSpec` literals
-need `tiers`.
+**For packs:** map the three lease rows in your `parity_row` match (a text pack: N/A, "leases are
+tier 0's") and build your list with `PersonAction::for_tier(Tier::Text)`. `VerbSpec` literals need
+`tiers`.
 
 **Behaviour changes:** the conflict-copy name; copies in the host's folder when it gives
 one; the 30-day cleanup on `tick`.
@@ -5863,7 +6278,7 @@ the sweep, from the session, the store and the blob store),
 
 ## v0.3.0 (2026-10-27)
 
-Blame (P22 live). The API contract is `docs/SESSIONS.md` ("Blame"; amendment 8, additive,
+Blame (its parity row live). The API contract is `docs/SESSIONS.md` ("Blame"; amendment 8, additive,
 lists every change). **Store format stays 3**: one new table, so a v0.2.0 build still reads
 and writes a v0.3.0 store (N−1). No new dependency.
 
@@ -5888,8 +6303,8 @@ and writes a v0.3.0 store (N−1). No new dependency.
 - **Store:** `change_clocks`, written in each change's transaction, erased with the doc,
   copied by `rewrite_file`.
 
-**For packs:** mark P22 live: `ParityRow::live(P::Blame, &["blame"])`. A pack still listing it
-deferred fails its parity test (`UnexpectedVerb`, `StaleDeferral`).
+**For packs:** mark the blame row live: `ParityRow::live(P::Blame, &["blame"])`. A pack still
+listing it deferred fails its parity test (`UnexpectedVerb`, `StaleDeferral`).
 
 **Behaviour changes:** none for existing calls. Text inserted before v0.3.0 (and by a v0.2.0
 build writing a v0.3.0 store) has no clock rows: it blames to its client's owner without a
@@ -5997,7 +6412,7 @@ First release of the Multi-Player Cores (MPC) base kit. The API contract is
   restore, plus conflict copies when a desktop app ignores the lease.
 - **Manager.** Listing and rights re-check; `delete_doc` / `delete_space` across every kit
   table.
-- **Agent parity framework.** `PersonAction` P1–P31 (exhaustive), the `KIT_VERBS` registry,
+- **Agent parity framework.** `PersonAction`, 31 rows (exhaustive), the `KIT_VERBS` registry,
   pack verbs (`Pack::verbs`), and the harness comparing the person path with the agent path.
 - **Conformance suite** for text. Two genuine Yrs deviations are pinned:
   `text.yata_separating_case` and `text.yata_paper_a19`.

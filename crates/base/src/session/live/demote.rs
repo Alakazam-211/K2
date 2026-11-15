@@ -90,25 +90,19 @@ pub(crate) struct DemoteFile {
 }
 
 /// The planted fault [`crate::differential::DemoteMutant::DropsUnwritten`].
-#[cfg(any(test, feature = "differential"))]
 fn planted_drops_unwritten() -> bool {
-    crate::differential::demote_mutant() == Some(crate::differential::DemoteMutant::DropsUnwritten)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_drops_unwritten() -> bool {
-    false
+    plant_on!(
+        crate::differential::demote_mutant()
+            == Some(crate::differential::DemoteMutant::DropsUnwritten)
+    )
 }
 
 /// The planted fault [`crate::differential::DemoteMutant::MergesByLine`], for the manager.
-#[cfg(any(test, feature = "differential"))]
 pub(crate) fn planted_merges_by_line() -> bool {
-    crate::differential::demote_mutant() == Some(crate::differential::DemoteMutant::MergesByLine)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-pub(crate) fn planted_merges_by_line() -> bool {
-    false
+    plant_on!(
+        crate::differential::demote_mutant()
+            == Some(crate::differential::DemoteMutant::MergesByLine)
+    )
 }
 
 impl Session {

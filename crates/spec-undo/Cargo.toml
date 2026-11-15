@@ -38,3 +38,7 @@ name = "undo_enum"
 
 [[bin]]
 name = "undo_itf_replay"
+
+# the workspace's (the root Cargo.toml)
+[lints]
+workspace = true

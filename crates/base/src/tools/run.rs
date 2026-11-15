@@ -5,7 +5,9 @@ use super::fence::Fence;
 use super::{exit, EditOutput, Kind, Tool, ToolDoc, ToolError};
 use crate::errors::{ids, ErrorReport};
 use crate::session::Shown;
-use crate::session::{ClaimPolicy, ConnId, EditResult, EditWithError, ForEdit, Notes, Session};
+use crate::session::{
+    ClaimPolicy, ConnId, EditResult, EditWithError, ForEdit, Notes, Session, VerbRefused,
+};
 use crate::store::Seq;
 
 /// What [`Session::run_tool`] produced. The host prints `stdout` as is, `stderr_summary`
@@ -44,6 +46,17 @@ pub struct ToolOutput {
     /// `stdout`: an agent's edit by position with no version, applied in
     /// [`PositionalMode::Warn`] ([`positional_note`]). Empty for most calls.
     pub warnings: Warnings,
+}
+
+/// What a structured edit verb named and touched, kept for a refusal's frame on the keyed
+/// watch ([`Session::run_structured`]).
+#[derive(Default)]
+struct Addressed {
+    unit: Option<String>,
+    touched: Vec<(String, crate::elem::Key)>,
+    /// What the verb said its agent is looking at and where its playhead is.
+    viewing: Option<String>,
+    time: Option<crate::session::TimePosition>,
 }
 
 /// [`ToolOutput::warnings`]: `note: ` lines for stderr about the call itself. Boxed, as it is
@@ -462,6 +475,9 @@ impl Session {
             if let Some(r) = &refusal {
                 summary = format!("{summary} ({})", r.id());
             }
+            if refusal.is_none() && out.exit == exit::OK {
+                self.verb_view_time(conn, out.viewing.as_deref(), out.time.as_ref());
+            }
             return Ok(ToolOutput {
                 stdout: out.stdout,
                 stderr_summary: summary,
@@ -475,6 +491,37 @@ impl Session {
                 warnings: Warnings::default(),
             });
         }
+        let mut seen = Addressed::default();
+        let out = self.run_structured_edit(conn, v, args, stdin, opts, &mut seen);
+        let refusal = match &out {
+            Ok(o) => o.refusal.as_ref().map(|r| (r.id(), None)),
+            Err(e) => Some((e.report().id(), Some(e))),
+        };
+        if let Some((code, err)) = refusal {
+            let mut r = VerbRefused::new(conn, verb, opts.turn, code);
+            r.unit = seen.unit;
+            r.touched = seen.touched;
+            if let Some(ToolRunError::Session(e)) = err {
+                r = r.held_by(e);
+            }
+            self.watch_refused(r);
+        }
+        out
+    }
+
+    /// [`Session::run_structured`]'s edit verbs. `seen`: the unit the verb named and the
+    /// elements its edits touched, for a refusal's frame on the keyed watch.
+    fn run_structured_edit(
+        &self,
+        conn: ConnId,
+        v: super::PackVerb,
+        args: &[String],
+        stdin: &[u8],
+        opts: &ToolOptions,
+        seen: &mut Addressed,
+    ) -> Result<ToolOutput, ToolRunError> {
+        let name = self.key()?.path;
+        let verb = v.name();
         let (if_version, base, args) = super::args::take_guards(args)?;
         // positional addresses (#N, LN) count in the version named: under --base, the base's
         // table (R-1); under --if-version the live one is that version
@@ -499,6 +546,10 @@ impl Session {
                 None => ctx,
             };
             let o = f(&ctx)?;
+            seen.unit = o.unit;
+            seen.viewing = o.viewing;
+            seen.time = o.time;
+            seen.touched = VerbRefused::touched_of(pack.as_ref(), &o.edits);
             report = Some((o.stdout, o.exit));
             own = o.refusal;
             Ok::<_, ToolError>((o.edits, o.cells))
@@ -531,6 +582,9 @@ impl Session {
         };
         if let Some(r) = &refusal {
             summary = format!("{summary} ({})", r.id());
+        }
+        if refusal.is_none() && exit == exit::OK {
+            self.verb_view_time(conn, seen.viewing.as_deref(), seen.time.as_ref());
         }
         Ok(ToolOutput {
             stdout,

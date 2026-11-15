@@ -71,6 +71,7 @@ const fn view(precision: Precision) -> ViewSchema {
             title: Src::Field("name"),
             hidden: Src::None,
             layout: Src::None,
+            parent: Src::None,
         },
         unit_fields: UnitFields {
             kind: Src::ListValue,

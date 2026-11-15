@@ -53,7 +53,7 @@ const load = <T>(dir: string, name: string): T => JSON.parse(readFileSync(join(d
  * folds it on the previous client. */
 const rosterFiles = (dir: string) => readdirSync(dir).filter((n) => n.startsWith("roster_events") && n.endsWith(".json") && !/rollup|closed|grid|cells/.test(n));
 /** The streams a `PresenceChannel` folds (element presence and claims), where both have them. */
-const PRESENCE_FILES = ["roster_events_elem_presence.json", "roster_events_claims_elems.json", "roster_events_focus_range.json"];
+const PRESENCE_FILES = ["roster_events_elem_presence.json", "roster_events_claims_elems.json", "roster_events_focus_range.json", "roster_events_view_time.json"];
 const handlesOf = (e: RosterEvent) => (e.kind === "snapshot" ? (e.members as RosterEntry[]).map((m) => m.handle).sort() : []);
 const now = { schedule: (deliver: () => void) => deliver() };
 
@@ -101,6 +101,34 @@ function readsAll(client: Client, dir: string): number {
     expect(rows(p), name).toEqual(rows(late));
   }
   return n;
+}
+
+/** The container fields added after v0.18.0 (WIRE.md, "Containers in containers", "Derived
+ * values per container"): a previous client keeps the snapshot's copy and never updates them, so
+ * an N-1 compare removes exactly these, by name, from both sides. */
+const NEW_CONTAINER_FIELDS = ["parent", "derived"] as const;
+
+/** `W`'s keyed watch on its own copy of `frames`: what it ends with, every container and unit
+ * whole, and the kinds of frame it sent. */
+function replayKeyed(W: typeof KeyedWatch, frames: ServerFrame[]) {
+  const w = wire();
+  const k = new W(w.t, { root: "objs", version: 1, client: 7, self: "ada", rights: "read", features: ["keyed_watch"] });
+  for (const f of structuredClone(frames)) w.deliver(f);
+  const containers = structuredClone(k.view?.containers ?? []);
+  const units = (k.view?.containers ?? []).map((c) => [c.key, structuredClone(k.units(c.key))]);
+  return { ready: k.ready, state: k.stateJson(), rev: k.rev, current: k.viewCurrent, containers, units, sent: w.sent.map((f) => f.type) };
+}
+
+/** `r` with the fields in `NEW_CONTAINER_FIELDS` taken off every container. */
+function withoutNewFields(r: ReturnType<typeof replayKeyed>) {
+  return {
+    ...r,
+    containers: r.containers.map((c) => {
+      const x: Record<string, unknown> = { ...c };
+      for (const f of NEW_CONTAINER_FIELDS) delete x[f];
+      return x;
+    }),
+  };
 }
 
 describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
@@ -168,6 +196,63 @@ describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
     expect(w.sent).toEqual([]);
   });
 
+  it("the previous client folds this kit's view addresses and time positions (after v0.18.0) without error, to the same peers", async () => {
+    const name = "roster_events_view_time.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const prev = await previous();
+    const g = load<Roster>(OURS, name);
+    const kinds = new Set(g.events.map((e) => e.kind as string));
+    expect(kinds.has("view_address") && kinds.has("time_position")).toBe(true);
+    const w = wire();
+    const welcome: Welcome = { root: "source", version: 0, client: g.client ?? 1, self: g.self, rights: "edit" };
+    const p = new prev.PresenceChannel(w.t, welcome, now);
+    for (const event of g.events) w.deliver({ type: "roster_event", event });
+    expect([...new Set(p.peers().map((x) => x.handle))].sort()).toEqual(["ada", "atlas", "bob"]);
+    expect(w.sent).toEqual([]);
+  });
+
+  it("the previous client folds a claim gone in an outside save (after v0.18.0: `how: gone_outside_save`, `keys`) as an ended claim: the same claims and peers as this client, nothing sent", async () => {
+    const name = "roster_events_claim_gone_outside.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const prev = await previous();
+    const g = load<Roster>(OURS, name);
+    const end = g.events.find((e) => e.kind === "claim_ended") as { how?: string; keys?: string[] } | undefined;
+    expect(end?.how).toBe("gone_outside_save");
+    expect(end?.keys).toEqual(["@item:i2"]);
+    const fold = (P: typeof PresenceChannel) => {
+      const w = wire();
+      const welcome: Welcome = { root: "items", version: 0, client: g.client ?? 1, self: g.self, rights: "edit" };
+      const p = new P(w.t, welcome, now);
+      let held = 0;
+      for (const event of g.events) {
+        w.deliver({ type: "roster_event", event });
+        if (event.kind === "claim_started_elems") held = p.claims().length;
+      }
+      return { held, claims: p.claims().length, peers: [...new Set(p.peers().map((x) => x.handle))].sort(), sent: w.sent.length };
+    };
+    const old = fold(prev.PresenceChannel);
+    // the claim was held, then ended: the previous client drops it as this one does
+    expect(old).toEqual({ held: 1, claims: 0, peers: old.peers, sent: 0 });
+    expect(old).toEqual(fold(PresenceChannel));
+  });
+
+  it("the previous client's keyed watch reads this kit's frames with an outside_save frame (after v0.18.0): the same state as this client's", async () => {
+    const g = load<{ frames: ServerFrame[]; final_json: string; final_rev: number }>(OURS, "keyed_frames.json");
+    expect(g.frames.some((f) => (f.type as string) === "outside_save")).toBe(true);
+    if (!existsSync(join(PREV, "src", "keyed.ts"))) return; // a previous release with no keyed watch
+    const prevKeyed = (await import(/* @vite-ignore */ join(PREV, "src", "keyed.ts"))) as { KeyedWatch: typeof KeyedWatch };
+    const welcome: Welcome = { root: "shapes", version: 1, client: 7, self: "ada", rights: "read", features: ["keyed_watch"] };
+    const read = (W: typeof KeyedWatch) => {
+      const w = wire();
+      const k = new W(w.t, welcome);
+      for (const f of g.frames) w.deliver(f);
+      return { ready: k.ready, state: k.stateJson(), rev: k.rev, watches: w.sent.filter((f) => f.type === "watch").length };
+    };
+    const old = read(prevKeyed.KeyedWatch);
+    expect(old).toEqual({ ready: true, state: g.final_json, rev: g.final_rev, watches: 1 });
+    expect(read(KeyedWatch)).toEqual(old);
+  });
+
   it("the previous client folds the live grid's roster stream (`cells`, `claim_started_cells`) without error and sends nothing", async () => {
     const prev = await previous();
     const name = "roster_events_cells.json";
@@ -207,6 +292,82 @@ describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
     expect(old.watches).toBe(1);
     expect(old.units).toEqual(ours.units);
     expect(ours.state).toBe(g.final_json);
+  });
+
+  it("the previous client's keyed watch reads this kit's snapshot whose view schema declares nesting (after v0.18.0): the same state and units as this client's", async () => {
+    const name = "keyed_snapshot_nesting.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const g = load<{ frames: ServerFrame[]; final_json: string }>(OURS, name);
+    if (!existsSync(join(PREV, "src", "keyed.ts"))) return; // a previous release with no keyed watch: the row above covers it
+    const prevKeyed = (await import(/* @vite-ignore */ join(PREV, "src", "keyed.ts"))) as { KeyedWatch: typeof KeyedWatch };
+    const welcome: Welcome = { root: "items", version: 1, client: 7, self: "ada", rights: "read", features: ["keyed_watch"] };
+    const read = (W: typeof KeyedWatch) => {
+      const w = wire();
+      const k = new W(w.t, welcome);
+      for (const f of g.frames) w.deliver(f);
+      const units = (k.view?.containers ?? []).map((c) => [c.key, k.units(c.key).map((u) => u.key)]);
+      return { ready: k.ready, state: k.stateJson(), units, nesting: k.view?.schema.nesting, watches: w.sent.filter((f) => f.type === "watch").length };
+    };
+    const old = read(prevKeyed.KeyedWatch);
+    const ours = read(KeyedWatch);
+    // the frames carry it, and the previous client reads past it
+    expect(ours.nesting?.length).toBe(2);
+    expect(old.ready).toBe(true);
+    expect(old.state).toBe(g.final_json);
+    expect(old.watches).toBe(1);
+    expect(old.units).toEqual(ours.units);
+    expect(ours.state).toBe(g.final_json);
+  });
+
+  it("the previous client's keyed watch reads this kit's frames with containers in containers (after v0.18.0): this client's state with the new container fields removed", async () => {
+    const name = "keyed_frames_container_parent.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const g = load<Record<"field" | "derived", { frames: ServerFrame[]; final_json: string; final_rev: number; parents: Record<string, string | null>[] }>>(OURS, name);
+    if (!existsSync(join(PREV, "src", "keyed.ts"))) return; // a previous release with no keyed watch: the row above covers it
+    const prevKeyed = (await import(/* @vite-ignore */ join(PREV, "src", "keyed.ts"))) as { KeyedWatch: typeof KeyedWatch };
+    for (const mode of ["field", "derived"] as const) {
+      const run = g[mode];
+      // a nested container in the snapshot, and parent_after on the frames
+      expect(JSON.stringify(run.frames[0]), mode).toContain('"parent":"@coll:1"');
+      expect(JSON.stringify(run.frames), mode).toContain('"parent_after"');
+      const old = replayKeyed(prevKeyed.KeyedWatch, run.frames);
+      const ours = replayKeyed(KeyedWatch, run.frames);
+      // this client: the kit's tree, every frame taken
+      expect(Object.fromEntries(ours.containers.map((c) => [c.key, c.parent ?? null])), mode).toEqual(run.parents[run.parents.length - 1]);
+      expect(ours.sent.filter((t) => t === "watch"), mode).toEqual(["watch"]);
+      // the previous client: every frame taken, no error and no new snapshot asked for, the kit's
+      // state; and this client's view but for the new container fields
+      expect(old.ready, mode).toBe(true);
+      expect(old.state, mode).toBe(run.final_json);
+      expect(old.rev, mode).toBe(run.final_rev);
+      expect(old.current, mode).toBe(true);
+      expect(old.sent.filter((t) => t === "watch"), mode).toEqual(["watch"]);
+      expect(old.sent.every((t) => t === "watch" || t === "report"), mode).toBe(true);
+      expect(withoutNewFields(old), mode).toEqual(withoutNewFields(ours));
+    }
+  });
+
+  it("the previous client's keyed watch reads this kit's frames with containers' derived values (after v0.18.0): this client's state with the new container fields removed", async () => {
+    const name = "keyed_frames_container_derived.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const g = load<{ frames: ServerFrame[]; final_json: string; final_rev: number; derived: Record<string, Record<string, string>>[] }>(OURS, name);
+    if (!existsSync(join(PREV, "src", "keyed.ts"))) return;
+    const prevKeyed = (await import(/* @vite-ignore */ join(PREV, "src", "keyed.ts"))) as { KeyedWatch: typeof KeyedWatch };
+    expect(JSON.stringify(g.frames)).toContain('"containers":{"@coll:1"');
+    const old = replayKeyed(prevKeyed.KeyedWatch, g.frames);
+    const ours = replayKeyed(KeyedWatch, g.frames);
+    // this client: the kit's values, every frame taken
+    expect(Object.fromEntries(ours.containers.map((c) => [c.key, c.derived ?? {}]))).toEqual(g.derived[g.derived.length - 1]);
+    expect(ours.sent.filter((t) => t === "watch")).toEqual(["watch"]);
+    // the previous client: every frame taken, no error and no new snapshot asked for, the kit's
+    // state; and this client's view but for the new container fields
+    expect(old.ready).toBe(true);
+    expect(old.state).toBe(g.final_json);
+    expect(old.rev).toBe(g.final_rev);
+    expect(old.current).toBe(true);
+    expect(old.sent.filter((t) => t === "watch")).toEqual(["watch"]);
+    expect(old.sent.every((t) => t === "watch" || t === "report")).toBe(true);
+    expect(withoutNewFields(old)).toEqual(withoutNewFields(ours));
   });
 
   it("the previous client's keyed watch reads this kit's frames with placements in 3D: the same state and units as this client's", async () => {

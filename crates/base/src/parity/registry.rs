@@ -718,7 +718,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK0,
     )
     .on(ALL3),
-    // P24: the file's bytes through the export registry (the kit's target is `as-is`; a
+    // export: the file's bytes through the export registry (the kit's target is `as-is`; a
     // host registers format exporters beside it)
     kit(
         "export",
@@ -993,7 +993,7 @@ const fn annot(
 /// [`Registry::for_tier`] doesn't list them and a host that hasn't adopted comments sees no new
 /// verb; [`Registry::for_blob_pack`] lists them, and [`Registry::with_annotations`] adds them
 /// to any other. Their parity is
-/// [`super::check_annotations`]'s (P23 `Annotate` is a text and grid row; on blob docs these
+/// [`super::check_annotations`]'s (`Annotate` is a text and grid row; on blob docs these
 /// are its verbs). The rights: read for the reads, history for the log, the comment right
 /// (implied by edit) for the rest, and `comment --delete` also its author, the person it was
 /// for, or an owner. An agent's `reanchor` is a proposal a person confirms.
@@ -1336,14 +1336,14 @@ impl Registry {
     /// `node` as other names for its list and show verbs, and claims by node
     /// (`claim --node`, `claim --renew`, `claim --release`). A pack with no index gets exactly
     /// `for_tier(Tier::Blob).with_annotations()`, and `for_tier` never lists any of these: a
-    /// host that hasn't adopted them sees no change. The annotation verbs serve P23 and P27,
-    /// text and grid rows: a list checked against this registry lists them there.
+    /// host that hasn't adopted them sees no change. The annotation verbs serve `Annotate`
+    /// and `Mention`, text and grid rows: a list checked against this registry lists them there.
     ///
     /// They are kit verbs ([`Source::Kit`], [`VerbSpec::is_index`]) of [`Tier::Blob`]: the
     /// rights, calls, exits and parity rows are the kit's, only the names the pack's. All but
     /// the export verb run through [`crate::session::BlobSession::run_tool`]; the export verb
     /// is the host's export with the node option ([`crate::export::NODE_OPTION`]). The claim
-    /// verbs serve P8, a text and grid row: a pack that indexes lists it in its blob parity
+    /// verbs serve `Caret`, a text and grid row: a pack that indexes lists it in its blob parity
     /// list too.
     ///
     /// Refused: a verb name that isn't two lowercase words (letters, digits, `-`), one whose
@@ -1785,7 +1785,7 @@ mod tests {
                 "{n} is grid only"
             );
         }
-        // P44 is the owner's
+        // dropping deleted rows is the owner's
         assert_eq!(
             grid.get("rows drop-deleted").map(|v| (v.needs, v.serves)),
             Some((

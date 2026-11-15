@@ -19,7 +19,7 @@
 //! a whole-text merge would fire it (U12). A clean region applies **the merge's own hunks**
 //! (offset by `s'`). In repeated text a diff can't tell another participant's identical
 //! element from the region's own; exact sets can, so undo, redo and revert never remove an
-//! element they didn't write (finding F3, `hist.undo_own_only`).
+//! element they didn't write (`hist.undo_own_only`).
 //!
 //! **By root** (v1.8, U8, U23): every element has a provenance root ([`super::prov`]), and a
 //! region keeps the roots of its base's elements (`after`), of `before`'s, and of what each

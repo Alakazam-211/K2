@@ -60,6 +60,7 @@ const VIEW: ViewSchema = ViewSchema {
         title: Src::None,
         hidden: Src::None,
         layout: Src::None,
+        parent: Src::None,
     },
     unit_fields: UnitFields {
         name: Src::Field("name"),

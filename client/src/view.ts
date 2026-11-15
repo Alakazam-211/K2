@@ -24,12 +24,40 @@ import type { KeyedState } from "./keyed";
  * `VIEW_TEXT_MAX`). */
 export const VIEW_TEXT_MAX = 1024;
 
+/** The deepest a container sits in the containers' tree, in levels (the top level is 1): the
+ * kit's `CONTAINER_DEPTH_MAX`. A container's `parent` never puts it deeper. */
+export const CONTAINER_DEPTH_MAX = 32;
+
 const SEP = "\u001f";
 
 /** A unit's or container's placement as a delta's `placement_after` gives it (`null`: none). */
 function setPlacement(x: { placement?: PlacementJson | null }, p: PlacementJson | null | undefined): void {
   if (p) x.placement = p;
   else delete x.placement;
+}
+
+/** A container's parent as a delta's `parent_after` gives it (`null`: at the top level). */
+function setParent(c: ViewContainer, p: string | null | undefined): void {
+  if (p) c.parent = p;
+  else delete c.parent;
+}
+
+/** One element's part of a change's `derived` (`d`, `{name: text or null}`) onto its `derived`,
+ * for the schema's `names` only: a text sets one, `null` removes it, anything else is left. */
+function setDerived(x: { derived?: Record<string, string> } | undefined, d: unknown, names: string[] | undefined): void {
+  if (!x || !names || names.length === 0 || !d || typeof d !== "object") return;
+  const vals = d as Record<string, unknown>;
+  for (const name of names) {
+    if (!(name in vals)) continue;
+    const v = vals[name];
+    if (typeof v === "string") x.derived = { ...(x.derived ?? {}), [name]: v };
+    else if (v === null && x.derived && name in x.derived) {
+      const rest = { ...x.derived };
+      delete rest[name];
+      if (Object.keys(rest).length === 0) delete x.derived;
+      else x.derived = rest;
+    }
+  }
 }
 
 /** A view delta that doesn't fit the view: the watch asks for a snapshot. */
@@ -164,27 +192,21 @@ export class KeyedView {
     return c ? (c.placement ?? null) : undefined;
   }
 
-  /** A change's `derived.units` values of the schema's `unit_derived` names onto the units, as
-   * the kit sends them (the values the change set or removed): a text sets one, `null` removes
-   * it. Names the schema doesn't declare, and units the view doesn't know, are left alone. */
+  /** A change's `derived.units` values of the schema's `unit_derived` names onto the units, and
+   * its `derived.containers` values of the `container_derived` names onto the containers, as the
+   * kit sends them (the values the change set or removed): a text sets one, `null` removes it.
+   * Names the schema doesn't declare, and elements the view doesn't know, are left alone. */
   applyDerived(f: OpsChangeFrame): void {
-    const names = this.vs.unit_derived;
     const units = f.derived?.units;
-    if (!names || names.length === 0 || !units) return;
-    for (const [addr, d] of Object.entries(units)) {
-      const u = this.shown.get(addr) ?? this.gone.get(addr);
-      if (!u || !d || typeof d !== "object") continue;
-      const vals = d as Record<string, unknown>;
-      for (const name of names) {
-        if (!(name in vals)) continue;
-        const v = vals[name];
-        if (typeof v === "string") u.derived = { ...(u.derived ?? {}), [name]: v };
-        else if (v === null && u.derived && name in u.derived) {
-          const rest = { ...u.derived };
-          delete rest[name];
-          if (Object.keys(rest).length === 0) delete u.derived;
-          else u.derived = rest;
-        }
+    if (units) {
+      for (const [addr, d] of Object.entries(units)) setDerived(this.shown.get(addr) ?? this.gone.get(addr), d, this.vs.unit_derived);
+    }
+    // the containers' (`container_derived`), the same way
+    const containers = f.derived?.containers;
+    if (containers) {
+      for (const [addr, d] of Object.entries(containers)) {
+        const c = this.snapshot.containers.find((x) => x.key === addr) ?? this.goneContainers.get(addr);
+        setDerived(c, d, this.vs.container_derived);
       }
     }
   }
@@ -272,6 +294,7 @@ export class KeyedView {
         if (i > cs.length || cs.some((c) => c.key === d.key)) misfit(`${d.op} ${d.key} at ${i + 1}`);
         const c = this.buildContainer(st, d.key);
         if ("placement_after" in d) setPlacement(c, d.placement_after);
+        if ("parent_after" in d) setParent(c, d.parent_after);
         cs.splice(i, 0, c);
         this.lists.set(d.key, []);
         dirty.add(d.key);
@@ -300,6 +323,9 @@ export class KeyedView {
         }
         if (d.op === "hide_show" && d.hidden_after !== null && !this.vs.derived.containers.includes("hidden")) c.hidden = d.hidden_after;
         if ("placement_after" in d) setPlacement(c, d.placement_after);
+        // the kit sends a container's parent (an address it mapped from the store's key): never
+        // read from the keyed state
+        if ("parent_after" in d) setParent(c, d.parent_after);
       }
     }
   }

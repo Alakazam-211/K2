@@ -507,8 +507,16 @@ impl Session {
 
     /// After a structured change (`stream`, applied and logged), by anyone or from outside: an
     /// element claim or reservation on a list root the change touched ends when none of its
-    /// elements is live. Nothing passes on from a claim that ends this way.
-    pub(super) fn elem_claims_after(&self, st: &mut State, stream: &[ElemApplied], now: u64) {
+    /// elements is live. Nothing passes on from a claim that ends this way. A claim ends
+    /// [`ClaimEnd::GoneOutsideSave`] when the change is an outside save's apply (`outside`), else
+    /// [`ClaimEnd::Deleted`]; a reservation ends [`ReservationEnd::Deleted`] either way.
+    pub(super) fn elem_claims_after(
+        &self,
+        st: &mut State,
+        stream: &[ElemApplied],
+        now: u64,
+        outside: bool,
+    ) {
         let any = st.aware.claims.iter().any(|c| c.elems.is_some())
             || st.aware.reservations.iter().any(|r| r.elems.is_some());
         if !any {
@@ -546,9 +554,14 @@ impl Session {
             .filter(|r| r.elems.as_ref().is_some_and(gone))
             .map(|r| r.claim)
             .collect();
+        let how = if outside && !planted_outside_end_reported_deleted() {
+            ClaimEnd::GoneOutsideSave
+        } else {
+            ClaimEnd::Deleted
+        };
         for id in claims {
             if let Some(k) = st.aware.claims.iter().position(|c| c.id == id) {
-                self.end_claim(st, k, ClaimEnd::Deleted, now, false);
+                self.end_claim(st, k, how, now, false);
             }
         }
         for id in reservations {
@@ -561,35 +574,33 @@ impl Session {
 
 /// The planted fault [`crate::differential::ClaimMutant::MapKeysUnmapped`]: map writes aren't
 /// mapped to their elements. Without the `differential` feature there is no hook: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_map_keys_unmapped() -> bool {
-    crate::differential::claim_mutant() == Some(crate::differential::ClaimMutant::MapKeysUnmapped)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_map_keys_unmapped() -> bool {
-    false
+    plant_on!(
+        crate::differential::claim_mutant()
+            == Some(crate::differential::ClaimMutant::MapKeysUnmapped)
+    )
 }
 
 /// Planted ([`crate::differential::ContractMutant::ClaimDoesNotReplaceSelection`]): an agent's
 /// claim leaves its selection as it was.
-#[cfg(any(test, feature = "differential"))]
 fn planted_claim_keeps_selection() -> bool {
-    crate::differential::contract_mutant()
-        == Some(crate::differential::ContractMutant::ClaimDoesNotReplaceSelection)
+    plant_on!(
+        crate::differential::contract_mutant()
+            == Some(crate::differential::ContractMutant::ClaimDoesNotReplaceSelection)
+    )
 }
 
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_claim_keeps_selection() -> bool {
-    false
+/// The planted fault [`crate::differential::ClaimMutant::OutsideEndReportedDeleted`].
+fn planted_outside_end_reported_deleted() -> bool {
+    plant_on!(
+        crate::differential::claim_mutant()
+            == Some(crate::differential::ClaimMutant::OutsideEndReportedDeleted)
+    )
 }
 
-#[cfg(any(test, feature = "differential"))]
 fn planted_mark_before_apply() -> bool {
-    crate::differential::claim_mutant() == Some(crate::differential::ClaimMutant::MarkBeforeApply)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_mark_before_apply() -> bool {
-    false
+    plant_on!(
+        crate::differential::claim_mutant()
+            == Some(crate::differential::ClaimMutant::MarkBeforeApply)
+    )
 }

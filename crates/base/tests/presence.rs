@@ -1242,7 +1242,7 @@ fn registry_rows_for_the_new_verbs() {
     assert_eq!(form(&["view", "--lines", "1,2", "--for-edit"]), "view");
 }
 
-// ---------- last-edit ranges don't expand (finding F2) ----------
+// ---------- last-edit ranges don't expand ----------
 
 fn last_edit(f: &Fx, obs: ConnId, pid: &str) -> Option<LineRange> {
     f.s.roster(obs)

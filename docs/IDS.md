@@ -6,7 +6,7 @@ Every ID or address kind the kit's verbs take or print, as data (`ids::KIT`). An
 
 ## Classes
 
-Each kind has one class (P1), listed most durable first:
+Each kind has one class, listed most durable first:
 
 | Class | Meaning |
 |---|---|

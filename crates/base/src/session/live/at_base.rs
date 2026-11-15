@@ -332,7 +332,7 @@ impl Session {
     ///
     /// The client (`client/`) has **one change in flight** (rule 0), and `base` is the
     /// latest version it has seen, its own acknowledged changes included. Refusals (nothing
-    /// applied, P4):
+    /// applied):
     /// - `MPC-E112 base_expired`: `base` is past the live window (as
     ///   [`Session::events_since`]); reload;
     /// - `MPC-E151 bad_hunk`: the hunks are out of order or range, or off a character
@@ -375,7 +375,7 @@ impl Session {
             .map_err(|e| SessionError::Doc(DocError::from(e)).report())?;
         let ours = diff::coalesce(hunks);
         // rules 3–5, over the changes since as broadcast: the authored hunks (clarification
-        // r2.1, F1), never widened to tokens
+        // r2.1), never widened to tokens
         #[allow(unused_mut)]
         let mut since: Vec<Vec<Hunk>> = on_root.iter().map(|w| w.event.hunks.clone()).collect();
         #[cfg(any(test, feature = "differential"))]

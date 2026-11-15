@@ -8,7 +8,27 @@
 import type { OpId, Presence } from "./live";
 import { byteToIndex, indexToByte, utf8Len } from "./hunk";
 import { ERR } from "./wire";
-import type { CellRange, Cells, ClaimActor, ClientFrame, Corner, ElemFocus, ElemRange, ElemSelection, ErrorReport, Handle, Point, Rect, RosterEntry, RosterEvent, ServerFrame, Transport, Welcome } from "./wire";
+import type {
+  CellRange,
+  Cells,
+  ClaimActor,
+  ClientFrame,
+  Corner,
+  ElemFocus,
+  ElemRange,
+  ElemSelection,
+  ErrorReport,
+  Handle,
+  Point,
+  Rect,
+  RosterEntry,
+  RosterEvent,
+  ServerFrame,
+  TimePositionJson,
+  TimePositionSet,
+  Transport,
+  Welcome,
+} from "./wire";
 import { CELLS_FEATURE, CELLS_RANGES_MAX, CELL_CLAIMS_FEATURE } from "./grid";
 
 /**
@@ -145,6 +165,10 @@ export interface PresencePeer {
   range: ElemRange | null;
   /** Its cells in a live grid (feature `cells`), or `null`. */
   cells: Cells | null;
+  /** The view it is looking at, by address, or `null`. */
+  viewAddress: string | null;
+  /** Its playhead, or `null`. */
+  timePosition: TimePositionJson | null;
   away: boolean;
 }
 
@@ -178,7 +202,7 @@ export interface PresenceRefusal {
 }
 
 /** The frames a `PresenceChannel` sends, each refusable. */
-export type PresenceFrameType = "select" | "pointer" | "viewport" | "focus" | "range" | "cells" | "claim" | "release";
+export type PresenceFrameType = "select" | "pointer" | "viewport" | "focus" | "range" | "cells" | "view_address" | "time_position" | "claim" | "release";
 
 /** The name a host lists in `welcome.features` when it takes the presence frames. */
 export const PRESENCE_FEATURE = "presence";
@@ -188,6 +212,52 @@ export const FOCUS_FEATURE = "focus";
 
 /** The name a host lists in `welcome.features` when it takes the `range` frame (wire 3). */
 export const RANGE_FEATURE = "range";
+
+/** The name a host lists in `welcome.features` when it takes the `view_address` frame. */
+export const VIEW_ADDRESS_FEATURE = "view_address";
+
+/** The name a host lists in `welcome.features` when it takes the `time_position` frame. */
+export const TIME_POSITION_FEATURE = "time_position";
+
+/** The longest view address or `in` the host takes, in UTF-8 bytes (`PRESENCE_ADDRESS_MAX`). */
+export const PRESENCE_ADDRESS_MAX = 512;
+
+/** A decimal integer as a time position writes one: an optional `-`, digits, no leading zero,
+ * within 64 bits. */
+function decimalInt(s: string): boolean {
+  if (!/^-?(0|[1-9][0-9]*)$/.test(s) || s === "-0") return false;
+  const n = BigInt(s);
+  return n >= -(2n ** 63n) && n < 2n ** 63n;
+}
+
+/** What the host would refuse (`MPC-E114`) about a time position, or `null`. */
+function timeProblem(t: TimePositionSet): string | null {
+  if (!decimalInt(t.at)) return `the time ${JSON.stringify(t.at)} is not a decimal integer`;
+  if (t.state !== "playing" && t.state !== "paused") return `the state ${JSON.stringify(t.state)} is not playing or paused`;
+  if (t.rate !== undefined) {
+    const [n, d, more] = t.rate.split("/");
+    const good = more === undefined && decimalInt(n) && (d === undefined || (decimalInt(d) && BigInt(d) > 0n));
+    if (!good) return `the rate ${JSON.stringify(t.rate)} is not a decimal ratio`;
+  }
+  if (t.in !== undefined && addressProblem(t.in)) return `the time position's in ${JSON.stringify(t.in)} is not an address`;
+  return null;
+}
+
+/** What the host would refuse (`MPC-E114`) about an address, or `null`: empty, over
+ * `PRESENCE_ADDRESS_MAX` bytes, or a malformed native ID (`@kind:id`) or key (`@k:`). */
+function addressProblem(a: string): string | null {
+  if (a.length === 0) return "an empty address";
+  if (utf8Len(a) > PRESENCE_ADDRESS_MAX) return `over ${PRESENCE_ADDRESS_MAX} bytes`;
+  if (a.startsWith("@k:") || a.startsWith("key:")) return /^(@k:|key:)[0-9a-z._-]{1,24}$/.test(a) ? null : "a malformed key";
+  if (a.startsWith("@")) {
+    const ok = a
+      .slice(1)
+      .split("/")
+      .every((seg) => /^[a-z][a-z0-9_-]*:\S+$/.test(seg) && !seg.startsWith("k:"));
+    return ok ? null : "a malformed native id";
+  }
+  return null;
+}
 
 /**
  * A range's offsets (UTF-8 bytes on the wire) as UTF-16 indexes into `text`, the field's text,
@@ -208,6 +278,27 @@ export const CLAIM_KEYS_MAX = 256;
 
 /** The longest note on a claim, in UTF-8 bytes. */
 export const CLAIM_NOTE_MAX = 1024;
+
+/** How a claim ended (the kit's `ClaimEnd`; WIRE.md, "Claims on elements"). */
+export type ClaimEndReason = "released" | "edited" | "expired" | "left" | "reset" | "deleted" | "gone_outside_save";
+
+const CLAIM_END_REASONS: readonly string[] = ["released", "edited", "expired", "left", "reset", "deleted", "gone_outside_save"];
+
+/** A `claim_ended` event's `how` as a `ClaimEndReason`: a reason this client doesn't know (from
+ * a newer kit) is read as `deleted`, the claim simply ended. */
+export function claimEndReason(how: string): ClaimEndReason {
+  return (CLAIM_END_REASONS.includes(how) ? how : "deleted") as ClaimEndReason;
+}
+
+/** One claim's end, as `PresenceChannel.onClaimEnded` hands it on: the claim, who held it, how it
+ * ended, and, for a claim on elements, its elements by address as they were (`keys`; empty
+ * otherwise), so a view can say what went ("Atlas's hold on Drums ended: renamed outside"). */
+export interface ClaimEnded {
+  claim: string;
+  who: string;
+  how: ClaimEndReason;
+  keys: string[];
+}
 
 /** `PresenceChannel.claim`'s options. */
 export interface ClaimOptions {
@@ -308,10 +399,13 @@ interface Values {
   focus: ElemFocus | null;
   range: ElemRange | null;
   cells: Cells | null;
+  viewAddress: string | null;
+  timePosition: TimePositionJson | null;
 }
 
-const noValues = (): Values => ({ selection: null, pointer: null, viewport: null, focus: null, range: null, cells: null });
-const hasValue = (v: Values) => v.selection !== null || v.pointer !== null || v.viewport !== null || v.focus !== null || v.range !== null || v.cells !== null;
+const noValues = (): Values => ({ selection: null, pointer: null, viewport: null, focus: null, range: null, cells: null, viewAddress: null, timePosition: null });
+const hasValue = (v: Values) =>
+  v.selection !== null || v.pointer !== null || v.viewport !== null || v.focus !== null || v.range !== null || v.cells !== null || v.viewAddress !== null || v.timePosition !== null;
 
 const copyCorner = (c: Corner): Corner => ({ row: c.row, row_off: c.row_off, col: c.col, col_off: c.col_off });
 const copyRange = (r: CellRange): CellRange => ({ start: copyCorner(r.start), end: copyCorner(r.end) });
@@ -372,6 +466,8 @@ export class PresenceChannel {
   private focus: ElemFocus | null = null;
   private range: ElemRange | null = null;
   private cells: Cells | null = null;
+  private viewAddress: string | null = null;
+  private timePosition: TimePositionSet | null = null;
   /** What is waiting for the next batch. */
   private pointerDue = false;
   private viewportDue = false;
@@ -383,6 +479,7 @@ export class PresenceChannel {
   private watchers = 0;
   private readonly watchingCbs = new Set<(count: number) => void>();
   private readonly claimCbs = new Set<(claims: readonly ClaimView[]) => void>();
+  private readonly endedCbs = new Set<(e: ClaimEnded) => void>();
   private readonly changeCbs = new Set<(peers: readonly PresencePeer[]) => void>();
   private readonly refusedCbs = new Set<(r: PresenceRefusal) => void>();
 
@@ -433,6 +530,52 @@ export class PresenceChannel {
   get cellClaimsSupported(): boolean {
     const f = this.welcome.features;
     return Array.isArray(f) && f.includes(CELL_CLAIMS_FEATURE);
+  }
+
+  /** The connection's `welcome.features` lists `"view_address"`. While false, `setViewAddress`
+   * only records the value. */
+  get viewAddressSupported(): boolean {
+    const f = this.welcome.features;
+    return Array.isArray(f) && f.includes(VIEW_ADDRESS_FEATURE);
+  }
+
+  /** The connection's `welcome.features` lists `"time_position"`. While false,
+   * `setTimePosition` only records the value. */
+  get timePositionSupported(): boolean {
+    const f = this.welcome.features;
+    return Array.isArray(f) && f.includes(TIME_POSITION_FEATURE);
+  }
+
+  /** Set the view this connection is looking at, by address (`Session::set_view_address`), or
+   * clear it with `null`. Goes at once when the host lists `"view_address"`; else recorded and
+   * sent on a later connection that does. An address the host would refuse (empty, over
+   * `PRESENCE_ADDRESS_MAX` bytes, a malformed `@kind:id` or `@k:` key) is refused here
+   * (`onRefused`, `MPC-E114`), unsent. */
+  setViewAddress(address: string | null): void {
+    const bad = address === null ? null : addressProblem(address);
+    if (bad) return this.refuse("view_address", { id: ERR.BAD_POSITION, message: `bad position: the view address ${JSON.stringify(address)}: ${bad}` });
+    if (address === this.viewAddress) return;
+    this.viewAddress = address;
+    this.sendViewAddress();
+  }
+
+  /** Set this connection's playhead (`Session::set_time_position`), or clear it with `null`:
+   * `at` a decimal integer string in the pack's unit, `state`, and optionally `in` (an address)
+   * and `rate` (a decimal ratio, `1/2`). The host stamps `at_ms`. Goes at once when the host
+   * lists `"time_position"`; else recorded. A value the host would refuse is refused here
+   * (`onRefused`, `MPC-E114`), unsent. */
+  setTimePosition(time: TimePositionSet | null): void {
+    const bad = time === null ? null : timeProblem(time);
+    if (bad) return this.refuse("time_position", { id: ERR.BAD_POSITION, message: `bad position: ${bad}` });
+    const next: TimePositionSet | null = time && {
+      at: time.at,
+      state: time.state,
+      ...(time.in === undefined ? {} : { in: time.in }),
+      ...(time.rate === undefined ? {} : { rate: time.rate }),
+    };
+    if (JSON.stringify(next) === JSON.stringify(this.timePosition)) return;
+    this.timePosition = next;
+    this.sendTimePosition();
   }
 
   /** The wire version of this connection's host (`welcome.wire`; absent: 2). */
@@ -627,6 +770,8 @@ export class PresenceChannel {
           focus: v.focus,
           range: v.range,
           cells: v.cells,
+          viewAddress: v.viewAddress,
+          timePosition: v.timePosition,
           away: f.away,
         };
       };
@@ -656,6 +801,13 @@ export class PresenceChannel {
   onClaims(cb: (claims: readonly ClaimView[]) => void): () => void {
     this.claimCbs.add(cb);
     return () => this.claimCbs.delete(cb);
+  }
+
+  /** A claim ended (any participant's): hands on each `claim_ended` as a `ClaimEnded`, as it
+   * comes. Returns an unsubscribe. */
+  onClaimEnded(cb: (e: ClaimEnded) => void): () => void {
+    this.endedCbs.add(cb);
+    return () => this.endedCbs.delete(cb);
   }
 
   /**
@@ -704,6 +856,8 @@ export class PresenceChannel {
     if (this.selection) this.sendSelection();
     if (this.pointer) this.pointerDue = true;
     if (this.viewport) this.viewportDue = true;
+    if (this.viewAddress !== null) this.sendViewAddress();
+    if (this.timePosition) this.sendTimePosition();
     this.flush();
   }
 
@@ -778,6 +932,16 @@ export class PresenceChannel {
     this.t.send({ type: "range", req: this.number("range"), range: this.range });
   }
 
+  private sendViewAddress(): void {
+    if (this.closed || !this.viewAddressSupported) return;
+    this.t.send({ type: "view_address", req: this.number("view_address"), address: this.viewAddress });
+  }
+
+  private sendTimePosition(): void {
+    if (this.closed || !this.timePositionSupported) return;
+    this.t.send({ type: "time_position", req: this.number("time_position"), time_position: this.timePosition });
+  }
+
   private sendCells(): void {
     if (this.closed || !this.cellsSupported) return;
     this.t.send({ type: "cells", req: this.number("cells"), cells: this.cells });
@@ -823,6 +987,8 @@ export class PresenceChannel {
         if (kind === "focus" && this.latest.focus === f.req) this.focus = null;
         if (kind === "range" && this.latest.range === f.req) this.range = null;
         if (kind === "cells" && this.latest.cells === f.req) this.cells = null;
+        if (kind === "view_address" && this.latest.view_address === f.req) this.viewAddress = null;
+        if (kind === "time_position" && this.latest.time_position === f.req) this.timePosition = null;
         return this.refuse(kind, f.error);
       }
       case "roster":
@@ -890,6 +1056,10 @@ export class PresenceChannel {
         return set(e.who, e.client, { range: e.range });
       case "cells":
         return set(e.who, e.client, { cells: e.cells && copyCells(e.cells) });
+      case "view_address":
+        return set(e.who, e.client, { viewAddress: e.view_address });
+      case "time_position":
+        return set(e.who, e.client, { timePosition: e.time_position && { ...e.time_position } });
       default:
         return false;
     }
@@ -943,6 +1113,10 @@ export class PresenceChannel {
       case "claim_ended": {
         const before = this.claimed.length;
         this.claimed = this.claimed.filter((c) => c.claim !== e.claim);
+        if (this.endedCbs.size > 0) {
+          const ended: ClaimEnded = { claim: e.claim, who: e.who, how: claimEndReason(e.how), keys: Array.isArray(e.keys) ? [...e.keys] : [] };
+          for (const cb of [...this.endedCbs]) cb(ended);
+        }
         return this.claimed.length !== before;
       }
       default:
@@ -1010,6 +1184,8 @@ function foldEntry(m: RosterEntry): Folded {
       focus: d.focus ?? null,
       range: d.range ?? null,
       cells: d.cells ?? null,
+      viewAddress: d.view_address ?? null,
+      timePosition: d.time_position ?? null,
     });
   }
   return {
@@ -1018,7 +1194,16 @@ function foldEntry(m: RosterEntry): Folded {
     colour: m.colour,
     rawKind: m.kind,
     away: m.away,
-    top: { selection: m.selection ?? null, pointer: m.pointer ?? null, viewport: m.viewport ?? null, focus: m.focus ?? null, range: m.range ?? null, cells: m.cells ?? null },
+    top: {
+      selection: m.selection ?? null,
+      pointer: m.pointer ?? null,
+      viewport: m.viewport ?? null,
+      focus: m.focus ?? null,
+      range: m.range ?? null,
+      cells: m.cells ?? null,
+      viewAddress: m.view_address ?? null,
+      timePosition: m.time_position ?? null,
+    },
     conns,
     perConn: conns.size > 0,
   };

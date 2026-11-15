@@ -5,8 +5,7 @@
 //! **theirs**, every later hunk that touched the region's carried window, composed into
 //! one canonical set in base coordinates. Neither side is ever found by diffing strings:
 //! in repeated text (`b` and an inserted `b`) a diff can't tell which element is whose, so
-//! a merge on diffed sides can delete another participant's identical element (finding
-//! F3).
+//! a merge on diffed sides can delete another participant's identical element.
 //!
 //! Theirs is kept as **shapes** `(start, end, inserted length)`: the inserted text is
 //! always the live window's, so it is read from there when the region is merged

@@ -535,7 +535,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 ### MPC-E164 `vector_needs_parts`
 
 - **Message:** `the version vector ({entries} writers) doesn't fit one frame: send it in parts`
-- **Next:** Nothing was sent. The doc's version vector is past one frame (MPCE-E983): send it as parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never send a smaller or empty vector.
+- **Next:** Nothing was sent. The doc's version vector is too large for one frame: send it as parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never send a smaller or empty vector.
 - **Rule:** the MPCE seam (stable codes): a vector is never sent smaller or empty
 - **Exit:** 2
 - **Reached by:** a native doc with about 10,000 writers or more (feature native)
@@ -543,7 +543,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 ### MPC-E165 `needs_state_transfer`
 
 - **Message:** `the peer's history is compacted past this doc's state: it needs a state transfer`
-- **Next:** Nothing was applied. The peer compacted the history this doc lacks (MPCE-E262), so no diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry the catch-up and don't close the peer: it isn't at fault.
+- **Next:** Nothing was applied. The peer has compacted the history this doc asked for, so no diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry the catch-up and don't close the peer: it isn't at fault.
 - **Rule:** the MPCE seam (stable codes): a replica behind a cut
 - **Exit:** 2
 - **Reached by:** a native replica behind a peer's cut (feature native)

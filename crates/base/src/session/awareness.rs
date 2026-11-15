@@ -94,10 +94,17 @@ pub enum ClaimEnd {
     /// Every row (or column) it covered was deleted (a grid claim), or none of
     /// its elements is live (an element claim), so the claimant knows why.
     Deleted,
+    /// An element claim whose last live element an **outside save** removed (the file changed
+    /// on disk, and its apply took the element out: an app deleted it, or its new pairing gave
+    /// a renamed element a new key, so the old key went). A live delete stays
+    /// [`ClaimEnd::Deleted`]. The end events carry the claim's element addresses as they were
+    /// (`RosterEvent::ClaimEnded`'s and `AuditEvent::ClaimEnded`'s `addresses`), so a view can
+    /// name what went.
+    GoneOutsideSave,
 }
 
 impl ClaimEnd {
-    /// `released`, `edited`, `expired`, `left`, `reset`, `deleted`.
+    /// `released`, `edited`, `expired`, `left`, `reset`, `deleted`, `gone_outside_save`.
     pub fn as_str(self) -> &'static str {
         match self {
             ClaimEnd::Released => "released",
@@ -106,6 +113,7 @@ impl ClaimEnd {
             ClaimEnd::Left => "left",
             ClaimEnd::Reset => "reset",
             ClaimEnd::Deleted => "deleted",
+            ClaimEnd::GoneOutsideSave => "gone_outside_save",
         }
     }
 }
@@ -1661,7 +1669,7 @@ mod tests {
     }
 
     /// Last-edit spans don't expand: text typed at an edge stays out, and a span whose text
-    /// is all removed or replaced is gone (finding F2: notes naming someone's newer text).
+    /// is all removed or replaced is gone (else notes would name someone's newer text).
     #[test]
     fn edit_spans_do_not_expand() {
         // "aaa|BBB|ccc": the span is BBB, bytes 3..6
@@ -1807,6 +1815,7 @@ mod tests {
             assert_eq!(GridSpan::of(&s).unwrap().span(), s);
         }
         assert_eq!(ClaimEnd::Deleted.as_str(), "deleted");
+        assert_eq!(ClaimEnd::GoneOutsideSave.as_str(), "gone_outside_save");
         // the contract's note (§6)
         let n = Note {
             pid: "agent-b".into(),

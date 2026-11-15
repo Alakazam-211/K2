@@ -115,6 +115,7 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
             DocRows::Clock(d) => copy(&r, &w, d)?,
             DocRows::Elem(d) => copy(&r, &w, d)?,
             DocRows::Named(d) => copy(&r, &w, d)?,
+            DocRows::Bytes(d) => copy(&r, &w, d)?,
         };
     }
     // a known table this didn't copy (a name in SHARED_TABLES without its copy above)
@@ -152,10 +153,10 @@ impl DocStore {
     }
 
     /// [`StoreError::RewriteNewer`] for a store of a format this build reads but doesn't
-    /// write (above [`super::STORE_FORMAT`]). Read-only.
+    /// write (above [`super::STORE_FORMAT_WRITTEN`]). Read-only.
     fn check_rewritable_format(&self) -> Result<(), StoreError> {
         let found = self.format()?;
-        if found > super::STORE_FORMAT {
+        if found > super::STORE_FORMAT_WRITTEN {
             return Err(StoreError::RewriteNewer { found });
         }
         Ok(())

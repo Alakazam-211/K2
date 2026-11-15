@@ -131,7 +131,7 @@ fn too_large(st: &mut BlobStage) -> Result<(), String> {
     Ok(())
 }
 
-// ---------- P1, P2: open, leave ----------
+// ---------- open, leave ----------
 
 fn p1_person(p: &mut BlobPerson<'_>) -> R {
     p.conn()?;
@@ -150,7 +150,7 @@ fn p2_agent(a: &mut BlobAgent<'_>) -> R {
     agent_step(a.verb(&["leave"], b"")?, |_| Output::None)
 }
 
-// ---------- P3, P24: the bytes ----------
+// ---------- the bytes ----------
 
 fn p3_person(p: &mut BlobPerson<'_>) -> R {
     person_step(p.bytes(), Output::Bytes)
@@ -162,7 +162,7 @@ fn p3_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
-// ---------- P24: export ----------
+// ---------- export ----------
 
 /// What an export observes: the bytes it wrote, the version and the codec flag.
 fn exported(
@@ -206,7 +206,7 @@ fn p24_at_agent(a: &mut BlobAgent<'_>) -> R {
     )
 }
 
-// ---------- P6: who ----------
+// ---------- who ----------
 
 fn p6_person(p: &mut BlobPerson<'_>) -> R {
     let c = p.conn()?;
@@ -219,7 +219,7 @@ fn p6_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
-// ---------- P14: write --base V ----------
+// ---------- write --base V ----------
 
 fn p14_person(p: &mut BlobPerson<'_>) -> R {
     let c = p.conn()?;
@@ -241,7 +241,7 @@ fn p14_stale_agent(a: &mut BlobAgent<'_>) -> R {
     agent_step(a.verb(&["write", "--base", "1"], NEW)?, other)
 }
 
-// ---------- P17, P25: status, flush ----------
+// ---------- status, flush ----------
 
 fn p17_status_person(p: &mut BlobPerson<'_>) -> R {
     p.conn()?;
@@ -264,7 +264,7 @@ fn p17_flush_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
-// ---------- P19: log, show --version ----------
+// ---------- log, show --version ----------
 
 fn p19_log_person(p: &mut BlobPerson<'_>) -> R {
     let c = p.conn()?;
@@ -293,7 +293,7 @@ fn p19_show_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
-// ---------- P20: restore, version --name ----------
+// ---------- restore, version --name ----------
 
 fn p20_restore_person(p: &mut BlobPerson<'_>) -> R {
     let c = p.conn()?;
@@ -318,7 +318,7 @@ fn p20_name_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
-// ---------- P21: mv ----------
+// ---------- mv ----------
 
 fn p21_person(p: &mut BlobPerson<'_>) -> R {
     p.conn()?;
@@ -331,7 +331,7 @@ fn p21_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
-// ---------- P22: blame ----------
+// ---------- blame ----------
 
 fn p22_person(p: &mut BlobPerson<'_>) -> R {
     let c = p.conn()?;
@@ -344,7 +344,7 @@ fn p22_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
-// ---------- P32-P34: the lease ----------
+// ---------- the lease ----------
 
 fn lease_value(v: &VerbValue) -> Output {
     match v {
@@ -428,7 +428,7 @@ fn p34_agent(a: &mut BlobAgent<'_>) -> R {
     agent_step(a.verb(&["lease", "--break"], b"")?, lease_value)
 }
 
-// ---------- P29, P30: on-behalf writes ----------
+// ---------- on-behalf writes ----------
 
 /// `pid`, an assistant acting for `person`, writes `bytes` from the current version.
 fn assistant_writes(
@@ -567,7 +567,7 @@ fn p30_all_agent_as(a: &mut BlobAgent<'_>, argv: &[&str]) -> R {
         v => other(v),
     })
 }
-/// P30 through the alias (`approvals`, the same as `log --pending`).
+/// The pending row through the alias (`approvals`, the same as `log --pending`).
 fn p30_alias_agent(a: &mut BlobAgent<'_>) -> R {
     p30_agent_as(a, &["approvals", "--on-behalf-of", "me"])
 }

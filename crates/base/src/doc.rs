@@ -156,12 +156,12 @@ pub enum DocError {
     /// was applied. Error id `MPC-E163`.
     #[error("this replica's engine refused the host's merge: it is behind the host's engine")]
     ReplicaLagging,
-    /// This doc's version vector doesn't fit one frame (`MPCE-E983`, about 10,000 writers at
-    /// the default limits): it goes in parts ([`Doc::state_vector_parts`]), never smaller or
+    /// This doc's version vector is too large for one frame (about 10,000 writers at the
+    /// default limits): it goes in parts ([`Doc::state_vector_parts`]), never smaller or
     /// empty. Nothing was sent. Error id `MPC-E164`.
     #[error("the version vector ({entries} writers) doesn't fit one frame: send it in parts")]
     VectorNeedsParts { entries: u64 },
-    /// The peer's history is compacted past what this doc holds (`MPCE-E262`): this doc is
+    /// The peer has compacted the history this doc asked for: this doc is
     /// behind the peer's cut and needs a state transfer, not a diff. Nothing was applied; not
     /// to be retried, and the peer isn't at fault. Error id `MPC-E165`.
     #[error("the peer's history is compacted past this doc's state: it needs a state transfer")]
@@ -521,7 +521,7 @@ impl Doc {
 
     /// The state vector (what this doc has), for sync step 1, typed: on the native engine a
     /// vector past one frame is [`DocError::VectorNeedsParts`] (`MPC-E164`, the engine's
-    /// `MPCE-E983` beside it); send [`Doc::state_vector_parts`] then. Yrs's never fails.
+    /// own code beside it); send [`Doc::state_vector_parts`] then. Yrs's never fails.
     pub fn try_state_vector(&self) -> Result<Vec<u8>, DocError> {
         self.inner.try_state_vector()
     }

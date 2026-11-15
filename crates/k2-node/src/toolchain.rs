@@ -532,6 +532,125 @@ impl Toolchains {
         Ok(true)
     }
 
+    // ── native tools: the Android NDK and cargo-ndk (pinned) ────────
+
+    /// `toolchains/android-ndk/<release>` (`r27d`).
+    pub fn ndk_dir(&self, release: &str) -> PathBuf {
+        self.root.join(needs::ANDROID_NDK).join(release)
+    }
+    /// `toolchains/cargo-ndk/<version>`.
+    pub fn cargo_ndk_dir(&self) -> PathBuf {
+        self.root.join(needs::CARGO_NDK).join(needs::CARGO_NDK_VERSION)
+    }
+
+    /// The native tools run on Linux x86_64 only.
+    pub fn native_host(&self, tool: &str) -> Result<(), String> {
+        if (self.os, self.arch) == needs::NATIVE_TOOLS_HOST {
+            return Ok(());
+        }
+        Err(format!(
+            "{tool} runs on Linux x86_64 nodes only (the Android NDK ships a linux-x86_64 host and no linux-aarch64; on macOS it's a .dmg); this node is {}-{}: place the job on a Linux x86_64 node",
+            self.os, self.arch
+        ))
+    }
+
+    /// The pinned NDK in `toolchains/android-ndk/<release>`: its folder,
+    /// and whether it was installed now.
+    pub async fn ensure_android_ndk(&self, version: &str, log: &mut (dyn FnMut(&str) + Send)) -> Result<(PathBuf, bool), String> {
+        self.native_host(needs::ANDROID_NDK)?;
+        let pin = needs::ndk_pin(version).ok_or_else(|| needs::check_native(needs::ANDROID_NDK, version).err().unwrap_or_default())?;
+        let dest = self.ndk_dir(pin.release);
+        if ndk_revision(&dest).as_deref() == Some(pin.revision) {
+            return Ok((dest, false));
+        }
+        log(&format!("installing the Android NDK {} ({}, {} MB, sha256 checked) into {}", pin.release, pin.revision, pin.bytes >> 20, dest.display()));
+        let stage = self.stage(needs::ANDROID_NDK)?;
+        let zip = stage.join(pin.url.rsplit('/').next().unwrap_or("ndk.zip"));
+        if let Err(e) = download_within(self, pin.url, &zip, NDK_DOWNLOAD_LIMIT).await {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(e);
+        }
+        self.place_ndk(&zip, pin, &stage, &dest).await.map(|d| (d, true))
+    }
+
+    /// Check the zip's sha256, unpack it in `stage`, check its revision,
+    /// and rename it in as `dest`: a job never sees a half-unpacked NDK.
+    /// `stage` is removed either way.
+    async fn place_ndk(&self, zip: &Path, pin: &needs::NdkPin, stage: &Path, dest: &Path) -> Result<PathBuf, String> {
+        let r = async {
+            check_sha256(zip, pin.sha256)?;
+            unzip(self, zip, stage).await?;
+            let _ = std::fs::remove_file(zip);
+            let top = stage.join(format!("android-ndk-{}", pin.release));
+            match ndk_revision(&top) {
+                Some(r) if r == pin.revision => {}
+                got => return Err(format!("the unpacked NDK says revision {got:?}, expected {}", pin.revision)),
+            }
+            swap_in(&top, dest, stage)
+        }
+        .await;
+        let _ = std::fs::remove_dir_all(stage);
+        r.map(|_| dest.to_path_buf())
+    }
+
+    /// The pinned prebuilt cargo-ndk in `toolchains/cargo-ndk/<version>`.
+    pub async fn ensure_cargo_ndk(&self, log: &mut (dyn FnMut(&str) + Send)) -> Result<(PathBuf, bool), String> {
+        self.native_host(needs::CARGO_NDK)?;
+        let dest = self.cargo_ndk_dir();
+        if is_executable(&dest.join("cargo-ndk")) {
+            return Ok((dest, false));
+        }
+        log(&format!("installing cargo-ndk {} (prebuilt, sha256 checked)", needs::CARGO_NDK_VERSION));
+        let stage = self.stage(needs::CARGO_NDK)?;
+        let tgz = stage.join("cargo-ndk.tgz");
+        if let Err(e) = download(self, needs::CARGO_NDK_URL, &tgz).await {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(e);
+        }
+        let top = format!("cargo-ndk-x86_64-unknown-linux-musl-v{}", needs::CARGO_NDK_VERSION);
+        self.place_cargo_ndk(&tgz, needs::CARGO_NDK_SHA256, &top, &stage, &dest).await.map(|d| (d, true))
+    }
+
+    async fn place_cargo_ndk(&self, tgz: &Path, sha: &str, top: &str, stage: &Path, dest: &Path) -> Result<PathBuf, String> {
+        let r = async {
+            check_sha256(tgz, sha)?;
+            let o = self.run("/usr/bin/tar", &["-xzf", &tgz.display().to_string(), "-C", &stage.display().to_string()], Duration::from_secs(120)).await?;
+            if !o.ok {
+                return Err(format!("unpack cargo-ndk: {}", last_lines(&o.stderr, 4)));
+            }
+            let top = stage.join(top);
+            if !is_executable(&top.join("cargo-ndk")) {
+                return Err(format!("no executable cargo-ndk in {}", top.display()));
+            }
+            swap_in(&top, dest, stage)
+        }
+        .await;
+        let _ = std::fs::remove_dir_all(stage);
+        r.map(|_| dest.to_path_buf())
+    }
+
+    /// A fresh `toolchains/.<what>-stage-<pid>` (same filesystem as the
+    /// destination, so the final rename is atomic).
+    fn stage(&self, what: &str) -> Result<PathBuf, String> {
+        let stage = self.root.join(format!(".{what}-stage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&stage);
+        std::fs::create_dir_all(&self.root).map_err(|e| format!("create {}: {e}", self.root.display()))?;
+        crate::util::mkdir_mode(&stage, 0o755)?;
+        Ok(stage)
+    }
+
+    /// `mise:node@22.23.4` / `android-ndk:r27d` / `cargo-ndk:4.1.2` for a
+    /// path inside an install (the tool-cache LRU's key).
+    fn install_key(&self, p: &Path) -> Option<String> {
+        self.mise_key(p).or_else(|| {
+            needs::NATIVE_TOOLS.iter().find_map(|t| {
+                let rel = p.strip_prefix(self.root.join(t)).ok()?;
+                let v = rel.components().next()?.as_os_str().to_string_lossy().into_owned();
+                Some(format!("{t}:{v}"))
+            })
+        })
+    }
+
     // ── resolve ──────────────────────────────────────────────────────
 
     /// Everything the job needs, installed. `explicit` failures fail the
@@ -585,6 +704,15 @@ impl Toolchains {
             let did = crate::packages::ensure(self, &sys, log).await?;
             out.installed_any |= did;
         }
+        // The native tools (Android NDK, cargo-ndk) asked for explicitly on
+        // a node that can't run them: tool_unsupported, not an install failure.
+        for (n, src) in &work {
+            if let (Need::Tool { tool, .. }, None) = (n, src) {
+                if needs::NATIVE_TOOLS.contains(&tool.as_str()) {
+                    self.native_host(tool).map_err(|e| (codes::TOOL_UNSUPPORTED, format!("{}: {e}", n.token())))?;
+                }
+            }
+        }
         let mut rust_env: Option<String> = None;
         for (n, src) in &work {
             let required = src.is_none();
@@ -597,6 +725,31 @@ impl Toolchains {
                     }
                     Ok(false)
                 }
+                Need::Tool { tool, version } if tool == needs::ANDROID_NDK => match self.ensure_android_ndk(version, log).await {
+                    Ok((dir, did)) => {
+                        let (bin, env) = ndk_env(&dir, needs::ANDROID_DEFAULT_API);
+                        if !out.path_prepend.contains(&bin) {
+                            out.path_prepend.push(bin);
+                        }
+                        out.env.extend(env);
+                        out.notes.push(format!(
+                            "Android NDK {}: ANDROID_NDK_HOME and the aarch64-linux-android{api} linker are set (API {api}; your own --env CC_/CARGO_TARGET_…_LINKER/CARGO_NDK_PLATFORM wins)",
+                            dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                            api = needs::ANDROID_DEFAULT_API
+                        ));
+                        Ok(did)
+                    }
+                    Err(e) => Err(e),
+                },
+                Need::Tool { tool, .. } if tool == needs::CARGO_NDK => match self.ensure_cargo_ndk(log).await {
+                    Ok((dir, did)) => {
+                        if !out.path_prepend.contains(&dir) {
+                            out.path_prepend.push(dir);
+                        }
+                        Ok(did)
+                    }
+                    Err(e) => Err(e),
+                },
                 Need::Tool { tool, version } => match self.ensure_tool(tool, version, log).await {
                     Ok((dirs, did)) => {
                         for d in dirs {
@@ -677,7 +830,7 @@ impl Toolchains {
             }
         }
         // CE-18: what this job used, for the tool-cache cap's LRU.
-        let mut used: Vec<String> = out.path_prepend.iter().filter_map(|p| self.mise_key(p)).collect();
+        let mut used: Vec<String> = out.path_prepend.iter().filter_map(|p| self.install_key(p)).collect();
         for ch in rust_env.iter().chain(rust_file.map(|r| &r.channel)) {
             if let Some(name) = self.toolchain_dir(ch).and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned())) {
                 used.push(format!("rust:{name}"));
@@ -759,6 +912,11 @@ impl Toolchains {
         for (tc, dir) in real_dirs(&self.rustup_home().join("toolchains")) {
             out.push((format!("rust:{tc}"), dir));
         }
+        for t in needs::NATIVE_TOOLS {
+            for (v, dir) in real_dirs(&self.root.join(t)) {
+                out.push((format!("{t}:{v}"), dir));
+            }
+        }
         out.sort();
         out
     }
@@ -835,6 +993,27 @@ impl Toolchains {
         }
         if let Some(how) = self.rust_installer() {
             out.insert(needs::TOOLS_RUST_INSTALLER.into(), how.into());
+        }
+        // The native tools: the NDK by its revision (`27.3.13750724`, what
+        // `android-ndk@27` matches), cargo-ndk by its version.
+        let dirs_of = |t: &str| -> Vec<PathBuf> {
+            let mut v: Vec<PathBuf> = std::fs::read_dir(self.root.join(t))
+                .map(|rd| rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink())).map(|e| e.path()).collect())
+                .unwrap_or_default();
+            v.sort();
+            v
+        };
+        let ndks: Vec<String> = dirs_of(needs::ANDROID_NDK).iter().filter_map(|d| ndk_revision(d)).collect();
+        if !ndks.is_empty() {
+            out.insert(needs::ANDROID_NDK.into(), ndks.join(","));
+        }
+        let cndk: Vec<String> = dirs_of(needs::CARGO_NDK)
+            .iter()
+            .filter(|d| is_executable(&d.join("cargo-ndk")))
+            .filter_map(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        if !cndk.is_empty() {
+            out.insert(needs::CARGO_NDK.into(), cndk.join(","));
         }
         if let Ok(rd) = std::fs::read_dir(self.rustup_home().join("toolchains")) {
             let mut tcs: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
@@ -1168,6 +1347,10 @@ pub struct ToolVersion {
 pub fn version_needed(key: &str, needs: &[Need]) -> bool {
     needs.iter().any(|n| match n {
         Need::Rust { channel, .. } => key.strip_prefix("rust:").is_some_and(|tc| tc == channel || tc.starts_with(&format!("{channel}-"))),
+        Need::Tool { tool, version } if tool == needs::ANDROID_NDK => {
+            key.strip_prefix("android-ndk:").is_some_and(|r| needs::ndk_pin(version).is_some_and(|p| p.release == r))
+        }
+        Need::Tool { tool, version } if tool == needs::CARGO_NDK => key.strip_prefix("cargo-ndk:").is_some_and(|v| needs::cargo_ndk_matches(version) && v == needs::CARGO_NDK_VERSION),
         Need::Tool { tool, version } => {
             let Some(rest) = key.strip_prefix("mise:") else { return false };
             let Some((t, v)) = rest.split_once('@') else { return false };
@@ -1237,6 +1420,77 @@ async fn download(tc: &Toolchains, url: &str, dest: &Path) -> Result<(), String>
         return Err(format!("download {url} failed: {}", last_lines(&o.stderr, 3)));
     }
     Ok(())
+}
+
+/// The NDK is ~650 MB: more time than the other downloads get.
+const NDK_DOWNLOAD_LIMIT: Duration = Duration::from_secs(30 * 60);
+
+async fn download_within(tc: &Toolchains, url: &str, dest: &Path, limit: Duration) -> Result<(), String> {
+    let o = tc.run("/usr/bin/curl", &["--proto", "=https", "--tlsv1.2", "-fsSL", "--retry", "2", "-o", &dest.display().to_string(), url], limit).await?;
+    if !o.ok {
+        return Err(format!("download {url} failed: {}", last_lines(&o.stderr, 3)));
+    }
+    Ok(())
+}
+
+/// Unpack a zip keeping its symlinks and modes (the NDK has both):
+/// `unzip`, else `bsdtar` (libarchive; on Arch with pacman).
+async fn unzip(tc: &Toolchains, zip: &Path, into: &Path) -> Result<(), String> {
+    let (z, d) = (zip.display().to_string(), into.display().to_string());
+    let tries: [(&str, Vec<&str>); 2] = [("unzip", vec!["-q", "-o", &z, "-d", &d]), ("bsdtar", vec!["-xf", &z, "-C", &d])];
+    for (prog, args) in tries {
+        let Some(bin) = crate::sysinfo::which(prog, &tc.base_env) else { continue };
+        let o = tc.run(&bin, &args, INSTALL_LIMIT).await?;
+        if o.ok {
+            return Ok(());
+        }
+        return Err(format!("{prog} {}: {}", zip.display(), last_lines(&o.stderr, 4)));
+    }
+    Err("unpacking it needs `unzip` or `bsdtar` on this node: add --needs sys:unzip (or profile:build-base)".into())
+}
+
+/// `Pkg.Revision` from an NDK's `source.properties` (`27.3.13750724`).
+pub fn ndk_revision(ndk: &Path) -> Option<String> {
+    let s = small_read(&ndk.join("source.properties"))?;
+    s.lines().find_map(|l| {
+        let (k, v) = l.split_once('=')?;
+        (k.trim() == "Pkg.Revision").then(|| v.trim().to_string())
+    })
+}
+
+/// Rename `top` in as `dest`; a stale `dest` (an older or broken unpack)
+/// is moved into `stage` first, so `dest` is never half there.
+fn swap_in(top: &Path, dest: &Path, stage: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    if std::fs::symlink_metadata(dest).is_ok() {
+        std::fs::rename(dest, stage.join(".old")).map_err(|e| format!("move the old {} aside: {e}", dest.display()))?;
+    }
+    std::fs::rename(top, dest).map_err(|e| format!("place {}: {e}", dest.display()))
+}
+
+/// The job env for an NDK at `ndk`: its LLVM bin dir (first on PATH) and
+/// the variables cargo, the cc crate and cargo-ndk read, for
+/// aarch64-linux-android at API level `api`. The job's own `--env` comes
+/// after these, so it wins.
+pub fn ndk_env(ndk: &Path, api: u32) -> (PathBuf, Vec<(String, String)>) {
+    let bin = ndk.join("toolchains/llvm/prebuilt/linux-x86_64/bin");
+    let d = ndk.display().to_string();
+    let b = |n: &str| bin.join(n).display().to_string();
+    let clang = b(&format!("aarch64-linux-android{api}-clang"));
+    let env = vec![
+        ("ANDROID_NDK_HOME".to_string(), d.clone()),
+        ("ANDROID_NDK_ROOT".to_string(), d.clone()),
+        ("ANDROID_NDK".to_string(), d.clone()),
+        ("NDK_HOME".to_string(), d),
+        ("CC_aarch64_linux_android".to_string(), clang.clone()),
+        ("CXX_aarch64_linux_android".to_string(), format!("{clang}++")),
+        ("AR_aarch64_linux_android".to_string(), b("llvm-ar")),
+        ("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER".to_string(), clang),
+        ("CARGO_NDK_PLATFORM".to_string(), api.to_string()),
+    ];
+    (bin, env)
 }
 
 fn check_sha256(p: &Path, want: &str) -> Result<(), String> {
@@ -1643,6 +1897,197 @@ mod tests {
         assert!(tc.rustup_home().join("toolchains/stable-x").exists(), "the default toolchain stays");
         // Under the cap: nothing more goes.
         assert!(tc.gc_to_budget(1 << 30, &[], 10_000).is_empty());
+    }
+
+    // ── the native tools (android-ndk, cargo-ndk) ────────────────────
+
+    fn linux_x86(home: &Path) -> Toolchains {
+        let mut tc = Toolchains::new(home, vec![("PATH".into(), "/usr/bin:/bin".into()), ("HOME".into(), home.display().to_string())]);
+        tc.os = "linux";
+        tc.arch = "x86_64";
+        tc
+    }
+
+    /// A small stand-in for the NDK zip: `<top>/source.properties`, an
+    /// executable clang wrapper, and a symlink (the real one has both).
+    fn fake_ndk_zip(path: &Path, top: &str, revision: &str) {
+        use std::io::Write;
+        let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let o = zip::write::SimpleFileOptions::default();
+        z.add_directory(format!("{top}/"), o).unwrap();
+        z.start_file(format!("{top}/source.properties"), o.unix_permissions(0o644)).unwrap();
+        z.write_all(format!("Pkg.Desc = Android NDK\nPkg.Revision = {revision}\n").as_bytes()).unwrap();
+        let bin = format!("{top}/toolchains/llvm/prebuilt/linux-x86_64/bin");
+        z.start_file(format!("{bin}/clang-18"), o.unix_permissions(0o755)).unwrap();
+        z.write_all(b"#!/bin/sh\necho clang\n").unwrap();
+        z.add_symlink(format!("{bin}/clang"), "clang-18", o).unwrap();
+        z.finish().unwrap();
+    }
+
+    fn sha_of(p: &Path) -> String {
+        k2_node_proto::crypto::sha256_hex(&std::fs::read(p).unwrap())
+    }
+
+    fn have_unzipper() -> bool {
+        ["unzip", "bsdtar"].iter().any(|p| crate::sysinfo::which(p, &[("PATH".into(), "/usr/bin:/bin".into())]).is_some())
+    }
+
+    #[test]
+    fn ndk_env_is_the_aarch64_android28_toolchain_and_the_ndk_home() {
+        let (bin, env) = ndk_env(Path::new("/n/android-ndk/r27d"), needs::ANDROID_DEFAULT_API);
+        assert_eq!(bin, PathBuf::from("/n/android-ndk/r27d/toolchains/llvm/prebuilt/linux-x86_64/bin"));
+        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone()).unwrap_or_else(|| panic!("{k}"));
+        for k in ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "ANDROID_NDK", "NDK_HOME"] {
+            assert_eq!(get(k), "/n/android-ndk/r27d");
+        }
+        let clang = format!("{}/aarch64-linux-android28-clang", bin.display());
+        assert_eq!(get("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"), clang);
+        assert_eq!(get("CC_aarch64_linux_android"), clang);
+        assert_eq!(get("CXX_aarch64_linux_android"), format!("{clang}++"));
+        assert_eq!(get("AR_aarch64_linux_android"), format!("{}/llvm-ar", bin.display()));
+        assert_eq!(get("CARGO_NDK_PLATFORM"), "28", "Sew's minSdk");
+    }
+
+    /// The job's own `--env` comes after the NDK's, so it wins (another API level).
+    #[test]
+    fn the_jobs_env_wins_over_the_ndk_env() {
+        let home = crate::util::temp_dir("tc-ndk-env");
+        let (_, tool_env) = ndk_env(Path::new("/n/ndk"), 28);
+        let extra: BTreeMap<String, String> = [("CARGO_NDK_PLATFORM".to_string(), "31".to_string())].into();
+        let (job_home, tmp, target) = (home.join("h"), home.join("t"), home.join("target"));
+        let env = crate::runner::job_env(&crate::runner::EnvInputs {
+            job_home: &job_home,
+            job_tmp: &tmp,
+            node_home: &home,
+            cache_dir: &home,
+            target_dir: &target,
+            tool_paths: &[],
+            tool_env: &tool_env,
+            extra: &extra,
+            job_id: "j",
+            user: "u",
+            sccache_socket: None,
+            job_cache: None,
+            src_dir: None,
+        })
+        .unwrap();
+        let last = env.iter().rev().find(|(k, _)| k == "CARGO_NDK_PLATFORM").unwrap();
+        assert_eq!(last.1, "31", "the last value is what the job gets");
+    }
+
+    #[tokio::test]
+    async fn the_ndk_is_checked_unpacked_and_swapped_in_whole() {
+        if !have_unzipper() {
+            eprintln!("skipped: no unzip or bsdtar here");
+            return;
+        }
+        let home = crate::util::temp_dir("tc-ndk");
+        let tc = linux_x86(&home);
+        let src = home.join("ndk.zip");
+        fake_ndk_zip(&src, "android-ndk-rtest", "27.9.1");
+        let sha: &'static str = Box::leak(sha_of(&src).into_boxed_str());
+        let pin = needs::NdkPin { major: "27", release: "rtest", revision: "27.9.1", url: "https://x/android-ndk-rtest-linux.zip", sha256: sha, sha1: "", bytes: 0 };
+        let dest = tc.ndk_dir("rtest");
+        // A stale half-unpacked folder from before is replaced, not merged.
+        write(&dest, "junk", "x");
+        let stage = tc.stage("android-ndk").unwrap();
+        let zip = stage.join("android-ndk-rtest-linux.zip");
+        std::fs::copy(&src, &zip).unwrap();
+        assert_eq!(tc.place_ndk(&zip, &pin, &stage, &dest).await.unwrap(), dest);
+        assert_eq!(ndk_revision(&dest).as_deref(), Some("27.9.1"));
+        assert!(!dest.join("junk").exists(), "the old folder went whole");
+        let bin = dest.join("toolchains/llvm/prebuilt/linux-x86_64/bin");
+        assert!(is_executable(&bin.join("clang-18")), "modes kept");
+        assert_eq!(std::fs::read_link(bin.join("clang")).unwrap(), PathBuf::from("clang-18"), "symlinks kept");
+        assert!(!stage.exists(), "the stage is gone");
+        // Facts, the LRU key, and what a need keeps.
+        assert_eq!(tc.installed_tools().get("android-ndk").map(String::as_str), Some("27.9.1"));
+        assert_eq!(tc.install_key(&bin).as_deref(), Some("android-ndk:rtest"));
+        assert!(tc.installed_versions_shallow().iter().any(|(k, _)| k == "android-ndk:rtest"));
+        assert!(version_needed("android-ndk:r27d", &needs::parse_all(&["android-ndk@27"]).unwrap()));
+        assert!(!version_needed("android-ndk:r26c", &needs::parse_all(&["android-ndk@27"]).unwrap()));
+    }
+
+    #[tokio::test]
+    async fn a_wrong_sha_or_revision_leaves_nothing_behind() {
+        if !have_unzipper() {
+            eprintln!("skipped: no unzip or bsdtar here");
+            return;
+        }
+        let home = crate::util::temp_dir("tc-ndk-bad");
+        let tc = linux_x86(&home);
+        let src = home.join("ndk.zip");
+        fake_ndk_zip(&src, "android-ndk-rtest", "27.9.1");
+        let good: &'static str = Box::leak(sha_of(&src).into_boxed_str());
+        let zero: &'static str = Box::leak("0".repeat(64).into_boxed_str());
+        for (sha, rev, why) in [(zero, "27.9.1", "refusing"), (good, "27.9.2", "expected 27.9.2")] {
+            let pin = needs::NdkPin { major: "27", release: "rtest", revision: rev, url: "https://x/z.zip", sha256: sha, sha1: "", bytes: 0 };
+            let stage = tc.stage("android-ndk").unwrap();
+            let zip = stage.join("z.zip");
+            std::fs::copy(&src, &zip).unwrap();
+            let e = tc.place_ndk(&zip, &pin, &stage, &tc.ndk_dir("rtest")).await.unwrap_err();
+            assert!(e.contains(why), "{e}");
+            assert!(!stage.exists() && !tc.ndk_dir("rtest").exists(), "nothing left: {e}");
+        }
+    }
+
+    #[tokio::test]
+    async fn cargo_ndk_is_checked_and_placed() {
+        let home = crate::util::temp_dir("tc-cargo-ndk");
+        let tc = linux_x86(&home);
+        let top = "cargo-ndk-x86_64-unknown-linux-musl-v4.1.2";
+        write(&home.join("src"), &format!("{top}/cargo-ndk"), "#!/bin/sh\n");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(home.join("src").join(top).join("cargo-ndk"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let tgz = home.join("c.tgz");
+        assert!(std::process::Command::new("/usr/bin/tar").args(["-czf", tgz.to_str().unwrap(), "-C", home.join("src").to_str().unwrap(), top]).status().unwrap().success());
+        let stage = tc.stage("cargo-ndk").unwrap();
+        let staged = stage.join("c.tgz");
+        std::fs::copy(&tgz, &staged).unwrap();
+        let dest = tc.cargo_ndk_dir();
+        tc.place_cargo_ndk(&staged, &sha_of(&tgz), top, &stage, &dest).await.unwrap();
+        assert!(is_executable(&dest.join("cargo-ndk")) && !stage.exists());
+        assert_eq!(tc.installed_tools().get("cargo-ndk").map(String::as_str), Some("4.1.2"));
+        // Installed: resolve puts it on PATH without a download.
+        let r = tc.resolve(&needs::parse_all(&["cargo-ndk@4"]).unwrap(), &[], None, &mut |_| {}).await.unwrap();
+        assert_eq!(r.path_prepend, vec![dest]);
+        assert!(!r.installed_any);
+    }
+
+    /// An installed NDK resolves without a download: its bin first on PATH,
+    /// its env and a note in the job's log.
+    #[tokio::test]
+    async fn resolve_gives_an_installed_ndk_its_env() {
+        let home = crate::util::temp_dir("tc-ndk-resolve");
+        let tc = linux_x86(&home);
+        let pin = needs::ndk_pin("27").unwrap();
+        write(&tc.ndk_dir(pin.release), "source.properties", &format!("Pkg.Revision = {}\n", pin.revision));
+        let r = tc.resolve(&needs::parse_all(&["ndk@27"]).unwrap(), &[], None, &mut |_| {}).await.unwrap();
+        assert_eq!(r.path_prepend, vec![tc.ndk_dir("r27d").join("toolchains/llvm/prebuilt/linux-x86_64/bin")]);
+        assert!(r.env.iter().any(|(k, v)| k == "ANDROID_NDK_HOME" && Path::new(v) == tc.ndk_dir("r27d")), "{:?}", r.env);
+        assert!(r.notes.iter().any(|n| n.contains("aarch64-linux-android28 linker")), "{:?}", r.notes);
+        assert!(!r.installed_any);
+    }
+
+    /// Elsewhere (a Mac, arm64 Linux): an explicit need is tool_unsupported
+    /// before anything is fetched; a repo-declared one is a note.
+    #[tokio::test]
+    async fn the_ndk_is_refused_off_linux_x86_64() {
+        let home = crate::util::temp_dir("tc-ndk-mac");
+        let mut tc = linux_x86(&home);
+        for (os, arch) in [("macos", "aarch64"), ("linux", "aarch64")] {
+            tc.os = os;
+            tc.arch = arch;
+            let (code, msg) = tc.resolve(&needs::parse_all(&["android-ndk@27"]).unwrap(), &[], None, &mut |_| {}).await.unwrap_err();
+            assert_eq!(code, codes::TOOL_UNSUPPORTED, "{msg}");
+            assert!(msg.contains("Linux x86_64 nodes only") && msg.contains(&format!("{os}-{arch}")), "{msg}");
+            let repo = vec![(needs::parse("android-ndk@27").unwrap(), "mise.toml".to_string())];
+            let r = tc.resolve(&[], &repo, None, &mut |_| {}).await.unwrap();
+            assert!(r.notes.iter().any(|n| n.contains("Linux x86_64 nodes only")), "{:?}", r.notes);
+        }
+        assert!(!tc.root.join("android-ndk").exists(), "nothing fetched");
     }
 
     #[test]

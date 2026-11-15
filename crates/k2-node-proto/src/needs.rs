@@ -67,6 +67,94 @@ pub const SUPPORTED_TOOLS: &[(&str, &[&str])] = &[
     ("pnpm", &["pnpm"]),
 ];
 
+/// Tools k2-node installs itself from a pinned, sha256-checked download
+/// (not mise): the Android NDK and cargo-ndk, for Rust cross-builds to
+/// Android (Sew's arm64 phone builds, 2026-11-15). Linux x86_64 nodes
+/// only: the NDK ships a linux-x86_64 host and no linux-aarch64, and on
+/// macOS it is a .dmg.
+pub const ANDROID_NDK: &str = "android-ndk";
+pub const CARGO_NDK: &str = "cargo-ndk";
+pub const NATIVE_TOOLS: &[&str] = &[ANDROID_NDK, CARGO_NDK];
+
+/// The (os, arch) the native tools run on (the node's `os` / `arch`).
+pub const NATIVE_TOOLS_HOST: (&str, &str) = ("linux", "x86_64");
+
+/// The API level the NDK env defaults to (`aarch64-linux-android28-clang`,
+/// `CARGO_NDK_PLATFORM=28`): Sew's minSdk (AAudio and the OS AEC/NS).
+/// A job overrides it with its own env (`--env`), which comes after.
+pub const ANDROID_DEFAULT_API: u32 = 28;
+
+/// A pinned NDK release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NdkPin {
+    /// `27`: what `android-ndk@27` names.
+    pub major: &'static str,
+    /// `r27d`: Google's release name (the folder in the zip).
+    pub release: &'static str,
+    /// `27.3.13750724`: `Pkg.Revision` in its `source.properties`.
+    pub revision: &'static str,
+    pub url: &'static str,
+    /// Checked on the node before anything is unpacked.
+    pub sha256: &'static str,
+    /// Google's published SHA-1 (checked once when pinned, with the sha256).
+    pub sha1: &'static str,
+    pub bytes: u64,
+}
+
+/// r27d, the r27 LTS. Pinned 2026-11-15 by K2 Hardware: downloaded once,
+/// sha256 computed, SHA-1 22105e41… matches developer.android.com/ndk/downloads
+/// in its zh-cn, es and it pages (663956036 bytes). The en page's r27d block
+/// then showed 713550176 bytes / 26b746e5…, and the ru, de, he and pt pages
+/// 783549481 / 87e2bb7e…: those values belong to newer (beta) packages
+/// mixed into the page, not to this file.
+pub const NDK_PINS: &[NdkPin] = &[NdkPin {
+    major: "27",
+    release: "r27d",
+    revision: "27.3.13750724",
+    url: "https://dl.google.com/android/repository/android-ndk-r27d-linux.zip",
+    sha256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9",
+    sha1: "22105e410cf29afcf163760cc95522b9fb981121",
+    bytes: 663_956_036,
+}];
+
+/// The pin an `android-ndk@<version>` names: `27`, `r27`, `r27d`, `27.3`,
+/// `27.3.13750724`, `lts` or `latest` (the newest pin).
+pub fn ndk_pin(version: &str) -> Option<&'static NdkPin> {
+    let v = version.trim();
+    if matches!(v, "lts" | "latest") {
+        return NDK_PINS.last();
+    }
+    // `r27` / `r27d` → `27` / `27d`; `27.3.13750724` stays.
+    let bare = v.strip_prefix('r').unwrap_or(v);
+    NDK_PINS.iter().find(|p| {
+        let release = p.release.strip_prefix('r').unwrap_or(p.release);
+        bare == p.major || bare == release || v == p.revision || p.revision.strip_prefix(v).is_some_and(|r| r.starts_with('.'))
+    })
+}
+
+/// The pinned cargo-ndk (prebuilt, musl): its version, asset and sha256.
+pub const CARGO_NDK_VERSION: &str = "4.1.2";
+pub const CARGO_NDK_URL: &str = "https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-x86_64-unknown-linux-musl-v4.1.2.tgz";
+pub const CARGO_NDK_SHA256: &str = "dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966";
+
+/// Does `cargo-ndk@<version>` name the pin (`4`, `4.1`, `4.1.2`, `latest`)?
+pub fn cargo_ndk_matches(version: &str) -> bool {
+    matches!(version, "latest" | "lts") || version == CARGO_NDK_VERSION || CARGO_NDK_VERSION.strip_prefix(version).is_some_and(|r| r.starts_with('.'))
+}
+
+/// A native tool's version check, in words an agent can act on.
+pub fn check_native(tool: &str, version: &str) -> Result<(), String> {
+    match tool {
+        ANDROID_NDK if ndk_pin(version).is_none() => Err(format!(
+            "{tool}@{version}: k2-node has the Android NDK {} pinned (android-ndk@{}); ask K2 for another release",
+            NDK_PINS.iter().map(|p| format!("{} ({})", p.release, p.revision)).collect::<Vec<_>>().join(", "),
+            NDK_PINS.last().map(|p| p.major).unwrap_or("27")
+        )),
+        CARGO_NDK if !cargo_ndk_matches(version) => Err(format!("{tool}@{version}: k2-node has cargo-ndk {CARGO_NDK_VERSION} pinned (cargo-ndk@4)")),
+        _ => Ok(()),
+    }
+}
+
 /// mise backends a need may name explicitly (`aqua:cli/cli@2`). Never
 /// `asdf:`/`vfox:` (plugins are shell scripts from third-party repos).
 pub const ALLOWED_BACKENDS: &[&str] = &["aqua", "ubi", "github", "npm", "pipx", "cargo", "go"];
@@ -80,6 +168,7 @@ pub fn expected_bins(tool: &str) -> &'static [&'static str] {
 /// What `--needs` takes, for help text and refusals.
 pub fn supported_list() -> String {
     let mut v: Vec<String> = SUPPORTED_TOOLS.iter().map(|(t, _)| format!("{t}@<v>")).collect();
+    v.extend(["android-ndk@27 (Linux x86_64)", "cargo-ndk@4 (Linux x86_64)"].map(String::from));
     v.extend(["rust@<channel>[+<component>…][+target:<triple>…]", "cargo-nextest", "sys:<package>", "sys:<apt|pacman|dnf|zypper>:<package>", "profile:<name>"].map(String::from));
     v.join(", ")
 }
@@ -100,6 +189,9 @@ pub fn check_supported(n: &Need) -> Result<(), String> {
     }
     if SUPPORTED_TOOLS.iter().any(|(t, _)| t == tool) {
         return Ok(());
+    }
+    if NATIVE_TOOLS.contains(&tool.as_str()) {
+        return check_native(tool, version);
     }
     Err(format!(
         "{tool}@{version}: k2-node doesn't install {tool:?}. Supported: {}. Or name a mise backend (aqua:owner/repo@1), or ask the machine's owner to install it (Linux: --needs sys:<package> once approved)",
@@ -329,6 +421,7 @@ pub fn canonical_tool(t: &str) -> &str {
         "golang" => "go",
         "rustlang" => "rust",
         "python3" => "python",
+        "ndk" | "android_ndk" => ANDROID_NDK,
         other => other,
     }
 }
@@ -449,6 +542,32 @@ pub fn parse_all<S: AsRef<str>>(tokens: &[S]) -> Result<Vec<Need>, NeedError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn android_ndk_and_cargo_ndk_are_native_tools_with_pinned_versions() {
+        use super::*;
+        assert_eq!(parse("ndk@27").unwrap(), Need::Tool { tool: ANDROID_NDK.into(), version: "27".into() }, "ndk is an alias");
+        for v in ["27", "r27", "r27d", "27d", "27.3", "27.3.13750724", "lts", "latest"] {
+            assert_eq!(ndk_pin(v).map(|p| p.release), Some("r27d"), "{v}");
+            check_supported(&parse(&format!("android-ndk@{v}")).unwrap()).unwrap_or_else(|e| panic!("{v}: {e}"));
+        }
+        for v in ["26", "r26c", "28", "2", "27.4", "r27c"] {
+            assert!(ndk_pin(v).is_none(), "{v}");
+            let e = check_supported(&parse(&format!("android-ndk@{v}")).unwrap()).unwrap_err();
+            assert!(e.contains("r27d (27.3.13750724) pinned"), "{e}");
+        }
+        for v in ["4", "4.1", "4.1.2", "latest"] {
+            check_supported(&parse(&format!("cargo-ndk@{v}")).unwrap()).unwrap_or_else(|e| panic!("{v}: {e}"));
+        }
+        assert!(check_supported(&parse("cargo-ndk@3").unwrap()).unwrap_err().contains("cargo-ndk 4.1.2 pinned"));
+        assert!(supported_list().contains("android-ndk@27") && supported_list().contains("cargo-ndk@4"));
+        // The pin's own facts stay consistent (a bump changes them together).
+        let p = NDK_PINS.last().unwrap();
+        assert!(p.url.ends_with(&format!("android-ndk-{}-linux.zip", p.release)));
+        assert_eq!((p.sha256.len(), p.sha1.len()), (64, 40));
+        assert!(p.revision.starts_with(&format!("{}.", p.major)));
+        assert!(CARGO_NDK_URL.contains(&format!("v{CARGO_NDK_VERSION}")) && CARGO_NDK_SHA256.len() == 64);
+    }
+
     use super::*;
 
     #[test]

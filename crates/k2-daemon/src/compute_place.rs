@@ -44,6 +44,10 @@ use k2_core::compute::{self as compute, scheduler};
 
 use crate::compute_ws;
 
+/// The native tools' need states (android-ndk, cargo-ndk).
+#[path = "compute_place_native.rs"]
+mod native;
+
 /// Why an auto job waits where it is; a shared node's own slots.
 #[path = "compute_why_not.rs"]
 pub mod why_not;
@@ -953,6 +957,10 @@ pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
                     } else {
                         st(NeedState::Install, None)
                     }
+                }
+                Ok(needs::Need::Tool { tool, version }) if needs::NATIVE_TOOLS.contains(&tool.as_str()) => {
+                    let (state, have) = native::need_state(offer, &tool, &version);
+                    st(state, have)
                 }
                 Ok(needs::Need::Tool { tool, version }) => match list(&format!("mise:{tool}")).into_iter().rfind(|v| version_matches(v, &version)) {
                     Some(v) => st(NeedState::Ready, Some(v)),

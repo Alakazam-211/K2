@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.1.6: pairs with kit v0.19.0 and k2-mpc-ooxml v0.1.1
+
+**Requires `k2-mpc-base` v0.19.0** (its cut `b8db699e`) and **`k2-mpc-ooxml` v0.1.1**
+(`k2-mpc-opc` 0.1.1, unchanged), each checked out beside this repo. As for v0.1.5, the tag is a
+cut commit that leaves out the fuzz crate (`fuzz/`).
+
+- Pairs with kit v0.19.0. For this pack, the kit release adds: an element claim whose last
+  element an outside save removed ends `gone_outside_save`, and a claim's end events carry its
+  element addresses (by this pack's `address_of`); the keyed watch's `outside_save` and
+  `verb_refused` frames for a live deck; new view-schema container fields (none set here; see
+  below); and chunked tier-0 versions, off by default.
+- **The view schema's container fields are built from `ContainerFields::NONE`**
+  (`..ContainerFields::NONE`), setting the same fields as before, so a field the kit adds to
+  `ContainerFields` (a container's parent, after kit v0.18.0) doesn't break the build. No change
+  in what the pack declares. Every literal of `ContainerFields`, `BlobView` and `ViewSchema` in
+  the pack is in that form now.
+- Public text: expected values are in the tests, not in golden files a reader can't see; golden
+  variant and case names as code spans; `scripts/check-labels.sh` also blocks parity-row, finding
+  and run labels, branch names and engine codes.
+- `Cargo.toml`'s comment and the README name the kit's v0.19.0 and its cut. `Cargo.lock` and
+  `fuzz/Cargo.lock`: k2-mpc-base 0.19.0 and the crate version 0.1.6 (only those versions move);
+  `k2-mpc-opc` stays 0.1.1.
+
 ## v0.1.5 (2026-11-12): pairs with kit v0.18.0 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.18.0** (its cut `efc6377e`) and **`k2-mpc-ooxml` v0.1.1**
@@ -106,13 +129,13 @@ that leaves out the fuzz crate (`fuzz/`).
   verbs now focus the shape's slide (before, the kit's default focused the shape itself).
 - **What the pack derives on the kit's index** (`view_schema::derive`): each slide's title, the
   layouts (from the deck map), `name_is_generic`, a placeholder with no type as `obj`.
-- `tests/kit_view.rs`: the kit's index of the golden deck against the hand-made golden
-  `index-rev40.json`, field by field (transcribed in `tests/common/kit_view_golden.rs`), and the
-  blob tier's against the live tier's; any difference not listed fails.
+- `tests/kit_view.rs`: the kit's index of the golden deck against the hand-made expected index,
+  field by field (the expected index is kept in the test, `tests/common/kit_view_golden.rs`), and
+  the blob tier's against the live tier's; any difference not listed fails.
 - **The live view reads the carrier** (`live::view_derive`; needs the kit's carrier hand-off,
   `ViewSource::Live(state, carrier)`, and `Pack::watch_extras`' view argument, kit v0.16.0):
   what only the file's bytes hold is set on the kit's live index,
-  so the live index of the golden deck is `index-rev40.json` with no gap left (render hashes
+  so the live index of the golden deck is the expected index with no gap left (render hashes
   compared as the golden's labels). From the carrier, decoded once per carrier
   (`ViewCarrier::decoded`, the pack's `view::read_open` and the live model of it):
   - a group's children (`live: false`), placed by `view::place`, the code that places every

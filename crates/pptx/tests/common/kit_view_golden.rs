@@ -1,11 +1,10 @@
-//! The hand-made golden `index-rev40.json` (the whole view index of the
-//! sample deck before the scripted turn, live tier, rev 40), transcribed value for value into the
-//! kit's JSON value (generated from the golden file, its header left out), for
+//! The hand-made expected index (the whole view index of the sample deck before the scripted
+//! turn, live tier, rev 40), kept here value for value as the kit's JSON value, for
 //! `tests/kit_view.rs`.
 
 use k2_mpc_base::errors::Value as Json;
 
-/// `index-rev40.json`.
+/// The expected index at rev 40.
 pub fn rev40() -> Json {
     Json::obj([
         ("tier", Json::from("live")),

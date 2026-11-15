@@ -2229,8 +2229,8 @@ fn wake_sidecar_and_fire(
         None => payload.clone(),
     };
     let (spawn_command, spawn_args, wake_timeout, inject_profile, launch_prompt) =
-        match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
-            Ok(c) if !c.is_empty() => (
+        match crate::wake_headless::test_command() {
+            Some(c) => (
                 c,
                 Vec::new(),
                 wake_timeout.min(Duration::from_millis(1500)),
@@ -2670,8 +2670,8 @@ fn wake_and_fire(
     // the provider).
     let payload = format_sender(from, text, command);
     let (spawn_command, spawn_args, wake_timeout, inject_profile, launch_prompt) =
-        match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
-            Ok(c) if !c.is_empty() => (
+        match crate::wake_headless::test_command() {
+            Some(c) => (
                 c,
                 Vec::new(),
                 wake_timeout.min(Duration::from_millis(1500)),

@@ -920,11 +920,7 @@ fn run_fresh_fire(
 
 /// How long a replacement session is watched for an at-once failure.
 fn restart_confirm_window() -> std::time::Duration {
-    let test_override = std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND")
-        .ok()
-        .filter(|c| !c.is_empty())
-        .is_some();
-    if test_override {
+    if crate::wake_headless::test_command().is_some() {
         std::time::Duration::from_millis(1200)
     } else {
         std::time::Duration::from_secs(8)

@@ -146,6 +146,18 @@ impl std::fmt::Display for WakeFireError {
     }
 }
 
+/// The names the test stand-in for the agent command is read under,
+/// newest first.
+const TEST_COMMAND_NAMES: &[&str] = &["K5_WAKE_HEADLESS_TEST_COMMAND", "K2SO_WAKE_HEADLESS_TEST_COMMAND"];
+
+/// A test seam compiled into the daemon: when set, a headless wake runs
+/// this command (the tests use `cat`) in place of the agent's own, and
+/// the paths that read it shorten their waits. `None` when the first of
+/// its names that is set is empty, or none is set.
+pub(crate) fn test_command() -> Option<String> {
+    k2_core::env_names::first_set(TEST_COMMAND_NAMES).map(|(_, v)| v).filter(|c| !c.is_empty())
+}
+
 fn spawn_wake_headless_with(
     agent_name: &str,
     project_path: &str,
@@ -207,8 +219,8 @@ fn spawn_wake_headless_with(
     // below are gated on it (test override keeps legacy stamping
     // behavior so the integration test's assertions stay meaningful).
     let (command, args, session_id_pinned) =
-        match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
-            Ok(c) if !c.is_empty() => (c, Vec::<String>::new(), true),
+        match test_command() {
+            Some(c) => (c, Vec::<String>::new(), true),
             _ if resolved.is_claude() => {
                 let mut args = resolved.args.clone();
                 // Headless wakes can't answer permission prompts —
@@ -321,10 +333,7 @@ fn spawn_wake_headless_with(
     // Also delivered under the test override (`cat` echoes it back into
     // the grid), so integration tests can assert exactly what a fire
     // typed into the agent.
-    let is_test_override = std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND")
-        .ok()
-        .filter(|c| !c.is_empty())
-        .is_some();
+    let is_test_override = test_command().is_some();
     let delivery_job = match crate::v2_session_map::lookup_by_session_id(&outcome.session_id) {
         Some(session) => {
             // Readiness dialect: the test override keeps the claude-shaped
@@ -612,5 +621,31 @@ mod emit_path_tests {
             !src.contains("emit_heartbeat_live(\"\""),
             "empty workspacePath is dropped by event_matches_workspace"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k2_core::test_env::EnvVar;
+
+    /// The stand-in command is read as `K5_WAKE_HEADLESS_TEST_COMMAND`
+    /// first and `K2SO_WAKE_HEADLESS_TEST_COMMAND` after it.
+    #[test]
+    fn the_test_command_is_read_under_the_k5_name_first_and_the_old_name_after() {
+        assert_eq!(TEST_COMMAND_NAMES, &["K5_WAKE_HEADLESS_TEST_COMMAND", "K2SO_WAKE_HEADLESS_TEST_COMMAND"]);
+        let _new_unset = EnvVar::remove("K5_WAKE_HEADLESS_TEST_COMMAND");
+        {
+            let _old_unset = EnvVar::remove("K2SO_WAKE_HEADLESS_TEST_COMMAND");
+            assert_eq!(test_command(), None, "unset: the agent's own command runs");
+        }
+        let _old = EnvVar::set("K2SO_WAKE_HEADLESS_TEST_COMMAND", "cat");
+        assert_eq!(test_command().as_deref(), Some("cat"), "the old name still works");
+        {
+            let _new = EnvVar::set("K5_WAKE_HEADLESS_TEST_COMMAND", "tee");
+            assert_eq!(test_command().as_deref(), Some("tee"), "the new name wins when both are set");
+        }
+        let _new_empty = EnvVar::set("K5_WAKE_HEADLESS_TEST_COMMAND", "");
+        assert_eq!(test_command(), None, "the new name set and empty is no stand-in, whatever the old name says");
     }
 }

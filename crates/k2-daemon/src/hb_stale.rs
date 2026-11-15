@@ -336,13 +336,13 @@ pub fn fresh_pick_now(
     }
 }
 
-/// The test seam's stand-in agent (`K2SO_WAKE_HEADLESS_TEST_COMMAND`)
+/// The test seam's stand-in agent (`crate::wake_headless::test_command`)
 /// keeps Claude's transcript keying, as `wake_headless` does.
 fn transcript_tool(program: Option<&str>) -> Option<Tool> {
     if let Some(t) = program.and_then(Tool::from_command) {
         return Some(t);
     }
-    let over = std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND").ok().filter(|c| !c.is_empty())?;
+    let over = crate::wake_headless::test_command()?;
     let p = program?;
     (crate::spawn::program_basename(p) == crate::spawn::program_basename(&over)).then_some(Tool::Claude)
 }

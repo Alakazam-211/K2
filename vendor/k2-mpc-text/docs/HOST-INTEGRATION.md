@@ -32,7 +32,8 @@ specific to plain-text files.
      tier 0).
    - `Some(pack)`: `SessionManager::open_file(Arc::new(pack), &key, path, root)`.
 3. **If open fails with `SessionError::Declined { code, message }`,** the file stays as it
-   is. Nothing was stored or written. Open it the non-live way and show the message (P25).
+   is. Nothing was stored or written. Open it the non-live way and show the message, so the
+   user sees why live editing is off.
    See the refusal codes below.
 
 An unknown name (`Lookup::Unknown`) is opened like the others, with `PACK`. It becomes live

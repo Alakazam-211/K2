@@ -4954,7 +4954,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-text"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "k2-mpc-base",
  "serde_json",

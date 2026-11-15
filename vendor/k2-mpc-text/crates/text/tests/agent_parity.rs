@@ -34,7 +34,7 @@ fn agent_parity() {
             .unwrap_or_else(|f| panic!("{what}: {}", parity::render(&f)));
         let rows = parity();
         let live = rows.iter().filter(|r| r.status == RowStatus::Live).count();
-        assert_eq!(live, 28, "P24 Export is live since kit v0.9.7");
+        assert_eq!(live, 28, "the Export row is live since kit v0.9.7");
         assert!(report.not_applicable.is_empty());
         let deferred: Vec<PersonAction> = report.deferred.iter().map(|d| d.0).collect();
         assert_eq!(
@@ -55,7 +55,7 @@ fn agent_parity() {
                 );
             }
         }
-        // P22: the gutter and the verb, -L, and the history right
+        // blame: the gutter and the verb, -L, and the history right
         assert_eq!(
             report
                 .matched
@@ -89,8 +89,8 @@ fn registry_covers_actions_with_kit_verbs_only() {
     }
 }
 
-/// Negative control: with `patch` taken out of the registry, the harness reports P13's verb
-/// missing from the list.
+/// Negative control: with `patch` taken out of the registry, the harness reports the paste
+/// row's verb missing from the list.
 #[test]
 fn unmapping_a_verb_fails() {
     let without = Registry::for_pack(&PACK).unwrap().without("patch");
@@ -106,7 +106,7 @@ fn unmapping_a_verb_fails() {
     );
 }
 
-/// Negative control: a row naming a verb nobody registered (a `format` verb for P15) fails.
+/// Negative control: a row naming a verb nobody registered (a `format` verb for formatting) fails.
 #[test]
 fn an_invented_verb_fails() {
     let mut rows = parity();
@@ -123,7 +123,7 @@ fn an_invented_verb_fails() {
     );
 }
 
-/// Negative control: P22 deferred (blame absent) fails, since the kit registers `blame`.
+/// Negative control: blame deferred (absent) fails, since the kit registers `blame`.
 #[test]
 fn a_stale_deferral_fails() {
     let registry = Registry::for_pack(&PACK).unwrap();
@@ -164,7 +164,7 @@ fn every_pack_has_a_table() {
     assert_eq!(
         numbers,
         (1..=31).collect::<Vec<u8>>(),
-        "PARITY.md rows P1..P31 in order"
+        "PARITY.md has the text tier's 31 rows, in order"
     );
     for row in parity() {
         let ParityRow { action, verbs, .. } = row;

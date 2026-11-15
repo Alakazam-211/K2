@@ -27,7 +27,7 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
         P::Paste => ParityRow::live(a, &["patch", "apply", "append"]),
         P::Rewrite => ParityRow::live(a, &["write"]),
         // formatting a text file is text: indentation, comment toggles, wrapping
-        // (a formatter's whole-file output is P14's `write --base V`)
+        // (a formatter's whole-file output is a rewrite: `write --base V`)
         P::Format => ParityRow::live(a, &["insert", "replace", "sed -i"]),
         P::Undo => ParityRow::live(a, &["undo", "redo", "undo --drop"]),
         P::Saved => ParityRow::live(a, &["status", "flush"]),
@@ -72,7 +72,7 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
             &["lease", "lease --renew", "lease --release", "lease --break"],
             "a text doc merges edits; leases are tier 0's",
         ),
-        // the grid tier's rows (P35-P44, kit v0.10.0): a text doc has no rows or columns
+        // the grid tier's rows (kit v0.10.0): a text doc has no rows or columns
         P::RowInsert
         | P::RowMove
         | P::RowDelete
@@ -103,7 +103,7 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
     }
 }
 
-/// Every row of a text pack, P1 to P31 (the text tier's actions).
+/// Every row of a text pack: the text tier's actions.
 pub fn parity() -> Vec<ParityRow> {
     PersonAction::for_tier(Tier::Text).map(parity_row).collect()
 }

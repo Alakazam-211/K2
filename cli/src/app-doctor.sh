@@ -2848,9 +2848,8 @@ THE ORDER
     k2 app approve <id>: that starts the deploy. The Owner's
     k2 app access <ws> --core sew=on pre-approves the chat caps (never
     chat:channels or box services).
- 8. Everyone else: chat as in step 4 (the Owner's line, or under the
-    guests-chat grant the Agent's line or setChat). App login + chat = in
-    your Space. Sew may answer not_provisioned for a few seconds: retry.
+ 8. Everyone else: chat as in step 4. App login + chat = in your Space.
+    Sew may answer not_provisioned for a few seconds: retry.
  9. Origin (Agent): k2 hostchat home --json, your App's row in .apps[]:
     origin "wss://<your host>" AND delivered true. K2 sends it itself on
     its sweep, up to 10 minutes after the bind (the Owner can force one:

@@ -149,6 +149,7 @@ pub(super) fn copy_live_rows(r: &ReadTransaction, w: &WriteTransaction) -> Resul
         Err(e) => return Err(e.into()),
     };
     let blobs = r.open_table(BLOBS)?;
+    let manifests = super::chunks::manifest_files(r)?;
     #[cfg(any(test, feature = "differential"))]
     let copy_orphans = matches!(
         crate::differential::index_mutant(),
@@ -164,7 +165,7 @@ pub(super) fn copy_live_rows(r: &ReadTransaction, w: &WriteTransaction) -> Resul
     for kv in src.iter()? {
         let (k, v) = kv?;
         let (no, id, _, _) = k.value();
-        if !copy_orphans && blobs.get((no, id))?.is_none() {
+        if !copy_orphans && blobs.get((no, id))?.is_none() && !manifests.contains(id) {
             continue;
         }
         dst.insert(k.value(), v.value())?;
@@ -339,8 +340,12 @@ impl DocStore {
                     return Ok(StructCommitted::Stale("the version holds other bytes"));
                 }
             }
-            let blobs = w.open_table(BLOBS)?;
-            if blobs.get((p.no, p.blob.as_bytes().as_slice()))?.is_none() {
+            // a chunked version's manifest row stands in for the blob row
+            let whole = w
+                .open_table(BLOBS)?
+                .get((p.no, p.blob.as_bytes().as_slice()))?
+                .is_some();
+            if !whole && !super::chunks::is_chunked(&w, p.doc, p.blob)? {
                 return Ok(StructCommitted::Stale("the blob was removed"));
             }
         }
@@ -431,6 +436,24 @@ impl DocStore {
         Ok(Some(out))
     }
 
+    /// Test-only: how many index rows the store holds, every space's.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn blob_struct_rows_for_tests(&self) -> Result<u64, StoreError> {
+        let r = self.begin_read()?;
+        let t = match r.open_table(BLOB_STRUCT) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let mut n = 0;
+        for kv in t.iter()? {
+            kv?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
     /// Remove rows whose blob row is gone (left by a kit that doesn't know this table), from
     /// [`crate::blob::BlobStore::gc`]: the rows are found in a read transaction, and only
     /// those found are deleted, in short write transactions. Returns the rows removed.
@@ -466,11 +489,12 @@ impl DocStore {
             Err(e) => return Err(e.into()),
         };
         let blobs = r.open_table(BLOBS)?;
+        let manifests = super::chunks::manifest_files(&r)?;
         let mut gone = Vec::new();
         for kv in t.iter()? {
             let (k, _) = kv?;
             let (no, id, pack, format) = k.value();
-            if blobs.get((no, id))?.is_none() {
+            if blobs.get((no, id))?.is_none() && !manifests.contains(id) {
                 gone.push((no, id.to_vec(), pack.to_owned(), format));
             }
         }
@@ -486,12 +510,14 @@ impl DocStore {
         #[cfg(not(any(test, feature = "differential")))]
         let skip_check = false;
         let w = self.begin_write()?;
+        let manifests = super::chunks::manifest_files_in(&w)?;
         let mut n = 0;
         {
             let mut t = w.open_table(BLOB_STRUCT)?;
             let blobs = w.open_table(BLOBS)?;
             for (no, id, pack, format) in rows {
-                if !skip_check && blobs.get((*no, id.as_slice()))?.is_some() {
+                let held = blobs.get((*no, id.as_slice()))?.is_some() || manifests.contains(id);
+                if !skip_check && held {
                     continue;
                 }
                 t.remove((*no, id.as_slice(), pack.as_str(), *format))?;

@@ -339,26 +339,18 @@ pub fn marks_for_drops<'k, 'm>(
 
 /// The planted fault [`crate::differential::MintMutant::SingleLwwMark`]: [`mark_key`] is one
 /// key per prefix and tag, shared by every dropper (last writer wins).
-#[cfg(any(test, feature = "differential"))]
 fn planted_single_lww_mark() -> bool {
-    crate::differential::mint_mutant() == Some(crate::differential::MintMutant::SingleLwwMark)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_single_lww_mark() -> bool {
-    false
+    plant_on!(
+        crate::differential::mint_mutant() == Some(crate::differential::MintMutant::SingleLwwMark)
+    )
 }
 
 /// The planted fault [`crate::differential::MintMutant::IgnoreRetired`]: [`next_for`] ignores
 /// the retired mark. Without the `differential` feature there is no hook: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_ignore_retired() -> bool {
-    crate::differential::mint_mutant() == Some(crate::differential::MintMutant::IgnoreRetired)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_ignore_retired() -> bool {
-    false
+    plant_on!(
+        crate::differential::mint_mutant() == Some(crate::differential::MintMutant::IgnoreRetired)
+    )
 }
 
 #[cfg(test)]

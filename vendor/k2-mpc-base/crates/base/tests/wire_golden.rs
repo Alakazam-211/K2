@@ -27,8 +27,8 @@ use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
     At, AuditEvent, ChangeEvent, ClaimSpan, Config, ConnId, CursorAt, EditOptions, ElemFocus,
     ElemRange, ElemSelection, Host, JoinOptions, LeaveReason, LineRange, Overwrite, Participant,
-    ParticipantKind, Point, Rect, Rights, Role, RosterEvent, RosterMember, Session, SessionError,
-    SessionManager, Stay, TextFilePack, Who, OVERWRITE_PENDING_MAX,
+    ParticipantKind, PlayState, Point, Rect, Rights, Role, RosterEvent, RosterMember, Session,
+    SessionError, SessionManager, Stay, TextFilePack, TimePosition, Who, OVERWRITE_PENDING_MAX,
 };
 use k2_mpc_base::store::{DocKey, DocStore, Seq};
 use k2_mpc_base::text::diff::Hunk;
@@ -273,6 +273,7 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
     if let Some(c) = &m.entry.cells {
         fields.push(("cells", c.to_value()));
     }
+    view_time_fields(&mut fields, &m.entry.view_address, &m.entry.time);
     if let Some(Value::List(devices)) = fields
         .iter_mut()
         .find(|(k, _)| *k == "devices")
@@ -292,6 +293,7 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
             if let Some(c) = &d.cells {
                 more.push(("cells", c.to_value()));
             }
+            view_time_fields(&mut more, &d.view_address, &d.time);
             o.extend(more.into_iter().map(|(k, v)| (k.to_owned(), v)));
         }
     }
@@ -433,6 +435,37 @@ fn elem_fields(
     }
     if let Some(g) = g {
         fields.push(("range", range(g)));
+    }
+}
+
+/// A time position (WIRE.md, "JSON encodings"): `{at, state, at_ms}`, then `in` and `rate`
+/// only when it has them.
+fn time_position(t: &TimePosition) -> Value {
+    let mut fields = vec![
+        ("at", Value::from(t.at())),
+        ("state", Value::from(t.state().as_str())),
+        ("at_ms", Value::from(t.at_ms())),
+    ];
+    if let Some(a) = t.in_address() {
+        fields.push(("in", Value::from(a)));
+    }
+    if let Some(r) = t.rate_text() {
+        fields.push(("rate", Value::from(r)));
+    }
+    Value::obj(fields)
+}
+
+/// A roster entry's or a device's `view_address` and `time_position`, each left out when `None`.
+fn view_time_fields(
+    fields: &mut Vec<(&'static str, Value)>,
+    view: &Option<String>,
+    time: &Option<TimePosition>,
+) {
+    if let Some(v) = view {
+        fields.push(("view_address", Value::from(v.as_str())));
+    }
+    if let Some(t) = time {
+        fields.push(("time_position", time_position(t)));
     }
 }
 
@@ -657,6 +690,30 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             client,
             st,
         ),
+        RosterEvent::ViewAddress {
+            who: w,
+            address,
+            client,
+            ..
+        } => elem_event(
+            "view_address",
+            w,
+            address.as_deref().map_or(Value::Null, Value::from),
+            client,
+            st,
+        ),
+        RosterEvent::TimePosition {
+            who: w,
+            time,
+            client,
+            ..
+        } => elem_event(
+            "time_position",
+            w,
+            time.as_ref().map_or(Value::Null, time_position),
+            client,
+            st,
+        ),
         RosterEvent::ClaimStarted {
             who: w,
             claim,
@@ -753,18 +810,29 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             actor: a,
             at_ms,
             at_rev,
+            addresses,
             ..
-        } => Value::obj([
-            ("kind", Value::from("claim_ended")),
-            ("who", who(w)),
-            ("claim", Value::from(st.claim(claim.get()))),
-            ("how", Value::from(how.as_str())),
-            ("lines", lines(l)),
-            ("version", Value::from(*version)),
-            ("actor", actor(w, a)),
-            ("at_ms", Value::from(*at_ms)),
-            ("at_rev", at_rev.map_or(Value::Null, Value::from)),
-        ]),
+        } => {
+            let mut v = vec![
+                ("kind", Value::from("claim_ended")),
+                ("who", who(w)),
+                ("claim", Value::from(st.claim(claim.get()))),
+                ("how", Value::from(how.as_str())),
+                ("lines", lines(l)),
+                ("version", Value::from(*version)),
+                ("actor", actor(w, a)),
+                ("at_ms", Value::from(*at_ms)),
+                ("at_rev", at_rev.map_or(Value::Null, Value::from)),
+            ];
+            // an element claim's elements by address, as they were: only when there are some
+            if !addresses.is_empty() {
+                v.push((
+                    "keys",
+                    Value::List(addresses.iter().map(|a| Value::from(a.as_str())).collect()),
+                ));
+            }
+            Value::obj(v)
+        }
         RosterEvent::Note {
             to,
             from,
@@ -2019,6 +2087,101 @@ fn element_presence_is_golden() {
     );
 }
 
+/// A person on two connections, an agent and another person: each sets a view address and a time
+/// position; one connection leaves with its values; the time is cleared. The values ride the
+/// roster as `view_address` and `time_position`, per connection, and a later snapshot's rows.
+///
+/// `roster_events_view_time.json`: `self`, `client`, the stream, and `final`, a later
+/// subscription's snapshot.
+#[test]
+fn view_address_and_time_position_are_golden() {
+    let (_dir, host, mgr, s) = keyed_fx("view-time");
+    let tick = || {
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let join = |pid: &str, name: &str, colour: &str, kind: ParticipantKind| {
+        s.join(Participant::new(pid, name, colour, kind, "tab"), Stay::Held)
+            .unwrap()
+    };
+    let a1 = join("ada", "Ada", "#7c3aed", ParticipantKind::Person);
+    let a2 = join("ada", "Ada", "#7c3aed", ParticipantKind::Person);
+    let bot = join("atlas", "Atlas", "#6d5bd0", ParticipantKind::Agent);
+    let b = join("bob", "Bob", "#16a34a", ParticipantKind::Person);
+    let mut st = Stable::default();
+    st.clients.insert(a1.client, 4);
+    st.clients.insert(a2.client, 5);
+    st.clients.insert(bot.client, 6);
+    st.clients.insert(b.client, 7);
+    let roster = s.subscribe_roster(a1.conn).unwrap();
+    tick();
+
+    s.set_view_address(a1.conn, Some("@seq:main")).unwrap();
+    s.set_time_position(
+        a1.conn,
+        Some(
+            TimePosition::new("254016000000", PlayState::Playing)
+                .unwrap()
+                .within("@seq:main")
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    tick();
+    s.set_view_address(a2.conn, Some("i3")).unwrap();
+    // the host sets the agent's, as when it renders a still for it
+    s.set_view_address(bot.conn, Some("@seq:main/clip:7"))
+        .unwrap();
+    s.set_time_position(
+        bot.conn,
+        Some(
+            TimePosition::new("-1270080000", PlayState::Paused)
+                .unwrap()
+                .rate("1001/1000")
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    s.set_time_position(
+        b.conn,
+        Some(TimePosition::new("0", PlayState::Paused).unwrap()),
+    )
+    .unwrap();
+    tick();
+    // a connection leaves with its value
+    s.leave(a2.conn).unwrap();
+    tick();
+    // cleared
+    s.set_time_position(a1.conn, None).unwrap();
+    tick();
+
+    let ros = drain(&roster);
+    let late = drain(&s.subscribe_roster(a1.conn).unwrap());
+    for k in ["view_address", "time_position"] {
+        assert!(
+            ros.iter().any(|e| matches!(
+                (k, e),
+                ("view_address", RosterEvent::ViewAddress { .. })
+                    | ("time_position", RosterEvent::TimePosition { .. })
+            )),
+            "no {k} event in {ros:?}"
+        );
+    }
+    let me = self_in(&late[0], "Ada");
+    golden(
+        &golden_dir().join("roster_events_view_time.json"),
+        &file(Value::obj([
+            ("self", me.clone()),
+            ("client", Value::from(st.client(a1.client))),
+            (
+                "events",
+                Value::List(ros.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+        ])),
+    );
+}
+
 /// xorshift64*, as `client_vectors.rs`: the trace doesn't depend on a crate's generator.
 fn next(state: &mut u64) -> u64 {
     *state ^= *state >> 12;
@@ -2283,6 +2446,113 @@ fn element_claims_are_golden() {
         kinds,
         ["started", "started", "deleted", "released", "started"]
     );
+}
+
+/// A claim on an element an outside save removed: Bot holds `i2` of a doc opened from its file
+/// (`keyed_pack::KeyedFile`, addresses `@item:<key>`); an app saves the file without `i2`, so the
+/// claim ends `gone_outside_save`, its `keys` the claim's element addresses as they were.
+///
+/// `roster_events_claim_gone_outside.json`: `about`, `self`, the stream, and `final`, a later
+/// subscription's snapshot (no claim). A client that doesn't know the reason reads it as any
+/// ended claim (`client/WIRE.md`, "Claims on elements").
+#[test]
+fn a_claim_gone_in_an_outside_save_is_golden() {
+    let dir = std::env::temp_dir().join(format!("k2mb-wire-gone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let ws = std::fs::canonicalize(ws).unwrap();
+    let _dir = TmpDir(dir.clone());
+    let path = ws.join("doc.keyed");
+    std::fs::write(&path, "i1\ni2\ni3\n").unwrap();
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(1_700_000_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mgr = SessionManager::new(store, host.clone(), Config::default());
+    let s = mgr
+        .open_file(
+            Arc::new(keyed_pack::KeyedFile),
+            &DocKey {
+                space: "ws".into(),
+                path: "doc.keyed".into(),
+            },
+            &path,
+            &ws,
+        )
+        .unwrap();
+    let tick = || {
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let ada = s
+        .join(
+            Participant::new("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"),
+            Stay::Held,
+        )
+        .unwrap();
+    let bot = s
+        .join(
+            Participant::new("bot", "Bot", "#0891b2", ParticipantKind::Agent, "cli"),
+            Stay::Held,
+        )
+        .unwrap();
+    let mut st = Stable::default();
+    st.clients.insert(ada.client, MAX_CLIENT_ID);
+    st.clients.insert(bot.client, 5);
+    let roster = s.subscribe_roster(ada.conn).unwrap();
+    s.claim_elems(
+        bot.conn,
+        keyed_pack::ITEMS,
+        &[Key::new("i2").unwrap()],
+        None,
+        Some("renaming".into()),
+        true,
+    )
+    .unwrap();
+    tick();
+    std::fs::write(&path, "i1\ni3\n").unwrap();
+    let out = s.file_changed().unwrap();
+    assert!(
+        matches!(out, k2_mpc_base::session::DiskCheck::Ingested { .. }),
+        "{out:?}"
+    );
+    tick();
+    let ros = drain(&roster);
+    let late = drain(&s.subscribe_roster(ada.conn).unwrap());
+    let me = who(&Who::Pid("ada".into()));
+    golden(
+        &golden_dir().join("roster_events_claim_gone_outside.json"),
+        &file(Value::obj([
+            (
+                "about",
+                Value::from(
+                    "A claim on an element an outside save removed: `claim_started_elems`, then \
+                     `claim_ended` with `how: gone_outside_save` and `keys`, the claim's element \
+                     addresses as they were; `final`, a later subscription's snapshot, with no \
+                     claim.",
+                ),
+            ),
+            ("self", me.clone()),
+            (
+                "events",
+                Value::List(ros.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+        ])),
+    );
+    // the scenario did what the file says
+    let ends: Vec<(&str, Vec<String>)> = ros
+        .iter()
+        .filter_map(|e| match e {
+            RosterEvent::ClaimEnded { how, addresses, .. } => {
+                Some((how.as_str(), addresses.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, [("gone_outside_save", vec!["@item:i2".to_owned()])]);
 }
 
 // ---------- focus and range (wire 3) ----------

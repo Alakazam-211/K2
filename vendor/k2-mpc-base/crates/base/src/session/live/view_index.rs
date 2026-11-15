@@ -54,23 +54,18 @@ fn update_checks_on() -> bool {
 
 /// The planted fault [`crate::differential::ViewMutant::DeriveIgnoresCarrier`].
 fn planted_derive_ignores_carrier() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::view_mutant()
-        == Some(crate::differential::ViewMutant::DeriveIgnoresCarrier)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::view_mutant()
+            == Some(crate::differential::ViewMutant::DeriveIgnoresCarrier)
+    )
 }
 
 /// The planted fault [`crate::differential::ViewMutant::DeriveCacheStale`].
 fn planted_derive_cache_stale() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::view_mutant() == Some(crate::differential::ViewMutant::DeriveCacheStale)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::view_mutant()
+            == Some(crate::differential::ViewMutant::DeriveCacheStale)
+    )
 }
 
 impl Session {

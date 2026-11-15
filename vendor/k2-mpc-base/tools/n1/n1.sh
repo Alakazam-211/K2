@@ -160,6 +160,23 @@
 #                                                this build's `n1_demote_prev_store` demotes it,
 #                                                keeping both. The last line is `N-1 DEMOTE OK`.
 #
+# Store format 8, the required-features word, both ways:
+#
+#   tools/n1/n1.sh layout-format <previous tag> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/format the consumer
+#                                                (tools/n1/consumer-format)
+#   tools/n1/n1.sh node-format <dir>             on a build node, from the repo root: this
+#                                                build's `n1_format_producer` makes three stores
+#                                                and stamps them format 8 by hand (the word naming
+#                                                chunked, native, and both); the previous release
+#                                                (it reads up to format 7) refuses each at open
+#                                                with one line, its bytes unchanged, and writes a
+#                                                store of its own; this build's `n1_format_after`
+#                                                opens that store as before (its format kept, a
+#                                                write, a rewrite), opens the chunked one and
+#                                                refuses the two that set native. The last line
+#                                                is `N-1 FORMAT OK`.
+#
 # The rows depend on the previous release: the node modes read each kit's crate version from
 # its manifest and hand it to the rows (K2MB_N1_READER, the build whose consumer ran on a store;
 # K2MB_N1_PREV, the previous release). Against a release that doesn't know a table (v0.14.0 and
@@ -191,7 +208,7 @@ tree_of() {
     git -C "$1" archive "$2" | tar -x -C "$3"
   fi
 }
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -424,6 +441,31 @@ PY
     echo "== reverse: this build demotes it"
     K2MB_N1_OUT="$OUT/demote" cargo test -p k2-mpc-base --test demote n1_demote_prev_store -- --ignored --nocapture
     echo "N-1 DEMOTE OK"
+    ;;
+  layout-format)
+    TAG=${2:?previous release tag}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/format"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-format/." "$OUT/format/"
+    cp "$OUT/old/Cargo.lock" "$OUT/format/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-format)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build stamps three stores format 8"
+    K2MB_N1_OUT="$OUT/format" cargo test -p k2-mpc-base --test engine_stamp n1_format_producer -- --ignored --nocapture
+    PREV=$(kit_version "$OUT/old")
+    echo "== the previous release ($PREV) refuses each"
+    (cd "$OUT/format" && cargo run -q -- read "$OUT/format")
+    echo "== the previous release ($PREV) writes a store of its own"
+    (cd "$OUT/format" && cargo run -q -- produce "$OUT/format")
+    echo "== this build opens it as before"
+    K2MB_N1_OUT="$OUT/format" cargo test -p k2-mpc-base --test engine_stamp n1_format_after -- --ignored --nocapture
+    echo "N-1 FORMAT OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;
 esac

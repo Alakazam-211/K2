@@ -65,7 +65,7 @@ impl Cat {
     }
 
     pub(crate) fn run(&self, doc: &ToolDoc) -> ReadOutput {
-        // the whole doc is shown: those are the lines touched (no viewing range: P3)
+        // the whole doc is shown: those are the lines touched (no viewing range for a whole read)
         let n = lines(doc.text).len();
         let mut o = self.output(doc);
         o.touched = (n > 0).then_some((1, n));
@@ -406,7 +406,7 @@ impl Wc {
     }
 }
 
-/// `view --lines a,b`: those lines, and the caller's viewing range (P4).
+/// `view --lines a,b`: those lines, and the caller's viewing range.
 #[derive(Debug, Clone)]
 pub(crate) struct View {
     range: LineSpec,

@@ -14,7 +14,7 @@ full-bound headline re-run on the current oracle: the exhaustive pair, 8,494,185
 states (724.6M together, was 725.9M under the per-copy reading), and 1,000,000 + 1,000,000 walks
 with every mutant ([Runs at the full bound](#runs-at-the-full-bound)).
 
-**"Every mutant" in this note means the planted set, `Mutant::ALL`** (`crates/spec-undo/src/model/mutant.rs`): (i), (iii), (iv), (vi), (vii), skip-U19, F3 (viii), restart-single-taint (ix), (x), (xi). The spec's list (`SPEC-UNDO.md` §8, Mutants) also names **(ii) an end-of-text rule without O5** and **(v) a diff with a wall-clock deadline**, which are not planted, so this note's runs say nothing about them.
+**"Every mutant" in this note means the planted set, `Mutant::ALL`** (`crates/spec-undo/src/model/mutant.rs`): (i), (iii), (iv), (vi), (vii), skip-U19, re-diff (viii), restart-single-taint (ix), (x), (xi). The spec's list (`SPEC-UNDO.md` §8, Mutants) also names **(ii) an end-of-text rule without O5** and **(v) a diff with a wall-clock deadline**, which are not planted, so this note's runs say nothing about them.
 
 Every figure from a run with a record cites it (`[run JOB/RUN]` or `[run JOB/RUN:field]`,
 records in `docs/evidence/runs/`, checked by `tools/evidence/check.py`). Jobs from before run
@@ -126,7 +126,7 @@ not a least witness: the exhaustive least depths are under Teeth, below).
 | (vi) `vi-o5-every-window-end` | O5 at every window end | yes | `O5` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_vi-o5-every-window-end] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_vi-o5-every-window-end:walks] | RUNREC |
 | (vii) `vii-o5-region-base` | O5 on the region's base, not the doc's | yes | `O5` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_vii-o5-region-base] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_vii-o5-region-base:walks] | RUNREC |
 | `skip-u19` | a purge keeps the stacks | yes | `U19` at depth 1; trace of 2 [run 48962ffa/walk_3x3_u2_r1_rs0_skip-u19] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_skip-u19:walks] | RUNREC |
-| (viii) `f3-rediff` | sides by re-diffing strings (F3) | yes | `own_only` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_f3-rediff] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_f3-rediff:walks] | RUNREC |
+| (viii) `f3-rediff` | sides by re-diffing strings (the re-diff finding) | yes | `own_only` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_f3-rediff] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_f3-rediff:walks] | RUNREC |
 | (ix) `restart-single-taint` | a restart reads one taint flag back at both edges | yes | `RT` at depth 8; trace of 9 [run 48962ffa/walk_3x3_u2_r1_rs1_restart-single-taint] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs1_restart-single-taint:walks] | RUNREC |
 | (x) `x-provenance-ignored-in-o4` | O4 on element identity, no O4a | yes | `I1` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4:walks] | RUNREC |
 | (xi) `xi-no-o4a` | O4 on (range, roots), no O4a | yes | `I1` at depth 4; trace of 5 [run 48962ffa/walk_3x3_u2_r1_rs0_xi-no-o4a] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_xi-no-o4a:walks] | RUNREC |
@@ -458,7 +458,7 @@ Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least)
 | (vi) O5 at every window end | O5 | same | 3 [run 545f3ae0/e_m_vi-o5-every-window-end:violation_depth] | 4 [run 545f3ae0/m_tiny#4] |
 | (vii) O5 on the region's base | O5 | same | 3 [run 545f3ae0/e_m_vii-o5-region-base:violation_depth] | 4 [run 545f3ae0/m_tiny#5] |
 | skip-U19 | U19 | same | 1 [run 545f3ae0/e_m_skip-u19:violation_depth] | 2 [run 545f3ae0/m_tiny#6] |
-| **(viii) `f3-rediff`**: sides by re-diffing strings (F3) | own_only | same | 3 [run 545f3ae0/e_m_f3-rediff:violation_depth] | 4 [run 545f3ae0/m_tiny#7] |
+| **(viii) `f3-rediff`**: sides by re-diffing strings (the re-diff finding) | own_only | same | 3 [run 545f3ae0/e_m_f3-rediff:violation_depth] | 4 [run 545f3ae0/m_tiny#7] |
 | **(ix) `restart-single-taint`**: one taint flag read back at both edges | RT | 1 pid × 3 events + 1 revert + 1 restart (`abba`, 4) | 4 [run 545f3ae0/e_m_restart-single-taint:violation_depth] | 5 [run 545f3ae0/m_rst] |
 | **(x) `provenance-ignored-in-O4`** (v1.8): O4 on element identity, no O4a | I1 | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 [run 545f3ae0/e_m_x-provenance-ignored-in-o4:violation_depth] | 4 [run 545f3ae0/m_prov] |
 | **(xi) `no-o4a`** (v1.9): O4 on (range, roots), no O4a | I1 | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 4 [run 545f3ae0/e_m_xi-no-o4a:violation_depth] | 5 [run 545f3ae0/m_xi] |
@@ -534,8 +534,8 @@ enabled, cut, outcome, whole state):
 - Since v1.7 a mismatch also when: the applied hunks differ (0 here: kit and oracle remove
   the same elements), the oracle's or the kit's undo, redo or revert removes an element not
   its own (per-element blame on the kit).
-- The class `exact_sides_differ_from_rediff` (F3's: exact sides differ from what a re-diff
-  would give): 877 hits in 256 traces.
+- The class `exact_sides_differ_from_rediff` (the re-diff finding's: exact sides differ from
+  what a re-diff would give): 877 hits in 256 traces.
 - **U22a's cost** (revert conflicting where undo of the same change would apply): 7 of 2,304
   revert regions (0.30%); with touching regions 7 of 443 (1.58%).
 - Large run: `trace_equivalence_large`, 400,000 traces in five parts (`tools/undo/traces-large.sh` `PART=main1`…`main5`), each class at least half its measured rate (`LARGE_MAIN`, job 301c3906): enforced minimums over the 400,000 of about 2,500 for `redo_after_partial` and about 7,750 for `concurrent_restore_o4a`, every other class above 10^4 (≥ 10^4 per class would take about 800,000 traces).
@@ -550,9 +550,9 @@ kit's session tests `revert_of_a_change_undone_and_redone_applies` and
 `sec.client_provenance_refused` is declared (kit: by construction; native: later, with the native
 engine).
 
-`hist.undo_own_only` (per element, through blame) passes on the kit, with F3's case; the
-session tests `undo_exact_hunks_*` (F3, repeated lines, a run; undo and revert) fail on
-v0.8.2's kit and pass here.
+`hist.undo_own_only` (per element, through blame) passes on the kit, with the re-diff
+finding's case; the session tests `undo_exact_hunks_*` (the re-diff finding, repeated lines, a
+run; undo and revert) fail on v0.8.2's kit and pass here.
 
 
 ## Log

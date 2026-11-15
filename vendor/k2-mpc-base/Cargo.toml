@@ -14,6 +14,11 @@ rust-version = "1.80"
 publish = false
 license = "MIT OR Apache-2.0"
 
+# The members' lints (each member inherits them: `[lints] workspace = true`).
+[workspace.lints.rust]
+# the acknowledgement cfg (crates/base/src/lib.rs): a known name, not an unexpected one.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(k2_mpc_untrusted_wire_ack)"] }
+
 # The kit's own dev and test builds (tools/README.md, "Build settings"). Cargo applies a
 # workspace's profiles only when that workspace is the one being built, so a host that vendors
 # the kit keeps its own. Release builds (the soak, the measurements) are unchanged.

@@ -41,7 +41,7 @@ Condition 4 of the error-surface work: a fresh agent with no context gets only t
 
 | # | Refusal met | `explain` used | Recovery | Verdict |
 |---|---|---|---|---|
-| 1 | `MPC-E203` (`undo --partial` skipped line 3) | E203, E120 | Picked `undo --partial` from `capabilities`' P26 row before plain `undo`; undid the clean region (Owner); left Sam's line, as E203 says; told the user the Status choice is Sam's | **pass** |
+| 1 | `MPC-E203` (`undo --partial` skipped line 3) | E203, E120 | Picked `undo --partial` from `capabilities`' partial-undo row before plain `undo`; undid the clean region (Owner); left Sam's line, as E203 says; told the user the Status choice is Sam's | **pass** |
 | 2 | `MPC-E130` held: approvals_backlog | E130, E120 | Didn't retry or approve. Listed the pending changes (`log --pending`) and wrote Sam the exact ask: approve or decline changes 2 and 3, then it adds the line | **pass** |
 | 3 | `MPC-E901` rate_limited, ×5 (one loop) | E901 | Following E901's "combine your changes into fewer calls", appended the 5 refused items in one call. 8 lines, in order, no duplicates | **pass** |
 | 4 | `MPC-E404` declined_mixed_line_endings | E404 | Took E404's first option, ordinary file tools. Appended `carol,42\r\n` with the shell, left the existing bytes alone, and told the user how to make the file live (make the endings consistent) | **pass** |
@@ -71,7 +71,8 @@ message was reworded.
 
 **Observations:**
 - **No agent hit plain `undo`'s `MPC-E201`.** Both scenario-1 agents read `capabilities`, saw
-  P26 ("Undo the regions of my change nobody touched; report the rest") and went straight
+  the partial-undo row ("Undo the regions of my change nobody touched; report the rest") and
+  went straight
   to `undo --partial`. The all-or-nothing conflict is covered by the reachability test
   (`tests/error_ids.rs`), not by this run.
 - **Change numbers and version numbers get mixed up.** Agents passed change numbers to

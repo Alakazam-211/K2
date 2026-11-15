@@ -1,4 +1,4 @@
-//! Exports, the kit's side (P0): `Session::file_at` / `file_now` (the file's bytes at a
+//! Exports, the kit's side: `Session::file_at` / `file_now` (the file's bytes at a
 //! version) and the `export` contract (the registry, the identity exporter, a test exporter
 //! for the contract). Public API only.
 //!

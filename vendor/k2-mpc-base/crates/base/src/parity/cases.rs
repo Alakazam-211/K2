@@ -151,7 +151,7 @@ pub(super) fn sam_edits_intro(stage: &mut Stage) -> Result<(), String> {
     Ok(())
 }
 
-// ---------- P1-P8: presence and reading ----------
+// ---------- presence and reading ----------
 
 pub(super) fn p1_person(p: &mut Person<'_>) -> R {
     p.conn()?;
@@ -348,7 +348,7 @@ pub(super) fn p8_person_reader(p: &mut Person<'_>) -> R {
     )
 }
 
-// ---------- amendment 13: agent presence (P4 --for-edit, P6 activity, P8 claims) ----------
+// ---------- agent presence (`--for-edit`, activity, claims) ----------
 
 /// Lines 5-8 for 30 s (the default `--for-edit` TTL), with a view: what a tab does when a
 /// person says "I'm about to edit this".
@@ -522,7 +522,7 @@ pub(super) fn p8_claimed_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["claim", "--lines", "5,8"], b"")?, claim_out)
 }
 
-// ---------- P9-P15: editing ----------
+// ---------- editing ----------
 
 pub(super) fn p9_line_person(p: &mut Person<'_>) -> R {
     let at = line_start(&p.text()?, 7)?;
@@ -725,7 +725,7 @@ pub(super) fn p15_bold_agent(a: &mut Agent<'_>) -> R {
     )
 }
 
-// ---------- P16, P26: undo ----------
+// ---------- undo ----------
 
 pub(super) fn undo_out(o: &VerbOut) -> Output {
     match &o.value {
@@ -820,7 +820,7 @@ pub(super) fn p26_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["undo", "--partial"], b"")?, undo_out)
 }
 
-// ---------- P17, P18, P25: saving, watching, live editing off ----------
+// ---------- saving, watching, live editing off ----------
 
 pub(super) fn disk_out(
     disk: &Option<crate::session::DiskState>,
@@ -889,7 +889,7 @@ pub(super) fn p25_edit_agent(a: &mut Agent<'_>) -> R {
     agent_step(agent_tool(a, &["insert", "--line", "1"], "x\n")?, tool_edit)
 }
 
-// ---------- P19-P21: history, restore, rename ----------
+// ---------- history, restore, rename ----------
 
 pub(super) fn history_setup(stage: &mut Stage) -> Result<(), String> {
     let first = stage
@@ -1002,7 +1002,7 @@ pub(super) fn p21_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-/// P24: what an export observes, the bytes it wrote, the doc version and the codec flag.
+/// What an export observes, the bytes it wrote, the doc version and the codec flag.
 fn exported(
     name: &str,
     f: crate::session::FileBytes,
@@ -1045,7 +1045,7 @@ pub(super) fn p24_at_agent(a: &mut Agent<'_>) -> R {
     )
 }
 
-// ---------- P29-P31: on-behalf edits and revert ----------
+// ---------- on-behalf edits and revert ----------
 
 /// An assistant ("aide") edits line 12 on the actor's behalf; mark "c" is its change.
 pub(super) fn aide_setup(stage: &mut Stage) -> Result<(), String> {
@@ -1153,7 +1153,7 @@ pub(super) fn p30_all_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
         v => Output::value(v),
     })
 }
-/// P30 through the alias (`approvals`, the same as `log --pending`).
+/// The pending row through the alias (`approvals`, the same as `log --pending`).
 pub(super) fn p30_alias_agent(a: &mut Agent<'_>) -> R {
     p30_agent_as(a, &["approvals", "--on-behalf-of", "me"])
 }
@@ -1184,7 +1184,7 @@ pub(super) fn p31_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["revert", &seq], b"")?, undo_out)
 }
 
-// ---------- P22: blame ----------
+// ---------- blame ----------
 
 /// A history with every kind of author: the import, a person, an agent, an assistant acting
 /// for the actor (pending), an outside edit; a second apart each.
@@ -1260,8 +1260,8 @@ pub(super) fn p22_range_agent(a: &mut Agent<'_>) -> R {
 }
 
 /// The kit's cases for `action`: each kit verb serving it, the person's way and the
-/// agent's way. Empty for the rows the kit doesn't bind yet (deferred: P23 and P27
-/// annotations, P28 purge); a pack's list must then mark them deferred.
+/// agent's way. Empty for the rows the kit doesn't bind yet (deferred: annotations,
+/// mentions and purge); a pack's list must then mark them deferred.
 pub fn kit_cases(action: PersonAction) -> Vec<Case> {
     use PersonAction as P;
     let c = Case::new;

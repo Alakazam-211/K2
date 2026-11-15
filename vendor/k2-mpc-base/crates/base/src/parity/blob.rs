@@ -29,7 +29,7 @@ use crate::tools;
 pub const BLOB_PATH: &str = "report.pdf";
 /// The default blob doc's bytes.
 pub const BLOB_DOC: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n";
-/// The stage's blob limit: a file over it is declined (`too_large`, P25).
+/// The stage's blob limit: a file over it is declined (`too_large`).
 pub const BLOB_MAX_BYTES: u64 = 64 << 10;
 
 /// Others' activity before the paths run.

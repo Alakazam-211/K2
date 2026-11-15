@@ -1229,53 +1229,42 @@ fn mint(axis: &Axis, next: &mut u64, prefix: char) -> Key {
 
 /// The planted per-column walk ([`crate::differential::GridCostMutant::PerColumn`]): never
 /// outside the kit's tests and the `differential` feature.
-#[cfg(any(test, feature = "differential"))]
 pub(crate) fn per_column() -> bool {
-    crate::differential::grid_cost_mutant() == Some(crate::differential::GridCostMutant::PerColumn)
+    plant_on!(
+        crate::differential::grid_cost_mutant()
+            == Some(crate::differential::GridCostMutant::PerColumn)
+    )
 }
 
-#[cfg(not(any(test, feature = "differential")))]
-pub(crate) fn per_column() -> bool {
-    false
-}
-
-/// The planted walks of the second sweep ([`crate::differential::GridCostMutant`]): never
-/// outside the kit's tests and the `differential` feature.
-#[cfg(any(test, feature = "differential"))]
-fn planted(m: crate::differential::GridCostMutant) -> bool {
-    crate::differential::grid_cost_mutant() == Some(m)
-}
+// The planted walks of the second sweep (`differential::GridCostMutant`): never outside the
+// kit's tests and the `differential` feature.
 
 pub(crate) fn axis_walk() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if planted(crate::differential::GridCostMutant::AxisWalk) {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::grid_cost_mutant()
+            == Some(crate::differential::GridCostMutant::AxisWalk)
+    )
 }
 
 pub(crate) fn conflict_walk() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if planted(crate::differential::GridCostMutant::ConflictWalk) {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::grid_cost_mutant()
+            == Some(crate::differential::GridCostMutant::ConflictWalk)
+    )
 }
 
 pub(crate) fn rekey_walk() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if planted(crate::differential::GridCostMutant::RekeyWalk) {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::grid_cost_mutant()
+            == Some(crate::differential::GridCostMutant::RekeyWalk)
+    )
 }
 
 pub(crate) fn row_list_walk() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if planted(crate::differential::GridCostMutant::RowListWalk) {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::grid_cost_mutant()
+            == Some(crate::differential::GridCostMutant::RowListWalk)
+    )
 }
 
 /// Count `n` elements visited ([`crate::differential::visits`]); nothing outside the kit's

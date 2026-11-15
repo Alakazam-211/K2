@@ -86,11 +86,11 @@ pub use error::{DroppedBy, EditWithError, ElemsClaim, NodesClaim, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope, Rights};
 #[cfg(feature = "conformance")]
 pub use live::CharBlame;
-pub(crate) use live::Shown;
 pub use live::{
-    keyed_state_json, watch_state_json, KeyedWatch, WatchActor, WatchChange, WatchExtras,
-    WatchFrame, WatchOp, WatchOptions, WatchPage, WatchPart, WatchSnapshot, KEYED_WATCH_FEATURE,
-    WATCH_FRAME_MAX, WATCH_PAGE_BYTES, WATCH_PAGE_BYTES_MIN,
+    keyed_state_json, watch_state_json, KeyedWatch, OutsideSaveCopy, OutsideSaveOutcome,
+    WatchActor, WatchChange, WatchExtras, WatchFrame, WatchOp, WatchOptions, WatchOutsideSave,
+    WatchPage, WatchPart, WatchRefusal, WatchSnapshot, KEYED_WATCH_FEATURE, WATCH_FRAME_MAX,
+    WATCH_PAGE_BYTES, WATCH_PAGE_BYTES_MIN,
 };
 pub use live::{
     AuditReport, AuditViolation, CellBlame, ElemBlame, FacetConflict, GridConflict, GridWrite,
@@ -103,6 +103,7 @@ pub use live::{
     ReadResult, RightsChange, Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome,
     UndoRequest, WriteOptions, WriteOutcome, WriteReport, WriterLease, DEMOTED, DEVICE_KEY_MAX,
 };
+pub(crate) use live::{Shown, VerbRefused};
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{
     default_reconcile, elem_of_map_key, list_pairing, Declined, Pack, PackContent, PackError,
@@ -110,8 +111,9 @@ pub use pack::{
 };
 pub use participant::{
     CellCursor, ConnId, CursorAt, Device, ElemFocus, ElemRange, ElemSelection, Participant,
-    ParticipantKind, Point, Rect, Role, RosterEntry, Stay, DEVICE_LABEL_MAX, ELEM_SELECTION_MAX,
-    EXTERNAL_PID, IMPORT_PID, RESERVED_PID_PREFIX, UNKNOWN_PID,
+    ParticipantKind, PlayState, Point, Rect, Role, RosterEntry, Stay, TimePosition,
+    DEVICE_LABEL_MAX, ELEM_SELECTION_MAX, EXTERNAL_PID, IMPORT_PID, PRESENCE_ADDRESS_MAX,
+    RESERVED_PID_PREFIX, UNKNOWN_PID,
 };
 pub use position::{At, Cursor, LineCol, LineRange};
 pub use roster::{ClaimActor, RosterEvent, RosterMember, Who};

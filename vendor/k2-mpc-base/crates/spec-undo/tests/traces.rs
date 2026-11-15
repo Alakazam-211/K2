@@ -792,7 +792,7 @@ fn large_part(
     (format!("{name}_{a}_{b}"), a..b, min)
 }
 
-/// Regression for finding F1 (fixed in v0.8.1): two participants append the same line;
+/// Regression, fixed in v0.8.1: two participants append the same line;
 /// each undoes their own.
 /// Undo of the first must delete **its own** line (U10: the merge's hunks, at element
 /// identity), so the second's undo finds its line and the doc is back to `x\n`.

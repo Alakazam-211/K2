@@ -1,0 +1,519 @@
+{
+  "features": ["keyed_watch"],
+  "frames": [
+    {
+      "type": "keyed_snapshot",
+      "seq": 1,
+      "upto": 1,
+      "schema": {
+        "name": "deck-view",
+        "roots": [
+          {
+            "name": "pages",
+            "kind": "list"
+          },
+          {
+            "name": "items",
+            "kind": "list"
+          },
+          {
+            "name": "item_f",
+            "kind": "map"
+          }
+        ],
+        "composite": [
+          {
+            "map": "item_f",
+            "list": "items"
+          }
+        ]
+      },
+      "view": {
+        "schema": {
+          "containers": "pages",
+          "units": "items",
+          "unit_container_field": "page",
+          "container_id_field": null,
+          "native_unit": "px",
+          "page": null,
+          "container_fields": {
+            "title": null,
+            "hidden": null,
+            "layout": null
+          },
+          "unit_fields": {
+            "kind": {
+              "list_value": true
+            },
+            "name": null,
+            "alt": null,
+            "text": "text",
+            "hidden": null,
+            "editable_text": null,
+            "placeholder": null
+          },
+          "geometry": null,
+          "field_class": {},
+          "derived": {
+            "containers": [],
+            "units": []
+          },
+          "nesting": [
+            {
+              "kind": "box",
+              "parent": "group"
+            },
+            {
+              "kind": "group",
+              "parent": "group"
+            }
+          ]
+        },
+        "tier": "live",
+        "rev": 1,
+        "version": null,
+        "page": null,
+        "fonts": [],
+        "layouts": [],
+        "containers": [
+          {
+            "key": "@pg:p1",
+            "position": 1,
+            "title": null,
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 3
+          },
+          {
+            "key": "@pg:p2",
+            "position": 2,
+            "title": null,
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 3
+          }
+        ]
+      },
+      "pages": 5
+    },
+    {
+      "type": "keyed_page",
+      "seq": 2,
+      "upto": 1,
+      "page": 1,
+      "pages": 5,
+      "root": "pages",
+      "live": [
+        ["@pg:p1", null],
+        ["@pg:p2", null]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 3,
+      "upto": 1,
+      "page": 2,
+      "pages": 5,
+      "root": "items",
+      "live": [
+        ["@it:i1x1", "box"],
+        ["@it:i1x2", "box"],
+        ["@it:i1x3", "box"],
+        ["@it:i2x1", "box"],
+        ["@it:i2x2", "box"],
+        ["@it:i2x3", "box"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 4,
+      "upto": 1,
+      "page": 3,
+      "pages": 5,
+      "root": "item_f",
+      "entries": [
+        ["@it:i1x1", "page", "p1"],
+        ["@it:i1x1", "text", "item 1 on pa"],
+        ["@it:i1x2", "page", "p1"],
+        ["@it:i1x2", "text", "item 2 on pa"],
+        ["@it:i1x3", "page", "p1"],
+        ["@it:i1x3", "text", "item 3 on pa"],
+        ["@it:i2x1", "page", "p2"],
+        ["@it:i2x1", "text", "item 1 on pa"],
+        ["@it:i2x2", "page", "p2"],
+        ["@it:i2x2", "text", "item 2 on pa"],
+        ["@it:i2x3", "page", "p2"],
+        ["@it:i2x3", "text", "item 3 on pa"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 5,
+      "upto": 1,
+      "page": 4,
+      "pages": 5,
+      "root": "items",
+      "units": {
+        "container": "@pg:p1",
+        "from": 0,
+        "units": [
+          {
+            "key": "@it:i1x1",
+            "container": "@pg:p1",
+            "parent": null,
+            "live": true,
+            "kind": "box",
+            "name": "",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": {
+              "summary": "item 1 on pa",
+              "truncated": false
+            },
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          },
+          {
+            "key": "@it:i1x2",
+            "container": "@pg:p1",
+            "parent": null,
+            "live": true,
+            "kind": "box",
+            "name": "",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 1,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": {
+              "summary": "item 2 on pa",
+              "truncated": false
+            },
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          },
+          {
+            "key": "@it:i1x3",
+            "container": "@pg:p1",
+            "parent": null,
+            "live": true,
+            "kind": "box",
+            "name": "",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 2,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": {
+              "summary": "item 3 on pa",
+              "truncated": false
+            },
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          }
+        ],
+        "next": null,
+        "total": 3
+      }
+    },
+    {
+      "type": "keyed_page",
+      "seq": 6,
+      "upto": 1,
+      "page": 5,
+      "pages": 5,
+      "root": "items",
+      "units": {
+        "container": "@pg:p2",
+        "from": 0,
+        "units": [
+          {
+            "key": "@it:i2x1",
+            "container": "@pg:p2",
+            "parent": null,
+            "live": true,
+            "kind": "box",
+            "name": "",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": {
+              "summary": "item 1 on pa",
+              "truncated": false
+            },
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          },
+          {
+            "key": "@it:i2x2",
+            "container": "@pg:p2",
+            "parent": null,
+            "live": true,
+            "kind": "box",
+            "name": "",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 1,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": {
+              "summary": "item 2 on pa",
+              "truncated": false
+            },
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          },
+          {
+            "key": "@it:i2x3",
+            "container": "@pg:p2",
+            "parent": null,
+            "live": true,
+            "kind": "box",
+            "name": "",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 2,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": {
+              "summary": "item 3 on pa",
+              "truncated": false
+            },
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          }
+        ],
+        "next": null,
+        "total": 3
+      }
+    }
+  ],
+  "final_json": "{\"roots\":[{\"name\":\"pages\",\"kind\":\"list\",\"live\":[[\"@pg:p1\",null],[\"@pg:p2\",null]],\"hidden\":[]},{\"name\":\"items\",\"kind\":\"list\",\"live\":[[\"@it:i1x1\",\"box\"],[\"@it:i1x2\",\"box\"],[\"@it:i1x3\",\"box\"],[\"@it:i2x1\",\"box\"],[\"@it:i2x2\",\"box\"],[\"@it:i2x3\",\"box\"]],\"hidden\":[]},{\"name\":\"item_f\",\"kind\":\"map\",\"entries\":[[\"@it:i1x1\\u001fpage\",\"p1\"],[\"@it:i1x1\\u001ftext\",\"item 1 on pa\"],[\"@it:i1x2\\u001fpage\",\"p1\"],[\"@it:i1x2\\u001ftext\",\"item 2 on pa\"],[\"@it:i1x3\\u001fpage\",\"p1\"],[\"@it:i1x3\\u001ftext\",\"item 3 on pa\"],[\"@it:i2x1\\u001fpage\",\"p2\"],[\"@it:i2x1\\u001ftext\",\"item 1 on pa\"],[\"@it:i2x2\\u001fpage\",\"p2\"],[\"@it:i2x2\\u001ftext\",\"item 2 on pa\"],[\"@it:i2x3\\u001fpage\",\"p2\"],[\"@it:i2x3\\u001ftext\",\"item 3 on pa\"]]}]}",
+  "units": {
+    "@pg:p1": [
+      {
+        "key": "@it:i1x1",
+        "container": "@pg:p1",
+        "parent": null,
+        "live": true,
+        "kind": "box",
+        "name": "",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 0,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": {
+          "summary": "item 1 on pa",
+          "truncated": false
+        },
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null
+      },
+      {
+        "key": "@it:i1x2",
+        "container": "@pg:p1",
+        "parent": null,
+        "live": true,
+        "kind": "box",
+        "name": "",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 1,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": {
+          "summary": "item 2 on pa",
+          "truncated": false
+        },
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null
+      },
+      {
+        "key": "@it:i1x3",
+        "container": "@pg:p1",
+        "parent": null,
+        "live": true,
+        "kind": "box",
+        "name": "",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 2,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": {
+          "summary": "item 3 on pa",
+          "truncated": false
+        },
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null
+      }
+    ],
+    "@pg:p2": [
+      {
+        "key": "@it:i2x1",
+        "container": "@pg:p2",
+        "parent": null,
+        "live": true,
+        "kind": "box",
+        "name": "",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 0,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": {
+          "summary": "item 1 on pa",
+          "truncated": false
+        },
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null
+      },
+      {
+        "key": "@it:i2x2",
+        "container": "@pg:p2",
+        "parent": null,
+        "live": true,
+        "kind": "box",
+        "name": "",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 1,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": {
+          "summary": "item 2 on pa",
+          "truncated": false
+        },
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null
+      },
+      {
+        "key": "@it:i2x3",
+        "container": "@pg:p2",
+        "parent": null,
+        "live": true,
+        "kind": "box",
+        "name": "",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 2,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": {
+          "summary": "item 3 on pa",
+          "truncated": false
+        },
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null
+      }
+    ]
+  }
+}

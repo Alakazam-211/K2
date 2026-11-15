@@ -1936,7 +1936,7 @@ mod tests {
             .collect()
     }
 
-    /// P14: the seam's `new` and `text` return `Result`; a text root the doc doesn't hold
+    /// The seam's `new` and `text` return `Result`; a text root the doc doesn't hold
     /// is an error.
     #[test]
     fn text_of_an_unknown_root_is_an_error() {

@@ -1,7 +1,7 @@
 //! The agent-parity framework: everything a person can do in an editor, an
 //! agent can do through a verb, with the same effect.
 //!
-//! - [`PersonAction`]: one variant per parity row (P1…P44), each for some of text docs, blob
+//! - [`PersonAction`]: one variant per parity row (44 rows), each for some of text docs, blob
 //!   docs (tier 0) and grid docs ([`Tier`]). Deliberately exhaustive: a pack
 //!   maps it with a `match`, so a new row doesn't compile until every pack maps it.
 //! - [`Registry`]: every verb ([`VerbSpec`]: name, kind, rights, the session calls it makes,
@@ -20,8 +20,9 @@
 //! - The grid tier (a [`crate::table`] pack): [`check_grid`] with the pack's registry
 //!   ([`Registry::for_pack`]: the kit's [`Tier::Grid`] verbs and the pack's structured
 //!   verbs), [`kit_grid_cases`] and the pack's [`GridCase`]s; it compares the grid **by key**
-//!   ([`GridObservation`]) as well as the rendered bytes. P35-P44 are grid rows; text and
-//!   blob lists don't carry them (a text pack maps them N/A in its exhaustive `match`).
+//!   ([`GridObservation`]) as well as the rendered bytes. The row and column actions are grid
+//!   rows; text and blob lists don't carry them (a text pack maps them N/A in its exhaustive
+//!   `match`).
 //! - A blob pack with a structure index: [`Registry::for_blob_pack`] adds its verbs and node
 //!   claims, and [`kit_index_cases`] checks them on two versions of a file the pack gives.
 //! - [`positions`]: how each verb counts the positions it takes or prints, the

@@ -17,7 +17,9 @@ use k2_mpc_base::session::{
     AuditEvent, Config, Host, Participant, ParticipantKind, PurgeRequest, PurgeScope, Rights,
     Session, SessionError, SessionManager, Stay, TextFilePack,
 };
-use k2_mpc_base::store::{DocId, DocKey, DocMeta, DocStore, StoreError, STORE_FORMAT_READ};
+use k2_mpc_base::store::{
+    DocId, DocKey, DocStore, StoreError, FEATURE_CHUNKED, FEATURE_NATIVE, STORE_FORMAT_READ,
+};
 use k2_mpc_base::tools::{exit, session_exit};
 
 const MD: TextFilePack = TextFilePack::new("markdown", 1 << 20);
@@ -243,11 +245,12 @@ fn an_unstamped_doc_loads_as_this_engines() {
     mgr.release().unwrap();
 }
 
-// ------------------------------------------------- a format-7 store (v0.10.1, forward-declared)
+// ------------------------------------------- store formats 7 and 8 (the required-features word)
 
-/// Stamp the store at `path` format `f` (and a pending rewrite, when `pending`), through redb
-/// itself: as the native engine's build would leave it. This build never writes format 7.
-fn stamp_store(path: &std::path::Path, f: u64, pending: bool) {
+/// Stamp the store at `path` format `f`, with features word `word` (`None`: none), and a
+/// pending rewrite when `pending`, through redb itself: as another build would leave it. This
+/// build never writes format 7, and stamps format 8 only with a store's first chunked version.
+fn stamp_store(path: &std::path::Path, f: u64, word: Option<u64>, pending: bool) {
     use redb::{Database, TableDefinition};
     const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
     let d = Database::open(path).unwrap();
@@ -255,18 +258,23 @@ fn stamp_store(path: &std::path::Path, f: u64, pending: bool) {
     {
         let mut m = w.open_table(META).unwrap();
         m.insert("store_format", f).unwrap();
+        match word {
+            Some(v) => m.insert("required_features", v).unwrap(),
+            None => m.remove("required_features").unwrap(),
+        };
         if pending {
             m.insert("rewrite_pending", 1).unwrap();
+        } else {
+            m.remove("rewrite_pending").unwrap();
         }
     }
     w.commit().unwrap();
 }
 
-/// A store, made by this build and then stamped format 7 by hand, as the native engine's
-/// build would leave it: a Yrs doc (`y.md`), a doc the native engine wrote (`n.md`, stamped
-/// `mpce-0.1` format 1), and a table only the native build knows. Returns its folder and path.
-fn format_7_store(tag: &str) -> (PathBuf, PathBuf, Arc<TestHost>) {
-    let dir = std::env::temp_dir().join(format!("k2mb-stamp7-{tag}-{}", std::process::id()));
+/// A store made by this build (a Yrs doc, `y.md`) and then stamped format `f` with features
+/// word `word` by hand. Returns its folder and path.
+fn stamped_store(tag: &str, f: u64, word: Option<u64>) -> (PathBuf, PathBuf, Arc<TestHost>) {
+    let dir = std::env::temp_dir().join(format!("k2mb-stamp{f}-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("docs.redb");
@@ -281,51 +289,30 @@ fn format_7_store(tag: &str) -> (PathBuf, PathBuf, Arc<TestHost>) {
     {
         let store = Arc::new(DocStore::open(&path).unwrap());
         let mgr = SessionManager::new(store.clone(), host.clone(), Config::default());
-        for p in ["y.md", "n.md"] {
-            drop(
-                mgr.open(Arc::new(MD), &key(p), Some(TEXT.as_bytes()))
-                    .unwrap(),
-            );
-        }
+        drop(
+            mgr.open(Arc::new(MD), &key("y.md"), Some(TEXT.as_bytes()))
+                .unwrap(),
+        );
         mgr.release().unwrap();
-        drop(mgr);
-        let n = store.find(&key("n.md")).unwrap().unwrap();
-        let meta = DocMeta {
-            engine: "mpce-0.1".into(),
-            engine_format: 1,
-            ..store.meta(n).unwrap()
-        };
-        store.put_meta(n, &meta).unwrap();
-        store.add_table_for_tests("mpce_events", false).unwrap();
     }
-    stamp_store(&path, 7, false);
+    stamp_store(&path, f, word, false);
     (dir, path, host)
 }
 
-/// v0.10.1 reads a format-7 store (the native engine's) without writing its format, and never
-/// changes what it can't read. Opening the store writes nothing (its bytes are the same after
-/// an open and a close). A Yrs doc in it is served: read, edited, blamed. A doc the native
-/// engine wrote is refused with `MPC-E520` on open and on delete (alone and with its space),
-/// and nothing is deleted. A purge (which rewrites the file) and a whole-store rewrite are
-/// refused with `MPC-E502` before anything changes. A purge of the native doc itself can't
-/// be asked for: a purge needs the doc open, and opening it is refused (`MPC-E520`); the
-/// store's own purge checks the stamp too.
+/// A format-8 store naming only the chunked feature opens here as any store this build writes:
+/// it serves the Yrs doc in it (read, edited, blamed), never lowers its stamp or drops its
+/// word, and a purge (which rewrites the file) and a whole-store rewrite copy it with its meta.
 #[test]
-fn a_format_7_store_serves_yrs_docs_and_refuses_native_ones() {
-    let (dir, path, host) = format_7_store("serve");
-    let before = std::fs::read(&path).unwrap();
+fn a_format_8_store_serves_yrs_docs_and_is_rewritten_here() {
+    let (dir, path, host) = stamped_store("serve", 8, Some(FEATURE_CHUNKED));
     {
-        let store = DocStore::open(&path).unwrap();
-        assert_eq!(store.format().unwrap(), 7);
-        assert_eq!(STORE_FORMAT_READ, 7);
+        let store = DocStore::open(&path).expect("row: a format-8 store naming chunked opens");
+        assert_eq!(store.format().unwrap(), 8);
+        assert_eq!(store.required_features().unwrap(), FEATURE_CHUNKED);
+        assert_eq!(STORE_FORMAT_READ, 8);
     }
-    assert!(
-        std::fs::read(&path).unwrap() == before,
-        "opening a format-7 store wrote to it"
-    );
     let store = Arc::new(DocStore::open(&path).unwrap());
     let mgr = SessionManager::new(store.clone(), host.clone(), Config::default());
-    // the Yrs doc is served
     let s = mgr.open(Arc::new(MD), &key("y.md"), None).unwrap();
     let who = Participant::new("a", "A", "#123456", ParticipantKind::Person, "cli");
     let c = s.join(who, Stay::Held).unwrap().conn;
@@ -335,66 +322,185 @@ fn a_format_7_store_serves_yrs_docs_and_refuses_native_ones() {
     assert_eq!(s.blame(c, TextFilePack::ROOT, None).unwrap().lines.len(), 3);
     assert_eq!(
         store.format().unwrap(),
-        7,
-        "the stamp stays 7: never lowered"
+        8,
+        "the stamp stays 8: never lowered"
     );
-    // the native doc: refused on open, delete and delete_space; nothing deleted
-    let e = mgr.open(Arc::new(MD), &key("n.md"), None).err().unwrap();
-    assert_engine_mismatch(&e, "mpce-0.1", 1);
-    let e = mgr.delete_doc(&key("n.md")).unwrap_err();
-    assert_engine_mismatch(&e, "mpce-0.1", 1);
-    let e = mgr.delete_space("ws").unwrap_err();
-    assert_engine_mismatch(&e, "mpce-0.1", 1);
-    assert!(store.find(&key("n.md")).unwrap().is_some());
-    assert!(store.find(&key("y.md")).unwrap().is_some());
-    assert!(
-        mgr.get(&key("y.md")).is_some(),
-        "a refused delete_space closes nothing"
-    );
-    // the store's own delete and its whole-store rewrite refuse too
-    let n = store.find(&key("n.md")).unwrap().unwrap();
-    let e = store.delete_doc(n, 5).unwrap_err();
-    assert!(matches!(e, StoreError::ForeignEngine { .. }), "{e:?}");
-    assert_eq!(e.report().id(), "MPC-E520");
-    let e = store.rewrite_file().unwrap_err();
-    assert_eq!(e, StoreError::RewriteNewer { found: 7 });
+    assert_eq!(store.required_features().unwrap(), FEATURE_CHUNKED);
+    store
+        .rewrite_file()
+        .expect("row: a format-8 store is rewritten here");
     assert_eq!(
-        (e.report().id(), e.report().exit()),
-        ("MPC-E502", exit::STORE)
+        (store.format().unwrap(), store.required_features().unwrap()),
+        (8, FEATURE_CHUNKED),
+        "row: the rewrite keeps the stamp and the word"
     );
-    // a purge (of the Yrs doc) rewrites the file: refused before anything changes
-    let e = s
-        .purge(c, PurgeRequest::new(PurgeScope::History))
-        .unwrap_err();
-    assert_eq!(e.report().id(), "MPC-E502", "{e:?}");
+    s.purge(c, PurgeRequest::new(PurgeScope::History))
+        .expect("row: a purge of a format-8 store runs here");
     assert_eq!(
         s.read(c).unwrap().text_by_root[0].1,
         "# Title\n\nbody, edited\n"
+    );
+    assert_eq!(
+        (store.format().unwrap(), store.required_features().unwrap()),
+        (8, FEATURE_CHUNKED),
+        "row: the purge's rewrite keeps the stamp and the word"
     );
     mgr.release().unwrap();
     drop((s, mgr, store));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A rewrite the native engine's build left pending on its format-7 store isn't finished
-/// here: the open is refused with `MPC-E502` and the file is left as it was. A store past
-/// what this build reads (format 8) is refused as newer.
+/// Format 7 was never written (declared for the native engine's stores and retired): a store
+/// stamped 7 is refused at open with `MPC-E503`, exit 6, the file left as it was, with a
+/// pending rewrite or a features word too. A rewrite another build left pending on a format-8
+/// store is finished here, the stamp and the word kept. Past what this build reads (format 9),
+/// the store is refused as newer.
 #[test]
-fn a_format_7_store_with_a_pending_rewrite_is_refused_untouched() {
-    let (dir, path, _host) = format_7_store("pending");
-    stamp_store(&path, 7, true);
-    let before = std::fs::read(&path).unwrap();
-    let e = DocStore::open(&path).err().expect("refused");
-    assert_eq!(e, StoreError::RewriteNewer { found: 7 });
-    assert_eq!(e.report().id(), "MPC-E502");
-    assert!(
-        std::fs::read(&path).unwrap() == before,
-        "a refused open wrote to the store"
-    );
-    stamp_store(&path, 8, false);
+fn a_format_7_store_is_refused_untouched() {
+    let (dir, path, _host) = stamped_store("never", 7, None);
+    for (word, pending) in [(None, false), (None, true), (Some(FEATURE_CHUNKED), false)] {
+        stamp_store(&path, 7, word, pending);
+        let before = std::fs::read(&path).unwrap();
+        let e = DocStore::open(&path)
+            .err()
+            .expect("row: format 7 is refused at open");
+        assert_eq!(
+            e,
+            StoreError::NeverWritten { found: 7 },
+            "word {word:?}, pending {pending}"
+        );
+        assert_eq!(e.to_string(), "store is format 7, which no kit writes");
+        assert_eq!(
+            (e.report().id(), e.report().exit()),
+            ("MPC-E503", exit::STORE)
+        );
+        assert!(
+            std::fs::read(&path).unwrap() == before,
+            "a refused open wrote to the store"
+        );
+    }
+    stamp_store(&path, 8, Some(FEATURE_CHUNKED), true);
+    {
+        let s = DocStore::open(&path).expect("row: a pending rewrite on format 8 is finished");
+        assert_eq!(
+            (s.format().unwrap(), s.required_features().unwrap()),
+            (8, FEATURE_CHUNKED),
+            "row: the finished rewrite keeps the stamp and the word"
+        );
+    }
+    stamp_store(&path, 9, None, false);
     assert_eq!(
         DocStore::open(&path).err(),
-        Some(StoreError::Newer { found: 8 })
+        Some(StoreError::Newer { found: 9 })
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ------------------------------------------------- N−1 of store format 8 (tools/n1/n1.sh)
+
+/// The directory `tools/n1/n1.sh node-format` names (`K2MB_N1_OUT`).
+fn n1_out() -> PathBuf {
+    PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT: run by tools/n1/n1.sh"))
+}
+
+/// The three format-8 stores the N−1 check hands the previous release: each made by this build
+/// (a Yrs doc, `y.md`) and stamped format 8 by hand, its word naming chunked, native, and both.
+const N1_WORDS: [(&str, u64); 3] = [
+    ("chunked", FEATURE_CHUNKED),
+    ("native", FEATURE_NATIVE),
+    ("both", FEATURE_CHUNKED | FEATURE_NATIVE),
+];
+
+/// N−1 of store format 8, this build's half before the previous release's
+/// (`tools/n1/n1.sh node-format`): `chunked.redb`, `native.redb` and `both.redb` in
+/// `K2MB_N1_OUT`, for the previous release to refuse at open, each with one line, the bytes
+/// unchanged (`tools/n1/consumer-format`).
+#[test]
+#[ignore = "N-1: tools/n1/n1.sh node-format"]
+fn n1_format_producer() {
+    let out = n1_out();
+    std::fs::create_dir_all(&out).unwrap();
+    for (name, word) in N1_WORDS {
+        let (dir, path, _host) = stamped_store(&format!("n1-{name}"), 8, Some(word));
+        std::fs::copy(&path, out.join(format!("{name}.redb"))).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        println!("N-1 FORMAT produced {name}.redb: format 8, features word {word}");
+    }
+}
+
+/// N−1 of store format 8, this build's half after the previous release's: the store the
+/// previous release wrote (`prev.redb`, a text doc) opens here as before, keeps its format
+/// (only a chunked version stamps 8) with no features word, reads, takes a write and rewrites;
+/// the format-8 stores the previous release refused are as this build made them: `chunked`
+/// opens at format 8 with its word, `native` and `both` are refused (no engine store) with
+/// their bytes unchanged.
+#[test]
+#[ignore = "N-1: tools/n1/n1.sh node-format"]
+fn n1_format_after() {
+    let out = n1_out();
+    let prev = out.join("prev.redb");
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(1_800_000_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    host.rights
+        .lock()
+        .unwrap()
+        .insert("a".into(), Rights::full().with_owner(true));
+    {
+        let store = Arc::new(DocStore::open(&prev).unwrap());
+        let format = store.format().unwrap();
+        assert!(format < 8, "the previous release wrote format {format}");
+        assert_eq!(store.required_features().unwrap(), 0);
+        let mgr = SessionManager::new(store.clone(), host.clone(), Config::default());
+        let k = DocKey {
+            space: "ws".into(),
+            path: "a.md".into(),
+        };
+        let s = mgr.open(Arc::new(MD), &k, None).unwrap();
+        let who = Participant::new("a", "A", "#123456", ParticipantKind::Person, "cli");
+        let c = s.join(who, Stay::Held).unwrap().conn;
+        assert_eq!(
+            s.read(c).unwrap().text_by_root[0].1,
+            "# Written by the previous release\n\nbody\n"
+        );
+        s.replace_text(
+            c,
+            TextFilePack::ROOT,
+            "# Written by the previous release\n\nedited\n",
+        )
+        .unwrap();
+        mgr.release().unwrap();
+        drop((s, mgr));
+        store.rewrite_file().unwrap();
+        assert_eq!(
+            store.format().unwrap(),
+            format,
+            "the format stays: only a chunked version stamps 8"
+        );
+        assert_eq!(store.required_features().unwrap(), 0);
+        println!("N-1 FORMAT AFTER prev.redb: opened, written and rewritten at format {format}");
+    }
+    for (name, word) in N1_WORDS {
+        let p = out.join(format!("{name}.redb"));
+        let before = std::fs::read(&p).unwrap();
+        match DocStore::open(&p) {
+            Ok(s) => {
+                assert_eq!(word, FEATURE_CHUNKED, "{name} opened");
+                assert_eq!(s.format().unwrap(), 8);
+                assert_eq!(s.required_features().unwrap(), word);
+                println!("N-1 FORMAT AFTER {name}.redb: opens at format 8");
+            }
+            Err(e) => {
+                assert_ne!(word, FEATURE_CHUNKED, "{name}: {e}");
+                assert_eq!(e, StoreError::NativeWithoutEngine, "{name}");
+                assert!(
+                    std::fs::read(&p).unwrap() == before,
+                    "{name}: a refused open changed the file"
+                );
+                println!("N-1 FORMAT AFTER {name}.redb: refused: {e}");
+            }
+        }
+    }
+    println!("N-1 FORMAT AFTER OK");
 }

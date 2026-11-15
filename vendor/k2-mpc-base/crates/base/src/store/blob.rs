@@ -7,6 +7,7 @@
 
 use redb::{ReadableTable, TableDefinition, WriteTransaction};
 
+use super::chunks::{self, ChunkCommit, ChunkId};
 use super::enc::{R, W};
 use super::turns;
 use super::{
@@ -435,6 +436,15 @@ pub(super) fn delete_rows(
     {
         blobs.push(dec_version(kv?.1.value())?.blob);
     }
+    // a chunked version holds its manifest, not a whole-file blob: its rows go with the doc's
+    // chunk tables below
+    let mut whole = Vec::with_capacity(blobs.len());
+    for b in blobs {
+        if !chunks::is_chunked(w, id, &b)? {
+            whole.push(b);
+        }
+    }
+    let blobs = whole;
     if !blobs.is_empty() {
         match space_in(w, space) {
             Ok(k) => {
@@ -455,6 +465,12 @@ pub(super) fn delete_rows(
         .retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?;
     w.open_table(BLOB_APPROVALS)?
         .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
+    let no = match space_in(w, space) {
+        Ok(k) => Some(k.no),
+        Err(StoreError::NoBlobSpace) => None,
+        Err(e) => return Err(e),
+    };
+    chunks::erase_doc(w, id, no)?;
     super::live_carrier::delete_rows(w, id, now)?;
     super::blob_refs::delete_rows(w, id, now)
 }
@@ -623,9 +639,15 @@ impl DocStore {
                 }
             }
         }
-        // the invariant: an index row exists only while its blob row does
-        for (no, id, _) in &gone {
-            super::blob_struct::remove_rows(&w, *no, id)?;
+        // the invariant: an index row exists only while its blob row does, or a manifest of
+        // the same bytes (a chunked version's stands in for its blob row)
+        if !gone.is_empty() {
+            let manifests = chunks::manifest_files_in(&w)?;
+            for (no, id, _) in &gone {
+                if !manifests.contains(id.as_bytes().as_slice()) {
+                    super::blob_struct::remove_rows(&w, *no, id)?;
+                }
+            }
         }
         w.commit()?;
         Ok(gone)
@@ -664,6 +686,11 @@ impl DocStore {
                         t.remove((k.no, id.as_bytes().as_slice()))?;
                     }
                     let struct_rows = super::blob_struct::remove_space_rows(&w, k.no)?;
+                    // the space's chunked versions go with its key: their chunk keys, chunk
+                    // ids and manifests are digests of the content
+                    for doc in docs_in_space(&w, space)? {
+                        chunks::erase_doc(&w, doc, None)?;
+                    }
                     Some((k.no, rows, struct_rows))
                 }
             }
@@ -689,14 +716,29 @@ impl DocStore {
 
     // ----- blob docs -----
 
-    /// Create a blob doc with its first version (taking a reference on its blob) and,
-    /// for a doc with a file, its synced state, in one transaction.
+    /// [`DocStore::create_blob_doc_with`] with a whole-file first version (tests).
+    #[cfg(test)]
     pub(crate) fn create_blob_doc(
         &self,
         meta: &DocMeta,
         first: &BlobVersion,
         sync: Option<&BlobSync>,
     ) -> Result<(DocId, VersionId), StoreError> {
+        self.create_blob_doc_with(meta, first, sync, None)
+    }
+
+    /// Create a blob doc with its first version (taking a reference on its manifest when the
+    /// version is chunked, else on its blob) and, for a doc with a file, its synced state, in
+    /// one transaction. A chunked first version (`chunked`, the write's commit) is committed
+    /// with it, under the doc id its write took ([`DocStore::reserve_doc_id`]).
+    pub(crate) fn create_blob_doc_with(
+        &self,
+        meta: &DocMeta,
+        first: &BlobVersion,
+        sync: Option<&BlobSync>,
+        chunked: Option<&ChunkCommit>,
+    ) -> Result<(DocId, VersionId), StoreError> {
+        chunk_hook_before(chunked.is_some());
         let w = self.begin_write()?;
         let id = {
             let mut paths = w.open_table(PATHS)?;
@@ -704,29 +746,61 @@ impl DocStore {
             if paths.get(k.as_str())?.is_some() {
                 return Err(StoreError::KeyTaken(meta.key.clone()));
             }
-            let mut m = w.open_table(META)?;
-            let id = m.get("next_doc_id")?.map(|v| v.value()).unwrap_or(1);
-            m.insert("next_doc_id", id + 1)?;
+            let id = match chunked {
+                Some(c) => c.doc,
+                None => {
+                    let mut m = w.open_table(META)?;
+                    let id = m.get("next_doc_id")?.map(|v| v.value()).unwrap_or(1);
+                    m.insert("next_doc_id", id + 1)?;
+                    id
+                }
+            };
+            let mut docs = w.open_table(DOCS)?;
+            if docs.get(id)?.is_some() {
+                return Err(StoreError::Corrupt("a reserved doc id is taken"));
+            }
             paths.insert(k.as_str(), id)?;
-            w.open_table(DOCS)?
-                .insert(id, super::enc_meta(meta).as_slice())?;
+            docs.insert(id, super::enc_meta(meta).as_slice())?;
             id
         };
         let space = space_in(&w, &meta.key.space)?;
-        adjust_ref(&w, space.no, &first.blob, 1, first.at_ms)?;
+        if let Some(c) = chunked {
+            chunks::apply(&w, space.no, c)?;
+        }
+        if !chunks::take_ref(&w, id, &first.blob)? {
+            adjust_ref(&w, space.no, &first.blob, 1, first.at_ms)?;
+        }
         put_version(&w, id, 1, first)?;
+        // the version and the reference it takes
+        chunk_work!(rows_written, 2, if chunked.is_some());
         if let Some(s) = sync {
             w.open_table(BLOB_SYNC)?
                 .insert((id, SYNCED), enc_sync(s).as_slice())?;
+            chunk_work!(rows_written, 1, if chunked.is_some());
         }
         w.commit()?;
+        chunk_work!(commits, 1, if chunked.is_some());
+        chunk_hook_after(chunked.is_some())?;
         Ok((id, 1))
     }
 
-    /// Append versions to a blob doc (each takes a reference on its blob, and one written on
-    /// someone's behalf gets a `Pending` [`Approval`]) and, when given, set its synced state
-    /// (clearing a write-back in flight), in one transaction. Fails with
-    /// [`StoreError::LogMoved`] unless the doc's latest version is `expect_last`.
+    /// A doc id for a doc about to be created ([`DocStore::create_blob_doc_with`]), taken now
+    /// so a chunked first version can be written under it before the doc exists. Doc ids are
+    /// never reused: an id taken and never used is skipped.
+    pub(crate) fn reserve_doc_id(&self) -> Result<DocId, StoreError> {
+        let w = self.begin_write()?;
+        let id = {
+            let mut m = w.open_table(META)?;
+            let id = m.get("next_doc_id")?.map(|v| v.value()).unwrap_or(1);
+            m.insert("next_doc_id", id + 1)?;
+            id
+        };
+        w.commit()?;
+        Ok(id)
+    }
+
+    /// [`DocStore::commit_blob_versions_with`] with no chunked write (tests).
+    #[cfg(test)]
     pub(crate) fn commit_blob_versions(
         &self,
         id: DocId,
@@ -735,26 +809,105 @@ impl DocStore {
         versions: &[BlobVersion],
         sync: Option<&BlobSync>,
     ) -> Result<Vec<VersionId>, StoreError> {
+        self.commit_blob_versions_with(id, space, expect_last, versions, sync, &[])
+    }
+
+    /// Append versions to a blob doc (one written on someone's behalf gets a `Pending`
+    /// [`Approval`]) and, when given, set its synced state (clearing a write-back in flight), in
+    /// one transaction, with the chunked writes of some of them (`docs/SESSIONS.md`, "Chunked
+    /// versions"): each one's manifest, chunk rows and segment row, failing closed
+    /// ([`StoreError::ChunkGone`]). Each version takes its reference: on its manifest when the
+    /// doc holds one for its bytes, on its whole-file blob otherwise. Fails with
+    /// [`StoreError::LogMoved`] unless the doc's latest version is `expect_last`.
+    pub(crate) fn commit_blob_versions_with(
+        &self,
+        id: DocId,
+        space: &str,
+        expect_last: VersionId,
+        versions: &[BlobVersion],
+        sync: Option<&BlobSync>,
+        chunked: &[&ChunkCommit],
+    ) -> Result<Vec<VersionId>, StoreError> {
+        chunk_hook_before(!chunked.is_empty());
         let w = self.begin_write()?;
         let mut last = last_vid(&w, id)?;
         if last != expect_last {
             return Err(StoreError::LogMoved(id, expect_last, last));
         }
         let k = space_in(&w, space)?;
+        for c in chunked {
+            if c.doc != id {
+                return Err(StoreError::Corrupt("a chunked write of another doc"));
+            }
+            chunks::apply(&w, k.no, c)?;
+        }
         let mut vids = Vec::with_capacity(versions.len());
         for v in versions {
-            adjust_ref(&w, k.no, &v.blob, 1, v.at_ms)?;
+            if !chunks::take_ref(&w, id, &v.blob)? {
+                adjust_ref(&w, k.no, &v.blob, 1, v.at_ms)?;
+            }
             last += 1;
             put_version(&w, id, last, v)?;
             vids.push(last);
+            // the version and the reference it takes
+            chunk_work!(rows_written, 2, if !chunked.is_empty());
         }
         if let Some(s) = sync {
             let mut t = w.open_table(BLOB_SYNC)?;
             t.insert((id, SYNCED), enc_sync(s).as_slice())?;
             t.remove((id, PENDING))?;
+            chunk_work!(rows_written, 1, if !chunked.is_empty());
         }
         w.commit()?;
+        chunk_work!(commits, 1, if !chunked.is_empty());
+        chunk_hook_after(!chunked.is_empty())?;
         Ok(vids)
+    }
+
+    /// A rechunk's commit (`crate::blob::BlobStore::rechunk`): doc `c.doc`'s version bytes
+    /// `c.file`, held as a whole-file blob, stored chunked, in one transaction: the chunked
+    /// write's rows (as a write's, the space's blob row of the same bytes notwithstanding), each
+    /// version of the doc naming the bytes takes its reference on the manifest and drops the
+    /// one it held on the whole-file blob (whose row stays, at no references when nothing else
+    /// holds it, for the caller to remove at once). Returns how many versions moved: 0 when
+    /// none names the bytes any more (or the doc holds them chunked already), and then nothing
+    /// is committed. Fails closed as a write's commit does ([`StoreError::ChunkGone`]).
+    pub(crate) fn blob_rechunk_commit(
+        &self,
+        space: &str,
+        c: &ChunkCommit,
+    ) -> Result<u64, StoreError> {
+        chunk_hook_before(true);
+        let w = self.begin_write()?;
+        let id = c.doc;
+        if chunks::is_chunked(&w, id, &c.file)? {
+            return Ok(0);
+        }
+        let mut n: u64 = 0;
+        for kv in w
+            .open_table(BLOB_VERSIONS)?
+            .range((id, 0)..=(id, u64::MAX))?
+        {
+            let v = dec_version(kv?.1.value())?;
+            if !v.redacted && v.blob == c.file {
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return Ok(0);
+        }
+        let k = space_in(&w, space)?;
+        chunks::apply_over_whole(&w, k.no, c)?;
+        for _ in 0..n {
+            if !chunks::take_ref(&w, id, &c.file)? {
+                return Err(StoreError::Corrupt("a rechunk's manifest is missing"));
+            }
+        }
+        let delta = i64::try_from(n).map_err(|_| StoreError::Corrupt("version count"))?;
+        adjust_ref(&w, k.no, &c.file, -delta, c.now)?;
+        w.commit()?;
+        chunk_hook_after(true)?;
+        Ok(n)
     }
 
     /// Every version of a blob doc, oldest first.
@@ -816,13 +969,20 @@ impl DocStore {
 
     /// Delete a blob doc's version (retention), releasing its reference on the blob. The
     /// store's version rule applies: a named version is refused ([`StoreError::NamedVersion`]),
-    /// and so is the latest (it is the current content).
+    /// and so is the latest (it is the current content). A chunked version's chunks a write
+    /// waits on keep their rows: retention holds the blob store's lock across its
+    /// transaction, so it reads the waiting marks as they are at its commit.
     pub fn delete_blob_version(
         &self,
         id: DocId,
         vid: VersionId,
         now: u64,
     ) -> Result<(), StoreError> {
+        let link = self.blob_link();
+        let _blob_lock = link
+            .as_ref()
+            .map(|l| l.lock.lock().unwrap_or_else(|p| p.into_inner()));
+        let waiting = |c: &super::ChunkId| link.as_ref().is_some_and(|l| (l.waiting)(id, c));
         let w = self.begin_write()?;
         {
             let key = {
@@ -853,7 +1013,11 @@ impl DocStore {
                 super::blob_struct::remove_keys(&w, id, vid)?;
             }
             let k = space_in(&w, &key.space)?;
-            adjust_ref(&w, k.no, &v.blob, -1, now)?;
+            let dir = link.as_ref().map(|l| l.dir.as_path());
+            let dropped = chunks::drop_ref(&w, id, k.no, &v.blob, dir, &waiting, &mut Vec::new())?;
+            if dropped.is_none() {
+                adjust_ref(&w, k.no, &v.blob, -1, now)?;
+            }
         }
         w.commit()?;
         Ok(())
@@ -877,6 +1041,32 @@ impl DocStore {
         vids: &[VersionId],
         now: u64,
     ) -> Result<(Vec<PurgedBlob>, u64, u64), StoreError> {
+        let out = self.blob_purge_versions_with(id, vids, now, None)?;
+        Ok(out.expect("a purge with no compaction step commits"))
+    }
+
+    /// [`DocStore::blob_purge_versions`], with a chunked doc's compaction in the same
+    /// transaction (`docs/SESSIONS.md`, "Chunked versions"): a chunked version drops its
+    /// manifest's reference, and the chunks only it held lose their rows (erased: their ids are
+    /// digests of the content); then `compact` runs in the transaction, with the ids erased,
+    /// and says whether to commit (`Ok(None)`: it said no, and nothing is committed). A version
+    /// whose bytes another version still names whole (its manifest kept) is released with that
+    /// manifest's references, so a caller reports it shared. Without `compact` (no blob store
+    /// open), a chunked version is refused before anything changes
+    /// ([`StoreError::ChunkedPurge`]). With it, the transaction asks for the store file's
+    /// rewrite at the next open (cleared by the caller's own rewrite), so a stop between this
+    /// commit and the rewrite leaves no purged byte in a freed page past that open.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn blob_purge_versions_with(
+        &self,
+        id: DocId,
+        vids: &[VersionId],
+        now: u64,
+        compact: Option<&mut dyn FnMut(&WriteTransaction, &[ChunkId]) -> Result<bool, StoreError>>,
+    ) -> Result<Option<(Vec<PurgedBlob>, u64, u64)>, StoreError> {
+        let link = self.blob_link();
+        let blob_dir = link.as_ref().map(|l| l.dir.clone());
+        let mut erased: Vec<ChunkId> = Vec::new();
         let w = self.begin_write()?;
         let out = {
             let meta = {
@@ -891,6 +1081,24 @@ impl DocStore {
                 .then(|| last_vid(&w, id))
                 .transpose()?;
             let space = space_in(&w, &key.space).ok();
+            // with no blob store, chunked versions can't be erased from their segments:
+            // refused before anything changes
+            if compact.is_none() {
+                for &vid in vids {
+                    if Some(vid) == current {
+                        continue; // refused below as the current version
+                    }
+                    let v = {
+                        let t = w.open_table(BLOB_VERSIONS)?;
+                        let g = t.get((id, vid))?.ok_or(StoreError::NoVersion(id, vid))?;
+                        dec_version(g.value())?
+                    };
+                    if !v.redacted && chunks::is_chunked(&w, id, &v.blob)? {
+                        return Err(StoreError::ChunkedPurge);
+                    }
+                }
+            }
+            let mut chunked: std::collections::HashSet<BlobId> = std::collections::HashSet::new();
             let mut released: Vec<(BlobId, u64)> = Vec::new();
             let mut approvals = 0;
             for &vid in vids {
@@ -919,9 +1127,18 @@ impl DocStore {
                 w.open_table(BLOB_VERSIONS)?
                     .insert((id, vid), enc_version(&v).as_slice())?;
                 if let Some(k) = &space {
-                    match adjust_ref(&w, k.no, &blob, -1, now) {
-                        Ok(()) | Err(StoreError::NoBlob(_)) => {}
-                        Err(e) => return Err(e),
+                    // a chunked version drops its manifest's reference (under the doc's lock:
+                    // no write of the doc waits on a chunk), else its whole-file blob's
+                    let dir = blob_dir.as_deref();
+                    if chunks::drop_ref(&w, id, k.no, &blob, dir, &|_| false, &mut erased)?
+                        .is_some()
+                    {
+                        chunked.insert(blob);
+                    } else {
+                        match adjust_ref(&w, k.no, &blob, -1, now) {
+                            Ok(()) | Err(StoreError::NoBlob(_)) => {}
+                            Err(e) => return Err(e),
+                        }
                     }
                 }
                 released.push((blob, v.size));
@@ -942,11 +1159,16 @@ impl DocStore {
                     if !seen.insert(b) {
                         continue;
                     }
-                    let refs = t
-                        .get((k.no, b.as_bytes().as_slice()))?
-                        .map(|v| dec_row(v.value()))
-                        .transpose()?
-                        .map_or(0, |r| r.refs);
+                    // a chunked version's: the versions still naming its manifest (shared
+                    // only when another holds these very bytes)
+                    let refs = if chunked.contains(&b) {
+                        chunks::manifest_refs(&w, id, &b)?
+                    } else {
+                        t.get((k.no, b.as_bytes().as_slice()))?
+                            .map(|v| dec_row(v.value()))
+                            .transpose()?
+                            .map_or(0, |r| r.refs)
+                    };
                     out.push((k.no, b, size, refs));
                 }
             }
@@ -954,8 +1176,23 @@ impl DocStore {
             let anchors = super::annot::forget_versions(&w, id, vids)?;
             (out, approvals, anchors)
         };
+        if let Some(compact) = compact {
+            if !compact(&w, &erased)? {
+                return Ok(None);
+            }
+            w.open_table(META)?.insert(super::REWRITE_PENDING, 1)?;
+        }
         w.commit()?;
-        Ok(out)
+        Ok(Some(out))
+    }
+
+    /// The store file's rewrite a purge asked for at its commit is done (the purge rewrote the
+    /// file itself): the mark goes.
+    pub(crate) fn clear_rewrite_pending(&self) -> Result<(), StoreError> {
+        let w = self.begin_write()?;
+        w.open_table(META)?.remove(super::REWRITE_PENDING)?;
+        w.commit()?;
+        Ok(())
     }
 
     // ----- approvals of on-behalf blob versions (format 4) -----
@@ -1045,4 +1282,49 @@ impl DocStore {
         w.commit()?;
         Ok(())
     }
+}
+
+/// The docs whose key is in `space`, in `w`.
+fn docs_in_space(w: &WriteTransaction, space: &str) -> Result<Vec<DocId>, StoreError> {
+    let prefix = format!("{space}\u{0}");
+    let paths = w.open_table(PATHS)?;
+    let docs = w.open_table(DOCS)?;
+    let mut ids = Vec::new();
+    for kv in paths.range(prefix.as_str()..)? {
+        let (k, v) = kv?;
+        if !k.value().starts_with(&prefix) {
+            break;
+        }
+        // the index joins space and path with NUL: check the doc's own key
+        if let Some(m) = docs.get(v.value())? {
+            if super::dec_meta(m.value())?.key.space == space {
+                ids.push(v.value());
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// The chunk test hook before a chunked write's transaction (test builds only).
+fn chunk_hook_before(chunked: bool) {
+    #[cfg(any(test, feature = "differential"))]
+    if chunked {
+        crate::differential::chunk_hook(crate::differential::ChunkStep::BeforeCommit);
+    }
+    #[cfg(not(any(test, feature = "differential")))]
+    let _ = chunked;
+}
+
+/// The chunk test hook after a chunked write's transaction committed (test builds only): a
+/// stop there reports the write as failed, as a process stop after the commit would leave it.
+fn chunk_hook_after(chunked: bool) -> Result<(), StoreError> {
+    #[cfg(any(test, feature = "differential"))]
+    if chunked && crate::differential::chunk_hook(crate::differential::ChunkStep::Committed) {
+        return Err(StoreError::Db(
+            "stopped after the commit (test hook)".into(),
+        ));
+    }
+    #[cfg(not(any(test, feature = "differential")))]
+    let _ = chunked;
+    Ok(())
 }

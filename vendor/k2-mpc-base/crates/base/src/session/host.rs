@@ -138,6 +138,15 @@ pub trait Host: Send + Sync {
         let _ = (file_name, at_ms, who);
         None
     }
+
+    /// The doc a file is, when the host serves it as a kit document: its key. The kit asks it
+    /// for a conflict copy it just wrote, so a keyed watch's `outside_save` frame names the
+    /// copy's doc address beside its path. Called with the session locked: quick, no I/O.
+    /// Default `None`: the frame gives the path only.
+    fn document_at(&self, file: &std::path::Path) -> Option<DocKey> {
+        let _ = file;
+        None
+    }
 }
 
 /// The right a refused call needed.
@@ -617,6 +626,10 @@ pub enum AuditEvent {
         version: crate::store::Seq,
         next_waiter: Option<(ConnId, String)>,
         waiters: Vec<(ConnId, String)>,
+        /// A claim on elements (or a blob doc's nodes): its elements by address, as they were
+        /// when it was taken, in key order (`RosterEvent::ClaimEnded`'s). Empty for a claim on
+        /// lines or cells.
+        addresses: Vec<String>,
     },
     /// Claim `claim`'s range is reserved for the waiter `pid` (`conn`) until `until_ms`
     /// ([`crate::session::Config::claim_handoff_ms`]): granted to the first waiter when the

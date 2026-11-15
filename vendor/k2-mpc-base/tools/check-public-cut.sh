@@ -53,7 +53,12 @@
 #                goldens. In prose only (LABEL_PROSE_PATTERNS: a Markdown line or a code comment,
 #                its `code` spans out): a release-line name (`C1e`), an amendment label (`A13`),
 #                an unnumbered plan slice, an engine-answer label (`E8`), a plan stage
-#                (`stage D`); the rule column holds neither of the first two either.
+#                (`stage D`), a parity-row or plan-item label (`P24`; a table row's first
+#                cell may hold a parity row's id), a finding label (`F2`), a run label (`V1`);
+#                the rule column holds no release-line or amendment label. Anywhere: a
+#                branch name (`feat/x`), and an engine code (`MPCE-Ennn`) with no entry in
+#                the public registry (a code alone in a string literal, as code matches it,
+#                passes).
 #                LABEL_EXEMPT names the files read as data whole. Printed as
 #                `check-public-cut: labels: PATH:LINE: KIND`.
 #   private      tools/check-private.sh is clean.
@@ -98,7 +103,8 @@ ask label=(^|[^A-Za-z0-9_.-])K([13-9]|1[01])([^A-Za-z0-9_,]|$)
 plan slice=(^|[^A-Za-z])[Ss]lices? [0-9]
 contract gap=rendering-data contract|contract.s gaps? [0-9]|contract gaps? [0-9]|[(;] ?gaps? [0-9]
 KC item=(^|[^A-Za-z0-9_-])KC[0-9]
-PRD pointer=(^|[^A-Za-z])PRDs?([^A-Za-z]|$)'
+PRD pointer=(^|[^A-Za-z])PRDs?([^A-Za-z]|$)
+branch name=(^|[^A-Za-z0-9_./-])(feat|fix|chore|rel|release|exp|hygiene|bump|probe)/[a-z0-9]'
 # Labels read in prose only (a Markdown line, or the comment part of a code line, its `code`
 # spans taken out), where a cell reference or an option value can't be meant; the same
 # KIND=regex form. Release-line and amendment labels are refused in the rule column too.
@@ -106,7 +112,10 @@ LABEL_PROSE_PATTERNS='release-line name=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])C[1-9][0-9
 amendment label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])(A([2-9]|1[0-9])|A1[-–]A[0-9])([^A-Za-z0-9_:'"'"'"]|: |$)
 unnumbered plan slice=(^|[^A-Za-z])([Tt]his|[Tt]hat|[Nn]ext|[Ee]arlier|[Ll]ater) slice([^A-Za-z]|$)
 engine-answer label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])E[1-9]([^A-Za-z0-9_:'"'"'"]|: |$)
-plan stage=(^|[^A-Za-z])stage [A-Z]([^A-Za-z]|$)'
+plan stage=(^|[^A-Za-z])stage [A-Z]([^A-Za-z]|$)
+parity or plan item label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])P[0-9][0-9]?[a-z]?([^A-Za-z0-9_:'"'"'"]|: |$)
+finding label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])F[0-9][0-9]?([^A-Za-z0-9_:'"'"'"]|: |$)
+run label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])V([0-79]|[1-9][0-9])([^A-Za-z0-9_:'"'"'"]|: |$)'
 # Files the labels rule reads as data whole: this script and the gate, which name the patterns.
 LABEL_EXEMPT="tools/check-public-cut.sh tools/tests/public-cut-gate.sh"
 # ---------------------------------------------------------------------------------------------
@@ -501,10 +510,12 @@ grep -Ev '^vendor/' "$LIST" | while IFS= read -r f; do
   case " $LABEL_EXEMPT " in *" $f "*) continue ;; esac
   grep -Iq . "$f" 2>/dev/null || continue
   printf '%s\n' "$f"
-done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTERNS" awk '
+done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTERNS" \
+  ENGINE_CODES="$(grep -oE 'e\("MPCE-E[0-9]+"' crates/base/src/errors/registry.rs 2>/dev/null | grep -oE 'MPCE-E[0-9]+' | tr '\n' ' ')" awk '
   BEGIN {
     n = split(ENVIRON["LABEL_PATTERNS"], row, "\n"); for (i = 1; i <= n; i++) { k = index(row[i], "="); kind[i] = substr(row[i], 1, k - 1); rx[i] = substr(row[i], k + 1) }
     m = split(ENVIRON["LABEL_PROSE_PATTERNS"], row, "\n"); for (i = 1; i <= m; i++) { k = index(row[i], "="); pkind[i] = substr(row[i], 1, k - 1); prx[i] = substr(row[i], k + 1) }
+    split(ENVIRON["ENGINE_CODES"], ec, " "); for (i in ec) known[ec[i]] = 1
   }
   {
     file = $0; ln = 0; md = (file ~ /\.md$/)
@@ -521,7 +532,13 @@ done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTE
       if (md) t = line
       else if (line ~ /^[ \t]*(\/\/|#|\*|\/\*)/) t = line
       else if ((p = index(line, "// ")) > 0) t = substr(line, p)
+      # a table row whose first cell is a parity row id keeps that id (the kit prints it)
+      if (t ~ /^[ \t]*\| *P[0-9]+[a-z]? *\|/) sub(/\| *P[0-9]+[a-z]? *\|/, "|", t)
       if (t != "") { gsub(/`[^`]*`/, "", t); for (i = 1; i <= m; i++) if (t ~ prx[i]) print "check-public-cut: labels: " file ":" ln ": " pkind[i] }
+      # an engine code the public registry has no entry for (a code value in a string literal
+      # alone, as an adapter matches it, passes)
+      u = line; gsub(/"MPCE-E[0-9]+"/, "", u)
+      while (match(u, /MPCE-E[0-9]+/)) { c = substr(u, RSTART, RLENGTH); u = substr(u, RSTART + RLENGTH); if (!(c in known)) print "check-public-cut: labels: " file ":" ln ": unregistered engine code " c }
       # the rule column, where it is data
       gsub(/\\?"rule\\?" *: *\\?"[^"\\]*/, "", line)
       if (reg) { sub(/e\("MPC-E[0-9]+", *"[a-z0-9_]+", *[A-Za-z]+, *[0-9]+, *"[^"]*"/, "", line); sub(/^[ \t]*"[^"]*", *(ANY|SYNC|CHANGE|HOST|RUN_TOOL|UNDO|&\[|[A-Z_]+,)/, "", line) }

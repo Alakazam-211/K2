@@ -144,7 +144,7 @@ impl BlobSession {
         })
     }
 
-    /// **Blame by node** (P22 on the structure): for every node of version `version` (`None`:
+    /// **Blame by node** (on the structure): for every node of version `version` (`None`:
     /// the current one), in outline order, the version that made it as it is and who set
     /// that version. It walks back through the doc's versions while the node is unchanged
     /// (its record, content, text, name, parent and fields; a shift among siblings is not a

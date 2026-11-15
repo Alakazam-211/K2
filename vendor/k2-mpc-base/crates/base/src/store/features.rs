@@ -1,0 +1,210 @@
+//! Store format 8: the required-features word (`docs/design/version-storage-r2.md`, section 10).
+//!
+//! - **Format 8** means the store's `meta` holds a word of required features under
+//!   [`REQUIRED_FEATURES`]. From 8 on, a new on-disk capability is a feature bit, not a format
+//!   number: two independent capabilities can't be ordered on one number.
+//! - **The features**: [`FEATURE_CHUNKED`] (the store holds chunked versions) and
+//!   [`FEATURE_NATIVE`] (the store holds engine stores: a container-level guard, never a claim
+//!   about the engine's own header bits, which the kit never writes, reads or mirrors).
+//! - **At open, before anything else reads or writes the store**, a kit refuses a word naming a
+//!   bit it doesn't know, by name ([`StoreError::UnknownFeatures`]); a format-8 store without
+//!   its word, or a word in a store below format 8, is damage ([`StoreError::Corrupt`]).
+//! - **The native bit**: this kit stores no engine records yet, so no store it opens holds an
+//!   engine store, and a store that sets the bit is refused
+//!   ([`StoreError::NativeWithoutEngine`]). The check against the engine's record 0 (its magic
+//!   and engine name), both ways, replaces this one with the change that first stores engine
+//!   records.
+//! - **Format 7 was never written** (it was declared for the native engine's stores, and no
+//!   shipped host turned that engine on): a format-7 store is refused at open, before anything
+//!   reads it ([`StoreError::NeverWritten`]).
+//!
+//! A store's first chunked version stamps format 8 with [`FEATURE_CHUNKED`], lazily, in its own
+//! transaction (`chunks.rs`), and the stamp is never lowered. Kits v0.14.0 to v0.17.0 read up to
+//! format 7 and refuse a format-8 store at open ([`StoreError::Newer`]), its bytes unchanged.
+
+use redb::Database;
+
+use super::{DocStore, StoreError, META, STORE_FORMAT_READ};
+
+/// The first store format whose `meta` holds a required-features word.
+pub const STORE_FORMAT_FEATURES: u64 = 8;
+
+/// A format no kit writes: declared for the native engine's stores and retired unwritten. A
+/// store stamped with it is refused at open ([`StoreError::NeverWritten`]).
+pub const STORE_FORMAT_NEVER_WRITTEN: u64 = 7;
+
+/// `meta` key of a format-8 store: its required-features word.
+pub(super) const REQUIRED_FEATURES: &str = "required_features";
+
+/// Required feature: the store holds chunked versions.
+pub const FEATURE_CHUNKED: u64 = 1 << 0;
+
+/// Required feature: the store holds engine stores (the native engine's).
+pub const FEATURE_NATIVE: u64 = 1 << 1;
+
+/// Every feature bit this build knows.
+const FEATURES_KNOWN: u64 = FEATURE_CHUNKED | FEATURE_NATIVE;
+
+/// The names of the bits set in `bits`, lowest first: a known feature by its name, any other
+/// as `bit N`.
+pub(crate) fn feature_names(bits: u64) -> Vec<String> {
+    (0..u64::BITS)
+        .filter(|i| bits & (1 << i) != 0)
+        .map(|i| match 1u64 << i {
+            FEATURE_CHUNKED => "chunked".to_owned(),
+            FEATURE_NATIVE => "native".to_owned(),
+            _ => format!("bit {i}"),
+        })
+        .collect()
+}
+
+/// [`StoreError::UnknownFeatures`]'s message: the store's format and each unknown bit by name.
+pub(super) fn unknown_features_message(found: u64, unknown: u64) -> String {
+    let names = feature_names(unknown);
+    let noun = if names.len() == 1 {
+        "feature"
+    } else {
+        "features"
+    };
+    format!(
+        "store is format {found} and requires {noun} {}, which this build doesn't know: use \
+         the newer build",
+        names.join(", ")
+    )
+}
+
+/// What a store's `meta` says it is, checked before anything else reads or writes it, from a
+/// read transaction: its format (`None`: a new store), refused when it is one no kit writes
+/// ([`STORE_FORMAT_NEVER_WRITTEN`]), above what this build reads, or (format 8) when its
+/// features word is missing, names a bit this build doesn't know, or sets the native bit.
+pub(super) fn check_stamp(db: &Database) -> Result<Option<u64>, StoreError> {
+    let r = db.begin_read()?;
+    let meta = match r.open_table(META) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let format = meta.get("store_format")?.map(|v| v.value());
+    let word = meta.get(REQUIRED_FEATURES)?.map(|v| v.value());
+    let Some(f) = format else {
+        if word.is_some() {
+            return Err(StoreError::Corrupt(
+                "a features word in a store without a format",
+            ));
+        }
+        return Ok(None);
+    };
+    if f == STORE_FORMAT_NEVER_WRITTEN && !planted(plant::FormatPlant::Format7ReadOnly) {
+        return Err(StoreError::NeverWritten { found: f });
+    }
+    if f > STORE_FORMAT_READ {
+        return Err(StoreError::Newer { found: f });
+    }
+    match (f >= STORE_FORMAT_FEATURES, word) {
+        (false, None) => Ok(Some(f)),
+        (false, Some(_)) => Err(StoreError::Corrupt("a features word below format 8")),
+        (true, None) => Err(StoreError::Corrupt("format 8 without its features word")),
+        (true, Some(w)) => {
+            let unknown = w & !FEATURES_KNOWN;
+            if unknown != 0 && !planted(plant::FormatPlant::UnknownFeatureIgnored) {
+                return Err(StoreError::UnknownFeatures { found: f, unknown });
+            }
+            // this kit stores no engine records, so no store it opens holds an engine store
+            if w & FEATURE_NATIVE != 0 && !planted(plant::FormatPlant::NativeUnchecked) {
+                return Err(StoreError::NativeWithoutEngine);
+            }
+            Ok(Some(f))
+        }
+    }
+}
+
+impl DocStore {
+    /// The store's required-features word (0 below format 8; [`FEATURE_CHUNKED`],
+    /// [`FEATURE_NATIVE`]).
+    pub fn required_features(&self) -> Result<u64, StoreError> {
+        let r = self.begin_read()?;
+        let w = r
+            .open_table(META)?
+            .get(REQUIRED_FEATURES)?
+            .map_or(0, |v| v.value());
+        Ok(w)
+    }
+}
+
+/// Whether `p` is planted (test builds only).
+#[cfg(test)]
+fn planted(p: plant::FormatPlant) -> bool {
+    plant::planted(p)
+}
+
+/// Never planted outside test builds.
+#[cfg(not(test))]
+fn planted(_: plant::FormatPlant) -> bool {
+    false
+}
+
+/// Planted faults of the open's format checks (test builds only), each caught by its row in
+/// `features_tests.rs`: installed per thread, for one call, by the row from `MPC_FORMAT_PLANT`.
+pub(crate) mod plant {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum FormatPlant {
+        /// A format-7 store opens as a format this build reads but doesn't write, as kits
+        /// v0.10.1 to v0.17.0 opened it (`format-7-read-only`).
+        Format7ReadOnly,
+        /// A features word's unknown bits are ignored (`unknown-feature-ignored`).
+        UnknownFeatureIgnored,
+        /// The native bit is not checked (`native-unchecked`).
+        NativeUnchecked,
+    }
+
+    #[cfg(test)]
+    pub(crate) use on::{planted, under};
+
+    #[cfg(test)]
+    mod on {
+        use super::FormatPlant;
+        use std::cell::Cell;
+
+        impl FormatPlant {
+            fn named(name: &str) -> Option<Self> {
+                Some(match name {
+                    "format-7-read-only" => FormatPlant::Format7ReadOnly,
+                    "unknown-feature-ignored" => FormatPlant::UnknownFeatureIgnored,
+                    "native-unchecked" => FormatPlant::NativeUnchecked,
+                    _ => return None,
+                })
+            }
+        }
+
+        thread_local! {
+            static PLANT: Cell<Option<FormatPlant>> = const { Cell::new(None) };
+        }
+
+        /// Whether `p` is planted on this thread.
+        pub(crate) fn planted(p: FormatPlant) -> bool {
+            PLANT.with(|c| c.get() == Some(p))
+        }
+
+        /// Run `f` with `p` planted on this thread when `MPC_FORMAT_PLANT` names it (printed
+        /// either way, since a job's record shows the variable's name, not its value); any
+        /// other value is refused, so a misspelt plant can't pass as a clean run.
+        pub(crate) fn under<R>(p: FormatPlant, f: impl FnOnce() -> R) -> R {
+            let v = std::env::var("MPC_FORMAT_PLANT");
+            println!("MPC_FORMAT_PLANT={}", v.as_deref().unwrap_or("(unset)"));
+            let on = match v.as_deref() {
+                Ok(name) => match FormatPlant::named(name) {
+                    Some(named) => named == p,
+                    None => unreachable!("MPC_FORMAT_PLANT={name}: no such plant"),
+                },
+                Err(_) => false,
+            };
+            if !on {
+                return f();
+            }
+            PLANT.with(|c| c.set(Some(p)));
+            let r = f();
+            PLANT.with(|c| c.set(None));
+            r
+        }
+    }
+}

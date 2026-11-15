@@ -4895,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "redb",
  "regex-automata",

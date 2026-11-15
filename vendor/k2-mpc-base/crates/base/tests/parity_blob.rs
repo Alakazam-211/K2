@@ -1,5 +1,5 @@
 //! Agent parity for tier 0 (any file, on blob docs): every tier-0 row through the
-//! kit's blob harness, with negative controls proving it fails loudly. The leases (P32–P34)
+//! kit's blob harness, with negative controls proving it fails loudly. The leases
 //! are tier 0's own rows.
 
 use std::sync::Arc;
@@ -90,7 +90,7 @@ fn agent_parity_any_file() {
         .iter()
         .filter(|r| r.status == RowStatus::Live)
         .count();
-    assert_eq!(live, 17, "rows live (P24 Export since exports P0)");
+    assert_eq!(live, 17, "rows live (Export live since the exports work)");
     assert_eq!(report.not_applicable.len(), 0);
     assert_eq!(report.deferred.len(), 3);
     for r in rows().iter().filter(|r| r.status == RowStatus::Live) {
@@ -113,8 +113,8 @@ fn agent_parity_any_file() {
         .iter()
         .filter(|m| matches!(m.0, PersonAction::Approve | PersonAction::Pending))
         .count();
-    // P30 four times: `log --pending` and its alias `approvals`, each also with `--all`
-    assert_eq!(approvals, 7, "the approval rows' cases (P29, P30)");
+    // the pending row four times: `log --pending` and its alias `approvals`, each also with `--all`
+    assert_eq!(approvals, 7, "the approval rows' cases (approve, pending)");
     assert_eq!(report.matched.len(), 35, "{:?}", report.matched);
 }
 
@@ -198,7 +198,7 @@ fn a_different_lease_is_a_mismatch() {
     );
 }
 
-/// Negative controls for the approval rows (P29, P30): a missing verb is reported in the
+/// Negative controls for the approval rows: a missing verb is reported in the
 /// list and on the agent path, and an agent verb with another effect than the person's
 /// (declining what the person approved) is a mismatch on the approvals and the output.
 #[test]

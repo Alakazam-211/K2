@@ -51,6 +51,10 @@ const VALUES = [
   "transform",
   "utf8Len",
   "VIEW_TEXT_MAX",
+  // a claim's end, read whatever kit sent it (WIRE.md, "Claims on elements")
+  "claimEndReason",
+  // containers in containers (WIRE.md, "Containers in containers")
+  "CONTAINER_DEPTH_MAX",
   // the live grid (WIRE.md, "The live grid")
   "CELLS_FEATURE",
   "CELLS_RANGES_MAX",

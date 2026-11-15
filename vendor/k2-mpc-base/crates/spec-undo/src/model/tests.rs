@@ -384,7 +384,7 @@ fn u22a_revert_is_restart_transparent() {
     }
 }
 
-/// F3 (v1.7, exact hunk sets): p2's insertion at the start of p1's region repeats its text;
+/// Exact hunk sets (v1.7): p2's insertion at the start of p1's region repeats its text;
 /// p1's undo turns back its own `b` (p2's stays in front), so p2's undo applies, and neither
 /// deletes a character whose root it may not remove.
 #[test]

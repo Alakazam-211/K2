@@ -1,0 +1,829 @@
+{
+  "features": ["keyed_watch"],
+  "frames": [
+    {
+      "type": "keyed_snapshot",
+      "seq": 1,
+      "upto": 1,
+      "schema": {
+        "name": "outline",
+        "roots": [
+          {
+            "name": "colls",
+            "kind": "list"
+          },
+          {
+            "name": "coll_f",
+            "kind": "map"
+          },
+          {
+            "name": "objs",
+            "kind": "list"
+          },
+          {
+            "name": "obj_f",
+            "kind": "map"
+          },
+          {
+            "name": "tree",
+            "kind": "map"
+          }
+        ],
+        "composite": [
+          {
+            "map": "coll_f",
+            "list": "colls"
+          },
+          {
+            "map": "obj_f",
+            "list": "objs"
+          }
+        ]
+      },
+      "view": {
+        "schema": {
+          "containers": "colls",
+          "units": "objs",
+          "unit_container_field": "coll",
+          "container_id_field": null,
+          "native_unit": "scene-unit",
+          "page": null,
+          "container_fields": {
+            "title": "name",
+            "hidden": null,
+            "layout": null,
+            "parent": "parent"
+          },
+          "unit_fields": {
+            "kind": {
+              "list_value": true
+            },
+            "name": "name",
+            "alt": null,
+            "text": null,
+            "hidden": null,
+            "editable_text": null,
+            "placeholder": null
+          },
+          "geometry": null,
+          "field_class": {
+            "name": "text",
+            "parent": "meta"
+          },
+          "derived": {
+            "containers": [],
+            "units": []
+          },
+          "container_derived": ["label", "kind"]
+        },
+        "tier": "live",
+        "rev": 1,
+        "version": null,
+        "page": null,
+        "fonts": [],
+        "layouts": [],
+        "containers": [
+          {
+            "key": "@coll:1",
+            "position": 1,
+            "title": "Scene",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 1,
+            "derived": {
+              "label": "SCENE",
+              "kind": "scene"
+            }
+          },
+          {
+            "key": "@coll:2",
+            "position": 2,
+            "title": "Props",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 0,
+            "parent": "@coll:1",
+            "derived": {
+              "label": "PROPS"
+            }
+          },
+          {
+            "key": "@coll:3",
+            "position": 3,
+            "title": "Chairs",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 1,
+            "parent": "@coll:2",
+            "derived": {
+              "label": "CHAIRS"
+            }
+          },
+          {
+            "key": "@coll:4",
+            "position": 4,
+            "title": "Lights",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 1,
+            "derived": {
+              "label": "LIGHTS"
+            }
+          },
+          {
+            "key": "@coll:5",
+            "position": 5,
+            "title": "Cameras",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 1,
+            "parent": "@coll:1",
+            "derived": {
+              "label": "CAMERAS",
+              "kind": "camera"
+            }
+          },
+          {
+            "key": "@coll:6",
+            "position": 6,
+            "title": "Long",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 0,
+            "derived": {
+              "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+            }
+          }
+        ]
+      },
+      "pages": 9
+    },
+    {
+      "type": "keyed_page",
+      "seq": 2,
+      "upto": 1,
+      "page": 1,
+      "pages": 9,
+      "root": "colls",
+      "live": [
+        ["@coll:1", "coll"],
+        ["@coll:2", "coll"],
+        ["@coll:3", "coll"],
+        ["@coll:4", "coll"],
+        ["@coll:5", "coll"],
+        ["@coll:6", "coll"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 3,
+      "upto": 1,
+      "page": 2,
+      "pages": 9,
+      "root": "coll_f",
+      "entries": [
+        ["@coll:1", "kind", "scene"],
+        ["@coll:1", "name", "Scene"],
+        ["@coll:2", "name", "Props"],
+        ["@coll:2", "parent", "c1"],
+        ["@coll:3", "name", "Chairs"],
+        ["@coll:3", "parent", "c2"],
+        ["@coll:4", "name", "Lights"],
+        ["@coll:5", "kind", "camera"],
+        ["@coll:5", "name", "Cameras"],
+        ["@coll:5", "parent", "c1"],
+        ["@coll:6", "name", "Long"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 4,
+      "upto": 1,
+      "page": 3,
+      "pages": 9,
+      "root": "objs",
+      "live": [
+        ["@obj:1", "obj"],
+        ["@obj:2", "obj"],
+        ["@obj:3", "obj"],
+        ["@obj:4", "obj"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 5,
+      "upto": 1,
+      "page": 4,
+      "pages": 9,
+      "root": "obj_f",
+      "entries": [
+        ["@obj:1", "coll", "c1"],
+        ["@obj:1", "name", "Floor"],
+        ["@obj:2", "coll", "c3"],
+        ["@obj:2", "name", "Chair"],
+        ["@obj:3", "coll", "c4"],
+        ["@obj:3", "name", "Lamp"],
+        ["@obj:4", "coll", "c5"],
+        ["@obj:4", "name", "Camera"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 6,
+      "upto": 1,
+      "page": 5,
+      "pages": 9,
+      "root": "tree",
+      "entries": [
+        ["c2", null, "c1"],
+        ["c3", null, "c2"],
+        ["c5", null, "c1"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 7,
+      "upto": 1,
+      "page": 6,
+      "pages": 9,
+      "root": "objs",
+      "units": {
+        "container": "@coll:1",
+        "from": 0,
+        "units": [
+          {
+            "key": "@obj:1",
+            "container": "@coll:1",
+            "parent": null,
+            "live": true,
+            "kind": "obj",
+            "name": "Floor",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          }
+        ],
+        "next": null,
+        "total": 1
+      }
+    },
+    {
+      "type": "keyed_page",
+      "seq": 8,
+      "upto": 1,
+      "page": 7,
+      "pages": 9,
+      "root": "objs",
+      "units": {
+        "container": "@coll:3",
+        "from": 0,
+        "units": [
+          {
+            "key": "@obj:2",
+            "container": "@coll:3",
+            "parent": null,
+            "live": true,
+            "kind": "obj",
+            "name": "Chair",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          }
+        ],
+        "next": null,
+        "total": 1
+      }
+    },
+    {
+      "type": "keyed_page",
+      "seq": 9,
+      "upto": 1,
+      "page": 8,
+      "pages": 9,
+      "root": "objs",
+      "units": {
+        "container": "@coll:4",
+        "from": 0,
+        "units": [
+          {
+            "key": "@obj:3",
+            "container": "@coll:4",
+            "parent": null,
+            "live": true,
+            "kind": "obj",
+            "name": "Lamp",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          }
+        ],
+        "next": null,
+        "total": 1
+      }
+    },
+    {
+      "type": "keyed_page",
+      "seq": 10,
+      "upto": 1,
+      "page": 9,
+      "pages": 9,
+      "root": "objs",
+      "units": {
+        "container": "@coll:5",
+        "from": 0,
+        "units": [
+          {
+            "key": "@obj:4",
+            "container": "@coll:5",
+            "parent": null,
+            "live": true,
+            "kind": "obj",
+            "name": "Camera",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          }
+        ],
+        "next": null,
+        "total": 1
+      }
+    },
+    {
+      "type": "ops_change",
+      "seq": 11,
+      "rev": 2,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "coll_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@coll:1",
+          "field": "name",
+          "before": "Scene",
+          "after": "World"
+        }
+      ],
+      "units": [],
+      "containers_changed": [
+        {
+          "key": "@coll:1",
+          "op": "props",
+          "position_before": null,
+          "position_after": null,
+          "hidden_after": null,
+          "fields": ["name"]
+        }
+      ],
+      "containers": ["@coll:1"],
+      "derived": {
+        "containers": {
+          "@coll:1": {
+            "label": "WORLD"
+          }
+        }
+      },
+      "render_hashes": null
+    },
+    {
+      "type": "ops_change",
+      "seq": 12,
+      "rev": 3,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "coll_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@coll:4",
+          "field": "kind",
+          "after": "light"
+        }
+      ],
+      "units": [],
+      "containers_changed": [
+        {
+          "key": "@coll:4",
+          "op": "props",
+          "position_before": null,
+          "position_after": null,
+          "hidden_after": null,
+          "fields": ["kind"]
+        }
+      ],
+      "containers": ["@coll:4"],
+      "derived": {
+        "containers": {
+          "@coll:4": {
+            "kind": "light"
+          }
+        }
+      },
+      "render_hashes": null
+    },
+    {
+      "type": "ops_change",
+      "seq": 13,
+      "rev": 4,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "coll_f",
+          "kind": "map",
+          "op": "delete",
+          "key": "@coll:1",
+          "field": "kind",
+          "before": "scene"
+        }
+      ],
+      "units": [],
+      "containers_changed": [
+        {
+          "key": "@coll:1",
+          "op": "props",
+          "position_before": null,
+          "position_after": null,
+          "hidden_after": null,
+          "fields": ["kind"]
+        }
+      ],
+      "containers": ["@coll:1"],
+      "derived": {
+        "containers": {
+          "@coll:1": {
+            "kind": null
+          }
+        }
+      },
+      "render_hashes": null
+    },
+    {
+      "type": "ops_change",
+      "seq": 14,
+      "rev": 5,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "colls",
+          "kind": "list",
+          "op": "insert",
+          "key": "@coll:7",
+          "index_before": null,
+          "index_after": 6,
+          "after": "coll",
+          "effect": "visible"
+        },
+        {
+          "root": "coll_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@coll:7",
+          "field": "name",
+          "after": "Rigs"
+        },
+        {
+          "root": "coll_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@coll:7",
+          "field": "kind",
+          "after": "rig"
+        }
+      ],
+      "units": [],
+      "containers_changed": [
+        {
+          "key": "@coll:7",
+          "op": "add",
+          "position_before": null,
+          "position_after": 7,
+          "hidden_after": null,
+          "fields": [],
+          "parent_after": null
+        }
+      ],
+      "containers": ["@coll:7"],
+      "derived": {
+        "containers": {
+          "@coll:7": {
+            "label": "RIGS",
+            "kind": "rig"
+          }
+        }
+      },
+      "render_hashes": null
+    },
+    {
+      "type": "ops_change",
+      "seq": 15,
+      "rev": 6,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "coll_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@coll:3",
+          "field": "parent",
+          "before": "c2",
+          "after": "c4"
+        }
+      ],
+      "units": [],
+      "containers_changed": [
+        {
+          "key": "@coll:3",
+          "op": "props",
+          "position_before": null,
+          "position_after": null,
+          "hidden_after": null,
+          "fields": ["parent"],
+          "parent_after": "@coll:4"
+        }
+      ],
+      "containers": ["@coll:3"],
+      "derived": null,
+      "render_hashes": null
+    }
+  ],
+  "final_json": "{\"roots\":[{\"name\":\"colls\",\"kind\":\"list\",\"live\":[[\"@coll:1\",\"coll\"],[\"@coll:2\",\"coll\"],[\"@coll:3\",\"coll\"],[\"@coll:4\",\"coll\"],[\"@coll:5\",\"coll\"],[\"@coll:6\",\"coll\"],[\"@coll:7\",\"coll\"]],\"hidden\":[]},{\"name\":\"coll_f\",\"kind\":\"map\",\"entries\":[[\"@coll:1\\u001fname\",\"World\"],[\"@coll:2\\u001fname\",\"Props\"],[\"@coll:2\\u001fparent\",\"c1\"],[\"@coll:3\\u001fname\",\"Chairs\"],[\"@coll:3\\u001fparent\",\"c4\"],[\"@coll:4\\u001fkind\",\"light\"],[\"@coll:4\\u001fname\",\"Lights\"],[\"@coll:5\\u001fkind\",\"camera\"],[\"@coll:5\\u001fname\",\"Cameras\"],[\"@coll:5\\u001fparent\",\"c1\"],[\"@coll:6\\u001fname\",\"Long\"],[\"@coll:7\\u001fkind\",\"rig\"],[\"@coll:7\\u001fname\",\"Rigs\"]]},{\"name\":\"objs\",\"kind\":\"list\",\"live\":[[\"@obj:1\",\"obj\"],[\"@obj:2\",\"obj\"],[\"@obj:3\",\"obj\"],[\"@obj:4\",\"obj\"]],\"hidden\":[]},{\"name\":\"obj_f\",\"kind\":\"map\",\"entries\":[[\"@obj:1\\u001fcoll\",\"c1\"],[\"@obj:1\\u001fname\",\"Floor\"],[\"@obj:2\\u001fcoll\",\"c3\"],[\"@obj:2\\u001fname\",\"Chair\"],[\"@obj:3\\u001fcoll\",\"c4\"],[\"@obj:3\\u001fname\",\"Lamp\"],[\"@obj:4\\u001fcoll\",\"c5\"],[\"@obj:4\\u001fname\",\"Camera\"]]},{\"name\":\"tree\",\"kind\":\"map\",\"entries\":[[\"c2\",\"c1\"],[\"c3\",\"c2\"],[\"c5\",\"c1\"]]}]}",
+  "final_rev": 6,
+  "derived": [
+    {
+      "@coll:1": {
+        "label": "SCENE",
+        "kind": "scene"
+      },
+      "@coll:2": {
+        "label": "PROPS"
+      },
+      "@coll:3": {
+        "label": "CHAIRS"
+      },
+      "@coll:4": {
+        "label": "LIGHTS"
+      },
+      "@coll:5": {
+        "label": "CAMERAS",
+        "kind": "camera"
+      },
+      "@coll:6": {
+        "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      }
+    },
+    {
+      "@coll:1": {
+        "label": "WORLD",
+        "kind": "scene"
+      },
+      "@coll:2": {
+        "label": "PROPS"
+      },
+      "@coll:3": {
+        "label": "CHAIRS"
+      },
+      "@coll:4": {
+        "label": "LIGHTS"
+      },
+      "@coll:5": {
+        "label": "CAMERAS",
+        "kind": "camera"
+      },
+      "@coll:6": {
+        "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      }
+    },
+    {
+      "@coll:1": {
+        "label": "WORLD",
+        "kind": "scene"
+      },
+      "@coll:2": {
+        "label": "PROPS"
+      },
+      "@coll:3": {
+        "label": "CHAIRS"
+      },
+      "@coll:4": {
+        "label": "LIGHTS",
+        "kind": "light"
+      },
+      "@coll:5": {
+        "label": "CAMERAS",
+        "kind": "camera"
+      },
+      "@coll:6": {
+        "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      }
+    },
+    {
+      "@coll:1": {
+        "label": "WORLD"
+      },
+      "@coll:2": {
+        "label": "PROPS"
+      },
+      "@coll:3": {
+        "label": "CHAIRS"
+      },
+      "@coll:4": {
+        "label": "LIGHTS",
+        "kind": "light"
+      },
+      "@coll:5": {
+        "label": "CAMERAS",
+        "kind": "camera"
+      },
+      "@coll:6": {
+        "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      }
+    },
+    {
+      "@coll:1": {
+        "label": "WORLD"
+      },
+      "@coll:2": {
+        "label": "PROPS"
+      },
+      "@coll:3": {
+        "label": "CHAIRS"
+      },
+      "@coll:4": {
+        "label": "LIGHTS",
+        "kind": "light"
+      },
+      "@coll:5": {
+        "label": "CAMERAS",
+        "kind": "camera"
+      },
+      "@coll:6": {
+        "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      },
+      "@coll:7": {
+        "label": "RIGS",
+        "kind": "rig"
+      }
+    },
+    {
+      "@coll:1": {
+        "label": "WORLD"
+      },
+      "@coll:2": {
+        "label": "PROPS"
+      },
+      "@coll:3": {
+        "label": "CHAIRS"
+      },
+      "@coll:4": {
+        "label": "LIGHTS",
+        "kind": "light"
+      },
+      "@coll:5": {
+        "label": "CAMERAS",
+        "kind": "camera"
+      },
+      "@coll:6": {
+        "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      },
+      "@coll:7": {
+        "label": "RIGS",
+        "kind": "rig"
+      }
+    }
+  ]
+}

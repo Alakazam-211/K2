@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use k2_mpc_base::differential::{with_view_mutant, with_watch_mutant, ViewMutant, WatchMutant};
@@ -36,17 +36,19 @@ use k2_mpc_base::errors::Value as Json;
 use k2_mpc_base::parity::PersonAction;
 use k2_mpc_base::schema::{Kind, Schema};
 use k2_mpc_base::session::{
-    watch_state_json, AuditEvent, ClaimId, Config, ConnId, Declined, EditOptions, ElemFocus,
-    ElemRange, ElemSelection, Host, KeyedWatch, Pack, PackContent, PackError, Participant,
-    ParticipantKind, Point, Reconciled, Rights, RosterEvent, Session, SessionError, SessionManager,
-    Stay, TextFilePack, UndoRequest, View, WatchExtras, WatchFrame, WatchOp, WatchOptions,
-    WatchPart, KEYED_WATCH_FEATURE, WATCH_FRAME_MAX, WATCH_PAGE_BYTES_MIN,
+    watch_state_json, AuditEvent, ClaimId, ClaimPolicy, Config, ConnId, Declined, DiskCheck,
+    EditOptions, ElemFocus, ElemRange, ElemSelection, Host, KeyedWatch, OutsideSaveOutcome, Pack,
+    PackContent, PackError, Participant, ParticipantKind, Point, Reconciled, Rights, RosterEvent,
+    Session, SessionError, SessionManager, Stay, TextFilePack, UndoRequest, View, WatchExtras,
+    WatchFrame, WatchOp, WatchOptions, WatchOutsideSave, WatchPart, WatchRefusal,
+    KEYED_WATCH_FEATURE, WATCH_FRAME_MAX, WATCH_PAGE_BYTES_MIN,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_base::text::diff::{self, Hunk};
 use k2_mpc_base::tools::{PackVerb, StructEdit, StructOutput, ToolError, ToolOptions, VerbCtx};
 use k2_mpc_base::view_index::{
-    unit_value, ContainerFields, Src, Unit, UnitFields, ViewSchema, VIEW_PAGE_MIN,
+    unit_value, ContainerFields, Nesting, Src, Unit, UnitFields, ViewSchema, NESTING_MAX,
+    VIEW_PAGE_MIN,
 };
 use k2_mpc_base::{Edit, Key, Turn, Value};
 
@@ -431,12 +433,15 @@ fn shape_text(args: &[String]) -> Result<StructEdit, ToolError> {
 
 struct TestHost {
     now: AtomicU64,
+    /// `cleo` has no rights (from when it is set: the host takes them away).
+    cleo_revoked: AtomicBool,
 }
 
 impl Host for TestHost {
     fn rights(&self, who: &Participant, _key: &DocKey) -> Rights {
         match who.pid.as_str() {
             "ada" => Rights::read_only(),
+            "cleo" if self.cleo_revoked.load(Ordering::SeqCst) => Rights::none(),
             _ => Rights::full(),
         }
     }
@@ -444,6 +449,11 @@ impl Host for TestHost {
         self.now.load(Ordering::SeqCst)
     }
     fn on_event(&self, _ev: &AuditEvent) {}
+    /// A conflict copy is a doc of the space, by its file name.
+    fn document_at(&self, file: &Path) -> Option<DocKey> {
+        let name = file.file_name()?.to_str()?;
+        name.contains("conflict").then(|| doc_key(name))
+    }
 }
 
 struct TmpDir(PathBuf);
@@ -475,6 +485,7 @@ fn fx(tag: &str, set: impl FnOnce(&mut Config)) -> Fx {
     let ws = fs::canonicalize(ws).unwrap();
     let host = Arc::new(TestHost {
         now: AtomicU64::new(1_700_000_000_000),
+        cleo_revoked: AtomicBool::new(false),
     });
     let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
     let mut c = Config::default();
@@ -858,6 +869,8 @@ impl Replica {
                 self.seq = c.seq;
                 self.rev = c.rev;
             }
+            // unnumbered, and they change nothing
+            WatchFrame::Refused(_) | WatchFrame::OutsideSave(_) => {}
             _ => return Err("a frame this replica doesn't know".into()),
         }
         Ok(())
@@ -2009,6 +2022,382 @@ fn plant_roster_keys_leak_is_caught() {
 
 // ---------- the fields ----------
 
+// ---------- refused verbs ----------
+
+fn refusal_frames(frames: &[WatchFrame]) -> Vec<&WatchRefusal> {
+    frames
+        .iter()
+        .filter_map(|f| match f {
+            WatchFrame::Refused(r) => Some(&**r),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An agent's verb under [`ClaimPolicy::Respect`], guarded by the version now, with a turn.
+fn respecting(
+    s: &Session,
+    c: ConnId,
+    words: &[String],
+    t: Turn,
+) -> Result<k2_mpc_base::tools::ToolOutput, k2_mpc_base::tools::ToolRunError> {
+    let mut a: Vec<String> = words.to_vec();
+    a.extend(["--if-version".to_owned(), version(s).to_string()]);
+    let mut o = ToolOptions::new().turn(t);
+    o.policy = ClaimPolicy::Respect;
+    s.run_tool_with(c, SHAPES, &a, b"", &o)
+}
+
+/// Brook (an agent) holds `a2`; Atlas (another agent, claims respected) moves `a1`, then `a2`.
+/// Ada (read only), an App viewer and Cleo watch; the host takes Cleo's rights between the two
+/// verbs, and her watch stays open. Only the refused verb makes a refusal frame, Ada and the App
+/// viewer get one each and Cleo none, and it carries who, the verb, the unit by address, the
+/// code, the holder and the claim (by handle and with no turn for the App viewer).
+fn row_refusals() -> Result<(), String> {
+    let f = fx("refused", |_| {});
+    let s = f.board(false);
+    let ada = join(&s, person("ada", "Ada"));
+    let cleo = join(&s, person("cleo", "Cleo"));
+    let atlas = join(&s, agent());
+    let brook = join(
+        &s,
+        Participant::new("brook", "Brook", "#c2410c", ParticipantKind::Agent, "cli"),
+    );
+    let app = join(
+        &s,
+        Participant::new("guest", "Guest", "#ffaa00", ParticipantKind::App, "app"),
+    );
+    let mut wa = s.watch_keyed(ada, &listed()).unwrap().unwrap();
+    let mut wc = s.watch_keyed(cleo, &listed()).unwrap().unwrap();
+    let mut wg = s.watch_keyed(app, &listed()).unwrap().unwrap();
+    let mut fa = s.watch_snapshot(&mut wa).unwrap();
+    let mut fc = s.watch_snapshot(&mut wc).unwrap();
+    let mut fg = s.watch_snapshot(&mut wg).unwrap();
+    let held = s
+        .claim_elems(brook, SHAPES, &[k("a2")], None, None, true)
+        .unwrap()
+        .id;
+    // an accepted verb: a change frame, no refusal
+    let ok = respecting(&s, atlas, &words(&["shape", "move", "a1"]), turn(20))
+        .map_err(|e| format!("the accepted verb was refused: {e}"))?;
+    need(ok.changed.is_some(), "accepted", || {
+        format!("the accepted verb changed nothing: {ok:?}")
+    })?;
+    fa.extend(wa.try_frames());
+    need(refusal_frames(&fa).is_empty(), "accepted", || {
+        format!("an accepted verb made a refusal frame: {fa:?}")
+    })?;
+    need(change_frames(&fa).len() == 1, "accepted", || {
+        format!("the accepted verb's change frame: {fa:?}")
+    })?;
+    // the host takes Cleo's rights; then the refused verb
+    f.host.cleo_revoked.store(true, Ordering::SeqCst);
+    let before = version(&s);
+    let err = match respecting(&s, atlas, &words(&["shape", "move", "a2"]), turn(21)) {
+        Err(e) => e,
+        Ok(o) => return Err(format!("the verb on Brook's claim was not refused: {o:?}")),
+    };
+    need(err.exit() == 5 && version(&s) == before, "refused", || {
+        format!("the claim's refusal: exit {}, {err}", err.exit())
+    })?;
+    fa.extend(wa.try_frames());
+    fc.extend(wc.try_frames());
+    let got = refusal_frames(&fa);
+    need(got.len() == 1, "refused", || {
+        format!(
+            "the refused verb made {} refusal frames for Ada: {fa:?}",
+            got.len()
+        )
+    })?;
+    let r = got[0];
+    let want_actor = (
+        "atlas".to_owned(),
+        "Atlas".to_owned(),
+        ParticipantKind::Agent,
+    );
+    need(
+        (r.actor.id.clone(), r.actor.name.clone(), r.actor.kind) == want_actor,
+        "refused",
+        || format!("who: {:?}", r.actor),
+    )?;
+    need(r.verb == "shape move", "refused", || {
+        format!("verb: {:?}", r.verb)
+    })?;
+    need(r.unit.as_deref() == Some("@sh:a2"), "refused", || {
+        format!("unit (by address): {:?}", r.unit)
+    })?;
+    need(
+        r.code == err.report().id() && r.code == "MPC-E301",
+        "refused",
+        || format!("code: {} (the call's {})", r.code, err.report().id()),
+    )?;
+    let holder = r.holder.as_ref().map(|h| (h.id.as_str(), h.name.as_str()));
+    need(holder == Some(("brook", "Brook")), "refused", || {
+        format!("holder: {:?}", r.holder)
+    })?;
+    need(
+        r.claim.as_deref() == Some(held.to_string().as_str()),
+        "refused",
+        || format!("claim: {:?} (held {held})", r.claim),
+    )?;
+    need(
+        r.turn.as_ref().map(|t| t.as_str()) == Some("t:9c41e07ab2d35f68.21"),
+        "refused",
+        || format!("turn: {:?}", r.turn),
+    )?;
+    let j = WatchFrame::Refused(Box::new(r.clone())).to_json();
+    let want = format!(
+        "{{\"type\":\"verb_refused\",\"at_ms\":{},\"actor\":{{\"id\":\"atlas\",\"name\":\"Atlas\",\
+         \"kind\":\"agent\",\"colour\":\"#6d5bd0\"}},\"client\":{},\"turn\":\"t:9c41e07ab2d35f68.21\",\
+         \"verb\":\"shape move\",\"unit\":\"@sh:a2\",\"code\":\"MPC-E301\",\"holder\":{{\"id\":\"brook\",\
+         \"name\":\"Brook\",\"kind\":\"agent\",\"colour\":\"#c2410c\"}},\"claim\":\"{held}\"}}",
+        r.at_ms, r.client
+    );
+    need(j == want, "refused", || {
+        format!("the frame's JSON:\n{j}\nwant\n{want}")
+    })?;
+    let f = WatchFrame::Refused(Box::new(r.clone()));
+    let last = change_frames(&fa).last().map_or(0, |c| c.seq);
+    need(
+        !f.numbered() && f.seq() == 0 && wa.seq() == last,
+        "refused",
+        || {
+            format!(
+                "a refusal takes no number: watch at {}, last change {last}",
+                wa.seq()
+            )
+        },
+    )?;
+    need(refusal_frames(&fc).is_empty(), "no rights", || {
+        format!("Cleo, without rights, got a refusal frame: {fc:?}")
+    })?;
+    fg.extend(wg.try_frames());
+    let g = refusal_frames(&fg);
+    need(g.len() == 1, "app viewer", || {
+        format!("the App viewer's refusal frames: {fg:?}")
+    })?;
+    let g = g[0];
+    let handle = |id: &str| id.starts_with('p') && id[1..].parse::<u32>().is_ok();
+    need(
+        handle(&g.actor.id)
+            && g.holder
+                .as_ref()
+                .is_some_and(|h| handle(&h.id) && h.id != g.actor.id)
+            && g.turn.is_none()
+            && (g.verb.as_str(), g.unit.as_deref(), g.code)
+                == ("shape move", Some("@sh:a2"), "MPC-E301"),
+        "app viewer",
+        || format!("by handle, no turn: {g:?}"),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn a_refused_verb_is_one_refusal_frame_for_viewers_with_rights_only() {
+    row_refusals().unwrap();
+}
+
+// ---------- outside saves ----------
+
+fn outside_frames(frames: &[WatchFrame]) -> Vec<&WatchOutsideSave> {
+    frames
+        .iter()
+        .filter_map(|f| match f {
+            WatchFrame::OutsideSave(o) => Some(&**o),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The board's file with one more `meta` entry, saved by another program.
+fn save_outside(f: &Fx, key: &str) {
+    let mut p = parse(&fs::read(f.path()).unwrap()).unwrap();
+    p.meta.insert(key.into(), Value::str("x"));
+    fs::write(f.path(), render(&p)).unwrap();
+}
+
+/// Each way an outside save goes is one unnumbered `outside_save` frame, after the save's own
+/// change frame, with its fields: ingested (`rev`), kept both (`rev`, `kept`, the copy's name,
+/// path and doc address), declined (`code`, `message`, once while it stays declined) and missing
+/// (once while it stays gone). Nothing for a check that finds nothing new or the kit's own
+/// write. A watcher whose rights went gets none.
+fn row_outside_saves() -> Result<(), String> {
+    let f = fx("outside", |_| {});
+    let s = f.board(false);
+    let ada = join(&s, person("ada", "Ada"));
+    let cleo = join(&s, person("cleo", "Cleo"));
+    let own = join(&s, person("own", "Owen"));
+    let mut wa = s.watch_keyed(ada, &listed()).unwrap().unwrap();
+    let mut wc = s.watch_keyed(cleo, &listed()).unwrap().unwrap();
+    let mut fa = s.watch_snapshot(&mut wa).unwrap();
+    let mut fc = s.watch_snapshot(&mut wc).unwrap();
+    f.host.cleo_revoked.store(true, Ordering::SeqCst);
+    let mut seen = 0;
+    fn next(
+        w: &mut KeyedWatch,
+        fa: &mut Vec<WatchFrame>,
+        seen: &mut usize,
+    ) -> Vec<WatchOutsideSave> {
+        let new = w.try_frames();
+        fa.extend(new.iter().cloned());
+        let got: Vec<WatchOutsideSave> = outside_frames(&new).into_iter().cloned().collect();
+        *seen += got.len();
+        got
+    }
+    // nothing new: no frame
+    let _ = s.file_changed();
+    let got = next(&mut wa, &mut fa, &mut seen);
+    need(got.is_empty(), "unchanged", || format!("{got:?}"))?;
+    // ingested: an outside save over the file as the kit read it
+    f.tick();
+    save_outside(&f, "one");
+    let check = s.file_changed().unwrap();
+    let DiskCheck::Ingested { version } = check else {
+        return Err(format!("ingested: the check gave {check:?}"));
+    };
+    let new = wa.try_frames();
+    fa.extend(new.iter().cloned());
+    let kinds: Vec<&str> = new
+        .iter()
+        .map(|x| match x {
+            WatchFrame::Change(_) => "change",
+            WatchFrame::OutsideSave(_) => "outside_save",
+            _ => "other",
+        })
+        .collect();
+    need(kinds == ["change", "outside_save"], "ingested", || {
+        format!("the save's frames: {kinds:?}")
+    })?;
+    seen += outside_frames(&new).len();
+    let o = outside_frames(&new)[0];
+    need(
+        matches!(o.outcome, OutsideSaveOutcome::Ingested { rev } if rev == version)
+            && o.doc == NAME
+            && o.at_ms == f.host.now.load(Ordering::SeqCst),
+        "ingested",
+        || format!("{o:?}"),
+    )?;
+    let j = WatchFrame::OutsideSave(Box::new(o.clone())).to_json();
+    let want = format!(
+        "{{\"type\":\"outside_save\",\"at_ms\":{},\"doc\":\"{NAME}\",\"outcome\":\"ingested\",\"rev\":{version}}}",
+        o.at_ms
+    );
+    need(j == want, "ingested", || format!("JSON {j}\nwant {want}"))?;
+    let f0 = WatchFrame::OutsideSave(Box::new(o.clone()));
+    need(!f0.numbered() && f0.seq() == 0, "ingested", || {
+        "an outside save's frame takes a number".into()
+    })?;
+    // kept both: the kit wrote the file, then another program saved over it
+    raw(
+        &s,
+        own,
+        vec![Edit::Map {
+            root: META.into(),
+            ops: vec![MapOp::Set {
+                key: "kit".into(),
+                value: Value::str("wrote"),
+            }],
+        }],
+    )
+    .ok_or("kept both: the kit's edit")?;
+    s.flush(own).unwrap();
+    // the kit's own write: no frame
+    let _ = s.file_changed();
+    let got = next(&mut wa, &mut fa, &mut seen);
+    need(got.is_empty(), "own write", || format!("{got:?}"))?;
+    f.tick();
+    save_outside(&f, "two");
+    let check = s.file_changed().unwrap();
+    let DiskCheck::Conflict {
+        version,
+        kept,
+        copy: Some(copy),
+    } = check
+    else {
+        return Err(format!("kept both: the check gave {check:?}"));
+    };
+    let got = next(&mut wa, &mut fa, &mut seen);
+    let name = copy.file_name().unwrap().to_str().unwrap().to_owned();
+    let ok = match got.as_slice() {
+        [WatchOutsideSave {
+            outcome:
+                OutsideSaveOutcome::KeptBoth {
+                    rev,
+                    kept: k,
+                    copy: Some(c),
+                },
+            ..
+        }] => {
+            *rev == version
+                && *k == kept
+                && c.name == name
+                && c.path == name
+                && c.doc.as_deref() == Some(name.as_str())
+        }
+        _ => false,
+    };
+    need(ok, "kept both", || {
+        format!("{got:?} (copy {copy:?}, kept {kept})")
+    })?;
+    let j = WatchFrame::OutsideSave(Box::new(got[0].clone())).to_json();
+    need(
+        j.contains(&format!(
+            "\"outcome\":\"kept_both\",\"rev\":{version},\"kept\":{kept},\"copy\":{{\"name\":\"{name}\",\"path\":\"{name}\",\"doc\":\"{name}\"}}}}"
+        )),
+        "kept both",
+        || format!("JSON {j}"),
+    )?;
+    // declined: once, while it stays declined
+    f.tick();
+    fs::write(f.path(), b"S\tnot a line\n").unwrap();
+    let check = s.file_changed().unwrap();
+    let DiskCheck::Declined(why) = check else {
+        return Err(format!("declined: the check gave {check:?}"));
+    };
+    let got = next(&mut wa, &mut fa, &mut seen);
+    let ok = matches!(got.as_slice(),
+        [WatchOutsideSave { outcome: OutsideSaveOutcome::Declined { code, message }, .. }]
+            if *code == why.code && *message == why.message && *code == "malformed");
+    need(ok, "declined", || format!("{got:?} ({why:?})"))?;
+    f.tick();
+    fs::write(f.path(), b"S\tstill not a line\n").unwrap();
+    let _ = s.file_changed();
+    let got = next(&mut wa, &mut fa, &mut seen);
+    need(got.is_empty(), "declined again", || format!("{got:?}"))?;
+    // missing: once, while it stays gone
+    fs::remove_file(f.path()).unwrap();
+    let check = s.file_changed().unwrap();
+    need(matches!(check, DiskCheck::Missing), "missing", || {
+        format!("the check gave {check:?}")
+    })?;
+    let got = next(&mut wa, &mut fa, &mut seen);
+    let ok = matches!(
+        got.as_slice(),
+        [WatchOutsideSave {
+            outcome: OutsideSaveOutcome::Missing,
+            ..
+        }]
+    );
+    need(ok, "missing", || format!("{got:?}"))?;
+    let _ = s.file_changed();
+    let got = next(&mut wa, &mut fa, &mut seen);
+    need(got.is_empty(), "missing again", || format!("{got:?}"))?;
+    need(seen == 4, "one frame a save", || {
+        format!("{seen} outside_save frames for four outcomes")
+    })?;
+    fc.extend(wc.try_frames());
+    need(outside_frames(&fc).is_empty(), "no rights", || {
+        format!("Cleo, without rights, got outside_save frames: {fc:?}")
+    })?;
+    // the frames replay: an outside save's frame changes nothing
+    replay(&fa).map(|_| ())
+}
+
+#[test]
+fn each_outside_save_is_one_outside_save_frame_with_its_outcome() {
+    row_outside_saves().unwrap();
+}
+
 fn change_frames(frames: &[WatchFrame]) -> Vec<&k2_mpc_base::session::WatchChange> {
     frames
         .iter()
@@ -2711,4 +3100,210 @@ fn the_keyed_frames_are_golden() {
             ("final_rev", Json::from(version(&s))),
         ])),
     );
+}
+
+// ---------- nesting in the view schema ----------
+
+/// The deck's view schema with nesting declared: a box sits in a group, and a group in a group.
+const NESTED_VIEW: ViewSchema = ViewSchema {
+    nesting: &[
+        Nesting {
+            kind: "box",
+            parent: "group",
+        },
+        Nesting {
+            kind: "group",
+            parent: "group",
+        },
+    ],
+    ..DECK_VIEW
+};
+
+/// [`ViewDeck`] with [`NESTED_VIEW`].
+struct NestedDeck;
+
+impl Pack for NestedDeck {
+    fn schema(&self) -> Schema {
+        ViewDeck.schema()
+    }
+    fn composite(&self) -> &'static [(&'static str, &'static str)] {
+        ViewDeck.composite()
+    }
+    fn view_schema(&self) -> Option<ViewSchema> {
+        Some(NESTED_VIEW)
+    }
+    fn address_of(&self, root: &str, key: &Key) -> String {
+        ViewDeck.address_of(root, key)
+    }
+    fn key_of(&self, root: &str, address: &str) -> Option<Key> {
+        ViewDeck.key_of(root, address)
+    }
+    fn decode(&self, b: &[u8]) -> Result<PackContent, Declined> {
+        ViewDeck.decode(b)
+    }
+    fn encode(&self, r: &[(String, Neutral)], c: &[u8]) -> Result<Vec<u8>, PackError> {
+        ViewDeck.encode(r, c)
+    }
+}
+
+/// A view schema's `nesting` read back from its JSON: `(kind, parent)` pairs, in order; `None`
+/// when the JSON has no `nesting`.
+fn nesting_of(v: &Json) -> Option<Vec<(String, String)>> {
+    let Json::List(l) = v.get("nesting")? else {
+        panic!("nesting is not a list: {}", v.to_json());
+    };
+    Some(
+        l.iter()
+            .map(|n| {
+                let s = |k: &str| match n.get(k) {
+                    Some(Json::Str(s)) => s.clone(),
+                    other => panic!("nesting entry's {k}: {other:?}"),
+                };
+                (s("kind"), s("parent"))
+            })
+            .collect(),
+    )
+}
+
+/// The deck's view schema as the snapshot carried it before nesting existed (the bytes of
+/// `client/test/golden/keyed_snapshot.json`'s `view` head).
+const DECK_VIEW_JSON: &str = "{\"containers\":\"pages\",\"units\":\"items\",\
+\"unit_container_field\":\"page\",\"container_id_field\":null,\"native_unit\":\"px\",\"page\":null,\
+\"container_fields\":{\"title\":null,\"hidden\":null,\"layout\":null},\"unit_fields\":{\"kind\":\
+{\"list_value\":true},\"name\":null,\"alt\":null,\"text\":\"text\",\"hidden\":null,\
+\"editable_text\":null,\"placeholder\":null},\"geometry\":null,\"field_class\":{},\"derived\":\
+{\"containers\":[],\"units\":[]}}";
+
+/// A schema that declares nesting carries it, in order, in its JSON and in a watch's snapshot
+/// head, and reads back the same; a schema without it is the same bytes as before; the
+/// declaration is checked.
+fn row_nesting() -> Result<(), String> {
+    let composites = ViewDeck.composite();
+    NESTED_VIEW
+        .check(&DECK_SCHEMA, composites)
+        .map_err(|e| format!("check: the nested schema is refused: {e}"))?;
+    let want = vec![
+        ("box".to_owned(), "group".to_owned()),
+        ("group".to_owned(), "group".to_owned()),
+    ];
+    let got = nesting_of(&NESTED_VIEW.to_value());
+    need(got.as_ref() == Some(&want), "round trip", || {
+        format!(
+            "the schema's JSON gives {got:?}: {}",
+            NESTED_VIEW.to_value().to_json()
+        )
+    })?;
+    // through a watch: the snapshot's head carries the same schema
+    let f = fx("nesting", |_| {});
+    let d = f
+        .mgr
+        .open(
+            Arc::new(NestedDeck),
+            &doc_key("nested.deck"),
+            Some(deck_bytes(2, 3, 12).as_bytes()),
+        )
+        .unwrap();
+    let ada = join(&d, person("ada", "Ada"));
+    let mut w = d.watch_keyed(ada, &listed()).unwrap().unwrap();
+    let frames = d.watch_snapshot(&mut w).unwrap();
+    let head = frames.first().map(WatchFrame::to_value);
+    let schema = head
+        .as_ref()
+        .and_then(|h| h.get("view"))
+        .and_then(|v| v.get("schema"))
+        .ok_or_else(|| format!("round trip: no view schema in the head: {head:?}"))?;
+    need(
+        nesting_of(schema).as_ref() == Some(&want),
+        "round trip",
+        || format!("the head's schema: {}", schema.to_json()),
+    )?;
+    need(
+        schema.to_json() == NESTED_VIEW.to_value().to_json(),
+        "round trip",
+        || {
+            format!(
+                "the head's schema differs from the pack's: {}",
+                schema.to_json()
+            )
+        },
+    )?;
+    let r = replay(&frames)?;
+    let state = d.keyed_state_for_tests().unwrap();
+    need(
+        r.json() == watch_state_json(&NestedDeck, &state),
+        "round trip",
+        || "the nested deck's snapshot replays".into(),
+    )?;
+    // a schema without it: the same bytes as before, with no `nesting`
+    let plain = DECK_VIEW.to_value();
+    need(nesting_of(&plain).is_none(), "without", || {
+        format!("a schema without nesting has one: {}", plain.to_json())
+    })?;
+    need(plain.to_json() == DECK_VIEW_JSON, "without", || {
+        format!("byte for byte:\n{}\nwas\n{DECK_VIEW_JSON}", plain.to_json())
+    })?;
+    // checked: a pair twice, an empty kind, too many
+    let refused = |n: &'static [Nesting], says: &str| -> Result<(), String> {
+        let vs = ViewSchema {
+            nesting: n,
+            ..DECK_VIEW
+        };
+        match vs.check(&DECK_SCHEMA, composites) {
+            Err(e) if e.contains(says) => Ok(()),
+            other => Err(format!(
+                "check: {n:?} gave {other:?}, want an error saying {says:?}"
+            )),
+        }
+    };
+    let pair = Nesting {
+        kind: "box",
+        parent: "group",
+    };
+    refused(
+        Box::leak(vec![pair, pair].into_boxed_slice()),
+        "declared twice",
+    )?;
+    refused(
+        Box::leak(
+            vec![Nesting {
+                kind: "",
+                parent: "group",
+            }]
+            .into_boxed_slice(),
+        ),
+        "names a kind",
+    )?;
+    let many: Vec<Nesting> = (0..=NESTING_MAX)
+        .map(|i| Nesting {
+            kind: Box::leak(format!("k{i}").into_boxed_str()),
+            parent: "group",
+        })
+        .collect();
+    refused(Box::leak(many.into_boxed_slice()), "at most")?;
+    // the client's golden: the nested deck's snapshot, its state and units
+    let units = r
+        .units
+        .iter()
+        .map(|(c, us)| (c.clone(), Json::List(us.iter().map(unit_value).collect())));
+    golden(
+        &golden_dir().join("keyed_snapshot_nesting.json"),
+        &file(Json::obj([
+            (
+                "features",
+                Json::List(vec![Json::from(KEYED_WATCH_FEATURE)]),
+            ),
+            ("frames", Stable::default().frames(&frames)),
+            (
+                "final_json",
+                Json::from(watch_state_json(&NestedDeck, &state).as_str()),
+            ),
+            ("units", Json::obj(units)),
+        ])),
+    );
+    Ok(())
+}
+
+#[test]
+fn a_view_schema_declares_nesting_and_one_without_it_is_unchanged() {
+    row_nesting().unwrap();
 }

@@ -697,14 +697,10 @@ impl GridNumbers {
 
 /// Planted ([`crate::differential::GridMutant::GapIgnored`]): numbering ignores the gap
 /// field. Without the `differential` feature: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_gap_ignored() -> bool {
-    crate::differential::grid_mutant() == Some(crate::differential::GridMutant::GapIgnored)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_gap_ignored() -> bool {
-    false
+    plant_on!(
+        crate::differential::grid_mutant() == Some(crate::differential::GridMutant::GapIgnored)
+    )
 }
 
 // ----- a change frame's derived values, typed -----

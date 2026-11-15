@@ -66,6 +66,12 @@ pub(super) const KEPT: &[&str] = &[
     "annot_thread_log",
     "annot_changed",
     "demoted_changes",
+    // the chunked versions a doc kept from an earlier life at tier 0
+    "doc_chunk_keys",
+    "doc_chunks",
+    "doc_manifests",
+    "doc_segments",
+    "doc_removals",
 ];
 
 /// The per-doc tables a demotion erases (the text doc's own). `live_carriers`,
@@ -240,7 +246,9 @@ impl DocStore {
             let mut last = blob::last_vid(&w, id)?;
             let mut vids = Vec::with_capacity(p.versions.len());
             for v in p.versions {
-                blob::adjust_ref(&w, k.no, &v.blob, 1, v.at_ms)?;
+                if !super::chunks::take_ref(&w, id, &v.blob)? {
+                    blob::adjust_ref(&w, k.no, &v.blob, 1, v.at_ms)?;
+                }
                 last += 1;
                 blob::put_version(&w, id, last, v)?;
                 vids.push(last);

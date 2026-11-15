@@ -197,6 +197,8 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `focus` (wire 3) | `req`, `focus`: `{root, key}` or `null` | only when refused |
 | `range` (wire 3) | `req`, `range`: `{root, key, field, anchor, head}` or `null` | only when refused |
 | `cells` (live grid) | `req`, `cells`: `{container, active, ranges}` or `null` ([The live grid](#the-live-grid)) | only when refused |
+| `view_address` | `req`, `address`: an address or `null` | only when refused |
+| `time_position` | `req`, `time_position`: `{at, state, in?, rate?}` or `null` | only when refused |
 
 | Frame | Session call |
 |---|---|
@@ -205,6 +207,8 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `viewport` | `set_viewport(conn, rect)`, from `Rect::new(x, y, w, h)` |
 | `focus` | `set_focus(conn, focus)`, from `ElemFocus::new(root, key)` |
 | `range` | `set_range(conn, range)`, from `ElemRange::new(root, key, field, anchor, head)` |
+| `view_address` | `set_view_address(conn, address)` |
+| `time_position` | `set_time_position(conn, time)`, from `TimePosition::new(at, state)`, then `.within(in)` and `.rate(rate)` when given |
 
 - **`focus`**: the container this connection has in view (a
   slide), an element of a MovableList root, live (`MPC-E114` otherwise). Needs read. It leaves
@@ -224,6 +228,19 @@ They sit outside the doc's numbering: none of them takes or moves a version.
   the container's rows or columns, an active cell outside the ranges, another container's
   corner), `MPC-E310` (more than 16 ranges: the client refuses it itself, unsent), `MPC-E305` (a
   watcher).
+- **`view_address`**: the view this connection is looking at, by address (any address the kit's
+  grammar reads, a bare key included; at most 512 bytes, `PRESENCE_ADDRESS_MAX`; `MPC-E114`
+  otherwise). The kit doesn't resolve it. Needs read; a watcher is refused (`MPC-E305`). A pack's
+  verb sets its agent's (`StructOutput::viewing`), and a host sets one for any connection (an
+  agent's, when it renders a still for it). Not to be confused with `view`, a text doc's lines.
+- **`time_position`**: this connection's playhead. `at` is a decimal integer string (an optional
+  `-`, digits, no leading zero, within 64 bits) in the pack's unit, the view schema's `time_unit`
+  (a timeline's ticks): never a float. `state` is `playing` or `paused`; `in` (optional) what it
+  is in, by address; `rate` (optional) the playback rate as a decimal ratio, `n` or `n/d` with `d`
+  above 0 (`2`, `1/2`, `-1`, `1001/1000`), 1 when absent. The kit stamps `at_ms` (the host clock)
+  when it takes it, so a follower extrapolates a playing one from `at_ms` at `rate` (the time
+  since `at_ms`, times `rate`, in the pack's unit). Anything else is `MPC-E114`. A pack's verb sets its
+  agent's (`StructOutput::time_position`). Needs read; a watcher is refused (`MPC-E305`).
 - **Elements by address.** On the wire an element is named by its address (`@sld:256`,
   `@sld:256/sp:4`), the pack's `Pack::address_of` of its key (by default the key itself, so a
   pack that maps nothing sees no change). The host converts at the kit's edge: the setters by
@@ -292,6 +309,8 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `keyed_watch` (wire 3, after v0.15.1) | `watch`, `report` ([The keyed watch](#the-keyed-watch)) |
 | `cells` (wire 3, after v0.15.1) | `cells` ([The live grid](#the-live-grid)) |
 | `cell_claims` (wire 3, after v0.15.1) | `claim` with `cells` ([Claim frames](#claim-frames)) |
+| `view_address` (wire 3, after v0.18.0) | `view_address` |
+| `time_position` (wire 3, after v0.18.0) | `time_position` |
 
 ## Claim frames
 
@@ -315,6 +334,17 @@ this spec, no socket.
   before anything applies: it takes no version and moves nothing.
 - **Who sees it:** everyone, by the roster kinds `claim_started_elems` and `claim_ended`; a later
   subscriber by the snapshot entries' `elem_claims` ([The roster](#the-roster)).
+- **A claim whose elements went** ends `how: "deleted"` when a live change removed the last of
+  them, and `how: "gone_outside_save"` (after v0.18.0) when an **outside save** did: the file
+  changed on disk and its apply took the elements out (an app deleted them, or a pack's pairing
+  gave a renamed element a new key, so the old key went). Its `claim_ended` carries `keys`, the
+  claim's elements by address as they were when it was taken, so a view can say what went;
+  `keys` is absent for a claim on lines or cells (and from an older kit).
+- **A reason a client doesn't know** is an ended claim like any other: the client drops the claim
+  and reads the reason as `deleted` (`claimEndReason` in `src/presence.ts`). No feature name
+  gates `gone_outside_save`: a v0.18.0 client folds `claim_ended` by its `claim` alone, so it
+  drops the claim as before (`test/n1-wire.test.ts`). The client hands each end on with
+  `PresenceChannel.onClaimEnded` (`ClaimEnded {claim, who, how, keys}`).
 - **A claim doesn't outlive the connection that took it,** held or not: it ends `how: "left"` when
   that connection closes. A new connection that names the old one (`join_replacing`) closes it at
   once; one that doesn't leaves the claim live until the old one closes or its time runs out.
@@ -643,8 +673,9 @@ a frame over it, and the host refuses one cleanly:
   started_ms}`, `claim_started_elems {who, claim, root, keys, note, hold, expires_ms, version,
   actor, started_ms}`, `claim_started_cells {who, claim, container, ranges, note, hold,
   expires_ms, version, actor, started_ms}` (a live grid), `claim_ended {who, claim, how, lines,
-  version, actor, at_ms, at_rev}`
-  (`actor`, `started_ms`, `at_ms` and `at_rev`: wire 3, [below](#claim-events-wire-3)),
+  version, actor, at_ms, at_rev, keys?}`
+  (`actor`, `started_ms`, `at_ms` and `at_rev`: wire 3, [below](#claim-events-wire-3); `keys`:
+  a claim on elements, its elements by address as they were, after v0.18.0),
   `note {to, from, note, lines, claim}`,
   `overwritten` ([below](#the-overwritten-event)), `watching {count}`, `closed {reason}` (the
   host closed the doc's live session, `SessionManager::close`: the last event, then the
@@ -685,7 +716,7 @@ even after the claimant left:
 - **`started_ms`** on `claim_started` and `claim_started_elems`: when it was taken (host clock);
   also on a snapshot's `elem_claims`.
 - **`at_ms`** on `claim_ended`: when it ended; **`at_rev`**: the change (the doc's version) that
-  ended it when one did (`how: "edited"` or `"deleted"`), else `null`.
+  ended it when one did (`how: "edited"`, `"deleted"` or `"gone_outside_save"`), else `null`.
 - **An agent's claim on elements moves its presence:** at the same flush, after the claim's
   start, its `focus` goes to the claim's first container in document order and its
   `selection` is **replaced** by the claimed keys (in the order it gave them). A person's claim
@@ -737,7 +768,8 @@ the kit's own final roster.
 | `role` | `"editor"` / `"viewer"` (`Role`) |
 | `kind` | `ParticipantKind` in lower case: `person`, `agent`, `app`, `external`, `restore`, `import` |
 | `reason` (`left`) | `LeaveReason`: `left`, `idle`, `kicked`, `rights_lost` |
-| `how` (`claim_ended`) | `ClaimEnd::as_str`: `released`, `edited`, `expired`, `left`, `reset`, `deleted` |
+| `how` (`claim_ended`) | `ClaimEnd::as_str`: `released`, `edited`, `expired`, `left`, `reset`, `deleted`, `gone_outside_save` (after v0.18.0; a client reads a reason it doesn't know as `deleted`) |
+| `keys` (`claim_ended`) | `RosterEvent::ClaimEnded::addresses`, only when not empty: a claim on elements (or a blob doc's nodes), its elements by address as they were when it was taken, in key order |
 | `note` (`note`) | `NoteKind::as_str` |
 | `claim` | `claim-N` (`ClaimId`'s `Display`) |
 | `lines` | `{root, first, last}`, 1-based, inclusive. For a claim on elements (`claim_ended`), the list root and the live positions of its first and last live elements (`1, 1` with none live), for display only |
@@ -752,6 +784,8 @@ the kit's own final roster.
 | `ElemFocus` (wire 3) | `{root, key}`: `key` as `Key`'s text |
 | `ElemRange` (wire 3) | `{root, key, field, anchor, head}`: `anchor` and `head` as JSON numbers, UTF-8 bytes of the field's text |
 | `RosterEvent::Focus`, `Range` (wire 3) | `{kind: "focus" \| "range", who, <kind>: value or null}`, then `client` only when the event's `client` is `Some` |
+| `TimePosition` (after v0.18.0) | `{at, state, at_ms}`, then `in` and `rate` only when it has them: `at` and `rate` strings exactly as set, `state` `PlayState::as_str` (`playing`, `paused`), `at_ms` a JSON number (host clock) |
+| `RosterEvent::ViewAddress`, `TimePosition` (after v0.18.0) | `{kind: "view_address" \| "time_position", who, <kind>: value or null}` (the address a string), then `client` only when the event's `client` is `Some`. A roster entry and a device carry `view_address` and `time_position` only when they have one |
 | `ErrorReport` | exactly `ErrorReport::to_json()`: `{id, exit, message, next, next_step, rule, details}`, `next_step` = `{verb, args, why}`, absent when there is nothing to run (and before kit v0.10.1). Clients key on `id`; `message`, `next` and `next_step` are for people (a host renders `next_step` in its own syntax) |
 | `RosterEvent::Overwritten {to, overwrite}` → `overwritten` | `{kind: "overwritten", to, change, version, restore_from, source, rule, row, line, cells, more, not_shown, withheld, no_history, message}`, every field always present: `to` = `to` (`Who`'s `Display`, the subscriber's own, since the kit sends it only to its author's subscriptions); `change`, `source`, `rule`, `more`, `not_shown`, `withheld`, `no_history` = the `Overwrite`'s fields of those names; `version`, `restore_from`, `row`, `line` = the `Overwrite`'s `Option`s, `null` when `None`; `cells` (below); `message` = the `Overwrite`'s `Display` (`to_string()`), which holds the person's text |
 | `cells` | in order: first `{region, col, yours, file, cut}` from the `Overwrite`'s own top-level `region`, `col`, `yours`, `file`, `cut` (its first place), then one `{region, col, yours, file, cut}` per entry of `also` (an `OverwriteCell`, same fields), in `also`'s order. `col` is `null` when `None`. A roll-up (`rule: "rollup"`, `Overwrite::is_rollup`) has no place: `cells: []` (its `region` is empty; don't send it) |
@@ -894,6 +928,8 @@ Nothing is guessed.
 | `keyed_page` | `seq`, `upto`, `page` (from 1), `pages`, `root`, and one of `live`, `hidden`, `entries`, `text`, `units`; `derived?` | the keyed state's runs, one root each, in schema order: `live` `[[address, value], ...]` (elements in order, appended), `hidden` (deleted elements), `entries` `[[key, field, value], ...]` (map entries, split as ops are), `text` (appended); then the view index's units, container by container: `units` `{container, from, units, next, total}` (`ViewIndex::units_page`; `root` is the units root). `derived`: on a page of a live grid's rows map, the pack's values kept by cell field for that page's entries ([The live grid](#the-live-grid)); absent when there are none |
 | `ops_change` | `seq`, `rev`, `at_ms`, `change_kind`, `actor {id, name, kind, colour}`, `client`, `via`, `on_behalf_of`, `turn`, `verb`, `claim`, `ops`, then for a pack with a view schema `units`, `containers_changed` and `containers` ([View deltas](#view-deltas)), then `derived`, `render_hashes` | one committed change, now at version `rev` |
 | `watch_refused` | `error` | unnumbered: the host can't serve the watch (`MPC-E401`, below) |
+| `verb_refused` | `at_ms`, `actor {id, name, kind, colour}`, `client`, `turn`, `verb`, `unit`, `code`, `holder`, `claim` | unnumbered: a verb on the doc was refused and applied nothing ([Refused verbs](#refused-verbs)) |
+| `outside_save` | `at_ms`, `doc`, `outcome`, and by outcome `rev`, `kept`, `copy`, `code`, `message` | unnumbered: what came of an outside save of the doc's file ([Outside saves](#outside-saves)) |
 
 - **The snapshot is the fallback for everything:** a client's gap, a reconnect (numbering starts
   again at 1 on every connection), a watch that fell behind (its queue of
@@ -968,6 +1004,57 @@ and units) and `test/golden/keyed_frames.json` (a scripted session's
 frames after its snapshot), written by `crates/base/tests/keyed_watch.rs`; the seeded traces in
 `test/vectors/keyed_watch.json` replay in `test/keyed-watch.test.ts` to the kit's own final state,
 byte for byte.
+
+### Refused verbs
+
+A pack's structured edit verb (`Session::run_tool`) that a refusal stopped, whatever refused it
+(another's claim, a stale `--if-version`, a size limit, rights, its arguments, or the verb's own
+"no" with its id), is one `verb_refused` frame (`WatchFrame::Refused`, `WatchRefusal`), so a view
+can say who couldn't do what and why. It changes nothing.
+
+- **Unnumbered:** no `seq`, never counted; no snapshot holds it, and a lost one is never asked
+  for again. It goes out only after the watch's first snapshot, and a watch whose queue is full
+  misses it (the watch stays open).
+- **Who sees it:** the watches whose connection may read the doc when the verb is refused (the
+  kit asks the host's rights then, so a watcher whose rights went since it opened gets none),
+  the same viewers as the change frames. An App viewer gets `actor.id` and `holder.id` as
+  handles and `turn` `null`, as on a change frame.
+- **The fields:**
+  - `actor`, `client`, `turn`: who was refused, as a change frame's.
+  - `verb`: the verb's name (`shape move`).
+  - `unit`: the unit it addressed, by address: the one the verb names (a pack sets it,
+    `StructOutput::addressing`), else the first element its edits touched under the claim that
+    refused it, else the first element its edits touched; `null` when it was refused before it
+    named one.
+  - `code`: the refusal's id (`MPC-E301` for a claim; `ErrorReport::id` of what the call
+    returned).
+  - `holder`: `{id, name, kind, colour}` of who holds the claim or lease that refused it, else
+    `null`; `claim`: that claim's id, `claim-N`, else `null`.
+
+### Outside saves
+
+When the kit handles an outside save of the doc's file (another program saved it), one
+`outside_save` frame (`WatchFrame::OutsideSave`, `WatchOutsideSave`) says what came of it, so a host
+forwards it as it is. The save's change, when it made one, comes first as its own `ops_change`
+(actor `kit:external`), unchanged.
+
+- **Unnumbered**, as `verb_refused`: no `seq`, never counted, after the watch's first snapshot,
+  and only to the watches whose connection may read the doc then.
+- **One a save**: one frame for each save the kit takes in; `declined` and `missing` once, when
+  the file stops decoding or goes, not on every check after. Nothing for a check that finds the
+  file unchanged or holding the kit's own write.
+- **Every frame**: `at_ms` (the host clock when the kit handled it), `doc` (the doc's address,
+  `DocKey::path`), `outcome`:
+  - `ingested`: taken in by key; `rev` the doc's version after it (`DiskCheck::Ingested`).
+  - `kept_both`: the save is the doc at `rev`; what was live before is kept as the stored version
+    `kept` and as the conflict copy `copy {name, path, doc?}` (`DiskCheck::Conflict`): `name` its
+    file name, `path` relative to the doc's file's folder as the kit records it, `doc` its doc
+    address when the copy is itself a kit document (the host's `Host::document_at`); `copy` is
+    `null` when it couldn't be written.
+  - `declined`: the file can't be a live doc any more (`DiskCheck::Declined`): `code` the pack's
+    (`too_large`, `not_utf8`, `malformed`...) and `message` in plain words.
+  - `missing`: the file is gone (`DiskCheck::Missing`).
+- The client: `OutsideSaveFrame`, `KeyedWatch.onOutsideSave`. An older client ignores the frame.
 
 ### View deltas
 
@@ -1069,6 +1156,63 @@ stays 3, and a client that doesn't know them reads every frame as before.
   `KeyedWatch.unit(address)` the unit, with them in `derived`. A fresh snapshot replaces them
   all. A unit nested under another (a group's child) the pack adds after the snapshot isn't
   shown until the next snapshot, as before; its values come with it.
+
+### Derived values per container
+
+The container half of [Derived values per unit](#derived-values-per-unit), under the same rules
+(a timeline track's label and kind). Additive within wire 3.
+
+- **The names**: the view schema's `container_derived` (`["label","kind"]`), at most 8, each 1 to
+  64 bytes of ASCII letters, digits, `_`, `-` or `.`; absent when the pack declares none (and
+  from an older kit).
+- **On the snapshot's containers**: each carries its own as `derived` (`{"label":"Drums",
+  "kind":"audio"}`), in the schema's order, each text at most 1,024 bytes; a container with none
+  has no `derived`.
+- **On a change frame**: `derived.containers.<container address>.<name>` is the text the change
+  set, or `null` when the container has none any more, for exactly the values the change set or
+  removed; beside the pack's own keys there (a sheet's `merges`, `styles`), which the kit never
+  overwrites. A container added or restored gets all its values.
+- **The client**: `KeyedWatch.containerDerived(name, container)` reads them (`null` for none), and
+  each `ViewContainer.derived`.
+
+### Nesting
+
+Which unit kinds nest inside which (a collection's items, a group's shapes), so a view can draw
+the hierarchy. Additive within wire 3: a client that doesn't know it reads every frame as before.
+
+- **The relation**: the view schema's `nesting` (`ViewSchema::nesting`, `Nesting`):
+  `[{"kind":"box","parent":"group"}, ...]` in the pack's order, each `kind` and `parent` a unit
+  kind as units carry it (`kind`), 1 to 64 bytes, at most 16 (`NESTING_MAX`), no pair twice;
+  absent when the pack declares none (and from an older kit), so such a schema is the same bytes
+  as before.
+- **Which unit is in which** stays on the unit: its `parent`, by address (`null`: right under its
+  container). The relation is a declaration only: the kit builds the index as before.
+- **The client**: `ViewSchemaJson.nesting` (`NestingJson`).
+
+### Containers in containers
+
+A container inside another (a scene's collections in collections, a document's sections), so an
+outliner draws the containers' tree from the view alone. Additive within wire 3: a client that
+doesn't know it reads every frame as before.
+
+- **On a container** (the snapshot's `containers`): `parent`, the address of the container it sits
+  inside; absent at the top level (and from an older kit). Always another container of the same
+  view, never in a cycle, at most 32 levels deep (`CONTAINER_DEPTH_MAX`; the top level is 1): the
+  kit checks it when it builds the view and leaves out a parent that fails. `position` stays the
+  flat order: draw the tree by `parent`, each level in `position` order.
+- **On a change frame**: a container delta's `parent_after`, the parent's address after the
+  change (`null`: at the top level now), on `add` and `restore` always and on any other delta
+  when the parent changed. A container whose parent changed with no op of its own (a parent the
+  pack derives from another root) gets a `props` delta naming no field, with `parent_after`.
+  Absent: unchanged.
+- **The schema**: `container_fields.parent` names where the parent comes from (as the other
+  view fields); absent when the pack declares none. A client never reads a parent from the
+  keyed state: the store holds the parent's key, the view its address, and only the kit maps one
+  to the other.
+- **The client**: `ViewContainer.parent`, `ContainerDelta.parent_after`, `CONTAINER_DEPTH_MAX`;
+  `KeyedView` keeps them. Tests: `test/container-parent.test.ts` on the kit's golden
+  (`test/golden/keyed_frames_container_parent.json`, written by
+  `crates/base/tests/view_containers.rs`).
 
 ### Placements in 3D
 

@@ -25,6 +25,18 @@
 //! - **Numbered per watch:** every frame takes the next `seq` (the snapshot's head, each page,
 //!   each change), so a client sees a lost frame as a gap and asks for a fresh snapshot.
 //!   Presence, roster and claim frames are never numbered and never counted.
+//! - **Refused verbs** (`verb_refused`, [`WatchRefusal`]): a pack's structured edit verb that a
+//!   refusal stopped (another's claim, a stale version, a limit, the verb's own "no") is one
+//!   unnumbered frame: who, the verb, the unit it addressed, the refusal's id and, when a claim
+//!   or lease held by someone else caused it, the holder. It changes nothing, so a snapshot
+//!   never holds it and a lost one is never asked for again. It goes only to the watches whose
+//!   connection has the right to read the doc when it is refused (the host is asked then), as
+//!   change frames do; an App viewer sees the others by handle.
+//! - **Outside saves** (`outside_save`, [`WatchOutsideSave`]): when the kit handles an outside
+//!   save of the doc's file, one unnumbered frame says what came of it: `ingested`, `kept_both`
+//!   (with the conflict copy and the version holding what was live before), `declined` or
+//!   `missing` (once, when the file goes or stops decoding). The save's own change still comes
+//!   as its change frame, before it. The same audience as the refused verbs.
 //! - **The snapshot is the fallback** for everything a watch can't carry: a client's gap, a
 //!   subscriber cut off for falling behind, a change whose frame would pass the frame cap. A
 //!   catch-up from a version (the changes since, under the cap) is not built: it would sit in
@@ -228,6 +240,97 @@ pub struct WatchChange {
     pub space_after: Option<crate::placement::Space>,
 }
 
+/// A verb refused on the watched doc (`verb_refused`): a pack's structured edit verb run through
+/// [`Session::run_tool`] that applied nothing because it was refused, whatever refused it (the
+/// session: another's claim, a stale `--if-version`, a size limit, rights; or the verb's own
+/// "no", with its id). Unnumbered: it changes nothing, so no snapshot holds it, and a watch
+/// that misses one (its queue full) doesn't ask for it again. Sent only to the watches whose
+/// connection may read the doc at the time (the host's rights, asked when it is refused).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WatchRefusal {
+    pub at_ms: u64,
+    /// Who was refused (an App viewer gets a handle).
+    pub actor: WatchActor,
+    /// The refused connection's client.
+    pub client: ClientId,
+    /// The call's turn; `None` for an App viewer, as on a change frame.
+    pub turn: Option<Turn>,
+    /// The verb's name (`shape move`).
+    pub verb: String,
+    /// The unit the verb addressed, by address ([`Pack::address_of`]): the one the verb names
+    /// ([`crate::tools::StructOutput::addressing`]), else, for a claim, the first element it
+    /// touched under the claim, else the first element its edits touched. `None` when it was
+    /// refused before it named one (its arguments, rights, a stale version).
+    pub unit: Option<String>,
+    /// The refusal's id (`MPC-E301`): [`crate::errors::ErrorReport::id`] of what the call
+    /// returned.
+    pub code: &'static str,
+    /// Who holds the claim (or lease) that refused it, when that refused it; `None` otherwise.
+    pub holder: Option<WatchActor>,
+    /// The holder's claim, `claim-N`, when a claim refused it.
+    pub claim: Option<String>,
+}
+
+/// What the kit made of an outside save of the watched doc's file (`outside_save`): unnumbered,
+/// one per save it took in, and one when the file goes or stops decoding. Sent to the watches
+/// whose connection may read the doc then, as [`WatchRefusal`]. The save's change, when it made
+/// one, came first as its own change frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WatchOutsideSave {
+    /// When the kit handled it (host clock).
+    pub at_ms: u64,
+    /// The doc's address: its [`DocKey::path`].
+    pub doc: String,
+    pub outcome: OutsideSaveOutcome,
+}
+
+/// How an outside save went ([`WatchOutsideSave::outcome`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OutsideSaveOutcome {
+    /// Taken in by key: the doc is at `rev` (`DiskCheck::Ingested`).
+    Ingested { rev: Seq },
+    /// Kept both (`DiskCheck::Conflict`): the save is the doc at `rev`, and what was live before
+    /// is the stored version `kept` and the conflict copy (`None` when it couldn't be written).
+    KeptBoth {
+        rev: Seq,
+        kept: crate::store::VersionId,
+        copy: Option<OutsideSaveCopy>,
+    },
+    /// The file can't be a live doc any more (`DiskCheck::Declined`): the pack's `code` and its
+    /// `message`. Once, when it starts.
+    Declined { code: &'static str, message: String },
+    /// The file is gone (`DiskCheck::Missing`). Once, when it goes.
+    Missing,
+}
+
+impl OutsideSaveOutcome {
+    /// `ingested`, `kept_both`, `declined` or `missing`, as the wire carries it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OutsideSaveOutcome::Ingested { .. } => "ingested",
+            OutsideSaveOutcome::KeptBoth { .. } => "kept_both",
+            OutsideSaveOutcome::Declined { .. } => "declined",
+            OutsideSaveOutcome::Missing => "missing",
+        }
+    }
+}
+
+/// A kept-both save's conflict copy ([`OutsideSaveOutcome::KeptBoth`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OutsideSaveCopy {
+    /// Its file name.
+    pub name: String,
+    /// Its path relative to the doc's file's folder, as the kit records it.
+    pub path: String,
+    /// Its doc address ([`DocKey::path`]) when the copy is itself a kit document: the host's
+    /// [`Host::document_at`] for its file. `None` otherwise.
+    pub doc: Option<String>,
+}
+
 /// The snapshot's head (`keyed_snapshot`): the schema, the view index's snapshot, and how many
 /// pages follow.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,16 +388,26 @@ pub enum WatchFrame {
     Snapshot(Box<WatchSnapshot>),
     Page(WatchPage),
     Change(Box<WatchChange>),
+    /// A refused verb: unnumbered ([`WatchRefusal`]).
+    Refused(Box<WatchRefusal>),
+    /// What came of an outside save: unnumbered ([`WatchOutsideSave`]).
+    OutsideSave(Box<WatchOutsideSave>),
 }
 
 impl WatchFrame {
-    /// Its number in the watch.
+    /// Its number in the watch; 0 for an unnumbered frame ([`WatchFrame::Refused`]).
     pub fn seq(&self) -> u64 {
         match self {
             WatchFrame::Snapshot(s) => s.seq,
             WatchFrame::Page(p) => p.seq,
             WatchFrame::Change(c) => c.seq,
+            WatchFrame::Refused(_) | WatchFrame::OutsideSave(_) => 0,
         }
+    }
+
+    /// Whether it takes a number in the watch (every frame but a refusal and an outside save's).
+    pub fn numbered(&self) -> bool {
+        !matches!(self, WatchFrame::Refused(_) | WatchFrame::OutsideSave(_))
     }
 
     /// The frame as the wire carries it (`client/WIRE.md`, "The keyed watch").
@@ -338,6 +451,8 @@ impl WatchFrame {
                 v
             }
             WatchFrame::Change(c) => change_json(c),
+            WatchFrame::Refused(r) => refusal_json(r),
+            WatchFrame::OutsideSave(o) => outside_save_json(o),
         }
     }
 
@@ -679,6 +794,69 @@ fn op_json(o: &WatchOp) -> Json {
     Json::Obj(v)
 }
 
+fn actor_json(a: &WatchActor) -> Json {
+    Json::obj([
+        ("id", Json::from(a.id.as_str())),
+        ("name", Json::from(a.name.as_str())),
+        ("kind", Json::from(actor_kind(a.kind))),
+        ("colour", a.colour.as_deref().map_or(Json::Null, Json::from)),
+    ])
+}
+
+fn refusal_json(r: &WatchRefusal) -> Json {
+    let opt = |s: &Option<String>| s.as_deref().map_or(Json::Null, Json::from);
+    Json::obj([
+        ("type", Json::from("verb_refused")),
+        ("at_ms", Json::from(r.at_ms)),
+        ("actor", actor_json(&r.actor)),
+        ("client", Json::from(r.client)),
+        (
+            "turn",
+            r.turn
+                .as_ref()
+                .map_or(Json::Null, |t| Json::from(t.as_str())),
+        ),
+        ("verb", Json::from(r.verb.as_str())),
+        ("unit", opt(&r.unit)),
+        ("code", Json::from(r.code)),
+        ("holder", r.holder.as_ref().map_or(Json::Null, actor_json)),
+        ("claim", opt(&r.claim)),
+    ])
+}
+
+fn outside_save_json(o: &WatchOutsideSave) -> Json {
+    let mut v = vec![
+        ("type".to_owned(), Json::from("outside_save")),
+        ("at_ms".to_owned(), Json::from(o.at_ms)),
+        ("doc".to_owned(), Json::from(o.doc.as_str())),
+        ("outcome".to_owned(), Json::from(o.outcome.as_str())),
+    ];
+    match &o.outcome {
+        OutsideSaveOutcome::Ingested { rev } => v.push(("rev".into(), Json::from(*rev))),
+        OutsideSaveOutcome::KeptBoth { rev, kept, copy } => {
+            v.push(("rev".into(), Json::from(*rev)));
+            v.push(("kept".into(), Json::from(*kept)));
+            let copy = copy.as_ref().map_or(Json::Null, |c| {
+                let mut f = vec![
+                    ("name".to_owned(), Json::from(c.name.as_str())),
+                    ("path".to_owned(), Json::from(c.path.as_str())),
+                ];
+                if let Some(d) = &c.doc {
+                    f.push(("doc".into(), Json::from(d.as_str())));
+                }
+                Json::Obj(f)
+            });
+            v.push(("copy".into(), copy));
+        }
+        OutsideSaveOutcome::Declined { code, message } => {
+            v.push(("code".into(), Json::from(*code)));
+            v.push(("message".into(), Json::from(message.as_str())));
+        }
+        OutsideSaveOutcome::Missing => {}
+    }
+    Json::Obj(v)
+}
+
 fn change_json(c: &WatchChange) -> Json {
     let opt = |s: &Option<String>| s.as_deref().map_or(Json::Null, Json::from);
     let mut v = Json::obj([
@@ -687,15 +865,7 @@ fn change_json(c: &WatchChange) -> Json {
         ("rev", Json::from(c.rev)),
         ("at_ms", Json::from(c.at_ms)),
         ("change_kind", Json::from(c.kind.as_str())),
-        (
-            "actor",
-            Json::obj([
-                ("id", Json::from(c.actor.id.as_str())),
-                ("name", Json::from(c.actor.name.as_str())),
-                ("kind", Json::from(actor_kind(c.actor.kind))),
-                ("colour", opt(&c.actor.colour)),
-            ]),
-        ),
+        ("actor", actor_json(&c.actor)),
         ("client", Json::from(c.client)),
         ("via", Json::from(c.via.as_str())),
         ("on_behalf_of", opt(&c.on_behalf_of)),
@@ -1115,9 +1285,120 @@ fn ops_of(pack: &dyn Pack, a: &ElemApplied, out: &mut Vec<WatchOp>) {
 
 // ---------- the session's side ----------
 
+/// A refused verb, as [`Session::watch_refused`] takes it from the call that refused it.
+pub(crate) struct VerbRefused {
+    pub(crate) conn: ConnId,
+    pub(crate) verb: String,
+    pub(crate) turn: Option<Turn>,
+    pub(crate) code: &'static str,
+    /// The unit the verb named ([`crate::tools::StructOutput::addressing`]).
+    pub(crate) unit: Option<String>,
+    /// The elements its edits touched, in order, when it made some ([`VerbRefused::touched_of`]).
+    pub(crate) touched: Vec<(String, Key)>,
+    /// The pid, name and claim (none for a lease) of who holds what refused it.
+    pub(crate) holder: Option<(String, String, Option<awareness::ClaimId>)>,
+    /// The refusing claim's list root and keys, for a claim on elements.
+    pub(crate) claimed: Option<(String, Vec<Key>)>,
+}
+
+/// At most this many touched elements are kept for a refusal's unit.
+const REFUSAL_TOUCHED_MAX: usize = 64;
+
+impl VerbRefused {
+    pub(crate) fn new(conn: ConnId, verb: &str, turn: Option<Turn>, code: &'static str) -> Self {
+        VerbRefused {
+            conn,
+            verb: verb.to_owned(),
+            turn,
+            code,
+            unit: None,
+            touched: Vec::new(),
+            holder: None,
+            claimed: None,
+        }
+    }
+
+    /// Who holds what `e` refused: another's claim (on elements: its root and keys) or lease.
+    pub(crate) fn held_by(mut self, e: &SessionError) -> Self {
+        match e {
+            SessionError::Claimed { id, by, name, .. } => {
+                self.holder = Some((by.clone(), name.clone(), Some(*id)));
+            }
+            SessionError::ElemsClaimed(c) => {
+                self.holder = Some((c.by.clone(), c.name.clone(), Some(c.id)));
+                self.claimed = Some((c.root.clone(), c.keys.clone()));
+            }
+            SessionError::NodesClaimed(c) => {
+                self.holder = Some((c.by.clone(), c.name.clone(), Some(c.id)));
+            }
+            SessionError::Leased { holder, name, .. } => {
+                self.holder = Some((holder.clone(), name.clone(), None));
+            }
+            _ => {}
+        }
+        self
+    }
+
+    /// The elements `edits` touch, in order, by list root and key (a composite map key as its
+    /// element), at most [`REFUSAL_TOUCHED_MAX`].
+    pub(crate) fn touched_of(pack: &dyn Pack, edits: &[Edit]) -> Vec<(String, Key)> {
+        let composites = pack.composite();
+        let mut out = Vec::new();
+        for e in edits {
+            match e {
+                Edit::List { root, ops } => {
+                    let room = REFUSAL_TOUCHED_MAX - out.len();
+                    out.extend(
+                        ops.iter()
+                            .take(room)
+                            .map(|o| (root.clone(), o.key().clone())),
+                    );
+                }
+                Edit::Map { root, ops } => {
+                    let room = REFUSAL_TOUCHED_MAX - out.len();
+                    out.extend(
+                        ops.iter()
+                            .filter_map(|o| elem_of_map_key(composites, root, o.key()))
+                            .take(room)
+                            .map(|(l, k)| (l.to_owned(), k)),
+                    );
+                }
+                _ => {}
+            }
+            if out.len() >= REFUSAL_TOUCHED_MAX {
+                break;
+            }
+        }
+        out
+    }
+
+    /// The unit it names, by address: the verb's own, else the first touched element under the
+    /// refusing claim, else the first touched element.
+    fn unit_address(&self, pack: &dyn Pack) -> Option<String> {
+        if let Some(u) = &self.unit {
+            return Some(u.clone());
+        }
+        let under = self.claimed.as_ref().and_then(|(root, keys)| {
+            self.touched
+                .iter()
+                .find(|(r, k)| r == root && keys.contains(k))
+        });
+        under
+            .or(self.touched.first())
+            .map(|(r, k)| pack.address_of(r, k))
+    }
+}
+
 /// A snapshot's reading of the doc ([`Session::watch_state`]): its version, its keyed state,
 /// and the view index when the pack has one.
 pub(super) type WatchState = (Seq, Arc<KeyedState>, Option<(ViewSchema, ViewIndex)>);
+
+/// What a watch's queue holds: a change, or a refused verb (unnumbered).
+enum Queued {
+    Change(Box<WatchChange>),
+    Refused(Box<WatchRefusal>),
+    OutsideSave(Box<WatchOutsideSave>),
+}
 
 /// One watch's subscription.
 struct WatchSub {
@@ -1125,7 +1406,7 @@ struct WatchSub {
     conn: ConnId,
     /// An App viewer's pid: its frames go through its handles.
     app: Option<String>,
-    tx: SyncSender<WatchChange>,
+    tx: SyncSender<Queued>,
 }
 
 /// The session's keyed watches: their subscriptions, and the change events of the change being
@@ -1167,7 +1448,7 @@ impl WatchHub {
 pub struct KeyedWatch {
     id: u64,
     conn: ConnId,
-    rx: Receiver<WatchChange>,
+    rx: Receiver<Queued>,
     /// The last number handed out.
     seq: u64,
     /// The last snapshot's version: changes at or before it are in it.
@@ -1192,32 +1473,28 @@ impl std::fmt::Debug for KeyedWatch {
 
 /// The planted fault [`crate::differential::ViewMutant::FrameMissesRenderHash`].
 fn planted_frame_misses_render_hash() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::view_mutant()
-        == Some(crate::differential::ViewMutant::FrameMissesRenderHash)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::view_mutant()
+            == Some(crate::differential::ViewMutant::FrameMissesRenderHash)
+    )
 }
 
 /// The planted fault [`crate::differential::ViewMutant::FrameMissesUnitDerived`].
 fn planted_frame_misses_unit_derived() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::view_mutant()
-        == Some(crate::differential::ViewMutant::FrameMissesUnitDerived)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::view_mutant()
+            == Some(crate::differential::ViewMutant::FrameMissesUnitDerived)
+    )
 }
 
-/// A change frame's `derived` with the units' derived values the change set or removed
-/// ([`ViewChange::unit_derived`]) joined in: `units.<unit>.<name>`, the text or `null`. The
-/// pack's own `derived` (from [`Pack::watch_extras`]) keeps every key it has, and a name it set
-/// for a unit wins; a pack's `derived` that isn't an object (nor `null`) is left as it is.
-fn merge_unit_derived(
+/// A change frame's `derived` with the units' or the containers' derived values the change set
+/// or removed ([`ViewChange::unit_derived`], [`ViewChange::container_derived`]) joined in under
+/// `part` (`units` or `containers`): `<part>.<address>.<name>`, the text or `null`. The pack's
+/// own `derived` (from [`Pack::watch_extras`]) keeps every key it has, and a name it set for an
+/// element wins; a pack's `derived` that isn't an object (nor `null`) is left as it is.
+fn merge_derived(
     derived: Option<Json>,
+    part: &str,
     units: crate::view_index::DerivedChanges,
 ) -> Option<Json> {
     let mut top = match derived {
@@ -1225,10 +1502,10 @@ fn merge_unit_derived(
         Some(Json::Obj(m)) => m,
         Some(other) => return Some(other),
     };
-    let at = match top.iter().position(|(k, _)| k == "units") {
+    let at = match top.iter().position(|(k, _)| k == part) {
         Some(i) => i,
         None => {
-            top.push(("units".into(), Json::Obj(Vec::new())));
+            top.push((part.into(), Json::Obj(Vec::new())));
             top.len() - 1
         }
     };
@@ -1254,15 +1531,20 @@ fn merge_unit_derived(
     Some(Json::Obj(top))
 }
 
+/// The planted fault [`crate::differential::ViewMutant::FrameMissesContainerDerived`].
+fn planted_frame_misses_container_derived() -> bool {
+    plant_on!(
+        crate::differential::view_mutant()
+            == Some(crate::differential::ViewMutant::FrameMissesContainerDerived)
+    )
+}
+
 /// The planted fault [`crate::differential::WatchMutant::SnapshotOffByOne`].
 fn planted_snapshot_off_by_one() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::watch_mutant()
-        == Some(crate::differential::WatchMutant::SnapshotOffByOne)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::watch_mutant()
+            == Some(crate::differential::WatchMutant::SnapshotOffByOne)
+    )
 }
 
 impl KeyedWatch {
@@ -1313,9 +1595,23 @@ impl KeyedWatch {
         out
     }
 
-    /// A change as its frame, numbered; `None` when the last snapshot holds it, or its frame
-    /// is over the cap (then a snapshot is needed).
-    fn take(&mut self, mut ch: WatchChange) -> Option<WatchFrame> {
+    /// A queued change as its frame, numbered; `None` when the last snapshot holds it, or its
+    /// frame is over the cap (then a snapshot is needed). A refused verb as its frame,
+    /// unnumbered, once a snapshot went out (one over the cap is dropped: it changes nothing).
+    fn take(&mut self, q: Queued) -> Option<WatchFrame> {
+        let mut ch = match q {
+            Queued::Change(ch) => ch,
+            Queued::Refused(r) => {
+                self.upto?;
+                let f = WatchFrame::Refused(r);
+                return (f.to_json().len() <= self.frame_max).then_some(f);
+            }
+            Queued::OutsideSave(o) => {
+                self.upto?;
+                let f = WatchFrame::OutsideSave(o);
+                return (f.to_json().len() <= self.frame_max).then_some(f);
+            }
+        };
         let upto = self.upto?;
         let held = match planted_snapshot_off_by_one() {
             true => ch.rev < upto,
@@ -1325,7 +1621,7 @@ impl KeyedWatch {
             return None;
         }
         ch.seq = self.seq + 1;
-        let f = WatchFrame::Change(Box::new(ch));
+        let f = WatchFrame::Change(ch);
         if f.to_json().len() > self.frame_max {
             self.cut = true;
             return None;
@@ -1421,12 +1717,7 @@ impl Session {
         Ok((st.version, state, view))
     }
 
-    fn watch_subscribe(
-        &self,
-        st: &mut State,
-        i: usize,
-        conn: ConnId,
-    ) -> (u64, Receiver<WatchChange>) {
+    fn watch_subscribe(&self, st: &mut State, i: usize, conn: ConnId) -> (u64, Receiver<Queued>) {
         let (tx, rx) = sync_channel(self.config.subscriber_queue.max(1));
         let app = Self::app_viewer(st, i);
         st.watch.next_id += 1;
@@ -1513,7 +1804,7 @@ impl Session {
                     Some(v) => handles.lens(v).watch_change(ch.clone()),
                     None => ch.clone(),
                 };
-                s.tx.try_send(ch).is_ok()
+                s.tx.try_send(Queued::Change(Box::new(ch))).is_ok()
             });
         }
         // a new carrier taken in since the last frame, which moved placements these frames
@@ -1527,7 +1818,8 @@ impl Session {
 
     /// When a new carrier was taken in with no change frame to carry it (an outside save that
     /// changed only what the carrier holds): every watch takes a fresh snapshot if a placement
-    /// moved. Called at the end of a disk check.
+    /// moved or a container's parent changed (a parent the pack derives from the carrier). Called
+    /// at the end of a disk check.
     pub(super) fn settle_carrier_watch(&self, st: &mut State) {
         let Some(old) = st.view_carrier_before.take() else {
             return;
@@ -1536,10 +1828,23 @@ impl Session {
             return;
         }
         if let Ok(Some(new)) = self.kept_view_index(st) {
-            if Self::carrier_moved(&old, &new, &[]) {
+            if Self::carrier_moved(&old, &new, &[]) || Self::parents_moved(&old, &new) {
                 st.watch.subs.clear();
             }
         }
+    }
+
+    /// Whether any container in both `old` and `new` has another parent in `new`.
+    fn parents_moved(old: &ViewIndex, new: &ViewIndex) -> bool {
+        let was: HashMap<&str, Option<&String>> = old
+            .containers
+            .iter()
+            .map(|c| (c.key.as_str(), c.parent.as_ref()))
+            .collect();
+        new.containers.iter().any(|c| {
+            was.get(c.key.as_str())
+                .is_some_and(|p| *p != c.parent.as_ref())
+        })
     }
 
     /// Whether any unit's or container's placement differs between `old` and `new`, leaving out
@@ -1578,7 +1883,9 @@ impl Session {
 
     /// One change's frame (unnumbered) from its events, one per root it touched. `last`: the
     /// last change of the flush, which carries the units' derived values the flush set or
-    /// removed (read from the view index after it, as the render hashes are).
+    /// removed (read from the view index after it, as the render hashes are), and the parents
+    /// of the containers whose parent changed with no delta of their own
+    /// ([`crate::view_delta::parent_deltas`]).
     #[allow(clippy::too_many_arguments)]
     fn watch_change(
         &self,
@@ -1596,6 +1903,7 @@ impl Session {
         if let (Some(vs), Some(v)) = (self.watch_view_schema(), view) {
             if let Some(d) = deltas.as_mut() {
                 crate::view_delta::place_deltas(&vs, d, v.before, v.after);
+                crate::view_delta::parent_deltas(&vs, d, v.before, v.after, last);
             }
             let was = v.before.and_then(|b| b.space.as_ref());
             if last && vs.space.is_some() && was != v.after.space.as_ref() {
@@ -1623,7 +1931,14 @@ impl Session {
         if let (true, Some(v)) = (last && !planted_frame_misses_unit_derived(), view) {
             let d = v.unit_derived();
             if !d.is_empty() {
-                extras.derived = merge_unit_derived(extras.derived.take(), d);
+                extras.derived = merge_derived(extras.derived.take(), "units", d);
+            }
+        }
+        // and the containers' (`derived.containers.<container>.<name>`)
+        if let (true, Some(v)) = (last && !planted_frame_misses_container_derived(), view) {
+            let d = v.container_derived();
+            if !d.is_empty() {
+                extras.derived = merge_derived(extras.derived.take(), "containers", d);
             }
         }
         WatchChange {
@@ -1643,6 +1958,118 @@ impl Session {
             extras,
             space_after,
         }
+    }
+
+    /// A pack's structured edit verb run by `refused.conn` was refused: one [`WatchRefusal`] to
+    /// every keyed watch whose connection may read the doc now (the host's rights for it are
+    /// asked here, so a watcher whose rights went since it opened gets none), through an App
+    /// viewer's handles. Nothing when no watch is open, or the refused connection isn't in the
+    /// doc (any more). A watch whose queue is full misses it (it stays open: a refusal changes
+    /// nothing).
+    pub(crate) fn watch_refused(&self, refused: VerbRefused) {
+        let now = self.now();
+        let Ok(mut st) = self.lock() else {
+            return;
+        };
+        let st = &mut *st;
+        if !st.watch.active() {
+            return;
+        }
+        let Some(m) = st.members.iter().find(|m| m.conn == refused.conn) else {
+            return;
+        };
+        let actor = Self::watch_actor(st, &m.p.pid);
+        let client = m.client;
+        let holder = refused.holder.as_ref().map(|(pid, name, _)| {
+            let mut h = Self::watch_actor(st, pid);
+            if !st.members.iter().any(|m| m.p.pid == *pid) {
+                // gone since: the name the refusal gave
+                h.name.clone_from(name);
+            }
+            h
+        });
+        let r = WatchRefusal {
+            at_ms: now,
+            actor,
+            client,
+            turn: refused.turn,
+            unit: refused.unit_address(&*self.pack),
+            verb: refused.verb,
+            code: refused.code,
+            holder,
+            claim: refused
+                .holder
+                .and_then(|(_, _, c)| c)
+                .map(|c| c.to_string()),
+        };
+        let may_read: std::collections::HashSet<ConnId> = st
+            .members
+            .iter()
+            .filter(|m| watched(self.host.rights(&m.p, &st.key), m.watcher).read)
+            .map(|m| m.conn)
+            .collect();
+        let handles = &mut st.handles;
+        st.watch.subs.retain(|s| {
+            if !may_read.contains(&s.conn) {
+                return true;
+            }
+            let r = match &s.app {
+                Some(v) => handles.lens(v).watch_refusal(r.clone()),
+                None => r.clone(),
+            };
+            !matches!(
+                s.tx.try_send(Queued::Refused(Box::new(r))),
+                Err(TrySendError::Disconnected(_))
+            )
+        });
+    }
+
+    /// What came of an outside save: one [`WatchOutsideSave`] to every keyed watch whose
+    /// connection may read the doc now (as [`Session::watch_refused`]). Called under the lock,
+    /// after the save's change frame went out; nothing when no watch is open.
+    pub(super) fn watch_outside_save(&self, st: &mut State, outcome: OutsideSaveOutcome) {
+        if !st.watch.active() {
+            return;
+        }
+        let o = WatchOutsideSave {
+            at_ms: self.now(),
+            doc: st.key.path.clone(),
+            outcome,
+        };
+        let may_read: std::collections::HashSet<ConnId> = st
+            .members
+            .iter()
+            .filter(|m| watched(self.host.rights(&m.p, &st.key), m.watcher).read)
+            .map(|m| m.conn)
+            .collect();
+        st.watch.subs.retain(|s| {
+            if !may_read.contains(&s.conn) {
+                return true;
+            }
+            !matches!(
+                s.tx.try_send(Queued::OutsideSave(Box::new(o.clone()))),
+                Err(TrySendError::Disconnected(_))
+            )
+        });
+    }
+
+    /// A kept-both save's conflict copy for its frame: `record` relative to the file's folder,
+    /// `real` its path, and its doc address when the host says it is a kit document.
+    pub(super) fn outside_save_copy(
+        &self,
+        record: Option<&str>,
+        real: Option<&std::path::Path>,
+    ) -> Option<OutsideSaveCopy> {
+        let (record, real) = (record?, real?);
+        Some(OutsideSaveCopy {
+            name: real
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(record)
+                .to_owned(),
+            path: record.to_owned(),
+            doc: self.host.document_at(real).map(|k| k.path),
+        })
     }
 
     fn watch_actor(st: &State, pid: &str) -> WatchActor {

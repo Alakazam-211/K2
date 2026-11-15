@@ -957,23 +957,16 @@ pub(super) fn address_cells<P: Pack + ?Sized>(pack: &P, c: &mut Cells) {
     }
 }
 
-#[cfg(any(test, feature = "differential"))]
 fn planted_corners_move() -> bool {
-    crate::differential::grid_mutant() == Some(crate::differential::GridMutant::CornersMoveNotDrop)
+    plant_on!(
+        crate::differential::grid_mutant()
+            == Some(crate::differential::GridMutant::CornersMoveNotDrop)
+    )
 }
 
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_corners_move() -> bool {
-    false
-}
-
-#[cfg(any(test, feature = "differential"))]
 fn planted_claim_actor_missing() -> bool {
-    crate::differential::grid_mutant()
-        == Some(crate::differential::GridMutant::ClaimCellsActorMissing)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_claim_actor_missing() -> bool {
-    false
+    plant_on!(
+        crate::differential::grid_mutant()
+            == Some(crate::differential::GridMutant::ClaimCellsActorMissing)
+    )
 }

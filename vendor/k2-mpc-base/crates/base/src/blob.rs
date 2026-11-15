@@ -50,8 +50,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::hash::{hex, HmacSha256};
 use crate::store::{DocStore, SpaceKey, StoreError};
 
+mod cdc;
+mod chunked;
+mod compact;
 mod host_cache;
+mod rechunk;
+pub(crate) use chunked::{CheapSet, HintSource, LockWait, VersionPut};
 pub use host_cache::HostCacheKey;
+pub use rechunk::{RechunkError, RechunkReport};
 
 const BUF: usize = 64 << 10;
 const TMP: &str = "tmp";
@@ -171,6 +177,14 @@ pub struct BlobConfig {
     pub max_blob_bytes: u64,
     /// An unreferenced blob is collected only after this long (host clock). Default 1 h.
     pub gc_grace_ms: u64,
+    /// Store a tier-0 version of [`BlobConfig::chunk_min_bytes`] or more as chunks
+    /// (`docs/SESSIONS.md`, "Chunked versions"). Default off. **The first chunked version
+    /// stamps the store format 8**, which kits up to v0.17.0 refuse to open: turn it on only
+    /// once the release a host would roll back to reads format 8.
+    pub chunked_versions: bool,
+    /// The smallest version stored chunked when [`BlobConfig::chunked_versions`] is on;
+    /// smaller ones stay whole files. Default 1 MiB.
+    pub chunk_min_bytes: u64,
 }
 
 impl Default for BlobConfig {
@@ -178,6 +192,8 @@ impl Default for BlobConfig {
         Self {
             max_blob_bytes: 4 << 30,
             gc_grace_ms: 60 * 60_000,
+            chunked_versions: false,
+            chunk_min_bytes: 1 << 20,
         }
     }
 }
@@ -234,13 +250,10 @@ pub struct GcReport {
 
 /// The planted fault [`crate::differential::KeyedMutant::RemovalIgnoresWaitingPuts`].
 fn planted_ignores_waiting() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::RemovalIgnoresWaitingPuts)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::RemovalIgnoresWaitingPuts)
+    )
 }
 
 /// Returned by [`BlobStore::purge_space_key`].
@@ -269,6 +282,13 @@ pub struct BlobStats {
     pub bytes: u64,
     /// Bytes no version references (collectable once their grace runs out).
     pub unreferenced_bytes: u64,
+    /// Versions stored as whole-file blobs, since this blob store was opened, because a chunked
+    /// write found its doc's internal lock busy (in memory: 0 after a restart).
+    pub chunked_busy_fallbacks: u64,
+    /// Chunked versions whose pack's cut hints were ignored, since this blob store was opened,
+    /// because one was outside the file or out of order (`BlobPack::chunk_hints`; in memory: 0
+    /// after a restart).
+    pub chunk_hints_ignored: u64,
 }
 
 /// The host's clock (milliseconds), as [`crate::session::Host::now_ms`].
@@ -282,11 +302,20 @@ pub struct BlobStore {
     config: BlobConfig,
     clock: Clock,
     /// Serialises "file in place + index row" against GC, so GC never removes a file a put
-    /// is about to index.
-    lock: Mutex<()>,
+    /// is about to index; a chunked write's waiting marks change under it too.
+    lock: Arc<Mutex<()>>,
     /// Puts waiting for their reference: `(space no, id)` -> (how many, when the last was
     /// put). Read and written under `lock`. Removal at once leaves these blobs.
     waiting: Mutex<HashMap<(u64, BlobId), (u32, u64)>>,
+    /// Chunked writes' waiting marks (segment names and chunk ids), changed under `lock`.
+    marks: Arc<Mutex<chunked::Marks>>,
+    /// The docs' internal locks, one chunked writer per doc.
+    doc_locks: Arc<chunked::DocLocks>,
+    /// Versions stored whole because a chunked write found its doc's lock busy
+    /// ([`BlobStats::chunked_busy_fallbacks`]).
+    busy_fallbacks: AtomicU64,
+    /// Chunked versions whose pack's hints were ignored ([`BlobStats::chunk_hints_ignored`]).
+    hints_ignored: AtomicU64,
 }
 
 /// 32 random bytes from the OS.
@@ -296,7 +325,9 @@ fn random_key() -> Result<[u8; 32], BlobError> {
 
 impl BlobStore {
     /// Open the blob folder `dir` (created if missing) over `docs`. Temp files a crash left
-    /// are removed. `clock` is the host's (for GC's grace period).
+    /// are removed, and so is every segment file of a chunked version no row names (nothing is
+    /// waiting after a restart: a write a stop interrupted before its commit). `clock` is the
+    /// host's (for GC's grace period).
     pub fn open(
         docs: Arc<DocStore>,
         dir: impl AsRef<Path>,
@@ -310,14 +341,38 @@ impl BlobStore {
                 let _ = fs::remove_file(e.path());
             }
         }
-        Ok(Self {
+        let lock = Arc::new(Mutex::new(()));
+        let marks: Arc<Mutex<chunked::Marks>> = Arc::default();
+        let m = marks.clone();
+        docs.link_blob_store(crate::store::BlobLink {
+            dir: dir.clone(),
+            lock: lock.clone(),
+            waiting: Arc::new(move |doc, id| {
+                m.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .chunk_waiting(doc, id)
+            }),
+        });
+        let s = Self {
             docs,
             dir,
             config,
             clock,
-            lock: Mutex::new(()),
+            lock,
             waiting: Mutex::new(HashMap::new()),
-        })
+            marks,
+            doc_locks: Arc::default(),
+            busy_fallbacks: AtomicU64::new(0),
+            hints_ignored: AtomicU64::new(0),
+        };
+        // a removal list a stop after a purge's commit left is finished before anything else
+        // reads or writes a chunked doc
+        s.finish_removals_at_open()?;
+        {
+            let _g = s.guard();
+            s.sweep_segments(false)?;
+        }
+        Ok(s)
     }
 
     pub fn config(&self) -> &BlobConfig {
@@ -463,6 +518,8 @@ impl BlobStore {
     /// A verifying reader over the blob's bytes. The read that reaches the end fails with
     /// [`io::ErrorKind::InvalidData`] if the bytes don't match the id or the indexed size;
     /// treat a stream as good only after a clean end.
+    /// A whole-file blob's reader, for a host's named blobs and [`BlobStore::retain`]ed ones.
+    /// A tier-0 version is read with [`BlobStore::reader_of`], which also reads a chunked one.
     pub fn reader(&self, space: &str, id: &BlobId) -> Result<BlobReader, BlobError> {
         let k = self.existing_key(space, id)?;
         let row = self
@@ -477,43 +534,27 @@ impl BlobStore {
             Err(e) => return Err(io_err("opening the blob", e)),
         };
         Ok(BlobReader {
-            f,
-            mac: Some(HmacSha256::new(&k.key)),
-            bad: None,
-            id: *id,
-            left: row.size,
-            size: row.size,
+            inner: Inner::Whole(WholeReader {
+                f,
+                mac: Some(HmacSha256::new(&k.key)),
+                bad: None,
+                id: *id,
+                left: row.size,
+                size: row.size,
+            }),
         })
     }
 
     /// The whole blob in memory, verified, if it is at most `max` bytes
     /// ([`BlobError::TooLarge`] otherwise).
     pub fn read_to_vec(&self, space: &str, id: &BlobId, max: u64) -> Result<Vec<u8>, BlobError> {
-        let mut r = self.reader(space, id)?;
-        if r.size() > max {
-            return Err(BlobError::TooLarge { limit: max });
-        }
-        let mut out = Vec::with_capacity(r.size() as usize);
-        r.read_to_end(&mut out).map_err(|e| r.error(e))?;
-        Ok(out)
+        read_all(self.reader(space, id)?, max)
     }
 
     /// Copy the blob to `dst`, verified (the copy fails at the end if the bytes are bad; the
     /// caller discards what it wrote). Returns the bytes copied.
     pub fn copy_to(&self, space: &str, id: &BlobId, dst: &mut dyn Write) -> Result<u64, BlobError> {
-        let mut r = self.reader(space, id)?;
-        let mut buf = vec![0u8; BUF];
-        let mut n_all = 0;
-        loop {
-            let n = match r.read(&mut buf) {
-                Ok(0) => return Ok(n_all),
-                Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(r.error(e)),
-            };
-            dst.write_all(&buf[..n]).map_err(|e| io_err("copying", e))?;
-            n_all += n as u64;
-        }
+        copy_all(self.reader(space, id)?, dst)
     }
 
     fn waiting(&self) -> MutexGuard<'_, HashMap<(u64, BlobId), (u32, u64)>> {
@@ -551,8 +592,20 @@ impl BlobStore {
 
     /// Remove blobs unreferenced for [`BlobConfig::gc_grace_ms`] (index row first, then the
     /// file), files with no index row, the folders of purged spaces, and structure-index rows
-    /// whose blob is gone (left by a kit that didn't know the table).
+    /// whose blob is gone (left by a kit that didn't know the table). For chunked versions:
+    /// chunk rows at no references nothing waits on, segment files no row names (never one a
+    /// write or a compaction waits on), the compaction retention deferred (a segment less than
+    /// half live, of a doc whose internal lock is free), and the removal list's entries an
+    /// earlier try couldn't delete.
     pub fn gc(&self) -> Result<GcReport, BlobError> {
+        let rep = self.gc_locked()?;
+        self.compact_sparse()?;
+        self.finish_removals(None)?;
+        Ok(rep)
+    }
+
+    /// [`BlobStore::gc`]'s part under the blob store's lock.
+    fn gc_locked(&self) -> Result<GcReport, BlobError> {
         let _g = self.guard();
         let now = (self.clock)();
         let due = self.docs.blob_collectable(now, self.config.gc_grace_ms)?;
@@ -568,6 +621,15 @@ impl BlobStore {
             rep.removed += 1;
             rep.bytes += size;
         }
+        // chunk rows retention kept at no references for a write that waited on them, once
+        // nothing waits; then chunked versions' segments: files without rows (unless a write
+        // waits on one), and purged spaces' folders
+        {
+            let marks = self.marks();
+            self.docs
+                .chunk_remove_unreferenced(&|doc, id| marks.chunk_waiting(doc, id))?;
+        }
+        rep.orphan_files += self.sweep_segments(true)?;
         // the sweep: files without rows, and purged spaces' folders
         let live = self.docs.blob_space_nos()?;
         let rd = fs::read_dir(&self.dir).map_err(|e| io_err("blob folder", e))?;
@@ -610,11 +672,16 @@ impl BlobStore {
         let Some((no, rows, index_rows_removed)) = self.docs.blob_purge_space(space)? else {
             return Ok(PurgeReport::default());
         };
-        let folder = self.dir.join(no.to_string());
-        match fs::remove_dir_all(&folder) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_err("removing the space's blobs", e)),
+        // its whole-file blobs, and its chunked versions' segments
+        for folder in [
+            self.dir.join(no.to_string()),
+            self.dir.join(crate::store::SEGMENTS).join(no.to_string()),
+        ] {
+            match fs::remove_dir_all(&folder) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(io_err("removing the space's blobs", e)),
+            }
         }
         // the key's own bytes must leave the file (a key read back from a freed page would
         // re-derive every host cache key of the space), and so must index rows' names and text
@@ -667,9 +734,91 @@ impl BlobStore {
             blobs,
             bytes,
             unreferenced_bytes,
+            chunked_busy_fallbacks: self.busy_fallbacks.load(Ordering::Relaxed),
+            chunk_hints_ignored: self.hints_ignored.load(Ordering::Relaxed),
         })
     }
+
+    /// Test-only: how many entries the removal list holds (segment files a purge's commit named
+    /// for deletion and the kit hasn't deleted yet), every doc's.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn pending_removals_for_tests(&self) -> Result<usize, BlobError> {
+        Ok(self.docs.chunk_removals(None)?.len())
+    }
+
+    /// Test-only: purge versions `vids` of doc `doc` in `space` with no session, as a session's
+    /// purge does it in the blob store (under the doc's internal lock): their rows, their chunks'
+    /// bytes and the removal list.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn purge_versions_for_tests(
+        &self,
+        space: &str,
+        doc: crate::store::DocId,
+        vids: &[crate::store::VersionId],
+    ) -> Result<(), BlobError> {
+        self.purge_for_tests(space, doc, vids)
+    }
+
+    /// Test-only: hold doc `doc`'s internal lock (the one a chunked write takes) until the
+    /// value is dropped, as another chunked writer of the doc would.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn hold_doc_lock_for_tests(&self, doc: crate::store::DocId) -> DocLockHeld {
+        DocLockHeld(self.doc_locks.take_waiting(doc))
+    }
+
+    /// Test-only: the folder of doc `doc`'s segment files in `space`.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn segment_dir(&self, space: &str, doc: crate::store::DocId) -> Result<PathBuf, BlobError> {
+        let k = self
+            .docs
+            .blob_space(space)?
+            .ok_or_else(|| BlobError::NotFound(space.to_owned()))?;
+        Ok(self.segment_dir_of(k.no, doc))
+    }
+
+    /// Test-only: what the store holds of doc `doc`'s chunked versions.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn chunk_report(
+        &self,
+        space: &str,
+        doc: crate::store::DocId,
+    ) -> Result<ChunkReport, BlobError> {
+        let k = self
+            .docs
+            .blob_space(space)?
+            .ok_or_else(|| BlobError::NotFound(space.to_owned()))?;
+        self.report_of(k.no, doc)
+    }
 }
+
+/// Test-only: what the store holds of one doc's chunked versions
+/// ([`BlobStore::chunk_report`]).
+#[cfg(any(test, feature = "differential"))]
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(clippy::type_complexity)]
+pub struct ChunkReport {
+    /// The chunk tables the store holds (none until a store's first chunked version).
+    pub tables: Vec<String>,
+    /// The doc's manifests: (file id, versions naming it).
+    pub manifests: Vec<(BlobId, u64)>,
+    /// The doc's chunk rows: (chunk id, segment, offset, length, references).
+    pub chunks: Vec<([u8; 32], u64, u64, u32, u64)>,
+    /// The doc's segment rows: (segment, what the file holds as (chunk id, offset, length)).
+    pub segments: Vec<(u64, Vec<([u8; 32], u64, u32)>)>,
+    /// The doc's segment files: (file name, bytes).
+    pub files: Vec<(String, u64)>,
+}
+
+/// Test-only: a doc's internal lock, held until dropped ([`BlobStore::hold_doc_lock_for_tests`]).
+#[cfg(any(test, feature = "differential"))]
+#[doc(hidden)]
+pub struct DocLockHeld(#[allow(dead_code)] chunked::DocGuard);
 
 fn count_files(dir: &Path) -> usize {
     fs::read_dir(dir)
@@ -686,33 +835,64 @@ fn count_files(dir: &Path) -> usize {
         .sum()
 }
 
-/// A blob's bytes, verified as they stream ([`BlobStore::reader`]).
+/// `r`'s bytes in memory, verified, if they are at most `max` ([`BlobError::TooLarge`]
+/// otherwise).
+fn read_all(mut r: BlobReader, max: u64) -> Result<Vec<u8>, BlobError> {
+    if r.size() > max {
+        return Err(BlobError::TooLarge { limit: max });
+    }
+    let mut out = Vec::with_capacity(r.size() as usize);
+    r.read_to_end(&mut out).map_err(|e| r.error(e))?;
+    Ok(out)
+}
+
+/// `r`'s bytes copied to `dst`, verified (the copy fails at the end if they are bad).
+fn copy_all(mut r: BlobReader, dst: &mut dyn Write) -> Result<u64, BlobError> {
+    let mut buf = vec![0u8; BUF];
+    let mut n_all = 0;
+    loop {
+        let n = match r.read(&mut buf) {
+            Ok(0) => return Ok(n_all),
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(r.error(e)),
+        };
+        dst.write_all(&buf[..n]).map_err(|e| io_err("copying", e))?;
+        n_all += n as u64;
+    }
+}
+
+/// A blob's bytes, verified as they stream ([`BlobStore::reader`], [`BlobStore::reader_of`]):
+/// a whole-file blob, or a chunked version's chunks.
 pub struct BlobReader {
-    f: File,
-    /// `None` once the end was verified.
-    mac: Option<HmacSha256>,
-    /// Set once the bytes failed verification: every later read fails too.
-    bad: Option<&'static str>,
-    id: BlobId,
-    left: u64,
-    size: u64,
+    inner: Inner,
+}
+
+enum Inner {
+    Whole(WholeReader),
+    Chunked(chunked::ChunkedReader),
 }
 
 impl BlobReader {
+    fn chunked(r: chunked::ChunkedReader) -> Self {
+        Self {
+            inner: Inner::Chunked(r),
+        }
+    }
+
     /// The blob's indexed size.
     pub fn size(&self) -> u64 {
-        self.size
+        match &self.inner {
+            Inner::Whole(r) => r.size,
+            Inner::Chunked(r) => r.size(),
+        }
     }
 
     pub fn id(&self) -> BlobId {
-        self.id
-    }
-
-    fn damaged(&self, why: &str) -> io::Error {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("blob {} is damaged: {why}", self.id),
-        )
+        match &self.inner {
+            Inner::Whole(r) => r.id,
+            Inner::Chunked(r) => r.id(),
+        }
     }
 
     /// Map a read error from this reader to a [`BlobError`].
@@ -726,6 +906,36 @@ impl BlobReader {
 }
 
 impl Read for BlobReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match &mut self.inner {
+            Inner::Whole(r) => r.read(buf),
+            Inner::Chunked(r) => r.read(buf),
+        }
+    }
+}
+
+/// A whole-file blob's bytes, verified as they stream.
+struct WholeReader {
+    f: File,
+    /// `None` once the end was verified.
+    mac: Option<HmacSha256>,
+    /// Set once the bytes failed verification: every later read fails too.
+    bad: Option<&'static str>,
+    id: BlobId,
+    left: u64,
+    size: u64,
+}
+
+impl WholeReader {
+    fn damaged(&self, why: &str) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("blob {} is damaged: {why}", self.id),
+        )
+    }
+}
+
+impl Read for WholeReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if let Some(why) = self.bad {
             return Err(self.damaged(why));

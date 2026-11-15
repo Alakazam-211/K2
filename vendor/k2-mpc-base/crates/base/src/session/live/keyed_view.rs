@@ -80,24 +80,18 @@ enum UndoPart {
 
 /// The planted fault [`crate::differential::KeyedMutant::ReadVisitsWholeDoc`].
 pub(super) fn planted_read_visits_whole_doc() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::ReadVisitsWholeDoc)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::ReadVisitsWholeDoc)
+    )
 }
 
 /// The planted fault [`crate::differential::KeyedMutant::ListReReadsRoot`].
 fn planted_list_rereads_root() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::ListReReadsRoot)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::ListReReadsRoot)
+    )
 }
 
 /// Whether the live view's checks are on (test builds, unless switched off on this thread).

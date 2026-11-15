@@ -745,7 +745,7 @@ impl State {
         }
         // U12 (v1.7, a diagnostic): outside taint, the window merge of the exact sets equals
         // the whole-text merge of the same sets (offset into the doc); the old re-diff form
-        // is only informative (F4)
+        // is only informative
         if b.u12 {
             for n in hits.notes.iter().filter(|n| !n.tainted && !n.erased) {
                 let (l, r) = (&n.live[..n.start], &n.live[n.end..]);
@@ -1152,7 +1152,7 @@ pub const RULES: &[&str] = &[
 ];
 
 /// The rules a run stops at by default: every rule but the diagnostic `U12` (`--u12` only).
-/// `own_only` is enforced since v1.7 (F3 fixed: exact hunk sets), by root since v1.8; `I1`
+/// `own_only` is enforced since v1.7 (exact hunk sets), by root since v1.8; `I1`
 /// since v1.8.
 /// The model panicked while stepping (one of the oracle's own assertions, e.g. `window.rs`'s
 /// shared-edge check): reported like a violated rule, `panic@<depth>` with its message, and

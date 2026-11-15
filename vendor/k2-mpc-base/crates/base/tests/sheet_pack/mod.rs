@@ -108,6 +108,7 @@ pub const VIEW: ViewSchema = ViewSchema {
         title: Src::Field("name"),
         hidden: Src::Field("hidden"),
         layout: Src::None,
+        parent: Src::None,
     },
     unit_fields: UnitFields {
         kind: Src::ListValue,

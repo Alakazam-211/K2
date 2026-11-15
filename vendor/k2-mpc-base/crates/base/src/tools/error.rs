@@ -213,6 +213,9 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         S::MarksLost(_) => exit::TOO_OLD,
         S::Db(_)
         | S::Newer { .. }
+        | S::NeverWritten { .. }
+        | S::UnknownFeatures { .. }
+        | S::NativeWithoutEngine
         | S::RewriteNewer { .. }
         | S::ForeignEngine { .. }
         | S::NewerData { .. }
@@ -223,7 +226,9 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         | S::NamedVersion(..)
         | S::KeyChange
         | S::LogMoved(..)
-        | S::NoRandom(_) => exit::STORE,
+        | S::NoRandom(_)
+        | S::ChunkGone
+        | S::ChunkedPurge => exit::STORE,
     }
 }
 
@@ -366,7 +371,13 @@ mod tests {
         let failures = [
             S::Db("disk full".into()),
             S::Newer { found: 9 },
-            S::RewriteNewer { found: 7 },
+            S::NeverWritten { found: 7 },
+            S::UnknownFeatures {
+                found: 8,
+                unknown: 1 << 5,
+            },
+            S::NativeWithoutEngine,
+            S::RewriteNewer { found: 8 },
             S::ForeignEngine {
                 stored: "mpce-0.1".into(),
                 stored_format: 1,
@@ -382,6 +393,8 @@ mod tests {
             S::KeyChange,
             S::LogMoved(1, 2, 3),
             S::NoRandom("x".into()),
+            S::ChunkGone,
+            S::ChunkedPurge,
         ];
         for e in &missing {
             assert_eq!(session_exit(e), exit::NOT_FOUND, "{e:?}");

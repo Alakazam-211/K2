@@ -240,7 +240,7 @@ fn skip_u19_fails_u19() {
     fails_its_rule(Mutant::SkipU19, "U19", 1, tiny());
 }
 
-/// F3: the merge's sides found by diffing strings.
+/// The merge's sides found by diffing strings.
 #[test]
 fn rediff_fails_own_only() {
     fails_its_rule(Mutant::Rediff, "own_only", 3, tiny());

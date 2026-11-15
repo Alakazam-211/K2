@@ -584,11 +584,11 @@ mod tests {
         assert_eq!(both("aé日b", &[h(1, 6, "")], &[h(3, 3, "Z")]), "aZb");
     }
 
-    /// r2.3, K2 Engine's P2 counterexample to r2.2's rule (1): ours types `C` after `a` and
-    /// deletes the separator, in one change; others replace `b`, then the separator. Carried
-    /// past the first, `C` touches ours' own deletion; as sent it is still an insertion, so
-    /// only the deletion meets the second replacement, and deleting what another replaced is
-    /// no conflict (rule 4 (a), S5).
+    /// r2.3, K2 Engine's no-false-refusal counterexample to r2.2's rule (1): ours types `C`
+    /// after `a` and deletes the separator, in one change; others replace `b`, then the
+    /// separator. Carried past the first, `C` touches ours' own deletion; as sent it is still
+    /// an insertion, so only the deletion meets the second replacement, and deleting what
+    /// another replaced is no conflict (rule 4 (a), S5).
     #[test]
     fn r23_insertion_touching_own_deletion_stays_an_insertion() {
         let ours = [h(1, 1, "C"), h(2, 3, "")];
@@ -604,9 +604,10 @@ mod tests {
         assert!(recanon.is_err(), "{recanon:?}");
     }
 
-    /// r2.3, K2 Engine's P2c counterexample: ours replaces `ab`; another types `C` inside it,
-    /// then replaces `b`. Rule 5 splits ours around `C`; the piece over `b` is still ours'
-    /// replacement, so it competes with theirs (rule 4 (b) i) and is refused at step 1.
+    /// r2.3, K2 Engine's split-replacement counterexample: ours replaces `ab`; another types
+    /// `C` inside it, then replaces `b`. Rule 5 splits ours around `C`; the piece over `b` is
+    /// still ours' replacement, so it competes with theirs (rule 4 (b) i) and is refused at
+    /// step 1.
     #[test]
     fn r23_split_replacement_still_competes() {
         let ours = [h(0, 2, "B")];

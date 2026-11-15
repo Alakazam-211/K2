@@ -2,7 +2,7 @@
 //! durability class, its scope and the verbs that accept it.
 //!
 //! An address is **(scope, id)**: `r17` names a row of one table, `v12` a version of one
-//! doc. Each kind has a class ([`IdClass`], P1): durable, file-local, a unique name,
+//! doc. Each kind has a class ([`IdClass`]): durable, file-local, a unique name,
 //! positional, session or a change stamp. Anchors bind to the most durable ID an object has;
 //! weaker ones are hints for re-matching.
 //!
@@ -23,7 +23,7 @@ pub mod churn;
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// How long an ID keeps naming the same object (P1). Declared most durable first: an anchor
+/// How long an ID keeps naming the same object. Declared most durable first: an anchor
 /// binds to the smallest class an object has ([`IdClass::anchors`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
@@ -410,7 +410,7 @@ pub fn markdown(rows: &[IdKind]) -> String {
     o
 }
 
-/// The classes as a Markdown table (P1), most durable first.
+/// The classes as a Markdown table, most durable first.
 pub fn classes_markdown() -> String {
     let mut o = String::from("| Class | Meaning |\n|---|---|\n");
     for c in IdClass::ALL {
@@ -429,7 +429,7 @@ pub fn kit_markdown() -> String {
          An address is **(scope, id)**: an ID means something only inside its \
          scope (`r17` is a row of one table, `v12` a version of one doc).\n\n\
          ## Classes\n\n\
-         Each kind has one class (P1), listed most durable first:\n\n",
+         Each kind has one class, listed most durable first:\n\n",
     );
     o.push_str(&classes_markdown());
     o.push_str(

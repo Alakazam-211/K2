@@ -8,7 +8,7 @@
 //! the exit and output.
 //!
 //! The kit's grid cases are one exhaustive `match` ([`super::kit_grid_cases`]); the grid
-//! actions' own verbs (P35-P43: `row insert`...) are a pack's, so a pack (or the kit's test
+//! actions' own verbs (`row insert`...) are a pack's, so a pack (or the kit's test
 //! table pack) adds their cases.
 
 use std::fmt;

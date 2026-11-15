@@ -69,14 +69,14 @@ describe("carried as sent (r2.3)", () => {
     runrec("client_carried_histories", { histories: 20000, steps, refused });
   });
 
-  it("the model's counterexamples: P2 and P2c", () => {
+  it("the model's counterexamples: no false refusal, and every conflict refused", () => {
     const h = (start: number, end: number, insert = ""): Hunk => ({ start, end, insert });
-    // P2: an insertion touching our own deletion stays an insertion (no false refusal)
+    // an insertion touching our own deletion stays an insertion (no false refusal)
     const since = [[h(1, 2, "A")], [h(2, 3, "B")]];
     const r = rebaseOurs([h(1, 1, "C"), h(2, 3)], since);
     expect("ok" in r).toBe(true);
     if ("ok" in r) expect(apply(apply(apply("ab ", since[0]), since[1]), r.ok)).toBe("aABC");
-    // P2c: a split replacement still competes
+    // a split replacement still competes
     const e = rebaseOurs([h(0, 2, "B")], [[h(1, 1, "C")], [h(2, 3, "D")]]);
     expect("conflict" in e && [e.conflict.ours, e.conflict.step, e.conflict.why]).toEqual([0, 1, "replacement"]);
   });

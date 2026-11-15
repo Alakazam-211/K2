@@ -206,11 +206,13 @@ describe("numbering", () => {
       deliver(f);
     }
     expect(w.stateJson()).toBe(FRAMES.final_json);
-    expect(w.seq).toBe(seqOf(FRAMES.frames.at(-1)!));
+    // the numbered frames (an `outside_save` takes no number)
+    const numbered = FRAMES.frames.filter((f) => "seq" in f);
+    expect(w.seq).toBe(seqOf(numbered.at(-1)!));
     // one report a numbered frame applied (a snapshot's whole counts once), never for noise
     const rs = reports(sent).map((x) => x.seq);
-    const changes = FRAMES.frames.filter((f) => f.type === "ops_change").map(seqOf);
-    const head = FRAMES.frames.filter((f) => f.type !== "ops_change").map(seqOf).at(-1)!;
+    const changes = numbered.filter((f) => f.type === "ops_change").map(seqOf);
+    const head = numbered.filter((f) => f.type !== "ops_change").map(seqOf).at(-1)!;
     expect(rs).toEqual([head, ...changes]);
   });
 

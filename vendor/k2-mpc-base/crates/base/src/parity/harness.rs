@@ -851,7 +851,7 @@ pub enum VerbValue {
     CellBlame(Option<Box<crate::session::ElemBlame>>),
     /// A grid: `blame --structure`.
     Structure(crate::session::StructureBlame),
-    /// `export`, `export --version` (P24): what the export wrote, the doc version it is
+    /// `export`, `export --version`: what the export wrote, the doc version it is
     /// (tier 0: the version id) and how the codec was applied.
     Export {
         bytes: Vec<u8>,
@@ -1021,7 +1021,7 @@ impl Agent<'_> {
         };
         let mut used = Vec::new();
         let bound = self.bind(&form, &argv, stdin, &mut used)?;
-        // any verb joins (P1): `join_shared` is implied for every verb
+        // any verb joins (the open row): `join_shared` is implied for every verb
         for api in used.iter().filter(|a| **a != Api::JoinShared) {
             if !spec.api.contains(api) {
                 self.problems.push(Failure::WrongApi {

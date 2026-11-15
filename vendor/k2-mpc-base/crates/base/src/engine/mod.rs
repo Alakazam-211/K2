@@ -54,7 +54,7 @@ pub(crate) fn reads_stamp(engine: &str, format: u32) -> bool {
     family == ENGINE_FAMILY && format == ENGINE_FORMAT
 }
 
-/// An engine's element units (proposal P2, v0.10.1): what one clock step of an element ID
+/// An engine's element units (since v0.10.1): what one clock step of an element ID
 /// counts. Element IDs are `(client, clock)` with a u64 clock in these units, and a run of
 /// text `s` occupies `units.of(s)` clocks: the character `k` units into a run whose first
 /// ID is `(client, c)` has ID `(client, c + k)`. Yrs counts UTF-16 code units; a native
@@ -197,11 +197,11 @@ pub(crate) enum EngineCheck {
 
 #[allow(dead_code)] // the trait documents the seam; one implementation today
 pub(crate) trait EngineDoc: Sized + Send {
-    /// A new, empty doc on `schema`. Fallible (P14, v0.10.1): an engine may refuse a schema
+    /// A new, empty doc on `schema`. Fallible (since v0.10.1): an engine may refuse a schema
     /// it can't hold; Yrs refuses none.
     fn new(schema: &Schema) -> Result<Self, DocError>;
     fn load(schema: &Schema, state: &[u8]) -> Result<Self, DocError>;
-    /// Text root `root`'s current text. Fallible (P14): a root the doc doesn't hold is an
+    /// Text root `root`'s current text. Fallible: a root the doc doesn't hold is an
     /// error ([`DocError::Malformed`]).
     fn text(&self, root: &str) -> Result<String, DocError>;
     fn state_vector(&self) -> Vec<u8>;

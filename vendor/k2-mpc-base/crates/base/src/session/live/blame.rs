@@ -1,4 +1,4 @@
-//! Blame on a live text doc (P22): [`Session::blame`]. A child of
+//! Blame on a live text doc: [`Session::blame`]. A child of
 //! `live`, so it works on the session's own state.
 //!
 //! **Grain.** Text is blamed per character: every live character is an element with an ID
@@ -440,7 +440,7 @@ impl Session {
         Ok(out)
     }
 
-    /// **Blame** `root` (P22): each line's most recent author, by the rule on
+    /// **Blame** `root`: each line's most recent author, by the rule on
     /// [`BlameLine`], with the change, kind, surface, time, `on_behalf_of` and approval state,
     /// and `erased` where a purge reached the change. `lines` is `blame -L a,b`:
     /// 1-based, inclusive, of this root (`first` must exist; `last` past the end is

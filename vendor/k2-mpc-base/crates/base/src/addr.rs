@@ -23,7 +23,7 @@
 //! the caller read", so an agent's positional edit names that version (`--if-version` or
 //! `--base`). A person acts on what they see; their positional addresses resolve live.
 //!
-//! **An address is `(scope, id)`** (P1): `@sld:256/sp:4` is shape 4 of slide 256, never shape
+//! **An address is `(scope, id)`**: `@sld:256/sp:4` is shape 4 of slide 256, never shape
 //! 4 of whatever slide; the kinds a pack reads, their class and scope, are its ID table.
 
 use crate::errors::{ids, ErrorReport, Value};
@@ -45,7 +45,7 @@ pub enum Addr {
     Word(String),
 }
 
-/// The grammar's four classes of form (P12).
+/// The grammar's four classes of form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Form {
     /// The format's own ID ([`Addr::Native`]).

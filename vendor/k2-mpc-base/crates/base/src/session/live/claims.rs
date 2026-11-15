@@ -556,6 +556,15 @@ impl Session {
         };
         let actor = c.actor();
         let waiters: Vec<(ConnId, String)> = c.waiters.into_iter().collect();
+        // an element claim's elements by address, as they were: the keys it was taken on
+        let addresses: Vec<String> = match &c.elems {
+            Some(e) if !planted_end_addresses_dropped() => e
+                .keys
+                .iter()
+                .map(|k| self.pack.address_of(&e.root, k))
+                .collect(),
+            _ => Vec::new(),
+        };
         st.roster.record(
             RosterEvent::ClaimEnded {
                 who: Who::of(&c.pid),
@@ -566,7 +575,12 @@ impl Session {
                 actor,
                 at_ms: now,
                 // the change that ended it, when one did
-                at_rev: matches!(how, ClaimEnd::Edited | ClaimEnd::Deleted).then_some(st.version),
+                at_rev: matches!(
+                    how,
+                    ClaimEnd::Edited | ClaimEnd::Deleted | ClaimEnd::GoneOutsideSave
+                )
+                .then_some(st.version),
+                addresses: addresses.clone(),
             },
             self.config.roster_queue,
         );
@@ -579,6 +593,7 @@ impl Session {
             version: st.version,
             next_waiter: waiters.first().cloned(),
             waiters: waiters.clone(),
+            addresses,
         });
         // a cells claim isn't handed on: a waiter claims the range again
         if grant && c.cells.is_none() {
@@ -1366,4 +1381,13 @@ impl Session {
 /// The lines a byte span covers now, as `(first, last)`.
 fn line_pair(text: &str, s: usize, e: usize) -> (usize, usize) {
     (position::line_of(text, s), position::line_of(text, e))
+}
+
+/// The planted fault [`crate::differential::ClaimMutant::EndAddressesDropped`]: a claim's end
+/// events carry no element addresses.
+fn planted_end_addresses_dropped() -> bool {
+    plant_on!(
+        crate::differential::claim_mutant()
+            == Some(crate::differential::ClaimMutant::EndAddressesDropped)
+    )
 }

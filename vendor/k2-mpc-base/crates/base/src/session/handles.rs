@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use super::awareness::{ActivityEntry, ClaimInfo, Note, ReservationInfo};
 use super::error::SessionError;
-use super::live::{Blame, ChangeEvent, LogItem, WatchChange};
+use super::live::{Blame, ChangeEvent, LogItem, WatchChange, WatchRefusal};
 use super::participant::{RosterEntry, RESERVED_PID_PREFIX};
 use super::roster::{RosterEvent, RosterMember, Who};
 
@@ -161,6 +161,17 @@ impl Lens<'_> {
         c.on_behalf_of = self.opt(c.on_behalf_of.take());
         c.turn = None;
         c
+    }
+
+    /// A keyed watch's refusal frame: who was refused and who holds what refused it by handle,
+    /// no turn (as [`Lens::watch_change`]).
+    pub fn watch_refusal(&mut self, mut r: WatchRefusal) -> WatchRefusal {
+        r.actor.id = self.pid(&r.actor.id);
+        if let Some(h) = r.holder.as_mut() {
+            h.id = self.pid(&h.id);
+        }
+        r.turn = None;
+        r
     }
 
     pub fn blame(&mut self, mut b: Blame) -> Blame {
@@ -443,6 +454,20 @@ impl Lens<'_> {
                 viewport,
                 client,
             },
+            RosterEvent::ViewAddress {
+                who,
+                address,
+                client,
+            } => RosterEvent::ViewAddress {
+                who: self.who(who),
+                address,
+                client,
+            },
+            RosterEvent::TimePosition { who, time, client } => RosterEvent::TimePosition {
+                who: self.who(who),
+                time,
+                client,
+            },
             RosterEvent::ClaimStarted {
                 who,
                 claim,
@@ -530,6 +555,7 @@ impl Lens<'_> {
                 actor,
                 at_ms,
                 at_rev,
+                addresses,
             } => RosterEvent::ClaimEnded {
                 who: self.who(who),
                 claim,
@@ -539,6 +565,7 @@ impl Lens<'_> {
                 actor,
                 at_ms,
                 at_rev,
+                addresses,
             },
             RosterEvent::Note {
                 to,

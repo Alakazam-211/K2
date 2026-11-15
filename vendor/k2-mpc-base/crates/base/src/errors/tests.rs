@@ -31,7 +31,13 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
     vec![
         S::Db(x.into()),
         S::Newer { found: 99 },
-        S::RewriteNewer { found: 7 },
+        S::NeverWritten { found: 7 },
+        S::UnknownFeatures {
+            found: 8,
+            unknown: 1 << 5,
+        },
+        S::NativeWithoutEngine,
+        S::RewriteNewer { found: 8 },
         S::ForeignEngine {
             stored: "mpce-0.1".into(),
             stored_format: 1,
@@ -55,6 +61,8 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
         S::CurrentVersion(1, 2),
         S::NoRandom(x.into()),
         S::PurgedVersion(1, 2),
+        S::ChunkGone,
+        S::ChunkedPurge,
     ]
 }
 
@@ -515,7 +523,7 @@ fn entries_name_real_verbs() {
         Registry::for_tier(Tier::Blob).with_annotations(),
         Registry::for_tier(Tier::Grid),
     ];
-    // host verbs the kit serves through its API but doesn't register (purge: deferred, P28),
+    // host verbs the kit serves through its API but doesn't register (purge: deferred),
     // and the CSV verbs the reserved ids name
     let other = ["purge", "cell set"];
     let mut file_rows = 0;

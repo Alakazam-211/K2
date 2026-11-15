@@ -132,12 +132,8 @@ fn writer_tag_of(client: crate::doc::ClientId) -> Result<WriterTag> {
 
 /// The planted fault [`crate::differential::MintMutant::AnyWriterTag`]: the writer-tag rule
 /// takes any writer's tag. Without the `differential` feature there is no hook: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_any_tag() -> bool {
-    crate::differential::mint_mutant() == Some(crate::differential::MintMutant::AnyWriterTag)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_any_tag() -> bool {
-    false
+    plant_on!(
+        crate::differential::mint_mutant() == Some(crate::differential::MintMutant::AnyWriterTag)
+    )
 }

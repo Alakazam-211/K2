@@ -53,14 +53,11 @@ pub(super) fn heal_at_load(
 }
 
 /// The planted fault [`crate::differential::BlobRefMutant::NoHealAtLoad`].
-#[cfg(any(test, feature = "differential"))]
 fn planted_no_heal() -> bool {
-    crate::differential::blob_ref_mutant() == Some(crate::differential::BlobRefMutant::NoHealAtLoad)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_no_heal() -> bool {
-    false
+    plant_on!(
+        crate::differential::blob_ref_mutant()
+            == Some(crate::differential::BlobRefMutant::NoHealAtLoad)
+    )
 }
 
 /// The planted fault [`crate::differential::BlobRefMutant::StaleStrictFlag`].
@@ -76,15 +73,11 @@ pub(super) fn planted_stale_strict() -> bool {
 }
 
 /// The planted fault [`crate::differential::BlobRefMutant::RefsIgnoreRights`].
-#[cfg(any(test, feature = "differential"))]
 fn planted_refs_ignore_rights() -> bool {
-    crate::differential::blob_ref_mutant()
-        == Some(crate::differential::BlobRefMutant::RefsIgnoreRights)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_refs_ignore_rights() -> bool {
-    false
+    plant_on!(
+        crate::differential::blob_ref_mutant()
+            == Some(crate::differential::BlobRefMutant::RefsIgnoreRights)
+    )
 }
 
 impl Session {

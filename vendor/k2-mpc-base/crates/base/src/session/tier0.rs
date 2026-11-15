@@ -36,11 +36,13 @@ mod node_claims;
 mod promote;
 mod struct_index;
 use crate::anchor::{AnchorJudgment, AnchorRules, CandidateWhy};
-use crate::blob::{BlobError, BlobId, BlobInfo, BlobReader, BlobStore};
+use crate::blob::{
+    BlobError, BlobId, BlobReader, BlobStore, CheapSet, HintSource, LockWait, VersionPut,
+};
 use crate::index::{Fingerprint, IndexDraft, IndexLimits, IndexNode, IndexRefused, IndexSpec};
 use crate::store::{
-    Approval, ApprovalState, BlobReason, BlobSync, BlobVersion, DocId, DocKey, DocMeta, DocStore,
-    PurgeCounts, StoreError, VersionId, BLOB_DOC_PACK,
+    Approval, ApprovalState, BlobReason, BlobSync, BlobVersion, ChunkCommit, DocId, DocKey,
+    DocMeta, DocStore, PurgeCounts, StoreError, VersionId, BLOB_DOC_PACK,
 };
 pub use index_read::INDEX_ADDRS_MAX;
 pub use node_claims::NODE_CLAIM_ROOT;
@@ -170,6 +172,43 @@ pub trait BlobPack: Send + Sync {
     fn agent_writes(&self) -> AgentWrites {
         AgentWrites::Allowed
     }
+
+    /// Where a chunked version of this type may be cut besides its content (`docs/SESSIONS.md`,
+    /// "Chunked versions"): byte offsets from the file's own structure, such as a zip's member
+    /// boundaries read from its central directory, in increasing order, each inside the file.
+    /// **Allowed cut points, never required ones**: the kit checks them (one offset outside the
+    /// file, or out of order, and it ignores them all, counted in
+    /// [`crate::blob::BlobStats::chunk_hints_ignored`]), merges those closer than the chunk
+    /// minimum (the first of a run kept), caps their number, and cuts by content between them,
+    /// so a span longer than the chunk maximum is still cut at the maximum, and content cuts
+    /// still happen inside spans. **Pure**: the offsets depend on `bytes` only (no state, no
+    /// clock, no I/O), so the same bytes always cut the same way; nothing reads them back, and a
+    /// version cut at hints reads through any pack. Asked only for a version of at most
+    /// [`BlobPack::chunk_hints_up_to`] bytes, which the kit reads into memory for it, possibly
+    /// with the session locked: bounded. Default: none.
+    fn chunk_hints(&self, bytes: &[u8]) -> Vec<u64> {
+        let _ = bytes;
+        Vec::new()
+    }
+
+    /// The largest version the kit reads into memory to ask [`BlobPack::chunk_hints`]; a larger
+    /// one is cut by content only. Default 0: never asked.
+    fn chunk_hints_up_to(&self) -> u64 {
+        0
+    }
+}
+
+/// A tier-0 pack's cut hints ([`BlobPack::chunk_hints`]), as the blob store takes them with a
+/// chunked write.
+pub(crate) struct PackHints<'a>(pub(crate) &'a dyn BlobPack);
+
+impl HintSource for PackHints<'_> {
+    fn up_to(&self) -> u64 {
+        self.0.chunk_hints_up_to()
+    }
+    fn hints(&self, bytes: &[u8]) -> Vec<u64> {
+        self.0.chunk_hints(bytes)
+    }
 }
 
 /// Whether agents may write a blob type ([`BlobPack::agent_writes`]). A rule about the file
@@ -216,13 +255,10 @@ fn kit_wrote(v: &BlobVersion) -> bool {
 
 /// The planted fault [`crate::differential::Tier0Mutant::StaleAfterKitWriteIgnored`].
 fn stale_after_kit_write_ignored() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::tier0_mutant()
-        == Some(crate::differential::Tier0Mutant::StaleAfterKitWriteIgnored)
-    {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::tier0_mutant()
+            == Some(crate::differential::Tier0Mutant::StaleAfterKitWriteIgnored)
+    )
 }
 
 /// Tier 0 for any file: no merge, the default conflict-copy name.
@@ -624,6 +660,9 @@ struct BState {
     /// The open save ticket ([`BlobSession::expect_save`]); in memory only, so an unload
     /// drops it.
     expected: Option<Expected>,
+    /// The open ticket's stored bytes (by ticket id), committed with its version: a chunked
+    /// put holds its marks and the doc's lock until the ticket ends.
+    ticket_put: Option<(u64, VersionPut)>,
     /// Tickets that ended this load, newest last, at most [`SAVE_TICKETS_KEPT`]: (id,
     /// connection, how).
     ended: VecDeque<(u64, ConnId, Ended)>,
@@ -900,6 +939,7 @@ impl BlobSession {
                 last_cleanup_ms: None,
                 expected: None,
                 ended: VecDeque::new(),
+                ticket_put: None,
                 node_claims: Vec::new(),
             }),
             index_flight: Arc::default(),
@@ -939,9 +979,10 @@ impl BlobSession {
         pack: Arc<dyn BlobPack>,
         store: Arc<DocStore>,
         key: DocKey,
-        info: BlobInfo,
+        put: &VersionPut,
         from_file: Option<FileStat>,
     ) -> Result<Self> {
+        let info = put.info();
         let now = host.now_ms();
         let meta = DocMeta {
             key: key.clone(),
@@ -973,7 +1014,8 @@ impl BlobSession {
             blob: info.id,
             stat: disk::Seen::now(s).persisted(),
         });
-        let (doc_id, vid) = store.create_blob_doc(&meta, &first, sync.as_ref())?;
+        let (doc_id, vid) =
+            store.create_blob_doc_with(&meta, &first, sync.as_ref(), put.chunked())?;
         let for_index = (store.clone(), key.clone(), first.blob, first.size);
         let s = Self::build(host, config, blobs, pack, store, doc_id, key, (vid, first));
         s.want_index_key(&for_index.0, &for_index.1, vid, for_index.2, for_index.3);
@@ -1070,6 +1112,31 @@ impl BlobSession {
         }
         st.members[i].last_active_ms = now;
         Ok(i)
+    }
+
+    /// The cheap set of a chunked write (`docs/SESSIONS.md`, "Chunked versions"): the versions
+    /// whose chunks it may reuse, writing no byte. For connection `i`, from its rights as
+    /// [`BlobSession::admit`] just resolved them (so a right the host dropped is gone at the
+    /// next write): with the history right, every version's; without it, the current
+    /// version's. A tier-0 write's base adds nothing: it must be the current version (any
+    /// other is refused as stale before a byte is stored), which every reader of the doc may
+    /// read. `None`, a write the kit makes for no connection (an outside save taken in, a
+    /// merge): the current version's.
+    fn cheap_set(st: &BState, i: Option<usize>) -> CheapSet {
+        let history = i.is_some_and(|i| st.members[i].rights.history);
+        if history || Self::cheap_set_ignores_history_right() {
+            CheapSet::History
+        } else {
+            CheapSet::Versions(vec![st.cur.blob])
+        }
+    }
+
+    /// The planted fault [`crate::differential::ChunkPlant::CheapSetIgnoresHistoryRight`].
+    fn cheap_set_ignores_history_right() -> bool {
+        plant_on!(
+            crate::differential::chunk_plant()
+                == Some(crate::differential::ChunkPlant::CheapSetIgnoresHistoryRight)
+        )
     }
 
     /// [`BlobPack::agent_writes`]: an agent can't write a type that refuses it. Checked once
@@ -1536,7 +1603,9 @@ impl BlobSession {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
-        let reader = self.blobs.reader(&st.key.space, &st.cur.blob)?;
+        let reader = self
+            .blobs
+            .reader_of(&st.key.space, self.doc_id, &st.cur.blob)?;
         Ok(BlobRead {
             version: st.vid,
             info: st.cur.clone(),
@@ -1611,7 +1680,7 @@ impl BlobSession {
         Ok(out)
     }
 
-    /// **Blame** for any file (tier 0, P22): the current version's setter and a summary of
+    /// **Blame** for any file (tier 0): the current version's setter and a summary of
     /// the version history (how many versions, who set them, most recent first). Needs read
     /// and history.
     pub fn blame(&self, conn: ConnId) -> Result<BlobBlame> {
@@ -1664,7 +1733,9 @@ impl BlobSession {
         if info.redacted {
             return Err(StoreError::PurgedVersion(self.doc_id, vid).into());
         }
-        let reader = self.blobs.reader(&st.key.space, &info.blob)?;
+        let reader = self
+            .blobs
+            .reader_of(&st.key.space, self.doc_id, &info.blob)?;
         Ok(BlobRead {
             version: vid,
             info,
@@ -1783,7 +1854,7 @@ impl BlobSession {
         opts: &BlobWriteOptions,
     ) -> Result<BlobWriteResult> {
         let now = self.now();
-        let (space, pid, auto) = {
+        let (space, pid, auto, cheap) = {
             let mut st = self.lock()?;
             let i = self.admit_write(&mut st, conn, Action::WriteBase, now)?;
             self.check_agent_write(&st, i)?;
@@ -1799,17 +1870,33 @@ impl BlobSession {
             if auto {
                 self.grant(&mut st, i, self.config.lease_auto_ms.max(1), now, true);
             }
-            (st.key.space.clone(), pid, auto)
+            (
+                st.key.space.clone(),
+                pid,
+                auto,
+                Self::cheap_set(&st, Some(i)),
+            )
         };
-        let put = self.blobs.put(&space, src);
-        let put_id = put.as_ref().ok().map(|i| i.id);
+        // the doc's lock is only tried: a writer never waits on it, so no lock order crosses
+        // the session's (a busy doc gets a whole-file version)
+        let put = self.blobs.put_version(
+            &space,
+            Some(self.doc_id),
+            src,
+            LockWait::Try,
+            &cheap,
+            &PackHints(&*self.pack),
+        );
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
-        let out = self.commit_write(st, conn, put, base, opts, now);
+        let out = match &put {
+            Ok(p) => self.commit_write(st, conn, p, base, opts, now),
+            Err(e) => Err(e.clone().into()),
+        };
         // the put no longer waits: referenced by the version, or given up
-        if let Some(id) = put_id {
-            self.blobs.settle(&space, &id);
+        if let Ok(p) = put {
+            self.blobs.finish(&space, p);
         }
         if auto && st.lease.as_ref().is_some_and(|l| l.auto && l.pid == pid) {
             self.end_lease(st, LeaseEnd::Released);
@@ -1853,12 +1940,12 @@ impl BlobSession {
         &self,
         st: &mut BState,
         conn: ConnId,
-        put: std::result::Result<BlobInfo, BlobError>,
+        put: &VersionPut,
         base: VersionId,
         opts: &BlobWriteOptions,
         now: u64,
     ) -> Result<BlobWriteResult> {
-        let info = put?;
+        let info = put.info();
         let i = self.admit(st, conn, Need::Edit, Action::WriteBase, now)?;
         let pid = st.members[i].p.pid.clone();
         self.check_lease(st, &pid, now)?;
@@ -1890,24 +1977,27 @@ impl BlobSession {
         );
         v.on_behalf_of = p.on_behalf_of.clone();
         v.turn = opts.turn;
-        self.commit_own(st, i, v, now)
+        self.commit_own(st, i, v, now, put.chunked())
     }
 
-    /// Record a participant's version, then write it back.
+    /// Record a participant's version (with its chunked write, if it is one), then write it
+    /// back.
     fn commit_own(
         &self,
         st: &mut BState,
         i: usize,
         v: BlobVersion,
         now: u64,
+        chunked: Option<&ChunkCommit>,
     ) -> Result<BlobWriteResult> {
         let store = Self::store(st)?;
-        let vid = store.commit_blob_versions(
+        let vid = store.commit_blob_versions_with(
             self.doc_id,
             &st.key.space,
             st.vid,
             std::slice::from_ref(&v),
             None,
+            chunked.as_slice(),
         )?[0];
         st.vid = vid;
         st.cur = v;
@@ -1969,7 +2059,15 @@ impl BlobSession {
         if st.disk.is_none() {
             return Err(SessionError::BadPath("this session has no file".into()));
         }
-        let info = self.blobs.put_bytes(&st.key.space, bytes)?;
+        let put = self.blobs.put_version_bytes(
+            &st.key.space,
+            Some(self.doc_id),
+            bytes,
+            LockWait::Try,
+            &Self::cheap_set(st, Some(i)),
+            &PackHints(&*self.pack),
+        )?;
+        let info = put.info();
         let ttl = self.config.save_ticket_ms.max(1);
         if st.lease.as_ref().map_or(true, |l| l.auto) {
             self.grant(st, i, ttl, now, true);
@@ -1989,8 +2087,12 @@ impl BlobSession {
             load: self.load,
             expires_ms: t.expires_ms,
         };
+        let id = t.id;
         if let Some(old) = st.expected.replace(t) {
             Self::remember(st, &old, Ended::Replaced);
+        }
+        if let Some((_, old)) = st.ticket_put.replace((id, put)) {
+            self.blobs.finish(&st.key.space, old);
         }
         Ok(ticket)
     }
@@ -2156,15 +2258,27 @@ impl BlobSession {
             blob: t.blob,
             stat: seen.persisted(),
         };
-        let committed = Self::store(st)?.commit_blob_versions(
+        let put = match st.ticket_put.take() {
+            Some((id, p)) if id == t.id => Some(p),
+            other => {
+                st.ticket_put = other;
+                None
+            }
+        };
+        let chunked = put.as_ref().and_then(VersionPut::chunked);
+        let committed = Self::store(st)?.commit_blob_versions_with(
             self.doc_id,
             &space,
             st.vid,
             std::slice::from_ref(&v),
             Some(&sync),
+            chunked.as_slice(),
         );
         // the ticket's put no longer waits: referenced by the save's version, or given up
-        self.blobs.settle(&space, &t.blob);
+        match put {
+            Some(p) => self.blobs.finish(&space, p),
+            None => self.blobs.settle(&space, &t.blob),
+        }
         let vid = committed?[0];
         st.vid = vid;
         st.cur = v;
@@ -2195,6 +2309,11 @@ impl BlobSession {
     fn end_ticket(&self, st: &mut BState, t: &Expected, how: Ended) {
         if st.expected.as_ref().is_some_and(|x| x.id == t.id) {
             st.expected = None;
+        }
+        if st.ticket_put.as_ref().is_some_and(|(id, _)| *id == t.id) {
+            if let Some((_, p)) = st.ticket_put.take() {
+                self.blobs.finish(&st.key.space, p);
+            }
         }
         Self::remember(st, t, how);
         if st.lease.as_ref().is_some_and(|l| l.auto && l.pid == t.pid) {
@@ -2263,9 +2382,26 @@ impl BlobSession {
                 not_recorded: None,
             });
         }
-        if self.blobs.info(&st.key.space, &old.blob)?.is_none() {
-            return Err(BlobError::NotFound(old.blob.to_hex()).into());
-        }
+        let space = st.key.space.clone();
+        let put = if self.blobs.is_chunked(self.doc_id, &old.blob)? {
+            // a chunked version: its bytes read back through its chunks and written again
+            // (a restore needs history, so its cheap set is every version's: nothing is
+            // written twice)
+            let mut r = self.blobs.reader_of(&space, self.doc_id, &old.blob)?;
+            Some(self.blobs.put_version(
+                &space,
+                Some(self.doc_id),
+                &mut r,
+                LockWait::Try,
+                &Self::cheap_set(st, Some(i)),
+                &PackHints(&*self.pack),
+            )?)
+        } else {
+            if self.blobs.info(&space, &old.blob)?.is_none() {
+                return Err(BlobError::NotFound(old.blob.to_hex()).into());
+            }
+            None
+        };
         let p = &st.members[i].p;
         let mut v = BlobVersion::new(
             old.blob,
@@ -2279,7 +2415,12 @@ impl BlobSession {
         v.on_behalf_of = p.on_behalf_of.clone();
         v.restored_from = Some(vid);
         v.turn = opts.turn;
-        self.commit_own(st, i, v, now)
+        let chunked = put.as_ref().and_then(VersionPut::chunked);
+        let out = self.commit_own(st, i, v, now, chunked);
+        if let Some(p) = put {
+            self.blobs.finish(&space, p);
+        }
+        out
     }
 
     // ----- approvals of on-behalf writes -----
@@ -2459,6 +2600,10 @@ impl BlobSession {
     /// and kept, as its entry is: it is metadata only (agent, person, state, settler, time;
     /// never content or a blob id), counted in [`PurgeCounts::approvals`].
     pub fn purge(&self, conn: ConnId, version: Option<VersionId>) -> Result<PurgeOutcome> {
+        // the doc's internal lock before the session's: a chunked write holds the doc's lock
+        // from its first mark to its commit, which takes the session's, so this order never
+        // crosses it; the purge (and its compaction) waits for that write's commit
+        let _doc = self.blobs.lock_doc(self.doc_id);
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -2493,7 +2638,10 @@ impl BlobSession {
             }
         }
         let space = st.key.space.clone();
-        let (released, approvals, anchors) = store.blob_purge_versions(self.doc_id, &vids, now)?;
+        // chunked versions: their chunks' rows and bytes, compacted out of every segment of the
+        // doc, in the purge's own transaction
+        let (released, approvals, anchors) =
+            self.blobs.purge_versions(&space, self.doc_id, &vids, now)?;
         let purged: Vec<BlobId> = released.iter().map(|r| r.1).collect();
         let free: Vec<(u64, BlobId, u64)> = released
             .iter()
@@ -2543,7 +2691,11 @@ impl BlobSession {
             ..PurgeCounts::default()
         };
         let rewrite = match store.rewrite_file() {
-            Ok(r) => Some(r),
+            Ok(r) => {
+                // the rewrite the purge's commit asked for at the next open is done
+                let _ = store.clear_rewrite_pending();
+                Some(r)
+            }
             Err(_) => {
                 not_reached.push(NotReached::StoreFile);
                 None
@@ -3177,17 +3329,24 @@ impl BlobSession {
             .map_err(|e| BlobError::Io(e.to_string()))
             .and_then(|mut f| {
                 let stat = FileStat::of(&f.metadata().map_err(|e| BlobError::Io(e.to_string()))?);
-                let info = self.blobs.put(&st.key.space, &mut f)?;
-                Ok((info, stat))
+                let put = self.blobs.put_version(
+                    &st.key.space,
+                    Some(self.doc_id),
+                    &mut f,
+                    LockWait::Try,
+                    &Self::cheap_set(st, None),
+                    &PackHints(&*self.pack),
+                )?;
+                Ok((put, stat))
             });
-        let (info, stat) = match stored {
+        let (put, stat) = match stored {
             Ok(v) => v,
             Err(e) => return Err(self.disk_error(st, &real.display().to_string(), e)),
         };
         let space = st.key.space.clone();
-        let out = self.ingest_stored(st, real, info, stat, now);
+        let out = self.ingest_stored(st, real, &put, stat, now);
         // the put no longer waits: referenced by the save's version, or given up
-        self.blobs.settle(&space, &info.id);
+        self.blobs.finish(&space, put);
         out
     }
 
@@ -3196,10 +3355,11 @@ impl BlobSession {
         &self,
         st: &mut BState,
         real: &Path,
-        info: BlobInfo,
+        put: &VersionPut,
         stat: FileStat,
         now: u64,
     ) -> Result<DiskCheck> {
+        let info = put.info();
         let store = Self::store(st)?;
         self.expire_lease(st, now);
         let holder = st.lease.clone();
@@ -3236,12 +3396,13 @@ impl BlobSession {
             stat: disk::Seen::now(stat).persisted(),
         };
         if !conflict {
-            let vid = store.commit_blob_versions(
+            let vid = store.commit_blob_versions_with(
                 self.doc_id,
                 &st.key.space,
                 st.vid,
                 std::slice::from_ref(&theirs),
                 Some(&sync),
+                put.chunked().as_slice(),
             )?[0];
             st.vid = vid;
             st.cur = theirs;
@@ -3262,7 +3423,17 @@ impl BlobSession {
         let merged = if stale_over_kit {
             None
         } else {
-            self.try_merge(st, &store, base, &ours, &theirs, &sync, stat, now)?
+            self.try_merge(
+                st,
+                &store,
+                real,
+                base,
+                &ours,
+                (&theirs, put),
+                &sync,
+                stat,
+                now,
+            )?
         };
         if let Some(out) = merged {
             return Ok(out);
@@ -3275,12 +3446,13 @@ impl BlobSession {
         let copy = self.write_conflict_copy(st, real, &file_name, &ours, &who, now);
         theirs.conflict_copy = copy.clone();
         let at_ms = theirs.at_ms;
-        let vid = store.commit_blob_versions(
+        let vid = store.commit_blob_versions_with(
             self.doc_id,
             &st.key.space,
             st.vid,
             std::slice::from_ref(&theirs),
             Some(&sync),
+            put.chunked().as_slice(),
         )?[0];
         st.vid = vid;
         st.cur = theirs;
@@ -3323,9 +3495,10 @@ impl BlobSession {
         &self,
         st: &mut BState,
         store: &DocStore,
+        real: &Path,
         base: BlobId,
         ours: &BlobVersion,
-        theirs: &BlobVersion,
+        (theirs, theirs_put): (&BlobVersion, &VersionPut),
         sync: &BlobSync,
         stat: FileStat,
         now: u64,
@@ -3335,14 +3508,45 @@ impl BlobSession {
         }
         let space = st.key.space.clone();
         let max = self.config.blob_merge_max_bytes;
-        let read = |id: &BlobId| self.blobs.read_to_vec(&space, id, max);
-        let (Ok(b), Ok(o), Ok(t)) = (read(&base), read(&ours.blob), read(&theirs.blob)) else {
+        let read = |id: &BlobId| self.blobs.read_to_vec_of(&space, self.doc_id, id, max);
+        // a chunked save isn't readable until its commit: its bytes are the file's, if the
+        // file still holds them
+        let read_theirs = || -> std::result::Result<Vec<u8>, BlobError> {
+            if theirs_put.chunked().is_none() {
+                return read(&theirs.blob);
+            }
+            if theirs.size > max {
+                return Err(BlobError::TooLarge { limit: max });
+            }
+            let b = fs::read(real).map_err(|e| BlobError::Io(e.to_string()))?;
+            if self.blobs.id_of(&space, &mut &b[..])?.0 != theirs.blob {
+                return Err(BlobError::Damaged("the file changed".into()));
+            }
+            Ok(b)
+        };
+        let (Ok(b), Ok(o), Ok(t)) = (read(&base), read(&ours.blob), read_theirs()) else {
             return Ok(None);
         };
         let BlobMerge::Merged(m) = self.pack.merge3_bytes(&b, &o, &t) else {
             return Ok(None);
         };
-        let info = self.blobs.put_bytes(&space, &m)?;
+        // a merge is the kit's, for no connection: the current version's chunks only
+        let cheap = Self::cheap_set(st, None);
+        let mput = match theirs_put.as_chunked() {
+            Some(prev) => {
+                self.blobs
+                    .put_version_after(&space, prev, &m, &cheap, &PackHints(&*self.pack))?
+            }
+            None => self.blobs.put_version_bytes(
+                &space,
+                Some(self.doc_id),
+                &m,
+                LockWait::Try,
+                &cheap,
+                &PackHints(&*self.pack),
+            )?,
+        };
+        let info = mput.info();
         let merged = BlobVersion::new(
             info.id,
             info.size,
@@ -3353,15 +3557,21 @@ impl BlobSession {
             BlobReason::Merged,
         );
         // the file holds theirs until the merge is written back
-        let committed = store.commit_blob_versions(
+        let chunked: Vec<&ChunkCommit> = theirs_put
+            .chunked()
+            .into_iter()
+            .chain(mput.chunked())
+            .collect();
+        let committed = store.commit_blob_versions_with(
             self.doc_id,
             &space,
             st.vid,
             &[theirs.clone(), merged.clone()],
             Some(sync),
+            &chunked,
         );
         // the put no longer waits: referenced by the merge's version, or given up
-        self.blobs.settle(&space, &info.id);
+        self.blobs.finish(&space, mput);
         let vids = committed?;
         self.want_index(st, vids[0], theirs.blob, theirs.size);
         st.vid = vids[1];
@@ -3405,7 +3615,9 @@ impl BlobSession {
             who,
             now,
             |f| {
-                self.blobs.copy_to(&space, &ours.blob, f).map_err(blob_io)?;
+                self.blobs
+                    .copy_to_of(&space, self.doc_id, &ours.blob, f)
+                    .map_err(blob_io)?;
                 Ok(())
             },
         );
@@ -3465,7 +3677,9 @@ impl BlobSession {
         store.set_blob_pending(self.doc_id, &BlobSync { blob, stat: None })?;
         let space = st.key.space.clone();
         let written = disk::atomic_write_with(&real, |f| {
-            self.blobs.copy_to(&space, &blob, f).map_err(blob_io)?;
+            self.blobs
+                .copy_to_of(&space, self.doc_id, &blob, f)
+                .map_err(blob_io)?;
             Ok(())
         });
         let stat = match written {

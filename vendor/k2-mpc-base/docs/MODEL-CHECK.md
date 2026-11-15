@@ -139,7 +139,7 @@ appears.
 | `O5` | O5 lands exactly at the doc's end with a non-empty whole-doc base: never elsewhere, never refused there (U10's `at_end`, both ways) |
 | `O5doc` (2026-11-04) | O5 and U10's `at_end` **restated independently** of the merge's own `at_end`: for a request that merged one step (a revert, or an undo or redo of one batch), each untainted region judged from its own exact sides, the doc's length as the pre-state holds it, the whole-doc base flag its batch or record stored, and the text the step left (landed elsewhere; refused at the doc's end; or landed there but the text left doesn't end with ours). `bounded::o5_doc`, `undo.qnt` `o5doc` |
 | `U17doc` (2026-11-04) | U17 read off the state an applied undo or redo left: the batches it pushed on the opposite stack hold one region per region each step applied, in order |
-| `U12` (Rust only, `--u12`) | a diagnostic: outside taint, the window merge of the exact sets equals the whole-text merge of the same sets (v1.7). Clean; the old re-diff form (F4) is informative only |
+| `U12` (Rust only, `--u12`) | a diagnostic: outside taint, the window merge of the exact sets equals the whole-text merge of the same sets (v1.7). Clean; the old re-diff form (the repeated-text finding below) is informative only |
 
 ### What the runs check
 
@@ -215,27 +215,27 @@ reading; the exact counts and the exhaustive pair were re-run under the canonica
 
 ## Findings
 
-**Both fixed in v1.7** (spec U10 on exact hunk sets; kit v0.9.0). F3 is now mutant
+**Both fixed in v1.7** (spec U10 on exact hunk sets; kit v0.9.0). The first is now mutant
 `f3-rediff` (fails `own_only` at depth 3, inside 2 × 1 + 1 undo), and U12 is restated on
 hunk sets (clean at every bound run). Kept as found:
 
-**F3: the oracle (and the kit) violate `hist.undo_own_only` per element.** Least depth 3:
-seed `ab`; p1 replaces `a` with `b` (`bb`); p2 inserts `b` at 0 (`bbb`), which is pulled into
-p1's region at its start (U8). p1's undo merges `base = "b"`, `ours = "a"`, `theirs = "bb"`:
+**The re-diff finding: the oracle (and the kit) violate `hist.undo_own_only` per element.** Least
+depth 3: seed `ab`; p1 replaces `a` with `b` (`bb`); p2 inserts `b` at 0 (`bbb`), which is pulled
+into p1's region at its start (U8). p1's undo merges `base = "b"`, `ours = "a"`, `theirs = "bb"`:
 `diff::hunks(base, theirs)` trims the common prefix and reports p2's insertion **after** the
-region's own `b`, so ours' replacement lands on p2's `b`. The text is right (`abb`); the
-elements are wrong: p2's `b` is deleted and p1's stays, and p2's own undo then conflicts.
-Confirmed on the kit on Yrs (char blame). Same class as F1 (v0.8.1), on the theirs side: the
-window's foreign changes are found by a text diff, which can't see element identity in
-repeated text. A fix needs the merge to know where foreign insertions inside the window are
-(element positions the engine reports), a spec change for the kit's owner.
+region's own `b`, so ours' replacement lands on p2's `b`. The text is right (`abb`); the elements
+are wrong: p2's `b` is deleted and p1's stays, and p2's own undo then conflicts. Confirmed on the
+kit on Yrs (char blame). Same class as v0.8.1's repeated-text fix, on the theirs side: the window's
+foreign changes are found by a text diff, which can't see element identity in repeated text. A fix
+needs the merge to know where foreign insertions inside the window are (element positions the engine
+reports), a spec change for the kit's owner.
 
-**F4: U12's equivalence note fails in repeated text.** Least depth 3: seed `ab`; p1 inserts
-`a` at 0 (`aab`); p2 replaces it with `b` (`bab`). p1's undo conflicts in the window form (O1:
-p2 replaced p1's letter), which is right by identity; whole-text merge3 of the same inverse is
-clean (its diff deletes the seed's `a` instead). U12 says the region form is the definition,
-so the definition stands; the note's claim "U10 equals whole-text merge3 outside the taint
-case" needs "outside repeated text" (or to be dropped).
+**The repeated-text finding: U12's equivalence note fails in repeated text.** Least depth 3: seed
+`ab`; p1 inserts `a` at 0 (`aab`); p2 replaces it with `b` (`bab`). p1's undo conflicts in the
+window form (O1: p2 replaced p1's letter), which is right by identity; whole-text merge3 of the same
+inverse is clean (its diff deletes the seed's `a` instead). U12 says the region form is the
+definition, so the definition stands; the note's claim "U10 equals whole-text merge3 outside the
+taint case" needs "outside repeated text" (or to be dropped).
 
 ## The audit's additions (2026-11-04)
 
@@ -621,7 +621,7 @@ at 2 × 1 + 2 undos + 1 revert (5,000 steps; 1,422 undos, 578 redos, 1,000 rever
 |---|---|---|---|---|
 | (i), (iii), (iv), (vi), (vii) | U9, U15, U17, O5, O5 | 2 × 1 + 1 undo (`abb`, 4) | 3 each | 3 each |
 | skip-U19 | U19 | same | 1 | 1 |
-| `f3-rediff` (F3) | own_only | same | 3 | 3 |
+| `f3-rediff` | own_only | same | 3 | 3 |
 | `restart-single-taint` | RT | 1 × 3 + 1 revert + 1 restart (`abba`, 4) | 4 | 4 |
 | **(x) `x-provenance-ignored-in-o4`** (v1.8) | **I1** | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 | 3 |
 
@@ -716,7 +716,7 @@ mismatches.
 |---|---|---|---|---|
 | (i), (iii), (iv), (vi), (vii) | U9, U15, U17, O5, O5 | 2 × 1 + 1 undo (`abb`, 4) | 3 each | 3 each |
 | skip-U19 | U19 | same | 1 | 1 |
-| `f3-rediff` (F3) | own_only | same | 3 | 3 |
+| `f3-rediff` | own_only | same | 3 | 3 |
 | `restart-single-taint` | RT | 1 × 3 + 1 revert + 1 restart (`abba`, 4) | 4 | 4 |
 
 Job `7a899e60` (indicative (bundle); source stated as `a5bc7d0`); the smoke job `0c00aee0` (TLC with every worker; indicative (bundle)) agrees.
@@ -743,7 +743,8 @@ Quint simulator traces through the wrapper `tools/undo/itf.qnt.in`, replayed ste
 | *before the fix below:* 2 pids × 2 events + 1 undo (`ab`, 3) | 6,000 | 30,000 | 0 |
 
 At the full bound the replayed actions were 22,311 edits, 4,555 purges, 4,204 undos, 1,759 redos and
-2,969 reverts. The replay saw every action kind and the model reproduces F3 (`own_only` in its `viol`, as in the oracle's).
+2,969 reverts. The replay saw every action kind, and the model shows the re-diff finding too
+(`own_only` in its `viol`, as in the oracle's).
 
 ### TLC's exact counts = the enumerator's
 
@@ -783,7 +784,7 @@ At 2 pids × 1 event + 1 undo (`abb`, 4): TLC with one worker (a shortest counte
 The same set fails `cargo test -p k2-mpc-spec-undo --features mutants --test mutants`, and on random
 walks at the full bound (20,000 walks each, `tools/undo/g1-smoke.sh`): the same rule, at the same
 depth (3; skip-U19 at 1). 150,000 walks of the oracle of record at the full bound (1.8M steps)
-violate no rule the runs stop at (F3 observed).
+violate no rule the runs stop at (the re-diff finding observed).
 
 ## The full bound
 

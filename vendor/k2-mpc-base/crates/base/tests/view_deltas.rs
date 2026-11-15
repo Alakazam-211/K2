@@ -110,6 +110,7 @@ const BY_ID: ViewSchema = ViewSchema {
         title: Src::Derived("slide_title"),
         hidden: Src::Field("hidden"),
         layout: Src::Field("layout"),
+        parent: Src::None,
     },
     unit_fields: UnitFields {
         kind: Src::ListValue,
@@ -149,6 +150,7 @@ const BY_KEY: ViewSchema = ViewSchema {
             values: &[("0", "true"), ("1", "false")],
         },
         layout: Src::Field("layout"),
+        parent: Src::None,
     },
     geometry: Some(Geometry {
         field: "geom",

@@ -49,10 +49,12 @@ pub use grid::{
 };
 pub use history::{DiffOutput, LogItem, LogQuery};
 pub use purge::{NotReached, PurgeOutcome, PurgeRequest, PurgeScope};
+pub(crate) use watch::VerbRefused;
 pub use watch::{
-    keyed_state_json, watch_state_json, KeyedWatch, WatchActor, WatchChange, WatchExtras,
-    WatchFrame, WatchOp, WatchOptions, WatchPage, WatchPart, WatchSnapshot, KEYED_WATCH_FEATURE,
-    WATCH_FRAME_MAX, WATCH_PAGE_BYTES, WATCH_PAGE_BYTES_MIN,
+    keyed_state_json, watch_state_json, KeyedWatch, OutsideSaveCopy, OutsideSaveOutcome,
+    WatchActor, WatchChange, WatchExtras, WatchFrame, WatchOp, WatchOptions, WatchOutsideSave,
+    WatchPage, WatchPart, WatchRefusal, WatchSnapshot, KEYED_WATCH_FEATURE, WATCH_FRAME_MAX,
+    WATCH_PAGE_BYTES, WATCH_PAGE_BYTES_MIN,
 };
 
 use super::awareness::{self, ActivityEntry, ActivityKind, Aware, ClaimPolicy, Notes};
@@ -538,7 +540,7 @@ impl WriteReport {
 /// What a read verb showed ([`Session::read_with`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Shown {
-    /// The viewing range to set (P4).
+    /// The viewing range to set.
     pub view: Option<(usize, usize)>,
     /// The lines it looked at (notes, activity, `--for-edit`).
     pub touched: Option<(usize, usize)>,
@@ -1268,24 +1270,18 @@ fn planted_client_zero(_: ClientId) -> bool {
 /// range is moved into it, as the old `.max(2)` did) and
 /// [`crate::differential::MintMutant::ReuseHeldClient`] (agent reuse ignores the IDs present
 /// connections hold). Without the `differential` feature there are no hooks.
-#[cfg(any(test, feature = "differential"))]
 fn planted_shift_not_resample() -> bool {
-    crate::differential::mint_mutant() == Some(crate::differential::MintMutant::ShiftNotResample)
+    plant_on!(
+        crate::differential::mint_mutant()
+            == Some(crate::differential::MintMutant::ShiftNotResample)
+    )
 }
 
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_shift_not_resample() -> bool {
-    false
-}
-
-#[cfg(any(test, feature = "differential"))]
 fn planted_reuse_held() -> bool {
-    crate::differential::mint_mutant() == Some(crate::differential::MintMutant::ReuseHeldClient)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_reuse_held() -> bool {
-    false
+    plant_on!(
+        crate::differential::mint_mutant()
+            == Some(crate::differential::MintMutant::ReuseHeldClient)
+    )
 }
 
 /// The planted fault [`crate::differential::ApplyFault::StoreCommitFails`]: a change's store
@@ -2559,6 +2555,8 @@ impl Session {
                     focus: None,
                     range: None,
                     cells: None,
+                    view_address: None,
+                    time: None,
                 })
                 .collect();
             // the planted fault (test-only): every connection shows the most active one's caret
@@ -2875,7 +2873,7 @@ impl Session {
 
     /// [`Session::read`], then `f` on `root`'s text under the same lock (the tools' read
     /// verbs). `f` returns its result and the lines it showed (1-based, inclusive): `view`
-    /// becomes the connection's viewing range (P4); `touched` (the lines the call looked
+    /// becomes the connection's viewing range; `touched` (the lines the call looked
     /// at) gets the heads-up notes, the activity row, and, with `for_edit: Some(ttl)`, an
     /// implicit claim. Like `edit_with`'s `f`, it must be bounded and must not call back
     /// into the kit; a panic is passed on after the lock is released. With `ids` on a grid,
@@ -6306,6 +6304,7 @@ impl Session {
                 key: st.key.clone(),
                 unflushed,
             });
+            self.watch_outside_save(st, OutsideSaveOutcome::Missing);
         }
         DiskCheck::Missing
     }
@@ -6326,6 +6325,13 @@ impl Session {
                 key: st.key.clone(),
                 code: why.code,
             });
+            self.watch_outside_save(
+                st,
+                OutsideSaveOutcome::Declined {
+                    code: why.code,
+                    message: why.message.clone(),
+                },
+            );
         }
         Ok(DiskCheck::Declined(why))
     }
@@ -6919,6 +6925,7 @@ impl Session {
         // a keyed doc's text roots merged from the file: the keyed watch's frame for it, once
         // the save is the carrier (its view index reads the save's carrier)
         self.flush_watch(st);
+        self.watch_outside_save(st, OutsideSaveOutcome::Ingested { rev: seq });
         settled?;
         self.maybe_compact(st);
         Ok(DiskCheck::Ingested { version: seq })

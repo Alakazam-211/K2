@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.18.0"
+version = "0.19.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -57,6 +57,6 @@ rand = { version = "0.8", features = ["small_rng"] }
 # Tests stand in for remote clients with raw Yrs docs (Yjs wire-compatible): the same copy.
 yrs = { path = "../../vendor/yrs", version = "=0.28.0" }
 
-[lints.rust]
-# the acknowledgement cfg (lib.rs): a known name, not an unexpected one.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(k2_mpc_untrusted_wire_ack)"] }
+# the workspace's (the root Cargo.toml: the acknowledgement cfg)
+[lints]
+workspace = true

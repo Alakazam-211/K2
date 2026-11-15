@@ -245,10 +245,15 @@ export type RosterEvent =
   /** A connection's cells in a live grid (feature `cells`), as `selection`. `null`: gone (cleared,
    * its focus moved to another container, or nothing of it is left after a row or column went). */
   | { kind: "cells"; who: Handle; cells: Cells | null; client?: number }
+  /** A connection's view address (the view it is looking at) or time position (its playhead), as
+   * `selection` (kit after v0.18.0; an older host sends none). */
+  | { kind: "view_address"; who: Handle; view_address: string | null; client?: number }
+  | { kind: "time_position"; who: Handle; time_position: TimePositionJson | null; client?: number }
   /** `actor` and `started_ms`: wire 3, absent from an older host. */
   | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; version: number; actor?: ClaimActor; started_ms?: number; [k: string]: unknown }
   /** A claim on elements of a list root: it has no lines, so it has its own kind. It ends with
-   * `claim_ended` (`how: "deleted"` when none of its elements is live). */
+   * `claim_ended` (`how: "deleted"` when none of its elements is live after a live change,
+   * `"gone_outside_save"` when an outside save removed the last of them). */
   | {
       kind: "claim_started_elems";
       who: Handle;
@@ -281,10 +286,13 @@ export type RosterEvent =
       started_ms: number;
     }
   /** `actor`, `at_ms` (when it ended, the host's clock) and `at_rev` (the change that ended it:
-   * `edited`, `deleted`; else `null`): wire 3, absent from an older host. `lines`: a claim on
-   * lines, its lines; a claim on cells, its range's first and last row numbers at `version`, in
-   * the rows root. */
-  | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; actor?: ClaimActor; at_ms?: number; at_rev?: number | null; lines?: LineSpan; [k: string]: unknown }
+   * `edited`, `deleted`, `gone_outside_save`; else `null`): wire 3, absent from an older host.
+   * `lines`: a claim on lines, its lines; a claim on cells, its range's first and last row
+   * numbers at `version`, in the rows root. `how` is a `ClaimEndReason` from this kit; read it
+   * with `claimEndReason`, which takes a reason this client doesn't know as `deleted`. `keys`: a
+   * claim on elements, its elements by address as they were when it was taken (so a view can
+   * name what went); absent otherwise (and from an older kit). */
+  | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; actor?: ClaimActor; at_ms?: number; at_rev?: number | null; lines?: LineSpan; keys?: string[]; [k: string]: unknown }
   | { kind: "note"; to: Handle; from: Handle; [k: string]: unknown }
   | {
       kind: "overwritten";
@@ -335,7 +343,25 @@ export interface Device {
   range?: ElemRange | null;
   /** This connection's cells in a live grid; absent or `null` when it has none. */
   cells?: Cells | null;
+  /** This connection's view address and time position; absent when it has none. */
+  view_address?: string | null;
+  time_position?: TimePositionJson | null;
 }
+
+/** A playhead (WIRE.md, Presence frames, `time_position`): `at` a decimal integer string in the
+ * pack's unit (the view schema's `time_unit`), never a float; `state`; `at_ms` the host clock when
+ * the kit took it (so a follower extrapolates a playing one at `rate`); `in` what it is in, by
+ * address; `rate` a decimal ratio (`1/2`), 1 when absent. */
+export interface TimePositionJson {
+  at: string;
+  state: "playing" | "paused";
+  at_ms: number;
+  in?: string;
+  rate?: string;
+}
+
+/** A time position as a client sends it: the host stamps `at_ms`. */
+export type TimePositionSet = Omit<TimePositionJson, "at_ms">;
 
 /** One participant as the host shows them (from the kit's `RosterMember`). */
 export interface RosterEntry {
@@ -366,6 +392,10 @@ export interface RosterEntry {
   /** The most active connection's cells in a live grid that has some; absent or `null` when
    * none has. */
   cells?: Cells | null;
+  /** The most active connection's view address and time position that has one; absent when
+   * none has (and from an older host). */
+  view_address?: string | null;
+  time_position?: TimePositionJson | null;
   /** The participant's live claims on elements, so a late subscriber sees who holds what.
    * Present only when they hold some. */
   elem_claims?: ElemClaim[];
@@ -470,6 +500,10 @@ export type ClientFrame =
    * lists `"focus"` or `"range"`. Answered only when refused. */
   | { type: "focus"; req: number; focus: ElemFocus | null }
   | { type: "range"; req: number; range: ElemRange | null }
+  /** This connection's view address and time position (`null`: clear), sent only when the host
+   * lists `"view_address"` or `"time_position"`. Answered only when refused. */
+  | { type: "view_address"; req: number; address: string | null }
+  | { type: "time_position"; req: number; time_position: TimePositionSet | null }
   /** This connection's cells in a live grid (`null`: clear), sent only when the host lists
    * `"cells"`. It also sets the connection's focus to their container. Answered only when
    * refused. */
@@ -534,6 +568,10 @@ export type ServerFrame =
   | OpsChangeFrame
   /** The host can't serve the keyed watch (`MPC-E401`: an entry over the frame cap). Unnumbered. */
   | { type: "watch_refused"; error: ErrorReport }
+  /** A verb on the watched doc was refused and applied nothing (kit after v0.18.0). Unnumbered. */
+  | VerbRefusedFrame
+  /** What came of an outside save of the doc's file (kit after v0.18.0). Unnumbered. */
+  | OutsideSaveFrame
   /** The last frame on a connection; the host then closes the socket. */
   | {
       type: "closed";
@@ -711,7 +749,10 @@ export interface ViewSchemaJson {
   container_id_field: string | null;
   native_unit: string;
   page: { root: string; w: string; h: string } | null;
-  container_fields: { title: ViewSrc; hidden: ViewSrc; layout: ViewSrc };
+  /** `parent`: where a container's parent container comes from (WIRE.md, "Containers in
+   * containers"); absent when the pack declares none (and from an older kit). A client never
+   * reads it from the keyed state: the kit sends each container's `parent` and `parent_after`. */
+  container_fields: { title: ViewSrc; hidden: ViewSrc; layout: ViewSrc; parent?: ViewSrc };
   unit_fields: { kind: ViewSrc; name: ViewSrc; alt: ViewSrc; text: ViewSrc; hidden: ViewSrc; editable_text: ViewSrc; placeholder: ViewSrc };
   geometry: { field: string; parts: string[]; rot_unit: string } | null;
   field_class: Record<string, FieldClass>;
@@ -726,9 +767,23 @@ export interface ViewSchemaJson {
    * transform, a label as people read it): each unit carries its own in `derived`, and a
    * change's `derived.units.<unit>.<name>` updates them. Absent: none (and from an older kit). */
   unit_derived?: string[];
+  /** The names of the pack's derived values per container (a timeline track's label and kind):
+   * each container carries its own in `derived`, and a change's
+   * `derived.containers.<container>.<name>` updates them. Absent: none (and from an older kit). */
+  container_derived?: string[];
   /** The 3D slot (WIRE.md, "Placements in 3D"): the fields a placement is read from and its
    * numbers' precision. Absent: no 3D (and from an older kit). */
   space?: SpaceSlotJson;
+  /** Which unit kinds nest inside which (WIRE.md, "Nesting"), in the pack's order: a unit of
+   * `kind` sits inside a unit of `parent` (its own `parent`, by address, says which one).
+   * Absent: none declared (and from an older kit). */
+  nesting?: NestingJson[];
+}
+
+/** One nesting relation of the view schema: units of `kind` sit inside a unit of `parent`. */
+export interface NestingJson {
+  kind: string;
+  parent: string;
 }
 
 /** The view schema's 3D slot. */
@@ -775,8 +830,16 @@ export interface ViewContainer {
   fonts: number[];
   has_fields: string[];
   unit_count: number;
+  /** The container it sits inside, by address (a collection inside a collection), for an
+   * outliner's tree (WIRE.md, "Containers in containers"): always another container of the same
+   * view, never in a cycle, at most `CONTAINER_DEPTH_MAX` levels deep. Absent: at the top level
+   * (and every container from an older kit). `position` stays the flat order. */
+  parent?: string;
   /** Its placement (a 3D slot with container fields); absent or `null`: not placed. */
   placement?: PlacementJson | null;
+  /** The pack's derived values (the view schema's `container_derived`), `{name: text}`, each
+   * text at most `VIEW_TEXT_MAX` bytes; absent when the container has none. */
+  derived?: Record<string, string>;
 }
 
 /** One unit of the view index (a shape), by address, in native units. */
@@ -852,6 +915,11 @@ export interface ContainerDelta {
   fields: string[];
   /** A 3D slot with container fields: its placement after the change (`null`: none now). */
   placement_after?: PlacementJson | null;
+  /** Containers that nest: its parent's address after the change (`null`: at the top level
+   * now), on `add` and `restore` always and otherwise when it changed. A container whose parent
+   * changed with no other change of its own gets a `props` delta naming no field, with this.
+   * Absent: unchanged (and from an older kit). */
+  parent_after?: string | null;
 }
 
 /** The head of a snapshot: the doc's keyed state at version `upto` follows in `pages` pages.
@@ -928,6 +996,46 @@ export type WatchOp =
       effect: "visible" | "hidden";
     }
   | { root: string; kind: "map"; op: "set" | "delete"; key: string; field: string | null; before?: KeyedValue; after?: KeyedValue };
+
+/** A refused verb on a keyed watch (WIRE.md, "Refused verbs"): unnumbered, it changes nothing.
+ * Sent only to viewers who may read the doc; an App viewer gets handles and no `turn`. */
+export interface VerbRefusedFrame {
+  type: "verb_refused";
+  at_ms: number;
+  /** Who was refused. */
+  actor: WatchActor;
+  client: number;
+  turn: string | null;
+  /** The verb's name (`shape move`). */
+  verb: string;
+  /** The unit it addressed, by address; `null` when it was refused before it named one. */
+  unit: string | null;
+  /** The refusal's id (`MPC-E301` for a claim). */
+  code: string;
+  /** Who holds the claim or lease that refused it; `null` otherwise. */
+  holder: WatchActor | null;
+  /** That claim, `claim-N`; `null` otherwise. */
+  claim: string | null;
+}
+
+/** What the kit made of an outside save of the watched doc's file (WIRE.md, "Outside saves"):
+ * unnumbered, after the save's own change frame. `ingested`: taken in, the doc at `rev`.
+ * `kept_both`: the save is the doc at `rev`; what was live before is the stored version `kept`
+ * and the conflict `copy` (`null` when it couldn't be written; `doc` when it is a document).
+ * `declined`: the file can't be a live doc (`code`, `message`). `missing`: the file is gone. */
+export type OutsideSaveFrame =
+  | { type: "outside_save"; at_ms: number; doc: string; outcome: "ingested"; rev: number }
+  | {
+      type: "outside_save";
+      at_ms: number;
+      doc: string;
+      outcome: "kept_both";
+      rev: number;
+      kept: number;
+      copy: { name: string; path: string; doc?: string } | null;
+    }
+  | { type: "outside_save"; at_ms: number; doc: string; outcome: "declined"; code: string; message: string }
+  | { type: "outside_save"; at_ms: number; doc: string; outcome: "missing" };
 
 /** One committed change (the doc's version `rev`), numbered `seq`. `change_kind` is the kit's
  * `ChangeKind` (`edit`, `undo`, `redo`, `revert`, `restore`, `external`, `import`). */

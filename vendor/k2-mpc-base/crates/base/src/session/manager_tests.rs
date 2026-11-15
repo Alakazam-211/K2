@@ -571,7 +571,10 @@ fn a_structured_pack_opens_and_upgrades_the_store_lazily() {
     assert_eq!(f.store.format().unwrap(), crate::store::STORE_FORMAT_BASE);
     let k = key("s", "t.grid");
     let s = f.mgr.open(Arc::new(Grid), &k, Some(b"a\nb\n")).unwrap();
-    assert_eq!(f.store.format().unwrap(), crate::store::STORE_FORMAT);
+    assert_eq!(
+        f.store.format().unwrap(),
+        crate::store::STORE_FORMAT_STRUCTURED
+    );
     let c = s.join(person("p"), Stay::Held).unwrap().conn;
     let r = s.read(c).unwrap();
     assert_eq!(r.bytes, b"a\nb\n");

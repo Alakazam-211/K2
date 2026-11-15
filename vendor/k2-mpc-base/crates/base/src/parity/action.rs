@@ -44,7 +44,7 @@ macro_rules! person_actions {
             /// Every action, in row order.
             pub const ALL: &'static [PersonAction] = &[ $( PersonAction::$v, )* ];
 
-            /// The row number (`13` for P13).
+            /// The row number (`13` for the row printed `P13`).
             pub const fn number(self) -> u8 {
                 match self { $( PersonAction::$v => $n, )* }
             }
@@ -63,94 +63,94 @@ macro_rules! person_actions {
 }
 
 person_actions! {
-    /// P1: join; appear in presence.
+    /// Join; appear in presence.
     Open = 1, ALL3, "Open the file (join; appear in presence)";
-    /// P2: leave.
+    /// Leave.
     Close = 2, ALL3, "Close it (leave)";
-    /// P3.
+    /// Read the whole doc.
     ReadAll = 3, ALL3, "Read the whole doc";
-    /// P4: the viewing highlight.
+    /// The viewing highlight.
     ViewRange = 4, ALL3, "Look at a range (viewing highlight)";
-    /// P5.
+    /// Find.
     Find = 5, TG, "Find";
-    /// P6.
+    /// See who's here.
     Who = 6, ALL3, "See who's here";
-    /// P7.
+    /// Follow someone.
     Follow = 7, TG, "Follow someone";
-    /// P8 (and, later, declaring an intent range).
+    /// Place the caret or select (and, later, declaring an intent range).
     Caret = 8, TG, "Place the caret / select; say what I'm working on";
-    /// P9.
+    /// Type at a position.
     Type = 9, TG, "Type at a position";
-    /// P10.
+    /// Select and type over.
     TypeOver = 10, TG, "Select and type over";
-    /// P11.
+    /// Delete a range.
     Delete = 11, TG, "Delete a range";
-    /// P12.
+    /// Find and replace.
     FindReplace = 12, TG, "Find and replace";
-    /// P13.
+    /// Paste a block or apply a change.
     Paste = 13, TG, "Paste a block / apply a change";
-    /// P14: `write --base V` (three-way merge; conflict exit 1, expired base exit 8).
+    /// `write --base V` (three-way merge; conflict exit 1, expired base exit 8).
     Rewrite = 14, ALL3, "Rewrite from what I last saw";
-    /// P15.
+    /// Format (bold, heading, list).
     Format = 15, TEXT, "Format (bold, heading, list)";
-    /// P16: all or nothing; `undo --drop` skips a blocked step.
+    /// Undo / redo my own edits: all or nothing; `undo --drop` skips a blocked step.
     Undo = 16, TG, "Undo / redo my own edits";
-    /// P17.
+    /// See that it saved.
     Saved = 17, ALL3, "See that it saved";
-    /// P18.
+    /// Watch others edit live.
     Watch = 18, ALL3, "Watch others edit live";
-    /// P19.
+    /// History, diff, show a version.
     History = 19, ALL3, "History, diff, show a version";
-    /// P20.
+    /// Restore or name a version.
     Restore = 20, ALL3, "Restore / name a version";
-    /// P21.
+    /// Rename or move.
     Rename = 21, ALL3, "Rename / move";
-    /// P22.
+    /// Blame.
     Blame = 22, ALL3, "Blame";
-    /// P23: comment, reply, resolve; suggest; accept / reject per hunk.
+    /// Comment, reply, resolve; suggest; accept / reject per hunk.
     Annotate = 23, TG, "Comment, reply, resolve; suggest; accept / reject";
-    /// P24.
+    /// Export.
     Export = 24, ALL3, "Export";
-    /// P25.
+    /// See why live editing is off.
     WhyOff = 25, ALL3, "See why live editing is off";
-    /// P26: Ctrl+Z when others edited part of my change (`undo --partial`).
+    /// Ctrl+Z when others edited part of my change (`undo --partial`).
     UndoPartial = 26, TG, "Undo the regions of my change nobody touched; report the rest";
-    /// P27.
+    /// Mention someone.
     Mention = 27, TG, "Mention someone";
-    /// P28: owner only.
+    /// Purge a pasted secret or personal data: owner only.
     Purge = 28, ALL3, "Purge a pasted secret or personal data";
-    /// P29.
+    /// Approve or decline an assistant's edit made on my behalf.
     Approve = 29, ALL3, "Approve or decline an assistant's edit made on my behalf";
-    /// P30.
+    /// See which edits are waiting for my approval.
     Pending = 30, ALL3, "See which edits are waiting for my approval";
-    /// P31: inside the revert window; older changes: `restore --version`.
+    /// Reverse one change, inside the revert window; older changes: `restore --version`.
     Revert = 31, TG, "Reverse one specific change";
-    /// P32 (tier 0): take the lease, or extend mine (`lease`, `lease --renew`).
+    /// Tier 0: take the lease, or extend mine (`lease`, `lease --renew`).
     Lease = 32, BLOB, "Take the lease (lock the file while I change it), or extend it";
-    /// P33 (tier 0).
+    /// Tier 0: release my lease.
     ReleaseLease = 33, BLOB, "Release my lease";
-    /// P34 (tier 0): owner only.
+    /// Tier 0: break someone else's lease; owner only.
     BreakLease = 34, BLOB, "Break someone else's lease";
     // the grid tier (CSV contract §3.5): a structured doc's own actions
-    /// P35: `row insert`.
+    /// `row insert`.
     RowInsert = 35, GRID, "Insert a row";
-    /// P36: `row move`.
+    /// `row move`.
     RowMove = 36, GRID, "Drag a row to another place";
-    /// P37: `row delete` (hides the row; its cells stay, hidden).
+    /// `row delete` (hides the row; its cells stay, hidden).
     RowDelete = 37, GRID, "Delete rows";
-    /// P38: `col insert`.
+    /// `col insert`.
     ColInsert = 38, GRID, "Insert a column";
-    /// P39: `col move`.
+    /// `col move`.
     ColMove = 39, GRID, "Drag a column";
-    /// P40: `col delete`.
+    /// `col delete`.
     ColDelete = 40, GRID, "Delete a column";
-    /// P41: `col rename`.
+    /// `col rename`.
     ColRename = 41, GRID, "Rename a column (edit the header)";
-    /// P42: `sort --by` (one change: the minimal moves).
+    /// `sort --by` (one change: the minimal moves).
     Sort = 42, GRID, "Sort by a column";
-    /// P43: `row restore`, `col restore` (also `undo`, `revert`).
+    /// `row restore`, `col restore` (also `undo`, `revert`).
     RestoreElement = 43, GRID, "Bring back a deleted row or column";
-    /// P44: `rows drop-deleted`, owner only (frees the size limit; not erasure,
+    /// `rows drop-deleted`, owner only (frees the size limit; not erasure,
     /// history keeps the rows; anyone else gets exit 3).
     DropDeleted = 44, GRID, "Remove deleted rows to free space (owner only)";
 }
@@ -203,8 +203,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2, 3, 4, 6, 14, 17, 18, 19, 20, 21, 22, 24, 25, 28, 29, 30, 32, 33, 34]
         );
-        // the grid tier (CSV contract §3.5): every text row but P15 (CSV has no formatting),
-        // tier 0's own rows left out (leases), then P35-P44
+        // the grid tier (CSV contract §3.5): every text row but formatting (CSV has none),
+        // tier 0's own rows left out (leases), then the grid rows' own actions
         let grid: Vec<u8> = PersonAction::for_tier(Tier::Grid)
             .map(|a| a.number())
             .collect();

@@ -28,7 +28,8 @@ use k2_mpc_base::session::{
     TextFilePack, UndoMode, UndoOutcome, UndoRequest, View, WriterLease,
 };
 use k2_mpc_base::store::{
-    DocKey, DocStore, StoreError, VersionReason, STORE_FORMAT, STORE_FORMAT_BASE, STORE_FORMAT_READ,
+    DocKey, DocStore, StoreError, VersionReason, STORE_FORMAT_BASE, STORE_FORMAT_READ,
+    STORE_FORMAT_STRUCTURED,
 };
 use k2_mpc_base::table::{self, Field, Record, Shape, Table, TableError, CELLS, ROWS};
 use k2_mpc_base::tools::{exit, session_exit};
@@ -387,7 +388,7 @@ fn store_upgrades_to_6_on_first_grid_doc() {
     let f = fx("v6");
     assert_eq!(f.store.format().unwrap(), STORE_FORMAT_BASE);
     f.open("t.csv", "a,b\nc,d\n");
-    assert_eq!(f.store.format().unwrap(), STORE_FORMAT);
+    assert_eq!(f.store.format().unwrap(), STORE_FORMAT_STRUCTURED);
     let path = f.dir.0.join("docs.redb");
     let Fx { mgr, store, .. } = f;
     mgr.release().unwrap();
@@ -414,8 +415,8 @@ fn store_newer_format_refused_with_one_line() {
             .unwrap();
         w.commit().unwrap();
     }
-    // v0.10.1 reads format 7 (the native engine's, forward-declared): the first format it
-    // refuses is 8
+    // the first format this build refuses as newer is the one past what it reads (format 8,
+    // the required-features word)
     let e = DocStore::open(&path).err().expect("refused");
     assert_eq!(
         e,
@@ -425,7 +426,8 @@ fn store_newer_format_refused_with_one_line() {
     );
     let line = e.to_string();
     assert!(
-        !line.contains('\n') && line.contains("this build reads up to 7"),
+        !line.contains('\n')
+            && line.contains(&format!("this build reads up to {STORE_FORMAT_READ}")),
         "{line}"
     );
 }
@@ -1418,7 +1420,7 @@ fn n1_producer() {
         assert_eq!(
             store.format().unwrap(),
             if grid {
-                STORE_FORMAT
+                STORE_FORMAT_STRUCTURED
             } else {
                 STORE_FORMAT_BASE
             }
@@ -3053,7 +3055,7 @@ mod outside_merge {
     }
 
     /// A row deleted in the file, edited live: the delete wins; the row stays restorable with
-    /// the live value (P43), and the editor's note names it.
+    /// the live value, and the editor's note names it.
     #[test]
     fn a_row_the_file_deletes_and_live_edits_is_deleted_and_restorable() {
         let f = Fix::new();
@@ -8471,7 +8473,7 @@ mod outside_merge {
             assert!(cells.contains("COLV"), "{cells}");
         }
 
-        /// P44: `rows drop-deleted` cuts a version first whose cell map holds the dropped rows' and
+        /// `rows drop-deleted` cuts a version first whose cell map holds the dropped rows' and
         /// columns' cells (no store format change: a version's cell map is the whole map).
         #[test]
         fn a_before_drop_version_holds_the_dropped_cells() {
@@ -8531,7 +8533,7 @@ mod outside_merge {
             assert!(!matches!(out, UndoOutcome::Applied { skipped, .. } if skipped.is_empty()));
         }
 
-        /// PROBE (P44, S11): can the owner revert the drop itself, and does that bring the values back?
+        /// PROBE (S11): can the owner revert the drop itself, and does that bring the values back?
         #[test]
         fn probe_revert_of_a_drop() {
             let f = Fix::new();
@@ -8571,7 +8573,7 @@ mod outside_merge {
             );
         }
 
-        /// PROBE (P44): does a version from before a drop hold the dropped values, and does a
+        /// PROBE: does a version from before a drop hold the dropped values, and does a
         /// restore bring them back?
         #[test]
         fn probe_restore_after_a_drop() {

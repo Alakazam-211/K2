@@ -605,7 +605,7 @@ pub(super) fn dec_change(
 
 /// Runs as stored: `(bytes u32, units u32, client u64, clock u32)`, little-endian, the
 /// layout of records versions 2 and 3 (unchanged since format 5). The units and the clock
-/// are u64 in memory (P2, v0.10.1) and narrowed here, checked: a value over `u32::MAX`
+/// are u64 in memory (since v0.10.1) and narrowed here, checked: a value over `u32::MAX`
 /// refuses the record ([`StoreError::ClockOverflow`]) instead of storing a wrong root.
 fn enc_runs(w: &mut W, runs: &RootRuns) -> Result<(), StoreError> {
     let narrow = |v: u64| u32::try_from(v).map_err(|_| StoreError::ClockOverflow(v));
@@ -944,15 +944,11 @@ thread_local! {
 
 /// The planted fault [`crate::differential::BlobRefMutant::RefAfterCommit`]: a change's blob
 /// references are taken in a second transaction, after its own commit.
-#[cfg(any(test, feature = "differential"))]
 fn planted_ref_after_commit() -> bool {
-    crate::differential::blob_ref_mutant()
-        == Some(crate::differential::BlobRefMutant::RefAfterCommit)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_ref_after_commit() -> bool {
-    false
+    plant_on!(
+        crate::differential::blob_ref_mutant()
+            == Some(crate::differential::BlobRefMutant::RefAfterCommit)
+    )
 }
 
 /// Write `changes` (positions `seqs`) and their revert records in `w`, updating the stats.
@@ -1778,7 +1774,7 @@ mod tests {
 
     /// The records land with the change, carry the text purge must reach, and leave the
     /// window with their stats; pending ones are counted until settled.
-    /// A revert record with root runs, as v0.10.1 builds it (P2: u64 units and clocks in
+    /// A revert record with root runs, as v0.10.1 builds it (u64 units and clocks in
     /// memory), for the stored-bytes tests below.
     fn record_with_runs(inserted: RootRuns, deleted: RootRuns) -> RevertRecord {
         RevertRecord {
@@ -1812,9 +1808,9 @@ mod tests {
             .collect()
     }
 
-    /// P2 changes no stored byte (v0.10.1): the records that hold engine clocks encode as
-    /// v0.10.0's encoders wrote them (these bytes were checked against v0.10.0's own
-    /// encoders), and decode back to the same values. A revert record's runs stay
+    /// u64 units and clocks change no stored byte (v0.10.1): the records that hold engine
+    /// clocks encode as v0.10.0's encoders wrote them (these bytes were checked against
+    /// v0.10.0's own encoders), and decode back to the same values. A revert record's runs stay
     /// `(bytes u32, units u32, client u64, clock u32)`; a provenance row and a change-clocks
     /// value were three and two u64s already.
     #[test]
@@ -1847,7 +1843,7 @@ mod tests {
     }
 
     /// A root run whose units or clock is over `u32::MAX` is refused at encode, never
-    /// stored truncated (v0.10.1, P2 with the stored layout kept): the record, and a whole
+    /// stored truncated (v0.10.1, u64 clocks with the stored layout kept): the record, and a whole
     /// commit holding it, fail with [`StoreError::ClockOverflow`], and nothing of the commit
     /// is written. The u64 tables (clock spans, provenance) take such clocks as they are.
     #[test]

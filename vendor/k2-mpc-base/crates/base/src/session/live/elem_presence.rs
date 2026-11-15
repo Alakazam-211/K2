@@ -1,5 +1,5 @@
-//! A connection's element selection, pointer, viewport, focus and text range. A child of
-//! `live`, so it works on the session's own state.
+//! A connection's element selection, pointer, viewport, focus, text range, view address and
+//! time position. A child of `live`, so it works on the session's own state.
 //!
 //! All five stay outside the doc's numbering: nothing here takes or moves a version, writes to
 //! the store, or marks the doc dirty. Subscribers see them through the roster
@@ -13,6 +13,12 @@
 //! range is never shown on a container nobody has in view. A range is never moved: it is dropped
 //! when its field changes, by anyone, or its element stops being live.
 //!
+//! **View address and time position**: the view a participant is looking at, by address, and
+//! their place in time (a timeline's playhead), on any live doc. People set their own; a pack's
+//! verb sets the acting agent's when it says so ([`crate::tools::StructOutput::viewing`],
+//! [`crate::tools::StructOutput::time_position`]), and a host sets one for any connection (an
+//! agent's, when it renders a still for it).
+//!
 //! **An agent's verbs move its presence**: when a pack's verb changes
 //! elements, the kit sets the acting agent's focus to the container of the last element it
 //! touched (the last container touched wins) and its selection to the elements it touched. A
@@ -23,7 +29,8 @@ use std::collections::BTreeMap;
 use super::*;
 use crate::elem::{Applied as ElemApplied, Effect, ElemState, Key};
 use crate::session::participant::{
-    ElemFocus, ElemRange, ElemSelection, Point, Rect, ELEM_SELECTION_MAX,
+    presence_address, ElemFocus, ElemRange, ElemSelection, Point, Rect, TimePosition,
+    ELEM_SELECTION_MAX,
 };
 
 /// One connection's values.
@@ -36,6 +43,10 @@ pub(super) struct ElemPresence {
     range: Option<ElemRange>,
     /// The cell caret and ranges on a grid (`cells`), on one container.
     pub(super) cells: Option<crate::grid::Cells>,
+    /// The view it is looking at, by address.
+    view_address: Option<String>,
+    /// Its place in time, stamped when set.
+    time: Option<TimePosition>,
 }
 
 impl ElemPresence {
@@ -87,6 +98,8 @@ pub(super) fn fold(conns: &[&Member], entry: &mut RosterEntry) {
     entry.focus = conns.iter().find_map(|m| m.elem.focus.clone());
     entry.range = conns.iter().find_map(|m| m.elem.range.clone());
     entry.cells = conns.iter().find_map(|m| m.elem.cells.clone());
+    entry.view_address = conns.iter().find_map(|m| m.elem.view_address.clone());
+    entry.time = conns.iter().find_map(|m| m.elem.time.clone());
     for d in &mut entry.devices {
         if let Some(m) = conns.iter().find(|m| m.client == d.client) {
             d.selection = m.elem.selection.clone();
@@ -95,17 +108,17 @@ pub(super) fn fold(conns: &[&Member], entry: &mut RosterEntry) {
             d.focus = m.elem.focus.clone();
             d.range = m.elem.range.clone();
             d.cells = m.elem.cells.clone();
+            d.view_address = m.elem.view_address.clone();
+            d.time = m.elem.time.clone();
         }
     }
 }
 
 /// The planted fault [`crate::differential::ViewMutant::RosterKeysLeak`].
 fn planted_roster_keys_leak() -> bool {
-    #[cfg(any(test, feature = "differential"))]
-    if crate::differential::view_mutant() == Some(crate::differential::ViewMutant::RosterKeysLeak) {
-        return true;
-    }
-    false
+    plant_on!(
+        crate::differential::view_mutant() == Some(crate::differential::ViewMutant::RosterKeysLeak)
+    )
 }
 
 /// Elements `keys` of list root `root` by address ([`Pack::address_of`]).
@@ -273,6 +286,80 @@ impl Session {
         self.refuse_watcher(st, i)?;
         st.members[i].elem.viewport = viewport;
         Ok(())
+    }
+
+    /// Set the view this connection is looking at, by address, or clear it with `None`. Needs
+    /// read. Any address the kit's grammar reads ([`crate::addr::parse`], native IDs too; a
+    /// bare key is one), at most [`crate::session::PRESENCE_ADDRESS_MAX`] bytes, else
+    /// [`SessionError::BadPosition`] and nothing changes; the kit doesn't resolve it. Returns
+    /// it as stored. Delivered as [`Session::set_pointer`]: the latest at each roster flush
+    /// ([`RosterEvent::ViewAddress`](super::roster::RosterEvent::ViewAddress)). A host sets an
+    /// agent's when it renders a still for it. A watcher is refused
+    /// ([`SessionError::Watching`]).
+    pub fn set_view_address(&self, conn: ConnId, address: Option<&str>) -> Result<Option<String>> {
+        let address = address
+            .map(|a| presence_address("the view address", a))
+            .transpose()?;
+        let now = self.now();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let i = self.admit(st, conn, Need::Read, Action::View, now)?;
+        self.refuse_watcher(st, i)?;
+        st.members[i].elem.view_address = address.clone();
+        Ok(address)
+    }
+
+    /// Set this connection's place in time (a playhead: [`TimePosition`]), or clear it with
+    /// `None`. Needs read. The kit stamps it with the host clock (`at_ms`) and returns it as
+    /// stored. Delivered as [`Session::set_pointer`]
+    /// ([`RosterEvent::TimePosition`](super::roster::RosterEvent::TimePosition)). A watcher is
+    /// refused ([`SessionError::Watching`]).
+    pub fn set_time_position(
+        &self,
+        conn: ConnId,
+        time: Option<TimePosition>,
+    ) -> Result<Option<TimePosition>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let i = self.admit(st, conn, Need::Read, Action::View, now)?;
+        self.refuse_watcher(st, i)?;
+        let time = time.map(|t| t.stamped(now));
+        st.members[i].elem.time = time.clone();
+        Ok(time)
+    }
+
+    /// A pack's verb said where its agent is looking and where its playhead is
+    /// ([`crate::tools::StructOutput::viewing`], [`crate::tools::StructOutput::time_position`]):
+    /// set on the verb's connection, as the verb's focus and selection are, for an agent only
+    /// (a person's presence is never moved, nor a watcher's). A view address the grammar
+    /// refuses is the pack's bug: it is left as it was.
+    pub(crate) fn verb_view_time(
+        &self,
+        conn: ConnId,
+        view: Option<&str>,
+        time: Option<&TimePosition>,
+    ) {
+        if view.is_none() && time.is_none() {
+            return;
+        }
+        let now = self.now();
+        let Ok(mut st) = self.lock() else {
+            return;
+        };
+        let st = &mut *st;
+        let Some(m) = st.members.iter_mut().find(|m| m.conn == conn) else {
+            return;
+        };
+        if m.p.kind != ParticipantKind::Agent || m.watcher {
+            return;
+        }
+        if let Some(v) = view.and_then(|v| presence_address("the view address", v).ok()) {
+            m.elem.view_address = Some(v);
+        }
+        if let Some(t) = time {
+            m.elem.time = Some(t.clone().stamped(now));
+        }
     }
 
     /// [`Session::set_selection`] by address ([`Pack::address_of`]): every
@@ -668,39 +755,27 @@ fn written_fields(changed: &[ElemApplied]) -> std::collections::HashSet<(String,
 
 /// Planted ([`crate::differential::ContractMutant::VerbMovesPersonPresence`]): a person's verb
 /// moves their presence as an agent's does. Without the `differential` feature: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_verb_moves_person() -> bool {
-    crate::differential::contract_mutant()
-        == Some(crate::differential::ContractMutant::VerbMovesPersonPresence)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_verb_moves_person() -> bool {
-    false
+    plant_on!(
+        crate::differential::contract_mutant()
+            == Some(crate::differential::ContractMutant::VerbMovesPersonPresence)
+    )
 }
 
 /// Planted ([`crate::differential::ContractMutant::RangeDoesNotSetFocus`]): a range leaves the
 /// focus where it was. Without the `differential` feature there is no hook: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_range_keeps_focus() -> bool {
-    crate::differential::contract_mutant()
-        == Some(crate::differential::ContractMutant::RangeDoesNotSetFocus)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_range_keeps_focus() -> bool {
-    false
+    plant_on!(
+        crate::differential::contract_mutant()
+            == Some(crate::differential::ContractMutant::RangeDoesNotSetFocus)
+    )
 }
 
 /// Planted ([`crate::differential::SelectionMutant::KeepsDeleted`]): selections keep every key.
 /// Without the `differential` feature there is no hook: `false`.
-#[cfg(any(test, feature = "differential"))]
 fn planted_selection_keeps_deleted() -> bool {
-    crate::differential::selection_mutant()
-        == Some(crate::differential::SelectionMutant::KeepsDeleted)
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-fn planted_selection_keeps_deleted() -> bool {
-    false
+    plant_on!(
+        crate::differential::selection_mutant()
+            == Some(crate::differential::SelectionMutant::KeepsDeleted)
+    )
 }

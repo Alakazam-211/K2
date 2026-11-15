@@ -37,6 +37,17 @@ export interface LiveDocClosed {
   reason: string
   code?: string
   path?: string
+  /** The daemon's own words, when its `closed` frame had them. */
+  message?: string
+}
+
+/** The daemon's `message` on a close: on the close itself (a close after
+ *  the welcome), or on the refusal's `close` (a `LiveConnectError`, whose
+ *  own Error message doesn't survive the editor copying its fields). */
+function closeMessage(c: unknown): string | undefined {
+  const o = c as { message?: unknown; close?: { message?: unknown } } | null
+  const m = typeof o?.message === 'string' ? o.message : typeof o?.close?.message === 'string' ? o.close.message : undefined
+  return m && m.trim() ? m : undefined
 }
 
 export interface LiveDocViewProps {
@@ -84,9 +95,12 @@ const OWN_MOVE_MS = 600
 
 /** Why a closed Live view stopped, in words. */
 export function closedText(c: LiveDocClosed): string {
-  switch (c.code === 'core_off' ? 'core_off' : c.reason) {
+  switch (c.code === 'core_off' || c.code === 'docs_unavailable' ? c.code : c.reason) {
     case 'core_off':
       return 'Live editing was turned off for this kind of file (Settings → Cores → Multiplayer).'
+    case 'docs_unavailable':
+      // The box's docs store is off (say, a newer K2 wrote it): the daemon says why.
+      return c.message ?? 'Live documents are off on this box.'
     case 'idle':
       return 'Live editing paused: this tab was idle.'
     case 'kicked':
@@ -210,7 +224,13 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
       ed.on('roster', (entries) => setOthers(Math.max(0, entries.length - 1))),
       ed.on('note', (n) => setNotes((prev) => [...prev, n])),
       ed.on('closed', (c) => {
-        const info: LiveDocClosed = { reason: c.reason, ...(c.code ? { code: c.code } : {}), ...(c.path ? { path: c.path } : {}) }
+        const message = closeMessage(c)
+        const info: LiveDocClosed = {
+          reason: c.reason,
+          ...(c.code ? { code: c.code } : {}),
+          ...(c.path ? { path: c.path } : {}),
+          ...(message ? { message } : {}),
+        }
         setClosed(info)
         if (info.code === 'core_off') onCoreOffRef.current?.(info)
       }),

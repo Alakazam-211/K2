@@ -128,7 +128,7 @@ pub struct Runtime {
 enum Slot {
     NotStarted,
     Running(Arc<Runtime>),
-    Failed(String),
+    Failed(OpenFailure),
     Released,
 }
 
@@ -141,8 +141,23 @@ fn slot() -> &'static RwLock<Slot> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unavailable {
     NotStarted,
-    Failed(String),
+    Failed(OpenFailure),
     Released,
+}
+
+/// Why the docs store didn't open: the line people read, and whether a
+/// newer K2 wrote the store (that line stands alone: it already says what
+/// happened and what to do, so it isn't wrapped in "failed to open (…)").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenFailure {
+    pub why: String,
+    pub newer_k2: bool,
+}
+
+impl OpenFailure {
+    pub fn from_store_error(e: &k2_mpc_base::store::StoreError) -> Self {
+        OpenFailure { why: store_open_error(e), newer_k2: store_is_newer_k2s(e) }
+    }
 }
 
 impl Unavailable {
@@ -153,7 +168,8 @@ impl Unavailable {
                  The owner or an Admin turns one on in Settings → Cores → Multiplayer (k2 doc cores)"
                 .to_string(),
             Unavailable::NotStarted => "live docs are still starting".to_string(),
-            Unavailable::Failed(e) => format!("live docs are off: the docs store failed to open ({e})"),
+            Unavailable::Failed(f) if f.newer_k2 => f.why.clone(),
+            Unavailable::Failed(f) => format!("live docs are off: the docs store failed to open ({})", f.why),
             Unavailable::Released => "this daemon handed off; the next one serves live docs".to_string(),
         }
     }
@@ -280,9 +296,9 @@ pub fn start() {
             export_worker::check_in_background();
         }
         Err(e) => {
-            let why = store_open_error(&e);
-            log_debug!("[docs] WARN: docs store at {} failed to open: {why}", path.display());
-            *s = Slot::Failed(why);
+            let failure = OpenFailure::from_store_error(&e);
+            log_debug!("[docs] WARN: docs store at {} failed to open: {}", path.display(), failure.why);
+            *s = Slot::Failed(failure);
         }
     }
 }
@@ -295,15 +311,32 @@ pub fn start() {
 /// purge or rewrite is refused (`store_newer`, `routes::session_error`).
 /// "Reads up to" names the highest format the kit reads
 /// (`STORE_FORMAT_READ`: 8 since kit v0.19.0), not the one it stamps.
+/// A format-8 store whose required features this K2 doesn't know, or that
+/// sets the native feature (native-engine documents, a Beta) this kit has no
+/// engine store for, is also a newer K2's: the kit refuses it before
+/// reading anything, so the store and the files on disk are untouched.
 pub fn store_open_error(e: &k2_mpc_base::store::StoreError) -> String {
+    use k2_mpc_base::store::StoreError;
     match e {
-        k2_mpc_base::store::StoreError::Newer { found } => format!(
+        StoreError::Newer { found } => format!(
             "the docs store was written by a newer K2 (store format {found}; this K2 reads up to {}). \
              A box that opened documents with a newer K2 can't go back to an older K2: update K2 again",
             k2_mpc_base::store::STORE_FORMAT_READ
         ),
+        StoreError::NativeWithoutEngine | StoreError::UnknownFeatures { .. } => NATIVE_STORE_FROM_NEWER_K2.to_string(),
         other => other.to_string(),
     }
+}
+
+/// What a store a newer K2 wrote with native-engine documents says.
+const NATIVE_STORE_FROM_NEWER_K2: &str = "This box's document store was written by a newer K2 \
+     (it has native-engine documents, a Beta). This K2 can't open it: update K2 to open live documents again. \
+     Nothing in the store was changed, and the files on disk hold their latest text.";
+
+/// Whether a newer K2 wrote the store (its line stands alone).
+fn store_is_newer_k2s(e: &k2_mpc_base::store::StoreError) -> bool {
+    use k2_mpc_base::store::StoreError;
+    matches!(e, StoreError::Newer { .. } | StoreError::NativeWithoutEngine | StoreError::UnknownFeatures { .. })
 }
 
 /// The running runtime, or why there is none.
@@ -801,6 +834,36 @@ mod tests {
         // comes only with a first chunked version, which K2 leaves off.
         assert_eq!(k2_mpc_base::store::STORE_FORMAT, 6, "0.46.7 reads up to store format 6");
         assert_eq!(k2_mpc_base::store::STORE_FORMAT_BASE, 5, "0.46.7 writes store format 5");
+    }
+
+    /// A store a newer K2 wrote with native-engine documents (a Beta): the
+    /// kit refuses it at open, before reading anything. K2 says so plainly,
+    /// in one line people can act on, not the kit's own words and not
+    /// wrapped in "the docs store failed to open (…)": that is the line the
+    /// CLI's 503 `docs_unavailable` and the Live view's closed frame carry.
+    #[test]
+    fn a_store_with_native_engine_documents_says_update_k2() {
+        use k2_mpc_base::store::StoreError;
+        let want = "This box's document store was written by a newer K2 (it has native-engine documents, a Beta). \
+                    This K2 can't open it: update K2 to open live documents again. \
+                    Nothing in the store was changed, and the files on disk hold their latest text.";
+        for e in [StoreError::NativeWithoutEngine, StoreError::UnknownFeatures { found: 8, unknown: 1 << 40 }] {
+            assert_eq!(store_open_error(&e), want, "{e:?}");
+            let f = OpenFailure::from_store_error(&e);
+            assert!(f.newer_k2, "{e:?} is a newer K2's store");
+            assert_eq!(Unavailable::Failed(f).message(), want, "{e:?}: the line stands alone");
+        }
+    }
+
+    /// A newer store format also stands alone; any other open failure keeps
+    /// the "failed to open (…)" wrapper with the kit's words inside.
+    #[test]
+    fn only_a_newer_k2s_store_drops_the_failed_to_open_wrapper() {
+        use k2_mpc_base::store::StoreError;
+        let newer = Unavailable::Failed(OpenFailure::from_store_error(&StoreError::Newer { found: 9 })).message();
+        assert!(newer.starts_with("the docs store was written by a newer K2 (store format 9;"), "{newer}");
+        let db = Unavailable::Failed(OpenFailure::from_store_error(&StoreError::Db("disk I/O error".into()))).message();
+        assert_eq!(db, "live docs are off: the docs store failed to open (store: disk I/O error)");
     }
 
     /// Kit v0.19.0's chunked versions stay off: the first chunked version

@@ -26,7 +26,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { LiveDocView, closedText, liveStatusText, noteText, undoChord } from './LiveDocView'
-import type { LiveClientFrame, LiveClose, LiveServerFrame, LiveTransport, LiveWelcome } from '@/lib/docs-live-transport'
+import { LiveConnectError, parseClose, type LiveClientFrame, type LiveClose, type LiveServerFrame, type LiveTransport, type LiveWelcome } from '@/lib/docs-live-transport'
 import type { ServerScope } from '@/kessel/server-scope'
 
 const SELF = 'person:owner'
@@ -185,7 +185,40 @@ describe('LiveDocView', () => {
     await waitFor(() => expect(t.connects).toBe(2))
     await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('live'))
   })
+
+  it('shows the daemon’s own words when the box’s docs store is off', async () => {
+    // The daemon refuses the open (`closed` before `welcome`): the store a
+    // newer K2 wrote. Not "too large, or not text": the daemon's message.
+    const why =
+      "This box's document store was written by a newer K2 (it has native-engine documents, a Beta). " +
+      "This K2 can't open it: update K2 to open live documents again. " +
+      'Nothing in the store was changed, and the files on disk hold their latest text.'
+    const t = new RefusingTransport({ type: 'closed', reason: 'declined', retry: false, code: 'docs_unavailable', message: why })
+    render(<LiveDocView scope={scope} filePath="/w/notes.md" markdown createTransport={() => t} />)
+    await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('closed'))
+    expect(screen.getByTestId('live-doc-status').textContent).toBe(why)
+    expect(t.connects).toBe(1)
+  })
+
+  it('says live documents are off when the daemon gave no words', async () => {
+    const t = new RefusingTransport({ type: 'closed', reason: 'declined', retry: false, code: 'docs_unavailable' })
+    render(<LiveDocView scope={scope} filePath="/w/notes.md" markdown createTransport={() => t} />)
+    await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('closed'))
+    expect(screen.getByTestId('live-doc-status').textContent).toBe('Live documents are off on this box.')
+  })
 })
+
+/** A socket the daemon refuses: its `closed` frame comes before any
+ *  `welcome`, so `connect` rejects the way K2's transport does. */
+class RefusingTransport extends ScriptedTransport {
+  constructor(private frame: Record<string, unknown>) {
+    super('')
+  }
+  override async connect(): Promise<LiveWelcome> {
+    this.connects += 1
+    throw new LiveConnectError(parseClose(this.frame))
+  }
+}
 
 /** A socket that answers undo the way the daemon does: the change first (as
  *  a `change` frame, never filtered: it isn't an edit of this socket's), then
@@ -388,5 +421,10 @@ describe('the Live view’s words', () => {
   })
   it('says a moved file’s new name', () => {
     expect(closedText({ reason: 'moved', path: 'docs/b.md' })).toBe('This file was renamed to docs/b.md. Open it there.')
+  })
+  it('says why live documents are off in the daemon’s words, else plainly', () => {
+    expect(closedText({ reason: 'declined', code: 'docs_unavailable', message: 'update K2' })).toBe('update K2')
+    expect(closedText({ reason: 'declined', code: 'docs_unavailable' })).toBe('Live documents are off on this box.')
+    expect(closedText({ reason: 'declined' })).toBe('This file can’t be edited live (too large, or not text K2 can edit live).')
   })
 })

@@ -1,5 +1,7 @@
 //! Statistics.
 
+use crate::stage::CaptureStageStats;
+
 /// Receive statistics for one participant, cumulative since it was added.
 ///
 /// The four headline fields (`jitter_ms`, `loss_pct`, `concealed_pct`,
@@ -73,6 +75,9 @@ pub struct Stats {
     pub aec_erle_db: Option<f32>,
     /// Capture counters.
     pub capture: CaptureStats,
+    /// The capture stage's state and counters (`None` without a stage).
+    /// [`CaptureStageStats::bypassed`] is the sticky bypass flag.
+    pub capture_stage: Option<CaptureStageStats>,
     /// Received frames dropped because the receive queue was full.
     pub recv_queue_drops: u64,
     /// Received frames for participants that were never added.

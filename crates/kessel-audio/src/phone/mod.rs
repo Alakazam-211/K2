@@ -11,7 +11,7 @@
 //! with a fake on any OS (see the tests). The OS calls are in `ios` and
 //! `android`. Everything here runs on the engine's control thread.
 
-use crate::apm::ProcessingConfig;
+use crate::apm::ApmSettings;
 use crate::device::{ring_capacity, CaptureIo, PlayIo};
 use crate::engine::{is_default, lock, Ctrl, PhoneCmd, Shared};
 use crate::error::{AudioError, ErrorCode};
@@ -66,8 +66,8 @@ impl OsEffects {
     /// The processing left for sonora: what the caller asked for, less what
     /// the OS does. The high-pass filter goes with echo cancellation (the
     /// OS's filters its own input).
-    pub(crate) fn remaining(&self, asked: &ProcessingConfig) -> ProcessingConfig {
-        ProcessingConfig {
+    pub(crate) fn remaining(&self, asked: ApmSettings) -> ApmSettings {
+        ApmSettings {
             echo_cancellation: asked.echo_cancellation && !self.echo_cancellation,
             noise_suppression: if self.noise_suppression {
                 None
@@ -76,6 +76,12 @@ impl OsEffects {
             },
             gain_control: asked.gain_control && !self.gain_control,
             high_pass: asked.high_pass && !self.echo_cancellation,
+            // The OS's suppressor already runs before any stage.
+            stage_fallback_ns: if self.noise_suppression {
+                None
+            } else {
+                asked.stage_fallback_ns
+            },
         }
     }
 }

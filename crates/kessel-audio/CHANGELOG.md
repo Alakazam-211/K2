@@ -1,6 +1,84 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (unreleased)
+
+### Breaking
+
+- `ProcessingConfig` has a new field, `capture_stage`, and is now
+  `#[non_exhaustive]`: build it from `ProcessingConfig::default()` or
+  `ProcessingConfig::off()` and set fields, or use the new `with_` methods,
+  instead of a struct literal. This is the last field addition that breaks.
+- `ProcessingConfig` is no longer `Clone` or `PartialEq` (a stage is a boxed
+  trait object). Its `Debug` output shows the stage's latency.
+- `EngineConfig` is now `#[non_exhaustive]` too: build it from
+  `EngineConfig::default()` or `EngineConfig::null(device)` and chain the new
+  `with_backend`, `with_processing`, `with_capture_stage`, `with_encoder`,
+  `with_jitter`, `with_initial_ts48k`, `with_playout_buffer_ms`,
+  `with_capture_queue_frames`, `with_recv_queue_frames`,
+  `with_max_participants`, `with_levels_interval_ms`,
+  `with_speaking_threshold_dbov`, `with_device_poll_interval` and
+  `with_processing_poll`.
+- `Stats` has a new field, `capture_stage`, and `Event` a new variant,
+  `CaptureStage`; both were already `#[non_exhaustive]`.
+
+### Added
+
+- **The capture stage**: `ProcessingConfig::capture_stage` /
+  `with_capture_stage(Box<dyn CaptureStage>)`, the caller's own processing
+  (a noise-removal model, for example) after the high-pass filter, echo
+  cancellation and noise suppression and before AGC2 and its limiter.
+  Levels, VAD and DTX read the signal after the stage and AGC2.
+  `CaptureStage` is `process(&mut [f32; 480])` (10 ms of 48 kHz mono, in
+  place), a fixed `latency_samples()` (at most `MAX_STAGE_LATENCY_SAMPLES`,
+  one second) and `reset()`.
+- The stage's budget, enforced on the processing thread: a call of 9 ms or
+  more, or a 99th percentile over 6 ms across the last 100 calls, is a
+  strike. The stage is bypassed: the echo canceller's output goes on,
+  delayed by the stage's latency (a preallocated delay line), so the timing
+  never shifts. It is retried after 10 s of capture (reset, then warmed for
+  its latency) and bypassed for good on the third strike. A panic (in
+  `process` or `reset`) or a NaN or infinite sample is a fault: bypassed for
+  good, no retry.
+- `Stats::capture_stage: Option<CaptureStageStats>`: `active`, the sticky
+  `bypassed: Option<StageBypassReason>` (`Budget` or `Fault`), `strikes`,
+  `permanent`, `latency_samples`, block counts and the longest and 99th
+  percentile call times. `Event::CaptureStage` is sent when `active`,
+  `bypassed`, `strikes` or `permanent` change.
+- `reset()` is called once on the processing thread before the first
+  `process()` (when the engine builds its processing core, before audio
+  flows; a stage may allocate there), when the capture stream reopens (a
+  device change), after a capture gap of more than a second (a suspend, for
+  example) and before a retry; never twice with no `process()` between.
+- The step-down floor, `ProcessingConfig::stage_fallback_noise_suppression`
+  (default `Some(Moderate)`): with a stage and `noise_suppression: None`,
+  sonora's noise suppression stands in while the stage is bypassed (budget
+  or fault) and stops when a retry brings the stage back. The suppressor
+  runs on every block in its own sonora instance (so it is converged when
+  needed), delayed to the stage's latency; each switch crossfades over one
+  10 ms block. `CaptureStageStats::fallback_noise_suppression` says when it
+  stands in. Neither the switching nor the suppressor allocates per block
+  (counted). Its own delay (334 samples) comes out of the stage's latency,
+  so the timing holds for stages with at least 7 ms of latency.
+- `ProcessingConfig::with_noise_suppression`, `with_echo_cancellation`,
+  `with_gain_control`, `with_high_pass` and
+  `with_stage_fallback_noise_suppression`.
+
+### Timestamps
+
+- `EncodedFrame::ts48k` does not include the stage's latency: the stamps are
+  exactly what they are without a stage (and through a bypass). The audio in
+  a frame is `latency_samples` older than its stamp;
+  `CaptureStageStats::latency_samples` says how much.
+
+### Unchanged
+
+- With no stage set, the pipeline is bit for bit what 0.1.0 runs: one sonora
+  instance with the same configuration. With a stage, echo cancellation and
+  gain control run in two sonora instances with the stage between them.
+- The stage path allocates nothing after construction (tested with a
+  counting allocator, including bypasses, retries, resets and faults).
+
+## 0.1.0
 
 ### Added
 

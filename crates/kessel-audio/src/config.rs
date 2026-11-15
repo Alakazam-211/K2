@@ -98,7 +98,12 @@ impl Backend {
 }
 
 /// Everything [`crate::AudioEngine::start`] needs.
+///
+/// `#[non_exhaustive]`: start from [`EngineConfig::default`] (the system
+/// devices) or [`EngineConfig::null`] and chain the `with_` methods, or set
+/// fields on a `let mut`.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct EngineConfig {
     /// Devices.
     pub backend: Backend,
@@ -161,14 +166,106 @@ impl EngineConfig {
         }
     }
 
-    /// With a phone backend, sonora runs only what the OS doesn't.
+    /// Set [`backend`](Self::backend).
+    pub fn with_backend(mut self, backend: Backend) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// Set [`processing`](Self::processing).
+    pub fn with_processing(mut self, processing: ProcessingConfig) -> Self {
+        self.processing = processing;
+        self
+    }
+
+    /// Set the capture stage ([`ProcessingConfig::capture_stage`]), keeping
+    /// the rest of [`processing`](Self::processing).
+    pub fn with_capture_stage(mut self, stage: Box<dyn crate::CaptureStage>) -> Self {
+        self.processing.capture_stage = Some(stage);
+        self
+    }
+
+    /// Set [`encoder`](Self::encoder).
+    pub fn with_encoder(mut self, encoder: EncoderCfg) -> Self {
+        self.encoder = encoder;
+        self
+    }
+
+    /// Set [`jitter`](Self::jitter).
+    pub fn with_jitter(mut self, jitter: JitterConfig) -> Self {
+        self.jitter = jitter;
+        self
+    }
+
+    /// Set [`initial_ts48k`](Self::initial_ts48k).
+    pub fn with_initial_ts48k(mut self, ts48k: u32) -> Self {
+        self.initial_ts48k = ts48k;
+        self
+    }
+
+    /// Set [`playout_buffer_ms`](Self::playout_buffer_ms).
+    pub fn with_playout_buffer_ms(mut self, ms: u32) -> Self {
+        self.playout_buffer_ms = ms;
+        self
+    }
+
+    /// Set [`capture_queue_frames`](Self::capture_queue_frames).
+    pub fn with_capture_queue_frames(mut self, frames: usize) -> Self {
+        self.capture_queue_frames = frames;
+        self
+    }
+
+    /// Set [`recv_queue_frames`](Self::recv_queue_frames).
+    pub fn with_recv_queue_frames(mut self, frames: usize) -> Self {
+        self.recv_queue_frames = frames;
+        self
+    }
+
+    /// Set [`max_participants`](Self::max_participants).
+    pub fn with_max_participants(mut self, n: usize) -> Self {
+        self.max_participants = n;
+        self
+    }
+
+    /// Set [`levels_interval_ms`](Self::levels_interval_ms).
+    pub fn with_levels_interval_ms(mut self, ms: u32) -> Self {
+        self.levels_interval_ms = ms;
+        self
+    }
+
+    /// Set [`speaking_threshold_dbov`](Self::speaking_threshold_dbov).
+    pub fn with_speaking_threshold_dbov(mut self, dbov: f32) -> Self {
+        self.speaking_threshold_dbov = dbov;
+        self
+    }
+
+    /// Set [`device_poll_interval`](Self::device_poll_interval).
+    pub fn with_device_poll_interval(mut self, every: Duration) -> Self {
+        self.device_poll_interval = every;
+        self
+    }
+
+    /// Set [`processing_poll`](Self::processing_poll).
+    pub fn with_processing_poll(mut self, every: Duration) -> Self {
+        self.processing_poll = every;
+        self
+    }
+
+    /// With a phone backend, sonora runs only what the OS doesn't. A
+    /// capture stage stays: it is the caller's, not one of the OS's effects.
     #[cfg(any(
         test,
         all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
     ))]
     pub(crate) fn with_os_effects(mut self) -> Self {
         if let Some(fx) = self.backend.os_effects() {
-            self.processing = fx.remaining(&self.processing);
+            let left = fx.remaining(self.processing.settings());
+            let p = &mut self.processing;
+            p.echo_cancellation = left.echo_cancellation;
+            p.noise_suppression = left.noise_suppression;
+            p.gain_control = left.gain_control;
+            p.high_pass = left.high_pass;
+            p.stage_fallback_noise_suppression = left.stage_fallback_ns;
         }
         self
     }

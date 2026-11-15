@@ -3,9 +3,11 @@
 
 use kessel_audio::bytes::Bytes;
 use kessel_audio::{
-    AudioEngine, CaptureSource, DeviceChoice, DeviceSelection, EncodedFrame, EngineConfig,
-    ErrorCode, Event, FrameRx, NullDevice, ProcessingConfig, RecvFrame, FRAME_SAMPLES,
+    AudioEngine, CaptureSource, CaptureStage, CaptureStageStats, DeviceChoice, DeviceSelection,
+    EncodedFrame, EncoderCfg, EngineConfig, ErrorCode, Event, FrameRx, NullDevice,
+    ProcessingConfig, RecvFrame, StageBypassReason, FRAME_SAMPLES,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,11 +53,9 @@ fn realtime_null(input: Option<CaptureSource>) -> NullDevice {
 }
 
 fn config(dev: NullDevice) -> EngineConfig {
-    EngineConfig {
-        processing: ProcessingConfig::off(),
-        processing_poll: Duration::from_micros(500),
-        ..EngineConfig::null(dev)
-    }
+    EngineConfig::null(dev)
+        .with_processing(ProcessingConfig::off())
+        .with_processing_poll(Duration::from_micros(500))
 }
 
 fn collect(rx: &FrameRx, n: usize, timeout: Duration) -> Vec<EncodedFrame> {
@@ -106,10 +106,8 @@ fn capture_frames_step_by_960() {
 #[test]
 fn ts48k_wraps_around() {
     let start = u32::MAX - 5 * FRAME_SAMPLES as u32 + 1;
-    let cfg = EngineConfig {
-        initial_ts48k: start,
-        ..config(fast_null(Some(Box::new(talker(48_000, 10.0, 10.0)))))
-    };
+    let cfg =
+        config(fast_null(Some(Box::new(talker(48_000, 10.0, 10.0))))).with_initial_ts48k(start);
     let engine = AudioEngine::start(cfg).expect("start");
     let frames = collect(&engine.capture_frames(), 20, Duration::from_secs(10));
     assert_eq!(frames[0].ts48k, start);
@@ -301,10 +299,7 @@ fn a_call_between_two_engines() {
 
 #[test]
 fn push_never_blocks_and_counts_drops() {
-    let cfg = EngineConfig {
-        recv_queue_frames: 8,
-        ..config(fast_null(None))
-    };
+    let cfg = config(fast_null(None)).with_recv_queue_frames(8);
     let engine = AudioEngine::start(cfg).expect("start");
     engine.add_participant(1);
     let t0 = Instant::now();
@@ -341,10 +336,8 @@ fn unknown_participants_are_counted() {
 
 #[test]
 fn the_frame_queue_is_bounded() {
-    let cfg = EngineConfig {
-        capture_queue_frames: 5,
-        ..config(fast_null(Some(Box::new(talker(48_000, 100.0, 100.0)))))
-    };
+    let cfg = config(fast_null(Some(Box::new(talker(48_000, 100.0, 100.0)))))
+        .with_capture_queue_frames(5);
     let engine = AudioEngine::start(cfg).expect("start");
     std::thread::sleep(Duration::from_millis(500));
     let rx = engine.capture_frames();
@@ -409,10 +402,7 @@ fn null_devices_and_set_device() {
 
 #[test]
 fn invalid_config_is_refused() {
-    let cfg = EngineConfig {
-        playout_buffer_ms: 5,
-        ..config(fast_null(None))
-    };
+    let cfg = config(fast_null(None)).with_playout_buffer_ms(5);
     let err = AudioEngine::start(cfg).expect_err("5 ms playout buffer");
     assert_eq!(err.code, ErrorCode::InvalidConfig);
 }
@@ -430,4 +420,174 @@ fn shutdown_is_prompt() {
     let t0 = Instant::now();
     drop(engine);
     assert!(t0.elapsed() < Duration::from_secs(1));
+}
+
+// ---- The capture stage on the engine's threads ----
+
+/// Cues for [`TestStage`].
+#[derive(Default)]
+struct Ctl {
+    sleep_us: AtomicU64,
+    panic_on: AtomicU64,
+    calls: AtomicU64,
+    resets: AtomicU64,
+}
+
+/// A pass-through (480 samples of latency) that can be told to sleep or
+/// panic.
+struct TestStage {
+    prev: [f32; 480],
+    ctl: Arc<Ctl>,
+}
+
+impl CaptureStage for TestStage {
+    fn process(&mut self, block: &mut [f32; 480]) {
+        let n = self.ctl.calls.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.ctl.panic_on.load(Ordering::Relaxed) == n {
+            panic!("test stage panic (expected)");
+        }
+        let us = self.ctl.sleep_us.load(Ordering::Relaxed);
+        if us > 0 {
+            std::thread::sleep(Duration::from_micros(us));
+        }
+        std::mem::swap(block, &mut self.prev);
+    }
+    fn latency_samples(&self) -> usize {
+        480
+    }
+    fn reset(&mut self) {
+        self.ctl.resets.fetch_add(1, Ordering::Relaxed);
+        self.prev.fill(0.0);
+    }
+}
+
+/// A real-time engine with a [`TestStage`], DTX off (a frame every 20 ms).
+fn staged_engine() -> (AudioEngine, Arc<Ctl>) {
+    let ctl = Arc::new(Ctl::default());
+    let stage = TestStage {
+        prev: [0.0; 480],
+        ctl: ctl.clone(),
+    };
+    let engine = AudioEngine::start(
+        config(realtime_null(Some(Box::new(talker(48_000, 10.0, 10.0)))))
+            .with_encoder(EncoderCfg {
+                dtx: false,
+                ..EncoderCfg::default()
+            })
+            .with_capture_stage(Box::new(stage)),
+    )
+    .expect("start");
+    (engine, ctl)
+}
+
+/// The next capture-stage event within `within`.
+fn stage_event(engine: &AudioEngine, within: Duration) -> CaptureStageStats {
+    let events = engine.events();
+    let deadline = Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "no capture stage event");
+        if let Some(Event::CaptureStage(s)) = events.recv_timeout(left) {
+            return s;
+        }
+    }
+}
+
+fn assert_contiguous(frames: &[EncodedFrame]) {
+    for w in frames.windows(2) {
+        assert_eq!(
+            w[1].ts48k.wrapping_sub(w[0].ts48k),
+            FRAME_SAMPLES as u32,
+            "a gap in the capture"
+        );
+    }
+}
+
+/// Bar 4: a stage that takes 9 ms is bypassed on that block; capture goes
+/// on with no lost frame, no overrun and no underrun.
+#[test]
+fn a_9_ms_stage_is_bypassed_and_capture_keeps_flowing() {
+    let (engine, ctl) = staged_engine();
+    let rx = engine.capture_frames();
+    let mut frames = collect(&rx, 50, Duration::from_secs(5));
+    let before = engine.stats();
+    let st = before.capture_stage.expect("stage stats");
+    assert!(st.active && st.latency_samples == 480, "{st:?}");
+    let calls = ctl.calls.load(Ordering::Relaxed);
+    ctl.sleep_us.store(9_000, Ordering::Relaxed);
+    let s = stage_event(&engine, Duration::from_secs(2));
+    assert_eq!(s.bypassed, Some(StageBypassReason::Budget), "{s:?}");
+    assert!(!s.active && s.strikes == 1 && !s.permanent, "{s:?}");
+    // The step-down floor (on by default, noise suppression being off).
+    assert!(s.fallback_noise_suppression, "{s:?}");
+    // Bypassed on the slow call itself: no second one.
+    assert_eq!(ctl.calls.load(Ordering::Relaxed), calls + 1);
+    frames.extend(collect(&rx, 50, Duration::from_secs(5)));
+    assert_contiguous(&frames);
+    let after = engine.stats();
+    assert_eq!(
+        after.capture.capture_overruns, before.capture.capture_overruns,
+        "capture samples were dropped"
+    );
+    assert_eq!(
+        after.capture.playout_underruns, before.capture.playout_underruns,
+        "playback ran dry"
+    );
+    assert_eq!(after.capture.frames_dropped, 0);
+    let st = after.capture_stage.expect("stage stats");
+    assert_eq!(
+        st.bypassed,
+        Some(StageBypassReason::Budget),
+        "sticky: {st:?}"
+    );
+}
+
+/// A panic in the stage: bypassed for good (a fault), and capture goes on.
+#[test]
+fn a_panicking_stage_is_a_fault_and_capture_goes_on() {
+    let (engine, ctl) = staged_engine();
+    let rx = engine.capture_frames();
+    let mut frames = collect(&rx, 10, Duration::from_secs(5));
+    let calls = ctl.calls.load(Ordering::Relaxed);
+    ctl.panic_on.store(calls + 3, Ordering::Relaxed);
+    let s = stage_event(&engine, Duration::from_secs(2));
+    assert_eq!(s.bypassed, Some(StageBypassReason::Fault), "{s:?}");
+    assert!(!s.active && s.permanent, "{s:?}");
+    frames.extend(collect(&rx, 25, Duration::from_secs(5)));
+    assert_contiguous(&frames);
+    assert_eq!(
+        ctl.calls.load(Ordering::Relaxed),
+        calls + 3,
+        "never called again"
+    );
+}
+
+/// The stage is reset when the stream starts and after a capture gap of
+/// more than a second (here a suspend); nothing changes state, so no event.
+#[test]
+fn the_stage_is_reset_after_a_long_gap() {
+    let (engine, ctl) = staged_engine();
+    let rx = engine.capture_frames();
+    let _ = collect(&rx, 10, Duration::from_secs(5));
+    let at_start = ctl.resets.load(Ordering::Relaxed);
+    // Once on the processing thread before the first block; the stream
+    // opening right after has nothing new to clear.
+    assert_eq!(at_start, 1, "one reset before the first block");
+    engine.suspend();
+    std::thread::sleep(Duration::from_millis(1_300));
+    engine.resume();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while ctl.resets.load(Ordering::Relaxed) == at_start {
+        assert!(Instant::now() < deadline, "no reset after a 1.3 s gap");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let st = engine.stats().capture_stage.expect("stage stats");
+    assert!(st.active && st.bypassed.is_none(), "{st:?}");
+    let events = engine.events();
+    while let Some(e) = events.try_recv() {
+        assert!(
+            !matches!(e, Event::CaptureStage(_)),
+            "a stage event with nothing changed: {e:?}"
+        );
+    }
 }

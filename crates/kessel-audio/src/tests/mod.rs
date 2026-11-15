@@ -5,18 +5,24 @@
 #![cfg_attr(not(feature = "speech-tests"), allow(dead_code))]
 
 mod alloc;
+mod digest;
 mod hostile;
 #[cfg(feature = "speech-tests")]
 mod metrics;
 mod pause;
 #[cfg(feature = "speech-tests")]
 mod receive;
+mod stage;
+#[cfg(feature = "speech-tests")]
+mod stage_metrics;
+pub(crate) mod stages;
 
 use crate::apm::ProcessingConfig;
 use crate::codec::{OpusDec, OpusEnc};
 use crate::frame::{EncoderCfg, RecvFrame, BLOCK_SAMPLES, FRAME_SAMPLES};
 use crate::jitter::JitterConfig;
 use crate::pipeline::{Core, CoreConfig, Participant};
+use crate::stage::CaptureStage;
 use crate::stats::Stats;
 use crate::testkit::Rng;
 use bytes::Bytes;
@@ -42,9 +48,9 @@ pub(crate) fn exclusive_cpu() -> std::sync::RwLockWriteGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-pub(crate) fn core_cfg(processing: ProcessingConfig) -> CoreConfig {
+pub(crate) fn core_cfg(processing: impl Into<crate::apm::ApmSettings>) -> CoreConfig {
     CoreConfig {
-        processing,
+        processing: processing.into(),
         encoder: EncoderCfg::default(),
         jitter: JitterConfig::default(),
         initial_ts48k: 0,
@@ -61,6 +67,8 @@ pub(crate) fn aec_only() -> ProcessingConfig {
         noise_suppression: None,
         gain_control: false,
         high_pass: true,
+        capture_stage: None,
+        stage_fallback_noise_suppression: None,
     }
 }
 
@@ -153,7 +161,20 @@ pub(crate) fn run_core_inner(
     n_samples: usize,
     mic: Option<&[f32]>,
 ) -> CallRun {
-    let mut core = Core::new(cfg.clone()).expect("core");
+    run_core_staged(cfg, None, sched, n_samples, mic)
+}
+
+/// [`run_core_inner`] with a capture stage. `out` is on the capture
+/// timeline as produced: a stage's latency is not taken out (see
+/// [`align`]).
+pub(crate) fn run_core_staged(
+    cfg: &CoreConfig,
+    stage: Option<Box<dyn CaptureStage>>,
+    sched: &[(u64, Packet)],
+    n_samples: usize,
+    mic: Option<&[f32]>,
+) -> CallRun {
+    let mut core = Core::with_stage(cfg.clone(), stage).expect("core");
     core.add(Participant::new(FAR_ID, cfg).expect("participant"))
         .unwrap_or_else(|_| panic!("add participant"));
     let t0 = Instant::now();
@@ -197,6 +218,16 @@ pub(crate) fn run_core_inner(
         block_ns,
         stats,
     }
+}
+
+/// `x` moved `latency` samples earlier (the tail is zero), so a staged
+/// run's output lines up with its microphone input.
+pub(crate) fn align(x: &[f32], latency: usize) -> Vec<f32> {
+    let mut y = vec![0.0f32; x.len()];
+    if latency < x.len() {
+        y[..x.len() - latency].copy_from_slice(&x[latency..]);
+    }
+    y
 }
 
 /// Decode captured frames onto the capture timeline, concealing gaps.

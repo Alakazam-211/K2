@@ -3,13 +3,14 @@
 //! the mixer and the meters. The engine's processing thread drives it in
 //! 10 ms blocks; tests drive it directly with a simulated clock.
 
-use crate::apm::{Apm, ProcessingConfig};
+use crate::apm::{Apm, ApmSettings};
 use crate::codec::{has_lbrr, Decoded, OpusDec, OpusEnc};
 use crate::error::AudioError;
 use crate::events::{Level, Levels};
 use crate::frame::{dbov, EncodedFrame, EncoderCfg, RecvFrame, BLOCK_SAMPLES, FRAME_SAMPLES};
 use crate::jitter::{JitterBuffer, JitterConfig, Next};
 use crate::level::{LevelMeter, Vad};
+use crate::stage::CaptureStage;
 use crate::stats::{CaptureStats, Stats};
 use bytes::Bytes;
 use std::time::{Duration, Instant};
@@ -36,7 +37,9 @@ pub(crate) enum Pause {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CoreConfig {
-    pub(crate) processing: ProcessingConfig,
+    /// What sonora runs. The capture stage, if any, is handed to
+    /// [`Core::with_stage`] on its own: it can't be cloned.
+    pub(crate) processing: ApmSettings,
     pub(crate) encoder: EncoderCfg,
     pub(crate) jitter: JitterConfig,
     pub(crate) initial_ts48k: u32,
@@ -127,9 +130,23 @@ pub(crate) struct Core {
 }
 
 impl Core {
+    /// Without a capture stage (the tests' usual core).
+    #[cfg(test)]
     pub(crate) fn new(cfg: CoreConfig) -> Result<Core, AudioError> {
+        Self::with_stage(cfg, None)
+    }
+
+    /// Build the core, with the caller's capture stage if there is one.
+    /// Everything it needs on the audio path is allocated here.
+    pub(crate) fn with_stage(
+        cfg: CoreConfig,
+        stage: Option<Box<dyn CaptureStage>>,
+    ) -> Result<Core, AudioError> {
         let enc = OpusEnc::new(cfg.encoder)?;
-        let apm = Apm::new(&cfg.processing);
+        let apm = match stage {
+            None => Apm::new(cfg.processing),
+            Some(s) => Apm::with_stage(cfg.processing, s)?,
+        };
         let level_blocks = (cfg.levels_interval_ms / 10).max(1);
         Ok(Core {
             apm,
@@ -378,6 +395,17 @@ impl Core {
         }
     }
 
+    /// The capture stream restarted (a device opened or reopened) or had a
+    /// gap of more than a second: reset the capture stage.
+    pub(crate) fn reset_capture_stage(&mut self) {
+        self.apm.reset_stage();
+    }
+
+    /// True once after the capture stage's state changed (a bypass, a retry).
+    pub(crate) fn take_stage_changed(&mut self) -> bool {
+        self.apm.take_stage_changed()
+    }
+
     /// True once per levels interval; clears itself.
     pub(crate) fn take_levels_due(&mut self) -> bool {
         std::mem::take(&mut self.levels_due)
@@ -398,13 +426,14 @@ impl Core {
     }
 
     /// Fill `out` in place (no allocation while it has the capacity).
-    pub(crate) fn fill_stats(&self, out: &mut Stats) {
+    pub(crate) fn fill_stats(&mut self, out: &mut Stats) {
         out.participants.clear();
         for p in self.participants.iter() {
             out.participants.push((p.id, p.jb.stats()));
         }
         out.aec_delay_ms = self.apm.delay_ms();
         out.aec_erle_db = self.apm.erle_db();
+        out.capture_stage = self.apm.stage_stats();
         out.capture = self.capture_stats.clone();
         out.recv_queue_drops = self.recv_queue_drops;
         out.unknown_participant_frames = self.unknown_frames;

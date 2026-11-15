@@ -4,7 +4,7 @@
 //! it on the engine's real threads with a fake device that plays a clock.
 
 use super::{check_selection, Ends, Faults, Opened, OsEffects, Phone, PhoneIo};
-use crate::apm::ProcessingConfig;
+use crate::apm::{ApmSettings, ProcessingConfig};
 use crate::config::{Backend, EngineConfig};
 use crate::device::NullDevice;
 use crate::engine::{lock, AudioEngine, Ctrl, PhoneCmd, Shared};
@@ -426,22 +426,24 @@ fn the_os_picks_the_route() {
 
 #[test]
 fn sonora_runs_only_what_the_os_does_not() {
-    let all = ProcessingConfig::default();
-    assert_eq!(
-        OsEffects::default().remaining(&all),
-        ProcessingConfig::off()
-    );
+    let all = ProcessingConfig::default().settings();
+    let off = ProcessingConfig::off()
+        .with_stage_fallback_noise_suppression(None)
+        .settings();
+    // The OS suppresses noise, so no stage fallback either.
+    assert_eq!(OsEffects::default().remaining(all), off);
     let no_aec = OsEffects {
         echo_cancellation: false,
         ..OsEffects::default()
     };
     assert_eq!(
-        no_aec.remaining(&all),
-        ProcessingConfig {
+        no_aec.remaining(all),
+        ApmSettings {
             echo_cancellation: true,
             noise_suppression: None,
             gain_control: false,
             high_pass: true,
+            stage_fallback_ns: None,
         }
     );
     let none = OsEffects {
@@ -449,12 +451,35 @@ fn sonora_runs_only_what_the_os_does_not() {
         noise_suppression: false,
         gain_control: false,
     };
-    assert_eq!(none.remaining(&all), all);
+    assert_eq!(none.remaining(all), all);
     // What the caller turned off stays off.
+    assert_eq!(none.remaining(off), off);
+}
+
+#[test]
+fn a_capture_stage_survives_the_os_effects() {
+    struct Nop;
+    impl crate::CaptureStage for Nop {
+        fn process(&mut self, _: &mut [f32; 480]) {}
+        fn latency_samples(&self) -> usize {
+            0
+        }
+        fn reset(&mut self) {}
+    }
+    let cfg = EngineConfig {
+        backend: Backend::TestPhone(FakeIo(FakeOs::new(48_000).io(), OsEffects::default())),
+        processing: ProcessingConfig::default().with_capture_stage(Box::new(Nop)),
+        ..EngineConfig::null(NullDevice::default())
+    }
+    .with_os_effects();
+    // The OS suppresses noise, so there is no step-down floor either.
     assert_eq!(
-        none.remaining(&ProcessingConfig::off()),
+        cfg.processing.settings(),
         ProcessingConfig::off()
+            .with_stage_fallback_noise_suppression(None)
+            .settings()
     );
+    assert!(cfg.processing.capture_stage.is_some());
 }
 
 // ---- On the engine's threads ----

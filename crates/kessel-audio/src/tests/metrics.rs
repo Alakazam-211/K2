@@ -13,19 +13,19 @@ use super::*;
 use crate::apm::NoiseSuppressionStrength;
 use crate::testkit::*;
 
-const SYS_DELAY: usize = 60 * 48; // 60 ms
-const ECHO_DB: f64 = -24.0;
-const NEAR_DB: f64 = -26.0;
-const FLOOR_DB: f64 = -72.0;
+pub(super) const SYS_DELAY: usize = 60 * 48; // 60 ms
+pub(super) const ECHO_DB: f64 = -24.0;
+pub(super) const NEAR_DB: f64 = -26.0;
+pub(super) const FLOOR_DB: f64 = -72.0;
 
-struct Case {
-    rendered: Vec<f32>,
-    sched: Vec<(u64, Packet)>,
+pub(super) struct Case {
+    pub(super) rendered: Vec<f32>,
+    pub(super) sched: Vec<(u64, Packet)>,
 }
 
 /// Far-end talker over `far_range` seconds of a `total`-second call,
 /// received with a fixed 30 ms network delay; returns what gets played.
-fn far_case(cfg: &CoreConfig, seed: u64, total: f64, far_range: (f64, f64)) -> Case {
+pub(super) fn far_case(cfg: &CoreConfig, seed: u64, total: f64, far_range: (f64, f64)) -> Case {
     let mut rng = Rng::new(seed);
     let n = secs(total);
     let mut far = vec![0.0f32; n];
@@ -46,7 +46,7 @@ fn far_case(cfg: &CoreConfig, seed: u64, total: f64, far_range: (f64, f64)) -> C
     }
 }
 
-fn mic_from(parts: &[&[f32]], rng: &mut Rng) -> Vec<f32> {
+pub(super) fn mic_from(parts: &[&[f32]], rng: &mut Rng) -> Vec<f32> {
     let n = parts[0].len();
     let mut m = floor_noise(rng, n, FLOOR_DB);
     for p in parts {
@@ -66,7 +66,7 @@ fn duplex(cfg: &CoreConfig, case: &Case, mic: &[f32]) -> CallRun {
     run
 }
 
-fn report(name: &str, values: &[(String, f64)]) {
+pub(super) fn report(name: &str, values: &[(String, f64)]) {
     let line: Vec<String> = values.iter().map(|(k, v)| format!("{k}={v:.2}")).collect();
     eprintln!("[metrics] {name}: {}", line.join(" "));
 }
@@ -310,6 +310,8 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
         noise_suppression: Some(NoiseSuppressionStrength::Moderate),
         gain_control: false,
         high_pass: true,
+        capture_stage: None,
+        stage_fallback_noise_suppression: None,
     };
     let cfg = core_cfg(processing);
     let mut rng = Rng::new(4000);
@@ -328,9 +330,9 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
     let run = duplex(&cfg, &silent, &mic);
     // Reference: the same input with NS off, through the same codec.
     let plain = duplex(
-        &core_cfg(ProcessingConfig {
+        &core_cfg(crate::apm::ApmSettings {
             noise_suppression: None,
-            ..cfg.processing.clone()
+            ..cfg.processing
         }),
         &silent,
         &mic,
@@ -379,6 +381,8 @@ fn s6_agc2_levels_speech() {
         noise_suppression: None,
         gain_control: true,
         high_pass: true,
+        capture_stage: None,
+        stage_fallback_noise_suppression: None,
     };
     let cfg = core_cfg(processing);
     let room = &ROOMS[0];
@@ -442,7 +446,7 @@ fn cpu_per_block_within_bars() {
     let (run, apm_ns) = {
         let _alone = super::exclusive_cpu();
         let run = run_core_inner(&cfg, &case.sched, mic.len(), Some(&mic));
-        let mut apm = crate::apm::Apm::new(&cfg.processing);
+        let mut apm = crate::apm::Apm::new(cfg.processing);
         let mut out = [0.0f32; BLOCK_SAMPLES];
         let mut apm_ns = Vec::new();
         for (r, m) in case
@@ -507,6 +511,8 @@ fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
         noise_suppression: None,
         gain_control: true,
         high_pass: true,
+        capture_stage: None,
+        stage_fallback_noise_suppression: None,
     };
     let room = &ROOMS[0];
     let mut rng = Rng::new(6100);

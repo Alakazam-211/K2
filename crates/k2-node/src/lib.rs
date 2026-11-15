@@ -38,6 +38,7 @@ pub mod sim;
 pub mod slots;
 pub mod spool;
 pub mod statement;
+pub mod strays;
 pub mod status;
 pub mod sync;
 pub mod sysinfo;

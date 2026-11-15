@@ -1453,6 +1453,20 @@ impl Node {
         // The wall rule (C9): the unit or the holder's group is gone before
         // anything the job wrote is read (its output's last bytes, artifacts).
         self.proc_reap(&mut proc).await;
+        // macOS: what the job left running outside its group (a `setsid`
+        // fake daemon): the node's own processes under the job's folder,
+        // ended and named in the job's log (Linux: the leaf or the unit
+        // already holds everything).
+        if cfg!(target_os = "macos") {
+            let (root, grace) = (dirs.root.clone(), self.opts.cancel_grace.min(Duration::from_secs(5)));
+            if let Ok(lines) = tokio::task::spawn_blocking(move || crate::strays::reap_under(&root, grace)).await {
+                if !lines.is_empty() {
+                    crate::nlog!("job {job}: ended {} process(es) it left outside its group", lines.len());
+                    let text = format!("[k2-node] ended {} process(es) the job left running outside its group: {}\n", lines.len(), lines.join("; "));
+                    let _ = journal.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, text.as_bytes());
+                }
+            }
+        }
         let _ = tail_tx.send(TailCmd::Finish);
         for p in tailers {
             let _ = tokio::time::timeout(Duration::from_secs(60), p).await;

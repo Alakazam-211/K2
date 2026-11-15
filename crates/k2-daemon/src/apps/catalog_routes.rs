@@ -153,8 +153,8 @@ pub(crate) fn reasons(e: &Entry, f: &Facts) -> Vec<Why> {
         out.push(Why::new(code, text, None));
     }
     if f.pro == Some(false) {
-        let at = url_of(&e.default_label).map(|u| u.trim_start_matches("https://").to_string()).unwrap_or_else(|| format!("{}.<your server>.k2.dev", e.default_label));
-        out.push(Why::new(sc::PRO_REQUIRED, format!("An address like {at} needs K2 Connect Pro: see https://k2.dev/dashboard"), None));
+        let at = url_of(&e.default_label).map(|u| u.trim_start_matches("https://").to_string()).unwrap_or_else(|| k2_core::hosts::box_host(format_args!("{}.<your server>", e.default_label)));
+        out.push(Why::new(sc::PRO_REQUIRED, format!("An address like {at} needs K2 Connect Pro: see {}", k2_core::hosts::DASHBOARD_URL), None));
     }
     out
 }
@@ -418,7 +418,7 @@ fn check_address(who: &Who, cat: &Catalog, params: &HashMap<String, String>, f: 
     let res = resolve_address(e, &id, &ws.id, param(params, "address"));
     let tier = match f.pro {
         Some(true) => json!({ "pro": true }),
-        Some(false) => json!({ "pro": false, "code": sc::PRO_REQUIRED, "hint": "a K2 address needs K2 Connect Pro (https://k2.dev/dashboard)" }),
+        Some(false) => json!({ "pro": false, "code": sc::PRO_REQUIRED, "hint": format!("a K2 address needs K2 Connect Pro ({})", k2_core::hosts::DASHBOARD_URL) }),
         None => json!({ "pro": null, "hint": "Pro is checked when you deploy" }),
     };
     Ok(match res {

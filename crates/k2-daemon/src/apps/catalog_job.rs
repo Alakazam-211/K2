@@ -236,7 +236,11 @@ pub(crate) fn pro_refusal(msg: &str) -> Refusal {
         "pro_check_failed"
     };
     let hint = if code == sc::PRO_REQUIRED {
-        "An address like chat.<your server>.k2.dev needs K2 Connect Pro on this server: see https://k2.dev/dashboard".to_string()
+        format!(
+            "An address like {} needs K2 Connect Pro on this server: see {}",
+            k2_core::hosts::box_host("chat.<your server>"),
+            k2_core::hosts::DASHBOARD_URL
+        )
     } else {
         msg.to_string()
     };
@@ -661,7 +665,7 @@ fn step_address(h: &dyn Hooks, j: &mut JobRow, who: &Who) -> Out {
             return fail(r.code, r.hint);
         }
         if let Err(e) = h.point_suite_label(&j.address, Some(front)) {
-            return fail("address_failed", format!("The address {}.<your server>.k2.dev couldn't be pointed at {}: {e}", j.address, j.app_id));
+            return fail("address_failed", format!("The address {} couldn't be pointed at {}: {e}", k2_core::hosts::box_host(format_args!("{}.<your server>", j.address)), j.app_id));
         }
         let rec = jobs::SuiteLabel { label: j.address.clone(), app_id: j.app_id.clone(), front_port: front as i64, bound_at: deploy::now(), bound_by: j.actor.clone() };
         let bound = {

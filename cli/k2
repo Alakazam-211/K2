@@ -151,10 +151,15 @@ _k2_refuse_if_airgap() {
     fi
 }
 
-# Workspace dot-dir for a project root: .k2/ preferred when present,
-# .k2so/ is the 0.x default (Q2 dual-compat; full flip lands pre-1.0.0).
+# Workspace dot-dir for a project root, by the daemon's rule
+# (k2_core::workspace_dir::workspace_dot_dir): .k2/ when it is a folder,
+# else .k2so/ when that is a folder (an older workspace keeps its name),
+# else .k2/ for a workspace that has neither yet. A FILE named .k2 in the
+# way gives .k2so/.
 _ws_dot_dir() {
-    if [ -d "$1/.k2" ]; then echo "$1/.k2"; else echo "$1/.k2so"; fi
+    if [ -d "$1/.k2" ]; then echo "$1/.k2"
+    elif [ -d "$1/.k2so" ] || [ -e "$1/.k2" ]; then echo "$1/.k2so"
+    else echo "$1/.k2"; fi
 }
 
 # One `note:` line about an address, on stderr (exit code unaffected).
@@ -24945,7 +24950,7 @@ cmd_sessions_spawn() {
 }
 
 # List every session this project's filesystem knows about, by
-# walking $PROJECT/.k2so/sessions/ and summarizing each directory.
+# walking the sessions folder in its dot-dir and summarizing each directory.
 # No daemon round-trip — archive dirs are the source of truth.
 #
 # Output columns: session id, total archive bytes, segment count,

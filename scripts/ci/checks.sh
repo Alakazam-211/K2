@@ -83,6 +83,7 @@ part_web() {
     # catalog": k2-core's contract:: freshness test).
     step "generated files are fresh (regen.sh)";   bash scripts/regen.sh --check --no-cargo
     step "k2 knows the name it was called by";     bash tests/cli/called_as.sh
+    step "k2 picks a workspace's dot-dir as the daemon does"; bash tests/cli/ws_dot_dir.sh
     step "the CLI name rewrite, on a copy";        bash tests/garden/cli-name-flip.sh
     step "k2 zen widget CLI (no daemon)";          bash tests/cli/zen_widget_offline.sh
     step "k2 on a virtual desktop never acts as the owner"; bash tests/cli/virtual_desktop_owner_guard.sh

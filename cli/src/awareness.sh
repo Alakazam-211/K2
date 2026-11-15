@@ -110,7 +110,7 @@ cmd_sessions_spawn() {
 }
 
 # List every session this project's filesystem knows about, by
-# walking $PROJECT/.k2so/sessions/ and summarizing each directory.
+# walking the sessions folder in its dot-dir and summarizing each directory.
 # No daemon round-trip — archive dirs are the source of truth.
 #
 # Output columns: session id, total archive bytes, segment count,

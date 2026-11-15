@@ -12,18 +12,44 @@ use std::time::Duration;
 /// `(workspace_id, text)`.
 pub type Sink = Box<dyn Fn(&str, &str) + Send + Sync>;
 
-static SINK: RwLock<Option<Sink>> = RwLock::new(None);
+type Shared = std::sync::Arc<dyn Fn(&str, &str) + Send + Sync>;
+
+static SINK: RwLock<Option<Shared>> = RwLock::new(None);
+
+// Under test, the thread that installs a sink also keeps its own copy, read
+// first: libtest runs every test on its own thread, so a test's alerts from
+// its own thread reach its own sink even when a test running beside it
+// installs another (the process-wide slot was last-writer-wins: an audit
+// test's alert went to a reach test's sink in the shuffled soak). Alerts
+// raised on other threads (a supervisor, a worker) still use the
+// process-wide slot, as before.
+#[cfg(test)]
+thread_local! {
+    static THREAD_SINK: std::cell::RefCell<Option<Shared>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Replace the delivery (tests). `None` restores the real one.
 pub fn set_sink(s: Option<Sink>) {
+    let s: Option<Shared> = s.map(Shared::from);
+    #[cfg(test)]
+    THREAD_SINK.with(|t| *t.borrow_mut() = s.clone());
     *SINK.write().unwrap_or_else(|e| e.into_inner()) = s;
+}
+
+/// The installed sink, if any: this thread's own first (tests).
+fn sink() -> Option<Shared> {
+    #[cfg(test)]
+    if let Some(s) = THREAD_SINK.with(|t| t.borrow().clone()) {
+        return Some(s);
+    }
+    SINK.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// Leave the workspace's agent an inbox note, **no wake** (its App access
 /// changed, prd-agent-app-permissions-v1 §5). With a test sink installed
 /// the note goes there as `"[note] <title>\n\n<text>"`.
 pub fn note(workspace_id: &str, title: &str, text: &str) {
-    if let Some(s) = SINK.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(s) = sink() {
         s(workspace_id, &format!("[note] {title}\n\n{text}"));
         return;
     }
@@ -41,7 +67,7 @@ pub fn note(workspace_id: &str, title: &str, text: &str) {
 /// Deliver `text` to the App's owning workspace agent. Never blocks the
 /// caller: the real delivery (which may wake the agent) runs on a thread.
 pub fn notify(workspace_id: &str, text: &str) {
-    if let Some(s) = SINK.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(s) = sink() {
         s(workspace_id, text);
         return;
     }

@@ -3405,7 +3405,21 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
             }
             CliResponse::ok_json(with_moved_from(body, &resolved))
         }
+        Err(e) if e == overlay::CARD_NOT_PENDING => expired_or_not_pending(&resolved.conversation_id, &card_id),
         Err(e) => card_error(e),
+    }
+}
+
+/// The 409 for an answer to a plain card that is no longer pending. A card
+/// whose time ran out (the expiry sweep closed it before this answer, so
+/// check-on-touch found nothing due) says so, "This card expired at …", as
+/// an action card does; any other close keeps the generic words.
+fn expired_or_not_pending(conversation_id: &str, card_id: &str) -> CliResponse {
+    match overlay::get_thread_doc(conversation_id, card_id) {
+        Ok(Some(doc)) if doc.choice.as_ref().is_some_and(|c| c.status == "expired") => {
+            error_json("409 Conflict", "card_not_pending", closed_card_words(&doc))
+        }
+        _ => card_error(overlay::CARD_NOT_PENDING.to_string()),
     }
 }
 

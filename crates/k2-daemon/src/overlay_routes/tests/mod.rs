@@ -2172,8 +2172,12 @@ fn expired_cards_close_on_the_sweep_and_refuse_late_answers() {
     assert_eq!(f.len(), 1, "one frame for the touched card: {f:?}");
     assert_eq!(f[0].doc.as_ref().expect("doc").choice.as_ref().expect("c").status, "expired");
 
-    // The sweep (as the daemon loop runs it) closes the other one.
-    assert!(sweep_expired_cards(overlay::now_secs()) >= 1);
+    // The sweep (as the daemon loop runs it) closes the other one. No count
+    // check: once any in-process daemon test in this binary has started the
+    // 60 s loop, that loop may run this same sweep during the wait above
+    // (the shuffled soak, 11-15); the card's state and its one frame are
+    // what the sweep owes either way.
+    sweep_expired_cards(overlay::now_secs());
     assert_eq!(card_status(&handle, &swept_id), "expired");
     assert_eq!(card_status(&handle, &lasting_id), "pending", "time left");
     let f = frames_for(&mut rx, &swept_id);
@@ -2186,6 +2190,11 @@ fn expired_cards_close_on_the_sweep_and_refuse_late_answers() {
     ] {
         let r = dispatch_post(route, &HashMap::new(), body.to_string().as_bytes());
         assert_eq!(r.status, "409 Conflict", "{route}: {}", r.body);
+        if route == "/cli/thread/answer" {
+            // An answer after the sweep says the card expired, not the
+            // generic "already answered or dismissed".
+            assert_eq!(json_body(&r)["error"]["hint"].as_str().map(|h| h.starts_with("This card expired at ")), Some(true), "{}", r.body);
+        }
     }
     let injects = recorded_injects();
     assert!(

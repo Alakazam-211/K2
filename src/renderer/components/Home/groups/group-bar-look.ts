@@ -1,6 +1,6 @@
 // Home groups: the look's numbers in one place (K2 Design's home-groups
 // notes). The bar's glyph size is ONE constant (Rosson chose 12 px over the
-// mock's 8 px, 2026-11-14), and the space between glyphs is the nav
+// mock's 8 px, 2026-11-14, then 15% bigger, 14 px, 2026-11-15), and the space between glyphs is the nav
 // footer's own gap between "Add Agent" and « (Rosson, 2026-11-14). The
 // target size, the line weight, the bare numeral and the CSS tokens
 // (`--k2-group-icon`, `--k2-group-gap`, `--k2-group-target`, set on the
@@ -9,8 +9,9 @@
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { NAV_COLLAPSE_GAP_PX } from '@/components/Sidebar/SidebarCollapseButton'
 
-/** The bar's glyph size (px). Rosson's pick: 12 (the mock drew 8). */
-export const GROUP_BAR_ICON_PX = 12
+/** The bar's glyph size (px). Rosson's pick: 12 (the mock drew 8), then
+ *  15% bigger: 12 × 1.15 = 13.8, drawn at 14 for whole pixels. */
+export const GROUP_BAR_ICON_PX = 14
 
 /** The CSS custom property the bar's root carries its glyph size in. */
 export const GROUP_BAR_ICON_VAR = '--k2-group-icon'
@@ -28,7 +29,7 @@ export const GROUP_BAR_TARGET_MIN_PX = 20
 
 /** Each group's square click target (px). The targets touch, never
  *  overlap, so a click lands on exactly one group, and the glyphs sit
- *  GROUP_BAR_GAP_PX apart: glyph + gap, at least the minimum (12 + 8 = 20). */
+ *  GROUP_BAR_GAP_PX apart: glyph + gap, at least the minimum (14 + 8 = 22). */
 export const GROUP_BAR_TARGET_PX = Math.max(GROUP_BAR_TARGET_MIN_PX, GROUP_BAR_ICON_PX + GROUP_BAR_GAP_PX)
 
 /** The space between targets (px): none while glyph + gap reaches the
@@ -50,9 +51,10 @@ export function groupGlyphStroke(px: number): number {
 }
 
 /** The bare numeral a group with no icon shows: 9 px bold beside 8 px
- *  glyphs, 11 px bold beside 12 px ones. */
+ *  glyphs, 11 px bold beside 12 px ones, 12 px bold beside 14 px ones. */
 export function groupNumeralPx(px: number): number {
-  return px <= 8 ? 9 : 11
+  if (px <= 8) return 9
+  return px < 14 ? 11 : 12
 }
 
 /** The Groups dialog: up to 880 wide, kept 16 px from the window's sides,

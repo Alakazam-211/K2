@@ -92,7 +92,7 @@ describe('the group icon row', () => {
       'miter',
       'currentColor',
     ])
-    expect(GROUP_BAR_ICON_PX).toBe(12)
+    expect(GROUP_BAR_ICON_PX).toBe(14)
     expect(work.className).toContain('h-[var(--k2-group-target)] w-[var(--k2-group-target)]')
     expect(groupButton('Play').querySelector('[data-group-dot]')?.textContent).toBe('2')
     expect(groupButton('Play').querySelector('svg')).toBeNull()

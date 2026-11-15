@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // Home groups: the bar's look rules (K2 Design's mock and Rosson's calls),
-// pinned so a later change has to mean it: the glyph-size token (12 px,
+// pinned so a later change has to mean it: the glyph-size token (14 px,
 // Rosson), the space between glyphs (the footer's own Add Agent | « gap),
 // the hit targets (touching, never overlapping, never under 20 px), the
 // focus ring and the edge fades.
@@ -59,10 +59,12 @@ function props(over: Partial<HomeGroupBarProps> = {}): HomeGroupBarProps {
 afterEach(() => cleanup())
 
 describe('the glyph-size token', () => {
-  it('is one constant, 12 px (Rosson), drawn at the app’s stroke; 8 px keeps a 1 px line', () => {
-    expect(GROUP_BAR_ICON_PX).toBe(12)
+  it('is one constant, 14 px (Rosson: 12 px, then 15% bigger), drawn at the app’s stroke; 8 px keeps a 1 px line', () => {
+    expect(GROUP_BAR_ICON_PX).toBe(14)
+    expect(groupGlyphStroke(14)).toBe(K2_ICON_STROKE)
     expect(groupGlyphStroke(12)).toBe(K2_ICON_STROKE)
     expect(groupGlyphStroke(8)).toBe(3) // 3 / 24 × 8 = a 1 px line
+    expect(groupNumeralPx(14)).toBe(12)
     expect(groupNumeralPx(12)).toBe(11)
     expect(groupNumeralPx(8)).toBe(9)
   })
@@ -76,7 +78,7 @@ describe('the glyph-size token', () => {
     const svg = bar.querySelector('svg[data-group-icon="briefcase"]') as SVGElement
     expect([svg.getAttribute('width'), svg.getAttribute('stroke-width')]).toEqual([String(GROUP_BAR_ICON_PX), String(K2_ICON_STROKE)])
     const n = bar.querySelector('[data-group-numeral]') as HTMLElement
-    expect([n.textContent, n.style.fontSize, n.className.includes('font-bold')]).toEqual(['2', '11px', true])
+    expect([n.textContent, n.style.fontSize, n.className.includes('font-bold')]).toEqual(['2', '12px', true])
   })
 })
 
@@ -88,7 +90,7 @@ describe('spacing and hit targets', () => {
     expect(GROUP_BAR_TARGET_GAP_PX).toBeGreaterThanOrEqual(0)
     // Glyph to glyph: target − glyph + the space between targets.
     expect(GROUP_BAR_TARGET_PX - GROUP_BAR_ICON_PX + GROUP_BAR_TARGET_GAP_PX).toBe(NAV_COLLAPSE_GAP_PX)
-    expect([GROUP_BAR_TARGET_PX, GROUP_BAR_TARGET_GAP_PX]).toEqual([20, 0])
+    expect([GROUP_BAR_TARGET_PX, GROUP_BAR_TARGET_GAP_PX]).toEqual([22, 0])
   })
 
   it('every target is a square button of the target token with the app’s focus ring; no fill', () => {

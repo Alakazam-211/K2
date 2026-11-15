@@ -8,8 +8,12 @@
   `#[non_exhaustive]`: build it from `ProcessingConfig::default()` or
   `ProcessingConfig::off()` and set fields, or use the new `with_` methods,
   instead of a struct literal. This is the last field addition that breaks.
-- `ProcessingConfig` is no longer `Clone` or `PartialEq` (a stage is a boxed
-  trait object). Its `Debug` output shows the stage's latency.
+- `ProcessingConfig` is no longer `Clone` or `PartialEq`, and no longer
+  `Sync`, `UnwindSafe` or `RefUnwindSafe`: it holds the stage, a
+  `Box<dyn CaptureStage>`, and `CaptureStage` is only `Send + 'static`. It
+  is still `Send`. Its `Debug` output shows the stage's latency.
+  (`EngineConfig`'s auto traits are unchanged: its null device's closures
+  already made it `Send` only.)
 - `EngineConfig` is now `#[non_exhaustive]` too: build it from
   `EngineConfig::default()` or `EngineConfig::null(device)` and chain the new
   `with_backend`, `with_processing`, `with_capture_stage`, `with_encoder`,
@@ -19,7 +23,12 @@
   `with_speaking_threshold_dbov`, `with_device_poll_interval` and
   `with_processing_poll`.
 - `Stats` has a new field, `capture_stage`, and `Event` a new variant,
-  `CaptureStage`; both were already `#[non_exhaustive]`.
+  `CaptureStage`; both were already `#[non_exhaustive]`, so these are not
+  breaking. cargo-semver-checks 0.51.0 against 0.1.0 (run as if this were a
+  minor release) finds exactly the breaks above: `struct_marked_non_exhaustive`
+  (`ProcessingConfig`, `EngineConfig`), `derive_trait_impl_removed`
+  (`ProcessingConfig`: `Clone`, `PartialEq`) and `auto_trait_impl_removed`
+  (`ProcessingConfig`: `Sync`, `UnwindSafe`, `RefUnwindSafe`).
 
 ### Added
 

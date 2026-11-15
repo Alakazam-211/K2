@@ -195,8 +195,8 @@ describe('AppsSection', () => {
 
   it('Details opens Published’s details sheet for the App’s service row', async () => {
     serve(
-      { p1: [app({ appId: 'shop' })] },
-      [{ name: 'shop', cmd: 'npm start', cwd: '/p', port: 3000, expose: 'tunnel', desired: 'running', status: 'running', pid: 7, url: 'https://shop.rosson.k2.dev', target: null, error: null, lastExitCode: null, kind: 'cmd', skinRoot: '' }],
+      { p1: [app({ appId: 'shop', serviceId: 'svc-shop' })] },
+      [{ id: 'svc-shop', name: 'shop', cmd: 'npm start', cwd: '/p', port: 3000, expose: 'tunnel', desired: 'running', status: 'running', pid: 7, url: 'https://shop.rosson.k2.dev', target: null, error: null, lastExitCode: null, kind: 'cmd', skinRoot: '' }],
     )
     renderInRoom(room, <AppsSection projectId="p1" />)
     fireEvent.click(await screen.findByRole('button', { name: 'Details for shop' }))

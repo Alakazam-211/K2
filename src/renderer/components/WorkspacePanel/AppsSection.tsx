@@ -118,13 +118,14 @@ export function AppsSection({ projectId }: { projectId: string }): React.JSX.Ele
     }
   }, [projectId])
 
-  // Details is Published's sheet for the App's service row (its name is
-  // the App id). An App with no service row yet opens Settings → Apps.
+  // Details is Published's sheet for the App's service row, matched by the
+  // App's serviceId (Published itself leaves that row out). An App whose
+  // row isn't listed opens Settings → Apps.
   const openDetails = useCallback(
-    async (appId: string): Promise<void> => {
+    async (serviceId: string | null): Promise<void> => {
       try {
-        const raw = await daemonCliGet<unknown>(scope, 'publish/list', { project: projectId })
-        const svc = parsePublishList(raw).find((s) => s.name.toLowerCase() === appId.toLowerCase())
+        const raw = serviceId ? await daemonCliGet<unknown>(scope, 'publish/list', { project: projectId }) : null
+        const svc = parsePublishList(raw).find((s) => s.id === serviceId)
         if (svc) {
           setDetails(svc)
           return
@@ -205,7 +206,7 @@ export function AppsSection({ projectId }: { projectId: string }): React.JSX.Ele
                   key={app.appId}
                   app={app}
                   onOpen={(url) => void openSite(scope, url)}
-                  onDetails={() => void openDetails(app.appId)}
+                  onDetails={() => void openDetails(app.serviceId)}
                 />
               ))}
             </div>

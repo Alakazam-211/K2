@@ -5,6 +5,9 @@
 //
 // Each `apps[]` row (k2-daemon apps/routes.rs `app_summary`) carries:
 //   appId     the App's name (there is no separate display name)
+//   serviceId its runtime row in Published (`published_services.id`, the
+//             `id` of a GET /cli/publish/list service). Made with the App
+//             and moved with it (hand over, park), so it holds in every state
 //   label     the run path in words ("Guarded (container)"), optional
 //   state     installing | running | stopped | crashlooping | failed |
 //             parked | waiting_engine | restarting
@@ -17,6 +20,7 @@ export const APP_DEPLOY_EXAMPLE = 'k2 app deploy'
 
 export interface WorkspaceApp {
   appId: string
+  serviceId: string | null
   label: string | null
   state: string
   stateReason: string | null
@@ -46,6 +50,7 @@ export function parseWorkspaceApps(raw: unknown): WorkspaceApp[] {
     if (!appId) continue
     out.push({
       appId,
+      serviceId: str(o.serviceId),
       label: str(o.label),
       state: str(o.state) ?? '',
       stateReason: str(o.stateReason),
@@ -54,6 +59,15 @@ export function parseWorkspaceApps(raw: unknown): WorkspaceApp[] {
     })
   }
   return out
+}
+
+/** The Published service ids that belong to this workspace's Apps (from
+ *  the same GET /cli/app/list answer). Published leaves those rows out:
+ *  they live in Apps, and an App's Details still opens their sheet. */
+export function appServiceIds(raw: unknown): Set<string> {
+  const ids = new Set<string>()
+  for (const app of parseWorkspaceApps(raw)) if (app.serviceId) ids.add(app.serviceId)
+  return ids
 }
 
 function hostOf(url: string): string {

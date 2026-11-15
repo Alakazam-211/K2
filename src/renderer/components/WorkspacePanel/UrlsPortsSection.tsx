@@ -39,6 +39,7 @@ import {
   type PublishLeftover,
 } from './urls-ports'
 import { scopeMayWrite, scopedKey } from '@/kessel/server-scope'
+import { appServiceIds } from './workspace-apps'
 
 const DETAILS_BTN =
   'px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0'
@@ -51,7 +52,10 @@ const DETAILS_BTN =
 // K2 Connect (TunnelUrlsPanel). Nested-URL state is shared with that
 // panel via `useTunnelUrls`. Services come from GET /cli/publish/list
 // when the daemon speaks `publish-services`; older remotes hide
-// Start/Stop and still show attributed nested URLs.
+// Start/Stop and still show attributed nested URLs. A service that belongs
+// to one of this workspace's Apps (its id is the App's serviceId, from
+// GET /cli/app/list?workspace=) is left out: it lives in the Apps section,
+// whose Details opens the same sheet.
 
 function statusDotClass(status: string): string {
   if (status === 'running') return 'bg-[var(--color-status-ok)]'
@@ -94,6 +98,9 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const [services, setServices] = useState<PublishedService[] | undefined>(
     supportsPublish ? undefined : [],
   )
+  // The service ids this workspace's Apps own. undefined until the first
+  // read answers; empty when the daemon can't say (then every row shows).
+  const [appIds, setAppIds] = useState<Set<string> | undefined>(undefined)
   const [busyName, setBusyName] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [leftovers, setLeftovers] = useState<PublishLeftover[] | undefined>(undefined)
@@ -111,16 +118,23 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   useEffect(() => {
     if (!supportsPublish || !projectId) {
       setServices([])
+      setAppIds(new Set())
       setListError(null)
       return
     }
     let cancelled = false
     setServices(undefined)
+    setAppIds(undefined)
     const refresh = async (): Promise<void> => {
       try {
-        const raw = await daemonCliGet<unknown>(scope, 'publish/list', { project: projectId })
+        const [raw, apps] = await Promise.all([
+          daemonCliGet<unknown>(scope, 'publish/list', { project: projectId }),
+          // No Apps answer (an older daemon, a refusal): hide nothing.
+          daemonCliGet<unknown>(scope, 'app/list', { workspace: projectId }).catch(() => null),
+        ])
         if (!cancelled) {
           setServices(parsePublishList(raw))
+          setAppIds(appServiceIds(apps))
           setListError(null)
         }
       } catch (err) {
@@ -128,6 +142,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
           // Keep prior rows when we have them; never coerce a first failure
           // into empty-success “ask your agent…”.
           setServices((prev) => prev ?? [])
+          setAppIds((prev) => prev ?? new Set())
           setListError(publishListErrorMessage(err))
         }
       }
@@ -223,13 +238,17 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     : leftoverAttributed
   const serviceList = services ?? []
   const byo = byoWorkspaceTargets(mine, serviceList)
-  const serviceRows = sortedServices(serviceList)
+  // An App's own row shows in Apps, not here; its Details opens the sheet.
+  // Until the Apps answer is in, show none rather than flash an App's row.
+  const serviceRows = appIds
+    ? sortedServices(serviceList.filter((s) => !(s.id && appIds.has(s.id))))
+    : []
   const nestedRows = sortedTargets(byo)
   const claimable = unattributedCount(allTargets)
   const hint = unattributedHint(claimable)
   const hasAny = serviceRows.length + nestedRows.length > 0
   const rowCount = serviceRows.length + nestedRows.length
-  const loadingServices = supportsPublish && services === undefined
+  const loadingServices = supportsPublish && (services === undefined || appIds === undefined)
   const loadingSubs = leftoversMissing && subs === undefined
   const loadingLeftovers = leftovers === undefined && !leftoversMissing && !leftoversError
   const unavailable = !supportsPublish && leftoversMissing && subs === null

@@ -123,6 +123,9 @@ export type PublishedServiceKind = 'cmd' | 'skin'
 
 /** One row from GET `/cli/publish/list` after wire normalization. */
 export interface PublishedService {
+  /** `published_services.id`: what an App's `serviceId` points at (never
+   *  the name). Absent only in hand-built rows. */
+  id?: string | null
   name: string
   cmd: string
   cwd: string
@@ -197,7 +200,9 @@ export function parsePublishedService(raw: unknown): PublishedService | null {
   const o = raw as Record<string, unknown>
   const name = asString(o.name).trim()
   if (!name) return null
+  const id = asStringOrNull(o.id)
   return {
+    ...(id ? { id } : {}),
     name,
     cmd: asString(o.cmd),
     cwd: asString(o.cwd),

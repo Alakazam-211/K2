@@ -21,6 +21,8 @@ import { ConnectedAgentsSection } from './ConnectedAgentsSection'
 import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
 import { WorkspacePhonePushBell } from './WorkspacePhonePushToggle'
 import { scopedKey } from '@/kessel/server-scope'
+import { InboxIcon, WikiIcon } from '@/components/icons/K2Icons'
+import { DRAWER_HEADER_GLYPH_PX } from './drawer-glyph'
 
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
 // now uses `invoke<number>('k2_inbox_count', ...)` so the only
@@ -151,12 +153,7 @@ export default function WorkspacePanel(): React.JSX.Element {
                 ? 'Open the workspace knowledge base graph'
                 : `Switch this window to ${room.scope.label} and open the workspace knowledge base graph`}
             >
-              <svg className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="6" cy="6" r="2.5" />
-                <circle cx="18" cy="8" r="2.5" />
-                <circle cx="10" cy="18" r="2.5" />
-                <path d="M8 7.5l7 0.5M8 16.5l8-7" />
-              </svg>
+              <WikiIcon size={DRAWER_HEADER_GLYPH_PX} className="text-[var(--color-accent)] flex-shrink-0" />
               <span className="text-[11px] text-[var(--color-text-primary)]">View Wiki</span>
             </button>
           )}
@@ -174,10 +171,7 @@ export default function WorkspacePanel(): React.JSX.Element {
             onClick={() => openAgentPane('__workspace__', activeProject.path)}
           >
             <div className="flex items-center gap-2">
-              <svg className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M3 9h18" />
-              </svg>
+              <InboxIcon size={DRAWER_HEADER_GLYPH_PX} className="text-[var(--color-accent)] flex-shrink-0" />
               <span className="text-[11px] text-[var(--color-text-primary)]">View Inbox</span>
             </div>
           </div>

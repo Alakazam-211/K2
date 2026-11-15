@@ -32,6 +32,8 @@
 //     `paperclip`, `refresh-cw` keep round caps (their strokes are curves).
 //   Plus, Minus (a video tile's zoom in / out)
 //     Lucide 1.58 `plus`, `minus`, squared.
+//   Api (the Workspace drawer's API section)
+//     Lucide 1.73 `braces`, squared caps (the braces themselves are curves).
 //   Gardens
 //     Not here: K2's own brush ensō, `ZenIcon` (components/Zen/ZenIcon.tsx).
 //
@@ -138,6 +140,16 @@ export function WikiIcon(props: K2IconProps = {}): React.JSX.Element {
       <path d="M12 6v14" />
       <path d="M8 8v12" />
       <path d="M4 4v16" />
+    </svg>
+  )
+}
+
+/** API: Lucide `braces` ({ }), squared caps. */
+export function ApiIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('api', props)}>
+      <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1" />
+      <path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />
     </svg>
   )
 }

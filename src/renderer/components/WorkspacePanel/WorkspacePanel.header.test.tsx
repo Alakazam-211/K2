@@ -6,6 +6,7 @@
 // switches the window to that server, then opens the Wiki there.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, screen } from '@testing-library/react'
+import { invoke } from '@tauri-apps/api/core'
 import { createStore } from 'zustand/vanilla'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => 0) }))
@@ -68,14 +69,14 @@ const hostB = {
   token: 'tok-b',
 } as unknown as ConnectHost
 
-function render(isPrimary: boolean, scope?: ServerScope): void {
+function render(isPrimary: boolean, scope?: ServerScope, shown: ProjectWithWorkspaces = project): void {
   const tabs = createStore(() => ({ openAgentPane: vi.fn() }))
   const room = testRoom({
     tabs,
     isPrimary,
     scope: isPrimary ? undefined : scope ?? fakeScope('b.k2.dev'),
     localCommands: isPrimary,
-    projects: [project],
+    projects: [shown],
     activeProjectId: 'p1',
     key: isPrimary ? 'primary' : 'b',
   })
@@ -222,5 +223,34 @@ describe('Workspace tab header', () => {
     expect(Array.from(screen.getByTestId('workspace-panel-header').children)).toEqual([
       screen.getByTestId('workspace-panel-bell'),
     ])
+  })
+})
+
+// Rosson 2026-11-15: the drawer's header glyphs are K2's own icons (style
+// A3: 24 grid, K2 stroke, square caps), not the old hand-drawn ones.
+describe('Workspace tab header icons', () => {
+  it('View Wiki uses WikiIcon in the accent colour at the header-glyph size', () => {
+    render(true)
+    const button = screen.getByText('View Wiki').closest('button') as HTMLElement
+    const icon = button.querySelector('svg[data-k2-icon="wiki"]')
+    expect(icon).not.toBeNull()
+    expect(icon?.getAttribute('stroke-linecap')).toBe('square')
+    expect(icon?.getAttribute('width')).toBe('12')
+    expect(icon?.getAttribute('class')).toContain('text-[var(--color-accent)]')
+    expect(button.querySelectorAll('svg')).toHaveLength(1)
+    expect(button.querySelector('circle')).toBeNull()
+  })
+
+  it('View Inbox uses InboxIcon, not a rounded square', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => (cmd === 'k2_inbox_count' ? 2 : 0))
+    render(true, undefined, { ...project, agentMode: 'off' } as unknown as ProjectWithWorkspaces)
+    const label = await screen.findByText('View Inbox')
+    const row = label.parentElement as HTMLElement
+    const icon = row.querySelector('svg[data-k2-icon="inbox"]')
+    expect(icon).not.toBeNull()
+    expect(icon?.getAttribute('width')).toBe('12')
+    expect(icon?.getAttribute('class')).toContain('text-[var(--color-accent)]')
+    expect(row.querySelector('rect[rx]')).toBeNull()
+    vi.mocked(invoke).mockImplementation(async () => 0)
   })
 })

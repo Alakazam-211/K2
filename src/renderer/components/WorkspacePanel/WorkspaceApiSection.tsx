@@ -11,6 +11,8 @@ import {
 } from '@/components/Settings/sections/api-keys-api'
 import { scopeMayWrite, scopedKey } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
+import { ApiIcon } from '@/components/icons/K2Icons'
+import { DRAWER_HEADER_GLYPH_PX } from './drawer-glyph'
 
 type ListResponse = { keys?: ApiKeyRow[] }
 
@@ -94,18 +96,7 @@ export function WorkspaceApiSection({
           >
             <path d="M2 1 L6 4 L2 7" />
           </svg>
-          <svg
-            className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M3 8h10M8 3v10" />
-            <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
-          </svg>
+          <ApiIcon size={DRAWER_HEADER_GLYPH_PX} className="text-[var(--color-accent)] flex-shrink-0" />
           API
           {activeCount > 0 && (
             <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">

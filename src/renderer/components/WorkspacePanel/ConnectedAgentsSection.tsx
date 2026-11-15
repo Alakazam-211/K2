@@ -6,6 +6,11 @@ import { SectionManageCog } from './SectionManageCog'
 import { scopedKey } from '@/kessel/server-scope'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { parseConnectionRows, remoteConnRowView, type ConnListRow } from './connected-agents-rows'
+import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import { AgentsIcon } from '@/components/icons/K2Icons'
+import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
+import type { ProjectWithWorkspaces } from '@/stores/projects'
+import { DRAWER_HEADER_GLYPH_PX, DRAWER_ROW_AVATAR_PX } from './drawer-glyph'
 
 /** Collapsible Connected Agents — only workspaces with a present connection. */
 export function ConnectedAgentsSection({ projectId }: { projectId: string }): React.JSX.Element {
@@ -80,23 +85,7 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
           >
             <path d="M2 1 L6 4 L2 7" />
           </svg>
-          <svg
-            className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
-          >
-            <circle cx="8" cy="2.5" r="1" />
-            <path d="M8 3.5v1.5" />
-            <rect x="3" y="5" width="10" height="9" rx="2" />
-            <circle cx="6.25" cy="9" r="1" />
-            <circle cx="9.75" cy="9" r="1" />
-            <path d="M6.5 12h3" />
-          </svg>
+          <AgentsIcon size={DRAWER_HEADER_GLYPH_PX} className="text-[var(--color-accent)] flex-shrink-0" />
           Connected Agents
           {count > 0 && (
             <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">
@@ -130,7 +119,7 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
                     key={row.address || `remote-${i}`}
                     title={view.title}
                     detail={view.detail}
-                    federated
+                    avatar={<RemoteConnAvatar address={row.address ?? ''} name={view.title} gone={view.gone} />}
                     gone={view.gone}
                     // Re-add lives in Settings → Connections (owner/admin).
                     onClick={
@@ -150,7 +139,14 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
                   key={row.projectId || `local-${i}`}
                   title={title}
                   detail={row.reachable === false ? 'unreachable' : 'connected'}
-                  color={local?.color}
+                  avatar={
+                    <LocalConnAvatar
+                      project={local}
+                      projectId={row.projectId}
+                      name={title}
+                      fetchIcon={room.isPrimary}
+                    />
+                  }
                   onClick={
                     row.projectId ? () => activateProject(row.projectId as string) : undefined
                   }
@@ -164,33 +160,72 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
   )
 }
 
+/** A workspace on this room's server: its own avatar (picture, initial,
+ *  colour), the shape the look gives every avatar. In a room on another
+ *  server the path means nothing to the window's daemon, so only the
+ *  listing's picture paints (no icon lookup). */
+function LocalConnAvatar({
+  project,
+  projectId,
+  name,
+  fetchIcon,
+}: {
+  project: ProjectWithWorkspaces | undefined
+  projectId: string | undefined
+  name: string
+  fetchIcon: boolean
+}): React.JSX.Element {
+  return (
+    <span className="flex-shrink-0 flex" data-conn-avatar="local">
+      <ProjectAvatar
+        projectPath={project?.path ?? `conn:${projectId ?? name}`}
+        projectName={project?.name ?? name}
+        projectColor={project?.color || 'var(--color-neutral)'}
+        projectId={project?.id}
+        iconUrl={project?.iconUrl ?? null}
+        size={DRAWER_ROW_AVATAR_PX}
+        fetchIcon={fetchIcon && !!project}
+      />
+    </span>
+  )
+}
+
+/** An agent on another server: the picture and colour the Home nav keeps
+ *  for its address (`agent::host`), else its initial on the accent. A gone
+ *  one (0159) is neutral and dimmed. */
+function RemoteConnAvatar({ address, name, gone }: { address: string; name: string; gone: boolean }): React.JSX.Element {
+  const picture = useHomeRowAvatar(address)
+  const color = useHomeRowColor(address)
+  return (
+    <span className={`flex-shrink-0 flex ${gone ? 'opacity-60 grayscale' : ''}`} data-conn-avatar="remote">
+      <ProjectAvatar
+        projectPath={`home:${address}`}
+        projectName={name}
+        projectColor={gone ? 'var(--color-neutral)' : color ?? 'var(--color-accent)'}
+        iconUrl={picture}
+        size={DRAWER_ROW_AVATAR_PX}
+        fetchIcon={false}
+      />
+    </span>
+  )
+}
+
 function ConnRow({
   title,
   detail,
-  color,
-  federated,
+  avatar,
   gone,
   onClick,
 }: {
   title: string
   detail: string
-  color?: string | null
-  federated?: boolean
+  avatar: React.ReactNode
   gone?: boolean
   onClick?: () => void
 }): React.JSX.Element {
   const inner = (
     <>
-      <span
-        className="w-2 h-2 flex-shrink-0"
-        style={{
-          backgroundColor: gone
-            ? 'var(--color-neutral)'
-            : federated
-              ? 'var(--color-accent)'
-              : color || 'var(--color-neutral)',
-        }}
-      />
+      {avatar}
       <span className={`min-w-0 flex-1 ${gone ? 'opacity-60' : ''}`}>
         <span
           className={`block text-[11px] truncate ${gone ? 'text-[var(--color-text-muted)] line-through' : 'text-[var(--color-text-secondary)]'}`}

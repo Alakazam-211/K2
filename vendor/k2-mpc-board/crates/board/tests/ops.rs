@@ -573,7 +573,7 @@ fn a_meta_that_changes_nothing_is_a_noop() {
 #[test]
 fn reactions_change_only_the_callers_entries() {
     let mut b = base();
-    // The caller's view lacks the emoji it can't show, and P2's entry under "x".
+    // The caller's view lacks the emoji it can't show, and `P2`'s entry under "x".
     let op = set(
         &b,
         "s-2",
@@ -585,7 +585,7 @@ fn reactions_change_only_the_callers_entries() {
         Some(&parse(&format!(
             "{{\"new\":[\"{P2}\"],\"x\":[\"{P2}\"],\"y\":[\"{P1}\"]}}"
         ))),
-        "someone else's reaction went, or P1's stayed"
+        "someone else's reaction went, or the caller's old one stayed"
     );
     b.validate(&Limits::V1).expect("sorted and unique");
 }

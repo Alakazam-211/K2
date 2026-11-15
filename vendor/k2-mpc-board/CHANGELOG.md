@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.13
+
+Pairs with kit v0.19.0 (`b8db699e`, the public cut). The bridge's lock and kit pin text move to it;
+the pack's code doesn't change. The kit's changes for a pack are additive with defaults (container
+parents and derived values, the view schema's nesting and time unit, a claim's element addresses
+at its end, presence view address and time position, two keyed-watch frames, chunked version
+storage off by default); the bridge uses none of them. Public text: the reaction test names its
+people by const, and `scripts/check-labels.sh` also blocks parity-row, finding and run labels,
+branch names and engine codes.
+
 ## v0.1.12 (2026-11-12)
 
 Pairs with kit v0.18.0 (`efc6377e`, the public cut). The bridge's lock and kit pin text move to it;

@@ -1006,6 +1006,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/voice/rooms/rename",
         "/cli/voice/rooms/close",
         "/cli/voice/join",
+        // DM calls (Home chat): a passport gets the handler's refusal
+        // (agents never start, answer or cancel a DM call).
+        "/cli/voice/call/decline",
+        "/cli/voice/call/ring",
+        "/cli/voice/call/cancel",
+        "/cli/voice/call/leave",
         "/cli/voice/session/leave",
         "/cli/voice/session/state",
         "/cli/voice/session/stats",

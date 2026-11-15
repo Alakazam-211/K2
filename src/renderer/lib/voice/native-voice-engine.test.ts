@@ -12,6 +12,7 @@ import {
   parseEngineError,
   parseParticipants,
   parseRecording,
+  parseRecordingControls,
   parseSpeaking,
   type NativeEvents,
   type NativeVoiceBridge,
@@ -256,6 +257,18 @@ describe('rejections', () => {
     await expect(new NativeVoiceEngine(missing.bridge).setRecordingRights(rights)).rejects.toBeInstanceOf(NativeVoiceError)
     const refused = fakeBridge({}, { [`${PLUGIN_COMMAND_PREFIX}set_recording_rights`]: { code: 'not_in_call', detail: null } })
     await expect(new NativeVoiceEngine(refused.bridge).setRecordingRights(rights)).rejects.toMatchObject({ code: 'not_in_call' })
+  })
+
+  it("reads plugin 0.7.0's Record and Stop from Sew (source sew, record_unavailable) as the same two answers", () => {
+    const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
+    const fromSew = sew.recording.controls.from_sew
+    expect(fromSew.event).toBe(`${EVENT_PREFIX}${RECORDING_CONTROLS_EVENT}`)
+    expect(parseRecordingControls(fromSew.neither)).toEqual({ canRecord: false, canStop: false })
+    expect(parseRecordingControls(fromSew.may_record)).toEqual({ canRecord: true, canStop: false })
+    expect(parseRecordingControls(fromSew.may_stop)).toEqual({ canRecord: false, canStop: true })
+    // Sew's hint never changes can_record: Record shows, a press may be refused.
+    expect(parseRecordingControls(fromSew.hinted)).toEqual({ canRecord: true, canStop: false })
+    expect(() => parseRecordingControls({ source: 'sew' })).toThrow(/recording_controls/)
   })
 
   it('a join answer with no call id fails loudly', async () => {

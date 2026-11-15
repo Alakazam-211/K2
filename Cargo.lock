@@ -4330,18 +4330,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "is"
-version = "0.11.1"
-source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
-dependencies = [
- "crc",
- "serde",
- "str0m-proto",
- "subtle",
- "tracing",
-]
-
-[[package]]
 name = "is-docker"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7715,7 +7703,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8968,8 +8956,8 @@ dependencies = [
 
 [[package]]
 name = "sew-call-client"
-version = "0.6.1"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=85f5c87f93b301823629d920da5bc31015bd64b0#85f5c87f93b301823629d920da5bc31015bd64b0"
+version = "0.7.0"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=8b5a2ff4f5b6393e8a678690093b563ca4b25973#8b5a2ff4f5b6393e8a678690093b563ca4b25973"
 dependencies = [
  "bytes",
  "futures-util",
@@ -8990,9 +8978,9 @@ dependencies = [
  "sew-e2ee",
  "sew-lk-compat",
  "sew-lkproto",
- "sew-proto 0.9.2",
+ "sew-proto 0.10.0",
+ "sew-str0m",
  "sha1",
- "str0m",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
@@ -9027,8 +9015,9 @@ dependencies = [
 
 [[package]]
 name = "sew-e2ee"
-version = "0.9.2"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=85f5c87f93b301823629d920da5bc31015bd64b0#85f5c87f93b301823629d920da5bc31015bd64b0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d54c3b9d24a7914ead6fbbf61248c1ef206bd39870313a1284535f5fb9d610f0"
 dependencies = [
  "aes-gcm 0.10.3",
  "ed25519-dalek",
@@ -9042,7 +9031,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-mls-crypto",
- "sew-proto 0.9.2",
+ "sew-proto 0.10.0",
  "sha2 0.10.9",
  "subtle",
  "thiserror 2.0.18",
@@ -9053,8 +9042,9 @@ dependencies = [
 
 [[package]]
 name = "sew-lk-compat"
-version = "0.9.2"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=85f5c87f93b301823629d920da5bc31015bd64b0#85f5c87f93b301823629d920da5bc31015bd64b0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57795b3a378b9dda195cc79dcd3b4d4ff57ebd98dad9cb915e8aec4d38297d89"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -9071,8 +9061,9 @@ dependencies = [
 
 [[package]]
 name = "sew-lkproto"
-version = "0.9.2"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=85f5c87f93b301823629d920da5bc31015bd64b0#85f5c87f93b301823629d920da5bc31015bd64b0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f78eb1e54786be091a0fd4c8959b76bb0b5bca5ed9491487e55027f3a6a4c06"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -9082,8 +9073,9 @@ dependencies = [
 
 [[package]]
 name = "sew-mls-crypto"
-version = "0.9.2"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=85f5c87f93b301823629d920da5bc31015bd64b0#85f5c87f93b301823629d920da5bc31015bd64b0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "165b8b655d26455c8f2408fd540a7e530593423ff86020aae14e10cf66cabe86"
 dependencies = [
  "aes-gcm 0.10.3",
  "chacha20poly1305 0.10.1",
@@ -9116,13 +9108,48 @@ dependencies = [
 
 [[package]]
 name = "sew-proto"
-version = "0.9.2"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=85f5c87f93b301823629d920da5bc31015bd64b0#85f5c87f93b301823629d920da5bc31015bd64b0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd75acff72b892e52b2818fffa940f5d77eefd533252241f9656f7588c65bb09"
 dependencies = [
  "chrono",
  "schemars 1.2.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sew-str0m"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a16762c4263b8aec30bfba7137ed981b135d62d18d4ed19b9ae6ca4eff978f8"
+dependencies = [
+ "arrayvec",
+ "base64ct",
+ "combine",
+ "dimpl",
+ "fastrand",
+ "sctp-proto",
+ "serde",
+ "sew-str0m-is",
+ "str0m-aws-lc-rs",
+ "str0m-proto",
+ "subtle",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "sew-str0m-is"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c37c49ef298165ce7375398eca3bb0b354bf7a2187959f10ad463f0071ef59ed"
+dependencies = [
+ "crc",
+ "serde",
+ "str0m-proto",
+ "subtle",
+ "tracing",
 ]
 
 [[package]]
@@ -9519,29 +9546,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
-name = "str0m"
-version = "0.24.0"
-source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
-dependencies = [
- "arrayvec",
- "base64ct",
- "combine",
- "dimpl",
- "fastrand",
- "is",
- "sctp-proto",
- "serde",
- "str0m-aws-lc-rs",
- "str0m-proto",
- "subtle",
- "time",
- "tracing",
-]
-
-[[package]]
 name = "str0m-aws-lc-rs"
-version = "0.6.0"
-source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ec90dfd6ceb4b82131b494e21ee555ad35d565bdf9ab4077fd67924a0e8a5fe"
 dependencies = [
  "aws-lc-rs",
  "dimpl",
@@ -9551,8 +9559,9 @@ dependencies = [
 
 [[package]]
 name = "str0m-proto"
-version = "0.7.0"
-source = "git+https://github.com/Alakazam-211/str0m?rev=c57e931dc443f8fde7941ab587f38cb5bdba054d#c57e931dc443f8fde7941ab587f38cb5bdba054d"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6a9a46a0f013add7a1d0d53d9bc92c85c1ac95243140fe0d073fb6e57c99b63"
 dependencies = [
  "base64ct",
  "dimpl",
@@ -10095,8 +10104,8 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-sew-voice"
-version = "0.6.1"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=85f5c87f93b301823629d920da5bc31015bd64b0#85f5c87f93b301823629d920da5bc31015bd64b0"
+version = "0.7.0"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=8b5a2ff4f5b6393e8a678690093b563ca4b25973#8b5a2ff4f5b6393e8a678690093b563ca4b25973"
 dependencies = [
  "base64 0.22.1",
  "cpal",
@@ -10104,7 +10113,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-call-client",
- "sew-proto 0.9.2",
+ "sew-proto 0.10.0",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",

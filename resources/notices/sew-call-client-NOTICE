@@ -16,4 +16,10 @@ The `rust-crypto` feature's DTLS/SRTP provider (src/rust_crypto.rs) follows the 
 crate of str0m (https://github.com/algesten/str0m, Copyright Martin Algesten, MIT OR
 Apache-2.0).
 
+Its WebRTC stack is sew-str0m and sew-str0m-is, Alakazam Labs' fork of str0m
+(https://github.com/Alakazam-211/str0m, MIT OR Apache-2.0, str0m's copyright and licence texts
+kept), with str0m's own str0m-proto and str0m-aws-lc-rs from crates.io (MIT OR Apache-2.0).
+Those two crates.io packages carry no licence file; their text is str0m's LICENSE-MIT.txt at
+tag 0.25.0 (https://github.com/algesten/str0m/blob/0.25.0/LICENSE-MIT.txt).
+
 Not affiliated with or endorsed by LiveKit, Inc.

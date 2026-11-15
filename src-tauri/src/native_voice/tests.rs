@@ -465,16 +465,47 @@ fn the_join_body_asks_for_the_credential_and_sends_no_e2ee() {
     }
 }
 
-/// A DM call's room (`dm:<conversation id>`) goes as `{dm}`, and says whether
-/// this build's call client takes Sew's `CallJoinResponse` as is (not yet:
-/// the daemon unwraps `.voice` for it).
+/// A DM call's room (`dm:<conversation id>`) goes as `{dm}`, and says this
+/// build's call client takes Sew's `CallJoinResponse` as is (plugin 0.7.0):
+/// the daemon passes it through unchanged.
 #[test]
 fn a_dm_call_joins_by_dm_and_says_how_its_answer_is_read() {
     let req = JoinRequest { target: "h".into(), room: "dm:900".into(), muted: true, deafened: false, rejoin: None, recording_notice: None };
     assert_eq!(
         join_body(&req),
-        json!({"dm": "900", "join": {"call_credential": true, "self_mute": true, "self_deaf": false}, "callAnswer": false})
+        json!({"dm": "900", "join": {"call_credential": true, "self_mute": true, "self_deaf": false}, "callAnswer": true})
     );
+}
+
+/// The daemon's answer to a DM call join with `callAnswer: true`: Sew's
+/// `CallJoinResponse` (`{call, created, voice, recording}`) unchanged under
+/// `join`. The plugin reads the voice answer and its call credential from
+/// `voice` and keeps the call; the DM is the room.
+#[test]
+fn a_dm_call_answer_passed_through_unchanged_is_read() {
+    let voice = daemon_answer()["join"].clone();
+    let channel = voice["state"]["channel_id"].clone();
+    let body = json!({
+        "ok": true,
+        "callId": "vc_1",
+        "dm": channel,
+        "join": {
+            "call": {"id": "48831765147549800", "channel_id": channel, "started_by": "48831765147549699", "state": "ringing",
+                     "participant_ids": [], "rings": []},
+            "created": true,
+            "voice": voice,
+            "recording": null
+        }
+    });
+    let a = answer_from(200, None, &serde_json::to_vec(&body).expect("json"), &login("https://lab.k2.dev")).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(a.call_credential().expect("credential").token, CALL_CRED);
+    assert_eq!(a.join.token, MEDIA_TOKEN);
+    let call = a.dm_call().expect("a DM call's answer keeps the call");
+    assert_eq!(call.call_id.to_string(), "48831765147549800");
+    assert_eq!(call.channel_id.to_string(), channel.as_str().expect("id"));
+    assert!(call.created);
+    let dbg = format!("{a:?}");
+    assert!(!dbg.contains(CALL_CRED) && !dbg.contains(MEDIA_TOKEN), "{dbg}");
 }
 
 /// The person's answer to a recording notice reaches Sew's join as given, and

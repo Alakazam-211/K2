@@ -91,7 +91,7 @@ parking_lot = "0.12"
 
 # Native voice calls (prd-k2-voice-rooms-v1 §14), behind the `native-voice`
 # feature below. Named by version; the root Cargo.toml's [patch.crates-io] says
-# where it comes from. It brings cpal, str0m and openmls, which is why it is
+# where it comes from. It brings cpal, str0m (sew-str0m) and openmls, which is why it is
 # optional (the 0.46.4 rule above; vs-live V40), though on by default. K2 leaves the plugin's
 # `keyring-store` feature off: its Linux Secret Service backend can't build beside
 # K2's `sync-secret-service`, and K2 passes its own store over its own keyring.
@@ -101,7 +101,7 @@ parking_lot = "0.12"
 # for this OS (AVFoundation, VideoToolbox and ScreenCaptureKit on macOS; Media
 # Foundation and Windows Graphics Capture; V4L2 and the portal on Linux). The
 # commands it adds need `sew-voice:video` (capabilities-native-voice/).
-tauri-plugin-sew-voice = { version = "=0.6.1", optional = true, features = ["video"] }
+tauri-plugin-sew-voice = { version = "=0.7.0", optional = true, features = ["video"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

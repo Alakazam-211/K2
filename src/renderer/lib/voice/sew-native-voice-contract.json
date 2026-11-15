@@ -140,7 +140,7 @@
   },
   "moved": {
     "event": "sew-voice://state",
-    "cause": "a moderator moved the member (Sew's voice_server_updated): the call goes on in the destination; room is the destination voice channel's id (the DM call's id when the destination is a call), target is unchanged, the state may be unchanged",
+    "cause": "a moderator moved the member (Sew's voice_server_updated): the call goes on in the destination; room is the destination channel's id (the voice channel's, or the DM's when the destination is a DM call), target is unchanged, the state may be unchanged",
     "payload": { "state": "connected", "target": "k2:acme", "room": "48831765147549710" }
   },
   "recording": {
@@ -186,6 +186,15 @@
         "required_two": { "recording_id": "48831765147549722", "auto": false, "started_by": "48831765147549700", "my_consent": "granted", "participants": [{ "member_id": "48831765147549699", "consent": "granted", "recorded": true }, { "member_id": "48831765147549700", "consent": "granted", "recorded": true }], "recorder_present": true, "trigger": "required", "required": true },
         "required_alone": { "recording_id": "48831765147549722", "auto": false, "started_by": "48831765147549700", "my_consent": "granted", "participants": [{ "member_id": "48831765147549699", "consent": "granted", "recorded": true }, { "member_id": "48831765147549700", "consent": "granted", "recorded": true }], "recorder_present": true, "trigger": "required", "required": true, "can_stop": true },
         "state_snapshot": { "state": "connected", "participants": [{ "member_id": "48831765147549699", "is_self": true, "muted": false, "deafened": false, "server_muted": false, "server_deafened": false }], "call_id": "r_fakeroomfakeroomfakeroomfa", "target": "k2:acme", "room": "48831765147549698", "recording_controls": { "can_record": true, "can_stop": false } }
+      },
+      "from_sew": {
+        "cause": "plugin 0.7.0: a Sew server that computes each person's Record and Stop sends them to the call, and the plugin passes them on in the same recording_controls event, state recording_controls and recording event can_record / can_stop, with source sew (absent means host: worked out from set_recording_rights as above, against a Sew that sends none). They are both false until Sew's first value (shortly after the call connects: neither) and whenever the call is not connected or reconnecting; Sew's value wins over any rights the host gave (set_recording_rights still answers null and is kept for a Sew that sends none); a move clears the value until the destination's arrives; reconnecting keeps it. record_unavailable (recording_capacity or recorder_unavailable) is Sew's hint while can_record is true: Record is allowed but would be refused for now (hinted). The state command writes recording_controls whenever source is sew (state_snapshot, before the first value).",
+        "event": "sew-voice://recording_controls",
+        "neither": { "can_record": false, "can_stop": false, "source": "sew" },
+        "may_record": { "can_record": true, "can_stop": false, "source": "sew" },
+        "may_stop": { "can_record": false, "can_stop": true, "source": "sew" },
+        "hinted": { "can_record": true, "can_stop": false, "record_unavailable": "recording_capacity", "source": "sew" },
+        "state_snapshot": { "state": "connected", "participants": [{ "member_id": "48831765147549699", "is_self": true, "muted": false, "deafened": false, "server_muted": false, "server_deafened": false }], "call_id": "r_fakeroomfakeroomfakeroomfa", "target": "k2:acme", "room": "48831765147549698", "recording_controls": { "can_record": false, "can_stop": false, "source": "sew" } }
       }
     }
   }

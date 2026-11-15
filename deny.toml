@@ -165,15 +165,12 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # Every git dependency is pinned by commit (rev = <full sha>);
 # scripts/ci/cargo-deny.sh checks the Cargo.toml files for that.
 required-git-spec = "rev"
-# Only the app (src-tauri, native voice) reaches the two git sources; the
+# Only the app (src-tauri, native voice) reaches the git source; the
 # other trees don't, and that is not a finding.
 unused-allowed-source = "allow"
 allow-git = [
-    # Sew's public mirror (sew-proto 0.9, sew-call-client, tauri-plugin-sew-voice
-    # and their crates). Retires when sew-call-client and tauri-plugin-sew-voice
-    # are on crates.io.
+    # Sew's public mirror (sew-call-client and tauri-plugin-sew-voice 0.7.0; their
+    # other Sew crates and sew-str0m come from crates.io since Sew 0.10.0). Retires
+    # when sew-call-client and tauri-plugin-sew-voice are on crates.io.
     "https://github.com/Alakazam-211/sew-crates",
-    # The str0m fork (str0m, str0m-proto, is, str0m-aws-lc-rs). Retires when
-    # sew-call-client depends on crates.io sew-str0m and sew-str0m-is.
-    "https://github.com/Alakazam-211/str0m",
 ]

@@ -215,10 +215,13 @@ pub fn join_body(req: &JoinRequest) -> Value {
 /// A DM call's room as the webview names it.
 pub const DM_ROOM_PREFIX: &str = "dm:";
 
-/// Whether this build's call client takes Sew's `CallJoinResponse` as is
-/// (Sew 0.10.0's fix to sew-call-client and the plugin). Until K2 pins that
-/// release the daemon unwraps `.voice` for it; then this turns true.
-pub const CALL_CLIENT_TAKES_CALL_ANSWER: bool = false;
+/// Whether this build's call client takes Sew's `CallJoinResponse` as is:
+/// yes since sew-call-client and the plugin 0.7.0 (Sew 0.10.0), whose
+/// `JoinAnswer::from_json` reads the voice answer from `voice` and keeps the
+/// call (`dm_call`). The daemon then passes Sew's answer through unchanged;
+/// it still unwraps `.voice` for a client that says false (0.46.12 and older
+/// never call a DM).
+pub const CALL_CLIENT_TAKES_CALL_ANSWER: bool = true;
 
 /// The door the engine uses for this login's server.
 pub fn api_base(base_url: &str) -> Result<url::Url, ProviderError> {

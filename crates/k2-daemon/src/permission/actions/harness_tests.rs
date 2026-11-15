@@ -41,6 +41,7 @@ fn live(ws: &Ws) -> bool {
 
 #[test]
 fn the_action_is_registered_with_the_route_floor_and_its_walls() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(crate::agent_harness::CARD_ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Admin, Proof::Click, Grant::OneTime));
@@ -58,6 +59,7 @@ fn the_action_is_registered_with_the_route_floor_and_its_walls() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_asks_a_member_cant_answer_and_the_owner_allow_moves_the_pinned_chat() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let shim_dir = home.path().join("agent-shims");

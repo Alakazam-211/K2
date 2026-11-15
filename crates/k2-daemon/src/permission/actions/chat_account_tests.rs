@@ -33,6 +33,7 @@ fn chat_grant(ws: &Ws) -> Option<(String, String)> {
 
 #[test]
 fn the_card_is_registered_with_the_grants_routes_floor_and_its_three_walls() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Owner, Proof::Click, Grant::OneTime));
@@ -55,6 +56,7 @@ fn the_card_is_registered_with_the_grants_routes_floor_and_its_three_walls() {
 
 #[test]
 fn the_owner_allows_a_coworker_account_once_and_the_grant_is_the_routes_own() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = env();
     let ws = seed("cac");
 
@@ -98,6 +100,7 @@ fn the_owner_allows_a_coworker_account_once_and_the_grant_is_the_routes_own() {
 
 #[test]
 fn an_assistant_account_names_the_person_it_speaks_for() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = env();
     let ws = seed("caa");
     let dana = format!("dana{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
@@ -130,6 +133,7 @@ fn an_assistant_account_names_the_person_it_speaks_for() {
 /// Only its own workspace, and only real scopes.
 #[test]
 fn an_agent_cant_ask_for_another_workspaces_account_or_a_scope_that_isnt_one() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = env();
     let (ws, other) = (seed("cao"), seed("cap"));
     for params in [json!({ "workspace": other.handle }), json!({ "subject": other.handle }), json!({ "target": other.id })] {
@@ -146,6 +150,7 @@ fn an_agent_cant_ask_for_another_workspaces_account_or_a_scope_that_isnt_one() {
 /// With Chat / Voice Hosting off there is no account to give.
 #[test]
 fn no_card_while_chat_is_off() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let ws = seed("caf");

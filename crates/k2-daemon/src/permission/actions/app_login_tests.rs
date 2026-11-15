@@ -63,6 +63,7 @@ fn as_agent(ws: &Ws, card: &str) -> (String, Value) {
 
 #[test]
 fn the_card_is_registered_with_the_routes_floor_and_a_click() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Owner, Proof::Click, Grant::OneTime));
@@ -75,6 +76,7 @@ fn the_card_is_registered_with_the_routes_floor_and_a_click() {
 
 #[test]
 fn the_owner_allows_a_login_once_and_the_card_says_what_the_role_allows() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let ws = seed("alg");
@@ -136,6 +138,7 @@ const LOGIN_GRANT_APPLY: fn(&Ctx, &Answerer, Option<&str>) -> Applied = apply;
 
 #[test]
 fn only_its_own_app_existing_people_real_roles_and_never_an_agent_or_a_box_login() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let (ws, other) = (seed("alh"), seed("ali"));
@@ -186,6 +189,7 @@ fn only_its_own_app_existing_people_real_roles_and_never_an_agent_or_a_box_login
 /// `k2 app grant list` for an agent: its own workspace's Apps only.
 #[test]
 fn an_agent_lists_the_logins_on_its_own_apps_only() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let (ws, other) = (seed("alj"), seed("alk"));

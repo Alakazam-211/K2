@@ -693,6 +693,10 @@ mod tests {
 
     #[test]
     fn newly_due_only_reports_what_it_has_not_already() {
+        // newly_due() reads every workspace's reminders (the monitor's
+        // precise pass), so on the binary-wide test DB another test's
+        // pending reminder (due 18:45 the same day) answers first: own DB.
+        let _db = crate::db::scoped_for_test();
         let (dir, _pid) = workspace("due2");
         add_in(&dir, "a", WhenInput { in_: Some("1h"), ..Default::default() }, at("2026-06-10T18:00:00Z"));
         let db = crate::db::shared();
@@ -718,6 +722,9 @@ mod tests {
     /// ago doesn't. (A string compare in UTC got this exactly backwards.)
     #[test]
     fn hour_counts_compare_instants_whatever_offset_a_fire_was_written_with() {
+        // The prune deletes old fires of every workspace, so on the
+        // binary-wide test DB it also counts other tests' fires: own DB.
+        let _db = crate::db::scoped_for_test();
         let (dir, pid) = workspace("offsets");
         let now = chrono::Utc::now();
         let west = chrono::FixedOffset::west_opt(7 * 3600).expect("-07:00");

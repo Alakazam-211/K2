@@ -110,6 +110,7 @@ fn assert_nowhere(secret: &str, places: &[(&'static str, String)]) {
 
 #[test]
 fn the_card_is_registered_with_the_routes_floor_a_click_and_one_time() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (FLOOR, Proof::Click, Grant::OneTime));
@@ -129,6 +130,7 @@ fn the_card_is_registered_with_the_routes_floor_a_click_and_one_time() {
 
 #[test]
 fn only_an_agent_of_the_apps_workspace_asks_for_its_own_apps_users() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("prask");
     let (u, _) = person(&e.app, "ann", Some("ann@x.test"));
     // No passport (the owner, a login): refused, no card.
@@ -169,6 +171,7 @@ fn only_an_agent_of_the_apps_workspace_asks_for_its_own_apps_users() {
 /// card says nothing about it.
 #[test]
 fn the_card_says_whether_it_unties() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("prtie");
     let consequences = |user: &str, mode: &str| -> String {
         let v = ask_ok(&e.ws, ACTION, json!({ "user": user, "app": e.app, "mode": mode }));
@@ -190,6 +193,7 @@ fn the_card_says_whether_it_unties() {
 #[cfg(unix)]
 #[test]
 fn password_mode_shows_the_approver_a_password_once_and_nothing_else_ever_holds_it() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("prpw");
     let (u, pid) = person(&e.app, "ben", Some("ben@x.test"));
     // Locked out (three wrong tries) and signed in somewhere.
@@ -272,6 +276,7 @@ fn password_mode_shows_the_approver_a_password_once_and_nothing_else_ever_holds_
 #[cfg(unix)]
 #[test]
 fn link_mode_hands_the_approver_an_owner_reset_link_once() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("prlink");
     let (u, pid) = person(&e.app, "cat", None);
     let v = ask_ok(&e.ws, ACTION, json!({ "user": u, "app": e.app_name, "mode": "link" }));
@@ -297,6 +302,7 @@ fn link_mode_hands_the_approver_an_owner_reset_link_once() {
 
 #[test]
 fn email_them_a_link_instead_works_from_a_phone_and_never_names_the_address() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("premail");
     let addr = format!("dee{}@x.test", uniq());
     let (u, _) = person(&e.app, "dee", Some(&addr));
@@ -320,6 +326,7 @@ fn email_them_a_link_instead_works_from_a_phone_and_never_names_the_address() {
 
 #[test]
 fn email_is_refused_where_the_stored_email_isnt_trusted() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("prnoem");
     let (u, pid) = person(&e.app, "eve", Some("eve@agent-chosen.test"));
     // An agent touched them: their stored email may be the agent's pick.
@@ -344,6 +351,7 @@ fn email_is_refused_where_the_stored_email_isnt_trusted() {
 
 #[test]
 fn a_reset_card_is_never_batched() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("prbatch");
     let (u1, _) = person(&e.app, "gus", Some("gus@x.test"));
     let (u2, _) = person(&e.app, "hal", Some("hal@x.test"));
@@ -357,6 +365,7 @@ fn a_reset_card_is_never_batched() {
 
 #[test]
 fn the_list_finds_the_card_by_password() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("prlist");
     let body = json!({ "search": "password" }).to_string();
     let r = routes::handle_gated(routes::LIST, &super::super::held::tests::agent(&e.ws), false, body.as_bytes(), &HashMap::new());
@@ -373,6 +382,7 @@ fn the_list_finds_the_card_by_password() {
 /// and an Admin can't answer it.
 #[test]
 fn an_admin_resets_app_only_users_and_the_owner_hears_but_box_logins_stay_the_owners() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env("pradmin");
     let admin = login("pradm", Role::Admin);
     let (u, _) = person(&e.app, "ivy", Some("ivy@x.test"));

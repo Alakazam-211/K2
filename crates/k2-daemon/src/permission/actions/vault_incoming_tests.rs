@@ -102,6 +102,7 @@ fn card_doc(ws: &Ws, card: &str) -> k2_core::overlay::OverlayDoc {
 
 #[test]
 fn the_card_is_registered_admin_click_one_time_and_k2_presented() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Admin, Proof::Click, Grant::OneTime));
@@ -116,6 +117,7 @@ fn the_card_is_registered_admin_click_one_time_and_k2_presented() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn k2_presents_the_card_people_at_the_floor_answer_and_allow_lands_it() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -193,6 +195,7 @@ async fn k2_presents_the_card_people_at_the_floor_answer_and_allow_lands_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deny_declines_the_delivery_through_the_decide_route() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -212,6 +215,7 @@ async fn deny_declines_the_delivery_through_the_decide_route() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_asks_for_its_own_pending_deliveries_only() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -254,6 +258,7 @@ async fn an_agent_asks_for_its_own_pending_deliveries_only() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_clash_asks_to_accept_it_under_a_free_name() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -287,6 +292,7 @@ async fn a_clash_asks_to_accept_it_under_a_free_name() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn expiry_and_a_late_look_close_or_restore_the_card() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -328,6 +334,7 @@ async fn expiry_and_a_late_look_close_or_restore_the_card() {
 /// K2 can't read keeps naming that id.
 #[test]
 fn the_listing_without_an_id_says_what_it_accepts() {
+    let _db = k2_core::db::scoped_for_test();
     let spec = super::super::find(ACTION).expect("registered").spec;
     let listed = Ctx { workspace_id: "w-1".into(), workspace_handle: "k2".into(), params: serde_json::Map::new() };
     let w = crate::permission::present::words(spec, &listed);

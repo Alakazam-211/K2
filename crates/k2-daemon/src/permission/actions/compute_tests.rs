@@ -77,6 +77,7 @@ fn state_of(id: &str) -> String {
 
 #[test]
 fn compute_admin_approve_is_registered_and_the_other_compute_rows_arent_cards() {
+    let _db = k2_core::db::scoped_for_test();
     use k2_core::permission::catalog::{ConfirmAction, Floor, Proof};
     let r = super::super::find("compute.admin-approve").expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
@@ -93,6 +94,7 @@ fn compute_admin_approve_is_registered_and_the_other_compute_rows_arent_cards() 
 
 #[test]
 fn compute_admin_approve_sends_the_signed_step_as_the_owner() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("e2cp");
@@ -136,6 +138,7 @@ fn compute_admin_approve_sends_the_signed_step_as_the_owner() {
 
 #[test]
 fn compute_admin_approve_is_off_while_compute_is_dark_and_follows_the_request() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2cs");
     let other = seed("e2co");
@@ -189,6 +192,7 @@ fn set_manage(ws: &Ws, on: bool) {
 /// Settings shows it), its node and the reason filed with it.
 #[test]
 fn the_card_names_the_change_and_its_reason() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("e2cw");
@@ -217,6 +221,7 @@ fn the_card_names_the_change_and_its_reason() {
 /// the card denies the node request itself; Settings then can't approve it.
 #[test]
 fn the_cards_allow_and_deny_are_settings_own_and_decide_once() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("e2cd");
@@ -268,6 +273,7 @@ fn the_cards_allow_and_deny_are_settings_own_and_decide_once() {
 /// while the card waits makes the click stale.
 #[test]
 fn only_an_agent_that_may_act_on_nodes_raises_the_card() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("e2cm");
@@ -317,6 +323,7 @@ fn set_list(ws: &Ws, ids: Option<&[String]>) {
 
 #[test]
 fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
+    let _db = k2_core::db::scoped_for_test();
     use k2_core::permission::catalog::{Direction, Floor, Proof};
     for id in ["compute.allow-nodes", "compute.allow-nodes-clear"] {
         let r = super::super::find(id).unwrap_or_else(|| panic!("{id} registered"));
@@ -371,6 +378,7 @@ fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
 /// refused at the ask.
 #[test]
 fn the_cache_trust_card_is_a_persons_and_asks_only_when_needed() {
+    let _db = k2_core::db::scoped_for_test();
     use k2_core::permission::catalog::{Direction, Floor, Proof};
     let r = super::super::find("ci.cache-trust").expect("ci.cache-trust registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
@@ -441,6 +449,7 @@ fn pkg_rows(batch: &str) -> Vec<k2_core::compute::pkgreq::PkgRow> {
 
 #[test]
 fn package_cards_are_registered_with_their_floors() {
+    let _db = k2_core::db::scoped_for_test();
     use k2_core::permission::catalog::{Direction, Floor, Grant, Proof};
     let r = super::super::find("compute.packages").expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
@@ -460,6 +469,7 @@ fn package_cards_are_registered_with_their_floors() {
 /// for whom, the dependency count and size, and the agent's reason.
 #[test]
 fn the_package_card_names_what_installs_where_and_for_whom() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("pkgw");
@@ -502,6 +512,7 @@ fn the_package_card_names_what_installs_where_and_for_whom() {
 /// words. The node admin card never takes a package request.
 #[test]
 fn the_package_card_follows_the_request() {
+    let _db = k2_core::db::scoped_for_test();
     use k2_core::compute::pkgreq::{OWN, SENT};
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
@@ -544,6 +555,7 @@ fn the_package_card_follows_the_request() {
 /// request waiting in Settings, and says so.
 #[test]
 fn the_package_cards_allow_and_deny_decide_the_request() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("pkgd");
@@ -580,6 +592,7 @@ fn the_package_cards_allow_and_deny_decide_the_request() {
 /// unrelated "Allow all", in either order.
 #[test]
 fn package_cards_batch_only_with_each_other() {
+    let _db = k2_core::db::scoped_for_test();
     use k2_core::compute::pkgreq::OWN;
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
@@ -608,6 +621,7 @@ fn package_cards_batch_only_with_each_other() {
 /// whose k2-node has no package policy yet, or an unknown level is refused.
 #[test]
 fn the_package_policy_card_checks_its_node() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("pkgp");
@@ -643,6 +657,7 @@ const SETUP_ASK: &str = "k2 permission request compute.git-access-setup --why \"
 /// the card), is read on its own, and says what the credential needs.
 #[test]
 fn git_access_setup_is_a_persons_card_with_no_value_on_it() {
+    let _db = k2_core::db::scoped_for_test();
     use k2_core::permission::catalog::{Floor, Proof};
     let r = super::super::find("compute.git-access-setup").expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
@@ -705,6 +720,7 @@ fn git_access_setup_is_a_persons_card_with_no_value_on_it() {
 /// click with that line in the agent's turn.
 #[test]
 fn the_grant_card_points_at_setup_while_there_is_no_credential() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _on = ComputeOn::set(true);
     let ws = seed("gsg");

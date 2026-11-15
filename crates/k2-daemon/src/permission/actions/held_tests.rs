@@ -144,6 +144,7 @@ fn uniq() -> String {
 
 #[test]
 fn the_held_actions_are_registered_with_the_code_floors_and_proofs() {
+    let _db = k2_core::db::scoped_for_test();
     let rows = [
         ("apps.approve", Floor::Owner, Proof::SettingsConfirm { action: ConfirmAction::AppApprove }, "/cli/app/approve"),
         ("mail.approve", Floor::Admin, Proof::Click, "/cli/mail/approvals/approve"),
@@ -170,6 +171,7 @@ fn the_held_actions_are_registered_with_the_code_floors_and_proofs() {
 
 #[test]
 fn rows_outside_v1_say_they_cant_be_requested_or_name_their_cover() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("e2nc");
     not_requestable(&ws, &["vault.widen", "compute.admin-deny"]);
     // 0.46.10: accepting a secret another agent sent is a card now.
@@ -189,6 +191,7 @@ pub(crate) fn not_requestable(ws: &Ws, ids: &[&str]) {
 
 #[test]
 fn route_floor_reads_the_policy_table() {
+    let _db = k2_core::db::scoped_for_test();
     let route = "/cli/mail/approvals/approve";
     assert!(super::super::held::route_floor(route, &Answerer::OwnerToken).is_ok());
     assert!(super::super::held::route_floor(route, &Answerer::Login { user: "a".into(), role: "admin".into() }).is_ok());
@@ -254,6 +257,7 @@ fn app_token(id: &str, stamp: &str) -> String {
 
 #[test]
 fn apps_approve_runs_the_held_request_through_app_approvals_as_the_owner() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     quiet_apps();
     let ws = seed("e2ap");
@@ -313,6 +317,7 @@ fn apps_approve_runs_the_held_request_through_app_approvals_as_the_owner() {
 
 #[test]
 fn apps_approve_follows_the_app_request_as_settings_decides_it() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     quiet_apps();
     let ws = seed("e2as");
@@ -389,6 +394,7 @@ fn mail_row(id: &str) -> (String, Option<String>) {
 
 #[test]
 fn mail_approve_releases_the_held_send_through_the_approvals_route() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2ml");
     let msg = held_mail(&ws, now(), Some(now() + 3600));
@@ -419,6 +425,7 @@ fn mail_approve_releases_the_held_send_through_the_approvals_route() {
 
 #[test]
 fn mail_approve_follows_the_queue() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2mq");
     let other = seed("e2mo");
@@ -448,6 +455,7 @@ fn mail_approve_follows_the_queue() {
 
 #[test]
 fn mail_approve_with_no_mail_server_fails_loudly() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _g = crate::mail::mail_server_test_lock();
     {
@@ -503,6 +511,7 @@ fn source_row(name: &str) -> k2_core::sources::SourceRow {
 
 #[test]
 fn sources_approve_activates_plain_sources_as_one_batch() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2sr");
     let (a, b) = (proposed_source(&ws, None, false), proposed_source(&ws, None, false));
@@ -537,6 +546,7 @@ fn sources_approve_activates_plain_sources_as_one_batch() {
 
 #[test]
 fn sources_approve_takes_only_plain_unchanged_sources_of_ones_own() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2sp");
     let other = seed("e2so");
@@ -697,6 +707,7 @@ fn garden_proposal_approve_follows_the_queue() {
 
 #[test]
 fn mail_approve_refuses_a_message_the_card_cannot_show() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("e2mc");
     for (column, value) in [

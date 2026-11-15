@@ -37,7 +37,6 @@
 //! not in the running App.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 use k2_core::deploy::store::{self, AppRow};
 use serde_json::{json, Value as J};
@@ -107,21 +106,36 @@ pub struct Applied {
     pub db_ports: Option<Vec<u16>>,
 }
 
-fn table() -> &'static Mutex<HashMap<String, Applied>> {
+/// The daemon's one table of sent rules, keyed by App id.
+#[cfg(not(test))]
+fn with_table<R>(f: impl FnOnce(&mut HashMap<String, Applied>) -> R) -> R {
+    use std::sync::{Mutex, OnceLock};
     static T: OnceLock<Mutex<HashMap<String, Applied>>> = OnceLock::new();
-    T.get_or_init(Default::default)
+    f(&mut T.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Under test, rules are "sent" to this thread's recorder
+/// ([`test_seams`]), so what was sent is this thread's too: one table per
+/// test. Process-wide, a rule another test left for its `ledger` was re-sent
+/// by this test's database change (the same App ids in every test).
+#[cfg(test)]
+fn with_table<R>(f: impl FnOnce(&mut HashMap<String, Applied>) -> R) -> R {
+    thread_local! {
+        static T: std::cell::RefCell<HashMap<String, Applied>> = std::cell::RefCell::new(HashMap::new());
+    }
+    T.with(|t| f(&mut t.borrow_mut()))
 }
 
 pub(crate) fn record(app: &str, a: Applied) {
-    table().lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), a);
+    with_table(|t| t.insert(app.to_string(), a));
 }
 
 pub(crate) fn forget(app: &str) {
-    table().lock().unwrap_or_else(|e| e.into_inner()).remove(app);
+    with_table(|t| t.remove(app));
 }
 
 pub fn applied_of(app: &str) -> Option<Applied> {
-    table().lock().unwrap_or_else(|e| e.into_inner()).get(app).cloned()
+    with_table(|t| t.get(app).cloned())
 }
 
 /// Send one rule to the root helper (a recorder in tests).
@@ -204,7 +218,7 @@ pub struct Refreshed {
 /// grant or revoke, a database made or dropped, a `DATABASE_URL` that
 /// names another one). Live: `apps nft app` replaces only that App's line.
 pub(crate) fn refresh_running() -> Vec<Refreshed> {
-    let mut apps: Vec<String> = table().lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+    let mut apps: Vec<String> = with_table(|t| t.keys().cloned().collect());
     apps.sort();
     apps.into_iter().filter_map(|a| refresh_one(&a)).collect()
 }

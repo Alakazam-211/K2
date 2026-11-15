@@ -65,6 +65,7 @@ fn as_agent(ws: &Ws, card: &str) -> (String, Value) {
 
 #[test]
 fn the_card_is_registered_at_the_owners_floor_and_reached_by_asking() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant, r.spec.direction), (Floor::Owner, Proof::Click, Grant::OneTime, Direction::Loosen));
@@ -80,6 +81,7 @@ fn the_card_is_registered_at_the_owners_floor_and_reached_by_asking() {
 
 #[test]
 fn the_owner_allows_it_from_the_thread_and_the_grant_is_the_effect() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let me = seed("bxa");
@@ -142,6 +144,7 @@ fn the_owner_allows_it_from_the_thread_and_the_grant_is_the_effect() {
 
 #[test]
 fn the_ask_is_refused_for_anyone_but_a_box_login_on_its_own_app() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let (me, other) = (seed("bxb"), seed("bxc"));
@@ -179,6 +182,7 @@ fn the_ask_is_refused_for_anyone_but_a_box_login_on_its_own_app() {
 /// before the click makes the card stale (they are in the words).
 #[test]
 fn a_switched_off_login_says_so_and_folder_limits_are_in_the_words() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let me = seed("bxd");

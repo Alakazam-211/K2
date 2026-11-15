@@ -84,16 +84,23 @@ fn copy(ws: &Ws) -> Ws {
     Ws { id: ws.id.clone(), handle: ws.handle.clone(), conv: ws.conv.clone() }
 }
 
+/// `spawn_blocking` on this test's own database: the blocking pool's
+/// threads don't carry the test thread's scoped one.
+fn on_own_db<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> tokio::task::JoinHandle<T> {
+    let db = k2_core::db::scoped_handle_for_test().expect("the test's own database");
+    tokio::task::spawn_blocking(move || k2_core::db::with_scoped_handle(db, f))
+}
+
 /// The agent's own `k2 vault send NAME --to TO`, off the runtime (it dials).
 async fn agent_sends(fx: &Fx, ws: &Ws, name: &str, to: &str) -> (u16, Value, String) {
     let (v, c, b) = (fx.v.clone(), agent_caller(ws), json!({ "name": name, "to": to }));
-    tokio::task::spawn_blocking(move || send(&v, &c, b)).await.unwrap()
+    on_own_db(move || send(&v, &c, b)).await.unwrap()
 }
 
 /// A person answers the card, off the runtime (Allow sends: it dials).
 async fn answer(author: &str, ws: &Ws, card: &str, body: Value) -> (String, Value) {
     let (a, w, c) = (author.to_string(), copy(ws), card.to_string());
-    tokio::task::spawn_blocking(move || answer_as(&a, &w, &c, body)).await.unwrap()
+    on_own_db(move || answer_as(&a, &w, &c, body)).await.unwrap()
 }
 
 fn confirm_for(v: &k2_vault::LocalVault, request: &str, stamp: &str) -> String {
@@ -143,6 +150,7 @@ fn send_allow_post(fx: &Fx, c: &VaultCaller, body: Value) -> (u16, Value) {
 
 #[test]
 fn the_card_is_registered_with_the_senders_floor_a_confirm_and_its_wall() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
@@ -160,12 +168,13 @@ fn the_card_is_registered_with_the_senders_floor_a_confirm_and_its_wall() {
 /// A person's own send and a secret the agent gave itself are unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_held_send_names_the_secret_and_how_to_get_a_yes_and_other_sends_are_unchanged() {
+    let _db = k2_core::db::scoped_for_test();
     let fx = setup("vs-held");
     let ws = seed("vsh");
     given(&fx.v, &ws, "GEO_DB");
 
     let (v, c) = (fx.v.clone(), agent_caller(&ws));
-    let (st, j, raw) = tokio::task::spawn_blocking(move || send(&v, &c, json!({ "name": "GEO_DB", "to": "bob::heldbox", "note": "for the import" })))
+    let (st, j, raw) = on_own_db(move || send(&v, &c, json!({ "name": "GEO_DB", "to": "bob::heldbox", "note": "for the import" })))
         .await
         .unwrap();
     assert_eq!((st, j["error"]["code"].as_str().unwrap_or("")), (403, "held"), "{raw}");
@@ -189,13 +198,13 @@ async fn a_held_send_names_the_secret_and_how_to_get_a_yes_and_other_sends_are_u
 
     // A person's own send: the confirm, then sent, as before.
     let (v, o, h) = (fx.v.clone(), owner(), ws.handle.clone());
-    let (st, j, raw) = tokio::task::spawn_blocking(move || send(&v, &o, json!({ "name": "GEO_DB", "scope": "workspace", "workspace": h, "to": "bob::heldbox" })))
+    let (st, j, raw) = on_own_db(move || send(&v, &o, json!({ "name": "GEO_DB", "scope": "workspace", "workspace": h, "to": "bob::heldbox" })))
         .await
         .unwrap();
     assert_eq!((st, j["error"]["code"].as_str().unwrap_or("")), (403, "confirm_required"), "{raw}");
     let token = fx.v.confirm.mint(crate::vault_routes::HANDOFF_CONFIRM_ACTION, Some(j["secretId"].as_str().unwrap()), "owner", "vault-password");
     let (v, o, h) = (fx.v.clone(), owner(), ws.handle.clone());
-    let (st, j, raw) = tokio::task::spawn_blocking(move || {
+    let (st, j, raw) = on_own_db(move || {
         send(&v, &o, json!({ "name": "GEO_DB", "scope": "workspace", "workspace": h, "to": "bob::heldbox", "confirmToken": token }))
     })
     .await
@@ -223,6 +232,7 @@ async fn a_held_send_names_the_secret_and_how_to_get_a_yes_and_other_sends_are_u
 /// the owner, once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_owner_sends_them_from_one_card_with_the_confirm_and_is_logged_as_the_sender() {
+    let _db = k2_core::db::scoped_for_test();
     let fx = setup("vs-allow");
     let ws = seed("vsa");
     given(&fx.v, &ws, "GEO_A");
@@ -296,6 +306,7 @@ async fn the_owner_sends_them_from_one_card_with_the_confirm_and_is_logged_as_th
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn denying_sends_nothing_and_tells_the_agent() {
+    let _db = k2_core::db::scoped_for_test();
     let fx = setup("vs-deny");
     let ws = seed("vsn");
     given(&fx.v, &ws, "GEO_DB");
@@ -317,6 +328,7 @@ async fn denying_sends_nothing_and_tells_the_agent() {
 /// agent or another secret still asks; removing the grant stops it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn from_now_on_lets_later_sends_through_to_that_agent_only_until_it_is_removed() {
+    let _db = k2_core::db::scoped_for_test();
     let fx = setup("vs-always");
     let ws = seed("vsw");
     given(&fx.v, &ws, "GEO_DB");
@@ -383,6 +395,7 @@ async fn from_now_on_lets_later_sends_through_to_that_agent_only_until_it_is_rem
 /// the agent gave itself needs none.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settings_adds_one_only_with_a_persons_vault_confirm() {
+    let _db = k2_core::db::scoped_for_test();
     let fx = setup("vs-settings");
     let ws = seed("vss");
     let sid = given(&fx.v, &ws, "GEO_DB");

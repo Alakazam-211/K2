@@ -303,6 +303,7 @@ mod tests {
     /// valid against the catalog.
     #[test]
     fn the_card_is_the_owners_with_its_own_confirm() {
+        let _db = k2_core::db::scoped_for_test();
         let r = super::super::find(ACTION).expect("apps.recording");
         k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(APPS_RECORDING.floor, Floor::Owner);
@@ -318,6 +319,7 @@ mod tests {
     /// owner and turns it on.
     #[test]
     fn an_admin_leaves_it_open_and_the_owner_turns_server_read_on() {
+        let _db = k2_core::db::scoped_for_test();
         let e = env();
         let ws = seed("rec");
         let (name, svc) = app_of(&ws);

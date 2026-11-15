@@ -104,6 +104,7 @@ fn login(_home: &crate::test_support::TempHome, name: &str, role: k2_core::conne
 
 #[test]
 fn a_request_posts_a_permission_card_and_allow_applies_it_once() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pca");
     let v = ask_ok(&ws, "test.switch", json!({}));
     let id = v["id"].as_str().expect("id").to_string();
@@ -175,6 +176,7 @@ fn a_request_posts_a_permission_card_and_allow_applies_it_once() {
 
 #[test]
 fn two_allows_at_once_apply_once_with_one_audit_line() {
+    let db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     let ws = seed("pccas");
     let v = ask_ok(&ws, "test.slow", json!({}));
@@ -182,10 +184,10 @@ fn two_allows_at_once_apply_once_with_one_audit_line() {
     let card = card_of(&v);
     let mut handles = Vec::new();
     for _ in 0..2 {
-        let (h, c, conv, wsid) = (ws.handle.clone(), card.clone(), ws.conv.clone(), ws.id.clone());
+        let (h, c, conv, wsid, db) = (ws.handle.clone(), card.clone(), ws.conv.clone(), ws.id.clone(), db.handle());
         handles.push(std::thread::spawn(move || {
             let w = Ws { id: wsid, handle: h, conv };
-            answer_as("owner", &w, &c, json!({ "answer": "Allow" }), &[]).0
+            k2_core::db::with_scoped_handle(db, || answer_as("owner", &w, &c, json!({ "answer": "Allow" }), &[]).0)
         }));
     }
     let mut statuses: Vec<String> = handles.into_iter().map(|h| h.join().expect("thread")).collect();
@@ -203,6 +205,7 @@ fn two_allows_at_once_apply_once_with_one_audit_line() {
 
 #[test]
 fn already_on_at_the_ask_stores_nothing() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcad");
     testkit::set_on(&ws.id, "test.switch", true);
     let (s, v) = ask(&ws, "test.switch", json!({}));
@@ -213,6 +216,7 @@ fn already_on_at_the_ask_stores_nothing() {
 
 #[test]
 fn already_on_at_the_click_closes_the_card_as_a_no_op() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcac");
     let v = ask_ok(&ws, "test.switch", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
@@ -241,6 +245,7 @@ fn already_on_at_the_click_closes_the_card_as_a_no_op() {
 
 #[test]
 fn close_answers_an_already_done_card_and_only_that() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pccl");
     let v = ask_ok(&ws, "test.switch", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
@@ -264,6 +269,7 @@ fn close_answers_an_already_done_card_and_only_that() {
 
 #[test]
 fn values_that_moved_or_reworded_text_are_stale_and_nothing_applies() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcst");
     let v = ask_ok(&ws, "test.moved", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
@@ -294,6 +300,7 @@ fn values_that_moved_or_reworded_text_are_stale_and_nothing_applies() {
 
 #[test]
 fn a_refused_apply_fails_the_request_and_closes_the_card() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcfl");
     let v = ask_ok(&ws, "test.fail", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
@@ -314,6 +321,7 @@ fn a_refused_apply_fails_the_request_and_closes_the_card() {
 
 #[test]
 fn deny_with_a_reason_blocks_the_same_ask_for_a_day_and_update_reopens_once() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcdn");
     let v = ask_ok(&ws, "test.switch", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
@@ -354,6 +362,7 @@ fn deny_with_a_reason_blocks_the_same_ask_for_a_day_and_update_reopens_once() {
 
 #[test]
 fn only_people_at_the_floor_answer() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     let ws = seed("pcfr");
     let member = login(&home, "pcm", k2_core::connect_users::Role::Member);
@@ -388,6 +397,7 @@ fn only_people_at_the_floor_answer() {
 
 #[test]
 fn a_confirm_action_takes_its_token_and_a_wrong_one_decides_nothing() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pccf");
     let v = ask_ok(&ws, "test.confirm", json!({ "params": { "request": "ar_22" } }));
     assert_eq!(v["id"], "ar_22", "a held request keeps its own id: {v}");
@@ -416,6 +426,7 @@ fn a_confirm_action_takes_its_token_and_a_wrong_one_decides_nothing() {
 
 #[test]
 fn asks_within_five_minutes_share_one_batch_card_and_allow_all_skips_confirm_items() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcbt");
     let a = ask_ok(&ws, "test.owner-switch", json!({}));
     let card = card_of(&a);
@@ -450,6 +461,7 @@ fn asks_within_five_minutes_share_one_batch_card_and_allow_all_skips_confirm_ite
 
 #[test]
 fn deny_all_closes_every_item() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcda");
     let a = ask_ok(&ws, "test.mode", json!({ "params": { "mode": "approval" } }));
     let b = ask_ok(&ws, "test.mode", json!({ "params": { "mode": "free", "cores": "db,files" } }));
@@ -468,6 +480,7 @@ fn deny_all_closes_every_item() {
 
 #[test]
 fn an_expired_card_expires_its_request_and_wakes_the_agent_once() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcex");
     let v = ask_ok(&ws, "test.switch", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
@@ -501,6 +514,7 @@ fn the_request_sweep_expires_a_request_past_its_time() {
 
 #[test]
 fn the_agent_withdraws_its_request_and_gets_no_turn() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pccn");
     let v = ask_ok(&ws, "test.switch", json!({}));
     let id = v["id"].as_str().unwrap().to_string();
@@ -533,6 +547,7 @@ fn close_as(author: &str, ws: &Ws, card: &str, reason: Option<&str>, params: &[(
 
 #[test]
 fn a_dismissed_permission_card_grants_nothing_is_no_denial_and_is_audited() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     let ws = seed("pcdm");
     let member = login(&home, "pcdmm", k2_core::connect_users::Role::Member);
@@ -581,6 +596,7 @@ fn a_dismissed_permission_card_grants_nothing_is_no_denial_and_is_audited() {
 
 #[test]
 fn the_asking_agent_withdraws_its_permission_card_from_the_thread() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcwd");
     let other = seed("pcwx");
     let v = ask_ok(&ws, "test.switch", json!({}));
@@ -607,6 +623,7 @@ fn the_asking_agent_withdraws_its_permission_card_from_the_thread() {
 
 #[test]
 fn turning_the_switch_off_closes_open_requests_with_one_turn_each() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcso");
     let a = ask_ok(&ws, "test.switch", json!({}));
     let b = ask_ok(&ws, "test.owner-switch", json!({}));
@@ -628,6 +645,7 @@ fn turning_the_switch_off_closes_open_requests_with_one_turn_each() {
 
 #[test]
 fn bad_asks_are_refused_with_their_codes() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcbad");
     let cases: Vec<(Value, &str, &str)> = vec![
         (json!({ "action": "no.such", "why": "x" }), "400 Bad Request", "bad_action"),
@@ -663,6 +681,7 @@ fn bad_asks_are_refused_with_their_codes() {
 
 #[test]
 fn the_same_ask_dedupes_and_the_limits_hold() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pclim");
     let a = ask_ok(&ws, "test.switch", json!({}));
     let (s, v) = ask(&ws, "test.switch", json!({}));
@@ -735,6 +754,7 @@ fn fifty_open_requests_on_the_server_refuse_the_next() {
 
 #[test]
 fn people_are_not_served_the_agent_verbs() {
+    let _db = k2_core::db::scoped_for_test();
     let (s, v) = call(&Who::Owner, routes::REQUEST, json!({ "action": "test.switch", "why": "x" }));
     assert_eq!((s.as_str(), &v["error"]["code"]), ("403 Forbidden", &json!("forbidden")), "{v}");
     let (s, v) = call(&Who::Owner, routes::ENABLED, json!({}));
@@ -750,6 +770,7 @@ fn people_are_not_served_the_agent_verbs() {
 
 #[test]
 fn todays_bodies_match_the_off_goldens() {
+    let _db = k2_core::db::scoped_for_test();
     use routes::{today, Transport};
     let r = today(Transport::Tcp, true);
     assert_eq!((r.status, r.body.as_str()), ("405 Method Not Allowed", r#"{"error":"method not allowed for this route"}"#));
@@ -762,6 +783,7 @@ fn todays_bodies_match_the_off_goldens() {
 
 #[test]
 fn the_agents_route_lists_switches_and_recent_requests_for_owners_and_admins() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     let ws = seed("pcag");
     k2_core::workspace::settings::set_agents_can_request_permissions(&ws.id, true).expect("switch on");
@@ -881,6 +903,7 @@ impl Drop for LiveCell {
 #[cfg(unix)]
 #[test]
 fn a_sidecars_ask_lands_on_its_own_thread_and_the_answer_comes_back_to_it() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pcside");
     let conv = uuid::Uuid::new_v4().to_string();
     seed_sidecar(&ws, &conv, "reviewer");
@@ -915,6 +938,7 @@ fn a_sidecars_ask_lands_on_its_own_thread_and_the_answer_comes_back_to_it() {
 
 #[test]
 fn a_cell_that_is_not_a_sidecar_still_asks_on_the_pinned_thread() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed("pccanon");
     // `agent(ws)`'s session id names no live cell: the pinned Thread.
     let v = ask_ok(&ws, "test.switch", json!({}));

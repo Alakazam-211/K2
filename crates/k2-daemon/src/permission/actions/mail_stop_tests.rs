@@ -40,6 +40,7 @@ fn set_sending(ws: &Ws, mode: &str) {
 
 #[test]
 fn the_card_is_registered_at_the_routes_admin_floor_and_only_tightens() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant, r.spec.direction), (Floor::Admin, Proof::Click, Grant::OneTime, Direction::Tighten));
@@ -56,6 +57,7 @@ fn the_card_is_registered_at_the_routes_admin_floor_and_only_tightens() {
 
 #[test]
 fn an_agent_asks_to_stop_another_workspaces_sending_and_an_admin_allows_it() {
+    let _db = k2_core::db::scoped_for_test();
     let _env = env();
     let (me, sales) = (seed("msa"), seed("msb"));
     set_sending(&sales, "on");
@@ -89,6 +91,7 @@ fn an_agent_asks_to_stop_another_workspaces_sending_and_an_admin_allows_it() {
 
 #[test]
 fn its_own_sending_too_by_any_of_its_names_and_only_real_workspaces() {
+    let _db = k2_core::db::scoped_for_test();
     let _env = env();
     let me = seed("msc");
     set_sending(&me, "approval");

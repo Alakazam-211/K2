@@ -143,6 +143,7 @@ fn tickets(ws: &Ws) -> Vec<k2_core::feedback::FeedbackItem> {
 
 #[test]
 fn a_card_is_pushed_to_the_people_who_may_answer_it_only() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let admin = login("pcadm", Role::Admin);
     let member = login("pcmem", Role::Member);
@@ -191,6 +192,7 @@ fn a_card_is_pushed_to_the_people_who_may_answer_it_only() {
 
 #[test]
 fn the_card_budget_is_30_an_hour_per_person_and_apart_from_thread_posts() {
+    let _db = k2_core::db::scoped_for_test();
     let who = format!("pcbudget-{}", uuid::Uuid::new_v4().simple());
     let conv = format!("conv-{who}");
     let push = |budget: ThreadBudget| ThreadPush {
@@ -235,6 +237,7 @@ fn the_card_budget_is_30_an_hour_per_person_and_apart_from_thread_posts() {
 
 #[test]
 fn the_tickets_item_goes_to_eligible_logins_when_nobody_was_looking() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let admin = login("pctadm", Role::Admin);
     let member = login("pctmem", Role::Member);
@@ -277,6 +280,7 @@ fn the_tickets_item_goes_to_eligible_logins_when_nobody_was_looking() {
 
 #[test]
 fn with_no_eligible_login_the_item_is_unassigned_and_pushes_nothing() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _member = login("pcnone", Role::Member);
     let ws = seed("pctnone");
@@ -296,6 +300,7 @@ fn with_no_eligible_login_the_item_is_unassigned_and_pushes_nothing() {
 
 #[test]
 fn a_person_below_the_floor_leaves_one_note_that_approvers_see() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     let member = login("pcnm", Role::Member);
     let admin = login("pcna", Role::Admin);
@@ -372,6 +377,7 @@ fn a_person_below_the_floor_leaves_one_note_that_approvers_see() {
 
 #[test]
 fn an_admin_may_note_an_owner_card_and_a_batch_note_names_its_item() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let admin = login("pcnb", Role::Admin);
     let ws = seed("pcnoteb");
@@ -403,6 +409,7 @@ fn an_admin_may_note_an_owner_card_and_a_batch_note_names_its_item() {
 
 #[test]
 fn turn_off_again_runs_the_twin_once_as_the_person_within_7_days() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     let admin = login("pcua", Role::Admin);
     let member = login("pcum", Role::Member);
@@ -475,6 +482,7 @@ fn turn_off_again_runs_the_twin_once_as_the_person_within_7_days() {
 
 #[test]
 fn two_turn_off_agains_at_once_run_the_twin_once() {
+    let db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("pcundor");
     let v = ask(&ws, "test.switch");
@@ -484,11 +492,13 @@ fn two_turn_off_agains_at_once_run_the_twin_once() {
     let applied = testkit::applied(&ws.id, "test.switch");
     let handles: Vec<_> = (0..2)
         .map(|_| {
-            let (conv, card) = (ws.conv.clone(), card.clone());
+            let (conv, card, db) = (ws.conv.clone(), card.clone(), db.handle());
             std::thread::spawn(move || {
-                undo::handle(&HashMap::new(), &CardCtx { conversation_id: &conv, card_id: &card, batch: false }, &Answerer::OwnerToken)
-                    .status
-                    .to_string()
+                k2_core::db::with_scoped_handle(db, || {
+                    undo::handle(&HashMap::new(), &CardCtx { conversation_id: &conv, card_id: &card, batch: false }, &Answerer::OwnerToken)
+                        .status
+                        .to_string()
+                })
             })
         })
         .collect();
@@ -502,6 +512,7 @@ fn two_turn_off_agains_at_once_run_the_twin_once() {
 
 #[test]
 fn waiting_on_you_lists_what_this_person_can_answer() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let admin = login("pcwa", Role::Admin);
     let member = login("pcwm", Role::Member);
@@ -559,6 +570,7 @@ fn waiting_on_you_lists_what_this_person_can_answer() {
 
 #[test]
 fn while_the_switch_is_off_the_card_routes_answer_as_unknown_thread_routes() {
+    let _db = k2_core::db::scoped_for_test();
     // Garden access lists also open these two routes; hold the lock its
     // tests flip that switch under.
     let _env = k2_core::test_env::lock();

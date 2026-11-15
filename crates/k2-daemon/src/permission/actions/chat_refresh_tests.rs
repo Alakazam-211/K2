@@ -67,6 +67,7 @@ fn cards_on(ws: &Ws) -> k2_core::test_env::EnvVar {
 
 #[test]
 fn the_action_is_registered_with_the_route_floor_and_its_walls() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Admin, Proof::Click, Grant::OneTime));
@@ -79,6 +80,7 @@ fn the_action_is_registered_with_the_route_floor_and_its_walls() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_agent_asks_with_its_note_and_allow_moves_the_chat_and_closes_the_card_on_the_new_key() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let _shim = shims(&home);
@@ -149,6 +151,7 @@ async fn the_agent_asks_with_its_note_and_allow_moves_the_chat_and_closes_the_ca
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn from_now_on_refreshes_and_turns_the_switch_on_and_the_card_is_offered_only_while_it_is_off() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let _shim = shims(&home);
@@ -183,6 +186,7 @@ async fn from_now_on_refreshes_and_turns_the_switch_on_and_the_card_is_offered_o
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_note_changed_after_the_ask_or_a_chat_moved_makes_the_card_stale() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let _shim = shims(&home);
@@ -210,6 +214,7 @@ async fn a_note_changed_after_the_ask_or_a_chat_moved_makes_the_card_stale() {
 
 #[test]
 fn a_secret_shaped_note_stays_off_the_card() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let (ws, path) = seed_dir(&home, "crx");
@@ -223,6 +228,7 @@ fn a_secret_shaped_note_stays_off_the_card() {
 
 #[test]
 fn a_sidecar_cant_ask_and_a_card_names_only_known_harnesses() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let (ws, _) = seed_dir(&home, "cry");

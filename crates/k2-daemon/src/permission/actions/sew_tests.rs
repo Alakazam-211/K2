@@ -38,6 +38,7 @@ fn confirm(token: &str, request: &str, stamp: &str) {
 
 #[test]
 fn the_card_is_registered_owner_only_with_the_settings_confirm_and_the_hc2_note() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find("sew.owner-handoff").expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(r.spec.floor, Floor::Owner);
@@ -49,6 +50,7 @@ fn the_card_is_registered_owner_only_with_the_settings_confirm_and_the_hc2_note(
 
 #[test]
 fn only_a_manage_sew_agent_asks_and_only_with_an_app_url() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("sewho");
     let (s, v) = ask(&ws, "sew.owner-handoff", json!({}));
@@ -79,6 +81,7 @@ fn only_a_manage_sew_agent_asks_and_only_with_an_app_url() {
 
 #[test]
 fn the_owner_allows_and_the_link_goes_to_them_never_to_the_agent() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _sew = Sew::set();
     let ws = seed("sewok");
@@ -156,6 +159,7 @@ impl Drop for Plan {
 
 #[test]
 fn the_rollback_card_is_owner_only_with_its_own_confirm_and_says_what_is_lost() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find("sew.rollback-data-loss").expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(r.spec.floor, Floor::Owner);
@@ -171,6 +175,7 @@ fn the_rollback_card_is_owner_only_with_its_own_confirm_and_says_what_is_lost() 
 
 #[test]
 fn a_manage_sew_agent_asks_and_the_owner_rolls_back_with_k2s_words() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _plan = Plan::set();
     let ws = seed("sewrb");
@@ -216,6 +221,7 @@ fn a_manage_sew_agent_asks_and_the_owner_rolls_back_with_k2s_words() {
 
 #[test]
 fn without_a_rollback_point_the_card_is_not_offered() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let _plan = Plan::set();
     PLAN.with(|c| *c.borrow_mut() = Some(Err("K2 has no backup of Sew 0.3.1 from before the upgrade".into())));
@@ -229,6 +235,7 @@ fn without_a_rollback_point_the_card_is_not_offered() {
 
 #[test]
 fn the_recording_card_is_registered_admin_floor_with_the_routes_confirm() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find("sew.recording-enable").expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(r.spec.floor, Floor::Admin, "an Owner or an Admin answers (Rosson Q5)");
@@ -246,6 +253,7 @@ fn the_recording_card_is_registered_admin_floor_with_the_routes_confirm() {
 /// (0.8.x: no `app_recording`) the card is unavailable, not a dead button.
 #[test]
 fn the_recording_card_is_unavailable_until_sew_reports_app_recording() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let ws = seed("sewrec");
     let (s, v) = ask(&ws, "sew.recording-enable", json!({}));

@@ -39,6 +39,7 @@ fn delivery(v: &k2_vault::LocalVault, ws: &Ws, name: &str) -> (Delivery, Deliver
 
 #[test]
 fn the_card_is_registered_with_the_widen_floor_a_click_and_its_wall() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Admin, Proof::Click, Grant::OneTime));
@@ -51,6 +52,7 @@ fn the_card_is_registered_with_the_widen_floor_a_click_and_its_wall() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_refused_a_wider_delivery_asks_and_the_owner_allow_widens_it() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -188,6 +190,7 @@ fn share_params(name: &str, service: &str, how: &str) -> Value {
 
 #[test]
 fn the_share_card_is_registered_with_the_grant_routes_people_and_a_confirm() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(SHARE_ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.grant), (Floor::Admin, Grant::OneTime));
@@ -203,6 +206,7 @@ fn the_share_card_is_registered_with_the_grant_routes_people_and_a_confirm() {
 /// name that doesn't exist; nothing about the other workspace leaks.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_its_own_secret_and_its_own_service_can_be_asked_for() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -242,6 +246,7 @@ async fn only_its_own_secret_and_its_own_service_can_be_asked_for() {
 /// the agent's own call.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_service_name_two_workspaces_share_reaches_only_the_askers() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -267,6 +272,7 @@ async fn a_service_name_two_workspaces_share_reaches_only_the_askers() {
 /// The whole card: words, who answers, the confirm, once only, no value.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_owner_allows_it_once_with_a_confirm_and_no_value_shows() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -399,6 +405,7 @@ async fn the_owner_allows_it_once_with_a_confirm_and_no_value_shows() {
 /// the route a second time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_admin_login_allows_it_as_itself_and_a_token_works_once() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -437,6 +444,7 @@ async fn an_admin_login_allows_it_as_itself_and_a_token_works_once() {
 /// carries into `$K2_SECRETS_DIR`, and the restart it names is `k2 app`'s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_guarded_app_gets_the_shared_file_through_its_wall() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -488,6 +496,7 @@ async fn a_guarded_app_gets_the_shared_file_through_its_wall() {
 /// What a card can't do is refused when asked, with what to do instead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn what_the_route_would_refuse_is_refused_when_asked() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -606,6 +615,7 @@ fn off_by(expires_at: &str, secs: i64) -> i64 {
 
 #[test]
 fn the_use_card_is_registered_with_a_person_floor_and_a_proof_that_follows_the_delivery() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(USE_ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.grant, r.spec.direction), (Floor::Admin, Grant::OneTime, Direction::Loosen));
@@ -633,6 +643,7 @@ fn the_use_card_is_registered_with_a_person_floor_and_a_proof_that_follows_the_d
 /// person who can answer is told.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_name_that_does_not_exist_gets_the_same_answers_as_one_that_does() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -687,6 +698,7 @@ async fn a_name_that_does_not_exist_gets_the_same_answers_as_one_that_does() {
 /// card.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_use_route_refuses_a_name_it_cant_see_the_same_whether_or_not_it_exists() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -740,6 +752,7 @@ async fn a_use_route_refuses_a_name_it_cant_see_the_same_whether_or_not_it_exist
 /// shape only, and never names its own workspace.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn what_a_card_can_ask_for_is_fixed() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let _v = crate::vault::ensure_test_vault();
@@ -760,6 +773,7 @@ async fn what_a_card_can_ask_for_is_fixed() {
 /// the secret some other way; a Member can't either.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_cant_approve_its_own_card() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -799,6 +813,7 @@ async fn an_agent_cant_approve_its_own_card() {
 /// the end of it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_persons_allow_grants_for_the_time_asked_and_it_ends() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -868,6 +883,7 @@ async fn a_persons_allow_grants_for_the_time_asked_and_it_ends() {
 /// something later.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_denied_card_grants_nothing() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -893,6 +909,7 @@ async fn a_denied_card_grants_nothing() {
 /// and asking again is a new card a person still has to answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_expired_card_grants_nothing() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -921,6 +938,7 @@ async fn an_expired_card_grants_nothing() {
 /// bound to this card.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_readable_delivery_needs_a_confirm_and_stops_at_the_ceiling() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -979,6 +997,7 @@ async fn a_readable_delivery_needs_a_confirm_and_stops_at_the_ceiling() {
 /// `for=session`: the grant is the asking session's, with an end even so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_card_reaches_only_the_session_that_asked() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -1026,6 +1045,7 @@ fn ask_from(ws: &Ws, session: &str, params: Value) -> Value {
 /// is still one card for the workspace.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_sessions_asking_for_themselves_get_their_own_cards() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -1067,6 +1087,7 @@ async fn two_sessions_asking_for_themselves_get_their_own_cards() {
 /// A card never takes away access a person already gave.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_time_boxed_card_never_shortens_a_longer_grant() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();

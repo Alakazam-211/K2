@@ -56,6 +56,18 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T,
 }
 
 pub(crate) fn insert(r: &PermissionRequest) -> Result<(), String> {
+    // The server-wide pending cap (`limits::check_ask`, 50) counts every
+    // open request in the database. Under libtest every test of this
+    // binary shares one database, so requests left open by earlier tests
+    // filled the cap and a later test's ask got 429 (the shuffled soak).
+    // A test that opens a request runs on its own database: one test, one
+    // server, one queue.
+    #[cfg(test)]
+    assert!(
+        k2_core::db::scoped_handle_for_test().is_some(),
+        "a test that opens a permission request needs its own database (let _db = k2_core::db::scoped_for_test();): \
+         the server-wide pending cap counts every open request, and the binary-wide test database is every test's server at once"
+    );
     with_conn(|c| {
         c.execute(
             &format!("INSERT INTO permission_requests ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)"),

@@ -886,7 +886,16 @@ mod tests {
         });
         let facts = PaneFacts { child_pid: Some(100), known_conversation_id: None };
         let mut claim = PaneOwner::default();
+        // The store's timer thread (started by any in-process daemon test
+        // earlier in this binary, `spawn()`) ticks every row on the wall
+        // clock each time an input wakes it. Fed at t = 2.3 s after the
+        // epoch, this row was 30 min past its evidence on that clock and
+        // went stale between the feed and the read. Run the row's clock a
+        // minute ahead of the wall clock instead, so no deadline of this
+        // row comes due while the test runs.
+        let t0 = now_ms() + 60_000;
         let mut feed = |pid: i32, body: &str, t: i64| {
+            let t = t0 + t;
             let mut env = envelope::parse(
                 &HookHeaders {
                     pane: sid.to_string(),
@@ -934,7 +943,7 @@ mod tests {
         assert_eq!(row["children"]["subagents"], 1, "{row}");
         assert_eq!(row["counts"]["subagents"], 1, "{row}");
         assert_eq!(row["counts"]["tools"], 1, "the background job's Task call counts: {row}");
-        assert_eq!(row["evidenceAt"], 2_500, "evidence follows the background job: {row}");
+        assert_eq!(row["evidenceAt"], t0 + 2_500, "evidence follows the background job: {row}");
         unregister(sid);
     }
 

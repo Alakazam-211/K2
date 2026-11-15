@@ -89,6 +89,7 @@ fn asker_pending() -> Value {
 
 #[test]
 fn every_other_doc_is_the_identity() {
+    let _db = k2_core::db::scoped_for_test();
     let text = OverlayDoc::text("t1".into(), "billing".into(), "billing".into(), "hello".into(), "thread");
     let keep = doc(json!({"id":"kc1","kind":"choice","from":"pog","to":"pog","created_at":1,"via":"card",
         "choice":{"prompt":"Keep it as yours?","options":[{"label":"Keep as mine"}],"allow_custom":false,"status":"pending",
@@ -106,6 +107,7 @@ fn every_other_doc_is_the_identity() {
 
 #[test]
 fn the_approver_gets_the_contract_view() {
+    let _db = k2_core::db::scoped_for_test();
     let stored = doc(approver_pending());
     assert_eq!(wire(&project(&stored, &rosson(), 2)), approver_pending(), "§17.11.1");
     // Stored for another viewer: rosson still gets exactly his own view.
@@ -124,6 +126,7 @@ fn the_approver_gets_the_contract_view() {
 
 #[test]
 fn the_asker_and_other_members_wait_with_a_note_box() {
+    let _db = k2_core::db::scoped_for_test();
     let stored = doc(approver_pending());
     assert_eq!(wire(&project(&stored, &dana(), 2)), asker_pending(), "§17.11.5");
     let mut lee_want = asker_pending();
@@ -141,6 +144,7 @@ fn the_asker_and_other_members_wait_with_a_note_box() {
 
 #[test]
 fn approved_asker_sees_who_allowed_it_and_no_undo() {
+    let _db = k2_core::db::scoped_for_test();
     let stored = doc(approver_approved());
     assert_eq!(wire(&project(&stored, &rosson(), 2)), approver_approved(), "§17.11.2");
     let mut want = approver_approved();
@@ -155,6 +159,7 @@ fn approved_asker_sees_who_allowed_it_and_no_undo() {
 
 #[test]
 fn passports_and_old_clients_get_the_fallback() {
+    let _db = k2_core::db::scoped_for_test();
     let stored = doc(approver_pending());
     // §17.11.10: an agent passport, whatever it sends.
     let want_agent = json!({"id":"tc_7f3a2c90","kind":"text","from":"billing","to":"billing","created_at":1761060000,"via":"permission",
@@ -229,6 +234,7 @@ fn answered(off: bool, deny: Option<Option<&str>>) -> Value {
 /// answers, for every fallback viewer (old build, agent passport).
 #[test]
 fn done_line_names_the_action_for_on_and_off_cards() {
+    let _db = k2_core::db::scoped_for_test();
     let cases: [(bool, Option<Option<&str>>, &str); 6] = [
         (false, None, "Allowed by rosson: Let billing run jobs on this server's compute nodes."),
         (false, Some(None), "Denied by rosson: Let billing run jobs on this server's compute nodes."),
@@ -260,6 +266,7 @@ fn done_line_names_the_action_for_on_and_off_cards() {
 /// done line: the old setting-for-agent wording, with one stop.
 #[test]
 fn done_line_falls_back_to_the_setting_without_a_sentence() {
+    let _db = k2_core::db::scoped_for_test();
     let mut v = approver_approved();
     v["choice"]["action"]["view"]["whatChanges"] = json!("  ");
     let got = wire(&project(&doc(v), &dana(), 0));
@@ -268,6 +275,7 @@ fn done_line_falls_back_to_the_setting_without_a_sentence() {
 
 #[test]
 fn id_seq_and_guest_safety() {
+    let _db = k2_core::db::scoped_for_test();
     let stored = doc(approver_pending());
     let item = OverlayItem { collection: "thread".into(), seq: 41, id: stored.id.clone(), doc: stored.clone(), conversation_id: Some("c".into()) };
     for v in [rosson(), dana(), billing_passport()] {
@@ -296,6 +304,7 @@ fn id_seq_and_guest_safety() {
 
 #[test]
 fn after_close_the_card_stays_already_done_and_closed_cards_never_show_buttons() {
+    let _db = k2_core::db::scoped_for_test();
     let mut v = approver_pending();
     v["choice"]["status"] = json!("answered");
     v["choice"]["answer"] = json!("Close");
@@ -347,6 +356,7 @@ fn batch_doc(confirm_item: bool) -> OverlayDoc {
 
 #[test]
 fn batches_answer_all_only_without_confirms() {
+    let _db = k2_core::db::scoped_for_test();
     let b = wire(&project(&batch_doc(true), &rosson(), 2));
     assert_eq!(b["choice"]["action"]["view"]["viewer"],
         json!({"login":"rosson","role":"owner","via":"login","mode":"approve","canAnswer":true,"canAnswerAll":false,"isAsker":false}), "§17.11.12");
@@ -372,6 +382,7 @@ fn batches_answer_all_only_without_confirms() {
 
 #[test]
 fn cards_opt_in_parsing() {
+    let _db = k2_core::db::scoped_for_test();
     let mut q = HashMap::new();
     assert_eq!(cards_param(&q), 0);
     q.insert("cards".to_string(), "2".to_string());
@@ -433,6 +444,7 @@ fn stored(ws: &Ws, card: &str) -> OverlayDoc {
 /// and "Already on: …" on old clients and for the agent.
 #[test]
 fn a_satisfied_pending_card_draws_already_on_with_close() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed();
     let (_, card) = ask(&ws);
     testkit::set_on(&ws.id, "test.switch", true);
@@ -457,6 +469,7 @@ fn a_satisfied_pending_card_draws_already_on_with_close() {
 /// to the approve and wait views.
 #[test]
 fn a1s_stored_view_projects_per_viewer() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed();
     let (id, card) = ask(&ws);
     let d = stored(&ws, &card);
@@ -479,6 +492,7 @@ fn a1s_stored_view_projects_per_viewer() {
 /// that was answered with `Close`.
 #[test]
 fn the_sweep_moves_pending_to_already_done_and_back_and_republishes() {
+    let _db = k2_core::db::scoped_for_test();
     let ws = seed();
     let (id, card) = ask(&ws);
     let state = || store::get_by_display_id(&id).expect("db").expect("row").state;

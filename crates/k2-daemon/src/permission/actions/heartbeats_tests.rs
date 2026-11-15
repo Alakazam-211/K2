@@ -36,6 +36,7 @@ fn enabled(id: &str, name: &str) -> bool {
 
 #[test]
 fn both_actions_are_registered_at_the_admin_floor_with_their_walls() {
+    let _db = k2_core::db::scoped_for_test();
     for id in [PAUSE_ACTION, RESUME_ACTION] {
         let r = super::super::find(id).expect("registered");
         k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
@@ -62,6 +63,7 @@ fn both_actions_are_registered_at_the_admin_floor_with_their_walls() {
 
 #[test]
 fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_pauses_it_as_the_admin() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let name = format!("triage-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
@@ -124,6 +126,7 @@ fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_pauses_it_as_the_admin
 
 #[test]
 fn values_that_dont_hold_are_refused_at_the_ask() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let name = format!("triage-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);

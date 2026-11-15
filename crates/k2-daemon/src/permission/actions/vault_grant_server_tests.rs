@@ -61,6 +61,7 @@ fn confirm_for(v: &k2_vault::LocalVault, request: &str, stamp: &str) -> String {
 
 #[test]
 fn the_card_is_registered_with_the_share_floor_a_confirm_and_its_wall() {
+    let _db = k2_core::db::scoped_for_test();
     let r = super::super::find(ACTION).expect("registered");
     k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((r.spec.floor, r.spec.proof), (Floor::Admin, Proof::SettingsConfirm { action: ConfirmAction::VaultShareService }));
@@ -73,6 +74,7 @@ fn the_card_is_registered_with_the_share_floor_a_confirm_and_its_wall() {
 /// ask for; the walls map teaches that exact line.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agents_grant_of_a_server_secret_it_cant_see_teaches_the_ask() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -128,6 +130,7 @@ async fn an_agents_grant_of_a_server_secret_it_cant_see_teaches_the_ask() {
 /// says env reaches new sessions only (k2 agent refresh).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_owner_allows_it_with_the_confirm_and_the_grant_route_runs_as_the_owner() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();
@@ -170,6 +173,7 @@ async fn the_owner_allows_it_with_the_confirm_and_the_grant_route_runs_as_the_ow
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn denying_grants_nothing_and_tells_the_agent() {
+    let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let v = crate::vault::ensure_test_vault();

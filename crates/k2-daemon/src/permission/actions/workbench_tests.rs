@@ -94,6 +94,7 @@ fn branch_exists(root: &Path, b: &str) -> bool {
 
 #[test]
 fn both_actions_are_registered_at_the_admin_floor_with_their_walls() {
+    let _db = k2_core::db::scoped_for_test();
     for (id, route, code, keys) in [
         (LAND_ACTION, LAND_ROUTE, LAND_NEEDS_PERSON, ["sidecar", "tip"]),
         (RETIRE_ACTION, RETIRE_ROUTE, RETIRE_NEEDS_PERSON, ["sidecar", "discard"]),
@@ -124,6 +125,7 @@ fn both_actions_are_registered_at_the_admin_floor_with_their_walls() {
 
 #[test]
 fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_lands_and_retires() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let ws: Ws = seed("wbland");
@@ -182,6 +184,7 @@ fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_lands_and_retires() {
 
 #[test]
 fn retire_refuses_unlanded_work_until_discard() {
+    let _db = k2_core::db::scoped_for_test();
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let ws: Ws = seed("wbret");

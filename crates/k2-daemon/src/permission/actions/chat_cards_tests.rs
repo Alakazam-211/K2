@@ -53,6 +53,7 @@ fn confirm_for(e: &Env, action: &str, id: &str, stamp: &str) -> String {
 
 #[test]
 fn both_cards_are_registered_with_the_routes_floor_a_confirm_and_their_walls() {
+    let _db = k2_core::db::scoped_for_test();
     let k = super::super::find(KEY_ACTION).expect("apps.chat-key");
     let g = super::super::find(GOV_ACTION).expect("sew.space-governance");
     for (r, confirm, route) in [(&k, ConfirmAction::AppsChatKey, KEY_ROUTE), (&g, ConfirmAction::SewSpaceGovernance, GOV_ROUTE)] {
@@ -76,6 +77,7 @@ fn both_cards_are_registered_with_the_routes_floor_a_confirm_and_their_walls() {
 /// or widens it; a Sew without the flag can't have one.
 #[test]
 fn a_chat_key_ask_is_its_own_apps_and_checked_against_the_routes_rules() {
+    let _db = k2_core::db::scoped_for_test();
     let _e = env();
     let ws = seed("ckq");
     let other = seed("cko");
@@ -107,6 +109,7 @@ fn a_chat_key_ask_is_its_own_apps_and_checked_against_the_routes_rules() {
 /// ceiling, once only.
 #[test]
 fn the_owner_turns_the_key_on_from_the_card_and_an_admin_past_the_ceiling_leaves_it_open() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env();
     flag();
     let ws = seed("ckc");
@@ -177,6 +180,7 @@ fn the_owner_turns_the_key_on_from_the_card_and_an_admin_past_the_ceiling_leaves
 /// App-governed from the card, through the route, as itself.
 #[test]
 fn the_owner_switches_its_apps_space_to_app_governed_from_the_card() {
+    let _db = k2_core::db::scoped_for_test();
     let e = env();
     flag();
     let ws = seed("sgv");

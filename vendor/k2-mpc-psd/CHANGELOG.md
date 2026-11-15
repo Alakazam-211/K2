@@ -1,11 +1,27 @@
 # Changelog
 
+## v0.1.8: pairs with kit v0.19.0
+
+**Requires `k2-mpc-base` v0.19.0**, checked out beside this repo. The crate version is `0.1.8`;
+`Cargo.lock` records k2-mpc-base 0.19.0. This pack's own code's behaviour is unchanged from
+v0.1.7. As for v0.1.7, the tag is a cut commit that leaves out the test tooling (`fuzz/`,
+`scripts/oracle/`).
+
+- Pairs with kit v0.19.0. The kit release adds chunked tier-0 versions, off by default: a host
+  that turns them on stores a large PSD or PSB file's versions as chunks (this pack gives no cut
+  hints). A blob doc's node claims end as before, and the pack declares no view schema, so PSD
+  and PSB files behave as in v0.1.7.
+- Public text: `scripts/check-labels.sh` also blocks parity-row, finding and run labels, branch
+  names and engine codes. The v0.1.7 entry's long line is wrapped.
+- `crates/psd/Cargo.toml`'s kit comment names v0.19.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.19.0 and the crate version 0.1.8.
+
 ## v0.1.7 (2026-11-12): pairs with kit v0.18.0
 
 **Requires `k2-mpc-base` v0.18.0**, checked out beside this repo. The crate version is `0.1.7`;
 `Cargo.lock` records k2-mpc-base 0.18.0 (only the kit's crate version moves). This pack's own
-code's behaviour is unchanged from v0.1.6. As for v0.1.6, the tag is a cut commit that leaves out the test
-tooling (`fuzz/`, `scripts/oracle/`).
+code's behaviour is unchanged from v0.1.6. As for v0.1.6, the tag is a cut commit that leaves out
+the test tooling (`fuzz/`, `scripts/oracle/`).
 
 - Pairs with kit v0.18.0. Its changes for a pack: build the view index's structs with
   `..X::default()` (and the schema's parts with `..X::NONE`); a keyed doc's `MPC-E822` is

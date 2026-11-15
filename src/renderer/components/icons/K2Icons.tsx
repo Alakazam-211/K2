@@ -34,6 +34,8 @@
 //     Lucide 1.58 `plus`, `minus`, squared.
 //   Api (the Workspace drawer's API section)
 //     Lucide 1.73 `braces`, squared caps (the braces themselves are curves).
+//   Apps (the Workspace drawer's Apps section)
+//     Lucide 1.73 `app-window`, squared (no corner radius).
 //   Gardens
 //     Not here: K2's own brush ensō, `ZenIcon` (components/Zen/ZenIcon.tsx).
 //
@@ -404,6 +406,19 @@ export function BoardIcon(props: K2IconProps = {}): React.JSX.Element {
       <path d="M2 3h20" />
       <path d="M21 3v13H3V3" />
       <path d="M7 21l5-5 5 5" />
+    </svg>
+  )
+}
+
+/** Apps (the Workspace drawer's Apps section): Lucide `app-window`, a
+ *  window with its title bar, squared (no corner radius). */
+export function AppsIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('app-window', props)}>
+      <rect width="20" height="16" x="2" y="4" />
+      <path d="M2 8h20" />
+      <path d="M6 4v4" />
+      <path d="M10 4v4" />
     </svg>
   )
 }

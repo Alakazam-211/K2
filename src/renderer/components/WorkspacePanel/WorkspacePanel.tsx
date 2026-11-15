@@ -16,6 +16,7 @@ import { showContextMenu } from '@/lib/context-menu'
 import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
 import { HeartbeatsPanel } from '@/components/HeartbeatsPanel/HeartbeatsPanel'
 import { UrlsPortsSection } from './UrlsPortsSection'
+import { AppsSection } from './AppsSection'
 import { WorkspaceApiSection } from './WorkspaceApiSection'
 import { ConnectedAgentsSection } from './ConnectedAgentsSection'
 import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
@@ -202,6 +203,9 @@ export default function WorkspacePanel(): React.JSX.Element {
 
       {/* ── Connected Agents (present connections only) ── */}
       <ConnectedAgentsSection projectId={activeProject.id} />
+
+      {/* ── Apps ── the Apps this agent maintains, above what it publishes */}
+      <AppsSection projectId={activeProject.id} />
 
       {/* ── Published ── (collapsible; daemon-owned hosted services +
           leftover BYO nested URLs, live via publish_services_changed /

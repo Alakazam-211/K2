@@ -257,8 +257,11 @@ THE SHAPE
     pass and no cookie travel with the bytes, and your server never carries
     them.
   The door is /_k2/transfers/ on your App's addresses (<app>.<box>.k2.dev
-  and its live custom domains) and on this server's own address. K2 answers
-  it before your App, App up or down. Each answer closes the connection
+  and its live custom domains), on a local App's front port
+  (http://127.0.0.1:<front port>, an App installed without --tunnel) and on
+  this server's own address. K2 answers it before your App, App up or down.
+  A browser may call it straight from any origin (CORS *: the token is a
+  bearer, never a cookie). Each answer closes the connection
   (HTTP/1.1, one request per connection). K2 answers url as a path: the app
   puts it after the origin it already talks to. Times (expiresAt,
   tokenExpiresAt, K2-Upload-Expires) are milliseconds since the epoch.
@@ -351,8 +354,10 @@ FROM RUST (A TAURI APP) AND FROM THE WEB
   The crate runs in your app's process, so it stops when the phone suspends
   the app: on a phone, hand the PUTs to the OS (above) through a small
   native plugin, and use the crate on the desktop and to finish up when the
-  app wakes. A web page or Node: uploadToDoor({ base, url, token, data })
-  from @k2/server.
+  app wakes. A web page or Node: uploadToDoor({ base, url, token, data }):
+    import { uploadToDoor, TransferError, type UploadToDoorOptions,
+      type DoorUploadStatus, type DoorUploadDone } from '@k2/server'
+  (k2 app sdk add). Without the SDK, every field: k2 study app-transfers-http.
 
 TOKENS AND LIMITS
   - An upload token opens its one upload; a download token opens its one
@@ -374,7 +379,8 @@ TOKENS AND LIMITS
     4xx: fix the request (bad_range), resend (checksum_mismatch), or send
     what missing lists (upload_incomplete).
 
-MORE: k2 study app-api (every verb), k2 study tauri, k2 study app-errors.
+MORE: k2 study app-transfers-http (raw HTTP, every field, curl),
+k2 study app-api (every verb), k2 study tauri, k2 study app-errors.
 EOF
 }
 

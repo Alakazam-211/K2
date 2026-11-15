@@ -851,6 +851,27 @@ tx_lines="$(printf '%s\n' "$tx_out" | wc -l | tr -d ' ')"
 if [ "$tx_lines" -le 140 ]; then echo "  PASS: app-transfers is bounded ($tx_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-transfers is $tx_lines lines (max 140)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: app-transfers row" "$("$K2" study)" "  app-transfers       Big uploads and downloads"
 assert_contains "tauri points at app-transfers" "$("$K2" study tauri)" "k2 study app-transfers"
+for needle in "http://127.0.0.1:<front port>" "CORS *" "type DoorUploadStatus" "k2 study app-transfers-http"; do
+    assert_contains "app-transfers: $needle" "$tx_out" "$needle"
+done
+
+echo "== k2 study app-transfers-http (the raw HTTP reference) =="
+th_out="$("$K2" study app-transfers-http)"
+assert_contains "title" "$th_out" "k2 study app-transfers-http — resumable uploads over plain HTTP, every field"
+for needle in "POST /cli/fs/upload/create" "GET  /cli/fs/upload/status?uploadId=<id>" "POST /cli/fs/upload/complete {uploadId, sha256?}" \
+    "POST /cli/fs/upload/abort {uploadId}" "POST /cli/fs/upload/token {uploadId, tokenTtlSecs?}" "Authorization: Bearer k2skn_" \
+    "Authorization: Bearer k2up_<id>.<secret>" "Content-Range: bytes <first>-<last>/<size>" "missing[0][0]" "K2-Upload-Received" \
+    "Access-Control-Allow-Origin: *" "Access-Control-Allow-Headers: Authorization, Content-Type, Content-Range," \
+    "transfer_token_required" "transfer_token_invalid" "pass_invalid" "cap_not_granted" "rate_limited" "busy" "bad_range" \
+    "guest_pass_required" "too_many_transfers" "upload_incomplete" "checksum_mismatch" "A LOCAL APP" "Yes, the door answers there" \
+    "curl -sS -X PUT" "--data-binary @p0" "/complete" "from '@k2/server'" "dist/server/src/transfer.js" "generated/verbs.js"; do
+    assert_contains "app-transfers-http: $needle" "$th_out" "$needle"
+done
+th_lines="$(printf '%s\n' "$th_out" | wc -l | tr -d ' ')"
+if [ "$th_lines" -le 165 ]; then echo "  PASS: app-transfers-http is bounded ($th_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-transfers-http is $th_lines lines (max 165)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-transfers-http row" "$("$K2" study)" "  app-transfers-http  Resumable uploads without the SDK"
+assert_contains "usage lists app-transfers-http" "$("$K2" study --help)" "  app-transfers-http  app-chat"
+assert_contains "catalog --json: app-transfers-http" "$("$K2" study --json)" '"id":"app-transfers-http"'
 
 echo "== k2 study app-pairing (prd-app-phone-pairing-v1, 0.46.5) =="
 pp_out="$("$K2" study app-pairing)"

@@ -469,3 +469,100 @@ async fn download_tokens_serve_ranges_with_if_range_and_recheck_rights() {
     let owner_t = post(port, "/cli/thread/attachment/token", OWNER, json!({ "addr": addr, "id": doc, "n": 0 })).await;
     assert_eq!(owner_t.status, 200, "a person may save what they may open: {}", owner_t.body);
 }
+
+/// A local App (installed without a tunnel, reached at
+/// `http://127.0.0.1:<front port>`): the door answers on its front port,
+/// App up and App down (`apps::router::serve_app_conn` → `read_first_plain`
+/// reads the head for the door while any transfer exists on this box). Before
+/// any transfer exists, the same path is the App's. The pass side goes over
+/// the daemon's own port, as an App's server would; the bytes go only
+/// through the front port, and the file lands in the room.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_door_answers_on_a_local_apps_front_port_app_up_or_down() {
+    require_python3();
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let ws = seed_ws(&env, &format!("lfw{tag}"));
+    let app = format!("lfa{tag}");
+
+    // A real App on the process engine, no tunnel: loopback only.
+    let r = post(port, "/cli/app/install", OWNER, json!({ "app": app, "workspace": ws.id, "engine": "process" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let front = r.json()["frontPort"].as_u64().expect("frontPort") as u16;
+    assert_ne!(front, port, "the front port is the App's own listener, not the daemon's");
+    let folder = app_folder(&ws.path.join(&app), &app, "1.0.0", "v1");
+    let r = post(port, "/cli/app/deploy", OWNER, json!({ "app": app, "folder": folder, "wait": 60 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["deployment"]["result"], "live", "{}", r.body);
+    assert_eq!(http_get(front, "/").map(|(s, b)| (s, b.trim().to_string())), Some((200, "v1".to_string())));
+
+    // No transfer on this box yet: a door path on the front port is the App's.
+    let fake = format!("/_k2/transfers/uploads/{}", "0".repeat(32));
+    assert_eq!(
+        http_get(front, &fake).map(|(s, b)| (s, b.trim().to_string())),
+        Some((200, "v1".to_string())),
+        "with no transfer live, K2 doesn't read the App's requests for the door"
+    );
+
+    let (pass, _) = guest(port, &ws, &format!("lia{tag}"), &["thread:read", "files:write"]).await;
+    let data: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let r = post(
+        port,
+        "/cli/fs/upload/create",
+        &pass,
+        json!({ "workspace": ws.handle, "dir": "local", "filename": "front.bin", "size": data.len(), "sha256": sha(&data) }),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let up = r.json();
+    let id = up["uploadId"].as_str().expect("uploadId").to_string();
+    let url = up["url"].as_str().expect("url").to_string();
+    let token = up["transferToken"].as_str().expect("transferToken").to_string();
+
+    // A browser's preflight, then the second half, App up.
+    let o = door(
+        front,
+        "OPTIONS",
+        &url,
+        None,
+        &[("Origin", format!("http://127.0.0.1:{front}")), ("Access-Control-Request-Method", "PUT".into())],
+        b"",
+    )
+    .await;
+    assert_eq!(o.status, 204, "{:?}", String::from_utf8_lossy(&o.body));
+    assert_eq!(o.h("Access-Control-Allow-Origin"), Some("*"));
+    assert!(o.h("Access-Control-Allow-Methods").expect("allow methods").contains("PUT"));
+    assert!(o.h("Access-Control-Allow-Headers").expect("allow headers").contains("Content-Range"));
+    let r = put(front, &url, &token, 100_000, &data[100_000..], data.len()).await;
+    assert_eq!(r.status, 200, "App up: {:?}", String::from_utf8_lossy(&r.body));
+    assert_eq!(r.json()["missing"], json!([[0, 99_999]]));
+    assert_eq!(r.h("K2-Upload-Received"), Some("100000-199999"));
+    assert_eq!(r.h("Access-Control-Allow-Origin"), Some("*"));
+    assert_eq!(r.h("Connection"), Some("close"));
+    assert_eq!(http_get(front, "/").map(|(s, _)| s), Some(200), "the App still serves its own paths");
+
+    // App down: K2 answers the App's own paths 503, and the door still works.
+    let r = post(port, "/cli/app/stop", OWNER, json!({ "app": app })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(http_get(front, "/").is_some_and(|(s, _)| s == 503), "stopped: K2 answers 503 at the front");
+    let r = put(front, &url, &token, 0, &data[..100_000], data.len()).await;
+    assert_eq!(r.status, 200, "App down: {:?}", String::from_utf8_lossy(&r.body));
+    assert_eq!(r.json()["complete"], json!(true));
+    let h = door(front, "HEAD", &url, Some(&token), &[], b"").await;
+    assert_eq!(h.status, 200);
+    assert_eq!(h.h("K2-Upload-Received"), Some("0-199999"));
+    assert_eq!(h.h("K2-Upload-Done"), Some("0"));
+    let g = door(front, "GET", &url, Some(&token), &[], b"").await;
+    assert_eq!((g.status, g.json()["receivedBytes"].clone()), (200, json!(200_000)));
+    let c = door(front, "POST", &format!("{url}/complete"), Some(&token), &[], json!({ "sha256": sha(&data) }).to_string().as_bytes()).await;
+    assert_eq!(c.status, 200, "{:?}", String::from_utf8_lossy(&c.body));
+    assert_eq!(c.json()["relPath"], "local/front.bin");
+    assert_eq!(c.json()["done"], json!(true));
+    assert_eq!(std::fs::read(ws.path.join("local/front.bin")).expect("the file is in the room"), data);
+    // The App's server sees it done too.
+    let s = get(port, "/cli/fs/upload/status", &pass, &format!("uploadId={id}")).await;
+    assert_eq!(s.status, 200, "{}", s.body);
+    assert_eq!((s.json()["done"].clone(), s.json()["relPath"].clone()), (json!(true), json!("local/front.bin")));
+}

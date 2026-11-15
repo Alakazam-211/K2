@@ -2,7 +2,7 @@
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-transfers-http app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps"
 
 _study_usage() {
     cat <<'EOF'
@@ -21,7 +21,7 @@ Topics:
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  auth-pages  app-profile
   app-account-deletion  app-transfers  app-recording
-  app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
+  app-transfers-http  app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  ci  ci-release  ci-stats  vault
   notifications  data-sources  projects  hooks  agent-hire
@@ -68,6 +68,7 @@ _study_title() {
         app-profile) echo "A person's own profile, picture and sessions in an App" ;;
         app-account-deletion) echo "A person deletes their own App account: store rules, modes, what stays" ;;
         app-transfers) echo "Big files that survive the app in the background" ;;
+        app-transfers-http) echo "Resumable uploads over plain HTTP: every field, refusal and curl" ;;
         app-chat) echo "Chat, voice and calls in your App (Chat / Voice Hosting)" ;;
         app-recording) echo "Recording in an App's calls: consent, required, server reads, the lock" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
@@ -203,6 +204,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   app-profile         A person's own profile, picture and sessions in an App; who decides
   app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
   app-transfers       Big uploads and downloads that survive a phone app in the background
+  app-transfers-http  Resumable uploads without the SDK: every route, field, refusal; curl
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   app-recording       Recording in an App's calls: all off, consent, required, server reads, the card, the lock
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
@@ -295,6 +297,7 @@ _study_page() {
         app-profile) _study_page_app_profile ;;
         app-account-deletion) _study_page_app_account_deletion ;;
         app-transfers) _study_page_app_transfers ;;
+        app-transfers-http) _study_page_app_transfers_http ;;
         app-chat) _study_page_app_chat ;;
         app-recording) _study_page_app_recording ;;
         chat-voice) _study_page_chat_voice ;;

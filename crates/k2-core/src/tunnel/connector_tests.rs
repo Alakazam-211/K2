@@ -2006,9 +2006,12 @@ fn registering_frpc(dir: &Path) -> PathBuf {
 /// supervisor lets go (no kill), and the connector singleton is
 /// forgotten as a fresh daemon would have it.
 fn hand_off_and_forget() -> i32 {
+    let released = handoff_releases_for_test();
     let pid = detach_for_handoff().expect("a live frpc to hand off");
-    // The supervisor polls every second; give it time to let go.
-    std::thread::sleep(SUPERVISE_POLL * 2);
+    // The supervisor polls every second: wait until it has let go. A fixed
+    // two-poll sleep lost the race on a loaded Mac node; the supervisor
+    // then saw a plain stop once DETACHED was cleared, and killed frpc.
+    wait_until("the supervisor lets go after the hand-off", 15, || handoff_releases_for_test() > released);
     *state().lock().unwrap_or_else(|p| p.into_inner()) = None;
     DETACHED.store(false, Ordering::SeqCst);
     pid

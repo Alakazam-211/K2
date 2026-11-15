@@ -338,11 +338,14 @@ fn a_restarted_daemon_adopts_the_running_frpc_voice() {
         wait_until("up", 10, is_up);
         let pid = voice_pid();
 
+        let released = connector::handoff_releases_for_test();
         connector::detach_for_handoff().expect("a live frpc to hand off");
         wait_until("the voice supervisor lets go", 5, || !SUPERVISING.load(Ordering::SeqCst));
         assert!(frpc_proc::pid_alive(pid), "hand-off leaves frpc-voice running");
-        // The main supervisor polls every second: give it time to let go.
-        std::thread::sleep(Duration::from_millis(2100));
+        // The main supervisor polls every second: wait until it has let go
+        // (forgetting clears the hand-off flag; one that hasn't polled yet
+        // would then see a plain stop).
+        wait_until("the main supervisor lets go", 15, || connector::handoff_releases_for_test() > released);
         connector::forget_after_handoff_for_test();
         forget_for_test();
         assert!(frpc_proc::pid_alive(pid));

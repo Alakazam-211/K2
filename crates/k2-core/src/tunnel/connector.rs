@@ -572,6 +572,19 @@ pub(crate) fn detached() -> bool {
     DETACHED.load(Ordering::SeqCst)
 }
 
+/// Supervisors that let go of their frpc for a hand-off (the
+/// `ChildOutcome::Detached` exit) in this process.
+static HANDOFF_RELEASES: AtomicU64 = AtomicU64::new(0);
+
+/// Tests: how many supervisors have let go after a hand-off. A test that
+/// forgets the connector waits for this to move first: forgetting clears
+/// [`DETACHED`], and a supervisor that hasn't polled yet would then see a
+/// plain stop and kill the frpc the "next daemon" is meant to adopt.
+#[cfg(test)]
+pub(crate) fn handoff_releases_for_test() -> u64 {
+    HANDOFF_RELEASES.load(Ordering::SeqCst)
+}
+
 /// Tests (the voice lane's): forget the connector as a fresh daemon has it
 /// after a hand-off, leaving frpc running.
 #[cfg(test)]
@@ -2703,6 +2716,7 @@ fn spawn_supervised(
                     );
                     // Never kill or reap it: the successor adopts it.
                     std::mem::forget(child);
+                    HANDOFF_RELEASES.fetch_add(1, Ordering::SeqCst);
                     return;
                 }
                 let came_up = run.came_up;

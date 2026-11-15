@@ -8,7 +8,8 @@ are bytes, times milliseconds since the epoch, ranges [first, last] with
 last inclusive. JSON numbers are integers. Machine-readable, generated from
 K2's verb catalog: the vendored SDK's dist/server/src/generated/verbs.js
 (each verb's method, route and response schema) and verbs.d.ts (its args).
-The door and the refusal codes are on this page only.
+The door and the refusal codes are on this page only. Browsers never send
+Expect: 100-continue, so the -H 'Expect:' in the curl lines is for curl only.
 
 YOUR SERVER, AS THE PERSON
   On your gateway link, K2_GATEWAY_URL (a --cmd service: the daemon's

@@ -995,6 +995,13 @@ mod tests {
             assert!(r.body.contains("k2.dev"), "{}", r.body);
             assert!(r.body.contains("not_ready"), "{}", r.body);
         }
+        // k5.dev is ours too. The message still says "a k2.dev name".
+        for h in ["mail.box.k5.dev", "K5.DEV", "box.k5.dev."] {
+            let r = pick_mail_host("example.com", Some(h.to_string())).unwrap_err();
+            assert_eq!(r.status, "409 Conflict", "{h}: {}", r.body);
+            assert!(r.body.contains("not_ready"), "{}", r.body);
+            assert!(r.body.contains("control plane"), "{}", r.body);
+        }
         let r = pick_mail_host("example.com", None).unwrap_err();
         assert_eq!(r.status, "409 Conflict");
         assert!(r.body.contains("no mail hostname"), "{}", r.body);

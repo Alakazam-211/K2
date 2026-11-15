@@ -349,6 +349,21 @@ mod tests {
     use super::test_util::*;
     use super::*;
 
+    /// A name in a zone of ours is never a custom App domain, whatever
+    /// the row says it is used for: k2.dev, and k5.dev before any box
+    /// answers there.
+    #[test]
+    fn our_own_zones_are_never_a_custom_domain() {
+        for h in ["acme.k2.dev", "k2.dev", "acme.k5.dev", "app.acme.k5.dev", "k5.dev", "Acme.K5.Dev."] {
+            for role in [None, Some(domains::ROLE_MAIL), Some(domains::ROLE_DIRECT)] {
+                let e = bind_conflict(h, role).unwrap_err();
+                assert_eq!((e.status, e.code), (400, K2_DEV_NAME), "{h} {role:?}: {e:?}");
+            }
+        }
+        assert_eq!(bind_conflict("shop.example.com", None), Ok(()));
+        assert_eq!(bind_conflict("notk5.dev", None), Ok(()), "only ends in the letters");
+    }
+
     #[test]
     fn unknown_apps_are_refused_for_everyone() {
         let _db = k2_core::db::scoped_for_test();

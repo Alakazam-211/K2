@@ -1395,12 +1395,17 @@ mod tests {
         let (ok, why) = calendar_reach(true, Some("tls-alpn"), Some("mail.box.k2.dev"), false);
         assert!(!ok, "never mail.<box>.k2.dev");
         assert!(why.expect("reason").contains("control plane"));
+        let (ok, why) = calendar_reach(true, Some("tls-alpn"), Some("mail.box.k5.dev"), true);
+        assert!(!ok, "never mail.<box>.k5.dev either");
+        assert!(why.expect("reason").contains("control plane"));
         assert!(!calendar_reach(false, Some("tls-alpn"), Some("mail.example.com"), false).0);
         assert_eq!(
             caldav_url(Some("mail.example.com")).as_deref(),
             Some("https://mail.example.com/.well-known/caldav")
         );
         assert_eq!(caldav_url(Some("mail.box.k2.dev")), None);
+        assert_eq!(caldav_url(Some("mail.box.k5.dev")), None);
+        assert_eq!(caldav_url(Some("Mail.Box.K5.Dev.")), None);
         assert_eq!(caldav_url(None), None);
     }
 

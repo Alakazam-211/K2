@@ -1288,6 +1288,23 @@ mod tests {
         assert!(load().last_scan_note.unwrap().contains("air-gap"));
     }
 
+    /// A name in a zone of ours never goes to the CA from here, even
+    /// when a binding row says it is attached: k2.dev, and k5.dev before
+    /// any box answers there.
+    #[test]
+    fn names_in_our_own_zones_do_not_qualify() {
+        for (host, apex) in [
+            ("app.box.k2.dev", "box.k2.dev"),
+            ("app.box.k5.dev", "box.k5.dev"),
+            ("App.Box.K5.Dev.", "box.k5.dev"),
+            ("box.k5.dev", "box.k5.dev"),
+        ] {
+            let why = qualifies(&row(host, "other", Some(binding(apex, false, None)))).expect_err(host);
+            assert_eq!(why, "Connect *.k2.dev names stay on cert.k2.dev", "{host}");
+        }
+        assert_eq!(qualifies(&row("app.example.com", "other", Some(binding("example.com", false, None)))), Ok(()));
+    }
+
     #[test]
     fn scan_skips_names_that_no_longer_qualify() {
         let _home = crate::test_support::TempHome::new();

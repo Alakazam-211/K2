@@ -1688,6 +1688,7 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
         let conn = db.lock();
         let apex = format!("ext-{}.example", &uuid::Uuid::new_v4().simple().to_string()[..12]);
         assert!(zone_is_k2_hosted(&conn, "lumon.k2.dev"));
+        assert!(zone_is_k2_hosted(&conn, "lumon.k5.dev"), "k5.dev is ours too, with no binding row");
         assert!(!zone_is_k2_hosted(&conn, &apex), "no binding = external");
         for (dns_write, status, hosted) in [(0, None, false), (1, Some("pending_ns"), false), (1, Some("active"), true)] {
             conn.execute("DELETE FROM domain_bindings WHERE apex = ?1", rusqlite::params![apex])

@@ -2321,6 +2321,10 @@ mod tests {
         let c = caldav_check(&env, "mail.box.k2.dev");
         assert_eq!(c.status, ST_WARN);
         assert!(env.http_calls.lock().unwrap().is_empty());
+        let c = caldav_check(&env, "mail.box.k5.dev");
+        assert_eq!(c.status, ST_WARN);
+        assert!(c.detail.contains("control-plane name"), "{}", c.detail);
+        assert!(env.http_calls.lock().unwrap().is_empty(), "a k5.dev name is not probed either");
     }
 
     fn srv(target: &str, port: u16) -> dns_verify::SrvAnswer {

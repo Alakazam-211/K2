@@ -1616,6 +1616,8 @@ mod tests {
             Some("box.example.com".into())
         );
         assert_eq!(host_from_front_door_url("https://skin.rosson.k2.dev"), None);
+        assert_eq!(host_from_front_door_url("https://skin.rosson.k5.dev"), None, "k5.dev is ours too");
+        assert_eq!(host_from_front_door_url("Skin.Rosson.K5.DEV"), None);
         assert_eq!(host_from_front_door_url("https://127.0.0.1"), None);
         assert_eq!(host_from_front_door_url(""), None);
     }

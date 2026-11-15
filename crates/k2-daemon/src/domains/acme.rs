@@ -1244,6 +1244,8 @@ mod tests {
     #[test]
     fn k2_dev_names_are_rejected() {
         assert!(reject_k2_dev("rosson.k2.dev").is_err());
+        assert!(reject_k2_dev("rosson.k5.dev").is_err(), "k5.dev is ours too");
+        assert!(reject_k2_dev("mail.rosson.k5.dev").is_err());
         assert!(reject_k2_dev("mail.lumon.io").is_ok());
     }
 

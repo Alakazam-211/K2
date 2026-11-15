@@ -12,9 +12,10 @@
 //! their own names for them and their own env overrides.
 
 /// Every zone whose names are ours: what [`in_zone`], [`under_zone`] and
-/// [`label_of`] ask about. One today. A zone goes on this list before
-/// anything is served under it, so that a name in it is never taken for
-/// someone else's domain.
+/// [`label_of`] ask about. A zone goes on this list before anything is
+/// served under it, so that a name in it is never taken for someone
+/// else's domain: `k5.dev` is here for that reason, and no box answers
+/// under it yet.
 ///
 /// Who should ask these: a check that REFUSES our own names (as a custom
 /// domain, a mail domain, a name to issue a certificate for here). Those
@@ -22,7 +23,7 @@
 /// is ours (the Origin check, routing by host, a peer's address) uses
 /// [`ZONE_SUFFIX`], the primary zone, until serving a second zone is
 /// built on purpose: a longer list must never widen what is let in.
-pub const ZONES: &[&str] = &["k2.dev"];
+pub const ZONES: &[&str] = &["k2.dev", "k5.dev"];
 
 /// The zone a box's own name is built under: what [`box_host`] uses.
 /// Building names under another zone is a separate, deliberate change.
@@ -97,18 +98,38 @@ mod tests {
         assert_eq!(ZONE_SUFFIX, format!(".{ZONE}"));
     }
 
-    /// One zone today, and it is the one names are built under. Adding a
-    /// zone to ZONES changes what counts as ours and nothing about how a
-    /// box's name is built.
+    /// Two zones are ours, and names are still built under the first.
+    /// Adding a zone to ZONES changes what counts as ours and nothing
+    /// about how a box's name is built.
     #[test]
-    fn the_zones_are_the_primary_zone_and_no_other() {
-        assert_eq!(ZONES, &["k2.dev"]);
+    fn the_zones_are_k2_dev_and_k5_dev_and_names_are_built_under_k2_dev() {
+        assert_eq!(ZONES, &["k2.dev", "k5.dev"]);
         assert_eq!(PRIMARY_ZONE, "k2.dev");
-        assert!(ZONES.contains(&PRIMARY_ZONE));
+        assert_eq!(ZONES[0], PRIMARY_ZONE);
         assert_eq!(ZONE, PRIMARY_ZONE);
+        assert_eq!(ZONE_SUFFIX, ".k2.dev");
+        assert_eq!(box_host("acme"), "acme.k2.dev");
     }
 
-    /// label_of is `strip_suffix(".k2.dev")`, case for case.
+    /// A k5.dev name is ours for the checks that refuse our own names.
+    #[test]
+    fn k5_dev_names_are_in_a_zone_of_ours() {
+        assert!(in_zone("k5.dev"));
+        assert!(in_zone("acme.k5.dev"));
+        assert!(in_zone("app.acme.k5.dev"));
+        assert!(under_zone("acme.k5.dev"));
+        assert!(!under_zone("k5.dev"), "the bare zone is not under itself");
+        assert_eq!(label_of("acme.k5.dev"), Some("acme"));
+        assert_eq!(label_of("app.acme.k5.dev"), Some("app.acme"));
+        assert_eq!(label_of("k5.dev"), None);
+        assert!(!in_zone("notk5.dev"), "a name that only ends in the letters is not in the zone");
+        assert!(!in_zone("k5.dev.example.com"));
+        assert!(!in_zone("ACME.K5.DEV"), "bytes as given: the caller lowers first");
+        assert!(!in_zone("acme.k5.dev."), "a trailing dot is the caller's to trim");
+    }
+
+    /// For a name that does not end in k5.dev, label_of is
+    /// `strip_suffix(".k2.dev")`, case for case.
     #[test]
     fn label_of_takes_the_zone_off_the_end() {
         for host in [

@@ -1482,6 +1482,8 @@ mod tests {
         assert_eq!(names.len(), 3);
         assert!(!names.contains(&"autoconfig.example.com".to_string()));
         assert!(extra_names_for_apex("rosson.k2.dev", None).is_empty(), "Connect names stay on cert.k2.dev");
+        assert!(extra_names_for_apex("rosson.k5.dev", None).is_empty(), "k5.dev is ours too");
+        assert!(extra_names_for_apex("Rosson.K5.Dev.", None).is_empty());
         assert!(extra_names_for_apex("", None).is_empty());
         assert!(extra_names_for_apex("localhost", None).is_empty());
     }

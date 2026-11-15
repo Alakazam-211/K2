@@ -23,8 +23,9 @@ use crate::error::{Result, VaultError};
 const PSL: &str = include_str!("../data/public_suffix_list.dat");
 
 /// K2's own shared suffixes: every customer box lives under these, so a
-/// wildcard there would reach every customer (Rosson, VS4).
-const K2_SHARED_SUFFIXES: &[&str] = &["k2.dev", "app.k2.dev"];
+/// wildcard there would reach every customer (Rosson, VS4). The `k5.dev`
+/// pair is listed before any box answers under that zone.
+const K2_SHARED_SUFFIXES: &[&str] = &["k2.dev", "app.k2.dev", "k5.dev", "app.k5.dev"];
 
 struct Psl {
     rules: HashSet<String>,
@@ -466,6 +467,24 @@ mod tests {
         assert_eq!(public_suffix_labels("abc.supabase.co"), 2);
         assert!(!is_registrable_or_below("supabase.co"));
         assert!(is_registrable_or_below("abc.supabase.co"));
+    }
+
+    /// k5.dev is a shared suffix like k2.dev: a wildcard over every box
+    /// there is refused, one box's own names are not.
+    #[test]
+    fn k5_dev_is_a_shared_suffix() {
+        for s in ["*.k5.dev", "*.app.k5.dev"] {
+            let e = p(s).expect_err(s);
+            assert_eq!(e.code, "wildcard_public_suffix", "{s}");
+        }
+        for s in ["*.box1.k5.dev", "*.box1.app.k5.dev", "box1.k5.dev"] {
+            p(s).unwrap_or_else(|e| panic!("{s}: {e}"));
+        }
+        assert_eq!(public_suffix_labels("box1.k5.dev"), 2);
+        assert_eq!(public_suffix_labels("web.box1.app.k5.dev"), 3);
+        assert!(!is_registrable_or_below("k5.dev"));
+        assert!(!is_registrable_or_below("app.k5.dev"));
+        assert!(is_registrable_or_below("box1.k5.dev"));
     }
 
     #[test]

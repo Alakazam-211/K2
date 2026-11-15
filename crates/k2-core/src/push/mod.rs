@@ -151,9 +151,11 @@ pub enum CallPushState {
     Ringing,
     /// Nobody answered in time (Sew wrote `call_missed`).
     Missed,
-    /// The ring stopped without a missed call: answered on another device,
-    /// declined, cancelled by the caller, or the call ended.
+    /// The ring stopped without a missed call: declined, cancelled by the
+    /// caller, or the call ended.
     Ended,
+    /// The person answered on another device.
+    Answered,
 }
 
 impl CallPushState {
@@ -163,9 +165,17 @@ impl CallPushState {
             Self::Ringing => "ringing",
             Self::Missed => "missed",
             Self::Ended => "ended",
+            Self::Answered => "answered",
         }
     }
 }
+
+/// `aps.category` of a DM call's ring (K2 Companion's Accept / Decline).
+pub const CALL_CATEGORY_RING: &str = "K2_CALL";
+/// `aps.category` of the push that replaces the ring (missed, ended, answered).
+pub const CALL_CATEGORY_DONE: &str = "K2_CALL_DONE";
+/// `aps.interruption-level` of a ring (harmless without the entitlement).
+pub const INTERRUPTION_TIME_SENSITIVE: &str = "time-sensitive";
 
 /// One person's DM call push (S14).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -681,6 +691,7 @@ impl PushEvent {
                 CallPushState::Ringing => "Incoming call".to_string(),
                 CallPushState::Missed => "Missed call".to_string(),
                 CallPushState::Ended => "Call ended".to_string(),
+                CallPushState::Answered => "Answered on another device".to_string(),
             },
         }
     }
@@ -841,6 +852,32 @@ impl PushEvent {
         use sha2::{Digest, Sha256};
         let hex: String = Sha256::digest(id.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
         format!("{prefix}{}", &hex[..COLLAPSE_ID_MAX - prefix.len()])
+    }
+
+    /// What the relay puts in the CLEAR `aps` of this push, beside the seal
+    /// (never content: fixed words only). A DM call's ring: `category`
+    /// `K2_CALL`, `interruptionLevel` `time-sensitive` and `sound`, so it
+    /// rings even when the phone's extension can't open the seal; the push
+    /// that replaces it: `category` `K2_CALL_DONE`. Other kinds: none.
+    pub fn aps_hints(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::Call(c) if c.state == CallPushState::Ringing => Some(serde_json::json!({
+                "category": CALL_CATEGORY_RING,
+                "interruptionLevel": INTERRUPTION_TIME_SENSITIVE,
+                "sound": PUSH_SOUND_DEFAULT,
+            })),
+            Self::Call(_) => Some(serde_json::json!({ "category": CALL_CATEGORY_DONE })),
+            _ => None,
+        }
+    }
+
+    /// Merge [`Self::aps_hints`] into a relay `payload` object.
+    pub fn add_aps_hints(&self, payload: &mut serde_json::Value) {
+        if let (Some(serde_json::Value::Object(h)), Some(p)) = (self.aps_hints(), payload.as_object_mut()) {
+            for (k, v) in h {
+                p.insert(k, v);
+            }
+        }
     }
 
     /// The mobile deep-link `data` object ([`K2Cloud`] payloads): IDs
@@ -1771,6 +1808,7 @@ impl K2Cloud {
         if let Some(c) = event.collapse_id() {
             payload["collapseId"] = serde_json::json!(c);
         }
+        event.add_aps_hints(&mut payload);
         payload
     }
 
@@ -2116,7 +2154,9 @@ impl K2Cloud {
         }
         for (format, chunk) in by_format.iter().flat_map(|(f, all)| all.chunks(MAX_DEVICES_PER_CALL).map(move |c| (*f, c))) {
             let entries: Vec<e2e::SealedEntry> = chunk.iter().map(|(e, _)| e.clone()).collect();
-            let body = e2e::sealed_dispatch_body_in(kind, format, &entries);
+            let mut body = e2e::sealed_dispatch_body_in(kind, format, &entries);
+            // A DM call's ring sounds even if the seal can't be opened.
+            event.add_aps_hints(&mut body["payload"]);
             let started = std::time::Instant::now();
             let mut out = attempts::RelayOutcome::default();
             let sent = self.post_sealed(&url, &body, now, &mut out);
@@ -3015,6 +3055,28 @@ mod tests {
             _ => unreachable!(),
         } });
         assert_eq!(nameless.title(), "K2");
+        // K2 Companion's asks: the ring's category, sound and level ride the
+        // CLEAR payload (and the sealed call's), the replacement's category too.
+        assert_eq!(r["category"], "K2_CALL");
+        assert_eq!(r["interruptionLevel"], "time-sensitive");
+        for state in [CallPushState::Missed, CallPushState::Ended, CallPushState::Answered] {
+            let p = K2Cloud::payload(&ring(state), &stamp, TEST_KEY);
+            assert_eq!(p["category"], "K2_CALL_DONE", "{state:?}");
+            assert!(p.get("interruptionLevel").is_none(), "{state:?}");
+            assert_eq!(p["collapseId"], "call:88001");
+        }
+        assert_eq!(ring(CallPushState::Answered).body(), "Answered on another device");
+        let mut sealed = e2e::sealed_dispatch_body(seal::SealKind::Alert, &[]);
+        ring(CallPushState::Ringing).add_aps_hints(&mut sealed["payload"]);
+        assert_eq!(sealed["payload"]["sound"], "default", "in the clear, outside the seal");
+        assert_eq!(sealed["payload"]["category"], "K2_CALL");
+        assert_eq!(sealed["payload"]["data"].as_object().map(|d| d.len()), Some(2), "the sealed data stays kind and v");
+        // A phone with no key (sealed-only): fixed words, never "New message".
+        let g = e2e::generic_payload(&ring(CallPushState::Ringing), &stamp, TEST_KEY);
+        assert_eq!((g["title"].as_str(), g["body"].as_str()), (Some("K2"), Some("Incoming call")));
+        assert_eq!(g["category"], "K2_CALL");
+        // Other kinds carry no hints.
+        assert!(PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![] }.aps_hints().is_none());
     }
 
     /// Communication Notifications: `avatarRev` + `agentColor` ride every

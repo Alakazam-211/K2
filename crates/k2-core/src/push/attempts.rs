@@ -138,6 +138,7 @@ pub fn kind_label(event: &PushEvent, lane: Lane) -> &'static str {
             super::CallPushState::Ringing => "call_ring",
             super::CallPushState::Missed => "call_missed",
             super::CallPushState::Ended => "call_ended",
+            super::CallPushState::Answered => "call_answered",
         },
     }
 }

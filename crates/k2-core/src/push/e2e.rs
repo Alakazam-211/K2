@@ -623,12 +623,16 @@ pub fn generic_payload(event: &PushEvent, stamp: &PushStamp, badge_key: &str) ->
             data.insert(k, v);
         }
     }
-    serde_json::json!({
+    // A DM call says what it is in K2's own fixed words (no name, no id).
+    let body = if matches!(event, PushEvent::Call(_)) { event.body() } else { GENERIC_BODY.to_string() };
+    let mut p = serde_json::json!({
         "title": GENERIC_TITLE,
-        "body": GENERIC_BODY,
+        "body": body,
         "data": data,
         "sound": PUSH_SOUND_DEFAULT,
-    })
+    });
+    event.add_aps_hints(&mut p);
+    p
 }
 
 /// The constant visible text of a sealed or generic alert.

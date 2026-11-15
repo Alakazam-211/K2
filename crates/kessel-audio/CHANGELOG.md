@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-15)
 
 ### Breaking
 
@@ -31,14 +31,18 @@
   `CaptureStage` is `process(&mut [f32; 480])` (10 ms of 48 kHz mono, in
   place), a fixed `latency_samples()` (at most `MAX_STAGE_LATENCY_SAMPLES`,
   one second) and `reset()`.
-- The stage's budget, enforced on the processing thread: a call of 9 ms or
-  more, or a 99th percentile over 6 ms across the last 100 calls, is a
-  strike. The stage is bypassed: the echo canceller's output goes on,
-  delayed by the stage's latency (a preallocated delay line), so the timing
-  never shifts. It is retried after 10 s of capture (reset, then warmed for
-  its latency) and bypassed for good on the third strike. A panic (in
-  `process` or `reset`) or a NaN or infinite sample is a fault: bypassed for
-  good, no retry.
+- The stage's budget, enforced on the processing thread: a strike is 2
+  consecutive calls of 9 ms or more, or a 99th percentile over 6 ms across
+  the last 100 calls (one late call alone, usually the thread being
+  preempted, is not). On a strike the stage is bypassed: the echo
+  canceller's output goes on, delayed by the stage's latency (a
+  preallocated delay line), so the timing never shifts. It is retried after
+  10 s of capture (reset, then warmed for its latency). 3 strikes within
+  60 s of capture make the bypass permanent; otherwise the count decays. A
+  panic (in `process` or `reset`) or a NaN or infinite sample is a fault:
+  bypassed for good, no retry. A panic is only caught with
+  `panic = "unwind"` (the default); with `panic = "abort"` it ends the
+  process.
 - `Stats::capture_stage: Option<CaptureStageStats>`: `active`, the sticky
   `bypassed: Option<StageBypassReason>` (`Budget` or `Fault`), `strikes`,
   `permanent`, `latency_samples`, block counts and the longest and 99th
@@ -58,7 +62,12 @@
   10 ms block. `CaptureStageStats::fallback_noise_suppression` says when it
   stands in. Neither the switching nor the suppressor allocates per block
   (counted). Its own delay (334 samples) comes out of the stage's latency,
-  so the timing holds for stages with at least 7 ms of latency.
+  so the timing holds for stages with at least 7 ms of latency. Measured
+  cost (60 s of duplex, release build, x86-64): a pass-through stage with
+  noise suppression off and the floor on costs 50–54 µs per 10 ms block
+  more than 0.1.0's full chain (0.51–0.54% of a core), against 2–7 µs
+  (0.02–0.07%) for the hook alone with the same processing. Turn the floor
+  off with `with_stage_fallback_noise_suppression(None)`.
 - `ProcessingConfig::with_noise_suppression`, `with_echo_cancellation`,
   `with_gain_control`, `with_high_pass` and
   `with_stage_fallback_noise_suppression`.

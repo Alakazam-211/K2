@@ -142,11 +142,29 @@ impl Core {
         cfg: CoreConfig,
         stage: Option<Box<dyn CaptureStage>>,
     ) -> Result<Core, AudioError> {
-        let enc = OpusEnc::new(cfg.encoder)?;
         let apm = match stage {
             None => Apm::new(cfg.processing),
             Some(s) => Apm::with_stage(cfg.processing, s)?,
         };
+        Self::with_apm(cfg, apm)
+    }
+
+    /// [`Core::with_stage`] with the stage timed by `clock` (tests).
+    #[cfg(test)]
+    pub(crate) fn with_stage_clock(
+        cfg: CoreConfig,
+        stage: Option<Box<dyn CaptureStage>>,
+        clock: crate::stage::StageClock,
+    ) -> Result<Core, AudioError> {
+        let apm = match stage {
+            None => Apm::new(cfg.processing),
+            Some(s) => Apm::with_stage_clock(cfg.processing, s, clock)?,
+        };
+        Self::with_apm(cfg, apm)
+    }
+
+    fn with_apm(cfg: CoreConfig, apm: Apm) -> Result<Core, AudioError> {
+        let enc = OpusEnc::new(cfg.encoder)?;
         let level_blocks = (cfg.levels_interval_ms / 10).max(1);
         Ok(Core {
             apm,

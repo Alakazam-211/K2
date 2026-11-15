@@ -37,8 +37,12 @@ use std::time::{Duration, Instant};
 ///   called again if `process` hasn't run since the last reset. Clear the
 ///   state that carried the old audio. Only the first call may allocate.
 ///
-/// The engine enforces a time budget (see [`StageBypassReason`]): a stage
-/// that runs too long or misbehaves is bypassed, and the call goes on with
+/// The engine enforces a time budget (see [`StageBypassReason`]): a strike
+/// is 2 consecutive calls of 9 ms or more, or a 99th percentile over 6 ms
+/// across 100 calls; it is retried after 10 s of capture, and 3 strikes
+/// within 60 s of capture make the bypass permanent (otherwise the count
+/// decays). A panic or a non-finite sample is a fault: bypassed for good.
+/// A stage that runs too long or misbehaves is bypassed, and the call goes on with
 /// the echo canceller's output, delayed by `latency_samples` so the timing
 /// never shifts; with
 /// [`stage_fallback_noise_suppression`](crate::ProcessingConfig::stage_fallback_noise_suppression)
@@ -59,8 +63,12 @@ pub trait CaptureStage: Send + 'static {
 /// The longest stage latency the engine accepts: one second.
 pub const MAX_STAGE_LATENCY_SAMPLES: usize = 48_000;
 
-/// A single `process` call at or above this is a strike.
+/// Two consecutive `process` calls at or above this are a strike (one
+/// alone is not: a single late block is usually the OS preempting the
+/// thread, not a slow stage).
 pub(crate) const HARD_BUDGET: Duration = Duration::from_millis(9);
+/// Consecutive calls at or above [`HARD_BUDGET`] that make a strike.
+pub(crate) const HARD_RUN: u32 = 2;
 /// A strike when the 99th percentile of the last [`WINDOW`] calls is
 /// above this (nearest rank: two of the hundred calls above it).
 pub(crate) const P99_BUDGET: Duration = Duration::from_millis(6);
@@ -68,18 +76,23 @@ pub(crate) const P99_BUDGET: Duration = Duration::from_millis(6);
 pub(crate) const WINDOW: usize = 100;
 /// A bypassed stage is retried after this many blocks of capture (10 s).
 pub(crate) const RETRY_BLOCKS: u64 = 1_000;
-/// After this many strikes the stage stays bypassed.
-pub(crate) const MAX_STRIKES: u32 = 3;
+/// This many budget strikes within [`STRIKE_SPAN_BLOCKS`] make the bypass
+/// permanent.
+pub(crate) const MAX_STRIKES: usize = 3;
+/// The span the strikes must fall within, in blocks of capture (60 s).
+/// Older strikes no longer count toward a permanent bypass.
+pub(crate) const STRIKE_SPAN_BLOCKS: u64 = 6_000;
 
 /// Why the capture stage was bypassed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StageBypassReason {
-    /// Over the time budget: one call took 9 ms or more, or the 99th
-    /// percentile of the last 100 calls was over 6 ms. The stage is retried
-    /// after 10 s of capture (it is reset first, and its output is used
-    /// again once its latency has filled with live audio); the third strike
-    /// bypasses it for the rest of the engine's life.
+    /// Over the time budget, a strike: 2 consecutive calls of 9 ms or more,
+    /// or a 99th percentile over 6 ms across the last 100 calls. The stage
+    /// is retried after 10 s of capture (it is reset first, and its output
+    /// is used again once its latency has filled with live audio). 3
+    /// strikes within 60 s of capture make the bypass permanent; otherwise
+    /// the count decays (a strike older than 60 s no longer counts).
     Budget,
     /// The stage panicked (in `process` or `reset`) or returned NaN or
     /// infinite samples. It is never called again. (A panic is only caught
@@ -100,13 +113,14 @@ pub struct CaptureStageStats {
     /// retry (`active` says whether it is running now). `None` if it never
     /// was.
     pub bypassed: Option<StageBypassReason>,
-    /// Bypassed for good: a fault, or the last allowed strike.
+    /// Bypassed for good: a fault, or 3 strikes within 60 s of capture.
     pub permanent: bool,
     /// sonora's noise suppression is standing in for the bypassed stage
     /// right now (see
     /// [`crate::ProcessingConfig::stage_fallback_noise_suppression`]).
     pub fallback_noise_suppression: bool,
-    /// Budget strikes and faults so far.
+    /// Budget strikes and faults so far, all of them (only budget strikes
+    /// within the last 60 s of capture count toward `permanent`).
     pub strikes: u32,
     /// The stage's latency, samples at 48 kHz. Not included in
     /// [`crate::EncodedFrame::ts48k`]: the audio in a frame is this much
@@ -134,9 +148,41 @@ enum Mode {
     Bypassed(Option<u64>),
 }
 
+/// What times the stage's calls: the wall clock, or (tests) a counter the
+/// test advances, so budget behaviour doesn't depend on machine load.
+#[derive(Clone, Debug)]
+pub(crate) enum StageClock {
+    /// [`Instant`].
+    Wall,
+    /// Nanoseconds, advanced by the test (a stage that "takes" time adds
+    /// to it).
+    #[cfg(test)]
+    Manual(std::sync::Arc<std::sync::atomic::AtomicU64>),
+}
+
+impl StageClock {
+    /// Time since `base`.
+    fn now(&self, base: Instant) -> Duration {
+        match self {
+            StageClock::Wall => base.elapsed(),
+            #[cfg(test)]
+            StageClock::Manual(ns) => {
+                Duration::from_nanos(ns.load(std::sync::atomic::Ordering::Relaxed))
+            }
+        }
+    }
+}
+
 /// Runs a [`CaptureStage`] on the processing thread: the budget, the
 /// bypass delay line and the counters. Everything is allocated up front.
 pub(crate) struct StageRunner {
+    clock: StageClock,
+    epoch: Instant,
+    /// Consecutive calls at or above [`HARD_BUDGET`].
+    slow_run: u32,
+    /// The blocks of the last budget strikes (a ring of [`MAX_STRIKES`]).
+    strike_blocks: [u64; MAX_STRIKES],
+    budget_strikes: usize,
     stage: Box<dyn CaptureStage>,
     latency: usize,
     /// The bypass delay line: the input, `latency` samples late.
@@ -164,6 +210,14 @@ impl StageRunner {
     /// thread that will run it: it resets the stage once, so a stage that
     /// prepares itself in `reset` does so here, not in the first block.
     pub(crate) fn new(stage: Box<dyn CaptureStage>) -> Result<StageRunner, AudioError> {
+        Self::with_clock(stage, StageClock::Wall)
+    }
+
+    /// [`StageRunner::new`] timed by `clock`.
+    pub(crate) fn with_clock(
+        stage: Box<dyn CaptureStage>,
+        clock: StageClock,
+    ) -> Result<StageRunner, AudioError> {
         let latency = stage.latency_samples();
         if latency > MAX_STAGE_LATENCY_SAMPLES {
             return Err(AudioError::new(
@@ -174,6 +228,11 @@ impl StageRunner {
             ));
         }
         let mut runner = StageRunner {
+            clock,
+            epoch: Instant::now(),
+            slow_run: 0,
+            strike_blocks: [0; MAX_STRIKES],
+            budget_strikes: 0,
             stage,
             latency,
             delay: vec![0.0; latency].into_boxed_slice(),
@@ -246,9 +305,9 @@ impl StageRunner {
             }
         }
 
-        let t = Instant::now();
+        let t = self.clock.now(self.epoch);
         let r = catch_unwind(AssertUnwindSafe(|| self.stage.process(&mut self.work)));
-        let took = t.elapsed();
+        let took = self.clock.now(self.epoch).saturating_sub(t);
         self.dirty = true;
         self.stats.blocks_processed += 1;
         let us = took.as_micros().min(u32::MAX as u128) as u32;
@@ -260,7 +319,14 @@ impl StageRunner {
             return;
         }
         self.push_time(us);
-        if took >= HARD_BUDGET || (self.win_len == WINDOW && self.over_p99 >= 2) {
+        // One late call alone is usually the thread being preempted: it
+        // takes two in a row, or the percentile, to strike.
+        self.slow_run = if took >= HARD_BUDGET {
+            self.slow_run + 1
+        } else {
+            0
+        };
+        if self.slow_run >= HARD_RUN || (self.win_len == WINDOW && self.over_p99 >= 2) {
             self.strike(StageBypassReason::Budget);
             self.stats.blocks_bypassed += 1;
             return;
@@ -340,7 +406,17 @@ impl StageRunner {
         self.stats.strikes += 1;
         self.stats.bypassed = Some(why);
         self.stats.active = false;
-        let permanent = why == StageBypassReason::Fault || self.stats.strikes >= MAX_STRIKES;
+        // Permanent on a fault, or on the third budget strike within 60 s
+        // of capture: the oldest of the last three is recent enough.
+        let mut permanent = why == StageBypassReason::Fault;
+        if why == StageBypassReason::Budget {
+            self.strike_blocks[self.budget_strikes % MAX_STRIKES] = self.blocks;
+            self.budget_strikes += 1;
+            if self.budget_strikes >= MAX_STRIKES {
+                let oldest = self.strike_blocks[self.budget_strikes % MAX_STRIKES];
+                permanent = self.blocks - oldest <= STRIKE_SPAN_BLOCKS;
+            }
+        }
         self.stats.permanent = permanent;
         self.mode = Mode::Bypassed((!permanent).then_some(self.blocks + RETRY_BLOCKS));
         self.clear_window();
@@ -378,10 +454,12 @@ impl StageRunner {
         self.win_pos = (self.win_pos + 1) % WINDOW;
     }
 
+    /// Start the timing rules afresh (after a strike, a retry or a reset).
     fn clear_window(&mut self) {
         self.win_len = 0;
         self.win_pos = 0;
         self.over_p99 = 0;
+        self.slow_run = 0;
     }
 
     fn p99_us(&mut self) -> u32 {

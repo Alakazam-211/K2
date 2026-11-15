@@ -187,7 +187,7 @@ fn the_capture_stage_path_does_not_allocate() {
     let bare = || ProcessingConfig::off().with_stage_fallback_noise_suppression(None);
 
     let (rnn, on) = RnnLike::new(3);
-    let mut apm = Apm::with_stage(bare(), Box::new(rnn)).expect("stage");
+    let mut apm = Apm::with_stage_clock(bare(), Box::new(rnn), crate::tests::stages::still_clock()).expect("stage");
     let ((), n) = allocations(|| {
         for (i, b) in blocks[100..].iter().enumerate() {
             if i % 500 == 499 {
@@ -212,8 +212,8 @@ fn the_capture_stage_path_does_not_allocate() {
     let cycle = |apm: &mut Apm, script: &crate::tests::stages::Script, out: &mut [f32]| {
         for (i, b) in blocks[..2_600].iter().enumerate() {
             match i {
-                100 => script.sleep_us.store(9_000, Ordering::Relaxed),
-                101 => script.sleep_us.store(0, Ordering::Relaxed),
+                100 => script.cost_us.store(9_000, Ordering::Relaxed),
+                102 => script.cost_us.store(0, Ordering::Relaxed),
                 2_500 => {
                     let next = script.calls.load(Ordering::Relaxed) + 1;
                     script.nan_on.store(next, Ordering::Relaxed);
@@ -225,7 +225,7 @@ fn the_capture_stage_path_does_not_allocate() {
         }
     };
     let (stage, script) = Scripted::new();
-    let mut apm = Apm::with_stage(bare(), Box::new(stage)).expect("stage");
+    let mut apm = Apm::with_stage_clock(bare(), Box::new(stage), script.clock()).expect("stage");
     let ((), n) = allocations(|| cycle(&mut apm, &script, &mut out));
     let s = apm.stage_stats().expect("stage stats");
     assert_eq!(
@@ -245,7 +245,7 @@ fn the_capture_stage_path_does_not_allocate() {
     // switching adds nothing: the count equals the same suppressor's alone
     // on the same blocks.
     let (stage, script) = Scripted::new();
-    let mut apm = Apm::with_stage(ProcessingConfig::off(), Box::new(stage)).expect("stage");
+    let mut apm = Apm::with_stage_clock(ProcessingConfig::off(), Box::new(stage), script.clock()).expect("stage");
     let ((), floor) = allocations(|| cycle(&mut apm, &script, &mut out));
     let s = apm.stage_stats().expect("stage stats");
     assert!(s.permanent && s.fallback_noise_suppression, "{s:?}");
@@ -294,7 +294,7 @@ fn a_capture_stage_adds_no_allocations_to_the_processing_thread() {
     );
     let count = |processing: ProcessingConfig, stage: Option<Box<dyn crate::CaptureStage>>| {
         let cfg = core_cfg(processing);
-        let mut core = Core::with_stage(cfg.clone(), stage).expect("core");
+        let mut core = Core::with_stage_clock(cfg.clone(), stage, crate::tests::stages::still_clock()).expect("core");
         core.add(Participant::new(FAR_ID, &cfg).expect("participant"))
             .unwrap_or_else(|_| panic!("add participant"));
         let t0 = Instant::now();

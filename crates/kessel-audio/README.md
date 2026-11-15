@@ -9,9 +9,11 @@ on [docs.rs](https://docs.rs/kessel-audio), and the source is at
 <https://github.com/Alakazam-211/K2> (`crates/kessel-audio`). Licensed MIT OR
 Apache-2.0.
 
-**Version 0.1** is the first release. Until 1.0, a minor release (0.2, 0.3)
-may change the API, as Cargo allows for 0.x versions; a patch release (0.1.x)
-won't. Each change is listed in the changelog in the repository.
+**Version 0.2** adds the capture stage (see [Capture stage](#capture-stage))
+and makes the configuration structs `#[non_exhaustive]`, which breaks code
+that builds them with struct literals; see `CHANGELOG.md` (it ships in the
+package) for the full list. Until 1.0, a minor release (0.3, 0.4) may change
+the API, as Cargo allows for 0.x versions; a patch release (0.2.x) won't.
 
 ## Platforms
 
@@ -172,15 +174,19 @@ bit what 0.1 ran.
 
 The stage runs on the processing thread, so the engine holds it to a budget:
 
-- a call that takes **9 ms or more**, or a **99th percentile over 6 ms** across
-  the last 100 calls, is a strike: the stage is **bypassed**, and the echo
-  canceller's output goes on **delayed by the stage's latency**, so the
-  timing never shifts. The stage is retried after 10 s of capture (reset
-  first; its output is used again once its latency has filled), and the
-  third strike bypasses it for good;
+- a strike is **2 consecutive calls of 9 ms or more**, or a **99th percentile
+  over 6 ms** across the last 100 calls (one late call alone is not: that is
+  usually the thread being preempted). On a strike the stage is
+  **bypassed**, and the echo canceller's output goes on **delayed by the
+  stage's latency**, so the timing never shifts. The stage is retried after
+  10 s of capture (reset first; its output is used again once its latency
+  has filled). **3 strikes within 60 s** of capture make the bypass
+  permanent; otherwise the count decays;
 - a **panic** or a **NaN or infinite** sample is a fault: bypassed for good.
+  A panic is only caught with `panic = "unwind"` (Rust's default); with
+  `panic = "abort"` a panicking stage ends the process.
 
-Capture never stops for it: the worst case is one late block. While the
+Capture never stops for it: the worst case is two late blocks. While the
 stage is bypassed, sonora's noise suppression stands in (the step-down floor,
 `stage_fallback_noise_suppression`, Moderate by default, when
 `noise_suppression` is off), crossfaded in and out over 10 ms. The state is in

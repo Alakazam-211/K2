@@ -304,7 +304,7 @@ SKILLS (documentation profiles — NOT spawnable; harness handles spawn)
 UPDATE
   update                                        Update K2 app (default: --app)
   update --app                                  Same: check/install app updates
-  update --cli                                  Update this CLI script
+  update --cli [--check]                        CLI vs daemon version; the CLI updates with K2
   update --list                                 Show available versions
 
 ONBOARDING (first-launch flow)

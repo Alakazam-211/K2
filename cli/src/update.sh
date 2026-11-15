@@ -1,6 +1,4 @@
-# ── Self-Update ──────────────────────────────────────────────────────
-
-K2_CLI_RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2"
+# ── Updates ──────────────────────────────────────────────────────────
 
 cmd_app_update() {
     local version="${1:-}"
@@ -58,6 +56,29 @@ for r in data:
     fi
 }
 
+# `k2 update --cli [--check]`. The CLI never updates itself: it ships with K2
+# (the app bundle, Linux packages), and the daemon's CLI staging and the root
+# helper's cli-refresh keep the installed copy matched to the daemon. So this
+# only says which version is installed, whether the local daemon runs the
+# same one, and how K2 updates. It downloads, replaces and runs nothing.
+# The daemon's version is the one read from loopback /boot-status (no token).
+_update_daemon_version() {
+    [ -n "${PORT:-}" ] || return 0
+    local body
+    body=$(_K2_CURL_TRIES=1 _k2_curl "" -s --connect-timeout 2 --max-time 4 \
+        "http://127.0.0.1:${PORT}/boot-status" 2>/dev/null) || return 0
+    printf '%s' "$body" | python3 -c '
+import json, sys
+try:
+    b = json.loads(sys.stdin.read() or "null")
+except Exception:
+    sys.exit(0)
+v = b.get("version") if isinstance(b, dict) else None
+if isinstance(v, str) and v.strip():
+    print(v.strip())
+' 2>/dev/null || true
+}
+
 cmd_update() {
     local check_only=0
     while [ $# -gt 0 ]; do
@@ -67,68 +88,26 @@ cmd_update() {
         esac
     done
 
-    echo "Checking for updates..."
+    local daemon_version
+    daemon_version=$(_update_daemon_version)
+    daemon_version="${daemon_version#v}"
 
-    # Download the latest version string from GitHub
-    local remote_script
-    remote_script=$(curl -sS --connect-timeout 5 --max-time 15 "$K2_CLI_RAW_URL" 2>/dev/null)
-    if [ -z "$remote_script" ]; then
-        echo "Error: Could not reach GitHub to check for updates." >&2
-        exit 1
-    fi
-
-    # Extract the version from the remote script.
-    # Use cut/tr — never a sed that matches K2_CLI_VERSION="0.46.11" (release.sh
-    # rewrites every occurrence of that form when bumping the version).
-    local remote_version
-    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | cut -d'"' -f2)
-    if [ -z "$remote_version" ]; then
-        echo "Error: Could not parse remote version." >&2
-        exit 1
-    fi
-
-    echo "  Installed: $K2_CLI_VERSION"
-    echo "  Latest:    $remote_version"
-
-    # Compare versions (simple string comparison works for semver with same format)
-    if [ "$K2_CLI_VERSION" = "$remote_version" ]; then
-        echo "Already up to date."
-        exit 0
-    fi
-
-    # Check if remote is actually newer (not a downgrade)
-    local newer
-    newer=$(printf '%s\n%s\n' "$K2_CLI_VERSION" "$remote_version" | sort -V | tail -1)
-    if [ "$newer" = "$K2_CLI_VERSION" ]; then
-        echo "Installed version is newer than remote (dev build?)."
-        exit 0
-    fi
-
-    if [ "$check_only" = "1" ]; then
-        echo "Update available: $K2_CLI_VERSION → $remote_version"
-        echo "Run 'k2 update' to install."
-        exit 0
-    fi
-
-    # Find where k2 is installed
-    local install_path
-    install_path=$(which k2 2>/dev/null)
-    if [ -z "$install_path" ]; then
-        echo "Error: Could not find k2 in PATH." >&2
-        exit 1
-    fi
-
-    # Check if we can write to the install path
-    if [ ! -w "$install_path" ]; then
-        echo "Updating $install_path (requires sudo)..."
-        echo "$remote_script" | sudo tee "$install_path" > /dev/null
-        sudo chmod +x "$install_path"
+    echo "k2 CLI ${K2_CLI_VERSION}"
+    if [ -z "$daemon_version" ]; then
+        echo "K2 daemon: didn't answer, so its version is unknown."
+    elif [ "$daemon_version" = "$K2_CLI_VERSION" ]; then
+        echo "K2 daemon: ${daemon_version} (same as the CLI)"
     else
-        echo "Updating $install_path..."
-        echo "$remote_script" > "$install_path"
-        chmod +x "$install_path"
+        echo "K2 daemon: ${daemon_version} (differs from the CLI's ${K2_CLI_VERSION})"
     fi
-
-    echo "Updated k2: $K2_CLI_VERSION → $remote_version"
+    echo ""
+    echo "The CLI updates together with K2; k2 never downloads itself."
+    echo "  Desktop: k2 update --app, or the app's own updater."
+    echo "  Linux:   your K2 package, or the install script."
+    echo "  The K2 daemon and root helper keep this CLI matched to K2."
+    if [ "$check_only" != "1" ]; then
+        echo ""
+        echo "Nothing was changed."
+    fi
+    exit 0
 }
-

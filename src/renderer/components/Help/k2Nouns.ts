@@ -240,7 +240,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'settings', blurb: 'Read/update daemon and workspace settings.', example: 'k2 settings' },
       { noun: 'vault', blurb: 'Secrets: fetch by name, never paste.', example: 'k2 vault list' },
       { noun: 'job', blurb: 'Scripts on a schedule, run by the daemon with their own secrets.', example: 'k2 job list' },
-      { noun: 'update', blurb: 'Update the K2 app or this CLI.', example: 'k2 update --app' },
+      { noun: 'update', blurb: 'Update the K2 app (the CLI updates with it).', example: 'k2 update --app' },
       {
         noun: 'hostchat',
         blurb: 'Chat / Voice Hosting on this Linux box: the chat and voice server, powered by Sew.',

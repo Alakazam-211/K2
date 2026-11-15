@@ -1625,8 +1625,8 @@
    },
    {
     "name": "update",
-    "usage": "k2 update [--app|--cli|--list]",
-    "description": "Update the K2 app or this CLI."
+    "usage": "k2 update [--app|--cli [--check]|--list]",
+    "description": "Update the K2 app. The CLI updates with K2; it never downloads itself."
    },
    {
     "name": "daemon",

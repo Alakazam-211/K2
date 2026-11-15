@@ -122,12 +122,13 @@
     },
     {
       "name": "update",
-      "usage": "k2 update [--app|--cli|--list]",
-      "description": "Update the K2 app or this CLI.",
+      "usage": "k2 update [--app|--cli [--check]|--list]",
+      "description": "Update the K2 app. The CLI updates with K2; it never downloads itself.",
       "args": [],
       "flags": [
         {"name": "--app", "arg": null, "description": "Update the desktop app (default)."},
-        {"name": "--cli", "arg": null, "description": "Update this CLI script."},
+        {"name": "--cli", "arg": null, "description": "Show the CLI's and the daemon's versions and how the CLI updates (with K2). Downloads nothing."},
+        {"name": "--check", "arg": null, "description": "With --cli: the same, without the closing 'Nothing was changed.'"},
         {"name": "--list", "arg": null, "description": "List available versions."}
       ]
     },

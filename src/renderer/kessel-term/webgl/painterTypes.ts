@@ -25,7 +25,7 @@ export interface PainterTheme {
    * Coverage-gamma exponent for tinted glyphs (`pow(coverage, gamma)`).
    * Live from the style store (per-style / per-scheme; Settings →
    * Styles) so the slider updates open WebGL tabs without remount.
-   * Dev override `localStorage.K2SO_WEBGL_TEXT_GAMMA` still wins at
+   * Dev override `localStorage.K5_WEBGL_TEXT_GAMMA` still wins at
    * paint time.
    */
   textGamma: number

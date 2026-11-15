@@ -11,7 +11,8 @@
 // saved weight (or the polarity preset if never adjusted).
 //
 // Precedence at paint time (highest first):
-//   1. localStorage.K2SO_WEBGL_TEXT_GAMMA  — dev escape hatch
+//   1. localStorage.K5_WEBGL_TEXT_GAMMA    — dev escape hatch (the older
+//      K2SO_WEBGL_TEXT_GAMMA is still read after it)
 //   2. style-store textGamma               — effective value for the
 //      active style (loaded from per-style storage or preset)
 //

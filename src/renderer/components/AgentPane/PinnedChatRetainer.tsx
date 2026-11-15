@@ -45,19 +45,14 @@ import {
   type RetainedChatSlotKind,
 } from '@/stores/retained-chat'
 import { computeRetainedSet } from '@/kessel-term/retainedChat'
+import { readDebugKey } from '@/lib/debug-keys'
 
-/** Escape hatch: `localStorage.K2SO_PINNED_RETAIN_OFF = '1'` restores
- *  park-on-hidden everywhere without a rebuild (read per render — flip
- *  takes effect on the next workspace switch). */
+/** Escape hatch: `localStorage.K5_PINNED_RETAIN_OFF = '1'` (or the older
+ *  `K2SO_PINNED_RETAIN_OFF`) restores park-on-hidden everywhere without a
+ *  rebuild (read per render — flip takes effect on the next workspace
+ *  switch). */
 export function retentionDisabled(): boolean {
-  try {
-    return (
-      typeof localStorage !== 'undefined' &&
-      localStorage.getItem('K2SO_PINNED_RETAIN_OFF') === '1'
-    )
-  } catch {
-    return false
-  }
+  return readDebugKey('PINNED_RETAIN_OFF') === '1'
 }
 
 interface PinnedChatGateProps {

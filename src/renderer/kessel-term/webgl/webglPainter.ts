@@ -25,6 +25,7 @@ import {
   TEXT_GAMMA_LIGHT,
   clampTextGamma,
 } from '@/lib/text-gamma'
+import { readDebugKey } from '@/lib/debug-keys'
 
 /** Known clear color for the mount-time pixel-readback sanity probe
  *  (brief §7.7: WKWebView's WebGL history demands a rendered-pixels
@@ -40,21 +41,18 @@ const PREWARM_BAND = 24
 const PREWARM_BUDGET_MS = 2
 
 /** Text-weight ("chonky") gamma resolution. Precedence (highest first):
- *    1. localStorage.K2SO_WEBGL_TEXT_GAMMA — dev escape hatch
+ *    1. localStorage.K5_WEBGL_TEXT_GAMMA (or the older
+ *       K2SO_WEBGL_TEXT_GAMMA) — dev escape hatch
  *    2. frame.theme.textGamma — style-store effective value
  *       (per-style/scheme override or polarity preset; live from
  *       Settings → Styles so open tabs update without remount)
  *  Clamp [0.5, 3] applied once here. Default when both missing is
  *  the light-theme preset (1.05). */
 function resolveFrameTextGamma(frameGamma: number | undefined): number {
-  try {
-    const raw = localStorage.getItem('K2SO_WEBGL_TEXT_GAMMA')
-    if (raw !== null) {
-      const v = parseFloat(raw)
-      if (Number.isFinite(v)) return clampTextGamma(v)
-    }
-  } catch {
-    // localStorage unavailable (tests) — fall through.
+  const raw = readDebugKey('WEBGL_TEXT_GAMMA')
+  if (raw !== null) {
+    const v = parseFloat(raw)
+    if (Number.isFinite(v)) return clampTextGamma(v)
   }
   if (typeof frameGamma === 'number' && Number.isFinite(frameGamma)) {
     return clampTextGamma(frameGamma)
@@ -92,11 +90,10 @@ export function createWebglPainter(
   const cache = new RowCache()
   const buffers = new FrameBuffers()
 
-  // Diagnostics (owner feel-test aid): localStorage.K2SO_WEBGL_DIAG='1'
-  // → one console line per 60 rendered frames with timing + volume.
-  const diagEnabled =
-    typeof localStorage !== 'undefined' &&
-    localStorage.getItem('K2SO_WEBGL_DIAG') === '1'
+  // Diagnostics (owner feel-test aid): localStorage.K5_WEBGL_DIAG='1'
+  // (or the older K2SO_WEBGL_DIAG) → one console line per 60 rendered
+  // frames with timing + volume.
+  const diagEnabled = readDebugKey('WEBGL_DIAG') === '1'
   let diagFrames = 0
   let diagMs = 0
 

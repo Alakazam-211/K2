@@ -768,7 +768,10 @@ impl Node {
             let line = self.host.lock().unwrap().line();
             sys(&mut journal, &format!("host: {line}"));
         }
-        if let Some(line) = self.job_network_line(&t, network) {
+        // The network, cargo's target dir and missing-tool lines (0.46.13)
+        // go to a server that speaks easy mode, like the cpus and tools
+        // lines: an older one gets its own release's log (golden_solo).
+        if let Some(line) = t.speaks_easy().then(|| self.job_network_line(&t, network)).flatten() {
             sys(&mut journal, &line);
         }
         // Toolchains: explicit needs (required) + what the repo declares
@@ -945,13 +948,15 @@ impl Node {
             tools_used = crate::toolchain::tools_used(&env, &cwd, &explicit_needs).await;
             sys(&mut journal, &crate::toolchain::tools_line(&tools_used));
         }
-        // A tool the command calls that the job's PATH lacks: say which
-        // --needs brings it, before the command fails with "not found".
-        for hint in crate::toolchain::missing_tool_hints(&a.plan.argv, &env, &explicit_needs) {
-            sys(&mut journal, &hint);
+        if easy {
+            // A tool the command calls that the job's PATH lacks: say which
+            // --needs brings it, before the command fails with "not found".
+            for hint in crate::toolchain::missing_tool_hints(&a.plan.argv, &env, &explicit_needs) {
+                sys(&mut journal, &hint);
+            }
+            // Where cargo builds: the slot's target dir, not ./target.
+            sys(&mut journal, &runner::target_dir_line(&env, &target));
         }
-        // Where cargo builds: the slot's target dir, not ./target.
-        sys(&mut journal, &runner::target_dir_line(&env, &target));
         if stop.borrow().is_some() {
             let s = stop.borrow().clone().unwrap_or(StopReason { state: JobState::Cancelled, reason: "cancelled".into() });
             self.finish_job(&t, &a, Some(&dirs), s.state, Some(&s.reason), None, src_ran, None, Some(journal), lease, None).await;

@@ -35,7 +35,7 @@ impl Relay {
         if let Some(r) = self.script.lock().expect("relay").pop_front() {
             return r;
         }
-        GatewayResponse {
+        GatewayResponse { call_aps: false,
             status: 200,
             body: "{\"ok\":true,\"results\":[]}".into(),
             s0: true,
@@ -383,7 +383,7 @@ fn a_v2_phone_on_an_s2_relay_gets_the_bigger_bucket_and_the_whole_reply() {
     assert_eq!(calls[0].1["payload"]["data"]["v"], "1");
     assert_eq!(calls[0].1["devices"][0]["e2e"].as_str().expect("e2e").len(), 2159);
     // The caps are stored with s2 and survive a restart.
-    assert_eq!(e2e::load_relay_caps_full(&url).expect("load"), Some(e2e::RelayCaps { s1: true, s2: false }));
+    assert_eq!(e2e::load_relay_caps_full(&url).expect("load"), Some(e2e::RelayCaps { s1: true, s2: false, call_aps: false }));
 }
 
 /// push-content-available-v1 (0.46.7, K3): the stale hint names chats by
@@ -973,7 +973,7 @@ fn sealed_waits_for_s1_and_never_falls_back() {
     let url3 = unique_url("s1-refused");
     e2e::note_relay_caps(&url3, true, false);
     let relay3 = Relay::new(true);
-    relay3.script.lock().expect("relay").push_back(GatewayResponse {
+    relay3.script.lock().expect("relay").push_back(GatewayResponse { call_aps: false,
         status: 401,
         body: "{\"error\":{\"code\":\"secret-detail-canary\"},\"results\":[{\"error\":\"/3/device/tok\"}]}".into(),
         s0: false,
@@ -1036,7 +1036,7 @@ fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
     let (_, k) = phone_key(62);
     let d = vec![register("st-key", "apns", "tok-st-key", true, Some(&k))];
     let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "ticket-created").expect("e").1;
-    let old_relay_refusal = || GatewayResponse {
+    let old_relay_refusal = || GatewayResponse { call_aps: false,
         status: 400,
         body: "{\"error\":{\"code\":\"invalid_title\"}}".into(),
         s0: true,
@@ -1445,7 +1445,7 @@ fn attempt_line_for_a_sealed_push() {
     let dev = register(&id, "apns", "tok-attempt-sealed", true, Some(&k));
     let url = unique_url("attempt-sealed");
     let relay = Relay::new(true);
-    relay.script.lock().expect("relay").push_back(GatewayResponse {
+    relay.script.lock().expect("relay").push_back(GatewayResponse { call_aps: false,
         status: 200,
         body: r#"{"ok":true,"results":[{"token":"tok-attempt-sealed","sent":true,"dead":false}]}"#.into(),
         s0: true,
@@ -1503,7 +1503,7 @@ fn attempt_line_for_a_legacy_push_and_a_refusal() {
     let dev = register(&id, "fcm", "tok-attempt-legacy", false, Some(&k));
     let url = unique_url("attempt-legacy");
     let relay = Relay::new(true);
-    relay.script.lock().expect("relay").push_back(GatewayResponse {
+    relay.script.lock().expect("relay").push_back(GatewayResponse { call_aps: false,
         status: 200,
         body: r#"{"ok":true,"results":[{"token":"tok-attempt-legacy","sent":false,"dead":true,"error":"fcm 404: https://fcm.example/x"}]}"#.into(),
         s0: true,
@@ -1533,7 +1533,7 @@ fn attempt_line_for_a_legacy_push_and_a_refusal() {
     let id2 = ring_device("refused");
     let dev2 = register(&id2, "apns", "tok-attempt-refused", true, None);
     let relay = Relay::new(false);
-    relay.script.lock().expect("relay").push_back(GatewayResponse {
+    relay.script.lock().expect("relay").push_back(GatewayResponse { call_aps: false,
         status: 403,
         body: r#"{"error":{"code":"subdomain_not_owned"}}"#.into(),
         s0: true,
@@ -1604,7 +1604,7 @@ fn attempt_lines_and_ring_carry_no_content_or_tokens() {
         for mode in [PushE2eMode::Off, PushE2eMode::SealedWhenSupported, PushE2eMode::SealedOnly] {
             let url = unique_url("attempt-noleak");
             let relay = Relay::new(true);
-            relay.script.lock().expect("relay").push_back(GatewayResponse {
+            relay.script.lock().expect("relay").push_back(GatewayResponse { call_aps: false,
                 status: 200,
                 body: r#"{"ok":true,"results":[{"token":"tok-ATTEMPT-CANARY-keyed-0123456789","sent":true,"dead":false},{"token":"tok-ATTEMPT-CANARY-old-0123456789","sent":false,"dead":false,"error":"apns 400: ZEBRA-PREVIEW-distinctive-text"}]}"#.into(),
                 s0: true,
@@ -1683,7 +1683,7 @@ const NOT_400: &[(u16, bool, bool)] = &[
 ];
 
 fn relay_answer(status: u16, s0: bool, s1: bool) -> GatewayResponse {
-    GatewayResponse { status, body: "{\"error\":\"refused\"}".into(), s0, s1, s2: false }
+    GatewayResponse { call_aps: false, status, body: "{\"error\":\"refused\"}".into(), s0, s1, s2: false }
 }
 
 fn alert_events() -> Vec<PushEvent> {
@@ -1921,7 +1921,7 @@ fn a_400_sends_only_a_contentless_push() {
         register("r4-v1", "apns", "tok-r4-v1", true, Some(&k)),
         register("r4-v2", "apns", "tok-r4-v2", true, Some(&k2)),
     ];
-    let old_relay = || GatewayResponse {
+    let old_relay = || GatewayResponse { call_aps: false,
         status: 400,
         body: "{\"error\":\"invalid_title\"}".into(),
         s0: true,
@@ -2035,7 +2035,7 @@ fn an_answer_from_in_front_of_the_relay_does_not_turn_sealing_off() {
         let url = unique_url("caps-rollback");
         e2e::note_relay_caps(&url, true, false);
         let relay = Relay::new(false);
-        relay.script.lock().expect("relay").push_back(GatewayResponse { body: "{}".into(), ..relay_answer(status, true, false) });
+        relay.script.lock().expect("relay").push_back(GatewayResponse { call_aps: false, body: "{}".into(), ..relay_answer(status, true, false) });
         let sent = tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, &keyed, PushE2eMode::SealedWhenSupported);
         assert_eq!(sent.is_ok(), status == 200, "HTTP {status}");
         assert!(!e2e::relay_s1(&url), "HTTP {status}");
@@ -2278,4 +2278,107 @@ fn sealed_alerts_keep_kind_inside_data() {
             assert_eq!(pt["data"]["kind"], want, "kind inside data: {event:?}: {pt}");
         }
     }
+}
+
+/// A DM call push to one person.
+fn call_event(state: CallPushState) -> PushEvent {
+    PushEvent::Call(CallPush {
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        call_id: "88001".into(),
+        channel_id: "900".into(),
+        caller: "Alex Doe".into(),
+        state,
+    })
+}
+
+/// The APNs body the relay builds for a sealed alert (k2-connect `apns.rs`
+/// `sealed_apns_body`), with the call's clear fields when it copies them.
+fn relay_apns_len(body: &serde_json::Value) -> usize {
+    let p = &body["payload"];
+    let mut aps = serde_json::json!({ "alert": { "title": "K2", "body": "New message" }, "sound": "default", "mutable-content": 1 });
+    if let Some(c) = p.get("category") {
+        aps["category"] = c.clone();
+    }
+    if let Some(l) = p.get("interruptionLevel") {
+        aps["interruption-level"] = l.clone();
+    }
+    let blob = body["devices"][0]["e2e"].as_str().expect("e2e");
+    serde_json::json!({ "aps": aps, "kind": p["data"]["kind"], "v": p["data"]["v"], "e2e": blob }).to_string().len()
+}
+
+/// A DM call is sealed in format 1 even for a format-2 phone on an `s2`
+/// relay: format 2 plus the call's clear `aps` fields is over APNs' 4096
+/// bytes. The phone opens it as format 1; the relay's APNs body stays under
+/// 4096. A message push to the same phone stays format 2.
+#[test]
+fn a_call_push_is_sealed_in_format_one_even_for_a_format_two_phone() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (sk2, mut k2) = phone_key(71);
+    k2.v = 2;
+    let devices = vec![register("call-v2", "apns", "tok-call-v2", true, Some(&k2))];
+    let url = unique_url("call-v1");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: true, call_aps: true });
+    let cloud = tunnel_cloud(&url, relay.clone());
+
+    cloud.dispatch_in_mode(&call_event(CallPushState::Ringing), "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1);
+    let body = calls[0].1.clone();
+    assert!(calls[0].2, "sealed");
+    assert_eq!(body["payload"]["data"]["v"], "1", "format 1, always, for a call");
+    let blob = body["devices"][0]["e2e"].as_str().expect("e2e");
+    assert_eq!(blob.len(), seal::Format::V1.b64_len(SealKind::Alert), "format 1's alert bucket");
+    let (format, json) = seal::open_format(SealKind::Alert, &sk2, &k2.psk, blob).expect("the phone opens it");
+    assert_eq!(format, seal::Format::V1);
+    let pt: serde_json::Value = serde_json::from_slice(&json).expect("json");
+    assert_eq!(pt["kind"], PUSH_KIND_CALL);
+    assert_eq!(body["payload"]["category"], "K2_CALL", "the relay said call-aps");
+    let len = relay_apns_len(&body);
+    assert!(len < seal::VENDOR_PAYLOAD_MAX, "the relay's APNs body is {len} bytes");
+
+    relay.clear();
+    // The fake relay's answer listed no caps; a real one says them each time.
+    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: true, call_aps: true });
+    let reply = "All checks passed. ".repeat(80);
+    cloud.dispatch_in_mode(&msg_thread(&reply), "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls[0].1["payload"]["data"]["v"], "2", "a message push keeps format 2");
+    assert!(calls[0].1["payload"].get("category").is_none());
+}
+
+/// The call's clear `category`, `interruptionLevel` and `sound` go beside
+/// the seal only when the relay listed `call-aps`: an older relay refuses a
+/// sealed ring that carries them (400 `sealed_extra_field`). The token is
+/// read from the relay's caps header.
+#[test]
+fn a_calls_clear_aps_fields_wait_for_the_relays_call_aps_token() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_sk, k1) = phone_key(72);
+    let devices = vec![register("call-aps", "apns", "tok-call-aps", true, Some(&k1))];
+    for (call_aps, want) in [(false, false), (true, true)] {
+        let url = unique_url("call-aps");
+        let relay = Relay::new(true);
+        e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps });
+        let cloud = tunnel_cloud(&url, relay.clone());
+        for state in [CallPushState::Ringing, CallPushState::Missed] {
+            relay.clear();
+            // The fake relay's answer lists no caps: say them again each time.
+            e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps });
+            cloud.dispatch_in_mode(&call_event(state), "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+            let p = relay.calls()[0].1["payload"].clone();
+            assert_eq!(p.get("category").is_some(), want, "call-aps {call_aps}, {state:?}: {p}");
+            if state == CallPushState::Ringing {
+                assert_eq!(p.get("interruptionLevel").is_some(), want, "{p}");
+                assert_eq!(p.get("sound").is_some(), want, "beside the seal only with call-aps: {p}");
+            }
+        }
+    }
+    assert!(e2e::caps_has_call_aps("s1, s2, call-aps"));
+    assert!(!e2e::caps_has_call_aps("s1,s2"));
 }

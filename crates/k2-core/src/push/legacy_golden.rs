@@ -38,7 +38,7 @@ impl DispatchSender for Recorder {
 }
 
 fn golden_ok() -> GatewayResponse {
-    GatewayResponse { status: 200, body: "{\"results\":[]}".into(), s0: false, s1: false, s2: false }
+    GatewayResponse { call_aps: false, status: 200, body: "{\"results\":[]}".into(), s0: false, s1: false, s2: false }
 }
 
 pub(crate) fn golden_cloud(sender: Arc<dyn DispatchSender>) -> K2Cloud {

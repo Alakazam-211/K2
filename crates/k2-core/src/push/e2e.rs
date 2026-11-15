@@ -140,6 +140,12 @@ pub const CAPS_S1: &str = "s1";
 /// characters and a nudge of 1476.
 pub const CAPS_S2: &str = "s2";
 
+/// The token that says the relay copies a DM call push's clear `category`,
+/// `interruptionLevel` and `sound` into `aps`, sealed lane included. An older
+/// relay answers 400 `sealed_extra_field` to a sealed ring that carries them,
+/// so K2 sends them only after the relay said this.
+pub const CAPS_CALL_APS: &str = "call-aps";
+
 fn caps_has(value: &str, token: &str) -> bool {
     value.split(',').any(|t| t.trim().eq_ignore_ascii_case(token))
 }
@@ -154,6 +160,11 @@ pub fn caps_has_s2(value: &str) -> bool {
     caps_has(value, CAPS_S2)
 }
 
+/// True when a `X-K2-Push-Caps` value lists `call-aps`.
+pub fn caps_has_call_aps(value: &str) -> bool {
+    caps_has(value, CAPS_CALL_APS)
+}
+
 /// What a relay last said it accepts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RelayCaps {
@@ -161,6 +172,10 @@ pub struct RelayCaps {
     pub s1: bool,
     /// Format 2 too (only meaningful with `s1`).
     pub s2: bool,
+    /// A DM call's clear `aps` fields ([`CAPS_CALL_APS`]). Kept in memory
+    /// only: after a restart the first ring goes without them until the
+    /// relay answers again.
+    pub call_aps: bool,
 }
 
 type CapsMap = std::collections::HashMap<String, RelayCaps>;
@@ -179,7 +194,11 @@ fn relay_map() -> std::sync::MutexGuard<'static, Option<CapsMap>> {
 /// (`push_relay_caps`, migrations 0211 + 0252) so the first push after a
 /// restart is sealed too.
 pub fn note_relay_caps(gateway_url: &str, s1: bool, s2: bool) {
-    let caps = RelayCaps { s1, s2 };
+    note_relay_caps_full(gateway_url, RelayCaps { s1, s2, call_aps: false })
+}
+
+/// [`note_relay_caps`] with every token the relay listed.
+pub fn note_relay_caps_full(gateway_url: &str, caps: RelayCaps) {
     let changed = {
         let mut g = relay_map();
         let map = g.get_or_insert_with(Default::default);
@@ -213,6 +232,12 @@ pub fn relay_caps(gateway_url: &str) -> RelayCaps {
 /// The relay accepts the sealed kinds (`s1`).
 pub fn relay_s1(gateway_url: &str) -> bool {
     relay_caps(gateway_url).s1
+}
+
+/// The relay copies a DM call's clear `aps` fields (`s1` and `call-aps`).
+pub fn relay_call_aps(gateway_url: &str) -> bool {
+    let c = relay_caps(gateway_url);
+    c.s1 && c.call_aps
 }
 
 /// The relay accepts format 2 too (`s1` and `s2`).
@@ -250,7 +275,7 @@ pub fn load_relay_caps_full(gateway_url: &str) -> Result<Option<RelayCaps>, Stri
     conn.query_row(
         "SELECT s1, s2 FROM push_relay_caps WHERE gateway_url = ?1",
         rusqlite::params![gateway_url],
-        |r| Ok(RelayCaps { s1: r.get::<_, i64>(0)? != 0, s2: r.get::<_, i64>(1)? != 0 }),
+        |r| Ok(RelayCaps { s1: r.get::<_, i64>(0)? != 0, s2: r.get::<_, i64>(1)? != 0, call_aps: false }),
     )
     .optional()
     .map_err(|e| e.to_string())
@@ -601,6 +626,12 @@ pub fn sealed_dispatch_body_in(kind: SealKind, format: seal::Format, entries: &[
 /// ids, `threadId` or `collapseId`. A badge push keeps today's payload
 /// minus its `stale` and `read` chat ids.
 pub fn generic_payload(event: &PushEvent, stamp: &PushStamp, badge_key: &str) -> serde_json::Value {
+    generic_payload_with(event, stamp, badge_key, false)
+}
+
+/// [`generic_payload`], plus a DM call's `aps` hints when the relay listed
+/// `call-aps` (`call_aps`).
+pub fn generic_payload_with(event: &PushEvent, stamp: &PushStamp, badge_key: &str, call_aps: bool) -> serde_json::Value {
     if let PushEvent::Badge(_) = event {
         return super::K2Cloud::payload(&event.without_hints(), stamp, badge_key);
     }
@@ -631,7 +662,9 @@ pub fn generic_payload(event: &PushEvent, stamp: &PushStamp, badge_key: &str) ->
         "data": data,
         "sound": PUSH_SOUND_DEFAULT,
     });
-    event.add_aps_hints(&mut p);
+    if call_aps {
+        event.add_aps_hints(&mut p);
+    }
     p
 }
 

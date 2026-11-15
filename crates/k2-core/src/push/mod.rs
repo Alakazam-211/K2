@@ -1223,6 +1223,9 @@ pub struct GatewayResponse {
     pub s1: bool,
     /// push-e2e-v2 (0.46.7): the caps also list `s2` (format-2 blobs).
     pub s2: bool,
+    /// The caps list `call-aps` ([`e2e::CAPS_CALL_APS`]): the relay copies a
+    /// DM call's `category`, `interruptionLevel` and `sound` into `aps`.
+    pub call_aps: bool,
 }
 
 impl GatewayResponse {
@@ -1349,8 +1352,13 @@ impl HttpDispatchSender {
             .get(e2e::CAPS_HEADER)
             .and_then(|v| v.to_str().ok())
             .is_some_and(e2e::caps_has_s2);
+        let call_aps = response
+            .headers()
+            .get(e2e::CAPS_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(e2e::caps_has_call_aps);
         let body = response.text().unwrap_or_default();
-        Ok(GatewayResponse { status, body, s0, s1, s2 })
+        Ok(GatewayResponse { call_aps, status, body, s0, s1, s2 })
     }
 }
 
@@ -1763,6 +1771,12 @@ impl K2Cloud {
     /// push it is, 0.46.1: never their name); a Thread push also carries
     /// `threadId` + `collapseId` (§7). No `aps.badge`, ever (TP27).
     pub fn payload(event: &PushEvent, stamp: &PushStamp, badge_key: &str) -> serde_json::Value {
+        Self::payload_with(event, stamp, badge_key, false)
+    }
+
+    /// [`Self::payload`], plus a DM call's [`PushEvent::aps_hints`] when the
+    /// relay listed `call-aps` (`call_aps`); an older relay refuses them.
+    pub fn payload_with(event: &PushEvent, stamp: &PushStamp, badge_key: &str, call_aps: bool) -> serde_json::Value {
         let mut data = event.data();
         if event.is_mobile() {
             if !badge_key.is_empty() {
@@ -1808,7 +1822,9 @@ impl K2Cloud {
         if let Some(c) = event.collapse_id() {
             payload["collapseId"] = serde_json::json!(c);
         }
-        event.add_aps_hints(&mut payload);
+        if call_aps {
+            event.add_aps_hints(&mut payload);
+        }
         payload
     }
 
@@ -1863,7 +1879,7 @@ impl K2Cloud {
                 // prd-e2e-push-v1: learn the relay's `s1` capability from
                 // its per-daemon responses (a rollback clears it).
                 if resp.tells_caps() {
-                    e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
+                    e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps });
                 }
                 if resp.is_success() {
                     note_tunnel_accepted();
@@ -2095,7 +2111,7 @@ impl K2Cloud {
         devices: &[&crate::push_devices::PushDevice],
     ) -> Result<(), PushError> {
         let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
-        let payload = e2e::generic_payload(event, &stamp, badge_key);
+        let payload = e2e::generic_payload_with(event, &stamp, badge_key, e2e::relay_call_aps(&self.config.url));
         let url = format!("{}/push/dispatch", self.config.url);
         let devices: Vec<_> = devices.iter().map(|d| (*d).clone()).collect();
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
@@ -2120,10 +2136,11 @@ impl K2Cloud {
         let kind = if matches!(event, PushEvent::Badge(_)) { seal::SealKind::Nudge } else { seal::SealKind::Alert };
         let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
         let now_ms = unix_now_ms();
+        let call_aps = e2e::relay_call_aps(&self.config.url);
         let mut sealed: Vec<(e2e::SealedEntry, &SealedDevice<'_>)> = Vec::with_capacity(devices.len());
         for sd in devices {
             let d = sd.device;
-            match Self::seal_for(event, kind, sd.format, d, &sd.key, &stamp, badge_key, now, now_ms) {
+            match Self::seal_for(event, kind, Self::seal_format(event, sd.format), d, &sd.key, &stamp, badge_key, now, now_ms) {
                 Ok(e2e) => sealed.push((e2e::SealedEntry { platform: d.platform.clone(), token: d.token.clone(), e2e }, sd)),
                 // A nudge that can't fit (a very long server name): skipped,
                 // logged once per device so it shows.
@@ -2150,13 +2167,16 @@ impl K2Cloud {
         let mut by_format: std::collections::BTreeMap<seal::Format, Vec<(e2e::SealedEntry, &SealedDevice<'_>)>> =
             Default::default();
         for (e, sd) in sealed {
-            by_format.entry(sd.format).or_default().push((e, sd));
+            by_format.entry(Self::seal_format(event, sd.format)).or_default().push((e, sd));
         }
         for (format, chunk) in by_format.iter().flat_map(|(f, all)| all.chunks(MAX_DEVICES_PER_CALL).map(move |c| (*f, c))) {
             let entries: Vec<e2e::SealedEntry> = chunk.iter().map(|(e, _)| e.clone()).collect();
             let mut body = e2e::sealed_dispatch_body_in(kind, format, &entries);
-            // A DM call's ring sounds even if the seal can't be opened.
-            event.add_aps_hints(&mut body["payload"]);
+            // A DM call's ring sounds even if the seal can't be opened, once
+            // the relay said it copies these (`call-aps`).
+            if call_aps {
+                event.add_aps_hints(&mut body["payload"]);
+            }
             let started = std::time::Instant::now();
             let mut out = attempts::RelayOutcome::default();
             let sent = self.post_sealed(&url, &body, now, &mut out);
@@ -2257,6 +2277,17 @@ impl K2Cloud {
         seal::seal_in(kind, format, &key.public_key, &key.psk, &json).map_err(SealFailure::Seal)
     }
 
+    /// The format a device's push is sealed in. A DM call is ALWAYS format 1:
+    /// a format-2 alert body is already 4072 bytes, and the call's clear
+    /// `aps` fields would take it past APNs' 4096. Every phone reads format 1.
+    pub fn seal_format(event: &PushEvent, device_format: seal::Format) -> seal::Format {
+        if matches!(event, PushEvent::Call(_)) {
+            seal::Format::V1
+        } else {
+            device_format
+        }
+    }
+
     /// POST one sealed body: per-daemon auth, 10 s timeout, never retried,
     /// never the shared token. The relay capability is learned from the
     /// response. An error carries the status and the relay's error code
@@ -2276,7 +2307,7 @@ impl K2Cloud {
         let resp = self.sender.post_sealed(url, &auth, body).inspect_err(|e| out.observe_err("s1", e))?;
         out.observe("s1", &resp);
         if resp.tells_caps() {
-            e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
+            e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps });
         }
         if resp.is_success() {
             note_tunnel_accepted();
@@ -2341,7 +2372,7 @@ impl K2Cloud {
             subdomain: self.config.subdomain.clone(),
             instance_id: instance_id(),
         };
-        let payload = Self::payload(event, &stamp, badge_key);
+        let payload = Self::payload_with(event, &stamp, badge_key, e2e::relay_call_aps(&self.config.url));
         let url = format!("{}/push/dispatch", self.config.url);
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
             let body = Self::dispatch_body(chunk, &payload);
@@ -2550,7 +2581,7 @@ mod tests {
                 auth.clone(),
                 body.clone(),
             ));
-            Ok(self.script.lock().expect("mock lock").pop_front().unwrap_or_else(|| GatewayResponse {
+            Ok(self.script.lock().expect("mock lock").pop_front().unwrap_or_else(|| GatewayResponse { call_aps: false,
                 status: 200,
                 body: self.response.to_string(),
                 s0: false,
@@ -3024,7 +3055,7 @@ mod tests {
                 state,
             })
         };
-        let r = K2Cloud::payload(&ring(CallPushState::Ringing), &stamp, TEST_KEY);
+        let r = K2Cloud::payload_with(&ring(CallPushState::Ringing), &stamp, TEST_KEY, true);
         assert_eq!(r["title"], "Alex Doe");
         assert_eq!(r["body"], "Incoming call");
         assert_eq!(r["sound"], "default");
@@ -3060,7 +3091,7 @@ mod tests {
         assert_eq!(r["category"], "K2_CALL");
         assert_eq!(r["interruptionLevel"], "time-sensitive");
         for state in [CallPushState::Missed, CallPushState::Ended, CallPushState::Answered] {
-            let p = K2Cloud::payload(&ring(state), &stamp, TEST_KEY);
+            let p = K2Cloud::payload_with(&ring(state), &stamp, TEST_KEY, true);
             assert_eq!(p["category"], "K2_CALL_DONE", "{state:?}");
             assert!(p.get("interruptionLevel").is_none(), "{state:?}");
             assert_eq!(p["collapseId"], "call:88001");
@@ -3072,9 +3103,15 @@ mod tests {
         assert_eq!(sealed["payload"]["category"], "K2_CALL");
         assert_eq!(sealed["payload"]["data"].as_object().map(|d| d.len()), Some(2), "the sealed data stays kind and v");
         // A phone with no key (sealed-only): fixed words, never "New message".
-        let g = e2e::generic_payload(&ring(CallPushState::Ringing), &stamp, TEST_KEY);
+        let g = e2e::generic_payload_with(&ring(CallPushState::Ringing), &stamp, TEST_KEY, true);
         assert_eq!((g["title"].as_str(), g["body"].as_str()), (Some("K2"), Some("Incoming call")));
         assert_eq!(g["category"], "K2_CALL");
+        // Without the relay's `call-aps`: no category or level anywhere; the
+        // clear lane keeps its sound as before.
+        let plain = K2Cloud::payload(&ring(CallPushState::Ringing), &stamp, TEST_KEY);
+        assert!(plain.get("category").is_none() && plain.get("interruptionLevel").is_none(), "{plain}");
+        assert_eq!(plain["sound"], "default");
+        assert!(e2e::generic_payload(&ring(CallPushState::Ringing), &stamp, TEST_KEY).get("category").is_none());
         // Other kinds carry no hints.
         assert!(PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![] }.aps_hints().is_none());
     }
@@ -3194,14 +3231,14 @@ mod tests {
         let tunnel_auth = GatewayAuth::Tunnel { token: "tun-tok".into(), subdomain: "rosson".into() };
         let shared_auth = GatewayAuth::Shared { token: "shared-gw".into() };
         let ev = thread_event(ThreadMsgKind::Text, 1, "c-auth");
-        let refused = |status: u16, s0: bool, code: &str| GatewayResponse {
+        let refused = |status: u16, s0: bool, code: &str| GatewayResponse { call_aps: false,
             status,
             body: serde_json::json!({ "error": { "code": code } }).to_string(),
             s0,
             s1: false,
             s2: false,
         };
-        let ok = || GatewayResponse { status: 200, body: r#"{"results":[]}"#.into(), s0: true, s1: false, s2: false };
+        let ok = || GatewayResponse { call_aps: false, status: 200, body: r#"{"results":[]}"#.into(), s0: true, s1: false, s2: false };
         let now = unix_now();
 
         // 1. Accepted: one call, tunnel token + X-K2-Subdomain.
@@ -3267,7 +3304,7 @@ mod tests {
 
     #[test]
     fn gateway_response_reason_reads_the_error_code() {
-        let r = |b: &str| GatewayResponse { status: 403, body: b.into(), s0: true, s1: false, s2: false }.reason();
+        let r = |b: &str| GatewayResponse { call_aps: false, status: 403, body: b.into(), s0: true, s1: false, s2: false }.reason();
         assert_eq!(r(r#"{"error":{"code":"suspended"}}"#), "suspended");
         assert_eq!(r(r#"{"error":"unknown_token"}"#), "unknown_token");
         assert_eq!(r(r#"{"code":"subdomain_not_owned"}"#), "subdomain_not_owned");

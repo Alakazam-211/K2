@@ -1755,6 +1755,7 @@ mod tests {
     /// deliberate, coordinated contract bump.
     #[test]
     fn api_spawn_preamble_is_byte_frozen() {
+        let _home = crate::test_support::TempHome::new();
         assert_eq!(
             API_SPAWN_PREAMBLE,
             "[K2 API] You were invoked through the K2 API. Report progress and results \
@@ -1768,6 +1769,7 @@ mod tests {
     /// follow-up = guest policy → caller (no preamble). Pure compose helpers.
     #[test]
     fn inject_compose_orders_preamble_guest_then_caller() {
+        let _home = crate::test_support::TempHome::new();
         let guest = "GUEST-POLICY-MARKER";
         let caller = "CALLER-PROMPT-MARKER";
         let spawn = compose_spawn_inject(guest, caller);
@@ -1806,6 +1808,7 @@ mod tests {
     /// by serde, and the host always reads policy from workspace settings.
     #[test]
     fn request_body_cannot_set_or_override_guest_policy() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-guest-override";
         insert_project("v1host-guest-override", ws);
@@ -1881,6 +1884,7 @@ mod tests {
     /// Empty/NULL workspace setting falls through to the platform default.
     #[test]
     fn guest_policy_defaults_when_unset() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-guest-default";
         insert_project("v1host-guest-default", ws);
@@ -1905,6 +1909,7 @@ mod tests {
     /// malformed slug, unknown slug, ungranted key — before any spawn work.
     #[test]
     fn new_blocks_uniformly_at_the_door() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         insert_project("v1host-new-door", "/tmp/k2-v1host-new-door");
 
@@ -1927,6 +1932,7 @@ mod tests {
     /// an ungranted key (no existence oracle), even with a full grant.
     #[test]
     fn host_sessions_require_capability() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         insert_project("v1host-cap-deny", "/tmp/k2-v1host-cap-deny");
         let no_host = apik_caps(
@@ -1965,6 +1971,7 @@ mod tests {
     /// Malformed JSON body → 400 (never a spawn).
     #[test]
     fn new_rejects_malformed_json() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         insert_project("v1host-badjson", "/tmp/k2-v1host-badjson");
         let r = handle_v1_host_new(&V1Principal::Owner, "v1host-badjson", b"{not json");
@@ -1975,6 +1982,7 @@ mod tests {
     /// never spawned in this workspace are ALL the uniform 404.
     #[test]
     fn resume_guards_canonical_foreign_and_malformed_ids() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let pid = insert_project("v1host-resume-guard", "/tmp/k2-v1host-resume-guard");
         insert_canonical_session(&pid, "11111111-2222-3333-4444-555555555555");
@@ -2010,6 +2018,7 @@ mod tests {
     /// `host_session_resumable` admits exactly this-workspace `api-…` rows.
     #[test]
     fn host_session_resumable_scopes_by_workspace_and_namespace() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-resumable";
         let pid = insert_project("v1host-resumable", ws);
@@ -2031,6 +2040,7 @@ mod tests {
     /// message-live: canonical → 404; unknown/unowned → 404; wrong-owner → 404.
     #[test]
     fn message_live_refuses_canonical_unknown_and_unowned() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let pid = insert_project("v1host-msg", "/tmp/k2-v1host-msg");
         insert_canonical_session(&pid, "v1host-msg-canon");
@@ -2071,6 +2081,7 @@ mod tests {
     /// is the idempotent 200 `{killed:false, reason:"not_live"}` (K6).
     #[test]
     fn kill_refuses_canonical_unknown_unowned_and_idempts_dead() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let pid = insert_project("v1host-kill", "/tmp/k2-v1host-kill");
         insert_canonical_session(&pid, "v1host-kill-canon");
@@ -2112,6 +2123,7 @@ mod tests {
     /// conversation id (preserve_index path). not_live orphan sweeps still clear.
     #[test]
     fn live_kill_preserve_index_leaves_durable_row() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-kill-preserve";
         let pid = insert_project("v1host-kill-preserve", ws);
@@ -2143,6 +2155,7 @@ mod tests {
     /// Owner floor clears; exact-key prefix clears; wrong key 404s.
     #[test]
     fn kill_durable_row_without_live_owner_map() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-kill-durable";
         let pid = insert_project("v1host-kill-dur", ws);
@@ -2194,6 +2207,7 @@ mod tests {
     /// the owning principal drains its log.
     #[test]
     fn messages_refuses_canonical_and_reuses_owner_authz() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let pid = insert_project("v1host-read", "/tmp/k2-v1host-read");
         insert_canonical_session(&pid, "v1host-read-canon");
@@ -2227,6 +2241,7 @@ mod tests {
     /// workspace's `api-…` rows with a liveness flag.
     #[test]
     fn list_authorizes_then_lists_api_rows_only() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-list";
         let pid = insert_project("v1host-list", ws);
@@ -2255,6 +2270,7 @@ mod tests {
     /// resumable.
     #[test]
     fn list_and_resume_omit_unstamped_rows() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-unstamped";
         let pid = insert_project("v1host-unstamped", ws);
@@ -2285,6 +2301,7 @@ mod tests {
     /// own api- index, not the id's shape.
     #[test]
     fn host_session_resumable_accepts_non_uuid_adopted_ids() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-nonuuid";
         let pid = insert_project("v1host-nonuuid", ws);
@@ -2296,6 +2313,7 @@ mod tests {
     /// Pure phase priority: working > grace > finished > never_started > gone.
     #[test]
     fn status_phase_priority_order() {
+        let _home = crate::test_support::TempHome::new();
         assert_eq!(
             compute_host_status_phase(true, true, true, true, false),
             Some("working"),
@@ -2332,6 +2350,7 @@ mod tests {
     /// `phase=never_started`, `started=false`. Field is `latest_seq` (snake).
     #[test]
     fn status_never_started_durable_dead_no_file_seq0() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-status-ns";
         let pid = insert_project("v1host-status-ns", ws);
@@ -2369,6 +2388,7 @@ mod tests {
     /// Unowned / wrong key → uniform 404 (no existence oracle).
     #[test]
     fn status_unowned_uniform_404() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-status-unown";
         let pid = insert_project("v1host-status-unown", ws);
@@ -2411,6 +2431,7 @@ mod tests {
     /// Owner floor can observe any durable `api-*` row (Scout reconciler).
     #[test]
     fn status_owner_floor_observes_durable_api_row() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-status-owner";
         let pid = insert_project("v1host-status-owner", ws);
@@ -2440,6 +2461,7 @@ mod tests {
     /// `started` true when latest_seq > 0 even if not live → `finished`.
     #[test]
     fn status_finished_when_seq_positive_not_live() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-status-fin";
         let pid = insert_project("v1host-status-fin", ws);
@@ -2476,6 +2498,7 @@ mod tests {
     /// Product lock: live + seq 0 + no transcript ⇒ NEVER never_started.
     #[test]
     fn status_phase_live_is_working_and_started() {
+        let _home = crate::test_support::TempHome::new();
         // Pure function — no PTY construction required.
         let phase = compute_host_status_phase(
             /*live*/ true,
@@ -2508,6 +2531,7 @@ mod tests {
     /// durable row mutation, no respond append.
     #[test]
     fn status_has_no_side_effects() {
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = "/tmp/k2-v1host-status-se";
         let pid = insert_project("v1host-status-se", ws);

@@ -626,20 +626,53 @@ pub fn steal_between(a: (u64, u64), b: (u64, u64)) -> Option<u32> {
 }
 
 /// What else a host stamp looks at (GPU jobs S2): a foreign lock held,
-/// and the job's GPU (its PCI address) for `gpu_busy_percent`.
+/// and the job's GPU (its PCI address) for `gpu_busy_percent`. Before the
+/// spawn a GPU job's GPU isn't leased yet: every GPU it may get, and the
+/// stamp takes the busiest (as `--exclusive --gpu`'s wait does).
 #[derive(Debug, Clone, Default)]
 pub struct HostExtra {
     pub foreign_lock: bool,
-    pub gpu_pci: Option<String>,
+    pub gpu_pcis: Vec<String>,
 }
 
-/// One host stamp (blocking: the steal window).
-pub fn host_sample(at: i64, cpus: u32, other_jobs: u32, extra: &HostExtra, window: Duration) -> HostSample {
-    let steal = steal_permille(window);
-    let gpu = extra.gpu_pci.as_deref().and_then(|p| gpu_busy_pct(Path::new(crate::gpu::SYS), p));
+/// The host now, without the steal window (doesn't block): load, other K2
+/// jobs, a foreign lock, the GPU, and the quiet verdict they give. The
+/// start stamp is this, taken right before the spawn, so the job's
+/// `K2_QUIET_HOST` and its "host at start" line are one reading.
+pub fn host_now(at: i64, cpus: u32, other_jobs: u32, extra: &HostExtra) -> HostSample {
+    let sysfs = Path::new(crate::gpu::SYS);
+    let gpu = extra.gpu_pcis.iter().filter_map(|p| gpu_busy_pct(sysfs, p)).max();
     let load = load1_milli();
     let quiet = k2_node_proto::results::quiet_why(load, cpus, other_jobs, extra.foreign_lock, gpu).is_none();
-    HostSample { at, load1_milli: load, cpus, steal_permille: steal, other_jobs, foreign_lock: extra.foreign_lock, gpu_busy_pct: gpu, quiet: Some(quiet) }
+    HostSample { at, load1_milli: load, cpus, steal_permille: None, other_jobs, foreign_lock: extra.foreign_lock, gpu_busy_pct: gpu, quiet: Some(quiet) }
+}
+
+/// One host stamp (blocking: the steal window, then [`host_now`]).
+pub fn host_sample(at: i64, cpus: u32, other_jobs: u32, extra: &HostExtra, window: Duration) -> HostSample {
+    let steal = steal_permille(window);
+    HostSample { steal_permille: steal, ..host_now(at, cpus, other_jobs, extra) }
+}
+
+/// A stamp's quiet-host verdict: `Ok` quiet, `Err(why)` not, `None` for a
+/// stamp without one (an older node's). The one source for both the log
+/// line ([`host_line`]) and the job's env ([`quiet_env`]).
+pub fn quiet_verdict(h: &HostSample) -> Option<Result<(), String>> {
+    h.quiet?;
+    match k2_node_proto::results::quiet_why(h.load1_milli, h.cpus, h.other_jobs, h.foreign_lock, h.gpu_busy_pct) {
+        None => Some(Ok(())),
+        Some(why) => Some(Err(why)),
+    }
+}
+
+/// The job's env from its start stamp: `K2_QUIET_HOST=yes|no`, and when
+/// `no`, `K2_QUIET_HOST_WHY` (the same reason text as the log line).
+pub fn quiet_env(h: &HostSample) -> Vec<(String, String)> {
+    use k2_node_proto::env::{ENV_QUIET_HOST, ENV_QUIET_HOST_WHY};
+    match quiet_verdict(h) {
+        None => Vec::new(),
+        Some(Ok(())) => vec![(ENV_QUIET_HOST.into(), "yes".into())],
+        Some(Err(why)) => vec![(ENV_QUIET_HOST.into(), "no".into()), (ENV_QUIET_HOST_WHY.into(), why)],
+    }
 }
 
 /// The log line: `host at start: load 2.31 on 16 CPUs, steal 0.4%, 2 other
@@ -653,12 +686,10 @@ pub fn host_line(when: &str, h: &HostSample) -> String {
         n => format!("{n} other K2 jobs"),
     };
     let gpu = h.gpu_busy_pct.map(|b| format!(", GPU {b}% busy")).unwrap_or_default();
-    let quiet = match h.quiet {
+    let quiet = match quiet_verdict(h) {
         None => String::new(),
-        Some(_) => match k2_node_proto::results::quiet_why(h.load1_milli, h.cpus, h.other_jobs, h.foreign_lock, h.gpu_busy_pct) {
-            None => ", quiet host: yes".into(),
-            Some(w) => format!(", quiet host: no ({w})"),
-        },
+        Some(Ok(())) => ", quiet host: yes".into(),
+        Some(Err(w)) => format!(", quiet host: no ({w})"),
     };
     format!("host at {when}: load {}.{:02} on {} CPUs{steal}, {others}{gpu}{quiet}", h.load1_milli / 1000, (h.load1_milli % 1000) / 10, h.cpus)
 }
@@ -902,6 +933,44 @@ mod tests {
         );
         let j = serde_json::to_string(&HostSample { at: 1, load1_milli: 1, cpus: 1, steal_permille: None, other_jobs: 0, ..Default::default() }).unwrap();
         assert!(!j.contains("quiet") && !j.contains("gpu") && !j.contains("foreign"), "an older reader's JSON: {j}");
+    }
+
+    /// 0.46.13: the job's `K2_QUIET_HOST` / `K2_QUIET_HOST_WHY` and its
+    /// "host at start" line come from one verdict: yes, no (with the same
+    /// reason text), and none for a stamp without one.
+    #[test]
+    fn quiet_env_and_the_log_line_share_one_verdict() {
+        let quiet = HostSample { at: 1, load1_milli: 1_000, cpus: 16, other_jobs: 0, quiet: Some(true), ..Default::default() };
+        assert_eq!(quiet_verdict(&quiet), Some(Ok(())));
+        assert_eq!(quiet_env(&quiet), vec![("K2_QUIET_HOST".to_string(), "yes".to_string())]);
+        assert!(host_line("start", &quiet).ends_with(", quiet host: yes"));
+
+        let loud = HostSample { load1_milli: 5_000, other_jobs: 2, gpu_busy_pct: Some(9), quiet: Some(false), ..quiet.clone() };
+        let why = "2 other K2 jobs, load 5.00 ≥ 4.00, GPU 9% busy";
+        assert_eq!(quiet_verdict(&loud), Some(Err(why.to_string())));
+        assert_eq!(quiet_env(&loud), vec![("K2_QUIET_HOST".to_string(), "no".to_string()), ("K2_QUIET_HOST_WHY".to_string(), why.to_string())]);
+        assert_eq!(host_line("start", &loud), format!("host at start: load 5.00 on 16 CPUs, 2 other K2 jobs, GPU 9% busy, quiet host: no ({why})"));
+
+        // Every not-quiet reason: the env's why is the line's parenthesis.
+        for h in [
+            HostSample { other_jobs: 1, ..quiet.clone() },
+            HostSample { foreign_lock: true, ..quiet.clone() },
+            HostSample { load1_milli: 4_000, ..quiet.clone() },
+            HostSample { gpu_busy_pct: Some(5), ..quiet.clone() },
+        ] {
+            let env = quiet_env(&h);
+            assert_eq!(env[0], ("K2_QUIET_HOST".to_string(), "no".to_string()), "{h:?}");
+            assert_eq!(env.len(), 2, "{env:?}");
+            assert!(host_line("start", &h).ends_with(&format!(", quiet host: no ({})", env[1].1)), "{h:?}");
+        }
+
+        let older = HostSample { quiet: None, ..loud.clone() };
+        assert_eq!((quiet_verdict(&older), quiet_env(&older)), (None, vec![]), "a stamp without a verdict sets nothing");
+
+        // The real reading: the stamp the env and the line both use.
+        let now = host_now(3, 16, 1, &HostExtra::default());
+        assert_eq!((now.at, now.steal_permille, now.quiet), (3, None, Some(false)), "no steal window; another K2 job: never quiet");
+        assert_eq!(quiet_env(&now)[1].1.split(", ").next(), Some("1 other K2 job"));
     }
 
     /// GPU jobs S4: busy average and max, and memory peaks over the value

@@ -563,7 +563,7 @@ elif verb == "get":
             if not s: return "-"
             return "load %s of %s CPUs, %s other job(s)%s%s%s" % (s.get("load1"), s.get("cpus"), s.get("jobs"), (", steal %s%%" % s["steal"]) if s.get("steal") is not None else "",
                 (", GPU %s%% busy" % s["gpuBusy"]) if s.get("gpuBusy") is not None else "",
-                (", quiet" if s["quiet"] else ", not quiet") if s.get("quiet") is not None else "")
+                (", quiet" if s["quiet"] else (", not quiet (%s)" % s["quietWhy"]) if s.get("quietWhy") else ", not quiet") if s.get("quiet") is not None else "")
         print("  node at start: %s · at end: %s" % (stamp(hs.get("start")), stamp(hs.get("end"))))
     eff = r.get("effective")
     if isinstance(eff, dict) and eff:

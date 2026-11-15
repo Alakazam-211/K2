@@ -370,7 +370,10 @@ GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
   Every job's "[k2-node] host at start:" and "host at end:" log lines end
   with "quiet host: yes", or "no (why)": other K2 jobs, a foreign lock (a CI
   runner's), the load, the GPU. A GPU job's also say how busy its GPU was
-  (the whole device, the host's own use too).
+  (the whole device, the host's own use too). The job itself reads the
+  start verdict as K2_QUIET_HOST=yes|no (K2_QUIET_HOST_WHY: the why), so a
+  timing test can skip its wall-time bound on a busy host:
+    [ "$K2_QUIET_HOST" = yes ] || echo "timing not checked: $K2_QUIET_HOST_WHY"
   At the end, a GPU job's log has one more line, and k2 compute get a gpu:
   line (--json: result.resources.gpu):
     GPU <model>: busy avg 37% (max 98%), VRAM +0.5G, GTT +3.0G (the whole
@@ -892,11 +895,15 @@ RESULTS (one object, artifacts, test lists)
                memLimitBytes its --gpu-mem (null where not watched)
     host       the node's load at the job's start and end:
                {start: {at, load1: 0.8, cpus: 12, steal: 0.3, jobs: 2,
-               quiet: false, gpuBusy: 41}, end: …}
+               quiet: false, quietWhy: "2 other K2 jobs", gpuBusy: 41},
+               end: …}
                (steal: CPU steal in percent, null on macOS; jobs = other K2
                jobs running there, every server's; quiet: no other K2 job,
                no foreign lock, load under 0.25 × CPUs and the GPU under 5%
-               busy; gpuBusy: --gpu jobs only, null where not reported)
+               busy; start.quiet is the job's K2_QUIET_HOST, end.quiet the
+               host as it ended; quietWhy: only when not quiet, the log
+               line's words; gpuBusy: --gpu jobs only, null where not
+               reported)
     effective  the settings the job ran with and where each came from, e.g.
                {mem: {value: "24G", from: "flag"}, needs: {…, from: "preset"}}
     stall      a running job's stall watch: {stallSecs (the limit), warned,
@@ -1062,10 +1069,19 @@ IN THE JOB
                            what the machine is (ENVIRONMENT)
     K2_GPU_RENDER, K2_GPU_VENDOR, K2_GPU_PCI
                            --gpu jobs only: the GPU it got (GPU JOBS)
+    K2_QUIET_HOST=yes|no   was the host quiet as the job started: no other
+                           K2 job, no foreign lock, load under 0.25 × CPUs,
+                           the GPU under 5% busy (the "host at start" log
+                           line's verdict, the same reading)
+    K2_QUIET_HOST_WHY      only when no: why, in the log line's words, e.g.
+                           "2 other K2 jobs, load 5.10 ≥ 4.00"
+                           (a test skips its wall-time bound when not yes;
+                           k2-node 0.46.13 on the node, an older one sets
+                           neither)
   None of them reaches a daemon, no K2 token or socket ever does, and
   K2's own test guard ignores them. If your command refuses any K2_*
   variable, exclude them: env | grep -E '^K2(SO)?_' | grep -vE
-  '^K2_(COMPUTE_JOB|JOB_|NODE_|GPU_)'
+  '^K2_(COMPUTE_JOB|JOB_|NODE_|GPU_|QUIET_HOST)'
   Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
   so a failing a looks green).
   --exclusive waits for an idle node and holds other K2 jobs while it

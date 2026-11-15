@@ -69,7 +69,7 @@ class H(BaseHTTPRequestHandler):
                            "vramPeakBytes": 512 << 20, "gttPeakBytes": 3 << 30, "samples": 12, "source": "sysfs-device",
                            "jobMemPeakBytes": 3 << 29, "memLimitBytes": 2 << 30}}
             host = {"start": {"at": 1, "load1": 0.4, "cpus": 16, "steal": 0.0, "jobs": 0, "quiet": True, "gpuBusy": 2},
-                    "end": {"at": 2, "load1": 5.1, "cpus": 16, "steal": 0.0, "jobs": 1, "quiet": False, "gpuBusy": 41}}
+                    "end": {"at": 2, "load1": 5.1, "cpus": 16, "steal": 0.0, "jobs": 1, "quiet": False, "quietWhy": "1 other K2 job, GPU 41% busy", "gpuBusy": 41}}
             return self.reply(200, {"id": "abcd1234" * 4, "short": "abcd1234", "node": "k2n-gpu", "state": "done", "exitCode": 0, "argv": ["true"],
                                     "result": {"resources": res, "host": host}})
         return self.reply(404, {"error": {"code": "not_found", "hint": self.path}})
@@ -185,7 +185,7 @@ echo "== get shows the GPU and the quiet stamps (S2, S4) =="
 out="$("$K2" compute get abcd1234 2>&1)"
 expect_has "get: gpu line" "$out" "gpu: AMD Radeon Test APU: busy avg 37% (max 98%), VRAM +0.5G, GTT +3.0G (whole device, sysfs-device)"
 expect_has "get: start stamp quiet" "$out" "GPU 2% busy, quiet"
-expect_has "get: end stamp not quiet" "$out" "GPU 41% busy, not quiet"
+expect_has "get: end stamp not quiet, and why" "$out" "GPU 41% busy, not quiet (1 other K2 job, GPU 41% busy)"
 expect_has "get: the job's own GPU memory (S6)" "$out" "gpu memory (the job itself): peak 1.5G of --gpu-mem 2.0G"
 
 echo "== help and study =="

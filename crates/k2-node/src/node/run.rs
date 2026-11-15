@@ -161,6 +161,10 @@ pub(super) struct Live {
     /// GPU jobs: the leased GPU's PCI address (the host stamps read its
     /// busy %). An adopted job: none.
     pub gpu: Option<String>,
+    /// CE-19: the host as it started, read before the spawn (its quiet
+    /// verdict is the job's `K2_QUIET_HOST`); the steal window fills in
+    /// after. An adopted job, or an older server's: none.
+    pub host_start: Option<k2_node_proto::results::HostSample>,
 }
 
 /// One spool tailer's inputs.
@@ -310,6 +314,16 @@ pub fn with_job_hints(
         env.push((e::ENV_JOB_PORT_BASE.into(), base.to_string()));
         env.push((e::ENV_JOB_PORT_COUNT.into(), e::JOB_PORT_BLOCK.to_string()));
     }
+    env
+}
+
+/// The start stamp's quiet verdict into the job's env (0.46.13):
+/// `K2_QUIET_HOST`, and `K2_QUIET_HOST_WHY` when not quiet
+/// ([`crate::jobstat::quiet_env`]). Node-set: replaces any earlier pair.
+pub fn with_quiet_env(mut env: Vec<(String, String)>, start: &k2_node_proto::results::HostSample) -> Vec<(String, String)> {
+    use k2_node_proto::env::{ENV_QUIET_HOST, ENV_QUIET_HOST_WHY};
+    env.retain(|(k, _)| k != ENV_QUIET_HOST && k != ENV_QUIET_HOST_WHY);
+    env.extend(crate::jobstat::quiet_env(start));
     env
 }
 
@@ -1082,6 +1096,21 @@ impl Node {
                 Some(why) => sys(&mut journal, &format!("host not quiet after {} ({why}); starting anyway", human_secs(w.waited.as_secs()))),
             }
         }
+        // CE-19: the host at the start, read right before the spawn, so the
+        // job's env says what its "host at start" line says (one reading):
+        // K2_QUIET_HOST=yes|no, and K2_QUIET_HOST_WHY when no. The steal
+        // window runs after the spawn, off the job's path. A GPU job's GPU
+        // isn't leased yet: the busiest of the ones it may get.
+        let host_start = easy.then(|| {
+            let gpu_pcis = if a.plan.gpu.is_some() { self.ready_gpus_for(&t).into_iter().map(|g| g.pci).collect() } else { Vec::new() };
+            let extra = crate::jobstat::HostExtra { foreign_lock: self.local.lock().unwrap().locks.holding.is_some(), gpu_pcis };
+            let others = self.jobs.lock().unwrap().len().saturating_sub(1) as u32;
+            crate::jobstat::host_now(self.now(), self.facts.cores as u32, others, &extra)
+        });
+        let env = match &host_start {
+            Some(h) => with_quiet_env(env, h),
+            None => env,
+        };
         // GPU jobs (0.46.11): only a walled unit gets a GPU (root leases the
         // device); never a GPU job run anywhere else without one.
         let started = if a.plan.gpu.is_some() && !unit_mode {
@@ -1177,6 +1206,7 @@ impl Node {
             preset_detail: None,
             adopted: false,
             gpu,
+            host_start,
         };
         // An update's drain waits for this (the status file's running_until).
         self.job_ends_by(t.slot, &job, self.now().saturating_add(a.plan.limits.max_secs.max(1) as i64));
@@ -1187,9 +1217,9 @@ impl Node {
     /// k2-node process, §5.6): the output, the wait (exit, stop, timeout,
     /// stall, memory), a detach for an update, the artifacts and the end.
     pub(super) async fn supervise(self: Arc<Self>, t: Arc<Tenant>, a: Assign, live: Live, mut stop: watch::Receiver<Option<StopReason>>) {
-        let Live { dirs, cwd, target, src_ran, lease, mut proc, outs, journal, redactor, mem_limit, easy, tools_used, deadline, facts, preset, preset_detail, adopted, gpu } = live;
-        // GPU jobs S2: what the host stamps look at beyond load and jobs.
-        let host_extra = || crate::jobstat::HostExtra { foreign_lock: self.local.lock().unwrap().locks.holding.is_some(), gpu_pci: gpu.clone() };
+        let Live { dirs, cwd, target, src_ran, lease, mut proc, outs, journal, redactor, mem_limit, easy, tools_used, deadline, facts, preset, preset_detail, adopted, gpu, host_start } = live;
+        // GPU jobs S2: what the end stamp looks at beyond load and jobs.
+        let host_extra = || crate::jobstat::HostExtra { foreign_lock: self.local.lock().unwrap().locks.holding.is_some(), gpu_pcis: gpu.iter().cloned().collect() };
         let job = a.fence.job_id.clone();
         let gen = a.fence.generation;
         if let Proc::Unit { unit, cg, .. } = &mut proc {
@@ -1248,13 +1278,15 @@ impl Node {
             }
         }
 
-        // CE-19: the host at the start, off the job's path (the steal
-        // window); its line lands in the log when it's read. An adopted job
+        // CE-19: the host at the start was read before the spawn (the job's
+        // K2_QUIET_HOST); the steal window runs here, off the job's path,
+        // and the line lands in the log when it's done. An adopted job
         // started long ago: no start stamp.
-        let host_start = (easy && !adopted).then(|| {
-            let (j, at, cpus, others, extra) = (journal.clone(), self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32, host_extra());
+        let host_start = host_start.filter(|_| easy && !adopted).map(|h| {
+            let j = journal.clone();
             tokio::spawn(async move {
-                let h = tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, &extra, Duration::from_secs(1))).await.ok()?;
+                let steal = tokio::task::spawn_blocking(|| crate::jobstat::steal_permille(Duration::from_secs(1))).await.ok()?;
+                let h = k2_node_proto::results::HostSample { steal_permille: steal, ..h };
                 let _ = j.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {}\n", crate::jobstat::host_line("start", &h)).as_bytes());
                 Some(h)
             })
@@ -2927,6 +2959,7 @@ pub(super) mod tests {
             preset_detail: None,
             adopted: false,
             gpu: None,
+            host_start: None,
         };
         let (_stop_tx, stop_rx) = watch::channel(None);
         tokio::time::timeout(Duration::from_secs(60), n.clone().supervise(t.clone(), a.clone(), live, stop_rx)).await.expect("supervise ended within a minute");
@@ -3117,6 +3150,20 @@ pub(super) mod tests {
         let big = vec![b'z'; LINE_MAX + 1];
         assert_eq!(b.push(&big).len(), LINE_MAX + 1, "an endless line still goes, at the cap");
         assert_eq!(b.push(b"\n"), b"\n");
+    }
+
+    /// 0.46.13: the start stamp's verdict goes into the job's env, node-set
+    /// (an earlier pair is replaced), the why only when not quiet.
+    #[test]
+    fn quiet_env_goes_into_the_job_env() {
+        use k2_node_proto::results::HostSample;
+        let quiet = HostSample { load1_milli: 100, cpus: 8, quiet: Some(true), ..Default::default() };
+        let env = with_quiet_env(vec![("K2_QUIET_HOST_WHY".into(), "stale".into()), ("A".into(), "1".into())], &quiet);
+        assert_eq!(env, vec![("A".to_string(), "1".to_string()), ("K2_QUIET_HOST".to_string(), "yes".to_string())]);
+        let loud = HostSample { other_jobs: 3, quiet: Some(false), ..quiet };
+        let env = with_quiet_env(vec![("K2_QUIET_HOST".into(), "yes".into())], &loud);
+        assert_eq!(env, vec![("K2_QUIET_HOST".to_string(), "no".to_string()), ("K2_QUIET_HOST_WHY".to_string(), "3 other K2 jobs".to_string())]);
+        assert!(crate::jobstat::host_line("start", &loud).ends_with(", quiet host: no (3 other K2 jobs)"));
     }
 
     /// CE-15 + ports: the hints fill only what the plan's env doesn't set;

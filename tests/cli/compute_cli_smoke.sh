@@ -224,11 +224,11 @@ set -e
 expect_eq "a --timeout over the grant is a bad request" "$rc" "2"
 expect_has "timeout_over_grant names the grant and the owner command" "$(cat "$SANDBOX/err")" "(grant: 2h/job, 2 parallel, 10 queued, 60 GB disk). Ask your owner: k2 compute grant mini --workspace"
 help="$(k2 compute --help)"
-for want in "k2 compute wait <job>..." "[--workspace WS]" "cancel <job> [--force]" "≤ the grant's max" "--wait [--failures] [--max-wait 9m]" "K2_COMPUTE_JOB" "[--cache-required]" "Without --needs a job has"; do
+for want in "k2 compute wait <job>..." "[--workspace WS]" "cancel <job> [--force]" "≤ the grant's max" "--wait [--failures] [--max-wait 9m]" "K2_COMPUTE_JOB" "K2_QUIET_HOST=yes|no" "[--cache-required]" "Without --needs a job has"; do
     expect_has "--help lists $want" "$help" "$want"
 done
 study="$(k2 study compute)"
-for want in "K2_COMPUTE_JOB=<job id>" "CANCEL" "WORKTREES" "k2 compute wait <id>" "sh -ec" "rust@1.95.0+target:wasm32-unknown-unknown" "rust_target_unsupported" "WHAT A JOB HAS WITHOUT --needs" "--cache-required"; do
+for want in "K2_COMPUTE_JOB=<job id>" "CANCEL" "WORKTREES" "k2 compute wait <id>" "sh -ec" "rust@1.95.0+target:wasm32-unknown-unknown" "rust_target_unsupported" "WHAT A JOB HAS WITHOUT --needs" "--cache-required" "K2_QUIET_HOST=yes|no" "K2_QUIET_HOST_WHY" "quietWhy"; do
     expect_has "study compute covers $want" "$study" "$want"
 done
 set +e

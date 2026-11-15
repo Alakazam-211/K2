@@ -109,8 +109,21 @@ fn host_sample(s: Option<&Value>) -> Value {
     });
     // GPU jobs S2: only from a node that says (an older node's stamp keeps
     // its shape): was the host quiet, and how busy was the job's GPU.
-    if let Some(q) = s.get("quiet").filter(|q| q.is_boolean()) {
-        v["quiet"] = q.clone();
+    if let Some(q) = s.get("quiet").and_then(Value::as_bool) {
+        v["quiet"] = Value::Bool(q);
+        // 0.46.13: why not, in the words of the job's log line and its
+        // K2_QUIET_HOST_WHY (the same rule over the same stamp).
+        if !q {
+            let n = |k: &str| s.get(k).and_then(Value::as_u64);
+            let why = super::proto::results::quiet_why(
+                n("load1_milli").unwrap_or(0),
+                n("cpus").unwrap_or(0) as u32,
+                n("other_jobs").unwrap_or(0) as u32,
+                s.get("foreign_lock").and_then(Value::as_bool).unwrap_or(false),
+                n("gpu_busy_pct").map(|g| g as u32),
+            );
+            v["quietWhy"] = why.map(Value::String).unwrap_or(Value::Null);
+        }
     }
     if let Some(g) = s.get("gpu_busy_pct").filter(|g| g.is_u64()) {
         v["gpuBusy"] = g.clone();
@@ -454,6 +467,12 @@ mod tests {
         let h = host(&j);
         assert_eq!((h["start"]["quiet"].as_bool(), h["start"]["gpuBusy"].as_u64()), (Some(true), Some(2)));
         assert_eq!((h["end"]["quiet"].as_bool(), h["end"].get("gpuBusy")), (Some(false), None));
+        // 0.46.13: a not-quiet stamp says why, in the log line's words; a
+        // quiet one and an older node's have no quietWhy.
+        assert_eq!(h["end"]["quietWhy"], json!("1 other K2 job, load 5.10 ≥ 4.00"));
+        assert_eq!(h["start"].get("quietWhy"), None);
+        j.summary_json = Some(json!({"host": {"end": {"at": 2, "load1_milli": 100, "cpus": 16, "other_jobs": 0, "foreign_lock": true, "gpu_busy_pct": 7, "quiet": false}}}).to_string());
+        assert_eq!(host(&j)["end"]["quietWhy"], json!("a foreign lock is held, GPU 7% busy"));
         // GPU jobs S4: a --gpu job's GPU, camelCase.
         j.summary_json = Some(
             json!({"artifacts": [], "notes": [],

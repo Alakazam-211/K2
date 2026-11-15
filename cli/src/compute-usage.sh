@@ -664,8 +664,9 @@ compute_off, queue_full, owner_only, job_started, …); 130 = you detached
 with Ctrl-C (the job keeps running). run --json prints one result object
 on stdout (logs go to stderr). Jobs see K2_COMPUTE_JOB=<id>, K2_JOB_CPUS,
 K2_JOB_PORT_BASE, K2_JOB_PORT_COUNT and K2_NODE_OS, K2_NODE_DISTRO,
-K2_NODE_DISTRO_VERSION, K2_NODE_PKG (all set by the node; --env can't set
-them; no K2 token or socket). --secret: the job gets a vault
+K2_NODE_DISTRO_VERSION, K2_NODE_PKG, K2_QUIET_HOST=yes|no (+
+K2_QUIET_HOST_WHY when no: the "host at start" verdict) (all set by the
+node; --env can't set them; no K2 token or socket). --secret: the job gets a vault
 secret as env; only a person grants it (k2 vault grant NAME --to
 compute:<ws>/<node> --as env), and the job can print or send what it's
 given. Read `k2 study compute` first.

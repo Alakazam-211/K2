@@ -187,7 +187,8 @@ async fn a_job_gets_its_cpus_ports_tools_usage_and_host_stamp() {
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
     let script = "echo cpus=$K2_JOB_CPUS cargo=$CARGO_BUILD_JOBS omp=$OMP_NUM_THREADS nextest=$NEXTEST_TEST_THREADS rtt=$RUST_TEST_THREADS base=$K2_JOB_PORT_BASE count=$K2_JOB_PORT_COUNT; \
-                  x=$(head -c 120000000 /dev/zero | tr '\\0' a); sleep 2; echo ${#x}";
+                  x=$(head -c 120000000 /dev/zero | tr '\\0' a); sleep 2; echo ${#x}; \
+                  echo \"quiet=$K2_QUIET_HOST why=${K2_QUIET_HOST_WHY-unset}\"";
     let mut p = plan("h1", &["/bin/sh", "-c", script]);
     p.limits.cpu_millis = Some(2500);
     p.env.insert("RUST_TEST_THREADS".into(), "7".into());
@@ -210,6 +211,20 @@ async fn a_job_gets_its_cpus_ports_tools_usage_and_host_stamp() {
     let (s, e) = (h.start.expect("start"), h.end.expect("end"));
     assert!(s.cpus >= 1 && e.at >= s.at, "{s:?} {e:?}");
     assert_eq!(s.steal_permille.is_some(), cfg!(target_os = "linux"), "steal on Linux, null on macOS: {s:?}");
+    // 0.46.13: the job's K2_QUIET_HOST (and _WHY) say what its "host at
+    // start" line and its start stamp say: one reading.
+    let q = out.lines().find_map(|l| l.strip_prefix("quiet=")).expect("the job printed its quiet env");
+    let (verdict, why) = q.split_once(" why=").expect("quiet=… why=…");
+    let start_line = sys.lines().find(|l| l.starts_with("[k2-node] host at start: ")).expect("a start line");
+    match verdict {
+        "yes" => {
+            assert_eq!(why, "unset", "a quiet host has no K2_QUIET_HOST_WHY");
+            assert!(start_line.ends_with(", quiet host: yes"), "{start_line} vs {q}");
+        }
+        "no" => assert!(start_line.ends_with(&format!(", quiet host: no ({why})")), "{start_line} vs {q}"),
+        other => panic!("K2_QUIET_HOST={other:?}: {out}"),
+    }
+    assert_eq!(s.quiet, Some(verdict == "yes"), "the stamp's verdict is the env's: {s:?}");
     let Frame::Receipt(rf) = fr.last().unwrap() else { unreachable!() };
     let receipt = rf.receipt.verify(n.node.key.spki_der()).unwrap();
     assert_eq!(receipt.tools_used, o.tools_used, "the signed receipt carries the same tools");

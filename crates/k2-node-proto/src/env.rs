@@ -71,6 +71,14 @@ pub const ENV_JOB_CPUS: &str = "K2_JOB_CPUS";
 /// another port. Node-set.
 pub const ENV_JOB_PORT_BASE: &str = "K2_JOB_PORT_BASE";
 pub const ENV_JOB_PORT_COUNT: &str = "K2_JOB_PORT_COUNT";
+/// 0.46.13: was the host quiet as the job started (`yes` / `no`), from the
+/// same reading as the job's "host at start: … quiet host:" log line (no
+/// other K2 job, no foreign lock, load under 0.25 × CPUs, the GPU under 5%
+/// busy). When `no`, [`ENV_QUIET_HOST_WHY`] says why, in the log line's
+/// words. So a test can tell whether a wall-time bound counts. Node-set;
+/// an older node sets neither.
+pub const ENV_QUIET_HOST: &str = "K2_QUIET_HOST";
+pub const ENV_QUIET_HOST_WHY: &str = "K2_QUIET_HOST_WHY";
 
 /// Thread-count variables the node sets to the job's CPUs (CE-15) unless
 /// the plan's env already sets them (a caller's `--env`, or a controller's

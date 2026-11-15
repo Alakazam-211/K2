@@ -13,6 +13,7 @@ pub mod admin;
 pub mod artifacts;
 pub mod cgroup;
 pub mod config;
+pub mod egress;
 pub mod hold;
 pub mod enroll;
 pub mod fairq;

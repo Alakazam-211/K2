@@ -1391,6 +1391,15 @@ pub fn main() -> ExitCode {
         };
         return ExitCode::from(k2_node::hold::main(std::path::Path::new(dir)) as u8);
     }
+    // A Mac no-lan job's egress proxy: forks like the holder, then its own
+    // small runtime (prd-compute-mac-no-lan-v1 §5.2).
+    if raw.first().map(String::as_str) == Some("job-egress") {
+        let Some(dir) = raw.get(1) else {
+            eprintln!("k2-node job-egress <dir>");
+            return ExitCode::from(2);
+        };
+        return ExitCode::from(k2_node::egress::proc::main(std::path::Path::new(dir)) as u8);
+    }
     // The Simulator service (iPhones on a Mac node): plain threads, no runtime.
     if raw.first().map(String::as_str) == Some("simhost") {
         let r = parse(&raw).and_then(|a| {

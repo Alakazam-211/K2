@@ -29,6 +29,7 @@
 //! lines and the end-of-job host list ([`fold`]).
 
 pub mod fold;
+pub mod proc;
 
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;

@@ -106,7 +106,7 @@ pub fn real_path(p: &Path) -> PathBuf {
 
 /// A Seatbelt string literal (backslash and quote escaped; no control
 /// characters, which a path never needs).
-fn sb_str(p: &Path) -> String {
+pub(crate) fn sb_str(p: &Path) -> String {
     let s = p.to_string_lossy();
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');

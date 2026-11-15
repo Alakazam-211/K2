@@ -179,6 +179,26 @@ describe('DesktopPane states', () => {
     }
   })
 
+  it('Ask at the Mac from a remote room says to start the prompt at that Mac', async () => {
+    daemon.status = status({ state: 'needs_permission' })
+    daemon.refuseEnableAsRoom = true
+    useToastStore.setState({ toasts: [] })
+    try {
+      await render()
+      const ask = card().querySelector<HTMLElement>('[data-desktop-card-action="ask-at-mac"]')
+      expect(ask).not.toBeNull()
+      await act(async () => {
+        fireEvent.click(ask!)
+      })
+      await act(async () => {})
+      const toasts = useToastStore.getState().toasts.map((t) => t.message)
+      expect(toasts.some((m) => m.startsWith("The Mac's permission prompt can only be started at that Mac: on b.k2.dev"))).toBe(true)
+      expect(toasts.some((m) => m.startsWith('Remote desktop is turned on at that computer itself'))).toBe(false)
+    } finally {
+      daemon.refuseEnableAsRoom = false
+    }
+  })
+
   it('Retry re-reads status; a desktop_state event does too', async () => {
     daemon.status = status({ state: 'needs_update' })
     await render()

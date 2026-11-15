@@ -457,12 +457,11 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
               // A remote room never switches on screen sharing for another
               // machine (prd-remote-desktop-tab S1): say where to do it.
               if (err instanceof RoomWriteRefusedError) {
-                useToastStore
-                  .getState()
-                  .addToast(
-                    `Remote desktop is turned on at that computer itself: on ${err.hostKey}, open Settings → Remote desktop (or run k2 desktop enable there).`,
-                    'error',
-                  )
+                const text =
+                  action === 'ask-at-mac'
+                    ? `The Mac's permission prompt can only be started at that Mac: on ${err.hostKey}, open a Desktop tab for that computer and press Ask at the Mac, or allow K2 Screen in System Settings → Privacy & Security (Screen & System Audio Recording, and Accessibility).`
+                    : `Remote desktop is turned on at that computer itself: on ${err.hostKey}, open Settings → Remote desktop (or run k2 desktop enable there).`
+                useToastStore.getState().addToast(text, 'error')
                 return
               }
               const msg = err instanceof Error ? err.message : String(err)

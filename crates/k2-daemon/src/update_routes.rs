@@ -1039,11 +1039,14 @@ fn start_bundled_app_update(
     CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string())
 }
 
+/// The names the host's display name override is read under, newest first.
+const HOSTNAME_NAMES: &[&str] = &["K5_HOSTNAME", "K2SO_HOSTNAME"];
+
 /// Actionable "the app isn't open" message surfaced on a bundled-app job
 /// when no co-located app is listening to drive the Tauri updater.
 fn app_not_running_msg() -> String {
-    let host = std::env::var("K2SO_HOSTNAME")
-        .ok()
+    let host = k2_core::env_names::first_set(HOSTNAME_NAMES)
+        .map(|(_, v)| v)
         .or_else(|| hostname_best_effort())
         .unwrap_or_else(|| "this host".to_string());
     format!("K2.app isn't running on {host} — open it there, or update on the machine.")
@@ -2175,6 +2178,18 @@ pub fn swap_shape_a_followup() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The host name in the "app isn't running" message is read as
+    /// `K5_HOSTNAME` first and `K2SO_HOSTNAME` after it.
+    #[test]
+    fn the_app_not_running_message_names_the_host_under_either_name() {
+        assert_eq!(HOSTNAME_NAMES, &["K5_HOSTNAME", "K2SO_HOSTNAME"]);
+        let _new_unset = k2_core::test_env::EnvVar::remove("K5_HOSTNAME");
+        let _old = k2_core::test_env::EnvVar::set("K2SO_HOSTNAME", "old-box");
+        assert_eq!(app_not_running_msg(), "K2.app isn't running on old-box — open it there, or update on the machine.");
+        let _new = k2_core::test_env::EnvVar::set("K5_HOSTNAME", "new-box");
+        assert_eq!(app_not_running_msg(), "K2.app isn't running on new-box — open it there, or update on the machine.");
+    }
     use std::cmp::Ordering;
 
     // ── Manifest parse ──────────────────────────────────────────────

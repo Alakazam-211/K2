@@ -493,6 +493,11 @@ fn a1s_stored_view_projects_per_viewer() {
 #[test]
 fn the_sweep_moves_pending_to_already_done_and_back_and_republishes() {
     let _db = k2_core::db::scoped_for_test();
+    // The server switch is a process-wide flag; tests that flip it (the
+    // settings routes) hold the env lock and put it back on release. Hold
+    // it too, so the switch stays off while this test reads it (shuffled
+    // soak, seed 3: it read a neighbour's "on").
+    let _env = k2_core::test_env::lock();
     let ws = seed();
     let (id, card) = ask(&ws);
     let state = || store::get_by_display_id(&id).expect("db").expect("row").state;

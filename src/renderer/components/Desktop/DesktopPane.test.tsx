@@ -161,6 +161,7 @@ describe('DesktopPane states', () => {
   it('Turn on from a remote room says to turn it on at that computer', async () => {
     daemon.status = status({ enabled: false })
     daemon.refuseEnableAsRoom = true
+    useToastStore.setState({ toasts: [] })
     try {
       await render()
       const button = (): HTMLElement => card().querySelector<HTMLElement>('[data-desktop-card-action="turn-on"]')!
@@ -168,11 +169,10 @@ describe('DesktopPane states', () => {
       await act(async () => {
         fireEvent.click(button())
       })
-      await act(async () => {})
+      const want =
+        'Remote desktop is turned on at that computer itself: on b.k2.dev, open Settings → Remote desktop (or run k2 desktop enable there).'
+      await vi.waitFor(() => expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(want))
       const toasts = useToastStore.getState().toasts.map((t) => t.message)
-      expect(toasts).toContain(
-        'Remote desktop is turned on at that computer itself: on b.k2.dev, open Settings → Remote desktop (or run k2 desktop enable there).',
-      )
       expect(toasts.some((m) => m.includes('is not something a room sends'))).toBe(false)
     } finally {
       daemon.refuseEnableAsRoom = false
@@ -190,10 +190,11 @@ describe('DesktopPane states', () => {
       await act(async () => {
         fireEvent.click(ask!)
       })
-      await act(async () => {})
+      const askLine = (m: string): boolean => m.startsWith("The Mac's permission prompt can only be started at that Mac: on b.k2.dev")
+      await vi.waitFor(() => expect(useToastStore.getState().toasts.some((t) => askLine(t.message))).toBe(true))
+      // The ask action's own toast is the newest one, not Turn on's line.
       const toasts = useToastStore.getState().toasts.map((t) => t.message)
-      expect(toasts.some((m) => m.startsWith("The Mac's permission prompt can only be started at that Mac: on b.k2.dev"))).toBe(true)
-      expect(toasts.some((m) => m.startsWith('Remote desktop is turned on at that computer itself'))).toBe(false)
+      expect(askLine(toasts[toasts.length - 1]!)).toBe(true)
     } finally {
       daemon.refuseEnableAsRoom = false
     }

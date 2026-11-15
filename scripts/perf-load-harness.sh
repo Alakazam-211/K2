@@ -13,7 +13,7 @@
 # 2. In-app load:       YOU follow the printed checklist inside K2 —
 #                       open N terminals, run noisy commands, fire a
 #                       fuzzy search every so often.
-# 3. Capture + analyze: K2's stderr (with K2SO_PERF=1) collects
+# 3. Capture + analyze: K2's stderr (with K5_PERF=1) collects
 #                       [perf] summary lines. `perf-analyze.sh`
 #                       aggregates worst-case p50/p99/max per histogram.
 #
@@ -21,11 +21,11 @@
 #
 #   - K2 dev build running with stderr captured to a log file:
 #
-#       K2SO_PERF=1 bun run tauri dev 2>&1 | tee /tmp/k2-perf.log
+#       K5_PERF=1 bun run tauri dev 2>&1 | tee /tmp/k2-perf.log
 #
 #     Or skip the tee and redirect:
 #
-#       K2SO_PERF=1 bun run tauri dev > /tmp/k2-perf.log 2>&1
+#       K5_PERF=1 bun run tauri dev > /tmp/k2-perf.log 2>&1
 #
 #   - A test project path to storm. Defaults to this repo.
 #
@@ -74,7 +74,7 @@ if [[ ! -f "$LOG_PATH" ]]; then
     echo -e "${YELLOW}warning:${NC} $LOG_PATH doesn't exist yet."
     echo "Start K2 in another terminal first:"
     echo ""
-    echo "    K2SO_PERF=1 bun run tauri dev 2>&1 | tee $LOG_PATH"
+    echo "    K5_PERF=1 bun run tauri dev 2>&1 | tee $LOG_PATH"
     echo ""
     read -p "Press enter once K2 is running and the log is being written, or Ctrl-C to abort... "
 fi

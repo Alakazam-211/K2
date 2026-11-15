@@ -1,7 +1,7 @@
 #!/bin/bash
 # K2 Performance Log Analyzer
 #
-# Reads a K2SO stderr log (with K2SO_PERF=1 enabled), extracts every
+# Reads a K2SO stderr log (with K5_PERF=1 enabled), extracts every
 # `[perf] <name> — p50=... p99=...` summary line, and prints the
 # worst-case p50/p99/max per histogram across the whole log.
 #
@@ -168,7 +168,7 @@ elif [[ $status -eq 1 ]]; then
     echo -e "${YELLOW}→ P3 (tokio-ize polling) is justified for the 'OVER' paths above.${NC}"
     echo -e "${YELLOW}→ If UI blocking persists post-P3, P4 (daemon split) becomes warranted.${NC}"
 else
-    echo -e "${YELLOW}No [perf] lines found. Did K2 run with K2SO_PERF=1?${NC}"
+    echo -e "${YELLOW}No [perf] lines found. Did K2 run with K5_PERF=1?${NC}"
 fi
 
 exit $status

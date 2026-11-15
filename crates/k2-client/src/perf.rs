@@ -13,7 +13,7 @@
 //!                           [`FLUSH_EVERY`] samples the histogram prints a
 //!                           p50 / p99 / mean / count / min / max line.
 //!
-//! Instrumentation is gated on [`is_enabled`]: true only when the `K2SO_PERF`
+//! Instrumentation is gated on [`is_enabled`]: true only when the `K5_PERF` (or older `K2SO_PERF`)
 //! environment variable is set (any non-empty value other than `0`; since
 //! 0.36.2 debug builds are no longer auto-on). Without the env var, every
 //! macro body short-circuits and
@@ -48,7 +48,7 @@ static ENABLED: OnceLock<bool> = OnceLock::new();
 /// Returns true if performance instrumentation should record samples.
 /// Cached on first call so repeated lookups are a single atomic read.
 ///
-/// Opt-in via `K2SO_PERF=1`. Pre-0.36.2 this was auto-on in debug
+/// Opt-in via `K5_PERF=1` (the older `K2SO_PERF=1` is still read). Pre-0.36.2 this was auto-on in debug
 /// builds, which drowned the dev console in `[perf] *_tick` lines and
 /// made other tracing (e.g. `[legacy-per-agent-heartbeat]`) hard to
 /// spot. If you actually want a perf measurement run, set the env.
@@ -59,11 +59,15 @@ pub fn is_enabled() -> bool {
         TEST_ON => return true,
         _ => {}
     }
-    *ENABLED.get_or_init(|| {
-        std::env::var("K2SO_PERF")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
+    *ENABLED.get_or_init(|| enabled_by(crate::env_names::first_set(ENABLED_NAMES).map(|(_, v)| v)))
+}
+
+/// The names the perf switch is read under, newest first.
+const ENABLED_NAMES: &[&str] = &["K5_PERF", "K2SO_PERF"];
+
+/// What the switch's value means: on for anything but unset, empty or `0`.
+fn enabled_by(value: Option<String>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 // Test override of the gate (unset / off / on). The real gate is read from
@@ -229,6 +233,25 @@ macro_rules! perf_hist {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The switch is read as `K5_PERF` first and `K2SO_PERF` after it.
+    /// The gate itself is read once per process, so the rule is tested
+    /// over a plain lookup.
+    #[test]
+    fn the_switch_is_read_under_the_k5_name_first_and_means_what_it_did() {
+        use crate::env_names::first_set_in;
+        assert_eq!(ENABLED_NAMES, &["K5_PERF", "K2SO_PERF"]);
+        let on = |pairs: &'static [(&'static str, &'static str)]| {
+            enabled_by(first_set_in(ENABLED_NAMES, |n| pairs.iter().find(|(k, _)| *k == n).map(|(_, v)| v.to_string())).map(|(_, v)| v))
+        };
+        assert!(!on(&[]), "off by default");
+        assert!(on(&[("K2SO_PERF", "1")]), "the old name still turns it on");
+        assert!(on(&[("K5_PERF", "1")]));
+        assert!(on(&[("K5_PERF", "yes")]), "any value but empty or 0");
+        assert!(!on(&[("K5_PERF", "0")]));
+        assert!(!on(&[("K5_PERF", "")]));
+        assert!(!on(&[("K5_PERF", "0"), ("K2SO_PERF", "1")]), "the new name wins when both are set");
+    }
 
     #[test]
     fn histogram_computes_percentiles() {

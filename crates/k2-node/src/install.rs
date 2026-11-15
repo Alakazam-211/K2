@@ -55,6 +55,13 @@ fn xml(s: &str) -> String {
 }
 
 /// launchd LaunchDaemon `dev.k2.node.plist`.
+///
+/// `ProcessType` is `Interactive`. With it unset (or `Standard`), launchd
+/// applies "light resource limits" to the job and coalesces its timers,
+/// and every job inherits that clamp: measured on an M4 mini (macOS 26.5)
+/// a 2 ms sleep took ~13 ms and a 16.7 ms sleep ~130 ms, the same as
+/// `taskpolicy -c utility`; a job can't lift it (thread QoS, nice and
+/// taskpolicy don't help). `Interactive` gives the app-like 3 ms / 24 ms.
 pub fn render_plist(p: &InstallParams<'_>) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -81,6 +88,8 @@ pub fn render_plist(p: &InstallParams<'_>) -> String {
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>WorkingDirectory</key>
 	<string>{home}</string>
 	<key>StandardOutPath</key>
@@ -159,6 +168,16 @@ mod tests {
             }
         }
         assert!(write_files("windows", &params("linux"), &crate::util::temp_dir("install-win")).is_err());
+    }
+
+    #[test]
+    fn plist_is_interactive_so_job_timers_are_not_coalesced() {
+        let s = render_plist(&params("macos"));
+        assert!(
+            s.contains("<key>ProcessType</key>\n\t<string>Interactive</string>"),
+            "dev.k2.node.plist must set ProcessType=Interactive (unset = Standard = throttled, coalesced timers):\n{s}"
+        );
+        assert_eq!(s.matches("<key>ProcessType</key>").count(), 1);
     }
 
     #[test]

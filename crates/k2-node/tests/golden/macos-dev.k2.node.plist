@@ -22,6 +22,8 @@
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>WorkingDirectory</key>
 	<string>/var/k2node</string>
 	<key>StandardOutPath</key>

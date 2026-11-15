@@ -199,15 +199,22 @@ fn open_blobs(store: &Arc<DocStore>) -> Option<Arc<BlobStore>> {
     if let Err(e) = k2_core::private_home::restrict_path(&dir) {
         log_debug!("[docs] WARN: blob folder {}: {e}", dir.display());
     }
-    let mut cfg = BlobConfig::default();
-    cfg.max_blob_bytes = blob_max_bytes();
-    match BlobStore::open(store.clone(), &dir, cfg, Arc::new(host::now_ms)) {
+    match BlobStore::open(store.clone(), &dir, blob_config(), Arc::new(host::now_ms)) {
         Ok(b) => Some(Arc::new(b)),
         Err(e) => {
             log_debug!("[docs] WARN: blob store at {} failed to open ({e}); any-file docs are off", dir.display());
             None
         }
     }
+}
+
+/// The blob store's config: K2's size cap. Kit v0.19.0's chunked versions
+/// stay off (its default): the first one stamps the store format 8, which
+/// kit v0.18.0 and earlier refuse to open.
+fn blob_config() -> BlobConfig {
+    let mut cfg = BlobConfig::default();
+    cfg.max_blob_bytes = blob_max_bytes();
+    cfg
 }
 
 fn config() -> Config {
@@ -286,12 +293,14 @@ pub fn start() {
 /// A newer kit may also add a table without a new format (v0.9.7's
 /// `authored`): that store still opens, reads and edits here, and only a
 /// purge or rewrite is refused (`store_newer`, `routes::session_error`).
+/// "Reads up to" names the highest format the kit reads
+/// (`STORE_FORMAT_READ`: 8 since kit v0.19.0), not the one it stamps.
 pub fn store_open_error(e: &k2_mpc_base::store::StoreError) -> String {
     match e {
         k2_mpc_base::store::StoreError::Newer { found } => format!(
             "the docs store was written by a newer K2 (store format {found}; this K2 reads up to {}). \
              A box that opened documents with a newer K2 can't go back to an older K2: update K2 again",
-            k2_mpc_base::store::STORE_FORMAT
+            k2_mpc_base::store::STORE_FORMAT_READ
         ),
         other => other.to_string(),
     }
@@ -779,15 +788,30 @@ mod tests {
 
     #[test]
     fn a_too_new_store_says_there_is_no_way_back() {
-        let m = store_open_error(&k2_mpc_base::store::StoreError::Newer { found: 7 });
-        assert!(m.contains("store format 7; this K2 reads up to 6"), "{m}");
+        // Kit v0.19.0 reads up to format 8 (the required-features word):
+        // a store above it is a newer K2's.
+        let m = store_open_error(&k2_mpc_base::store::StoreError::Newer { found: 9 });
+        assert!(m.contains("store format 9; this K2 reads up to 8"), "{m}");
         assert!(m.contains("can't go back to an older K2"), "{m}");
+        assert_eq!(k2_mpc_base::store::STORE_FORMAT_READ, 8, "kit v0.19.0 reads up to store format 8");
         // Kit v0.10.0.x reads up to format 6 (structured docs). A store is
         // created at 5 and stamped 6 only by its first structured doc (a
         // grid), which K2 0.46.7 never opens (no CSV grid core): every
-        // store 0.46.7 writes stays format 5 (WHATS_NEW says so).
+        // store 0.46.7 writes stays format 5 (WHATS_NEW says so). Format 8
+        // comes only with a first chunked version, which K2 leaves off.
         assert_eq!(k2_mpc_base::store::STORE_FORMAT, 6, "0.46.7 reads up to store format 6");
         assert_eq!(k2_mpc_base::store::STORE_FORMAT_BASE, 5, "0.46.7 writes store format 5");
+    }
+
+    /// Kit v0.19.0's chunked versions stay off: the first chunked version
+    /// stamps the store format 8, which a K2 on kit v0.18.0 or earlier
+    /// refuses to open, so turning it on would take away the way back to
+    /// the release before.
+    #[test]
+    fn chunked_versions_stay_off() {
+        let cfg = blob_config();
+        assert!(!cfg.chunked_versions, "chunked versions stay off until the release K2 would roll back to reads format 8");
+        assert_eq!(cfg.max_blob_bytes, blob_max_bytes(), "K2's size cap");
     }
 
     /// Kit v0.15.0: a purge that destroyed a key rewrites the store file

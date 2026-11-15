@@ -584,17 +584,28 @@ pub fn roster_event_for(e: &RosterEvent, me: Value) -> Option<Value> {
                 ("started_ms", Value::from(*started_ms)),
             ])
         }
-        RosterEvent::ClaimEnded { who: w, claim, how, lines: l, version, actor: a, at_ms, at_rev, .. } => Value::obj([
-            ("kind", Value::from("claim_ended")),
-            ("who", who(w)),
-            ("claim", Value::from(claim.to_string())),
-            ("how", Value::from(how.as_str())),
-            ("lines", lines(l)),
-            ("version", Value::from(*version)),
-            ("actor", actor(w, a)),
-            ("at_ms", Value::from(*at_ms)),
-            ("at_rev", at_rev.map_or(Value::Null, Value::from)),
-        ]),
+        // `keys` (kit v0.19.0): a claim on elements names them by address as
+        // they were when it was taken, so a view can say what went (`how:
+        // "gone_outside_save"` when an outside save took them out). Only when
+        // there are some, as the kit's WIRE.md and goldens: a claim on lines
+        // or cells has none, and its bytes are as before.
+        RosterEvent::ClaimEnded { who: w, claim, how, lines: l, version, actor: a, at_ms, at_rev, addresses, .. } => {
+            let mut fields = vec![
+                ("kind", Value::from("claim_ended")),
+                ("who", who(w)),
+                ("claim", Value::from(claim.to_string())),
+                ("how", Value::from(how.as_str())),
+                ("lines", lines(l)),
+                ("version", Value::from(*version)),
+                ("actor", actor(w, a)),
+                ("at_ms", Value::from(*at_ms)),
+                ("at_rev", at_rev.map_or(Value::Null, Value::from)),
+            ];
+            if !addresses.is_empty() {
+                fields.push(("keys", addresses_value(addresses)));
+            }
+            Value::obj(fields)
+        }
         // Wire 3: element presence (a keyed doc's viewers and agents).
         RosterEvent::Selection { who: w, selection: s, client, .. } => {
             elem_event("selection", w, s.as_ref().map_or(Value::Null, selection), client)

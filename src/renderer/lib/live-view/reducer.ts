@@ -15,10 +15,12 @@ import type {
   KeyedSchema,
   KeyedSnapshotFrame,
   OpsChangeFrame,
+  OutsideSaveFrame,
   Point,
   Rect,
   RosterEntry,
   RosterEvent,
+  VerbRefusedFrame,
 } from '@k2/mpc-client'
 import { NO_CELL_DERIVED, withPageDerived, type CellDerivedValues } from './cell-derived'
 import { checkPage, foldSnapshot, KeyedMisfit } from './keyed-fold'
@@ -37,6 +39,9 @@ export type LiveWorkbookFrame =
   /** The host's word on the doc's tier: live, the blob tier (too large to watch live; read-only), or no doc (32 MiB and up). */
   | { type: 'tier'; tier: LiveTier }
   | { type: 'watch_refused'; error: ErrorReport }
+  /** Kit v0.19.0's unnumbered keyed-watch notices: what came of an outside save, a refused verb. */
+  | OutsideSaveFrame
+  | VerbRefusedFrame
   | ClockFrame
 
 export type LiveTier = 'live' | 'blob' | 'none'
@@ -400,6 +405,10 @@ function step(s0: LiveWorkbookState, a: LiveWorkbookAction): LiveWorkbookState {
       return { ...s, tier: a.tier }
     case 'watch_refused':
       return { ...s, awaiting: false, refused: a.error }
+    // Notices, not state: the doc's change came in its own `ops_change`. Nothing a workbook view draws yet.
+    case 'outside_save':
+    case 'verb_refused':
+      return s
     case 'keyed_snapshot':
       return onHead(s, a)
     case 'keyed_page':

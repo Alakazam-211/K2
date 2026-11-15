@@ -100,11 +100,15 @@ impl Drop for Fx {
 
 impl Fx {
     fn new() -> Fx {
+        Fx::with_config(|_| {})
+    }
+    fn with_config(tune: impl FnOnce(&mut k2_mpc_base::session::Config)) -> Fx {
         let dir = std::env::temp_dir().join(format!("k2-live-watch-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
         let mut config = k2_mpc_base::session::Config::default();
         config.edit_rate_per_s = 1_000_000;
         config.edit_burst = 1_000_000;
+        tune(&mut config);
         let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("store"));
         Fx { dir, mgr: SessionManager::new(store, Arc::new(TestHost), config) }
     }
@@ -239,4 +243,37 @@ fn a_snapshot_over_the_frame_cap_goes_out_as_watch_refused_once() {
     // No retry on its own: a change goes nowhere until the client asks again.
     insert(&s, ada, "a2", "a1");
     assert!(w.pump(&s).is_empty(), "nothing after a refusal until the client's next watch");
+}
+
+/// Kit v0.19.0: a claim's end names its elements by address as they were,
+/// and K2's roster encoder sends them as `claim_ended`'s `keys`, after
+/// `at_rev`, only when there are some (the kit's WIRE.md and golden
+/// `roster_events_claims_elems.json`). A claim on lines has none, so its
+/// bytes are as before (`roster_events.json`, `live_wire_golden_tests`).
+#[test]
+fn a_claim_on_elements_ends_with_its_keys_on_the_roster() {
+    let f = Fx::with_config(|c| c.roster_interval_ms = 0);
+    let s = f.board(START);
+    let me = join(&s, "person:owner");
+    let bot = s.join(Participant::new("agent:bot", "Bot", "#0891b2", ParticipantKind::Agent, "cli"), Stay::Held).expect("join").conn;
+    let roster = s.subscribe_roster(me).expect("roster");
+    let keys = [Key::new("a2").expect("key"), Key::new("a1").expect("key")];
+    let id = s.claim_elems(bot, SHAPES, &keys, None, None, true).expect("claim").id;
+    s.release_claim(bot, Some(id)).expect("release");
+    s.flush_roster().expect("roster flush");
+    let ended: Vec<String> = roster
+        .try_iter()
+        .filter_map(|e| super::super::live_wire::roster_event(&e))
+        .map(|v| v.to_json())
+        .filter(|j| j.starts_with(r#"{"kind":"claim_ended""#))
+        .collect();
+    assert_eq!(ended.len(), 1, "one end: {ended:?}");
+    let e: J = serde_json::from_str(&ended[0]).expect("event JSON");
+    assert_eq!(e["how"], "released", "{e}");
+    assert_eq!(e["who"], "agent:bot", "{e}");
+    assert!(
+        ended[0].ends_with(r#","keys":["a1","a2"]}"#),
+        "the claim's elements by address, in key order, last (after `at_rev`), as the kit's golden: {}",
+        ended[0]
+    );
 }

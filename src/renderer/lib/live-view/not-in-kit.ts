@@ -1,5 +1,5 @@
 // What the live workbook view reads that the kit's TS client (k2-mpc-base
-// v0.18.0, `@k2/mpc-client`) doesn't type. Everything else (frames, roster
+// v0.19.0, `@k2/mpc-client`) doesn't type. Everything else (frames, roster
 // events, corners, ranges, cells, the grid slot, derived values) is imported
 // from the kit, never redefined here. Each type below says why it is still
 // ours; when the kit (or K2's host) types it, it goes.
@@ -22,8 +22,14 @@ export interface XlsxViewSchema extends Omit<ViewSchemaJson, 'container_fields' 
   grid: GridSlot
 }
 
-/** The index's container with r1's `state` and `derived`. Ours: the kit's `ViewContainer` carries neither. */
-export interface XlsxViewContainer extends ViewContainer {
+/**
+ * The index's container with r1's `state` and `derived` (a sheet's merges and
+ * style hints). Ours: the kit's `ViewContainer` has no `state`, and since
+ * client 0.19.0 its `derived` is a container's own values (`{name: text}`,
+ * the view schema's `container_derived`), a different shape from r1's, so
+ * this container replaces it (as `XlsxViewUnit` does a unit's).
+ */
+export interface XlsxViewContainer extends Omit<ViewContainer, 'derived'> {
   state?: SheetState
   derived?: ContainerDerived | null
 }

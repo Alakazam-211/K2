@@ -33,11 +33,13 @@ export interface LiveWorkbookSource {
   close(): void
 }
 
-/** The socket frames a workbook view folds (the rest, such as acks or the hunk channel's, aren't for it). */
-const FOLDED: ReadonlySet<string> = new Set(['keyed_snapshot', 'keyed_page', 'ops_change', 'watch_refused', 'roster_event', 'turn_end', 'tier'])
+/** The socket frames a workbook view folds (the rest, such as acks or the hunk channel's, aren't for it).
+ *  `outside_save` and `verb_refused` (kit v0.19.0, unnumbered keyed-watch notices) pass on as the kit's
+ *  watch frames do; the view doesn't draw them yet. */
+const FOLDED: ReadonlySet<string> = new Set(['keyed_snapshot', 'keyed_page', 'ops_change', 'watch_refused', 'outside_save', 'verb_refused', 'roster_event', 'turn_end', 'tier'])
 
 /** Frames of the keyed watch: a fresh snapshot's head makes every earlier one moot. */
-const KEYED: ReadonlySet<string> = new Set(['keyed_snapshot', 'keyed_page', 'ops_change', 'watch_refused'])
+const KEYED: ReadonlySet<string> = new Set(['keyed_snapshot', 'keyed_page', 'ops_change', 'watch_refused', 'outside_save', 'verb_refused'])
 
 /** Changes kept since the last snapshot before the source asks for a fresh one (catch-up stays short). */
 export const CHANGES_KEPT = 2048

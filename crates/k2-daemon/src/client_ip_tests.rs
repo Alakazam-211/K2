@@ -586,7 +586,7 @@ async fn a_diverted_request_never_moves_and_comes_back_byte_for_byte() {
     });
     let h = tokio::spawn(async move {
         let mut up = TcpStream::connect(("127.0.0.1", app)).await.unwrap();
-        let got = forward_diverted(&mut server_side, &mut up, Mode::Tunnel(Some(ip(CLIENT))), None, None, None, Some(divert)).await;
+        let got = forward_diverted(&mut server_side, &mut up, Mode::Tunnel(Some(ip(CLIENT))), None, None, None, Some(divert), None).await;
         (got, server_side)
     });
     let first = "POST /up HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
@@ -996,4 +996,153 @@ async fn peek_for_the_gate_reads_the_same_way_the_forwarder_does() {
         drop(c);
         assert!(peek_gate_request(&mut s, strip, None).await.req.is_none(), "{bad:?}");
     }
+}
+
+// ── the per-request log (k2 app requests) ────────────────────────────
+
+type Rows = std::sync::Arc<Mutex<Vec<RequestRecord>>>;
+
+/// A client forwarded to `app` with a sink that keeps every row.
+async fn logged(app: u16, mode: Mode, gate: Option<WriteGate>) -> (Client, Rows) {
+    let rows: Rows = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let keep = rows.clone();
+    let sink: RequestSink = std::sync::Arc::new(move |r| keep.lock().unwrap().push(r));
+    let (client, server_side, _) = pair().await;
+    tokio::spawn(async move {
+        let mut up = TcpStream::connect(("127.0.0.1", app)).await.unwrap();
+        let mut down = server_side;
+        forward_diverted(&mut down, &mut up, mode, None, gate, None, None, Some(sink)).await
+    });
+    (Client { s: client, buf: Vec::new() }, rows)
+}
+
+/// The rows once there are at least `n` (fails after [`TEST_WAIT`]).
+async fn rows_at_least(rows: &Rows, n: usize) -> Vec<RequestRecord> {
+    let deadline = std::time::Instant::now() + TEST_WAIT;
+    loop {
+        let got = rows.lock().unwrap().clone();
+        if got.len() >= n {
+            return got;
+        }
+        assert!(std::time::Instant::now() < deadline, "want {n} rows, have {got:?}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_request_gives_one_row_with_its_status_bytes_and_path_without_the_query() {
+    let (mut c, rows) = logged(echo_app().await, Mode::Tunnel(Some(ip(CLIENT))), None).await;
+    let req = "POST /upload?token=k2skn_QUERYSECRET&x=1 HTTP/1.1\r\nHost: a\r\nCookie: sid=COOKIESECRET\r\n\
+               Authorization: Bearer AUTHSECRET\r\nContent-Length: 5\r\n\r\nhello";
+    c.send(req.as_bytes()).await.unwrap();
+    let (head, body) = c.response().await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let got = rows_at_least(&rows, 1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rows.lock().unwrap().len(), 1, "exactly one row");
+    let r = &got[0];
+    assert_eq!((r.method.as_str(), r.path.as_str(), r.status, r.k2_code), ("POST", "/upload", 200, None));
+    assert_eq!(r.bytes_in, req.len() as u64, "the head as sent plus the body");
+    assert_eq!(r.bytes_out, (head.len() + body.len()) as u64, "what the client got");
+    let head_ms = r.head_ms.expect("a response head came");
+    assert!(head_ms <= r.total_ms, "{r:?}");
+    assert_eq!((r.closed_early, r.ws), (None, None));
+    assert_eq!(r.visitor, Some(ip(CLIENT)), "the vouched address goes to the sink (it stores only a key)");
+    let all = format!("{got:?}");
+    for secret in ["QUERYSECRET", "token=", "COOKIESECRET", "AUTHSECRET", "Bearer", "hello"] {
+        assert!(!all.contains(secret), "{secret} reached the row: {all}");
+    }
+}
+
+#[tokio::test]
+async fn three_requests_on_one_keep_alive_connection_give_three_rows() {
+    let (mut c, rows) = logged(echo_app().await, Mode::Tunnel(Some(ip(CLIENT))), None).await;
+    for i in 0..3 {
+        c.send(format!("GET /r{i}?page={i} HTTP/1.1\r\nHost: a\r\n\r\n").as_bytes()).await.unwrap();
+        assert!(c.response().await.0.starts_with("HTTP/1.1 200"));
+    }
+    let got = rows_at_least(&rows, 3).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rows.lock().unwrap().len(), 3);
+    assert_eq!(got.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), vec!["/r0", "/r1", "/r2"]);
+    assert!(got.iter().all(|r| r.status == 200 && r.method == "GET" && r.closed_early.is_none()), "{got:?}");
+}
+
+#[tokio::test]
+async fn k2s_own_refusals_give_a_row_with_k2s_code() {
+    // 400: ambiguous framing.
+    let (mut c, rows) = logged(echo_app().await, Mode::Tunnel(Some(ip(CLIENT))), None).await;
+    c.send(b"POST /x?k=SECRET HTTP/1.1\r\nHost: a\r\nContent-Length: 4\r\nContent-Length: 5\r\n\r\nabcd").await.unwrap();
+    let out = c.rest().await;
+    assert!(out.starts_with("HTTP/1.1 400"), "{out}");
+    let r = rows_at_least(&rows, 1).await.remove(0);
+    assert_eq!((r.status, r.k2_code), (400, Some("bad_request")), "{r:?}");
+    assert_eq!(r.bytes_out, out.len() as u64);
+    assert!(r.closed_early.is_none() && !format!("{r:?}").contains("SECRET"), "{r:?}");
+
+    // 431: a head over K2's limit.
+    let (mut c, rows) = logged(echo_app().await, Mode::Tunnel(Some(ip(CLIENT))), None).await;
+    let _ = c.send(format!("GET / HTTP/1.1\r\nHost: a\r\nX-Big: {}\r\n\r\n", "a".repeat(MAX_HEAD + 10)).as_bytes()).await;
+    assert!(c.rest().await.starts_with("HTTP/1.1 431"));
+    let r = rows_at_least(&rows, 1).await.remove(0);
+    assert_eq!((r.status, r.k2_code), (431, Some("head_too_large")), "{r:?}");
+
+    // 429: the guard's write limit; the App answered the first write.
+    let l = crate::apps::guard::Limiter::new(1000);
+    let (mut c, rows) = logged(echo_app().await, Mode::Tunnel(Some(ip(CLIENT))), Some(test_gate(&l, Some(1)))).await;
+    c.send(b"POST /save HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+    assert!(c.response().await.0.starts_with("HTTP/1.1 200"));
+    c.send(b"POST /save HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+    assert!(c.rest().await.starts_with("HTTP/1.1 429"));
+    let got = rows_at_least(&rows, 2).await;
+    assert_eq!(got.iter().map(|r| (r.status, r.k2_code)).collect::<Vec<_>>(), vec![(200, None), (429, Some("too_many_writes"))]);
+    assert_eq!((got[1].method.as_str(), got[1].path.as_str()), ("POST", "/save"));
+}
+
+#[tokio::test]
+async fn a_websocket_gives_a_row_at_the_upgrade_and_one_at_the_close() {
+    let (mut c, rows) = logged(echo_app().await, Mode::Tunnel(Some(ip(CLIENT))), None).await;
+    let hs = "GET /ws?ticket=WSSECRET HTTP/1.1\r\nHost: a\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+              Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    c.send(hs.as_bytes()).await.unwrap();
+    let (head, _) = c.response().await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    let echoed: usize = values(&head, "x-handshake-len")[0].parse().unwrap();
+    c.take(echoed).await;
+    let frame = b"\x81\x05hello";
+    c.send(frame).await.unwrap();
+    assert_eq!(c.take(frame.len()).await, frame);
+    let up = rows_at_least(&rows, 1).await.remove(0);
+    assert_eq!((up.status, up.ws, up.path.as_str(), up.closed_early), (101, Some("upgrade"), "/ws", None), "{up:?}");
+    assert_eq!((up.bytes_in, up.bytes_out), (hs.len() as u64, head.len() as u64));
+    // The client closes: the close row has the bytes after the upgrade.
+    drop(c);
+    let got = rows_at_least(&rows, 2).await;
+    let close = &got[1];
+    assert_eq!((close.status, close.ws, close.path.as_str()), (101, Some("close"), "/ws"), "{close:?}");
+    assert_eq!(close.bytes_in, frame.len() as u64, "{close:?}");
+    assert_eq!(close.bytes_out, (echoed + frame.len()) as u64, "{close:?}");
+    assert!(!format!("{got:?}").contains("WSSECRET"));
+}
+
+#[tokio::test]
+async fn an_app_that_closes_without_answering_gives_status_0_closed_by_the_app() {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let app = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        let mut got = Vec::new();
+        while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            let mut b = [0u8; 1024];
+            let n = s.read(&mut b).await.unwrap();
+            got.extend_from_slice(&b[..n]);
+        }
+        drop(s);
+    });
+    let (mut c, rows) = logged(app, Mode::Tunnel(None), None).await;
+    c.send(b"GET /dropped HTTP/1.1\r\nHost: a\r\n\r\n").await.unwrap();
+    assert_eq!(c.rest().await, "", "nothing came back");
+    let r = rows_at_least(&rows, 1).await.remove(0);
+    assert_eq!((r.status, r.closed_early, r.head_ms, r.visitor), (0, Some("app"), None, None), "{r:?}");
+    assert_eq!(r.path, "/dropped");
 }

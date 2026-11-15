@@ -1282,6 +1282,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // the owner's suspension stays the owner's.
         // `/cli/app/remote-pass/rotate` is NOT here: the owner's.
         "/cli/app/audit",
+        // Read only: its own App's visitor requests (`k2 app requests`).
+        "/cli/app/requests",
         "/cli/app/quota",
         "/cli/app/quota/set",
         "/cli/app/suspend",

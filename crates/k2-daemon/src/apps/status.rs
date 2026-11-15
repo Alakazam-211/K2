@@ -81,6 +81,14 @@ pub(crate) fn route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     } else if health.get("ok") == Some(&J::Bool(false)) {
         red = true;
         next.push(item("red", "health", "the health check isn't answering 2xx", format!("k2 app logs {}", app.app_id)));
+        // Which visitors' requests reached it, and what each got (K2's 502
+        // when the App didn't answer).
+        next.push(item(
+            "info",
+            "requests",
+            "see whether visitors' requests reach it and what they got",
+            format!("k2 app requests {} --since 1h", app.app_id),
+        ));
     } else if !live && dep["last"].is_null() && app.live_seed.is_none() {
         yellow = true;
         next.push(item("yellow", "deploy", "nothing deployed yet", format!("k2 app deploy {} <folder>", app.app_id)));

@@ -203,3 +203,29 @@ fn the_cli_exit_follows_the_verdict() {
         assert!(f.contains(&format!("{verdict}) {exit} ;;")), "{verdict} → {exit}");
     }
 }
+
+/// A live App whose health check isn't answering 2xx: red, and the next
+/// lines name the logs and the per-request log (`k2 app requests`).
+#[test]
+fn an_unhealthy_app_points_at_its_logs_and_its_request_log() {
+    let _f = fx("unhealthy");
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = l.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for s in l.incoming() {
+            let Ok(mut s) = s else { return };
+            let mut b = [0u8; 2048];
+            let _ = s.read(&mut b);
+            let _ = s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+    let _ = super::super::router::switch("jobs", port);
+    let (st, v) = status(&Who::Owner, &[]);
+    super::super::router::clear("jobs");
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["verdict"], "red", "{v}");
+    let runs = next_runs(&v);
+    assert!(runs.contains(&"k2 app logs jobs".to_string()), "{v}");
+    assert!(runs.contains(&"k2 app requests jobs --since 1h".to_string()), "{v}");
+}

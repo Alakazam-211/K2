@@ -162,7 +162,10 @@ pub fn is_post_route(p: &str) -> bool {
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
 /// remote passes, each in its own module.
 fn door_route(p: &str) -> bool {
-    super::audit::ROUTES.contains(&p) || super::quotas::ROUTES.contains(&p) || super::suspend::ROUTES.contains(&p)
+    super::audit::ROUTES.contains(&p)
+        || super::requests::ROUTES.contains(&p)
+        || super::quotas::ROUTES.contains(&p)
+        || super::suspend::ROUTES.contains(&p)
 }
 
 fn door_post_route(p: &str) -> bool {
@@ -550,6 +553,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         "/cli/app/link/rotate" => link_rotate(&who, body),
         // The door (0.46.1 lane 2): audit, quotas, suspend, remote passes.
         p if super::audit::ROUTES.contains(&p) => super::audit::handle(&who, params),
+        // `k2 app requests`: visitor requests to the App, one row each.
+        p if super::requests::ROUTES.contains(&p) => super::requests::handle(&who, params),
         p if super::quotas::ROUTES.contains(&p) => super::quotas::handle(p, &who, body, params),
         p if super::suspend::ROUTES.contains(&p) => super::suspend::handle(p, &who, body, params),
         // Egress (S15) and held widenings.

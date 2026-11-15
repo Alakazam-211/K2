@@ -190,6 +190,7 @@ fn agent_switch_matrix_off_build_full() {
         ("/cli/app/logs", false, json!({"app": "jobs"}), Run, Run, Run),
         ("/cli/app/errors", false, json!({"app": "jobs"}), Run, Run, Run),
         ("/cli/app/audit", false, json!({"app": "jobs"}), Run, Run, Run),
+        ("/cli/app/requests", false, json!({"app": "jobs"}), Run, Run, Run),
         ("/cli/app/quota", false, json!({"app": "jobs"}), Run, Run, Run),
         ("/cli/app/link", false, json!({"app": "jobs"}), Run, Run, Run),
         ("/cli/app/egress", false, json!({"app": "jobs"}), Run, Run, Run),

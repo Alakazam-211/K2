@@ -62,6 +62,26 @@ WHEN A START FAILS
     k2 app logs <app-id> --deployment <d-…>   that start's output
   With nothing live, k2 app logs <app-id> shows the newest deployment.
 
+DID A VISITOR'S REQUEST REACH THE APP? (k2 app requests)
+  k2 app requests <app-id> [--since 1h] [--status 4xx|5xx|N] [--path /up]
+                  [--method POST] [--until 10m] [--json]
+  One row per request K2 forwarded to the App (WebSockets: one at the
+  upgrade, one at the close): time, method, path, status, bytes in/out,
+  ms to the answer and to the end, and who closed early (client, app, or
+  k2 for a drain). No row: the request never reached K2 (DNS, the relay,
+  the browser). Status - means the App took it and never answered. When
+  K2 answered itself the row has K2's code instead of the App's answer:
+  bad_request 400, head_too_large 431, too_many_writes 429 (the guard),
+  app_not_answering 502, app_not_running 503, sign_in_door, k2_answer.
+  Stored: those fields and a visitor key (a hash under a key K2 keeps in
+  memory only and changes every UTC day: one visitor's requests group,
+  nothing maps back to an address). Never stored: query strings, header
+  values (cookies, Authorization), bodies, IP addresses. Kept 7 days, at
+  most 200,000 rows per App, in ~/.k2/apps/app-requests.db. Readers: the
+  owner, Admins and the App's own agent; never a Member or a guest.
+  An App with host.clientIp false is a raw splice: K2 doesn't parse it,
+  so it has no rows.
+
 HOW FAR BACK YOU CAN GO
   K2 always keeps the Seeds of an App's last 5 deployments that went live
   and stayed live (the live one counts), and the one a plain k2 app rollback

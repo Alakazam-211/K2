@@ -83,11 +83,22 @@
 //! it were the first request of a fresh connection. Before this, those doors
 //! read only a connection's first request, and a door request later on a
 //! keep-alive connection reached the App.
+//!
+//! **The per-request log** (`k2 app requests`): given a [`RequestSink`],
+//! [`forward_diverted`] hands it one [`RequestRecord`] per request on the
+//! connection (and two per WebSocket: the upgrade and the close), K2's own
+//! answers included, once both the request and its response are done (or
+//! the connection ended). The record carries the path without its query
+//! (`k2_core::app_requests::safe_path`), the status, the bytes each way and
+//! the timings, never a header value or a body. The sink only queues
+//! (`apps::requests`): nothing here waits on a write.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -335,11 +346,14 @@ struct Reader<R> {
     r: R,
     buf: Vec<u8>,
     pos: usize,
+    /// Counts every byte consumed (and everything [`Reader::copy_rest`]
+    /// moves) while set: the current request's bytes for its log row.
+    meter: Option<Arc<AtomicU64>>,
 }
 
 impl<R: AsyncRead + Unpin> Reader<R> {
     fn new(r: R) -> Self {
-        Self { r, buf: Vec::new(), pos: 0 }
+        Self { r, buf: Vec::new(), pos: 0, meter: None }
     }
 
     fn data(&self) -> &[u8] {
@@ -347,6 +361,9 @@ impl<R: AsyncRead + Unpin> Reader<R> {
     }
 
     fn consume(&mut self, n: usize) {
+        if let Some(m) = &self.meter {
+            m.fetch_add(n as u64, Ordering::Relaxed);
+        }
         self.pos += n;
         if self.pos >= self.buf.len() {
             self.buf.clear();
@@ -387,7 +404,14 @@ impl<R: AsyncRead + Unpin> Reader<R> {
             let n = self.data().len();
             self.consume(n);
         }
-        tokio::io::copy(&mut self.r, w).await?;
+        match self.meter.clone() {
+            Some(m) => {
+                tokio::io::copy(&mut self.r, &mut Counting { w, n: &m }).await?;
+            }
+            None => {
+                tokio::io::copy(&mut self.r, w).await?;
+            }
+        }
         Ok(())
     }
 
@@ -516,6 +540,8 @@ struct RequestHead {
     /// The head exactly as the client sent it, kept only for a [`Divert`]
     /// (empty otherwise).
     raw: Vec<u8>,
+    /// How many bytes the head took on the wire (as sent).
+    head_len: usize,
 }
 
 /// One request, as K2's gate sees it ([`GateHooks`]).
@@ -907,6 +933,7 @@ fn rewrite_request(req: &httparse::Request, rule: Rule, strip: &[&str]) -> Resul
         content_type,
         user_agent,
         raw: Vec::new(),
+        head_len: 0,
     })
 }
 
@@ -926,7 +953,7 @@ async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule, stri
                     let raw = if keep_raw { rd.data()[..n].to_vec() } else { Vec::new() };
                     rd.consume(n);
                     return Ok(match out {
-                        Ok(h) => ReadRequest::Head(RequestHead { raw, ..h }),
+                        Ok(h) => ReadRequest::Head(RequestHead { raw, head_len: n, ..h }),
                         Err(status) => ReadRequest::Refuse(status),
                     });
                 }
@@ -951,10 +978,12 @@ async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule, stri
 /// What the response side expects next, in request order.
 #[derive(Debug, Clone)]
 enum Expect {
-    Response { head: bool, upgrade: bool },
+    /// `draft`: the request's log row, when the connection has a
+    /// [`RequestSink`].
+    Response { head: bool, upgrade: bool, draft: Option<Arc<Draft>> },
     /// K2's own answer (a refusal, or a [`LocalAnswer`]): written after the
     /// responses before it, then the connection closes.
-    Own(Vec<u8>),
+    Own(Vec<u8>, Option<Arc<Draft>>),
     /// A request a [`Divert`] claimed: the responses before it are written,
     /// then the forwarder stops with the client still open.
     Divert,
@@ -966,6 +995,233 @@ struct Shared {
     /// What a [`Divert`] took: the claimed request's head as sent and every
     /// byte read after it.
     diverted: Mutex<Option<Vec<u8>>>,
+    /// A switched WebSocket's close row: the response side puts it here
+    /// before it lets the request side go raw; both count into it.
+    ws_close: Mutex<Option<Arc<Draft>>>,
+}
+
+// ── the per-request log ──────────────────────────────────────────────
+
+/// One request as the forwarder saw it, handed to a [`RequestSink`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestRecord {
+    pub at_ms: i64,
+    /// `""` when K2 refused a head it couldn't parse.
+    pub method: String,
+    /// The path only (`k2_core::app_requests::safe_path`).
+    pub path: String,
+    /// `0`: no response head came.
+    pub status: u16,
+    /// Set when K2 answered instead of the App
+    /// (`k2_core::app_requests::codes`).
+    pub k2_code: Option<&'static str>,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub head_ms: Option<u64>,
+    pub total_ms: u64,
+    /// `client`, `app` or `k2` (K2 cut the connection), when the response
+    /// didn't finish.
+    pub closed_early: Option<&'static str>,
+    /// `upgrade` / `close`: a WebSocket's two rows.
+    pub ws: Option<&'static str>,
+    /// The address K2 vouches for, never a header's (the sink keys it; it
+    /// is never stored).
+    pub visitor: Option<IpAddr>,
+}
+
+/// Where the forwarder hands each finished request. It runs on the
+/// connection's task, so it must only queue (`apps::requests::record`).
+pub type RequestSink = Arc<dyn Fn(RequestRecord) + Send + Sync>;
+
+struct DraftState {
+    status: u16,
+    k2_code: Option<&'static str>,
+    head_at: Option<Instant>,
+    done: bool,
+    cut: Option<&'static str>,
+    ws: Option<&'static str>,
+    /// A diverted request: K2's other door serves it; no row here.
+    skip: bool,
+}
+
+/// One request's row in the making. It is handed to the sink when its
+/// last holder lets go (the request side once the body is sent, the
+/// response side once the response is), so a connection that ends any
+/// way, a drain's cut included, still gives every row.
+struct Draft {
+    sink: RequestSink,
+    at_ms: i64,
+    started: Instant,
+    method: String,
+    path: String,
+    visitor: Option<IpAddr>,
+    bytes_in: Arc<AtomicU64>,
+    bytes_out: Arc<AtomicU64>,
+    st: Mutex<DraftState>,
+}
+
+impl std::fmt::Debug for Draft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Draft({} {})", self.method, self.path)
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+impl Draft {
+    fn new(sink: &RequestSink, method: &str, target: &str, visitor: Option<IpAddr>) -> Arc<Self> {
+        Arc::new(Draft {
+            sink: sink.clone(),
+            at_ms: now_ms(),
+            started: Instant::now(),
+            method: method.to_string(),
+            path: if target.is_empty() { String::new() } else { k2_core::app_requests::safe_path(target) },
+            visitor,
+            bytes_in: Arc::new(AtomicU64::new(0)),
+            bytes_out: Arc::new(AtomicU64::new(0)),
+            st: Mutex::new(DraftState { status: 0, k2_code: None, head_at: None, done: false, cut: None, ws: None, skip: false }),
+        })
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, DraftState> {
+        self.st.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The final response head arrived.
+    fn head(&self, status: u16) {
+        let mut st = self.state();
+        st.status = status;
+        st.head_at = Some(Instant::now());
+    }
+
+    fn done(&self) {
+        self.state().done = true;
+    }
+
+    /// Who ended it early (the first to say so wins).
+    fn cut(&self, who: &'static str) {
+        let mut st = self.state();
+        if st.cut.is_none() {
+            st.cut = Some(who);
+        }
+    }
+
+    /// K2's own whole answer was written.
+    fn own(&self, bytes: &[u8]) {
+        self.bytes_out.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        self.head(status_of(bytes));
+        self.done();
+    }
+
+    /// The upgrade row is done; the close row starts now.
+    fn switched(&self) -> Arc<Draft> {
+        {
+            let mut st = self.state();
+            st.ws = Some("upgrade");
+            st.done = true;
+        }
+        Arc::new(Draft {
+            sink: self.sink.clone(),
+            at_ms: now_ms(),
+            started: Instant::now(),
+            method: self.method.clone(),
+            path: self.path.clone(),
+            visitor: self.visitor,
+            bytes_in: Arc::new(AtomicU64::new(0)),
+            bytes_out: Arc::new(AtomicU64::new(0)),
+            st: Mutex::new(DraftState { status: 101, k2_code: None, head_at: None, done: false, cut: None, ws: Some("close"), skip: false }),
+        })
+    }
+}
+
+impl Drop for Draft {
+    fn drop(&mut self) {
+        let st = self.st.get_mut().unwrap_or_else(|p| p.into_inner());
+        if st.skip {
+            return;
+        }
+        let rec = RequestRecord {
+            at_ms: self.at_ms,
+            method: std::mem::take(&mut self.method),
+            path: std::mem::take(&mut self.path),
+            status: st.status,
+            k2_code: st.k2_code,
+            bytes_in: self.bytes_in.load(Ordering::Relaxed),
+            bytes_out: self.bytes_out.load(Ordering::Relaxed),
+            head_ms: st.head_at.map(|t| t.saturating_duration_since(self.started).as_millis() as u64),
+            total_ms: self.started.elapsed().as_millis() as u64,
+            closed_early: if st.done { None } else { Some(st.cut.unwrap_or("k2")) },
+            ws: st.ws,
+            visitor: self.visitor,
+        };
+        (self.sink)(rec);
+    }
+}
+
+/// `draft` with K2's code (K2 answers this request itself).
+fn coded(draft: Option<Arc<Draft>>, code: &'static str) -> Option<Arc<Draft>> {
+    if let Some(d) = &draft {
+        d.state().k2_code = Some(code);
+    }
+    draft
+}
+
+/// The status of a whole response K2 wrote (`HTTP/1.1 NNN …`).
+fn status_of(bytes: &[u8]) -> u16 {
+    bytes.get(9..12).and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse().ok()).unwrap_or(0)
+}
+
+/// K2's code for one of its refusals.
+fn refusal_code(status: &str) -> &'static str {
+    if status.starts_with("431") {
+        k2_core::app_requests::codes::HEAD_TOO_LARGE
+    } else {
+        k2_core::app_requests::codes::BAD_REQUEST
+    }
+}
+
+/// Who a request-side error points at, as K2 saw it: the client stopped
+/// sending (or sent garbage), or the App stopped taking it.
+fn request_error_side(e: &io::Error) -> &'static str {
+    match e.kind() {
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => "client",
+        _ => "app",
+    }
+}
+
+/// Who a response-side error points at: the App stopped sending (or sent
+/// garbage), or the client stopped taking it.
+fn response_error_side(e: &io::Error) -> &'static str {
+    match e.kind() {
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData => "app",
+        _ => "client",
+    }
+}
+
+/// A writer that counts what it writes (bytes after an upgrade, or a body
+/// read to the close).
+struct Counting<'a, W> {
+    w: &'a mut W,
+    n: &'a AtomicU64,
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for Counting<'_, W> {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<io::Result<usize>> {
+        let me = self.get_mut();
+        let r = std::pin::Pin::new(&mut *me.w).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(k)) = &r {
+            me.n.fetch_add(*k as u64, Ordering::Relaxed);
+        }
+        r
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut *self.get_mut().w).poll_flush(cx)
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut *self.get_mut().w).poll_shutdown(cx)
+    }
 }
 
 impl Shared {
@@ -999,11 +1255,13 @@ async fn requests<R, W>(
     access: Option<&GateHooks>,
     door: Option<&DoorHook>,
     divert: Option<&Divert>,
+    log: Option<&RequestSink>,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    use k2_core::app_requests::codes;
     let strip: &[&str] = access.map_or(&[], |a| a.strip_cookies);
     let mut rule: Option<Rule> = None;
     let mut upgrades = 0u64;
@@ -1015,23 +1273,32 @@ where
             return Ok(());
         }
         let r = *rule.get_or_insert_with(|| resolve(mode));
+        rd.meter = None;
         let mut head = match read_request(&mut rd, r, strip, divert.is_some()).await? {
             ReadRequest::Eof => {
                 let _ = up.shutdown().await;
                 return Ok(());
             }
             ReadRequest::Refuse(status) => {
-                shared.push(Expect::Own(refusal(status)));
+                let draft = coded(log.map(|s| Draft::new(s, "", "", r.visitor())), refusal_code(status));
+                shared.push(Expect::Own(refusal(status), draft));
                 return Ok(());
             }
             ReadRequest::Head(h) => h,
         };
+        // This request's log row: its head and body count as they're read.
+        let draft = log.map(|s| {
+            let d = Draft::new(s, &head.method, &head.path, r.visitor());
+            d.bytes_in.fetch_add(head.head_len as u64, Ordering::Relaxed);
+            d
+        });
+        rd.meter = draft.as_ref().map(|d| d.bytes_in.clone());
         // The sign-in door (0.46.9): first, on every request, any method.
         // Its body is read here and never forwarded.
         if let Some(door) = door {
             if (door.claims)(&head.path) {
                 let call = door_call(&mut rd, &head, door, r.visitor()).await;
-                shared.push(Expect::Own((door.answer)(call).await));
+                shared.push(Expect::Own((door.answer)(call).await, coded(draft, codes::SIGN_IN_DOOR)));
                 return Ok(());
             }
         }
@@ -1039,6 +1306,9 @@ where
         // request moves; it and everything after it go back to the caller.
         if let Some(divert) = divert {
             if divert(&head.raw) {
+                if let Some(d) = &draft {
+                    d.state().skip = true;
+                }
                 let mut rest = std::mem::take(&mut head.raw);
                 rest.extend_from_slice(rd.data());
                 *shared.diverted.lock().unwrap_or_else(|p| p.into_inner()) = Some(rest);
@@ -1050,7 +1320,7 @@ where
         // moves. Every request on the connection comes through here.
         if let Some(access) = access {
             if let GateVerdict::Answer(bytes) = (access.gate)(head.gate_request(r.visitor())).await {
-                shared.push(Expect::Own(bytes));
+                shared.push(Expect::Own(bytes, coded(draft, codes::SITE_GATE)));
                 return Ok(());
             }
         }
@@ -1060,7 +1330,7 @@ where
         if let (Some(gate), Some(ip)) = (gate, r.visitor()) {
             if is_write(&head.method) {
                 if let Some(retry) = gate(ip) {
-                    shared.push(Expect::Own(too_many(retry)));
+                    shared.push(Expect::Own(too_many(retry), coded(draft, codes::TOO_MANY_WRITES)));
                     return Ok(());
                 }
             }
@@ -1070,19 +1340,31 @@ where
         if let Some(answer) = local {
             if head.body == Body::None && !head.upgrade {
                 if let Some(bytes) = answer(&head.method, &head.path, head.host.as_deref()) {
-                    shared.push(Expect::Own(bytes));
+                    shared.push(Expect::Own(bytes, coded(draft, codes::K2_ANSWER)));
                     return Ok(());
                 }
             }
         }
-        shared.push(Expect::Response { head: head.is_head, upgrade: head.upgrade });
-        up.write_all(&head.bytes).await?;
-        match head.body {
-            Body::None => {}
-            Body::Length(n) => rd.copy_exact(n, &mut up).await?,
-            Body::Chunked => copy_chunked(&mut rd, &mut up, Some(r)).await?,
+        shared.push(Expect::Response { head: head.is_head, upgrade: head.upgrade, draft: draft.clone() });
+        let sent: io::Result<()> = async {
+            up.write_all(&head.bytes).await?;
+            match head.body {
+                Body::None => {}
+                Body::Length(n) => rd.copy_exact(n, &mut up).await?,
+                Body::Chunked => copy_chunked(&mut rd, &mut up, Some(r)).await?,
+            }
+            up.flush().await
         }
-        up.flush().await?;
+        .await;
+        rd.meter = None;
+        if let Err(e) = sent {
+            if let Some(d) = &draft {
+                d.cut(request_error_side(&e));
+            }
+            return Err(e);
+        }
+        // The request side is done with this row; the response side holds it.
+        drop(draft);
         if head.upgrade {
             upgrades += 1;
             let switched = match decided.wait_for(|d| d.0 >= upgrades).await {
@@ -1091,7 +1373,16 @@ where
                 Err(_) => return Ok(()),
             };
             if switched {
-                rd.copy_rest(&mut up).await?;
+                let close = shared.ws_close.lock().unwrap_or_else(|p| p.into_inner()).take();
+                rd.meter = close.as_ref().map(|c| c.bytes_in.clone());
+                let res = rd.copy_rest(&mut up).await;
+                if let Some(c) = &close {
+                    match &res {
+                        Ok(()) => c.done(),
+                        Err(e) => c.cut(request_error_side(e)),
+                    }
+                }
+                res?;
                 let _ = up.shutdown().await;
                 return Ok(());
             }
@@ -1163,8 +1454,15 @@ where
     let mut decided = 0u64;
     loop {
         let expect = match shared.front() {
-            Some(Expect::Own(bytes)) => {
-                cw.write_all(&bytes).await?;
+            Some(Expect::Own(bytes, draft)) => {
+                let wrote = cw.write_all(&bytes).await;
+                if let Some(d) = &draft {
+                    match &wrote {
+                        Ok(()) => d.own(&bytes),
+                        Err(_) => d.cut("client"),
+                    }
+                }
+                wrote?;
                 let _ = cw.shutdown().await;
                 return Ok(());
             }
@@ -1188,10 +1486,11 @@ where
             // Bytes nobody asked for (e.g. a 408 before closing).
             None => None,
         };
-        let (to_head, upgrade) = match expect {
-            Some(Expect::Response { head, upgrade }) => (head, upgrade),
-            _ => (false, false),
+        let (to_head, upgrade, draft) = match &expect {
+            Some(Expect::Response { head, upgrade, draft }) => (*head, *upgrade, draft.clone()),
+            _ => (false, false, None),
         };
+        rd.meter = draft.as_ref().map(|d| d.bytes_out.clone());
         let head = loop {
             if !rd.data().is_empty() {
                 match parse_response(rd.data(), to_head) {
@@ -1200,13 +1499,29 @@ where
                     Err(_) => {
                         // Can't frame it: pass the rest through as is. The
                         // request side keeps rewriting what the client sends.
+                        if let Some(d) = &draft {
+                            d.cut("app");
+                        }
                         rd.copy_rest(&mut cw).await?;
                         let _ = cw.shutdown().await;
                         return Ok(());
                     }
                 }
             }
-            if rd.fill().await? == 0 {
+            let n = match rd.fill().await {
+                Ok(n) => n,
+                Err(e) => {
+                    if let Some(d) = &draft {
+                        d.cut("app");
+                    }
+                    return Err(e);
+                }
+            };
+            if n == 0 {
+                // The App closed before (all of) its answer.
+                if let Some(d) = &draft {
+                    d.cut("app");
+                }
                 if !rd.data().is_empty() {
                     cw.write_all(rd.data()).await?;
                 }
@@ -1215,22 +1530,52 @@ where
             }
         };
         // `lines` go on real answers and a `101`, not on interim `1xx`s.
-        if lines.is_empty() || ((100..200).contains(&head.status) && head.status != 101) {
-            cw.write_all(&rd.data()[..head.len]).await?;
-        } else {
-            // A parsed head ends in the blank line: the lines go before it.
-            let (fields, blank) = rd.data()[..head.len].split_at(head.len - 2);
-            cw.write_all(fields).await?;
-            cw.write_all(lines).await?;
-            cw.write_all(blank).await?;
+        let wrote: io::Result<()> = async {
+            if lines.is_empty() || ((100..200).contains(&head.status) && head.status != 101) {
+                cw.write_all(&rd.data()[..head.len]).await?;
+            } else {
+                // A parsed head ends in the blank line: the lines go before it.
+                let (fields, blank) = rd.data()[..head.len].split_at(head.len - 2);
+                cw.write_all(fields).await?;
+                cw.write_all(lines).await?;
+                cw.write_all(blank).await?;
+                if let Some(d) = &draft {
+                    d.bytes_out.fetch_add(lines.len() as u64, Ordering::Relaxed);
+                }
+            }
+            Ok::<(), io::Error>(())
+        }
+        .await;
+        if let Err(e) = wrote {
+            if let Some(d) = &draft {
+                d.cut("client");
+            }
+            return Err(e);
         }
         rd.consume(head.len);
         if head.status == 101 && upgrade {
             shared.pop();
+            // The upgrade's row ends here; the close row runs until the
+            // socket does.
+            let close = draft.as_ref().map(|d| {
+                d.head(101);
+                d.switched()
+            });
+            drop(draft);
+            drop(expect);
+            *shared.ws_close.lock().unwrap_or_else(|p| p.into_inner()) = close.clone();
             decided += 1;
             let _ = decide.send((decided, true));
             cw.flush().await?;
-            rd.copy_rest(&mut cw).await?;
+            rd.meter = close.as_ref().map(|c| c.bytes_out.clone());
+            let res = rd.copy_rest(&mut cw).await;
+            if let Some(c) = &close {
+                match &res {
+                    Ok(()) => c.done(),
+                    Err(e) => c.cut(response_error_side(e)),
+                }
+            }
+            res?;
             let _ = cw.shutdown().await;
             return Ok(());
         }
@@ -1240,20 +1585,46 @@ where
             cw.flush().await?;
             continue;
         }
+        if let Some(d) = &draft {
+            d.head(head.status);
+        }
         if expect.is_some() {
             shared.pop();
         }
-        match head.body {
-            RespBody::None => {}
-            RespBody::Length(n) => rd.copy_exact(n, &mut cw).await?,
-            RespBody::Chunked => copy_chunked(&mut rd, &mut cw, None).await?,
+        let body: io::Result<()> = match head.body {
+            RespBody::None => Ok(()),
+            RespBody::Length(n) => rd.copy_exact(n, &mut cw).await,
+            RespBody::Chunked => copy_chunked(&mut rd, &mut cw, None).await,
             RespBody::UntilClose => {
-                rd.copy_rest(&mut cw).await?;
+                let res = rd.copy_rest(&mut cw).await;
+                if let Some(d) = &draft {
+                    match &res {
+                        Ok(()) => d.done(),
+                        Err(e) => d.cut(response_error_side(e)),
+                    }
+                }
+                res?;
                 let _ = cw.shutdown().await;
                 return Ok(());
             }
+        };
+        let body = match body {
+            Ok(()) => cw.flush().await.map_err(|e| (e, "client")),
+            Err(e) => {
+                let side = response_error_side(&e);
+                Err((e, side))
+            }
+        };
+        if let Err((e, side)) = body {
+            if let Some(d) = &draft {
+                d.cut(side);
+            }
+            return Err(e);
         }
-        cw.flush().await?;
+        if let Some(d) = &draft {
+            d.done();
+        }
+        rd.meter = None;
         if upgrade {
             decided += 1;
             let _ = decide.send((decided, false));
@@ -1287,7 +1658,7 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, None, None, Some(&hooks), None, None).await.map(|_| ())
+    run_forward(client, upstream, mode, None, None, Some(&hooks), None, None, None).await.map(|_| ())
 }
 
 /// [`forward_with`] plus G2's write gate (`apps::guard::write_gate`).
@@ -1302,7 +1673,7 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, local, gate, None, None, None).await.map(|_| ())
+    run_forward(client, upstream, mode, local, gate, None, None, None, None).await.map(|_| ())
 }
 
 /// [`forward_guarded`] plus the sign-in door on every request
@@ -1319,7 +1690,7 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, local, gate, None, door.as_ref(), None).await.map(|_| ())
+    run_forward(client, upstream, mode, local, gate, None, door.as_ref(), None, None).await.map(|_| ())
 }
 
 /// K2's other doors on an App's host (0.46.10, `apps::voice_door`): given a
@@ -1329,7 +1700,8 @@ where
 /// App's own traffic: it runs on every request.
 pub type Divert = std::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
 
-/// [`forward_doored`] plus a [`Divert`]. `Ok(Some(bytes))`: a request was
+/// [`forward_doored`] plus a [`Divert`] and the per-request log (`log`,
+/// [`RequestSink`]). `Ok(Some(bytes))`: a request was
 /// claimed. Nothing of it reached the App, every earlier response was
 /// written, and the client is still open; `bytes` are the claimed head as
 /// sent and everything read after it (replay them, then the client, with
@@ -1342,12 +1714,13 @@ pub async fn forward_diverted<C, U>(
     gate: Option<WriteGate>,
     door: Option<DoorHook>,
     divert: Option<Divert>,
+    log: Option<RequestSink>,
 ) -> io::Result<Option<Vec<u8>>>
 where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, local, gate, None, door.as_ref(), divert.as_ref()).await
+    run_forward(client, upstream, mode, local, gate, None, door.as_ref(), divert.as_ref(), log.as_ref()).await
 }
 
 async fn run_forward<C, U>(
@@ -1359,6 +1732,7 @@ async fn run_forward<C, U>(
     access: Option<&GateHooks>,
     door: Option<&DoorHook>,
     divert: Option<&Divert>,
+    log: Option<&RequestSink>,
 ) -> io::Result<Option<Vec<u8>>>
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -1366,9 +1740,14 @@ where
 {
     let (cr, cw) = tokio::io::split(client);
     let (ur, uw) = tokio::io::split(upstream);
-    let shared = Shared { queue: Mutex::new(VecDeque::new()), pushed: Notify::new(), diverted: Mutex::new(None) };
+    let shared = Shared {
+        queue: Mutex::new(VecDeque::new()),
+        pushed: Notify::new(),
+        diverted: Mutex::new(None),
+        ws_close: Mutex::new(None),
+    };
     let (decide, decided) = watch::channel::<Decision>((0, false));
-    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref(), access, door, divert);
+    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref(), access, door, divert, log);
     let lines = access.map_or(&[][..], |a| a.response_lines.as_slice());
     let resp = responses(Reader::new(ur), cw, &shared, decide, lines);
     tokio::pin!(req, resp);

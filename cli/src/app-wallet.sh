@@ -203,6 +203,7 @@ cmd_app() {
         suspend) shift; cmd_app_suspend "$@" ;;
         resume) shift; cmd_app_resume "$@" ;;
         audit) shift; cmd_app_audit "$@" ;;
+        requests) shift; cmd_app_requests "$@" ;;
         quota|quotas) shift; cmd_app_quota "$@" ;;
         remote-pass) shift; cmd_app_remote_pass "$@" ;;
         # RS-A15: `grant <app> --kind …` is an App's own owner grant; the

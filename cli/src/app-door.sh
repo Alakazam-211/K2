@@ -1,10 +1,10 @@
 # ── The 0.46.1 door (lane 2: S19, AR10) ──────────────────────────────
-# k2 app suspend|resume|audit|quota, k2 app token rotate, k2 app remote-pass.
+# k2 app suspend|resume|audit|requests|quota, k2 app token rotate, k2 app remote-pass.
 # Exit codes: 0 done, 2 held for the owner (or usage), 3 refused or infra.
 
 _app_door_usage() {
     cat <<'EOF'
-k2 app — the App door (quotas, audit, suspend, remote passes)
+k2 app — the App door (quotas, audit, requests, suspend, remote passes)
 
   k2 app suspend <app-id> [--reason TEXT]
                                        Stop it now: every pass it holds is
@@ -24,6 +24,16 @@ k2 app — the App door (quotas, audit, suspend, remote passes)
                                        100), newest first; --oldest-first
                                        reads them top to bottom. --verify
                                        checks the chain.
+  k2 app requests <app-id> [--since 1h] [--until 10m] [--status 4xx|5xx|N]
+                 [--path /prefix] [--method POST] [--limit N] [--json]
+                                       Visitors' requests to the App, one row
+                                       each: time, method, path (never its
+                                       query), status (or K2's own answer and
+                                       code: 400, 431, 429, 502, 503), bytes
+                                       in/out, ms, who closed early. Did a
+                                       browser's POST reach the App? Look
+                                       here. Kept 7 days, 200,000 rows per
+                                       App. Owner, Admins, the App's agent.
   k2 app quota <app-id> [--rps N] [--burst N] [--sockets N] [--body 8M]
                  [--upload 100M] [--subscriptions N] [--reset] [--reason TEXT]
                                        Per-App gateway quotas. No flags: show.
@@ -141,6 +151,75 @@ for d in v.get("chain") or []:
     if [ "$verify" = 1 ]; then
         printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if all(d.get("ok") for d in json.load(sys.stdin).get("chain") or []) else 1)'
     fi
+}
+
+# k2 app requests: visitors' requests to an App, one row each (the
+# forwarder's per-request log; `GET /cli/app/requests`, apps/requests.rs).
+cmd_app_requests() {
+    local app="" since="" until="" status="" path="" method="" limit="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since) since="${2:-}"; shift 2 ;;
+            --until) until="${2:-}"; shift 2 ;;
+            --status) status="${2:-}"; shift 2 ;;
+            --path) path="${2:-}"; shift 2 ;;
+            --method) method="${2:-}"; shift 2 ;;
+            --limit) limit="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_door_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app requests <app-id> [--since 1h] [--until 10m] [--status 4xx|5xx|N] [--path /prefix] [--method POST] [--limit N] [--json]" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ -n "$since" ] && q="${q}&since=$(urlencode "$since")"
+    [ -n "$until" ] && q="${q}&until=$(urlencode "$until")"
+    [ -n "$status" ] && q="${q}&status=$(urlencode "$status")"
+    [ -n "$path" ] && q="${q}&path_prefix=$(urlencode "$path")"
+    [ -n "$method" ] && q="${q}&method=$(urlencode "$method")"
+    [ -n "$limit" ] && q="${q}&limit=$(urlencode "$limit")"
+    _compute_call GET /cli/app/requests "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+app = v["app"]
+t = v.get("totals") or {}
+rows = v.get("requests") or []
+def size(n):
+    n = n or 0
+    if n < 1024:
+        return str(n)
+    for unit in ("K", "M", "G"):
+        n = n / 1024.0
+        if n < 1024 or unit == "G":
+            return ("%.1f%s" % (n, unit)) if n < 10 else ("%d%s" % (n, unit))
+print("%s: %s request%s (%s ok, %s 4xx, %s 5xx; %s answered by K2, %s closed early)" % (
+    app, t.get("requests", 0), "" if t.get("requests") == 1 else "s", t.get("ok", 0), t.get("clientErrors", 0),
+    t.get("serverErrors", 0), t.get("k2Answered", 0), t.get("closedEarly", 0)))
+if not rows:
+    print("No visitor request reached this App in that window. A request K2 never got (DNS, the relay, the")
+    print("browser) has no row; widen it with --since 1d. Rows are kept %s days." % (v.get("keep") or {}).get("days", 7))
+else:
+    print("%-19s  %-7s  %-34s  %-28s  %6s  %6s  %6s" % ("TIME", "METHOD", "PATH", "STATUS", "IN", "OUT", "MS"))
+    for r in rows:
+        at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["atMs"] / 1000))
+        st = str(r["status"]) if r.get("status") else "-"
+        if r.get("k2Code"):
+            st += " K2 " + r["k2Code"]
+        if r.get("ws"):
+            st += " ws " + r["ws"]
+        if r.get("closedEarly"):
+            st += " (" + r["closedEarly"] + " closed)"
+        path = r.get("path") or "-"
+        if len(path) > 34:
+            path = path[:33] + "~"
+        print("%-19s  %-7s  %-34s  %-28s  %6s  %6s  %6s" % (at, r.get("method") or "-", path, st, size(r.get("bytesIn")), size(r.get("bytesOut")), r.get("totalMs")))
+    print("newest first; status - means no answer came. Kept %s days, at most %s rows per App." % (
+        (v.get("keep") or {}).get("days", 7), (v.get("keep") or {}).get("rowsPerApp")))
+if v.get("dropped"):
+    print("note: %s row(s) were dropped since K2 started (the log queue was full)" % v["dropped"])'
 }
 
 cmd_app_quota() {

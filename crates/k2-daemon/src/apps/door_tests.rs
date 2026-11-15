@@ -466,6 +466,7 @@ fn agent_permissions_matrix() {
         ("/cli/app/logs", false, json!({"app": "jobs"}), O::Run, O::Run, O::Run),
         ("/cli/app/errors", false, json!({"app": "jobs"}), O::Run, O::Run, O::Run),
         ("/cli/app/audit", false, json!({"app": "jobs"}), O::Run, O::Run, O::Run),
+        ("/cli/app/requests", false, json!({"app": "jobs"}), O::Run, O::Run, O::Run),
         ("/cli/app/quota", false, json!({"app": "jobs"}), O::Run, O::Run, O::Run),
         ("/cli/app/link", false, json!({"app": "jobs"}), O::Run, O::Run, O::Run),
         ("/cli/app/remote-pass", false, json!({"app": "jobs"}), O::Run, O::Run, O::Run),
@@ -511,4 +512,68 @@ fn agent_permissions_matrix() {
     // Approve is the owner's in person, whatever the switches.
     let r = super::approvals::handle("/cli/app/approve", &a, br#"{"request":"w_x"}"#, &HashMap::new());
     assert_eq!(r.unwrap_err().code, "owner_only");
+}
+
+/// `k2 app requests` (GET /cli/app/requests): the owner, an Admin, a person
+/// in a K2 shell tab and the App's own agent read an App's visitor
+/// requests; another workspace's agent gets "no such App", and a Member, an
+/// App pass (a guest) or no credential are refused. Filters reach the
+/// store; a bad filter is a 400.
+#[test]
+fn the_request_log_is_the_owners_an_admins_and_the_apps_own_agents() {
+    let f = fx("req-who");
+    {
+        use k2_core::app_requests as rq;
+        let row = |app: &str, method: &str, path: &str, status: u16| rq::Request {
+            at_ms: super::requests::now_ms(),
+            app_id: app.into(),
+            deployment: None,
+            method: method.into(),
+            path: path.into(),
+            status,
+            k2_code: (status == 502).then(|| rq::codes::APP_NOT_ANSWERING.to_string()),
+            bytes_in: 10,
+            bytes_out: 20,
+            head_ms: Some(1),
+            total_ms: 2,
+            closed_early: None,
+            ws: None,
+            visitor: Some("0123456789abcdef".into()),
+        };
+        let c = rq::open(&rq::db_path()).unwrap();
+        rq::append(&c, &[row("jobs", "GET", "/a", 200), row("jobs", "POST", "/upload", 502), row("other", "GET", "/b", 500)]).unwrap();
+    }
+    let shell = Who::Shell { project_id: f.ws_a.clone(), session_id: "tab-1".into() };
+    for who in [Who::Owner, owner_login(), admin(), shell, agent(&f.ws_a)] {
+        let (st, v) = get("/cli/app/requests", &who, &[("app", "jobs")]);
+        assert_eq!(st, 200, "{who:?}: {v}");
+        let paths: Vec<&str> = v["requests"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap()).collect();
+        assert_eq!(paths.len(), 2, "{who:?}: {v}");
+        assert!(paths.contains(&"/a") && paths.contains(&"/upload"), "{v}");
+        assert_eq!(v["totals"]["requests"], 2, "{v}");
+        assert_eq!(v["keep"]["days"], 7, "{v}");
+        assert!(v["dropped"].is_u64(), "{v}");
+    }
+    // The App's own agent, filtered: one 5xx POST.
+    let (st, v) = get("/cli/app/requests", &agent(&f.ws_a), &[("app", "jobs"), ("status", "5xx"), ("method", "post"), ("path_prefix", "/up"), ("since", "1h")]);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["requests"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["requests"][0]["k2Code"], "app_not_answering", "{v}");
+    // Another workspace's agent: not its App (and it reads its own).
+    let (st, v) = get("/cli/app/requests", &agent(&f.ws_b), &[("app", "jobs")]);
+    assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
+    let (st, v) = get("/cli/app/requests", &agent(&f.ws_b), &[("app", "other")]);
+    assert_eq!((st, v["requests"][0]["path"].as_str()), (200, Some("/b")), "{v}");
+    // Never a Member, a guest's App pass, or nobody.
+    let member = Who::Login { username: "mo".into(), role: Role::Member };
+    for (who, want) in [(member, "forbidden"), (Who::Wrong, "wrong_credential"), (Who::Invalid, "forbidden")] {
+        let (st, v) = get("/cli/app/requests", &who, &[("app", "jobs")]);
+        assert_eq!((st, code(&v)), (403, want), "{who:?}: {v}");
+        assert!(v.get("requests").is_none(), "{v}");
+    }
+    // A bad filter is the caller's to fix.
+    for (k, bad) in [("status", "9xx"), ("since", "yesterday"), ("method", "GET /x"), ("limit", "0")] {
+        let (st, v) = get("/cli/app/requests", &Who::Owner, &[("app", "jobs"), (k, bad)]);
+        assert_eq!((st, code(&v)), (400, "bad_request"), "{k}={bad}: {v}");
+    }
 }

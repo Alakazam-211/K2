@@ -1026,7 +1026,7 @@ pub(crate) const UNREACHABLE_BODY: &str =
 /// Best-effort: read the visitor's request head (so closing the socket does
 /// not reset it before the reply lands), then answer `502 Bad Gateway` and
 /// close the TLS stream cleanly.
-async fn write_unreachable_502<S>(tls: &mut S)
+async fn write_unreachable_502<S>(tls: &mut S) -> Vec<u8>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -1042,6 +1042,7 @@ where
     let _ = tls.write_all(&unreachable_502_bytes()).await;
     let _ = tls.flush().await;
     let _ = tls.shutdown().await;
+    head
 }
 
 /// K2's answer when a site's port doesn't take the connection.
@@ -1330,12 +1331,18 @@ where
         // door: client-IP rewrite, K2's own pairing link-file
         // answers (App phone pairing V5), then the splice.
         let mode = crate::client_ip::Mode::Tunnel(client_ip);
+        let (started, at_ms) = (std::time::Instant::now(), crate::apps::requests::now_ms());
         match crate::apps::router::serve_tls_app(&mut *tls, be, &label, mode).await {
             crate::apps::router::TlsAppOutcome::Answered => return Ok(()),
             crate::apps::router::TlsAppOutcome::Spliced => {}
-            crate::apps::router::TlsAppOutcome::Failed { why, .. } => {
+            crate::apps::router::TlsAppOutcome::Failed { why, head, port, .. } => {
                 log_debug!("[daemon/e2e] {sni}: {why} — answering 502");
-                write_unreachable_502(&mut *tls).await;
+                let read = write_unreachable_502(&mut *tls).await;
+                // `k2 app requests`: the visitor got K2's 502.
+                let head = if head.is_empty() { read } else { head };
+                let code = k2_core::app_requests::codes::APP_NOT_ANSWERING;
+                let len = unreachable_502_bytes().len();
+                crate::apps::requests::k2_answered(&label, Some(port), client_ip, &head, len, 502, code, started, at_ms);
                 return Ok(());
             }
         }

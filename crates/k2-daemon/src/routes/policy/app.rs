@@ -262,6 +262,11 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/app/remote-pass", Member),
     post("/cli/app/remote-pass/revoke", Admin),
     post("/cli/app/remote-pass/rotate", Owner),
+    // `k2 app requests`: the per-request log of visitors' requests to an App
+    // (paths without queries, statuses, bytes, timings). Read only; a login
+    // is the owner or an Admin (the handler refuses a Member on every door),
+    // a passport its own workspace's Apps (agent allowlist, `app_for`).
+    get("/cli/app/requests", Admin),
     // 0.46.3 box usage + disk guard (prd-app-resources-disk-guard-v1): the view
     // is owner/Admin/agents (agents never see folder paths, handler); rescan is
     // rate-limited; settings are the owner's (handler: owner token or Owner login).

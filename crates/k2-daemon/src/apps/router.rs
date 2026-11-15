@@ -280,8 +280,10 @@ where
         // G2 (0.46.6): per-visitor writes for this App, wherever the
         // connection carries the visitor (`apps::guard`).
         let gate = Some(crate::apps::guard::write_gate(&be.app_id));
+        // `k2 app requests`: one row per request, queued, never awaited.
+        let log = Some(super::requests::sink_for(&be.app_id, Some(be.port)));
         tokio::select! {
-            r = crate::client_ip::forward_diverted(&mut *client, &mut upstream, mode, local, gate, door, divert) => r.ok().flatten(),
+            r = crate::client_ip::forward_diverted(&mut *client, &mut upstream, mode, local, gate, door, divert, log) => r.ok().flatten(),
             _ = cut.changed() => None,
         }
     } else {
@@ -376,24 +378,31 @@ pub async fn serve_app_conn_with<S>(client: &mut S, app_id: &str, mode: crate::c
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let (started, at_ms) = (std::time::Instant::now(), super::requests::now_ms());
     match live(app_id) {
         None => {
             let local = super::local_answers::for_app(app_id);
-            match read_first(client, app_id, local.as_ref(), crate::client_ip::visitor_of(mode), None).await {
+            let head = match read_first(client, app_id, local.as_ref(), crate::client_ip::visitor_of(mode), None).await {
                 Some(FirstRequest::Answered) => return,
-                Some(FirstRequest::Pass(_)) => {}
+                Some(FirstRequest::Pass(bytes)) => bytes,
                 None => consume_request_head(client).await,
-            }
-            let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
+            };
+            let answer = own_answer("503 Service Unavailable", UNAVAILABLE_BODY);
+            let _ = client.write_all(answer.as_bytes()).await;
+            let visitor = crate::client_ip::visitor_of(mode);
+            let code = k2_core::app_requests::codes::APP_NOT_RUNNING;
+            super::requests::k2_answered(app_id, None, visitor, &head, answer.len(), 503, code, started, at_ms);
         }
         Some(be) => match serve_tls_app(client, be, app_id, mode).await {
             TlsAppOutcome::Answered => return,
             TlsAppOutcome::Spliced => {}
-            TlsAppOutcome::Failed { head_read, .. } => {
-                if !head_read {
-                    consume_request_head(client).await;
-                }
-                let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
+            TlsAppOutcome::Failed { head_read, head, port, .. } => {
+                let head = if head_read { head } else { consume_request_head(client).await };
+                let answer = own_answer("502 Bad Gateway", BAD_GATEWAY_BODY);
+                let _ = client.write_all(answer.as_bytes()).await;
+                let visitor = crate::client_ip::visitor_of(mode);
+                let code = k2_core::app_requests::codes::APP_NOT_ANSWERING;
+                super::requests::k2_answered(app_id, Some(port), visitor, &head, answer.len(), 502, code, started, at_ms);
             }
         },
     }
@@ -408,8 +417,10 @@ pub enum TlsAppOutcome {
     /// Spliced to the App until either side closed (or the drain cut it).
     Spliced,
     /// The backend could not be dialed. `head_read`: the first request
-    /// head was already read (the caller answers its error at once).
-    Failed { head_read: bool, why: String },
+    /// head was already read (the caller answers its error at once), and
+    /// `head` holds the bytes read (for the request log: its method and
+    /// path). `port`: the backend that didn't answer.
+    Failed { head_read: bool, why: String, head: Vec<u8>, port: u16 },
 }
 
 /// The one App path behind a terminated TLS stream (vs-live CD-A8),
@@ -440,6 +451,7 @@ where
     let door = mode.and_then(|m| super::auth_door::hook_for(&be.app_id).map(|h| (m, h)));
     // K2's other doors on every later request (0.46.10): the rewrite only.
     let divert = mode.map(|_| super::voice_door::divert_for(label));
+    let port = be.port;
     let (mut pending, mut head_read) = match read_first(client, label, local.as_ref(), visitor, door.as_ref()).await {
         Some(FirstRequest::Answered) => return TlsAppOutcome::Answered,
         Some(FirstRequest::Pass(bytes)) => (bytes, true),
@@ -449,17 +461,19 @@ where
         let r = {
             let mut r = crate::client_ip::Replay::new(pending, client);
             let got = splice_doors(&mut r, be.clone(), mode, local.clone(), door.as_ref().map(|(_, h)| h.clone()), divert.clone()).await;
-            got.map(|d| {
-                d.map(|mut rest| {
+            match got {
+                Ok(d) => Ok(d.map(|mut rest| {
                     rest.extend_from_slice(&r.unread());
                     rest
-                })
-            })
+                })),
+                // Nothing was read from the replay: the bytes are the head.
+                Err(why) => Err((why, r.unread())),
+            }
         };
         let rest = match r {
             Ok(None) => return TlsAppOutcome::Spliced,
             Ok(Some(rest)) => rest,
-            Err(why) => return TlsAppOutcome::Failed { head_read, why },
+            Err((why, head)) => return TlsAppOutcome::Failed { head_read, why, head, port },
         };
         // A later request is K2's: served as a first request, App up or down.
         let mut r = crate::client_ip::Replay::new(rest, client);
@@ -536,8 +550,9 @@ where
 
 /// Read the request head before answering an error ourselves: closing a
 /// socket with unread bytes makes the kernel send a reset, and the client
-/// would see "connection reset" instead of our 503/502.
-async fn consume_request_head<S>(client: &mut S)
+/// would see "connection reset" instead of our 503/502. Returns what it
+/// read (the request log takes the method and path from it).
+async fn consume_request_head<S>(client: &mut S) -> Vec<u8>
 where
     S: AsyncRead + Unpin,
 {
@@ -553,6 +568,7 @@ where
         }
     })
     .await;
+    got
 }
 
 // ── front listeners ──────────────────────────────────────────────────

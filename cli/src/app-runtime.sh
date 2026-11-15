@@ -183,6 +183,10 @@ See and run it:
                                        not a Member); k2 app resume (owner).
   k2 app audit <app-id> [--since 1h] [--denied] [--verify]
                                        Every gateway call, hash-chained.
+  k2 app requests <app-id> [--since 1h] [--status 5xx] [--path /up] [--method POST]
+                                       Visitors' requests to the App, one row
+                                       each (path without query, status or
+                                       K2's code, bytes, ms): did it get there?
   k2 app quota <app-id> [--rps N] [--body 8M] [--reset]
                                        Per-App gateway quotas (raise: owner).
   k2 app token rotate <app-id>         Owner: a remote App pass (Apps hosted

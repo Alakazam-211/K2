@@ -65,6 +65,9 @@ pub mod alerts;
 pub mod app_key_routes;
 pub mod approvals;
 pub mod audit;
+/// `k2 app requests`: one row per visitor request to an App (the forwarder's
+/// per-request log, `~/.k2/apps/app-requests.db`).
+pub mod requests;
 pub mod attribution;
 /// Where an App listens: `HOST`/`PORT` per lane ("bind HOST:PORT as given").
 pub mod bind_host;

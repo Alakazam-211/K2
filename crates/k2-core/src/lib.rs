@@ -61,6 +61,9 @@ pub mod agent_hooks;
 pub mod app_grace;
 /// The per-call App audit (`~/.k2/apps/app-audit.db`, runtime S19).
 pub mod app_audit;
+/// The per-request log of visitor requests to an App
+/// (`~/.k2/apps/app-requests.db`, `k2 app requests`).
+pub mod app_requests;
 /// App client logs (0.46.9, migration 0269): a signed-in App user's
 /// device sends a redacted log bundle; `k2 app logs <app> --client`.
 pub mod app_client_logs;

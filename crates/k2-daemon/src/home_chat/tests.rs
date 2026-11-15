@@ -124,7 +124,7 @@ pub(crate) fn deps_with(api: Arc<FakeApi>, gateway: String, flags: HomeChatFeatu
         gateway_addr: Arc::new(move || gateway.clone()),
         flags: Arc::new(move || flags),
         platform_ok: true,
-        feed: Arc::new(|_, _| Err("no feed in this test".to_string())),
+        feed: Arc::new(|_, _, _| Err("no feed in this test".to_string())),
         devices: Arc::new(|_| None),
     })
 }

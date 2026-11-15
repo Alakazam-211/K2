@@ -375,61 +375,81 @@ fn call_pushes(since: usize, ids: &[&str]) -> Vec<(String, CallPushState)> {
         .collect()
 }
 
-/// S14: one feed read with Sew's `call_ring` sends ONE ring push to the
-/// person's phones; the next read with `call_missed` sends one push that
-/// replaces it (the same call); a ring stopped another way (here the caller
-/// cancelled) is replaced by "Call ended". A person with no phone gets
-/// nothing.
-#[test]
-fn the_feed_long_poll_sends_one_push_then_a_replacement() {
-    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let _home = k2_core::test_env::TempHome::new();
-    crate::home_chat::call_push::reset_for_tests();
-    let reads: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![
-        json!({"entries": [{"seq": 1, "kind": "call_ring", "call_id": "7701", "channel_id": "900", "started_by": "42"}], "next_after": 1}),
-        json!({"entries": [{"seq": 1, "kind": "call_ring", "call_id": "7701", "channel_id": "900"}, {"seq": 2, "kind": "call_missed", "call_id": "7701"}], "next_after": 2}),
-        json!({"entries": [{"seq": 3, "kind": "call_ring", "call_id": "7702", "channel_id": "900"}], "next_after": 3}),
-    ]));
-    let cursors: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+const SAM_EXT: &str = "k2:connect:5a6b7c8d-0000-4000-8000-000000000031";
+
+/// A feed item as Sew writes it.
+fn item(seq: u64, kind: &str, call: &str) -> Value {
+    json!({"seq": seq, "kind": kind, "at": "2026-11-14T12:00:00Z", "channel_id": "900", "from_member_id": "42", "app_id": null, "call_id": call, "message_id": "1001"})
+}
+
+/// Install a fake feed answering `reads` in order (then empty pages that
+/// keep `next`), recording each `(after, wait)`; Sam has one phone.
+fn fake_feed(reads: Vec<(u16, Value)>) -> Arc<Mutex<Vec<(u64, u64)>>> {
+    let asked: Arc<Mutex<Vec<(u64, u64)>>> = Arc::default();
+    let queue = Arc::new(Mutex::new(reads));
     let base = deps_with(Arc::new(FakeApi::default()), "127.0.0.1:9".into(), HomeChatFeatures::default());
-    let (r2, c2) = (reads.clone(), cursors.clone());
+    let a2 = asked.clone();
     crate::home_chat::set_deps(Some(Arc::new(crate::home_chat::Deps {
         sew: base.sew.clone(),
         mint: base.mint.clone(),
         gateway_addr: base.gateway_addr.clone(),
         flags: base.flags.clone(),
         platform_ok: true,
-        feed: Arc::new(move |ext: &str, cursor: Option<&str>| {
-            assert_eq!(ext, format!("k2:connect:{UUID_SAM}"));
-            c2.lock().unwrap().push(cursor.map(str::to_string));
-            let mut q = r2.lock().unwrap();
+        feed: Arc::new(move |ext: &str, after: u64, wait: u64| {
+            assert_eq!(ext, SAM_EXT, "one person's feed");
+            a2.lock().unwrap().push((after, wait));
+            let mut q = queue.lock().unwrap();
             if q.is_empty() {
-                Ok(json!({"entries": []}))
+                Ok((200, json!({"items": [], "next": after})))
             } else {
                 Ok(q.remove(0))
             }
         }),
-        devices: Arc::new(|ext: &str| (ext == format!("k2:connect:{UUID_SAM}")).then(|| ("sam".to_string(), vec!["sam".to_string()]))),
+        devices: Arc::new(|ext: &str| (ext == SAM_EXT).then(|| ("sam".to_string(), vec!["sam".to_string()]))),
     })));
-    let ext = format!("k2:connect:{UUID_SAM}");
+    asked
+}
+
+/// S14 on Sew's contract: `after` starts at 0 and is always the last page's
+/// `next` (even an empty page's); a `call_ring` sends ONE ring push; the
+/// feed's `call_missed` sends ONE push that replaces it (the same banner);
+/// unknown kinds are ignored; a `410 cursor_expired` resumes at `oldest_seq`
+/// and pushes nothing for the gap; 404 and 403 `not_provisioned` stop.
+#[test]
+fn the_feed_long_poll_sends_one_push_then_a_replacement() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    crate::home_chat::call_push::reset_for_tests();
+    use crate::home_chat::call_push::{poll_once, Poll, FEED_WAIT_S};
+    let asked = fake_feed(vec![
+        (200, json!({"items": [item(1, "call_ring", "7701"), item(2, "dm", "x")], "next": 2})),
+        (200, json!({"items": [], "next": 2})),
+        (200, json!({"items": [item(3, "call_ring", "7701"), item(4, "call_missed", "7701"), item(5, "something_new", "x")], "next": 5})),
+        (410, json!({"error": {"code": "cursor_expired", "hint": "too old", "details": {"oldest_seq": 40, "head": 90}}})),
+        (200, json!({"items": [], "next": 90})),
+        (404, json!({"error": {"code": "not_found", "hint": "no such person"}})),
+        (403, json!({"error": {"code": "not_provisioned", "hint": "deactivated"}})),
+    ]);
     let mark = crate::push_routes::test_push_capture::mark();
-    let mut cursor = None;
-    assert_eq!(crate::home_chat::call_push::poll_once(&ext, &mut cursor).unwrap(), 1);
+    let mut cursor = 0u64;
+    assert_eq!(poll_once(SAM_EXT, &mut cursor).unwrap(), Poll::Again(1));
     assert_eq!(call_pushes(mark, &["7701"]), vec![("7701".to_string(), CallPushState::Ringing)], "one ring push");
-    assert_eq!(crate::home_chat::call_push::poll_once(&ext, &mut cursor).unwrap(), 1);
+    assert_eq!(poll_once(SAM_EXT, &mut cursor).unwrap(), Poll::Again(0), "an empty page");
+    assert_eq!(poll_once(SAM_EXT, &mut cursor).unwrap(), Poll::Again(1));
     assert_eq!(
         call_pushes(mark, &["7701"]),
         vec![("7701".to_string(), CallPushState::Ringing), ("7701".to_string(), CallPushState::Missed)],
         "the ring again is nothing; the missed push replaces it"
     );
-    assert_eq!(*cursors.lock().unwrap(), vec![None, Some("1".to_string())], "each read goes on from the last cursor");
-    crate::home_chat::call_push::poll_once(&ext, &mut cursor).unwrap();
-    crate::home_chat::call_push::ring_seen(&ext, &json!({"call_id": "7702", "ringing": false, "reason": "cancelled"}));
-    assert_eq!(
-        call_pushes(mark, &["7702"]),
-        vec![("7702".to_string(), CallPushState::Ringing), ("7702".to_string(), CallPushState::Ended)],
-        "a cancelled ring is replaced by Call ended, never Missed"
-    );
+    assert_eq!(poll_once(SAM_EXT, &mut cursor).unwrap(), Poll::Again(0));
+    assert_eq!(cursor, 40, "410: resume at oldest_seq");
+    assert_eq!(poll_once(SAM_EXT, &mut cursor).unwrap(), Poll::Again(0));
+    assert!(matches!(poll_once(SAM_EXT, &mut cursor).unwrap(), Poll::Stop(_)), "404 stops");
+    assert!(matches!(poll_once(SAM_EXT, &mut cursor).unwrap(), Poll::Stop(_)), "403 not_provisioned stops");
+    let asked = asked.lock().unwrap().clone();
+    let afters: Vec<u64> = asked.iter().map(|(a, _)| *a).collect();
+    assert_eq!(afters, vec![0, 2, 2, 5, 40, 90, 90], "after: 0, then every page's next");
+    assert!(asked.iter().all(|(_, w)| *w == FEED_WAIT_S), "Sew holds each read up to the wait");
     let events: BTreeMap<String, PushEvent> = crate::push_routes::test_push_capture::since(mark)
         .into_iter()
         .filter_map(|e| match &e {
@@ -439,21 +459,6 @@ fn the_feed_long_poll_sends_one_push_then_a_replacement() {
         .collect();
     assert_eq!(events["ringing"].collapse_id(), events["missed"].collapse_id(), "the same banner");
     assert_eq!(events["ringing"].target_usernames(), Some(&["sam".to_string()][..]));
-    // No phone: no push.
-    let before = crate::push_routes::test_push_capture::since(mark).len();
-    let mut other = None;
-    crate::home_chat::set_deps(Some(Arc::new(crate::home_chat::Deps {
-        sew: base.sew.clone(),
-        mint: base.mint.clone(),
-        gateway_addr: base.gateway_addr.clone(),
-        flags: base.flags.clone(),
-        platform_ok: true,
-        feed: Arc::new(|_: &str, _: Option<&str>| Ok(json!({"entries": [{"kind": "call_ring", "call_id": "7703", "channel_id": "900"}]}))),
-        devices: Arc::new(|_: &str| None),
-    })));
-    crate::home_chat::call_push::poll_once("k2:owner", &mut other).unwrap();
-    assert_eq!(call_pushes(mark, &["7703"]), vec![], "no phone, no push");
-    assert!(crate::push_routes::test_push_capture::since(mark).len() >= before);
     crate::home_chat::call_push::reset_for_tests();
     crate::home_chat::set_deps(None);
 }

@@ -38,8 +38,9 @@ pub(crate) mod tests;
 
 /// A pass minter: `(external id, sid)` → a signed chat pass.
 pub type MintFn = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync;
-/// One read of a person's Sew feed: `(external id, cursor)` → its answer.
-pub type FeedFn = dyn Fn(&str, Option<&str>) -> Result<serde_json::Value, String> + Send + Sync;
+/// One read of a person's Sew feed: `(external id, after, wait seconds)` →
+/// the HTTP status and body (`Err` only when Sew wasn't reached).
+pub type FeedFn = dyn Fn(&str, u64, u64) -> Result<(u16, serde_json::Value), String> + Send + Sync;
 /// A person's push devices: external id → (person key, device logins).
 pub type DevicesFn = dyn Fn(&str) -> Option<(String, Vec<String>)> + Send + Sync;
 

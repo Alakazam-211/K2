@@ -37,6 +37,7 @@
 //! dropped) the watchdog prunes its state on the next tick so
 //! stale IDs don't accumulate.
 
+use k2_core::env_names::first_set;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -67,13 +68,6 @@ const CTRL_C_NAMES: &[&str] = &["K5_WATCHDOG_CTRL_C_SECS", "K2SO_WATCHDOG_CTRL_C
 const KILL_NAMES: &[&str] = &["K5_WATCHDOG_KILL_SECS", "K2SO_WATCHDOG_KILL_SECS"];
 const SPAWN_GRACE_NAMES: &[&str] = &["K5_WATCHDOG_SPAWN_GRACE_SECS", "K2SO_WATCHDOG_SPAWN_GRACE_SECS"];
 const POLL_NAMES: &[&str] = &["K5_WATCHDOG_POLL_SECS", "K2SO_WATCHDOG_POLL_SECS"];
-
-/// The value of the first of `names` that is set, with the name it was
-/// read under. A name that is set wins over the ones after it whatever
-/// its value: an operator who sets the new name means it.
-fn first_set(names: &[&'static str]) -> Option<(&'static str, String)> {
-    names.iter().find_map(|name| std::env::var(name).ok().map(|v| (*name, v)))
-}
 
 /// Load config from environment variables, falling back to
 /// `WatchdogConfig::default()` for anything not set. If the disabled

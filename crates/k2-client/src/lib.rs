@@ -46,6 +46,7 @@ pub mod cli_install;
 pub mod daemon_lifecycle;
 pub mod download_file;
 pub mod editors;
+pub mod env_names;
 pub mod events;
 pub mod hosts;
 pub mod login_path;

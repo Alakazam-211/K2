@@ -231,6 +231,7 @@ pub mod resource_samples;
 pub use k2_client::migration_home;
 pub use k2_client::paths;
 pub use k2_client::hosts;
+pub use k2_client::env_names;
 /// Permission cards (prd-agent-settings-cards-v1, 0.46.3 Beta): catalog,
 /// request and card-view types plus the two switches. Off by default.
 pub mod permission;

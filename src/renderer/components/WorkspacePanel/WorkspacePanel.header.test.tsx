@@ -254,3 +254,30 @@ describe('Workspace tab header icons', () => {
     vi.mocked(invoke).mockImplementation(async () => 0)
   })
 })
+
+// Rosson 2026-11-15: View Wiki and View Inbox sat at different insets (px-2
+// in a px-3 block; px-2 with -mx-1), off the section headers' chevrons. Both
+// now span the drawer (full-width hover) with the drawer's one left inset,
+// px-3, and the same icon-to-text gap, so their icons and text line up with
+// each other and with the chevrons below.
+describe('Workspace tab Status row inset', () => {
+  it('View Wiki and View Inbox share the drawer inset (px-3) and gap; the block adds none', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => (cmd === 'k2_inbox_count' ? 2 : 0))
+    render(true, undefined, { ...project, agentMode: 'off' } as unknown as ProjectWithWorkspaces)
+    const wiki = screen.getByText('View Wiki').closest('button') as HTMLElement
+    // The clickable row (its hover band).
+    const inbox = (await screen.findByText('View Inbox')).closest('.cursor-pointer') as HTMLElement
+    expect(inbox).not.toBeNull()
+    for (const el of [wiki, inbox]) {
+      const cls = el.className.split(/\s+/)
+      expect({ px: cls.filter((c) => /^-?(p|m)[xl]-/.test(c)), gap: cls.filter((c) => c.startsWith('gap-')) })
+        .toEqual({ px: ['px-3'], gap: ['gap-1.5'] })
+    }
+    // The block spans the drawer: no horizontal padding of its own.
+    const block = screen.getByTestId('workspace-panel-header').parentElement as HTMLElement
+    expect(block.className.split(/\s+/).filter((c) => /^p[xl]-/.test(c))).toEqual([])
+    // The bells keep the drawer's right inset.
+    expect(screen.getByTestId('workspace-panel-header').className.split(/\s+/)).toContain('pr-3')
+    vi.mocked(invoke).mockImplementation(async () => 0)
+  })
+})

@@ -134,9 +134,13 @@ export default function WorkspacePanel(): React.JSX.Element {
       {/* ── Status ── The agent's name, handle, picture and color live on
           the Agent drawer tab (0.46.0). Here: View Wiki on the left, the
           phone push toggle and the completion bell on the right (Rosson
-          2026-10-16). */}
-      <div className="flex-shrink-0 px-3 py-2 border-b border-[var(--color-border)]">
-        <div className="flex items-center gap-1.5" data-testid="workspace-panel-header">
+          2026-10-16). The block spans the drawer: View Wiki and View Inbox
+          carry the drawer's one left inset (px-3) themselves, so their
+          icons start at the section headers' chevrons and their hover bands
+          reach the drawer's edge; the row's pr-3 keeps the bells where
+          they were. */}
+      <div className="flex-shrink-0 py-2 border-b border-[var(--color-border)]">
+        <div className="flex items-center gap-1.5 pr-3" data-testid="workspace-panel-header">
           {/* Workspace knowledge base / brain map (prd-workspace-kb). The Wiki
               page reads the window's server (MS3: B's path means nothing on
               A), so in a room on another server the click switches the
@@ -144,7 +148,7 @@ export default function WorkspacePanel(): React.JSX.Element {
           {showWiki && (
             <button
               type="button"
-              className="flex items-center gap-1.5 px-2 py-1 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer no-drag"
+              className="flex items-center gap-1.5 px-3 py-1 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer no-drag"
               onClick={() => {
                 if (room.isPrimary) usePageViewStore.getState().openWiki(activeProject.path)
                 else openWikiOnRoomServer(room.scope.hostKey, activeProject)
@@ -167,13 +171,11 @@ export default function WorkspacePanel(): React.JSX.Element {
             workspace has undelegated inbox items. */}
         {agentMode === 'off' && wsInboxCount > 0 && (
           <div
-            className="mt-2 px-2 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer -mx-1"
+            className="mt-2 flex items-center gap-1.5 px-3 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer"
             onClick={() => openAgentPane('__workspace__', activeProject.path)}
           >
-            <div className="flex items-center gap-2">
-              <InboxIcon size={DRAWER_HEADER_GLYPH_PX} className="text-[var(--color-accent)] flex-shrink-0" />
-              <span className="text-[11px] text-[var(--color-text-primary)]">View Inbox</span>
-            </div>
+            <InboxIcon size={DRAWER_HEADER_GLYPH_PX} className="text-[var(--color-accent)] flex-shrink-0" />
+            <span className="text-[11px] text-[var(--color-text-primary)]">View Inbox</span>
           </div>
         )}
       </div>

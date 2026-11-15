@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.25: pairs with kit v0.19.0
+
+**Requires `k2-mpc-base` v0.19.0**. This pack's behaviour is unchanged from v0.2.24.
+
+- Pairs with kit v0.19.0. None of its additions changes a text doc: a claim on lines ends as
+  before (the new end reason and addresses are for element claims), the keyed-watch frames and
+  view-index fields are for keyed docs, and chunked versions are for tier-0 files. A
+  participant's new view address and time position are the host's to set. So this pack behaves
+  as in v0.2.24.
+- Public text: the CHANGELOG, docs, comments and test messages name parity rows by their action;
+  `scripts/check-labels.sh` also blocks parity-row, finding and run labels, branch names and
+  engine codes.
+- `Cargo.lock`: k2-mpc-base 0.19.0 (only the kit's crate version moves); the crate version.
+
 ## v0.2.24 (2026-11-12): pairs with kit v0.18.0
 
 **Requires `k2-mpc-base` v0.18.0**. This pack's behaviour is unchanged from v0.2.23.
@@ -231,7 +245,7 @@ This pack gets no grid and no new verb; what changed for it:
   a text doc stays a text root, and its tests and goldens are unchanged (checked on a build
   node).
 - **Breaking items absorbed:**
-  - `PersonAction` gained the grid tier's rows P35-P44 (`RowInsert` … `DropDeleted`):
+  - `PersonAction` gained the grid tier's rows (`RowInsert` … `DropDeleted`):
     `parity_row` maps them **N/A** (a text doc has no rows or columns), listing the grid verbs
     as absent (`row insert` … `rows drop-deleted`); `docs/PARITY.md` has the row.
   - `At` is no longer `Copy` (it gained `At::Elem`, a grid cell by key): nothing here
@@ -241,7 +255,7 @@ This pack gets no grid and no new verb; what changed for it:
   byte for byte, so a kit v0.9.7.1 build still reads and writes it.
 - **Error ids:** `MPC-E806 header_names_unrendered` and `MPC-E807 header_only_row_blank`
   come from the grid's `header on` verb, which this pack doesn't list: not visible here.
-  P24 (`export`, `export --version`) stays live as in v0.2.7.
+  The Export row (`export`, `export --version`) stays live as in v0.2.7.
 - `Cargo.lock`: k2-mpc-base 0.10.0; the crate version.
 
 ## v0.2.8 (2026-10-30): pairs with kit v0.9.7.1
@@ -263,11 +277,11 @@ corruption, kit v0.1.0 through v0.9.7). What changes for CSV-as-text users:
 ## v0.2.7 (2026-10-29): pairs with kit v0.9.7
 
 **Requires `k2-mpc-base` v0.9.7** (it skips v0.9.6, a one-fix release). Pack changes:
-- **Parity row P24 "Export" is live:** `ParityRow::live(a, &["export", "export --version"])`.
+- **The parity row "Export" is live:** `ParityRow::live(a, &["export", "export --version"])`.
   The kit now exports: `export` (needs read) and `export --version V` (needs history) give the
   file through the kit's export registry (as-is in the kit; format exporters are the host's).
   The old N/A row listed `export` as a verb that must not exist, which the kit's registry now
-  has, so the parity check would fail against it. `docs/PARITY.md`'s P24 row (the parity test
+  has, so the parity check would fail against it. `docs/PARITY.md`'s Export row (the parity test
   checks the table names each verb) and the parity test's counts (28 live rows, no N/A) follow.
 - `Cargo.lock`: k2-mpc-base 0.9.7; the crate version. No other pack code change: the kit's
   v0.9.7 changes (stable error ids, handles in `run_tool` output, an undo that keeps others'
@@ -283,7 +297,7 @@ The kit's changes since v0.9.5 (its CHANGELOG has the details):
   viewers, roster push, participant overflow); an undo never changes a word someone
   else wrote, and says so instead; speed work (incremental write-back and blame, the
   engine's position index); outside saves merged line by line; exports (`Session::file_at`,
-  the export contract, the P24 verbs); stable error ids (`MPC-Ennn`, `docs/ERRORS.md`); host
+  the export contract, the export verbs); stable error ids (`MPC-Ennn`, `docs/ERRORS.md`); host
   guidance per surface, relative paths in refusals and hard-linked files declined; the vendored
   engine at k2-yrs k2.6.3.
 
@@ -408,9 +422,9 @@ v0.9.0**, checked out beside this repo (`../k2-mpc-base`).
   - byte-exact through doc and store, and through live sessions on disk (`cat`, a no-op
     `replace`/`sed -i`/`write --base`, a one-word edit, write-back);
   - with a 512-case random-edit property test, checked against the original bytes.
-- **Parity:** `docs/PARITY.md` lists P1–P31 as data (27 live, Export N/A, 3 deferred).
-  `tests/agent_parity.rs` runs the kit harness on five of the pack's types, with negative
-  controls. The pack adds no verbs.
+- **Parity:** `docs/PARITY.md` lists the text tier's 31 rows as data (27 live, Export N/A,
+  3 deferred). `tests/agent_parity.rs` runs the kit harness on five of the pack's types, with
+  negative controls. The pack adds no verbs.
 - **`docs/HOST-INTEGRATION.md`:** what a host needs to open text files with this pack.
 - **`scripts/check.sh`:** fmt, clippy (`-D warnings`), tests, the licence gate, and the
   kit's engine-free check.

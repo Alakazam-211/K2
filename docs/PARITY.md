@@ -36,7 +36,7 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P12 | Find and replace | `replace --old TEXT --new TEXT [--all]` (exact text; `-`: stdin; 1: no match or not unique); `sed -i 's/…/…/g'` | E | `run_tool` (`edit_with`) | live |
 | P13 | Paste a block / apply a change | `patch`, `apply`, `append` (each with `[--if-version V]`) | E | `run_tool` (`edit_with`) | live |
 | P14 | Rewrite from what I last saw | `write --base V` (three-way; conflict exit 1, expired base exit 8); `--base live` | E | `write_base`; `replace_text` | live |
-| P15 | Format (indent, comment out, wrap) | Formatting a text file is text: `insert`, `replace`, `sed -i`; a formatter's whole-file output is P14's `write --base V` | E | `run_tool` (`edit_with`) | live |
+| P15 | Format (indent, comment out, wrap) | Formatting a text file is text: `insert`, `replace`, `sed -i`; a formatter's whole-file output is a rewrite, `write --base V` | E | `run_tool` (`edit_with`) | live |
 | P16 | Undo / redo my own edits (all or nothing; refused with the conflict regions if others changed any) | `undo [--steps N]`, `redo`, `undo --drop` (skip a blocked step) | E | `undo_with`, `redo_with` | live |
 | P17 | See that it saved | `status`, `flush` | R | `status`, `flush` | live |
 | P18 | Watch others edit live | `watch`, `tail -f` | R | `join` (held) + `subscribe` | live |

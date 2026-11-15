@@ -34,7 +34,9 @@
 //!   id image comes along, its table named as the listing is now
 //!   ([`with_current_ids`]). The scene and camera views keep their address
 //!   and hash when an object is renamed: their current images are pushed
-//!   `ready` again with the new ids ([`push_renamed_ids`]), nothing drawn.
+//!   `ready` again with the new ids ([`push_renamed_ids`]), nothing drawn,
+//!   and a draw that lands after the rename pushes its table named as the
+//!   head lists the objects then.
 //! - **Looks** ([`super::Look`]): a job is per look as well as per width;
 //!   a transparent image is cached under its own name.
 //! - **Purge.** [`doc_purged`], [`space_removed`], [`doc_moved`] and
@@ -162,24 +164,31 @@ pub fn head(
     conn: ConnId,
 ) -> Result<Arc<Snapshot>, SnapError> {
     let now = session.status().map_err(SnapError::Session)?.version;
-    let prev = memo().lock().unwrap_or_else(|p| p.into_inner()).get(&(key.clone(), None)).cloned();
+    let prev = head_now(key);
     if let Some(p) = prev.as_ref().filter(|p| p.rev == now && p.build == renderer.build()) {
         return Ok(p.clone());
     }
     let file = session.file_now(conn).map_err(SnapError::Session)?;
     let snap = Arc::new(list(blobs, renderer, key, file.version, None, file.bytes)?);
-    if let Some(prev) = prev {
-        head_moved(blobs, &prev, &snap);
+    match prev {
+        Some(prev) => head_moved(blobs, &prev, &snap),
+        None => remember(snap.clone()),
     }
-    remember(snap.clone());
     Ok(snap)
 }
 
-/// What a doc's head moving from `prev` to `snap` sets off: its dirty
-/// containers drawn again at the widths already looked at (or reused,
-/// [`reuse`]), then the scene and camera views' id tables pushed with the
-/// objects' new ids ([`push_renamed_ids`]).
+/// The doc's head snapshot as last listed, when it is memoised.
+fn head_now(key: &DocKey) -> Option<Arc<Snapshot>> {
+    memo().lock().unwrap_or_else(|p| p.into_inner()).get(&(key.clone(), None)).cloned()
+}
+
+/// What a doc's head moving from `prev` to `snap` sets off: `snap`
+/// remembered as the head first (a draw landing from here on names its id
+/// table from it), its dirty containers drawn again at the widths already
+/// looked at (or reused, [`reuse`]), then the scene and camera views' id
+/// tables pushed with the objects' new ids ([`push_renamed_ids`]).
 pub fn head_moved(blobs: &Arc<BlobStore>, prev: &Snapshot, snap: &Arc<Snapshot>) {
+    remember(snap.clone());
     for k in dirty(prev, snap) {
         for look in Look::ALL.into_iter().filter(|l| snap.renderer.draws(*l)) {
             for w in reuse::widths_to_redraw(prev, k, &look.cache_build(&snap.build)) {
@@ -260,12 +269,51 @@ fn remember(snap: Arc<Snapshot>) {
     let mut m = memo().lock().unwrap_or_else(|p| p.into_inner());
     if m.len() >= MEMO {
         // Drop cut versions first, then anything: a snapshot is cheap to make again.
-        let victim = m.keys().find(|(_, v)| v.is_some()).or_else(|| m.keys().next()).cloned();
+        let victim = m.keys().filter(|e| evictable(e)).find(|(_, v)| v.is_some()).or_else(|| m.keys().filter(|e| evictable(e)).next()).cloned();
         if let Some(v) = victim {
             m.remove(&v);
         }
     }
     m.insert((snap.key.clone(), snap.version), snap);
+}
+
+/// Whether the memo may drop `entry` to make room: any entry.
+#[cfg(not(test))]
+fn evictable(_entry: &(DocKey, Option<u64>)) -> bool {
+    true
+}
+
+/// In tests, any entry but a head a test pinned ([`pin_head`]): the memo
+/// is one per test process, so another test's listings could drop it.
+#[cfg(test)]
+fn evictable(entry: &(DocKey, Option<u64>)) -> bool {
+    entry.1.is_some() || !pinned().lock().unwrap_or_else(|p| p.into_inner()).contains(&entry.0)
+}
+
+#[cfg(test)]
+fn pinned() -> &'static Mutex<HashSet<DocKey>> {
+    static P: OnceLock<Mutex<HashSet<DocKey>>> = OnceLock::new();
+    P.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Keeps a doc's head snapshot in the memo while it lives (tests only).
+#[cfg(test)]
+pub struct HeadPin(DocKey);
+
+/// Pin `key`'s head snapshot in the memo until the pin drops, so a test
+/// that relies on it isn't at the mercy of what else the process lists.
+/// Purging the doc still drops it.
+#[cfg(test)]
+pub fn pin_head(key: &DocKey) -> HeadPin {
+    pinned().lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone());
+    HeadPin(key.clone())
+}
+
+#[cfg(test)]
+impl Drop for HeadPin {
+    fn drop(&mut self) {
+        pinned().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.0);
+    }
 }
 
 /// The containers of `next` whose hash isn't `prev`'s for them (new ones included).
@@ -432,7 +480,15 @@ fn draw(job: &Job) -> Result<(), FailCode> {
     let mut ready = Vec::new();
     let outcome = match result {
         Ok(img) => match store(&job.blobs, &job.snap, &job.container.key, hash, w, look, &img, rendered_at_ms) {
-            Ok(meta) => {
+            Ok(mut meta) => {
+                // An object renamed while this was drawn keeps the view's
+                // hash: the push names the table as the head lists it now
+                // (the cache keeps the drawn names, as for every image).
+                if let Some(head) = head_now(key) {
+                    if let Some(k) = head.container(&job.container.key) {
+                        with_current_ids(&head, k, &mut meta);
+                    }
+                }
                 ready = ready_fields(&meta);
                 Ok(())
             }

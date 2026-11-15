@@ -5,7 +5,8 @@
 //! doc is now after a rename).
 //!
 //! The service tests draw with [`Fake`], a renderer that runs no process and
-//! logs every render, so "no worker run" is a count.
+//! logs every render, so "no worker run" is a count. A test can hold one of
+//! its renders until it lets it land ([`hold`]).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -85,6 +86,22 @@ fn renders_of(container: &str) -> Vec<Look> {
     drawn().lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|(c, _)| c == container).map(|(_, l)| *l).collect()
 }
 
+type Held = Vec<(String, String, std::sync::mpsc::Receiver<()>)>;
+
+fn held() -> &'static Mutex<Held> {
+    static H: Mutex<Held> = Mutex::new(Vec::new());
+    &H
+}
+
+/// Hold the fake's next render of `container` from the doc `listing` until
+/// the returned sender sends (or is dropped, or 20 s pass, inside the
+/// host's cap): the test decides when that draw lands.
+fn hold(listing: &str, container: &str) -> std::sync::mpsc::Sender<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    held().lock().unwrap_or_else(|p| p.into_inner()).push((listing.to_string(), container.to_string(), rx));
+    tx
+}
+
 impl PreviewRenderer for Fake {
     fn kind(&self) -> &'static str {
         "fake"
@@ -122,6 +139,13 @@ impl PreviewRenderer for Fake {
         Ok(Listing { page: None, containers })
     }
     fn render(&self, src: &Source<'_>, c: &Container, width: Width, look: Look, _wall: Duration) -> Result<Image, Failed> {
+        let gate = {
+            let mut h = held().lock().unwrap_or_else(|p| p.into_inner());
+            h.iter().position(|(l, k, _)| l.as_bytes() == src.doc && *k == c.key).map(|i| h.remove(i).2)
+        };
+        if let Some(rx) = gate {
+            let _ = rx.recv_timeout(Duration::from_secs(20));
+        }
         drawn().lock().unwrap_or_else(|p| p.into_inner()).push((c.key.clone(), look));
         if c.key.ends_with(":fail") {
             return Err(Failed::new(FailCode::Timeout, "the fake's timeout"));
@@ -853,6 +877,111 @@ fn a_rename_pushes_nothing_for_an_image_not_cached_at_the_current_hash() {
         assert_ne!(b.container("@scene").expect("scene").hash, a.container("@scene").expect("scene").hash);
         service::head_moved(&blobs, &b, &c);
         assert!(pushed_now(&sub).is_empty(), "nothing cached at the current hash, nothing drawn");
+    });
+}
+
+/// A draw that started before an object was renamed in place and lands
+/// after the head moved (the view's hash the same): its push names the
+/// table as the head lists the objects now. The cache keeps the names it
+/// was drawn with, and the route answers the new ones.
+#[test]
+fn a_draw_landing_after_a_rename_pushes_its_table_named_as_now() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("renamed-mid-draw.blend");
+        let _pin = service::pin_head(&key);
+        let listing = "@scene 9 scene\n@cam:Main 4 c0\n@obj:Desk 5 o0\n@obj:Stool 6 o1";
+        let a = snap(&blobs, &key, 1, listing);
+        let sub = host_events::subscribe(&key);
+        let land = hold(listing, "@scene");
+        assert_eq!(service::request(&blobs, &a, "@scene", Width::Thumb, Look::Opaque), Requested::Rendering);
+        assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }));
+
+        // Stool renamed Bench while the scene is drawn: the same hash, nothing cached yet to push.
+        let b = snap(&blobs, &key, 2, &listing.replace("@obj:Stool", "@obj:Bench"));
+        let hash = b.container("@scene").expect("scene").hash.clone();
+        assert_eq!(hash, a.container("@scene").expect("scene").hash, "a rename keeps the hash");
+        service::head_moved(&blobs, &a, &b);
+        assert!(pushed_now(&sub).is_empty(), "nothing cached yet, nothing pushed");
+
+        land.send(()).expect("the draw is held");
+        let ev = next(&sub, "ready");
+        let f: serde_json::Value = serde_json::from_str(&frame(&ev)).expect("json");
+        let renamed = json!([{ "index": 0, "id": "Desk" }, { "index": 1, "id": "Bench" }]);
+        assert_eq!(
+            (f["container"].clone(), f["render_hash"].clone(), f["state"].clone(), f["rev"].clone()),
+            (json!("@scene"), json!(hash), json!("ready"), json!(1)),
+            "the draw's own push, at its rev: {f}"
+        );
+        assert_eq!((f["ids"]["objects"].clone(), f["ids"]["count"].clone()), (renamed.clone(), json!(2)), "{f}");
+
+        let Got::Hit(e) = cache::get(&blobs, &key, "@scene", &hash, Width::Thumb, "fake-1") else { panic!("cached") };
+        assert_eq!(e.meta["ids"]["objects"][1]["id"], json!("Stool"), "the cache keeps the drawn name");
+        assert_eq!(body(route::image(&blobs, &b, "@scene", None, Width::Thumb, Look::Opaque, false))["ids"]["objects"], renamed);
+        assert!(pushed_now(&sub).is_empty(), "nothing more");
+    });
+}
+
+/// A draw that lands after its view moved to another hash (and an object
+/// was renamed) is no longer the view's current image: its push keeps the
+/// names it was drawn with.
+#[test]
+fn a_draw_landing_after_its_view_moved_on_pushes_the_names_it_drew_with() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("moved-mid-draw.blend");
+        let _pin = service::pin_head(&key);
+        let listing = "@scene 9 scene\n@cam:Main 4 c0\n@obj:Shelf 5 o0\n@obj:Crate 6 o1";
+        let a = snap(&blobs, &key, 1, listing);
+        let sub = host_events::subscribe(&key);
+        let land = hold(listing, "@cam:Main");
+        assert_eq!(service::request(&blobs, &a, "@cam:Main", Width::Thumb, Look::Transparent), Requested::Rendering);
+        assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }));
+
+        // The camera moved and Crate renamed Box while the old view is drawn.
+        let b = snap(&blobs, &key, 2, &listing.replace("@cam:Main 4", "@cam:Main 3").replace("@obj:Crate", "@obj:Box"));
+        let drawn_at = a.container("@cam:Main").expect("camera").hash.clone();
+        assert_ne!(b.container("@cam:Main").expect("camera").hash, drawn_at);
+        service::head_moved(&blobs, &a, &b);
+        assert!(pushed_now(&sub).is_empty(), "nothing cached yet, nothing pushed");
+
+        land.send(()).expect("the draw is held");
+        let f: serde_json::Value = serde_json::from_str(&frame(&next(&sub, "ready"))).expect("json");
+        let as_drawn = json!([{ "index": 0, "id": "Shelf" }, { "index": 1, "id": "Crate" }]);
+        assert_eq!((f["container"].clone(), f["render_hash"].clone(), f["rev"].clone()), (json!("@cam:Main"), json!(drawn_at), json!(1)), "{f}");
+        assert_eq!(f["ids"]["objects"], as_drawn, "{f}");
+        let build = Look::Transparent.cache_build("fake-1");
+        let Got::Hit(e) = cache::get(&blobs, &key, "@cam:Main", &drawn_at, Width::Thumb, &build) else { panic!("cached") };
+        assert_eq!(e.meta["ids"]["objects"], as_drawn);
+        assert!(pushed_now(&sub).is_empty(), "nothing more");
+    });
+}
+
+/// A draw that lands when the doc has no head snapshot (here purged after
+/// an object was renamed) has no listing to name its table from: its push
+/// keeps the names it was drawn with.
+#[test]
+fn a_draw_landing_without_a_head_snapshot_pushes_the_names_it_drew_with() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("headless-mid-draw.blend");
+        let listing = "@scene 9 scene\n@obj:Bench 5 o0\n@obj:Easel 6 o1";
+        let a = snap(&blobs, &key, 1, listing);
+        let sub = host_events::subscribe(&key);
+        let land = hold(listing, "@scene");
+        assert_eq!(service::request(&blobs, &a, "@scene", Width::Thumb, Look::Opaque), Requested::Rendering);
+        assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }));
+
+        let b = snap(&blobs, &key, 2, &listing.replace("@obj:Easel", "@obj:Stand"));
+        service::head_moved(&blobs, &a, &b);
+        service::doc_purged(&key, "doc_deleted");
+        assert!(pushed_now(&sub).is_empty(), "nothing cached yet, nothing pushed");
+
+        land.send(()).expect("the draw is held");
+        let f: serde_json::Value = serde_json::from_str(&frame(&next(&sub, "ready"))).expect("json");
+        assert_eq!((f["container"].clone(), f["state"].clone(), f["rev"].clone()), (json!("@scene"), json!("ready"), json!(1)), "{f}");
+        assert_eq!(f["ids"]["objects"], json!([{ "index": 0, "id": "Bench" }, { "index": 1, "id": "Easel" }]), "{f}");
+        assert!(pushed_now(&sub).is_empty(), "nothing more");
     });
 }
 

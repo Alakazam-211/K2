@@ -172,6 +172,10 @@ fn audit(app_id: &str, event: &str, by: &str, payload: J) {
 
 pub(crate) fn changed(ws: &str) {
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: ws.to_string() });
+    sync_settings();
+}
+
+fn sync_settings() {
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({ "apps": "ownership" }));
 }
 
@@ -262,6 +266,8 @@ fn park_row(app: &AppRow, by: &str, reason: &str) -> R<()> {
     }
     audit(&app.app_id, "park", by, json!({ "from": app.owner_workspace, "reason": reason }));
     super::routes::mirror(&app.app_id);
+    // The workspace it left re-reads (its stop above folds into this one).
+    super::state_events::app_changed_in(&app.app_id, &app.owner_workspace);
     Ok(())
 }
 
@@ -288,7 +294,9 @@ fn park_route(who: &Who, body: &[u8]) -> R<J> {
             ),
         );
     }
-    changed(&from);
+    // park_row told `from`'s clients (coalesced with the stop); only the
+    // settings sync is left.
+    sync_settings();
     Ok(json!({ "ok": true, "app": app.app_id, "state": store::STATE_PARKED, "from": super::routes::ws_handle(&from) }))
 }
 

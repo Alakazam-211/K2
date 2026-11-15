@@ -308,6 +308,7 @@ pub fn stop_unwalled_if_off(actor: &str) -> Vec<String> {
         match stop_app(&app, actor) {
             Ok(()) => {
                 let _ = db(|c| store::set_state(c, &id, store::STATE_STOPPED, Some(UNWALLED_STOPPED)));
+                super::state_events::app_changed(&id);
                 audit(&id, "process_engine_off", actor, json!({ "stopped": true }));
                 stopped.push(id);
             }
@@ -529,6 +530,7 @@ pub(crate) fn serve_static_at_boot(booted_at: i64, only: Option<&[String]>) -> V
         let _ = db(|c| store::set_runtime_json(c, &dep, &serde_json::to_string(&fp).unwrap_or_default()));
         if app.state != store::STATE_RUNNING {
             let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_RUNNING, None));
+            super::state_events::app_changed(&app.app_id);
         }
         audit(&app.app_id, "static_served", "system", json!({ "deployment": dep, "port": h.port }));
         served.push(app.app_id.clone());
@@ -649,10 +651,12 @@ fn plan_boot(adopted: Vec<RunHandle>, unwalled_orphans: Vec<RunHandle>, unwalled
             // An adopted survivor is running whatever the row said.
             if app.state != store::STATE_RUNNING {
                 let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_RUNNING, None));
+                super::state_events::app_changed(&app.app_id);
             }
             audit(&app.app_id, "adopted", "system", json!({ "deployment": h.deployment_id, "port": h.port, "relaunch": stale }));
         } else if !unwalled_ok && runs_unwalled(app) && app.state != store::STATE_STOPPED {
             let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_STOPPED, Some(UNWALLED_STOPPED)));
+            super::state_events::app_changed(&app.app_id);
             audit(&app.app_id, "process_engine_off", "system", json!({ "stopped": true }));
         } else if app.live_seed.is_some() && wants_running(app, booted_at) {
             // The owner wants it running (R35) and no instance survived:
@@ -1003,6 +1007,7 @@ fn pipeline_fail_exit(app_id: &str, dep: &str, code: &str, msg: &str, exit: Exit
             msg.to_string()
         };
         let _ = db(|c| store::set_state(c, app_id, store::STATE_FAILED, Some(&reason)));
+        super::state_events::app_changed(app_id);
     }
     // The failure history, and the App's agent hears (0.46.3). A crash
     // restart's own failure is a crash: `restart_outcome` records it.
@@ -1655,6 +1660,7 @@ fn restart_after_stopped_first(app_id: &str, dep: &str, seed: &str) {
         rt.restart_why = Some(WHY_PAUSED_REHOST_FAILED);
     });
     let _ = db(|c| store::set_state(c, app_id, STATE_RESTARTING, Some("the re-host's new instance failed; the previous one starts again")));
+    super::state_events::app_changed(app_id);
     audit(app_id, "rehost_restore", "system", json!({ "deployment": dep, "seed": seed }));
 }
 
@@ -1827,6 +1833,7 @@ fn crashed(app_id: &str, inst: Instance, why: &str, exit: Exit, t: &Timings) {
             let ended = super::early_exit::exit_text(exit.exited, exit.code, exit.signal).unwrap_or_else(|| why.to_string());
             let reason = super::early_exit::state_reason(app_id, &inst.handle.deployment_id, &ended, None);
             let _ = db(|c| store::set_state(c, app_id, STATE_RESTARTING, Some(&reason)));
+            super::state_events::app_changed(app_id);
             audit(app_id, "crashed", "system", json!({ "deployment": inst.handle.deployment_id, "why": why, "restartInSecs": after_secs }));
         }
         Decision::Breaker => breaker(app_id, why),
@@ -1865,6 +1872,7 @@ fn restart_outcome(app_id: &str, dep: &str) {
         });
         let why = format!("waiting for K2's App engine ({code}); it starts when the engine answers");
         let _ = db(|c| store::set_state(c, app_id, store::STATE_WAITING_ENGINE, Some(&why)));
+        super::state_events::app_changed(app_id);
         audit(app_id, "waiting_engine", "system", json!({ "deployment": dep, "code": code, "retryInSecs": retry }));
         attempt(true, Next::OnEngineChange { retry_secs: retry });
         return;
@@ -1906,6 +1914,7 @@ fn restart_outcome(app_id: &str, dep: &str) {
                 None => super::early_exit::state_reason(app_id, dep, &format!("the restart failed its health gate: {msg}"), None),
             };
             let _ = db(|c| store::set_state(c, app_id, "restarting", Some(&why)));
+            super::state_events::app_changed(app_id);
         }
         Decision::Breaker => breaker(app_id, "its restarts keep failing the health gate"),
     }
@@ -1914,6 +1923,7 @@ fn restart_outcome(app_id: &str, dep: &str) {
 fn breaker(app_id: &str, why: &str) {
     let msg = format!("{why}; restarted 6 times within an hour, so K2 stopped restarting it. Why: k2 app errors {app_id} --kind crash");
     let _ = db(|c| store::set_state(c, app_id, store::STATE_CRASHLOOPING, Some(&msg)));
+    super::state_events::app_changed(app_id);
     audit(app_id, "crashlooping", "system", json!({ "why": why }));
     if let Ok(Some(app)) = db(|c| store::get_app(c, app_id)) {
         super::alerts::notify(
@@ -2155,6 +2165,7 @@ pub fn stop_app(app: &AppRow, actor: &str) -> Result<(), Fail> {
         let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, store::RESULT_STOPPED, None));
     }
     db(|c| store::set_state(c, &app.app_id, store::STATE_STOPPED, None))?;
+    super::state_events::app_changed(&app.app_id);
     // S14: a stopped App has no gateway link and no live pass.
     let revoked = super::gateway::close(&app.app_id, Some(&app.service_id), true);
     audit(&app.app_id, "stop", actor, json!({ "passesRevoked": revoked }));

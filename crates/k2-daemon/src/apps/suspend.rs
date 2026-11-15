@@ -149,6 +149,7 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
         let _ = store::set_state(&conn, &app.app_id, store::STATE_STOPPED, Some("suspended"));
         let _ = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, &app.app_id, "suspend", &by, None, &json!({ "reason": reason, "passesRevoked": revoked }));
     }
+    super::state_events::app_changed(&app.app_id);
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
         "app-suspend",
         &by,
@@ -241,6 +242,7 @@ fn resume(who: &Who, body: &[u8]) -> R<J> {
         let _ = store::set_state(&conn, &app.app_id, store::STATE_STOPPED, Some("resumed; not started"));
         let _ = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, &app.app_id, "resume", &by, None, &json!({}));
     }
+    super::state_events::app_changed(&app.app_id);
     super::quotas::invalidate(&app.app_id);
     k2_core::skin::access_live::hint();
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app-resume", &by, format!("{} resumed", app.app_id), "cli", "-", "apps"));

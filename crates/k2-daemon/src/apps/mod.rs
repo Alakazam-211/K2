@@ -174,6 +174,11 @@ pub mod init;
 pub mod supervisor;
 pub mod surfaces;
 pub mod suspend;
+/// An App's own state changes reach its workspace's clients, coalesced per
+/// App (`publish_services_changed`).
+pub mod state_events;
+#[cfg(test)]
+mod state_events_tests;
 pub mod wall_build;
 
 /// The 0.46.1 door's route tests (lane 2: S19, S20, S42, AR10).

@@ -1264,3 +1264,30 @@ fn an_approved_held_deploy_starts_with_its_manifests_box_services() {
     let open = reqs::list(&c, &reqs::Filter { app_id: Some(id), status: Some(reqs::STATUS_PENDING), ..Default::default() }, 100).unwrap();
     assert_eq!(open.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(), vec![reqs::KIND_EGRESS], "{open:?}");
 }
+
+/// The drawer's Apps section refetches on `publish_services_changed`: a
+/// crash (live → restarting) tells the owning workspace once; the restart
+/// back to live is its one `app_deployed`, with no second refetch beside it.
+#[test]
+fn a_crash_and_its_restart_each_tell_the_workspace_once() {
+    use super::super::state_events::{drain_refreshes, wait_told};
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s3t-crash-told";
+    let ws = format!("ws-{id}");
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    let first = go_live_first(id, &f.seed);
+    settle(id);
+    wait_told();
+    let only = ids(&[id]);
+    let seen = AtomicU64::new(super::super::engine_gate::generation());
+    let mut rx = crate::session_events::subscribe();
+    eng.stopped.lock().unwrap().insert(first.clone());
+    tick_until(&only, &seen, 20, "the crash", || app_row(id).state == STATE_RESTARTING);
+    wait_told();
+    assert_eq!(drain_refreshes(&mut rx, &ws), (1, 0), "a crash: one publish_services_changed");
+    tick_until(&only, &seen, 20, "the restart", || live(id));
+    settle(id);
+    wait_told();
+    assert_eq!(drain_refreshes(&mut rx, &ws), (0, 1), "the restart: one app_deployed and nothing else");
+}

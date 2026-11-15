@@ -315,7 +315,10 @@ pub enum SessionEvent {
     },
 
     /// Published-service inventory changed for a workspace (spawn, stop,
-    /// exit, hostname fail, rm). APP-LEVEL — one daemon, many workspaces;
+    /// exit, hostname fail, rm), or one of its Apps changed state on the
+    /// daemon's own (crash, restart, breaker, waiting for the engine, stop,
+    /// suspend, park; coalesced per App, `apps/state_events.rs`).
+    /// APP-LEVEL — one daemon, many workspaces;
     /// the drawer filters by `projectId`. Wire: `{ "kind":
     /// "publish_services_changed", "projectId": "<uuid>" }`.
     PublishServicesChanged {

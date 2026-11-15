@@ -2087,8 +2087,44 @@ pub(crate) fn url_for(app: &AppRow) -> Option<String> {
     svc.url
 }
 
+/// The names an App answers on, for one-call lists (the drawer's Apps
+/// section): its own URL's host, then the custom domains K2 serves for it
+/// now (`live` on an attached apex; primary first, then by name). A name
+/// still waiting for DNS, verifying, issuing or failing isn't listed, nor
+/// an `external` one (K2 never checks it); `GET /cli/app/domains?app=` has
+/// every name with its state.
+pub(crate) fn hosts_for(app: &AppRow, url: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(h) = url.and_then(url_host) {
+        out.push(h);
+    }
+    let mut custom = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::app_domains_for(&conn, &app.app_id).unwrap_or_default()
+    };
+    custom.retain(k2_core::domains::AppDomain::is_live);
+    custom.sort_by(|a, b| b.is_primary.cmp(&a.is_primary).then_with(|| a.hostname.cmp(&b.hostname)));
+    for d in custom {
+        let h = d.hostname.trim().trim_end_matches('.').to_ascii_lowercase();
+        if !h.is_empty() && !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    out
+}
+
+/// `https://jobs.box.k2.dev:8443/x` → `jobs.box.k2.dev`.
+fn url_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = rest.split(['/', '?', '#']).next()?.rsplit('@').next()?;
+    let host = host.split(':').next()?.trim().to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
 fn app_summary(app: &AppRow) -> J {
     let lab = super::open::label_of(app);
+    let url = url_for(app);
     // 0.46.7 (TC-2, TA-5): a static App runs no App code; its wall reads
     // `none (static: no App code)`, never a weaker wall.
     let is_static = super::supervisor::is_static_app(app);
@@ -2115,7 +2151,8 @@ fn app_summary(app: &AppRow) -> J {
         "io": k2_root_proto::apps::IoMax::from_column(app.io_max_json.as_deref()),
         "devices": app.devices(),
         "exception": app.exception_json.as_deref().and_then(|e| serde_json::from_str::<J>(e).ok()),
-        "url": url_for(app),
+        "hosts": hosts_for(app, url.as_deref()),
+        "url": url,
         "livePort": super::supervisor::live_port(&app.app_id),
         "link": super::gateway::status_json(&app.app_id),
     })

@@ -993,3 +993,82 @@ fn unpark_and_release_use_the_same_guard() {
     assert!(v["error"]["blockers"].as_array().unwrap().iter().any(|b| b["code"] == "handoff_needs_tie_move"), "{v}");
     assert_eq!(row(&f.a2).state, store::STATE_PARKED, "still parked");
 }
+
+// ── the drawer's Apps section: one event per park, hosts in the list ──
+
+/// A park (the stop, then the row moving to no one) tells the workspace it
+/// left once; the empty owner never hears.
+#[test]
+fn a_park_tells_the_workspace_it_left_once() {
+    use super::state_events::{drain_refreshes, wait_told};
+    let f = fx("parktold");
+    let mut rx = crate::session_events::subscribe();
+    let (st, v) = call("/cli/app/park", &admin(), json!({ "app": f.a1 }));
+    assert_eq!(st, 200, "{v}");
+    wait_told();
+    assert_eq!(drain_refreshes(&mut rx, &f.a), (1, 0), "the workspace it left");
+    assert_eq!(drain_refreshes(&mut rx, ""), (0, 0), "no one's");
+}
+
+/// The boot sweep's park used to tell no client: each orphan now tells the
+/// removed workspace's (still open) clients once.
+#[test]
+fn the_boot_sweep_tells_each_orphans_workspace() {
+    use super::state_events::{drain_refreshes, wait_told};
+    let _f = fx("sweeptold");
+    let gone = "own-gone-sweeptold";
+    add_app("orph1-sweeptold", gone, None, false);
+    add_app("orph2-sweeptold", gone, None, false);
+    let mut rx = crate::session_events::subscribe();
+    assert_eq!(super::ownership::sweep_orphans().len(), 2);
+    wait_told();
+    assert_eq!(drain_refreshes(&mut rx, gone), (2, 0), "one per App (each App coalesces on its own)");
+}
+
+/// `hosts` on each `/cli/app/list` row: the App's own URL host, then the
+/// custom names K2 serves now (primary first, then by name). Pending,
+/// failing and external names aren't listed.
+#[test]
+fn the_list_gives_each_app_its_url_host_then_its_live_custom_names() {
+    let f = fx("hosts");
+    let mut cfg = k2_core::tunnel::config::TunnelConfig::default();
+    cfg.subdomain = "box1".into();
+    k2_core::tunnel::config::save(&cfg).unwrap();
+    let app = "oa3-hosts";
+    add_app(app, &f.a, None, true);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        use k2_core::domains as d;
+        d::upsert_binding(&conn, "example.com", None, false).unwrap();
+        for (host, state) in [
+            ("zeta.example.com", d::STATE_LIVE),
+            ("alpha.example.com", d::STATE_LIVE),
+            ("shop.example.com", d::STATE_LIVE),
+            ("waiting.example.com", d::STATE_WAITING_DNS),
+            ("broken.example.com", d::STATE_FAILING),
+            ("old.example.com", d::STATE_EXTERNAL),
+        ] {
+            d::upsert_name(&conn, host, "example.com", &format!("app:{app}")).unwrap();
+            assert!(d::set_app_state(&conn, host, state, None).unwrap(), "{host}");
+        }
+        assert!(d::set_primary(&conn, app, "shop.example.com").unwrap());
+    }
+    let (st, v) = get("/cli/app/list", &agent(&f.a), &[]);
+    assert_eq!(st, 200, "{v}");
+    let rows = v["apps"].as_array().unwrap_or_else(|| panic!("no apps: {v}"));
+    let row = rows.iter().find(|r| r["appId"] == app).unwrap_or_else(|| panic!("{app} is listed: {v}"));
+    assert_eq!(row["url"], json!(format!("https://{app}.box1.k2.dev")), "{row}");
+    assert_eq!(
+        row["hosts"],
+        json!([format!("{app}.box1.k2.dev"), "shop.example.com", "alpha.example.com", "zeta.example.com"]),
+        "{row}"
+    );
+    // No URL and no custom names: an empty list, never missing.
+    let other = rows.iter().find(|r| r["appId"] == f.a1.as_str()).unwrap_or_else(|| panic!("{} is listed: {v}", f.a1));
+    assert_eq!(other["hosts"], json!([]), "{other}");
+    // The same rows reach a person asking for the workspace.
+    let (_, owner) = get("/cli/app/list", &Who::Owner, &[("workspace", &f.a)]);
+    let same = owner["apps"].as_array().unwrap().iter().find(|r| r["appId"] == app).unwrap().clone();
+    assert_eq!(same["hosts"], row["hosts"], "{owner}");
+}

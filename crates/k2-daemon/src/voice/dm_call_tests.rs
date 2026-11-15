@@ -420,7 +420,7 @@ fn the_feed_long_poll_sends_one_push_then_a_replacement() {
     let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let _home = k2_core::test_env::TempHome::new();
     crate::home_chat::call_push::reset_for_tests();
-    use crate::home_chat::call_push::{poll_once, Poll, FEED_WAIT_S};
+    use crate::home_chat::call_push::{poll_once, Poll, FEED_WAIT_RINGING_S, FEED_WAIT_S};
     let asked = fake_feed(vec![
         (200, json!({"items": [item(1, "call_ring", "7701"), item(2, "dm", "x")], "next": 2})),
         (200, json!({"items": [], "next": 2})),
@@ -449,7 +449,8 @@ fn the_feed_long_poll_sends_one_push_then_a_replacement() {
     let asked = asked.lock().unwrap().clone();
     let afters: Vec<u64> = asked.iter().map(|(a, _)| *a).collect();
     assert_eq!(afters, vec![0, 2, 2, 5, 40, 90, 90], "after: 0, then every page's next");
-    assert!(asked.iter().all(|(_, w)| *w == FEED_WAIT_S), "Sew holds each read up to the wait");
+    assert_eq!(asked[1].1, FEED_WAIT_RINGING_S, "a ring waits on its end: shorter holds");
+    assert_eq!(asked[3].1, FEED_WAIT_S, "nothing ringing: the long hold");
     let events: BTreeMap<String, PushEvent> = crate::push_routes::test_push_capture::since(mark)
         .into_iter()
         .filter_map(|e| match &e {
@@ -459,6 +460,51 @@ fn the_feed_long_poll_sends_one_push_then_a_replacement() {
         .collect();
     assert_eq!(events["ringing"].collapse_id(), events["missed"].collapse_id(), "the same banner");
     assert_eq!(events["ringing"].target_usernames(), Some(&["sam".to_string()][..]));
+    crate::home_chat::call_push::reset_for_tests();
+    crate::home_chat::set_deps(None);
+}
+
+/// The ring's END, both paths: the held session hears `call_ring {ringing:
+/// false}` and the replacement goes at once ("Answered on another device"
+/// for accepted, "Call ended" for a cancel); with no session to hear it, the
+/// ring is replaced by "Call ended" once it is old enough, and not before. A
+/// live held session never gets the timed fallback.
+#[test]
+fn a_rings_end_is_pushed_at_once_or_by_the_fallback() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    crate::home_chat::call_push::reset_for_tests();
+    use crate::home_chat::call_push::{expire_rings, poll_once, ring_seen, RING_FALLBACK_SECS};
+    fake_feed(vec![(
+        200,
+        json!({"items": [item(1, "call_ring", "7801"), item(2, "call_ring", "7802"), item(3, "call_ring", "7803"), item(4, "call_ring", "7804")], "next": 4}),
+    )]);
+    let mark = crate::push_routes::test_push_capture::mark();
+    let mut cursor = 0u64;
+    poll_once(SAM_EXT, &mut cursor).unwrap();
+    let rang = crate::home_chat::now_secs();
+    ring_seen(SAM_EXT, &json!({"call_id": "7801", "channel_id": "900", "ringing": false, "reason": "accepted"}));
+    ring_seen(SAM_EXT, &json!({"call_id": "7802", "channel_id": "900", "ringing": false, "reason": "cancelled"}));
+    assert_eq!(
+        call_pushes(mark, &["7801", "7802"]),
+        vec![
+            ("7801".to_string(), CallPushState::Ringing),
+            ("7802".to_string(), CallPushState::Ringing),
+            ("7801".to_string(), CallPushState::Answered),
+            ("7802".to_string(), CallPushState::Ended),
+        ],
+        "heard: replaced at once"
+    );
+    // 7803 and 7804: nobody heard their end.
+    assert_eq!(expire_rings(SAM_EXT, rang + RING_FALLBACK_SECS, true), 0, "a live held session hears the end: no timed fallback");
+    assert_eq!(expire_rings(SAM_EXT, rang + RING_FALLBACK_SECS - 2, false), 0, "too soon");
+    assert_eq!(expire_rings(SAM_EXT, rang + RING_FALLBACK_SECS + 1, false), 2);
+    assert_eq!(
+        call_pushes(mark, &["7803", "7804"]).into_iter().filter(|(_, s)| *s == CallPushState::Ended).count(),
+        2,
+        "the fallback replaces each with Call ended"
+    );
+    assert_eq!(expire_rings(SAM_EXT, rang + 1_000, false), 0, "once");
     crate::home_chat::call_push::reset_for_tests();
     crate::home_chat::set_deps(None);
 }

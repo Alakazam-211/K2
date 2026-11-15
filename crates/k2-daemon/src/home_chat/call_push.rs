@@ -25,9 +25,14 @@
 //!   is stopping.
 //!
 //! **The ring's end.** The ring push is replaced, with the same collapse id
-//! `call:<id>`, by exactly one push: the feed's `call_missed` → "Missed
-//! call", or a ring the person's follower hears stop any other way
-//! ([`ring_seen`]) → "Call ended".
+//! `call:<id>`, by exactly one push:
+//! - at once, when the person's held session hears `call_ring {ringing:
+//!   false, reason}` ([`ring_seen`]): `accepted` → "Answered on another
+//!   device", `timeout` → "Missed call", `declined`, `cancelled`,
+//!   `call_ended` → "Call ended";
+//! - or the feed's `call_missed` → "Missed call";
+//! - or, with no live held session to hear the end, "Call ended" once the
+//!   ring is [`RING_FALLBACK_SECS`] old (Sew rings for 45 s).
 //!
 //! Push kind `call` ([`k2_core::push::PUSH_KIND_CALL`]), its own budget
 //! class. Not VoIP or CallKit in v1.
@@ -45,8 +50,14 @@ use super::{deps, now_secs};
 
 /// How long Sew holds an empty feed read, seconds (Sew allows 0–30).
 pub const FEED_WAIT_S: u64 = 25;
+/// The shorter hold while a ring waits for its end (the fallback is timed).
+pub const FEED_WAIT_RINGING_S: u64 = 5;
 /// Items per read (Sew allows 1–500).
 pub const FEED_LIMIT: u32 = 100;
+/// A ring with no end heard is replaced after this long, when no live held
+/// session would hear its end (Sew rings for 45 s, then writes
+/// `call_missed`; the margin lets that come first).
+pub const RING_FALLBACK_SECS: i64 = 55;
 /// A poller Sew stopped (404, 403 `not_provisioned`) starts again after this.
 pub const STOPPED_FOR: Duration = Duration::from_secs(600);
 /// The supervisor's look at who has a push device.
@@ -164,14 +175,32 @@ impl CallPushes {
         Some(Action { call_id: call_id.to_string(), channel_id: s.channel_id.clone(), started_by: s.started_by.clone(), state })
     }
 
-    /// The person's follower heard `call_ring {ringing: false, reason}`: a
-    /// ring K2 pushed that stopped any way but a timeout is replaced by "Call
-    /// ended" (a timeout's replacement is the feed's `call_missed`).
+    /// The held session heard `call_ring {ringing: false, reason}`: a ring K2
+    /// pushed is replaced at once.
     pub fn on_ring_stopped(&mut self, call_id: &str, reason: &str) -> Option<Action> {
-        if reason == "timeout" {
-            return None;
-        }
-        self.replace(call_id, CallPushState::Ended)
+        let state = match reason {
+            "accepted" => CallPushState::Answered,
+            "timeout" => CallPushState::Missed,
+            _ => CallPushState::Ended,
+        };
+        self.replace(call_id, state)
+    }
+
+    /// With no live held session: rings pushed [`RING_FALLBACK_SECS`] ago or
+    /// more, with no end heard, are replaced by "Call ended".
+    pub fn expire(&mut self, now: i64) -> Vec<Action> {
+        let due: Vec<String> = self
+            .calls
+            .iter()
+            .filter(|(_, s)| !s.done && s.ringing_since.is_some_and(|t| now - t >= RING_FALLBACK_SECS))
+            .map(|(id, _)| id.clone())
+            .collect();
+        due.iter().filter_map(|id| self.replace(id, CallPushState::Ended)).collect()
+    }
+
+    /// A ring pushed and not yet replaced.
+    pub fn ringing(&self) -> bool {
+        self.calls.values().any(|s| s.ringing_since.is_some() && !s.done)
     }
 }
 
@@ -213,7 +242,9 @@ fn error_code(body: &Value) -> &str {
 /// One read of `ext`'s feed from `cursor` (blocking); the pushes it makes
 /// go out and `cursor` moves to the page's `next`.
 pub fn poll_once(ext: &str, cursor: &mut u64) -> Result<Poll, String> {
-    let (status, body) = (deps().feed)(ext, *cursor, FEED_WAIT_S)?;
+    let waiting = pushers().lock().unwrap_or_else(|p| p.into_inner()).get(ext).is_some_and(CallPushes::ringing);
+    let wait = if waiting { FEED_WAIT_RINGING_S } else { FEED_WAIT_S };
+    let (status, body) = (deps().feed)(ext, *cursor, wait)?;
     match status {
         200..=299 => {}
         410 if error_code(&body) == "cursor_expired" => {
@@ -236,8 +267,26 @@ pub fn poll_once(ext: &str, cursor: &mut u64) -> Result<Poll, String> {
     Ok(Poll::Again(actions.len()))
 }
 
-/// The follower heard a `call_ring` for `ext`: a stopped ring may owe its
-/// phones a replacing push.
+/// The fallback for `ext` at `now`: with no live held session (`heard` is
+/// false), a ring pushed long enough ago is replaced. Returns the pushes.
+pub fn expire_rings(ext: &str, now: i64, heard: bool) -> usize {
+    if heard {
+        return 0;
+    }
+    let due = pushers().lock().unwrap_or_else(|p| p.into_inner()).get_mut(ext).map(|p| p.expire(now)).unwrap_or_default();
+    for a in &due {
+        send(ext, a);
+    }
+    due.len()
+}
+
+/// Does a live held session follow `ext` (so a ring's end is heard)?
+fn heard_live(ext: &str) -> bool {
+    super::follower::get(ext).is_some_and(|h| h.status() == "live")
+}
+
+/// The follower heard a `call_ring` for `ext`: a stopped ring K2 pushed is
+/// replaced at once.
 pub fn ring_seen(ext: &str, d: &Value) {
     if d["ringing"].as_bool().unwrap_or(true) {
         return;
@@ -362,6 +411,7 @@ fn start(ext: &str) {
                     backoff = (backoff * 2).min(Duration::from_secs(60));
                 }
             }
+            expire_rings(&who, now_secs(), heard_live(&who));
         }
         let mut g = running().lock().unwrap_or_else(|p| p.into_inner());
         if g.get(&who).is_some_and(|s| Arc::ptr_eq(s, &mine)) {
@@ -444,6 +494,42 @@ mod tests {
         assert_eq!((m[0].state, m[0].channel_id.as_str(), m[0].started_by.as_deref()), (CallPushState::Missed, "900", Some("42")));
         assert!(p.on_feed(&[missed("1")], 146).is_empty(), "replaced once");
         assert!(p.on_ring_stopped("1", "call_ended").is_none(), "already replaced");
+        assert!(p.expire(1_000).is_empty(), "nothing left to expire");
+    }
+
+    /// The held session's ring end replaces the ring at once: accepted →
+    /// answered elsewhere, timeout → missed, the rest → ended. A ring K2
+    /// never pushed (held for Do Not Disturb) owes nothing.
+    #[test]
+    fn a_heard_ring_end_replaces_the_ring_at_once() {
+        for (reason, want) in [
+            ("accepted", CallPushState::Answered),
+            ("timeout", CallPushState::Missed),
+            ("declined", CallPushState::Ended),
+            ("cancelled", CallPushState::Ended),
+            ("call_ended", CallPushState::Ended),
+        ] {
+            let mut p = CallPushes::default();
+            p.on_feed(&[ring("7")], 100);
+            assert_eq!(p.on_ring_stopped("7", reason).map(|a| a.state), Some(want), "{reason}");
+            assert!(p.on_feed(&[missed("7")], 150).is_empty(), "{reason}: never a second replacement");
+            assert!(p.expire(1_000).is_empty(), "{reason}");
+        }
+        assert!(CallPushes::default().on_ring_stopped("9", "accepted").is_none(), "never pushed");
+    }
+
+    /// No end heard: the ring is replaced by "Call ended" once it is
+    /// RING_FALLBACK_SECS old, and not before.
+    #[test]
+    fn an_unheard_ring_expires_into_call_ended() {
+        let mut p = CallPushes::default();
+        p.on_feed(&[ring("8")], 100);
+        assert!(p.ringing());
+        assert!(p.expire(100 + RING_FALLBACK_SECS - 1).is_empty(), "too soon");
+        let e = p.expire(100 + RING_FALLBACK_SECS);
+        assert_eq!(e.iter().map(|a| a.state).collect::<Vec<_>>(), vec![CallPushState::Ended]);
+        assert!(!p.ringing());
+        assert!(p.on_feed(&[missed("8")], 200).is_empty(), "replaced once");
     }
 
     /// Sew's page: `{items, next}`; only call kinds are kept, unknown kinds

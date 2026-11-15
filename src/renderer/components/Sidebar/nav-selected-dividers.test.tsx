@@ -14,7 +14,9 @@
 //     is the one hidden, not the line under the worktree row;
 //   - the Pinned section's end rule goes under a selected last pin, and
 //     comes back while the section is folded;
-//   - the rule never reads :hover, so a hovered neighbour changes nothing;
+//   - a hovered row drops the same lines, as a hovered tab does (Rosson
+//     2026-11-15); jsdom has no pointer, so the test reads the rule with
+//     :hover standing in as a [data-test-hover] mark on the row;
 //   - inside a Garden nothing is hidden.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -94,6 +96,23 @@ import { useProjectsStore } from '@/stores/projects'
 const dir = dirname(fileURLToPath(import.meta.url))
 const globals = readFileSync(join(dir, '../../globals.css'), 'utf8')
 
+/** A selector list split at its top-level commas (not inside :is() or :has()). */
+function splitSelectors(list: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of list) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === ',' && depth === 0) {
+      out.push(cur)
+      cur = ''
+    } else cur += ch
+  }
+  out.push(cur)
+  return out.map((s) => s.trim()).filter(Boolean)
+}
+
 /** The selectors of the rule that hides the lines beside the selected row. */
 function hideSelectors(): string[] {
   const at = globals.indexOf('Row dividers beside the selected agent row')
@@ -102,12 +121,13 @@ function hideSelectors(): string[] {
   const open = globals.indexOf('{', start)
   const body = globals.slice(open, globals.indexOf('}', open))
   expect(body).toMatch(/visibility:\s*hidden/)
-  return globals.slice(start, open).split(',').map((s) => s.trim()).filter(Boolean)
+  return splitSelectors(globals.slice(start, open))
 }
 
-/** Each [data-row-divider] in the nav, top to bottom: hidden or shown. */
+/** Each [data-row-divider] in the nav, top to bottom: hidden or shown.
+ *  `:hover` reads as the [data-test-hover] mark (see hover()). */
 function lines(root: ParentNode): Array<'hidden' | 'shown'> {
-  const sels = hideSelectors()
+  const sels = hideSelectors().map((s) => s.replaceAll(':hover', '[data-test-hover]'))
   return Array.from(root.querySelectorAll('[data-row-divider]')).map((el) => (sels.some((s) => el.matches(s)) ? 'hidden' : 'shown'))
 }
 
@@ -131,6 +151,14 @@ function proj(id: string, worktree = false, pinned = false): StoreProject {
   } as unknown as StoreProject
 }
 
+/** Point at agent `name`'s row (the [data-test-hover] stand-in for :hover). */
+function hover(root: ParentNode, name: string): void {
+  root.querySelectorAll('[data-test-hover]').forEach((el) => el.removeAttribute('data-test-hover'))
+  const row = Array.from(root.querySelectorAll('[data-agent-row]')).find((el) => el.textContent?.includes(name))
+  if (!row) throw new Error(`no row for ${name}`)
+  row.setAttribute('data-test-hover', '')
+}
+
 function select(id: string): void {
   useProjectsStore.setState({ activeProjectId: id, activeWorkspaceId: `ws-${id}` })
 }
@@ -143,14 +171,48 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('the selected agent row drops the dividers around it (Agents nav)', () => {
-  it('the rule is keyed on the selection only, never on hover', () => {
+  it('the rule is keyed on the selected row or the hovered one, like the tabs', () => {
     const sels = hideSelectors()
     expect(sels).toHaveLength(4)
     for (const s of sels) {
-      expect(s).toContain('[data-agent-row][aria-current="true"]')
-      expect(s).not.toContain(':hover')
+      expect(s).toContain('[data-agent-row]:is([aria-current="true"], :hover)')
       expect(s).toContain(':not([data-zen-root] *)')
     }
+  })
+
+  it('a hovered middle row: no line under it, none over it; the others show', () => {
+    const { container } = render(<Sidebar />)
+    hover(container, 'Agent c')
+    expect(lines(container)).toEqual(['shown', 'hidden', 'hidden', 'shown'])
+  })
+
+  it('hovering one row while another is selected drops the lines beside both', () => {
+    select('a')
+    const { container } = render(<Sidebar />)
+    hover(container, 'Agent d')
+    // a's line goes (selected); c's and d's lines go (d hovered).
+    expect(lines(container)).toEqual(['hidden', 'shown', 'hidden', 'hidden'])
+  })
+
+  it('a hovered first or last row hides only the one line it touches', () => {
+    const { container } = render(<Sidebar />)
+    hover(container, 'Agent a')
+    expect(lines(container)).toEqual(['hidden', 'shown', 'shown', 'shown'])
+    hover(container, 'Agent e')
+    expect(lines(container)).toEqual(['shown', 'shown', 'shown', 'hidden'])
+  })
+
+  it('a hovered last pin drops the Pinned section\'s end rule', () => {
+    useProjectsStore.setState({ projects: [proj('a', false, true), proj('b', false, true), proj('c'), proj('d')] })
+    const { container } = render(<Sidebar />)
+    hover(container, 'Agent b')
+    expect(lines(container)).toEqual(['hidden', 'shown'])
+  })
+
+  it('inside a Garden a hovered row hides nothing', () => {
+    const { container } = render(<div data-zen-root=""><Sidebar /></div>)
+    hover(container, 'Agent c')
+    expect(lines(container)).toEqual(['shown', 'shown', 'shown', 'shown'])
   })
 
   it('a middle row: no line under it, none over it; the others show', () => {

@@ -1479,10 +1479,24 @@ describe('the selected agent row drops the dividers around it (Home nav)', () =>
     const at = globals.indexOf('Row dividers beside the selected agent row')
     if (at < 0) throw new Error('missing the "Row dividers beside the selected agent row" rule')
     const start = globals.indexOf('*/', at) + 2
-    return globals.slice(start, globals.indexOf('{', start)).split(',').map((s) => s.trim()).filter(Boolean)
+    // Split at top-level commas only: the rule's :is(…, …) holds commas too.
+    let depth = 0
+    let cur = ''
+    const out: string[] = []
+    for (const ch of globals.slice(start, globals.indexOf('{', start))) {
+      if (ch === '(') depth++
+      if (ch === ')') depth--
+      if (ch === ',' && depth === 0) {
+        out.push(cur)
+        cur = ''
+      } else cur += ch
+    }
+    out.push(cur)
+    return out.map((s) => s.trim()).filter(Boolean)
   }
+  // jsdom has no pointer: `:hover` reads as a [data-test-hover] mark.
   function lines(): Array<'hidden' | 'shown'> {
-    const sels = hideSelectors()
+    const sels = hideSelectors().map((s) => s.replaceAll(':hover', '[data-test-hover]'))
     return Array.from(homeSidebar().querySelectorAll('[data-home-row] > [data-row-divider]')).map((el) =>
       sels.some((s) => el.matches(s)) ? 'hidden' : 'shown',
     )
@@ -1525,6 +1539,19 @@ describe('the selected agent row drops the dividers around it (Home nav)', () =>
     expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
     // Under Nova (pin), none under the last pin, under Bee.
     expect(lines()).toEqual(['hidden', 'shown'])
+  })
+
+  it('a hovered row drops the lines beside it too, like a hovered tab (Rosson 2026-11-15)', () => {
+    rowsOf(['Nova', 'Cortana', 'Bee', 'Cee'])
+    useProjectsStore.getState().setActiveProject('pn')
+    render(<Shell />)
+    // Nova selected: only the line under it goes.
+    expect(lines()).toEqual(['hidden', 'shown', 'shown'])
+    rowOf('Bee').setAttribute('data-test-hover', '')
+    // Bee hovered as well: the lines over and under Bee go.
+    expect(lines()).toEqual(['hidden', 'hidden', 'hidden'])
+    rowOf('Bee').removeAttribute('data-test-hover')
+    expect(lines()).toEqual(['hidden', 'shown', 'shown'])
   })
 })
 

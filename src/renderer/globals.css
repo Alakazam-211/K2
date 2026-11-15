@@ -1598,13 +1598,14 @@ html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not(
      open and its last row is the selected one: that rule touches the row.
    Each list wraps a row and its line in a data-nav-row box (NavRowDivider).
    Home's captions carry no line, so a row beside one has none to lose.
-   Hidden, not removed, so no row moves. Hover changes nothing here, so a
-   pointer on a neighbouring row never flickers a line. Gardens keep their
-   own look. */
-[data-agent-row][aria-current="true"] + [data-row-divider]:not([data-zen-root] *),
-[data-nav-row]:has([data-agent-row][aria-current="true"]:last-child) > [data-row-divider]:not([data-zen-root] *),
-[data-nav-row]:has(+ [data-nav-row] [data-agent-row][aria-current="true"]) > [data-row-divider]:not([data-zen-root] *),
-[data-nav-section]:has(> [aria-expanded="true"]):has([data-nav-row]:last-child [data-agent-row][aria-current="true"]:last-child) > [data-row-divider]:not([data-zen-root] *) {
+   A hovered row drops the same lines, as a hovered tab does (Rosson
+   2026-11-15): the rule matches the selected row or the one under the
+   pointer. Hidden, not removed, so no row moves. Gardens keep their own
+   look. */
+[data-agent-row]:is([aria-current="true"], :hover) + [data-row-divider]:not([data-zen-root] *),
+[data-nav-row]:has([data-agent-row]:is([aria-current="true"], :hover):last-child) > [data-row-divider]:not([data-zen-root] *),
+[data-nav-row]:has(+ [data-nav-row] [data-agent-row]:is([aria-current="true"], :hover)) > [data-row-divider]:not([data-zen-root] *),
+[data-nav-section]:has(> [aria-expanded="true"]):has([data-nav-row]:last-child [data-agent-row]:is([aria-current="true"], :hover):last-child) > [data-row-divider]:not([data-zen-root] *) {
   visibility: hidden;
 }
 

@@ -40,15 +40,16 @@ fn signals() -> &'static (Vec<f32>, Vec<f32>) {
 }
 
 /// Run `blocks` blocks through `apm` (render first, as the engine does);
-/// `before(b, apm)` runs before block `b`.
+/// `before(b, apm)` runs before block `b`. Past the signals' end, they
+/// repeat.
 fn run(apm: &mut Apm, blocks: usize, mut before: impl FnMut(usize, &mut Apm)) -> Vec<f32> {
     let (far, mic) = signals();
     let mut out = vec![0.0f32; blocks * B];
     for b in 0..blocks {
         before(b, apm);
-        let r = b * B..(b + 1) * B;
-        apm.render(&far[r.clone()]);
-        apm.capture(&mic[r.clone()], &mut out[r]);
+        let i = (b % BLOCKS) * B..(b % BLOCKS + 1) * B;
+        apm.render(&far[i.clone()]);
+        apm.capture(&mic[i], &mut out[b * B..(b + 1) * B]);
     }
     out
 }
@@ -186,7 +187,10 @@ fn a_9_ms_stage_is_bypassed_on_its_second_slow_call_retried_twice_then_bypassed_
 
     // `seen[b]` is the reading before block b.
     let a = seen[s1];
-    assert!(a.active && a.strikes == 0, "one slow call is not a strike: {a:?}");
+    assert!(
+        a.active && a.strikes == 0,
+        "one slow call is not a strike: {a:?}"
+    );
     assert!(a.max_block_us >= 9_000, "{a:?}");
     // The flag is set by the second slow call itself.
     let a = seen[s1 + 1];
@@ -745,8 +749,8 @@ fn no_dtx(processing: ProcessingConfig) -> CoreConfig {
 fn the_stage_does_not_move_ts48k() {
     let (_, mic) = signals();
     let stamps = |stage: Option<Box<dyn CaptureStage>>, clock: StageClock| -> Vec<u32> {
-        let mut core = Core::with_stage_clock(no_dtx(ProcessingConfig::off()), stage, clock)
-            .expect("core");
+        let mut core =
+            Core::with_stage_clock(no_dtx(ProcessingConfig::off()), stage, clock).expect("core");
         let mut ts = Vec::new();
         for b in mic.as_chunks::<B>().0.iter().take(400) {
             if let Some(f) = core.capture_block(b) {
@@ -764,7 +768,11 @@ fn the_stage_does_not_move_ts48k() {
         none
     );
     assert_eq!(stamps(Some(Box::new(slow)), script.clock()), none);
-    assert_eq!(script.calls.load(Ordering::Relaxed), 2, "struck on the second");
+    assert_eq!(
+        script.calls.load(Ordering::Relaxed),
+        2,
+        "struck on the second"
+    );
 }
 
 #[test]

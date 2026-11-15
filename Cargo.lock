@@ -4946,6 +4946,23 @@ dependencies = [
 [[package]]
 name = "kessel-audio"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e152311680e06f662f77b668fb93e4bc4cabe4844e6c8b0ef9397b366a88fab3"
+dependencies = [
+ "block2",
+ "bytes",
+ "cpal",
+ "crossbeam-queue",
+ "objc2",
+ "ropus",
+ "rtrb",
+ "rubato",
+ "sonora",
+]
+
+[[package]]
+name = "kessel-audio"
+version = "0.2.0"
 dependencies = [
  "block2",
  "bytes",
@@ -8650,7 +8667,7 @@ dependencies = [
  "hmac 0.12.1",
  "http",
  "jni 0.21.1",
- "kessel-audio",
+ "kessel-audio 0.1.0",
  "kessel-video",
  "png 0.18.1",
  "prost 0.14.4",

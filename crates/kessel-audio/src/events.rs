@@ -1,6 +1,7 @@
 //! Events, levels and device descriptions.
 
 use crate::error::AudioError;
+use crate::stage::CaptureStageStats;
 use crossbeam_queue::ArrayQueue;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -101,6 +102,11 @@ pub enum Event {
     Error(AudioError),
     /// New levels (about every 50 ms).
     Levels(Levels),
+    /// The capture stage changed state: it was bypassed (over budget, or a
+    /// fault), retried, or bypassed for good. Sent when `active`,
+    /// `bypassed`, `strikes` or `permanent` change; the same reading is in
+    /// [`crate::Stats::capture_stage`].
+    CaptureStage(CaptureStageStats),
 }
 
 /// The receiving end of the event queue (bounded, lock-free). When it is

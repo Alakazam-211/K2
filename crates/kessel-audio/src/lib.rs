@@ -12,6 +12,9 @@
 //! - **echo cancellation, noise suppression and gain control** (sonora, a
 //!   port of WebRTC's audio processing), with the playback mix as the echo
 //!   reference;
+//! - **a capture stage** of your own (a noise-removal model, say) between
+//!   echo cancellation and gain control, held to a time budget with a
+//!   bypass that never shifts the timing ([`CaptureStage`]);
 //! - **Opus** encode and decode (ropus), 48 kHz mono, 20 ms frames, with
 //!   the caller's bitrate, FEC, DTX and complexity;
 //! - **a jitter buffer per participant** with loss concealment and FEC
@@ -94,6 +97,7 @@ mod null;
 mod phone;
 mod pipeline;
 mod resample;
+mod stage;
 mod stats;
 #[cfg(feature = "cpal")]
 mod system;
@@ -127,4 +131,5 @@ pub use frame::{
 pub use jitter::JitterConfig;
 #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
 pub use phone::{OsEffects, OsVoiceConfig};
+pub use stage::{CaptureStage, CaptureStageStats, StageBypassReason, MAX_STAGE_LATENCY_SAMPLES};
 pub use stats::{CaptureStats, ParticipantStats, Stats};

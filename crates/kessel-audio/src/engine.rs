@@ -124,7 +124,7 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Shared {
     pub(crate) fn new(cfg: &EngineConfig) -> Arc<Shared> {
         let core_cfg = CoreConfig {
-            processing: cfg.processing.clone(),
+            processing: cfg.processing.settings(),
             encoder: cfg.encoder,
             jitter: cfg.jitter.clone(),
             initial_ts48k: cfg.initial_ts48k,
@@ -258,6 +258,10 @@ impl AudioEngine {
             all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
         )))]
         let _ = session_active;
+        let mut cfg = cfg;
+        // The stage moves to the processing thread on its own; the rest of
+        // the config is shared.
+        let stage = cfg.processing.capture_stage.take();
         let shared = Shared::new(&cfg);
         let core_cfg = shared.core_cfg.clone();
         let engine = AudioEngine {
@@ -271,7 +275,7 @@ impl AudioEngine {
         let s = shared.clone();
         let dsp = std::thread::Builder::new()
             .name("kessel-audio-dsp".into())
-            .spawn(move || match Core::new(core_cfg) {
+            .spawn(move || match Core::with_stage(core_cfg, stage) {
                 Ok(core) => {
                     let _ = ready_tx.send(Ok(()));
                     dsp_main(s, core, poll);
@@ -552,8 +556,12 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
     let mut out = [0.0f32; BLOCK_SAMPLES];
     let mut soft_clock: Option<Instant> = None;
     let mut publish = false;
+    // When the last capture block went through processing (a gap of more
+    // than CAPTURE_GAP resets the capture stage).
+    let mut last_capture: Option<Instant> = None;
     const BLOCK: Duration = Duration::from_millis(10);
     const MAX_CAPTURE_BLOCKS_PER_PASS: usize = 8;
+    const CAPTURE_GAP: Duration = Duration::from_secs(1);
 
     while !shared.stop.load(Ordering::Acquire) {
         while let Some(c) = shared.ctrl.pop() {
@@ -576,6 +584,12 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
                     }
                 }
                 Ctrl::CaptureIo(c) => {
+                    // A capture stream (re)starts: the stage's state carries
+                    // audio from before it.
+                    if c.is_some() {
+                        core.reset_capture_stage();
+                        last_capture = None;
+                    }
                     if let Some(old) = std::mem::replace(&mut cap, c) {
                         let _ = shared.garbage.push(Garbage::Capture(old));
                     }
@@ -650,6 +664,13 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
                 if c.rs.process(&c.buf[..need], &mut block).is_err() {
                     break;
                 }
+                if !core.is_paused() {
+                    if last_capture.is_some_and(|t| now.saturating_duration_since(t) > CAPTURE_GAP)
+                    {
+                        core.reset_capture_stage();
+                    }
+                    last_capture = Some(now);
+                }
                 if let Some(f) = core.capture_block(&block) {
                     if shared.frames.push(f).is_ok() {
                         core.capture_stats.frames_sent += 1;
@@ -660,7 +681,9 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
             }
         }
 
-        if core.take_levels_due() {
+        // A stage bypass or retry is published at once, not with the next
+        // levels.
+        if core.take_levels_due() | core.take_stage_changed() {
             publish = true;
         }
         if publish {
@@ -731,7 +754,10 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
         }
     };
 
-    let mut last_levels = 0u64;
+    let mut last_version = 0u64;
+    let mut last_levels_seq = 0u64;
+    type StageKey = (bool, Option<crate::stage::StageBypassReason>, u32, bool);
+    let mut last_stage: Option<StageKey> = None;
     while !shared.stop.load(Ordering::Acquire) {
         while shared.garbage.pop().is_some() {}
 
@@ -773,15 +799,33 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
             p.tick(&shared);
         }
 
-        let levels = {
+        let (levels, stage) = {
             let g = lock(&shared.snapshot);
-            (g.version != last_levels).then(|| {
-                last_levels = g.version;
-                g.levels.clone()
-            })
+            if g.version == last_version {
+                (None, None)
+            } else {
+                last_version = g.version;
+                // A snapshot published for a stage change carries the same
+                // levels reading: send it once.
+                let levels = (g.levels.seq != last_levels_seq).then(|| {
+                    last_levels_seq = g.levels.seq;
+                    g.levels.clone()
+                });
+                (levels, g.stats.capture_stage)
+            }
         };
         if let Some(l) = levels {
             shared.emit(Event::Levels(l));
+        }
+        if let Some(s) = stage {
+            let key = (s.active, s.bypassed, s.strikes, s.permanent);
+            if last_stage != Some(key) {
+                // The first reading is the starting state, not a change.
+                if last_stage.is_some() || !s.active {
+                    shared.emit(Event::CaptureStage(s));
+                }
+                last_stage = Some(key);
+            }
         }
         std::thread::sleep(Duration::from_millis(10));
     }

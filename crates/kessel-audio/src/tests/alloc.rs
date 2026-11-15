@@ -132,7 +132,7 @@ fn report_dependency_allocations_per_second() {
     let _cpu = crate::tests::shared_cpu();
     let mut rng = crate::testkit::Rng::new(77);
     let x = crate::testkit::talker_track(&crate::testkit::TALKERS[0], &mut rng, 48_000 * 5);
-    let mut apm = Apm::new(&ProcessingConfig::default());
+    let mut apm = Apm::new(ProcessingConfig::default());
     let mut enc = OpusEnc::new(EncoderCfg::default()).unwrap();
     let mut dec = OpusDec::new().unwrap();
     let mut out = [0.0f32; BLOCK_SAMPLES];
@@ -165,5 +165,203 @@ fn report_dependency_allocations_per_second() {
         apm_n as f64 / 5.0,
         enc_n as f64 / 5.0,
         dec_n as f64 / 5.0
+    );
+}
+
+/// The capture stage's own path (the runner, its delay line and timing, the
+/// stage) allocates nothing after construction, from the first block: 60 s
+/// of the RNNoise-like stage (which plans its FFTs in its first `reset`,
+/// done when the core is built) with resets every 5 s and mode flips every
+/// 3 s, then a scripted stage through a budget bypass, a retry and a fault.
+/// Counting starts right after construction. No sonora here, so any
+/// allocation counted would be the hook's.
+#[test]
+fn the_capture_stage_path_does_not_allocate() {
+    use crate::tests::stages::{RnnLike, Scripted};
+    use std::sync::atomic::Ordering;
+    let _cpu = crate::tests::shared_cpu();
+    let mut rng = crate::testkit::Rng::new(78);
+    let x = crate::testkit::talker_track(&crate::testkit::TALKERS[1], &mut rng, 48_000 * 61);
+    let blocks = x.as_chunks::<BLOCK_SAMPLES>().0;
+    let mut out = [0.0f32; BLOCK_SAMPLES];
+    let bare = || ProcessingConfig::off().with_stage_fallback_noise_suppression(None);
+
+    let (rnn, on) = RnnLike::new(3);
+    let mut apm = Apm::with_stage(bare(), Box::new(rnn)).expect("stage");
+    let ((), n) = allocations(|| {
+        for (i, b) in blocks[100..].iter().enumerate() {
+            if i % 500 == 499 {
+                apm.reset_stage();
+            }
+            if i % 300 == 299 {
+                on.fetch_xor(true, Ordering::Relaxed);
+            }
+            apm.capture(b, &mut out);
+            if i % 5 == 0 {
+                std::hint::black_box(apm.stage_stats());
+                std::hint::black_box(apm.take_stage_changed());
+            }
+        }
+    });
+    let s = apm.stage_stats().expect("stage stats");
+    assert!(s.active && s.bypassed.is_none(), "{s:?}");
+    assert_eq!(n, 0, "the RNNoise-like stage path allocated {n} times");
+
+    // A budget strike, a retry, then a fault; with the step-down suppressor
+    // (`floor`) and without.
+    let cycle = |apm: &mut Apm, script: &crate::tests::stages::Script, out: &mut [f32]| {
+        for (i, b) in blocks[..2_600].iter().enumerate() {
+            match i {
+                100 => script.sleep_us.store(9_000, Ordering::Relaxed),
+                101 => script.sleep_us.store(0, Ordering::Relaxed),
+                2_500 => {
+                    let next = script.calls.load(Ordering::Relaxed) + 1;
+                    script.nan_on.store(next, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+            apm.capture(b, out);
+            std::hint::black_box(apm.stage_stats());
+        }
+    };
+    let (stage, script) = Scripted::new();
+    let mut apm = Apm::with_stage(bare(), Box::new(stage)).expect("stage");
+    let ((), n) = allocations(|| cycle(&mut apm, &script, &mut out));
+    let s = apm.stage_stats().expect("stage stats");
+    assert_eq!(
+        s.strikes, 2,
+        "a budget strike, a retry, then a fault: {s:?}"
+    );
+    assert!(s.permanent, "{s:?}");
+    // Once before the first block, once for the retry.
+    assert_eq!(script.resets.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        n, 0,
+        "bypass, retry and fault allocated {n} times on the audio path"
+    );
+
+    // The step-down floor: its suppressor is a sonora instance, which
+    // allocates on its own as sonora's noise suppression always has. The
+    // switching adds nothing: the count equals the same suppressor's alone
+    // on the same blocks.
+    let (stage, script) = Scripted::new();
+    let mut apm = Apm::with_stage(ProcessingConfig::off(), Box::new(stage)).expect("stage");
+    let ((), floor) = allocations(|| cycle(&mut apm, &script, &mut out));
+    let s = apm.stage_stats().expect("stage stats");
+    assert!(s.permanent && s.fallback_noise_suppression, "{s:?}");
+    let mut ns = Apm::new(crate::apm::ApmSettings {
+        noise_suppression: Some(crate::apm::NoiseSuppressionStrength::Moderate),
+        ..bare().settings()
+    });
+    let ((), alone) = allocations(|| {
+        for b in blocks[..2_600].iter() {
+            ns.capture(b, &mut out);
+        }
+    });
+    eprintln!(
+        "[alloc] step-down suppressor, 26 s: with the stage and its switching {floor}, sonora's noise suppression alone {alone} ({:.0}/s)",
+        alone as f64 / 26.0
+    );
+    assert_eq!(
+        floor,
+        alone,
+        "the step-down switching allocated {} times",
+        floor as i64 - alone as i64
+    );
+}
+
+/// The whole processing thread's work (render, capture, encode, decode and
+/// mix) for 60 s of duplex after a second of warm-up: a stage adds no
+/// allocation. sonora and Opus allocate on their own (reported above), so
+/// the bar is the count with a stage against the count without.
+#[test]
+fn a_capture_stage_adds_no_allocations_to_the_processing_thread() {
+    use crate::tests::stages::{PassThrough, RnnLike};
+    let _cpu = crate::tests::shared_cpu();
+    let total = 48_000 * 61;
+    let mut rng = crate::testkit::Rng::new(79);
+    let far = crate::testkit::talker_track(&crate::testkit::TALKERS[0], &mut rng, total);
+    let near = crate::testkit::talker_track(&crate::testkit::TALKERS[1], &mut rng, total);
+    let mut mic = crate::testkit::delay(&far, 60 * 48);
+    crate::testkit::scale(&mut mic, 0.25);
+    crate::testkit::add_into(&mut mic, &near);
+    let sched = schedule(
+        &encode_remote(&far, EncoderCfg::default()),
+        Net {
+            base_ms: 30.0,
+            ..Net::default()
+        },
+    );
+    let count = |processing: ProcessingConfig, stage: Option<Box<dyn crate::CaptureStage>>| {
+        let cfg = core_cfg(processing);
+        let mut core = Core::with_stage(cfg.clone(), stage).expect("core");
+        core.add(Participant::new(FAR_ID, &cfg).expect("participant"))
+            .unwrap_or_else(|_| panic!("add participant"));
+        let t0 = Instant::now();
+        let mut next = 0usize;
+        let mut out = [0.0f32; BLOCK_SAMPLES];
+        let mut frames = 0u64;
+        let mut step = |core: &mut Core, b: usize| {
+            let now_us = b as u64 * 10_000;
+            while next < sched.len() && sched[next].0 <= now_us {
+                let (at, p) = &sched[next];
+                core.insert(RecvFrame {
+                    participant: FAR_ID,
+                    payload: p.payload.clone(),
+                    seq: p.seq,
+                    ts48k: p.ts,
+                    arrival: t0 + Duration::from_micros(*at),
+                });
+                next += 1;
+            }
+            core.render_block(t0 + Duration::from_micros(now_us), &mut out);
+            let r = b * BLOCK_SAMPLES..(b + 1) * BLOCK_SAMPLES;
+            core.capture_block(&mic[r]).is_some()
+        };
+        for b in 0..100 {
+            frames += step(&mut core, b) as u64;
+        }
+        let ((), n) = allocations(|| {
+            for b in 100..total / BLOCK_SAMPLES {
+                frames += step(&mut core, b) as u64;
+            }
+        });
+        let mut stats = Stats::default();
+        core.fill_stats(&mut stats);
+        if let Some(s) = stats.capture_stage {
+            assert!(s.active && s.bypassed.is_none(), "{s:?}");
+        }
+        assert!(frames > 2_000, "only {frames} frames");
+        n
+    };
+    let none = count(ProcessingConfig::default(), None);
+    let pass = count(
+        ProcessingConfig::default(),
+        Some(Box::new(PassThrough::new())),
+    );
+    let rnn = count(
+        ProcessingConfig::default()
+            .with_noise_suppression(None)
+            .with_stage_fallback_noise_suppression(None),
+        Some(Box::new(RnnLike::new(4).0)),
+    );
+    // With the step-down suppressor running beside the stage (reported: it
+    // is sonora's noise suppression, moved out of line).
+    let floor = count(
+        ProcessingConfig::default().with_noise_suppression(None),
+        Some(Box::new(RnnLike::new(4).0)),
+    );
+    eprintln!(
+        "[alloc] processing thread, 60 s duplex: no stage {none}, pass-through stage {pass}, RNNoise-like stage (NS off) {rnn}, the same with the step-down suppressor {floor}"
+    );
+    assert!(
+        pass <= none,
+        "a pass-through stage added {} allocations",
+        pass - none
+    );
+    assert!(
+        rnn <= none,
+        "the RNNoise-like stage added {} allocations",
+        rnn - none
     );
 }

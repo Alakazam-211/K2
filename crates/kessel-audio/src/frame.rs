@@ -38,6 +38,10 @@ pub(crate) const BLOCK_SAMPLES: usize = 480;
 ///   so its `ts48k` has advanced across the gap.
 /// - **Mute:** with capture disabled ([`crate::AudioEngine::set_capture`])
 ///   no frames are pushed, and `ts48k` keeps advancing with the capture clock.
+/// - **Capture stage:** `ts48k` does not include a
+///   [`crate::CaptureStage`]'s latency. The stamps are the same with or
+///   without a stage, and through a bypass; the audio in a frame is
+///   [`crate::CaptureStageStats::latency_samples`] older than its stamp.
 /// - **Wrap-around:** `ts48k` is a `u32` that wraps (modulo 2^32, about
 ///   24.8 hours at 48 kHz), like an RTP timestamp. Compare timestamps with
 ///   wrapping arithmetic (`a.wrapping_sub(b) as i32`). The first value is

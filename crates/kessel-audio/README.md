@@ -31,7 +31,7 @@ null device and fake devices stand in for it.
 ## What it does
 
 ```text
- mic ─► resample to 48 kHz ─► AEC3 / NS / AGC2 ─► Opus encode ─► EncodedFrame ─► (your transport)
+ mic ─► resample to 48 kHz ─► AEC3 / NS ─► [your stage] ─► AGC2 ─► Opus encode ─► EncodedFrame ─► (your transport)
                                    ▲
                                    │ echo reference = exactly what is played
  speaker ◄─ resample ◄─ mix ◄─ per-participant jitter buffer + Opus decode ◄─ RecvFrame ◄─ (your transport)
@@ -42,6 +42,7 @@ null device and fake devices stand in for it.
 | Devices | cpal: CoreAudio, WASAPI, ALSA (and PulseAudio with the `pulseaudio` feature). Device lists, hot-plug polling, switching, fallback to the default when a chosen device goes away. A **null device** runs the whole pipeline without hardware. On iOS and Android, the **phone's own voice processing** (see [Phones](#phones)). |
 | Resampling | rubato (FFT, synchronous), device rate ↔ 48 kHz in 10 ms blocks. Skipped when the device runs at 48 kHz. |
 | Echo, noise, gain | sonora 0.2.0 (a pure-Rust port of WebRTC's audio processing): AEC3, noise suppression, AGC2, high-pass filter. The playback mix is the echo reference. |
+| Capture stage | Optional: your own processing (a noise-removal model, say) between echo cancellation and gain control, with a time budget and a bypass that keeps the timing (see [Capture stage](#capture-stage)). |
 | Opus | ropus (a pure-Rust port of the reference codec, bit-exact): 48 kHz mono, 20 ms frames; bitrate, in-band FEC, DTX and complexity from the caller, changeable mid-call. |
 | Jitter buffer | One per participant: adaptive delay (40 to 200 ms by default), reordering, duplicates, FEC recovery from the next packet, packet-loss concealment, DTX gaps, stall recovery and delay trimming. |
 | Mixing and levels | Sum with a soft limiter; levels and a speaking flag about every 50 ms for this device and each participant. |
@@ -65,7 +66,7 @@ it leaves and must hand over only `RecvFrame`s that decrypted and verified.
 
 ```toml
 [dependencies]
-kessel-audio = "0.1"
+kessel-audio = "0.2"
 ```
 
 This runs as it stands, with no audio hardware: a test tone stands in for the
@@ -91,7 +92,7 @@ fn main() -> Result<(), kessel_audio::AudioError> {
     };
     // DTX off: a frame every 20 ms, even if the tone is suppressed as noise.
     let encoder = EncoderCfg { dtx: false, ..EncoderCfg::default() };
-    let engine = AudioEngine::start(EngineConfig { encoder, ..EngineConfig::null(device) })?;
+    let engine = AudioEngine::start(EngineConfig::null(device).with_encoder(encoder))?;
 
     let frames = engine.capture_frames();
     let events = engine.events();
@@ -151,6 +152,43 @@ nothing to send are not pushed, so the next frame's `ts48k` has advanced
 across the gap. Muting stops frames; time keeps advancing.
 A suspend (below) stops frames too, and the first frame after it has a
 `ts48k` advanced by the suspended time, like the end of a DTX gap.
+`ts48k` does not include a capture stage's latency: the stamps are the same
+with or without a stage, so the audio in a frame is `latency_samples` older
+than its stamp (`Stats::capture_stage` reports the latency).
+
+### Capture stage
+
+`ProcessingConfig::with_capture_stage(Box::new(stage))` puts your own
+processing between echo cancellation and gain control. The stage implements
+`CaptureStage`: `process(&mut [f32; 480])` in place on 10 ms blocks of 48 kHz
+mono, a fixed `latency_samples()`, and `reset()`. Turn sonora's noise
+suppression off (`with_noise_suppression(None)`) if the stage removes noise:
+the engine doesn't decide that for you. With no stage, the pipeline is bit for
+bit what 0.1 ran.
+
+```text
+ mic ─► 48 kHz ─► high-pass ─► AEC3 (─► NS) ─► stage ─► AGC2 + limiter ─► levels / VAD ─► Opus
+```
+
+The stage runs on the processing thread, so the engine holds it to a budget:
+
+- a call that takes **9 ms or more**, or a **99th percentile over 6 ms** across
+  the last 100 calls, is a strike: the stage is **bypassed**, and the echo
+  canceller's output goes on **delayed by the stage's latency**, so the
+  timing never shifts. The stage is retried after 10 s of capture (reset
+  first; its output is used again once its latency has filled), and the
+  third strike bypasses it for good;
+- a **panic** or a **NaN or infinite** sample is a fault: bypassed for good.
+
+Capture never stops for it: the worst case is one late block. While the
+stage is bypassed, sonora's noise suppression stands in (the step-down floor,
+`stage_fallback_noise_suppression`, Moderate by default, when
+`noise_suppression` is off), crossfaded in and out over 10 ms. The state is in
+`Stats::capture_stage` (`active`, the sticky `bypassed` reason, `strikes`,
+`permanent`, `fallback_noise_suppression`, timings) and arrives as
+`Event::CaptureStage` when it changes. `reset()` is called once on the
+processing thread before the first block, when the capture stream restarts,
+after a capture gap of more than a second and before a retry.
 
 ### Threads
 

@@ -18859,10 +18859,13 @@ print(json.dumps(b))' "${rts[@]}")"
 }
 
 # N6: addresses K2 won't send to (kept hashed; a search names the address).
+# Flags go anywhere. The first word is the verb when it is one (an address
+# is never "list", "add" or "rm"); else it must be an address (it has an @),
+# which lists that address's entries. Any other first word is the usage
+# error, so a misspelt verb never runs as a list.
 cmd_notifications_suppressions() {
-    local verb="${1:-list}"
-    [ $# -gt 0 ] && shift
-    local addr="" sender="" all=0 json_out=0 limit=""
+    local verb="" addr="" sender="" all=0 json_out=0 limit=""
+    local usage="usage: k2 notifications email suppressions [list] [<address>] [--limit N] [--json] | add <address> [--sender S] | rm <address> [--sender S|--all]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --sender) sender="${2:-}"; shift 2 ;;
@@ -18870,9 +18873,19 @@ cmd_notifications_suppressions() {
             --limit) limit="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
-            *) [ -z "$addr" ] || { echo "one address at a time" >&2; exit 2; }; addr="$1"; shift ;;
+            *)
+                if [ -z "$verb" ] && [ -z "$addr" ]; then
+                    case "$1" in
+                        list|ls|add|rm|remove) verb="$1"; shift; continue ;;
+                        *@*) ;;
+                        *) echo "$usage" >&2; exit 2 ;;
+                    esac
+                fi
+                [ -z "$addr" ] || { echo "one address at a time" >&2; exit 2; }
+                addr="$1"; shift ;;
         esac
     done
+    verb="${verb:-list}"
     case "$verb" in
         list|ls)
             local q=""
@@ -18911,7 +18924,6 @@ print(json.dumps(b))')"
                 printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print("removed %s suppression(s)" % json.load(sys.stdin).get("removed"))'
             fi
             ;;
-        *) echo "usage: k2 notifications email suppressions [list] [<address>] | add <address> [--sender S] | rm <address> [--sender S|--all]" >&2; exit 2 ;;
     esac
 }
 

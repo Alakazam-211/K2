@@ -205,6 +205,21 @@ describe('Say something', () => {
     }
   })
 
+  it('the row names who said its last line, also after you follow someone else', async () => {
+    const t = new ScriptedTransport()
+    await open(t)
+    roster(t, [...everyone, member('person:sam', 'Sam', { cursor: caret('A table.') })])
+    fireEvent.click(await screen.findByTestId('lv-follow'))
+    await screen.findByTestId('lv-say-field')
+    act(() => t.push({ type: 'say', id: 'say-9', from: { id: 'agent:atlas', name: 'Atlas', kind: 'agent', colour: '#7c3aed' }, to: { id: SELF, name: 'Rosson', kind: 'person', colour: null }, text: 'On it.', at: null, time: null, reply_to: null, at_ms: 30 }))
+    await waitFor(() => expect(screen.getByTestId('lv-say-last').textContent).toBe('Atlas → You: On it.'))
+    const row = within(screen.getByTestId('ed-live-panel')).getByTestId('lv-person-person:sam')
+    fireEvent.click(row.closest('button') ?? row.querySelector('button') ?? row)
+    await waitFor(() => expect(screen.getByTestId('lv-follow').getAttribute('aria-label')).toBe('Following Sam · Stop'))
+    expect(screen.getByTestId('lv-say-field').getAttribute('placeholder')).toBe('Say something to Sam…')
+    expect(screen.getByTestId('lv-say-last').textContent).toBe('Atlas → You: On it.')
+  })
+
   it('rate limited: says so, keeps the words and offers Send again', async () => {
     post.mockImplementationOnce(async () => {
       throw Object.assign(new Error('rate limited'), { status: 429, code: 'rate_limited', body: { error: 'rate limited', retryAfterMs: 3000 } })

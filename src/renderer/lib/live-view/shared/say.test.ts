@@ -55,4 +55,11 @@ describe('say', () => {
     expect(sayReducer(SAY_IDLE, { type: 'send' })).toBe(SAY_IDLE)
     expect(sayReducer(sayReducer(SAY_IDLE, { type: 'draft', text: '   ' }), { type: 'send' }).status).toBe('idle')
   })
+
+  it('the last line names who said it, even after you follow someone else', () => {
+    let s: SayState = sayReducer(SAY_IDLE, { type: 'reply', text: 'On it.', name: 'Atlas' })
+    expect(sayView(s, { ...ctx, toName: 'Sam' }).line).toEqual({ tone: 'plain', who: 'Atlas → You', text: 'On it.' })
+    s = sayReducer(sayReducer(sayReducer(s, { type: 'draft', text: 'Here?' }), { type: 'send' }), { type: 'sent', name: 'Atlas' })
+    expect(sayView(s, { ...ctx, toName: 'Sam' }).line).toEqual({ tone: 'plain', who: 'You → Atlas', text: 'Here?' })
+  })
 })

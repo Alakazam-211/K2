@@ -73,15 +73,16 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
     const fresh = snap.messages.slice(seen.current)
     seen.current = snap.messages.length
     const reply = [...fresh].reverse().find((m) => m.to === snap.self)
-    if (reply) dispatchSay({ type: 'reply', text: reply.text })
-  }, [snap.messages, snap.self])
+    // The line names who said it, whoever the row speaks to next.
+    if (reply) dispatchSay({ type: 'reply', text: reply.text, name: personById(snap.people, reply.from)?.name })
+  }, [snap.messages, snap.self]) // eslint-disable-line react-hooks/exhaustive-deps
   const send = useCallback(
     (again: boolean) => {
       if (!sayTo) return
       const text = say.draft.trim()
       dispatchSay({ type: again ? 'send-again' : 'send' })
       const address = config.sayAddress(snap, sayTo.id)
-      void source.say({ to: sayTo.id, text, address: address?.address ?? null }).then((r) => dispatchSay(r.ok ? { type: 'sent' } : { type: 'failed', reason: r.reason }))
+      void source.say({ to: sayTo.id, text, address: address?.address ?? null }).then((r) => dispatchSay(r.ok ? { type: 'sent', name: sayTo.name } : { type: 'failed', reason: r.reason }))
     },
     [sayTo, say.draft, source, snap, config],
   )

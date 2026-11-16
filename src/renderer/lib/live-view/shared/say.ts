@@ -13,7 +13,7 @@ export interface SayState {
   /** Failed tries of the message in the field. */
   tries: number
   /** The last line of the conversation, for the row. */
-  last?: { from: 'you' | 'them'; text: string }
+  last?: { from: 'you' | 'them'; text: string; name?: string }
   /** The last send went through on Send again. */
   resent?: boolean
   /** Why the last send failed, in words (the route's refusal), when known. */
@@ -24,9 +24,9 @@ export type SayAction =
   | { type: 'draft'; text: string }
   | { type: 'send' }
   | { type: 'send-again' }
-  | { type: 'sent' }
+  | { type: 'sent'; name?: string }
   | { type: 'failed'; reason?: string }
-  | { type: 'reply'; text: string }
+  | { type: 'reply'; text: string; name?: string }
 
 export const SAY_IDLE: SayState = { draft: '', status: 'idle', tries: 0 }
 
@@ -41,11 +41,11 @@ export function sayReducer(s: SayState, a: SayAction): SayState {
       return s.status === 'failed' && s.draft.trim() ? { ...s, status: 'sending', resent: true } : s
     case 'sent':
       if (s.status !== 'sending') return s
-      return { draft: '', status: 'sent', tries: 0, last: { from: 'you', text: s.draft.trim() }, resent: s.resent }
+      return { draft: '', status: 'sent', tries: 0, last: { from: 'you', text: s.draft.trim(), ...(a.name ? { name: a.name } : {}) }, resent: s.resent }
     case 'failed':
       return s.status === 'sending' ? { ...s, status: 'failed', tries: s.tries + 1, reason: a.reason } : s
     case 'reply':
-      return { ...s, last: { from: 'them', text: a.text }, resent: false }
+      return { ...s, last: { from: 'them', text: a.text, ...(a.name ? { name: a.name } : {}) }, resent: false }
   }
 }
 
@@ -89,7 +89,7 @@ export function sayView(s: SayState, ctx: SayContext): SayView {
       action: 'Send again',
     }
   else if (s.last) {
-    line = { tone: 'plain', who: s.last.from === 'you' ? `You → ${ctx.toName}` : `${ctx.toName} → You`, text: s.last.text }
+    line = { tone: 'plain', who: s.last.from === 'you' ? `You → ${s.last.name ?? ctx.toName}` : `${s.last.name ?? ctx.toName} → You`, text: s.last.text }
     if (s.resent && s.last.from === 'you') line.note = 'Sent.'
   }
   const canSend = has && !ctx.offline && s.status !== 'sending' && s.status !== 'failed'

@@ -19,8 +19,8 @@ const MediaViewer = lazy(() => import('./MediaViewer').then((m) => ({ default: m
 // The 3D preview (ported from the K2 Companion) dynamic-imports three.js
 // again, then one loader chunk per format. CSV, diagrams, DXF and HTML: FilePreview.
 const ModelViewer = lazy(() => import('./ModelViewer').then((m) => ({ default: m.ModelViewer })))
-// The new editors (Settings → Multiplayer, "New markdown editor" and "New code editor"): one frame on the live shell.
-const EditorTab = lazy(() => import('@/components/Editor/EditorTab').then((m) => ({ default: m.EditorTab })))
+// The new editors (Settings → Multiplayer, "New markdown editor" and "New code editor"): one frame on the live shell, saving (E1c).
+const EditorFile = lazy(() => import('@/components/Editor/EditorFile').then((m) => ({ default: m.EditorFile })))
 // `getLanguageName` is a synchronous helper used in the status bar —
 // importing it eagerly is fine (it's a small string table, not the
 // CodeMirror bundle). Bundlers tree-shake the rest of the module.
@@ -102,6 +102,7 @@ import {
   type ViewMode,
 } from './fileCategory'
 import { isNewUntitledFile, saveNewUntitledFile, untitledNamesInUse } from '@/lib/untitled-file'
+import { leaveWrite } from '@/lib/editor/save-model/write'
 export { getFileCategory, getDefaultViewMode } from './fileCategory'
 export type { FileCategory, ViewMode } from './fileCategory'
 
@@ -249,13 +250,12 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // or it would create a second file.
   const firstSaveRef = useRef<Promise<string> | null>(null)
   const [cursorInfo, setCursorInfo] = useState({ line: 1, col: 1, selections: 1 })
-  // Latest buffer values for callbacks that outlive a render (the
-  // autosave-on-leave cleanup, the read-failure handler).
-  const flushRef = useRef({ filePath, editedContent, content })
-  flushRef.current = { filePath, editedContent, content }
-
   const category = getFileCategory(filePath)
   const editorKind = useEditorFrameKind(category)
+  // Latest buffer values for callbacks that outlive a render (the
+  // autosave-on-leave cleanup, the read-failure handler). `checked`: the editor frame's leave write checks the disk.
+  const flushRef = useRef({ filePath, editedContent, content, checked: false })
+  flushRef.current = { filePath, editedContent, content, checked: editorKind !== null }
   const [viewMode, setViewMode] = useState<ViewMode>(getDefaultViewMode(category))
   // A locked pane can't save. It reports unsaved changes only when it
   // holds edits made before the file stopped being text (`keptText`), so
@@ -474,7 +474,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   useEffect(() => {
     mountHostKeyRef.current = room.scope.connectionKey
     return () => {
-      const { filePath: fp, editedContent: edited, content: onDisk } = flushRef.current
+      const { filePath: fp, editedContent: edited, content: onDisk, checked } = flushRef.current
       // Drain the leave guard's per-tab flags whatever happens below.
       const tabsState = room.tabs.getState()
       const discarded = tabsState.consumeDiscardPending(tabId)
@@ -495,6 +495,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         // A first save still running decides where this goes.
         const target = firstSaveRef.current ? await firstSaveRef.current.catch(() => fp) : fp
         if (isNewUntitledFile(target, readOkPathRef.current)) await firstSave(target, edited)
+        else if (checked) await leaveWrite(room.scope, target, edited, readOkPathRef.current === target ? onDisk : null)
         else await daemonCliPost(room.scope, 'fs/write-file', { path: target, content: edited })
       }
       void flush().catch((err) => {
@@ -809,17 +810,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     return (
       <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
         <Suspense fallback={null}>
-          <EditorTab
+          <EditorFile
             key={filePath}
-            filePath={filePath}
-            kind={editorKind}
-            text={editedContent ?? content}
-            dirty={isDirty}
-            saving={saving}
+            {...{ filePath, kind: editorKind, scope: room.scope, base: content, text: editedContent ?? content, setBase: setContent, setText: setEditedContent, cursor: cursorInfo, locked: textLock !== null }}
+            baseAbsent={readOkPathRef.current !== filePath}
+            saveNew={isNewUntitledFile(filePath, readOkPathRef.current) ? (t) => saveFile(t) : undefined}
             readOnly={room.readOnly ? 'You can view this file but not edit it' : null}
-            cursor={cursorInfo}
             notice={<>{liveEndedBar}{rereadBar}</>}
-            onSave={() => void saveFile(editedContent ?? undefined)}
             renderEditor={(o) => codeEditor(o, o.readOnly)}
             renderPreview={preview ? () => preview : undefined}
           />

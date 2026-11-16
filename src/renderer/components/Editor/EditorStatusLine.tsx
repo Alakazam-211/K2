@@ -27,18 +27,25 @@ function Check(): React.JSX.Element {
   )
 }
 
-/** "Saved" with a tick, or "Not saved" / "Saving" with a dot. */
-export function SaveWord({ word }: { word: 'Saved' | 'Not saved' | 'Saving' }): React.JSX.Element {
+/** The save word: a tick when saved, a dot while it waits, a cross when it failed. */
+export function SaveWord({ word, tone = word === 'Saved' ? 'ok' : 'pending' }: { word: string; tone?: 'ok' | 'pending' | 'bad' }): React.JSX.Element {
   return (
     <>
-      {word === 'Saved' ? (
+      {tone === 'ok' ? (
         <span className="ed-ok inline-flex">
           <Check />
+        </span>
+      ) : tone === 'bad' ? (
+        <span aria-hidden="true" className="ed-bad inline-flex">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+            <circle cx="8" cy="8" r="6.5" />
+            <path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" />
+          </svg>
         </span>
       ) : (
         <span aria-hidden="true" className="ed-unsaved-dot" />
       )}
-      {word}
+      <span data-tone={tone}>{word}</span>
     </>
   )
 }

@@ -4,10 +4,11 @@
 // the editor's mode control, if it has one. No toolbar and no path bar: the
 // file reloads on its own and the tab closes itself. Under the text, the
 // status line (EditorStatusLine), which says the save state as it is. Saving
-// stays the caller's (E1c brings autosave, the failure bar and the tab dot).
+// (E1c) comes from EditorFile through FrameSaveContext: the save word, ⌘S in
+// every mode, autosave on blur and Compare, the same for both editors.
 // The LiveView shell's slots hold it all; nothing live yet (E4).
 
-import { useEffect, useRef } from 'react'
+import { useContext, useEffect, useRef } from 'react'
 import type { Extension } from '@codemirror/state'
 import { LiveHeader } from '@/components/LiveView/shell/LiveHeader'
 import { LiveTabFrame } from '@/components/LiveView/shell/LiveTabFrame'
@@ -18,6 +19,7 @@ import type { EditorKind } from '@/lib/editor/preview-switch'
 import { EDITOR_CSS } from './editorCss'
 import { WRITE_CSS } from './writeModeCss'
 import { EditorStatusLine, SaveWord, type StatusItem, type StatusToggle } from './EditorStatusLine'
+import { FrameSaveContext } from './frameSave'
 
 /** Narrower than this, the status line's toggles fold behind Display. */
 export const EDITOR_NARROW_BELOW = 900
@@ -98,16 +100,26 @@ export function EditorFrame(props: {
   onKeyDownCapture?: (e: React.KeyboardEvent) => void
 }): React.JSX.Element {
   const { frame, filePath, kind, mode, full, status } = props
+  const save = useContext(FrameSaveContext)
+  // The save model's word replaces the editor's own (none for a read-only file).
+  const items = save ? status.items.flatMap((it) => (it.id !== 'save' ? [it] : save.status ? [{ id: 'save', node: <SaveWord word={save.status.word} tone={save.status.tone} /> }] : [])) : status.items
+  const onKeyDownCapture = (e: React.KeyboardEvent): void => {
+    if (save && saveKey(e, save.saveNow)) return
+    props.onKeyDownCapture?.(e)
+  }
+  const onBlur = (e: React.FocusEvent): void => {
+    if (save && !frame.root.current?.contains(e.relatedTarget as Node | null)) save.onLeave()
+  }
   const name = fileNameOf(filePath)
   return (
     // data-k2-line: the mode control measures its room against the tab, not its own wrapper (ui/segmented-fit.ts).
-    <div ref={frame.root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} style={props.style} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={props.onKeyDownCapture}>
+    <div ref={frame.root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} style={props.style} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={onKeyDownCapture} onBlur={onBlur}>
       <style>{EDITOR_CSS + WRITE_CSS}</style>
       <LiveTabFrame
         header={<LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} sentence={null} mode={props.modeControl} />}
         notice={props.notice}
-        hero={<div className="ed-body flex min-h-0 flex-1 flex-col">{props.body}</div>}
-        status={<EditorStatusLine items={status.items} toggles={status.toggles} facts={status.facts} narrow={frame.narrow} />}
+        hero={<div className="ed-body flex min-h-0 flex-1 flex-col">{save?.replaceBody ?? props.body}</div>}
+        status={<EditorStatusLine items={items} toggles={status.toggles} facts={status.facts} narrow={frame.narrow} />}
         panel={null}
         panelOpen={false}
         panelMode="reflow"

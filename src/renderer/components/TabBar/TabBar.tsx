@@ -48,6 +48,7 @@ import type { Tab } from '@/stores/tabs'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { cachedChangesMenuState, probeChangesMenuState, type ChangesMenuState } from '@/stores/git-changes'
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
+import { TabUnsavedDot } from '@/components/TabBar/TabUnsavedDot'
 import { clampTabDropIndex, isPinnedFeatureTab, isPinnedMobileTab, isPinnedTab } from '@/lib/pinned-tabs'
 import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 import { MonitorIcon } from '@/components/icons/K2Icons'
@@ -1440,9 +1441,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               ) : (
                 <span
                   data-tab-title=""
-                  className={`min-w-0 flex-auto truncate ${isDirty ? 'italic' : ''}`}
-                  // Double-click the label to rename (regular tabs only —
-                  // system-agent tabs render in their own branch above).
+                  className="min-w-0 flex-auto truncate"
+                  // Double-click to rename (regular tabs; system-agent tabs render in their own branch above).
                   onDoubleClick={(e) => {
                     e.stopPropagation()
                     setEditingTabId(tab.id)
@@ -1451,6 +1451,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   {tab.title}
                 </span>
               )}
+              <TabUnsavedDot dirty={isDirty} />
               {/* Heartbeat tabs are "minimize, don't kill" — the
                   daemon-owned PTY keeps running so the heartbeat
                   keeps firing on schedule. Visually distinguish with
@@ -1508,8 +1509,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
                   </svg>
                 )
-                // Working: the grid takes the slot and the status (or the
-                // pin, else live / reaped) is its bottom-left badge.
+                // Working: the grid takes the slot; the status (or pin, else live / reaped) is its bottom-left badge.
                 const rest = isSessionTab ? <TabSlotRest view={tabView} pinned={pinned} /> : pinned ? <PinnedTabMark /> : null
                 const slotStyle: React.CSSProperties = { width: 14, height: 14, marginLeft: 'var(--clu-gap)' }
                 if (room.readOnly) {

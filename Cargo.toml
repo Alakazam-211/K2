@@ -75,6 +75,8 @@ members = [
     # layer for video previews. Std only, no dependencies; its fuzz
     # targets live in its own fuzz/ workspace.
     "crates/k2-isobmff",
+    # The k5 command line in Rust, built piece by piece. Std only.
+    "crates/k5-cli",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos

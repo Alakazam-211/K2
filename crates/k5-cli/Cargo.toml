@@ -1,0 +1,14 @@
+[package]
+name = "k5-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "The k5 command line in Rust, built piece by piece; so far the JSON reader and printer that writes the same bytes as Python's json.dumps. Std only."
+
+[lib]
+path = "src/lib.rs"
+
+# No dependencies of any kind: the JSON printer has to match Python byte for
+# byte, and serde_json differs on numbers and key order.
+[dependencies]

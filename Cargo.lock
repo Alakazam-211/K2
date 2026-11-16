@@ -5302,6 +5302,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "k5-cli"
+version = "0.1.0"
+
+[[package]]
 name = "kessel-attest"
 version = "0.1.0"
 dependencies = [

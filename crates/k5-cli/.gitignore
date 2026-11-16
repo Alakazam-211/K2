@@ -1,0 +1,3 @@
+# The repo ignores every out/ directory (build output). src/out is source:
+# the module for what the command line prints.
+!/src/out/

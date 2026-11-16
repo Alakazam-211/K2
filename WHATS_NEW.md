@@ -10,7 +10,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Ask at the Mac works from another computer** while Remote desktop is on there (`k2 desktop ask`), and a Desktop tab in a room on Home can now open the stream. Turning Remote desktop on is still done at that computer.
 
 ### Chat / Voice Hosting
-- **Sew 0.10.0: recommended update.** Chat with people: add or remove members, leave channels, see who's typing and how many messages are unread. The caller can cancel a DM call while it rings, so the other person doesn't see a missed call. Calls get upstream WebRTC fixes for congestion feedback. If PostgreSQL was updated underneath Sew, it now says plainly to restart the database first. The update changes how Sew stores chat, so going back to 0.9.3 afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
+- **Sew 0.10.2: recommended update.** Chat with people: add or remove members, leave channels, see who's typing and how many messages are unread. The caller can cancel a DM call while it rings, so the other person doesn't see a missed call. Calls get upstream WebRTC fixes for congestion feedback, and more WebRTC updates. Joining a call that's already running shows the first video picture sooner. If PostgreSQL was updated underneath Sew, it now says plainly to restart the database first. From Sew 0.9.x the update changes how Sew stores chat, so going back to 0.9.3 afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner; going back to 0.10.0 is the plain `k2 hostchat rollback`.
+
+### Calls
+- **Noise removal is on by default, with a new model.** Background noise like typing, fans and traffic is taken out of your microphone before others hear you, in voice rooms and DM calls in the desktop app. To send your full microphone instead, turn it off in Settings → Voice → Noise removal (echo cancellation and volume levelling stay on). It takes effect at once, even in a call, and this computer remembers your choice.
 
 ### The k2 command
 - **`k2 update` no longer downloads the CLI from GitHub; the CLI now updates only with K2 itself.** `k2 update --cli` shows the CLI's and the daemon's versions and how K2 updates, and changes nothing.

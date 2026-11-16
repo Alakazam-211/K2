@@ -89,6 +89,7 @@ import {
 import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import { SendFeedbackRows } from './SendFeedbackRows'
+import { RELEASES_URL_PREFIX } from '@/lib/brand'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'K2 app', description: 'The K2 version on this computer: check for, download and install updates', keywords: ['update', 'version', 'check', 'release', 'download', 'install', 'app version'] },
@@ -362,7 +363,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
 
   const openReleasePage = (): void => {
     const tag = updateVersion ? `v${updateVersion}` : 'latest'
-    const url = `https://github.com/Alakazam-211/K2/releases/tag/${tag}`
+    const url = `${RELEASES_URL_PREFIX}tag/${tag}`
     invoke('plugin:opener|open_url', { url }).catch(() => {
       window.open(url)
     })

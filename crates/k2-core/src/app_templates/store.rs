@@ -25,7 +25,7 @@ pub const TAURI_DEADLOCK_FIXED: (u32, u32, u32) = (2, 11, 5);
 pub const TAO_SCENE_FIXED: (u32, u32, u32) = (0, 37, 0);
 
 /// K2's public repo, where its patched wry lives (`third_party/wry`).
-pub const K2_REPO: &str = "https://github.com/Alakazam-211/K2";
+pub const K2_REPO: &str = crate::brand::RELEASE_REPO_URL;
 /// The K2 commit whose `third_party/wry` the template pins. It must be on
 /// K2's public main. Move it when K2's wry patches change.
 pub const WRY_PATCH_REV: &str = "afe5ccfb0a41eda114f9e849be3aab359e641cc5";

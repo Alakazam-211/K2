@@ -1960,8 +1960,7 @@ fn daemon_port_hint() -> String {
 /// cannot phone GitHub for update availability (`strings` will not find
 /// this URL). Cloud / GitHub-shipped daemons keep it.
 #[cfg(not(feature = "airgap"))]
-const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json";
+const DEFAULT_MANIFEST_URL: &str = k2_core::brand::DAEMON_FEED_URL;
 
 /// The `daemon-latest.json` URL. Overridable via `K2SO_DAEMON_MANIFEST_URL`
 /// (self-hosting / tests). The default points at the public release

@@ -195,7 +195,7 @@ pub fn download_binary() -> Result<PathBuf, String> {
         "aarch64" => "aarch64",
         a => return Err(format!("no k2-node release for {a}")),
     };
-    let base = std::env::var("K2_NODE_RELEASE_BASE").unwrap_or_else(|_| "https://github.com/Alakazam-211/K2/releases/download".into());
+    let base = std::env::var("K2_NODE_RELEASE_BASE").unwrap_or_else(|_| k2_core::brand::RELEASE_DOWNLOAD_BASE.into());
     let url = format!("{}/v{}/k2-node-linux-{arch}", base.trim_end_matches('/'), env!("CARGO_PKG_VERSION"));
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(15))

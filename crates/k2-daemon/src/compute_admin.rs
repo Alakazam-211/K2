@@ -1483,7 +1483,7 @@ fn fetch_release(asset: &str, version: &str, sig: bool) -> R<Vec<u8>> {
         if k2_core::airgap::enabled() {
             return Err(missing());
         }
-        let base = std::env::var("K2_NODE_RELEASE_BASE").unwrap_or_else(|_| "https://github.com/Alakazam-211/K2/releases/download".into());
+        let base = std::env::var("K2_NODE_RELEASE_BASE").unwrap_or_else(|_| k2_core::brand::RELEASE_DOWNLOAD_BASE.into());
         let url = format!("{}/v{version}/{name}", base.trim_end_matches('/'));
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(15))

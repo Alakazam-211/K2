@@ -2,6 +2,8 @@
  *  Thin-client localStorage — not daemon SSOT. Manual "Check for Updates"
  *  still runs. Default ON. */
 
+import { RELEASES_URL_PREFIX } from '@/lib/brand'
+
 export const LS_AUTO_UPDATE_CHECKS = 'k2.autoUpdateChecks'
 export const AUTO_UPDATE_CHECKS_EVENT = 'k2-auto-update-checks'
 
@@ -62,7 +64,7 @@ export interface LastUpdateCheck {
 
 const VERSION_SHAPE = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/
 // The Download button opens this URL, so it must be K2's release page or asset.
-const RELEASES_PREFIX = 'https://github.com/Alakazam-211/K2/releases/'
+const RELEASES_PREFIX = RELEASES_URL_PREFIX
 
 function isUpdateOffer(raw: unknown): raw is UpdateOffer {
   if (typeof raw !== 'object' || raw === null) return false

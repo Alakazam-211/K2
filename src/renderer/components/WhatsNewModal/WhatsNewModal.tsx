@@ -9,8 +9,9 @@ import { primaryScope } from '@/kessel/server-scope'
 import { markZenNewsSeen } from '@/lib/zen/zen-sync'
 import { ZenGardenNewsCard } from './ZenGardenNewsCard'
 import { isEditableTarget } from '@/lib/editable-target'
+import { RELEASE_REPO, RELEASE_REPO_URL } from '@/lib/brand'
 
-const GITHUB_REPO_URL = 'https://github.com/Alakazam-211/K2'
+const GITHUB_REPO_URL = RELEASE_REPO_URL
 
 interface WhatsNewPayload {
   current_version: string
@@ -570,7 +571,7 @@ function GithubStarDrawer(): React.JSX.Element {
         type="button"
         className="wn-star-btn"
         onClick={openRepo}
-        title="Open github.com/Alakazam-211/K2"
+        title={`Open github.com/${RELEASE_REPO}`}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M12 2.5l2.76 6.05 6.6.72-4.92 4.5 1.36 6.48L12 16.9 6.2 20.25l1.36-6.48-4.92-4.5 6.6-.72L12 2.5z" />

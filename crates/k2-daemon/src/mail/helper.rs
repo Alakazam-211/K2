@@ -487,7 +487,7 @@ pub fn decide_effect(cmd: HelperCommand, kind: NodeKind) -> Result<FsEffect, Str
 /// Where the root installer and the helper assets live. One release
 /// per tag: `install-mail-helper.sh`, `k2-mail-helper-linux-<arch>`
 /// (+ `.sig` minisign, `.sha256`). Uploaded by `daemon-binaries.yml`.
-pub const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/Alakazam-211/K2/releases/download";
+pub const RELEASE_DOWNLOAD_BASE: &str = k2_core::brand::RELEASE_DOWNLOAD_BASE;
 
 /// Is the root door usable by this daemon user right now?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

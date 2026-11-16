@@ -39,7 +39,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/Alakazam-211/K2/releases/download";
+const RELEASE_DOWNLOAD_BASE: &str = k2_client::brand::RELEASE_DOWNLOAD_BASE;
 pub const PKEXEC: &str = "/usr/bin/pkexec";
 const MAX_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SUMS_BYTES: u64 = 64 * 1024;

@@ -43,7 +43,7 @@ pub use k2_root_proto::version::{
 };
 
 /// Release assets live next to the daemon's own.
-pub const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/Alakazam-211/K2/releases/download";
+pub const RELEASE_DOWNLOAD_BASE: &str = k2_core::brand::RELEASE_DOWNLOAD_BASE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

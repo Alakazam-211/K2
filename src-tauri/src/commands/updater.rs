@@ -6,12 +6,11 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 // the desktop "Check for updates" path here so every update channel (this,
 // the Tauri auto-updater's latest.json, and the daemon's daemon-latest.json)
 // reads from the same K2 repo.
-const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/Alakazam-211/K2/releases/latest";
+const GITHUB_RELEASES_URL: &str = k2_client::brand::RELEASES_LATEST_API;
 // Same endpoint as `plugins.updater.endpoints` in tauri.conf.json.
 // GitHub 302s this to release-assets.githubusercontent.com, which the
 // webview CSP does not allow, so the app process fetches it.
-const LATEST_JSON_URL: &str =
-    "https://github.com/Alakazam-211/K2/releases/latest/download/latest.json";
+const LATEST_JSON_URL: &str = k2_client::brand::APP_FEED_URL;
 
 #[derive(Serialize)]
 pub struct UpdateInfo {
@@ -150,14 +149,12 @@ fn is_package_install(kind: &str) -> bool {
 /// deb/rpm: the release page lists every package for that version.
 fn linux_release_page_url(version: &str) -> String {
     let version = version.trim().trim_start_matches('v');
-    format!("https://github.com/Alakazam-211/K2/releases/tag/v{version}")
+    k2_client::brand::release_tag_url(version)
 }
 
 fn arch_pacman_download_url(version: &str) -> String {
     let version = version.trim().trim_start_matches('v');
-    format!(
-        "https://github.com/Alakazam-211/K2/releases/download/v{version}/k2-{version}-x86_64.pkg.tar.zst"
-    )
+    format!("{}/v{version}/k2-{version}-x86_64.pkg.tar.zst", k2_client::brand::RELEASE_DOWNLOAD_BASE)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

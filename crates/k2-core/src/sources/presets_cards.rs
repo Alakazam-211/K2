@@ -137,7 +137,7 @@ fn build(name: &str, args: &BTreeMap<String, String>) -> Result<SourceSpec, Spec
             let parts: Vec<&str> = repo.split('/').collect();
             let ok_part = |p: &str| !p.is_empty() && p.len() <= 100 && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
             if parts.len() != 2 || !parts.iter().all(|p| ok_part(p)) {
-                return Err(bad("repo is Owner/Name, like Alakazam-211/K2"));
+                return Err(bad(format!("repo is Owner/Name, like {}", crate::brand::RELEASE_REPO)));
             }
             spec(json!({
                 "preset": "github-latest-release",

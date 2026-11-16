@@ -103,8 +103,11 @@ parking_lot = "0.12"
 # commands it adds need `sew-voice:video` (capabilities-native-voice/).
 # `dfn3` (0.46.13, Sew 0.10.2): noise removal's Standard mode runs DeepFilterNet3
 # from the weights the app bundles under <resources>/dfn3/ (scripts/fetch-dfn3.sh);
-# without them it stays RNNoise and logs once.
-tauri-plugin-sew-voice = { version = "=0.8.0", optional = true, features = ["video", "dfn3"] }
+# without them it stays RNNoise and logs once. Since Sew 0.10.3 the plugin loads the
+# model when a call first needs it (RNNoise until it's ready) and frees it after its
+# default idle time (sew_call_client::DFN3_IDLE_UNLOAD, 5 minutes); K2 keeps both
+# defaults (no preload at launch).
+tauri-plugin-sew-voice = { version = "=0.8.1", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

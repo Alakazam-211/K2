@@ -13,6 +13,9 @@ export default function ConfirmDialog(): React.JSX.Element | null {
   const safeDefault = useConfirmDialogStore((s) => s.safeDefault)
   const choices = useConfirmDialogStore((s) => s.choices)
   const onChoose = useConfirmDialogStore((s) => s.onChoose)
+  const titleTooltip = useConfirmDialogStore((s) => s.titleTooltip)
+  // Answers with a line each stack as rows above Cancel.
+  const choiceRows = choices?.some((c) => c.hint) ?? false
   const close = useConfirmDialogStore((s) => s.close)
 
   // A `choose` dialog: one of its answers (Cancel is none of them).
@@ -42,8 +45,10 @@ export default function ConfirmDialog(): React.JSX.Element | null {
 
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Enter') return
-      // A safe default: Enter presses the focused button (the no-op).
+      // A safe default: Enter presses the focused button (the no-op, or
+      // a `choose` dialog's safe answer, which opens focused).
       if (safeDefault) return
+      if (choices?.some((c) => c.safeDefault)) return
       if (choices) {
         const primary = choices.find((c) => c.primary)
         if (!primary) return
@@ -80,6 +85,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
       >
         {/* Title */}
         <div
+          title={titleTooltip || undefined}
           style={{
             fontSize: '14px',
             fontWeight: 600,
@@ -93,6 +99,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
         </div>
 
         {/* Message */}
+        {message ? (
         <div
           style={{
             fontSize: '12px',
@@ -107,6 +114,34 @@ export default function ConfirmDialog(): React.JSX.Element | null {
         >
           {message}
         </div>
+        ) : null}
+
+        {/* Answers with a line each: rows above Cancel. */}
+        {choices && choiceRows ? (
+          <div role="group" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            {choices.map((c) => (
+              <Button
+                key={c.id}
+                variant={c.primary ? 'accent' : 'default'}
+                size="md"
+                autoFocus={c.safeDefault}
+                className="leading-[1.4] w-full text-left !whitespace-normal"
+                data-confirm-choice={c.id}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleChoice(c.id)
+                }}
+              >
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, whiteSpace: 'normal' }}>
+                  <span style={{ fontWeight: 500 }}>{c.label}</span>
+                  {c.hint ? (
+                    <span style={{ fontSize: '11px', fontWeight: 400, color: 'var(--color-text-secondary)' }}>{c.hint}</span>
+                  ) : null}
+                </span>
+              </Button>
+            ))}
+          </div>
+        ) : null}
 
         {/* Buttons */}
         <div
@@ -129,7 +164,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
           >
             {cancelLabel}
           </Button>
-          {choices ? (
+          {choices && choiceRows ? null : choices ? (
             choices.map((c) => (
               <Button
                 key={c.id}

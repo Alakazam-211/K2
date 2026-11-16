@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { createPortal } from 'react-dom'
 import { useDismissOnOutside } from '@/hooks/useDismissOnOutside'
 import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { ProgressiveHeaderBlur } from '@/components/ui'
@@ -24,8 +23,7 @@ import {
 } from '@/components/ChatHistory/ContinueNewChatDialog'
 import { agentDisplayName, claimAgentLock, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
-import { needsMainThreadChoice, type MainThreadChoice } from '@/lib/main-thread-choice'
-import { MainThreadChoiceDialog } from './MainThreadChoiceDialog'
+import { askMainThreadChoice, needsMainThreadChoice, type MainThreadChoice } from '@/lib/main-thread-choice'
 import { useStore } from 'zustand'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged, onAgentIdentityChanged } from '@/stores/session-events'
 import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
@@ -365,16 +363,16 @@ function ChatHeader({
   // 0.46.14 — picking another chat (a sidecar, a past chat) as the main
   // chat: when both have a Thread (the main one read by its conversation id,
   // else the workspace's address), the person chooses which one the main
-  // chat shows (MainThreadChoiceDialog); otherwise the main Thread follows
-  // the main chat (keep_main). Cancel leaves everything as it was.
-  const [threadChoiceFor, setThreadChoiceFor] = useState<HistorySession | null>(null)
+  // chat shows (the shared choose dialog, askMainThreadChoice); otherwise the
+  // main Thread follows the main chat (keep_main). Cancel changes nothing.
   const pickSession = async (s: HistorySession): Promise<void> => {
     if (s.sessionId === currentSessionId) {
       onSwitchSession(s.sessionId, s.provider)
       return
     }
     if (await needsMainThreadChoice(room.scope, currentSessionId || overlayAddr, s.sessionId)) {
-      setThreadChoiceFor(s)
+      const choice = await askMainThreadChoice(chatDisplayName(s) || 'this chat')
+      if (choice) onSwitchSession(s.sessionId, s.provider, choice)
       return
     }
     onSwitchSession(s.sessionId, s.provider, 'keep_main')
@@ -624,20 +622,6 @@ function ChatHeader({
       )}
       </div>
       ) : null}
-      {threadChoiceFor
-        ? createPortal(
-          <MainThreadChoiceDialog
-            name={chatDisplayName(threadChoiceFor) || 'this chat'}
-            onCancel={() => setThreadChoiceFor(null)}
-            onChoose={(choice) => {
-              const s = threadChoiceFor
-              setThreadChoiceFor(null)
-              onSwitchSession(s.sessionId, s.provider, choice)
-            }}
-          />,
-          document.body,
-        )
-        : null}
       {shows('refresh') ? (
       <button
         type="button"

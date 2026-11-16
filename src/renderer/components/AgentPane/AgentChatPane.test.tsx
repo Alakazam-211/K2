@@ -268,6 +268,7 @@ class FakeWS {
 vi.stubGlobal('WebSocket', FakeWS)
 
 import { AgentChatPane, ASLEEP_LABEL } from './AgentChatPane'
+import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { sessionViewTabStorageKey } from '@/components/SessionView/sessionViewTab'
@@ -538,48 +539,54 @@ describe('picking a chat that has its own Thread asks which Thread the main chat
     })
   }
   async function pick(): Promise<void> {
-    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    // The shared dialog (App mounts it once) beside the pane.
+    renderInRoom(room, <><AgentChatPane agentName="agent" projectPath="/ws" /><ConfirmDialog /></>)
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.setChatSession.mockClear()
+    await openAndPick()
+  }
+  async function openAndPick(): Promise<void> {
     fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
     await waitFor(() => expect(screen.queryByText('Reviewer')).not.toBeNull())
     fireEvent.click(screen.getByText('Reviewer'))
   }
+  const answer = (id: string): HTMLButtonElement | null =>
+    document.querySelector<HTMLButtonElement>(`[data-confirm-choice="${id}"]`)
 
-  it('both have a Thread: the dialog asks, keep the main Thread is picked first, and it is what is sent', async () => {
+  it('both have a Thread: the dialog asks, keeping the main Thread has the focus, and it is what is sent', async () => {
     threads(true, true)
     await pick()
-    const dialog = await screen.findByTestId('main-thread-choice')
-    expect(dialog.textContent).toContain('Make Reviewer the main chat')
+    await waitFor(() => expect(answer('keep_main')).not.toBeNull())
+    expect(screen.getByText('Make Reviewer the main chat?')).not.toBeNull()
+    expect(screen.getByText('Choose which Thread the main chat keeps.')).not.toBeNull()
+    expect(answer('keep_main')?.textContent).toBe("Keep the main chat's ThreadReviewer's Thread is kept on its own, under a new address.")
+    expect(answer('adopt_sidecar')?.textContent).toBe("Use Reviewer's ThreadThe main chat's Thread is kept on its own, under a new address.")
+    // Enter presses the focused answer: keeping the main chat's Thread.
+    expect(document.activeElement).toBe(answer('keep_main'))
     expect(h.setChatSession).not.toHaveBeenCalled()
-    const keep = dialog.querySelector<HTMLInputElement>('[data-main-thread-choice="keep_main"]')
-    expect(keep?.checked).toBe(true)
-    fireEvent.click(screen.getByText('Make main chat'))
+    fireEvent.click(answer('keep_main')!)
     await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'side-sess', 'claude', 'keep_main'))
-    expect(screen.queryByTestId('main-thread-choice')).toBeNull()
+    expect(answer('keep_main')).toBeNull()
   })
 
   it("choosing the picked chat's Thread sends adopt_sidecar", async () => {
     threads(true, true)
     await pick()
-    await screen.findByTestId('main-thread-choice')
-    fireEvent.click(screen.getByLabelText("Use Reviewer's Thread"))
-    fireEvent.click(screen.getByText('Make main chat'))
+    await waitFor(() => expect(answer('adopt_sidecar')).not.toBeNull())
+    fireEvent.click(answer('adopt_sidecar')!)
     await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'side-sess', 'claude', 'adopt_sidecar'))
   })
 
   it('Cancel and Esc change nothing', async () => {
     threads(true, true)
     await pick()
-    await screen.findByTestId('main-thread-choice')
+    await waitFor(() => expect(answer('keep_main')).not.toBeNull())
     fireEvent.click(screen.getByText('Cancel'))
-    await waitFor(() => expect(screen.queryByTestId('main-thread-choice')).toBeNull())
-    fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
-    await waitFor(() => expect(screen.queryByText('Reviewer')).not.toBeNull())
-    fireEvent.click(screen.getByText('Reviewer'))
-    await screen.findByTestId('main-thread-choice')
+    await waitFor(() => expect(answer('keep_main')).toBeNull())
+    await openAndPick()
+    await waitFor(() => expect(answer('keep_main')).not.toBeNull())
     fireEvent.keyDown(document, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByTestId('main-thread-choice')).toBeNull())
+    await waitFor(() => expect(answer('keep_main')).toBeNull())
     expect(h.setChatSession).not.toHaveBeenCalled()
   })
 
@@ -587,7 +594,7 @@ describe('picking a chat that has its own Thread asks which Thread the main chat
     threads(true, false)
     await pick()
     await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'side-sess', 'claude', 'keep_main'))
-    expect(screen.queryByTestId('main-thread-choice')).toBeNull()
+    expect(answer('keep_main')).toBeNull()
   })
 })
 

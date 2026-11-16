@@ -18,14 +18,23 @@ export interface ConfirmChoice {
   label: string
   /** The answer Enter gives, drawn as the dialog's main button. */
   primary?: boolean
+  /** One plain line under the label: what this answer does. Given on any
+   *  choice, the answers stack as rows above Cancel. */
+  hint?: string
+  /** The safe answer: it has the focus when the dialog opens, so Enter
+   *  picks it (Enter presses whichever answer has the focus). */
+  safeDefault?: boolean
 }
 
 interface ChooseDialogOptions {
   title: string
+  /** The body line; empty draws none. */
   message: string
   /** Two (or more) real answers, in the order they show, left to right,
-   *  after Cancel. */
+   *  after Cancel (rows above Cancel when they have hints). */
   choices: ConfirmChoice[]
+  /** The whole title on hover, for a title cut short (a long name). */
+  titleTooltip?: string
 }
 
 interface ConfirmDialogState {
@@ -36,6 +45,8 @@ interface ConfirmDialogState {
   confirmDestructive: boolean
   cancelLabel: string
   safeDefault: boolean
+  /** A `choose` title cut short: the whole of it on hover ('': none). */
+  titleTooltip: string
   onResolve: ((confirmed: boolean) => void) | null
   /** A `choose` dialog's answers (null: a plain confirm). */
   choices: ConfirmChoice[] | null
@@ -58,6 +69,7 @@ export const CONFIRM_DIALOG_CLOSED = {
   confirmDestructive: false,
   cancelLabel: 'Cancel',
   safeDefault: false,
+  titleTooltip: '',
   onResolve: null,
   choices: null,
   onChoose: null,
@@ -85,6 +97,7 @@ export const useConfirmDialogStore = create<ConfirmDialogState>((set, get) => {
           confirmDestructive: opts.destructive ?? false,
           cancelLabel: opts.cancelLabel ?? 'Cancel',
           safeDefault: opts.safeDefault ?? false,
+          titleTooltip: '',
           onResolve: resolve,
           choices: null,
           onChoose: null,
@@ -101,6 +114,7 @@ export const useConfirmDialogStore = create<ConfirmDialogState>((set, get) => {
           title: opts.title,
           message: opts.message,
           choices: opts.choices,
+          titleTooltip: opts.titleTooltip ?? '',
           onChoose: resolve,
         })
       })

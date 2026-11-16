@@ -125,6 +125,34 @@ describe('ConfirmDialog with two answers (choose)', () => {
     await expect(p).resolves.toBeNull()
   })
 
+  it('answers with a line each stack above Cancel; the safe one has the focus, Enter is left to it, and a cut title shows whole on hover', async () => {
+    render(<ConfirmDialog />)
+    let pending!: Promise<string | null>
+    act(() => {
+      pending = useConfirmDialogStore.getState().choose({
+        title: 'Make a very long na… the main chat?',
+        titleTooltip: 'Make a very long name indeed the main chat?',
+        message: '',
+        choices: [
+          { id: 'keep', label: 'Keep it', hint: 'The other stays.', safeDefault: true },
+          { id: 'use', label: 'Use the other', hint: 'This one stays.' },
+        ],
+      })
+    })
+    const keep = document.querySelector<HTMLButtonElement>('[data-confirm-choice="keep"]')!
+    expect(keep.textContent).toBe('Keep itThe other stays.')
+    expect(document.activeElement).toBe(keep)
+    expect(screen.getByText('Make a very long na… the main chat?').getAttribute('title')).toBe('Make a very long name indeed the main chat?')
+    // Enter is the focused button's (the browser presses it): the dialog
+    // takes no answer of its own.
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(useConfirmDialogStore.getState().isOpen).toBe(true)
+    const labels = screen.getAllByRole('button').map((b) => b.textContent)
+    expect(labels.indexOf('Cancel')).toBeGreaterThan(labels.indexOf('Use the otherThis one stays.'))
+    fireEvent.click(document.querySelector('[data-confirm-choice="use"]')!)
+    await expect(pending).resolves.toBe('use')
+  })
+
   it('a plain confirm is unchanged: one confirm button, true on confirm', async () => {
     const { pending } = ask()
     expect(document.querySelector('[data-confirm-choice]')).toBeNull()

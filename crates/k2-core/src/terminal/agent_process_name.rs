@@ -521,7 +521,7 @@ mod tests {
         let Outcome::Linked(link) = plan("claude", &e, &i.path(), &i.links()) else { panic!("link") };
         let comm_of = |prog: &Path| {
             // std's spawn returns once the exec has happened (or failed).
-            let mut child = std::process::Command::new(prog).arg("30").spawn().expect("spawn");
+            let mut child = crate::bg_proc::command(prog).arg("30").spawn().expect("spawn");
             let comm = std::fs::read_to_string(format!("/proc/{}/comm", child.id())).expect("comm");
             child.kill().expect("kill");
             let _ = child.wait();

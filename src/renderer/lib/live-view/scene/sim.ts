@@ -6,6 +6,7 @@
 
 import { GOLD } from './samples'
 import { clone, strip } from './math'
+import { SCENE_VIEW } from './view-address'
 import { applyFrame } from './fold'
 import { multiPlaceFrame, placeFrame, renameFrame, type PlaceChange } from './frames'
 import { ATLAS, actorOf } from './wording'
@@ -178,7 +179,7 @@ export function peerFrom(q: Record<string, unknown>): Peer {
 export function ensurePeer(S: SimState, h: string): Peer {
   if (!S.peers[h]) {
     const a = actorOf(h)
-    S.peers[h] = { handle: h, name: a.name, kind: a.kind, colour: a.colour, away: false, focus: null, selection: null, view: '@scene' }
+    S.peers[h] = { handle: h, name: a.name, kind: a.kind, colour: a.colour, away: false, focus: null, selection: null, view: SCENE_VIEW }
   }
   return S.peers[h]
 }
@@ -197,7 +198,7 @@ export function modeOf(p: Peer, claims: Claim[]): 'editing' | 'selecting' | 'vie
 export const claimOn = (S: SimState, a: string): Claim | null => S.claims.find((c) => c.keys.includes(a)) ?? null
 export const whoOn = (S: SimState, a: string): Peer[] => Object.values(S.peers).filter((p) => p.selection && p.selection.keys.includes(a))
 
-const PV0 = (GOLD.previews.records ?? []).find((r) => r.view === '@scene') ?? null
+const PV0 = (GOLD.previews.records ?? []).find((r) => r.view === SCENE_VIEW) ?? null
 export function pvBlank(rev: number | null): Picture {
   return { shown: rev, want: rev, state: rev == null ? 'none' : 'ready', ms: PV0 ? PV0.ms : null, reused: null, without_modifiers: false, reason: null }
 }

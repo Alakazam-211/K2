@@ -6,6 +6,7 @@
 import { GOLD } from './samples'
 import { parse9 } from './math'
 import { DOCS, docFromIndex } from './fold'
+import { SCENE_VIEW } from './view-address'
 import { blankState, ensurePeer, SELF, type SimState } from './sim'
 import { TURN, fromTurn, initTurn, stepOfLabelAfter, stepOfRev, type Scenario } from './turn'
 import { buildPresence, buildStates, ev, PV, step } from './scenarios'
@@ -59,7 +60,7 @@ function buildPinned(): Scenario[] {
   const pages = PR.crowd_pages.pages
   const pinnedBase = (D: Doc, extra: Partial<SimState> = {}) => (): SimState => {
     const S = blankState(D, SELF)
-    ensurePeer(S, SELF).view = '@scene'
+    ensurePeer(S, SELF).view = SCENE_VIEW
     S.follow = false
     S.pinned = true
     Object.assign(S, extra)

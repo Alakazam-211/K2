@@ -7,6 +7,7 @@
 
 import { GOLD } from './samples'
 import { CONT } from './fold'
+import { SCENE_VIEW } from './view-address'
 import { bigDoc, emptyDoc, REF } from './frames'
 import { ACTORS, ATLAS, BROOK, SAM } from './wording'
 import { blankState, ensurePeer, pvBlank, SELF, type PreviewEvent, type SimEvent, type SimState, type SimStep } from './sim'
@@ -16,7 +17,7 @@ import type { Doc } from './types'
 export const ev = (kind: string, o: Partial<SimEvent> = {}): SimEvent => ({ kind, ...o })
 export const step = (label: string, events: SimEvent[] = [], what = '', extra: Partial<SimStep> = {}): SimStep => ({ at: null, label, events, what, ...extra })
 export const PV = (rev: number, state: PreviewEvent['state'], extra: Partial<PreviewEvent> = {}): SimEvent =>
-  ev('preview', { p: { _constructed: true, type: 'preview', rev, view: '@scene', state, width: 1920, ...extra } as PreviewEvent })
+  ev('preview', { p: { _constructed: true, type: 'preview', rev, view: SCENE_VIEW, state, width: 1920, ...extra } as PreviewEvent })
 
 /** Until K2 Cores' mesh read carries camera names and lenses, cameras show as Camera 1, Camera 2 (view-list order). */
 export function camLabel(view: string): string {
@@ -127,11 +128,11 @@ export function buildPresence(): Scenario[] {
       step('Camera.001', [ev('view', { v: '@cam:26' })], 'Ada looks through Camera.001, where Brook is. The boxes and tags redraw for this view.'),
       step('follow Atlas', [ev('watch', { v: true }), ev('presence', { who: ATLAS, type: 'viewAddress', value: '@obj:10' })], 'Follow Atlas: the view goes where Atlas looks. Atlas asked for Table, framed.'),
       step('Atlas switches', [ev('presence', { who: ATLAS, type: 'viewAddress', value: '@cam:1' })], 'Atlas switches to Camera; Ada\'s view switches along.'),
-      step('Home', [ev('view', { v: '@scene' })], 'Ada presses Home (Scene). Choosing a view ends the follow; the one way back is the header button, now "Back to Atlas".'),
+      step('Home', [ev('view', { v: SCENE_VIEW })], 'Ada presses Home (Scene). Choosing a view ends the follow; the one way back is the header button, now "Back to Atlas".'),
       step('Sam away', [ev('presence', { who: SAM, type: 'away', value: true })], 'Sam goes away: the avatar and the outline dim; the selection stays.'),
     ] },
     { id: 'keys', group: G, title: 'Choosing a view with the keyboard', base: fromTurn(jAfter63), steps: [
-      step('menu open', [ev('follow', { v: false }), ev('menu', { v: true }), ev('ui', { menuCur: '@scene' })], 'The views menu is open from the keyboard: the highlight starts on the view you have (Scene).'),
+      step('menu open', [ev('follow', { v: false }), ev('menu', { v: true }), ev('ui', { menuCur: SCENE_VIEW })], 'The views menu is open from the keyboard: the highlight starts on the view you have (Scene).'),
       step('down twice', [ev('menu', { v: true }), ev('ui', { menuCur: '@cam:26' })], 'Down, Down: the highlight moves to Camera 2, on the row itself.'),
       step('Enter', [ev('view', { v: '@cam:26' }), ev('toast', { tone: 'ok', text: 'Now looking through Camera 2', ms: 2500 })], 'Enter picks it: the menu closes, the picture is Camera 2, and a quiet line confirms it for 2.5 s.'),
     ] },
@@ -141,7 +142,7 @@ export function buildPresence(): Scenario[] {
       step('not sent', [ev('sendfail', { to: ATLAS, text: 'Could the table sit a little closer to the window?', ref: '@obj:10' })], 'Send fails (the connection blinked): the composer keeps the words, says it couldn\'t send, and offers Try again. Nothing reaches Activity yet.'),
       step('sent on retry', [ev('sent', { to: ATLAS, text: 'Could the table sit a little closer to the window?', ref: '@obj:10' })], 'Sent: Activity shows "You → Atlas: …" with the Table chip. Talking isn\'t editing: Atlas decides what to do.'),
       step('reply', [ev('reply', { from: ATLAS, text: 'On it.', ref: '@obj:10' })], 'Atlas answers in Activity: "On it."'),
-      step('look away', [ev('view', { v: '@scene' })], 'Ada picks Scene herself. Picking a view leaves Follow; the header button becomes the one way back: "Back to Atlas".'),
+      step('look away', [ev('view', { v: SCENE_VIEW })], 'Ada picks Scene herself. Picking a view leaves Follow; the header button becomes the one way back: "Back to Atlas".'),
       step('follow Sam', [ev('watch', { who: SAM }), ev('presence', { who: SAM, type: 'viewAddress', value: '@cam:26' })], 'Ada clicks Sam\'s avatar to follow a person, not an agent. Sam is looking through Camera 2, so Ada\'s tab goes there: "Following Sam · Stop".'),
       step('Sam leaves', [ev('leave', { who: SAM })], 'Sam closes the file. Follow ends quietly: "Sam left the file" for 4 s, and Ada keeps the view she had.'),
     ] },

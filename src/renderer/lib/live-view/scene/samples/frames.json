@@ -218,7 +218,7 @@
    "frame": {
     "type": "preview",
     "rev": 61,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "rendering",
     "width": 1920,
     "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
@@ -231,7 +231,7 @@
    "frame": {
     "type": "preview",
     "rev": 61,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "ready",
     "width": 1920,
     "ms": 380,
@@ -251,7 +251,7 @@
    "frame": {
     "type": "preview",
     "rev": 62,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "rendering",
     "width": 1920,
     "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
@@ -264,7 +264,7 @@
    "frame": {
     "type": "preview",
     "rev": 62,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "ready",
     "width": 1920,
     "ms": 340,
@@ -306,7 +306,7 @@
     {
      "kind": "ViewAddress",
      "who": "agent:atlas",
-     "viewAddress": "@scene",
+     "viewAddress": "@scene:main",
      "client": 4711
     }
    ]
@@ -317,7 +317,7 @@
    "frame": {
     "type": "preview",
     "rev": 63,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "rendering",
     "width": 1920,
     "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
@@ -330,7 +330,7 @@
    "frame": {
     "type": "preview",
     "rev": 63,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "ready",
     "width": 1920,
     "ms": 410,
@@ -432,7 +432,7 @@
    "frame": {
     "type": "preview",
     "rev": 64,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "ready",
     "width": 1920,
     "reused_from": 63,
@@ -481,7 +481,7 @@
    "frame": {
     "type": "preview",
     "rev": 65,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "rendering",
     "width": 1920,
     "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
@@ -494,7 +494,7 @@
    "frame": {
     "type": "preview",
     "rev": 65,
-    "view": "@scene",
+    "view": "@scene:main",
     "state": "ready",
     "width": 1920,
     "ms": 450,

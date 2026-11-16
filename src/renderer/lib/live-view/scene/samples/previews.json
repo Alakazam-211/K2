@@ -13,7 +13,7 @@
  },
  "views": [
   {
-   "view": "@scene",
+   "view": "@scene:main",
    "name": "Scene",
    "kind": "scene"
   },
@@ -63,7 +63,7 @@
  "records": [
   {
    "rev": 60,
-   "view": "@scene",
+   "view": "@scene:main",
    "state": "ready",
    "width": 1920,
    "ms": 212,

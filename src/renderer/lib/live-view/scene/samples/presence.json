@@ -21,7 +21,7 @@
     "key": "@coll:1"
    },
    "selection": null,
-   "viewAddress": "@scene"
+   "viewAddress": "@scene:main"
   },
   {
    "handle": "person:sam",
@@ -39,7 +39,7 @@
      "@obj:4"
     ]
    },
-   "viewAddress": "@scene"
+   "viewAddress": "@scene:main"
   },
   {
    "handle": "agent:atlas",
@@ -49,7 +49,7 @@
    "away": false,
    "focus": null,
    "selection": null,
-   "viewAddress": "@scene"
+   "viewAddress": "@scene:main"
   }
  ],
  "points": [
@@ -73,8 +73,8 @@
    },
    "views": {
     "agent:atlas": "@obj:10",
-    "person:sam": "@scene",
-    "person:ada": "@scene"
+    "person:sam": "@scene:main",
+    "person:ada": "@scene:main"
    },
    "claims": [
     {
@@ -114,7 +114,7 @@
     "agent:brook": "@coll:4"
    },
    "views": {
-    "agent:atlas": "@scene",
+    "agent:atlas": "@scene:main",
     "agent:brook": "@cam:26"
    },
    "claims": [
@@ -164,7 +164,7 @@
     "agent:brook": "@coll:4"
    },
    "views": {
-    "agent:atlas": "@scene",
+    "agent:atlas": "@scene:main",
     "agent:brook": "@cam:26"
    },
    "claims": [],

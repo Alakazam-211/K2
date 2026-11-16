@@ -12,8 +12,8 @@ export const OBJ = '@obj:'
 export const COLL = '@coll:'
 
 export const isAddr = (s: unknown, pre?: string): s is string => typeof s === 'string' && ADDR.test(s) && (!pre || s.startsWith(pre))
-/** Any kit address: @kind:id, or a scene path form (@scene, @scene/turntable#k). */
-export const isAddrAny = (s: unknown): boolean => typeof s === 'string' && /^@[a-z]+(:(0|[1-9]\d*))?(\/[a-z]+(#\d+)?)?$/.test(s)
+/** Any kit address: @kind:id, the scene's default view (@scene:main), or a sample path form (@scene/turntable#k). */
+export const isAddrAny = (s: unknown): boolean => typeof s === 'string' && (s === '@scene:main' || /^@[a-z]+(:(0|[1-9]\d*))?(\/[a-z]+(#\d+)?)?$/.test(s))
 
 /** The shortest decimal that rounds to the same f32. */
 export function f32(x: number): number {

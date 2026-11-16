@@ -289,7 +289,7 @@ describe('The picture (K2 Render previews; provisional)', () => {
   it('views: Scene, one per camera in the file (one active), a framed object, Turntable; every view a person or agent is on is one of them', () => {
     const V = GOLD.previews.views
     const cams = D0.lists[UNITS].filter((a) => D0.kinds[a] === 'camera')
-    const okV = V.every((v) => v.view === '@scene' || v.view === '@scene/turntable' || v.view === '@obj:*' || (v.kind === 'camera' && v.view === '@cam:' + (v.object as string).split(':')[1] && cams.includes(v.object as string)))
+    const okV = V.every((v) => v.view === '@scene:main' || v.view === '@scene/turntable' || v.view === '@obj:*' || (v.kind === 'camera' && v.view === '@cam:' + (v.object as string).split(':')[1] && cams.includes(v.object as string)))
     const seen = GOLD.turn.timeline.flatMap((e) => e.roster_events ?? []).filter((r) => r.kind === 'ViewAddress').map((r) => r.viewAddress as string)
     const okSeen = seen.every((v) => V.some((x) => x.view === v) || (isAddr(v, '@obj:') && !!D0.props[v]))
     expect(okV && okSeen && V.filter((v) => v.kind === 'camera').length === cams.length && V.filter((v) => v.active).length === 1).toBe(true)

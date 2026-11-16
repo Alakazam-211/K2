@@ -135,6 +135,20 @@ describe('drawing, failing and trying again', () => {
     expect(seen.at(-1)).toMatchObject({ type: 'preview_ready', state: 'ready' })
   })
 
+  it('stale: the older still at once, then the current one followed until it lands', async () => {
+    const t = route((p, n) => (p.container === '@scene:main' && !p.layer && n <= 3 ? { ...json('scene.json'), state: 'stale', base64: b64('scene.webp'), current_hash: 'new' } : undefined))
+    const src = new DocsPreviewPictureSource(t, decoders, { pollMs: 1 })
+    const seen: PictureEvent[] = []
+    src.subscribe((e) => seen.push(e))
+    expect(await src.still(req('@scene:main', false))).not.toBeNull()
+    expect(seen.filter((e) => e.type !== 'listing').at(-1)?.type).toBe('preview_rendering')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(seen.at(-1)).toMatchObject({ type: 'preview_ready', state: 'ready' })
+    const n = t.calls.length
+    await src.still(req('@scene:main', false))
+    expect(t.calls.length).toBe(n)
+  })
+
   it('a view K2 can’t draw: failed with its code', async () => {
     const src = new DocsPreviewPictureSource(route(), decoders)
     const seen: PictureEvent[] = []

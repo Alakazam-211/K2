@@ -172,10 +172,26 @@ export class DocsPreviewPictureSource implements PictureSource {
       renderMs: a.renderMs,
       meta: a.meta,
     })
-    // A stale image is shown, not kept: the current one is still drawing.
+    // A stale image is shown, not kept: the current one is still drawing, and is followed until it lands.
     if (a.state === 'ready') this.cache.set(key, st)
+    else void this.follow(req, params)
     this.emit(a.state === 'ready' ? { type: 'preview_ready', container: req.view, state: 'ready', rev: a.rev, failed: null, render_ms: a.renderMs, without_modifiers: a.withoutModifiers, reused_from: a.reusedFrom } : { type: 'preview_rendering', container: req.view, rev: a.rev })
     return st
+  }
+
+  /** Ask again until the current still lands (then it is cached and said ready) or fails. */
+  private async follow(req: StillRequest, params: Record<string, string>): Promise<void> {
+    for (let n = 0; n < (this.o.pollMax ?? 40) && !this.closed; n++) {
+      await sleep(this.o.pollMs ?? 700)
+      let a: SceneImage
+      try {
+        a = parseSceneImage(await this.t.get(params))
+      } catch {
+        return
+      }
+      if (a.state === 'ready') return void (await this.still(req))
+      if (a.state === 'failed') return this.emit({ type: 'preview_ready', container: req.view, state: 'failed', rev: a.rev, failed: { code: a.failedCode ?? 'timeout' } })
+    }
   }
 
   /** The still's id image (none when the route has none: drawn without one, or gone). */

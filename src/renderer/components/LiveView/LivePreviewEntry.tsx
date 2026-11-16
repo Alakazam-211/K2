@@ -9,12 +9,15 @@
 // this file: the banner says so). With the type's switch off, or for any
 // other file, this renders its children and nothing else.
 //
-// The source is chosen here. Today it is always the sample; the real ones
-// (the kit's keyed watch on a doc socket) come in each view's later phases.
+// The data is the sample's today; the real ones (the kit's keyed watch on a
+// doc socket) come in each view's later phases. The views get the file's
+// path (LiveFileContext): the scene's picture is the file's own when the
+// daemon draws it.
 
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { previewTypeFor, useLivePreview, type LivePreviewType } from '@/lib/live-view/shared/preview-keys'
 import { LiveEntrySwitchProvider, LiveEntrySwitchView, type LiveEntryMode, type LiveEntrySwitchValue } from './LiveEntrySwitch'
+import { LiveFileContext } from './live-file'
 
 export { WATCH_LIVE_LABEL } from './LiveEntrySwitch'
 
@@ -36,6 +39,7 @@ export function LivePreviewEntry({ filePath, children, onLiveChange }: { filePat
   useEffect(() => {
     onLiveChange?.(live)
   }, [live, onLiveChange])
+  const file = useMemo(() => ({ path: filePath }), [filePath])
   const sw = useMemo<LiveEntrySwitchValue | null>(
     () => (type ? { group: ENTRIES[type].group, hint: ENTRIES[type].hint, testIdPrefix: `live-${type}`, mode, onMode: setMode } : null),
     [type, mode],
@@ -47,7 +51,9 @@ export function LivePreviewEntry({ filePath, children, onLiveChange }: { filePat
       {mode === 'live' ? (
         <div className="min-h-0 flex-1 overflow-hidden">
           <LiveEntrySwitchProvider value={sw}>
+            <LiveFileContext.Provider value={file}>
             <Suspense fallback={<div className="p-4 type-hint text-[var(--color-text-secondary)]">Loading the live view…</div>}>{entry.view()}</Suspense>
+            </LiveFileContext.Provider>
           </LiveEntrySwitchProvider>
         </div>
       ) : (

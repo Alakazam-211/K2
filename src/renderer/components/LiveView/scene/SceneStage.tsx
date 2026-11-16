@@ -37,6 +37,7 @@ import { KeyHint, OlderMark, PictureCard, PictureChips } from './PictureChrome'
 import { ScenePane } from './ScenePane'
 import { STAGE_CSS } from './stageCss'
 import { usePaneSize, useStageScope, useStill } from './useStage'
+import { usePictureFeed } from './usePictureFeed'
 import { useSceneFollow } from './useSceneFollow'
 import { ViewPicker } from './ViewPicker'
 
@@ -92,7 +93,10 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const fl = useSceneFollow({ follow, snap: { people } as ShellHeroProps['snap'] }, S, own, (v) => set({ view: v }))
   const view = fl.theirView ?? own
   const framed = framedOf(S, L.pick)
-  const status = pictureStatus(S)
+  const feed = usePictureFeed(source, view)
+  // The real picture says its own state; the sample's is the snapshot's.
+  const status = feed.status ?? pictureStatus(S)
+  const retryPicture = feed.status ? feed.retry : control.retryPicture
   const ctx = pictureContext(S, L.pick)
   // Ask is offered only where the shell can open the say row.
   const words = pictureWords(status, { ...ctx, askAgent: ask ? ctx.askAgent : null })
@@ -102,10 +106,12 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const view2 = L.view2 ?? ag?.view ?? SCENE_VIEW
   const reqOf = (v: string, i: number): StillRequest | null => {
     const r = split?.panes[i]
-    return words.still && r && status.shown != null ? { rev: status.shown, view: v, shape: (onlyOneOf(split) ? letterbox(r.w, r.h) : coverBox(r.w, r.h)).shape, width: STILL_WIDTH, ids: true } : null
+    // The real picture is asked before it is shown (its answer is what says it's ready).
+    const rev = feed.status ? (status.shown ?? status.want) : status.shown
+    return (words.still || feed.status) && r && rev != null ? { rev, view: v, shape: (onlyOneOf(split) ? letterbox(r.w, r.h) : coverBox(r.w, r.h)).shape, width: STILL_WIDTH, ids: true } : null
   }
-  const still = useStill(source, reqOf(view, 0))
-  const still2 = useStill(source, layout === 2 ? reqOf(view2, 1) : null)
+  const still = useStill(source, reqOf(view, 0), feed.epoch)
+  const still2 = useStill(source, layout === 2 ? reqOf(view2, 1) : null, feed.epoch)
   const ground = words.ground && S.D ? S.D : null
   const name = S.D ? viewName(S.D, view) : 'Scene'
   const rows = useMemo(() => (S.D ? viewRows(S.D, { framed, agent: ag ? { name: ag.name, view: ag.view } : null }) : []), [S.D, framed, ag?.name, ag?.view])
@@ -142,11 +148,11 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   }
   const pick2 = (r: ViewRow): void => set({ view2: r.v === '@agent' ? null : r.v, menu2: false })
   const onCard = (id: CardAction): void => {
-    if (id === 'retry') control.retryPicture()
+    if (id === 'retry') retryPicture()
     else if (id === 'try-camera') {
       const cam = S.D ? mainCamera(S.D) : null
       if (cam) go(cam)
-      control.retryPicture()
+      retryPicture()
     } else if (id === 'show-list') showList(ref.current)
     else if (id === 'ask' && ask) {
       const ag = agentId(S)
@@ -172,7 +178,8 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const frameObject = (a: string): void => {
     if (S.D) go(objectView(S.D, a), `Now looking at ${nameOf(S.D, a)}, framed`)
   }
-  const bounds = useCallback((D: Doc, a: string) => source?.bounds?.(D, a) ?? null, [source])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new listing (the epoch) brings the real bounds
+  const bounds = useCallback((D: Doc, a: string) => source?.bounds?.(D, a) ?? null, [source, feed.epoch])
 
   const ready = !!S.D && !S.loading
   const keys = !narrow && !isTurntable(view) && ready
@@ -194,6 +201,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
         style={style}
         data-k2-chamfer="surface"
         data-state={S.conn !== 'ok' ? 'lost' : status.state}
+        data-source={source?.kind}
         data-view={view}
         data-following={fl.whose ?? undefined}
         data-layout={split?.split ?? 'one'}
@@ -269,7 +277,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
         {words.card ? <PictureCard card={words.card} onAction={onCard} /> : null}
         {words.older ? <OlderMark text={words.older} /> : null}
         <div className="lv-vfoot">
-          <PictureChips chips={words.chips} onRetry={() => control.retryPicture()} />
+          <PictureChips chips={words.chips} onRetry={() => retryPicture()} />
           <span className="lv-sp" />
           {keys ? <KeyHint /> : null}
           {ready ? <TwoViewsButton two={layout === 2} stacked={split?.split === 'stacked' || (!!pane && paneRects(pane.width, pane.height, 2).split === 'stacked')} onToggle={() => set({ layout: layout === 2 ? 1 : 2 })} /> : null}

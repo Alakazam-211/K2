@@ -64,7 +64,7 @@ export function usePaneSize(ref: React.RefObject<HTMLElement | null>, given?: { 
 const reqKey = (r: StillRequest | null): string => (r ? `${r.rev}|${r.view}|${r.shape}|${r.width}|${r.ids ? 1 : 0}` : '')
 
 /** The still for a request; the one on screen stays until the next lands. Null when there's no request. */
-export function useStill(source: PictureSource | null, req: StillRequest | null): Still | null {
+export function useStill(source: PictureSource | null, req: StillRequest | null, epoch = 0): Still | null {
   const [still, setStill] = useState<Still | null>(null)
   const key = reqKey(req)
   const latest = useRef(req)
@@ -76,10 +76,13 @@ export function useStill(source: PictureSource | null, req: StillRequest | null)
       return
     }
     const ac = new AbortController()
-    void source.still(r, ac.signal).then((st) => {
-      if (!ac.signal.aborted) setStill(st)
-    })
+    void source.still(r, ac.signal).then(
+      (st) => {
+        if (!ac.signal.aborted && (st || source.kind === 'sample')) setStill(st)
+      },
+      () => undefined,
+    )
     return () => ac.abort()
-  }, [source, key])
+  }, [source, key, epoch])
   return req ? still : null
 }

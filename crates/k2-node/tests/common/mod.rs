@@ -44,6 +44,9 @@ pub enum Out {
     Frame(Frame),
     /// Raw text (forgeries, replays).
     Raw(String),
+    /// A WebSocket ping with this payload (`frames::clock_ping`, or an old
+    /// server's empty one).
+    Ping(Vec<u8>),
     Close,
 }
 
@@ -107,6 +110,8 @@ pub struct Fake {
     /// What it says in `Challenge.protocol` (default this build's
     /// `PROTOCOL`; mixed-version tests set an older one).
     pub server_protocol: Arc<std::sync::atomic::AtomicU32>,
+    /// `Welcome.server_time` it sends (default 0: no clock, as before).
+    pub welcome_time: Arc<std::sync::atomic::AtomicI64>,
     /// Sim streams the node dialed (`/cli/compute/sim-stream`), handed to
     /// the test as they are: it plays the server's half of the handshake.
     pub sim_streams: mpsc::UnboundedReceiver<SimWs>,
@@ -129,6 +134,8 @@ impl Fake {
         let wr = welcome_routes.clone();
         let server_protocol = Arc::new(std::sync::atomic::AtomicU32::new(frames::PROTOCOL));
         let sp = server_protocol.clone();
+        let welcome_time = Arc::new(std::sync::atomic::AtomicI64::new(0));
+        let wt = welcome_time.clone();
         let (ctx, crx) = mpsc::unbounded_channel();
         let (stx, srx) = mpsc::unbounded_channel::<SimWs>();
         let (k, n, c, r, a, s) = (key.clone(), nodes.clone(), codes.clone(), resume.clone(), attaches.clone(), last_sas.clone());
@@ -136,6 +143,7 @@ impl Fake {
             loop {
                 let Ok((tcp, _)) = listener.accept().await else { return };
                 let (k, n, c, r, a, s, ctx, wr, sp) = (k.clone(), n.clone(), c.clone(), r.clone(), a.clone(), s.clone(), ctx.clone(), wr.clone(), sp.clone());
+                let wt = wt.clone();
                 let stx = stx.clone();
                 tokio::spawn(async move {
                     let path = Arc::new(Mutex::new(String::new()));
@@ -152,14 +160,15 @@ impl Fake {
                         serve_enroll(ws, &k, &n, &c, &s).await;
                     } else if p == "/cli/compute/attach" {
                         a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        serve_attach(ws, k, n, r, ctx, wr, sp.load(std::sync::atomic::Ordering::SeqCst)).await;
+                        let time = wt.load(std::sync::atomic::Ordering::SeqCst);
+                        serve_attach(ws, k, n, r, ctx, wr, sp.load(std::sync::atomic::Ordering::SeqCst), time).await;
                     } else if p == "/cli/compute/sim-stream" {
                         let _ = stx.send(ws);
                     }
                 });
             }
         });
-        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas, welcome_routes, server_protocol, sim_streams: srx }
+        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas, welcome_routes, server_protocol, welcome_time, sim_streams: srx }
     }
 
     pub async fn next_conn(&mut self) -> Conn {
@@ -265,6 +274,7 @@ where
     send_hs(&mut ws, &HandshakeFrame::EnrollDone(EnrollDone { node_id, name: req.name, state: "pending".into() })).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve_attach<S>(
     mut ws: S,
     key: Arc<SigningKey>,
@@ -273,6 +283,7 @@ async fn serve_attach<S>(
     conns: mpsc::UnboundedSender<Conn>,
     welcome_routes: Arc<Mutex<Vec<String>>>,
     protocol: u32,
+    server_time: i64,
 ) where
     S: futures_util::Sink<Message> + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin + Send + 'static,
 {
@@ -306,7 +317,7 @@ async fn serve_attach<S>(
         resume: resume.lock().unwrap().clone(),
         routes: welcome_routes.lock().unwrap().clone(),
         narrow: None,
-        server_time: 0,
+        server_time,
     });
     let first = frames::seal(&key, Direction::ControllerToNode, &session, 0, &welcome).unwrap();
     let _ = ws.send(Message::Text(first.clone())).await;
@@ -324,6 +335,7 @@ async fn serve_attach<S>(
             o = out_rx.recv() => match o {
                 None | Some(Out::Close) => { let _ = sink.close().await; break; }
                 Some(Out::Raw(t)) => { if sink.send(Message::Text(t)).await.is_err() { break; } }
+                Some(Out::Ping(p)) => { if sink.send(Message::Ping(p)).await.is_err() { break; } }
                 Some(Out::Frame(f)) => {
                     let t = frames::seal(&key, Direction::ControllerToNode, &session, seq, &f).unwrap();
                     seq += 1;

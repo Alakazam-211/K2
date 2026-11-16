@@ -721,7 +721,9 @@ where
         loop {
             tokio::select! {
                 _ = ping.tick() => {
-                    if sink.send(Message::Ping(Vec::new())).await.is_err() { return "ping_failed"; }
+                    // Carries our clock: the node re-measures its skew
+                    // from it (an old node echoes it and reads nothing in).
+                    if sink.send(Message::Ping(frames::clock_ping(compute::now()))).await.is_err() { return "ping_failed"; }
                 }
                 out = rx.recv() => {
                     match out {
@@ -3379,6 +3381,10 @@ fn ensure_ticker() {
             }
     }));
 }
+
+#[cfg(test)]
+#[path = "compute_ws_ping_tests.rs"]
+mod ping_tests;
 
 #[cfg(test)]
 mod tests {

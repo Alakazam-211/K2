@@ -97,7 +97,7 @@ function job(state: CatalogJob['state'], step: string, over: Partial<CatalogJob>
 const HEARTH = {
   entry: 'sew/hearth',
   name: 'Hearth',
-  publisher: { id: 'sew', name: 'Sew', source: 'https://github.com/Alakazam-211/sew-web' },
+  publisher: { id: 'sew', name: 'Sew', source: 'https://github.com/Alakazam-211/sew-releases/releases' },
   summary: "Chat and voice for your community, on this server's chat.",
   license: 'MIT OR Apache-2.0',
   verified: 'Verified by K2',

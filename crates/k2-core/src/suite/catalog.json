@@ -5,7 +5,7 @@
     {
       "entry": "sew/hearth",
       "name": "Hearth",
-      "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-web" },
+      "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-releases/releases" },
       "summary": "Chat and voice for your community, on this server's chat.",
       "explain": [
         "Runs as a web App on this server, in its own protected space",
@@ -26,7 +26,7 @@
     {
       "entry": "sew/meet",
       "name": "Meet",
-      "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-web" },
+      "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-releases/releases" },
       "summary": "Video meetings with guest links, on this server's chat.",
       "explain": [
         "Runs as a web App on this server, in its own protected space",

@@ -159,7 +159,7 @@ type DraftHost = {
   id: string | null // null = creating a new host
   step: DraftStep
   label: string
-  /** Raw address field (e.g. https://studio.k2.dev); parsed on save via
+  /** Raw address field (e.g. https://your-server.example); parsed on save via
    *  parseServerUrl into hostname/secure/port. */
   url: string
   username: string
@@ -204,7 +204,7 @@ function addressProblem(reason: string): string {
   if (/explicit port/i.test(reason)) return 'Add the server’s port, like http://192.168.1.50:60710.'
   if (/not HTTPS/i.test(reason)) return 'Servers on your network use http://, not https://, like http://192.168.1.50:60710.'
   if (/^Port /.test(reason)) return 'The port must be a number from 1 to 65535.'
-  return 'That doesn’t look like a server address. Try one like studio.k2.dev.'
+  return 'That doesn’t look like a server address. Try one like your-server.example.'
 }
 
 /** Why a sign-in failed, in plain words, with what to do next. */
@@ -827,7 +827,7 @@ function ServerFormDialog({
       label="Address"
       htmlFor={`${id}-url`}
       problem={fieldProblem('address')}
-      hint="Its web address, like studio.k2.dev, or http://192.168.1.50:60710 on your network."
+      hint="Its web address, like your-server.example, or http://192.168.1.50:60710 on your network."
     >
       <Input
         id={`${id}-url`}

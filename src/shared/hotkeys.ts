@@ -83,6 +83,13 @@ export const HOTKEYS: HotkeyDefinition[] = [
   // The Org Chart tab (prd-org-chart-v1 §6.5): bindable, no default chord
   // (⌃⌘6 stays Settings). Does nothing while the Org Chart is off.
   { id: 'goToOrgChart', label: 'Go to Org Chart', defaultKey: '', category: 'Navigation' },
+  // Home nav rows (Rosson 2026-11-16): the row above / below the selected
+  // one, on Home only. ⌥⌘↑ / ⌥⌘↓ on macOS, Ctrl+Alt+Up / Down elsewhere.
+  // Handled by `useHomeRowStepShortcut` (lib/home-row-step.ts); no native
+  // menu accelerator. Clear of ⌥⌘← / ⌥⌘→ (tabs) and every ⌥↑ / ⌥↓ list
+  // chord (no ⌘); a code editor keeps them (CodeMirror: add a cursor).
+  { id: 'homeRowUp', label: 'Previous Agent on Home', defaultKey: 'Meta+Alt+ArrowUp', defaultKeyOther: 'Ctrl+Alt+ArrowUp', category: 'Navigation' },
+  { id: 'homeRowDown', label: 'Next Agent on Home', defaultKey: 'Meta+Alt+ArrowDown', defaultKeyOther: 'Ctrl+Alt+ArrowDown', category: 'Navigation' },
 
   // Thread view's terminal (prd-thread-view-focus-v1 §6). Ctrl+` was free
   // (checked against this list, the native menu's accelerators and every

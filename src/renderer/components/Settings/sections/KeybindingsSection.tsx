@@ -64,6 +64,8 @@ export const KEYBINDING_NAMES: Record<string, { name: string; hint?: string }> =
   goToWiki: { name: 'Go to the Wiki page' },
   goToSettings: { name: 'Go to the Settings page' },
   goToOrgChart: { name: 'Go to the Org Chart page', hint: 'Works while the Org Chart is turned on.' },
+  homeRowUp: { name: 'Go to the agent above on Home', hint: 'The one above the selected agent in the Home list.' },
+  homeRowDown: { name: 'Go to the agent below on Home', hint: 'The one below the selected agent in the Home list.' },
   // App
   launchDefaultAgent: { name: 'Start the default agent', hint: 'In a new tab, with this workspace’s default agent.' },
   openSettings: { name: 'Open Settings' },

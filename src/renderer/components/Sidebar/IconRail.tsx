@@ -34,13 +34,17 @@ export function ProjectIcon({
   isActive,
   onClick,
   onContextMenu,
-  shortcutIndex
+  shortcutIndex,
+  homeRailRow
 }: {
   project: ProjectWithWorkspaces
   isActive: boolean
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
   shortcutIndex?: number
+  /** On Home's rail: the row's address (`data-home-rail-row`), so a
+   *  keyboard step can scroll it into view. */
+  homeRailRow?: string
 }): React.JSX.Element {
   const roster = usePresenceStore((s) => s.roster)
   const presenceSupported = usePresenceStore((s) => s.supported)
@@ -84,6 +88,7 @@ export function ProjectIcon({
       onContextMenu={onContextMenu}
       title={tooltip}
       aria-current={isActive ? 'true' : undefined}
+      data-home-rail-row={homeRailRow}
     >
       <ProjectAvatar
         projectPath={project.path}

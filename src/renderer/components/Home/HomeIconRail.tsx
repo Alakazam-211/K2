@@ -98,6 +98,7 @@ function RailRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element
         // chat, then select the workspace.
         onClick={() => void openHomeRow(row)}
         onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
+        homeRailRow={row.address}
       />
     )
   }

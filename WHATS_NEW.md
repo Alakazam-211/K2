@@ -16,6 +16,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Your server's logins show up when you add someone to an App.** In Settings → Apps → (the App) → Add a person, the list now has a "This server's logins" group, so you can give a person who signs in to this server a role in the App. Their server sign-in doesn't change.
 - **Clearer next steps when permission cards are off.** If permission cards are off and an agent is refused, `k2 app grant`, `k2 study apps` and `k2 app --help` no longer tell it to use `k2 permission request`, which it can't run. They tell it what you can do instead: make the change in Settings → Apps, or turn on permission cards in Settings → Permission Cards.
 - **Drop a file anywhere on a Thread to attach it.** The messages, the empty Thread and the message box all take it, the same as a drop on the box (a ticket's Thread too); "Drop to attach" shows while the file is over it.
+- **Step through your agents on Home from the keyboard.** ⌥⌘↓ opens the agent below the selected one in the Home list and ⌥⌘↑ the one above (Ctrl+Alt+Down / Up on Linux and Windows), in the order the list shows them, scrolling it into view; with none selected, ⌥⌘↓ starts at the top and ⌥⌘↑ at the bottom. Change the keys in Settings → Key Bindings → Navigation.
 
 ## 0.46.14 — Choose which Thread the main chat keeps
 

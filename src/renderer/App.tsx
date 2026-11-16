@@ -80,6 +80,7 @@ import { primaryRoom } from './stores/room'
 import { focusedRoom, installRoomFocusTracking } from './stores/window-room'
 import { RoomProvider } from './components/Room/RoomContext'
 import { useWorkspaceIndexShortcuts } from './hooks/useWorkspaceIndexShortcuts'
+import { useHomeRowStepShortcut } from './hooks/useHomeRowStepShortcut'
 import { useSidebarStore } from './stores/sidebar'
 import { useActiveAgentsStore, startAgentPolling, stopAgentPolling, type ActiveAgent } from './stores/active-agents'
 import AgentCloseDialog from './components/AgentCloseDialog/AgentCloseDialog'
@@ -499,6 +500,10 @@ function AppRoot(): React.JSX.Element {
   // Cmd+1–9 / Cmd+Opt+1–9 — one window-level handler (MS18). On Home,
   // Cmd+1–9 selects Home row N (answer Q5).
   useWorkspaceIndexShortcuts()
+
+  // ⌥⌘↑ / ⌥⌘↓ (Ctrl+Alt+Up / Down off macOS): the Home nav's row above /
+  // below the selected one. Home only; capture phase (lib/home-row-step).
+  useHomeRowStepShortcut()
 
   // New Window. Not inside useTerminalShortcuts — that hook exists
   // only while TerminalArea is mounted.

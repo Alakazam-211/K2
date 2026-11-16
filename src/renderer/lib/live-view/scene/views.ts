@@ -1,6 +1,6 @@
 // The views of a scene and how the tab moves between them, keyed by K2
-// Render's own view addresses (view-address.ts: `@scene:main`,
-// `@cam:<id>`, `@obj:<id>`, `@turntable:<n>`): the view picker's rows
+// Render's own view addresses (view-address.ts: `@scene:main`, `@cam:N`,
+// `@obj:N`, `@turntable:<n>`, N the live key): the view picker's rows
 // (Scene, each file camera, the framed object, Turntable, and the agent's
 // view under a divider), the keys on the picture (Home Scene, 0 the file's
 // main camera, . frame the selection, Esc back), and an object's or a
@@ -9,7 +9,7 @@
 import { GOLD } from './samples'
 import { UNITS, nameOf, objOf } from './fold'
 import type { Doc } from './types'
-import { SCENE_VIEW, camView, decId, dupView, objView, parseView, turntableView } from './view-address'
+import { SCENE_VIEW, camView, keyOf, objView, parseView, turntableView } from './view-address'
 
 export type ViewKind = 'scene' | 'camera' | 'object' | 'turntable' | 'agent'
 
@@ -38,31 +38,25 @@ export const sameView = (a: string, b: string): boolean => a === b || (kindOf(a)
 
 const units = (D: Doc): string[] => D.lists[UNITS] ?? []
 
-/** An object's view: `@obj:<its name>`, or `@obj-n:<index>` when another object has the same name. */
-export function objectView(D: Doc, addr: string): string {
-  const name = nameOf(D, addr)
-  const all = units(D)
-  return all.filter((a) => nameOf(D, a) === name).length > 1 ? dupView('object', all.indexOf(addr)) : objView(name)
+/** An object's view: its kit address (`@obj:N`). */
+export function objectView(_D: Doc, addr: string): string {
+  const k = keyOf(addr)
+  return k === null ? addr : objView(k)
 }
 
-/** A camera object's view: `@cam:<its name>`, or `@cam-n:<index>` when another camera has the same name. */
-export function cameraView(D: Doc, addr: string): string {
-  const name = nameOf(D, addr)
-  const all = units(D)
-  return all.filter((a) => objOf(D, a).kind === 'camera' && nameOf(D, a) === name).length > 1 ? dupView('camera', all.indexOf(addr)) : camView(name)
+/** A camera object's view: `@cam:N`, N its object's key. */
+export function cameraView(_D: Doc, addr: string): string {
+  const k = keyOf(addr)
+  return k === null ? SCENE_VIEW : camView(k)
 }
 
-/** The object (its kit address) a camera or object view names, when it is in the doc. */
+/** The object (its kit address) a camera or object view names, when it is in the doc (a camera view, a camera object). */
 export function objectOfView(D: Doc, v: string): string | null {
   const p = parseView(v)
   if (!p || (p.kind !== 'camera' && p.kind !== 'object')) return null
-  const all = units(D)
-  const fits = (a: string): boolean => p.kind === 'object' || objOf(D, a).kind === 'camera'
-  if ('index' in p) {
-    const a = all[p.index]
-    return a && fits(a) ? a : null
-  }
-  return all.find((a) => fits(a) && nameOf(D, a) === p.id) ?? null
+  const a = objView(p.key)
+  if (!D.props[a] || !(units(D).includes(a))) return null
+  return p.kind === 'object' || objOf(D, a).kind === 'camera' ? a : null
 }
 
 /** The file's cameras that are in the doc, in the view list's order (the sample's listing; S7 reads K2 Render's). */
@@ -86,7 +80,7 @@ export function viewName(D: Doc, v: string): string {
   if (p.kind === 'turntable') return 'Turntable'
   if (p.kind === 'camera') return cameraLabel(D, v)
   const a = objectOfView(D, v)
-  return `${a ? nameOf(D, a) : 'id' in p ? decId(p.id) : 'Object'}, framed`
+  return `${a ? nameOf(D, a) : 'Object'}, framed`
 }
 
 /** The picker's rows. `framed` is the view "Framed object" frames (your pick, else the agent's); `agent` the agent's view when it has one. */

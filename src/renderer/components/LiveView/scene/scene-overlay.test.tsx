@@ -179,7 +179,7 @@ describe('off the picture', () => {
     expect(['left', 'right', 'top', 'bottom']).toContain(chip.getAttribute('data-side'))
     fireEvent.click(chip)
     await settle()
-    expect(screen.getByTestId('lv-scene-stage').getAttribute('data-view')).toBe('@obj:Sofa')
+    expect(screen.getByTestId('lv-scene-stage').getAttribute('data-view')).toBe('@obj:15')
     expect(screen.queryByRole('button', { name: 'Sofa is off the picture. Frame it' })).toBeNull()
   })
 })

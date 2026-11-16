@@ -142,7 +142,7 @@ describe('the details popover', () => {
 
   it('says how current the picture is while it redraws or failed', () => {
     const S = at('failed', 'couldn\'t update')
-    expect(pictureDetails(S, { view: '@cam:Camera', pick: undefined, size: null }).rows.slice(0, 2)).toEqual([
+    expect(pictureDetails(S, { view: '@cam:1', pick: undefined, size: null }).rows.slice(0, 2)).toEqual([
       { label: 'Picture', value: 'One change behind; the redraw failed' },
       { label: 'Looking at', value: 'Camera 1, a camera in the file' },
     ])

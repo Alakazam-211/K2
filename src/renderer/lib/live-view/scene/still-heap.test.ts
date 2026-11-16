@@ -49,7 +49,7 @@ describe('the rasteriser’s scratch buffers', () => {
     const src = new StandInStills((rev) => DOCS[rev] ?? null)
     src.draw({ rev: 60, view: '@scene:main', shape: 'wide', width: 640 })
     const first = rasterScratch()
-    src.draw({ rev: 60, view: '@cam:Camera', shape: 'wide', width: 640 })
+    src.draw({ rev: 60, view: '@cam:1', shape: 'wide', width: 640 })
     const second = rasterScratch()
     expect(second.depth).toBe(first.depth)
     expect(second.occlusion).toBe(first.occlusion)
@@ -60,7 +60,7 @@ describe('the rasteriser’s scratch buffers', () => {
 
   it('draw the same picture whether fresh or reused', () => {
     const one = new StandInStills((rev) => DOCS[rev] ?? null).draw({ rev: 61, view: '@scene:main', shape: 'wide', width: 640 })!
-    new StandInStills((rev) => DOCS[rev] ?? null).draw({ rev: 60, view: '@cam:Camera', shape: 'tall', width: 640 })
+    new StandInStills((rev) => DOCS[rev] ?? null).draw({ rev: 60, view: '@cam:1', shape: 'tall', width: 640 })
     const two = new StandInStills((rev) => DOCS[rev] ?? null).draw({ rev: 61, view: '@scene:main', shape: 'wide', width: 640 })!
     expect(one.image.kind === 'rgba' && two.image.kind === 'rgba' && Buffer.from(one.image.data.buffer).equals(Buffer.from(two.image.data.buffer))).toBe(true)
   })

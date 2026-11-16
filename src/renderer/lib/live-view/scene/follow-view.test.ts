@@ -49,13 +49,13 @@ describe('what the say row points at', () => {
   it('the view on screen, in the kit’s view grammar, named in words', () => {
     const D = simulate(TURN, 1).D
     expect(sayAtOf(D, SCENE_VIEW)).toEqual({ label: 'Scene', title: 'What you’re looking at: the whole scene', address: '@scene:main' })
-    const t = sayAtOf(D, '@obj:Table')
-    expect(t.address).toBe('@obj:Table')
+    const t = sayAtOf(D, '@obj:10')
+    expect(t.address).toBe('@obj:10')
     expect(t.label).toBe('Table, framed')
-    for (const v of ['@scene:main', '@cam:Camera', '@obj:Table', '@turntable:3']) expect(parseView(sayAtOf(D, v).address), v).not.toBeNull()
+    for (const v of ['@scene:main', '@cam:1', '@obj:10', '@turntable:3']) expect(parseView(sayAtOf(D, v).address), v).not.toBeNull()
     expect(sayAtOf(D, '@turntable:3').label).toBe('Turntable')
     // The shell's message shape: a view address and its words, no time.
-    expect(Object.keys(sayAtOf(D, '@obj:Table')).sort()).toEqual(['address', 'label', 'title'])
+    expect(Object.keys(sayAtOf(D, '@obj:10')).sort()).toEqual(['address', 'label', 'title'])
   })
 })
 
@@ -64,7 +64,7 @@ describe('people on other views', () => {
     const S = at('who', 'on the render')
     const o = othersOnViews(S, SCENE_VIEW)
     expect(o.map((p) => `${p.name}: ${p.label}`)).toEqual(['Brook: Camera 2'])
-    expect(othersOnViews(S, '@cam:Camera.001').map((p) => p.name)).toEqual(['Sam', 'Atlas'])
+    expect(othersOnViews(S, '@cam:26').map((p) => p.name)).toEqual(['Sam', 'Atlas'])
   })
 
   it('none while the connection is down', () => {

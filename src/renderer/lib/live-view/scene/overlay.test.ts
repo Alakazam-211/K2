@@ -224,7 +224,7 @@ describe('hidden and linked objects', () => {
 describe('off the picture', () => {
   it('your pick out of this camera’s frame becomes a chip on the edge, not a tag', () => {
     const S = simulate(sc('who'), 0)
-    const d = draw(S, { pick: '@obj:15', view: '@cam:Camera.001' })
+    const d = draw(S, { pick: '@obj:15', view: '@cam:26' })
     const chip = d.chips.find((c) => c.a === '@obj:15')!
     expect(chip).toMatchObject({ name: 'Sofa', slot: 4 })
     expect(['left', 'right', 'top', 'bottom']).toContain(chip.side)
@@ -253,7 +253,7 @@ describe('geometry the browser can draw', () => {
   })
 
   it('in the sample’s close views, no box, ghost or arrow strays past that band', () => {
-    const cases: [string, number, string, string | null][] = [['who', 2, '@cam:Camera.001', '@obj:15'], ['onpic', 1, '@cam:Camera.001', '@obj:15'], ['who', 3, '@obj:Table', null], ['turn', 3, '@obj:Table', null], ['onpic', 1, '@obj:Sofa', '@obj:15']]
+    const cases: [string, number, string, string | null][] = [['who', 2, '@cam:26', '@obj:15'], ['onpic', 1, '@cam:26', '@obj:15'], ['who', 3, '@obj:10', null], ['turn', 3, '@obj:10', null], ['onpic', 1, '@obj:15', '@obj:15']]
     for (const [id, step, view, pick] of cases) {
       const d = draw(simulate(sc(id), step), { view, pick })
       for (const p of [...d.boxes, ...d.ghosts, ...d.arrows]) expect(Math.max(...coords(p.d).map(Math.abs)), `${id}@${step} ${view} ${p.a}`).toBeLessThanOrEqual(BAND)

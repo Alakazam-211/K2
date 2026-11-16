@@ -1,10 +1,11 @@
 // SAMPLE ONLY. The mock's sample data names views the way the mock did
 // (`@scene`, `@cam:<object number>`, `@obj:<kit address>`,
 // `@scene/turntable`, and `@obj:*` for "the framed object"), and its
-// presence goldens keep them as pinned. The tab speaks K2 Render's
-// addresses (view-address.ts), so the sample's views are read through this
-// one adapter wherever they leave the simulation. A live source sends K2
-// Render's addresses and needs none of it.
+// presence goldens keep them as pinned. The tab speaks K2 Render's native
+// addresses (view-address.ts): the mock's cameras and objects already are
+// (`@cam:26`, `@obj:15`), so this adapter only spells the scene and the
+// turntable, and sends a view of something not in the doc to the scene. A
+// live source sends K2 Render's addresses and needs none of it.
 
 import { cameraView, objectView } from './views'
 import { SCENE_VIEW, parseView, turntableView } from './view-address'

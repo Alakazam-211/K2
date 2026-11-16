@@ -96,7 +96,7 @@ describe('following on the picture', () => {
     await settle()
     expect(dispatched).toContainEqual({ type: 'follow', who: 'agent:atlas' })
     expect(stage().getAttribute('data-following')).toBe('agent:atlas')
-    expect(stage().getAttribute('data-view')).toBe('@obj:Table')
+    expect(stage().getAttribute('data-view')).toBe('@obj:10')
   })
 
   it('choosing a view yourself looks away; the shell then offers Back to them', async () => {
@@ -113,7 +113,7 @@ describe('following on the picture', () => {
     mount('follow', idx('follow', 'say something'), { kind: 'following', who: 'agent:atlas' })
     await settle()
     const last = said.filter(Boolean).pop()!
-    expect(last).toMatchObject({ label: 'Table, framed', address: '@obj:Table' })
+    expect(last).toMatchObject({ label: 'Table, framed', address: '@obj:10' })
     expect(parseView(last.address)).not.toBeNull()
   })
 
@@ -145,7 +145,7 @@ describe('following on the picture', () => {
     expect(within(fin).getByRole('button', { name: 'Back to my place' })).toBeTruthy()
     expect(within(fin).queryByRole('button', { name: 'Follow again' })).toBeNull()
     // You keep the view Sam had.
-    expect(stage().getAttribute('data-view')).toBe('@cam:Camera.001')
+    expect(stage().getAttribute('data-view')).toBe('@cam:26')
   })
 })
 
@@ -158,7 +158,7 @@ describe('people on other views', () => {
     fireEvent.click(chip)
     await settle()
     expect(state).toEqual({ kind: 'following', who: 'agent:brook' })
-    expect(stage().getAttribute('data-view')).toBe('@cam:Camera.001')
+    expect(stage().getAttribute('data-view')).toBe('@cam:26')
   })
 })
 

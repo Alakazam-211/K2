@@ -67,7 +67,7 @@ describe('the still cache', () => {
 describe('the stand-in’s stills', () => {
   it('stay within the cap however many views are drawn', () => {
     const src = new StandInStills((rev) => DOCS[rev] ?? null)
-    const views = ['@scene:main', '@cam:Camera', '@cam:Camera.001', '@obj:Table', '@obj:Sofa', '@turntable:0', '@turntable:1', '@turntable:2', '@turntable:3', '@turntable:4']
+    const views = ['@scene:main', '@cam:1', '@cam:26', '@obj:10', '@obj:15', '@turntable:0', '@turntable:1', '@turntable:2', '@turntable:3', '@turntable:4']
     for (const rev of [60, 61]) for (const view of views) src.draw({ rev, view, shape: 'wide', width: 64 })
     expect(src.cached).toBe(STILL_CACHE_MAX)
   })

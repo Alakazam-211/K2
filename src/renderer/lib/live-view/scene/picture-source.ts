@@ -16,7 +16,7 @@ import type { IdLayer } from './ids'
 import type { StillCamera } from './project'
 import type { Doc } from './types'
 
-/** K2 Render's view address (view-address.ts): `@scene:main`, `@cam:<enc(id)>`, `@obj:<enc(id)>`, `@turntable:<0-7>`, `@cam-n:<i>` / `@obj-n:<i>`. */
+/** K2 Render's view address (view-address.ts): `@scene:main`, `@cam:N`, `@obj:N` (N the live key), `@turntable:<0-7>`. */
 export type ViewAddress = string
 
 /** 16:9, or 4:3 for a tall pane. */

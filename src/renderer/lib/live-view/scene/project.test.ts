@@ -137,7 +137,7 @@ describe('the stand-in still (sample)', () => {
   })
 
   it('names what is under the projected centre of Table (its camera and id image agree)', () => {
-    const st = src.draw({ rev: D.rev, view: '@obj:Table', shape: 'wide', width: 320 })!
+    const st = src.draw({ rev: D.rev, view: '@obj:10', shape: 'wide', width: 320 })!
     const w = worldOf(D, '@obj:10')!
     // The table top's centre, 0.77 m up in its own space.
     const p = [w[8] * 0.77 + w[12], w[9] * 0.77 + w[13], w[10] * 0.77 + w[14]]

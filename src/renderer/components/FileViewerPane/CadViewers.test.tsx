@@ -135,6 +135,17 @@ describe('DxfViewer', () => {
     }
   })
 
+  it('a TEXT width factor (41) scales the glyphs across, in the text’s own frame', async () => {
+    const dxf = readFileSync(resolve(__dirname, '__fixtures__/dxf-text-width-factor.dxf'), 'utf8')
+    renderInPrimaryRoom(<DxfViewer text={dxf} />)
+    const svg = await screen.findByTestId('dxf-svg')
+    expect(Array.from(svg.querySelectorAll('text')).map((t) => t.getAttribute('transform'))).toEqual([
+      'translate(0 0) scale(1 -1) scale(2 1)',
+      'translate(0 -20) scale(1 -1)',
+      'translate(0 -40) scale(1 -1) scale(0.5 1)',
+    ])
+  })
+
   it('wheel zooms around the cursor; Fit and double-click restore the fitted view', async () => {
     renderInPrimaryRoom(<DxfViewer text={DXF_FIXTURE} />)
     const svg = await screen.findByTestId('dxf-svg')

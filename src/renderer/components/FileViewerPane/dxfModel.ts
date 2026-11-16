@@ -55,6 +55,8 @@ export type DxfNode =
       lh: number
       /** Aligned and fit TEXT: stretched to this length along the baseline. */
       len?: number
+      /** TEXT width factor (group 41) when not 1: glyphs scale across by it. */
+      wf?: number
       c: string
     }
   | { k: 'group'; m: Mat; children: DxfNode[] }
@@ -319,11 +321,12 @@ export function drawingFromDxf(
     c: string,
     ctx: Ctx,
     len?: number,
+    wf = 1,
   ): DxfNode | null {
     const visible = lines.filter((l) => l.length > 0)
     if (!visible.length) return null
     // Rough extent for the fit: 0.6·h per character (K2DRAW1 §7).
-    const w = len ?? Math.max(...lines.map((l) => l.length)) * h * 0.6
+    const w = len ?? Math.max(...lines.map((l) => l.length)) * h * 0.6 * wf
     const r = (rot * Math.PI) / 180
     const dx = anchor === 'start' ? 0 : anchor === 'middle' ? -w / 2 : -w
     for (const [px, py] of [
@@ -335,7 +338,7 @@ export function drawingFromDxf(
       add(ctx.m, x + px * Math.cos(r) - py * Math.sin(r), y + px * Math.sin(r) + py * Math.cos(r))
     }
     const node: DxfNode = { k: 'text', x, y, h, fs: fontSizeFor(h, metrics), rot, lines, anchor, y0, lh, c }
-    return len === undefined ? node : { ...node, len }
+    return { ...node, ...(len !== undefined ? { len } : {}), ...(wf !== 1 ? { wf } : {}) }
   }
 
   function entity(e: IEntity, ctx: Ctx, top: boolean): DxfNode | null {
@@ -462,7 +465,7 @@ export function drawingFromDxf(
         const t = e as ITextEntity
         const line = decodeSpecials(t.text ?? '')
         const p = placeText(t, line, metrics)
-        node = textNode(p.x, p.y, p.h, p.rot, [line], p.anchor, p.y0, p.h, c, ctx, p.len)
+        node = textNode(p.x, p.y, p.h, p.rot, [line], p.anchor, p.y0, p.h, c, ctx, p.len, p.wf)
         break
       }
       case 'MTEXT': {

@@ -22,12 +22,15 @@ export type TextPlace = {
   y0: number
   /** Aligned and fit: the run's length, which the text is stretched to. */
   len?: number
+  /** Width factor (41) when not 1: glyph widths scale by it. Aligned and fit text is stretched to its run instead. */
+  wf?: number
 }
 
 const num = (v: unknown, d = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : d)
 
 export function placeText(t: ITextEntity, line: string, m: TextMetrics): TextPlace {
   const h = num(t.textHeight, 1) || 1
+  const wf = num(t.xScale, 1) || 1
   const p1 = { x: num(t.startPoint?.x), y: num(t.startPoint?.y) }
   if ((t.halign === 3 || t.halign === 5) && t.endPoint) {
     const dx = num(t.endPoint.x) - p1.x
@@ -37,7 +40,6 @@ export function placeText(t: ITextEntity, line: string, m: TextMetrics): TextPla
       const rot = (Math.atan2(dy, dx) * 180) / Math.PI
       if (t.halign === 5) return { ...p1, h, rot, anchor: 'start', y0: 0, len }
       // Aligned: the font size whose natural width (with the width factor) is the run.
-      const wf = num(t.xScale, 1) || 1
       const natural = m.advance(line) * wf
       return { ...p1, h: natural > 0 ? (len / natural) * m.cap : h, rot, anchor: 'start', y0: 0, len }
     }
@@ -46,5 +48,5 @@ export function placeText(t: ITextEntity, line: string, m: TextMetrics): TextPla
   const anchor = t.halign === 1 || t.halign === 4 ? 'middle' : t.halign === 2 ? 'end' : 'start'
   // "Middle" (72 = 4) centres on the cap height, as middle (73 = 2) does.
   const y0 = t.valign === 3 ? h : t.valign === 2 || t.halign === 4 ? h / 2 : t.valign === 1 ? -0.2 * h : 0
-  return { ...at, h, rot: num(t.rotation), anchor, y0 }
+  return { ...at, h, rot: num(t.rotation), anchor, y0, ...(wf !== 1 ? { wf } : {}) }
 }

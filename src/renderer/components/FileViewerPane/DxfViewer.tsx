@@ -70,7 +70,7 @@ function renderNode(node: DxfNode, key: number): ReactNode {
       return (
         <text
           key={key}
-          transform={`translate(${node.x} ${node.y}) scale(1 -1)${node.rot ? ` rotate(${-node.rot})` : ''}`}
+          transform={`translate(${node.x} ${node.y}) scale(1 -1)${node.rot ? ` rotate(${-node.rot})` : ''}${node.wf ? ` scale(${node.wf} 1)` : ''}`}
           fontSize={node.fs}
           textAnchor={node.anchor}
           fill={node.c}

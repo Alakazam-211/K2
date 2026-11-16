@@ -102,6 +102,26 @@ describe('TEXT "Middle" (72 = 4)', () => {
   })
 })
 
+describe('TEXT width factor (41)', () => {
+  const d = buildDrawing(fixture('dxf-text-width-factor.dxf'))
+  const [wide, plain, narrow] = of(d.nodes, 'text')
+
+  it('scales glyph widths, not the height', () => {
+    expect([wide.wf, plain.wf, narrow.wf]).toEqual([2, undefined, 0.5])
+    expect(new Set([wide.fs, plain.fs, narrow.fs]).size).toBe(1)
+  })
+
+  it('widens the fit: 4 characters × 0.6·h × 2', () => {
+    expect(d.bounds!.maxX).toBeCloseTo(4 * 0.6 * 10 * 2, 9)
+  })
+
+  it('aligned and fit text take no extra scale: they are stretched to their run', () => {
+    const fit = of(buildDrawing(fixture('dxf-aligned-fit-text.dxf').replace('72\n5', '41\n3\n72\n5')).nodes, 'text')[1]
+    expect(fit.len).toBe(100)
+    expect(fit.wf).toBeUndefined()
+  })
+})
+
 describe('O4 #4: a DXF text height is the cap height', () => {
   const text = fixture('dxf-cap-height.dxf')
 

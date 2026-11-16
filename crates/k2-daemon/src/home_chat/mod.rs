@@ -124,6 +124,43 @@ pub fn status() -> (bool, Option<&'static str>) {
     (true, None)
 }
 
+/// Sew's data went back under K2 (`k2 hostchat rollback --accept-data-loss`,
+/// `k2 hostchat restore`): K2's Home chat ledger for it is dropped or sent
+/// again ([`k2_core::tool_hook::admin_channels::forget_sew_ids`]: DM ids,
+/// channel ids, confirmed member lists), every held person starts over
+/// (session, read state, gateway) at once, and the grant hook's sweep runs
+/// now, so the status and Sew's feature list follow the Sew that runs, not
+/// the one before. Never fails the operation that called it: what goes
+/// wrong is logged.
+pub fn sew_data_reset(why: &str) {
+    let forgot = k2_core::tool_hook::with_home_chat_db(|conn| {
+        let r = k2_core::tool_hook::admin_channels::forget_sew_ids(conn, now_secs())?;
+        // The K5 Space, its rooms and its members are checked again (made
+        // again if the bundle predates them) before the sweep sends anything
+        // there: `k2 voice repair`'s full check. The members map is the
+        // sweep's own reconcile.
+        use k2_core::tool_hook::admin_space;
+        admin_space::mark_verify(conn, admin_space::VERIFY_FULL, &format!("Sew's data was reset: {why}"), now_secs(), true)?;
+        Ok(r)
+    });
+    match forgot {
+        Ok(r) => k2_core::log_debug!(
+            "[home-chat] Sew's data was reset ({why}): {} DM ids forgotten, {} channels to make again, {} people to add again, {} lists to resend",
+            r.dms,
+            r.channels,
+            r.members,
+            r.lists
+        ),
+        Err(e) => k2_core::log_debug!("[home-chat] Sew's data was reset ({why}); K2's ledger: {e}"),
+    }
+    for ext in follower::held_people() {
+        if let Some(h) = follower::get(&ext) {
+            h.start_over();
+        }
+    }
+    k2_core::tool_hook::kick_reconcile();
+}
+
 /// `/boot-status` lists `home-chat-v1` only when Home chat is on and Sew is
 /// set up and running here.
 pub fn boot_status_key() -> Option<&'static str> {

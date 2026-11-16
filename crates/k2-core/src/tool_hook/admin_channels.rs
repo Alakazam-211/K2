@@ -425,6 +425,76 @@ pub fn set_dm_channel(conn: &Connection, person: &str, target: &str, channel_id:
     .map_err(|e| format!("home dm write: {e}"))
 }
 
+/// Forget DM channel `channel_id` for both people (Sew no longer has it):
+/// the next open makes it again.
+pub fn forget_dm_channel(conn: &Connection, channel_id: &str) -> Result<usize, String> {
+    conn.execute("DELETE FROM tool_home_chat_dms WHERE channel_id = ?1", params![channel_id]).map_err(|e| format!("home dm forget: {e}"))
+}
+
+/// What [`forget_sew_ids`] dropped or sent again.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SewReset {
+    /// DM channel ids forgotten (each is made again on its next open).
+    pub dms: usize,
+    /// Live channels made again by slug (mgmt's create is idempotent on the
+    /// slug: one Sew still has comes back with its id, one it lost is new).
+    pub channels: usize,
+    /// People put back on their way into those channels.
+    pub members: usize,
+    /// People whose private-channel list Sew last confirmed, now unknown.
+    pub lists: usize,
+}
+
+/// Sew's data went back (an emergency rollback across a schema change, a
+/// backup restore): every Sew id K2 holds may name nothing now, or what
+/// Sew had before. K2 keeps what people asked for and drops what it learnt
+/// from Sew: DM channel ids go (made again on open); each live channel goes
+/// back to `pending` with no id and its people to `pending_add`, so the
+/// sweep makes it again by its slug and adds them (people on their way out
+/// are simply out; one on its way to archived is archived); every
+/// confirmed private-channel list is forgotten, so the next level sync
+/// sends the whole list. Archived channels stay as they are (read-only
+/// either way).
+pub fn forget_sew_ids(conn: &Connection, now: i64) -> Result<SewReset, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| format!("home sew reset begin: {e}"))?;
+    let e = |what: &'static str| move |err: rusqlite::Error| format!("home sew reset ({what}): {err}");
+    let dms = tx.execute("DELETE FROM tool_home_chat_dms", []).map_err(e("dms"))?;
+    // A channel on its way to being archived is archived: K2 never makes
+    // it again only to archive it.
+    tx.execute(
+        "UPDATE tool_admin_chat_channels SET state = 'archived', why = NULL, updated_at = ?1 WHERE state = 'active' AND want_archive = 1",
+        params![now],
+    )
+    .map_err(e("archiving"))?;
+    tx.execute(
+        "DELETE FROM tool_admin_chat_members WHERE state = 'pending_remove'
+           AND slug IN (SELECT slug FROM tool_admin_chat_channels WHERE state = 'active')",
+        [],
+    )
+    .map_err(e("leavers"))?;
+    let members = tx
+        .execute(
+            "UPDATE tool_admin_chat_members SET state = 'pending_add', why = NULL, updated_at = ?1
+             WHERE state = 'in' AND slug IN (SELECT slug FROM tool_admin_chat_channels WHERE state = 'active')",
+            params![now],
+        )
+        .map_err(e("members"))?;
+    let channels = tx
+        .execute(
+            "UPDATE tool_admin_chat_channels SET channel_id = NULL, state = 'pending', can_leave = 0,
+                why = 'Sew''s data was reset: K2 makes it again', updated_at = ?1
+             WHERE state = 'active'",
+            params![now],
+        )
+        .map_err(e("channels"))?;
+    let lists = tx
+        .execute("UPDATE tool_admin_member_channels SET channel_ids_sent = NULL, updated_at = ?1 WHERE channel_ids_sent IS NOT NULL", params![now])
+        .map_err(e("lists"))?;
+    tx.commit().map_err(|err| format!("home sew reset commit: {err}"))?;
+    Ok(SewReset { dms, channels, members, lists })
+}
+
 /// The other person of a DM channel `person` keeps (`None`: not one of theirs).
 pub fn dm_target(conn: &Connection, person: &str, channel_id: &str) -> Result<Option<String>, String> {
     conn.query_row("SELECT target_ext FROM tool_home_chat_dms WHERE person_ext = ?1 AND channel_id = ?2", params![person, channel_id], |r| r.get(0))

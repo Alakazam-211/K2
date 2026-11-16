@@ -3434,6 +3434,10 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
         Some(n) if n == 0 || sew_rolled_back_engine_failed(&v) => {
             // 4. K2's check of the old core, the row, voice; then doctor.
             let mut body = merge(after_rollback(env, Some(to.clone()), &v, media_to));
+            // Sew's chat is the bundle's now: K2's Home chat ledger, held
+            // sessions and Sew's feature list follow it (not the newer
+            // Sew's), once the old core answers its health check above.
+            crate::home_chat::sew_data_reset(&format!("rolled back {from} -> {to} to {bundle}"));
             let (fails, doc) = doctor_fails(env);
             body["doctorFails"] = json!(fails);
             body["doctorRun"] = doc;
@@ -3671,6 +3675,11 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
     let v = helper(env, &["restore", bundle_id], None).map_err(|e| no("helper_error", 500, e))?;
     let exit = sew_exit(&v).unwrap_or(0);
     let healthy = health_check(env, row.installed_version.as_deref().unwrap_or(pinned().version));
+    // Only Sew's refusals leave its data alone (see `untouched` below):
+    // otherwise K2's Home chat ledger and held sessions follow the bundle.
+    if !matches!(exit, 2 | 3 | 4 | 69 | 75 | 77) {
+        crate::home_chat::sew_data_reset(&format!("restored {bundle_id}"));
+    }
     let serving = healthy.is_ok();
     let ok = exit == 0 && serving;
     let err = if exit != 0 {

@@ -106,7 +106,7 @@ pub fn handle(path: &str, caller: R<Caller>, is_post: bool, params: &HashMap<Str
     }
 }
 
-fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &[u8]) -> R<Value> {
+pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &[u8]) -> R<Value> {
     match path {
         // `me`: the caller's own member id, so a client tells its own
         // messages from others' (Sew names authors by member id).
@@ -169,11 +169,18 @@ fn as_person(c: &Caller, method: &str, path: &str, body: Option<&Value>) -> R<Se
 /// One call to Sew as box person `ext` on their held session (DM calls use
 /// it too: `voice::dm_call`); a 401 signs in again once.
 pub(crate) fn sew_as(ext: &str, method: &str, path: &str, body: Option<&Value>) -> R<SewAnswer> {
+    sew_as_keyed(ext, method, path, body, None)
+}
+
+/// [`sew_as`], a POST carrying Sew's `Idempotency-Key` when `key` is given
+/// (Sew replays the first answer to the same key for 24 h).
+fn sew_as_keyed(ext: &str, method: &str, path: &str, body: Option<&Value>, key: Option<&str>) -> R<SewAnswer> {
     let h = follower::hold(ext);
     let d = deps();
-    let call = |tok: &str| match (method, body) {
-        ("GET", _) => d.sew.get(Some(tok), path),
-        (_, b) => d.sew.post(Some(tok), path, b.unwrap_or(&json!({}))),
+    let call = |tok: &str| match (method, body, key) {
+        ("GET", _, _) => d.sew.get(Some(tok), path),
+        (_, b, Some(k)) => d.sew.post_keyed(Some(tok), path, b.unwrap_or(&json!({})), k),
+        (_, b, None) => d.sew.post(Some(tok), path, b.unwrap_or(&json!({}))),
     };
     let tok = h.token()?;
     let a = call(&tok).map_err(super::sessions::unavailable)?;
@@ -187,10 +194,16 @@ pub(crate) fn sew_as(ext: &str, method: &str, path: &str, body: Option<&Value>) 
 
 fn ok_or_refuse(a: SewAnswer) -> R<Value> {
     if a.ok() {
-        Ok(a.body)
-    } else {
-        Err(sew_refusal(&a))
+        return Ok(a.body);
     }
+    // Sew's `422 invalid_state {reason: channel_archived}` is the brief's
+    // `409 channel_archived` (a post, a reaction, a read in an archived
+    // channel), the same answer K2's own ledger check gives.
+    let said = |p: &str| a.body.pointer(p).and_then(Value::as_str) == Some("channel_archived");
+    if said("/error/details/reason") || said("/error/code") {
+        return Err(archived());
+    }
+    Err(sew_refusal(&a))
 }
 
 fn flags() -> k2_core::tool_hook::features::HomeChatFeatures {
@@ -248,6 +261,7 @@ fn summary(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
     let convs: Vec<String> = param(p, "convs").map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
     let h = follower::hold(&c.ext);
     let flag = flags().read_state_unread_count;
+    settle_kinds(c, &h, &convs)?;
     let mut rows = h.state.lock().unwrap_or_else(|e| e.into_inner()).summary(&convs, flag);
     // A DM names its other person when K2 kept it (`with`), so a person row
     // on Home finds its badge without opening the DM first.
@@ -270,6 +284,32 @@ fn summary(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
         _ => "unavailable",
     };
     Ok(json!({"ok": true, "chat": chat, "convs": rows}))
+}
+
+/// A DM is a DM in the summary whatever Sew event made its row first: a
+/// read state can come before the message (Sew moves the poster's cursor
+/// first) and says nothing of the kind. A row that reads as a channel with
+/// no Space is checked against K2's DM ledger (also mending a row stored
+/// wrong before); one no event has named yet is read from Sew once.
+fn settle_kinds(c: &Caller, h: &follower::Held, convs: &[String]) -> R<()> {
+    let unsure = h.state.lock().unwrap_or_else(|e| e.into_inner()).kind_unsure(convs);
+    for conv in unsure {
+        if skin(|conn| ledger::dm_other(conn, &c.ext, &conv))?.is_some() {
+            h.state.lock().unwrap_or_else(|e| e.into_inner()).note_dm(&conv);
+        }
+    }
+    let unknown = h.state.lock().unwrap_or_else(|e| e.into_inner()).kind_unknown(convs);
+    for conv in unknown {
+        if !hook::sew_wire::is_sew_id(&conv) {
+            continue;
+        }
+        // Best effort: unreachable now, asked again on the next summary.
+        if let Ok(a) = as_person(c, "GET", &format!("/api/v1/channels/{conv}"), None) {
+            let ch = if a.ok() { a.body.get("channel").cloned().unwrap_or(a.body) } else { Value::Null };
+            h.state.lock().unwrap_or_else(|e| e.into_inner()).apply_channel(&conv, &ch);
+        }
+    }
+    Ok(())
 }
 
 /// A page of messages (newest last), with Sew's `reactions` and
@@ -367,7 +407,19 @@ fn dm(c: &Caller, b: DmBody) -> R<Value> {
     }
     people::check_target(&target)?;
     if let Some(conv) = skin(|conn| ledger::dm_channel(conn, &c.ext, &target))? {
-        return Ok(json!({"ok": true, "conv": conv, "created": false}));
+        // The kept id is Sew's only while Sew still has it: a rollback or a
+        // restore of Sew's data can take it away. Sew answers for it first;
+        // a DM it no longer has (404, or 403 once it isn't the caller's) is
+        // forgotten and made again below, never handed back.
+        let a = as_person(c, "GET", &format!("/api/v1/channels/{}", sew_id(&conv, "the kept DM")?), None)?;
+        match a.status {
+            s if (200..300).contains(&s) => return Ok(json!({"ok": true, "conv": conv, "created": false})),
+            403 | 404 => {
+                k2_core::log_debug!("[home-chat] {}: kept DM {conv} with {target} is gone from Sew ({}); making it again", c.ext, a.status);
+                skin(|conn| ledger::forget_dm_channel(conn, &conv))?;
+            }
+            _ => return Err(sew_refusal(&a)),
+        }
     }
     let member = people::member_id(&target)?;
     let body = ok_or_refuse(as_person(c, "POST", "/api/v1/dms", Some(&json!({"member_ids": [member]})))?)?;
@@ -407,13 +459,174 @@ fn send(c: &Caller, b: SendBody) -> R<Value> {
         return Err(usage("nonce is 1-64 characters (a retry sends the same one)"));
     }
     check_dm_writable(c, &conv)?;
+    check_channel_writable(&conv)?;
     let mut body = json!({"body": b.text, "nonce": b.nonce});
     if let Some(r) = b.reply_to.as_deref() {
         // D8: an inline reply reference, never a Sew sub-thread.
         body["reference"] = json!({"message_id": sew_id(r, "replyTo")?, "kind": "reply"});
     }
-    let m = ok_or_refuse(as_person(c, "POST", &format!("/api/v1/channels/{conv}/messages"), Some(&body))?)?;
-    Ok(json!({"ok": true, "message": m}))
+    let key = sends::Key { ext: c.ext.clone(), conv: conv.clone(), nonce: b.nonce.clone() };
+    let idem = key.idempotency_key();
+    sends::once(key, || {
+        let a = sew_as_keyed(&c.ext, "POST", &format!("/api/v1/channels/{conv}/messages"), Some(&body), Some(&idem))?;
+        if a.status == 404 && skin(|conn| ledger::dm_target(conn, &c.ext, &conv))?.is_some() {
+            // A DM K2 kept that Sew no longer has (its data was rolled
+            // back or restored): forget it, so opening the DM makes it again.
+            skin(|conn| ledger::forget_dm_channel(conn, &conv))?;
+            return Err(Refusal::new(404, "conversation_gone", "this DM is gone from chat on this server: open it again (POST /cli/home-chat/dm) and resend"));
+        }
+        let m = ok_or_refuse(a)?;
+        Ok(json!({"ok": true, "message": m}))
+    })
+}
+
+/// A Home channel K2's ledger holds as archived (or on its way there) takes
+/// no post: 409 `channel_archived`, before Sew is asked.
+fn check_channel_writable(conv: &str) -> R<()> {
+    if let Some(ch) = skin(|conn| ledger::channel_by_id(conn, conv))? {
+        if ch.state == ledger::CH_ARCHIVED || ch.want_archive {
+            return Err(archived());
+        }
+    }
+    Ok(())
+}
+
+fn archived() -> Refusal {
+    Refusal::new(409, "channel_archived", "that channel is archived: it is read-only")
+}
+
+/// One post per (sender, conversation, nonce) (§14.4 `send`: "a retry sends
+/// the same nonce"). A retry inside [`sends::KEEP_SECS`] (Sew's own
+/// idempotency window, 24 h) gets the first post's answer back and posts
+/// nothing; one that arrives while the first is still with Sew waits for
+/// it. Sew gets the same `Idempotency-Key` for each, so a retry after a
+/// daemon restart (this memory is gone) is still one message: Sew replays.
+pub(super) mod sends {
+    use std::collections::HashMap;
+    use std::sync::{Condvar, Mutex, OnceLock};
+    use std::time::Duration;
+
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
+
+    use super::R;
+
+    /// Sew keeps an `Idempotency-Key` this long (`IDEMPOTENCY_TTL_MS`).
+    pub const KEEP_SECS: i64 = 24 * 3600;
+    /// Most answers kept (the oldest go first).
+    pub const KEEP_MAX: usize = 4096;
+    /// How long a retry waits for the first send still with Sew (Sew's
+    /// client timeout is 15 s).
+    const WAIT: Duration = Duration::from_secs(20);
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct Key {
+        pub ext: String,
+        pub conv: String,
+        pub nonce: String,
+    }
+
+    impl Key {
+        /// Sew's `Idempotency-Key` (`[A-Za-z0-9_-]{1,64}`): the three
+        /// hashed, so any nonce fits and a person's nonce never names another's post.
+        pub fn idempotency_key(&self) -> String {
+            let mut h = Sha256::new();
+            for part in [&self.ext, &self.conv, &self.nonce] {
+                h.update(part.as_bytes());
+                h.update([0u8]);
+            }
+            let hex: String = h.finalize().iter().take(20).map(|b| format!("{b:02x}")).collect();
+            format!("k2hc-send-{hex}")
+        }
+    }
+
+    enum Slot {
+        InFlight,
+        Done { at: i64, answer: Value },
+    }
+
+    struct Book {
+        map: Mutex<HashMap<Key, Slot>>,
+        moved: Condvar,
+    }
+
+    fn book() -> &'static Book {
+        static B: OnceLock<Book> = OnceLock::new();
+        B.get_or_init(|| Book { map: Mutex::new(HashMap::new()), moved: Condvar::new() })
+    }
+
+    /// Run `post` once for `key`; a retry gets its answer. A refusal is not
+    /// kept: the next try asks Sew again (with the same key).
+    pub fn once(key: Key, post: impl FnOnce() -> R<Value>) -> R<Value> {
+        let b = book();
+        let mut m = b.map.lock().unwrap_or_else(|p| p.into_inner());
+        let deadline = std::time::Instant::now() + WAIT;
+        loop {
+            match m.get(&key) {
+                Some(Slot::Done { at, answer }) if *at > super::now_secs() - KEEP_SECS => return Ok(answer.clone()),
+                Some(Slot::InFlight) => {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        return Err(crate::voice::bff::Refusal::new(
+                            409,
+                            "send_in_progress",
+                            "the first send with this nonce is still on its way; try again in a moment",
+                        ));
+                    }
+                    m = b.moved.wait_timeout(m, left).unwrap_or_else(|p| p.into_inner()).0;
+                }
+                _ => break,
+            }
+        }
+        m.insert(key.clone(), Slot::InFlight);
+        drop(m);
+        // A post that panics never leaves its retries waiting.
+        struct Unstick<'a>(&'a Book, Option<Key>);
+        impl Drop for Unstick<'_> {
+            fn drop(&mut self) {
+                if let Some(k) = self.1.take() {
+                    self.0.map.lock().unwrap_or_else(|p| p.into_inner()).remove(&k);
+                    self.0.moved.notify_all();
+                }
+            }
+        }
+        let mut unstick = Unstick(b, Some(key.clone()));
+        let r = post();
+        unstick.1 = None;
+        let mut m = b.map.lock().unwrap_or_else(|p| p.into_inner());
+        match &r {
+            Ok(answer) => {
+                let now = super::now_secs();
+                m.retain(|_, s| !matches!(s, Slot::Done { at, .. } if *at <= now - KEEP_SECS));
+                if m.len() >= KEEP_MAX {
+                    let oldest = m
+                        .iter()
+                        .filter_map(|(k, s)| match s {
+                            Slot::Done { at, .. } => Some((*at, k.clone())),
+                            Slot::InFlight => None,
+                        })
+                        .min_by(|a, b| a.0.cmp(&b.0))
+                        .map(|(_, k)| k);
+                    if let Some(k) = oldest {
+                        m.remove(&k);
+                    }
+                }
+                m.insert(key, Slot::Done { at: now, answer: answer.clone() });
+            }
+            Err(_) => {
+                m.remove(&key);
+            }
+        }
+        drop(m);
+        b.moved.notify_all();
+        r
+    }
+
+    /// Tests: forget every kept answer (a daemon restart).
+    #[cfg(test)]
+    pub fn forget_for_tests() {
+        book().map.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    }
 }
 
 #[derive(Deserialize)]

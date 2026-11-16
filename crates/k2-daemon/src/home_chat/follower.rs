@@ -77,6 +77,10 @@ pub struct Held {
     pub connects: AtomicU32,
     stop: Notify,
     stopped: AtomicBool,
+    /// Sew's data was reset ([`Held::start_over`]): the loop drops what it
+    /// held and connects again now, without its backoff.
+    fresh: AtomicBool,
+    wake: Notify,
 }
 
 impl Held {
@@ -92,7 +96,27 @@ impl Held {
             connects: AtomicU32::new(0),
             stop: Notify::new(),
             stopped: AtomicBool::new(false),
+            fresh: AtomicBool::new(false),
+            wake: Notify::new(),
         }
+    }
+
+    /// Sew's data was reset under this person (an emergency rollback, a
+    /// restore): the held session, the gateway session and every read
+    /// state K2 kept may name nothing now. Drop them, tell the person's
+    /// clients to read again, and connect again at once (a fresh sign-in,
+    /// IDENTIFY, READY), not after the backoff the restart's drops built up.
+    pub fn start_over(&self) {
+        self.forget_session();
+        {
+            let mut st = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let viewing = std::mem::take(&mut st.viewing);
+            *st = PersonState { viewing, ..Default::default() };
+        }
+        self.fresh.store(true, Ordering::SeqCst);
+        self.wake.notify_one();
+        self.set_status("connecting");
+        self.publish(&[json!({"type": "summary_changed"})]);
     }
 
     /// Publish `frames` to the person's client sockets.
@@ -371,6 +395,11 @@ async fn run(h: Arc<Held>) {
     let mut backoff = Duration::from_secs(1);
     let mut resume = false;
     while !h.stopped.load(Ordering::SeqCst) {
+        if h.fresh.swap(false, Ordering::SeqCst) {
+            // Sew's data was reset: nothing held is good (start_over).
+            backoff = Duration::from_secs(1);
+            resume = false;
+        }
         let h2 = h.clone();
         let token = match blocking(move || h2.token()).await {
             Some(Ok(t)) => t,
@@ -388,8 +417,14 @@ async fn run(h: Arc<Held>) {
         match connect_once(&h, &token, resume).await {
             Ended::Stop => return,
             Ended::Again { resume: r } => {
-                resume = r;
-                if !r {
+                // A socket that went live starts the backoff over: Sew
+                // restarting (an upgrade, a rollback) drops it several
+                // times, and those drops must not leave the next try 30 s off.
+                if h.status() == "live" {
+                    backoff = Duration::from_secs(1);
+                }
+                resume = r && !h.fresh.load(Ordering::SeqCst);
+                if !resume && !h.fresh.load(Ordering::SeqCst) {
                     // The gateway session is gone: catch up over HTTP first.
                     let h2 = h.clone();
                     let tok = token.clone();
@@ -419,9 +454,14 @@ async fn wait_or_stop(h: &Held, d: Duration) -> bool {
     if h.stopped.load(Ordering::SeqCst) {
         return true;
     }
+    if h.fresh.load(Ordering::SeqCst) {
+        return false;
+    }
     tokio::select! {
         _ = tokio::time::sleep(d) => h.stopped.load(Ordering::SeqCst),
         _ = h.stop.notified() => true,
+        // Sew's data was reset: try again now.
+        _ = h.wake.notified() => h.stopped.load(Ordering::SeqCst),
     }
 }
 
@@ -511,6 +551,15 @@ async fn connect_once(h: &Arc<Held>, token: &str, resume: bool) -> Ended {
             _ = h.stop.notified() => {
                 let _ = write.send(Message::Close(None)).await;
                 break Ended::Stop;
+            }
+            _ = h.wake.notified() => {
+                // Sew's data was reset under a live socket: start over (a
+                // wake left over from before this socket changes nothing).
+                if !h.fresh.load(Ordering::SeqCst) {
+                    continue;
+                }
+                let _ = write.send(Message::Close(None)).await;
+                break Ended::Again { resume: false };
             }
             _ = heartbeat.tick() => {
                 let s = h.state.lock().unwrap_or_else(|p| p.into_inner()).seq;

@@ -391,3 +391,298 @@ fn members_take_a_conv_or_a_home_slug() {
     let r = routes::named_channel(&q(&[("conv", "../600")])).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (400, "usage"));
 }
+
+fn alex() -> people::Caller {
+    people::Caller { ext: ALEX.into(), login: "alex".into(), role: Role::Member }
+}
+
+/// A route as the dispatcher runs it once Home chat is on (the status gate
+/// is the dispatcher's; these tests drive the route itself).
+fn call(path: &str, body: Value) -> Result<Value, crate::voice::bff::Refusal> {
+    routes::route(path, &alex(), &HashMap::new(), body.to_string().as_bytes())
+}
+
+/// A fake Sew, skin.db made (K2's Home chat ledger lives there), and no
+/// answers kept from an earlier test.
+fn chat_box() -> (k2_core::test_env::TempHome, Arc<FakeApi>) {
+    let home = k2_core::test_env::TempHome::new();
+    k2_core::skin::list_principals().expect("skin.db");
+    let api = Arc::new(FakeApi::default());
+    set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    routes::sends::forget_for_tests();
+    (home, api)
+}
+
+fn done() {
+    follower::release_all();
+    routes::sends::forget_for_tests();
+    set_deps(None);
+}
+
+/// §14.4 `send`: a retry with the same nonce is one message. The retry gets
+/// the first post's answer and Sew isn't asked again; a retry after a
+/// daemon restart reaches Sew with the same Idempotency-Key (Sew replays);
+/// two at once make one post. Another nonce, or another conversation, is a
+/// new post.
+#[test]
+fn a_retried_send_posts_once() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    let path = "/api/v1/channels/900/messages";
+    api.answer(path, 200, json!({"id": "77", "channel_id": "900", "body": "hi", "nonce": "n-1"}));
+    let send = |conv: &str, nonce: &str| call("/cli/home-chat/send", json!({"conv": conv, "text": "hi", "nonce": nonce}));
+    let first = send("900", "n-1").expect("first send");
+    assert_eq!(first["message"]["id"], json!("77"));
+    // Were Sew asked again it would post a second message.
+    api.answer(path, 200, json!({"id": "78", "channel_id": "900", "body": "hi", "nonce": "n-1"}));
+    assert_eq!(send("900", "n-1").expect("retry"), first, "the retry answers the first message");
+    assert_eq!(api.calls_to(path).len(), 1, "one post to Sew");
+    let keys = api.keys.lock().unwrap().clone();
+    assert_eq!(keys.len(), 1, "{keys:?}");
+    let k = keys[0].clone();
+    assert!(k.starts_with("k2hc-send-") && k.len() <= 64 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'), "{k}");
+
+    // Another nonce is another message; another conversation too.
+    assert_eq!(send("900", "n-2").expect("new nonce")["message"]["id"], json!("78"));
+    api.answer("/api/v1/channels/901/messages", 200, json!({"id": "90", "channel_id": "901"}));
+    assert_eq!(send("901", "n-1").expect("other conv")["message"]["id"], json!("90"));
+    let keys = api.keys.lock().unwrap().clone();
+    assert_eq!(keys.len(), 3);
+    assert!(keys[1] != k && keys[2] != k && keys[1] != keys[2], "{keys:?}");
+
+    // A daemon restart forgets K2's answers: Sew gets the same key again.
+    routes::sends::forget_for_tests();
+    send("900", "n-1").expect("retry after a restart");
+    assert_eq!(api.keys.lock().unwrap().last().cloned(), Some(k.clone()), "Sew replays on the same Idempotency-Key");
+
+    // Two at once (each Sew call takes 300 ms): one post, one answer.
+    routes::sends::forget_for_tests();
+    let before = api.calls_to(path).len();
+    api.renew_delay_ms.store(300, Ordering::SeqCst);
+    let t: Vec<_> = (0..2)
+        .map(|_| std::thread::spawn(|| call("/cli/home-chat/send", json!({"conv": "900", "text": "hi", "nonce": "n-3"}))))
+        .collect();
+    let answers: Vec<Value> = t.into_iter().map(|h| h.join().unwrap().expect("concurrent send")).collect();
+    api.renew_delay_ms.store(0, Ordering::SeqCst);
+    assert_eq!(answers[0], answers[1]);
+    assert_eq!(api.calls_to(path).len(), before + 1, "one post for both");
+
+    // A refusal is never kept: the next try asks Sew again.
+    api.answer(path, 503, json!({"error": {"code": "unavailable"}}));
+    assert!(send("900", "n-4").is_err());
+    api.answer(path, 200, json!({"id": "99", "channel_id": "900"}));
+    assert_eq!(send("900", "n-4").expect("after a refusal")["message"]["id"], json!("99"));
+    done();
+}
+
+/// The brief's answer for a post in an archived channel is 409
+/// `channel_archived`: from K2's ledger before Sew is asked, and from Sew's
+/// own `422 invalid_state {reason: channel_archived}`.
+#[test]
+fn a_post_in_an_archived_channel_is_409_channel_archived() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    k2_core::tool_hook::with_home_chat_db(|conn| {
+        let row = k2_core::tool_hook::admin_channels::request_create(conn, "old-news", false, ALEX, &[], 1)?;
+        conn.execute("UPDATE tool_admin_chat_channels SET channel_id = '904', state = 'archived' WHERE slug = ?1", [&row.slug])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("an archived Home channel");
+    let r = call("/cli/home-chat/send", json!({"conv": "904", "text": "hi", "nonce": "a1"})).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (409, "channel_archived"));
+    assert!(api.calls_to("/api/v1/channels/904/messages").is_empty(), "Sew isn't asked");
+    // A channel K2's ledger doesn't know as archived: Sew says so.
+    api.answer(
+        "/api/v1/channels/905/messages",
+        422,
+        json!({"error": {"code": "invalid_state", "hint": "channel is archived", "details": {"reason": "channel_archived"}}}),
+    );
+    let r = call("/cli/home-chat/send", json!({"conv": "905", "text": "hi", "nonce": "a2"})).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (409, "channel_archived"), "not Sew's 422 invalid_state");
+    done();
+}
+
+/// A new DM's read state can come before its first message (Sew moves the
+/// poster's cursor first) and says nothing of the kind: the message that
+/// follows makes it a DM, so it counts like one. A channel stays a channel.
+#[test]
+fn a_dm_is_a_dm_whatever_sew_event_comes_first() {
+    let mut st = PersonState::default();
+    st.apply_ready(&ready_body());
+    // The person's own first message in a new DM.
+    st.apply_event("read_state_updated", &json!({"channel_id": "910", "unread": false, "mention_count": 0, "last_message_id": "11"}), false);
+    st.apply_event("message_created", &json!({"message": {"id": "11", "channel_id": "910", "author_id": "41"}}), false);
+    // Someone else's new DM, read state first too.
+    st.apply_event("read_state_updated", &json!({"channel_id": "911", "unread": true, "mention_count": 1}), false);
+    st.apply_event("message_created", &json!({"message": {"id": "12", "channel_id": "911", "author_id": "42"}}), false);
+    // A channel the same way.
+    st.apply_event("read_state_updated", &json!({"channel_id": "912", "unread": true, "mention_count": 0}), false);
+    st.apply_event("message_created", &json!({"message": {"id": "13", "channel_id": "912", "space_id": "7001", "author_id": "42"}}), false);
+    fn row(st: &PersonState, c: &str) -> Value {
+        st.summary(&[c.to_string()], false)[0].clone()
+    }
+    assert_eq!(row(&st, "910")["kind"], json!("dm"));
+    assert_eq!(row(&st, "911")["kind"], json!("dm"));
+    assert_eq!(row(&st, "911")["badge"], serde_json::to_value(Badge::Count { n: 2 }).unwrap(), "a DM counts every message");
+    assert_eq!(row(&st, "912")["kind"], json!("channel"));
+    assert_eq!(st.convs["912"].space_id.as_deref(), Some("7001"));
+    // A later message never turns a known kind around.
+    st.apply_event("message_created", &json!({"message": {"id": "14", "channel_id": "901", "author_id": "42"}}), false);
+    assert_eq!(row(&st, "901")["kind"], json!("channel"));
+}
+
+/// The summary names a DM K2 kept as a DM (with its person), also one whose
+/// row was made as a channel by a read state; one no event has named yet is
+/// read from Sew once.
+#[test]
+fn the_summary_settles_a_dm_from_k2s_ledger_and_sew() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::admin_channels::set_dm_channel(conn, ALEX, "k2:owner", "920", 1))
+        .expect("K2 kept the DM");
+    let h = follower::hold(ALEX);
+    {
+        let mut st = h.state.lock().unwrap();
+        st.apply_ready(&ready_body());
+        // Stored as a channel with no Space (a read state came first).
+        st.convs.insert(
+            "920".into(),
+            super::state::Conv { channel_id: "920".into(), unread: true, mention_count: 1, kind_known: true, ..Default::default() },
+        );
+        // Nothing has said what this one is yet.
+        st.apply_read_state(&json!({"channel_id": "921", "unread": true, "mention_count": 3}));
+    }
+    api.answer("/api/v1/channels/921", 200, json!({"id": "921", "type": "dm"}));
+    let summary = || routes::route("/cli/home-chat/summary", &alex(), &HashMap::new(), b"").expect("summary");
+    let s = summary();
+    let row = |s: &Value, c: &str| s["convs"].as_array().unwrap().iter().find(|r| r["conv"] == c).cloned().unwrap_or_else(|| panic!("{c}: {s}"));
+    let dm = row(&s, "920");
+    assert_eq!((dm["kind"].clone(), dm["with"].clone()), (json!("dm"), json!("k2:owner")), "{dm}");
+    assert_eq!(dm["badge"], serde_json::to_value(Badge::Count { n: 1 }).unwrap());
+    assert_eq!(row(&s, "921")["kind"], json!("dm"));
+    assert_eq!(row(&s, "901")["kind"], json!("channel"));
+    assert_eq!(api.calls_to("/api/v1/channels/921").len(), 1);
+    summary();
+    assert_eq!(api.calls_to("/api/v1/channels/921").len(), 1, "settled once");
+    for c in ["900", "901", "920"] {
+        assert!(api.calls_to(&format!("/api/v1/channels/{c}")).is_empty(), "{c}: no Sew read for a known kind");
+    }
+    done();
+}
+
+/// A DM id K2 kept that Sew no longer has (a rollback of Sew's data) is
+/// made again on the next open, never handed back; a send to it says so
+/// and forgets it.
+#[test]
+fn a_kept_dm_sew_no_longer_has_is_made_again() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    k2_core::tool_hook::map_member_for_tests("k2:owner", "50", "person", "owner", k2_core::tool_hook::members::ACTIVE).expect("owner's member");
+    let kept = |conv: &str| {
+        k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::admin_channels::set_dm_channel(conn, ALEX, "k2:owner", conv, 1))
+            .expect("kept DM")
+    };
+    let ledger = || k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::admin_channels::dm_channel(conn, ALEX, "k2:owner")).expect("ledger");
+    kept("920");
+    // Sew still has it: the kept id, nothing made.
+    api.answer("/api/v1/channels/920", 200, json!({"id": "920", "type": "dm"}));
+    let r = call("/cli/home-chat/dm", json!({"ext": "k2:owner"})).expect("open");
+    assert_eq!((r["conv"].clone(), r["created"].clone()), (json!("920"), json!(false)));
+    assert!(api.calls_to("/api/v1/dms").is_empty());
+    // Sew's data went back: it answers 404 for the kept id.
+    api.answer("/api/v1/channels/920", 404, json!({"error": {"code": "not_found"}}));
+    api.answer("/api/v1/dms", 200, json!({"id": "930", "type": "dm"}));
+    let r = call("/cli/home-chat/dm", json!({"ext": "k2:owner"})).expect("open again");
+    assert_eq!((r["conv"].clone(), r["created"].clone()), (json!("930"), json!(true)), "made again, not the stale id");
+    assert_eq!(api.calls_to("/api/v1/dms")[0].1["member_ids"], json!(["50"]));
+    assert_eq!(ledger().as_deref(), Some("930"));
+    // A send to a kept DM Sew lost: 404 conversation_gone, and forgotten.
+    api.answer("/api/v1/channels/930/messages", 404, json!({"error": {"code": "not_found"}}));
+    let e = call("/cli/home-chat/send", json!({"conv": "930", "text": "hi", "nonce": "g1"})).unwrap_err();
+    assert_eq!((e.status, e.code.as_str()), (404, "conversation_gone"));
+    assert_eq!(ledger(), None);
+    done();
+}
+
+/// A reset of Sew's data (`k2 hostchat rollback --accept-data-loss`, a
+/// restore): K2 drops the Sew ids its Home chat ledger learnt and sends
+/// what people asked for again, every held person starts over at once,
+/// and the sweep (status and Sew's features) is asked for now.
+#[test]
+fn a_sew_data_reset_drops_k2s_sew_ids_and_starts_over() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, _api) = chat_box();
+    use k2_core::tool_hook::admin_channels as ledger;
+    const KIM: &str = "k2:connect:3b241101-e2bb-4255-8caf-4136c566a962";
+    let (live, going) = k2_core::tool_hook::with_home_chat_db(|conn| {
+        ledger::set_dm_channel(conn, ALEX, "k2:owner", "920", 1)?;
+        let live = ledger::request_create(conn, "plans", false, ALEX, &[KIM.to_string()], 1)?;
+        let going = ledger::request_create(conn, "old", false, ALEX, &[], 1)?;
+        let e = |e: rusqlite::Error| e.to_string();
+        conn.execute("UPDATE tool_admin_chat_channels SET channel_id = '940', state = 'active' WHERE slug = ?1", [&live.slug]).map_err(e)?;
+        conn.execute("UPDATE tool_admin_chat_channels SET channel_id = '941', state = 'active', want_archive = 1 WHERE slug = ?1", [&going.slug])
+            .map_err(e)?;
+        conn.execute("UPDATE tool_admin_chat_members SET state = 'in' WHERE slug = ?1 AND external_id = ?2", rusqlite::params![live.slug, ALEX]).map_err(e)?;
+        conn.execute("UPDATE tool_admin_chat_members SET state = 'pending_remove' WHERE slug = ?1 AND external_id = ?2", rusqlite::params![live.slug, KIM])
+            .map_err(e)?;
+        conn.execute(
+            "INSERT INTO tool_admin_member_channels (external_id, channel_ids_want, channel_ids_sent, state, updated_at) VALUES (?1, '[\"940\"]', '[\"940\"]', 'synced', 1)",
+            [ALEX],
+        )
+        .map_err(e)?;
+        Ok((live.slug, going.slug))
+    })
+    .expect("a ledger with Sew ids");
+    let h = follower::hold(ALEX);
+    h.token().expect("a held session");
+    h.state.lock().unwrap().apply_ready(&ready_body());
+    let _ = k2_core::tool_hook::take_reconcile_request();
+
+    super::sew_data_reset("a test rollback");
+
+    k2_core::tool_hook::with_home_chat_db(|conn| {
+        assert_eq!(ledger::dm_channel(conn, ALEX, "k2:owner")?, None, "the DM id is forgotten");
+        let c = ledger::channel_by_slug(conn, &live)?.expect("the live channel");
+        assert_eq!((c.channel_id.as_deref(), c.state.as_str()), (None, ledger::CH_PENDING), "made again by its slug");
+        let m = ledger::members_of(conn, &live)?;
+        assert_eq!(m.iter().map(|m| (m.external_id.as_str(), m.state.as_str())).collect::<Vec<_>>(), vec![(ALEX, ledger::M_PENDING_ADD)], "back on the way in; the leaver is out");
+        let g = ledger::channel_by_slug(conn, &going)?.expect("the archiving channel");
+        assert_eq!(g.state, ledger::CH_ARCHIVED, "never made again only to be archived");
+        assert_eq!(ledger::sent_list(conn, ALEX)?, None, "the confirmed list is unknown again");
+        Ok(())
+    })
+    .expect("the ledger after the reset");
+    assert!(h.session.lock().unwrap().is_none(), "the held session is dropped");
+    let st = h.state.lock().unwrap().clone();
+    assert!(st.convs.is_empty() && st.gateway_session.is_none() && st.member_seq == 0, "no read state kept");
+    assert_eq!(h.status(), "connecting");
+    assert!(k2_core::tool_hook::take_reconcile_request(), "the sweep runs now (status and Sew's features)");
+    done();
+}
+
+/// After a reset of Sew's data the follower connects again at once, with a
+/// fresh sign-in and IDENTIFY, whatever backoff the restart's drops built.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sew_data_reset_reconnects_the_follower_at_once() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    let api = Arc::new(FakeApi::default());
+    let gw = fake_gateway(ready_body()).await;
+    set_deps(Some(deps_with(api.clone(), gw.addr.clone(), HomeChatFeatures::default())));
+    let h = follower::hold(ALEX);
+    until("live", || h.status() == "live").await;
+    let identifies = || gw.frames.lock().unwrap().iter().filter(|f| f["op"] == 2).count();
+    assert_eq!(identifies(), 1);
+    let signins = api.calls_to(super::sessions::AUTH_K2).len();
+    let t0 = std::time::Instant::now();
+    h.start_over();
+    until("a second IDENTIFY", || identifies() == 2).await;
+    until("live again", || h.status() == "live").await;
+    assert!(t0.elapsed() < Duration::from_secs(3), "at once, not after a backoff: {:?}", t0.elapsed());
+    assert_eq!(gw.connections.load(Ordering::SeqCst), 2);
+    assert_eq!(api.calls_to(super::sessions::AUTH_K2).len(), signins + 1, "a fresh sign-in");
+    assert!(gw.frames.lock().unwrap().iter().all(|f| f["op"] != 4), "no RESUME of the old gateway session");
+    follower::release_all();
+    set_deps(None);
+}

@@ -34,6 +34,11 @@ pub struct Conv {
     /// A channel is invite-only (Sew `private`) or open (`public`); `None`
     /// for a DM, or while Sew hasn't said.
     pub invite_only: Option<bool>,
+    /// `dm` came from something that says (a channel list, a message, K2's
+    /// own DM ledger), not from the default. A read state can arrive first
+    /// (Sew moves the poster's cursor before the message event) and says
+    /// nothing of the kind: the first event that does sets it.
+    pub kind_known: bool,
 }
 
 /// Sew's channel `visibility` as invite-only: `private` yes, `public` no,
@@ -138,6 +143,54 @@ impl PersonState {
         }
     }
 
+    /// Conversations that read as a channel with no Space: a row a read
+    /// state made before anything said its kind (or, before 0.46.13, a DM
+    /// stored as a channel that way). The summary asks K2's DM ledger, then
+    /// Sew, what each is.
+    pub fn kind_unsure(&self, convs: &[String]) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .convs
+            .values()
+            .filter(|c| convs.is_empty() || convs.contains(&c.channel_id))
+            .filter(|c| !c.dm && (!c.kind_known || c.space_id.is_none()))
+            .map(|c| c.channel_id.clone())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// K2's own DM ledger keeps `conv` as a DM: it is one, whichever Sew
+    /// event made the row first. True when that changed the row.
+    pub fn note_dm(&mut self, conv: &str) -> bool {
+        let Some(c) = self.convs.get_mut(conv) else { return false };
+        let changed = !c.dm;
+        c.dm = true;
+        c.kind_known = true;
+        c.invite_only = None;
+        changed
+    }
+
+    /// Conversations no event has said the kind of yet.
+    pub fn kind_unknown(&self, convs: &[String]) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .convs
+            .values()
+            .filter(|c| (convs.is_empty() || convs.contains(&c.channel_id)) && !c.kind_known)
+            .map(|c| c.channel_id.clone())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Sew's own `Channel` for one conversation (`GET /api/v1/channels/{id}`).
+    /// Whatever it says, the row's kind is settled (no second read).
+    pub fn apply_channel(&mut self, conv: &str, ch: &Value) {
+        self.apply_channels(&Value::Array(vec![ch.clone()]));
+        if let Some(c) = self.convs.get_mut(conv) {
+            c.kind_known = true;
+        }
+    }
+
     /// The channel list of READY or `me/sync` (kinds, Spaces, heads).
     fn apply_channels(&mut self, channels: &Value) {
         for ch in channels.as_array().into_iter().flatten() {
@@ -148,6 +201,7 @@ impl PersonState {
             }
             let c = self.convs.entry(id.clone()).or_insert_with(|| Conv { channel_id: id, ..Default::default() });
             c.dm = is_dm_kind(kind);
+            c.kind_known = true;
             c.space_id = id_of(&ch["space_id"]);
             if !c.dm {
                 c.invite_only = invite_only_of(&ch["visibility"]).or(c.invite_only);
@@ -291,11 +345,14 @@ impl PersonState {
                 let m = if d.get("message").is_some() { &d["message"] } else { d };
                 let Some(cid) = id_of(&m["channel_id"]) else { return out };
                 let mine = id_of(&m["author_id"]).is_some_and(|a| a == self.me);
-                let c = self.convs.entry(cid.clone()).or_insert_with(|| Conv {
-                    channel_id: cid.clone(),
-                    dm: m["space_id"].is_null() && d.get("space_id").is_none_or(Value::is_null),
-                    ..Default::default()
-                });
+                let c = self.convs.entry(cid.clone()).or_insert_with(|| Conv { channel_id: cid.clone(), ..Default::default() });
+                if !c.kind_known {
+                    // A message names its Space; a DM has none. A read
+                    // state that came first made the row with no kind.
+                    c.dm = m["space_id"].is_null() && d.get("space_id").is_none_or(Value::is_null);
+                    c.space_id = id_of(&m["space_id"]).or_else(|| d.get("space_id").and_then(id_of));
+                    c.kind_known = true;
+                }
                 c.last_message_id = id_of(&m["id"]).or(c.last_message_id.take());
                 c.last_at = m["created_at"].as_str().map(str::to_string).or(c.last_at.take());
                 if m["call"].is_object() && !mine {

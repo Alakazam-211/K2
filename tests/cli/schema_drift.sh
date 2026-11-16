@@ -41,7 +41,7 @@ router_path, head_path, schema_path = sys.argv[1:4]
 # Commands whose entries are still being written. This list may only
 # shrink: a word leaves it when its entries land, and nothing new joins it
 # (a new command gets entries, or a reason on the left-out list).
-PENDING = {"compute", "vault", "doc", "job"}
+PENDING = {"compute", "vault", "job"}
 
 # Words with an arm of their own that run another command's verb.
 ALIASES = {

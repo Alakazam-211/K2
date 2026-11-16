@@ -5242,6 +5242,664 @@ exit: 0
       "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
     },
     {
+      "name": "doc",
+      "usage": "k2 doc <verb> [flags] <file>",
+      "description": "Live docs: you, your human and other agents edit the same file at once; the daemon keeps the file on disk true. Markdown and any other text are live; other files are any-file docs (presence, a lease, versions and restore, no live merging). A file whose core is off is refused (core_off, exit 3). On a .k5board, k2 doc takes k2 board's verbs. Exit: 0 ok, 1 the tool's no (grep found nothing, diff differs, a conflict, the doc moved), a cancelled or failed export, or the daemon is unreachable, 2 bad usage, 3 refused, 4 no such file or change or it can't be a live doc, 5 someone else holds it for now (a lease, or a claim on those lines), 6 the docs store failed, 8 too old. See k2 study docs.",
+      "args": [{"name": "verb", "required": true}, {"name": "file", "required": false, "description": "The doc's path, the last argument (k2 doc cores and k2 doc shares take none)."}],
+      "flags": [
+        {"name": "-w", "arg": "ws", "description": "Workspace (also --workspace); a relative path is then inside it."},
+        {"name": "--on-behalf-of", "arg": "person", "description": "Agents: the edit is yours, for that person to approve."},
+        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--fence", "arg": null, "description": "Frame read output as shared, untrusted data (on in a K2 terminal)."},
+        {"name": "--no-fence", "arg": null, "description": "Don't frame read output."},
+        {"name": "--host", "arg": "server", "description": "Another server."},
+        {"name": "--token", "arg": "T", "description": "With --host: the token."}
+      ]
+    },
+    {
+      "name": "doc cores",
+      "usage": "k2 doc cores [on|off <core>] [--json] [--host <server> [--token T]]",
+      "description": "List the multiplayer cores on this server and whether each is on, or turn one on or off (people only: the owner or an Admin, from a terminal outside K2). Cores: markdown, text, any-file, board, slides. Agents only list them. Exit: 1 the flip worked but a file couldn't be written, or no answer from the daemon; 2 bad usage or an unknown core; 3 refused.",
+      "args": [{"name": "action", "required": false, "description": "on or off."}, {"name": "core", "required": false, "description": "markdown, text, any-file, board or slides."}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."},
+        {"name": "--host", "arg": "server", "description": "Another server (a Connect login with the Owner or Admin role)."},
+        {"name": "--token", "arg": "T", "description": "With --host: the token."}
+      ]
+    },
+    {
+      "name": "doc cat",
+      "usage": "k2 doc cat [-n|-b] [--for-edit [--ttl 30s]] <f>",
+      "description": "The doc now (exact bytes). An any-file doc: its bytes; pipe them.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-n", "arg": null, "description": "Number every line (6 wide, then a tab); prints the doc text, not the exact bytes."},
+        {"name": "-b", "arg": null, "description": "Number the non-blank lines only."},
+        {"name": "--for-edit", "arg": null, "description": "Also claim the lines shown."},
+        {"name": "--ttl", "arg": "30s", "description": "With --for-edit: how long the claim lasts: milliseconds, or Nms, Ns, Nm."}
+      ]
+    },
+    {
+      "name": "doc head",
+      "usage": "k2 doc head [-n N|-c N] [--for-edit [--ttl 30s]] <f>",
+      "description": "The first lines of the doc.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-n", "arg": "N", "description": "How many lines (-n -N: all but the last N)."},
+        {"name": "-c", "arg": "N", "description": "How many bytes, instead of lines (-c -N: all but the last N)."},
+        {"name": "--for-edit", "arg": null, "description": "Also claim the lines shown."},
+        {"name": "--ttl", "arg": "30s", "description": "With --for-edit: how long the claim lasts: milliseconds, or Nms, Ns, Nm."}
+      ]
+    },
+    {
+      "name": "doc tail",
+      "usage": "k2 doc tail [-n N|-c N] [-f] [--for-edit [--ttl 30s]] <f>",
+      "description": "The last lines of the doc.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-n", "arg": "N", "description": "How many lines (-n +N: from line N on)."},
+        {"name": "-c", "arg": "N", "description": "How many bytes, instead of lines (-c +N: from byte N on)."},
+        {"name": "-f", "arg": null, "description": "Print each change as it lands (the same as k2 doc watch)."},
+        {"name": "--for-edit", "arg": null, "description": "Also claim the lines shown."},
+        {"name": "--ttl", "arg": "30s", "description": "With --for-edit: how long the claim lasts: milliseconds, or Nms, Ns, Nm."}
+      ]
+    },
+    {
+      "name": "doc wc",
+      "usage": "k2 doc wc [-l -w -c -m] <f>",
+      "description": "The doc's exact bytes counted: lines, words, bytes, then its name.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-l", "arg": null, "description": "Lines only."},
+        {"name": "-w", "arg": null, "description": "Words."},
+        {"name": "-c", "arg": null, "description": "Bytes."},
+        {"name": "-m", "arg": null, "description": "Characters."}
+      ]
+    },
+    {
+      "name": "doc grep",
+      "usage": "k2 doc grep [-n -i -E -F -v -w -x -c -o -l -m N -A N -B N -C N -e PAT …] [--for-edit [--ttl 30s]] <pattern> <f>",
+      "description": "Search the doc (GNU flags, a subset; -P, -r and -f are refused with a hint). Exit 1: nothing found.",
+      "args": [{"name": "pattern", "required": true, "description": "Unless given with -e."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-n", "arg": null, "description": "Line numbers."},
+        {"name": "-i", "arg": null, "description": "Any case."},
+        {"name": "-E", "arg": null, "description": "Extended regex."},
+        {"name": "-F", "arg": null, "description": "Fixed strings, not a regex."},
+        {"name": "-e", "arg": "PAT", "description": "A pattern (repeatable)."},
+        {"name": "-v", "arg": null, "description": "The lines that don't match."},
+        {"name": "-w", "arg": null, "description": "Whole words only."},
+        {"name": "-x", "arg": null, "description": "Whole lines only."},
+        {"name": "-c", "arg": null, "description": "Count the matching lines."},
+        {"name": "-o", "arg": null, "description": "Only the matching parts."},
+        {"name": "-l", "arg": null, "description": "Only the doc's name, if it matches."},
+        {"name": "-m", "arg": "N", "description": "Stop after N matching lines."},
+        {"name": "-A", "arg": "N", "description": "Lines of context after."},
+        {"name": "-B", "arg": "N", "description": "Lines of context before."},
+        {"name": "-C", "arg": "N", "description": "Lines of context."},
+        {"name": "--for-edit", "arg": null, "description": "Also claim the lines shown."},
+        {"name": "--ttl", "arg": "30s", "description": "With --for-edit: how long the claim lasts: milliseconds, or Nms, Ns, Nm."}
+      ]
+    },
+    {
+      "name": "doc sed",
+      "usage": "k2 doc sed -n 'a,bp' <f> | k2 doc sed -i 's/old/new/g' <f>",
+      "description": "Print lines (sets your viewing range), or edit in place with -i (e w r R W and backup suffixes refused). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it.",
+      "args": [{"name": "script", "required": true, "description": "Unless given with -e."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-n", "arg": null, "description": "Print only what the script prints."},
+        {"name": "-i", "arg": null, "description": "Edit the doc."},
+        {"name": "-e", "arg": "SCRIPT", "description": "A script (repeatable)."},
+        {"name": "-E", "arg": null, "description": "Extended regex (also -r)."},
+        {"name": "--for-edit", "arg": null, "description": "Read form: also claim the lines shown."},
+        {"name": "--ttl", "arg": "30s", "description": "With --for-edit: how long the claim lasts: milliseconds, or Nms, Ns, Nm."},
+        {"name": "--if-version", "arg": "V", "description": "With -i: apply only if the doc is still at version V (else exit 1, nothing applied)."}
+      ]
+    },
+    {
+      "name": "doc view",
+      "usage": "k2 doc view --lines a,b [--for-edit [--ttl 30s]] <f> | k2 doc view --region \"page 3\" <f>",
+      "description": "Print lines of a text doc, or (any-file docs) say what you're looking at.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--lines", "arg": "a,b", "description": "The lines to show."},
+        {"name": "--region", "arg": "text", "description": "Any-file docs: what you're looking at."},
+        {"name": "--for-edit", "arg": null, "description": "Also claim the lines shown."},
+        {"name": "--ttl", "arg": "30s", "description": "With --for-edit: how long the claim lasts: milliseconds, or Nms, Ns, Nm."}
+      ]
+    },
+    {
+      "name": "doc diff",
+      "usage": "k2 doc diff [-u] [-U N] [--label L] <f> < old.md | k2 doc diff --version V [--to W] [-U N] <f>",
+      "description": "What changed vs your copy on stdin (exit 1 = differs), or with --version the doc's history (needs the history right).",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-u", "arg": null, "description": "Accepted; the diff is always unified."},
+        {"name": "-U", "arg": "N", "description": "Lines of context."},
+        {"name": "--label", "arg": "L", "description": "A side's name: give it twice, the old side, then the new."},
+        {"name": "--text", "arg": "\"...\"", "description": "Your old copy, instead of stdin."},
+        {"name": "--version", "arg": "V", "description": "Diff from version V."},
+        {"name": "--to", "arg": "W", "description": "With --version: to version W (default: now)."}
+      ]
+    },
+    {
+      "name": "doc patch",
+      "usage": "k2 doc patch [-p N] [-R] [--dry-run] [-F N] [--partial] <f> < change.diff",
+      "description": "Apply a diff, all or nothing (also: k2 doc apply). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-p", "arg": "N", "description": "Accepted for GNU compatibility (a number) and ignored: the doc named last is always the file patched."},
+        {"name": "-R", "arg": null, "description": "Apply the diff in reverse."},
+        {"name": "--dry-run", "arg": null, "description": "Check that it applies; change nothing (also --check)."},
+        {"name": "-F", "arg": "N", "description": "Fuzz: context lines a hunk may ignore (default 2)."},
+        {"name": "-s", "arg": null, "description": "Don't report hunks placed with fuzz or an offset."},
+        {"name": "--partial", "arg": null, "description": "Apply what fits."},
+        {"name": "--text", "arg": "\"...\"", "description": "The diff, instead of stdin."},
+        {"name": "--if-version", "arg": "V", "description": "Apply only if the doc is still at version V (else exit 1, nothing applied)."}
+      ]
+    },
+    {
+      "name": "doc append",
+      "usage": "k2 doc append [--ensure-newline] <f> < text | k2 doc append --text \"...\" <f>",
+      "description": "Append text. One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--text", "arg": "\"...\"", "description": "The text, instead of stdin."},
+        {"name": "--ensure-newline", "arg": null, "description": "Add a newline first if the doc doesn't end with one."},
+        {"name": "--if-version", "arg": "V", "description": "Apply only if the doc is still at version V (else exit 1, nothing applied)."}
+      ]
+    },
+    {
+      "name": "doc insert",
+      "usage": "k2 doc insert --line N|--after N|--at L:C <f> < text  (or --text \"...\")",
+      "description": "Insert text. One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--line", "arg": "N", "description": "Insert at line N."},
+        {"name": "--after", "arg": "N", "description": "Insert after line N."},
+        {"name": "--at", "arg": "L:C", "description": "Insert at line:column."},
+        {"name": "--text", "arg": "\"...\"", "description": "The text, instead of stdin."},
+        {"name": "--if-version", "arg": "V", "description": "Apply only if the doc is still at version V (else exit 1, nothing applied)."}
+      ]
+    },
+    {
+      "name": "doc replace",
+      "usage": "k2 doc replace --lines a,b|--range L:C-L:C <f> < text  (or --text \"...\") | k2 doc replace --old TEXT --new TEXT [--all] <f>",
+      "description": "Replace lines or a range, or exact text (no regex; exit 1: no match, or more than one without --all). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--lines", "arg": "a,b", "description": "The lines to replace."},
+        {"name": "--range", "arg": "L:C-L:C", "description": "The range to replace."},
+        {"name": "--old", "arg": "TEXT", "description": "The exact text to find (- reads it from stdin)."},
+        {"name": "--new", "arg": "TEXT", "description": "What to put in its place (- reads it from stdin)."},
+        {"name": "--all", "arg": null, "description": "Replace every match."},
+        {"name": "--old-file", "arg": "F", "description": "Take --old from a file's exact text (a final newline included), or - for stdin."},
+        {"name": "--new-file", "arg": "F", "description": "Take --new from a file's exact text, or - for stdin."},
+        {"name": "--text", "arg": "\"...\"", "description": "With --lines or --range: the text, instead of stdin."},
+        {"name": "--if-version", "arg": "V", "description": "Apply only if the doc is still at version V (else exit 1, nothing applied)."}
+      ]
+    },
+    {
+      "name": "doc delete",
+      "usage": "k2 doc delete --lines a,b|--range L:C-L:C <f>",
+      "description": "Delete lines or a range. One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--lines", "arg": "a,b", "description": "The lines to delete."},
+        {"name": "--range", "arg": "L:C-L:C", "description": "The range to delete."},
+        {"name": "--if-version", "arg": "V", "description": "Apply only if the doc is still at version V (else exit 1, nothing applied)."}
+      ]
+    },
+    {
+      "name": "doc replace-section",
+      "usage": "k2 doc replace-section --heading \"## X\" [--include-heading] [--nth K] <f> < text  (or --text \"...\")",
+      "description": "Markdown docs only: replace the section under a heading (on other docs an unknown verb, exit 2). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--heading", "arg": "\"## X\"", "description": "The section's heading."},
+        {"name": "--include-heading", "arg": null, "description": "Replace the heading line too (the new text then carries the new heading)."},
+        {"name": "--nth", "arg": "K", "description": "The Kth section with that heading (from 1)."},
+        {"name": "--text", "arg": "\"...\"", "description": "The new text, instead of stdin."},
+        {"name": "--if-version", "arg": "V", "description": "Apply only if the doc is still at version V (else exit 1, nothing applied)."}
+      ]
+    },
+    {
+      "name": "doc mv",
+      "usage": "k2 doc mv <f> <new-name.md>",
+      "description": "Rename; the doc keeps its history and presence. mv keeps the kind: text stays text, never Markdown or an any-file doc.",
+      "args": [{"name": "f", "required": true, "description": "The doc."}, {"name": "new-name", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "doc write",
+      "usage": "k2 doc write --base V|live <f> < whole-file | k2 doc write --base V --file new.png <f>",
+      "description": "Replace the whole doc: a three-way merge from version V (text), or new bytes for an any-file doc (V from status; no --base live). Conflicts exit 1.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--base", "arg": "V|live", "description": "The version you read."},
+        {"name": "--file", "arg": "FILE", "description": "Read the new content from this file instead of stdin."},
+        {"name": "--text", "arg": "\"...\"", "description": "The new content, instead of stdin."}
+      ]
+    },
+    {
+      "name": "doc undo",
+      "usage": "k2 doc undo [--steps N] [--partial|--drop] [--for <person>] <f>",
+      "description": "Reverse your own changes; it never alters a word someone else wrote. Conflicts exit 1. Not checked against your last read.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--steps", "arg": "N", "description": "How many steps (default 1)."},
+        {"name": "--partial", "arg": null, "description": "Apply what fits."},
+        {"name": "--drop", "arg": null, "description": "Remove your top step without applying it."},
+        {"name": "--for", "arg": "person", "description": "Undo what you did for them."}
+      ]
+    },
+    {
+      "name": "doc redo",
+      "usage": "k2 doc redo [--steps N] <f>",
+      "description": "Redo what you undid.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--steps", "arg": "N", "description": "How many steps (default 1)."}
+      ]
+    },
+    {
+      "name": "doc revert",
+      "usage": "k2 doc revert <change> [--partial] <f>",
+      "description": "Reverse one change from the log, days later. Conflicts exit 1; past the window: exit 8 (restore a version instead).",
+      "args": [{"name": "change", "required": true, "description": "The change number (k2 doc log)."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--partial", "arg": null, "description": "Apply what fits."}
+      ]
+    },
+    {
+      "name": "doc who",
+      "usage": "k2 doc who <f>",
+      "description": "Who is in the doc: each one's role, caret, the lines they view, claims, last edit, the lease.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc follow",
+      "usage": "k2 doc follow <name> <f>",
+      "description": "Where one person in the doc is now: caret, the lines they view, a lease. One line, then exit; 4 if they are not in it. With --json: the whole who roster.",
+      "args": [{"name": "name", "required": true, "description": "Part of a name (any case) or a pid; the first match."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc cursor",
+      "usage": "k2 doc cursor --at L:C [--to L:C] <f>",
+      "description": "Put your caret (or a selection) in the doc.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--at", "arg": "L:C", "description": "The caret."},
+        {"name": "--to", "arg": "L:C", "description": "The selection's other end."}
+      ]
+    },
+    {
+      "name": "doc claim",
+      "usage": "k2 doc claim --lines a,b [--ttl 2m] [--note \"why\"] [--hold] <f> | k2 doc claim --node ADDR... [--ttl 2m] [--note \"why\"] <f> | k2 doc claim --renew|--release [--id claim-N] <f>",
+      "description": "Say you're working on these lines: 30 s unless --ttl (at most 10m); your next edit there ends it. Another agent's edit into your claim is refused (exit 5, nothing applied) and that agent is put in line. On a PSD/PSB file: claim layers with --node (advisory, it never blocks a write; someone else's claim on one of them: exit 5).",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--lines", "arg": "a,b", "description": "The lines."},
+        {"name": "--node", "arg": "ADDR", "description": "PSD/PSB files: the layers."},
+        {"name": "--ttl", "arg": "2m", "description": "How long it lasts: milliseconds, or Nms, Ns, Nm."},
+        {"name": "--note", "arg": "why", "description": "A note."},
+        {"name": "--hold", "arg": null, "description": "It lasts until the ttl or --release, even after your edit."},
+        {"name": "--renew", "arg": null, "description": "Renew your claim."},
+        {"name": "--release", "arg": null, "description": "End your claim."},
+        {"name": "--id", "arg": "claim-N", "description": "Which claim (PSD/PSB: no --id = every claim of yours)."}
+      ]
+    },
+    {
+      "name": "doc activity",
+      "usage": "k2 doc activity [-n N] <f>",
+      "description": "Recent activity in the doc.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-n", "arg": "N", "description": "How many."}
+      ]
+    },
+    {
+      "name": "doc say",
+      "usage": "k2 doc say <f> [--to <who>] [--at <address>] [--time <ticks>] [--reply-to <id>] \"text\"",
+      "description": "Say something in a live doc's room (people watching it see it; an agent gets an inbox note). At most 1024 bytes, 5 at once then 1 every 3 s.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; here it comes first."}, {"name": "text", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "who", "description": "One person or agent who can read it."},
+        {"name": "--at", "arg": "address", "description": "What you look at (@cam:c1)."},
+        {"name": "--time", "arg": "ticks", "description": "A time."},
+        {"name": "--reply-to", "arg": "id", "description": "The message you answer."}
+      ]
+    },
+    {
+      "name": "doc open",
+      "usage": "k2 doc open <f>",
+      "description": "Stay present in the doc until k2 doc leave.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc leave",
+      "usage": "k2 doc leave <f>",
+      "description": "Leave the doc now.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc watch",
+      "usage": "k2 doc watch <f>",
+      "description": "Print each change as it lands, until Ctrl-C (also: tail -f).",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc status",
+      "usage": "k2 doc status [<f>]",
+      "description": "Disk state of the doc (and why a file isn't live text); with no file, the live docs pool.",
+      "args": [{"name": "f", "required": false, "description": "The doc."}],
+      "flags": []
+    },
+    {
+      "name": "doc flush",
+      "usage": "k2 doc flush <f>",
+      "description": "Write the doc back to disk now.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc log",
+      "usage": "k2 doc log [--by P] [--since 2h] [-n N] [--pending] [--for P|me] <f>",
+      "description": "Changes and versions. Needs the history right.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--by", "arg": "P", "description": "Only this author's."},
+        {"name": "--since", "arg": "2h", "description": "How far back: Ns, Nm, Nh, Nd or Nw."},
+        {"name": "-n", "arg": "N", "description": "How many."},
+        {"name": "--pending", "arg": null, "description": "Only changes waiting for approval."},
+        {"name": "--for", "arg": "P|me", "description": "Only changes made for this person."}
+      ]
+    },
+    {
+      "name": "doc versions",
+      "usage": "k2 doc versions <f>",
+      "description": "The doc's versions. Needs the history right.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc show",
+      "usage": "k2 doc show --version V [--out FILE] <f>",
+      "description": "The doc at version V; never binary onto a terminal. Needs the history right.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--version", "arg": "V", "description": "The version id (k2 doc versions)."},
+        {"name": "--out", "arg": "FILE", "description": "Write it to a file."}
+      ]
+    },
+    {
+      "name": "doc blame",
+      "usage": "k2 doc blame [-L a,b] [--porcelain] <f>",
+      "description": "Who wrote each line (change, author, time; restored text: who restored it, in which change). Needs the history right.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "-L", "arg": "a,b", "description": "Only these lines."},
+        {"name": "--porcelain", "arg": null, "description": "Machine-readable output."}
+      ]
+    },
+    {
+      "name": "doc restore",
+      "usage": "k2 doc restore --version V <f>",
+      "description": "Put version V back, forward: a new change you can undo. Needs the history right.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--version", "arg": "V", "description": "The version id."}
+      ]
+    },
+    {
+      "name": "doc version",
+      "usage": "k2 doc version --name \"before launch\" [--version V] <f>",
+      "description": "Name a version. Needs the history right.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--name", "arg": "text", "description": "The name."},
+        {"name": "--version", "arg": "V", "description": "Which version (default: now)."}
+      ]
+    },
+    {
+      "name": "doc approvals",
+      "usage": "k2 doc approvals [--pending] [--mine|--for P|me] <f>",
+      "description": "Changes agents made on behalf of a person, and their state. Needs the history right.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--pending", "arg": null, "description": "Only pending ones."},
+        {"name": "--mine", "arg": null, "description": "Only those for you."},
+        {"name": "--for", "arg": "P|me", "description": "Only those for this person."}
+      ]
+    },
+    {
+      "name": "doc approve",
+      "usage": "k2 doc approve <change> <f>",
+      "description": "Approve an agent's change (any-file docs: a version) made for you.",
+      "args": [{"name": "change", "required": true, "description": "A number (k2 doc approvals)."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc decline",
+      "usage": "k2 doc decline <change> <f>",
+      "description": "Decline an agent's change made for you. Any-file docs: it leaves the file as is and names the version to restore.",
+      "args": [{"name": "change", "required": true, "description": "A number (k2 doc approvals)."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc export",
+      "usage": "k2 doc export --list <f> | k2 doc export --to T [--version V] [--node ADDR] [--option NAME=VALUE]... [--out FILE] <f>",
+      "description": "A copy of the doc, now or at a version, as a new file; an export never changes the doc. stdout is the new file's absolute path. Exit 2: a target or option the file doesn't have, an export limit, an --out that exists; 3 export_place_forbidden; 1 cancelled or failed.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--list", "arg": null, "description": "The targets for this file, with each target's options (no other export flags)."},
+        {"name": "--to", "arg": "T", "description": "The target (as-is: every file; written beside it as <stem>.v<N>.<ext>)."},
+        {"name": "--version", "arg": "V", "description": "Export version V: the first column of k2 doc versions (needs the history right)."},
+        {"name": "--node", "arg": "ADDR", "description": "One layer of a PSD/PSB file (no exporter writes one yet: export_needs_renderer, exit 4)."},
+        {"name": "--option", "arg": "NAME=VALUE", "description": "A target option (repeatable)."},
+        {"name": "--out", "arg": "FILE", "description": "Exactly that name, never over an existing file."}
+      ]
+    },
+    {
+      "name": "doc lease",
+      "usage": "k2 doc lease [--ttl 5m] <f> | k2 doc lease --renew|--release <f> | k2 doc lease --break <f>",
+      "description": "Any-file docs (files that aren't text, and refused text). Take the lease (exit 5 while someone else has it). It ends at --ttl (default 5m, at most 1h), on --release, or when the daemon restarts.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--ttl", "arg": "5m", "description": "How long it lasts: seconds, or Ns, Nm, Nh."},
+        {"name": "--renew", "arg": null, "description": "Renew your lease."},
+        {"name": "--release", "arg": null, "description": "Give it up."},
+        {"name": "--break", "arg": null, "description": "Break someone's lease: the box owner or an Admin only."}
+      ]
+    },
+    {
+      "name": "doc lock",
+      "usage": "k2 doc lock [--ttl 5m] <f>",
+      "description": "Any-file docs (files that aren't text, and refused text). The same as lease, with the same flags. On a .k5board: the board's lock verb.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--ttl", "arg": "5m", "description": "How long it lasts: seconds, or Ns, Nm, Nh."},
+        {"name": "--renew", "arg": null, "description": "Renew your lease."},
+        {"name": "--release", "arg": null, "description": "Give it up."},
+        {"name": "--break", "arg": null, "description": "Break someone's lease: the box owner or an Admin only."}
+      ]
+    },
+    {
+      "name": "doc unlock",
+      "usage": "k2 doc unlock <f>",
+      "description": "Any-file docs (files that aren't text, and refused text). The same as lease --release.",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": []
+    },
+    {
+      "name": "doc outline",
+      "usage": "k2 doc outline [--depth N] [--kind K] [--under ADDR] [--tree] [--version V] [--read-budget BYTES] [--cursor C] [--no-truncate] <f>",
+      "description": "PSD/PSB files. Every layer in reading order, each with its #N (no text or pixels). Reads come in pages; until the layers are indexed a read exits 1 (index_pending).",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--depth", "arg": "N", "description": "How deep."},
+        {"name": "--kind", "arg": "K", "description": "Only this kind of layer."},
+        {"name": "--under", "arg": "ADDR", "description": "Only under this layer."},
+        {"name": "--tree", "arg": null, "description": "Indent each layer two spaces per depth."},
+        {"name": "--version", "arg": "V", "description": "At version V."},
+        {"name": "--read-budget", "arg": "BYTES", "description": "The page size in bytes (default 32768; less than 16384 counts as 16384)."},
+        {"name": "--cursor", "arg": "C", "description": "The next page: the cursor a truncated page named, with the same arguments."},
+        {"name": "--no-truncate", "arg": null, "description": "Exit 2 (over_budget) instead of paging."}
+      ]
+    },
+    {
+      "name": "doc node",
+      "usage": "k2 doc node ADDR... [--depth N] [--version V] [--read-budget BYTES] [--cursor C] [--no-truncate] <f> | k2 doc node ADDR --whole|--text <f>",
+      "description": "PSD/PSB files. Layers in full; ADDR is a key, #N or a name. A name two layers share: exit 2 (ambiguous_address); one that names nothing: exit 4, the rest still listed.",
+      "args": [{"name": "ADDR", "required": true}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--depth", "arg": "N", "description": "How deep."},
+        {"name": "--text", "arg": null, "description": "One layer's text, whole and raw; exit 1 if it has none. One ADDR; no --depth or --cursor."},
+        {"name": "--whole", "arg": null, "description": "One layer as one JSON line, not paged: every field, its text in full, and its ancestors. One ADDR; no --depth or --cursor."},
+        {"name": "--version", "arg": "V", "description": "At version V."},
+        {"name": "--read-budget", "arg": "BYTES", "description": "The page size in bytes (default 32768; less than 16384 counts as 16384)."},
+        {"name": "--cursor", "arg": "C", "description": "The next page."},
+        {"name": "--no-truncate", "arg": null, "description": "Exit 2 (over_budget) instead of paging."}
+      ]
+    },
+    {
+      "name": "doc layer",
+      "usage": "k2 doc layer list|show ... <f> | k2 doc layer diff V1 [V2] [--cursor C] [--no-truncate] <f> | k2 doc layer blame [--version V] [--cursor C] [--no-truncate] <f>",
+      "description": "PSD/PSB files. list and show are the same as outline and node, with their flags; diff: what changed, layer by layer (no V2: the current one); blame: who made each layer as it is. diff and blame need the history right. --read-budget works on all four.",
+      "args": [{"name": "action", "required": true, "description": "list, show, diff or blame."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--version", "arg": "V", "description": "blame: at version V."},
+        {"name": "--cursor", "arg": "C", "description": "The next page."},
+        {"name": "--no-truncate", "arg": null, "description": "Exit 2 (over_budget) instead of paging."},
+        {"name": "--read-budget", "arg": "BYTES", "description": "The page size in bytes (default 32768; less than 16384 counts as 16384)."}
+      ]
+    },
+    {
+      "name": "doc comment",
+      "usage": "k2 doc comment --doc|--node ADDR [--version V] [--hint TEXT] --body \"text\" [--mention P]... [--proposal FILE]... <f> | k2 doc comment --delete ann-N [--n N] <f>",
+      "description": "Comment on an any-file doc, pinned to the whole file or (PSD/PSB) to a layer. Needs edit, or a share with --comment; makes no version. --delete: its author, the person it was for, or an owner.",
+      "args": [{"name": "ann-N", "required": false, "description": "With --delete: the thread."}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--doc", "arg": null, "description": "Pin it to the whole file."},
+        {"name": "--node", "arg": "ADDR", "description": "Pin it to a layer."},
+        {"name": "--version", "arg": "V", "description": "With --node: the version the key is read in."},
+        {"name": "--hint", "arg": "TEXT", "description": "With --node: an anchor hint kept with the pin."},
+        {"name": "--body", "arg": "text", "description": "The comment."},
+        {"name": "--mention", "arg": "P", "description": "Mention me, a login, a workspace or a pid (repeatable)."},
+        {"name": "--proposal", "arg": "FILE", "description": "Name a new file as your proposal (repeatable)."},
+        {"name": "--delete", "arg": null, "description": "Delete the thread ann-N, or with --n one comment in it."},
+        {"name": "--n", "arg": "N", "description": "Which comment in the thread (default 0: the whole thread)."}
+      ]
+    },
+    {
+      "name": "doc reply",
+      "usage": "k2 doc reply ann-N --body \"text\" [--mention P]... [--proposal FILE]... <f>",
+      "description": "Reply in a comment thread.",
+      "args": [{"name": "ann-N", "required": true}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--body", "arg": "text", "description": "The reply."},
+        {"name": "--mention", "arg": "P", "description": "Mention someone (repeatable)."},
+        {"name": "--proposal", "arg": "FILE", "description": "Name a new file as your proposal (repeatable)."}
+      ]
+    },
+    {
+      "name": "doc resolve",
+      "usage": "k2 doc resolve ann-N [--reopen] <f>",
+      "description": "Resolve a comment thread.",
+      "args": [{"name": "ann-N", "required": true}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--reopen", "arg": null, "description": "Open it again."}
+      ]
+    },
+    {
+      "name": "doc comments",
+      "usage": "k2 doc comments [--open|--resolved] [--on KEY] [--since SEQ] [--after ann-N] [--limit N] [--version V] <f> | k2 doc comments --log [ann-N] [--since SEQ] [--limit N] <f>",
+      "description": "Each thread with its pin's state: attached, hint-stale, suspect, hidden or orphaned. --log: what happened to the threads (history).",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--open", "arg": null, "description": "Only open threads."},
+        {"name": "--resolved", "arg": null, "description": "Only resolved threads."},
+        {"name": "--on", "arg": "KEY", "description": "Only threads on this layer."},
+        {"name": "--since", "arg": "SEQ", "description": "What changed after SEQ (pass the last page's head)."},
+        {"name": "--after", "arg": "ann-N", "description": "Threads after this one."},
+        {"name": "--limit", "arg": "N", "description": "At most N."},
+        {"name": "--version", "arg": "V", "description": "Place the pins at version V (an older one needs history)."},
+        {"name": "--log", "arg": null, "description": "The threads' history, for all or for one ann-N."}
+      ]
+    },
+    {
+      "name": "doc reanchor",
+      "usage": "k2 doc reanchor ann-N --doc|--node ADDR [--version V] [--hint TEXT] <f>",
+      "description": "Move a comment's pin. An agent's move is a proposal a person confirms by running the same reanchor.",
+      "args": [{"name": "ann-N", "required": true}, {"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--doc", "arg": null, "description": "Pin it to the whole file."},
+        {"name": "--node", "arg": "ADDR", "description": "Pin it to a layer."},
+        {"name": "--version", "arg": "V", "description": "With --node: the version the key is read in."},
+        {"name": "--hint", "arg": "TEXT", "description": "With --node: an anchor hint kept with the pin."}
+      ]
+    },
+    {
+      "name": "doc purge-comments",
+      "usage": "k2 doc purge-comments --thread ann-N [--n N] | --text \"...\" | --all <f>",
+      "description": "Purge comments from an any-file doc. The box owner or an Admin only (never agents).",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--thread", "arg": "ann-N", "description": "One thread."},
+        {"name": "--n", "arg": "N", "description": "One comment in it."},
+        {"name": "--text", "arg": "\"...\"", "description": "Comments holding this text."},
+        {"name": "--all", "arg": null, "description": "Every comment."}
+      ]
+    },
+    {
+      "name": "doc erase-participant",
+      "usage": "k2 doc erase-participant --participant P --pseudonym NAME <f>",
+      "description": "Erase a participant from an any-file doc's attributions and comments, under a pseudonym. The box owner or an Admin only (never agents).",
+      "args": [{"name": "f", "required": true, "description": "The doc's path; it is the last argument."}],
+      "flags": [
+        {"name": "--participant", "arg": "P", "description": "Who to erase."},
+        {"name": "--pseudonym", "arg": "NAME", "description": "The name that stands in."}
+      ]
+    },
+    {
+      "name": "doc share",
+      "usage": "k2 doc share <file-or-folder> --with <ws> [--write] [--history] [--comment] -w <ws>",
+      "description": "People only: share a file or folder with another workspace.",
+      "args": [{"name": "file-or-folder", "required": true}],
+      "flags": [
+        {"name": "--with", "arg": "ws", "description": "The workspace that gets it."},
+        {"name": "--write", "arg": null, "description": "It may edit."},
+        {"name": "--history", "arg": null, "description": "It may read history."},
+        {"name": "--comment", "arg": null, "description": "A read-only share may comment."},
+        {"name": "-w", "arg": "ws", "description": "The workspace that owns it."}
+      ]
+    },
+    {
+      "name": "doc unshare",
+      "usage": "k2 doc unshare <file-or-folder> --with <ws> -w <ws>",
+      "description": "People only: end a share.",
+      "args": [{"name": "file-or-folder", "required": true}],
+      "flags": [
+        {"name": "--with", "arg": "ws", "description": "The workspace that had it."},
+        {"name": "-w", "arg": "ws", "description": "The workspace that owns it."}
+      ]
+    },
+    {
+      "name": "doc shares",
+      "usage": "k2 doc shares [-w <ws>] [--with <ws>]",
+      "description": "People only: list shares.",
+      "args": [],
+      "flags": [
+        {"name": "-w", "arg": "ws", "description": "Which workspace."},
+        {"name": "--with", "arg": "ws", "description": "Only shares with this workspace."}
+      ]
+    },
+    {
       "name": "skills",
       "usage": "k2 skills <list|create|remove|profile|...> [...]",
       "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",

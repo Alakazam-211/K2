@@ -3039,6 +3039,296 @@
     "description": "Run a held move step exactly as it was asked. The box owner, from their own terminal (asks the vault confirm). An agent asks instead with k2 permission request vault.move-approve request=mv_... --why \"...\". A held step expires after 24 h."
    },
    {
+    "name": "doc",
+    "usage": "k2 doc <verb> [flags] <file>",
+    "description": "Live docs: you, your human and other agents edit the same file at once; the daemon keeps the file on disk true. Markdown and any other text are live; other files are any-file docs (presence, a lease, versions and restore, no live merging). A file whose core is off is refused (core_off, exit 3). On a .k5board, k2 doc takes k2 board's verbs. Exit: 0 ok, 1 the tool's no (grep found nothing, diff differs, a conflict, the doc moved), a cancelled or failed export, or the daemon is unreachable, 2 bad usage, 3 refused, 4 no such file or change or it can't be a live doc, 5 someone else holds it for now (a lease, or a claim on those lines), 6 the docs store failed, 8 too old. See k2 study docs."
+   },
+   {
+    "name": "doc cores",
+    "usage": "k2 doc cores [on|off <core>] [--json] [--host <server> [--token T]]",
+    "description": "List the multiplayer cores on this server and whether each is on, or turn one on or off (people only: the owner or an Admin, from a terminal outside K2). Cores: markdown, text, any-file, board, slides. Agents only list them. Exit: 1 the flip worked but a file couldn't be written, or no answer from the daemon; 2 bad usage or an unknown core; 3 refused."
+   },
+   {
+    "name": "doc cat",
+    "usage": "k2 doc cat [-n|-b] [--for-edit [--ttl 30s]] <f>",
+    "description": "The doc now (exact bytes). An any-file doc: its bytes; pipe them."
+   },
+   {
+    "name": "doc head",
+    "usage": "k2 doc head [-n N|-c N] [--for-edit [--ttl 30s]] <f>",
+    "description": "The first lines of the doc."
+   },
+   {
+    "name": "doc tail",
+    "usage": "k2 doc tail [-n N|-c N] [-f] [--for-edit [--ttl 30s]] <f>",
+    "description": "The last lines of the doc."
+   },
+   {
+    "name": "doc wc",
+    "usage": "k2 doc wc [-l -w -c -m] <f>",
+    "description": "The doc's exact bytes counted: lines, words, bytes, then its name."
+   },
+   {
+    "name": "doc grep",
+    "usage": "k2 doc grep [-n -i -E -F -v -w -x -c -o -l -m N -A N -B N -C N -e PAT …] [--for-edit [--ttl 30s]] <pattern> <f>",
+    "description": "Search the doc (GNU flags, a subset; -P, -r and -f are refused with a hint). Exit 1: nothing found."
+   },
+   {
+    "name": "doc sed",
+    "usage": "k2 doc sed -n 'a,bp' <f> | k2 doc sed -i 's/old/new/g' <f>",
+    "description": "Print lines (sets your viewing range), or edit in place with -i (e w r R W and backup suffixes refused). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it."
+   },
+   {
+    "name": "doc view",
+    "usage": "k2 doc view --lines a,b [--for-edit [--ttl 30s]] <f> | k2 doc view --region \"page 3\" <f>",
+    "description": "Print lines of a text doc, or (any-file docs) say what you're looking at."
+   },
+   {
+    "name": "doc diff",
+    "usage": "k2 doc diff [-u] [-U N] [--label L] <f> < old.md | k2 doc diff --version V [--to W] [-U N] <f>",
+    "description": "What changed vs your copy on stdin (exit 1 = differs), or with --version the doc's history (needs the history right)."
+   },
+   {
+    "name": "doc patch",
+    "usage": "k2 doc patch [-p N] [-R] [--dry-run] [-F N] [--partial] <f> < change.diff",
+    "description": "Apply a diff, all or nothing (also: k2 doc apply). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it."
+   },
+   {
+    "name": "doc append",
+    "usage": "k2 doc append [--ensure-newline] <f> < text | k2 doc append --text \"...\" <f>",
+    "description": "Append text. One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it."
+   },
+   {
+    "name": "doc insert",
+    "usage": "k2 doc insert --line N|--after N|--at L:C <f> < text  (or --text \"...\")",
+    "description": "Insert text. One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it."
+   },
+   {
+    "name": "doc replace",
+    "usage": "k2 doc replace --lines a,b|--range L:C-L:C <f> < text  (or --text \"...\") | k2 doc replace --old TEXT --new TEXT [--all] <f>",
+    "description": "Replace lines or a range, or exact text (no regex; exit 1: no match, or more than one without --all). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it."
+   },
+   {
+    "name": "doc delete",
+    "usage": "k2 doc delete --lines a,b|--range L:C-L:C <f>",
+    "description": "Delete lines or a range. One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it."
+   },
+   {
+    "name": "doc replace-section",
+    "usage": "k2 doc replace-section --heading \"## X\" [--include-heading] [--nth K] <f> < text  (or --text \"...\")",
+    "description": "Markdown docs only: replace the section under a heading (on other docs an unknown verb, exit 2). One change; your own undo reverts it. Agents: checked against the version you last read; if the doc changed since, it is refused (exit 1): read again, then redo it."
+   },
+   {
+    "name": "doc mv",
+    "usage": "k2 doc mv <f> <new-name.md>",
+    "description": "Rename; the doc keeps its history and presence. mv keeps the kind: text stays text, never Markdown or an any-file doc."
+   },
+   {
+    "name": "doc write",
+    "usage": "k2 doc write --base V|live <f> < whole-file | k2 doc write --base V --file new.png <f>",
+    "description": "Replace the whole doc: a three-way merge from version V (text), or new bytes for an any-file doc (V from status; no --base live). Conflicts exit 1."
+   },
+   {
+    "name": "doc undo",
+    "usage": "k2 doc undo [--steps N] [--partial|--drop] [--for <person>] <f>",
+    "description": "Reverse your own changes; it never alters a word someone else wrote. Conflicts exit 1. Not checked against your last read."
+   },
+   {
+    "name": "doc redo",
+    "usage": "k2 doc redo [--steps N] <f>",
+    "description": "Redo what you undid."
+   },
+   {
+    "name": "doc revert",
+    "usage": "k2 doc revert <change> [--partial] <f>",
+    "description": "Reverse one change from the log, days later. Conflicts exit 1; past the window: exit 8 (restore a version instead)."
+   },
+   {
+    "name": "doc who",
+    "usage": "k2 doc who <f>",
+    "description": "Who is in the doc: each one's role, caret, the lines they view, claims, last edit, the lease."
+   },
+   {
+    "name": "doc follow",
+    "usage": "k2 doc follow <name> <f>",
+    "description": "Where one person in the doc is now: caret, the lines they view, a lease. One line, then exit; 4 if they are not in it. With --json: the whole who roster."
+   },
+   {
+    "name": "doc cursor",
+    "usage": "k2 doc cursor --at L:C [--to L:C] <f>",
+    "description": "Put your caret (or a selection) in the doc."
+   },
+   {
+    "name": "doc claim",
+    "usage": "k2 doc claim --lines a,b [--ttl 2m] [--note \"why\"] [--hold] <f> | k2 doc claim --node ADDR... [--ttl 2m] [--note \"why\"] <f> | k2 doc claim --renew|--release [--id claim-N] <f>",
+    "description": "Say you're working on these lines: 30 s unless --ttl (at most 10m); your next edit there ends it. Another agent's edit into your claim is refused (exit 5, nothing applied) and that agent is put in line. On a PSD/PSB file: claim layers with --node (advisory, it never blocks a write; someone else's claim on one of them: exit 5)."
+   },
+   {
+    "name": "doc activity",
+    "usage": "k2 doc activity [-n N] <f>",
+    "description": "Recent activity in the doc."
+   },
+   {
+    "name": "doc say",
+    "usage": "k2 doc say <f> [--to <who>] [--at <address>] [--time <ticks>] [--reply-to <id>] \"text\"",
+    "description": "Say something in a live doc's room (people watching it see it; an agent gets an inbox note). At most 1024 bytes, 5 at once then 1 every 3 s."
+   },
+   {
+    "name": "doc open",
+    "usage": "k2 doc open <f>",
+    "description": "Stay present in the doc until k2 doc leave."
+   },
+   {
+    "name": "doc leave",
+    "usage": "k2 doc leave <f>",
+    "description": "Leave the doc now."
+   },
+   {
+    "name": "doc watch",
+    "usage": "k2 doc watch <f>",
+    "description": "Print each change as it lands, until Ctrl-C (also: tail -f)."
+   },
+   {
+    "name": "doc status",
+    "usage": "k2 doc status [<f>]",
+    "description": "Disk state of the doc (and why a file isn't live text); with no file, the live docs pool."
+   },
+   {
+    "name": "doc flush",
+    "usage": "k2 doc flush <f>",
+    "description": "Write the doc back to disk now."
+   },
+   {
+    "name": "doc log",
+    "usage": "k2 doc log [--by P] [--since 2h] [-n N] [--pending] [--for P|me] <f>",
+    "description": "Changes and versions. Needs the history right."
+   },
+   {
+    "name": "doc versions",
+    "usage": "k2 doc versions <f>",
+    "description": "The doc's versions. Needs the history right."
+   },
+   {
+    "name": "doc show",
+    "usage": "k2 doc show --version V [--out FILE] <f>",
+    "description": "The doc at version V; never binary onto a terminal. Needs the history right."
+   },
+   {
+    "name": "doc blame",
+    "usage": "k2 doc blame [-L a,b] [--porcelain] <f>",
+    "description": "Who wrote each line (change, author, time; restored text: who restored it, in which change). Needs the history right."
+   },
+   {
+    "name": "doc restore",
+    "usage": "k2 doc restore --version V <f>",
+    "description": "Put version V back, forward: a new change you can undo. Needs the history right."
+   },
+   {
+    "name": "doc version",
+    "usage": "k2 doc version --name \"before launch\" [--version V] <f>",
+    "description": "Name a version. Needs the history right."
+   },
+   {
+    "name": "doc approvals",
+    "usage": "k2 doc approvals [--pending] [--mine|--for P|me] <f>",
+    "description": "Changes agents made on behalf of a person, and their state. Needs the history right."
+   },
+   {
+    "name": "doc approve",
+    "usage": "k2 doc approve <change> <f>",
+    "description": "Approve an agent's change (any-file docs: a version) made for you."
+   },
+   {
+    "name": "doc decline",
+    "usage": "k2 doc decline <change> <f>",
+    "description": "Decline an agent's change made for you. Any-file docs: it leaves the file as is and names the version to restore."
+   },
+   {
+    "name": "doc export",
+    "usage": "k2 doc export --list <f> | k2 doc export --to T [--version V] [--node ADDR] [--option NAME=VALUE]... [--out FILE] <f>",
+    "description": "A copy of the doc, now or at a version, as a new file; an export never changes the doc. stdout is the new file's absolute path. Exit 2: a target or option the file doesn't have, an export limit, an --out that exists; 3 export_place_forbidden; 1 cancelled or failed."
+   },
+   {
+    "name": "doc lease",
+    "usage": "k2 doc lease [--ttl 5m] <f> | k2 doc lease --renew|--release <f> | k2 doc lease --break <f>",
+    "description": "Any-file docs (files that aren't text, and refused text). Take the lease (exit 5 while someone else has it). It ends at --ttl (default 5m, at most 1h), on --release, or when the daemon restarts."
+   },
+   {
+    "name": "doc lock",
+    "usage": "k2 doc lock [--ttl 5m] <f>",
+    "description": "Any-file docs (files that aren't text, and refused text). The same as lease, with the same flags. On a .k5board: the board's lock verb."
+   },
+   {
+    "name": "doc unlock",
+    "usage": "k2 doc unlock <f>",
+    "description": "Any-file docs (files that aren't text, and refused text). The same as lease --release."
+   },
+   {
+    "name": "doc outline",
+    "usage": "k2 doc outline [--depth N] [--kind K] [--under ADDR] [--tree] [--version V] [--read-budget BYTES] [--cursor C] [--no-truncate] <f>",
+    "description": "PSD/PSB files. Every layer in reading order, each with its #N (no text or pixels). Reads come in pages; until the layers are indexed a read exits 1 (index_pending)."
+   },
+   {
+    "name": "doc node",
+    "usage": "k2 doc node ADDR... [--depth N] [--version V] [--read-budget BYTES] [--cursor C] [--no-truncate] <f> | k2 doc node ADDR --whole|--text <f>",
+    "description": "PSD/PSB files. Layers in full; ADDR is a key, #N or a name. A name two layers share: exit 2 (ambiguous_address); one that names nothing: exit 4, the rest still listed."
+   },
+   {
+    "name": "doc layer",
+    "usage": "k2 doc layer list|show ... <f> | k2 doc layer diff V1 [V2] [--cursor C] [--no-truncate] <f> | k2 doc layer blame [--version V] [--cursor C] [--no-truncate] <f>",
+    "description": "PSD/PSB files. list and show are the same as outline and node, with their flags; diff: what changed, layer by layer (no V2: the current one); blame: who made each layer as it is. diff and blame need the history right. --read-budget works on all four."
+   },
+   {
+    "name": "doc comment",
+    "usage": "k2 doc comment --doc|--node ADDR [--version V] [--hint TEXT] --body \"text\" [--mention P]... [--proposal FILE]... <f> | k2 doc comment --delete ann-N [--n N] <f>",
+    "description": "Comment on an any-file doc, pinned to the whole file or (PSD/PSB) to a layer. Needs edit, or a share with --comment; makes no version. --delete: its author, the person it was for, or an owner."
+   },
+   {
+    "name": "doc reply",
+    "usage": "k2 doc reply ann-N --body \"text\" [--mention P]... [--proposal FILE]... <f>",
+    "description": "Reply in a comment thread."
+   },
+   {
+    "name": "doc resolve",
+    "usage": "k2 doc resolve ann-N [--reopen] <f>",
+    "description": "Resolve a comment thread."
+   },
+   {
+    "name": "doc comments",
+    "usage": "k2 doc comments [--open|--resolved] [--on KEY] [--since SEQ] [--after ann-N] [--limit N] [--version V] <f> | k2 doc comments --log [ann-N] [--since SEQ] [--limit N] <f>",
+    "description": "Each thread with its pin's state: attached, hint-stale, suspect, hidden or orphaned. --log: what happened to the threads (history)."
+   },
+   {
+    "name": "doc reanchor",
+    "usage": "k2 doc reanchor ann-N --doc|--node ADDR [--version V] [--hint TEXT] <f>",
+    "description": "Move a comment's pin. An agent's move is a proposal a person confirms by running the same reanchor."
+   },
+   {
+    "name": "doc purge-comments",
+    "usage": "k2 doc purge-comments --thread ann-N [--n N] | --text \"...\" | --all <f>",
+    "description": "Purge comments from an any-file doc. The box owner or an Admin only (never agents)."
+   },
+   {
+    "name": "doc erase-participant",
+    "usage": "k2 doc erase-participant --participant P --pseudonym NAME <f>",
+    "description": "Erase a participant from an any-file doc's attributions and comments, under a pseudonym. The box owner or an Admin only (never agents)."
+   },
+   {
+    "name": "doc share",
+    "usage": "k2 doc share <file-or-folder> --with <ws> [--write] [--history] [--comment] -w <ws>",
+    "description": "People only: share a file or folder with another workspace."
+   },
+   {
+    "name": "doc unshare",
+    "usage": "k2 doc unshare <file-or-folder> --with <ws> -w <ws>",
+    "description": "People only: end a share."
+   },
+   {
+    "name": "doc shares",
+    "usage": "k2 doc shares [-w <ws>] [--with <ws>]",
+    "description": "People only: list shares."
+   },
+   {
     "name": "skills",
     "usage": "k2 skills <list|create|remove|profile|...> [...]",
     "description": "Manage skill profiles (SKILL.md) for workspaces/agents."

@@ -233,6 +233,12 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         example: 'k2 board boards',
       },
       { noun: 'db', blurb: "This workspace's loopback Postgres.", example: 'k2 db create' },
+      {
+        noun: 'doc',
+        also: ['docs'],
+        blurb: 'Live docs: edit the same file with people and other agents, with presence, your own undo and history.',
+        example: 'k2 doc grep -n TODO notes.md',
+      },
       { noun: 'wiki', blurb: 'Workspace notes.', example: 'k2 wiki index' },
     ],
   },

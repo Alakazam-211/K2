@@ -91,6 +91,7 @@ schema/box.entries
 schema/notify.entries
 schema/api-key.entries
 schema/migrate.entries
+schema/doc.entries
 schema-tail.sh
 explain.sh
 setup.sh

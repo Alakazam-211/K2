@@ -264,6 +264,9 @@ export type SkinUser = {
   roleId: string | null
   roleName: string | null
   email: string | null
+  /** Signs in to this server itself (a `host` grant): a server login.
+   *  Unknown (undefined) when the users list couldn't read it. */
+  boxLogin?: boolean
 }
 
 export type SkinRoomAccess = {
@@ -498,8 +501,31 @@ export function parseSkinUsers(raw: unknown): SkinUser[] {
       roleId: asString(rec.roleId) ?? asString(rec.role_id),
       roleName: asString(rec.roleName) ?? asString(rec.role_name),
       email: asString(rec.email),
+      boxLogin: asBool(rec.boxLogin),
     }]
   })
+}
+
+/** The App's "Add a person" choices: everyone without a login on `app` yet
+ *  (someone who has one changes their role on their row), App users first,
+ *  then this server's own logins in their own group. Giving a server login a
+ *  role here adds only their login on this App: their server sign-in stays
+ *  as it is (the owner's `skin/grants` route never touches `host`). */
+export function appPeopleChoices(
+  users: SkinUser[],
+  appGrants: { subjectKind: string; subjectId: string }[],
+  app: string,
+): { value: string; label: string; group?: string }[] {
+  const has = new Set(appGrants.filter((g) => g.subjectKind === 'principal').map((g) => g.subjectId))
+  const open = users.filter((u): u is SkinUser & { id: string } => !!u.id && !has.has(u.id))
+  if (app === 'host') return open.map((u) => ({ value: u.id, label: u.username }))
+  const appUsers = open.filter((u) => u.boxLogin !== true)
+  const serverLogins = open.filter((u) => u.boxLogin === true)
+  if (serverLogins.length === 0) return appUsers.map((u) => ({ value: u.id, label: u.username }))
+  return [
+    ...appUsers.map((u) => ({ value: u.id, label: u.username, group: 'App users' })),
+    ...serverLogins.map((u) => ({ value: u.id, label: u.username, group: 'This server’s logins' })),
+  ]
 }
 
 export function parseSkinRoles(raw: unknown): SkinRole[] {
@@ -1070,7 +1096,7 @@ export function SkinAccessSection(): React.JSX.Element {
     }
   }, [selectedApp, addPersonId, addRoleId, refresh])
 
-  const peopleChoices = users.flatMap((u) => (u.id ? [{ value: u.id, label: u.username }] : []))
+  const peopleChoices = appPeopleChoices(users, appGrants, selectedApp ?? 'host')
   const appRoleChoices = visibleRoles.map((r) => ({ value: r.id, label: r.name }))
   const loginRoleChoices = [
     { value: '', label: 'None' },
@@ -1522,7 +1548,15 @@ export function SkinAccessSection(): React.JSX.Element {
                     </div>
                   )
                 })}
-                <SettingRow label="Add a person" hint="Pick a person and the role they get here." stack>
+                <SettingRow
+                  label="Add a person"
+                  hint={
+                    selectedApp === 'host'
+                      ? 'Pick a person and the role they get here.'
+                      : 'Pick a person and the role they get here. This server’s logins are listed too: they get a login on this App, and their server sign-in stays as it is.'
+                  }
+                  stack
+                >
                   <div className={SETTING_FIELD_WIDTH}>
                     <SettingDropdown
                       ariaLabel="App user"

@@ -42,6 +42,7 @@ import {
   roleCapChoices,
   parseFrontDoor,
   parseSkinUsers,
+  appPeopleChoices,
   parseSkinTokens,
   parseHydra,
   mintSecretFrom,
@@ -946,6 +947,82 @@ describe('SkinAccessSection', () => {
       })
     })
     expect(h.daemonCliPost.mock.calls.map((c) => c[0])).not.toContain('skin/users')
+  })
+
+  it('lists this server’s logins in their own group and gives one a login on the App, never touching their server sign-in', async () => {
+    const ada = { id: 'p-ada', username: 'ada', boxLogin: false }
+    const bo = { id: 'p-bo', username: 'bo', boxLogin: true }
+    const cy = { id: 'p-cy', username: 'cy', boxLogin: true }
+    const wikiReader = { id: 'role-wiki', name: 'wiki-reader', appId: 'svc-wiki', roomAccess: [] }
+    h.daemonCliGet.mockImplementation(async (route: string, params?: { project?: string }) => {
+      if (route === 'skin/users') return { users: [ada, bo, cy] }
+      if (route === 'skin/roles') return { roles: [wikiReader] }
+      if (route === 'skin-tokens') return { tokens: [] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES]
+      if (route === 'skin/grants') {
+        return {
+          grants: [
+            // cy already has a login on wiki: their role changes on their row, not here.
+            { id: 'g-cy-wiki', subjectKind: 'principal', subjectId: 'p-cy', kind: 'app', targetId: 'svc-wiki', roleId: 'role-wiki', scope: null, enabled: true },
+            { id: 'g-bo-host', subjectKind: 'principal', subjectId: 'p-bo', kind: 'app', targetId: 'host', roleId: null, scope: '[]', enabled: true },
+          ],
+        }
+      }
+      if (route === 'publish/list') {
+        if (params?.project !== 'proj-sales') throw new Error(`unexpected project ${params?.project}`)
+        return {
+          services: [{ id: 'svc-wiki', projectId: 'proj-sales', name: 'wiki', kind: 'skin', status: 'running', expose: 'local', url: null }],
+        }
+      }
+      if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
+      if (route === 'skin/roles/suggest') return { templates: [] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
+    expect(screen.getByText(/This server’s logins are listed too/)).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('App user'))
+    const menu = screen.getByTestId('setting-dropdown-menu')
+    expect(menu.textContent).toContain('App users')
+    expect(menu.textContent).toContain('This server’s logins')
+    const names = [...menu.querySelectorAll('button')].map((b) => b.textContent)
+    expect(names).toEqual(['ada', 'bo'])
+    // The group headings come in that order: App users, then the server's logins.
+    expect(menu.textContent!.indexOf('App users')).toBeLessThan(menu.textContent!.indexOf('This server’s logins'))
+    expect(menu.textContent!.indexOf('This server’s logins')).toBeLessThan(menu.textContent!.indexOf('bo'))
+    fireEvent.click(screen.getByRole('button', { name: 'bo' }))
+    fireEvent.click(screen.getByLabelText('App user role'))
+    fireEvent.click(screen.getByRole('button', { name: 'wiki-reader' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/grants', {
+        subjectKind: 'principal',
+        subjectId: 'p-bo',
+        kind: 'app',
+        targetId: 'svc-wiki',
+        roleId: 'role-wiki',
+      })
+    })
+    expect(h.daemonCliPost.mock.calls.map((c) => c[0])).not.toContain('skin/grants/host')
+  })
+
+  it('appPeopleChoices: one flat list with no server logins, and on Host', () => {
+    const users = [
+      { id: 'p-a', username: 'a', defaultRooms: [], defaultRoomHandles: [], hasPassword: false, roleId: null, roleName: null, email: null, boxLogin: false },
+      { id: 'p-b', username: 'b', defaultRooms: [], defaultRoomHandles: [], hasPassword: false, roleId: null, roleName: null, email: null },
+      { id: 'p-c', username: 'c', defaultRooms: [], defaultRoomHandles: [], hasPassword: false, roleId: null, roleName: null, email: null, boxLogin: true },
+    ]
+    expect(appPeopleChoices(users.slice(0, 2), [], 'svc-wiki')).toEqual([
+      { value: 'p-a', label: 'a' },
+      { value: 'p-b', label: 'b' },
+    ])
+    // Host is the server sign-in itself: no groups; who has it already is left out.
+    expect(appPeopleChoices(users, [{ subjectKind: 'principal', subjectId: 'p-c' }], 'host')).toEqual([
+      { value: 'p-a', label: 'a' },
+      { value: 'p-b', label: 'b' },
+    ])
   })
 
   it('S24: App detail says logins are per App, shows role-less rooms, a waiting helper, and copies box logins', async () => {

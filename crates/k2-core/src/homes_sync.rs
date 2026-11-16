@@ -37,6 +37,12 @@
 //! merged-away Home id as a redirect, so selections and Garden `seedHome`
 //! still resolve.
 //!
+//! **Where they are stored.** Homes and agent rows in `homes_items`; people
+//! and channel rows in `homes_chat_items` (migration 0307), because 0.46.12
+//! reads every `homes_items` row and takes any kind but `row` for a Home: a
+//! server rolled back to it must not show its clients a person or a channel
+//! as an extra Home. The person's cursor is shared; a pull reads both.
+//!
 //! **Fields an older client leaves out.** The fields added after 0.46.1
 //! (`icon`, `recentFirst`, `pinOrder`, `lastMessagedAt`, migration 0305) are
 //! optional on a push: left out, the stored value stays (an older device's
@@ -93,15 +99,15 @@ pub fn valid_icon(s: &str) -> bool {
     !s.is_empty() && s.len() <= ICON_MAX && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// True when migration 0193's tables exist.
+/// True when migration 0193's tables (and 0307's) exist.
 pub fn tables_exist(conn: &Connection) -> bool {
     conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' \
-         AND name IN ('homes_items', 'homes_people', 'homes_devices')",
+         AND name IN ('homes_items', 'homes_chat_items', 'homes_people', 'homes_devices')",
         [],
         |r| r.get::<_, i64>(0),
     )
-    .map(|n| n == 3)
+    .map(|n| n == 4)
     .unwrap_or(false)
 }
 
@@ -146,7 +152,23 @@ impl Kind {
     pub fn is_row(self) -> bool {
         self != Kind::Home
     }
+
+    /// The table this kind is stored in: Homes and agent rows in
+    /// [`HOMES_TABLE`] (every release reads it), people and channels in
+    /// [`CHAT_TABLE`] (0307), where 0.46.12 never looks.
+    pub fn table(self) -> &'static str {
+        match self {
+            Kind::Home | Kind::Row => HOMES_TABLE,
+            Kind::Person | Kind::Channel => CHAT_TABLE,
+        }
+    }
 }
+
+/// Homes and agent rows (0193). 0.46.12 reads every row of a person here and
+/// takes any kind but `row` for a Home, so nothing else may be stored here.
+pub const HOMES_TABLE: &str = "homes_items";
+/// People and channel rows (0307), same columns.
+pub const CHAT_TABLE: &str = "homes_chat_items";
 
 /// One Home or Home row as stored (and as accepted from a push).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -525,7 +547,10 @@ fn item_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
 
 fn get_item(conn: &Connection, person: &str, item: &Item) -> rusqlite::Result<Option<Item>> {
     conn.query_row(
-        &format!("SELECT {ITEM_COLS} FROM homes_items WHERE person = ?1 AND kind = ?2 AND home_id = ?3 AND address = ?4"),
+        &format!(
+            "SELECT {ITEM_COLS} FROM {} WHERE person = ?1 AND kind = ?2 AND home_id = ?3 AND address = ?4",
+            item.kind.table()
+        ),
         params![person, item.kind.as_str(), item.home_id, item.address],
         item_from_row,
     )
@@ -544,12 +569,18 @@ fn person_seq(conn: &Connection, person: &str) -> rusqlite::Result<(i64, i64)> {
 /// Live pinned rows of every row kind on a Home, but `(except_kind,
 /// except_address)` itself (pins are shared by agents, people and channels).
 fn pinned_count_except(conn: &Connection, person: &str, home_id: &str, except_kind: Kind, except_address: &str) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM homes_items WHERE person = ?1 AND kind != 'home' AND home_id = ?2 \
-         AND deleted = 0 AND pin_order IS NOT NULL AND NOT (kind = ?3 AND address = ?4)",
-        params![person, home_id, except_kind.as_str(), except_address],
-        |r| r.get(0),
-    )
+    let mut n = 0;
+    for table in [HOMES_TABLE, CHAT_TABLE] {
+        n += conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM {table} WHERE person = ?1 AND kind != 'home' AND home_id = ?2 \
+                 AND deleted = 0 AND pin_order IS NOT NULL AND NOT (kind = ?3 AND address = ?4)"
+            ),
+            params![person, home_id, except_kind.as_str(), except_address],
+            |r| r.get::<_, i64>(0),
+        )?;
+    }
+    Ok(n)
 }
 
 fn live_home_count_except(conn: &Connection, person: &str, except_id: &str) -> rusqlite::Result<i64> {
@@ -630,13 +661,19 @@ pub fn pull(
     };
     let changes: Vec<Item> = if full {
         let mut st = conn.prepare(&format!(
-            "SELECT {ITEM_COLS} FROM homes_items WHERE person = ?1 AND deleted = 0 ORDER BY kind, home_id, ord, address"
+            "SELECT {ITEM_COLS} FROM {HOMES_TABLE} WHERE person = ?1 AND deleted = 0 \
+             UNION ALL SELECT {ITEM_COLS} FROM {CHAT_TABLE} WHERE person = ?1 AND deleted = 0 \
+             ORDER BY kind, home_id, ord, address"
         ))?;
         let rows = st.query_map(params![person], item_from_row)?;
         rows.collect::<rusqlite::Result<_>>()?
     } else {
+        // `seq` rides as a last column (item_from_row never reads it): a
+        // compound select orders by its result columns only.
         let mut st = conn.prepare(&format!(
-            "SELECT {ITEM_COLS} FROM homes_items WHERE person = ?1 AND seq > ?2 ORDER BY seq, kind, home_id, address"
+            "SELECT {ITEM_COLS}, seq FROM {HOMES_TABLE} WHERE person = ?1 AND seq > ?2 \
+             UNION ALL SELECT {ITEM_COLS}, seq FROM {CHAT_TABLE} WHERE person = ?1 AND seq > ?2 \
+             ORDER BY seq, kind, home_id, address"
         ))?;
         let rows = st.query_map(params![person, since.unwrap_or(0)], item_from_row)?;
         rows.collect::<rusqlite::Result<_>>()?
@@ -747,15 +784,18 @@ pub fn push(
             }
         }
         tx.execute(
-            "INSERT INTO homes_items (person, kind, home_id, address, name, label, workspace_id, ord, \
-               updated_at, device_id, deleted, merged_into, seq, icon, recent_first, pin_order, last_messaged_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
-             ON CONFLICT (person, kind, home_id, address) DO UPDATE SET \
-               name = excluded.name, label = excluded.label, workspace_id = excluded.workspace_id, \
-               ord = excluded.ord, updated_at = excluded.updated_at, device_id = excluded.device_id, \
-               deleted = excluded.deleted, merged_into = excluded.merged_into, seq = excluded.seq, \
-               icon = excluded.icon, recent_first = excluded.recent_first, pin_order = excluded.pin_order, \
-               last_messaged_at = excluded.last_messaged_at",
+            &format!(
+                "INSERT INTO {} (person, kind, home_id, address, name, label, workspace_id, ord, \
+                   updated_at, device_id, deleted, merged_into, seq, icon, recent_first, pin_order, last_messaged_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+                 ON CONFLICT (person, kind, home_id, address) DO UPDATE SET \
+                   name = excluded.name, label = excluded.label, workspace_id = excluded.workspace_id, \
+                   ord = excluded.ord, updated_at = excluded.updated_at, device_id = excluded.device_id, \
+                   deleted = excluded.deleted, merged_into = excluded.merged_into, seq = excluded.seq, \
+                   icon = excluded.icon, recent_first = excluded.recent_first, pin_order = excluded.pin_order, \
+                   last_messaged_at = excluded.last_messaged_at",
+                item.kind.table()
+            ),
             params![
                 person,
                 item.kind.as_str(),
@@ -782,17 +822,21 @@ pub fn push(
         // Collect old tombstones (never redirects) and raise the floor past
         // them, so a device that last pulled before them gets a full set.
         let cutoff = now_ms - TOMBSTONE_KEEP_MS;
-        let purged_max: Option<i64> = tx.query_row(
-            "SELECT MAX(seq) FROM homes_items WHERE person = ?1 AND deleted = 1 AND merged_into IS NULL AND updated_at < ?2",
-            params![person, cutoff],
-            |r| r.get(0),
-        )?;
-        if let Some(m) = purged_max {
-            tx.execute(
-                "DELETE FROM homes_items WHERE person = ?1 AND deleted = 1 AND merged_into IS NULL AND updated_at < ?2",
+        for table in [HOMES_TABLE, CHAT_TABLE] {
+            let purged_max: Option<i64> = tx.query_row(
+                &format!(
+                    "SELECT MAX(seq) FROM {table} WHERE person = ?1 AND deleted = 1 AND merged_into IS NULL AND updated_at < ?2"
+                ),
                 params![person, cutoff],
+                |r| r.get(0),
             )?;
-            floor = floor.max(m);
+            if let Some(m) = purged_max {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE person = ?1 AND deleted = 1 AND merged_into IS NULL AND updated_at < ?2"),
+                    params![person, cutoff],
+                )?;
+                floor = floor.max(m);
+            }
         }
         tx.execute(
             "INSERT INTO homes_people (person, seq, floor) VALUES (?1, ?2, ?3) \
@@ -981,8 +1025,13 @@ mod tests {
             .expect("0305 applies");
         conn.execute_batch(include_str!("../drizzle_sql/0306_home_chat_rows.sql").replace("--> statement-breakpoint", "").as_str())
             .expect("0306 applies");
+        conn.execute_batch(sql_0307().as_str()).expect("0307 applies");
         assert!(tables_exist(&conn));
         conn
+    }
+
+    fn sql_0307() -> String {
+        include_str!("../drizzle_sql/0307_home_chat_rows_apart.sql").replace("--> statement-breakpoint", "")
     }
 
     fn home(id: &str, name: &str, order: &str, at: i64) -> Value {
@@ -1608,6 +1657,9 @@ mod tests {
             .expect("0193");
         conn.execute_batch(include_str!("../drizzle_sql/0305_home_groups.sql").replace("--> statement-breakpoint", "").as_str())
             .expect("0305");
+        // This build's push and pull also read 0307's table: it is made
+        // first (on this older shape it moves nothing).
+        conn.execute_batch(sql_0307().as_str()).expect("0307's table");
         let mut r = row("h1", "atlas::s", "V", NOW);
         r["pinOrder"] = json!("V");
         r["lastMessagedAt"] = json!(NOW - 1);
@@ -1637,5 +1689,193 @@ mod tests {
         assert_eq!(idx, 1, "the cursor index is made again");
         let r = push(&conn, "owner", "d", &[chat_row("person", "h1", "k2:owner::s", "l", NOW)], NOW).expect("new");
         assert!(r.rejected.is_empty(), "{:?}", r.rejected);
+    }
+
+    /// v0.46.12's `pull`, as that release runs it against this database
+    /// (`git show v0.46.12:crates/k2-core/src/homes_sync.rs`): its columns,
+    /// its two queries word for word, and its kind mapping, where any kind
+    /// but `row` is a Home (`kind: if kind == "row" { Row } else { Home }`)
+    /// and a Home's wire form is `{kind:"home", id, name, order, …}`.
+    fn v0_46_12_pull(conn: &Connection, person: &str, since: Option<i64>) -> Vec<Value> {
+        const COLS: &str = "kind, home_id, address, name, label, workspace_id, ord, updated_at, device_id, deleted, merged_into";
+        let sql = match since {
+            None => format!("SELECT {COLS} FROM homes_items WHERE person = ?1 AND deleted = 0 ORDER BY kind, home_id, ord, address"),
+            Some(_) => format!("SELECT {COLS} FROM homes_items WHERE person = ?1 AND seq > ?2 ORDER BY seq, kind, home_id, address"),
+        };
+        let mut st = conn.prepare(&sql).expect("0.46.12's query runs on this schema");
+        let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<Value> {
+            let kind: String = r.get(0)?;
+            let (home_id, address): (String, String) = (r.get(1)?, r.get(2)?);
+            let (name, label): (Option<String>, Option<String>) = (r.get(3)?, r.get(4)?);
+            let (order, updated_at, device_id): (String, i64, String) = (r.get(6)?, r.get(7)?, r.get(8)?);
+            let mut v = if kind == "row" {
+                json!({"kind": "row", "homeId": home_id, "address": address, "label": label.unwrap_or_default(),
+                       "workspaceId": r.get::<_, Option<String>>(5)?, "order": order, "updatedAt": updated_at, "deviceId": device_id})
+            } else {
+                json!({"kind": "home", "id": home_id, "name": name, "order": order, "updatedAt": updated_at, "deviceId": device_id})
+            };
+            if r.get::<_, i64>(9)? != 0 {
+                v["deleted"] = json!(true);
+            }
+            if let Some(m) = r.get::<_, Option<String>>(10)? {
+                v["mergedInto"] = json!(m);
+            }
+            Ok(v)
+        };
+        let rows = match since {
+            None => st.query_map(params![person], map),
+            Some(s) => st.query_map(params![person, s], map),
+        }
+        .expect("0.46.12's query");
+        rows.collect::<rusqlite::Result<Vec<_>>>().expect("0.46.12's rows")
+    }
+
+    /// A 0.46.13 server rolled back to 0.46.12 (the database stays): 0.46.12's
+    /// own read gets the groups exactly as before people and channels were
+    /// added to them: no extra Home, no lost name, no moved group.
+    #[test]
+    fn a_server_rolled_back_to_0_46_12_reads_its_groups_unchanged() {
+        let c = db();
+        let groups = [home("h1", "Work", "V", NOW), home("h2", "Family", "l", NOW), row("h1", "atlas::s", "V", NOW)];
+        assert!(push(&c, "owner", "laptop", &groups, NOW).expect("groups").rejected.is_empty());
+        let before_full = v0_46_12_pull(&c, "owner", None);
+        let before_delta = v0_46_12_pull(&c, "owner", Some(0));
+        assert_eq!(before_full.iter().filter(|v| v["kind"] == "home").count(), 2);
+
+        // 0.46.13 puts people and channels in both groups (one pinned, one
+        // ordered first, one deleted again).
+        let mut p = chat_row("person", "h1", "k2:owner::s", "0", NOW + 1);
+        p["pinOrder"] = json!("V");
+        let rows = [p, chat_row("channel", "h1", "42::s", "1", NOW + 1), chat_row("person", "h2", "k2:connect:ab12::s", "z", NOW + 1)];
+        assert!(push(&c, "owner", "phone", &rows, NOW).expect("chat rows").rejected.is_empty());
+        let gone = tomb(chat_row("channel", "h2", "43::s", "2", NOW + 2));
+        assert!(push(&c, "owner", "phone", &[chat_row("channel", "h2", "43::s", "2", NOW + 1)], NOW).expect("ch").rejected.is_empty());
+        assert!(push(&c, "owner", "phone", &[gone], NOW).expect("tomb").rejected.is_empty());
+
+        assert_eq!(v0_46_12_pull(&c, "owner", None), before_full, "0.46.12's full read: the groups unchanged");
+        assert_eq!(v0_46_12_pull(&c, "owner", Some(0)), before_delta, "0.46.12's delta read: the groups unchanged");
+        let cursor = pull(&c, "owner", None, None, NOW).expect("pull").cursor;
+        assert!(v0_46_12_pull(&c, "owner", Some(1)).is_empty(), "nothing after the groups' own write reaches 0.46.12");
+        assert!(cursor > 1);
+
+        // 0.46.13 itself still reads everything, both ways.
+        let l = live(&c, "owner");
+        assert_eq!(l.iter().filter(|v| v["kind"] == "home").count(), 2);
+        assert_eq!(l.iter().filter(|v| v["kind"] == "person").count(), 2);
+        assert_eq!(l.iter().filter(|v| v["kind"] == "channel").count(), 1);
+        assert_eq!(l.iter().filter(|v| v["kind"] == "row").count(), 1);
+        let d: Vec<Value> = pull(&c, "owner", Some(1), None, NOW).expect("delta").changes.iter().map(Item::to_json).collect();
+        assert_eq!(
+            d.iter().map(|v| (v["kind"].as_str().unwrap_or_default().to_string(), v["deleted"] == json!(true))).collect::<Vec<_>>(),
+            vec![
+                ("channel".to_string(), false),
+                ("person".to_string(), false),
+                ("person".to_string(), false),
+                ("channel".to_string(), true)
+            ],
+            "the delta in seq order across both tables: {d:?}"
+        );
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM homes_items WHERE kind NOT IN ('home', 'row')", [], |r| r.get::<_, i64>(0)).expect("count"),
+            0,
+            "no person or channel row in the table 0.46.12 reads"
+        );
+    }
+
+    /// 0307 moves the person and channel rows a queue build wrote into
+    /// `homes_items` (0306) out of 0.46.12's sight, every field kept: before
+    /// it, 0.46.12's read shows them as nameless Homes; after it, the groups
+    /// read as they were, and this build pulls the very same items.
+    #[test]
+    fn rows_a_queue_build_wrote_move_out_of_0_46_12s_sight_at_0307() {
+        let conn = Connection::open_in_memory().expect("mem db");
+        for (n, sql) in [
+            ("0193", include_str!("../drizzle_sql/0193_homes_sync.sql")),
+            ("0305", include_str!("../drizzle_sql/0305_home_groups.sql")),
+            ("0306", include_str!("../drizzle_sql/0306_home_chat_rows.sql")),
+        ] {
+            conn.execute_batch(sql.replace("--> statement-breakpoint", "").as_str()).unwrap_or_else(|e| panic!("{n}: {e}"));
+        }
+        // What a queue build (0306 only) stored: Homes, an agent row, and
+        // people and channels in the same table.
+        let ins = |kind: &str, home: &str, addr: &str, name: Option<&str>, label: Option<&str>, ord: &str, deleted: i64, seq: i64, pin: Option<&str>| {
+            conn.execute(
+                "INSERT INTO homes_items (person, kind, home_id, address, name, label, ord, updated_at, device_id, deleted, seq, \
+                 pin_order, last_messaged_at, icon, recent_first) VALUES ('owner', ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'phone', ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    kind,
+                    home,
+                    addr,
+                    name,
+                    label,
+                    ord,
+                    NOW + seq,
+                    deleted,
+                    seq,
+                    pin,
+                    (kind != "home").then_some(NOW - seq),
+                    (kind == "home").then_some("rocket"),
+                    (kind == "home") as i64
+                ],
+            )
+            .expect("queue build row");
+        };
+        ins("home", "h1", "", Some("Work"), None, "V", 0, 1, None);
+        ins("home", "h2", "", Some("Family"), None, "l", 0, 1, None);
+        ins("row", "h1", "atlas::s", None, Some("Atlas"), "V", 0, 1, Some("V"));
+        ins("person", "h1", "k2:owner::s", None, Some("Owner"), "0", 0, 2, Some("a"));
+        ins("channel", "h1", "42::s", None, Some("general"), "1", 0, 2, None);
+        ins("channel", "h2", "43::s", None, Some("old"), "2", 1, 3, None);
+        conn.execute("INSERT INTO homes_people (person, seq, floor) VALUES ('owner', 3, 0)", []).expect("cursor");
+        let damaged = v0_46_12_pull(&conn, "owner", None);
+        assert_eq!(damaged.iter().filter(|v| v["kind"] == "home").count(), 4, "the defect: 0.46.12 reads people and channels as Homes");
+        let raw = |conn: &Connection, table: &str| -> Vec<Item> {
+            let mut st = conn.prepare(&format!("SELECT {ITEM_COLS} FROM {table} ORDER BY kind, home_id, address")).expect("raw");
+            let rows = st.query_map([], item_from_row).expect("raw rows");
+            rows.collect::<rusqlite::Result<_>>().expect("raw items")
+        };
+        let mut before = raw(&conn, "homes_items");
+        let seqs_before: Vec<(String, i64)> = conn
+            .prepare("SELECT home_id || '/' || address, seq FROM homes_items ORDER BY kind, home_id, address")
+            .expect("seqs")
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("seqs")
+            .collect::<rusqlite::Result<_>>()
+            .expect("seqs");
+
+        conn.execute_batch(sql_0307().as_str()).expect("0307");
+        assert!(tables_exist(&conn));
+        let groups = v0_46_12_pull(&conn, "owner", None);
+        assert_eq!(groups.len(), 3, "{groups:?}");
+        assert_eq!(
+            groups.iter().filter(|v| v["kind"] == "home").map(|v| (v["id"].clone(), v["name"].clone(), v["order"].clone())).collect::<Vec<_>>(),
+            vec![(json!("h1"), json!("Work"), json!("V")), (json!("h2"), json!("Family"), json!("l"))],
+            "0.46.12 reads its groups with their names and order"
+        );
+        let mut after = raw(&conn, "homes_items");
+        after.extend(raw(&conn, "homes_chat_items"));
+        let key = |i: &Item| (i.kind.as_str(), i.home_id.clone(), i.address.clone());
+        before.sort_by_key(key);
+        after.sort_by_key(key);
+        assert_eq!(before, after, "every item and field kept through the move");
+        let mut seqs_after: Vec<(String, i64)> = Vec::new();
+        for t in ["homes_items", "homes_chat_items"] {
+            let mut st = conn.prepare(&format!("SELECT home_id || '/' || address, seq FROM {t}")).expect("seqs");
+            seqs_after.extend(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("seqs").collect::<rusqlite::Result<Vec<_>>>().expect("seqs"));
+        }
+        let (mut a, mut b) = (seqs_before, seqs_after);
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "seqs kept, so cursors still work");
+        // This build's pull serves the moved rows (the tombstone only in a delta).
+        let l = live(&conn, "owner");
+        assert_eq!(l.len(), 5, "{l:?}");
+        let person = l.iter().find(|v| v["kind"] == "person").expect("the person row");
+        assert_eq!((person["pinOrder"].clone(), person["label"].clone()), (json!("a"), json!("Owner")));
+        let d = pull(&conn, "owner", Some(2), None, NOW).expect("delta").changes;
+        assert_eq!(d.iter().map(|i| (i.kind, i.deleted)).collect::<Vec<_>>(), vec![(Kind::Channel, true)]);
+        // A second run moves nothing and loses nothing.
+        conn.execute_batch(sql_0307().as_str()).expect("0307 again");
+        assert_eq!(live(&conn, "owner"), l);
     }
 }

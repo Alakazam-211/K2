@@ -116,7 +116,7 @@ fn with_temp_home<F: FnOnce(&Path)>(f: F) {
 fn isolate_homes() {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    conn.execute_batch("DELETE FROM homes_items; DELETE FROM homes_people; DELETE FROM homes_devices;")
+    conn.execute_batch("DELETE FROM homes_items; DELETE FROM homes_chat_items; DELETE FROM homes_people; DELETE FROM homes_devices;")
         .expect("isolate homes");
 }
 

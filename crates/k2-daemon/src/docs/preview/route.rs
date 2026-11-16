@@ -41,6 +41,13 @@
 //! A current image's id table names the objects as the doc does now
 //! ([`service::with_current_ids`]).
 //!
+//! **Not on this host.** A container the host can't draw at all (a
+//! timeline's tile where there is no video decoder:
+//! `PreviewRenderer::decodes_here`) is answered at once: the image is `200
+//! {state: "failed", failed: {code: "not_on_this_host"}}` (as every failed
+//! image), and a listing gives that container `failed` at every width plus
+//! `failed: {code: "not_on_this_host"}`. Nothing is queued or pushed.
+//!
 //! **An agent's view.** An agent asking for a still of the head (a
 //! `container`) is looking there: its connection's presence `view_address`
 //! becomes that address ([`agent_viewing`]), so the roster says where it is
@@ -59,7 +66,7 @@ use k2_mpc_base::session::{SessionError, Stay};
 
 use super::cache::{self, Got};
 use super::service::{self, Keyed, Requested, SnapError, Snapshot};
-use super::{extras, Look, Width};
+use super::{extras, FailCode, Look, Width};
 use crate::cli_response::CliResponse;
 use crate::docs::caller::refusal;
 use crate::docs::routes::{self, Call, OpenError};
@@ -205,9 +212,14 @@ fn state_of(snap: &Snapshot, container: &str, hash: &str, w: Width, look: Look) 
 /// (never the raw digest), the state of each width in `look`, then the
 /// type's extras.
 pub fn container_json(snap: &Snapshot, k: &Keyed, look: Look) -> Value {
+    // A container this host can't draw at all: every width `failed`, and
+    // why (`failed.code: not_on_this_host`), so the view shows its "no
+    // preview" card without asking.
+    let here = snap.renderer.decodes_here(&k.c);
     let mut previews = serde_json::Map::new();
     for w in [Width::Thumb, Width::Full] {
-        previews.insert(w.as_str().into(), json!(state_of(snap, &k.c.key, &k.hash, w, look)));
+        let state = if here { state_of(snap, &k.c.key, &k.hash, w, look) } else { "failed" };
+        previews.insert(w.as_str().into(), json!(state));
     }
     let mut v = json!({
         "key": k.c.key,
@@ -217,6 +229,9 @@ pub fn container_json(snap: &Snapshot, k: &Keyed, look: Look) -> Value {
         "render_hash": k.hash,
         "previews": previews,
     });
+    if !here {
+        v["failed"] = json!({ "code": FailCode::NotOnThisHost.as_str() });
+    }
     for (x, val) in &k.c.extras {
         v[x.as_str()] = val.clone();
     }
@@ -235,7 +250,7 @@ fn page_json(snap: &Snapshot) -> Value {
     snap.page.map_or(Value::Null, |p| json!({ "w": p.w, "h": p.h, "unit": p.unit }))
 }
 
-fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, want: Option<Width>, look: Look) -> CliResponse {
+pub(super) fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, want: Option<Width>, look: Look) -> CliResponse {
     let containers: Vec<Value> = snap
         .containers
         .iter()

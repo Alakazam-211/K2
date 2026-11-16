@@ -16,6 +16,7 @@
 //! | `mod.rs` | the per-type interface ([`PreviewRenderer`]), the registry ([`renderer_for`]), the shared types |
 //! | [`deck`] | `.pptx` slides: the pptx pack's view index, drawn by `k2-deckrender` (one process per render) |
 //! | [`scene`] | live BLEND scenes: the pack's mesh read (K2SCENE1; not in K2 yet), cameras and objects drawn by `k2-scenerender` (one process per request) |
+//! | [`timeline`] | live timelines: a clip's head and tail tiles keyed by (media hash, source time); a slot (no timeline pack, no tile decoder yet: `not_on_this_host`) |
 //! | [`extras`] | what a listing and an image carry besides the image (a scene's bounds, cameras, turntable titles, id tables), in the client's shapes |
 //! | [`reuse`] | a renamed container answered from the image its render hash already has, without a render |
 //! | [`cache`] | the sealed on-disk cache, its cap, and the purge hooks' file side |
@@ -44,6 +45,7 @@ pub mod reuse;
 pub mod route;
 pub mod scene;
 pub mod service;
+pub mod timeline;
 
 #[cfg(test)]
 mod scene_tab_tests;
@@ -278,6 +280,14 @@ pub trait PreviewRenderer: Send + Sync {
     fn draws_ids(&self, _container: &Container) -> bool {
         false
     }
+    /// Whether this host can draw `container` at all (a timeline's tiles
+    /// need the host's video decoders). When it can't, the host answers
+    /// [`FailCode::NotOnThisHost`] at once ([`service::request`]): nothing is
+    /// queued or pushed, no failure is kept (the doc changing doesn't change
+    /// the host), and a listing says so per container.
+    fn decodes_here(&self, _container: &Container) -> bool {
+        true
+    }
     /// The containers of `bytes`, with their raw digests. Runs in the
     /// daemon on bytes the live pack already holds (bounded by the pack's
     /// limits); never draws.
@@ -290,7 +300,7 @@ pub trait PreviewRenderer: Send + Sync {
 
 /// Every renderer, in the order they are asked.
 pub fn renderers() -> &'static [&'static dyn PreviewRenderer] {
-    static ALL: [&dyn PreviewRenderer; 2] = [&deck::DECK, &scene::SCENE];
+    static ALL: [&dyn PreviewRenderer; 3] = [&deck::DECK, &scene::SCENE, &timeline::TIMELINE];
     &ALL
 }
 
@@ -338,5 +348,8 @@ mod tests {
         // The scene renderer is registered, but serves nothing until the BLEND pack's mesh read lands.
         assert!(renderers().iter().any(|r| r.kind() == "scene"));
         assert!(renderer_for(&t("scene.blend", Tier::Blob)).is_none());
+        // So is the timeline's, serving nothing until the timeline pack and its tier land.
+        assert!(renderers().iter().any(|r| r.kind() == "timeline"));
+        assert!(renderer_for(&t("rough-cut.otio", Tier::Blob)).is_none());
     }
 }

@@ -355,7 +355,9 @@ pub enum Requested {
     /// now, `preview_ready` pushed, no worker run.
     Reused { from: String },
     /// The last render of exactly this failed (asked again: it isn't retried
-    /// until the doc changes or the daemon restarts).
+    /// until the doc changes or the daemon restarts); or, with
+    /// [`FailCode::NotOnThisHost`], this host can't draw it at all
+    /// ([`PreviewRenderer::decodes_here`]): never queued or kept.
     Failed(FailCode),
     /// The queue is full: ask again later.
     Busy,
@@ -367,6 +369,11 @@ pub enum Requested {
 /// the doc already has its image under another address ([`reuse`]).
 pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, width: Width, look: Look) -> Requested {
     let Some(k) = snap.container(container) else { return Requested::NoContainer };
+    // A host that can't draw it at all (no decoder for it here) says so at
+    // once: nothing queued, nothing pushed, no failure kept.
+    if !snap.renderer.decodes_here(&k.c) {
+        return Requested::Failed(FailCode::NotOnThisHost);
+    }
     let id: JobId = (snap.key.clone(), k.c.key.clone(), k.hash.clone(), width, look);
     {
         let q = queue().0.lock().unwrap_or_else(|p| p.into_inner());

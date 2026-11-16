@@ -3,8 +3,10 @@
 // each space a '-', punctuation dropped (letters and numbers in any script,
 // '-' and '_' kept), nothing encoded. Markdown's own marks go first: inline
 // code's backticks, emphasis, a link's target (its words stay). Repeats in
-// document order get -1, -2 (`getting-started`, `getting-started-1`). An
-// empty heading has no slug. Pure.
+// document order get -1, -2 (`getting-started`, `getting-started-1`), never a
+// slug already used, as github-slugger numbers them ('Notes', 'Notes',
+// 'Notes', 'Notes 1' → notes, notes-1, notes-2, notes-1-1). An empty heading
+// has no slug. Pure.
 
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?[ \t#]*$/
 
@@ -28,6 +30,7 @@ export interface HeadingSlug {
 /** Every heading with a slug, in document order, repeats numbered (code fences skipped). */
 export function headingSlugs(text: string): HeadingSlug[] {
   const out: HeadingSlug[] = []
+  // Each slug used so far, with how many repeats of it as an original have been numbered.
   const seen = new Map<string, number>()
   let fence = false
   text.split('\n').forEach((l, i) => {
@@ -41,9 +44,14 @@ export function headingSlugs(text: string): HeadingSlug[] {
     const words = (m[1] ?? '').trim()
     const base = slugify(words)
     if (!base) return
-    const n = seen.get(base) ?? 0
-    seen.set(base, n + 1)
-    out.push({ line: i + 1, text: words, slug: n === 0 ? base : `${base}-${n}` })
+    let slug = base
+    while (seen.has(slug)) {
+      const n = (seen.get(base) ?? 0) + 1
+      seen.set(base, n)
+      slug = `${base}-${n}`
+    }
+    seen.set(slug, 0)
+    out.push({ line: i + 1, text: words, slug })
   })
   return out
 }

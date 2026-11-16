@@ -43,6 +43,11 @@ describe('headingSlugs', () => {
       { line: 9, text: 'Getting started!', slug: 'getting-started-2' },
     ])
   })
+  it('a repeat never takes a slug already used, as github-slugger numbers them', () => {
+    const slugs = (hs: string[]): string[] => headingSlugs(hs.map((h) => `# ${h}`).join('\n')).map((h) => h.slug)
+    expect(slugs(['Notes', 'Notes', 'Notes', 'Notes 1'])).toEqual(['notes', 'notes-1', 'notes-2', 'notes-1-1'])
+    expect(slugs(['A', 'A-1', 'A'])).toEqual(['a', 'a-1', 'a-2'])
+  })
 })
 
 describe('addresses', () => {

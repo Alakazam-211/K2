@@ -18,8 +18,12 @@ export interface HeldRange extends Hold {
   to: number
 }
 
-/** Every hold now (lines resolved against the doc as it is). */
+/** Every hold, placed by its lines in the doc as it is: only for a fresh doc (a reload), where nothing was placed. */
 export const setHolds = StateEffect.define<Hold[]>()
+/** One hold, already placed (claim-resolve.ts resolves it by its version); it then maps through edits. */
+export const placeHold = StateEffect.define<HeldRange>()
+/** A hold that ended. */
+export const dropHold = StateEffect.define<string>()
 
 function resolve(state: EditorState, h: Hold): HeldRange | null {
   const n = state.doc.lines
@@ -32,7 +36,11 @@ export const holdField = StateField.define<HeldRange[]>({
   update(holds, tr) {
     let next = holds
     if (tr.docChanged) next = next.map((h) => ({ ...h, from: tr.changes.mapPos(h.from, -1), to: Math.max(tr.changes.mapPos(h.from, -1), tr.changes.mapPos(h.to, 1)) }))
-    for (const e of tr.effects) if (e.is(setHolds)) next = e.value.flatMap((h) => resolve(tr.state, h) ?? [])
+    for (const e of tr.effects) {
+      if (e.is(setHolds)) next = e.value.flatMap((h) => resolve(tr.state, h) ?? [])
+      else if (e.is(placeHold)) next = [...next.filter((h) => h.claim !== e.value.claim), { ...e.value, from: Math.min(e.value.from, tr.state.doc.length), to: Math.min(Math.max(e.value.from, e.value.to), tr.state.doc.length) }]
+      else if (e.is(dropHold)) next = next.filter((h) => h.claim !== e.value)
+    }
     return next
   },
 })
@@ -144,7 +152,7 @@ function decorations(state: EditorState, o: HoldsOptions): DecorationSet {
   const ranges: Range<Decoration>[] = []
   const head = state.selection.main.head
   for (const h of holds) {
-    const label = holdLabel(h, o.section(state, h.first))
+    const label = holdLabel(h, o.section(state, state.doc.lineAt(h.from).number))
     ranges.push(Decoration.widget({ widget: new LabelWidget(h, label, o.onMessage), block: true, side: -1 }).range(h.from))
     if (!state.readOnly && head >= h.from && head <= h.to) ranges.push(Decoration.widget({ widget: new HintWidget(h, label), block: true, side: 1 }).range(state.doc.lineAt(head).to))
   }
@@ -155,7 +163,7 @@ function decorations(state: EditorState, o: HoldsOptions): DecorationSet {
 const tintLayer = layer({
   above: false,
   class: 'ed-hold-layer',
-  update: (u) => u.docChanged || u.viewportChanged || u.geometryChanged || u.transactions.some((tr) => tr.effects.some((e) => e.is(setHolds))),
+  update: (u) => u.docChanged || u.viewportChanged || u.geometryChanged || u.transactions.some((tr) => tr.effects.some((e) => e.is(setHolds) || e.is(placeHold) || e.is(dropHold))),
   markers(view) {
     const holds = holdsIn(view.state)
     if (!holds.length) return []

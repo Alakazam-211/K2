@@ -30,7 +30,6 @@ import { liveNoticeView, readOnlyReason, type LiveActionId } from '@/lib/editor/
 import { LIVE_UI, liveReadOnly, liveSaveStatus, pickLiveNotice, showsMerged, type LiveUi, type SaveFlow } from '@/lib/editor/live/pick-notice'
 import { replaceText } from '@/lib/editor/live/replace'
 import { readLocalFlag } from '@/lib/editor/local-flag'
-import { headingAddress } from '@/lib/editor/live/say-words'
 import type { EditorKind } from '@/lib/editor/preview-switch'
 import { failureReason } from '@/lib/editor/save-model/write'
 import type { LiveChange } from '@/lib/live-view/shared/source'
@@ -64,14 +63,14 @@ const EDITOR_SHELL: ShellConfig = {
   backInHeader: true,
   sayAlways: false,
   kept: 'who’s here and the changes',
-  // A message points at the section its person is in ("Setup"), as a heading's address.
+  // A message points at the section its person is in: the chip says the heading's words ("Setup"),
+  // the wire carries the kit's address (`@h:setup`, or `L12` outside any heading).
   sayAddress: (snap, to) => {
     const p = snap.people.find((x) => x.id === to)
     const place = p?.place
-    if (!place) return null
-    const line = (snap as LiveDocSnapshot).lines?.get(to) ?? null
-    const address = /^line \d+$/.test(place) || place === 'the intro' ? (line !== null ? `line:${line}` : null) : headingAddress(place)
-    return address ? { label: place, title: `${place}, where ${p.name} is`, address } : null
+    const address = (snap as LiveDocSnapshot).addrs?.get(to) ?? null
+    if (!place || !address) return null
+    return { label: place, title: `${place}, where ${p.name} is`, address }
   },
   Hero: () => <></>,
 }

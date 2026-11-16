@@ -194,7 +194,7 @@ describe('Say something', () => {
       expect(screen.getByTestId('lv-say-chip').textContent).toBe('Setup')
       fireEvent.change(field, { target: { value: 'Keep step 3 short, please' } })
       fireEvent.keyDown(field, { key: 'Enter' })
-      await waitFor(() => expect(post).toHaveBeenCalledWith(scope, 'docs/say', { path: '/w/README.md', text: 'Keep step 3 short, please', to: 'agent:atlas', at: 'heading:Setup' }))
+      await waitFor(() => expect(post).toHaveBeenCalledWith(scope, 'docs/say', { path: '/w/README.md', text: 'Keep step 3 short, please', to: 'agent:atlas', at: '@h:setup' }))
       await waitFor(() => expect(screen.getByTestId('lv-say-last').textContent).toBe('You → Atlas: Keep step 3 short, please'))
       act(() => t.push({ type: 'say', id: 'say-2', from: { id: 'agent:atlas', name: 'Atlas', kind: 'agent', colour: '#7c3aed' }, to: { id: SELF, name: 'Rosson', kind: 'person', colour: null }, text: 'Will do. One line, with the command.', at: null, time: null, reply_to: 'say-1', at_ms: 20 }))
       await waitFor(() => expect(screen.getByTestId('lv-say-last').textContent).toBe('Atlas → You: Will do. One line, with the command.'))

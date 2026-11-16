@@ -23,16 +23,10 @@ export function sayFailure(err: unknown, to: string, nameOf: (id: string) => str
   return { reason: failureReason(err) }
 }
 
-/** A say's address as words for its chip: `heading:Setup` → "Setup". */
+/** An address as words when this text can't name it (lib/editor/live/addr.ts resolves it first):
+ *  `@h:getting-started` → "getting-started", `L12` → "line 12". */
 export function addressLabel(address: string): string {
-  const m = /^heading:(.*)$/.exec(address)
-  if (!m) return address
-  try {
-    return decodeURIComponent(m[1])
-  } catch {
-    return m[1]
-  }
+  if (address.startsWith('@h:')) return address.slice(3)
+  const l = /^L([1-9]\d*)$/.exec(address)
+  return l ? `line ${l[1]}` : address
 }
-
-/** A heading as a view address (percent-encodes `%`, `/`, whitespace and controls, as the kit's grammar asks). */
-export const headingAddress = (heading: string): string => `heading:${heading.replace(/[%/\s\p{Cc}]/gu, (c) => encodeURIComponent(c))}`

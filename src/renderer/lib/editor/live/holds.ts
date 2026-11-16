@@ -17,9 +17,10 @@ export interface Hold {
   name: string
   agent: boolean
   slot: Slot
-  /** Lines `first..last` (1-based) when the claim was taken. */
+  /** Lines `first..last` (1-based) at version `at` (the event's `version`): claim-resolve.ts places them. */
   first: number
   last: number
+  at: number
   /** The holder's own words for what they're doing ("rewriting Setup"). */
   note: string | null
   /** A hold (true) or a plain claim: both are drawn; neither blocks you. */
@@ -32,7 +33,7 @@ export interface HoldsContext {
   slot: (id: string) => Slot
 }
 
-type ClaimLike = { kind: string; who?: string; claim?: string; lines?: { first: number; last: number }; note?: unknown; hold?: unknown; actor?: { id?: string; name?: string; kind?: string }; [k: string]: unknown }
+type ClaimLike = { kind: string; who?: string; claim?: string; lines?: { first: number; last: number }; version?: unknown; note?: unknown; hold?: unknown; actor?: { id?: string; name?: string; kind?: string }; [k: string]: unknown }
 
 export function holdsReducer(holds: Hold[], ev: ClaimLike, ctx: HoldsContext): Hold[] {
   if (ev.kind === 'claim_ended') {
@@ -52,6 +53,7 @@ export function holdsReducer(holds: Hold[], ev: ClaimLike, ctx: HoldsContext): H
     slot: ctx.slot(ev.who),
     first,
     last,
+    at: typeof ev.version === 'number' ? ev.version : 0,
     note: typeof ev.note === 'string' && ev.note.trim() ? ev.note.trim() : null,
     hold: ev.hold !== false,
   }

@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { holdHint, holdLabel, holdsReducer, pruneHolds, type Hold } from './holds'
-import { heldAt, holdsExtension, holdsIn, setHolds } from './hold-field'
+import { dropHold, heldAt, holdsExtension, holdsIn, placeHold, setHolds } from './hold-field'
 
 const DOC = ['# Harbor', '', 'Intro.', '', '## Setup', '', '1. Clone it.', '2. Open it.', '', '## Configuration', '', 'A table.'].join('\n')
 const people = [
@@ -31,7 +31,7 @@ const started = (who: string, first: number, last: number, o: Record<string, unk
 describe('holdsReducer', () => {
   it('turns claim_started into a hold and claim_ended removes it', () => {
     let h = holdsReducer([], started('atlas', 5, 8, { note: 'rewriting Setup', actor: { id: 'atlas', name: 'Atlas', kind: 'agent', colour: '#7c3aed' } }), ctx)
-    expect(h).toEqual([{ claim: 'c-atlas', who: 'atlas', name: 'Atlas', agent: true, slot: 1, first: 5, last: 8, note: 'rewriting Setup', hold: true }])
+    expect(h).toEqual([{ claim: 'c-atlas', who: 'atlas', name: 'Atlas', agent: true, slot: 1, first: 5, last: 8, at: 3, note: 'rewriting Setup', hold: true }])
     h = holdsReducer(h, { kind: 'claim_ended', who: 'atlas', claim: 'c-atlas', how: 'released', version: 4 }, ctx)
     expect(h).toEqual([])
   })
@@ -58,7 +58,7 @@ describe('holdsReducer', () => {
 })
 
 describe('the words', () => {
-  const hold: Hold = { claim: 'c', who: 'atlas', name: 'Atlas', agent: true, slot: 1, first: 5, last: 8, note: 'rewriting Setup', hold: true }
+  const hold: Hold = { claim: 'c', who: 'atlas', name: 'Atlas', agent: true, slot: 1, first: 5, last: 8, at: 3, note: 'rewriting Setup', hold: true }
   it('says what the holder is doing', () => {
     expect(holdLabel(hold, 'Setup')).toBe('Atlas is rewriting Setup')
     expect(holdLabel({ ...hold, note: 'Restructure' }, 'Setup')).toBe('Atlas is working on Setup')
@@ -70,7 +70,7 @@ describe('the words', () => {
 })
 
 describe('the hold field', () => {
-  const hold: Hold = { claim: 'c-atlas', who: 'atlas', name: 'Atlas', agent: true, slot: 1, first: 5, last: 8, note: 'rewriting Setup', hold: true }
+  const hold: Hold = { claim: 'c-atlas', who: 'atlas', name: 'Atlas', agent: true, slot: 1, first: 5, last: 8, at: 3, note: 'rewriting Setup', hold: true }
   const make = (sel = 0) => {
     const state = EditorState.create({ doc: DOC, selection: { anchor: sel }, extensions: holdsExtension({ onMessage: () => undefined, section: () => 'Setup' }) })
     return state.update({ effects: setHolds.of([hold]) }).state
@@ -86,6 +86,20 @@ describe('the hold field', () => {
     expect(s.sliceDoc(m.from, m.to)).toBe('X## Setup\n\n1. Clone it.\n2. Open it.Y')
     expect(heldAt(s, m.from + 3)?.who).toBe('atlas')
     expect(heldAt(s, 0)).toBeNull()
+  })
+
+  it('places one hold at a time: a hold already placed keeps its mapped range, never placed again by lines', () => {
+    let s = EditorState.create({ doc: DOC, extensions: holdsExtension({ onMessage: () => undefined, section: () => 'Setup' }) })
+    const from = s.doc.line(5).from
+    s = s.update({ effects: placeHold.of({ ...hold, from, to: s.doc.line(8).to }) }).state
+    s = s.update({ changes: { from: 0, insert: 'A new first line.\n' } }).state
+    const sam = { ...hold, claim: 'c-sam', who: 'sam', name: 'Sam', first: 12, last: 12 }
+    s = s.update({ effects: placeHold.of({ ...sam, from: s.doc.line(13).from, to: s.doc.line(13).to }) }).state
+    const atlas = holdsIn(s).find((h) => h.claim === 'c-atlas')
+    expect(atlas && s.sliceDoc(atlas.from, atlas.to)).toBe('## Setup\n\n1. Clone it.\n2. Open it.')
+    expect(holdsIn(s).map((h) => h.claim)).toEqual(['c-atlas', 'c-sam'])
+    s = s.update({ effects: dropHold.of('c-atlas') }).state
+    expect(holdsIn(s).map((h) => h.claim)).toEqual(['c-sam'])
   })
 
   it('draws the label as its own block above the range, and the line under your caret only inside it', () => {

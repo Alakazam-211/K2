@@ -54,13 +54,3 @@ export function editWords(text: string, lines: { first: number; last: number }, 
   return lines.first === lines.last ? `edited line ${lines.first}` : `edited lines ${lines.first}–${lines.last}`
 }
 
-/** The line (1-based) of the heading named `name` (outside fences), or null. */
-export function headingLine(text: string, name: string): number | null {
-  const lines = text.split('\n')
-  let fence = false
-  for (let i = 0; i < lines.length; i++) {
-    if (/^ {0,3}(```|~~~)/.test(lines[i])) fence = !fence
-    else if (!fence && HEADING.exec(lines[i])?.[1].trim() === name) return i + 1
-  }
-  return null
-}

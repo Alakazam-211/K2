@@ -80,13 +80,25 @@ describe('say', () => {
     const post = vi.fn(async () => ({ ok: true, say: { id: 'say-1', at_ms: 5000, to: 'atlas' }, sockets: 1, inbox: true }))
     const { src, tap } = setup(post)
     expect(src.snapshot().features.say).toBe(true)
-    const r = await src.say({ to: 'atlas', text: 'Keep step 3 short, please', address: 'heading:Setup' })
+    const r = await src.say({ to: 'atlas', text: 'Keep step 3 short, please', address: '@h:setup' })
     expect(r).toEqual({ ok: true })
-    expect(post).toHaveBeenCalledWith({ text: 'Keep step 3 short, please', to: 'atlas', at: 'heading:Setup' })
-    expect(src.snapshot().messages).toEqual([{ id: 'say-1', from: 'me', to: 'atlas', text: 'Keep step 3 short, please', at_ms: 5000, address: { label: 'Setup', address: 'heading:Setup' } }])
+    expect(post).toHaveBeenCalledWith({ text: 'Keep step 3 short, please', to: 'atlas', at: '@h:setup' })
+    // The chip keeps the heading's own words; only the wire carries the slug.
+    expect(src.snapshot().messages).toEqual([{ id: 'say-1', from: 'me', to: 'atlas', text: 'Keep step 3 short, please', at_ms: 5000, address: { label: 'Setup', address: '@h:setup' } }])
     // Its own frame comes back on the socket: not shown twice.
-    tap.frame({ type: 'say', id: 'say-1', from: { id: 'me', name: 'You', kind: 'person', colour: '#2563eb' }, to: { id: 'atlas', name: 'Atlas', kind: 'agent', colour: '#7c3aed' }, text: 'Keep step 3 short, please', at: 'heading:Setup', time: null, reply_to: null, at_ms: 5000 })
+    tap.frame({ type: 'say', id: 'say-1', from: { id: 'me', name: 'You', kind: 'person', colour: '#2563eb' }, to: { id: 'atlas', name: 'Atlas', kind: 'agent', colour: '#7c3aed' }, text: 'Keep step 3 short, please', at: '@h:setup', time: null, reply_to: null, at_ms: 5000 })
     expect(src.snapshot().messages).toHaveLength(1)
+  })
+
+  it('reads a frame’s address in either form (and the old one, for one release)', () => {
+    const { src, tap } = setup(async () => ({}))
+    const from = { id: 'atlas', name: 'Atlas', kind: 'agent', colour: '#7c3aed' }
+    tap.frame({ type: 'say', id: 'a', from, to: null, text: 'x', at: 'L5', time: null, reply_to: null, at_ms: 1 })
+    tap.frame({ type: 'say', id: 'b', from, to: null, text: 'y', at: 'heading:Setup', time: null, reply_to: null, at_ms: 2 })
+    expect(src.snapshot().messages.map((m) => m.address)).toEqual([
+      { label: 'line 5', address: 'L5' },
+      { label: 'Setup', address: 'heading:Setup' },
+    ])
   })
 
   it('takes a reply frame into Messages, addressed to you', () => {

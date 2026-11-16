@@ -34,6 +34,7 @@ import type { ConnectionState, OutsideSave } from '@/lib/live-view/shared/notice
 import type { LiveChange, LiveMessage, LiveShellSnapshot, LiveSource, SayResult } from '@/lib/live-view/shared/source'
 import { holdLabel, holdsReducer, pruneHolds, type Hold } from './holds'
 import { assignSlots, type Slot } from './presence-slots'
+import { placeAddr, resolveAddr } from './addr'
 import { addressLabel, sayFailure } from './say-words'
 import { caretLine, editWords, lineAtByte, placeAt, sectionAt } from './sections'
 import type { TappedWelcome, TransportTap } from './transport-tap'
@@ -128,6 +129,8 @@ export interface LiveDocSnapshot extends LiveShellSnapshot {
   holds: Hold[]
   /** Each person's caret line (1-based), or null: the flags and the off-screen band. */
   lines: ReadonlyMap<string, number | null>
+  /** Where each person is, as a kit address (`@h:<slug>` or `L12`): what a message to them points at. */
+  addrs: ReadonlyMap<string, string | null>
 }
 
 interface Run {
@@ -271,7 +274,7 @@ export class LiveDocSource implements LiveSource {
       const r = (await this.post({ text: msg.text, to: msg.to, ...(msg.address ? { at: msg.address } : {}) })) as { say?: { id?: unknown; at_ms?: unknown } } | null
       const id = typeof r?.say?.id === 'string' ? r.say.id : `say-${++this.seq}`
       const at = typeof r?.say?.at_ms === 'number' ? r.say.at_ms : this.timers.now()
-      this.addMessage({ id, from: this.self, to: msg.to, text: msg.text, at_ms: at, address: msg.address ? { label: addressLabel(msg.address), address: msg.address } : null })
+      this.addMessage({ id, from: this.self, to: msg.to, text: msg.text, at_ms: at, address: msg.address ? { label: this.addrLabel(msg.address), address: msg.address } : null })
       return { ok: true }
     } catch (e) {
       return { ok: false, ...sayFailure(e, msg.to, (id) => this.roster.find((x) => x.handle === id)?.name ?? null) }
@@ -349,7 +352,12 @@ export class LiveDocSource implements LiveSource {
     const to = (f.to ?? null) as { id?: unknown } | null
     if (typeof f.id !== 'string' || typeof from.id !== 'string' || typeof f.text !== 'string') return
     const at = typeof f.at === 'string' && f.at ? f.at : null
-    this.addMessage({ id: f.id, from: from.id, to: typeof to?.id === 'string' ? to.id : '', text: f.text, at_ms: typeof f.at_ms === 'number' ? f.at_ms : this.timers.now(), address: at ? { label: addressLabel(at), address: at } : null })
+    this.addMessage({ id: f.id, from: from.id, to: typeof to?.id === 'string' ? to.id : '', text: f.text, at_ms: typeof f.at_ms === 'number' ? f.at_ms : this.timers.now(), address: at ? { label: this.addrLabel(at), address: at } : null })
+  }
+
+  /** A message's address in words for its chip: the heading's own text, "line 12", else as it came. */
+  private addrLabel(address: string): string {
+    return resolveAddr(this.text, address)?.label ?? addressLabel(address)
   }
 
   private slotOf(id: string): Slot {
@@ -567,6 +575,7 @@ export class LiveDocSource implements LiveSource {
     const connection = this.connection()
     const down = connection !== null && connection !== 'back'
     const present = this.roster.filter((e) => e.handle !== EXTERNAL_PID)
+    const lines = new Map(present.map((e) => [e.handle, e.cursor ? caretLine(this.text, e.cursor) : null]))
     this.slots = assignSlots(this.slots, present.map((e) => ({ id: e.handle, self: !!e.self || e.handle === this.self })))
     this.holds = pruneHolds(this.holds, present.map((e) => e.handle))
     const people = present.map((e) => this.person(e, down))
@@ -624,7 +633,8 @@ export class LiveDocSource implements LiveSource {
       pending: this.pending,
       slots: this.slots,
       holds: this.holds,
-      lines: new Map(present.map((e) => [e.handle, e.cursor ? caretLine(this.text, e.cursor) : null])),
+      lines,
+      addrs: new Map([...lines].map(([id, l]) => [id, l === null ? null : placeAddr(this.text, l, this.markdown)])),
     }
   }
 }

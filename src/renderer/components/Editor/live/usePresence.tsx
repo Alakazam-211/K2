@@ -23,14 +23,15 @@ import { SayBar } from '@/components/LiveView/shell/SayBar'
 import type { LiveShell } from '@/components/LiveView/shell/useLiveShell'
 import { Button } from '@/components/ui'
 import { TEXT_FOLLOW_IDLE, finishedWords, textFollowReducer } from '@/lib/editor/live/follow-text'
-import { holdsExtension, setHolds } from '@/lib/editor/live/hold-field'
+import { RevRing, resolveClaim } from '@/lib/editor/live/claim-resolve'
+import { dropHold, holdsExtension, holdsIn, placeHold } from '@/lib/editor/live/hold-field'
 import type { Hold } from '@/lib/editor/live/holds'
 import type { LiveDocSnapshot } from '@/lib/editor/live/live-doc-source'
 import { NO_OFFSCREEN, type Offscreen } from '@/lib/editor/live/offscreen'
 import { presenceChanged, presenceExtension, type PresenceHost, type PresencePerson } from '@/lib/editor/live/presence-layer'
 import { caretSlotCss, slotColour } from '@/lib/editor/live/presence-slots'
-import { headingAddress } from '@/lib/editor/live/say-words'
-import { headingLine, sectionAt } from '@/lib/editor/live/sections'
+import { placeAddr, resolveAddr } from '@/lib/editor/live/addr'
+import { sectionAt } from '@/lib/editor/live/sections'
 import { personById } from '@/lib/live-view/shared/people'
 import type { LiveDoc } from './useLiveDoc'
 import { EdgeBand } from './EdgeBand'
@@ -61,9 +62,32 @@ export function usePresence({ doc, shell, snap, markdown, root }: { doc: LiveDoc
     onTopLine: (l) => topLineRef.current(l),
     onUserMove: () => moveRef.current(),
   }))
+  // The last changes to the text by version, so a claim's lines (at its event's `version`) are placed
+  // where they are now (claim-resolve.ts); claims ahead of the text wait here until it gets there.
+  const ring = useRef<RevRing | null>(null)
+  const pending = useRef(new Set<string>())
+  const placedKey = useRef(new Map<string, string>())
+  const reconcileRef = useRef<() => void>(() => undefined)
   const extension = useMemo<Extension>(
     () => [
       presenceExtension(host),
+      EditorView.updateListener.of((u) => {
+        const v = doc.editor()?.version ?? 0
+        const r = (ring.current ??= new RevRing(64, v))
+        if (u.docChanged) {
+          const trs = u.transactions.filter((tr) => tr.docChanged)
+          let before = r.rev
+          trs.forEach((tr, i) => {
+            // A remote change moved the version; your own unacknowledged edit didn't.
+            const after = i === trs.length - 1 ? Math.max(before, v) : before
+            r.record(before, after, tr.changes, tr.changes.invert(tr.startState.doc))
+            before = after
+          })
+        }
+        // The view shows the kit's text at its version (a welcome or snapshot sets it without a change).
+        r.setRev(v)
+        if (pending.current.size) queueMicrotask(() => reconcileRef.current())
+      }),
       holdsExtension({
         onMessage: (h) => messageRef.current(h),
         section: (st, line) => (markdown ? sectionAt(st.doc.sliceString(0, st.doc.line(Math.min(line, st.doc.lines)).to), line, true) : null),
@@ -77,9 +101,55 @@ export function usePresence({ doc, shell, snap, markdown, root }: { doc: LiveDoc
   // The holds, into the text (and again after a reload or a new mode's extensions).
   const holdsRef = useRef(snap.holds)
   holdsRef.current = snap.holds
-  const syncHolds = useCallback(() => doc.editor()?.view.dispatch({ effects: setHolds.of(holdsRef.current) }), [doc])
+  // Place new holds by their version, drop ended ones; a hold already placed maps with the text.
+  const syncHolds = useCallback(() => {
+    const ed = doc.editor()
+    if (!ed) return
+    const r = (ring.current ??= new RevRing(64, ed.version))
+    r.setRev(ed.version)
+    const view = ed.view
+    const want = new Map(holdsRef.current.map((h) => [h.claim, h]))
+    const inField = new Set(holdsIn(view.state).map((h) => h.claim))
+    const effects = []
+    for (const claim of inField)
+      if (!want.has(claim)) {
+        effects.push(dropHold.of(claim))
+        placedKey.current.delete(claim)
+      }
+    for (const claim of [...pending.current]) if (!want.has(claim)) pending.current.delete(claim)
+    for (const h of want.values()) {
+      const key = `${h.at}|${h.first}|${h.last}`
+      if (inField.has(h.claim) && placedKey.current.get(h.claim) === key) continue
+      const at = resolveClaim({ at: h.at, first: h.first, last: h.last }, view.state.doc, r)
+      if (at === 'hold') {
+        pending.current.add(h.claim)
+        continue
+      }
+      pending.current.delete(h.claim)
+      if (!at) continue
+      effects.push(placeHold.of({ ...h, ...at }))
+      placedKey.current.set(h.claim, key)
+    }
+    if (effects.length) view.dispatch({ effects })
+  }, [doc])
+  reconcileRef.current = syncHolds
   useEffect(() => syncHolds(), [snap.holds, syncHolds])
-  useEffect(() => doc.editor()?.on('reload', () => syncHolds()), [doc, syncHolds, snap.tier])
+  useEffect(() => {
+    const ed = doc.editor()
+    if (!ed) return
+    const offs = [
+      // Your own edits acknowledged: the text is at that version now.
+      ed.on('ack', (a) => ring.current?.setRev(a.version)),
+      // A fresh text: nothing to map from; holds go back by their lines.
+      ed.on('reload', () => {
+        ring.current?.reset(ed.version)
+        placedKey.current.clear()
+        pending.current.clear()
+        queueMicrotask(() => syncHolds())
+      }),
+    ]
+    return () => offs.forEach((off) => off())
+  }, [doc, syncHolds, snap.tier])
 
   // ---- Follow ----
   const [tf, dispatchTf] = useReducer(textFollowReducer, TEXT_FOLLOW_IDLE)
@@ -110,7 +180,7 @@ export function usePresence({ doc, shell, snap, markdown, root }: { doc: LiveDoc
   // The view goes with them: the kit keeps their caret in view; with no caret, the heading they view.
   const followed = personById(snap.people, shell.followingId)
   const followedLine = followed ? (snap.lines.get(followed.id) ?? null) : null
-  const followedHeading = followed?.viewAddress?.startsWith('heading:') ? decodeURIComponent(followed.viewAddress.slice(8)) : null
+  const followedView = followed?.viewAddress ?? null
   useEffect(() => {
     const ed = doc.editor()
     if (!ed) return
@@ -122,9 +192,9 @@ export function usePresence({ doc, shell, snap, markdown, root }: { doc: LiveDoc
       return
     }
     ed.follow(null)
-    const line = followedHeading ? headingLine(ed.text, followedHeading) : null
+    const line = resolveAddr(ed.text, followedView)?.line ?? null
     if (line !== null) ed.view.dispatch({ effects: EditorView.scrollIntoView(ed.view.state.doc.line(line).from, { y: 'start', yMargin: 24 }) })
-  }, [doc, shell.followingId, followedLine === null, followedHeading]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doc, shell.followingId, followedLine === null, followedView]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // They finished: their hold ended, or (an agent holding nothing) their edit finished.
   const prevHolds = useRef(snap.holds)
@@ -176,8 +246,9 @@ export function usePresence({ doc, shell, snap, markdown, root }: { doc: LiveDoc
     if (!canSend) return
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
-      const section = sectionAt(textRef.current(), line, true)
-      const address = section && section !== 'the intro' ? headingAddress(section) : null
+      // The heading at the top of your view (`@h:<slug>`); none in the intro.
+      const a = placeAddr(textRef.current(), line, true)
+      const address = a.startsWith('@h:') ? a : null
       if (address === sent.current) return
       sent.current = address
       doc.sendViewAddress(address)

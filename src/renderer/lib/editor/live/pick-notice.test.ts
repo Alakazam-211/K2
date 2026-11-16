@@ -40,6 +40,7 @@ const base: LiveDocSnapshot = {
   beforeVersion: null,
   holds: [],
   lines: new Map(),
+  addrs: new Map(),
 }
 const snap = (p: Partial<LiveDocSnapshot>): LiveDocSnapshot => ({ ...base, ...p })
 const merged = snap({ outsideSave: { outcome: 'ingested', rev: 4, at_ms: 10 }, beforeExternal: 'before' })

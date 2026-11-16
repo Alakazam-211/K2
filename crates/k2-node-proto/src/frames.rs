@@ -180,6 +180,33 @@ pub const ARTIFACT_WINDOW: u64 = 8 * TRANSFER_CHUNK as u64;
 pub const ARTIFACT_ACK_STALL_SECS: u64 = 120;
 /// WebSocket ping cadence (the Thread-sync lesson: quiet sockets get cut).
 pub const PING_SECS: u64 = 20;
+/// The server's clock in its WebSocket ping (0.46.15): the payload is
+/// `k2t1:<unix secs>`. The node re-measures its clock skew from each one,
+/// so a clock stepped after attach (NTP after a reset RTC) stops showing
+/// the number taken at attach. Optional both ways: an old node echoes the
+/// payload in its pong and reads nothing into it, and an old server's empty
+/// ping carries no clock, which leaves the attach measurement. Not sealed:
+/// it feeds only the shown skew (§14), never order or ETAs.
+pub const PING_CLOCK_PREFIX: &[u8] = b"k2t1:";
+
+/// The ping payload carrying `server_time` (well under the 125-byte limit
+/// on a WebSocket control frame).
+pub fn clock_ping(server_time: i64) -> Vec<u8> {
+    let mut p = PING_CLOCK_PREFIX.to_vec();
+    p.extend_from_slice(server_time.to_string().as_bytes());
+    p
+}
+
+/// The server time in a ping payload, if it carries one: `None` for an
+/// empty ping (an old server) or anything else.
+pub fn ping_clock(payload: &[u8]) -> Option<i64> {
+    let digits = payload.strip_prefix(PING_CLOCK_PREFIX)?;
+    if digits.is_empty() || digits.len() > 18 || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let t: i64 = std::str::from_utf8(digits).ok()?.parse().ok()?;
+    (t > 0).then_some(t)
+}
 /// Offer cadence when nothing changed.
 pub const OFFER_SECS: u64 = 30;
 /// Deadline for the whole attach or enroll handshake.
@@ -2710,5 +2737,16 @@ mod tests {
         assert!(text.contains(r#""drain":{"running":2,"jobs_end_by":100,"until":1000}"#), "{text}");
         let Frame::UpdateState(back) = serde_json::from_str::<Frame>(&text).unwrap() else { panic!("not an update_state") };
         assert_eq!(back, with);
+    }
+
+    #[test]
+    fn the_ping_clock_round_trips_and_anything_else_is_none() {
+        let p = clock_ping(1_794_858_682);
+        assert_eq!(p, b"k2t1:1794858682");
+        assert!(p.len() <= 125, "a control frame's payload");
+        assert_eq!(ping_clock(&p), Some(1_794_858_682));
+        for other in [&b""[..], b"k2t1:", b"k2t1:-5", b"k2t1:0", b"k2t1:12x", b"k2t1: 12", b"k2t2:12", b"12", b"k2t1:9999999999999999999"] {
+            assert_eq!(ping_clock(other), None, "{:?}", String::from_utf8_lossy(other));
+        }
     }
 }

@@ -340,6 +340,28 @@ async fn send_running_first(t: &mut Track, row: &crate::ledger::Row, tx: &mpsc::
     tx.send(f).await.map_err(|_| ())
 }
 
+/// This node's clock minus the server's, from `server_time` (positive = the
+/// node is ahead): the Welcome's at attach, then each server ping's. Kept on
+/// the link (the share view's `skew_secs`, on the periodic offer) and, for
+/// the owner, in status. Logged at attach when over the warn line, and
+/// after attach when it crosses that line either way.
+fn note_skew(node: &Node, tenant: &Tenant, server_time: i64, at_attach: bool) {
+    let skew = node.now() - server_time;
+    let over = |k: i64| k.abs() > crate::status::SKEW_WARN_SECS;
+    let before = tenant.link.lock().unwrap().skew_secs.replace(skew);
+    if at_attach {
+        if over(skew) {
+            crate::nlog!("server slot {}: this node's clock is {skew:+} s off the server's", tenant.slot);
+        }
+    } else if over(skew) != before.is_some_and(over) {
+        let was = before.map(|b| format!(" (was {b:+} s)")).unwrap_or_default();
+        crate::nlog!("server slot {}: this node's clock is now {skew:+} s off the server's{was}", tenant.slot);
+    }
+    if tenant.is_owner() {
+        node.status.lock().unwrap().clock_skew_secs = Some(skew);
+    }
+}
+
 /// Run one established session of `tenant`'s server until it ends.
 pub async fn run_session(node: Arc<Node>, tenant: Arc<Tenant>, ws: Ws, start: SessionStart) -> SessionEnd {
     run_session_on(node, tenant, ws, start).await
@@ -370,16 +392,9 @@ where
     // The queue: an old (protocol < 3) owner never queues (V70 b).
     node.fairq.set_protocol(tenant.slot, Some(start.protocol));
     // Clock skew (§14): order and ETAs never depend on it; it's shown.
+    // Measured here, then again from each server ping that carries its clock.
     if start.welcome.server_time != 0 {
-        // The node's clock minus the server's: positive = the node is ahead.
-        let skew = node.now() - start.welcome.server_time;
-        if skew.abs() > crate::status::SKEW_WARN_SECS {
-            crate::nlog!("server slot {}: this node's clock is {skew:+} s off the server's", tenant.slot);
-        }
-        tenant.link.lock().unwrap().skew_secs = Some(skew);
-        if owner {
-            node.status.lock().unwrap().clock_skew_secs = Some(skew);
-        }
+        note_skew(&node, &tenant, start.welcome.server_time, true);
     }
     // Learned routes (this server's only), the confirmed flag, narrowing:
     // all `tenant`'s (V51).
@@ -637,6 +652,15 @@ where
             Some(Ok(Message::Text(t))) => t,
             Some(Ok(Message::Close(_))) => break SessionEnd::Closed("closed by controller".into()),
             Some(Ok(Message::Binary(_))) => break SessionEnd::ProtocolError("binary message".into()),
+            // A 0.46.15+ server's ping carries its clock: a clock stepped
+            // since attach shows its new skew (an old server's empty ping
+            // leaves the attach number).
+            Some(Ok(Message::Ping(p))) => {
+                if let Some(t) = frames::ping_clock(&p) {
+                    note_skew(&node, &tenant, t, false);
+                }
+                continue;
+            }
             Some(Ok(_)) => continue,
         };
         let frame = match frames::open(&spki, Direction::ControllerToNode, &session, expected, &text) {

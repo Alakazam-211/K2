@@ -151,10 +151,23 @@ K2's desktop app can carry voice calls with Sew's client crates (the `native-voi
 
 | | |
 |--|--|
-| **What** | `tauri-plugin-sew-voice`, `sew-call-client`, `sew-mls-crypto`, `sew-e2ee`, `sew-proto` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto` (Apache-2.0) |
+| **What** | `tauri-plugin-sew-voice`, `sew-call-client`, `sew-mls-crypto`, `sew-e2ee`, `sew-proto`, `sew-noise` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto` (Apache-2.0) |
 | **Upstream** | Alakazam Labs, Sew |
-| **Notice** | `sew-lk-compat` and `sew-lkproto` hold code ported from or generated from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). `sew-mls-crypto` holds code derived from openmls_rust_crypto (MIT, Copyright OpenMLS Authors). Each crate's NOTICE ships in the app under `resources/notices/`. Not affiliated with or endorsed by LiveKit, Inc. |
+| **Notice** | `sew-lk-compat` and `sew-lkproto` hold code ported from or generated from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). `sew-mls-crypto` holds code derived from openmls_rust_crypto (MIT, Copyright OpenMLS Authors). `sew-noise` (noise removal) links [nnnoiseless](https://github.com/jneem/nnnoiseless) 0.5.2, the Rust port of RNNoise, and through it compiles in RNNoise's model weights (BSD-3-Clause: Copyright (c) 2020 Joe Neeman; (c) 2017 Mozilla; (c) 2007-2017 Jean-Marc Valin; (c) 2005-2017 Xiph.Org Foundation; (c) 2003-2004 Mark Borgerding); its `src/dfn3/stream.rs` is ported from DeepFilterNet's libDF (MIT OR Apache-2.0, Copyright (c) 2021 Hendrik Schröter). Each crate's NOTICE ships in the app under `resources/notices/` (`sew-noise-NOTICE` carries nnnoiseless's full BSD-3-Clause text). Not affiliated with or endorsed by LiveKit, Inc. |
 | **K2 code** | Is **MIT**. These crates do **not** relicense the product. |
+
+## Third-party: DeepFilterNet3 model weights (MIT OR Apache-2.0)
+
+Noise removal in calls (Settings → Voice → Noise removal, on by default) runs the DeepFilterNet3 model (low-latency variant). Its weights ship with the desktop app under `dfn3/` in the app's resources, beside their NOTICE, `LICENSE-MIT` and `LICENSE-APACHE`; they are not in this repository (`scripts/fetch-dfn3.sh` fetches the pinned Sew release asset and checks it).
+
+| | |
+|--|--|
+| **What** | `dfn3_ll.nnef.tar`, DeepFilterNet3 (low-latency variant) model weights |
+| **Upstream** | [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet), the work of Hendrik Schröter and the DeepFilterNet authors. Copyright (c) 2021 Hendrik Schröter |
+| **License** | Either the MIT license or the Apache License, Version 2.0, at your option (the authors' texts, unchanged, ship beside the weights) |
+| **Changes** | Converted by Alakazam Labs. The file `dfn3_ll.nnef.tar` is a modified form of `DeepFilterNet3_ll_onnx.tar.gz` from the authors' repository (`models/`, commit `978576aa8400552a4ce9730838c635aa30db5e61`, the v0.5.6 tag): the ONNX graphs' float32 weights were renamed and stored as NNEF tensor files, values unchanged, with an NNEF graph that declares them; the graphs' operators are not included. Sew's noise removal (the `sew-noise` crate, cargo feature `dfn3`) runs this model with its own inference code. |
+| **Citation** | The authors ask: if you use the DeepFilterNet3 model, please cite *DeepFilterNet: Perceptually Motivated Real-Time Speech Enhancement* (Schröter, Rosenkranz, Escalante-B., Maier; INTERSPEECH 2023). |
+| **K2 code** | Is **MIT**. The weights do **not** relicense the product. |
 
 ## Third-party: objc2 (MIT)
 

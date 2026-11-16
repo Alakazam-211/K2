@@ -63,10 +63,17 @@ describe('the hero’s Follow and Say hooks', () => {
     const src = new SampleShellSource(shellSample('scene'), { autoplay: false, scenario: 'people' })
     const seen: string[] = []
     function Hero(p: ShellHeroProps): React.JSX.Element {
-      return <button type="button" data-testid="open-saved" onClick={() => p.onAction?.('open-saved')} />
+      return (
+        <button type="button" data-testid="open-saved" onClick={() => p.onAction?.('open-saved')}>
+          {p.fileName}
+        </button>
+      )
     }
     render(<LiveShellView source={src} config={{ ...SCENE_SHELL, Hero, onNoticeAction: (id, n) => seen.push(`${id}:${n ? n.kind : 'card'}`) }} width={1440} />)
     fireEvent.click(screen.getByTestId('open-saved'))
     expect(seen).toEqual(['open-saved:card'])
+    // and the file's name as the header shows it
+    expect(src.sample.fileName).not.toBe('')
+    expect(screen.getByTestId('open-saved').textContent).toBe(src.sample.fileName)
   })
 })

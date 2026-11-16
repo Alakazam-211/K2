@@ -39,6 +39,8 @@ export interface ShellHeroProps {
   setSayAt?: (a: SayAt | null) => void
   /** The view's own actions (a card's Open saved versions) go to the same handler as the notices'. */
   onAction?: (id: NoticeActionId) => void
+  /** The file's name as the header shows it (a card says "Opening rough-cut"). */
+  fileName?: string
 }
 
 /** What a message points at: the chip's words and tooltip, the address it carries, and a time (the playhead's time position) where the view has one. */

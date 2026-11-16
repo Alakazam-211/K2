@@ -1,0 +1,40 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip delete",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_transition: a transition joins it to its neighbour\nnext: clip show @item:2\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E004",
+    "exit": 2,
+    "message": "a transition joins it to its neighbour",
+    "next": "A transition sits on the clip's cut, and this edit would break it. Nothing was applied. Edit the clip's other edge, or a clip with no transition beside it.",
+    "next_step": {
+      "verb": "clip show",
+      "args": [],
+      "why": "Read the clip and what sits beside it."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_transition",
+      "next": "clip show @item:2",
+      "verb": "clip delete"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

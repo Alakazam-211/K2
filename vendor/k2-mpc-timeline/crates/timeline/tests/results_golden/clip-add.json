@@ -1,0 +1,163 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip add",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "items",
+        "inserted": 1,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 0,
+        "dropped": 0
+      },
+      {
+        "root": "item_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 9,
+        "dropped": 0
+      },
+      {
+        "root": "timeline",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@item:7",
+        "root": "items",
+        "key": "i7",
+        "field": null,
+        "op": "insert",
+        "before": null,
+        "after": "clip"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "track",
+        "op": "set",
+        "before": null,
+        "after": "t3"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "geom",
+        "op": "set",
+        "before": null,
+        "after": "508032000000,105840000000"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "src",
+        "op": "set",
+        "before": null,
+        "after": "211680000000"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "name",
+        "op": "set",
+        "before": null,
+        "after": "C on V2"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "media",
+        "op": "set",
+        "before": null,
+        "after": "m3"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "off",
+        "op": "set",
+        "before": null,
+        "after": "0"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "edit",
+        "op": "set",
+        "before": null,
+        "after": "1"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "retimed",
+        "op": "set",
+        "before": null,
+        "after": "0"
+      },
+      {
+        "address": "@item:7",
+        "root": "item_props",
+        "key": "i7",
+        "field": "rate",
+        "op": "set",
+        "before": null,
+        "after": "24/1"
+      },
+      {
+        "address": null,
+        "root": "timeline",
+        "key": "mark/i",
+        "field": null,
+        "op": "set",
+        "before": "6",
+        "after": "7"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "item": "@item:7",
+    "start": {
+      "shown": "01:00:02:00",
+      "ticks": "508032000000"
+    },
+    "track": "@trk:3",
+    "media": "@med:3"
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.clip-add/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

@@ -1,0 +1,232 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip delete",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "items",
+        "inserted": 0,
+        "deleted": 1,
+        "moved": 0,
+        "restored": 0,
+        "set": 0,
+        "dropped": 0
+      },
+      {
+        "root": "item_props",
+        "inserted": 0,
+        "deleted": 9,
+        "moved": 0,
+        "restored": 0,
+        "set": 0,
+        "dropped": 0
+      },
+      {
+        "root": "media",
+        "inserted": 0,
+        "deleted": 1,
+        "moved": 0,
+        "restored": 0,
+        "set": 0,
+        "dropped": 0
+      },
+      {
+        "root": "media_props",
+        "inserted": 0,
+        "deleted": 7,
+        "moved": 0,
+        "restored": 0,
+        "set": 0,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@item:6",
+        "root": "items",
+        "key": "i6",
+        "field": null,
+        "op": "delete",
+        "before": "clip",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "edit",
+        "op": "delete",
+        "before": "1",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "geom",
+        "op": "delete",
+        "before": "0,508032000000",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "media",
+        "op": "delete",
+        "before": "m4",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "name",
+        "op": "delete",
+        "before": "Music",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "off",
+        "op": "delete",
+        "before": "0",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "rate",
+        "op": "delete",
+        "before": "48000/1",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "retimed",
+        "op": "delete",
+        "before": "0",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "src",
+        "op": "delete",
+        "before": "0",
+        "after": null
+      },
+      {
+        "address": "@item:6",
+        "root": "item_props",
+        "key": "i6",
+        "field": "track",
+        "op": "delete",
+        "before": "t2",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media",
+        "key": "m4",
+        "field": null,
+        "op": "delete",
+        "before": "file",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media_props",
+        "key": "m4",
+        "field": "dur",
+        "op": "delete",
+        "before": "25401600000000",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media_props",
+        "key": "m4",
+        "field": "file",
+        "op": "delete",
+        "before": "music.wav",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media_props",
+        "key": "m4",
+        "field": "name",
+        "op": "delete",
+        "before": "music.wav",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media_props",
+        "key": "m4",
+        "field": "nid",
+        "op": "delete",
+        "before": "m:4533525f16f07ba6",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media_props",
+        "key": "m4",
+        "field": "origin",
+        "op": "delete",
+        "before": "range",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media_props",
+        "key": "m4",
+        "field": "rate",
+        "op": "delete",
+        "before": "48000/1",
+        "after": null
+      },
+      {
+        "address": "@med:4",
+        "root": "media_props",
+        "key": "m4",
+        "field": "start",
+        "op": "delete",
+        "before": "0",
+        "after": null
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "item": "@item:6",
+    "deleted": true,
+    "markers": [],
+    "media": "@med:4"
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.clip-delete/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

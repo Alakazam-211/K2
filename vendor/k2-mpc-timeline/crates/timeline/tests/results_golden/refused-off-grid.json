@@ -1,0 +1,40 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip move",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_off_grid: 1/100s is between frames at 24 fps: the frames around it are 0s and 1/24s\nnext: clip move @item:5 --to +0.01s --snap\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E002",
+    "exit": 2,
+    "message": "1/100s is between frames at 24 fps: the frames around it are 0s and 1/24s",
+    "next": "The time given is between two frames of the timeline's rate. Nothing was applied. Give a time on a frame, or run the same call with --snap to take the nearer frame.",
+    "next_step": {
+      "verb": "timeline info",
+      "args": [],
+      "why": "Read the timeline's rate, then give a time on one of its frames (or add --snap)."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_off_grid",
+      "next": "clip move @item:5 --to +0.01s --snap",
+      "verb": "clip move"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

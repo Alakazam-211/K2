@@ -1,0 +1,34 @@
+# Every test target, test-only feature and pending #[ignore] of the pack and its fuzz crate
+# (fuzz/, its own workspace, left out of a release cut); scripts/check-targets.sh reads this file
+# and checks it. One row per line: PACKAGE|KIND|NAME|FEATURES|PARTS, the format and the rules in
+# scripts/check-targets.sh's header. The part is `check`: scripts/check.sh. A row whose PARTS
+# holds "pending ruling" waits on a decision; none may be left when a change lands
+# (CHECK_TARGETS_LANDING=1).
+
+# ---- k2-mpc-timeline ----------------------------------------------------------------------------
+k2-mpc-timeline|lib|k2_mpc_timeline||check
+k2-mpc-timeline|doctest|k2_mpc_timeline||excluded: the crate's docs hold no runnable example
+k2-mpc-timeline|feature|fuzzing||check
+k2-mpc-timeline|feature|mutants||check
+k2-mpc-timeline|test|corpus||check
+k2-mpc-timeline|test|fcpxml||check
+k2-mpc-timeline|test|fuzz_seeds||check
+k2-mpc-timeline|test|kit_view||check
+k2-mpc-timeline|test|live||check
+k2-mpc-timeline|test|live_scale||check
+k2-mpc-timeline|test|model||check
+k2-mpc-timeline|test|otio||check
+k2-mpc-timeline|test|pack||check
+k2-mpc-timeline|test|pack_session||check
+k2-mpc-timeline|test|prproj||check
+k2-mpc-timeline|test|results||check
+k2-mpc-timeline|test|tick_grid||check
+k2-mpc-timeline|test|time||check
+k2-mpc-timeline|test|watch_turn||check
+k2-mpc-timeline|test|mutants|mutants|check
+
+# ---- k2-mpc-timeline-fuzz (fuzz/, its own workspace; cargo fuzz runs the targets) ---------------
+k2-mpc-timeline-fuzz|fuzz-bin|fcpxml_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+k2-mpc-timeline-fuzz|fuzz-bin|otio_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+k2-mpc-timeline-fuzz|fuzz-bin|prproj_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+

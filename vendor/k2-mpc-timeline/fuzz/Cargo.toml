@@ -1,0 +1,43 @@
+[package]
+name = "k2-mpc-timeline-fuzz"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for the timeline readers: a violated property is a finding, like a panic."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repo's, so a normal build doesn't pull libFuzzer.
+[workspace]
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped.
+# scripts/check-licences.sh allows NCSA for this one crate in this one lock.
+libfuzzer-sys = "0.4"
+k2-mpc-timeline = { path = "../crates/timeline", features = ["fuzzing"] }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "otio_read"
+path = "fuzz_targets/otio_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fcpxml_read"
+path = "fuzz_targets/fcpxml_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "prproj_read"
+path = "fuzz_targets/prproj_read.rs"
+test = false
+doc = false
+bench = false

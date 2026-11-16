@@ -1,0 +1,56 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip show",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "address": "@item:1",
+    "kind": "clip",
+    "item": {
+      "address": "@item:1",
+      "kind": "clip",
+      "track": "@trk:1",
+      "start": {
+        "shown": "01:00:01:00",
+        "ticks": "254016000000"
+      },
+      "duration": {
+        "shown": "48f",
+        "ticks": "508032000000"
+      },
+      "name": "Shot A",
+      "off": false,
+      "editable": true,
+      "retimed": false
+    },
+    "fields": {
+      "edit": "1",
+      "geom": "254016000000,508032000000",
+      "media": "@med:1",
+      "name": "Shot A",
+      "off": "0",
+      "rate": "24/1",
+      "retimed": "0",
+      "src": "1058400000000",
+      "track": "@trk:1"
+    },
+    "markers": [
+      {
+        "address": "@mk:1",
+        "name": "beat"
+      }
+    ]
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.clip-show/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

@@ -1,0 +1,40 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip move",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_overlap: @item:1 is there\nnext: clip list @trk:1 --from 01:00:02:00\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E001",
+    "exit": 2,
+    "message": "@item:1 is there",
+    "next": "Another item holds part of the range the clip would take. Nothing was applied. List the track's items there and pick a free range, or move the other item first.",
+    "next_step": {
+      "verb": "clip list",
+      "args": [],
+      "why": "See what is on the track around that time."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_overlap",
+      "next": "clip list @trk:1 --from 01:00:02:00",
+      "verb": "clip move"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

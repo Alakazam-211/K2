@@ -1,0 +1,52 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "marker list",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "markers": [
+      {
+        "address": "@mk:1",
+        "at": {
+          "shown": "01:00:01:10",
+          "ticks": "359856000000"
+        },
+        "owner": "@item:1",
+        "name": "beat",
+        "note": "on the downbeat"
+      },
+      {
+        "address": "@mk:3",
+        "at": {
+          "shown": "01:00:02:00",
+          "ticks": "508032000000"
+        },
+        "owner": "timeline",
+        "name": "chapter",
+        "note": ""
+      },
+      {
+        "address": "@mk:2",
+        "at": {
+          "shown": "01:00:05:00",
+          "ticks": "1270080000000"
+        },
+        "owner": "@trk:1",
+        "name": "act two",
+        "note": ""
+      }
+    ]
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.marker-list/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

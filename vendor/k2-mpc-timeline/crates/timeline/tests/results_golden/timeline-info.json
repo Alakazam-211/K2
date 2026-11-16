@@ -1,0 +1,37 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "timeline info",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "name": "Cut",
+    "rate": "24 fps",
+    "start": {
+      "shown": "01:00:00:00",
+      "ticks": "0"
+    },
+    "length": {
+      "shown": "168f",
+      "ticks": "1778112000000"
+    },
+    "end_from": "items",
+    "stacking": "last_on_top",
+    "drop_frame": false,
+    "tracks": 3,
+    "items": 6,
+    "markers": 3,
+    "media": 4
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.timeline-info/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

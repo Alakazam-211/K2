@@ -1,0 +1,8 @@
+<?xml version="1.0"?><!DOCTYPE fcpxml><fcpxml version="1.9"><resources>
+<format id="r1" frameDuration="1/25s" width="64" height="36"/><asset id="r2" name="a" uid="U1" start="0s" duration="60s" format="r1"><media-rep kind="original-media" src="a.mov"/></asset>
+<effect id="r3" name="T"/><media id="r4" name="c" uid="C1"><sequence format="r1" tcStart="0s"><spine><gap offset="0s" duration="2s"/></spine></sequence></media></resources>
+<project name="p" uid="P1"><sequence format="r1" tcStart="10s" duration="9s"><spine>
+<asset-clip ref="r2" offset="10s" start="1s" duration="4s" name="x"><marker start="2s" value="m"/><title ref="r3" lane="1" offset="1s" duration="1s"><text>hi</text></title></asset-clip>
+<transition offset="13s" duration="2s"/><gap offset="14s" start="0s" duration="2s"><spine lane="-1" offset="0s"><audio ref="r2" offset="0s" duration="1s"/></spine></gap>
+<ref-clip ref="r4" offset="16s" duration="2s"/><audition offset="18s"><asset-clip ref="r2" offset="0s" duration="1s"/><asset-clip ref="r2" offset="0s" duration="1s"/></audition>
+</spine></sequence></project></fcpxml>

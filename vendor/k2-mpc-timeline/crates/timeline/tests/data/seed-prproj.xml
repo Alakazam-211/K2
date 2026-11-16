@@ -1,0 +1,18 @@
+<?xml version="1.0"?><PremiereData Version="3">
+<Sequence ObjectUID="S1" ClassID="6a15d903-8739-11d5-af2d-9b7855ad8974" Version="12"><MarkerOwner Version="1"><Markers ObjectRef="10"/></MarkerOwner>
+<TrackGroups Version="1"><TrackGroup Version="1"><First>v</First><Second ObjectRef="20"/></TrackGroup></TrackGroups><Name>s</Name></Sequence>
+<Markers ObjectID="10" ClassID="bee50706-b524-416c-9f03-b596ce5f6866" Version="4"><Markers Version="1"><Marker Version="1"><First>M1</First><Second ObjectRef="11"/></Marker></Markers></Markers>
+<Marker ObjectID="11" ClassID="a45508e0-3ff7-4d04-90a7-2e0dfff4c910" Version="3"><DVAMarker>{"DVAMarker":{"mMarkerID":"M1","mName":"n","mStartTime":{"ticks":254016000000}}}</DVAMarker></Marker>
+<VideoTrackGroup ObjectID="20" ClassID="9e9abf7a-0918-49c2-91ae-991b5dde77bb" Version="13"><TrackGroup Version="1"><Tracks Version="1"><Track ObjectURef="T1"/></Tracks><FrameRate>10160640000</FrameRate></TrackGroup><FrameRect>0,0,8,8</FrameRect></VideoTrackGroup>
+<VideoClipTrack ObjectUID="T1" ClassID="f68dcd81-8805-11d5-af2d-9bfa89d4ddd4" Version="1"><ClipTrack Version="2"><Track Version="4"><Index>0</Index></Track>
+<ClipItems Version="3"><TrackItems Version="1"><TrackItem ObjectRef="30"/></TrackItems></ClipItems>
+<TransitionItems Version="3"><TrackItems Version="1"><TrackItem ObjectRef="31"/></TrackItems></TransitionItems></ClipTrack></VideoClipTrack>
+<VideoClipTrackItem ObjectID="30" ClassID="368b0406-29e3-4923-9fcd-094fbf9a1089" Version="8"><ClipTrackItem Version="8"><ComponentOwner Version="1"><Components ObjectRef="32"/></ComponentOwner>
+<TrackItem Version="4"><End>508032000000</End></TrackItem><SubClip ObjectRef="33"/></ClipTrackItem></VideoClipTrackItem>
+<Chain ObjectID="32" ClassID="x" Version="1"><Next ObjectRef="32"/></Chain>
+<SubClip ObjectID="33" ClassID="e0c58dc9-dbdd-4166-aef7-5db7e3f22e84" Version="6"><Clip ObjectRef="34"/><Name>c</Name></SubClip>
+<VideoClip ObjectID="34" ClassID="9308dbef-2440-4acb-9ab2-953b9a4e82ec" Version="11"><Clip Version="18"><Source ObjectRef="36"/><InPoint>0</InPoint><ClipID>C1</ClipID></Clip></VideoClip>
+<VideoMediaSource ObjectID="36" ClassID="e64ddf74-8fac-4682-8aa8-0e0ca2248949" Version="2"><MediaSource Version="4"><Media ObjectURef="MD1"/></MediaSource></VideoMediaSource>
+<Media ObjectUID="MD1" ClassID="7a5c103e-f3ac-4391-b6b4-7cc3d2f9a7ff" Version="30"><Title>m</Title></Media>
+<VideoTransitionTrackItem ObjectID="31" ClassID="3eeaed31-f78e-4144-b8e8-077656517181" Version="6"><TransitionTrackItem Version="3"><TrackItem Version="4"><Start>127008000000</Start><End>381024000000</End></TrackItem></TransitionTrackItem></VideoTransitionTrackItem>
+</PremiereData>

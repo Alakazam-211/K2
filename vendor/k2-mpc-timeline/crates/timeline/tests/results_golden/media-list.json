@@ -1,0 +1,66 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "media list",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "media": [
+      {
+        "address": "@med:1",
+        "kind": "file",
+        "name": "shot_a.mov",
+        "file": "shot_a.mov",
+        "length": {
+          "shown": "100000f",
+          "ticks": "1058400000000000"
+        },
+        "start_ticks": "0"
+      },
+      {
+        "address": "@med:2",
+        "kind": "file",
+        "name": "shot_b.mov",
+        "file": "shot_b.mov",
+        "length": {
+          "shown": "100000f",
+          "ticks": "1058400000000000"
+        },
+        "start_ticks": "0"
+      },
+      {
+        "address": "@med:3",
+        "kind": "file",
+        "name": "shot_c.mov",
+        "file": "shot_c.mov",
+        "length": {
+          "shown": "100000f",
+          "ticks": "1058400000000000"
+        },
+        "start_ticks": "0"
+      },
+      {
+        "address": "@med:4",
+        "kind": "file",
+        "name": "music.wav",
+        "file": "music.wav",
+        "length": {
+          "shown": "2400f",
+          "ticks": "25401600000000"
+        },
+        "start_ticks": "0"
+      }
+    ]
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.media-list/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

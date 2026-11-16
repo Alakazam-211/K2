@@ -1,0 +1,478 @@
+{
+  "index": {
+    "tier": "live",
+    "rev": 2,
+    "version": null,
+    "page": null,
+    "fonts": [],
+    "layouts": [],
+    "containers": [
+      {
+        "key": "@trk:1",
+        "position": 1,
+        "title": "V1",
+        "hidden": false,
+        "layout": null,
+        "render_hash": null,
+        "fonts": [],
+        "has_fields": [],
+        "unit_count": 5,
+        "derived": {
+          "kind_label": "V1",
+          "kind": "video"
+        }
+      },
+      {
+        "key": "@trk:2",
+        "position": 2,
+        "title": "A1",
+        "hidden": false,
+        "layout": null,
+        "render_hash": null,
+        "fonts": [],
+        "has_fields": [],
+        "unit_count": 1,
+        "derived": {
+          "kind_label": "A1",
+          "kind": "audio"
+        }
+      },
+      {
+        "key": "@trk:3",
+        "position": 3,
+        "title": "V2",
+        "hidden": false,
+        "layout": null,
+        "render_hash": null,
+        "fonts": [],
+        "has_fields": [],
+        "unit_count": 0,
+        "derived": {
+          "kind_label": "V2",
+          "kind": "video"
+        }
+      }
+    ],
+    "units": [
+      {
+        "key": "@item:1",
+        "container": "@trk:1",
+        "parent": null,
+        "live": true,
+        "kind": "clip",
+        "name": "Shot A",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 0,
+        "bbox": {
+          "x": 317520000000,
+          "y": 0,
+          "w": 444528000000,
+          "h": 0
+        },
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": "plain",
+        "derived": {
+          "tc": "01:00:01:06"
+        }
+      },
+      {
+        "key": "@item:2",
+        "container": "@trk:1",
+        "parent": null,
+        "live": true,
+        "kind": "clip",
+        "name": "Shot B",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 1,
+        "bbox": {
+          "x": 762048000000,
+          "y": 0,
+          "w": 254016000000,
+          "h": 0
+        },
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": "plain",
+        "derived": {
+          "tc": "01:00:03:00"
+        }
+      },
+      {
+        "key": "@item:3",
+        "container": "@trk:1",
+        "parent": null,
+        "live": true,
+        "kind": "transition",
+        "name": "dissolve",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 2,
+        "bbox": {
+          "x": 952560000000,
+          "y": 0,
+          "w": 127008000000,
+          "h": 0
+        },
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": "never",
+        "derived": {
+          "tc": "01:00:03:18"
+        }
+      },
+      {
+        "key": "@item:4",
+        "container": "@trk:1",
+        "parent": null,
+        "live": true,
+        "kind": "clip",
+        "name": "Shot C",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 3,
+        "bbox": {
+          "x": 1016064000000,
+          "y": 0,
+          "w": 381024000000,
+          "h": 0
+        },
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": "plain",
+        "derived": {
+          "tc": "01:00:04:00"
+        }
+      },
+      {
+        "key": "@item:5",
+        "container": "@trk:1",
+        "parent": null,
+        "live": true,
+        "kind": "clip",
+        "name": "Shot A again",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 4,
+        "bbox": {
+          "x": 1524096000000,
+          "y": 0,
+          "w": 254016000000,
+          "h": 0
+        },
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": "plain",
+        "derived": {
+          "tc": "01:00:06:00"
+        }
+      },
+      {
+        "key": "@item:6",
+        "container": "@trk:2",
+        "parent": null,
+        "live": true,
+        "kind": "clip",
+        "name": "Music",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 0,
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "w": 508032000000,
+          "h": 0
+        },
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": "plain",
+        "derived": {
+          "tc": "01:00:00:00"
+        }
+      }
+    ]
+  },
+  "marker_list": "@mk:1\t01:00:01:10\t@item:1\tbeat\ton the downbeat\n@mk:3\t01:00:02:00\ttimeline\tchapter\t\n@mk:2\t01:00:05:00\t@trk:1\tact two\t\n",
+  "state": {
+    "tracks": [
+      ["@trk:1", "video"],
+      ["@trk:2", "audio"],
+      ["@trk:3", "video"]
+    ],
+    "items": [
+      ["@item:1", "clip"],
+      ["@item:2", "clip"],
+      ["@item:3", "transition"],
+      ["@item:4", "clip"],
+      ["@item:5", "clip"],
+      ["@item:6", "clip"]
+    ],
+    "markers": [
+      ["@mk:1", "marker"],
+      ["@mk:2", "marker"],
+      ["@mk:3", "marker"]
+    ],
+    "media": [
+      ["@med:1", "file"],
+      ["@med:2", "file"],
+      ["@med:3", "file"],
+      ["@med:4", "file"]
+    ],
+    "track_props": {
+      "@trk:1 edit": "1",
+      "@trk:1 enabled": "1",
+      "@trk:1 locked": "0",
+      "@trk:1 muted": "0",
+      "@trk:1 name": "V1",
+      "@trk:1 nid": "V1",
+      "@trk:2 edit": "1",
+      "@trk:2 enabled": "1",
+      "@trk:2 locked": "0",
+      "@trk:2 muted": "0",
+      "@trk:2 name": "A1",
+      "@trk:2 nid": "A1",
+      "@trk:3 edit": "1",
+      "@trk:3 enabled": "1",
+      "@trk:3 locked": "0",
+      "@trk:3 muted": "0",
+      "@trk:3 name": "V2",
+      "@trk:3 nid": "V2"
+    },
+    "item_props": {
+      "@item:1 edit": "1",
+      "@item:1 geom": "317520000000,444528000000",
+      "@item:1 media": "m1",
+      "@item:1 name": "Shot A",
+      "@item:1 off": "0",
+      "@item:1 rate": "24/1",
+      "@item:1 retimed": "0",
+      "@item:1 src": "1121904000000",
+      "@item:1 track": "t1",
+      "@item:2 edit": "1",
+      "@item:2 geom": "762048000000,254016000000",
+      "@item:2 media": "m2",
+      "@item:2 name": "Shot B",
+      "@item:2 off": "0",
+      "@item:2 rate": "24/1",
+      "@item:2 retimed": "0",
+      "@item:2 src": "0",
+      "@item:2 track": "t1",
+      "@item:3 edit": "0",
+      "@item:3 geom": "952560000000,127008000000",
+      "@item:3 name": "dissolve",
+      "@item:3 off": "0",
+      "@item:3 retimed": "0",
+      "@item:3 tr": "63504000000,63504000000",
+      "@item:3 track": "t1",
+      "@item:4 edit": "1",
+      "@item:4 geom": "1016064000000,381024000000",
+      "@item:4 media": "m3",
+      "@item:4 name": "Shot C",
+      "@item:4 off": "0",
+      "@item:4 rate": "24/1",
+      "@item:4 retimed": "0",
+      "@item:4 src": "105840000000",
+      "@item:4 track": "t1",
+      "@item:5 edit": "1",
+      "@item:5 geom": "1524096000000,254016000000",
+      "@item:5 media": "m1",
+      "@item:5 name": "Shot A again",
+      "@item:5 off": "0",
+      "@item:5 rate": "24/1",
+      "@item:5 retimed": "0",
+      "@item:5 src": "2116800000000",
+      "@item:5 track": "t1",
+      "@item:6 edit": "1",
+      "@item:6 geom": "0,508032000000",
+      "@item:6 media": "m4",
+      "@item:6 name": "Music",
+      "@item:6 off": "0",
+      "@item:6 rate": "48000/1",
+      "@item:6 retimed": "0",
+      "@item:6 src": "0",
+      "@item:6 track": "t2"
+    },
+    "marker_props": {
+      "@mk:1 at": "1164240000000",
+      "@mk:1 color": "RED",
+      "@mk:1 dur": "0",
+      "@mk:1 name": "beat",
+      "@mk:1 note": "on the downbeat",
+      "@mk:1 owner": "i1",
+      "@mk:2 at": "1270080000000",
+      "@mk:2 color": "BLUE",
+      "@mk:2 dur": "0",
+      "@mk:2 name": "act two",
+      "@mk:2 note": "",
+      "@mk:2 owner": "t1",
+      "@mk:3 at": "508032000000",
+      "@mk:3 color": "GREEN",
+      "@mk:3 dur": "0",
+      "@mk:3 name": "chapter",
+      "@mk:3 note": "",
+      "@mk:3 owner": ""
+    },
+    "media_props": {
+      "@med:1 dur": "1058400000000000",
+      "@med:1 file": "shot_a.mov",
+      "@med:1 name": "shot_a.mov",
+      "@med:1 nid": "m:de094da5e6b84c49",
+      "@med:1 origin": "range",
+      "@med:1 rate": "24/1",
+      "@med:1 start": "0",
+      "@med:2 dur": "1058400000000000",
+      "@med:2 file": "shot_b.mov",
+      "@med:2 name": "shot_b.mov",
+      "@med:2 nid": "m:51d83a68df340328",
+      "@med:2 origin": "range",
+      "@med:2 rate": "24/1",
+      "@med:2 start": "0",
+      "@med:3 dur": "1058400000000000",
+      "@med:3 file": "shot_c.mov",
+      "@med:3 name": "shot_c.mov",
+      "@med:3 nid": "m:0b34eb32ec3f11fe",
+      "@med:3 origin": "range",
+      "@med:3 rate": "24/1",
+      "@med:3 start": "0",
+      "@med:4 dur": "25401600000000",
+      "@med:4 file": "music.wav",
+      "@med:4 name": "music.wav",
+      "@med:4 nid": "m:4533525f16f07ba6",
+      "@med:4 origin": "range",
+      "@med:4 rate": "48000/1",
+      "@med:4 start": "0"
+    },
+    "timeline": {
+      "doc": "98170437566bc54f",
+      "drop_frame": "0",
+      "end_from": "items",
+      "format": "otio",
+      "mark/i": "6",
+      "mark/k": "3",
+      "mark/m": "4",
+      "mark/t": "3",
+      "name": "Cut",
+      "rate": "24/1",
+      "stacking": "last_on_top",
+      "tc": "914457600000000",
+      "version": "Timeline.1"
+    }
+  },
+  "change": {
+    "type": "ops_change",
+    "seq": 13,
+    "rev": 2,
+    "at_ms": 1793111400000,
+    "change_kind": "edit",
+    "actor": {
+      "id": "atlas",
+      "name": "atlas",
+      "kind": "agent",
+      "colour": "#123456"
+    },
+    "client": "client-id",
+    "via": "cli",
+    "on_behalf_of": null,
+    "turn": null,
+    "verb": "clip trim",
+    "claim": null,
+    "ops": [
+      {
+        "root": "item_props",
+        "kind": "map",
+        "op": "set",
+        "key": "@item:1",
+        "field": "geom",
+        "before": "254016000000,508032000000",
+        "after": "317520000000,444528000000"
+      },
+      {
+        "root": "item_props",
+        "kind": "map",
+        "op": "set",
+        "key": "@item:1",
+        "field": "src",
+        "before": "1058400000000",
+        "after": "1121904000000"
+      }
+    ],
+    "units": [
+      {
+        "key": "@item:1",
+        "container": "@trk:1",
+        "ops": ["move_resize"],
+        "geom_before": "254016000000,508032000000",
+        "geom_after": "317520000000,444528000000",
+        "fields": ["geom", "src"],
+        "hidden_after": null,
+        "placeholder_type": null
+      }
+    ],
+    "containers_changed": [],
+    "containers": ["@trk:1"],
+    "derived": {
+      "units": {
+        "@item:1": {
+          "tc": "01:00:01:06"
+        }
+      }
+    },
+    "render_hashes": null
+  }
+}

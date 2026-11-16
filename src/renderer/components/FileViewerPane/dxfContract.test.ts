@@ -59,6 +59,40 @@ describe('O4 #3: aligned (72 = 3) and fit (72 = 5) TEXT', () => {
   })
 })
 
+describe('O4 #5: rational spline weights (group 41)', () => {
+  const text = fixture('dxf-rational-spline.dxf')
+  const spline = (src: string) => of(buildDrawing(src).nodes, 'path')[1]
+  const points = (d: string): [number, number][] =>
+    d.split(/\s*[ML]\s*/).filter(Boolean).map((p) => p.split(' ').map(Number) as [number, number])
+
+  it('weights 1, √2/2, 1 draw the exact quarter circle r = 50, within the contract tolerance', () => {
+    const pts = points(spline(text).d)
+    expect(pts[0]).toEqual([50, 0])
+    expect(pts[pts.length - 1]).toEqual([0, 50])
+    // Every vertex on the circle (to the path's 1e-4 rounding)…
+    for (const [x, y] of pts) expect(Math.abs(Math.hypot(x, y) - 50)).toBeLessThan(2e-4)
+    // …and every chord within 2.5e-4 of the spline's box diagonal (K2DRAW1 §4).
+    const tol = 2.5e-4 * Math.hypot(50, 50)
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1]
+      const [bx, by] = pts[i]
+      const mid = Math.hypot((ax + bx) / 2, (ay + by) / 2)
+      expect(50 - mid).toBeLessThan(tol)
+    }
+    expect(pts.length).toBeLessThanOrEqual(4096)
+  })
+
+  it('2D control points (no 30, so the reader re-reads each 41) keep one weight each', () => {
+    expect(spline(text.replace(/\n30\n0(?=\n41)/g, '')).d).toBe(spline(text).d)
+  })
+
+  it('equal weights draw the plain B-spline', () => {
+    const plain = text.replace(/\n41\n[^\n]+/g, '')
+    const equal = text.replace(/\n41\n[^\n]+/g, '\n41\n2')
+    expect(spline(equal).d).toBe(spline(plain).d)
+  })
+})
+
 describe('O4 #4: a DXF text height is the cap height', () => {
   const text = fixture('dxf-cap-height.dxf')
 

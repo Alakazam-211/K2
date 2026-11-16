@@ -25,6 +25,7 @@ import type {
 } from 'dxf-parser'
 import { entityColor, FG, hex } from './dxf/color'
 import { layerFlags, layerHidden } from './dxf/layers'
+import { sampleSpline } from './dxf/nurbs'
 import { readExtras } from './dxf/parse-extras'
 import { ESTIMATED_METRICS, fontSizeFor, type TextMetrics } from './dxf/text-metrics'
 import { placeText } from './dxf/text-place'
@@ -142,39 +143,6 @@ function bulgePoints(x1: number, y1: number, x2: number, y2: number, bulge: numb
     out.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
   }
   return out
-}
-
-/** Uniform B-spline evaluation (de Boor), weights ignored. */
-function sampleSpline(e: ISplineEntity): [number, number][] {
-  const cps = e.controlPoints ?? []
-  const p = n(e.degreeOfSplineCurve, 3)
-  const knots = e.knotValues ?? []
-  if (cps.length >= 2 && p >= 1 && knots.length === cps.length + p + 1) {
-    const lo = knots[p]
-    const hi = knots[cps.length]
-    if (hi > lo) {
-      const steps = Math.min(2000, Math.max(32, cps.length * 10))
-      const out: [number, number][] = []
-      for (let s = 0; s <= steps; s++) {
-        const t = s === steps ? hi - 1e-9 * (hi - lo) : lo + ((hi - lo) * s) / steps
-        let k = p
-        while (k < cps.length - 1 && knots[k + 1] <= t) k++
-        const d = Array.from({ length: p + 1 }, (_, j) => [n(cps[j + k - p].x), n(cps[j + k - p].y)])
-        for (let r = 1; r <= p; r++) {
-          for (let j = p; j >= r; j--) {
-            const i = j + k - p
-            const den = knots[i + p - r + 1] - knots[i]
-            const a = den === 0 ? 0 : (t - knots[i]) / den
-            d[j] = [(1 - a) * d[j - 1][0] + a * d[j][0], (1 - a) * d[j - 1][1] + a * d[j][1]]
-          }
-        }
-        out.push([d[p][0], d[p][1]])
-      }
-      return out
-    }
-  }
-  const pts = e.fitPoints && e.fitPoints.length >= 2 ? e.fitPoints : cps
-  return pts.map((q) => [n(q.x), n(q.y)])
 }
 
 /** Strip MTEXT inline formatting; `\P` splits lines. */

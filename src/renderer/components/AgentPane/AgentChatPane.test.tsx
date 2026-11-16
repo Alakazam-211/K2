@@ -559,8 +559,8 @@ describe('picking a chat that has its own Thread asks which Thread the main chat
     await waitFor(() => expect(answer('keep_main')).not.toBeNull())
     expect(screen.getByText('Make Reviewer the main chat?')).not.toBeNull()
     expect(screen.getByText('Choose which Thread the main chat keeps.')).not.toBeNull()
-    expect(answer('keep_main')?.textContent).toBe("Keep the main chat's ThreadReviewer's Thread is kept on its own, under a new address.")
-    expect(answer('adopt_sidecar')?.textContent).toBe("Use Reviewer's ThreadThe main chat's Thread is kept on its own, under a new address.")
+    expect(answer('keep_main')?.textContent).toBe("Keep the main chat's ThreadMoves Reviewer's Thread to its own address.")
+    expect(answer('adopt_sidecar')?.textContent).toBe("Use Reviewer's ThreadMoves the main chat's Thread to its own address.")
     // Enter presses the focused answer: keeping the main chat's Thread.
     expect(document.activeElement).toBe(answer('keep_main'))
     expect(h.setChatSession).not.toHaveBeenCalled()

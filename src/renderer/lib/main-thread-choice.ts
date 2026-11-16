@@ -58,13 +58,13 @@ export async function askMainThreadChoice(name: string): Promise<MainThreadChoic
       {
         id: 'keep_main',
         label: "Keep the main chat's Thread",
-        hint: `${full}'s Thread is kept on its own, under a new address.`,
+        hint: `Moves ${full}'s Thread to its own address.`,
         safeDefault: true,
       },
       {
         id: 'adopt_sidecar',
         label: `Use ${full}'s Thread`,
-        hint: "The main chat's Thread is kept on its own, under a new address.",
+        hint: "Moves the main chat's Thread to its own address.",
       },
     ],
   })

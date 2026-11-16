@@ -1,0 +1,55 @@
+# Every test target, test-only feature and pending #[ignore] of the repo (scripts/check-targets.sh
+# reads this file and checks it): the board crate, the bridge (bridge/, its own workspace) and
+# the fuzz crate (fuzz/, its own workspace). One row per line: PACKAGE|KIND|NAME|FEATURES|PARTS,
+# the format and the rules in scripts/check-targets.sh's header. The part is `check`:
+# scripts/check.sh. A row whose PARTS holds "pending ruling" waits on a decision; none may be
+# left when a change lands (CHECK_TARGETS_LANDING=1).
+
+# ---- k2-mpc-board -------------------------------------------------------------------------------
+k2-mpc-board|lib|k2_mpc_board||check
+k2-mpc-board|doctest|k2_mpc_board||check
+k2-mpc-board|example|gen||built-only:check: writes the generated files; the tests check the tree matches what it writes
+k2-mpc-board|example|header_cost||built-only:check: a measurement, run by hand with a release build
+k2-mpc-board|example|merge_cost||built-only:check: a measurement, run by hand with a release build
+k2-mpc-board|example|sample||built-only:check: writes a sample file for stock zip tools to read
+k2-mpc-board|example|save_cost||built-only:check: a measurement, run by hand with a release build
+k2-mpc-board|test|args||check
+k2-mpc-board|test|arrange||check
+k2-mpc-board|test|decoder_property||check
+k2-mpc-board|test|facts||check
+k2-mpc-board|test|fidelity||check
+k2-mpc-board|test|file||check
+k2-mpc-board|test|group_refusals||check
+k2-mpc-board|test|header||check
+k2-mpc-board|test|host_cli||check
+k2-mpc-board|test|merge||check
+k2-mpc-board|test|numbers||check
+k2-mpc-board|test|ops||check
+k2-mpc-board|test|package||check
+k2-mpc-board|test|parity||check
+k2-mpc-board|test|vectors||check
+k2-mpc-board|test|verbs||check
+
+# ---- k2-mpc-board-bridge (bridge/, its own workspace) ---------------------------------------------
+k2-mpc-board-bridge|lib|k2_mpc_board_bridge||check
+k2-mpc-board-bridge|doctest|k2_mpc_board_bridge||excluded: the crate's docs hold no runnable example (its code blocks are text)
+k2-mpc-board-bridge|test|dry_run||check
+k2-mpc-board-bridge|test|json||check
+k2-mpc-board-bridge|test|keys||check
+k2-mpc-board-bridge|test|kinds||check
+k2-mpc-board-bridge|test|parse||check
+k2-mpc-board-bridge|test|parse_calls||check
+k2-mpc-board-bridge|test|parse_host||check
+k2-mpc-board-bridge|test|registry||check
+k2-mpc-board-bridge|test|rows||check
+k2-mpc-board-bridge|test|values||check
+
+# ---- k2-mpc-board-fuzz (fuzz/, its own workspace; cargo fuzz runs the targets) -------------------
+k2-mpc-board-fuzz|lib|k2_mpc_board_fuzz||built-only:check: the fuzz targets' shared code, with no tests; checked under the fuzzing cfg
+k2-mpc-board-fuzz|doctest|k2_mpc_board_fuzz||excluded: the crate's docs hold no runnable example
+k2-mpc-board-fuzz|fuzz-bin|board_json||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-board-fuzz|fuzz-bin|header||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-board-fuzz|fuzz-bin|json_value||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-board-fuzz|fuzz-bin|package_open||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-board-fuzz|fuzz-bin|raw_ops||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-board-fuzz|fuzz-bin|verbs||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it

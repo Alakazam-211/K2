@@ -3189,6 +3189,12 @@ _remind_workspace_param() {
 
 cmd_heartbeat_remind() {
     local first="${1:-}" has_when=0 a
+    # snooze takes --in/--at/--on itself, so it goes first: with the time
+    # check below first, `snooze <name> --in 10m` set a new reminder whose
+    # text was "snooze <name>" (tests/cli/remind_snooze_dispatch.sh).
+    if [ "$first" = snooze ]; then
+        shift; _remind_snooze "$@"; return $?
+    fi
     for a in "$@"; do
         case "$a" in --in|--at|--on) has_when=1 ;; esac
     done
@@ -3199,7 +3205,6 @@ cmd_heartbeat_remind() {
             ""|-h|--help|help) cmd_help_remind; return 0 ;;
             list)   shift; _remind_list "$@"; return $? ;;
             show)   shift; _remind_show "$@"; return $? ;;
-            snooze) shift; _remind_snooze "$@"; return $? ;;
             cancel) shift; _remind_cancel "$@"; return $? ;;
         esac
     fi

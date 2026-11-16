@@ -18,7 +18,7 @@ export interface CachedText {
   text: PageText
 }
 
-const cache = new WeakMap<object, Map<number, Promise<CachedText>>>()
+const cache = new WeakMap<DocLike, Map<number, Promise<CachedText>>>()
 
 export function pageTextOf(doc: DocLike, n: number): Promise<CachedText> {
   let pages = cache.get(doc)

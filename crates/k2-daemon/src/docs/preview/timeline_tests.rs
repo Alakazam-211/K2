@@ -53,6 +53,18 @@ fn snapshot(blobs: &BlobStore, key: &DocKey, clips: &[Tile]) -> Arc<Snapshot> {
     })
 }
 
+/// The preview events on the doc's sockets within 300 ms (a turn end, which
+/// goes to every socket, isn't one).
+fn pushed(sub: &host_events::Subscription) -> usize {
+    let mut n = 0;
+    while let Ok(ev) = sub.rx.recv_timeout(Duration::from_millis(300)) {
+        if matches!(ev, host_events::HostEvent::PreviewRendering { .. } | host_events::HostEvent::PreviewReady { .. }) {
+            n += 1;
+        }
+    }
+    n
+}
+
 #[test]
 fn tiles_are_keyed_by_media_and_source_time_only() {
     let l = listing(&[clip(7, "Interview A", 1, 48_000, 96_000), clip(8, "B-roll", 2, 0, 24_000)]);
@@ -123,7 +135,7 @@ fn a_host_without_a_decoder_answers_not_on_this_host_at_once() {
         }
         // Asked again: the same answer, decided again (nothing kept to clear).
         assert_eq!(service::request(&blobs, &snap, "@trk:1/clip:7/tile:head", Width::Full, Look::Opaque), Requested::Failed(FailCode::NotOnThisHost));
-        assert!(sub.rx.recv_timeout(Duration::from_millis(300)).is_err(), "no preview_rendering or preview_ready is pushed");
+        assert_eq!(pushed(&sub), 0, "no preview_rendering or preview_ready is pushed");
 
         // The listing (with want=thumb too): every tile says why, and nothing is queued.
         let r = route::listing(&blobs, &snap, Some(Width::Thumb), Look::Opaque);
@@ -137,7 +149,7 @@ fn a_host_without_a_decoder_answers_not_on_this_host_at_once() {
             assert_eq!(t["previews"], json!({ "thumb": "failed", "full": "failed" }), "{t}");
             assert_eq!(t["failed"], json!({ "code": "not_on_this_host" }), "{t}");
         }
-        assert!(sub.rx.recv_timeout(Duration::from_millis(300)).is_err(), "the listing pushed nothing either");
+        assert_eq!(pushed(&sub), 0, "the listing pushed nothing either");
     });
 }
 

@@ -1,6 +1,8 @@
 // The live tab's header, one row: the file once (glyph, name, what kind),
 // the state chip, one activity sentence, then the right-hand slots (the
-// avatar stack, Follow, the view's own controls) and the side-panel toggle.
+// avatar stack, Follow, the view's own controls), the mode control and the
+// side-panel toggle. A plain file (the editor, not live) shows no chip; the
+// mode control shows live or not; a view with no panel has no toggle.
 // The sentence never shows cut: when it doesn't fit it gives up whole (and
 // takes its own row when the tab asks, as the timeline does at 800 px).
 
@@ -39,31 +41,44 @@ function useFitsWhole(ref: React.RefObject<HTMLElement | null>, key: string): bo
 
 export function LiveHeader({
   fileName,
+  fileTitle,
   fileGlyph,
   kindLabel,
   state,
   sentence,
   sentenceRow = false,
   right,
-  panelOpen,
+  mode,
+  panelOpen = false,
   onTogglePanel,
+  panelLabel = 'who’s watching and the changes',
 }: {
   fileName: string
+  /** The name's tooltip (the editor's path). */
+  fileTitle?: string
   fileGlyph?: React.ReactNode
   /** "3D scene", "Timeline": what the file is, quietly. */
   kindLabel?: string
-  state: LiveTabState
+  /** None: no chip (a plain file). */
+  state?: LiveTabState
   sentence: HeaderSentence | null
   /** Put the sentence on its own row (narrow windows). */
   sentenceRow?: boolean
   /** The stack, Follow and the view's controls, in that order. */
   right?: React.ReactNode
-  panelOpen: boolean
-  onTogglePanel: () => void
+  /** The view's modes (the editor's Write | Read | Source), after `right`. */
+  mode?: React.ReactNode
+  panelOpen?: boolean
+  /** No handler: no panel toggle. */
+  onTogglePanel?: () => void
+  /** What the panel holds, for the toggle's words ("Outline and Live"). */
+  panelLabel?: string
 }): React.JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const text = sentence ? `${sentence.who?.name ?? ''} ${sentence.text}` : ''
   const fits = useFitsWhole(box, `${text}|${sentenceRow}`)
+  // The live views' toggle keeps its words ("the side panel"); a view that names its panel says so.
+  const onlyName = panelLabel === 'who’s watching and the changes'
   return (
     <div data-testid="lv-shell-header" data-wrap={sentenceRow ? '' : undefined} className={cx('lv-head flex flex-none items-center gap-x-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-3', sentenceRow ? 'flex-wrap gap-y-1 py-1.5' : 'h-11')}>
       <div className="flex min-w-0 flex-none items-center gap-2">
@@ -72,10 +87,12 @@ export function LiveHeader({
             {fileGlyph}
           </span>
         ) : null}
-        <span className="type-name whitespace-nowrap font-semibold text-[var(--color-text-primary)]">{fileName}</span>
+        <span title={fileTitle} className="type-name whitespace-nowrap font-semibold text-[var(--color-text-primary)]">
+          {fileName}
+        </span>
         {kindLabel ? <span className="type-hint whitespace-nowrap text-[var(--color-text-secondary)]">{kindLabel}</span> : null}
       </div>
-      <StateChip state={state} />
+      {state ? <StateChip state={state} /> : null}
       <div ref={box} aria-live="polite" className={cx('lv-sentence-box flex min-w-0 items-center overflow-hidden', sentenceRow ? 'order-last basis-full' : 'flex-1')}>
         {sentence ? (
           <span className={cx('type-row inline-flex items-center gap-1.5 whitespace-nowrap text-[var(--color-text-primary)]', fits ? '' : 'invisible')} aria-hidden={fits ? undefined : true}>
@@ -91,19 +108,22 @@ export function LiveHeader({
       {sentenceRow ? <span className="flex-1" /> : null}
       <div className="flex flex-none items-center gap-2">
         {right}
-        <button
-          type="button"
-          data-k2-focus=""
-          data-k2-chamfer="control"
-          aria-pressed={panelOpen}
-          aria-label={panelOpen ? 'Hide the side panel' : 'Show the side panel'}
-          title={panelOpen ? 'Hide who’s watching and the changes' : 'Show who’s watching and the changes'}
-          onClick={onTogglePanel}
-          data-testid="lv-panel-toggle"
-          className="lv-icon-btn no-drag inline-flex h-[30px] w-[30px] cursor-pointer items-center justify-center rounded-[var(--radius-field)] text-[var(--color-text-secondary)]"
-        >
-          <PanelGlyph size={16} />
-        </button>
+        {mode}
+        {onTogglePanel ? (
+          <button
+            type="button"
+            data-k2-focus=""
+            data-k2-chamfer="control"
+            aria-pressed={panelOpen}
+            aria-label={panelOpen ? (onlyName ? 'Hide the side panel' : `Hide ${panelLabel}`) : onlyName ? 'Show the side panel' : `Show ${panelLabel}`}
+            title={panelOpen ? `Hide ${panelLabel}` : `Show ${panelLabel}`}
+            onClick={onTogglePanel}
+            data-testid="lv-panel-toggle"
+            className="lv-icon-btn no-drag inline-flex h-[30px] w-[30px] cursor-pointer items-center justify-center rounded-[var(--radius-field)] text-[var(--color-text-secondary)]"
+          >
+            <PanelGlyph size={16} />
+          </button>
+        ) : null}
       </div>
     </div>
   )

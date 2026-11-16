@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { clientToCssPx } from '@/lib/app-zoom'
 import { cx } from './cx'
+import { floatMaterial } from './float-material'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { labelText, segmentedLine, segmentedNeedsMenu } from './segmented-fit'
 import { usePressSpring } from './usePressSpring'
@@ -9,6 +10,10 @@ export interface SegmentedOption<T extends string> {
   value: T
   label: React.ReactNode
   disabled?: boolean
+  /** Off, with this reason: unlike `disabled` it stays focusable and in the
+   *  arrow order (aria-disabled), shows a lock and the secondary ink, and
+   *  says the reason in a tooltip on hover and on keyboard focus. */
+  offReason?: string
   /** Extra attributes for this segment's button (data-*, title). */
   buttonProps?: React.ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, unknown>
 }
@@ -45,6 +50,11 @@ export function Segmented<T extends string>({
   const group = useRef<HTMLDivElement>(null)
   const thumb = useRef<HTMLSpanElement>(null)
   const usable = options.filter((o) => !o.disabled && !disabled)
+  const tipId = useId()
+  // The off segment whose reason shows (hover or focus).
+  const [tipFor, setTipFor] = useState<T | null>(null)
+  const tip = options.find((o) => o.offReason && o.value === tipFor)?.offReason ?? null
+  const reason = options.find((o) => o.offReason)?.offReason
   // Too wide for its line even on a line of its own: a dropdown instead
   // (segmented-fit.ts). The group stays laid out, hidden, to be measured.
   const [menu, setMenu] = useState(false)
@@ -101,7 +111,7 @@ export function Segmented<T extends string>({
     const at = usable.findIndex((o) => o.value === from)
     if (at < 0 || usable.length === 0) return
     const next = usable[(at + step + usable.length) % usable.length]
-    if (activation === 'auto') onChange(next.value)
+    if (activation === 'auto' && !next.offReason) onChange(next.value)
     Array.from(group.current?.querySelectorAll<HTMLElement>('[data-k2-segment]') ?? [])
       .find((el) => el.dataset.k2Segment === next.value)
       ?.focus()
@@ -123,6 +133,9 @@ export function Segmented<T extends string>({
       {options.map((o) => {
         const on = o.value === value
         const off = disabled || o.disabled
+        const why = off ? undefined : o.offReason
+        const showTip = why ? () => setTipFor(o.value) : undefined
+        const hideTip = why ? () => setTipFor((t) => (t === o.value ? null : t)) : undefined
         return (
           <SegmentButton
             key={o.value}
@@ -132,7 +145,16 @@ export function Segmented<T extends string>({
             disabled={off}
             tabIndex={on || (!usable.some((u) => u.value === value) && usable[0]?.value === o.value) ? 0 : -1}
             data-k2-segment={o.value}
-            onClick={() => onChange(o.value)}
+            aria-disabled={why ? true : undefined}
+            aria-describedby={why ? tipId : undefined}
+            data-off={why ? '' : undefined}
+            onMouseEnter={showTip}
+            onMouseLeave={hideTip}
+            onFocus={showTip}
+            onBlur={hideTip}
+            onClick={() => {
+              if (!why) onChange(o.value)
+            }}
             onKeyDown={(e) => {
               if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                 e.preventDefault()
@@ -145,13 +167,27 @@ export function Segmented<T extends string>({
             {...o.buttonProps}
             className={cx('k2-segment no-drag', o.buttonProps?.className)}
           >
-            <span className="k2-segment-label">{o.label}</span>
+            <span className="k2-segment-label">
+              {why ? <LockGlyph /> : null}
+              {o.label}
+            </span>
           </SegmentButton>
         )
       })}
     </div>
   )
 
+  if (!menu && reason) {
+    // The reason sits to the group's left, outside its clip (Glass clips the track).
+    return (
+      <span className="k2-segmented-off-wrap">
+        {radios}
+        <span id={tipId} role="tooltip" hidden={tip === null} className="k2-segment-tip" {...floatMaterial('popover')}>
+          {tip ?? reason}
+        </span>
+      </span>
+    )
+  }
   if (!menu) return radios
   // The same choice as a Settings dropdown: same options, same onChange, same
   // accessible name, placed by SettingDropdown at any app zoom.
@@ -163,7 +199,7 @@ export function Segmented<T extends string>({
       <SettingDropdown
         value={value ?? ''}
         placeholder={value === null ? 'Choose' : undefined}
-        options={options.map((o) => ({ value: o.value, label: labelText(o.label), disabled: o.disabled }))}
+        options={options.map((o) => ({ value: o.value, label: labelText(o.label), disabled: o.disabled || !!o.offReason }))}
         onChange={(next) => onChange(next as T)}
         ariaLabel={ariaLabel}
         disabled={disabled}
@@ -172,6 +208,16 @@ export function Segmented<T extends string>({
         triggerData={{ 'data-k2-segmented-menu': ariaLabel, ...(testId ? { 'data-testid': `${testId}-menu` } : {}) }}
       />
     </>
+  )
+}
+
+/** The small lock on an off segment. */
+function LockGlyph(): React.JSX.Element {
+  return (
+    <svg aria-hidden="true" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="k2-segment-lock">
+      <rect x="3" y="7" width="10" height="7" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </svg>
   )
 }
 

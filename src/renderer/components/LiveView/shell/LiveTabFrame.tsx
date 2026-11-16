@@ -1,8 +1,10 @@
-// The live tab's frame: the header, then the sample banner and the notice
-// row, then the hero (the picture, the monitor and lanes; whatever the view
-// is about) with the closable side panel beside it. When the tab is narrow
-// the panel starts closed and opens as an opaque sheet over the hero, so the
-// hero never squeezes. The panel scrolls with soft ends (ScrollEdgeFrame).
+// The live tab's frame: the header, then the sample banner, the notice row
+// and the find bar, then the hero (the picture, the monitor and lanes, the
+// text; whatever the view is about) with its foot and status line, and the
+// closable side panel beside it. When the tab is narrow the panel starts
+// closed and opens as an opaque sheet over the hero, so the hero never
+// squeezes; or, in 'reflow' (the editor's), beside it, narrowing the text
+// with no scrim. The panel scrolls with soft ends (ScrollEdgeFrame).
 
 import { ScrollEdgeFrame, cx } from '@/components/ui'
 import { CloseGlyph } from './glyphs'
@@ -12,10 +14,14 @@ export function LiveTabFrame({
   header,
   banner,
   notice,
+  findBar,
   hero,
   foot,
+  status,
   panel,
   panelOpen,
+  panelMode = 'sheet',
+  panelLabel = 'Who’s watching and the changes',
   narrow,
   sample,
   onClosePanel,
@@ -23,32 +29,43 @@ export function LiveTabFrame({
   header: React.ReactNode
   banner?: React.ReactNode
   notice?: React.ReactNode
+  /** Under the notice, full width (the editor's find bar). */
+  findBar?: React.ReactNode
   hero: React.ReactNode
   /** Under the hero, beside the panel (the say row). */
   foot?: React.ReactNode
+  /** Under the hero and the foot, across the hero's column (the editor's status line). */
+  status?: React.ReactNode
   panel: React.ReactNode
   panelOpen: boolean
+  /** Narrow: a sheet over the hero (the scene, the timeline) or beside it (the editor). */
+  panelMode?: 'sheet' | 'reflow'
+  /** The panel's accessible name. */
+  panelLabel?: string
   narrow: boolean
   sample: boolean
   onClosePanel: () => void
 }): React.JSX.Element {
+  const sheet = narrow && panelMode === 'sheet'
   return (
     <div data-testid="lv-tab" data-sample={sample ? '' : undefined} data-narrow={narrow ? '' : undefined} className="lv-shell flex h-full min-h-0 flex-col overflow-hidden">
       <style>{LIVE_SHELL_CSS}</style>
       {header}
       {banner}
       {notice}
+      {findBar}
       <div className="relative flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="relative flex min-h-0 flex-1 flex-col">{hero}</div>
           {foot}
+          {status}
         </div>
         {panelOpen ? (
           <aside
             data-testid="lv-panel"
-            data-sheet={narrow ? '' : undefined}
-            aria-label="Who’s watching and the changes"
-            className={cx('lv-panel flex flex-col', narrow ? 'absolute inset-y-0 right-0 z-20 w-[min(340px,100%)]' : 'w-[300px] flex-none')}
+            data-sheet={sheet ? '' : undefined}
+            aria-label={panelLabel}
+            className={cx('lv-panel flex flex-col', sheet ? 'absolute inset-y-0 right-0 z-20 w-[min(340px,100%)]' : 'w-[300px] flex-none')}
           >
             {narrow ? (
               <div className="flex flex-none justify-end px-2 pt-1.5">

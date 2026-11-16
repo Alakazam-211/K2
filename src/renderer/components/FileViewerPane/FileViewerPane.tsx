@@ -1,6 +1,4 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, useLayoutEffect, useImperativeHandle } from 'react'
-import Markdown from '@/components/Markdown/Markdown'
-import remarkGfm from 'remark-gfm'
 import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
 import { isRemoteMacTmpPath } from '@/lib/remote-mac-tmp'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
@@ -29,11 +27,13 @@ const DiagramViewer = lazy(() =>
 const DxfViewer = lazy(() => import('./DxfViewer').then((m) => ({ default: m.DxfViewer })))
 const DxfHostBytesViewer = lazy(() => import('./DxfViewer').then((m) => ({ default: m.DxfHostBytesViewer })))
 const ModelViewer = lazy(() => import('./ModelViewer').then((m) => ({ default: m.ModelViewer })))
+// "New file editor (preview)" (Settings → Code): markdown and code in the editor frame on the live shell.
+const EditorTab = lazy(() => import('@/components/Editor/EditorTab').then((m) => ({ default: m.EditorTab })))
 // `getLanguageName` is a synchronous helper used in the status bar —
 // importing it eagerly is fine (it's a small string table, not the
 // CodeMirror bundle). Bundlers tree-shake the rest of the module.
 import { getLanguageName } from './CodeEditor'
-import { HighlightedCodeBlock } from './CodeHighlighter'
+import { MemoizedMarkdown } from './MarkdownPreview'
 import { DiffViewer } from '@/components/DiffViewer/DiffViewer'
 import { ImageViewer } from './ImageViewer'
 import { BinaryEmptyState } from './BinaryEmptyState'
@@ -65,6 +65,7 @@ import { AnyFileDocPanel } from './AnyFileDocPanel'
 import { LivePreviewEntry } from '@/components/LiveView/LivePreviewEntry'
 import { DeckPreviewPane } from './DeckPreviewPane'
 import { DocConflictNotice } from './DocConflictNotice'
+import { newEditorKind, useNewEditorPreview } from '@/lib/editor/preview-switch'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -136,52 +137,6 @@ export function hasSelectionWithin(container: HTMLElement | null): boolean {
   }
   return false
 }
-
-/**
- * Module-level ReactMarkdown components map. Hoisted out of the
- * render function so its reference is stable across renders — if
- * we rebuilt this object inside the component body, ReactMarkdown
- * would get a new prop ref every render and rebuild its element
- * tree, which destroys any active DOM text selection (the user
- * loses their highlight every time the parent re-renders).
- */
-const MARKDOWN_COMPONENTS = {
-  code({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) {
-    const match = /language-(\w+)/.exec(className || '')
-    const codeStr = String(children).replace(/\n$/, '')
-    if (match) {
-      return <HighlightedCodeBlock code={codeStr} language={match[1]} />
-    }
-    return <code className={className} {...props}>{children}</code>
-  },
-}
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm]
-
-/**
- * Memoized markdown body. Only re-renders when `content` actually
- * changes — without this, every parent FileViewerPane re-render
- * (for any unrelated reason: dirty-state ticks, settings polls,
- * tab activity, etc.) rebuilt ReactMarkdown's element tree, and
- * React's reconciliation rebuilt enough of the DOM that the
- * browser's active text selection collapsed. Wrapping in
- * React.memo with default shallow prop comparison stops the
- * cascade — content only changes when the file changes on disk
- * (or the user types in edit mode).
- */
-const MemoizedMarkdown = React.memo(function MemoizedMarkdown({
-  content,
-}: {
-  content: string
-}): React.JSX.Element {
-  return (
-    <Markdown
-      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
-    >
-      {content}
-    </Markdown>
-  )
-})
 
 function getFileName(filePath: string): string {
   return filePath.split('/').pop() || filePath
@@ -309,6 +264,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   flushRef.current = { filePath, editedContent, content }
 
   const category = getFileCategory(filePath)
+  const editorKind = useNewEditorPreview() ? newEditorKind(category) : null
   const [viewMode, setViewMode] = useState<ViewMode>(getDefaultViewMode(category))
   // A locked pane can't save. It reports unsaved changes only when it
   // holds edits made before the file stopped being text (`keptText`), so
@@ -822,6 +778,63 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     )
   }
 
+  // The text editor, for today's view and the editor frame's Write and Source.
+  const codeEditor = (display?: { wrap: boolean; lineNumbers: boolean }, readOnly = false): React.JSX.Element => (
+    <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading editor…</div>}>
+      <CodeEditor
+        code={editedContent ?? content}
+        filePath={filePath}
+        scope={room.scope}
+        localFormat={room.localCommands}
+        onSave={saveFile}
+        onChange={(newContent) => {
+          if (textLockRef.current === null) setEditedContent(newContent)
+        }}
+        onCursorChange={(line, col, selections) => setCursorInfo({ line, col, selections })}
+        initialScrollTop={initialScrollTop}
+        initialCursorPos={initialCursorPos}
+        onPersistState={paneGroupId ? ({ scrollTop, cursorPos }) => setFileViewerState(tabId, paneGroupId, paneId, { scrollTop, cursorPos }) : undefined}
+        readOnly={readOnly}
+        display={display}
+      />
+    </Suspense>
+  )
+  // The Live view ended because the file's core was turned off.
+  const liveEndedBar = liveEnded && !liveOn && (
+    <div role="status" data-testid="file-viewer-live-ended" className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] flex-shrink-0">
+      Live editing was turned off for this kind of file (Settings → Cores → Multiplayer). Every change was saved; the file now opens the usual way.
+    </div>
+  )
+  // Re-read failed, buffer kept (non-blocking).
+  const rereadBar = rereadIssue !== null && textLock === null && (
+    <div role="status" data-testid="file-viewer-reread-banner" data-issue={rereadIssue} className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] flex-shrink-0">
+      {[REREAD_FAILED_MESSAGE, isDirty ? REREAD_KEPT_MESSAGE : null, rereadIssue === 'deleted' ? REREAD_DELETED_MESSAGE : null].filter(Boolean).join(' ')}
+    </div>
+  )
+
+  // The editor frame (preview): no toolbar, no path bar. Live, any-file and deck files keep today's view until E4.
+  if (editorKind && !showTextLock && !liveOn && !anyFile && liveCore.status !== 'deck') {
+    return (
+      <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
+        <Suspense fallback={null}>
+          <EditorTab
+            key={filePath}
+            filePath={filePath}
+            kind={editorKind}
+            text={editedContent ?? content}
+            dirty={isDirty}
+            saving={saving}
+            readOnly={room.readOnly ? 'You can view this file but not edit it' : null}
+            cursor={cursorInfo}
+            notice={<>{liveEndedBar}{rereadBar}</>}
+            onSave={() => void saveFile(editedContent ?? undefined)}
+            renderEditor={(o) => codeEditor({ wrap: o.wrap, lineNumbers: o.lineNumbers }, o.readOnly)}
+          />
+        </Suspense>
+      </div>
+    )
+  }
+
   return (
     <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
       {/* Toolbar */}
@@ -1017,38 +1030,12 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       )}
 
-      {/* The Live view ended because the file's core was turned off */}
-      {liveEnded && !liveOn && (
-        <div
-          role="status"
-          data-testid="file-viewer-live-ended"
-          className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] flex-shrink-0"
-        >
-          Live editing was turned off for this kind of file (Settings → Cores → Multiplayer). Every change was saved; the file
-          now opens the usual way.
-        </div>
-      )}
+      {liveEndedBar}
 
       {/* Tier 0 kept both versions after another program's save (once per copy) */}
       {anyFile && <DocConflictNotice scope={room.scope} filePath={filePath} />}
 
-      {/* Re-read failed, buffer kept (non-blocking) */}
-      {rereadIssue !== null && textLock === null && (
-        <div
-          role="status"
-          data-testid="file-viewer-reread-banner"
-          data-issue={rereadIssue}
-          className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] flex-shrink-0"
-        >
-          {[
-            REREAD_FAILED_MESSAGE,
-            isDirty ? REREAD_KEPT_MESSAGE : null,
-            rereadIssue === 'deleted' ? REREAD_DELETED_MESSAGE : null,
-          ]
-            .filter(Boolean)
-            .join(' ')}
-        </div>
-      )}
+      {rereadBar}
 
       {/* Content, with the any-file panel beside it */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -1209,26 +1196,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       ) : (
         <>
-          <div className="flex-1 overflow-hidden" ref={editorContainerRef}>
-            <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading editor…</div>}>
-              <CodeEditor
-                code={editedContent ?? content}
-                filePath={filePath}
-                scope={room.scope}
-                localFormat={room.localCommands}
-                onSave={saveFile}
-                onChange={(newContent) => {
-                  if (textLockRef.current === null) setEditedContent(newContent)
-                }}
-                onCursorChange={(line, col, selections) => setCursorInfo({ line, col, selections })}
-                initialScrollTop={initialScrollTop}
-                initialCursorPos={initialCursorPos}
-                onPersistState={paneGroupId ? ({ scrollTop, cursorPos }) => {
-                  setFileViewerState(tabId, paneGroupId, paneId, { scrollTop, cursorPos })
-                } : undefined}
-              />
-            </Suspense>
-          </div>
+          <div className="flex-1 overflow-hidden" ref={editorContainerRef}>{codeEditor()}</div>
           {/* Status bar */}
           <div className="flex items-center gap-3 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-0.5 flex-shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono">
             <span>Ln {cursorInfo.line}, Col {cursorInfo.col}</span>

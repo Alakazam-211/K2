@@ -386,6 +386,8 @@ interface CodeEditorProps {
    *  (`format_file`)? A room on another server passes false: its path is
    *  that server's, not this computer's. Omitted = true (window surfaces). */
   localFormat?: boolean
+  /** The editor frame's own Wrap and line numbers (EditorTab); else the settings'. */
+  display?: { wrap: boolean; lineNumbers: boolean }
 }
 
 // ── Git gutter markers ──────────────────────────────────────────────
@@ -728,7 +730,7 @@ const stickyScrollPlugin = ViewPlugin.fromClass(
   }
 )
 
-export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorChange, readOnly = false, demoLineChanges, themeOverride, initialScrollTop, initialCursorPos, onPersistState, localFormat = true }: CodeEditorProps): React.JSX.Element {
+export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorChange, readOnly = false, demoLineChanges, themeOverride, initialScrollTop, initialCursorPos, onPersistState, localFormat = true, display }: CodeEditorProps): React.JSX.Element {
   const localFormatRef = useRef(localFormat)
   localFormatRef.current = localFormat
   const containerRef = useRef<HTMLDivElement>(null)
@@ -807,13 +809,8 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
       indentOnInput(),
       closeBrackets(),
       highlightSelectionMatches(),
-      // Settings-driven compartments
-      // Markdown files always soft-wrap regardless of the global
-      // editor.wordWrap setting — prose with horizontal scrolling
-      // forces users to scroll mid-paragraph, which is awful UX.
-      // Code files (TS, Rust, etc.) keep the user's chosen behavior
-      // because indentation and column alignment matter there.
-      c.wrap.of((es.wordWrap || isMarkdownPath(filePath)) ? EditorView.lineWrapping : []),
+      // Settings-driven compartments. Markdown always soft-wraps (prose shouldn't scroll sideways) unless the frame says.
+      c.wrap.of((display?.wrap ?? (es.wordWrap || isMarkdownPath(filePath))) ? EditorView.lineWrapping : []),
       c.tabSize.of([EditorState.tabSize.of(effectiveTabSize), indentUnit.of(' '.repeat(effectiveTabSize))]),
       c.whitespace.of(es.showWhitespace ? highlightWhitespace() : []),
       c.indentGuides.of(es.indentGuides ? indentationMarkers({ highlightActiveBlock: true, hideFirstIndent: false }) : []),
@@ -821,7 +818,7 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
       c.autocomplete.of(es.autocomplete ? autocompletion({ activateOnTyping: true, maxRenderedOptions: 30 }) : []),
       // The completion list and hovers stay under the caret at any app zoom.
       zoomAwareTooltips(),
-      c.lineNumbers.of(es.lineNumbers ? lineNumbers() : []),
+      c.lineNumbers.of((display?.lineNumbers ?? es.lineNumbers) ? lineNumbers() : []),
       c.activeLine.of(es.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
       c.bracket.of(es.bracketMatching ? bracketMatching() : []),
       c.fontSize.of(EditorView.theme({ '&': { fontSize: `${es.fontSize || 13}px` }, '.cm-gutters': { fontSize: `${Math.max((es.fontSize || 13) - 1, 10)}px` } })),
@@ -985,13 +982,13 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
 
     view.dispatch({
       effects: [
-        c.wrap.reconfigure((editorSettings.wordWrap || isMarkdownPath(filePath)) ? EditorView.lineWrapping : []),
+        c.wrap.reconfigure((display?.wrap ?? (editorSettings.wordWrap || isMarkdownPath(filePath))) ? EditorView.lineWrapping : []),
         c.tabSize.reconfigure([EditorState.tabSize.of(editorSettings.tabSize), indentUnit.of(' '.repeat(editorSettings.tabSize))]),
         c.whitespace.reconfigure(editorSettings.showWhitespace ? highlightWhitespace() : []),
         c.indentGuides.reconfigure(editorSettings.indentGuides ? indentationMarkers({ highlightActiveBlock: true, hideFirstIndent: false }) : []),
         c.fold.reconfigure(editorSettings.foldGutter ? [codeFolding(), foldGutter({ openText: '▾', closedText: '▸' })] : []),
         c.autocomplete.reconfigure(editorSettings.autocomplete ? autocompletion({ activateOnTyping: true, maxRenderedOptions: 30 }) : []),
-        c.lineNumbers.reconfigure(editorSettings.lineNumbers ? lineNumbers() : []),
+        c.lineNumbers.reconfigure((display?.lineNumbers ?? editorSettings.lineNumbers) ? lineNumbers() : []),
         c.activeLine.reconfigure(editorSettings.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
         c.bracket.reconfigure(editorSettings.bracketMatching ? bracketMatching() : []),
         c.fontSize.reconfigure(EditorView.theme({ '&': { fontSize: `${editorSettings.fontSize}px` }, '.cm-gutters': { fontSize: `${Math.max(editorSettings.fontSize - 1, 10)}px` } })),
@@ -1016,7 +1013,7 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
         c.vim.reconfigure(editorSettings.vimMode ? vim() : []),
       ],
     })
-  }, [editorSettings, themeOverride, customThemes])
+  }, [editorSettings, themeOverride, customThemes, display?.wrap, display?.lineNumbers])
 
   // Update content when external changes arrive (file polling)
   useEffect(() => {

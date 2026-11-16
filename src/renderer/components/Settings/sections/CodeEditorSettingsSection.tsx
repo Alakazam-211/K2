@@ -22,9 +22,11 @@ import {
   useSaveStatus,
 } from '../controls/SettingControls'
 import { AccessSheet, FailedNote } from './AccessDialogs'
+import { EditorPreviewSwitch } from '@/components/Editor/EditorPreviewSwitch'
 import type { SettingEntry } from '../searchManifest'
 
 export const CODE_EDITOR_MANIFEST: SettingEntry[] = [
+  { id: 'code-editor.new-editor-preview', section: 'code-editor', group: 'Preview', label: 'New file editor (preview)', description: 'Markdown and code files open in the new editor', keywords: ['editor', 'new editor', 'preview', 'write', 'read', 'source', 'markdown', 'beta'] },
   // Appearance
   { id: 'code-editor.theme', section: 'code-editor', group: 'Appearance', label: 'Theme', description: 'Colours for code in the editor', keywords: ['theme', 'colors', 'colours', 'appearance', 'dark mode', 'light mode', 'custom theme', 'new theme'] },
   { id: 'code-editor.font-family', section: 'code-editor', group: 'Appearance', label: 'Font family', description: 'For code here and for text across K2', keywords: ['font', 'typeface', 'family'] },
@@ -355,6 +357,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
 
       <div className="flex gap-6 items-start">
         <div className="flex-1 min-w-0 max-w-[40rem] space-y-6">
+          <EditorPreviewSwitch />
           <SettingsGroup
             card
             title="Appearance"

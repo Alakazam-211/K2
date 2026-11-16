@@ -2093,7 +2093,7 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
   cursor: pointer;
   transition: color var(--motion-duration-medium);
 }
-.k2-segment:hover:not(:disabled):not([aria-checked="true"]) { color: var(--color-text-primary); }
+.k2-segment:hover:not(:disabled):not([aria-checked="true"]):not([data-off]) { color: var(--color-text-primary); }
 .k2-segment[aria-checked="true"] {
   color: var(--color-on-accent);
   cursor: default;
@@ -2126,6 +2126,29 @@ html[data-style="terminal"] .k2-segment[aria-checked="true"]:focus-visible:not([
   inset: -3px;
 }
 .k2-segment:disabled { cursor: default; opacity: 0.45; }
+/* Off with a reason (Segmented's offReason): still focusable and full size,
+   in the secondary ink with a small lock; the reason shows to the group's
+   left on hover and on keyboard focus. */
+.k2-segment[data-off] { cursor: not-allowed; color: var(--color-text-secondary); }
+.k2-segment[data-off] .k2-segment-label { display: inline-flex; align-items: center; gap: 4px; }
+.k2-segmented-off-wrap { position: relative; display: inline-flex; }
+.k2-segment-tip {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  padding: 4px 8px;
+  white-space: nowrap;
+  font-size: var(--type-sm);
+  color: var(--color-text-primary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-field);
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+}
+.k2-segment-tip[hidden] { display: none; }
 
 /* Tags: the small uppercase labels (BETA, SOON, NEW, ON, OFF…), ui/Tag.tsx.
    A pill in Glass (--radius-pill) and a chip cut in Terminal (data-k2-chamfer

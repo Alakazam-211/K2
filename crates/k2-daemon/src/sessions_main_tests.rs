@@ -248,6 +248,12 @@ fn without_a_thread_choice_only_the_pin_moves() {
     assert_eq!(pinned(&p.id).as_deref(), Some(p.side.as_str()));
     assert_eq!(texts(&p.main), vec!["on the main Thread".to_string()]);
     assert_eq!(texts(&p.side), vec!["on the sidecar Thread".to_string()]);
+    // So the workspace's address follows the pin to the sidecar's Thread,
+    // and the old main Thread has no address of its own.
+    assert_eq!(thread_at(&p.handle), (p.side.clone(), vec!["on the sidecar Thread".to_string()]));
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    assert_eq!(k2_core::workspace_session_handles::current_address_for(&conn, &p.id, &p.main).expect("address"), None);
 }
 
 #[test]

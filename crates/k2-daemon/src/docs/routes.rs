@@ -1157,6 +1157,8 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 "declined": st.declined,
                 "disk": disk_json(st.disk.as_ref()),
                 "rights": rights.json(),
+                // Who to ask for more access (the read-only bar).
+                "accessOwner": host::access_owner_json(),
             })))
         }
         TOOL => tool(s, c),

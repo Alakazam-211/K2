@@ -546,6 +546,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         let features = super::live_watch::keyed_socket_features(&session);
         if let Value::Obj(o) = &mut welcome {
             o.extend(super::live_deck::welcome_extras(&t, &session, conn));
+            o.push(("access_owner".into(), super::live_deck::actor_record(&host::access_owner_pid())));
             if !features.is_empty() {
                 o.push(("features".into(), super::live_watch::features_value(&features)));
             }
@@ -597,6 +598,8 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
     let features = super::live_watch::TEXT_SOCKET_FEATURES.to_vec();
     if let Value::Obj(o) = &mut welcome {
         o.push(("features".into(), super::live_watch::features_value(&features)));
+        // Who to ask for edit access (the read-only bar), as an actor record.
+        o.push(("access_owner".into(), super::live_deck::actor_record(&host::access_owner_pid())));
     }
     Ok(Opened {
         session,

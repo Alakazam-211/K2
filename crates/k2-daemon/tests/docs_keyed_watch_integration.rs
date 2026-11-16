@@ -198,6 +198,13 @@ async fn a_live_deck_is_watched_by_key_headless() {
     assert_eq!(welcome["mode"], "deck", "{welcome}");
     assert_eq!(welcome["features"], json!(["keyed_watch", "view_address", "time_position"]), "{welcome}");
     assert!(welcome.get("previews").is_some(), "the previews stay for clients that never watch: {welcome}");
+    // Who to ask for edit access (the read-only bar): the box owner, as an actor record.
+    assert_eq!((&welcome["access_owner"]["id"], &welcome["access_owner"]["kind"]), (&json!("person:owner"), &json!("person")), "{welcome}");
+    assert!(welcome["access_owner"]["name"].as_str().is_some_and(|n| !n.is_empty()), "{welcome}");
+    let (st, body) = http(port, "GET", &format!("/cli/docs/status?token={OWNER}&path={}", enc(&talk)), None);
+    assert_eq!(st, 200, "{body}");
+    let status: J = serde_json::from_str(&body).expect("status JSON");
+    assert_eq!(status["accessOwner"], welcome["access_owner"], "the status route names the same person: {status}");
     // A second socket on the deck that never sends `watch` (an older client).
     let (mut old, _) = tokio_tungstenite::connect_async(&url(&talk)).await.expect("a second socket");
     let w_old = next_frame(&mut old, "the old client's welcome").await;
@@ -331,6 +338,7 @@ async fn a_live_deck_is_watched_by_key_headless() {
     assert_eq!(w["type"], "welcome", "{w}");
     assert_eq!(w["root"], "source", "{w}");
     assert_eq!(w["features"], json!(["view_address"]), "a text doc: the view address, no keyed watch, no playhead: {w}");
+    assert_eq!(w["access_owner"]["id"], "person:owner", "{w}");
     // Its view address is taken (no reply) and reaches the roster.
     let md_client = w["client"].as_u64().expect("client");
     md.send(Message::Text(json!({"type": "view_address", "req": 1, "address": "@k:intro"}).to_string())).await.expect("send view");

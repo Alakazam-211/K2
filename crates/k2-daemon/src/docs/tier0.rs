@@ -326,6 +326,8 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
                     "index": index,
                     "rights": c.rights.json(),
                     "owner": c.rights.owner,
+                    // Who to ask for more access (the read-only bar).
+                    "accessOwner": super::host::access_owner_json(),
                 }),
             ))
         }

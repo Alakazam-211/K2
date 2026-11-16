@@ -175,6 +175,22 @@ pub fn person_exists(person_key: &str) -> bool {
     person_key == k2_core::notify_prefs::OWNER || k2_core::connect_users::role_for_user(person_key).is_some()
 }
 
+/// Who a person asks for more access to a doc on this box (the editors'
+/// read-only bar: "Ask <name> for edit access"): the box owner. People's
+/// rights come from their login's role, which the owner (and Admin logins)
+/// set, and only they share a doc with another workspace (`k2 doc share`,
+/// an Admin route); a share record names workspaces, not people, and a
+/// workspace's agent can't grant anything. So it is the owner's pid, as an
+/// actor record where it goes out ([`super::live_deck::actor_record`]).
+pub fn access_owner_pid() -> String {
+    format!("{PERSON_PREFIX}{}", k2_core::notify_prefs::OWNER)
+}
+
+/// [`access_owner_pid`] as the routes' JSON: `{id, name, kind, colour}`.
+pub fn access_owner_json() -> serde_json::Value {
+    serde_json::from_str(&super::live_deck::actor_record(&access_owner_pid()).to_json()).unwrap_or(serde_json::Value::Null)
+}
+
 /// A person's rights on any doc on this box: the owner (and the logins the
 /// owner linked, which resolve to `owner`) and every existing login may do
 /// everything (every role is Member or above, and Member writes files
@@ -714,6 +730,19 @@ mod tests {
         std::fs::write(&elsewhere, b"PK").expect("outside");
         assert_eq!(host.document_at(&elsewhere), None, "a file in no workspace");
         let _ = std::fs::remove_file(&elsewhere);
+    }
+
+    /// The read-only bar's "Ask <name>": the box owner, who sets people's
+    /// roles and shares docs, as an actor record with a name.
+    #[test]
+    fn the_person_to_ask_for_access_is_the_box_owner() {
+        crate::test_support::with_temp_home(|| {
+            assert_eq!(access_owner_pid(), "person:owner");
+            let v = access_owner_json();
+            assert_eq!((&v["id"], &v["kind"]), (&serde_json::json!("person:owner"), &serde_json::json!("person")), "{v}");
+            assert!(v["name"].as_str().is_some_and(|n| !n.is_empty()), "a name to show: {v}");
+            assert!(v["colour"].is_string(), "{v}");
+        });
     }
 
     #[test]

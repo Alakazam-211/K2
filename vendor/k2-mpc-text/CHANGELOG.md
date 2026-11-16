@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.26: pairs with kit v0.20.0
+
+**Requires `k2-mpc-base` v0.20.0**. This pack's behaviour is unchanged from v0.2.25.
+
+- Pairs with kit v0.20.0, whose changes are the host's: a store holding native-engine docs opens and
+  refuses only those docs; writer IDs follow people, devices and agents (person-writer reuse on by
+  default, used only when the host sends a device key); a writers cap per doc, off by default, with
+  a near-cap audit notice. No pack API changes, so this pack behaves as in v0.2.25.
+- **The target scan** (tooling; no library change): `scripts/targets.txt` lists every test target of
+  the pack (lib unit tests, doc examples, integration tests), every feature of its manifest, and the
+  gate part that runs each, or why none does. `scripts/check-targets.sh` reads the manifests, the
+  sources and `scripts/check.sh`'s commands, with no build, and fails on a target or feature with no
+  row, a row with no target, a part that doesn't run what its row says, a test-only feature no part
+  turns on, and an `#[ignore]` whose reason names no runner; `CHECK_TARGETS_LANDING=1` also refuses
+  a row waiting on a ruling. `scripts/test-check-targets.sh` plants one case of each in a copy of
+  the tree. Both run first in `scripts/check.sh`. The kit's `tools/check-targets.sh`, with the
+  pack's gate shape. It prints the md5 of its shared copy (the script but for its two settings) and
+  of the self-test, the same in every pack, so a drift shows.
+- `Cargo.lock`: k2-mpc-base 0.20.0 (only the kit's crate version moves); the crate version.
+
 ## v0.2.25: pairs with kit v0.19.0
 
 **Requires `k2-mpc-base` v0.19.0**. This pack's behaviour is unchanged from v0.2.24.

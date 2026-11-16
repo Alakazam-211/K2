@@ -1065,6 +1065,11 @@ pub(super) const ROWS: &[Route] = &[
     // reads are Member (the handler keeps agents to their own workspace).
     get("/cli/sessions/main", Member),
     post("/cli/sessions/main/set", Admin),
+    // Switch one session's model live (0.46.13, `session_model.rs`): a
+    // person at the Admin floor (agents refused in the handler); the menu's
+    // options are a Member read.
+    post("/cli/sessions/model", Admin),
+    get("/cli/sessions/model/options", Member),
     post("/cli/sessions/open", Admin),
     get("/cli/sessions/past", Member),
     post("/cli/sessions/resize", Member),

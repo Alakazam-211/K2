@@ -344,6 +344,9 @@ pub mod session_author;
 // thread-mine-v1 (0.46.8): `mine` on a person's Thread docs, per reader.
 pub mod thread_mine;
 pub mod session_lookup;
+// 0.46.13: `/cli/sessions/model`: switch one session's model live, the
+// CLI's saved default put back.
+pub mod session_model;
 pub mod sessions_bytes_ws;
 pub mod sessions_grid_ws;
 pub mod sessions_ws;

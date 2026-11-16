@@ -100,6 +100,9 @@ pub mod chat_user_archive;
 // bundle). Powers both the high-bar push (P2) and the README fallback
 // (P3). HTTP/Tauri-free; see module docs + PRD k2-connect-clone-to.md.
 pub mod cli_stage;
+/// The `model` key of a Claude Code settings file, put back after K2
+/// switches one session's model (0.46.13, `/cli/sessions/model`).
+pub mod cli_model_settings;
 /// `k2` on the person's PATH with no admin prompt (0.46.11): links
 /// `~/.local/bin/k2` and adds one marked PATH block. Lives in k2-client so
 /// the app runs the same code; the tests here use `test_env::TempHome`.

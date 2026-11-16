@@ -44,17 +44,20 @@ pub const SHOW: &str = "/cli/sessions/show";
 pub const OPEN: &str = "/cli/sessions/open";
 pub const MAIN: &str = "/cli/sessions/main";
 pub const MAIN_SET: &str = "/cli/sessions/main/set";
+/// Switch one session's model live (0.46.13, [`crate::session_model`]).
+pub const MODEL: &str = crate::session_model::ROUTE;
+pub const MODEL_OPTIONS: &str = crate::session_model::OPTIONS_ROUTE;
 
 /// The outside-K2 guard (Q5): a transcript written this recently may be
 /// open in a terminal outside K2.
 pub const RECENT_SECS: i64 = 120;
 
 pub fn is_route(path: &str) -> bool {
-    matches!(path, ROSTER | PAST | SHOW | OPEN | MAIN | MAIN_SET)
+    matches!(path, ROSTER | PAST | SHOW | OPEN | MAIN | MAIN_SET | MODEL | MODEL_OPTIONS)
 }
 
 pub fn is_post_route(path: &str) -> bool {
-    matches!(path, OPEN | MAIN_SET)
+    matches!(path, OPEN | MAIN_SET | MODEL)
 }
 
 pub fn body_cap(path: &str) -> usize {
@@ -110,6 +113,20 @@ pub fn handle(
             sc::audit("sessions-main-set", &caller, &outcome, ingress);
             out
         }
+        MODEL => {
+            let out = sc::json_body(body).and_then(|v| crate::session_model::handle_switch(&caller, &v));
+            let outcome = match &out {
+                Ok(v) => format!(
+                    "ok {} {}",
+                    v.get("model").and_then(Value::as_str).unwrap_or("-"),
+                    v.pointer("/default/outcome").and_then(Value::as_str).unwrap_or("-")
+                ),
+                Err(e) => format!("refused:{}", e.code),
+            };
+            sc::audit("sessions-model", &caller, &outcome, ingress);
+            out
+        }
+        MODEL_OPTIONS => crate::session_model::handle_options(&caller, params),
         _ => return CliResponse::not_found(),
     };
     match result {

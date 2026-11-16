@@ -95,6 +95,9 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // Voice rooms §3.3: how many rooms this server hosts (0–10). Owner or
     // Admin; read-only for Members.
     "voiceRoomsCount",
+    // 0.46.13: the server's default model per harness, which every agent
+    // K2 launches starts on. Owner or Admin.
+    "defaultModels",
 ];
 
 /// The Admin-floor keys (tests).

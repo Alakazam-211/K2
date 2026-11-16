@@ -620,7 +620,9 @@ fn spawn_agent_session_v2_with_inner(
             llm_login.as_ref().map(|g| g.ptyd_meta()),
         ));
     }
+    let (home_program, home_env) = (cfg.program.clone(), cfg.env.clone());
     let session = DaemonPtySession::spawn(cfg).map_err(|e| format!("v2 spawn failed: {e}"))?;
+    crate::session_model::note_spawn_home(&session.session_id, home_program.as_deref(), &home_env);
     if let Some(s) = hb_started_on {
         crate::hb_stale::note_started_on(&session.session_id, s);
     }

@@ -767,6 +767,16 @@ pub fn recorded_account(
     Ok(recorded(conn, tool, session_key, conversation_id)?.map(|(a, _)| a))
 }
 
+/// The home a session key last started in, when K2 recorded one (a wallet
+/// login's slot). `None` = never recorded, or the tool's live home. Used to
+/// find which settings file a running session's CLI writes (0.46.13).
+pub fn recorded_home_for_key(conn: &Connection, tool: Tool, session_key: &str) -> Result<Option<PathBuf>, WalletError> {
+    Ok(match recorded(conn, tool, session_key, None)? {
+        Some((_, Some(h))) if !h.is_empty() => Some(PathBuf::from(h)),
+        _ => None,
+    })
+}
+
 /// The home a resumed conversation's history is in: its recorded home,
 /// else the tool's live home (pool and API-key sessions run there, and
 /// so did every conversation from before K2 tracked logins).

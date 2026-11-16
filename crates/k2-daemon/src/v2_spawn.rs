@@ -1635,6 +1635,8 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     }
     steps.step("login step");
     let __t_spawn = std::time::Instant::now();
+    // 0.46.13: which Claude home this session's CLI writes its settings to.
+    let (home_program, home_env) = (cfg.program.clone(), cfg.env.clone());
     let session = match DaemonPtySession::spawn(cfg) {
         Ok(s) => s,
         Err(e) => {
@@ -1658,6 +1660,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             };
         }
     };
+    crate::session_model::note_spawn_home(&session.session_id, home_program.as_deref(), &home_env);
     if let Some(g) = llm_login {
         g.spawned(session.child_pid());
     }

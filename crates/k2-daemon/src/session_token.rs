@@ -1364,6 +1364,11 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // harness passport `main_chat_needs_person`, a shell tab is a person).
         "/cli/sessions/main",
         "/cli/sessions/main/set",
+        // Switch a session's model (0.46.13): here so a K2 shell tab is
+        // classified as the person it is; the handler refuses a harness
+        // passport `model_switch_needs_person`.
+        "/cli/sessions/model",
+        "/cli/sessions/model/options",
         // Root helper status (read-only): agents see whether the helper is
         // there and what to ask their human for. update/rollback are NOT
         // here (owner/admin steps).

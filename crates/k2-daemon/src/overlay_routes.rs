@@ -2612,6 +2612,21 @@ pub(crate) fn post_workspace_note(workspace: &str, body: &str, via: &str) -> Res
     Ok(())
 }
 
+/// [`post_workspace_note`] from K2 itself (`from` = `k2`, like the
+/// changed-files card), on the Thread `addr` names (a workspace path or an
+/// agent's address). No wake, no inject, no push. The workspace's project
+/// id comes back so a caller can check the Thread is the one it meant.
+pub(crate) fn post_k2_note(addr: &str, body: &str, via: &str) -> Result<String, String> {
+    let resolved = resolve_addr(addr).map_err(|r| r.body)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) =
+        overlay::post_thread(&conn, &resolved.conversation_id, &resolved.project_id, "k2", &resolved.addr, body, via)?;
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
+    Ok(resolved.project_id)
+}
+
 /// A mail notice card on a workspace's Thread. Posted by K2, no inject and
 /// no push. `body` is the plain text for renderers that don't draw the card:
 /// the sender's address only, never the subject or snippet (W34).

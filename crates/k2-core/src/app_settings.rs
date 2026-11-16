@@ -375,6 +375,18 @@ pub struct AppSettings {
     pub workspace_layouts: HashMap<String, serde_json::Value>,
     #[serde(default = "default_agent")]
     pub default_agent: String,
+    /// 0.46.13 (Rosson): the server's default model per harness, keyed by
+    /// the CLI's name (`claude`, `codex`, `grok`, `gemini`, `cursor-agent`,
+    /// `pi`), e.g. `{"claude": "opus"}`. K2 passes it as the CLI's model
+    /// flag on every fresh launch, under a workspace's own default
+    /// ([`crate::workspace::model_splice`]), so what K2 starts never depends
+    /// on the CLI's own saved default (a person's `/model` in a terminal
+    /// writes that). A missing key = leave the CLI to choose. Owner or Admin
+    /// to change (`settings_routes::REMOTE_ACCESS_KEYS`); [`update`] refuses
+    /// an unknown harness or a model id that isn't one token, and drops a
+    /// key set to "". Wire name `defaultModels`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub default_models: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub timer: TimerSettings,
     /// Always treated as on by product code; default true for new installs.
@@ -1291,6 +1303,7 @@ impl Default for AppSettings {
             right_panel_tabs: default_right_panel_tabs(),
             workspace_layouts: HashMap::new(),
             default_agent: "claude".to_string(),
+            default_models: std::collections::BTreeMap::new(),
             timer: TimerSettings::default(),
             agentic_systems_enabled: true,
             keep_daemon_on_quit: true,
@@ -1860,6 +1873,10 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
         let stored = if raw.trim().is_empty() { String::new() } else { crate::connect_db::normalize(raw)? };
         *v = serde_json::Value::String(stored);
     }
+    // 0.46.13: the server's default model per harness.
+    if let Some(v) = partial.get_mut(DEFAULT_MODELS_KEY) {
+        validate_default_models(v)?;
+    }
     // 0.46.11: a person who sets the permission-cards switch has chosen;
     // the one-time default pass never touches it again.
     if partial.get("permissionCards").is_some() {
@@ -1911,8 +1928,68 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
         }
     }
 
+    let mut merged = merged;
+    merged.default_models.retain(|_, m| !m.trim().is_empty());
     save(&merged)?;
     Ok(merged)
+}
+
+/// Wire name of [`AppSettings::default_models`].
+pub const DEFAULT_MODELS_KEY: &str = "defaultModels";
+
+/// The harnesses a server default model can be set for: the CLIs K2 knows
+/// a model flag for ([`crate::workspace::model_splice`]).
+pub const DEFAULT_MODEL_HARNESSES: &[&str] = &["claude", "codex", "grok", "gemini", "cursor-agent", "pi"];
+
+/// A model id K2 will put on a command line or type after `/model`: one
+/// token of letters, digits and `. _ - : / @ [ ]` (`opus`,
+/// `claude-opus-5-5`, `sonnet[1m]`, `gpt-5.3-codex`), at most 128
+/// characters, never starting with `-`.
+pub fn valid_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && !id.starts_with('-')
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || "._-:/@[]".contains(c))
+}
+
+/// Check (and trim) a `defaultModels` write: an object of known harness →
+/// model id, where "" (or null) clears that harness.
+fn validate_default_models(v: &mut serde_json::Value) -> Result<(), String> {
+    let Some(obj) = v.as_object_mut() else {
+        return Err(format!("{DEFAULT_MODELS_KEY} must be an object of harness → model id (got {v})"));
+    };
+    for (harness, model) in obj.iter_mut() {
+        if !DEFAULT_MODEL_HARNESSES.contains(&harness.as_str()) {
+            return Err(format!(
+                "{DEFAULT_MODELS_KEY}: unknown harness {harness:?} (one of {})",
+                DEFAULT_MODEL_HARNESSES.join("|")
+            ));
+        }
+        let id = match model {
+            serde_json::Value::Null => String::new(),
+            serde_json::Value::String(s) => s.trim().to_string(),
+            other => return Err(format!("{DEFAULT_MODELS_KEY}.{harness} must be a model id (got {other})")),
+        };
+        if !id.is_empty() && !valid_model_id(&id) {
+            return Err(format!("{DEFAULT_MODELS_KEY}.{harness}: {id:?} is not a model id"));
+        }
+        *model = serde_json::Value::String(id);
+    }
+    Ok(())
+}
+
+/// The `defaultModels` key for a CLI binary name, when it has one
+/// (Cursor's `agent` binary is `cursor-agent`).
+pub fn default_model_harness(bin: &str) -> Option<&'static str> {
+    let bin = if bin == "agent" { "cursor-agent" } else { bin };
+    DEFAULT_MODEL_HARNESSES.iter().copied().find(|h| *h == bin)
+}
+
+/// The server's default model for the CLI `command` runs (its first token,
+/// path and `.exe` stripped), or `None`.
+pub fn server_default_model(command: &str) -> Option<String> {
+    let harness = default_model_harness(crate::workspace::model_splice::binary_token(command))?;
+    load().default_models.get(harness).map(|m| m.trim().to_string()).filter(|m| !m.is_empty())
 }
 
 /// Restore defaults: write `AppSettings::default()` over the on-disk
@@ -3137,5 +3214,41 @@ mod tests {
         let s = update(json!({"videoRoomsPreview": false})).expect("the write is kept");
         assert!(!s.video_rooms_preview);
         assert!(!load().video_rooms_preview, "the owner's false survives a reload");
+    }
+
+    /// 0.46.13: the server's default model per harness. Absent (and not
+    /// written) by default; a write is kept trimmed, "" clears one harness,
+    /// and an unknown harness or a non-token id is refused with nothing kept.
+    #[test]
+    fn default_models_are_kept_cleared_and_checked() {
+        use serde_json::json;
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let wire = serde_json::to_value(AppSettings::default()).unwrap();
+        assert!(wire.get(DEFAULT_MODELS_KEY).is_none(), "never written while empty: {wire}");
+        assert_eq!(server_default_model("claude --dangerously-skip-permissions"), None);
+
+        let s = update(json!({"defaultModels": {"claude": " opus ", "codex": "gpt-5.3-codex"}})).expect("kept");
+        assert_eq!(s.default_models.get("claude").map(String::as_str), Some("opus"));
+        assert_eq!(server_default_model("/usr/local/bin/claude --dangerously-skip-permissions").as_deref(), Some("opus"));
+        assert_eq!(server_default_model("codex --yolo").as_deref(), Some("gpt-5.3-codex"));
+        assert_eq!(server_default_model("grok"), None, "a harness with no default");
+        assert_eq!(server_default_model("bash"), None, "not a harness");
+
+        let s = update(json!({"defaultModels": {"claude": ""}})).expect("clears one");
+        assert!(!s.default_models.contains_key("claude"), "{:?}", s.default_models);
+        assert_eq!(s.default_models.get("codex").map(String::as_str), Some("gpt-5.3-codex"), "the other stays");
+        assert_eq!(server_default_model("claude"), None);
+
+        let e = update(json!({"defaultModels": {"vim": "x"}})).expect_err("unknown harness");
+        assert!(e.contains("unknown harness"), "{e}");
+        let e = update(json!({"defaultModels": {"claude": "opus; rm -rf /"}})).expect_err("not one token");
+        assert!(e.contains("not a model id"), "{e}");
+        let e = update(json!({"defaultModels": {"claude": "--settings"}})).expect_err("a flag is not a model");
+        assert!(e.contains("not a model id"), "{e}");
+        let e = update(json!({"defaultModels": "opus"})).expect_err("not an object");
+        assert!(e.contains("must be an object"), "{e}");
+        assert_eq!(load().default_models.get("codex").map(String::as_str), Some("gpt-5.3-codex"), "refusals keep the old value");
+        assert!(valid_model_id("sonnet[1m]") && valid_model_id("claude-opus-5-5") && !valid_model_id("a b"));
     }
 }

@@ -1763,6 +1763,22 @@ pub fn send_message_to_session_with_command(
     })
 }
 
+/// Type one of the CLI's own commands (`/model opus`) into a LIVE session
+/// and submit it, unframed (a `[from …]` stamp would make it a message, not
+/// a command). The same locked, ESC-sanitized [`inject_and_submit`] the
+/// composer's `/compact` and `/goal` ride. Never spawns. Used by
+/// `/cli/sessions/model` (0.46.13).
+/// `Err` is the refusal code (`pty_died`, `pty_stalled`, `hitl_gate_open`).
+pub fn inject_cli_command(session_id: &SessionId, command: &str) -> Result<(), &'static str> {
+    let live = session_lookup::lookup_by_session_id(session_id).ok_or(MsgReason::PtyDied.code())?;
+    match inject_and_submit(&live, command) {
+        InjectOutcome::Delivered => Ok(()),
+        InjectOutcome::PtyDied => Err(MsgReason::PtyDied.code()),
+        InjectOutcome::Stalled => Err(MsgReason::PtyStalled.code()),
+        InjectOutcome::GateHold => Err(MsgReason::HitlGateOpen.code()),
+    }
+}
+
 /// Persist compose-bar send history. Called after a successful
 /// `POST /cli/terminal/send-message` (and overlay `thread/post` via=compose
 /// records the same table). Tickets go through

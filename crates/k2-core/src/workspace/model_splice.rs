@@ -29,6 +29,9 @@ pub enum ModelApplyResult {
 pub enum ModelSource {
     Api,
     Workspace,
+    /// The server's default model for the harness (Settings → Providers /
+    /// Models, `defaultModels`, 0.46.13).
+    Server,
     #[serde(rename = "none")]
     None,
     IgnoredUnsupported,
@@ -300,8 +303,28 @@ pub fn decide_and_apply(
     resume: bool,
     force_on_resume: bool,
 ) -> ModelDecision {
+    decide_with_server(command, args, api_model, workspace_default, None, resume, force_on_resume)
+}
+
+/// [`decide_and_apply`] with the server's default model for this harness
+/// (`defaultModels`, 0.46.13) as the last choice on a FRESH launch:
+/// API `model` > workspace default > server default > the CLI's own saved
+/// default. Like the workspace default it never replaces a model the
+/// preset pins, and it never touches a resume: a resumed conversation keeps
+/// the model it was on (Claude Code 2.1.144+), so a `/model` switch made in
+/// that session survives a reopen.
+pub fn decide_with_server(
+    command: &str,
+    args: &[String],
+    api_model: Option<&str>,
+    workspace_default: Option<&str>,
+    server_default: Option<&str>,
+    resume: bool,
+    force_on_resume: bool,
+) -> ModelDecision {
     let api = nonempty(api_model);
     let ws = nonempty(workspace_default);
+    let server = nonempty(server_default);
     let (chosen, mode, source) = if resume {
         if let Some(id) = api {
             (Some(id), ModelApplyMode::ApiOverride, ModelSource::Api)
@@ -326,6 +349,8 @@ pub fn decide_and_apply(
             ModelApplyMode::WorkspaceDefault,
             ModelSource::Workspace,
         )
+    } else if let Some(id) = server {
+        (Some(id), ModelApplyMode::WorkspaceDefault, ModelSource::Server)
     } else {
         return ModelDecision::unchanged(args, ModelSource::None, ModelApplyResult::None);
     };
@@ -383,8 +408,12 @@ pub fn load_workspace_model(conn: &Connection, project_path_or_id: &str) -> (Opt
     }
 }
 
-/// K2-direct spawn helper: load workspace default and splice (no API model).
-/// No-op when neither default_model nor (resume+checkbox) apply — argv unchanged.
+/// K2-direct spawn helper: load the workspace default (and, on a fresh
+/// launch, the server's default for this harness) and splice (no API
+/// model). No-op when none applies — argv unchanged. Every PTY spawn door
+/// runs this, so a launch whose argv names no model still gets the
+/// server's: K2 launches never fall back to the CLI's own saved default
+/// while the server has one.
 pub fn splice_model_for_workspace_spawn(
     ws_path: &str,
     command: &str,
@@ -399,10 +428,11 @@ pub fn splice_model_for_workspace_spawn(
         let conn = db.lock();
         load_workspace_model(&conn, ws_path)
     };
-    if nonempty(ws_default.as_deref()).is_none() {
+    let server = if resume { None } else { crate::app_settings::server_default_model(command) };
+    if nonempty(ws_default.as_deref()).is_none() && server.is_none() {
         return;
     }
-    let decision = decide_and_apply(command, args, None, ws_default.as_deref(), resume, force);
+    let decision = decide_with_server(command, args, None, ws_default.as_deref(), server.as_deref(), resume, force);
     *args = decision.args;
 }
 
@@ -923,5 +953,64 @@ mod tests {
             let (m, _) = load_workspace_model(&conn, &path);
             assert_eq!(m, None, "whitespace default_model must load as None");
         }
+    }
+
+    /// 0.46.13: the server default is the last choice on a fresh launch, is
+    /// beaten by a workspace default and an API model, never replaces a
+    /// model the preset pins, and never touches a resume (even with the
+    /// workspace's force-on-resume box ticked and no workspace model).
+    #[test]
+    fn server_default_is_the_last_choice_on_a_fresh_launch_only() {
+        let base = s(&["--dangerously-skip-permissions"]);
+        let d = decide_with_server("claude", &base, None, None, Some("opus"), false, false);
+        assert!(has_pair(&d.args, "--model", "opus"), "{:?}", d.args);
+        assert_eq!((d.source, d.applied.as_deref()), (ModelSource::Server, Some("opus")));
+
+        let d = decide_with_server("codex", &s(&["--yolo"]), None, None, Some("gpt-5.3-codex"), false, false);
+        assert!(has_pair(&d.args, "-m", "gpt-5.3-codex"), "{:?}", d.args);
+
+        let d = decide_with_server("claude", &base, None, Some("sonnet"), Some("opus"), false, false);
+        assert!(has_pair(&d.args, "--model", "sonnet") && !has_pair(&d.args, "--model", "opus"), "{:?}", d.args);
+        assert_eq!(d.source, ModelSource::Workspace);
+
+        let d = decide_with_server("claude", &base, Some("haiku"), None, Some("opus"), false, false);
+        assert!(has_pair(&d.args, "--model", "haiku"), "{:?}", d.args);
+        assert_eq!(d.source, ModelSource::Api);
+
+        let pinned = s(&["--model", "haiku"]);
+        let d = decide_with_server("claude", &pinned, None, None, Some("opus"), false, false);
+        assert_eq!(d.args, pinned, "a preset's own model stays");
+
+        let resume = s(&["--resume", "abc"]);
+        let d = decide_with_server("claude", &resume, None, None, Some("opus"), true, true);
+        assert_eq!(d.args, resume, "a resume keeps the conversation's own model");
+
+        let d = decide_with_server("claude", &base, None, None, Some("  "), false, false);
+        assert_eq!(d.args, base, "a blank server default is no default");
+        assert_eq!(decide_and_apply("claude", &base, None, None, false, false).args, base, "the old door has no server default");
+    }
+
+    /// The spawn helper every PTY door runs reads the server default from
+    /// settings (a temp HOME): a fresh `claude` launch gets `--model`, a
+    /// resume and a harness without a default stay byte-identical.
+    #[test]
+    fn spawn_splice_reads_the_server_default() {
+        let _home = crate::test_env::TempHome::new();
+        let _db = crate::db::init_for_tests();
+        crate::app_settings::update(serde_json::json!({"defaultModels": {"claude": "opus"}})).expect("set default");
+        let ws = format!("/nonexistent/k2-ms-{}", uuid::Uuid::new_v4());
+
+        let mut args = s(&["--dangerously-skip-permissions", "--session-id", "x"]);
+        splice_model_for_workspace_spawn(&ws, "claude", &mut args, false);
+        assert!(has_pair(&args, "--model", "opus"), "{args:?}");
+
+        let mut resume = s(&["--dangerously-skip-permissions", "--resume", "x"]);
+        let before = resume.clone();
+        splice_model_for_workspace_spawn(&ws, "claude", &mut resume, true);
+        assert_eq!(resume, before);
+
+        let mut codex = s(&["--yolo"]);
+        splice_model_for_workspace_spawn(&ws, "codex", &mut codex, false);
+        assert_eq!(codex, s(&["--yolo"]));
     }
 }

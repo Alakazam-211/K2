@@ -82,11 +82,14 @@ afterEach(() => {
 })
 
 describe('Settings → Language Models → Providers / Models page', () => {
-  it('is one page: a header, then Starting agents, Launch presets and Agent tools card groups', async () => {
+  it('is one page: a header, then Starting agents and Launch presets, then Agent tools beside them, in that reading order', async () => {
     render(<AgentsSection />)
     expect(screen.getByRole('heading', { level: 2, name: 'Providers / Models' })).toBeTruthy()
     const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
     expect(headings).toEqual(['Starting agents', 'Launch presets', 'Agent tools on this computer'])
+    // The left half holds the first two; the tools are the right half.
+    expect(within(screen.getByTestId('agents-left')).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Starting agents', 'Launch presets'])
+    expect(within(screen.getByTestId('agents-right')).getByRole('heading', { level: 3 }).textContent).toBe('Agent tools on this computer')
     // The header bridges the nav name to what the page holds.
     expect(screen.getByRole('heading', { level: 2 }).nextElementSibling?.textContent).toContain('the providers behind them')
     for (const id of ['agents.default-agent', 'agents.show-launch-bar', 'agents.agent-presets', 'agents.add-preset', 'agents.reset-built-ins']) {

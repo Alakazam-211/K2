@@ -33,6 +33,7 @@ import type { SettingEntry } from '../searchManifest'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { Button, Callout, Input, OverflowMenu, Surface, Tag, Toggle } from '@/components/ui'
+import { HALVES_MIN_WIDTH, ScrollEdge, halves, useCssWidth } from '../controls/halves'
 
 /** "Opens with ⇧⌘T …" with the chord this platform really uses. */
 export function defaultAgentLaunchCopy(os?: DesktopOs): string {
@@ -151,26 +152,45 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
   ...cliManifest(),
 ]
 
-// The page follows Settings → Workspaces / Agents: a title with one line
-// under it, then card groups of rows at one content width.
-const CONTENT_WIDTH = 'max-w-[52rem]'
+// The page follows Settings → Projects: a fixed header (a title with one
+// line under it), then two halves side by side, each scrolling on its own
+// (controls/halves): Starting agents and Launch presets on the left, the
+// agent tools on the right. A narrow pane stacks them, the tools below.
 
 export function AgentsSection(): React.JSX.Element {
   const isRemote = useConnectHostStore((s) => s.activeHost !== 'local')
   const where = isRemote ? 'this server' : 'this computer'
+  const [bodyRef, bodyWidth] = useCssWidth(HALVES_MIN_WIDTH)
+  const stacked = bodyWidth < HALVES_MIN_WIDTH
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-testid="agents-page">
-      <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
-        <header className="min-w-0">
+    <div className="flex flex-col h-full min-h-0" data-testid="agents-page">
+      <header className="flex-shrink-0 px-6 pt-6 pb-4 border-b border-[var(--color-border)]">
+        <div className="min-w-0 max-w-[52rem]">
           <h2 className="type-title text-[var(--color-text-primary)]">Providers / Models</h2>
           <p className={SETTING_ROW_HINT}>
             The AI agents K2 starts and the providers behind them: which agent opens by default, the
             presets on the launch bar, and the agent tools installed on {where}.
           </p>
-        </header>
-        <DefaultAgentGroup />
-        <PresetsGroup />
-        <AgentToolsGroup where={where} />
+        </div>
+      </header>
+      <div ref={bodyRef} data-testid="agents-halves" data-layout={stacked ? 'stacked' : 'split'} className={halves.body(stacked)}>
+        {stacked && <ScrollEdge at="top" />}
+        <div data-testid="agents-left" className={halves.left(stacked)}>
+          {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+          <div className="pt-5 space-y-6">
+            <DefaultAgentGroup />
+            <PresetsGroup />
+          </div>
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+        </div>
+        <div data-testid="agents-right" className={halves.right(stacked)}>
+          {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+          <div className={halves.rightTop(stacked)}>
+            <AgentToolsGroup where={where} />
+          </div>
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+        </div>
+        {stacked && <ScrollEdge at="bottom" />}
       </div>
     </div>
   )

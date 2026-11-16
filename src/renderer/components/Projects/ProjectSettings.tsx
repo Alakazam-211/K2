@@ -151,9 +151,9 @@ import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
 import { clientToCssPx } from '@/lib/app-zoom'
 import { SPLIT_PAGE_MIN_PX } from '@/components/Settings/controls/split-page'
+import { HALVES_MIN_WIDTH, ScrollEdge, halves, useCssWidth } from '@/components/Settings/controls/halves'
 
-/** Below this width (px) of the detail body the two halves stack. */
-export const HALVES_MIN_WIDTH = 720
+export { HALVES_MIN_WIDTH }
 
 /** Below this page width (CSS px) the project list goes on top of the
  *  selected project instead of beside it: the list's 18rem plus 20rem for
@@ -245,74 +245,6 @@ function BusyNote({ text }: { text: string }): React.JSX.Element {
       <Spinner />
       {text}
     </span>
-  )
-}
-
-/** Width of an element, live (ResizeObserver). `fallback` until the
- *  first measurement, or forever where ResizeObserver doesn't exist. */
-function useElementWidth(fallback: number): [React.RefObject<HTMLDivElement | null>, number] {
-  const ref = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(fallback)
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const measure = (): void => {
-      // The rect is on-screen px; HALVES_MIN_WIDTH is CSS px (lib/app-zoom).
-      const w = clientToCssPx(el.getBoundingClientRect().width)
-      if (w > 0) setWidth(w)
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-  return [ref, width]
-}
-
-/** A fade at the top or bottom edge of a scrolling half, shown while there
- *  is more to scroll that way, so a row cut by the edge reads as "more
- *  below" instead of clipped. A zero-height sticky child of the scroller:
- *  place the top one first and the bottom one last. `inset` stretches it
- *  over the scroller's side padding. The top one sits under the sticky
- *  dashboard bar (z-[5] < z-10); the bottom one over it. */
-function ScrollEdge({ at, inset = '' }: { at: 'top' | 'bottom'; inset?: string }): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
-  const [more, setMore] = useState(false)
-  useLayoutEffect(() => {
-    const host = ref.current?.parentElement
-    if (!host) return
-    const update = (): void => {
-      const room = host.scrollHeight - host.clientHeight
-      setMore(room > 1 && (at === 'top' ? host.scrollTop > 1 : host.scrollTop < room - 1))
-    }
-    update()
-    host.addEventListener('scroll', update, { passive: true })
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
-    ro?.observe(host)
-    for (const child of Array.from(host.children)) ro?.observe(child)
-    return () => {
-      host.removeEventListener('scroll', update)
-      ro?.disconnect()
-    }
-  }, [at])
-  return (
-    <div
-      ref={ref}
-      aria-hidden="true"
-      data-scroll-edge={at}
-      data-more={more || undefined}
-      className={cx('sticky h-0 pointer-events-none', at === 'top' ? 'top-0 z-[5]' : 'bottom-0 z-20', inset)}
-    >
-      <div
-        className={cx(
-          'absolute inset-x-0 h-6 transition-opacity duration-150',
-          at === 'top'
-            ? 'top-0 bg-gradient-to-b from-[var(--color-bg)] to-transparent'
-            : 'bottom-0 bg-gradient-to-t from-[var(--color-bg)] to-transparent',
-          more ? 'opacity-100' : 'opacity-0',
-        )}
-      />
-    </div>
   )
 }
 
@@ -1784,7 +1716,7 @@ export function ProjectSettingsDetail({
   // stable hashed pick (what the nav renders without an override).
   const effectiveColor = detail.color ?? groupAvatarColor(detail.id)
 
-  const [bodyRef, bodyWidth] = useElementWidth(HALVES_MIN_WIDTH)
+  const [bodyRef, bodyWidth] = useCssWidth(HALVES_MIN_WIDTH)
   const stacked = bodyWidth < HALVES_MIN_WIDTH
   const leftRef = useRef<HTMLDivElement>(null)
   const generalRef = useRef<HTMLDivElement>(null)
@@ -2073,18 +2005,17 @@ export function ProjectSettingsDetail({
           data-testid="project-settings-halves"
           data-layout={stacked ? 'stacked' : 'split'}
           className={cx(
-            'flex-1 min-h-0',
+            halves.body(stacked),
             // In the sheet the body is the page's own ground, as in Settings,
             // so its cards and the sticky dashboard bar read the same.
             inSheet && 'bg-[var(--color-bg)]',
-            stacked ? 'overflow-y-auto' : 'grid grid-cols-2 divide-x divide-[var(--color-border)]',
           )}
         >
           {stacked && <ScrollEdge at="top" />}
           <div
             ref={leftRef}
             data-testid="project-settings-left"
-            className={cx('px-6 pb-8 [scrollbar-gutter:stable]', stacked ? '' : 'overflow-y-auto min-h-0')}
+            className={halves.left(stacked)}
           >
             {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
             <div ref={generalRef} className="pt-5 pb-3">
@@ -2102,13 +2033,10 @@ export function ProjectSettingsDetail({
           </div>
           <div
             data-testid="project-settings-right"
-            className={cx(
-              'px-6 pb-8 [scrollbar-gutter:stable]',
-              stacked ? 'pt-5 border-t border-[var(--color-border)]' : 'overflow-y-auto min-h-0',
-            )}
+            className={halves.right(stacked)}
           >
             {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
-            <div className={stacked ? '' : 'pt-5'}>
+            <div className={halves.rightTop(stacked)}>
               <AgentsSection detail={detail} caps={caps} edit={edit} />
             </div>
             {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
@@ -2417,7 +2345,7 @@ export function useProjectSettingsData(selectedId: string | null): {
 
 export default function ProjectSettings(): React.JSX.Element {
   // The page's width in CSS px (any app zoom): narrow, the list goes on top.
-  const [pageRef, pageWidth] = useElementWidth(PROJECTS_SPLIT_MIN_PX)
+  const [pageRef, pageWidth] = useCssWidth(PROJECTS_SPLIT_MIN_PX)
   const groups = useProjectGroupsStore((s) => s.groups)
   const groupsError = useProjectGroupsStore((s) => s.groupsError)
 

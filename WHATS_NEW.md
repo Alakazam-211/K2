@@ -3,7 +3,35 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.13 — Chat with people on Home
+## 0.46.13 — Chat and call people on Home, and live editors
+
+### Home
+- **Chat with people right from Home.** Add people and channels to a Home group beside your agents (Add to Home has Agents, People and Channels tabs). Direct messages and channels show who's typing, reactions, replies and unread counts. A channel can be open or invite-only. Home chat is a switch for the owner (`k2 settings set homeChat true`) and runs on Linux servers with Sew.
+- **Call someone from a direct message.** A DM call rings in every K2 window and on your phone; the caller can cancel while it rings, and a missed or answered-elsewhere call clears the ring everywhere.
+- **Home groups have icons, pins and a swipe.** Each group has a name and an icon, up to 9 pins, and an option to put the most recent chats at the top; swipe between groups.
+
+### Editors (preview)
+- **New markdown and code editors.** Turn them on in Settings → Multiplayer → New editors ("New markdown editor", "New code editor"). Markdown has Write, Read and Source: in Write you edit the formatted text and the marks show only on the line you're on. Both save on their own (and with Cmd+S), keep a draft if K2 restarts, and merge a save made outside K2 instead of overwriting it.
+- **Live files open in the new editors.** You see who's here, their names in the margin, what they're holding, and their changes with Undo for your own, and you can Follow someone or Say something on a line or heading.
+
+### Live views (preview)
+- **3D scenes and video timelines open as live views** in a tab: a 3D picture on a dark stage with views by camera, object or turntable, boxes and holds on the picture; a timeline with lanes, a ruler, a monitor and playback controls.
+
+### Approvals and agents
+- **Owners and Admins approve held App requests,** each with their own sign-in password. The prompt says whose password it wants: "Your sign-in password for <server> (login <name>)".
+- **Agents can show by name in Activity Monitor** instead of the Claude version, if the owner turns it on (`k2 settings set agentProcessNames true`). Claude Code agents only.
+
+### Under the hood
+- **Multiplayer engine 0.20.0** (native engine still off). A folder holding documents from a newer K2 still opens; only those documents are refused, with a note to update K2.
+
+### Fixes
+- The Thread list no longer freezes when you scroll up far and back down.
+- A remote server no longer gives a request the answer meant for the one before it.
+- k2-node updates no longer cut jobs short or update every node at once.
+- First launch opens at a comfortable window size.
+- A deleted message stays a quiet "Message deleted" line.
+- Settings → Email Notifications no longer crashes on an unexpected answer.
+- An image dropped on a message box that can't take it now says so, instead of vanishing.
 
 ### Remote desktop
 - **Turning on Remote desktop on a Mac is one step.** The switch in Settings → Remote desktop (or `k2 desktop enable`) now has K2 Screen ask macOS for Screen Recording and Accessibility right away, so K2 Screen shows up in both System Settings lists. If macOS asked before, K2 opens System Settings at the right pane. When someone at the Mac allows it, K2 notices within seconds and restarts K2 Screen so the permission takes effect. The Settings row shows each step, with a button to its System Settings pane.

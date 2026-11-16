@@ -37382,6 +37382,8 @@ k2 vault send — hand a vault secret to another agent by name (you never see th
   k2 vault incoming decline <id>
   k2 vault accept-from add|remove <ws:agent|agent|agent::host|team:id> --workspace <ws>
   k2 vault send-allow add|remove NAME --to <agent>::<host> --workspace <ws>   (add asks for the vault confirm)
+  k2 vault send NAME --to <agent> --workspace <ws> | --scope ws:<ws>|server
+                                    which secret of that name (an agent sends its own workspace's)
   printf '%s' "$KEY" | k2 vault send NAME --to <agent>::<host> --stdin [--kind api_key] [--for host]
                                     a value you type in, to another server only
 
@@ -37485,13 +37487,13 @@ _vault_handoff() {
     local sub="$1"; shift
     if _wants_help "$@"; then _vault_handoff_usage; return 0; fi
     local to="" as_n="" note="" ttl="" reply="" scope="" workspace="" via="" kind="" hosts="" hdelivery="" as_json=0 stdin=0 replace=0 always=0
-    local pos=()
+    local pos=() seen=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --json) as_json=1; shift ;;
-            --stdin) stdin=1; shift ;;
-            --replace) replace=1; shift ;;
-            --always) always=1; shift ;;
+            --json) as_json=1; seen+=("$1"); shift ;;
+            --stdin) stdin=1; seen+=("$1"); shift ;;
+            --replace) replace=1; seen+=("$1"); shift ;;
+            --always) always=1; seen+=("$1"); shift ;;
             --to|--as|--note|--ttl|--reply|--scope|--workspace|--via|--kind|--for|--delivery)
                 [ $# -ge 2 ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
@@ -37499,6 +37501,7 @@ _vault_handoff() {
                     --scope) scope="$2" ;; --workspace) workspace="$2" ;; --via) via="$2" ;; --kind) kind="$2" ;; --for) hosts="$2" ;;
                     --delivery) hdelivery="$2" ;;
                 esac
+                seen+=("$1")
                 shift 2 ;;
             --value|--value=*|--secret-value*)
                 echo "value_on_argv: values are read from stdin, never an argument" >&2; exit 2 ;;
@@ -37506,6 +37509,53 @@ _vault_handoff() {
             *) pos+=("$1"); shift ;;
         esac
     done
+    # One parser, many verbs: each verb takes only the flags it uses
+    # (K2, 2026-11-16). Any other is refused here, before a request goes
+    # out, never parsed and dropped.
+    local takes="" verb_words="$sub"
+    case "$sub" in
+        send) takes="--to --as --note --ttl --reply --scope --workspace --via --kind --for --delivery --stdin --json" ;;
+        incoming)
+            case "${pos[0]:-}" in
+                accept) takes="--as --replace --always --json"; verb_words="incoming accept" ;;
+                decline) takes="--json"; verb_words="incoming decline" ;;
+                *) takes="--workspace --json" ;;
+            esac ;;
+        sent|asks|accept-from) takes="--workspace --json" ;;
+        ask) takes="--note --workspace --json" ;;
+        unsend) takes="--json" ;;
+        send-allow)
+            case "${pos[0]:-list}" in
+                add|remove) takes="--to --workspace --json"; verb_words="send-allow ${pos[0]}" ;;
+                *) takes="--workspace --json" ;;
+            esac ;;
+    esac
+    local f
+    for f in "${seen[@]+"${seen[@]}"}"; do
+        case " $takes " in
+            *" $f "*) ;;
+            *)
+                local shown="${takes/ --via/}"
+                echo "usage: k2 vault $verb_words doesn't take $f (it takes: ${shown// /, }; k2 vault send --help)" >&2; exit 2 ;;
+        esac
+    done
+    if [ "$sub" = "send" ]; then
+        # A named send keeps the secret's own sites; --for is for a value a
+        # person types in (--stdin), which has no secret to pick by scope.
+        if [ "$stdin" = "0" ] && [ -n "$hosts" ]; then
+            echo "usage: --for goes with --stdin (a named send keeps the secret's own sites; k2 vault hosts NAME to change them)" >&2; exit 2
+        fi
+        if [ "$stdin" = "1" ]; then
+            [ -z "$scope" ] || { echo "usage: --scope picks a secret in the vault; --stdin sends a value you type in" >&2; exit 2; }
+            [ -z "$workspace" ] || { echo "usage: --workspace picks a secret in the vault; --stdin sends a value you type in" >&2; exit 2; }
+        fi
+        # In a K2 terminal the daemon sends the agent's own workspace's
+        # secret, whatever --scope or --workspace says: refuse, don't drop.
+        if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+            [ -z "$scope" ] || { echo "usage: --scope is for people; an agent sends its own workspace's secret (drop --scope)" >&2; exit 2; }
+            [ -z "$workspace" ] || { echo "usage: --workspace is for people; an agent sends its own workspace's secret (drop --workspace)" >&2; exit 2; }
+        fi
+    fi
     local q=""
     [ -n "$workspace" ] && q="workspace=$(urlencode "$workspace")"
     case "$sub" in
@@ -37516,7 +37566,7 @@ _vault_handoff() {
             local body
             body="$(python3 -c '
 import json, re, sys
-name, to, as_n, note, ttl, reply, scope, via, kind, hosts, delivery = sys.argv[1:12]
+name, to, as_n, note, ttl, reply, scope, via, kind, hosts, delivery, workspace = sys.argv[1:13]
 o = {"name": name, "to": to}
 if as_n: o["as"] = as_n
 if note: o["note"] = note
@@ -37530,11 +37580,16 @@ if scope.startswith("ws:") or scope.startswith("workspace:"):
     o["scope"] = "workspace"; o["workspace"] = scope.split(":", 1)[1]
 elif scope:
     o["scope"] = scope
+# --workspace WS (a person): the secret of that workspace, the same as --scope ws:WS.
+if workspace:
+    if o.get("workspace", workspace) != workspace or (scope and o.get("scope") != "workspace"):
+        print("usage: --workspace %s and --scope %s name different secrets; give one" % (workspace, scope), file=sys.stderr); sys.exit(2)
+    o["workspace"] = workspace
 if via: o["via"] = via
 if kind: o["kind"] = kind
 if hosts: o["hosts"] = [h.strip() for h in hosts.split(",") if h.strip()]
 if delivery: o["delivery"] = delivery
-print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$via" "$kind" "$hosts" "$hdelivery")" || exit 2
+print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$via" "$kind" "$hosts" "$hdelivery" "$workspace")" || exit 2
             if [ "$stdin" = "1" ]; then
                 # A value a person types in: the person channel only (H15).
                 _vault_person_guard

@@ -10,15 +10,36 @@
 #   k2 fed pair-request --pubkey <spki.pem> ...   pre-0.45.2 pairing (known peers only)
 #   k2 fed confirm <fingerprint> <sas-code>
 #
-# send + confirm are OWNER-gated (they need ~/.k2/daemon.token). pubkey is
-# pure-CLI (reads the on-box tunnel key) so it works even when federation is
-# dark — you need your key to bootstrap the very first pairing.
+# Pairing, confirm and outbox are the OWNER's (they need ~/.k2/daemon.token).
+# pubkey is pure-CLI (reads the on-box tunnel key) so it works even when
+# federation is dark — you need your key to bootstrap the very first pairing.
+#
+# Inside an agent session (a session passport is set) the owner token file
+# is never read: pairing, confirm and outbox are refused, and send goes
+# with the session's own passport (the daemon's send route takes one and
+# binds the message to that session's workspace).
+_fed_owner_only() {
+    echo "Error: k2 fed $1 is the server owner's: $2." >&2
+    echo "This shell is an agent session (it carries a session passport), so k2 doesn't use the owner token here." >&2
+    echo "Ask the owner to run it from their own terminal." >&2
+    exit 3
+}
 cmd_fed() {
+    local sub="${1:-}"; shift || true
+    local passport="${SCOPED_TOKEN:-}"
+    if [ -n "$passport" ]; then
+        case "$sub" in
+            pair-start|pair-join|pair-finish|pair-verify) _fed_owner_only "$sub" "it pairs this server with another one" ;;
+            confirm) _fed_owner_only "$sub" "it trusts another server" ;;
+            outbox) _fed_owner_only "$sub" "it lists every workspace's queued messages" ;;
+        esac
+    fi
     local owner_token=""
     local _tok_file="$K2_HOME/daemon.token"
-    [ -f "$_tok_file" ] && owner_token=$(cat "$_tok_file" 2>/dev/null | tr -d '[:space:]')
+    if [ -z "$passport" ]; then
+        [ -f "$_tok_file" ] && owner_token=$(cat "$_tok_file" 2>/dev/null | tr -d '[:space:]')
+    fi
 
-    local sub="${1:-}"; shift || true
     case "$sub" in
         send)
             local to="${1:-}"; local text="${2:-}"
@@ -26,7 +47,9 @@ cmd_fed() {
                 echo "usage: k2 fed send <peer>::<workspace>::<agent> \"message\"" >&2
                 exit 2
             fi
-            if [ -z "$owner_token" ]; then
+            # A session sends as itself; a person's terminal as the owner.
+            local send_token="${passport:-$owner_token}"
+            if [ -z "$send_token" ]; then
                 echo "k2 fed send: no owner token (need $_tok_file)" >&2
                 exit 1
             fi
@@ -39,7 +62,7 @@ cmd_fed() {
             local body
             body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' "$to" "$text" "$PROJECT")
             local _K2_CFG=""
-            _k2_cfg_add url "${BASE_URL}/cli/federation/send?token=${owner_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/send?token=${send_token}"
             _k2_cfg_add data-raw "$body"
             _k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 60 \

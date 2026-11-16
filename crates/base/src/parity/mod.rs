@@ -23,6 +23,9 @@
 //!   ([`GridObservation`]) as well as the rendered bytes. The row and column actions are grid
 //!   rows; text and blob lists don't carry them (a text pack maps them N/A in its exhaustive
 //!   `match`).
+//! - The keyed tier (a pack whose roots are all lists or maps: a deck, a timeline): its
+//!   registry ([`Registry::for_pack`]) holds the kit's verbs on a doc's presence and records and the pack's
+//!   structured verbs, so `capabilities` lists them; its parity harness is still to come.
 //! - A blob pack with a structure index: [`Registry::for_blob_pack`] adds its verbs and node
 //!   claims, and [`kit_index_cases`] checks them on two versions of a file the pack gives.
 //! - [`positions`]: how each verb counts the positions it takes or prints, the

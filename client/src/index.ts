@@ -58,8 +58,12 @@ export { apply, validate, coalesce, compose, invert, utf8Len, byteToIndex, index
 export type { Hunk, HunkError } from "./hunk";
 export { ERR, FRAME_MARGIN, FRAME_MAX, WIRE_VERSION, canRetry } from "./wire";
 export type {
+  ByteSpan,
   CaretAt,
   ChangeEvent,
+  ChangeKind,
+  KeptPair,
+  LinePair,
   ClientFrame,
   CloseEvent,
   CloseReason,

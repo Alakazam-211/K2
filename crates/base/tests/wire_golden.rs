@@ -132,8 +132,31 @@ fn hunk(h: &Hunk) -> Value {
     ])
 }
 
+/// A half-open byte span: `{start, end}`.
+fn byte_span(b: &std::ops::Range<usize>) -> Value {
+    Value::obj([("start", Value::from(b.start)), ("end", Value::from(b.end))])
+}
+
+/// Lines `first..=last`: `{first, last}`.
+fn line_pair((first, last): (usize, usize)) -> Value {
+    Value::obj([("first", Value::from(first)), ("last", Value::from(last))])
+}
+
 fn change(e: &ChangeEvent, st: &Stable) -> Value {
-    Value::obj([
+    let mut v = change_fields(e, st);
+    // an outside save's change that kept both sides: where (omitted otherwise)
+    if !e.kept_pairs.is_empty() {
+        let pairs = e
+            .kept_pairs
+            .iter()
+            .map(|p| Value::obj([("live", line_pair(p.live)), ("file", line_pair(p.file))]));
+        v.push(("kept_pairs", Value::List(pairs.collect())));
+    }
+    Value::obj(v)
+}
+
+fn change_fields(e: &ChangeEvent, st: &Stable) -> Vec<(&'static str, Value)> {
+    vec![
         ("version", Value::from(e.version)),
         ("pid", Value::from(e.pid.as_str())),
         ("client", Value::from(st.client(e.client))),
@@ -153,7 +176,7 @@ fn change(e: &ChangeEvent, st: &Stable) -> Value {
                 .map_or(Value::Null, |t| Value::from(t.as_str())),
         ),
         ("verb", e.verb.as_deref().map_or(Value::Null, Value::from)),
-    ])
+    ]
 }
 
 /// `edit` when the participant may edit, else `read` when they may read, else `none`.
@@ -725,20 +748,30 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             version,
             actor: a,
             started_ms,
+            bytes,
             ..
-        } => Value::obj([
-            ("kind", Value::from("claim_started")),
-            ("who", who(w)),
-            ("claim", Value::from(st.claim(claim.get()))),
-            ("lines", lines(l)),
-            ("note", note.as_deref().map_or(Value::Null, Value::from)),
-            ("hold", Value::from(*hold)),
-            ("for_edit", Value::from(*for_edit)),
-            ("expires_ms", Value::from(*expires_ms)),
-            ("version", Value::from(*version)),
-            ("actor", actor(w, a)),
-            ("started_ms", Value::from(*started_ms)),
-        ]),
+        } => {
+            let mut v = vec![
+                ("kind", Value::from("claim_started")),
+                ("who", who(w)),
+                ("claim", Value::from(st.claim(claim.get()))),
+                ("lines", lines(l)),
+            ];
+            // the claim's span at `version` (omitted when it has none: a grid's line claim)
+            if let Some(b) = bytes {
+                v.push(("bytes", byte_span(b)));
+            }
+            v.extend([
+                ("note", note.as_deref().map_or(Value::Null, Value::from)),
+                ("hold", Value::from(*hold)),
+                ("for_edit", Value::from(*for_edit)),
+                ("expires_ms", Value::from(*expires_ms)),
+                ("version", Value::from(*version)),
+                ("actor", actor(w, a)),
+                ("started_ms", Value::from(*started_ms)),
+            ]);
+            Value::obj(v)
+        }
         RosterEvent::ClaimStartedElems {
             who: w,
             claim,
@@ -1543,6 +1576,67 @@ fn outside_saves_and_the_hosts_close_are_golden() {
             ])),
         );
     }
+}
+
+/// `change_events_kept.json`: an outside save that overlaps a live edit keeps both sides, and its
+/// change says where (`kept_pairs`: the live line, then the file's); a later save on another
+/// line (after the kit wrote the doc back) merges cleanly, and its change has no `kept_pairs`.
+/// The changes replay to the doc.
+#[test]
+fn an_outside_saves_kept_pairs_are_golden() {
+    let f = file_fx("kept");
+    let ada = f.join("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab");
+    let rx = f.s.subscribe(ada).unwrap();
+    let v0 = f.s.status().unwrap().version;
+    let text0 = f.text(ada);
+    assert_eq!(text0, DOC);
+    // Ada rewrites line 4 live; not written back
+    let two = DOC.find("two\n").unwrap();
+    f.s.edit_at_base(
+        ada,
+        ROOT,
+        v0,
+        vec![h(two, two + 4, "two (ada)\n")],
+        &EditOptions::new(),
+    )
+    .unwrap();
+    // an editor rewrites the same line in the file: both are kept
+    f.host.now.fetch_add(10_000, Ordering::SeqCst);
+    std::fs::write(&f.file, DOC.replace("two\n", "two (editor)\n")).unwrap();
+    f.s.file_changed().unwrap();
+    let kept = f.text(ada);
+    assert_eq!(kept, "# Notes\n\none\ntwo (ada)\ntwo (editor)\nthree\n");
+    // the kit writes the kept text back; then a save on another line: clean
+    f.save(ada, &kept.replace("one\n", "one (editor)\n"));
+    let final_text = f.text(ada);
+    assert_eq!(
+        final_text,
+        "# Notes\n\none (editor)\ntwo (ada)\ntwo (editor)\nthree\n"
+    );
+    let evs = drain(&rx);
+    assert_eq!(evs.len(), 3, "{evs:?}");
+    let pairs =
+        |e: &ChangeEvent| -> Vec<_> { e.kept_pairs.iter().map(|p| (p.live, p.file)).collect() };
+    assert_eq!(pairs(&evs[0]), []);
+    assert_eq!(pairs(&evs[1]), [((4, 4), (5, 5))]);
+    assert_eq!(pairs(&evs[2]), []);
+    let mut st = f.stable();
+    // the outside saves' participant: one fixed number
+    st.clients.insert(evs[1].client, 9);
+    golden(
+        &golden_dir().join("change_events_kept.json"),
+        &file(Value::obj([
+            ("root", Value::from(ROOT)),
+            ("text", Value::from(text0.as_str())),
+            ("version", Value::from(v0)),
+            (
+                "events",
+                Value::List(evs.iter().map(|e| change(e, &st)).collect()),
+            ),
+            ("final_text", Value::from(final_text.as_str())),
+            ("final_version", Value::from(evs[2].version)),
+        ])),
+    );
 }
 
 /// One person's notes past the cap: `OVERWRITE_PENDING_MAX + 2` saves, each removing one of

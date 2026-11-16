@@ -1,0 +1,19 @@
+{
+ "packages": [
+  {
+   "license": "MIT OR Apache-2.0",
+   "manifest_path": "/r/serde-1.0.0/Cargo.toml",
+   "name": "serde",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  },
+  {
+   "license": "(MIT OR Apache-2.0) AND NCSA",
+   "manifest_path": "/r/libfuzzer-sys-0.4.10/Cargo.toml",
+   "name": "libfuzzer-sys",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "0.4.10"
+  }
+ ],
+ "version": 1
+}

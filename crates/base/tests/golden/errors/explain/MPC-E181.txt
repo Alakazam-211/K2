@@ -1,0 +1,21 @@
+MPC-E181 opened_version_gone (sessions and edits)
+exit:     8
+message:  version {version} is gone (purged or not kept)
+next:     The version was purged or isn't kept, so a save can't merge from it. Nothing was noted. Note the file as it is now (FileNow); never retry with the same version.
+rule:     outside saves: the version the app opened
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E181",
+  "name": "opened_version_gone",
+  "area": "sessions and edits",
+  "exit": 8,
+  "message": "version {version} is gone (purged or not kept)",
+  "next": "The version was purged or isn't kept, so a save can't merge from it. Nothing was noted. Note the file as it is now (FileNow); never retry with the same version.",
+  "rule": "outside saves: the version the app opened",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

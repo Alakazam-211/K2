@@ -208,7 +208,7 @@ pub(crate) fn state_entries(state: &KeyedState) -> usize {
 /// An import's edits: each text root's text, each list root's elements as one forward run
 /// of inserts, each map root's keys as sets (what a session applies when it imports a
 /// pack's decoded content, in schema order). Packs' tests reach it as
-/// [`super::test_support::import_edits`] (feature `test-support`).
+/// `super::test_support::import_edits` (feature `test-support`).
 pub fn import_edits(ordered: &[(String, Neutral)]) -> Vec<Edit> {
     let mut out = Vec::new();
     for (root, n) in ordered {

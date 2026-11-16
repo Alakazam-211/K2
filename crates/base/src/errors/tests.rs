@@ -170,6 +170,9 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             actual: 14,
         },
         S::BaseExpired { base: 12 },
+        S::OpenedUnknown { version: 12 },
+        S::OpenedGone { version: 12 },
+        S::OpenedNoFile,
         S::RateLimited { retry_after_ms: 90 },
         S::NotFound(key()),
         S::PackMismatch {
@@ -663,6 +666,11 @@ fn every_live_id_has_a_path() {
     // a grid verb's exit 4 (an unknown or deleted element): produced by run_tool on a table
     // (tests/grid_verbs.rs)
     seen.insert("MPC-E805");
+    // the version an app opened: a host's note_opened call (tests/opened.rs)
+    seen.extend(["MPC-E180", "MPC-E181", "MPC-E182"]);
+    // a keyed pack's refusal in the text form, with a code it registers no entry for: produced
+    // by run_tool on a keyed doc (tests/agent_results.rs)
+    seen.insert("MPC-E823");
     // a refused header switch (names that would render): the header verb on a table
     seen.insert("MPC-E806");
     // a refused header switch (the only row blank): the header verb on a table

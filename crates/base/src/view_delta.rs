@@ -133,7 +133,7 @@ pub struct ContainerDelta {
     /// For a doc whose containers nest ([`crate::view_index::Container::parent`]): its parent's
     /// address after the change, on `add` and `restore` always and otherwise when it changed
     /// (`Some(None)`: at the top level now). A container whose parent changed with no delta of
-    /// its own gets a `props` delta naming no field, with this ([`parent_deltas`]).
+    /// its own gets a `props` delta naming no field, with this (`parent_deltas`).
     pub parent_after: Option<Option<String>>,
 }
 

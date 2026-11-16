@@ -1,10 +1,7 @@
 target/
 node_modules/
-spike/out/
 *.log
 .DS_Store
-spike/traces/*.json
-spike/traces/*.json.gz
 tools/perf/Cargo.lock
 perf-out/
 .perf-b/

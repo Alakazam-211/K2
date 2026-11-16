@@ -743,6 +743,29 @@ LINE_ADDRESS_UNKNOWN = e("MPC-E177", "line_address_unknown", Session, 2, "K-ADDR
         "Line numbers can't be checked while the file can't be rendered, so list the rows to get \
          each one's key and position, then address the row by one of those.");
 
+// 180–189: the version a person's app opened (`note_opened`, a host call)
+
+OPENED_UNKNOWN = e("MPC-E180", "opened_version_unknown", Session, 4,
+    "outside saves: the version the app opened", HOST,
+    "no version {version} of this doc",
+    "The host named a version this doc never had. Nothing was noted: a save still merges as \
+     before. Note the file as it is now (FileNow), or name a version a read printed.")
+    .indirect("a host's note_opened call (tests/opened.rs)");
+
+OPENED_GONE = e("MPC-E181", "opened_version_gone", Session, 8,
+    "outside saves: the version the app opened", HOST,
+    "version {version} is gone (purged or not kept)",
+    "The version was purged or isn't kept, so a save can't merge from it. Nothing was noted. \
+     Note the file as it is now (FileNow); never retry with the same version.")
+    .indirect("a host's note_opened call (tests/opened.rs)");
+
+OPENED_NO_FILE = e("MPC-E182", "opened_no_file", Session, 2,
+    "outside saves: the version the app opened", HOST,
+    "this doc has no file",
+    "Only a doc with a file sees an app's saves, so there is nothing to note. Nothing \
+     changed.")
+    .indirect("a host's note_opened call (tests/opened.rs)");
+
 // ---------------------------------------------------------------- 2xx history and undo
 
 UNDO_CONFLICT = e("MPC-E201", "undo_conflict", History, 1,
@@ -1396,7 +1419,18 @@ KEYED_AT_LIMIT = e("MPC-E822", "keyed_at_limit", Structured, 2, "K-CSV-7 (keyed 
         "The doc is at its live size limit; read it, remove elements or fields it doesn't \
          need any more, then make the change again.");
 
-// 823–829: free, for structured docs.
+// 823: a pack's refusal in the text form (`refused: <code>: <why>`, exit 2) whose code the pack
+// registers no entry for (Pack::errors): the stop-gap until each pack registers its codes.
+
+PACK_REFUSED = e("MPC-E823", "pack_refused", Structured, 2,
+    "a pack's refusal by code (its own ids: Pack::errors)", &["@pack"],
+    "{code}: the pack refused the call",
+    "The file type's own verb refused the call: details.code is its reason, details.next its \
+     own way forward. Nothing was applied. Do what details.next says. (The pack has no id of \
+     its own for this code yet.)")
+    .indirect("a keyed pack's verb printing its refusal as text (tests/agent_results.rs)");
+
+// 824–829: free, for structured docs.
 
 // 830–869: the board file type's own agent verbs (k2-mpc-board), run by its host on the file
 // itself and listed with Registry::for_file. Each row names `@file`, then the board verbs

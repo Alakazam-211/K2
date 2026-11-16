@@ -578,7 +578,11 @@ impl Session {
         if outside_window > 0 {
             not_reached.push(NotReached::ChangesOutsideWindow(outside_window));
         }
-        // the file first: write it back so it holds the live text (and the replica with it)
+        // the file first: write it back so it holds the live text (and the replica with it);
+        // a purge doesn't wait for an app reading a pinned version
+        if let Some(d) = st.disk.as_mut() {
+            d.hold_until = None;
+        }
         let file_holds_live = st.disk.is_some()
             && self.write_back(st, now).is_ok()
             && matches!(Self::disk_state(st), Some(DiskState::Clean));

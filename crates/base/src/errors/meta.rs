@@ -105,7 +105,7 @@ pub fn run_meta(
         } else {
             index()
         }),
-        ("explain", [id]) => match lookup(id) {
+        ("explain", [id]) => match lookup(id).or_else(|| pack_lookup(registries, id)) {
             Some(e) => MetaOutput::ok(if json {
                 explain_json(e) + "\n"
             } else {
@@ -133,9 +133,20 @@ pub fn run_meta(
     })
 }
 
-/// The verbs groups expand to: the host's registries, or the kit's (both tiers).
+/// A pack's own entry by id ([`crate::session::Pack::errors`], in the host's registries),
+/// any case.
+fn pack_lookup(registries: &[&Registry], id: &str) -> Option<&'static ErrorEntry> {
+    registries
+        .iter()
+        .flat_map(|r| r.errors())
+        .find(|e| e.id.eq_ignore_ascii_case(id.trim()))
+}
+
+/// The verbs groups expand to: the host's registries, or the kit's (both tiers); and the
+/// packs' own entries those registries hold.
 struct Verbs {
     all: Vec<VerbSpec>,
+    pack_errors: Vec<&'static ErrorEntry>,
 }
 
 impl Verbs {
@@ -162,7 +173,13 @@ impl Verbs {
                 }
             }
         }
-        Verbs { all }
+        let mut pack_errors: Vec<&'static ErrorEntry> = Vec::new();
+        for e in registries.iter().flat_map(|r| r.errors()) {
+            if !pack_errors.iter().any(|p| p.id == e.id) {
+                pack_errors.push(e);
+            }
+        }
+        Verbs { all, pack_errors }
     }
 
     /// Whether `entry` can come from verb `v`. A row marked `@file` names file verbs
@@ -429,6 +446,7 @@ fn tier_word(t: Tier) -> &'static str {
         Tier::Text => "text",
         Tier::Blob => "blob",
         Tier::Grid => "grid",
+        Tier::Keyed => "keyed",
     }
 }
 
@@ -451,6 +469,7 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
         .iter()
         .copied()
         .filter(|e| e.status == Status::Live)
+        .chain(verbs.pack_errors.iter().copied())
         .collect();
     let verb_rows = verbs.all.iter().map(|v| {
         Value::obj([
@@ -576,12 +595,25 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
             ),
         ),
         ("parity", Value::List(parity.collect())),
+        (
+            "result_schema",
+            Value::obj([
+                ("name", Value::from("mpc.result")),
+                ("version", Value::from(1u32)),
+                ("schema", Value::from(crate::tools::RESULT_SCHEMA)),
+                (
+                    "fields",
+                    Value::list(crate::tools::RESULT_FIELDS.iter().copied()),
+                ),
+            ]),
+        ),
         ("limits", Value::Obj(limits)),
         ("positions", positions(&verbs)),
         (
             "errors",
             Value::List(
                 entries()
+                    .chain(verbs.pack_errors.iter().copied())
                     .map(|e| {
                         Value::obj([
                             ("id", Value::from(e.id)),
@@ -601,8 +633,15 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
 }
 
 /// The sections a file type's own registry alone leaves out of `capabilities` (the kit's
-/// doc-level rows, parity, limits and positions): they describe the kit's verbs, not its.
-const FILE_ONLY_LEFT_OUT: [&str; 4] = ["errors_any_verb", "parity", "limits", "positions"];
+/// doc-level rows, parity, the result's schema, limits and positions): they describe the kit's
+/// verbs, not its.
+const FILE_ONLY_LEFT_OUT: [&str; 5] = [
+    "errors_any_verb",
+    "parity",
+    "result_schema",
+    "limits",
+    "positions",
+];
 
 /// `capabilities`' `positions`: each surface's unit, every unit, and the
 /// position forms of each verb served, from [`crate::parity::positions`]'s one table.
@@ -746,6 +785,13 @@ fn capabilities_text(c: &Value) -> String {
         for v in l {
             o.push_str(&format!("  {}\n", s(v, "usage")));
         }
+    }
+    if let Some(r) = c.get("result_schema") {
+        o.push_str(&format!(
+            "\nA call's result as data ({}; a pack verb's --json, or the host's option): {}\n",
+            s(r, "schema"),
+            strs(r.get("fields")).join(" ")
+        ));
     }
     if let Some(Value::List(l)) = c.get("parity") {
         o.push_str("\nParity (each thing a person can do, and the verbs that do it):\n");

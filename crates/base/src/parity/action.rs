@@ -10,8 +10,11 @@ const BLOB: &[Tier] = &[Tier::Blob];
 const GRID: &[Tier] = &[Tier::Grid];
 /// Text and grid docs (CSV contract §3.5: "as for text", or mapped onto the grid).
 const TG: &[Tier] = &[Tier::Text, Tier::Grid];
-/// Every tier.
+/// Text, blob and grid docs.
 const ALL3: &[Tier] = &[Tier::Text, Tier::Blob, Tier::Grid];
+/// Every tier: the doc's presence and records (who's here, versions, approvals), whatever its
+/// content; a keyed doc's too.
+const EVERY: &[Tier] = Tier::ALL;
 
 macro_rules! person_actions {
     ($( $(#[$m:meta])* $v:ident = $n:literal, $t:ident, $desc:literal; )*) => {
@@ -64,9 +67,9 @@ macro_rules! person_actions {
 
 person_actions! {
     /// Join; appear in presence.
-    Open = 1, ALL3, "Open the file (join; appear in presence)";
+    Open = 1, EVERY, "Open the file (join; appear in presence)";
     /// Leave.
-    Close = 2, ALL3, "Close it (leave)";
+    Close = 2, EVERY, "Close it (leave)";
     /// Read the whole doc.
     ReadAll = 3, ALL3, "Read the whole doc";
     /// The viewing highlight.
@@ -74,7 +77,7 @@ person_actions! {
     /// Find.
     Find = 5, TG, "Find";
     /// See who's here.
-    Who = 6, ALL3, "See who's here";
+    Who = 6, EVERY, "See who's here";
     /// Follow someone.
     Follow = 7, TG, "Follow someone";
     /// Place the caret or select (and, later, declaring an intent range).
@@ -96,13 +99,13 @@ person_actions! {
     /// Undo / redo my own edits: all or nothing; `undo --drop` skips a blocked step.
     Undo = 16, TG, "Undo / redo my own edits";
     /// See that it saved.
-    Saved = 17, ALL3, "See that it saved";
+    Saved = 17, EVERY, "See that it saved";
     /// Watch others edit live.
     Watch = 18, ALL3, "Watch others edit live";
     /// History, diff, show a version.
-    History = 19, ALL3, "History, diff, show a version";
+    History = 19, EVERY, "History, diff, show a version";
     /// Restore or name a version.
-    Restore = 20, ALL3, "Restore / name a version";
+    Restore = 20, EVERY, "Restore / name a version";
     /// Rename or move.
     Rename = 21, ALL3, "Rename / move";
     /// Blame.
@@ -112,7 +115,7 @@ person_actions! {
     /// Export.
     Export = 24, ALL3, "Export";
     /// See why live editing is off.
-    WhyOff = 25, ALL3, "See why live editing is off";
+    WhyOff = 25, EVERY, "See why live editing is off";
     /// Ctrl+Z when others edited part of my change (`undo --partial`).
     UndoPartial = 26, TG, "Undo the regions of my change nobody touched; report the rest";
     /// Mention someone.
@@ -120,9 +123,9 @@ person_actions! {
     /// Purge a pasted secret or personal data: owner only.
     Purge = 28, ALL3, "Purge a pasted secret or personal data";
     /// Approve or decline an assistant's edit made on my behalf.
-    Approve = 29, ALL3, "Approve or decline an assistant's edit made on my behalf";
+    Approve = 29, EVERY, "Approve or decline an assistant's edit made on my behalf";
     /// See which edits are waiting for my approval.
-    Pending = 30, ALL3, "See which edits are waiting for my approval";
+    Pending = 30, EVERY, "See which edits are waiting for my approval";
     /// Reverse one change, inside the revert window; older changes: `restore --version`.
     Revert = 31, TG, "Reverse one specific change";
     /// Tier 0: take the lease, or extend mine (`lease`, `lease --renew`).

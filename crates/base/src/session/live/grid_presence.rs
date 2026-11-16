@@ -843,6 +843,8 @@ impl Session {
                 version: st.version,
                 actor,
                 started_ms: now,
+                // a grid's lines are its rendered file's: no text root to count bytes in
+                bytes: None,
             },
             self.config.roster_queue,
         );

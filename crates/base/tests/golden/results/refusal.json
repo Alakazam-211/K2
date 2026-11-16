@@ -1,0 +1,41 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "shape lock",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": 1,
+    "base_given": null
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: shape_locked: @s:s1 is locked\nnext: shape get @s:s1\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "DECK-E001",
+    "exit": 2,
+    "message": "@s:s1 is locked",
+    "next": "Someone locked the shape in the app. Nothing was applied. Work on another shape.",
+    "next_step": {
+      "verb": "shape get",
+      "args": ["{shape}"],
+      "why": "Read the shape; it is locked."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "shape_locked",
+      "next": "shape get @s:s1",
+      "verb": "shape lock",
+      "shape": "@s:s1"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

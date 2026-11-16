@@ -73,12 +73,16 @@ mod fence;
 mod grep;
 mod pattern;
 mod read;
+pub(crate) mod result;
 mod run;
 mod sed;
 mod udiff;
 
 pub use error::{exit, session_exit, ToolError, ToolRunError};
 pub use fence::{random_nonce, Fence};
+pub(crate) use result::{units_of as result_units, Capture, ResultData};
+pub use result::{ChangedUnit, RESULT_FIELDS, UNITS_MAX};
+pub(crate) use run::with_result;
 pub use run::{
     positional_note, PositionalMode, ToolOptions, ToolOutput, Warnings, POSITIONAL_DEFAULT,
 };
@@ -87,6 +91,10 @@ pub(crate) use udiff::refusal as udiff_refusal_for_tests;
 pub use udiff::unified;
 
 use crate::store::Seq;
+
+/// The name and version of a call's result as data ([`ToolOutput::result`]): a new field never
+/// changes it; a field renamed, removed or given another type does.
+pub const RESULT_SCHEMA: &str = "mpc.result/1";
 
 /// The most a tool may output (stdout, or an edit's new text), in bytes.
 pub const MAX_OUTPUT_BYTES: usize = 32 << 20;
@@ -465,6 +473,49 @@ pub struct StructOutput {
     pub(crate) viewing: Option<String>,
     /// The acting agent's playhead ([`StructOutput::time_position`]).
     pub(crate) time: Option<crate::session::TimePosition>,
+    /// A pack's refusal by its registered id ([`StructOutput::refused`]). Boxed: rare.
+    pub(crate) pack_refusal: Option<Box<PackRefusal>>,
+    /// The verb's payload and next page, for the call's result ([`StructOutput::data`],
+    /// [`StructOutput::next_page`]). Boxed: only with a result asked for.
+    pub(crate) result: Option<Box<ResultData>>,
+}
+
+/// The longest name [`StructOutput::data_spec`] takes, in bytes.
+pub const DATA_SPEC_NAME_MAX: usize = 64;
+
+/// Whether `name` and `version` name a typed data's shape ([`StructOutput::data_spec`]).
+fn data_spec_ok(name: &str, version: u32) -> bool {
+    let lower_or_digit = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let b = name.as_bytes();
+    version >= 1
+        && b.len() <= DATA_SPEC_NAME_MAX
+        && b.first().is_some_and(lower_or_digit)
+        && b.iter()
+            .all(|c| lower_or_digit(c) || matches!(c, b'.' | b'_' | b'-'))
+}
+
+/// [`StructOutput::refused`]'s refusal: the pack's entry, why, its next line and details.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackRefusal {
+    pub(crate) entry: &'static crate::errors::ErrorEntry,
+    pub(crate) why: String,
+    pub(crate) next: String,
+    pub(crate) details: Vec<(&'static str, crate::errors::Value)>,
+}
+
+impl PackRefusal {
+    /// The report `verb`'s refusal is: the entry, `why` as the message, then the details
+    /// `code` (the entry's name), `next`, `verb` and the pack's own.
+    pub(crate) fn report(&self, verb: &str) -> crate::errors::ErrorReport {
+        let mut r = crate::errors::ErrorReport::new(self.entry, self.why.clone())
+            .with("code", self.entry.name)
+            .with("next", self.next.as_str())
+            .with("verb", verb);
+        for (k, v) in &self.details {
+            r = r.with(k, v.clone());
+        }
+        r
+    }
 }
 
 impl StructOutput {
@@ -479,6 +530,8 @@ impl StructOutput {
             unit: None,
             viewing: None,
             time: None,
+            pack_refusal: None,
+            result: None,
         }
     }
 
@@ -521,6 +574,74 @@ impl StructOutput {
         self.shown = Some(span);
         self
     }
+
+    /// **A refusal by the pack's registered id** ([`crate::session::Pack::errors`]): nothing
+    /// applies, the exit is the entry's, and stdout is the text form packs print,
+    /// `refused: <entry's name>: <why>` then `next: <next>`. The kit reports it as
+    /// [`ToolOutput::refusal`] with the entry's id, `why` as the message, and the
+    /// details `code` (the entry's name), `next`, `verb` and any [`StructOutput::detail`].
+    pub fn refused(
+        entry: &'static crate::errors::ErrorEntry,
+        why: impl Into<String>,
+        next: impl Into<String>,
+    ) -> Self {
+        let (why, next) = (why.into(), next.into());
+        let mut o = StructOutput::new(
+            Vec::new(),
+            format!("refused: {}: {why}\nnext: {next}\n", entry.name).into_bytes(),
+            entry.exit,
+        );
+        o.pack_refusal = Some(Box::new(PackRefusal {
+            entry,
+            why,
+            next,
+            details: Vec::new(),
+        }));
+        o
+    }
+
+    /// Add a detail to [`StructOutput::refused`]'s report (structured: a number, a string, a
+    /// list, an object).
+    /// Without [`StructOutput::refused`] first, nothing is kept.
+    pub fn detail(mut self, key: &'static str, value: impl Into<crate::errors::Value>) -> Self {
+        if let Some(r) = self.pack_refusal.as_mut() {
+            r.details.push((key, value.into()));
+        }
+        self
+    }
+
+    /// The verb's own payload as data, for the call's result ([`ToolOutput::result`]'s `data`):
+    /// a read's rows, say. Without it `data` is the verb's stdout as text. stdout is unchanged.
+    pub fn data(mut self, value: crate::errors::Value) -> Self {
+        self.result.get_or_insert_with(Box::default).data = Some(value);
+        self
+    }
+
+    /// Name the shape of [`StructOutput::data`] and its version, for the call's result
+    /// (`data_spec`: `<name>/<version>`, as `timeline.clip-list/1`). A new version when a field of
+    /// the shape is renamed, removed or given another type; a new field keeps it. `name` is 1 to
+    /// [`DATA_SPEC_NAME_MAX`] bytes of `[a-z0-9._-]`, starting with a letter or digit, and
+    /// `version` is at least 1: anything else is the pack's bug, which fails loudly in a debug
+    /// build and leaves the shape unnamed (`data_spec: null`) in a release build. Without
+    /// [`StructOutput::data`] it names nothing.
+    pub fn data_spec(mut self, name: &'static str, version: u32) -> Self {
+        let ok = data_spec_ok(name, version);
+        debug_assert!(
+            ok,
+            "data_spec({name:?}, {version}): not a shape's name and version"
+        );
+        if ok {
+            self.result.get_or_insert_with(Box::default).data_spec = Some((name, version));
+        }
+        self
+    }
+
+    /// The call that reads the next page, as data (the result's `page.next`): the verb by its
+    /// registry name and its arguments. The verb still prints its own `next:` line in text.
+    pub fn next_page(mut self, verb: &'static str, args: Vec<String>) -> Self {
+        self.result.get_or_insert_with(Box::default).next_page = Some((verb, args));
+        self
+    }
 }
 
 /// What a structured verb computes on: the doc as a [`crate::session::View`], its
@@ -536,6 +657,8 @@ pub struct VerbCtx<'a> {
     /// The version positional addresses (`#N`, `LN`) count in, when it isn't the live one: an
     /// edit's `--base` (R-1).
     at: Option<&'a crate::session::View>,
+    /// The call asked for its result as data ([`VerbCtx::json`]).
+    json: bool,
 }
 
 /// The doc's history as a structured verb may read it, under the call's lock (the session
@@ -575,7 +698,13 @@ impl<'a> VerbCtx<'a> {
             codec,
             hist: None,
             at: None,
+            json: false,
         }
+    }
+    /// The call asked for its result as data ([`VerbCtx::json`]).
+    pub(crate) fn with_json(mut self, on: bool) -> Self {
+        self.json = on;
+        self
     }
     /// Count positional addresses in `at` (an edit's `--base` version) instead of the live
     /// doc.
@@ -666,6 +795,11 @@ impl<'a> VerbCtx<'a> {
     pub fn view(&self) -> &'a crate::session::View {
         self.view
     }
+    /// Whether the call asked for its result as data ([`ToolOutput::result`]): a verb that
+    /// fills [`StructOutput::data`] may then skip building its text.
+    pub fn json(&self) -> bool {
+        self.json
+    }
     /// The doc's codec settings, as the session held them for this call (the pack's,
     /// opaque to the kit).
     pub fn codec(&self) -> &'a [u8] {
@@ -730,7 +864,7 @@ enum VerbFn {
 /// A structured verb's name may be two words (`row insert`): the kit matches `argv[0]
 /// argv[1]` first, then `argv[0]`. The parity registry
 /// ([`crate::parity::Registry::for_pack`]) lists every pack verb with the person actions it
-/// serves; text verbs only for a text pack, structured verbs only for a table pack.
+/// serves; text verbs only for a text pack, structured verbs only for a table or keyed pack.
 #[derive(Clone, Copy)]
 pub struct PackVerb {
     name: &'static str,
@@ -742,6 +876,8 @@ pub struct PackVerb {
     positional: Option<FindPositional>,
     /// The position units it declares, if it does ([`PackVerb::positions`]).
     positions: Option<&'static [crate::parity::positions::PositionForm]>,
+    /// It takes `--json` itself ([`PackVerb::takes_json`]).
+    json_own: bool,
 }
 
 impl PackVerb {
@@ -764,6 +900,7 @@ impl PackVerb {
             run: VerbFn::Text(parse),
             positional: None,
             positions: None,
+            json_own: false,
         }
     }
 
@@ -785,6 +922,7 @@ impl PackVerb {
             run: VerbFn::StructEdit(parse),
             positional: None,
             positions: None,
+            json_own: false,
         }
     }
 
@@ -806,6 +944,7 @@ impl PackVerb {
             run: VerbFn::StructRead(parse),
             positional: None,
             positions: None,
+            json_own: false,
         }
     }
 
@@ -830,6 +969,20 @@ impl PackVerb {
     ) -> Self {
         self.positions = Some(forms);
         self
+    }
+
+    /// **It takes `--json` itself** and prints its own JSON with it (a grid's `cell get`): the
+    /// kit leaves the flag to it. Without this, a pack verb's `--json` is the kit's: the kit
+    /// takes it out of the verb's arguments and the call returns its result as data
+    /// ([`ToolOutput::result`]).
+    pub const fn takes_json(mut self) -> Self {
+        self.json_own = true;
+        self
+    }
+
+    /// Whether it takes `--json` itself ([`PackVerb::takes_json`]).
+    pub fn json_is_its_own(&self) -> bool {
+        self.json_own
     }
 
     /// The position units it declares ([`PackVerb::positions`]); `None` if it declares nothing.

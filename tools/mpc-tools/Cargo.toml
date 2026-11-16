@@ -1,0 +1,26 @@
+[package]
+name = "mpc-tools"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "The kit's and the packs' check and build tools, one binary with subcommands (tools/README.md, mpc-tools)"
+
+# Its own workspace: hosts never build it, and its dependencies stay out of the kit's lock.
+[workspace]
+
+[features]
+
+[dependencies]
+clap = { version = "4.5", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+miniz_oxide = "0.8"
+regex = "1"
+# insertion order kept: records are written back in the order they were read, as Python did
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+# document order kept, as Python's tomllib reads TOML
+toml = { version = "0.9", features = ["preserve_order"] }
+
+[lints.rust]
+unsafe_code = "forbid"

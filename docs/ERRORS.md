@@ -165,6 +165,9 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E175` | `over_budget` | 2 | K-READ-2 | `@pack`, `@index` | live |
 | `MPC-E176` | `line_address_unreliable` | 2 | K-ADDR-4, K-PAR-7 | `@pack` | live |
 | `MPC-E177` | `line_address_unknown` | 2 | K-ADDR-4 | `claim`, `@pack` | live |
+| `MPC-E180` | `opened_version_unknown` | 4 | outside saves: the version the app opened | `(host)` | live |
+| `MPC-E181` | `opened_version_gone` | 8 | outside saves: the version the app opened | `(host)` | live |
+| `MPC-E182` | `opened_no_file` | 2 | outside saves: the version the app opened | `(host)` | live |
 
 ### MPC-E101 `forbidden_read`
 
@@ -614,6 +617,30 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next step:** `blame --structure`. Line numbers can't be checked while the file can't be rendered, so list the rows to get each one's key and position, then address the row by one of those.
 - **Rule:** K-ADDR-4
 - **Exit:** 2
+
+### MPC-E180 `opened_version_unknown`
+
+- **Message:** `no version {version} of this doc`
+- **Next:** The host named a version this doc never had. Nothing was noted: a save still merges as before. Note the file as it is now (FileNow), or name a version a read printed.
+- **Rule:** outside saves: the version the app opened
+- **Exit:** 4
+- **Reached by:** a host's note_opened call (tests/opened.rs)
+
+### MPC-E181 `opened_version_gone`
+
+- **Message:** `version {version} is gone (purged or not kept)`
+- **Next:** The version was purged or isn't kept, so a save can't merge from it. Nothing was noted. Note the file as it is now (FileNow); never retry with the same version.
+- **Rule:** outside saves: the version the app opened
+- **Exit:** 8
+- **Reached by:** a host's note_opened call (tests/opened.rs)
+
+### MPC-E182 `opened_no_file`
+
+- **Message:** `this doc has no file`
+- **Next:** Only a doc with a file sees an app's saves, so there is nothing to note. Nothing changed.
+- **Rule:** outside saves: the version the app opened
+- **Exit:** 2
+- **Reached by:** a host's note_opened call (tests/opened.rs)
 
 ## 2xx: history and undo
 
@@ -1287,6 +1314,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 | `MPC-E820` | `key_not_own` | 2 | writer-tagged keys | `@change` | live |
 | `MPC-E821` | `key_space_full` | 2 | writer-tagged keys | `(host)` | live |
 | `MPC-E822` | `keyed_at_limit` | 2 | K-CSV-7 (keyed docs) | `@change` | live |
+| `MPC-E823` | `pack_refused` | 2 | a pack's refusal by code (its own ids: Pack::errors) | `@pack` | live |
 | `MPC-E830` | `conflict` | 1 | board file: object revs | `@file`, `update`, `delete`, `resolve`, `lock`, `check-set`, `check-remove`, `table-cell`, `table-remove-row`, `table-remove-column`, `move`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `apply`, `inverse` | live |
 | `MPC-E831` | `exists` | 1 | board file: unique ids | `@file`, `put-back`, `apply`, `inverse` | live |
 | `MPC-E832` | `busy` | 1 | board file: the save guard | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `apply`, `inverse` | live |
@@ -1395,6 +1423,14 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Next step:** `cat`. The doc is at its live size limit; read it, remove elements or fields it doesn't need any more, then make the change again.
 - **Rule:** K-CSV-7 (keyed docs)
 - **Exit:** 2
+
+### MPC-E823 `pack_refused`
+
+- **Message:** `{code}: the pack refused the call`
+- **Next:** The file type's own verb refused the call: details.code is its reason, details.next its own way forward. Nothing was applied. Do what details.next says. (The pack has no id of its own for this code yet.)
+- **Rule:** a pack's refusal by code (its own ids: Pack::errors)
+- **Exit:** 2
+- **Reached by:** a keyed pack's verb printing its refusal as text (tests/agent_results.rs)
 
 ### MPC-E830 `conflict`
 

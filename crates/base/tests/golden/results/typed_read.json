@@ -1,0 +1,25 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "shape fields",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "address": "@s:s1",
+    "fields": {
+      "color": "blue",
+      "w": "10"
+    }
+  },
+  "data_schema": "typed",
+  "data_spec": "deck.shape-fields/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

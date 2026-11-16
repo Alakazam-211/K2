@@ -91,7 +91,7 @@ tlc_compile_failed() {
 # a run stopped by its cap is PARTIAL (a lower bound); VIOLATION with the trace's length in
 # states; ERROR for an exit other than 0, 10-14 or 124.
 tlc_record() {
-  # the job id K2 Compute's nodes set (only [A-Za-z0-9_-]); null elsewhere (collect.py fills it)
+  # the job id K2 Compute's nodes set (only [A-Za-z0-9_-]); null elsewhere (the evidence collector fills it)
   job=$(printf '%s' "${K2_COMPUTE_JOB:-}" | tr -cd 'A-Za-z0-9_-')
   awk -v run="$1" -v cap="$3" -v rc="$4" -v wall="$5" -v job="$job" '
     function jstr(x) { gsub(/\\/, "\\\\", x); gsub(/"/, "\\\"", x); return "\"" x "\"" }

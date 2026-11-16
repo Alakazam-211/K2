@@ -1,0 +1,26 @@
+{
+ "packages": [
+  {
+   "license": "MPL-2.0",
+   "manifest_path": "/r/option-ext-0.2.0/Cargo.toml",
+   "name": "option-ext",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "0.2.0"
+  },
+  {
+   "license": "CC0-1.0",
+   "manifest_path": "/r/tiny-keccak-2.0.2/Cargo.toml",
+   "name": "tiny-keccak",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "2.0.2"
+  },
+  {
+   "license": "MIT OR Apache-2.0",
+   "manifest_path": "/r/serde-1.0.0/Cargo.toml",
+   "name": "serde",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  }
+ ],
+ "version": 1
+}

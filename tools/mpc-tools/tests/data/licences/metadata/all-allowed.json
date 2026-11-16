@@ -1,0 +1,33 @@
+{
+ "packages": [
+  {
+   "license": "MIT OR Apache-2.0",
+   "manifest_path": "/r/serde-1.0.0/Cargo.toml",
+   "name": "serde",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  },
+  {
+   "license": "0BSD OR MIT OR Apache-2.0",
+   "manifest_path": "/r/adler2-2.0.0/Cargo.toml",
+   "name": "adler2",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "2.0.0"
+  },
+  {
+   "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+   "manifest_path": "/r/unicode-ident-1.0.0/Cargo.toml",
+   "name": "unicode-ident",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  },
+  {
+   "license": "Apache-2.0 OR BSL-1.0",
+   "manifest_path": "/r/ryu-1.0.0/Cargo.toml",
+   "name": "ryu",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  }
+ ],
+ "version": 1
+}

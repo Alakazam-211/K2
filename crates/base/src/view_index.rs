@@ -1462,7 +1462,7 @@ impl ViewCarrier {
     }
 
     /// What `decode` makes of the bytes, **decoded once per carrier**: the first call runs
-    /// `decode` (one carrier decode, counted by [`crate::differential::take_carrier_decodes`] in
+    /// `decode` (one carrier decode, counted by `crate::differential::take_carrier_decodes` in
     /// test builds) and keeps its result with the carrier; every later call, this read's or a
     /// later one's, gives it back until the carrier changes. `None` when `decode` gave none, or
     /// when the kept result isn't a `T` (a pack decodes one type).
@@ -2482,7 +2482,7 @@ impl<'a> LiveCtx<'a> {
     }
 
     /// Unit `k`, in container `container` at `z`, its kit fields only: one unit built
-    /// ([`crate::differential::take_view_unit_builds`]).
+    /// (`crate::differential::take_view_unit_builds`).
     fn unit(&self, k: &'a Key, v: &'a Value, address: String, container: String, z: u32) -> Unit {
         #[cfg(any(test, feature = "differential"))]
         crate::differential::count_view_unit_build();

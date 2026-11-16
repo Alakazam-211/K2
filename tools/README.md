@@ -33,6 +33,41 @@ dir>/job.sh)"` with the `env-args` variables set on any Linux box. Figures in th
 build node" with the node's size where it matters. `tools/check-private.sh` keeps internal
 host names out of the tree.
 
+## mpc-tools
+
+`tools/mpc-tools` is one binary with subcommands for the checks and small jobs that the kit's
+and the packs' scripts did in Python. Rust, its own workspace and lock (a host never builds
+it), run through `tools/mpc-tools.sh <subcommand> ...` (a pack runs its kit's copy). The wrapper
+builds it with `cargo build --locked` in a target folder of its own, on Linux only unless
+`MPC_TOOLS_BUILD=1`; `MPC_TOOLS` names a binary built elsewhere. `mpc-tools --help` lists:
+
+- `licences`: every package of every tracked `Cargo.lock` against the allow-list
+  (`scripts/check-licences.sh`);
+- `undo ck-from-log LOG`: the dfs runs' checkpoint files from a job's log (`tools/undo/g1.sh`);
+- `pack-check engine-free|carrier-row [ROOT]`: the pack template's checks
+  (`scripts/pack-checks/`);
+- `unzip ZIP MEMBER OUT` and `unzip ZIP --all DIR`: our own zip reader;
+- `edit replace-once FILE FIND REPLACE`: one exact match replaced, or refused
+  (`tools/n1/n1.sh node-both`);
+- `evidence check` and `evidence collect`: the evidence notes' citation check and the run-record
+  collector (tools/evidence/README.md);
+
+**Where it runs.** In jobs: a shared Mac never builds it, so a flow that needs it runs on a
+node (the licence check and its `--expr` mode, the pack checks, n1's producer edit, g1's resume
+from `ck-from.log`). What must run on the Mac (submitting jobs, the private-pattern scan) is
+shell, with no Python.
+
+Exit codes: 0 ok, 1 an error or a check that found problems, 2 bad usage, 3 refused (nothing
+changed), 4 not found. stdout carries the result only, `--json` exactly one JSON document;
+notices go to stderr.
+
+**How a tool moves here.** A generator next to the port's tests
+(`tools/mpc-tools/tests/data/<sub>/gen_*.py`) runs the old tool on a fixed-seed set of inputs,
+twice, byte-equal, and writes a table; the Rust test reads the table (it never runs Python), has
+a row floor, and lists every row that differs. The old tool goes once a named run of those rows
+is green; the generator with it, the table stays. The `tools` part of `tools/tests/full.sh` runs
+them, the `lint` part lints the crate.
+
 ## Test jobs
 
 **The default: the runner ships the commit (`--repo`).** Every part runs in a checkout of
@@ -126,13 +161,8 @@ tools/test-bundle.sh [--rev REV] [--env NAME=VALUE]... <commands file> <out dir>
   the 60 pairs): `INLINE=120000 tools/test-bundle.sh …` puts the base64 past the chunks
   inside `job.sh`, i.e. in the job's command argument (120,000 characters checked on a build
   node; Linux allows 128 KiB per argument).
-- **`STRIP_DOCS=1`** (v0.9.7: D1 put `spec-undo` at 657,656 base64 characters, 145,656
-  past the variables, over what one argument carries): every shipped crate's `src/` and
-  `tests/` travel with their doc-comment lines (`///`, `//!`) **blanked, not deleted**, so
-  every line number a panic or a test failure names is the repository's
-  (`tools/strip-comments.py --docs`, which refuses when such a line sits in a string
-  literal). The code is unchanged; doctests are left behind, so use it only for a part that
-  runs none (`spec-undo`, `conformance`, `base-c`), never `base-a1`.
+- **Sources travel whole.** `STRIP_DOCS` (doc comments blanked to fit) went with its Python
+  stripper; a part over the limit as a bundle (`spec-undo`, `base-c`) runs as a `--repo` job.
 - **How it travels:** an xz tarball, base64, in chunks of at most `CHUNK` characters
   (default 8000) passed as `BUNDLE_B64_0`, `BUNDLE_B64_1`, ...; the job joins them, checks
   the sha256 written into `job.sh`, unpacks, and runs `tools/job.sh`.
@@ -153,8 +183,8 @@ gate.
 ### Both
 
 - **Run records:** the kit's runs print one `RUNREC` line each (`tools/evidence/README.md`);
-  after a job, `RUNREC_LOG_CMD='k2 compute logs {job}' tools/evidence/collect.py JOB` writes
-  `docs/evidence/runs/JOB.json`, and the evidence notes cite it.
+  after a job, `mpc-tools evidence collect` writes `docs/evidence/runs/JOB.json` from its log
+  (tools/evidence/README.md: in a job, with the log saved beside it), and the evidence notes cite it.
 - **Threads follow the job's CPU quota:** a node limits a job's CPUs with a cgroup quota, and
   `nproc` there counts the whole machine (16 in a `--cpus 4` job). The job sets
   `CARGO_BUILD_JOBS`, `RUST_TEST_THREADS` and `NEXTEST_TEST_THREADS` to the quota (a value
@@ -244,7 +274,7 @@ merged into main:** main merges the pre-cut commit (`tag^`), which keeps everyth
 | Script | What it does |
 |---|---|
 | `public-cut.sh [--no-commit] [--lock FILE] [--hold FILE] [--trailer TEXT]...` | Run at the root of a clean checkout of the release branch (never main): removes every `vendor/mpce*` but the allowlist's, the crates the allowlist drops (the conformance suite), the engine-only features (`native`, and every feature derived from removed ones, to a fixed point), engine dependencies from every dependency table, the trees in `DROPPED_TREES` (tooling no host builds or runs, and the evidence run records, `docs/evidence/runs`: main keeps and checks them; the conformance matrix document, which main keeps with its suite, and the person-writer reuse plan in `docs/design/`, which main keeps), the code under cfgs on removed features, the tooling's parts for them, what `public-cut: drop` marker lines enclose in a Markdown file or a `Cargo.toml`, and the lockfile's removed packages (removals only); then runs `check-public-cut.sh` and commits. Idempotent: on a cut tree it changes nothing and commits nothing. `--no-commit` is a dry run (allowed detached and on a dirty tree). `--hold FILE` (or `PUBLIC_CUT_HOLD`) reads an external hold list, kept outside the tree: paths named in it are taken from the given ref, and a patch after them is applied, before the cut's own steps; without one nothing of it runs. The guarded paths (`HOLD_GUARDED` in the script: `vendor/README.md`, the text about the vendored engine trees) must be taken: every line of each must be a line of its taken ref's copy or a line the hold patch adds to it, else the cut stops, naming line numbers only. The cut's gate makes the cut again from the pre-cut commit with the same list in its environment. Its header has the rules; a case it can't decide (a feature mixing engine parts with an optional dependency, an unknown cfg form) stops it, to decide by hand |
-| `check-public-cut.sh [ROOT]` | Fails closed (exit 1, naming every offending path or entry) unless the tree may be a public cut: both licence files; no engine path, manifest entry, lock entry or engine identifier outside `PUBLIC_ENGINE_CRATES`; no engine-only feature declared, requested or left enabled; every cfg names a declared feature; no dropped crate or engine feature in the tooling; every pinned regression present; no file under `DROPPED_TREES` and no reference to one (`DROPPED_REFS`, in any kept text file but a CHANGELOG, `vendor/` or the two cut scripts); no line added since the previous host release uses a term in `TEXT_TERMS`, unless reviewed (below; a file renamed with at least 75% of its text the same counts only its changed lines); no kept text file holds an internal label (`LABEL_PATTERNS`: a requirement id outside the error registry's rule column, an ask label, a plan slice, a numbered contract gap, a `KC` item, a pointer to an unpublished requirements document; in prose, `LABEL_PROSE_PATTERNS`: a release-line name, an amendment label, an unnumbered plan slice, an engine-answer label, a plan stage, a parity-row or plan-item label (a table row's first cell may hold a parity row's id), a finding label, a run label; the rule column holds no release-line or amendment label; anywhere, a branch name and an engine code with no entry in the public registry; `LABEL_EXEMPT` names the files read as data); `check-private.sh` clean. The allowlist (`PUBLIC_ENGINE_CRATES`, `NATIVE_FEATURES`, `DROPPED_CRATES`, `DROPPED_FILES`, `LICENCE_FILES`, `DROPPED_TREES`, `DROPPED_REFS`, `TEXT_TERMS`, `LABEL_PATTERNS`, `LABEL_PROSE_PATTERNS`, `LABEL_EXEMPT`) is at its top, the one place to change it; `--print-config` prints it |
+| `check-public-cut.sh [ROOT]` | Fails closed (exit 1, naming every offending path or entry) unless the tree may be a public cut: both licence files; no engine path, manifest entry, lock entry or engine identifier outside `PUBLIC_ENGINE_CRATES`; no engine-only feature declared, requested or left enabled; every cfg names a declared feature; no dropped crate or engine feature in the tooling; every pinned regression present; no file under `DROPPED_TREES` and no reference to one (`DROPPED_REFS`, in any kept text file but a CHANGELOG, `vendor/` or the two cut scripts); no line added since the previous host release uses a term in `TEXT_TERMS`, unless reviewed (below; a file renamed with at least 75% of its text the same counts only its changed lines); no kept text file holds an internal label (`LABEL_PATTERNS`: a requirement id outside the error registry's rule column, an ask label, a plan slice, a numbered contract gap, a `KC` item, a pointer to an unpublished requirements document; in prose, `LABEL_PROSE_PATTERNS`: a release-line name, an amendment label, an unnumbered plan slice, an engine-answer label, a plan stage, a parity-row or plan-item label (a table row's first cell may hold a parity row's id), a finding label, a run label; the rule column holds no release-line or amendment label; anywhere, a branch name and an engine code with no entry in the public registry; `LABEL_EXEMPT` names the files read as data); every `k2-mpc-NAME` a public repo or crate name (`PUBLIC_REPO_NAMES`); no commit-like hash in a test-data folder's prose (`tests/data/`: a table's `#` lines, every line of a generator or note); `check-private.sh` clean. The allowlist (`PUBLIC_ENGINE_CRATES`, `NATIVE_FEATURES`, `DROPPED_CRATES`, `DROPPED_FILES`, `LICENCE_FILES`, `DROPPED_TREES`, `DROPPED_REFS`, `TEXT_TERMS`, `LABEL_PATTERNS`, `LABEL_PROSE_PATTERNS`, `LABEL_EXEMPT`, `PUBLIC_REPO_NAMES`) is at its top, the one place to change it; `--print-config` prints it |
 | `public-text-base` | The text rule's base: the previous host release's pre-cut commit (`tag^`), one full sha. Missing, not tracked or not an ancestor of HEAD blocks the tag. A job's checkout has the history and no tags, so a sha it is |
 | `public-text-exceptions.txt` | The lines the text rule found and a person reviewed and kept, one `PATH: TEXT` each (the whole added line, trimmed). An entry covers that exact text in that file, so a changed line or another line of the file still blocks, and a moved one needs no update. Line numbers would go stale with each edit above them, and a hash would hide what was reviewed. An entry matching no added line blocks too, so none outlives its base |
 | `public-cut-regressions.txt` | The pinned regression tests of the host's earlier tags, which every cut must still carry (a hotfix line is cherry-picked, not an ancestor, so they are checked by name). One per line: `NAME` (a Rust `fn NAME` with a test attribute, not `#[ignore]`d) or `PATH IDENT` (the word in that file). **At each hotfix tag, append its regression tests** under a comment naming the tag and the fix |

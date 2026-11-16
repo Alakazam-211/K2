@@ -73,6 +73,9 @@ pub enum Area {
     Structured,
     /// 9xx: rate limits, caps and bounds.
     Limits,
+    /// A pack's own refusals ([`ErrorEntry::pack`]): ids `<PACK>-Ennn`, never the kit's. Not
+    /// in [`Area::ALL`], which lists the kit's areas.
+    Pack,
 }
 
 impl Area {
@@ -102,6 +105,8 @@ impl Area {
             Area::Blob => 7,
             Area::Structured => 8,
             Area::Limits => 9,
+            // a pack's ids carry their own numbers; it has no hundreds of the kit's
+            Area::Pack => 0,
         }
     }
 
@@ -117,6 +122,7 @@ impl Area {
             Area::Blob => "tier 0 and blobs",
             Area::Structured => "structured and CSV",
             Area::Limits => "limits",
+            Area::Pack => "a pack's own",
         }
     }
 }
@@ -238,9 +244,37 @@ impl ErrorEntry {
         }
     }
 
-    /// The entry's [`NextStep`]: `verb` a kit verb's registry name, `args` argv tokens
-    /// (`{key}`: the refusal's `details.key`), `why` prose.
-    pub(crate) const fn step(
+    /// **A pack's own refusal** ([`crate::session::Pack::errors`]): `id` is `<PACK>-Ennn` (the
+    /// pack's name upper-cased, `DECK-E001`), stable forever; `name` its snake_case code, the
+    /// `<code>` its verbs print in `refused: <code>: <why>`; `exit` from the kit's table (a
+    /// verb's refusal is 2); `message` and `next` as the kit's entries have them. Any of the
+    /// pack's verbs may return it (`@pack`). [`ErrorEntry::step`] adds what to run next.
+    pub const fn pack(
+        id: &'static str,
+        name: &'static str,
+        exit: u8,
+        message: &'static str,
+        next: &'static str,
+    ) -> Self {
+        ErrorEntry {
+            id,
+            name,
+            area: Area::Pack,
+            exit,
+            message,
+            next,
+            step: None,
+            rule: "the pack's own refusal",
+            verbs: &["@pack"],
+            status: Status::Live,
+            reach: Reach::Indirect("a pack's verb"),
+        }
+    }
+
+    /// The entry's [`NextStep`]: `verb` a verb's registry name (the kit's, or for a pack's
+    /// entry one of its verbs), `args` argv tokens (`{key}`: the refusal's `details.key`),
+    /// `why` prose.
+    pub const fn step(
         self,
         verb: &'static str,
         args: &'static [&'static str],

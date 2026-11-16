@@ -30,6 +30,7 @@ import {
   FRAME_MAX,
   type CaretAt,
   type ChangeEvent,
+  type ChangeKind,
   type ClientFrame,
   type CloseReason,
   type Device,
@@ -51,6 +52,32 @@ export interface ChangeInfo {
   by: Handle | null;
   /** The client's own `applyLocal` (already in the host's editor). */
   local: boolean;
+  /** The doc's version after the change (`ChangeEvent.version`). `null` for the client's own
+   * edit (not acknowledged yet), a refused change leaving, and a reload's diff. */
+  version: number | null;
+  /** What kind of change it is (`ChangeEvent.kind`). `null` where `version` is, and from a
+   * host older than kit v0.10.1 (which sends no kind). */
+  kind: ChangeKind | null;
+  /** The host-given turn of the agent step that made it (`ChangeEvent.turn`): opaque, compared
+   * only for equality. `null` for a person's change, an outside save, a call given none, where
+   * `version` is null, and from a host before wire 3. */
+  turn: string | null;
+  /** The pack verb that made it (`ChangeEvent.verb`, e.g. `replace-section`). `null` for a raw
+   * write, a kit tool, an outside save, an undo, redo, revert or restore, the import, where
+   * `version` is null, and from a host before wire 3. */
+  verb: string | null;
+  /** When the host applied it, ms since the Unix epoch (`ChangeEvent.at_ms`). `null` where
+   * `version` is. */
+  atMs: number | null;
+}
+
+/** A `ChangeInfo`'s event fields when it is not one server change. */
+const NOT_AN_EVENT = { version: null, kind: null, turn: null, verb: null, atMs: null } as const;
+
+/** A `ChangeInfo`'s event fields for server change `ev` (`null`: not one). */
+function eventFields(ev: ChangeEvent | null): Pick<ChangeInfo, "version" | "kind" | "turn" | "verb" | "atMs"> {
+  if (!ev) return NOT_AN_EVENT;
+  return { version: ev.version, kind: ev.kind ?? null, turn: ev.turn ?? null, verb: ev.verb ?? null, atMs: ev.at_ms };
 }
 
 /** A local change the server refused (or would): not in the text any more. */
@@ -441,7 +468,7 @@ export class LiveText {
     const before = this._text;
     this._text = before.apply(hs);
     this.moveRejected(hs);
-    this.emit("change", { hunks: hs, by: null, local: true });
+    this.emit("change", { hunks: hs, by: null, local: true, ...NOT_AN_EVENT });
     const last = this.queue[this.queue.length - 1];
     if (last && !isHeld(last) && last.group === opts.group) {
       last.hunks = composeLen(last.before.length8, last.hunks, hs);
@@ -1108,7 +1135,7 @@ export class LiveText {
     if (d.length) {
       this.moveRejected(d);
       this.moveCursor(d);
-      this.emit("change", { hunks: d, by: null, local: false });
+      this.emit("change", { hunks: d, by: null, local: false, ...NOT_AN_EVENT });
     }
     this.dirty();
   }
@@ -1389,7 +1416,7 @@ export class LiveText {
     this.advance(ev.version, ev.root, hs, ev.client, ev.kind);
     const old = this.serverText;
     this.serverText = old.apply(hs);
-    this.recarry(hs, this.serverText, [], ev.pid);
+    this.recarry(hs, this.serverText, [], ev.pid, ev);
     if (hs.length > 0) this.touch(ev.pid, ev.client);
     this.checkLanded(ev);
     this.resendCursor();
@@ -1524,6 +1551,7 @@ export class LiveText {
     newBase: Rope,
     regions: Array<{ rej: Rejection; start: number; end: number }>,
     by: Handle | null,
+    ev: ChangeEvent | null = null,
   ): void {
     const oldText = this._text;
     let base = newBase;
@@ -1579,7 +1607,7 @@ export class LiveText {
     if (x.length) {
       this.moveRejected(x);
       this.moveCursor(x);
-      this.emit("change", { hunks: x, by, local: false });
+      this.emit("change", { hunks: x, by, local: false, ...eventFields(ev) });
     }
     for (const g of regions) {
       g.rej.region = { start: g.start, end: Math.max(g.start, g.end) };
@@ -1736,7 +1764,7 @@ export class LiveText {
     if (d.length) {
       this.moveRejected(d);
       this.moveCursor(d);
-      this.emit("change", { hunks: d, by: null, local: false });
+      this.emit("change", { hunks: d, by: null, local: false, ...NOT_AN_EVENT });
     }
   }
 

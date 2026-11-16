@@ -202,6 +202,8 @@ pub enum Action {
     Activity,
     /// Tier 0: breaking someone else's lease (owner only).
     BreakLease,
+    /// Noting or clearing the version an app opened (`note_opened`, `clear_opened`).
+    Opened,
     /// Tier 0: restoring an older version.
     Restore,
     /// Listing or reading versions, naming one (tier 0 and text docs).
@@ -320,6 +322,16 @@ pub enum AuditEvent {
     /// [`crate::session::EXTERNAL_PID`]). For a tier-0 blob doc, `seq` is the version the
     /// save became.
     ExternalEdit { key: DocKey, seq: crate::store::Seq },
+    /// A host noted the version an app opened (`note_opened`): a save from that app merges
+    /// from it. `version`: a live doc's change seq, a blob doc's version id.
+    OpenedNoted { key: DocKey, version: u64 },
+    /// The doc's pin was dropped: `why` is `cleared` (the host's call), `not_held` (its version
+    /// is gone, found at use) or `replaced` (a later note).
+    OpenedDropped {
+        key: DocKey,
+        version: u64,
+        why: &'static str,
+    },
     /// An outside save (change `change`, by [`crate::session::EXTERNAL_PID`]) overrode
     /// someone's live work. Two kinds, one per doc kind:
     /// - a grid doc: the save overrode a live grid element (contract §2.9.1): the file's value

@@ -3,7 +3,7 @@
 //!
 //! Test-only: without the `mutants` feature [`active`] is always [`Mutant::None`] and no
 //! mutant can be set, so the oracle of record is never a mutant. With it, one mutant is
-//! active process-wide ([`set`]); the enumerator (`undo_enum --mutant`) sets it once,
+//! active process-wide (`set`); the enumerator (`undo_enum --mutant`) sets it once,
 //! before any thread starts.
 
 /// One wrong variant (spec §8's numbering).

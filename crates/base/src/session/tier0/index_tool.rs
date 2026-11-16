@@ -291,7 +291,7 @@ impl BlobSession {
     /// **Pages**: every page is at most [`ToolOptions::read_budget`] bytes, in text
     /// and in JSON: an item counts as the larger of its two forms, so a page is the same page
     /// in both. An item that couldn't fit a page alone is shortened until it does, saying what
-    /// it left out and the read that returns it ([`super::index_page`]). Past the budget the
+    /// it left out and the read that returns it (`index_page`). Past the budget the
     /// page ends `truncated: true` with a cursor, bound to this doc, the version read, the
     /// verb and the arguments that pick the items: pass it back with `--cursor` and the same
     /// arguments for the next page. Used on another version (the doc moved on, for a read of
@@ -308,7 +308,42 @@ impl BlobSession {
     ///
     /// A type with no index: `MPC-E711` (`outline`, `node`, `claim`); any other verb: a usage
     /// error naming its own call.
+    ///
+    /// With [`ToolOptions::result_json`], the call returns its result as data
+    /// ([`ToolOutput::result`], `mpc.result/1`): the verb's own output (its JSON with `--json`)
+    /// is the result's `data.text`, and a refusal is the result's `error`, with its exit.
     pub fn run_tool(
+        &self,
+        conn: ConnId,
+        argv: &[String],
+        opts: &ToolOptions,
+    ) -> std::result::Result<ToolOutput, ToolRunError> {
+        let out = self.run_tool_text(conn, argv, opts);
+        if !opts.result_json {
+            return out;
+        }
+        let form = crate::parity::verb_form(argv);
+        let kind = crate::parity::Registry::for_blob_pack(self.pack.as_ref())
+            .ok()
+            .and_then(|r| {
+                r.get(&form).map(|v| match v.kind {
+                    crate::parity::VerbKind::Edit => "edit",
+                    _ => "read",
+                })
+            });
+        let words = form.split(' ').count().min(argv.len());
+        let call = crate::tools::result::Call {
+            verb: form,
+            kind,
+            args: &argv[words..],
+            pack: None,
+        };
+        Ok(crate::tools::with_result(&call, out, || {
+            self.status().map(|s| s.version).unwrap_or_default()
+        }))
+    }
+
+    fn run_tool_text(
         &self,
         conn: ConnId,
         argv: &[String],
@@ -897,6 +932,7 @@ fn tool_output(stdout: Vec<u8>, summary: String, exit: u8, version: VersionId) -
         for_edit: None,
         refusal: None,
         warnings: Default::default(),
+        result: None,
     }
 }
 

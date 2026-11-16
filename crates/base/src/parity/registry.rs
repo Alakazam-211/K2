@@ -20,11 +20,31 @@ pub enum Tier {
     /// A grid doc: a [`crate::table`] pack's [`crate::session::Session`] (structured, merged
     /// by key; CSV contract §3.5).
     Grid,
+    /// A keyed doc that isn't a table: a pack's [`crate::session::Session`] whose roots are all
+    /// lists or maps (a deck, a timeline, a scene), edited by key through the pack's structured
+    /// verbs.
+    Keyed,
 }
 
 impl Tier {
     /// Every tier.
-    pub const ALL: &'static [Tier] = &[Tier::Text, Tier::Blob, Tier::Grid];
+    pub const ALL: &'static [Tier] = &[Tier::Text, Tier::Blob, Tier::Grid, Tier::Keyed];
+
+    /// The live tier `pack`'s docs are: [`Tier::Grid`] for a [`crate::table`] pack,
+    /// [`Tier::Keyed`] for any other pack whose roots are all lists or maps, else
+    /// [`Tier::Text`].
+    pub fn of_pack(pack: &dyn Pack) -> Tier {
+        use crate::schema::Kind;
+        let schema = pack.schema();
+        let keyed = |k: &Kind| !matches!(k, Kind::Text | Kind::RichText);
+        if crate::table::is_table(&schema) {
+            Tier::Grid
+        } else if !schema.roots.is_empty() && schema.roots.iter().all(|(_, k)| keyed(k)) {
+            Tier::Keyed
+        } else {
+            Tier::Text
+        }
+    }
 }
 
 /// What a verb does.
@@ -331,10 +351,14 @@ const OK01: &[u8] = &[OK, NO];
 const TEXT: &[Tier] = &[Tier::Text];
 const BLOB: &[Tier] = &[Tier::Blob];
 const GRID: &[Tier] = &[Tier::Grid];
+const KEYED: &[Tier] = &[Tier::Keyed];
 /// Text and grid docs: a grid's reads see its rendered file (CSV contract §3.2).
 const TG: &[Tier] = &[Tier::Text, Tier::Grid];
-/// Every tier.
+/// Text, blob and grid docs.
 const ALL3: &[Tier] = &[Tier::Text, Tier::Blob, Tier::Grid];
+/// Every tier: the verbs on a doc's presence and records (open, who's here, status, the log,
+/// named versions, approvals), whatever its content; a keyed doc's too.
+const EVERY: &[Tier] = Tier::ALL;
 
 const fn kit(
     name: &'static str,
@@ -375,8 +399,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "open (stays until leave)",
         OK0,
     )
-    .on(ALL3),
-    kit("leave", R, NR, &[A::Leave], &[P::Close], "leave", OK0).on(ALL3),
+    .on(EVERY),
+    kit("leave", R, NR, &[A::Leave], &[P::Close], "leave", OK0).on(EVERY),
     // on a blob doc, `cat` is the file's bytes (`BlobSession::read`)
     kit(
         "cat",
@@ -448,7 +472,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK01,
     )
     .on(TG),
-    kit("who", R, NR, &[A::Roster], &[P::Who], "who", OK0).on(ALL3),
+    kit("who", R, NR, &[A::Roster], &[P::Who], "who", OK0).on(EVERY),
     // agent presence (amendment 13): where others are working, and saying where I am
     kit(
         "activity",
@@ -666,8 +690,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "status",
         OK0,
     )
-    .on(ALL3),
-    kit("flush", R, NR, &[A::Flush], &[P::Saved], "flush", OK0).on(ALL3),
+    .on(EVERY),
+    kit("flush", R, NR, &[A::Flush], &[P::Saved], "flush", OK0).on(EVERY),
     kit(
         "watch",
         R,
@@ -697,7 +721,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "log [--by P] [-n N]",
         OK0,
     )
-    .on(ALL3),
+    .on(EVERY),
     kit(
         "diff --version",
         H,
@@ -779,7 +803,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "version --name NAME [--version V]",
         OK0,
     )
-    .on(ALL3),
+    .on(EVERY),
     kit(
         "mv",
         E,
@@ -799,7 +823,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "approve <change> (a blob doc: <version>)",
         OK0,
     )
-    .on(ALL3),
+    .on(EVERY),
     kit(
         "decline",
         E,
@@ -809,7 +833,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "decline <change> (a blob doc: <version>; then restore --version to reverse it)",
         OK0,
     )
-    .on(ALL3),
+    .on(EVERY),
     kit(
         "log --pending",
         H,
@@ -819,7 +843,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "log --pending [--all] [--on-behalf-of me|P] (--all: settled ones too, newest first)",
         OK0,
     )
-    .on(ALL3),
+    .on(EVERY),
     // the same list under a host-neutral name: what `log --pending` does, flag for flag
     kit(
         "approvals",
@@ -830,7 +854,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "approvals [--all] [--on-behalf-of me|P] (the same as log --pending)",
         OK0,
     )
-    .on(ALL3),
+    .on(EVERY),
     kit(
         "revert",
         E,
@@ -1125,9 +1149,51 @@ impl FileVerb {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registry {
     verbs: Vec<VerbSpec>,
+    /// The pack's own refusals ([`Registry::errors`]).
+    errors: &'static [crate::errors::ErrorEntry],
     tier: Tier,
     /// Built by [`Registry::for_file`]: the kit's parity harnesses refuse it.
     file: bool,
+}
+
+/// `pack`'s own refusals ([`crate::session::Pack::errors`]), checked as [`Registry::for_pack`]
+/// says.
+fn pack_errors(pack: &dyn Pack) -> Result<&'static [crate::errors::ErrorEntry], RegistryError> {
+    let errors = pack.errors();
+    let prefix = format!("{}-E", pack.schema().name.to_ascii_uppercase());
+    for (i, e) in errors.iter().enumerate() {
+        let digits = e.id.strip_prefix(prefix.as_str()).unwrap_or("");
+        if digits.len() < 3 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(RegistryError(format!(
+                "pack error {:?}: its id is {prefix} and at least three digits",
+                e.id
+            )));
+        }
+        if errors[..i].iter().any(|o| o.id == e.id || o.name == e.name) {
+            return Err(RegistryError(format!(
+                "pack error {} ({}): an id or a name twice",
+                e.id, e.name
+            )));
+        }
+        let snake = !e.name.is_empty()
+            && e.name.starts_with(|c: char| c.is_ascii_lowercase())
+            && e.name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        if !snake {
+            return Err(RegistryError(format!(
+                "pack error {}: its name {:?} is not snake_case",
+                e.id, e.name
+            )));
+        }
+        if e.exit == OK || e.exit > TOO_OLD {
+            return Err(RegistryError(format!(
+                "pack error {}: its exit {} is not one of the kit's refusals (1 to {TOO_OLD})",
+                e.id, e.exit
+            )));
+        }
+    }
+    Ok(errors)
 }
 
 impl Registry {
@@ -1140,6 +1206,7 @@ impl Registry {
     /// its command table against `for_tier(Tier::Blob)`.
     pub fn for_tier(tier: Tier) -> Self {
         Registry {
+            errors: &[],
             verbs: KIT_VERBS
                 .iter()
                 .filter(|v| v.applies_to(tier))
@@ -1167,6 +1234,7 @@ impl Registry {
     /// table (0 to 8) or none.
     pub fn for_file(verbs: &[FileVerb]) -> Result<Self, RegistryError> {
         let mut r = Registry {
+            errors: &[],
             verbs: Vec::with_capacity(verbs.len()),
             tier: Tier::Blob,
             file: true,
@@ -1232,22 +1300,35 @@ impl Registry {
         self.tier
     }
 
+    /// The pack's own refusals ([`crate::session::Pack::errors`]) that [`Registry::for_pack`]
+    /// checked and took; none for the kit's and a file type's registries.
+    pub fn errors(&self) -> &'static [crate::errors::ErrorEntry] {
+        self.errors
+    }
+
     /// The kit's verbs of the pack's tier plus the pack's own ([`crate::session::Pack::verbs`]).
-    /// A [`crate::table`] pack is a grid pack ([`Tier::Grid`]), any other a text pack.
+    /// The tier is [`Tier::of_pack`]'s: a [`crate::table`] pack is a grid pack
+    /// ([`Tier::Grid`]), a pack whose roots are all lists or maps a keyed pack
+    /// ([`Tier::Keyed`]), any other a text pack.
     ///
     /// - A text pack's verbs are edit verbs that need read and edit and run through
     ///   `run_tool` / `edit_with`; one word each.
-    /// - A grid pack's verbs are structured verbs: edit verbs need read and edit and run
-    ///   through `run_tool` / `edit_ops_with`, read verbs need read and run through `run_tool`;
-    ///   a name is one or two words (`row insert`).
+    /// - A grid or keyed pack's verbs are structured verbs: edit verbs need read and edit and
+    ///   run through `run_tool` / `edit_ops_with`, read verbs need read and run through
+    ///   `run_tool`; a name is one or two words (`row insert`, `clip move`).
     ///
     /// Refused: a pack verb whose first word is a kit verb's of any tier (the kit's would
     /// win), twice, with a word that isn't
     /// lowercase letters, digits or `-`, serving nothing, or of the other kind (a text verb on
-    /// a grid pack, a structured verb on a text pack).
+    /// a grid or keyed pack, a structured verb on a text pack); and a pack's own refusal
+    /// ([`crate::session::Pack::errors`]) whose id isn't `<PACK>-E` and at least three digits
+    /// (the pack's name upper-cased), whose id or name is there twice, whose name isn't
+    /// snake_case, or whose exit isn't one of the kit's refusals (1 to 8).
     pub fn for_pack(pack: &dyn Pack) -> Result<Self, RegistryError> {
-        let grid = crate::table::is_table(&pack.schema());
-        let mut r = Self::for_tier(if grid { Tier::Grid } else { Tier::Text });
+        let tier = Tier::of_pack(pack);
+        let structured = tier != Tier::Text;
+        let mut r = Self::for_tier(tier);
+        r.errors = pack_errors(pack)?;
         for v in pack.verbs() {
             let name = v.name();
             let words: Vec<&str> = name.split(' ').collect();
@@ -1264,7 +1345,7 @@ impl Registry {
                     if max_words == 1 { "one" } else { "one or two" }
                 )));
             }
-            if v.is_structured() != grid {
+            if v.is_structured() != structured {
                 return Err(RegistryError(format!(
                     "pack verb {name:?}: a {} verb on a {} pack",
                     if v.is_structured() {
@@ -1272,7 +1353,11 @@ impl Registry {
                     } else {
                         "text"
                     },
-                    if grid { "grid" } else { "text" }
+                    match tier {
+                        Tier::Grid => "grid",
+                        Tier::Keyed => "keyed",
+                        _ => "text",
+                    }
                 )));
             }
             // a kit verb's first word is the kit's, whatever follows (`blame x`, `rows x`)
@@ -1296,7 +1381,7 @@ impl Registry {
                 name,
                 kind: if read { VerbKind::Read } else { VerbKind::Edit },
                 needs: if read { NR } else { NE },
-                api: match (grid, read) {
+                api: match (structured, read) {
                     (false, _) => TOOL_EDIT,
                     (true, false) => &[A::RunTool, A::EditOps],
                     (true, true) => TOOL,
@@ -1305,7 +1390,11 @@ impl Registry {
                 usage: v.usage(),
                 exits: v.exits(),
                 source: Source::Pack,
-                tiers: if grid { GRID } else { TEXT },
+                tiers: match tier {
+                    Tier::Grid => GRID,
+                    Tier::Keyed => KEYED,
+                    _ => TEXT,
+                },
                 positions: v.declared_positions(),
                 serves_named: &[],
                 alias: None,
@@ -1738,7 +1827,10 @@ mod tests {
             "log --pending",
             "approvals",
         ] {
-            assert_eq!(text.get(n).map(|v| v.tiers), Some(ALL3), "{n}");
+            let v = text.get(n).unwrap();
+            for t in ALL3 {
+                assert!(v.applies_to(*t), "{n} on {t:?}");
+            }
         }
         assert_eq!(
             blob.get("lease --break").map(|v| v.needs),
@@ -1749,6 +1841,39 @@ mod tests {
             if a.tiers() == BLOB {
                 assert!(blob.serving(a).count() > 0, "{a}");
             }
+        }
+        // the keyed tier: exactly the kit's verbs on a doc's presence and records (no reads of
+        // a text root, no text tools, no undo yet, no grid verbs, no leases)
+        let keyed = Registry::for_tier(Tier::Keyed);
+        assert_eq!(keyed.tier(), Tier::Keyed);
+        let names: Vec<&str> = keyed.verbs().iter().map(|v| v.name).collect();
+        let every: Vec<&str> = KIT_VERBS
+            .iter()
+            .filter(|v| v.tiers == EVERY)
+            .map(|v| v.name)
+            .collect();
+        assert_eq!(names, every);
+        for n in [
+            "open",
+            "who",
+            "status",
+            "log",
+            "version --name",
+            "approvals",
+        ] {
+            assert!(names.contains(&n), "{n} on a keyed doc");
+        }
+        for n in [
+            "cat",
+            "blame",
+            "write",
+            "sed",
+            "insert",
+            "undo",
+            "lease",
+            "rows drop-deleted",
+        ] {
+            assert!(!names.contains(&n), "{n} on a keyed doc");
         }
         // the grid tier: the kit's reads, presence, history and its own three; no text
         // edit verbs (reconcile), no leases

@@ -63,7 +63,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=${1:-$(cd "$HERE/.." && pwd)}
 [ -d "$ROOT" ] || { echo "check-targets: no directory $ROOT" >&2; exit 2; }
 # manifests with a workspace of their own whose targets count too, paths from the root
-EXTRA_MANIFESTS=""
+EXTRA_MANIFESTS="tools/mpc-tools/Cargo.toml"
 LANDING=${CHECK_TARGETS_LANDING:-0}
 echo "check-targets: landing mode ${LANDING} (1: pending rows are findings)"
 exec python3 -I - "$ROOT" "$EXTRA_MANIFESTS" "$LANDING" <<'PY'

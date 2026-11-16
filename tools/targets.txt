@@ -10,6 +10,7 @@ k2-mpc-base|doctest|k2_mpc_base||base-a1
 k2-mpc-base|example|mpc||built-only:errors: a command-line example with no tests; errors builds it
 # the integration tests: base-a2 runs every one by its glob; base-b, base-c, base-d and errors their own
 k2-mpc-base|test|addresses||base-a2
+k2-mpc-base|test|agent_results||base-a2,plants
 k2-mpc-base|test|agents_cap||base-a2
 k2-mpc-base|test|annotations||base-a2
 k2-mpc-base|test|app_view||base-a2,base-c
@@ -71,6 +72,7 @@ k2-mpc-base|test|live_edit||base-a2,base-b
 k2-mpc-base|test|live_paired||base-a2
 k2-mpc-base|test|mint||base-a2
 k2-mpc-base|test|mint_vectors||base-a2
+k2-mpc-base|test|opened||base-a2,plants
 k2-mpc-base|test|outside_edit_undo||base-a2
 k2-mpc-base|test|outside_identity||base-a2
 k2-mpc-base|test|outside_removal_notes||base-a2
@@ -152,3 +154,17 @@ k2-mpc-spec-undo|test|walk_classes||spec-undo
 k2-mpc-spec-undo|test|mutants|mutants|spec-undo
 k2-mpc-spec-undo|feature|mutants||spec-undo
 
+
+# ---- mpc-tools (tools/mpc-tools, its own workspace: the tools binary; tools/README.md) ------
+mpc-tools|lib|mpc_tools||tools
+mpc-tools|doctest|mpc_tools||excluded: no doc examples
+mpc-tools|bin|mpc-tools||tools
+mpc-tools|test|ck_from_log||tools
+mpc-tools|test|cli||tools
+mpc-tools|test|cut_markers||tools
+mpc-tools|test|evidence_check||tools
+mpc-tools|test|evidence_collect||tools
+mpc-tools|test|licences||tools
+mpc-tools|test|pack_check||tools
+mpc-tools|test|replace_once||tools
+mpc-tools|test|unzip||tools

@@ -65,6 +65,18 @@ pub enum SessionError {
     /// Nothing applied. Exit 8 (`MPC-E112 base_expired`): never retry the same request.
     #[error("base version {base} is unknown or no longer cached; nothing applied")]
     BaseExpired { base: Seq },
+    /// `note_opened` named a version the doc never had. Nothing noted. Exit 4
+    /// (`MPC-E180 opened_version_unknown`).
+    #[error("no version {version} of this doc; nothing noted")]
+    OpenedUnknown { version: u64 },
+    /// `note_opened` named a version the kit doesn't hold (purged, or not kept). Nothing
+    /// noted. Exit 8 (`MPC-E181 opened_version_gone`).
+    #[error("version {version} is gone (purged or not kept); nothing noted")]
+    OpenedGone { version: u64 },
+    /// `note_opened` on a doc with no file: no app saves it, so there is nothing to note. Exit
+    /// 2 (`MPC-E182 opened_no_file`).
+    #[error("this doc has no file; nothing noted")]
+    OpenedNoFile,
     #[error("too many edits; retry in {retry_after_ms} ms")]
     RateLimited { retry_after_ms: u64 },
     /// The file can't be a live doc, or live editing was turned off for it.

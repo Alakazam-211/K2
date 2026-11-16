@@ -243,6 +243,100 @@ pub fn merge3_keep_both(base: &str, ours: &str, theirs: &str) -> Clean {
     Clean { hunks, text }
 }
 
+/// One place where an outside save's merge kept both sides ([`merge3_keep_both_kept`]): a
+/// conflict region where the live text and the file each wrote lines, both kept. Its lines
+/// are 1-based and inclusive, in the merged text (the doc's new version): from the side's
+/// first written line in the region to its last. The merged text holds only the two sides'
+/// own lines there (no marker or separator), in the merge's order ([`merge3_keep_both`]):
+/// the live side first at one point, but each side's text where its own change starts, so
+/// the file's lines can come first, and one side's range can enclose the other's. Use the
+/// ranges; never assume an order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct KeptPair {
+    /// The live side's lines (what the doc's participants had: `merge3_keep_both`'s
+    /// `theirs`).
+    pub live: (usize, usize),
+    /// The outside save's lines (the file's: `merge3_keep_both`'s `ours`).
+    pub file: (usize, usize),
+}
+
+/// [`merge3_keep_both`], and where it kept both sides: one [`KeptPair`] per conflict region in
+/// which both sides' written lines are in the result, in order. None when the sides merge
+/// cleanly (`write --base`'s merge, O1–O5), and none for a region where one side only deleted
+/// (nothing of it is kept).
+pub fn merge3_keep_both_kept(base: &str, ours: &str, theirs: &str) -> (Clean, Vec<KeptPair>) {
+    let clean = merge3_keep_both(base, ours, theirs);
+    let pairs = kept_pairs(base, ours, theirs);
+    (clean, pairs)
+}
+
+/// The kept pairs of [`merge3_keep_both_kept`], on the closed merged text (whose lines are the
+/// result's: only a final "\n" may differ).
+fn kept_pairs(base: &str, ours: &str, theirs: &str) -> Vec<KeptPair> {
+    let cb = closed(base);
+    let (a, b) = outside_sides(base, ours, theirs);
+    let (_, clash) = clashes(&cb, &a, &b, !cb.is_empty(), |i, j| a[i] == b[j]);
+    if clash.is_empty() {
+        return Vec::new();
+    }
+    let tagged = keep_both_tagged(&cb, &a, &b);
+    let joined = diff::coalesce(tagged.iter().map(|(h, _)| h.clone()).collect());
+    let merged = diff::apply(&closed(theirs), &joined);
+    // what a hunk adds to the length of the text it applies to
+    let grow = |h: &Hunk| h.insert.len() as isize - (h.end - h.start) as isize;
+    // where a byte of the closed theirs is in the merged text: after every kept-both hunk
+    // that ends at or before it (an insertion there lands before it)
+    let to_merged = |q: usize| -> usize {
+        let shift: isize = tagged
+            .iter()
+            .filter(|(h, _)| h.end <= q)
+            .map(|(h, _)| grow(h))
+            .sum();
+        (q as isize + shift) as usize
+    };
+    // where theirs' hunk `j` writes its text in the merged text
+    let live_at = |j: usize| -> usize {
+        let shift: isize = b[..j].iter().map(grow).sum();
+        to_merged((b[j].start as isize + shift) as usize)
+    };
+    // where each of ours' insertions is in the merged text: its place, after the hunks before it
+    let mut file_at: Vec<(usize, Range<usize>)> = Vec::new();
+    let mut delta: isize = 0;
+    for (h, tag) in &tagged {
+        if let Some(i) = tag {
+            let m = (h.start as isize + delta) as usize;
+            file_at.push((*i, m..m + h.insert.len()));
+        }
+        delta += grow(h);
+    }
+    let line = |at: usize| merged[..at].matches('\n').count() + 1;
+    // the lines a set of byte ranges spans, or `None` when it is empty
+    let lines = |rs: &mut dyn Iterator<Item = Range<usize>>| -> Option<(usize, usize)> {
+        let (mut lo, mut hi) = (usize::MAX, 0);
+        for r in rs.filter(|r| !r.is_empty()) {
+            lo = lo.min(r.start);
+            hi = hi.max(r.end);
+        }
+        (lo < hi).then(|| (line(lo), line(hi - 1)))
+    };
+    let mut pairs = Vec::new();
+    for (_, ai, bj) in regions(&a, &b, &clash) {
+        let mut live = bj.iter().filter(|&&j| !b[j].insert.is_empty()).map(|&j| {
+            let m = live_at(j);
+            m..m + b[j].insert.len()
+        });
+        let mut file = file_at
+            .iter()
+            .filter(|(i, _)| ai.contains(i))
+            .map(|(_, r)| r.clone());
+        if let (Some(live), Some(file)) = (lines(&mut live), lines(&mut file)) {
+            pairs.push(KeptPair { live, file });
+        }
+    }
+    pairs
+}
+
 /// `t` with a final "\n" when it has text and doesn't end with one (the outside save's
 /// merge works on closed texts, v0.9.7).
 pub fn closed(t: &str) -> std::borrow::Cow<'_, str> {
@@ -419,6 +513,17 @@ pub fn outside_merge_sides(
 /// before ours within each (O5 at the end of a text). Equal hunks are taken once (O4). On
 /// hunk sets that don't overlap this is [`merge_sets`]'s clean result.
 fn keep_both(base: &str, a: &[Hunk], b: &[Hunk]) -> Vec<Hunk> {
+    diff::coalesce(
+        keep_both_tagged(base, a, b)
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect(),
+    )
+}
+
+/// [`keep_both`]'s hunks before they are joined, in order on `theirs`, each with the index in
+/// `a` of the hunk whose text it inserts (`None`: a deletion).
+fn keep_both_tagged(base: &str, a: &[Hunk], b: &[Hunk]) -> Vec<(Hunk, Option<usize>)> {
     // pre[k]: the length change of b[..k]
     let mut pre = Vec::with_capacity(b.len() + 1);
     pre.push(0isize);
@@ -443,7 +548,7 @@ fn keep_both(base: &str, a: &[Hunk], b: &[Hunk]) -> Vec<Hunk> {
     // where the last ours group was put: a later one at the same point follows ours' own
     // lines, not theirs' text
     let mut last_put: Option<usize> = None;
-    for x in a {
+    for (i, x) in a.iter().enumerate() {
         if b.iter().any(|y| y == x) {
             continue; // O4: theirs holds it already
         }
@@ -489,11 +594,14 @@ fn keep_both(base: &str, a: &[Hunk], b: &[Hunk]) -> Vec<Hunk> {
                 }
             }
             last_put = Some(p);
-            out.push(Hunk {
-                start: p,
-                end: p,
-                insert,
-            });
+            out.push((
+                Hunk {
+                    start: p,
+                    end: p,
+                    insert,
+                },
+                Some(i),
+            ));
         }
         // the base characters x deletes that theirs still holds, split at theirs' insertions
         let mut u = x.start;
@@ -505,24 +613,30 @@ fn keep_both(base: &str, a: &[Hunk], b: &[Hunk]) -> Vec<Hunk> {
             }
             if y.start > u {
                 let s = at(u, false);
-                out.push(Hunk {
-                    start: s,
-                    end: s + (y.start - u),
-                    insert: String::new(),
-                });
+                out.push((
+                    Hunk {
+                        start: s,
+                        end: s + (y.start - u),
+                        insert: String::new(),
+                    },
+                    None,
+                ));
             }
             u = u.max(y.end);
         }
         if u < x.end {
             let s = at(u, false);
-            out.push(Hunk {
-                start: s,
-                end: s + (x.end - u),
-                insert: String::new(),
-            });
+            out.push((
+                Hunk {
+                    start: s,
+                    end: s + (x.end - u),
+                    insert: String::new(),
+                },
+                None,
+            ));
         }
     }
-    diff::coalesce(out)
+    out
 }
 
 /// Merge two **exact hunk sets** on `base` (undo spec v1.7, U10): `ours` and `theirs` are
@@ -566,27 +680,7 @@ fn merge_sets(
     same: impl Fn(usize, usize) -> bool,
 ) -> Merge {
     // Pass 1: find conflicts and drop changes made identically on both sides.
-    let mut keep = vec![true; a.len()];
-    let mut clash: Vec<(usize, usize)> = Vec::new(); // (index in a, index in b)
-    let mut j0 = 0;
-    for (i, x) in a.iter().enumerate() {
-        while j0 < b.len() && b[j0].end < x.start {
-            j0 += 1;
-        }
-        let mut j = j0;
-        while j < b.len() && b[j].start <= x.end {
-            let y = &b[j];
-            let eof_appends =
-                at_end && x.is_insertion() && y.is_insertion() && x.start == base.len();
-            if x.start == y.start && x.end == y.end && same(i, j) {
-                debug_assert_eq!(x, y, "O4's identity implies equal hunks");
-                keep[i] = false;
-            } else if !eof_appends && overlaps(x, y) {
-                clash.push((i, j));
-            }
-            j += 1;
-        }
-    }
+    let (keep, clash) = clashes(base, a, b, at_end, same);
     if !clash.is_empty() {
         return Merge::Conflicts(conflicts(base, a, b, &clash));
     }
@@ -623,6 +717,39 @@ fn merge_sets(
     Merge::Clean(Clean { hunks: out, text })
 }
 
+/// [`merge_sets`]' first pass: which of `a` to keep (`false`: the same change is in `b`, O4)
+/// and the clashing pairs `(index in a, index in b)`, in order.
+fn clashes(
+    base: &str,
+    a: &[Hunk],
+    b: &[Hunk],
+    at_end: bool,
+    same: impl Fn(usize, usize) -> bool,
+) -> (Vec<bool>, Vec<(usize, usize)>) {
+    let mut keep = vec![true; a.len()];
+    let mut clash: Vec<(usize, usize)> = Vec::new(); // (index in a, index in b)
+    let mut j0 = 0;
+    for (i, x) in a.iter().enumerate() {
+        while j0 < b.len() && b[j0].end < x.start {
+            j0 += 1;
+        }
+        let mut j = j0;
+        while j < b.len() && b[j].start <= x.end {
+            let y = &b[j];
+            let eof_appends =
+                at_end && x.is_insertion() && y.is_insertion() && x.start == base.len();
+            if x.start == y.start && x.end == y.end && same(i, j) {
+                debug_assert_eq!(x, y, "O4's identity implies equal hunks");
+                keep[i] = false;
+            } else if !eof_appends && overlaps(x, y) {
+                clash.push((i, j));
+            }
+            j += 1;
+        }
+    }
+    (keep, clash)
+}
+
 fn overlaps(x: &Hunk, y: &Hunk) -> bool {
     match (x.is_insertion(), y.is_insertion()) {
         // same point, different text (identical, and appends at the end, handled by caller)
@@ -635,8 +762,17 @@ fn overlaps(x: &Hunk, y: &Hunk) -> bool {
 
 /// Group clashing hunks into regions (clashes whose ranges overlap or touch form one region)
 /// and render each side.
-fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Vec<Conflict> {
-    let mut regions: Vec<(Range<usize>, Vec<usize>, Vec<usize>)> = Vec::new();
+/// A conflict region: its range on the base, and each side's hunks in it (indices).
+type Region = (Range<usize>, Vec<usize>, Vec<usize>);
+
+/// The regions `clash` forms: clashing hunks that overlap or touch, joined, each with its
+/// range on the base and each side's hunks in it, in base order: its clashing ones and every
+/// other one inside it (v0.11.1), since a hunk that clashes with nothing (an insertion where two
+/// clashes touch) still changes the region's text and lines on that side. An insertion at the
+/// region's start or end is outside it: it lands before the region or after it, as O3 places it
+/// and as `overlaps` lets it clash with neither.
+fn regions(a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Vec<Region> {
+    let mut regions: Vec<Region> = Vec::new();
     for &(i, j) in clash {
         let r = a[i].start.min(b[j].start)..a[i].end.max(b[j].end);
         match regions.last_mut() {
@@ -656,12 +792,6 @@ fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Ve
     regions
         .into_iter()
         .map(|(r, ai, bj)| {
-            // a side's hunks in the region (v0.11.1): its clashing ones (`idx`) and every other
-            // one inside it, since a hunk that clashes with nothing (an insertion where two
-            // clashes touch) still changes the region's text and lines on that side. An
-            // insertion at the region's start or end is outside it: it lands before the region
-            // or after it, as O3 places it and as `overlaps` lets it clash with neither. In
-            // base order.
             let inside = |hs: &[Hunk], idx: &[usize]| -> Vec<usize> {
                 (0..hs.len())
                     .filter(|&k| {
@@ -680,6 +810,15 @@ fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Ve
                     .collect()
             };
             let (ai, bj) = (inside(a, &ai), inside(b, &bj));
+            (r, ai, bj)
+        })
+        .collect()
+}
+
+fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Vec<Conflict> {
+    regions(a, b, clash)
+        .into_iter()
+        .map(|(r, ai, bj)| {
             let side = |hs: &[Hunk], idx: &[usize]| -> String {
                 let local: Vec<Hunk> = idx
                     .iter()
@@ -728,7 +867,7 @@ fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Ve
 }
 
 /// The planted faults, as this module names them: the kit's own copy of
-/// [`crate::differential::MergeMutant`]'s text-merge series, which exists only in test builds
+/// `crate::differential::MergeMutant`'s text-merge series, which exists only in test builds
 /// and with the `differential` feature (a host's build has neither, nor this enum: every fault
 /// is then absent, and its checks are compiled out).
 #[cfg(any(test, feature = "differential"))]
@@ -752,6 +891,84 @@ fn mutant() -> Option<Planted> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- the outside save's kept pairs (`merge3_keep_both_kept`)
+
+    #[test]
+    fn the_pairs_order_is_the_merges_not_always_live_first() {
+        // live first: both rewrote one line (one point, the live side first)
+        let (text, kept) = pairs("a\nb\nc\n", "a\nF\nc\n", "a\nL\nc\n");
+        assert_eq!(text, "a\nL\nF\nc\n");
+        assert_eq!(kept, [((2, 2), (3, 3))]);
+        // file first: the file replaced lines 2-3, the live side inserted a line between them;
+        // the file's text lands where its change starts, before the live line
+        let (text, kept) = pairs("a\nb\nc\nd\n", "a\nF\nd\n", "a\nb\nL\nc\nd\n");
+        assert_eq!(text, "a\nF\nL\nd\n");
+        assert_eq!(kept, [((3, 3), (2, 2))]);
+        // enclosed: the live side rewrote line 2 and inserted before line 4, the file replaced
+        // lines 2-4: the live range spans the file's line
+        let (text, kept) = pairs("a\nb\nc\nd\ne\n", "a\nF\ne\n", "a\nL1\nc\nL2\nd\ne\n");
+        assert_eq!(text, "a\nL1\nF\nL2\ne\n");
+        assert_eq!(kept, [((2, 4), (3, 3))]);
+        // no marker or separator line in any of them: every line is one side's or the base's
+        for (base, file, live) in [
+            ("a\nb\nc\n", "a\nF\nc\n", "a\nL\nc\n"),
+            ("a\nb\nc\nd\n", "a\nF\nd\n", "a\nb\nL\nc\nd\n"),
+        ] {
+            let (text, _) = pairs(base, file, live);
+            for l in text.lines() {
+                assert!(
+                    base.lines()
+                        .chain(file.lines())
+                        .chain(live.lines())
+                        .any(|x| x == l),
+                    "{l:?} is no side's line"
+                );
+            }
+        }
+    }
+
+    type Lines = (usize, usize);
+
+    fn pairs(base: &str, file: &str, live: &str) -> (String, Vec<(Lines, Lines)>) {
+        let (c, kept) = merge3_keep_both_kept(base, file, live);
+        assert_eq!(c, merge3_keep_both(base, file, live), "the same merge");
+        (c.text, kept.into_iter().map(|p| (p.live, p.file)).collect())
+    }
+
+    #[test]
+    fn an_overlap_kept_both_is_one_pair_with_its_exact_lines() {
+        // one line, both rewrote it: the live line first, then the file's
+        let (text, kept) = pairs("a\nb\nc\n", "a\nB-file\nc\n", "a\nB-live\nc\n");
+        assert_eq!(text, "a\nB-live\nB-file\nc\n");
+        assert_eq!(kept, [((2, 2), (3, 3))]);
+        // two base lines: the live side wrote one line, the file two
+        let (text, kept) = pairs("a\nb\nc\nd\n", "a\nF1\nF2\nd\n", "a\nL1\nd\n");
+        assert_eq!(text, "a\nL1\nF1\nF2\nd\n");
+        assert_eq!(kept, [((2, 2), (3, 4))]);
+        // two regions, in order, the second's lines after the first's
+        let (text, kept) = pairs("1\n2\n3\n4\n5\n", "1\nX\n3\nY\n5\n", "1\nx\n3\ny\n5\n");
+        assert_eq!(text, "1\nx\nX\n3\ny\nY\n5\n");
+        assert_eq!(kept, [((2, 2), (3, 3)), ((5, 5), (6, 6))]);
+        // multi-byte text and no final newline: lines, not bytes
+        let (text, kept) = pairs("é\nü\nö", "é\nÜ-file\nö", "é\nÜ-live\nö");
+        assert_eq!(text, "é\nÜ-live\nÜ-file\nö");
+        assert_eq!(kept, [((2, 2), (3, 3))]);
+    }
+
+    #[test]
+    fn a_clean_merge_keeps_no_pairs() {
+        // different lines
+        assert_eq!(pairs("a\nb\nc\n", "A\nb\nc\n", "a\nb\nC\n").1, []);
+        // the same change on both sides (O4)
+        assert_eq!(pairs("a\nb\n", "a\nB\n", "a\nB\n").1, []);
+        // two appends at the end of the text land, theirs first (O5): no overlap
+        let (text, kept) = pairs("a\nb\n", "a\nb\nX\n", "a\nb\nY\n");
+        assert_eq!((text.as_str(), kept), ("a\nb\nY\nX\n", vec![]));
+        // an overlap where one side only deleted: nothing of it is kept, so no pair
+        let (text, kept) = pairs("a\nb\nc\n", "a\nc\n", "a\nB\nc\n");
+        assert_eq!((text.as_str(), kept), ("a\nB\nc\n", vec![]));
+    }
     use proptest::prelude::*;
 
     fn clean(base: &str, ours: &str, theirs: &str) -> String {

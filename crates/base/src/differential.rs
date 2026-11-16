@@ -1173,6 +1173,153 @@ pub fn take_verb_state_builds() -> u64 {
     VERB_STATE_BUILDS.with(|c| c.replace(0))
 }
 
+/// A fault planted in what an agent gets back as data (`tools/run.rs`, `tools/result.rs`): a
+/// pack's refusals and the call's result ([`crate::tools::ToolOutput::result`]), so the rows of
+/// `tests/agent_results.rs` show they catch each one. Installed per thread by
+/// [`with_ergo_mutant`], or named by `MPC_ERGO_MUTANT` for a whole test run (an unknown name
+/// stops the run, naming it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ErgoMutant {
+    /// A pack's refusal is dropped as data: neither its registered entry nor the text form's
+    /// stop-gap makes a report (`refusal: None`, as before the pack refusals were read).
+    RefusalDropped,
+    /// The result's changed units lose their addresses (`address: null`).
+    UnitsDropAddress,
+    /// The result leaves out the version the verb computed on (`version.base: null`).
+    EnvelopeDropsBase,
+    /// The result is written to stdout though the call didn't ask for it.
+    JsonLeaksToText,
+    /// The result leaves out the name of its typed data's shape (`data_spec: null`).
+    DataSpecDropped,
+}
+
+impl ErgoMutant {
+    /// The mutant `MPC_ERGO_MUTANT` names: its name in kebab case.
+    pub fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "refusal-dropped" => Self::RefusalDropped,
+            "units-drop-address" => Self::UnitsDropAddress,
+            "envelope-drops-base" => Self::EnvelopeDropsBase,
+            "json-leaks-to-text" => Self::JsonLeaksToText,
+            "data-spec-dropped" => Self::DataSpecDropped,
+            _ => return None,
+        })
+    }
+}
+
+thread_local! {
+    static ERGO_MUTANT: std::cell::Cell<Option<ErgoMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The agent-result fault planted on this thread, else the one `MPC_ERGO_MUTANT` names, if any.
+pub fn ergo_mutant() -> Option<ErgoMutant> {
+    ERGO_MUTANT.with(|m| m.get()).or_else(|| {
+        let v = std::env::var("MPC_ERGO_MUTANT").ok()?;
+        Some(
+            ErgoMutant::named(&v)
+                .unwrap_or_else(|| panic!("MPC_ERGO_MUTANT={v}: not an agent-result mutant")),
+        )
+    })
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_ergo_mutant<R>(mutant: ErgoMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ErgoMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            ERGO_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(ERGO_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in the version an app opened (`session/opened.rs`, `note_opened`), so the
+/// rows of `tests/opened.rs` show they catch each one. Installed per thread by
+/// [`with_opened_mutant`], or named by `MPC_OPENED_MUTANT` for a whole test run (an unknown
+/// name stops the run, naming it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenedMutant {
+    /// The pin is kept in memory only: a restart forgets it.
+    OpenedInMemory,
+    /// The pin is used without checking its version is still held.
+    PinUnchecked,
+    /// An outside save taken in leaves the pin where it was.
+    PinNeverMoves,
+    /// `FileNow` pins the synced version without checking the file first.
+    FileNowSkipsCheck,
+    /// The write-back hold after a `FileNow` pin is ignored.
+    HoldIgnored,
+    /// An outside save merges as if there were no pin.
+    OpenedIgnored,
+    /// With no pin, a save over the kit's write merges from the synced version as if it were
+    /// known.
+    BaseIsAlwaysKnown,
+    /// A keyed doc's field merge takes a clash as the save's value.
+    ClashMerged,
+    /// A keyed doc's field merge isn't checked by the pack.
+    ViewCheckSkipped,
+    /// A save's own stamp is ignored.
+    StampIgnored,
+    /// A text doc's outside save merges from the synced text though a pin is noted (the pin
+    /// is otherwise kept and checked).
+    TextBaseSynced,
+    /// A text doc's outside save merged from the version the app opened reports no kept
+    /// pairs.
+    KeptPairsDropped,
+}
+
+impl OpenedMutant {
+    /// The mutant `MPC_OPENED_MUTANT` names: its name in kebab case.
+    pub fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "opened-in-memory" => Self::OpenedInMemory,
+            "pin-unchecked" => Self::PinUnchecked,
+            "pin-never-moves" => Self::PinNeverMoves,
+            "file-now-skips-check" => Self::FileNowSkipsCheck,
+            "hold-ignored" => Self::HoldIgnored,
+            "opened-ignored" => Self::OpenedIgnored,
+            "base-is-always-known" => Self::BaseIsAlwaysKnown,
+            "clash-merged" => Self::ClashMerged,
+            "view-check-skipped" => Self::ViewCheckSkipped,
+            "stamp-ignored" => Self::StampIgnored,
+            "text-base-synced" => Self::TextBaseSynced,
+            "kept-pairs-dropped" => Self::KeptPairsDropped,
+            _ => return None,
+        })
+    }
+}
+
+thread_local! {
+    static OPENED_MUTANT: std::cell::Cell<Option<OpenedMutant>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The opened-pin fault planted on this thread, else the one `MPC_OPENED_MUTANT` names, if any.
+pub fn opened_mutant() -> Option<OpenedMutant> {
+    OPENED_MUTANT.with(|m| m.get()).or_else(|| {
+        let v = std::env::var("MPC_OPENED_MUTANT").ok()?;
+        Some(
+            OpenedMutant::named(&v)
+                .unwrap_or_else(|| panic!("MPC_OPENED_MUTANT={v}: not an opened-pin mutant")),
+        )
+    })
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_opened_mutant<R>(mutant: OpenedMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<OpenedMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            OPENED_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(OPENED_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// A keyed watch's planted fault (`session/live/watch.rs`), installed per thread by
 /// [`with_watch_mutant`], so the watch's rows show they catch it (`tests/keyed_watch.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1957,7 +2104,7 @@ pub(crate) fn make(
 }
 
 /// The run record's `job` field (`tools/evidence/`): the job id K2 Compute's nodes set in
-/// `K2_COMPUTE_JOB`, as a JSON string, or `null` off a node (then `collect.py` fills it in).
+/// `K2_COMPUTE_JOB`, as a JSON string, or `null` off a node (then the evidence collector fills it in).
 /// Only `[A-Za-z0-9_-]` is taken, so the record stays valid JSON.
 pub fn runrec_job() -> String {
     match std::env::var("K2_COMPUTE_JOB") {

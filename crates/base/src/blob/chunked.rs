@@ -205,7 +205,7 @@ fn release<K: std::hash::Hash + Eq>(m: &mut HashMap<K, u32>, k: K) {
     }
 }
 
-/// The planted faults this module reads ([`crate::differential::ChunkPlant`]).
+/// The planted faults this module reads (`crate::differential::ChunkPlant`).
 #[derive(Clone, Copy)]
 pub(super) enum Plant {
     GcIgnoresWaitingSegment,

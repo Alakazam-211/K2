@@ -62,6 +62,15 @@
 #                passes).
 #                LABEL_EXEMPT names the files read as data whole. Printed as
 #                `check-public-cut: labels: PATH:LINE: KIND`.
+#   repos        every k2-mpc name (lowercase, `k2_mpc_` too) in a kept text file (vendor/ and
+#                LABEL_EXEMPT aside) names a public repo or crate: NAME is in PUBLIC_REPO_NAMES,
+#                or starts with one and `-`. Printed as
+#                `check-public-cut: repos: PATH:LINE: k2-mpc-NAME`.
+#   testdata     no commit-like hash (7 to 40 hex digits with a digit and a letter, a word of its
+#                own) in a test-data folder's (`tests/data/`) prose: a `#` line of a table
+#                (.tsv, .txt, .json, .log) and every line of any other file there (a generator,
+#                a script, a note). The rows of a table are data. Printed as
+#                `check-public-cut: testdata: PATH:LINE: a commit-like hash`.
 #   private      tools/check-private.sh is clean.
 #   windows-names  tools/check-windows-names.sh is clean: this tree is what a host's Windows
 #                machines check out. The script missing blocks too.
@@ -81,7 +90,7 @@ DROPPED_CRATES="crates/conformance:k2-mpc-conformance"
 # records: docs/evidence/runs, about 16 MB, checked on main), and what names them in a kept
 # file: extended regexes, |-separated. DROPPED_REFS has no pattern for the run records: the
 # evidence notes the cut keeps name the folder their citations point to.
-DROPPED_TREES="fuzz tools/fuzz docs/evidence/runs"
+DROPPED_TREES="fuzz tools/fuzz docs/evidence/runs tools/mpc-tools/tests/data/vendor-manifests"
 DROPPED_REFS='(^|[^A-Za-z0-9_-])fuzz/|tools/fuzz([^A-Za-z0-9_-]|$)|(^[ \t]*|exclude.*)"fuzz"|cargo[- ]fuzz|k2[-_]mpc[-_]base[-_]fuzz|k2_mpc_base::fuzzing|(^|[^A-Z_])FUZZ_(CPUS|HOME|MAX_JOBS|MEM|NODES|SECS|SHIP|SUMMARY_DIR|TIMEOUT|TZ|USED|WINDOW|WITH|WS)'
 # Single files a public cut removes (a check of what the cut takes out), paths from the root.
 DROPPED_FILES="tools/check-engine-features.sh tools/test-engine-features.sh tools/vendor-engine.sh tools/test-vendor-engine.sh docs/CONFORMANCE.md docs/design/person-writer-reuse-r0.md"
@@ -119,11 +128,14 @@ finding label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])F[0-9][0-9]?([^A-Za-z0-9_:'"'"'"]|: 
 run label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])V([0-79]|[1-9][0-9])([^A-Za-z0-9_:'"'"'"]|: |$)'
 # Files the labels rule reads as data whole: this script and the gate, which name the patterns.
 LABEL_EXEMPT="tools/check-public-cut.sh tools/tests/public-cut-gate.sh"
+# The names a kept file may give a repo or crate as k2-mpc-NAME: the kit's own crates and tools,
+# and the released packs' repos (the repos rule above). NAME-anything passes too.
+PUBLIC_REPO_NAMES="base spec-undo client conformance engine perf timers-check untrusted-wire-ack markdown text csv board psd pptx ooxml opc"
 # ---------------------------------------------------------------------------------------------
 
 if [ "${1:-}" = --print-config ]; then
-  printf 'PUBLIC_ENGINE_CRATES=%s\nNATIVE_FEATURES=%s\nDROPPED_CRATES=%s\nDROPPED_TREES=%s\nDROPPED_FILES=%s\nDROPPED_REFS=%s\nTEXT_TERMS=%s\nTEXT_CODE_TOKENS=%s\nTEXT_BASE=%s\nTEXT_EXCEPTIONS=%s\n' \
-    "'$PUBLIC_ENGINE_CRATES'" "'$NATIVE_FEATURES'" "'$DROPPED_CRATES'" "'$DROPPED_TREES'" "'$DROPPED_FILES'" "'$DROPPED_REFS'" "'$TEXT_TERMS'" "'$TEXT_CODE_TOKENS'" "'$TEXT_BASE'" "'$TEXT_EXCEPTIONS'"
+  printf 'PUBLIC_ENGINE_CRATES=%s\nNATIVE_FEATURES=%s\nDROPPED_CRATES=%s\nDROPPED_TREES=%s\nDROPPED_FILES=%s\nDROPPED_REFS=%s\nTEXT_TERMS=%s\nTEXT_CODE_TOKENS=%s\nTEXT_BASE=%s\nTEXT_EXCEPTIONS=%s\nPUBLIC_REPO_NAMES=%s\n' \
+    "'$PUBLIC_ENGINE_CRATES'" "'$NATIVE_FEATURES'" "'$DROPPED_CRATES'" "'$DROPPED_TREES'" "'$DROPPED_FILES'" "'$DROPPED_REFS'" "'$TEXT_TERMS'" "'$TEXT_CODE_TOKENS'" "'$TEXT_BASE'" "'$TEXT_EXCEPTIONS'" "'$PUBLIC_REPO_NAMES'"
   exit 0
 fi
 case ${1:-} in -*) echo "usage: tools/check-public-cut.sh [ROOT] | --print-config" >&2; exit 2 ;; esac
@@ -546,6 +558,44 @@ done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTE
       if (errs && (line ~ /^\| `MPC-/ || line ~ /^- \*\*Rule:\*\*/)) continue
       if (gold && line ~ /^rule:/) continue
       for (i = 1; i <= n; i++) if (line ~ rx[i]) print "check-public-cut: labels: " file ":" ln ": " kind[i]
+    }
+    close(file)
+  }' >> "$OUT"
+
+# ---- repos and testdata ---------------------------------------------------------------------
+# Every kept text file but vendor/ and LABEL_EXEMPT (binary files: grep -I): each k2-mpc-NAME is a
+# public name (PUBLIC_REPO_NAMES); in a test-data folder, no commit-like hash in its prose.
+grep -Ev '^vendor/' "$LIST" | while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  case " $LABEL_EXEMPT " in *" $f "*) continue ;; esac
+  grep -Iq . "$f" 2>/dev/null || continue
+  printf '%s\n' "$f"
+done | PUBLIC_REPO_NAMES="$PUBLIC_REPO_NAMES" awk '
+  BEGIN { n = split(ENVIRON["PUBLIC_REPO_NAMES"], pub, " ") }
+  function public(name,    i) {
+    for (i = 1; i <= n; i++) if (name == pub[i] || index(name, pub[i] "-") == 1) return 1
+    return 0
+  }
+  {
+    file = $0; ln = 0
+    data = (file ~ /(^|\/)tests\/data\//)
+    table = (file ~ /\.(tsv|txt|json|log)$/)
+    while ((getline line < file) > 0) {
+      ln++
+      s = line
+      while (match(s, /k2[-_]mpc[-_][a-z0-9]+([-_][a-z0-9]+)*/)) {
+        name = substr(s, RSTART + 7, RLENGTH - 7); s = substr(s, RSTART + RLENGTH)
+        gsub(/_/, "-", name)
+        if (!public(name)) print "check-public-cut: repos: " file ":" ln ": k2-mpc-" name
+      }
+      if (!data || (table && line !~ /^[ \t]*#/)) continue
+      k = split(line, tok, /[^0-9A-Za-z]+/)
+      for (i = 1; i <= k; i++) {
+        t = tok[i]
+        if (length(t) >= 7 && length(t) <= 40 && t ~ /^[0-9a-f]+$/ && t ~ /[0-9]/ && t ~ /[a-f]/) {
+          print "check-public-cut: testdata: " file ":" ln ": a commit-like hash"; break
+        }
+      }
     }
     close(file)
   }' >> "$OUT"

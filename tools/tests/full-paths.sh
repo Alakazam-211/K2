@@ -20,7 +20,7 @@ E="error_ids tools_session pack_verbs"
 # on main from the exports work; with k2.6.3's patch and the merged kit, base-a1 with them needed
 # 130,240 inline characters, over a job's 120,000; without them 96,728)
 D="disk if_version blame blame_incremental blame_cost position_index"
-case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wire-guard or evidence} in
+case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wire-guard, tools or evidence} in
   # base-a was one part until the v0.9.5 merge put it over a job's limit (INLINE 142,396):
   # base-a1 is the kit's unit tests (its proptest regressions) and doctests, base-a2 its
   # integration tests on the kit without its unit-test modules
@@ -40,12 +40,12 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
       echo "tools/evidence docs/evidence tools/check-private.sh tools/test-check-private.sh tools/private-allow.txt" \
       "tools/check-windows-names.sh tools/test-windows-names.sh" $EF \
       "tools/oss-check.sh tools/test-oss-check.sh LICENSE-MIT LICENSE-APACHE NOTICE.md" \
-      "scripts/pack-checks/carrier-row.sh tools/test-carrier-row.sh" \
+      "scripts/pack-checks/carrier-row.sh tools/test-carrier-row.sh tools/mpc-tools.sh tools/mpc-tools/Cargo.toml tools/mpc-tools/Cargo.lock tools/mpc-tools/src" \
       "tools/check-targets.sh tools/test-check-targets.sh tools/targets.txt tools/tests tools/n1/n1.sh tools/undo/traces-large.sh tools/README.md crates" \
       "client/LICENSE-MIT client/LICENSE-APACHE" \
       $(git ls-files '*Cargo.toml' '*package.json' | grep -v '^vendor/' | tr '\n' ' ') ;;
-  # bundled with STRIP_DOCS=1 since v0.9.7 (the App viewer's run_tool test put it 600 characters
-  # past a job's 120,000 inline; it runs no doctests; tools/README.md)
+  # over a job's inline limit as a bundle since v0.9.7 (the App viewer's run_tool test): a
+  # --repo job only
   # app_view's grid case uses the grid test pack
   base-c) echo "$KIT_LIB" $(for t in $C; do printf ' crates/base/tests/%s.rs' "$t"; done) crates/base/tests/grid_pack ;;
   base-d) echo "$KIT_LIB" $(for t in $D; do printf ' crates/base/tests/%s.rs' "$t"; done) ;;
@@ -56,14 +56,15 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
   base-b) echo "$KIT_LIB crates/base/tests/tier0.rs crates/base/tests/tier0_large.rs crates/base/tests/promote.rs crates/base/tests/demote.rs crates/base/tests/parity.rs crates/base/tests/parity_blob.rs crates/base/tests/parity_grid.rs crates/base/tests/grid_pack crates/base/tests/erasure.rs crates/base/tests/fixtures crates/base/tests/live_edit.rs crates/base/tests/vectors/live_rebase.json docs/SESSIONS.md" ;;
   # spec/quint: only the file its tests read (v0.9.4: the whole folder put the part over a
   # job's limit, 65 chunks)
-  # bundled with STRIP_DOCS=1 since v0.9.7 (D1 put it at 145,656 inline characters;
-  # tools/README.md)
+  # over a job's inline limit as a bundle since D1 (145,656 inline characters): a --repo job only
   spec-undo) echo "$KIT_LIB crates/spec-undo spec/quint/undo_diff.qnt docs/SPEC-UNDO.md" ;;
   # the build-time guard, checked from inside the repo and as a host would build (no cargo
   # check of tests: the lib alone)
   wire-guard) echo "$KIT_LIB tools/tests/wire-guard.sh" ;;
   # fmt and clippy need every target of every crate: a --repo job only
   lint) echo "full-paths.sh: lint runs only as a --repo job (tools/README.md, \"Test jobs\")" >&2; exit 2 ;;
+  # the tools binary and its pin tables (tools/mpc-tools; its own workspace)
+  tools) echo "tools/mpc-tools.sh tools/mpc-tools" ;;
   # not suite parts: what tools/tests/soak.sh and the edit-path measurements need
   soak) echo "$KIT_LIB crates/base/tests/soak.rs" ;;
   measure) echo "$KIT_LIB crates/base/tests/edit_cost.rs crates/base/tests/edit_paths.rs crates/base/tests/soak.rs" ;;

@@ -515,6 +515,8 @@ impl Session {
                 version: st.version,
                 actor,
                 started_ms: now,
+                // the span at this version: what the event's `version` names
+                bytes: Some(s..e),
             },
             self.config.roster_queue,
         );

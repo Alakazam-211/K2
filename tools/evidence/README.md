@@ -5,19 +5,20 @@ The tools here keep that true mechanically: a job prints one machine-readable li
 lines become committed run records, and a checker fails any count that is uncited, or does not
 match its run, or is a partial (capped) count written as if it were exact.
 
-Self-contained: POSIX sh and Python 3 (stdlib only). Copy the directory as is.
+POSIX sh and the kit's tools binary (`mpc-tools evidence`, tools/mpc-tools; it builds on Linux,
+so the check and the collector run in jobs).
 
 The run records live in the kit repo's `docs/evidence/runs/` and are checked there
 (`scripts/check.sh`, and the `evidence` part of `tools/tests/full.sh`). A release's public cut
-keeps the notes and leaves the records out, so `check.py` doesn't run on a cut; the self-test
+keeps the notes and leaves the records out, so the check doesn't run on a cut; the self-test
 does.
 
 | File | Does |
 |---|---|
-| `collect.py` | job logs → `docs/evidence/runs/<job>.json` |
-| `check.py` | evidence notes + run records → pass / fail |
+| `mpc-tools evidence collect` | job logs → `docs/evidence/runs/<job>.json` |
+| `mpc-tools evidence check` | evidence notes + run records → pass / fail |
 | `test.sh` | self-test: a fixture that must pass, planted negatives that must fail, the log parser |
-| `pre-commit` | git hook: runs `check.py` when a commit touches `docs/evidence/` |
+| `pre-commit` | git hook: runs the check when a commit touches `docs/evidence/` (where the tools binary builds) |
 
 ## 1. Run records
 
@@ -28,7 +29,7 @@ RUNREC {"job":null,"run":"m_g_2x2","tool":"tlc","status":"COMPLETE","states":597
 ```
 
 (`tools/quint-job.sh` defines `tlc_record`, which the TLC helpers call after each run.)
-`collect.py` fills in `job` and writes one file per job:
+The collector fills in `job` and writes one file per job:
 
 ```json
 {"job": "3ce98eac", "collected": "2026-10-28", "from": "log command", "runs": [ {record}, ... ]}
@@ -45,7 +46,7 @@ Record fields (null when unknown):
 | `states` | distinct states (for `PARTIAL`, the count reached when it stopped) |
 | `depth` | **One convention, TLC's:** the number of states on the longest shortest path from an initial state, the initial state counting as 1. For `COMPLETE`, TLC's "depth of the complete state graph search", or the enumerator's BFS level count (its levels include the initial state, so it is the same quantity); for `VIOLATION`, TLC's depth reached, or for the enumerator the violation's BFS depth d (d transitions from the initial state) converted to d + 1. Searches without BFS levels (sweep-line, reverse search, sampling) record null. Caveat: TLC with more than one worker is not strictly level-synchronous, so its reported depth can exceed the BFS depth, and its first violation need not be a shortest one (§4) |
 | `queued` | TLC's states left on queue at the last report |
-| `workers` | TLC's worker count, from the log's `Running ... with N worker(s) on ...` line (`tlc_record` and `collect.py` read it). 1 is a strict BFS. Absent when the log does not show it; a run backfilled from its job's commands file (`export TLC_WORKERS=1`) has `workers: 1` and says so in `workers_from` |
+| `workers` | TLC's worker count, from the log's `Running ... with N worker(s) on ...` line (`tlc_record` and the collector read it). 1 is a strict BFS. Absent when the log does not show it; a run backfilled from its job's commands file (`export TLC_WORKERS=1`) has `workers: 1` and says so in `workers_from` |
 | `cap_s` | the time cap in seconds, when known (a backfilled TLC run stopped by its cap: its wall time, which can run a second over) |
 | `generated` | TLC's states generated |
 | `trace_states` | `VIOLATION`: the counterexample's length in states, initial state included |
@@ -54,7 +55,7 @@ Record fields (null when unknown):
 | `profile` | enumerator: the Cargo profile the binary was built with, `release` (no LTO, 16 codegen units: fast builds) or `evidence` (thin LTO, 1 codegen unit; `PROFILE=evidence tools/enum-job.sh`) |
 | enumerator extras | `transitions`, `rate` (states/s), `fp_collision_bound` (n²/2^129 for 128-bit fingerprints; 0 for exact runs), `per_level`; dsweep: `pending_records`, `peak_disk_bytes`, `disk_B_per_record`, `peak_ram_bytes`, `checkpoints`, ...; sample: `seed`, `walks`, `steps`, `violating_walks`, `digest`. Cite one as `[run JOB/RUN:field]` |
 
-**Older logs** have no `RUNREC` lines. `collect.py` parses them:
+**Older logs** have no `RUNREC` lines. The collector parses them:
 - TLC output before `=== tlc NAME ...: exit RC, wall Ws` (or `=== live NAME ...`). Violation lines that name another run's instance are skipped; they come from a trace printed after that run.
 - `### NAME [... Ns cap]: <summary>` lines.
 - The enumerator's `SUMMARY ... states= levels= violations= complete=`, followed by `=== LABEL: exit ...`; the run name is LABEL with spaces turned to `_`.
@@ -62,10 +63,15 @@ Record fields (null when unknown):
 Usage:
 
 ```
-RUNREC_LOG_CMD='<command that prints a job log> {job}' tools/evidence/collect.py JOB [JOB ...]
-tools/evidence/collect.py --log saved.log --job JOB        # from a saved log
-tools/evidence/collect.py --print --log saved.log --job JOB  # to stdout, nothing written
+RUNREC_LOG_CMD='<command that prints a job log> {job}' sh tools/mpc-tools.sh evidence collect JOB [JOB ...]
+sh tools/mpc-tools.sh evidence collect --log saved.log --job JOB        # from a saved log
+sh tools/mpc-tools.sh evidence collect --print --log saved.log --job JOB  # to stdout, nothing written
 ```
+
+Where the tools binary doesn't build (a shared Mac), save the log there and collect in a job:
+`k2 compute logs JOB > JOB.log` (untracked, at the repo root), then `k2 compute run --os linux
+--repo <kit> --dirty --artifact 'docs/evidence/runs/*.json' -- sh tools/mpc-tools.sh evidence
+collect --log JOB.log --job JOB`, and take the record file from the job's artifacts.
 
 Commit the record files. A log that can no longer be read gets no record: mark its numbers
 `[unverified: log unavailable]` instead.
@@ -88,7 +94,7 @@ Bold (`**5,977** [run …]`) is fine. Not from a run: mark the table cell `[esti
 ## 3. The check
 
 ```
-tools/evidence/check.py [--runs docs/evidence/runs] [docs/evidence/*.md]
+sh tools/mpc-tools.sh evidence check [--runs docs/evidence/runs] [docs/evidence/*.md]
 ```
 
 It fails on any of these:
@@ -121,7 +127,7 @@ runs). So:
   trace / counterexample") makes every `VIOLATION` citation under it a least-depth citation.
   Write least-depth claims with those words, so the check sees them.
 
-`scripts/check.sh` (the repository's check flow) runs `check.py` and `test.sh`. To run the check
+`scripts/check.sh` (the repository's check flow) runs the check and `test.sh`. To run the check
 before every commit that touches the evidence:
 
 ```

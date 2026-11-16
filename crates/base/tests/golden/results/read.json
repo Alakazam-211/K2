@@ -1,0 +1,21 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "shape get",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "color=blue\nw=10\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

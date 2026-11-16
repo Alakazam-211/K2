@@ -410,6 +410,47 @@ fn a_stale_buffer_of_an_older_kit_write_is_still_an_echo() {
     assert_eq!(f.bytes("a.md"), b"three\n");
 }
 
+/// An outside save that overlaps a live edit keeps both, and its change event says where: one
+/// pair, the live line and the file's line in the new text. A save on other lines merges
+/// cleanly and its event has no pair.
+#[test]
+fn an_outside_saves_event_reports_its_kept_pairs() {
+    let f = fx("kept-pairs");
+    let seed: String = (1..=5).map(|i| format!("line {i}\n")).collect();
+    f.write("a.md", seed.as_bytes());
+    let s = f.open("a.md");
+    let a = f.join(&s, "agent");
+    let watch = s.subscribe(a).unwrap();
+    replace(&s, a, "line 3", "line 3 (agent)");
+    // a person rewrites the same line in a plain editor (from the file as it was)
+    f.write("a.md", seed.replace("line 3", "line 3 (person)").as_bytes());
+    let DiskCheck::Ingested { version } = s.file_changed().unwrap() else {
+        panic!("expected an ingest");
+    };
+    assert_eq!(
+        text(&s, a),
+        "line 1\nline 2\nline 3 (agent)\nline 3 (person)\nline 4\nline 5\n"
+    );
+    let evs: Vec<_> = watch.try_iter().collect();
+    let ext = evs.last().unwrap();
+    assert_eq!((ext.pid.as_str(), ext.version), (EXTERNAL_PID, version));
+    let kept: Vec<_> = ext.kept_pairs.iter().map(|p| (p.live, p.file)).collect();
+    assert_eq!(kept, [((3, 3), (4, 4))]);
+    // the agent's own change carried none
+    assert!(evs[..evs.len() - 1].iter().all(|e| e.kept_pairs.is_empty()));
+
+    // a save on another line: clean, no pair
+    let now = text(&s, a);
+    f.write("a.md", now.replace("line 5", "line 5 (person)").as_bytes());
+    let DiskCheck::Ingested { version } = s.file_changed().unwrap() else {
+        panic!("expected an ingest");
+    };
+    let evs: Vec<_> = watch.try_iter().collect();
+    let ext = evs.last().unwrap();
+    assert_eq!((ext.pid.as_str(), ext.version), (EXTERNAL_PID, version));
+    assert_eq!(ext.kept_pairs, []);
+}
+
 #[test]
 fn an_outside_edit_merges_with_unwritten_agent_edits_between_versions() {
     let f = fx("external");

@@ -3,6 +3,20 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.21.0 (kit tag v0.21.0)
+
+Still wire 3; every addition is optional, and a host that sends none of it behaves as before.
+
+- **`ChangeInfo` names the change** (`onChange`): `version`, `kind` (`ChangeKind`, a named
+  type), `turn`, `verb` and `atMs`, from the `ChangeEvent` the host relays. All five are `null`
+  for the client's own edit (not acknowledged yet), a refused change leaving the text and a
+  reload's diff; `kind`, `turn` and `verb` are `null` too from a host that sends none.
+- **`ChangeEvent.kept_pairs`** (optional; `KeptPair`, `LinePair`): on an outside save's change
+  whose merge kept both sides, each side's lines in the text after it. A client uses the ranges,
+  never an order of its own (WIRE.md).
+- **`claim_started.bytes`** (optional; `ByteSpan`): the claim's span in UTF-8 bytes of its
+  root's text at the event's `version`.
+
 ## 0.20.0 (kit tag v0.20.0)
 
 Still wire 3, with no new frame or field: with a kit that never gives a writer back unkept the

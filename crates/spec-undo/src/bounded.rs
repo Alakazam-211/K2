@@ -76,7 +76,7 @@
 //! never refused there). Two restate rules whose checks above read what the code computed
 //! for itself (the model check's audit, 2026-11-04): `O5doc` (O5 and U10's `at_end` judged
 //! from the region's sides, the pre-state doc's length, the base flag its batch or record
-//! stored and the text the step left, never from the merge's `at_end`; [`o5_doc`]) and
+//! stored and the text the step left, never from the merge's `at_end`; `o5_doc`) and
 //! `U17doc` (the regions an undo or redo pushed, read off the stacks it left).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -931,7 +931,7 @@ impl View {
         }
     }
 
-    /// Number the roots by first appearance in [`View::walk`]: states equal up to renaming
+    /// Number the roots by first appearance in `View::walk`: states equal up to renaming
     /// roots get one view (`undo.qnt`'s `relabel`).
     pub fn relabel(&mut self) {
         let mut m: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();

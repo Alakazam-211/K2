@@ -1,10 +1,19 @@
 #!/bin/sh
 # Git pre-commit hook: when the commit touches docs/evidence/ (notes or run records), every
-# count in the evidence notes must be cited and match its run (tools/evidence/check.py).
+# count in the evidence notes must be cited and match its run (`mpc-tools evidence check`).
 # Install: ln -s ../../tools/evidence/pre-commit .git/hooks/pre-commit
+# The tools binary builds on Linux only (tools/mpc-tools.sh): on a machine without one (a shared
+# Mac; MPC_TOOLS unset) the hook says so and lets the commit through, and the check runs in the
+# jobs (scripts/check.sh, the evidence part).
 top=$(git rev-parse --show-toplevel) || exit 1
 if git diff --cached --name-only | grep -q '^docs/evidence/'; then
-  cd "$top" && "${PYTHON:-python3}" tools/evidence/check.py || {
-    echo "pre-commit: the evidence check failed (tools/evidence/README.md); commit refused" >&2; exit 1; }
+  cd "$top" || exit 1
+  sh tools/mpc-tools.sh evidence check
+  rc=$?
+  case $rc in
+    0) ;;
+    4) echo "pre-commit: the evidence check can't run here (no tools binary); it runs in the jobs" >&2 ;;
+    *) echo "pre-commit: the evidence check failed (tools/evidence/README.md); commit refused" >&2; exit 1 ;;
+  esac
 fi
 exit 0

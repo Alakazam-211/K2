@@ -21,7 +21,7 @@ fail() { echo "test-check-targets: FAIL: $*"; FAILS=$((FAILS + 1)); }
 
 mkdir -p "$C"
 (cd "$ROOT" && tar -cf - --exclude ./vendor --exclude ./target --exclude ./.git --exclude ./.claude \
-  --exclude ./docs/evidence/runs --exclude ./client --exclude ./spike --exclude '*/target' . ) | (cd "$C" && tar -xf -)
+  --exclude ./docs/evidence/runs --exclude ./client --exclude '*/target' . ) | (cd "$C" && tar -xf -)
 [ -f "$C/tools/targets.txt" ] && [ -f "$C/crates/base/Cargo.toml" ] \
   || { echo "test-check-targets: the tree wasn't copied from $ROOT" >&2; exit 2; }
 KINDS='new|stale|unselected|feature|ignore|pending|format|unreadable'

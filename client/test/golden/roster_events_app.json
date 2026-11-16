@@ -153,6 +153,10 @@
         "first": 1,
         "last": 2
       },
+      "bytes": {
+        "start": 0,
+        "end": 8
+      },
       "note": "tidying the heading",
       "hold": false,
       "for_edit": false,

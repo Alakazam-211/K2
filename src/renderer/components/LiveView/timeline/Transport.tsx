@@ -79,6 +79,8 @@ export interface TransportProps {
   onPlay: () => void
   onLoop: () => void
   onScrub: (f: number) => void
+  /** Following ended because they stopped or left: the line, Back to my place and Follow again (none once they've left). */
+  finished?: { text: string; back: string; again: string | null; onBack: () => void; onAgain: () => void } | null
 }
 
 /** How far the right group folds when it doesn't fit: 1 hides the key hint, 2 zoom (the keys still zoom), 3 loop, 4 the mode word (its words stay in details). */
@@ -105,23 +107,35 @@ export function Transport(p: TransportProps): React.JSX.Element {
   const M = p.model.v
   const v = p.view.v
   const playing = v.playing
-  const [right, fold] = useFold([p.back ? 1 : 0, p.narrow])
+  const [right, fold] = useFold([p.back ? 1 : 0, p.finished ? (p.finished.again ? 2 : 1) : 0, p.narrow])
   const sm = 'lv-tl-tb !border-transparent !bg-transparent'
   return (
     <div className="lv-tl-transport" data-testid="lv-transport">
       <ScrubBar model={p.model} marks={p.marks} loop={p.loop} onScrub={p.onScrub} />
       <div className="lv-tl-trow" data-testid="lv-transport-row">
         <div className="lv-tl-tleft">
-          {p.person ? <LiveAvatar person={p.person} size={18} /> : null}
+          {p.loop ? (
+            <span className="inline-flex text-[var(--color-text-secondary)]" aria-hidden="true">
+              <LoopGlyph size={16} />
+            </span>
+          ) : p.person ? (
+            <LiveAvatar person={p.person} size={18} />
+          ) : null}
           <div className="lv-tl-tpl">
             {p.narrow ? (
               <span className="lv-tl-tcs" data-testid="lv-transport-tc">
                 {M.tcF(v.head.f)}
               </span>
             ) : null}
-            <span className="lv-tl-tpw" role="status" data-testid="lv-transport-who" title={p.who}>
-              {p.who}
-            </span>
+            {p.finished ? (
+              <span className="lv-tl-tpw" role="status" data-testid="lv-finished" title={p.finished.text}>
+                {p.finished.text}
+              </span>
+            ) : (
+              <span className="lv-tl-tpw" role="status" data-testid="lv-transport-who" title={p.who}>
+                {p.who}
+              </span>
+            )}
           </div>
         </div>
         <div className="lv-tl-tbtns" role="group" aria-label="Playback" data-testid="lv-transport-buttons">
@@ -147,6 +161,18 @@ export function Transport(p: TransportProps): React.JSX.Element {
         </div>
         <div ref={right} className="lv-tl-tright" data-fold={fold || undefined} data-testid="lv-transport-right">
           {p.back}
+          {p.finished ? (
+            <>
+              <Button variant="default" size="sm" className="!text-[var(--color-text-primary)]" data-testid="lv-back-home" onClick={p.finished.onBack}>
+                {p.finished.back}
+              </Button>
+              {p.finished.again ? (
+                <Button variant="accent" size="sm" data-testid="lv-follow-again" onClick={p.finished.onAgain}>
+                  {p.finished.again}
+                </Button>
+              ) : null}
+            </>
+          ) : null}
           <Button
             variant="quiet"
             className={`${sm}${p.loop ? ' !bg-[var(--color-control-hover-quiet)] !text-[var(--color-text-primary)]' : ''}`}

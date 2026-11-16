@@ -10,7 +10,7 @@
 import type { PlayerScenario, PlayerStep } from '../shared/sample-player'
 import { SampleShellSource, type SampleShellOptions } from '../shared/sample-shell'
 import type { ShellSample } from '../shared/samples'
-import { CONN, GOLDEN, HOLDGONE, LARGE_SC, OPEN, PREP, SAVES, STATES, TURN, WATCH } from './scenarios'
+import { CONN, GOLDEN, HOLDGONE, LARGE_SC, OPEN, PREP, PRES, SAVES, STATES, TURN, WATCH } from './scenarios'
 import { simulate, type Scenario } from './sim'
 import { SAMPLE_CLOCK0, timelineSnapshot, type TimelineSnapshot } from './snapshot'
 import { ATLAS, CTX, FACTS, SELF } from './world'
@@ -67,6 +67,7 @@ export function timelineBannerScenarios(): PlayerScenario<TimelineSnapshot>[] {
     whole(OPEN, 'open', 'First open', PEOPLE),
     whole(WATCH, 'watch', 'Watching an edit', PEOPLE),
     whole(TURN, 'turn', 'Two agents', PEOPLE),
+    whole(PRES, 'presence', 'Presence', PEOPLE),
     {
       id: 'saves',
       label: 'Outside saves',

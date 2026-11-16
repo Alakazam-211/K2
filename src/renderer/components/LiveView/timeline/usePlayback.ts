@@ -3,18 +3,19 @@
 // animation frames while it plays (at most once a frame of the edit, so the
 // lanes redraw at the edit's rate, not the screen's), looping a change
 // when asked, stopping at the end. A new sample step or file starts over
-// on the scenario's own playhead, as the mock does.
+// on the scenario's own playhead (or the loop the step scripts), as the mock does.
 
 import { useEffect, useRef, useState } from 'react'
 import { advance } from '@/lib/live-view/timeline/keys'
 import type { LocalPlay } from '@/lib/live-view/timeline/monitor-view'
 
-export function usePlayback(key: string, endF: number, fps: number): [LocalPlay | null, (l: LocalPlay | null) => void] {
-  const [local, setLocal] = useState<LocalPlay | null>(null)
+/** `initial`: what a new step starts with (the sample's scripted loop), else nothing of yours. */
+export function usePlayback(key: string, endF: number, fps: number, initial: LocalPlay | null = null): [LocalPlay | null, (l: LocalPlay | null) => void] {
+  const [local, setLocal] = useState<LocalPlay | null>(initial)
   const [seen, setSeen] = useState(key)
   if (seen !== key) {
     setSeen(key)
-    setLocal(null)
+    setLocal(initial)
   }
   const cur = useRef(local)
   cur.current = local

@@ -45,6 +45,9 @@ export const TIMELINE_CSS = `
 .lv-tl-flag svg { display: block; width: 8px; height: 12px; }
 .lv-tl-brk { position: absolute; height: 6px; box-sizing: border-box; border: 2px solid var(--lv-c); border-bottom: 0; background: color-mix(in srgb, var(--lv-c) 10%, transparent); opacity: .75; }
 .lv-tl-brk[data-fresh] { opacity: 1; background: color-mix(in srgb, var(--lv-c) 28%, transparent); }
+.lv-tl-brk[data-testid] { cursor: pointer; }
+.lv-tl-brk:hover { opacity: 1; background: color-mix(in srgb, var(--lv-c) 36%, transparent); }
+.lv-tl-loop { position: absolute; top: 18px; bottom: 2px; background: linear-gradient(to right, color-mix(in srgb, var(--color-text-primary) 16%, transparent) var(--lv-lead), color-mix(in srgb, var(--color-text-primary) 8%, transparent) var(--lv-lead), color-mix(in srgb, var(--color-text-primary) 8%, transparent) calc(100% - var(--lv-lead)), color-mix(in srgb, var(--color-text-primary) 16%, transparent) calc(100% - var(--lv-lead))); pointer-events: none; }
 .lv-tl-rdy { position: absolute; bottom: 0; height: 2px; }
 .lv-tl-rdy[data-kind="ok"] { background: color-mix(in srgb, var(--color-status-ok) 75%, transparent); }
 .lv-tl-rdy[data-kind="stills"] { background: color-mix(in srgb, var(--color-status-warn) 80%, transparent); }

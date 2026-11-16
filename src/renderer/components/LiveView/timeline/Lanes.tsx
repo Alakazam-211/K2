@@ -28,6 +28,7 @@ import {
   readinessOf,
   splitBefore,
   timeWidth,
+  type Bracket,
   type ViewPrefs,
 } from '@/lib/live-view/timeline/lanes-view'
 import { DEFAULT_PV, mediaInfo, picModeFor, WAVE_MIN, type MediaFacts } from '@/lib/live-view/timeline/picture'
@@ -35,6 +36,7 @@ import { RULER_H } from '@/lib/live-view/timeline/ruler'
 import { nowOf, type TimelineView } from '@/lib/live-view/timeline/snapshot'
 import type { Edge } from '../shell/EdgeStack'
 import { Clip, markerColour } from './Clip'
+import { usePlayScroll, type PlayScroll } from './usePlayScroll'
 import { DownGlyph, TrackMarkShape, TransitionShape } from './glyphs'
 import { measurer, useProbeFonts } from './measure'
 import { Overview } from './Overview'
@@ -62,6 +64,13 @@ export interface LanesProps {
   onJump: (side: Edge) => void
   /** The monitor's playhead (the monitor's own: yours, or whom you follow); from the state's own playhead when unset. */
   monitor?: { f: number; colour: string; name: string } | null
+  /** The lanes follow the monitor while it plays (page or centred) and keep a followed edit point in view (usePlayScroll). */
+  follow?: PlayScroll
+  /** Your own wheel, drag or keys on the lanes (following stops). */
+  onUserScroll?: () => void
+  /** The loop that runs, shaded on the ruler; a change's bracket loops it. */
+  loop?: { f0: number; f1: number } | null
+  onBracket?: (b: Bracket) => void
 }
 
 const PROBES = ['lv-tl-name', 'lv-tl-tagfont'] as const
@@ -131,6 +140,8 @@ export function Lanes(p: LanesProps): React.JSX.Element {
     last.current = { ppf, scenario: view.scenario, step: view.step, fit: p.fitTick, centre: p.centre?.key }
   })
 
+  usePlayScroll(scroller, monitor ? monitor.f * ppf : null, tw, p.follow, p.onUserScroll)
+
   const go = (f: number): void => {
     const s = scroller()
     if (s) s.scrollLeft = Math.max(0, f * ppf - tw * 0.35)
@@ -186,6 +197,8 @@ export function Lanes(p: LanesProps): React.JSX.Element {
         heads={live ? heads.filter((h) => !h.self && h.f >= f0 && h.f <= f1) : []}
         markers={tmarkers.filter((m) => (m.f as number) >= f0 - 200 && (m.f as number) <= f1).map((m) => ({ key: m.key, name: m.name, f: m.f as number, color: m.color, note: m.note }))}
         brackets={live ? bracketsOf(S) : []}
+        loop={p.loop ?? null}
+        onBracket={p.onBracket}
         readiness={live ? readinessOf(M, f0, f1, pv, facts) : []}
         window={win}
         stacks={{ left: asPeople(off.left), right: asPeople(off.right) }}

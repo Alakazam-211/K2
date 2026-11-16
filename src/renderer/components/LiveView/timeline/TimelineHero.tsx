@@ -7,17 +7,18 @@
 // Without a timeline beside the snapshot (the shell's own sample) it stays
 // the Phase 1 placeholder.
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui'
 import { personById } from '@/lib/live-view/shared/people'
 import { KEY_MAP, keysHint, playbackKey, type WatchKey } from '@/lib/live-view/timeline/keys'
-import { bracketsOf, defaultPpf, fitPpf, isBig, lanesHeight, loadPrefs, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
+import { finishedWords, sayAtOf, scriptedLoop } from '@/lib/live-view/timeline/follow-play'
+import { bracketsOf, type Bracket, defaultPpf, fitPpf, isBig, lanesHeight, loadPrefs, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
 import { detailRows } from '@/lib/live-view/timeline/monitor-details'
-import { monitorView } from '@/lib/live-view/timeline/monitor-view'
+import { monitorView, type LocalPlay } from '@/lib/live-view/timeline/monitor-view'
 import { loopRange } from '@/lib/live-view/timeline/picture'
 import { RULER_H } from '@/lib/live-view/timeline/ruler'
 import { monitorSourceFor } from '@/lib/live-view/timeline/sample-footage'
-import { nowOf, type TimelineSnapshot, type TimelineView } from '@/lib/live-view/timeline/snapshot'
+import type { TimelineSnapshot, TimelineView } from '@/lib/live-view/timeline/snapshot'
 import { editStarts, scrubMarks, whoLine } from '@/lib/live-view/timeline/transport'
 import { FACTS } from '@/lib/live-view/timeline/world'
 import type { ShellHeroProps } from '../shell/shell-config'
@@ -30,6 +31,7 @@ import { Monitor } from './Monitor'
 import { TIMELINE_CSS } from './timelineCss'
 import { Transport } from './Transport'
 import { usePlayback } from './usePlayback'
+import { useTimelineFollow } from './useTimelineFollow'
 import { ViewMenu } from './ViewMenu'
 
 /** The monitor row takes at least 62% of the content area; the lanes the rest, up to what they need. */
@@ -100,16 +102,27 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
   }
   const centre = z && cue && !z.fit && z.center != null ? { f: z.center, key: cue } : null
 
-  // The monitor: whose playhead (T5 wires Follow here; yours until then), your own playback, and what it shows.
-  const whose: string | null = null
+  // The monitor: whose playhead (whom you follow, else yours), your own playback, and what it shows.
   const fps = M.T.rate ? M.T.rate.fps : 24
-  const [local, setLocal] = usePlayback(`${key}|${view.step}`, M.endF, fps)
-  const now = nowOf(S)
+  const stepKey = `${key}|${view.step}`
+  const agentName0 = (p.snap.agent ? personById(p.snap.people, p.snap.agent)?.name : null) ?? 'the agent'
+  const scripted = scriptedLoop(S, M, agentName0)
+  const [local, setLocal] = usePlayback(stepKey, M.endF, fps, scripted ? { f: scripted.f0, rate: 1, loop: scripted } : null)
+  const fl = useTimelineFollow(p, S, stepKey, setLocal)
+  const whose = fl.whose
+  const now = fl.now
   const mv = monitorView({ S, M, facts, now, whose, local, people: p.snap.people })
+  fl.noteHead(mv.head.f, mv.head.self)
+  /** You take the monitor over (play, a key, a scrub, a loop): following looks away, and your playhead starts where theirs was. */
+  const take = (next: LocalPlay | null): void => {
+    if (!next) return
+    fl.lookAway()
+    setLocal(next)
+  }
   const source = monitorSourceFor(!!view.sample)
   const marks = useMemo(() => scrubMarks(S, M, mv, now), [S, M, mv, now])
   const agent = p.snap.agent ? personById(p.snap.people, p.snap.agent) : undefined
-  const agentName = agent?.name ?? 'the agent'
+  const agentName = agent?.name ?? agentName0
   const edits = useMemo(() => editStarts(S, p.snap.agent), [S, p.snap.agent])
   const latest = useMemo(() => bracketsOf(S).filter((b) => b.who === p.snap.agent).pop() ?? null, [S, p.snap.agent])
   const loop = local?.loop ? local.loop : null
@@ -124,8 +137,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
     setFitTick((n) => n + 1)
   }
   const play = (): void => {
-    const next = playbackKey('play', local, { f: mv.head.f, playing: mv.playing, canPlay: mv.canPlay, ended: mv.state === 'ended', endF: M.endF, edits })
-    if (next) setLocal(next)
+    take(playbackKey('play', local, { f: mv.head.f, playing: mv.playing, canPlay: mv.canPlay, ended: mv.state === 'ended', endF: M.endF, edits }))
   }
   const onWatchKey = (k: WatchKey): boolean => {
     if (k === 'zoom+') zoom(1)
@@ -135,8 +147,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
       if (!local?.loop) return false
       setLocal({ f: mv.head.f, rate: 0 })
     } else {
-      const next = playbackKey(k, local, { f: mv.head.f, playing: mv.playing, canPlay: mv.canPlay, ended: mv.state === 'ended', endF: M.endF, edits })
-      if (next) setLocal(next)
+      take(playbackKey(k, local, { f: mv.head.f, playing: mv.playing, canPlay: mv.canPlay, ended: mv.state === 'ended', endF: M.endF, edits }))
     }
     return true
   }
@@ -149,12 +160,37 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
     if (e.key === ' ' && t.closest?.('button')) return // Space on a button presses it
     if (onWatchKey(k)) e.preventDefault()
   }
+  /** Loop a change from 1 s before it to 1 s after; the same one again ends the loop. */
+  const loopOf = (b: Bracket | null): void => {
+    if (!b) return
+    const r = loopRange(M, b)
+    if (local?.loop && local.loop.f0 === r.f0 && local.loop.f1 === r.f1) return setLocal({ f: mv.head.f, rate: 0 })
+    take({ f: r.f0, rate: 1, loop: { f0: r.f0, f1: r.f1, who: personById(p.snap.people, b.who)?.name ?? agentName, verb: b.verb } })
+  }
   const toggleLoop = (): void => {
     if (local?.loop) return setLocal({ f: mv.head.f, rate: 0 })
-    if (!latest) return
-    const r = loopRange(M, latest)
-    setLocal({ f: r.f0, rate: 1, loop: { f0: r.f0, f1: r.f1, who: agentName, verb: latest.verb } })
+    loopOf(latest)
   }
+  // The say row points at what the monitor shows (its time settles while playing).
+  const sayAt = sayAtOf(M, mv)
+  const setSayAt = p.setSayAt
+  useEffect(() => {
+    setSayAt?.(sayAt)
+  }, [setSayAt, sayAt.address, sayAt.label, mv.playing ? 'playing' : sayAt.time]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => setSayAt?.(null), [setSayAt])
+  const fw = fl.finished ? finishedWords(fl.finished) : null
+  const finished = fw
+    ? {
+        text: fw.text,
+        back: fw.back,
+        again: fw.again,
+        onBack: () => {
+          const h = fl.backHome()
+          if (h != null) setLocal({ f: h, rate: 0 })
+        },
+        onAgain: fl.followAgain,
+      }
+    : null
   const choose = (group: keyof ViewPrefs, value: string): void => {
     const next = { ...prefs, [group]: value } as ViewPrefs
     setPrefs(next)
@@ -197,9 +233,9 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
             sheetHost={upper}
             onSkip={(f) => {
               const it = monitorView({ S, M, facts, now, whose, local: { f, rate: 0 } }).picture?.it
-              setLocal({ f, rate: 0, skipped: it?.name ?? null })
+              take({ f, rate: 0, skipped: it?.name ?? null })
             }}
-            onRestart={() => setLocal({ f: 0, rate: 1 })}
+            onRestart={() => take({ f: 0, rate: 1 })}
             onShowCant={fit}
           />
           <Transport
@@ -220,7 +256,8 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
             onKey={(k) => onWatchKey(k)}
             onPlay={play}
             onLoop={toggleLoop}
-            onScrub={(f) => setLocal({ f, rate: 0 })}
+            onScrub={(f) => take({ f, rate: 0 })}
+            finished={finished}
           />
           {p.say}
         </div>
@@ -240,6 +277,12 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
         onKey={() => {}}
         onJump={p.onJump}
         monitor={{ f: mv.head.f, colour: mv.head.self ? 'var(--color-accent)' : mv.head.colour, name: mv.head.self ? 'your playhead' : `${mv.head.name}’s playhead` }}
+        follow={{ playing: mv.playing, following: !!whose, scroll: prefs.scroll }}
+        onUserScroll={() => {
+          if (whose) take({ f: mv.head.f, rate: 0 })
+        }}
+        loop={local?.loop ?? null}
+        onBracket={loopOf}
       />
     </div>
   )

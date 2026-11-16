@@ -39,6 +39,9 @@ export interface RulerProps {
   readiness: Readiness[]
   window: [number, number]
   stacks: { left: LivePerson[]; right: LivePerson[] }
+  /** The loop that runs (from 1 s before a change to 1 s after), shaded; a bracket's click loops its change. */
+  loop?: { f0: number; f1: number } | null
+  onBracket?: (b: Bracket) => void
   onStack: (side: 'left' | 'right') => void
   measureTag: (text: string) => number
 }
@@ -75,6 +78,10 @@ export function Ruler(p: RulerProps): React.JSX.Element {
       </div>
       <div className="lv-tl-rclip">
         <div className="lv-tl-rbody" style={{ width: timeW, transform: `translateX(${-left}px)` }} data-testid="lv-ruler-body">
+          {p.loop ? (
+            // The loop's span, its 1 s lead-in and tail shaded deeper, as an in/out range.
+            <i className="lv-tl-loop" data-testid="lv-ruler-loop" aria-hidden="true" style={{ left: p.loop.f0 * ppf, width: Math.max(2, (p.loop.f1 - p.loop.f0) * ppf), '--lv-lead': `${(M.T.rate ? M.T.rate.fps : 24) * ppf}px` } as CSSProperties} />
+          ) : null}
           {ticks.map((t) => (
             <i key={'t' + t.f} className="lv-tl-tick" data-major={t.major ? '' : undefined} style={{ left: t.x }} />
           ))}
@@ -86,7 +93,15 @@ export function Ruler(p: RulerProps): React.JSX.Element {
               </span>
             ))}
           {brk.map(({ b, x0, x1, l }, i) => (
-            <i key={'b' + i} className="lv-tl-brk" data-fresh={b.fresh ? '' : undefined} title={b.line} style={{ left: x0, width: x1 - x0, top: 35 + l * 4, '--lv-c': b.colour } as CSSProperties} />
+            <i
+              key={'b' + i}
+              className="lv-tl-brk"
+              data-testid="lv-bracket"
+              data-fresh={b.fresh ? '' : undefined}
+              title={`${b.line}. Click to loop it.`}
+              style={{ left: x0, width: x1 - x0, top: 35 + l * 4, '--lv-c': b.colour } as CSSProperties}
+              onClick={p.onBracket ? () => p.onBracket?.(b) : undefined}
+            />
           ))}
           {p.readiness.map((r, i) => (
             <i key={'r' + i} className="lv-tl-rdy" data-kind={r.kind} style={{ left: r.f0 * ppf, width: Math.max(1, (r.f1 - r.f0) * ppf) }} />

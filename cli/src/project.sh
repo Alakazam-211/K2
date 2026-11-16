@@ -39,7 +39,7 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 # cwd walk-up — the same detection `k2 tickets` uses).
 _project_py() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" P_WS_PATH="$PROJECT" \
-    P_AGENT_NAME="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
+    P_AGENT_NAME="$(_envn AGENT_NAME)" \
     P_VERB="${P_VERB:-}" P_JSON="${P_JSON:-false}" \
     P_NAME="${P_NAME:-}" P_ARG_PROJECT="${P_ARG_PROJECT:-}" \
     P_ARG_WORKSPACE="${P_ARG_WORKSPACE:-}" P_TEXT="${P_TEXT:-}" \

@@ -28,11 +28,12 @@ _zen_access_on() {
 # A Zen GET with the session's passport inside a K2 terminal (the owner
 # token outside), like _zen_session_post.
 _zen_session_get() {
-    local endpoint="$1" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local endpoint="$1" hook_sock
+    _envn_into hook_sock HOOK_SOCK
     shift
     if [ -n "$hook_sock" ]; then
         local saved="$TOKEN"
-        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        TOKEN="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
         cli_request "$endpoint" "$@"
         TOKEN="$saved"
     else
@@ -298,7 +299,7 @@ cmd_zen_garden() {
             # widgets, and inside a K2 terminal the session's passport (the
             # agent's Garden; K2 asks the person). A K2 older than 0.46.3
             # makes an empty Garden as before, and has no --from/--widgets.
-            if [ -n "$new_from" ] || [ "${#new_widgets[@]}" -gt 0 ] || { [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && _zen_access_on; }; then
+            if [ -n "$new_from" ] || [ "${#new_widgets[@]}" -gt 0 ] || { _envn_any HOOK_SOCK && _zen_access_on; }; then
                 if ! _zen_access_on; then
                     echo "Error: --from and --widgets need K2 0.46.3 or newer on this server; this server's K2 is older. Update K2 on that server." >&2
                     exit 2
@@ -484,10 +485,11 @@ print(json.dumps(b))
 # lets the change through on an unlocked Garden and answers 423
 # garden_locked on a locked one. Outside K2 the owner token is used.
 _zen_session_post() {
-    local endpoint="$1" body="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local endpoint="$1" body="$2" hook_sock
+    _envn_into hook_sock HOOK_SOCK
     if [ -n "$hook_sock" ]; then
         local saved="$TOKEN"
-        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        TOKEN="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
         cli_post_json "$endpoint" "$body"
         TOKEN="$saved"
     else
@@ -501,10 +503,11 @@ _zen_session_post() {
 # session's passport instead, and the daemon refuses it. Outside K2 the
 # owner token is used.
 _zen_person_post() {
-    local endpoint="$1" body="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local endpoint="$1" body="$2" hook_sock
+    _envn_into hook_sock HOOK_SOCK
     if [ -n "$hook_sock" ]; then
         local saved="$TOKEN"
-        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        TOKEN="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
         cli_post_json "$endpoint" "$body"
         TOKEN="$saved"
     else

@@ -6,7 +6,7 @@
 # path SERVER-SIDE from the socket-bound principal — the body is never
 # trusted for identity). Recipient/routing args (`workspace=`, inbox `id=`,
 # etc.) are passed through by the caller exactly as for the TCP arms.
-_hook_sock() { echo "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"; }
+_hook_sock() { local s; _envn_into s HOOK_SOCK; echo "$s"; }
 
 cli_request_uds() {
     local endpoint="$1"; shift
@@ -483,7 +483,7 @@ _k2_idem_replay_note() {
 # people (no passport), or a daemon that answers no path, keep the $PWD
 # result.
 _cli_use_passport_project() {
-    [ -z "${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}" ] || return 0
+    [ -z "${K5_PROJECT_PATH:-${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}}" ] || return 0
     [ -n "${SCOPED_TOKEN:-}" ] || return 0
     _cli_skip_uds && return 0
     local sock out="" path="" _K2_CFG=""

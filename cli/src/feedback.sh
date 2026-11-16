@@ -39,7 +39,7 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 _feedback_detect_session() {
     FB_SESSION_ID=""
     FB_SESSION_KIND=""
-    if [ "${K2_API_CELL:-}" = "1" ] || [ "${K2SO_API_CELL:-}" = "1" ]; then
+    if [ "${K5_API_CELL:-${K2_API_CELL:-${K2SO_API_CELL:-}}}" = "1" ]; then
         FB_SESSION_ID="${K2_SESSION_ID:-}"
         FB_SESSION_KIND="api"
     elif [ "${K2_CELL:-}" = "sidecar" ]; then
@@ -187,7 +187,7 @@ cmd_feedback_ask() {
     FB_TITLE="$title" FB_BODY="$body" FB_BODY_PATH="$body_file" FB_HTML_PATH="$html_path" \
     FB_KIND="$kind" FB_OPTIONS="$options" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
-    FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
+    FB_PROJECT="$PROJECT" FB_AGENT="$(_envn AGENT_NAME)" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" FB_FILES="$files_json" \
     FB_FILES_PY="$_ticket_files_check_py" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
@@ -688,7 +688,8 @@ cmd_feedback_comment() {
     # the agent identity (env override → workspace folder basename, the
     # product-default agent display name). The renderer's thread panel
     # posts author="owner" via the route directly.
-    local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    local author
+    _envn_into author AGENT_NAME
     [ -z "$author" ] && author="$(basename "$PROJECT")"
     local body resp
     # Files: an array embedded in the body (TA22); relative paths resolve
@@ -771,7 +772,8 @@ cmd_feedback_resolve() {
     fi
     # Settling a discussion records the outcome under the AGENT's name
     # (same identity rule as `comment`), never as a human answer.
-    local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    local author
+    _envn_into author AGENT_NAME
     [ -z "$author" ] && author="$(basename "$PROJECT")"
     local body resp
     body=$(FB_ID="$id" FB_ANSWERED="$answered" FB_HAS_ANSWERED="$has_answered" FB_AUTHOR="$author" FB_FILES="$files_json" python3 -c 'import json,os
@@ -928,7 +930,7 @@ if os.environ.get("FB_SET_DEFAULT")=="true": b["defaultAssignee"]=os.environ.get
 print(json.dumps(b))')
         # In a K2 terminal: the passport, never the owner token (see above).
         local TOKEN="$TOKEN"
-        if [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && [ -n "$SCOPED_TOKEN" ]; then
+        if _envn_any HOOK_SOCK && [ -n "$SCOPED_TOKEN" ]; then
             TOKEN="$SCOPED_TOKEN"
         fi
         resp=$(cli_post_json "/cli/tickets/settings" "$body") || resp=""

@@ -204,7 +204,7 @@ sys.exit(1 if v.get("skipped") else 0)'
 
 # People-only routes: refuse inside a K2 terminal, then talk to vault.sock.
 _vault_person_guard() {
-    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+    if _envn_any HOOK_SOCK HOOK_TOKEN; then
         echo "owner_only: this is for a person, from your own terminal or SSH login, not a K2 terminal." >&2
         echo "Agents: don't run it; tell your owner." >&2
         exit 3
@@ -680,7 +680,7 @@ except Exception:
 # (vault.sock) when it's there, else the owner token.
 _vault_handoff_call() {
     local method="$1" route="$2" payload="${3:-}"
-    if [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+    if ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
         if [ "$method" = "GET" ] && [ -n "$payload" ]; then
             _vault_sock_call GET "${route}?${payload}"
         else
@@ -753,7 +753,7 @@ print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$v
             else
                 _vault_handoff_call POST send "$body"
             fi
-            if [ "$_SC_STATUS" = "403" ] && [ "$(_vault_handoff_code "$_SC_BODY")" = "confirm_required" ] && [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+            if [ "$_SC_STATUS" = "403" ] && [ "$(_vault_handoff_code "$_SC_BODY")" = "confirm_required" ] && ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
                 # A person gave this secret: confirm sending it to another server.
                 local sid tok
                 sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("secretId") or "")')"
@@ -788,7 +788,7 @@ if v.get("addressNote"): print("note: " + v["addressNote"], file=sys.stderr)'
             if [ "$sub" = "incoming" ] && { [ "$verb" = "accept" ] || [ "$verb" = "decline" ]; }; then
                 local id="${pos[1]:-}"
                 [ -n "$id" ] || { echo "usage: k2 vault incoming $verb <delivery-id>" >&2; exit 2; }
-                if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+                if _envn_any HOOK_SOCK HOOK_TOKEN; then
                     # 0.46.10: an agent never runs this; the person answers
                     # K2's permission card (desktop and phone).
                     echo "owner_only: a person accepts or declines $id on the card K2 put on your Thread (Allow accepts, Deny declines; it shows on their phone too). Nothing for you to run." >&2
@@ -933,7 +933,7 @@ for a in e:
                 add|remove)
                     local sname="${pos[1]:-}"
                     [ -n "$sname" ] && [ -n "$to" ] && [ -n "$workspace" ] || { echo "usage: k2 vault send-allow $verb NAME --to <agent>::<host> --workspace <ws>" >&2; exit 2; }
-                    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+                    if _envn_any HOOK_SOCK HOOK_TOKEN; then
                         echo "handoff_person_only: an Owner or Admin decides which secrets you may send to another server. To ask, run k2 vault send $sname --to $to and run the Ask with: line it prints." >&2
                         exit 3
                     fi

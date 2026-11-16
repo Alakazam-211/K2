@@ -958,7 +958,7 @@ cmd_msg_signal_form() {
     # `msg <ws> --signal <kind> [--payload <json>] [--from <name>]`
     local target="$1"
     shift
-    local kind="msg" payload="{}" from="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}" delivery="live"
+    local kind="msg" payload="{}" from="${K5_AGENT_NAME:-${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}}" delivery="live"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --signal)  kind="$2"; shift 2 ;;

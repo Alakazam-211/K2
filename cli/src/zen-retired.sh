@@ -68,7 +68,7 @@ _zen_garden_changes_hint() {
     for a in "$@"; do
         case "$a" in --json|--json=*) return 0 ;; esac
     done
-    root="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}"
+    root="${K5_PROJECT_PATH:-${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}}"
     [ -n "$root" ] && [ "$root" != "$HOME" ] || return 0
     dot="$(_ws_dot_dir "$root")"
     [ -d "$dot" ] || return 0

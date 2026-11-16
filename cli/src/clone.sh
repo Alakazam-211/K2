@@ -65,7 +65,7 @@ _clone_die() {
 
 # People-only verbs refuse a passport (an agent, or a K2 terminal).
 _clone_person_guard() {
-    if _compute_in_session || [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]; then
+    if _compute_in_session || _envn_any HOOK_TOKEN; then
         _clone_die clone_agents_propose "agents can't clone; propose it and a person approves: k2 clone propose --to <host|here> --why \"…\""
     fi
 }
@@ -1023,7 +1023,7 @@ cmd_users() {
             local raw
             raw=$(cli_send cli_request "/cli/users") || raw=""
             local users_agent=0
-            { _cli_caller_is_agent_passport || [ -n "${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}" ]; } && users_agent=1
+            { _cli_caller_is_agent_passport || _envn_any HOOK_TOKEN; } && users_agent=1
             printf '%s' "$raw" | AS_JSON="$as_json" USERS_AGENT="$users_agent" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()

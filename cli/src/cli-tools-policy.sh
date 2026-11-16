@@ -225,7 +225,7 @@ _cli_apply_auth_for_verb() {
     local tool_id mode
     tool_id="$(_cli_tool_id_for_verb "$verb" "$sub")"
     mode="$(_cli_tool_default_mode "$tool_id")"
-    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
 
     if [ "$mode" = "id" ]; then
         if [ -n "$hook_sock" ]; then
@@ -249,7 +249,7 @@ _cli_apply_auth_for_verb() {
 # inside a K2 terminal (so the agent's "Manage K2 projects" switch applies),
 # else $TOKEN (owner / external terminal).
 _k2_project_token() {
-    if [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
+    if [ -n "${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
         printf '%s' "$SCOPED_TOKEN"
     else
         printf '%s' "$TOKEN"
@@ -446,7 +446,7 @@ _cli_passport_stale_die() {
 # failed socket bind still serves the scoped token over TCP.
 _cli_check_session_passport() {
     local verb="${1:-}"
-    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
     [ -n "$hook_sock" ] || return 0
     local tool_id mode
     tool_id="$(_cli_tool_id_for_verb "$verb")"

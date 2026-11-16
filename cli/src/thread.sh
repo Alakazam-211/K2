@@ -9,7 +9,8 @@ _thread_sender_from() {
         printf '%s' "${K2_PRIMARY}/${K2_SIDECAR_NAME}"
         return 0
     fi
-    local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+    local sender_path
+    _envn_into sender_path PROJECT_PATH "$PWD"
     if [[ -n "$sender_path" ]]; then
         local sender_name
         # A lookup, not the command's request: never its closing line.

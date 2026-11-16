@@ -1225,7 +1225,8 @@ except Exception as e:
     if [ $exit_code -ne 0 ]; then exit $exit_code; fi
     [ -z "$rel_path" ] && { echo "Heartbeat '$name' has no wakeup path on file." >&2; exit 1; }
 
-    local base="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+    local base
+    _envn_into base PROJECT_PATH "$PWD"
     local abs_path="$base/$rel_path"
 
     case "$mode" in
@@ -1548,8 +1549,9 @@ cmd_hooks_emit() {
         exit 2
     fi
 
-    local pane="${K2_PANE_ID:-${K2SO_PANE_ID:-}}"
-    local sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local pane sock
+    _envn_into pane PANE_ID
+    _envn_into sock HOOK_SOCK
     if [ -z "$SCOPED_TOKEN" ] || [ -z "$pane" ]; then
         echo "Error: k2 hooks emit runs inside a K2 session (no session passport: K2_HOOK_TOKEN / K2_PANE_ID unset)." >&2
         echo "It reports for the program in this PTY; it never uses the owner token. See k2 study hooks." >&2

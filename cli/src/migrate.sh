@@ -109,7 +109,7 @@ EOF
 # elsewhere over vault.sock, where the daemon checks for a person.
 _migrate_send() {
     local method="$1" route="$2" payload="${3:-}" tty="0" out
-    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] || [ ! -S "$(_vault_sock)" ]; then
+    if _envn_any HOOK_SOCK HOOK_TOKEN || [ ! -S "$(_vault_sock)" ]; then
         _sidecar_split "$(_sidecar_send "$method" "/cli/migrate/secrets/${route}" "$payload")"
         return 0
     fi
@@ -705,7 +705,7 @@ print(json.dumps(o))' "$to" "$as_d" "$env_name" "$file_name" "$ttl")"
             # terminal: confirm here (Touch ID or the vault password) and
             # grant over the vault socket. A K2 terminal can't.
             if [ "$_SC_STATUS" = "403" ] && printf '%s' "$_SC_BODY" | grep -q '"vault_confirm_required"' \
-                && [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+                && ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
                 _vault_sock_call GET "show?$(python3 -c '
 import json, sys, urllib.parse
 o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"

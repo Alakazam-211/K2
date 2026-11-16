@@ -22,6 +22,38 @@ case "${0##*/}" in
     *)  _K2_CALLED_AS="k2" ;;
 esac
 
+# One env-name reader. A setting K2 hands this CLI is read under its newest
+# name first: K5_<NAME>, then K2_<NAME>, then K2SO_<NAME>. Empty counts as
+# unset, as `${K2_X:-${K2SO_X:-}}` always did. (The daemon's twin is
+# k2_core::env_names.) A block or function a test extracts on its own
+# spells the same three names inline: ${K5_X:-${K2_X:-${K2SO_X:-}}}.
+#   _envn_into VAR NAME [default]   the value into $VAR (no subshell)
+#   _envn NAME [default]            print it
+#   _envn_any NAME...               true when any NAME is set, under any name
+_envn_into() {
+    local _envn_n _envn_v=""
+    for _envn_n in "K5_$2" "K2_$2" "K2SO_$2"; do
+        _envn_v="${!_envn_n:-}"
+        [ -z "$_envn_v" ] || break
+    done
+    [ -n "$_envn_v" ] || _envn_v="${3:-}"
+    printf -v "$1" '%s' "$_envn_v"
+}
+_envn() {
+    local _envn_out
+    _envn_into _envn_out "$@"
+    printf '%s' "$_envn_out"
+}
+_envn_any() {
+    local _envn_a _envn_n
+    for _envn_a in "$@"; do
+        for _envn_n in "K5_$_envn_a" "K2_$_envn_a" "K2SO_$_envn_a"; do
+            [ -z "${!_envn_n:-}" ] || return 0
+        done
+    done
+    return 1
+}
+
 # Windows (Git Bash): `python3` is usually the Microsoft Store stub, and
 # Python there writes CRLF to pipes. Use whichever real Python 3 answers
 # (`python3`, `py -3`, `python`) and drop the CRs from its stdout, so every
@@ -58,10 +90,10 @@ esac
 
 # Connection details (set by K2 when creating terminal sessions)
 # Falls back to ~/.k2/heartbeat.{port,token} for external terminals
-PORT="${K2_PORT:-${K2SO_PORT:-}}"
+_envn_into PORT PORT
 # LAN / remote daemon: override loopback. Default matches today's bind.
 HOST="${K2_HOST:-127.0.0.1}"
-TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+_envn_into TOKEN HOOK_TOKEN
 
 # #58 Phase-1 close — capture the per-cell SCOPED token NOW, before any
 # Open-tool disk-owner inversion (see _cli_apply_auth_for_verb) can clobber
@@ -70,7 +102,7 @@ TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
 # passport and never re-source ~/.k2/heartbeat.token (owner) — that COMPAT-58
 # inversion is the agent elevation hole for ID verbs. Empty outside a scoped
 # cell (the UDS arm is then skipped — see cli_send).
-SCOPED_TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+_envn_into SCOPED_TOKEN HOOK_TOKEN
 
 # BEGIN_CLI_HEALED_PASSPORT
 # A session's env can't change, so when a daemon restart finds the passport
@@ -98,6 +130,7 @@ _cli_use_healed_passport() {
     SCOPED_TOKEN="$t"
     export K2_HOOK_TOKEN="$t"
     if [ -n "${K2SO_HOOK_TOKEN:-}" ]; then export K2SO_HOOK_TOKEN="$t"; fi
+    if [ -n "${K5_HOOK_TOKEN:-}" ]; then export K5_HOOK_TOKEN="$t"; fi
     return 0
 }
 # A call refused its passport, started before the new one was written (the
@@ -198,7 +231,7 @@ if isinstance(d,dict) and d.get("movedFrom") and d.get("addr"):
 # 10th. Agents forget Thread is markdown; help is not re-read. stderr
 # so stdout stays the id/seq line. Best-effort — missing .k2 is a no-op.
 _thread_md_nudge() {
-    local root="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-${PROJECT:-$PWD}}}"
+    local root="${K5_PROJECT_PATH:-${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-${PROJECT:-$PWD}}}}"
     local dot
     dot=$(_ws_dot_dir "$root")
     [ -d "$dot" ] || return 0
@@ -306,8 +339,9 @@ _k2_git_usable() {
 # Otherwise walk up from CWD to find a .k2/ or .k2so/ directory, skipping $HOME.
 # Also handles git worktrees: if CWD is inside a worktree, resolve back to
 # the main repo root where the workspace dot-dir lives.
-PROJECT="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$(pwd)}}"
-if [ -z "${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}" ]; then
+_envn_into PROJECT PROJECT_PATH
+[ -n "$PROJECT" ] || PROJECT="$(pwd)"
+if ! _envn_any PROJECT_PATH; then
     _dir="$(pwd)"
     _found=""
     while [ "$_dir" != "/" ]; do
@@ -605,7 +639,7 @@ _cli_apply_auth_for_verb() {
     local tool_id mode
     tool_id="$(_cli_tool_id_for_verb "$verb" "$sub")"
     mode="$(_cli_tool_default_mode "$tool_id")"
-    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
 
     if [ "$mode" = "id" ]; then
         if [ -n "$hook_sock" ]; then
@@ -629,7 +663,7 @@ _cli_apply_auth_for_verb() {
 # inside a K2 terminal (so the agent's "Manage K2 projects" switch applies),
 # else $TOKEN (owner / external terminal).
 _k2_project_token() {
-    if [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
+    if [ -n "${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
         printf '%s' "$SCOPED_TOKEN"
     else
         printf '%s' "$TOKEN"
@@ -826,7 +860,7 @@ _cli_passport_stale_die() {
 # failed socket bind still serves the scoped token over TCP.
 _cli_check_session_passport() {
     local verb="${1:-}"
-    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
     [ -n "$hook_sock" ] || return 0
     local tool_id mode
     tool_id="$(_cli_tool_id_for_verb "$verb")"
@@ -1600,7 +1634,7 @@ cli_post_form() {
 # path SERVER-SIDE from the socket-bound principal — the body is never
 # trusted for identity). Recipient/routing args (`workspace=`, inbox `id=`,
 # etc.) are passed through by the caller exactly as for the TCP arms.
-_hook_sock() { echo "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"; }
+_hook_sock() { local s; _envn_into s HOOK_SOCK; echo "$s"; }
 
 cli_request_uds() {
     local endpoint="$1"; shift
@@ -2077,7 +2111,7 @@ _k2_idem_replay_note() {
 # people (no passport), or a daemon that answers no path, keep the $PWD
 # result.
 _cli_use_passport_project() {
-    [ -z "${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}" ] || return 0
+    [ -z "${K5_PROJECT_PATH:-${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}}" ] || return 0
     [ -n "${SCOPED_TOKEN:-}" ] || return 0
     _cli_skip_uds && return 0
     local sock out="" path="" _K2_CFG=""
@@ -2178,7 +2212,7 @@ cmd_respond() {
 # or scoped-token presence (workspace agents under COMPAT-58 also have
 # those and must keep the plain `/cli/done` meaning).
 _is_api_lifecycle_context() {
-    case "${K2_API_CELL:-${K2SO_API_CELL:-}}" in
+    case "$(_envn API_CELL)" in
         1|true|yes|YES|True) return 0 ;;
     esac
     return 1
@@ -4458,7 +4492,8 @@ except Exception as e:
     if [ $exit_code -ne 0 ]; then exit $exit_code; fi
     [ -z "$rel_path" ] && { echo "Heartbeat '$name' has no wakeup path on file." >&2; exit 1; }
 
-    local base="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+    local base
+    _envn_into base PROJECT_PATH "$PWD"
     local abs_path="$base/$rel_path"
 
     case "$mode" in
@@ -4781,8 +4816,9 @@ cmd_hooks_emit() {
         exit 2
     fi
 
-    local pane="${K2_PANE_ID:-${K2SO_PANE_ID:-}}"
-    local sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local pane sock
+    _envn_into pane PANE_ID
+    _envn_into sock HOOK_SOCK
     if [ -z "$SCOPED_TOKEN" ] || [ -z "$pane" ]; then
         echo "Error: k2 hooks emit runs inside a K2 session (no session passport: K2_HOOK_TOKEN / K2_PANE_ID unset)." >&2
         echo "It reports for the program in this PTY; it never uses the owner token. See k2 study hooks." >&2
@@ -6852,8 +6888,8 @@ import json, sys, subprocess, os
 # The session's port and passport under their current names first, then
 # the older ones; a name that is set but empty counts as unset. Reading
 # only the K2SO_ names sent an agent's wake check with the owner token.
-port = os.environ.get('K2_PORT') or os.environ.get('K2SO_PORT') or ''
-token = os.environ.get('K2_HOOK_TOKEN') or os.environ.get('K2SO_HOOK_TOKEN') or ''
+port = os.environ.get('K5_PORT') or os.environ.get('K2_PORT') or os.environ.get('K2SO_PORT') or ''
+token = os.environ.get('K5_HOOK_TOKEN') or os.environ.get('K2_HOOK_TOKEN') or os.environ.get('K2SO_HOOK_TOKEN') or ''
 if not port:
     try: port = open(os.path.expanduser('$K2_HOME/heartbeat.port')).read().strip()
     except: pass
@@ -23398,7 +23434,8 @@ EOF
 }
 
 cmd_done() {
-    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    local agent
+    _envn_into agent AGENT_NAME
     local blocked=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -23666,7 +23703,8 @@ cmd_msg() {
     if [[ -z "$from" ]]; then
         # Prefer the workspace handle (D18) so [from] is a reply address,
         # never a pretty display name or a passport UUID.
-        local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+        local sender_path
+        _envn_into sender_path PROJECT_PATH "$PWD"
         if [[ -n "$sender_path" ]]; then
             local sender_name
             sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/handle" \
@@ -23806,7 +23844,8 @@ _thread_sender_from() {
         printf '%s' "${K2_PRIMARY}/${K2_SIDECAR_NAME}"
         return 0
     fi
-    local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+    local sender_path
+    _envn_into sender_path PROJECT_PATH "$PWD"
     if [[ -n "$sender_path" ]]; then
         local sender_name
         # A lookup, not the command's request: never its closing line.
@@ -25318,7 +25357,8 @@ cmd_signal() {
     local raw_payload="${3:-{\}}"
     shift 3 2>/dev/null || true
     local delivery="live"
-    local from="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}"
+    local from
+    _envn_into from AGENT_NAME cli
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --inbox) delivery="inbox"; shift ;;
@@ -35884,7 +35924,7 @@ cmd_sources_remove() {
     local yes=0 a
     for a in "$@"; do [ "$a" = "--yes" ] && yes=1; done
     if [ "$yes" != "1" ]; then
-        if [ -n "${K2_HOOK_SOCK:-}${K2SO_HOOK_SOCK:-}" ] || [ ! -t 0 ]; then
+        if [ -n "${K5_HOOK_SOCK:-}${K2_HOOK_SOCK:-}${K2SO_HOOK_SOCK:-}" ] || [ ! -t 0 ]; then
             echo "Error: k2 sources remove needs --yes here" >&2
             exit 2
         fi
@@ -36142,7 +36182,7 @@ else:
 # for. An agent with "Manage Gardens and data sources" needs none; any other
 # passport is refused by the daemon (person_only, exit 3).
 _sources_in_k2() {
-    [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]
+    [ -n "${K5_HOOK_TOKEN:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]
 }
 
 # A vault confirm (Touch ID / vault password) for ACTION bound to ID.
@@ -36897,7 +36937,7 @@ sys.exit(1 if v.get("skipped") else 0)'
 
 # People-only routes: refuse inside a K2 terminal, then talk to vault.sock.
 _vault_person_guard() {
-    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+    if _envn_any HOOK_SOCK HOOK_TOKEN; then
         echo "owner_only: this is for a person, from your own terminal or SSH login, not a K2 terminal." >&2
         echo "Agents: don't run it; tell your owner." >&2
         exit 3
@@ -37373,7 +37413,7 @@ except Exception:
 # (vault.sock) when it's there, else the owner token.
 _vault_handoff_call() {
     local method="$1" route="$2" payload="${3:-}"
-    if [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+    if ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
         if [ "$method" = "GET" ] && [ -n "$payload" ]; then
             _vault_sock_call GET "${route}?${payload}"
         else
@@ -37446,7 +37486,7 @@ print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$v
             else
                 _vault_handoff_call POST send "$body"
             fi
-            if [ "$_SC_STATUS" = "403" ] && [ "$(_vault_handoff_code "$_SC_BODY")" = "confirm_required" ] && [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+            if [ "$_SC_STATUS" = "403" ] && [ "$(_vault_handoff_code "$_SC_BODY")" = "confirm_required" ] && ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
                 # A person gave this secret: confirm sending it to another server.
                 local sid tok
                 sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("secretId") or "")')"
@@ -37481,7 +37521,7 @@ if v.get("addressNote"): print("note: " + v["addressNote"], file=sys.stderr)'
             if [ "$sub" = "incoming" ] && { [ "$verb" = "accept" ] || [ "$verb" = "decline" ]; }; then
                 local id="${pos[1]:-}"
                 [ -n "$id" ] || { echo "usage: k2 vault incoming $verb <delivery-id>" >&2; exit 2; }
-                if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+                if _envn_any HOOK_SOCK HOOK_TOKEN; then
                     # 0.46.10: an agent never runs this; the person answers
                     # K2's permission card (desktop and phone).
                     echo "owner_only: a person accepts or declines $id on the card K2 put on your Thread (Allow accepts, Deny declines; it shows on their phone too). Nothing for you to run." >&2
@@ -37626,7 +37666,7 @@ for a in e:
                 add|remove)
                     local sname="${pos[1]:-}"
                     [ -n "$sname" ] && [ -n "$to" ] && [ -n "$workspace" ] || { echo "usage: k2 vault send-allow $verb NAME --to <agent>::<host> --workspace <ws>" >&2; exit 2; }
-                    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+                    if _envn_any HOOK_SOCK HOOK_TOKEN; then
                         echo "handoff_person_only: an Owner or Admin decides which secrets you may send to another server. To ask, run k2 vault send $sname --to $to and run the Ask with: line it prints." >&2
                         exit 3
                     fi
@@ -39953,7 +39993,7 @@ EOF
 # elsewhere over vault.sock, where the daemon checks for a person.
 _migrate_send() {
     local method="$1" route="$2" payload="${3:-}" tty="0" out
-    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] || [ ! -S "$(_vault_sock)" ]; then
+    if _envn_any HOOK_SOCK HOOK_TOKEN || [ ! -S "$(_vault_sock)" ]; then
         _sidecar_split "$(_sidecar_send "$method" "/cli/migrate/secrets/${route}" "$payload")"
         return 0
     fi
@@ -40549,7 +40589,7 @@ print(json.dumps(o))' "$to" "$as_d" "$env_name" "$file_name" "$ttl")"
             # terminal: confirm here (Touch ID or the vault password) and
             # grant over the vault socket. A K2 terminal can't.
             if [ "$_SC_STATUS" = "403" ] && printf '%s' "$_SC_BODY" | grep -q '"vault_confirm_required"' \
-                && [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+                && ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
                 _vault_sock_call GET "show?$(python3 -c '
 import json, sys, urllib.parse
 o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"
@@ -41341,7 +41381,7 @@ cmd_llm() {
 # _reserve_args <verb> <args...> sets _RS_AGENT and _RS_PATHS.
 _reserve_args() {
     local verb="$1"; shift
-    _RS_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    _envn_into _RS_AGENT AGENT_NAME
     _RS_PATHS=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -44891,7 +44931,7 @@ _clone_die() {
 
 # People-only verbs refuse a passport (an agent, or a K2 terminal).
 _clone_person_guard() {
-    if _compute_in_session || [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]; then
+    if _compute_in_session || _envn_any HOOK_TOKEN; then
         _clone_die clone_agents_propose "agents can't clone; propose it and a person approves: k2 clone propose --to <host|here> --why \"…\""
     fi
 }
@@ -45849,7 +45889,7 @@ cmd_users() {
             local raw
             raw=$(cli_send cli_request "/cli/users") || raw=""
             local users_agent=0
-            { _cli_caller_is_agent_passport || [ -n "${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}" ]; } && users_agent=1
+            { _cli_caller_is_agent_passport || _envn_any HOOK_TOKEN; } && users_agent=1
             printf '%s' "$raw" | AS_JSON="$as_json" USERS_AGENT="$users_agent" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
@@ -66832,7 +66872,8 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 # (COMPAT-58), so the daemon cannot tell the agent from the owner; agent
 # permission switches are refused here instead.
 _cli_caller_is_agent_passport() {
-    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local hook_sock
+    _envn_into hook_sock HOOK_SOCK
     [ -n "$hook_sock" ] && [ -n "${SCOPED_TOKEN:-}" ]
 }
 
@@ -68013,7 +68054,7 @@ cmd_agent_refresh() {
         exit 1
     fi
     # No workspace named: this one. An agent's passport names it anyway.
-    [ -n "$ws" ] || ws="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}"
+    [ -n "$ws" ] || _envn_into ws PROJECT_PATH
     if [ -z "$ws" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
         _agent_err "bad_usage" "name the workspace — $usage"
         exit 2
@@ -69949,7 +69990,7 @@ _context_exit_for_code() {
 
 # Absolute workspace path for context routes (matches $PROJECT resolution).
 _context_project_path() {
-    python3 -c 'import os; print(os.path.abspath(os.path.expanduser(os.environ.get("K2_PROJECT_PATH") or os.environ.get("K2SO_PROJECT_PATH") or os.getcwd())))' 2>/dev/null \
+    python3 -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1] or os.getcwd())))' "$(_envn PROJECT_PATH)" 2>/dev/null \
         || echo "${PROJECT:-$PWD}"
 }
 
@@ -72625,7 +72666,7 @@ cmd_msg_signal_form() {
     # `msg <ws> --signal <kind> [--payload <json>] [--from <name>]`
     local target="$1"
     shift
-    local kind="msg" payload="{}" from="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}" delivery="live"
+    local kind="msg" payload="{}" from="${K5_AGENT_NAME:-${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}}" delivery="live"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --signal)  kind="$2"; shift 2 ;;
@@ -73178,7 +73219,7 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 _feedback_detect_session() {
     FB_SESSION_ID=""
     FB_SESSION_KIND=""
-    if [ "${K2_API_CELL:-}" = "1" ] || [ "${K2SO_API_CELL:-}" = "1" ]; then
+    if [ "${K5_API_CELL:-${K2_API_CELL:-${K2SO_API_CELL:-}}}" = "1" ]; then
         FB_SESSION_ID="${K2_SESSION_ID:-}"
         FB_SESSION_KIND="api"
     elif [ "${K2_CELL:-}" = "sidecar" ]; then
@@ -73326,7 +73367,7 @@ cmd_feedback_ask() {
     FB_TITLE="$title" FB_BODY="$body" FB_BODY_PATH="$body_file" FB_HTML_PATH="$html_path" \
     FB_KIND="$kind" FB_OPTIONS="$options" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
-    FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
+    FB_PROJECT="$PROJECT" FB_AGENT="$(_envn AGENT_NAME)" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" FB_FILES="$files_json" \
     FB_FILES_PY="$_ticket_files_check_py" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
@@ -73827,7 +73868,8 @@ cmd_feedback_comment() {
     # the agent identity (env override → workspace folder basename, the
     # product-default agent display name). The renderer's thread panel
     # posts author="owner" via the route directly.
-    local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    local author
+    _envn_into author AGENT_NAME
     [ -z "$author" ] && author="$(basename "$PROJECT")"
     local body resp
     # Files: an array embedded in the body (TA22); relative paths resolve
@@ -73910,7 +73952,8 @@ cmd_feedback_resolve() {
     fi
     # Settling a discussion records the outcome under the AGENT's name
     # (same identity rule as `comment`), never as a human answer.
-    local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    local author
+    _envn_into author AGENT_NAME
     [ -z "$author" ] && author="$(basename "$PROJECT")"
     local body resp
     body=$(FB_ID="$id" FB_ANSWERED="$answered" FB_HAS_ANSWERED="$has_answered" FB_AUTHOR="$author" FB_FILES="$files_json" python3 -c 'import json,os
@@ -74067,7 +74110,7 @@ if os.environ.get("FB_SET_DEFAULT")=="true": b["defaultAssignee"]=os.environ.get
 print(json.dumps(b))')
         # In a K2 terminal: the passport, never the owner token (see above).
         local TOKEN="$TOKEN"
-        if [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && [ -n "$SCOPED_TOKEN" ]; then
+        if _envn_any HOOK_SOCK && [ -n "$SCOPED_TOKEN" ]; then
             TOKEN="$SCOPED_TOKEN"
         fi
         resp=$(cli_post_json "/cli/tickets/settings" "$body") || resp=""
@@ -74493,7 +74536,7 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 # cwd walk-up — the same detection `k2 tickets` uses).
 _project_py() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" P_WS_PATH="$PROJECT" \
-    P_AGENT_NAME="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
+    P_AGENT_NAME="$(_envn AGENT_NAME)" \
     P_VERB="${P_VERB:-}" P_JSON="${P_JSON:-false}" \
     P_NAME="${P_NAME:-}" P_ARG_PROJECT="${P_ARG_PROJECT:-}" \
     P_ARG_WORKSPACE="${P_ARG_WORKSPACE:-}" P_TEXT="${P_TEXT:-}" \
@@ -99333,11 +99376,12 @@ _zen_access_on() {
 # A Zen GET with the session's passport inside a K2 terminal (the owner
 # token outside), like _zen_session_post.
 _zen_session_get() {
-    local endpoint="$1" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local endpoint="$1" hook_sock
+    _envn_into hook_sock HOOK_SOCK
     shift
     if [ -n "$hook_sock" ]; then
         local saved="$TOKEN"
-        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        TOKEN="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
         cli_request "$endpoint" "$@"
         TOKEN="$saved"
     else
@@ -99603,7 +99647,7 @@ cmd_zen_garden() {
             # widgets, and inside a K2 terminal the session's passport (the
             # agent's Garden; K2 asks the person). A K2 older than 0.46.3
             # makes an empty Garden as before, and has no --from/--widgets.
-            if [ -n "$new_from" ] || [ "${#new_widgets[@]}" -gt 0 ] || { [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && _zen_access_on; }; then
+            if [ -n "$new_from" ] || [ "${#new_widgets[@]}" -gt 0 ] || { _envn_any HOOK_SOCK && _zen_access_on; }; then
                 if ! _zen_access_on; then
                     echo "Error: --from and --widgets need K2 0.46.3 or newer on this server; this server's K2 is older. Update K2 on that server." >&2
                     exit 2
@@ -99789,10 +99833,11 @@ print(json.dumps(b))
 # lets the change through on an unlocked Garden and answers 423
 # garden_locked on a locked one. Outside K2 the owner token is used.
 _zen_session_post() {
-    local endpoint="$1" body="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local endpoint="$1" body="$2" hook_sock
+    _envn_into hook_sock HOOK_SOCK
     if [ -n "$hook_sock" ]; then
         local saved="$TOKEN"
-        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        TOKEN="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
         cli_post_json "$endpoint" "$body"
         TOKEN="$saved"
     else
@@ -99806,10 +99851,11 @@ _zen_session_post() {
 # session's passport instead, and the daemon refuses it. Outside K2 the
 # owner token is used.
 _zen_person_post() {
-    local endpoint="$1" body="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local endpoint="$1" body="$2" hook_sock
+    _envn_into hook_sock HOOK_SOCK
     if [ -n "$hook_sock" ]; then
         local saved="$TOKEN"
-        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        TOKEN="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
         cli_post_json "$endpoint" "$body"
         TOKEN="$saved"
     else
@@ -100465,9 +100511,10 @@ with open(os.environ["ZD_OUT"], "w") as out:
 # terminal (like _zen_session_post) and the owner token outside. For the
 # folder routes, whose bodies can be megabytes.
 _zen_session_post_file() {
-    local endpoint="$1" file="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" tok="$TOKEN"
+    local endpoint="$1" file="$2" hook_sock tok="$TOKEN"
+    _envn_into hook_sock HOOK_SOCK
     if [ -n "$hook_sock" ]; then
-        tok="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        tok="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
     fi
     local _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${tok}"
@@ -100977,7 +101024,7 @@ _zen_garden_changes_hint() {
     for a in "$@"; do
         case "$a" in --json|--json=*) return 0 ;; esac
     done
-    root="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}"
+    root="${K5_PROJECT_PATH:-${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}}"
     [ -n "$root" ] && [ "$root" != "$HOME" ] || return 0
     dot="$(_ws_dot_dir "$root")"
     [ -d "$dot" ] || return 0

@@ -71,9 +71,10 @@ with open(os.environ["ZD_OUT"], "w") as out:
 # terminal (like _zen_session_post) and the owner token outside. For the
 # folder routes, whose bodies can be megabytes.
 _zen_session_post_file() {
-    local endpoint="$1" file="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" tok="$TOKEN"
+    local endpoint="$1" file="$2" hook_sock tok="$TOKEN"
+    _envn_into hook_sock HOOK_SOCK
     if [ -n "$hook_sock" ]; then
-        tok="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        tok="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
     fi
     local _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${tok}"

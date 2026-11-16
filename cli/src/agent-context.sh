@@ -93,7 +93,7 @@ _context_exit_for_code() {
 
 # Absolute workspace path for context routes (matches $PROJECT resolution).
 _context_project_path() {
-    python3 -c 'import os; print(os.path.abspath(os.path.expanduser(os.environ.get("K2_PROJECT_PATH") or os.environ.get("K2SO_PROJECT_PATH") or os.getcwd())))' 2>/dev/null \
+    python3 -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1] or os.getcwd())))' "$(_envn PROJECT_PATH)" 2>/dev/null \
         || echo "${PROJECT:-$PWD}"
 }
 

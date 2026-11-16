@@ -12,7 +12,8 @@ EOF
 }
 
 cmd_done() {
-    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    local agent
+    _envn_into agent AGENT_NAME
     local blocked=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -280,7 +281,8 @@ cmd_msg() {
     if [[ -z "$from" ]]; then
         # Prefer the workspace handle (D18) so [from] is a reply address,
         # never a pretty display name or a passport UUID.
-        local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+        local sender_path
+        _envn_into sender_path PROJECT_PATH "$PWD"
         if [[ -n "$sender_path" ]]; then
             local sender_name
             sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/handle" \

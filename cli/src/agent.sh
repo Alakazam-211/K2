@@ -147,7 +147,8 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 # (COMPAT-58), so the daemon cannot tell the agent from the owner; agent
 # permission switches are refused here instead.
 _cli_caller_is_agent_passport() {
-    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    local hook_sock
+    _envn_into hook_sock HOOK_SOCK
     [ -n "$hook_sock" ] && [ -n "${SCOPED_TOKEN:-}" ]
 }
 
@@ -1328,7 +1329,7 @@ cmd_agent_refresh() {
         exit 1
     fi
     # No workspace named: this one. An agent's passport names it anyway.
-    [ -n "$ws" ] || ws="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}"
+    [ -n "$ws" ] || _envn_into ws PROJECT_PATH
     if [ -z "$ws" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
         _agent_err "bad_usage" "name the workspace — $usage"
         exit 2

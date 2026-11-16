@@ -22,6 +22,38 @@ case "${0##*/}" in
     *)  _K2_CALLED_AS="k2" ;;
 esac
 
+# One env-name reader. A setting K2 hands this CLI is read under its newest
+# name first: K5_<NAME>, then K2_<NAME>, then K2SO_<NAME>. Empty counts as
+# unset, as `${K2_X:-${K2SO_X:-}}` always did. (The daemon's twin is
+# k2_core::env_names.) A block or function a test extracts on its own
+# spells the same three names inline: ${K5_X:-${K2_X:-${K2SO_X:-}}}.
+#   _envn_into VAR NAME [default]   the value into $VAR (no subshell)
+#   _envn NAME [default]            print it
+#   _envn_any NAME...               true when any NAME is set, under any name
+_envn_into() {
+    local _envn_n _envn_v=""
+    for _envn_n in "K5_$2" "K2_$2" "K2SO_$2"; do
+        _envn_v="${!_envn_n:-}"
+        [ -z "$_envn_v" ] || break
+    done
+    [ -n "$_envn_v" ] || _envn_v="${3:-}"
+    printf -v "$1" '%s' "$_envn_v"
+}
+_envn() {
+    local _envn_out
+    _envn_into _envn_out "$@"
+    printf '%s' "$_envn_out"
+}
+_envn_any() {
+    local _envn_a _envn_n
+    for _envn_a in "$@"; do
+        for _envn_n in "K5_$_envn_a" "K2_$_envn_a" "K2SO_$_envn_a"; do
+            [ -z "${!_envn_n:-}" ] || return 0
+        done
+    done
+    return 1
+}
+
 # Windows (Git Bash): `python3` is usually the Microsoft Store stub, and
 # Python there writes CRLF to pipes. Use whichever real Python 3 answers
 # (`python3`, `py -3`, `python`) and drop the CRs from its stdout, so every
@@ -58,10 +90,10 @@ esac
 
 # Connection details (set by K2 when creating terminal sessions)
 # Falls back to ~/.k2/heartbeat.{port,token} for external terminals
-PORT="${K2_PORT:-${K2SO_PORT:-}}"
+_envn_into PORT PORT
 # LAN / remote daemon: override loopback. Default matches today's bind.
 HOST="${K2_HOST:-127.0.0.1}"
-TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+_envn_into TOKEN HOOK_TOKEN
 
 # #58 Phase-1 close — capture the per-cell SCOPED token NOW, before any
 # Open-tool disk-owner inversion (see _cli_apply_auth_for_verb) can clobber
@@ -70,7 +102,7 @@ TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
 # passport and never re-source ~/.k2/heartbeat.token (owner) — that COMPAT-58
 # inversion is the agent elevation hole for ID verbs. Empty outside a scoped
 # cell (the UDS arm is then skipped — see cli_send).
-SCOPED_TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+_envn_into SCOPED_TOKEN HOOK_TOKEN
 
 # BEGIN_CLI_HEALED_PASSPORT
 # A session's env can't change, so when a daemon restart finds the passport
@@ -98,6 +130,7 @@ _cli_use_healed_passport() {
     SCOPED_TOKEN="$t"
     export K2_HOOK_TOKEN="$t"
     if [ -n "${K2SO_HOOK_TOKEN:-}" ]; then export K2SO_HOOK_TOKEN="$t"; fi
+    if [ -n "${K5_HOOK_TOKEN:-}" ]; then export K5_HOOK_TOKEN="$t"; fi
     return 0
 }
 # A call refused its passport, started before the new one was written (the
@@ -198,7 +231,7 @@ if isinstance(d,dict) and d.get("movedFrom") and d.get("addr"):
 # 10th. Agents forget Thread is markdown; help is not re-read. stderr
 # so stdout stays the id/seq line. Best-effort — missing .k2 is a no-op.
 _thread_md_nudge() {
-    local root="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-${PROJECT:-$PWD}}}"
+    local root="${K5_PROJECT_PATH:-${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-${PROJECT:-$PWD}}}}"
     local dot
     dot=$(_ws_dot_dir "$root")
     [ -d "$dot" ] || return 0
@@ -306,8 +339,9 @@ _k2_git_usable() {
 # Otherwise walk up from CWD to find a .k2/ or .k2so/ directory, skipping $HOME.
 # Also handles git worktrees: if CWD is inside a worktree, resolve back to
 # the main repo root where the workspace dot-dir lives.
-PROJECT="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$(pwd)}}"
-if [ -z "${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}" ]; then
+_envn_into PROJECT PROJECT_PATH
+[ -n "$PROJECT" ] || PROJECT="$(pwd)"
+if ! _envn_any PROJECT_PATH; then
     _dir="$(pwd)"
     _found=""
     while [ "$_dir" != "/" ]; do

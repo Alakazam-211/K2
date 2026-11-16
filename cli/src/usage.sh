@@ -286,7 +286,7 @@ cmd_llm() {
 # _reserve_args <verb> <args...> sets _RS_AGENT and _RS_PATHS.
 _reserve_args() {
     local verb="$1"; shift
-    _RS_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    _envn_into _RS_AGENT AGENT_NAME
     _RS_PATHS=()
     while [[ $# -gt 0 ]]; do
         case "$1" in

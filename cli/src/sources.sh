@@ -889,7 +889,7 @@ cmd_sources_remove() {
     local yes=0 a
     for a in "$@"; do [ "$a" = "--yes" ] && yes=1; done
     if [ "$yes" != "1" ]; then
-        if [ -n "${K2_HOOK_SOCK:-}${K2SO_HOOK_SOCK:-}" ] || [ ! -t 0 ]; then
+        if [ -n "${K5_HOOK_SOCK:-}${K2_HOOK_SOCK:-}${K2SO_HOOK_SOCK:-}" ] || [ ! -t 0 ]; then
             echo "Error: k2 sources remove needs --yes here" >&2
             exit 2
         fi
@@ -1147,7 +1147,7 @@ else:
 # for. An agent with "Manage Gardens and data sources" needs none; any other
 # passport is refused by the daemon (person_only, exit 3).
 _sources_in_k2() {
-    [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]
+    [ -n "${K5_HOOK_TOKEN:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]
 }
 
 # A vault confirm (Touch ID / vault password) for ACTION bound to ID.

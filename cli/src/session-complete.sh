@@ -5,7 +5,7 @@
 # or scoped-token presence (workspace agents under COMPAT-58 also have
 # those and must keep the plain `/cli/done` meaning).
 _is_api_lifecycle_context() {
-    case "${K2_API_CELL:-${K2SO_API_CELL:-}}" in
+    case "$(_envn API_CELL)" in
         1|true|yes|YES|True) return 0 ;;
     esac
     return 1

@@ -19,7 +19,8 @@ cmd_signal() {
     local raw_payload="${3:-{\}}"
     shift 3 2>/dev/null || true
     local delivery="live"
-    local from="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}"
+    local from
+    _envn_into from AGENT_NAME cli
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --inbox) delivery="inbox"; shift ;;

@@ -156,6 +156,34 @@ fn missing_agent(a: &mut Agent<'_>) -> R {
     Ok(Step::exit(out.exit, Output::None))
 }
 
+// ---- 7. a repeated heading by its address (`@h:notes-1`), with no --nth ----
+
+fn address_person(p: &mut Person<'_>) -> R {
+    person_types(p, &FENCED.replace("second", "updated"))
+}
+fn address_agent(a: &mut Agent<'_>) -> R {
+    agent_runs(a, &[VERB, "--heading", "@h:notes-1"], "updated\n")
+}
+
+// ---- 8. an address the doc no longer has (the repeat renamed): refused, exit 2, nothing
+// applied; never the nearest heading ----
+
+const RENAMED: &str = "# Log\n\n## Notes\n\nfirst\n\n## Later\n\nsecond\n";
+
+fn stale_person(p: &mut Person<'_>) -> R {
+    // the tab's outline has no second "Notes" to paste into
+    p.text()?;
+    Ok(Step::exit(2, Output::None))
+}
+fn stale_agent(a: &mut Agent<'_>) -> R {
+    let out = a.verb(&[VERB, "--heading", "@h:notes-1"], b"x\n")?;
+    let why = out.refused.unwrap_or_default();
+    if why != "replace-section: notes.md: @h:notes-1 names no heading in this version" {
+        return Err(format!("refusal {why:?}"));
+    }
+    Ok(Step::exit(out.exit, Output::None))
+}
+
 fn cases() -> Vec<Case> {
     vec![
         Case::new(
@@ -196,6 +224,22 @@ fn cases() -> Vec<Case> {
             missing_person,
             missing_agent,
         ),
+        Case::new(
+            P13,
+            VERB,
+            "a repeated heading by its address",
+            address_person,
+            address_agent,
+        )
+        .initial(FENCED),
+        Case::new(
+            P13,
+            VERB,
+            "an address that names no heading: exit 2",
+            stale_person,
+            stale_agent,
+        )
+        .initial(RENAMED),
     ]
 }
 
@@ -229,7 +273,7 @@ fn agent_parity() {
             );
         }
     }
-    assert_eq!(report.matched.iter().filter(|m| m.1 == VERB).count(), 6);
+    assert_eq!(report.matched.iter().filter(|m| m.1 == VERB).count(), 8);
     // blame (live since base v0.3.0): the gutter and the verb, -L, and the history right
     assert_eq!(
         report

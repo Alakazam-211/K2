@@ -33,7 +33,7 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P10 | Select and type over | `replace --lines a,b` / `--range …` | E | `run_tool` (`edit_with`) | live |
 | P11 | Delete a range | `delete --lines a,b`; `sed -i 'a,bd'` | E | `run_tool` (`edit_with`) | live |
 | P12 | Find and replace | `replace --old TEXT --new TEXT [--all]` (exact text; `-`: stdin; 1: no match or not unique); `sed -i 's/…/…/g'` | E | `run_tool` (`edit_with`) | live |
-| P13 | Paste a block / apply a change | `patch`, `apply`, `append`, `replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V]` | E | `run_tool` (`edit_with`); `replace-section` is this pack's (`Pack::verbs`) | live |
+| P13 | Paste a block / apply a change | `patch`, `apply`, `append`, `replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V]` (or `--heading @h:<slug>`) | E | `run_tool` (`edit_with`); `replace-section` is this pack's (`Pack::verbs`) | live |
 | P14 | Rewrite from what I last saw | `write --base V` (three-way; conflict exit 1, expired base exit 8); `--base live` | E | `write_base`; `replace_text` | live |
 | P15 | Format (bold, heading, list) | Markdown formatting is text: `insert`, `replace`, `sed -i` | E | `run_tool` (`edit_with`) | live |
 | P16 | Undo / redo my own edits (all or nothing; refused with the conflict regions if others changed any) | `undo [--steps N]`, `redo`, `undo --drop` (skip a blocked step) | E | `undo_with`, `redo_with` | live |
@@ -64,6 +64,12 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 - `## X` names the level and the text; `X` alone names the text at any level. ATX (`## X`,
   optional closing `#`s) and setext (`X` underlined by `===` or `---`) headings count;
   headings inside fenced code and YAML front matter don't.
+- `--heading @h:<slug>` names one heading by its address (`docs/IDS.md`): GitHub's anchor
+  rule on the heading's text (lowercased; letters, numbers, combining marks, `-` and `_` kept;
+  each space a `-`; anything else dropped), a repeat numbered `-1`, `-2` in document order. It
+  takes no `--nth`. An address that names no heading (the heading renamed or removed, or a
+  repeat above it added or removed) is refused, exit 2, `MARKDOWN-E001` (`details.given`),
+  nothing applied: never the nearest heading.
 - Not found: exit 1, nothing applied. Several match without `--nth`: exit 1, nothing applied,
   and the report lists their line numbers. Bad flags: exit 2.
 - One change, like every edit verb: one `undo` reverts it.

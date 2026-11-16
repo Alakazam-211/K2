@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.7.25: pairs with kit v0.21.0
+
+**Requires `k2-mpc-base` v0.21.0**: the pack's first own refusal is a registered pack refusal id
+(`Pack::errors`, kit v0.21.0).
+
+- Pairs with kit v0.21.0. Its other pack API additions have defaults this pack keeps
+  (`Pack::check_merged_view`, `BlobPack::merge3_known`, `BlobPack::save_lineage`); its other
+  changes are the host's (the version an app opened, a call's result as data, kept pairs and
+  claim bytes on events).
+- **Heading addresses**: every heading has an address, `@h:<slug>` (a native ID in the kit's
+  address grammar), by GitHub's anchor rule on its text: lowercased; letters, numbers,
+  combining marks, `-` and `_` kept; each space a `-`; anything else dropped; a repeat numbered
+  `-1`, `-2` in document order (`section::slug`, `section::addresses`, `section::resolve`).
+  `replace-section --heading @h:<slug>` names that one heading. An address that names no
+  heading is refused, exit 2, with the pack's first own refusal, `MARKDOWN-E001
+  no_such_heading` (`Pack::errors`), never resolved to the nearest heading. A `--heading` value
+  starting `@h:` is an address (in v0.7.24 it is a heading's text); `--heading '# @h:x'` names
+  that text.
+- **The pack's ID table** (`Pack::ids`): `heading-address` and `heading-text`, generated into
+  `docs/IDS.md` and checked against the registry by a lib test.
+- `Cargo.lock`: k2-mpc-base 0.21.0 (only the kit's crate version moves); the crate version.
+
 ## v0.7.24: pairs with kit v0.20.0
 
 **Requires `k2-mpc-base` v0.20.0**. This pack's behaviour is unchanged from v0.7.23.

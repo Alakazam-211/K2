@@ -19,7 +19,8 @@ const TS = "import { x } from './x'\r\nexport const y = x + 1\r\n"
 
 /** The editor CodeMirror would be: its mount options as attributes. */
 function stubEditor(o: EditorMountOptions): React.ReactNode {
-  return <div data-testid="stub-editor" data-read-only={String(o.readOnly)} data-line-numbers={String(o.lineNumbers)} data-wrap={String(o.wrap)} />
+  const ext = Array.isArray(o.extensions) && o.extensions.length === 0 ? 'none' : 'write-mode'
+  return <div data-testid="stub-editor" data-mode={o.mode} data-ext={ext} data-read-only={String(o.readOnly)} data-line-numbers={String(o.lineNumbers)} data-wrap={String(o.wrap)} />
 }
 
 function mount(p: Partial<EditorTabProps> = {}): ReturnType<typeof render> {
@@ -73,11 +74,11 @@ describe('modes and keys', () => {
     mount()
     expect(mode()).toBe('write')
     expect(within(modes()).getByRole('radio', { name: 'Write' }).getAttribute('aria-checked')).toBe('true')
-    // TODO(E2) aside: Write is CodeMirror without line numbers; Source has them.
+    // Write and Read are the rendered page without line numbers; Source has them.
     expect(screen.getByTestId('stub-editor').getAttribute('data-line-numbers')).toBe('false')
     cmdE()
     expect(mode()).toBe('read')
-    expect(screen.queryByTestId('stub-editor')).toBeNull()
+    expect(screen.getByTestId('stub-editor').getAttribute('data-line-numbers')).toBe('false')
     cmdE()
     expect(mode()).toBe('write')
     cmdE(true)
@@ -224,15 +225,44 @@ describe('status line', () => {
   })
 })
 
-describe('Read', () => {
-  it('renders the buffer, not the saved file, in the reading column', () => {
-    mount({ text: '# Quill\n\nEDITED-MARKER is unsaved.\n', dirty: true, readOnly: null })
+describe('Write, Read and Source (E2)', () => {
+  it('Write and Read mount the editor with the rendered page; Source with nothing; the same editor element throughout', () => {
+    mount()
+    const ed = screen.getByTestId('stub-editor')
+    expect([ed.dataset.mode, ed.dataset.ext]).toEqual(['write', 'write-mode'])
     cmdE()
-    const read = screen.getByTestId('editor-read')
-    expect(read.textContent).toContain('EDITED-MARKER is unsaved.')
-    expect(read.querySelector('h1')?.textContent).toBe('Quill')
+    expect(screen.getByTestId('stub-editor')).toBe(ed)
+    expect([ed.dataset.mode, ed.dataset.ext, ed.dataset.wrap]).toEqual(['read', 'write-mode', 'true'])
+    expect(screen.getByTestId('editor-read').contains(ed)).toBe(true)
+    cmdE(true)
+    expect(screen.getByTestId('stub-editor')).toBe(ed)
+    expect([ed.dataset.mode, ed.dataset.ext]).toEqual(['source', 'none'])
+    // Read no longer uses today's renderer.
+    expect(document.querySelector('.markdown-content')).toBeNull()
   })
 
+  it('a code file has no Write mode extension', () => {
+    mount({ filePath: '/ws/quill/src/x.ts', kind: 'code', text: TS })
+    expect(screen.getByTestId('stub-editor').dataset.ext).toBe('none')
+  })
+
+  it('a file over 20,000 lines opens in Source; Write and Read are off with the reason; ⌘E stays in Source', () => {
+    mount({ text: '- item\n'.repeat(20_001) })
+    expect(mode()).toBe('source')
+    expect(screen.getByTestId('stub-editor').dataset.ext).toBe('none')
+    for (const name of ['Write', 'Read']) {
+      const seg = within(modes()).getByRole('radio', { name: new RegExp(name) })
+      expect(seg.getAttribute('aria-disabled')).toBe('true')
+    }
+    expect(within(modes()).getByRole('radio', { name: 'Source' }).getAttribute('aria-disabled')).toBeNull()
+    cmdE()
+    expect(mode()).toBe('source')
+    fireEvent.click(within(modes()).getByRole('radio', { name: /Write/ }))
+    expect(mode()).toBe('source')
+  })
+})
+
+describe('Read', () => {
   it('⌘S in Read saves the buffer', () => {
     let saved = 0
     mount({ dirty: true, onSave: () => saved++ })

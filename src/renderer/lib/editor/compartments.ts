@@ -8,7 +8,7 @@ import { Compartment } from '@codemirror/state'
 const NAMES = [
   'wrap', 'tabSize', 'whitespace', 'indentGuides', 'fold', 'autocomplete', 'lineNumbers', 'activeLine',
   'bracket', 'fontSize', 'fontFamily', 'cursor', 'theme', 'scrollPastEnd', 'vim', 'stickyScroll',
-  'minimap', 'gitGutter', 'highlight',
+  'minimap', 'gitGutter', 'highlight', 'extra',
 ] as const
 
 export type EditorCompartments = Record<(typeof NAMES)[number], Compartment>

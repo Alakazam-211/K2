@@ -59,6 +59,13 @@ export function useRoom(): Room {
   return room
 }
 
+/** This component's room, or null outside one. For a surface that does less
+ *  without a room (the editor frame's images and file links), never one that
+ *  falls back to the window's server. */
+export function useOptionalRoom(): Room | null {
+  return useContext(RoomContext)
+}
+
 /** Select from this room's tabs store (the room-scoped `useTabsStore`). */
 export function useRoomTabs<T>(selector: (state: TabsState) => T): T {
   const room = useContext(RoomContext)

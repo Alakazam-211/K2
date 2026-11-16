@@ -1,7 +1,7 @@
 // Today's markdown renderer (react-markdown with GFM, highlighted fences):
-// the file viewer's Preview, and the editor frame's Read until E2 makes Read
-// the read-only Write view (build-editors.md E1b). Moved out of
-// FileViewerPane unchanged.
+// the file viewer's Preview, behind the new editor's switch. The editor
+// frame's Read is the read-only Write view since E2 (build-editors.md), so
+// this retires with the old path (E7). Moved out of FileViewerPane unchanged.
 
 import React from 'react'
 import remarkGfm from 'remark-gfm'

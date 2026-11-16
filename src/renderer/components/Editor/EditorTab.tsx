@@ -4,38 +4,45 @@
 // Source. No toolbar and no path bar: the file reloads on its own and the
 // tab closes itself. Under the text, the status line (EditorStatusLine).
 //
-// The text is the caller's buffer. Write and Source mount the caller's
-// editor (CodeMirror, through `renderEditor`); Read renders the buffer, not
-// the saved file. Saving stays the caller's (E1c brings autosave, the
-// failure bar and the tab dot); the status line says the save state as it is.
-// Nothing live yet (E4): no chip, no presence, no panel.
+// The text is the caller's buffer. Every mode mounts the caller's editor
+// (CodeMirror, through `renderEditor`): Write and Read with the write-mode
+// extension (E2: the rendered page; Read is it, read only, with no caret),
+// Source with none. A file over 1 MB or 20,000 lines is Source only. Saving
+// stays the caller's (E1c brings autosave, the failure bar and the tab dot);
+// the status line says the save state as it is. Nothing live yet (E4).
 
 import { useEffect, useRef, useState } from 'react'
+import type { Extension } from '@codemirror/state'
 import { Segmented } from '@/components/ui'
 import { LiveHeader } from '@/components/LiveView/shell/LiveHeader'
 import { LiveTabFrame } from '@/components/LiveView/shell/LiveTabFrame'
 import { useTabWidth } from '@/components/LiveView/shell/useLiveShell'
-import { MemoizedMarkdown } from '@/components/FileViewerPane/MarkdownPreview'
 import { getLanguageName } from '@/components/FileViewerPane/CodeEditor'
 import { SetiFileIcon } from '@/lib/seti-file-icons/SetiFileIcon'
 import { useLocalFlag } from '@/lib/editor/local-flag'
 import { initialMode, modeForKey, usableMode, type EditorMode } from '@/lib/editor/modes'
 import type { EditorKind } from '@/lib/editor/preview-switch'
 import { countWords, lineEnding, readingMinutes } from '@/lib/editor/words'
+import { writeModeFits } from '@/lib/editor/write-mode'
 import { useSettingsStore } from '@/stores/settings'
 import { EDITOR_CSS } from './editorCss'
+import { WRITE_CSS } from './writeModeCss'
+import { useWriteMode } from './useWriteMode'
 import { EditorStatusLine, SaveWord, type StatusItem, type StatusToggle } from './EditorStatusLine'
 
 /** Narrower than this, the status line's toggles fold behind Display. */
 export const EDITOR_NARROW_BELOW = 900
 const FULL_WIDTH_KEY = 'k2.editor.fullWidth.v1'
 const MARKDOWN_WRAP_KEY = 'k2.editor.markdownWrap.v1'
+export const TOO_LARGE_REASON = 'This file is too large to show formatted (over 1 MB or 20,000 lines)'
 
 export interface EditorMountOptions {
   mode: EditorMode
   readOnly: boolean
   lineNumbers: boolean
   wrap: boolean
+  /** Write and Read: the rendered page (lib/editor/write-mode). Source: none. */
+  extensions: Extension
 }
 
 export interface EditorTabProps {
@@ -68,8 +75,11 @@ export function EditorTab({ filePath, kind, text, dirty, saving, readOnly, curso
   const [root, tabWidth] = useTabWidth(width)
   const narrow = tabWidth < EDITOR_NARROW_BELOW
   const ro = readOnly !== null
-  const [picked, setPicked] = useState<EditorMode>(() => initialMode(kind, ro))
-  const mode = kind === 'code' ? 'source' : usableMode(picked, ro)
+  // Decided once per file: typing past the limit doesn't throw you out of Write.
+  const [large] = useState(() => kind === 'markdown' && !writeModeFits(text))
+  const [picked, setPicked] = useState<EditorMode>(() => initialMode(kind, ro, large))
+  const mode = kind === 'code' ? 'source' : usableMode(picked, ro, large)
+  const extensions = useWriteMode(kind === 'markdown' ? mode : 'source', filePath)
   const [full, setFull] = useLocalFlag(FULL_WIDTH_KEY)
   const [mdWrap, setMdWrap] = useLocalFlag(MARKDOWN_WRAP_KEY, true)
   const codeWrap = useSettingsStore((s) => s.editor.wordWrap)
@@ -83,7 +93,7 @@ export function EditorTab({ filePath, kind, text, dirty, saving, readOnly, curso
   useEffect(() => {
     if (!refocus.current) return
     refocus.current = false
-    root.current?.querySelector<HTMLElement>(mode === 'read' ? '[data-testid="editor-read"]' : '.cm-content')?.focus()
+    root.current?.querySelector<HTMLElement>('.cm-content')?.focus()
   }, [mode, root])
 
   const onKeyDownCapture = (e: React.KeyboardEvent): void => {
@@ -91,7 +101,7 @@ export function EditorTab({ filePath, kind, text, dirty, saving, readOnly, curso
     if (mod && kind === 'markdown' && e.key.toLowerCase() === 'e') {
       e.preventDefault()
       e.stopPropagation()
-      const next = modeForKey(mode, e, ro)
+      const next = modeForKey(mode, e, ro, large)
       if (next) {
         refocus.current = true
         setPicked(next)
@@ -132,27 +142,24 @@ export function EditorTab({ filePath, kind, text, dirty, saving, readOnly, curso
         className="ed-modes"
         value={mode}
         onChange={setPicked}
-        options={MODE_OPTIONS.map((o) => (o.value === 'write' && readOnly ? { ...o, offReason: readOnly } : o))}
+        options={MODE_OPTIONS.map((o) => {
+          const off = o.value === 'source' ? null : large ? TOO_LARGE_REASON : o.value === 'write' ? readOnly : null
+          return off ? { ...o, offReason: off } : o
+        })}
       />
     ) : null
 
-  const body =
-    mode === 'read' ? (
-      <div data-testid="editor-read" tabIndex={0} aria-label={`${name}, reading view`} className="ed-read-scroll">
-        <div className="markdown-content ed-read">
-          <MemoizedMarkdown content={text} />
-        </div>
-      </div>
-    ) : (
-      // TODO(E2): Write gets the live-preview decorations; until then it is
-      // Source in the document face, at the measure, without line numbers.
-      <div className="min-h-0 flex-1 overflow-hidden">{renderEditor({ mode, readOnly: ro, lineNumbers: mode === 'source' ? lineNumbers : false, wrap })}</div>
-    )
+  // One element in every mode, so switching keeps the editor (and its undo history).
+  const body = (
+    <div data-testid={mode === 'read' ? 'editor-read' : undefined} aria-label={mode === 'read' ? `${name}, reading view` : undefined} className="min-h-0 flex-1 overflow-hidden">
+      {renderEditor({ mode, readOnly: ro, lineNumbers: mode === 'source' ? lineNumbers : false, wrap: mode === 'read' || wrap, extensions })}
+    </div>
+  )
 
   return (
     // data-k2-line: the mode control measures its room against the tab, not its own wrapper (ui/segmented-fit.ts).
     <div ref={root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={onKeyDownCapture}>
-      <style>{EDITOR_CSS}</style>
+      <style>{EDITOR_CSS + WRITE_CSS}</style>
       <LiveTabFrame
         header={<LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} sentence={null} mode={modeControl} />}
         notice={notice}

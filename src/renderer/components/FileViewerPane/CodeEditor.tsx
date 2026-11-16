@@ -29,7 +29,7 @@ import { rust } from '@codemirror/lang-rust'
 import { css } from '@codemirror/lang-css'
 import { html } from '@codemirror/lang-html'
 import { json } from '@codemirror/lang-json'
-import { markdown } from '@codemirror/lang-markdown'
+import { gfmMarkdown } from '@/lib/editor/write-mode/language'
 import { cpp } from '@codemirror/lang-cpp'
 import { java } from '@codemirror/lang-java'
 import { go } from '@codemirror/lang-go'
@@ -173,7 +173,7 @@ const EXT_LANG_MAP: Record<string, LanguageFn> = {
   lisp: sl(commonLisp), cl: sl(commonLisp),
   jl: sl(julia),
   // Docs
-  md: () => markdown(), mdx: () => markdown(), markdown: () => markdown(),
+  md: gfmMarkdown, mdx: gfmMarkdown, markdown: gfmMarkdown,
   // SQL
   sql: () => sql(),
   // PHP
@@ -386,8 +386,8 @@ interface CodeEditorProps {
    *  (`format_file`)? A room on another server passes false: its path is
    *  that server's, not this computer's. Omitted = true (window surfaces). */
   localFormat?: boolean
-  /** The editor frame's own Wrap and line numbers (EditorTab); else the settings'. */
-  display?: { wrap: boolean; lineNumbers: boolean }
+  /** The editor frame's own Wrap and line numbers, and its mode's extension (EditorTab); else the settings'. */
+  display?: { wrap: boolean; lineNumbers: boolean; extensions?: Extension }
 }
 
 // ── Git gutter markers ──────────────────────────────────────────────
@@ -831,10 +831,8 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
       })) : []),
       c.stickyScroll.of(es.stickyScroll ? stickyScrollPlugin : []),
       c.vim.of(es.vimMode ? vim() : []),
-      // Rainbow bracket colorization
       rainbowBrackets,
-      // Git gutter (populated async after mount)
-      c.gitGutter.of([]),
+      c.gitGutter.of([]), // the git gutter, filled after mount
       // Search with replace panel
       search({ top: true }),
       // Keymaps (Cmd+D = select next occurrence)
@@ -860,7 +858,7 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
           ? buildEditorTheme(themeOverride.colors, themeOverride.isLight)
           : getThemeExtension(es.theme)
       ),
-      // Change tracking
+      c.extra.of(display?.extensions ?? []), // the editor frame's Write and Read
       updateListener,
     ]
 
@@ -1011,9 +1009,10 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
         })) : []),
         c.stickyScroll.reconfigure(editorSettings.stickyScroll ? stickyScrollPlugin : []),
         c.vim.reconfigure(editorSettings.vimMode ? vim() : []),
+        c.extra.reconfigure(display?.extensions ?? []),
       ],
     })
-  }, [editorSettings, themeOverride, customThemes, display?.wrap, display?.lineNumbers])
+  }, [editorSettings, themeOverride, customThemes, display?.wrap, display?.lineNumbers, display?.extensions])
 
   // Update content when external changes arrive (file polling)
   useEffect(() => {

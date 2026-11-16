@@ -1302,6 +1302,34 @@ html[data-style="terminal"] :where(input[data-k2-chamfer]:not([data-zen-root] *,
 }
 html[data-style="terminal"] :where(textarea[data-k2-chamfer]:focus:not([data-zen-root] *, [data-k2-thread-zen] *)),
 html[data-style="terminal"] :where(input[data-k2-chamfer]:focus:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-edge: var(--color-accent); }
+/* A card built from stacked rows (the file editors' code fence: one row per
+   line). Its first row cuts the top corners and its last the bottom ones
+   (`data-k2-chamfer-rows="first|last|only"`), each with its 1px edge on the
+   cut from --k2-ch-edge, as the inputs above. */
+html[data-style="terminal"] :where([data-k2-chamfer-rows]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  --k2-ch-cut: var(--chamfer-control);
+  --k2-ch-s: calc(var(--k2-ch-cut) + 2px);
+  --k2-ch-stop: calc(0.7071 * var(--k2-ch-cut) + 1px);
+  background-size: var(--k2-ch-s) var(--k2-ch-s);
+  background-repeat: no-repeat;
+  background-origin: border-box;
+}
+html[data-style="terminal"] :where([data-k2-chamfer-rows="first"]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  clip-path: polygon(var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% 100%, 0 100%, 0 var(--k2-ch-cut));
+  background-image: linear-gradient(135deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)), linear-gradient(225deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop));
+  background-position: left top, right top;
+}
+html[data-style="terminal"] :where([data-k2-chamfer-rows="last"]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)));
+  background-image: linear-gradient(315deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)), linear-gradient(45deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop));
+  background-position: right bottom, left bottom;
+}
+html[data-style="terminal"] :where([data-k2-chamfer-rows="only"]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  clip-path: polygon(var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut));
+  background-image: linear-gradient(135deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)), linear-gradient(225deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)), linear-gradient(315deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)), linear-gradient(45deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop));
+  background-position: left top, right top, right bottom, left bottom;
+}
+
 /* Keyboard focus on a text field (<Input>, <SearchField>, <Textarea>, any cut
    text input or text box): the 2px accent ring the cut buttons draw, following
    the cut. An <input> or <textarea> has no pseudo-elements, so the ring is its

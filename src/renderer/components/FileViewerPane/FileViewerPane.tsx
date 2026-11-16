@@ -779,7 +779,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   }
 
   // The text editor, for today's view and the editor frame's Write and Source.
-  const codeEditor = (display?: { wrap: boolean; lineNumbers: boolean }, readOnly = false): React.JSX.Element => (
+  const codeEditor = (display?: React.ComponentProps<typeof CodeEditor>['display'], readOnly = false): React.JSX.Element => (
     <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading editor…</div>}>
       <CodeEditor
         code={editedContent ?? content}
@@ -828,7 +828,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             cursor={cursorInfo}
             notice={<>{liveEndedBar}{rereadBar}</>}
             onSave={() => void saveFile(editedContent ?? undefined)}
-            renderEditor={(o) => codeEditor({ wrap: o.wrap, lineNumbers: o.lineNumbers }, o.readOnly)}
+            renderEditor={(o) => codeEditor(o, o.readOnly)}
           />
         </Suspense>
       </div>

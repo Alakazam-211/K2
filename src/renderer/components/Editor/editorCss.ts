@@ -16,30 +16,7 @@ html[data-style="glass"] .ed-tab { --editor-bg: var(--color-bg-surface); }
 .ed-tab .ed-body { background: var(--editor-bg, var(--color-bg)); }
 .ed-tab .ed-modes .k2-segment { font-size: 12.5px; }
 
-/* Write (E1b): CodeMirror in the document face at the reading measure, no
-   gutters. TODO(E2): Write becomes the live-preview decorations. */
-.ed-tab[data-mode="write"] .cm-editor { font-family: var(--ed-body); font-size: var(--ed-fs); }
-.ed-tab[data-mode="write"] .cm-editor .cm-scroller { font-family: var(--ed-body); line-height: var(--ed-lh); padding: 0 24px; }
-.ed-tab[data-mode="write"] .cm-editor .cm-content { flex: 0 1 auto; width: var(--ed-measure); max-width: 100%; margin: 0 auto; padding: 28px 0 40px; }
-.ed-tab[data-mode="write"] .cm-editor .cm-gutters { display: none; }
-
-/* Read (E1b): today's renderer on the buffer, restyled to the measure. */
-.ed-tab .ed-read-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 24px; }
-.ed-tab .ed-read-scroll:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
-html[data-style="glass"] .ed-tab .ed-read-scroll { border-radius: var(--radius-box); }
-.ed-tab .ed-read { max-width: var(--ed-measure); margin: 0 auto; padding: 28px 0 40px; font-family: var(--ed-body); font-size: var(--ed-fs); line-height: var(--ed-lh); color: var(--color-text-primary); user-select: text; -webkit-user-select: text; }
-.ed-tab .ed-read :is(p, ul, ol, li, td) { color: var(--color-text-primary); }
-.ed-tab .ed-read :is(h1, h2, h3, h4) { font-family: var(--ed-body); font-weight: 700; color: var(--color-text-primary); border-bottom: 0; padding-bottom: 0; line-height: 1.3; }
-.ed-tab .ed-read h1 { font-size: var(--ed-h1); margin: 0 0 16px; }
-.ed-tab .ed-read h2 { font-size: var(--ed-h2); margin: 32px 0 12px; }
-.ed-tab .ed-read h3 { font-size: var(--ed-h3); margin: 24px 0 8px; }
-.ed-tab .ed-read code { font-family: var(--font-code); }
-.ed-tab .ed-read blockquote { background: none; border-left: 3px solid var(--color-border-strong); color: var(--color-text-secondary); padding: 2px 0 2px 16px; }
-.ed-tab .ed-read blockquote p { color: var(--color-text-secondary); }
-.ed-tab .ed-read table { font-size: 0.9em; }
-.ed-tab .ed-read :is(thead th, tbody td) { border: 0; border-bottom: 1px solid var(--color-border-strong); background: none; }
-.ed-tab .ed-read thead th { border-bottom: 1.5px solid var(--color-control-edge); }
-.ed-tab .ed-read img { border: 1px solid var(--color-border); border-radius: var(--radius-box); }
+/* Write and Read are in ./writeModeCss (E2). */
 
 /* The status line: quiet, under the text. */
 .ed-tab .ed-status { height: 28px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 10px; border-top: 1px solid var(--color-border); background: var(--editor-bg, var(--color-bg)); color: var(--color-text-secondary); font-family: var(--font-ui); font-size: 11.5px; white-space: nowrap; position: relative; }

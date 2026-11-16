@@ -39,12 +39,24 @@ export interface Raster {
   ms: number
 }
 
+/** Full-size scratch buffers (depth, occlusion, blur), kept between stills and grown when a bigger
+ *  one comes: four 8 MB arrays a 1920 px still were garbage otherwise. The pixels and ids are the
+ *  still's own, so they're new each time. */
+let SCRATCH = { depth: new Float32Array(0), occlusion: new Float32Array(0), blur: new Float32Array(0) }
+function scratch(n: number): typeof SCRATCH {
+  if (SCRATCH.depth.length < n) SCRATCH = { depth: new Float32Array(n), occlusion: new Float32Array(n), blur: new Float32Array(n) }
+  return SCRATCH
+}
+/** The scratch buffers now (tests). */
+export const rasterScratch = (): typeof SCRATCH => SCRATCH
+
 /** Draw the doc's drawable objects through a camera at W × H. */
 export function rasterise(D: Doc, cam: Basis, W: number, H: number): Raster {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now()
   const rgba = new Uint8ClampedArray(W * H * 4)
   const px = new Uint32Array(rgba.buffer)
-  const zb = new Float32Array(W * H)
+  const buf = scratch(W * H)
+  const zb = buf.depth.subarray(0, W * H).fill(0)
   const ids = new Uint32Array(W * H)
   const objs = unitsOf(D).filter((a) => drawable(D, a))
   const objects = objs.map((id, index) => ({ index, id }))
@@ -120,16 +132,23 @@ export function rasterise(D: Doc, cam: Basis, W: number, H: number): Raster {
     }
   })
 
-  if (W >= 640 && objs.length) ambientOcclusion(D, objs, cam, W, H, px, zb, ids)
+  if (W >= 640 && objs.length) ambientOcclusion(D, objs, cam, W, H, px, zb, ids, buf)
   const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0)
   return { width: W, height: H, rgba, ids, objects, ms }
 }
 
+/** The depth at (x, y) when it's the same object as pixel i, else null. */
+function sameAt(id: Uint32Array, zb: Float32Array, W: number, H: number, i: number, x: number, y: number): number | null {
+  if (x < 0 || y < 0 || x >= W || y >= H) return null
+  const k = y * W + x
+  return id[k] === id[i] ? zb[k] : null
+}
+
 /** K2 Render's AO, approximated from the depth buffer: creases, inside corners and the floor round and under objects darken (colour only; alpha untouched). */
-function ambientOcclusion(D: Doc, objs: string[], cam: Basis, W: number, H: number, px: Uint32Array, zb: Float32Array, id: Uint32Array): void {
+function ambientOcclusion(D: Doc, objs: string[], cam: Basis, W: number, H: number, px: Uint32Array, zb: Float32Array, id: Uint32Array, buf: typeof SCRATCH): void {
   const box = worldPoints(D, objs, false)
   const R = box ? (0.1 * Math.hypot(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2])) / 2 : 0.4
-  const occ = new Float32Array(W * H)
+  const occ = buf.occlusion.subarray(0, W * H).fill(0)
   const dirs: [number, number][] = []
   for (let k = 0; k < 12; k++) for (const f of [0.35, 0.7, 1]) dirs.push([(k * Math.PI) / 6, f])
   const step = 2
@@ -142,15 +161,10 @@ function ambientOcclusion(D: Doc, objs: string[], cam: Basis, W: number, H: numb
       if (rp < 1.5) continue
       // The pixel's own surface plane (1/z is linear across a plane in screen space): only samples in front of it occlude.
       const iz = zb[i]
-      const izAt = (xx: number, yy: number): number | null => {
-        if (xx < 0 || yy < 0 || xx >= W || yy >= H) return null
-        const k = yy * W + xx
-        return id[k] === id[i] ? zb[k] : null
-      }
-      const a1 = izAt(x - 2, y)
-      const a2 = izAt(x + 2, y)
-      const b1 = izAt(x, y - 2)
-      const b2 = izAt(x, y + 2)
+      const a1 = sameAt(id, zb, W, H, i, x - 2, y)
+      const a2 = sameAt(id, zb, W, H, i, x + 2, y)
+      const b1 = sameAt(id, zb, W, H, i, x, y - 2)
+      const b2 = sameAt(id, zb, W, H, i, x, y + 2)
       const gx = a1 != null && a2 != null ? (a2 - a1) / 4 : a2 != null ? (a2 - iz) / 2 : a1 != null ? (iz - a1) / 2 : 0
       const gy = b1 != null && b2 != null ? (b2 - b1) / 4 : b2 != null ? (b2 - iz) / 2 : b1 != null ? (iz - b1) / 2 : 0
       let o = 0
@@ -175,7 +189,7 @@ function ambientOcclusion(D: Doc, objs: string[], cam: Basis, W: number, H: numb
       for (let yy = y; yy < Math.min(H, y + step); yy++) for (let xx = x; xx < Math.min(W, x + step); xx++) occ[yy * W + xx] = v
     }
   // A small box blur, so the darkening is soft.
-  const tmp = new Float32Array(W * H)
+  const tmp = buf.blur.subarray(0, W * H)
   const rb = 5
   for (let y = 0; y < H; y++) {
     let acc = 0

@@ -88,6 +88,15 @@ export interface PictureSource {
   close(): void
 }
 
+/** Keep a still's big arrays (its pixels and id values: millions of indexes at 1920 px) out of
+ *  enumeration. React's dev build walks every changed prop's keys into its performance track and the
+ *  browser keeps those measures, so an enumerable pixel array cost gigabytes a step. Still readable. */
+export function sealStill(st: Still): Still {
+  if (st.image.kind === 'rgba') Object.defineProperty(st.image, 'data', { enumerable: false })
+  if (st.ids) Object.defineProperty(st.ids, 'values', { enumerable: false })
+  return st
+}
+
 /** The picture's state, folded from K2 Render's pushes (preview_rendering, preview_ready). */
 export interface PictureStatus {
   /** The rev of the still on screen; null before the first one. */

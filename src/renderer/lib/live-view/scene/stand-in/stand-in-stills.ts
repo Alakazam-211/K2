@@ -9,7 +9,7 @@
 
 import { UNITS } from '../fold'
 import { stillCamera } from '../project'
-import { stillHeight, type PictureSource, type Still, type StillRequest } from '../picture-source'
+import { sealStill, stillHeight, type PictureSource, type Still, type StillRequest } from '../picture-source'
 import { StillCache } from '../still-cache'
 import type { Doc } from '../types'
 import { standInCamera } from './camera'
@@ -65,6 +65,7 @@ export class StandInStills implements PictureSource {
       renderMs: r.ms,
       meta: { base_values: false, hidden_left_out: false, objects_hidden: 0, objects_not_evaluated: 0 },
     }
+    sealStill(still)
     this.cache.set(key, still)
     return still
   }

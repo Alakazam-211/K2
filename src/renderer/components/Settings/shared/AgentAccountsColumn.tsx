@@ -19,9 +19,16 @@
 // the chat header's Token picker); those keep their token. API tokens are
 // billed per token. K2 never switches on its own: "Use next token" is a
 // click.
+//
+// The server default is always first in its provider's card, as on the
+// phone (Rosson 2026-11-15), so nobody goes hunting for it; the rest keep
+// the daemon's order. Make default moves the row up as soon as the switch
+// is sent (a short move, none under reduced motion), keeps keyboard focus
+// on that row and says so politely; a refusal puts it back. With no
+// default, the card's line says so above the list.
 
 import React from 'react'
-import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { primaryScope } from '@/kessel/server-scope'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
@@ -60,6 +67,7 @@ import { Button, Callout, Input, OverflowMenu, Tag, type OverflowMenuItem } from
 import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { AccessSheet, ConfirmSheet, DIALOG_FIELD, Field } from '../sections/AccessDialogs'
 import { StatusDot, type HealthTone } from '../sections/ConnectionsParts'
+import { useReorderMotion } from './useReorderMotion'
 
 /** The big 7 rows, in the page's order, with their icon names. */
 export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: string }> = [
@@ -123,6 +131,18 @@ export function switchConfirmText(
   ]
   if (warnings.length > 0) lines.push('', ...warnings.map((w) => `Warning: ${w}`))
   return { title: `Make “${to.label}” the ${tool.display} server default?`, message: lines.join('\n'), warnings }
+}
+
+/** A provider's tokens in the page's order: the server default first, the
+ *  rest in the daemon's order. */
+export function defaultFirst(tool: Pick<LlmTool, 'activeId' | 'accounts'>): LlmAccount[] {
+  const active = tool.accounts.find((a) => a.id === tool.activeId)
+  return active ? [active, ...tool.accounts.filter((a) => a !== active)] : tool.accounts
+}
+
+/** Said to a screen reader when a token becomes the default and moves up. */
+export function movedFirstText(tool: Pick<LlmTool, 'display'>, a: Pick<LlmAccount, 'label'>): string {
+  return `“${a.label}” is now the ${tool.display} server default and is first in the list.`
 }
 
 const STATE_TONE: Record<string, HealthTone> = {
@@ -239,10 +259,17 @@ function AccountRow({
   limits,
   onRefreshLimits,
   actions,
+  rowRef,
+  focusRequest,
 }: {
   account: LlmAccount
   tool: LlmTool
   doc: LlmAccountsDoc
+  /** The row's box (it slides when the order changes). */
+  rowRef?: (el: HTMLElement | null) => void
+  /** Changes when keyboard focus should come back to this row (after it
+   *  moved): it lands on the row's "…" button, which every row keeps. */
+  focusRequest?: number
   /** This token's `/cli/usage/limits` row (Owner/Admin), else null. */
   limits: LimitsLogin | null
   onRefreshLimits?: (accountId: string) => Promise<void>
@@ -250,6 +277,11 @@ function AccountRow({
 }): React.JSX.Element {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  const box = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (focusRequest === undefined) return
+    box.current?.querySelector<HTMLElement>('[data-llm-row-focus]')?.focus()
+  }, [focusRequest])
   const apiKey = account.kind === 'api_key'
   const signedIn = account.state === 'signed_in'
   const needsLogin = !apiKey && (account.state === 'needs_login' || account.state === 'not_set_up')
@@ -352,7 +384,14 @@ function AccountRow({
   if (account.inUse) facts.push('In use by a chat right now')
 
   return (
-    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`llm-account-${account.id}`}>
+    <div
+      ref={(el) => {
+        box.current = el
+        rowRef?.(el)
+      }}
+      className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`}
+      data-testid={`llm-account-${account.id}`}
+    >
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
         <span title={STATE_LABELS[account.state] ?? account.state} className="flex">
           <StatusDot tone={STATE_TONE[account.state] ?? 'neutral'} />
@@ -379,7 +418,7 @@ function AccountRow({
         </div>
         <div className="flex items-center gap-2 pl-3">
           {primary}
-          <OverflowMenu label={`More actions for ${account.label}`} items={items} />
+          <OverflowMenu label={`More actions for ${account.label}`} items={items} triggerProps={{ 'data-llm-row-focus': '' }} />
         </div>
         <div className="col-start-2 min-w-0">
           <p className={`${SETTING_ROW_HINT} truncate`} data-testid={`llm-kind-${account.id}`}>
@@ -505,7 +544,8 @@ function RenameDialog({
 
 /** A question before a change: the dialog it opens. */
 type Ask =
-  | { kind: 'switch'; tool: LlmTool; to: LlmAccount }
+  /** `fromRow`: asked from the row's Make default (focus follows the row). */
+  | { kind: 'switch'; tool: LlmTool; to: LlmAccount; fromRow?: boolean }
   | { kind: 'remove'; tool: LlmTool; account: LlmAccount }
   | { kind: 'no-default'; tool: LlmTool; account: LlmAccount }
   | { kind: 'rename'; tool: LlmTool; account: LlmAccount }
@@ -522,6 +562,10 @@ export function AgentAccountsColumn(): React.JSX.Element {
   const [sheet, setSheet] = useState<LoginSheetStart | null>(null)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [note, setNote] = useState<Note | null>(null)
+  // Make default from a row: focus goes back to that row once it moved
+  // (the button it was on is gone), and a polite line says where it went.
+  const [focusRow, setFocusRow] = useState<{ id: string; n: number } | null>(null)
+  const [announce, setAnnounce] = useState('')
 
   useEffect(() => watchLlmAccounts(scope), [scope])
   // Usage v2: every login's limits for the bars (Owner/Admin; a Member's
@@ -537,6 +581,8 @@ export function AgentAccountsColumn(): React.JSX.Element {
     setSheet(null)
     setAsk(null)
     setNote(null)
+    setFocusRow(null)
+    setAnnounce('')
   }, [hostKey])
   // A sign-in asked for from outside Settings (the setup checklist): once
   // the list is here, open the sheet for that tool, or for the first of
@@ -597,7 +643,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
   }, [])
 
   const actionsFor = (tool: LlmTool): RowActions => ({
-    onMakeDefault: (a) => setAsk({ kind: 'switch', tool, to: a }),
+    onMakeDefault: (a) => setAsk({ kind: 'switch', tool, to: a, fromRow: true }),
     onLoginAgain: (a) => setSheet({ kind: 'relogin', tool: tool.tool, toolLabel: tool.display, accountId: a.id, label: a.label }),
     onRename: (a) => setAsk({ kind: 'rename', tool, account: a }),
     onRemove: (a) => setAsk({ kind: 'remove', tool, account: a }),
@@ -624,6 +670,8 @@ export function AgentAccountsColumn(): React.JSX.Element {
   const notYet = LOGIN_TOOL_ROWS.filter((r) => byTool.get(r.id)?.supported !== true).map((r) => r.label)
   const total = supportedRows.reduce((n, r) => n + (byTool.get(r.id)?.accounts.length ?? 0), 0)
   const server = serverInSentence(scope)
+  const rowsByTool = new Map(supportedRows.map((r) => [r.id, defaultFirst(byTool.get(r.id)!)]))
+  const rowRef = useReorderMotion(supportedRows.flatMap((r) => (rowsByTool.get(r.id) ?? []).map((a) => `${r.id}\u0000${a.id}`)))
 
   const addButton = (
     <Button variant="accent" onClick={() => setSheet({ kind: 'new' })} disabled={!doc || supportedRows.length === 0}>
@@ -698,7 +746,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
                   </Button>
                 </SettingRow>
               ) : null}
-              {tool.accounts.map((a) => (
+              {(rowsByTool.get(row.id) ?? []).map((a) => (
                 <AccountRow
                   key={a.id}
                   account={a}
@@ -707,6 +755,8 @@ export function AgentAccountsColumn(): React.JSX.Element {
                   limits={findLimitsLogin(limitsDoc, a.id)}
                   onRefreshLimits={limitsDoc ? refreshLimits : undefined}
                   actions={actionsFor(tool)}
+                  rowRef={rowRef(`${row.id}\u0000${a.id}`)}
+                  focusRequest={focusRow?.id === a.id ? focusRow.n : undefined}
                 />
               ))}
               {cyclable.length >= 2 ? (
@@ -786,6 +836,9 @@ export function AgentAccountsColumn(): React.JSX.Element {
       ) : null}
 
       {body}
+      <p className="sr-only" aria-live="polite" data-testid="llm-order-announce">
+        {announce}
+      </p>
 
       {sheet && <LlmLoginSheet scope={scope} start={sheet} onClose={() => setSheet(null)} onDone={onSheetDone} />}
       {ask?.kind === 'switch' ? (
@@ -800,9 +853,24 @@ export function AgentAccountsColumn(): React.JSX.Element {
               testId="llm-switch-confirm"
               onCancel={() => setAsk(null)}
               onConfirm={() => {
-                const { tool, to } = ask
+                const { tool, to, fromRow } = ask
                 setAsk(null)
-                void change(tool.tool, switchLogin(scope, to.id), `“${to.label}” is now the ${tool.display} server default.`, 'Couldn’t change the server default.')
+                // The row moves up at once (the switch is drawn as sent).
+                setAnnounce(movedFirstText(tool, to))
+                const refocus = (): void => {
+                  if (fromRow) setFocusRow((f) => ({ id: to.id, n: (f?.n ?? 0) + 1 }))
+                }
+                refocus()
+                void change(tool.tool, switchLogin(scope, to.id), `“${to.label}” is now the ${tool.display} server default.`, 'Couldn’t change the server default.').then(
+                  (refused) => {
+                    if (refused === null) return
+                    // Back in its old place: focus stays on the same row
+                    // (unless the person has moved on since).
+                    setAnnounce('')
+                    const at = document.activeElement
+                    if (!at || at === document.body || at.closest(`[data-testid="llm-account-${to.id}"]`)) refocus()
+                  },
+                )
               }}
             />
           )

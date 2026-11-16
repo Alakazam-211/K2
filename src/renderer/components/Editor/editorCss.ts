@@ -12,7 +12,9 @@ export const EDITOR_CSS = `
 .ed-tab { --ed-body: ${SANS}; --ed-fs: 15px; --ed-lh: 1.62; --ed-h1: 27px; --ed-h2: 20.5px; --ed-h3: 17.5px; }
 html[data-style="terminal"] .ed-tab { --ed-fs: 14.5px; --ed-h1: 26px; --ed-h2: 20px; --ed-h3: 17px; }
 html[data-style="glass"] .ed-tab { --editor-bg: var(--color-bg-surface); }
-.ed-tab .lv-shell, .ed-tab .lv-head { background: var(--editor-bg, var(--color-bg)); }
+.ed-tab .lv-shell { background: var(--editor-bg, var(--color-bg)); }
+/* The header row is the selected tab's colour, not the writing surface's: the tab runs into it and its hairline parts it from the text. */
+.ed-tab .lv-head { background: var(--color-tab-active); }
 .ed-tab .ed-body { background: var(--editor-bg, var(--color-bg)); }
 .ed-tab .ed-modes .k2-segment { font-size: 12.5px; }
 

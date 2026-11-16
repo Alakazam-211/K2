@@ -1179,7 +1179,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   // Glass fills these with --k2-rail-* (the lit pill is drawn
                   // above this opaque cell, so scrolled tabs stay hidden).
                   background: isActive
-                    ? 'var(--k2-rail-lit, color-mix(in srgb, white 8%, var(--color-bg-surface)))'
+                    ? 'var(--k2-rail-lit, var(--color-tab-active))'
                     : 'var(--k2-rail-rest, var(--color-bg-surface))',
                 }}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
@@ -1275,7 +1275,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   // Glass fills these with --k2-rail-* (the lit pill is drawn
                   // above this opaque cell, so scrolled tabs stay hidden).
                   background: isActive
-                    ? 'var(--k2-rail-lit, color-mix(in srgb, white 8%, var(--color-bg-surface)))'
+                    ? 'var(--k2-rail-lit, var(--color-tab-active))'
                     : 'var(--k2-rail-rest, var(--color-bg-surface))',
                 }}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
@@ -1313,19 +1313,18 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               // tab. Working takes the status slot's place (its status
               // becomes a corner badge), so the width never changes when
               // working toggles. `--tab-bg` is the tab's resting
-              // background, under that badge (TabStatus.tsx).
+              // background, under that badge (TabStatus.tsx). The selected
+              // tab is color.tab-active, which the header row under it shares.
               style={
                 {
                   minWidth: TAB_MIN_PX,
                   maxWidth: TAB_MAX_PX,
-                  '--tab-bg': isActive
-                    ? 'color-mix(in srgb, white 8%, var(--color-bg-surface))'
-                    : 'var(--color-bg-surface)',
+                  '--tab-bg': isActive ? 'var(--color-tab-active)' : 'var(--color-bg-surface)',
                 } as React.CSSProperties
               }
               className={`group relative flex h-full flex-shrink-0 items-center border-r border-[var(--color-border)] px-3 text-xs transition-colors select-none ${
                 isActive
-                  ? 'bg-white/[0.08] text-[var(--color-text-primary)]'
+                  ? 'bg-[var(--color-tab-active)] text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04]'
               } ${isDragged ? 'opacity-30' : ''}`}
               onClick={() => setActiveTabInGroup(groupIndex, tab.id)}

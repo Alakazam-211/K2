@@ -280,7 +280,8 @@
     "find-match": { "$value": "rgba(253, 199, 0, 0.22)", "$type": "color", "$description": "Find: every match, a wash over the editor. text-primary keeps 4.5:1 on it." },
     "find-match-current": { "$value": "rgba(253, 199, 0, 0.28)", "$type": "color", "$description": "Find: the current match, stronger than the others." },
     "selection": { "$value": "rgba(59, 130, 246, 0.34)", "$type": "color", "$description": "Selected text in editors. text-primary keeps 4.5:1 on it." },
-    "stage": { "$value": "#1a1a1a", "$type": "color", "$description": "The live 3D picture’s stage: dark in every look, the light ones too: the clay reads about 6:1 on it and 1.3:1 on a light surface. What sits on the stage takes the look’s dark palette." }
+    "stage": { "$value": "#1a1a1a", "$type": "color", "$description": "The live 3D picture’s stage: dark in every look, the light ones too: the clay reads about 6:1 on it and 1.3:1 on a light surface. What sits on the stage takes the look’s dark palette." },
+    "tab-active": { "$value": "color-mix(in srgb, white 8%, var(--color-bg-surface))", "$type": "color", "$description": "The selected tab's fill (the tab strip's 8% white over bg-surface). The header row under a file tab paints it too, so the tab runs into its header; text-primary and text-secondary keep 4.5:1 on it." }
   },
   "terminal": {
     "fg": {

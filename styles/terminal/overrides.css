@@ -53,21 +53,19 @@
 [data-style="terminal"] [data-room-tab-bar] > [data-tab-scroller]:is(:not(:has(> [data-tab-id])), :has(> [data-tab-id]:last-child:is([data-selected], :hover, [data-dragging]))) + [data-tab-add]:not([data-zen-root] *)::before,
 [data-style="terminal"] [data-room-tab-bar] > [data-tab-add]:hover:not([data-zen-root] *)::before { content: none; }
 
-/* ── The selected tab in a light palette ──────────────────────────────────
-   The tab strip lights its selected tab with 8% white, which vanishes on a
-   light strip. In a light palette it takes the strongest wash instead (about
-   1.4:1 on Paper's strip), laid over the strip so the pinned tabs stay opaque
-   and the status badge's mask matches. Hover takes the lightest wash. Dark
-   palettes keep their white. */
-[data-style="terminal"][data-scheme="light"] [data-room-tab-bar]:not([data-zen-root] *) {
-  --k2-rail-lit: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
-}
-[data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail])[data-selected]:not([data-zen-root] *) {
-  background: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
-}
+/* ── A tab in a light palette ─────────────────────────────────────────────
+   The selected tab is color.tab-active (Paper's is the strongest wash over the
+   strip, since 8% white vanishes on a light strip), and so is the header row
+   under it. A hovered tab takes the lightest wash. Dark palettes keep their
+   white. */
 [data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail], [data-selected]):hover:not([data-zen-root] *) {
   background: var(--color-wash-1);
 }
-[data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id][data-selected] :is([data-tab-close-slot], [data-tab-status-slot]):not([data-zen-root] *) {
-  --tab-bg: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
+/* ── The header row under a tab ───────────────────────────────────────────
+   It is the selected tab's colour, a step off the page, so on it muted words
+   and icons take text-secondary (muted falls under 4.5:1 there) and a quiet
+   control's hover and pressed fill steps off the row, not off the page. */
+[data-style="terminal"] [data-tab-header]:not([data-zen-root] *) {
+  --color-text-muted: var(--color-text-secondary);
+  --color-control-hover-quiet: color-mix(in srgb, var(--color-text-primary) 16%, var(--color-tab-active));
 }

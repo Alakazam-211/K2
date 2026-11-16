@@ -738,8 +738,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   if (error) {
     return (
       <div className="flex h-full w-full flex-col bg-[var(--color-bg)]">
-        {/* Toolbar even in error state */}
-        <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
+        {/* Toolbar even in error state; the selected tab's colour, as below */}
+        <div data-tab-header="" className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-tab-active)] px-3 py-1.5 flex-shrink-0">
           <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate">
             {fileName}
           </span>
@@ -833,8 +833,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
   return (
     <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
-      {/* Toolbar. While a live view shows, its header is the tab's only header. */}
-      {!watchingLive && <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
+      {/* Toolbar, the selected tab's colour (the tab runs into it). While a live view shows, its header is the tab's only header. */}
+      {!watchingLive && <div data-tab-header="" className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-tab-active)] px-3 py-1.5 flex-shrink-0">
         {/* File info */}
         <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate">
           {fileName}

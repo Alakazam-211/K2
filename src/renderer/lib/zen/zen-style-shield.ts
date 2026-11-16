@@ -50,6 +50,8 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-control-hover': zen('border'),
   '--color-control-hover-quiet': zen('surface-raised'),
   '--color-divider': zen('border'),
+  // The selected tab and the header row under it: a Garden draws its own.
+  '--color-tab-active': zen('surface'),
   // Text
   '--color-text': zen('text'),
   '--color-text-primary': zen('text'),

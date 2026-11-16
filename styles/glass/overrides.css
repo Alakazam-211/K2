@@ -647,7 +647,9 @@
    As in Chrome, the strip colour fills the tile to its edges and the body below
    it has its own rounded top corners, so the strip's ends never curve up. */
 [data-style="glass"] [data-tab-group-index]:not([data-zen-root] *) {
-  --k2-wave-fill: var(--color-bg);
+  /* The wave is color.tab-active (the pane's surface in every Glass palette), so
+     a restyled tab and the header row under it stay one colour. */
+  --k2-wave-fill: var(--color-tab-active);
   --k2-strip-fill: var(--tile-fill);
   --k2-wave-r: 8px;
   /* The body's top corners follow the tile's bottom ones (its inner curve,

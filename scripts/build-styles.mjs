@@ -70,6 +70,9 @@ const REQUIRED_COLOR_SLOTS = [
   'find-match', 'find-match-current', 'selection',
   // The live 3D picture's stage (build-live-scene.md): dark in every look.
   'stage',
+  // The selected tab's fill, which the header row under it (a file tab's
+  // header, the old viewer's toolbar) shares, so the tab runs into its header.
+  'tab-active',
 ]
 
 const REQUIRED_TERMINAL_SLOTS = ['fg', 'bg', 'cursor', 'selection', 'ansi']

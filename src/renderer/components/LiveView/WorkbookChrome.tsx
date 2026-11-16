@@ -33,7 +33,7 @@ export function WorkbookHeader({
   const people = state.tier === 'live' && book ? others(state) : []
   const self = state.welcome?.self ? state.peers[state.welcome.self] : undefined
   return (
-    <div className="flex min-h-[40px] flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5" data-testid="lv-header">
+    <div data-tab-header="" className="flex min-h-[40px] flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-tab-active)] px-3 py-1.5" data-testid="lv-header">
       <span className="inline-flex items-center gap-1.5 text-[var(--color-text-secondary)]">
         <SheetGlyph size={14} />
         <span className="type-row font-medium text-[var(--color-text-primary)]">{fileName}</span>

@@ -16,6 +16,8 @@
 // sentence (their marks and short words stay), the file's tile, the long form
 // of the sentence (its short form stays), those buttons' short words, then a
 // plain "Live" chip.
+// The row is the selected tab's colour (color.tab-active), so the tab runs
+// into it like a folder tab; its bottom hairline is the edge with the content.
 
 import { useLayoutEffect, useRef, useState } from 'react'
 import { cx } from '@/components/ui'
@@ -145,7 +147,7 @@ export function LiveHeader({
   // The live views' toggle keeps its words ("the side panel"); a view that names its panel says so.
   const onlyName = panelLabel === 'who’s watching and the changes'
   return (
-    <div ref={row} data-testid="lv-shell-header" data-tight={tight || undefined} data-wrap={sentenceRow ? '' : undefined} className={cx('lv-head flex flex-none items-center gap-x-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-3', sentenceRow ? 'flex-wrap gap-y-1 py-1.5' : 'h-11')}>
+    <div ref={row} data-testid="lv-shell-header" data-tab-header="" data-tight={tight || undefined} data-wrap={sentenceRow ? '' : undefined} className={cx('lv-head flex flex-none items-center gap-x-2.5 border-b border-[var(--color-border)] bg-[var(--color-tab-active)] px-3', sentenceRow ? 'flex-wrap gap-y-1 py-1.5' : 'h-11')}>
       <div className="flex min-w-0 flex-none items-center gap-2">
         {fileGlyph ? (
           <span data-k2-chamfer="control" aria-hidden="true" data-lv-give="4" className="lv-file-glyph inline-flex h-[26px] w-[26px] flex-none items-center justify-center rounded-[var(--radius-field)]">

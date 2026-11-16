@@ -68,7 +68,7 @@
     "src/renderer/components/Sidebar/SidebarCollapseButton.tsx": 2,
     "src/renderer/components/Sidebar/WorktreeDialog.tsx": 5,
     "src/renderer/components/Sidebar/picker-label.tsx": 1,
-    "src/renderer/components/TabBar/TabBar.tsx": 2,
+    "src/renderer/components/TabBar/TabBar.tsx": 1,
     "src/renderer/components/Terminal/AlacrittyTerminalView.tsx": 10,
     "src/renderer/components/Terminal/TerminalArea.tsx": 3,
     "src/renderer/components/Terminal/TerminalComposeBar.tsx": 6,

@@ -143,6 +143,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: #333333;
   --color-control-hover-quiet: #333333;
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
@@ -316,6 +317,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge: rgba(255, 255, 255, 0.06);
@@ -423,6 +425,7 @@
   --color-find-match-current: rgba(214, 150, 0, 0.40);
   --color-selection: rgba(37, 90, 146, 0.20);
   --color-stage: #1a1a1a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge: rgba(255, 255, 255, 0);
@@ -598,6 +601,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-tab-active: var(--color-bg);
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
@@ -714,6 +718,7 @@
   --color-find-match-current: rgba(255, 170, 0, 0.42);
   --color-selection: rgba(8, 106, 204, 0.20);
   --color-stage: #24252a;
+  --color-tab-active: var(--color-bg-surface);
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 78%, black);
@@ -830,6 +835,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-tab-active: var(--color-bg);
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-chart-1: #3987e5;
@@ -1518,7 +1524,9 @@
    As in Chrome, the strip colour fills the tile to its edges and the body below
    it has its own rounded top corners, so the strip's ends never curve up. */
 [data-style="glass"] [data-tab-group-index]:not([data-zen-root] *) {
-  --k2-wave-fill: var(--color-bg);
+  /* The wave is color.tab-active (the pane's surface in every Glass palette), so
+     a restyled tab and the header row under it stay one colour. */
+  --k2-wave-fill: var(--color-tab-active);
   --k2-strip-fill: var(--tile-fill);
   --k2-wave-r: 8px;
   /* The body's top corners follow the tile's bottom ones (its inner curve,
@@ -1898,6 +1906,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
@@ -2001,6 +2010,7 @@
   --color-find-match-current: rgba(255, 170, 0, 0.42);
   --color-selection: rgba(8, 106, 204, 0.20);
   --color-stage: #24252a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.9);
@@ -2104,6 +2114,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
@@ -2345,6 +2356,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: #333333;
   --color-control-hover-quiet: #333333;
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
@@ -2450,6 +2462,7 @@
   --color-find-match-current: rgba(214, 150, 0, 0.40);
   --color-selection: rgba(37, 90, 146, 0.20);
   --color-stage: #1a1a1a;
+  --color-tab-active: color-mix(in srgb, rgb(40, 32, 16) 16%, var(--color-bg-surface));
   --color-control-hover: #cfc7b6;
   --color-control-hover-quiet: #cfc7b6;
   --color-accent-fill: var(--color-accent);
@@ -2555,6 +2568,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: #3a3732;
   --color-control-hover-quiet: #3a3732;
   --color-chart-1: #3987e5;
@@ -2638,21 +2652,19 @@
 [data-style="terminal"] [data-room-tab-bar] > [data-tab-scroller]:is(:not(:has(> [data-tab-id])), :has(> [data-tab-id]:last-child:is([data-selected], :hover, [data-dragging]))) + [data-tab-add]:not([data-zen-root] *)::before,
 [data-style="terminal"] [data-room-tab-bar] > [data-tab-add]:hover:not([data-zen-root] *)::before { content: none; }
 
-/* ── The selected tab in a light palette ──────────────────────────────────
-   The tab strip lights its selected tab with 8% white, which vanishes on a
-   light strip. In a light palette it takes the strongest wash instead (about
-   1.4:1 on Paper's strip), laid over the strip so the pinned tabs stay opaque
-   and the status badge's mask matches. Hover takes the lightest wash. Dark
-   palettes keep their white. */
-[data-style="terminal"][data-scheme="light"] [data-room-tab-bar]:not([data-zen-root] *) {
-  --k2-rail-lit: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
-}
-[data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail])[data-selected]:not([data-zen-root] *) {
-  background: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
-}
+/* ── A tab in a light palette ─────────────────────────────────────────────
+   The selected tab is color.tab-active (Paper's is the strongest wash over the
+   strip, since 8% white vanishes on a light strip), and so is the header row
+   under it. A hovered tab takes the lightest wash. Dark palettes keep their
+   white. */
 [data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail], [data-selected]):hover:not([data-zen-root] *) {
   background: var(--color-wash-1);
 }
-[data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id][data-selected] :is([data-tab-close-slot], [data-tab-status-slot]):not([data-zen-root] *) {
-  --tab-bg: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
+/* ── The header row under a tab ───────────────────────────────────────────
+   It is the selected tab's colour, a step off the page, so on it muted words
+   and icons take text-secondary (muted falls under 4.5:1 there) and a quiet
+   control's hover and pressed fill steps off the row, not off the page. */
+[data-style="terminal"] [data-tab-header]:not([data-zen-root] *) {
+  --color-text-muted: var(--color-text-secondary);
+  --color-control-hover-quiet: color-mix(in srgb, var(--color-text-primary) 16%, var(--color-tab-active));
 }

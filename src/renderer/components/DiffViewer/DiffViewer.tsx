@@ -104,8 +104,8 @@ export function DiffViewer({ filePath, className }: DiffViewerProps): React.JSX.
 
   return (
     <div className={`flex flex-col h-full overflow-hidden ${className || ''}`}>
-      {/* File header */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+      {/* File header: the selected tab's colour (the tab runs into it) */}
+      <div data-tab-header="" className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-tab-active)]">
         <span className="text-xs font-medium text-[var(--color-text-primary)]">{fileName}</span>
         <span className="text-[10px] text-[var(--color-text-muted)]">{filePath}</span>
         <div className="ml-auto flex items-center gap-2">

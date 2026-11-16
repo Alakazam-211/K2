@@ -84,7 +84,8 @@
     "find-match": { "$value": "rgba(255, 195, 0, 0.30)", "$type": "color", "$description": "Find: every match, a wash over the editor. text-primary keeps 4.5:1 on it." },
     "find-match-current": { "$value": "rgba(255, 170, 0, 0.42)", "$type": "color", "$description": "Find: the current match, stronger than the others." },
     "selection": { "$value": "rgba(8, 106, 204, 0.20)", "$type": "color", "$description": "Selected text in editors. text-primary keeps 4.5:1 on it." },
-    "stage": { "$value": "#24252a", "$type": "color", "$description": "The live 3D picture’s stage (retired style: Glass’s value, so the build stays complete)." }
+    "stage": { "$value": "#24252a", "$type": "color", "$description": "The live 3D picture’s stage (retired style: Glass’s value, so the build stays complete)." },
+    "tab-active": { "$value": "color-mix(in srgb, white 8%, var(--color-bg-surface))", "$type": "color", "$description": "The selected tab's fill (retired style: the tab strip's default)." }
   },
   "terminal": {
     "fg": { "$value": "#1a1d26", "$type": "color" },

@@ -171,7 +171,8 @@ describe('session tabs: one status model (S5)', () => {
     setTabs([termTab('a', 'Active one'), termTab('b', 'Other one')])
     seed([row('s-a', 'tab-t-a', 'working'), row('s-b', 'tab-t-b', 'working')])
     render()
-    expect(tabEl('a').style.getPropertyValue('--tab-bg')).toBe('color-mix(in srgb, white 8%, var(--color-bg-surface))')
+    // The selected tab's fill is color.tab-active (the header row under it shares it).
+    expect(tabEl('a').style.getPropertyValue('--tab-bg')).toBe('var(--color-tab-active)')
     expect(tabEl('b').style.getPropertyValue('--tab-bg')).toBe('var(--color-bg-surface)')
   })
 

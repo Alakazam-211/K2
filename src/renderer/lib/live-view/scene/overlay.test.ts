@@ -178,11 +178,19 @@ describe('hidden and linked objects', () => {
     expect(boxOf(draw(S, { pick: '@obj:6' }), '@obj:6')).toBeUndefined()
   })
 
-  it('a dashed “(hidden)” ghost box when an agent holds it', () => {
+  it('a dashed “(hidden)” ghost box when an agent holds it, with ONE label: the hold says it’s hidden', () => {
     const S = plus(base(), [hold(ATLAS, ['@obj:6'], 'rebuilding the left wall')])
     const d = draw(S)
     expect(boxOf(d, '@obj:6')).toMatchObject({ style: 'hold', hidden: true, slot: 1 })
-    expect(d.tags.find((t) => t.kind === 'note' && t.a === '@obj:6')!.text).toBe('Wall.Left (hidden)')
+    const on = d.tags.filter((t) => t.a === '@obj:6')
+    expect(on.map((t) => [t.kind, t.who, t.text])).toEqual([['hold', 'Atlas', 'left wall (hidden)']])
+  })
+
+  it('a hold over several objects names the hidden ones in its one label', () => {
+    const S = plus(base(), [hold(ATLAS, ['@obj:6', '@obj:1'], 'rebuilding the room')])
+    const d = draw(S)
+    expect(d.tags.filter((t) => t.kind === 'note' && (t.a === '@obj:6' || t.a === '@obj:1'))).toEqual([])
+    expect(d.tags.find((t) => t.kind === 'hold' && t.title?.endsWith('rebuilding the room'))!.text).toBe('room (Wall.Left hidden)')
   })
 
   it('and when an agent acts on it', () => {

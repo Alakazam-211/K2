@@ -141,7 +141,8 @@ describe('hidden objects', () => {
     await settle()
     const wall = boxes().find((b) => b.getAttribute('data-a') === '@obj:6')!
     expect(wall.hasAttribute('data-hidden')).toBe(true)
-    expect(tags('note').map((t) => t.textContent)).toContain('Wall.Left (hidden)')
+    expect(tags('note').map((t) => t.textContent)).not.toContain('Wall.Left (hidden)')
+    expect(tags('hold').map((t) => t.textContent).join('|')).toMatch(/\(hidden\)/)
   })
 })
 

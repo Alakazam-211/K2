@@ -300,14 +300,18 @@ export function overlayDraw(S: SimState, o: { pick: string | null | undefined; s
     } else if (it.style === 'hold' && it.claim && !held.has(it.claim.id)) {
       held.add(it.claim.id)
       const group = it.claim.keys.filter((k) => items.find((x) => x.a === k)?.style === 'hold' && geo.get(k) && !off.has(k))
-      out.tags.push({ id: `hold:${it.claim.id}`, a: it.a, kind: 'hold', place: 'tag', anchor: union(group.map((k) => geo.get(k)!.rect)), slot: it.slot, who: it.who, text: shortHold(it.claim.label), title: `${it.who} is holding ${list(it.claim.keys.map((k) => nameOf(D, k)))}: ${it.claim.label}` })
+      // One label per held object: the hold says what's hidden or approximate (no second note beside it).
+      const hid = group.filter((k) => isHidden(D, k, o.bounds))
+      const hidWord = !hid.length ? '' : hid.length === group.length ? ' (hidden)' : ` (${list(hid.map((k) => nameOf(D, k)))} hidden)`
+      const approxWord = group.some((k) => approxOf(D, k, o.bounds)) ? ' · approximate' : ''
+      out.tags.push({ id: `hold:${it.claim.id}`, a: it.a, kind: 'hold', place: 'tag', anchor: union(group.map((k) => geo.get(k)!.rect)), slot: it.slot, who: it.who, text: shortHold(it.claim.label) + hidWord + approxWord, title: `${it.who} is holding ${list(it.claim.keys.map((k) => nameOf(D, k)))}: ${it.claim.label}` })
     } else if (it.style === 'mine') out.tags.push({ id: `mine:${it.a}`, a: it.a, kind: 'mine', place: 'tag', anchor: g.rect, slot: it.slot, who: 'You', text: name + approx })
     else if (it.style === 'sel' && it.agent) out.tags.push({ id: `sel:${it.a}:${it.who}`, a: it.a, kind: 'sel', place: 'tag', anchor: g.rect, slot: it.slot, who: it.who, text: '', agent: true })
     else if (it.style === 'sel') {
       const p = edgeAnchor(g, sv)
       out.tags.push({ id: `sel:${it.a}:${it.who}`, a: it.a, kind: 'sel', place: 'point', anchor: { x0: p.x, y0: p.y, x1: p.x, y1: p.y }, slot: it.slot, who: it.who, text: it.away ? '(away)' : '', away: it.away })
     }
-    if ((approx || hidden) && it.style !== 'mine') out.tags.push({ id: `note:${it.a}`, a: it.a, kind: 'note', place: 'tag', anchor: g.rect, slot: it.slot, who: '', text: `${name}${hidden ? ' (hidden)' : ''}${approx}` })
+    if ((approx || hidden) && it.style !== 'mine' && it.style !== 'hold') out.tags.push({ id: `note:${it.a}`, a: it.a, kind: 'note', place: 'tag', anchor: g.rect, slot: it.slot, who: '', text: `${name}${hidden ? ' (hidden)' : ''}${approx}` })
   }
   return out
 }

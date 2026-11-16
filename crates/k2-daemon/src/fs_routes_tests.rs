@@ -1150,6 +1150,54 @@ fn guest_writes_to_root_instruction_files_need_the_opt_in() {
     assert!(!lexically_in_agent_config("CLAUDE.md", false));
 }
 
+/// Heartbeat ground is the `heartbeats` folder under each name the agent's
+/// folder has had, and it holds even with the `files:agentconfig` opt-in.
+/// The one file a guest may write there is under the live `.k2` only.
+#[test]
+fn heartbeat_ground_holds_under_each_name_of_the_agent_folder() {
+    let room = config_room("hbnames");
+    let h = room.handle.clone();
+    std::fs::create_dir_all(room.dir.join(".k2so/heartbeats/digest")).expect("old hb dir");
+    std::fs::write(room.dir.join(".k2so/heartbeats/digest/WAKEUP.md"), b"old wake").expect("old wake");
+    std::fs::create_dir_all(room.dir.join(".k5/heartbeats/digest")).expect("new hb dir");
+    k2_core::test_env::symlink(room.dir.join(".k2so"), room.dir.join("oldcfg")).expect("oldcfg link");
+    let heartbeats_area = |r: &CliResponse, label: &str| {
+        assert_eq!(r.status, "403 Forbidden", "{label}: {}", r.body);
+        assert!(r.body.contains("heartbeats_area"), "{label}: {}", r.body);
+    };
+    for opt_in in [true, false] {
+        let pass = writer(&room, opt_in);
+        for path in [
+            ".k2so/heartbeats/digest/WAKEUP.md",
+            ".k2so/heartbeats/digest/notes.md",
+            ".k2so/heartbeats/newhb/WAKEUP.md",
+            ".K2SO/Heartbeats/digest/x.md",
+            ".k2so./heartbeats/digest/x.md",
+            ".k5/heartbeats/digest/WAKEUP.md",
+            ".K5/heartbeats/digest/x.md",
+        ] {
+            let r = handle_write_file_gated(&write_body(&room, path, "guest wake"), Some(pass.clone()));
+            heartbeats_area(&r, &format!("write-file {path} (opt-in {opt_in})"));
+        }
+        #[cfg(unix)]
+        {
+            let r = handle_write_file_gated(&write_body(&room, "oldcfg/heartbeats/digest/WAKEUP.md", "x"), Some(pass.clone()));
+            heartbeats_area(&r, &format!("through a link into .k2so (opt-in {opt_in})"));
+            let body = json_bytes(serde_json::json!({"workspace": h, "path": "oldcfg/heartbeats/newhb", "is_directory": true}));
+            heartbeats_area(&handle_create_gated(&body, Some(pass.clone())), &format!("create through a link (opt-in {opt_in})"));
+        }
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": ["notes/a.md"], "destination": ".k2so/heartbeats/digest"}));
+        heartbeats_area(&handle_copy_gated(&body, Some(pass.clone())), &format!("copy into .k2so/heartbeats (opt-in {opt_in})"));
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": [".k2so/heartbeats/digest"], "destination": "notes"}));
+        heartbeats_area(&handle_move_gated(&body, Some(pass.clone())), &format!("move out of .k2so/heartbeats (opt-in {opt_in})"));
+    }
+    assert_eq!(std::fs::read_to_string(room.dir.join(".k2so/heartbeats/digest/WAKEUP.md")).expect("old wake"), "old wake");
+    assert!(!room.dir.join(".k2so/heartbeats/newhb").exists());
+    assert!(!room.dir.join(".k2so/heartbeats/digest/notes.md").exists());
+    assert!(!room.dir.join(".k5/heartbeats/digest/WAKEUP.md").exists());
+    assert!(room.dir.join("notes/a.md").exists());
+}
+
 #[test]
 fn opt_in_lets_a_guest_write_agent_config_but_not_heartbeats() {
     let room = config_room("allow");

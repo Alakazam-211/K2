@@ -809,19 +809,22 @@ fn handle_fire(body: &Map<String, Value>, pass: &SkinPass, room: &Room) -> CliRe
 }
 
 /// `true` when `rel` (workspace-relative, as a guest sent it) lexically
-/// names a path at or under `.k2/heartbeats` (R2). ASCII case is folded so
-/// a case-insensitive disk cannot dodge it.
+/// names a path at or under `.k2/heartbeats` (R2), or under the folder's
+/// other names (`.k2so/heartbeats`, `.k5/heartbeats`:
+/// `k2_core::paths::is_workspace_dot_dir`). ASCII case is folded so a
+/// case-insensitive disk cannot dodge it.
 pub fn lexically_in_heartbeats(rel: &str) -> bool {
     let comps = normal_components(rel);
-    comps.len() >= 2 && comps[0] == ".k2" && comps[1] == "heartbeats"
+    comps.len() >= 2 && k2_core::paths::is_workspace_dot_dir(&comps[0]) && comps[1] == "heartbeats"
 }
 
-/// `true` when `rel` names `.`, `.k2`, or a path at or under
-/// `.k2/heartbeats` (moving or renaming any of those moves the folder).
+/// `true` when `rel` names `.`, the agent's folder (`.k2`, `.k2so`,
+/// `.k5`), or a path at or under its `heartbeats` (moving or renaming any
+/// of those moves the folder).
 pub fn lexically_touches_heartbeats(rel: &str) -> bool {
     let comps = normal_components(rel);
     comps.is_empty()
-        || (comps.len() == 1 && comps[0] == ".k2")
+        || (comps.len() == 1 && k2_core::paths::is_workspace_dot_dir(&comps[0]))
         || lexically_in_heartbeats(rel)
 }
 
@@ -836,7 +839,9 @@ fn normal_components(rel: &str) -> Vec<String> {
 }
 
 /// R2 — the heartbeat name when `rel` is exactly
-/// `.k2/heartbeats/<name>/WAKEUP.md` (case as written).
+/// `.k2/heartbeats/<name>/WAKEUP.md` (case as written). This is what a
+/// guest MAY write, so it knows the live folder's one name only: the same
+/// path under `.k2so` or `.k5` is heartbeat ground and nothing more.
 pub fn exact_wakeup_name(rel: &str) -> Option<String> {
     let comps: Vec<String> = Path::new(rel.trim())
         .components()
@@ -872,14 +877,17 @@ pub fn abs_touches_heartbeats(root: &str, abs: &Path, ancestors: bool) -> bool {
         }
     });
     let fold = |p: &Path| p.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
-    let hb_dir = fold(&canon_root.join(".k2").join("heartbeats"));
-    let k2_dir = fold(&canon_root.join(".k2"));
     let root_s = fold(&canon_root);
     let target = fold(&canon);
-    if k2_core::paths::is_under(&target, &hb_dir) {
-        return true;
+    // The agent's folder under each of its names (`.k2`, `.k2so`, `.k5`).
+    for name in k2_core::paths::WORKSPACE_DOT_DIR_NAMES {
+        let dot_dir = fold(&canon_root.join(name));
+        let hb_dir = fold(&canon_root.join(name).join("heartbeats"));
+        if k2_core::paths::is_under(&target, &hb_dir) || (ancestors && target == dot_dir) {
+            return true;
+        }
     }
-    ancestors && (target == k2_dir || target == root_s)
+    ancestors && target == root_s
 }
 
 #[cfg(test)]
@@ -936,6 +944,30 @@ mod tests {
         assert!(lexically_touches_heartbeats(".k2"));
         assert!(lexically_touches_heartbeats("."));
         assert!(!lexically_touches_heartbeats(".k2/wiki"));
+        // The folder's other names: a leftover `.k2so`, the coming `.k5`.
+        for rel in [
+            ".k2so/heartbeats/a/WAKEUP.md",
+            ".K2SO/Heartbeats/a/x.md",
+            "./.k2so/heartbeats",
+            ".k2so./heartbeats/a",
+            ".k5/heartbeats/a/WAKEUP.md",
+            ".K5/heartbeats",
+        ] {
+            assert!(lexically_in_heartbeats(rel), "{rel}");
+            assert!(lexically_touches_heartbeats(rel), "{rel}");
+        }
+        for rel in [".k2so", ".K2so", ".k5", ".k5 "] {
+            assert!(lexically_touches_heartbeats(rel), "{rel}");
+            assert!(!lexically_in_heartbeats(rel), "{rel}");
+        }
+        for rel in [".k2so/wiki/a.md", "notes/.k2so/heartbeats/a", ".k2so-old/heartbeats/a", ".k5x/heartbeats/a"] {
+            assert!(!lexically_in_heartbeats(rel), "{rel}");
+            assert!(!lexically_touches_heartbeats(rel), "{rel}");
+        }
+        // What a guest may write stays the live folder's own path.
+        assert_eq!(exact_wakeup_name(".k2so/heartbeats/inbox-sweep/WAKEUP.md"), None);
+        assert_eq!(exact_wakeup_name(".k5/heartbeats/inbox-sweep/WAKEUP.md"), None);
+        assert_eq!(exact_wakeup_name(".K2/heartbeats/inbox-sweep/WAKEUP.md"), None);
         assert_eq!(
             exact_wakeup_name(".k2/heartbeats/inbox-sweep/WAKEUP.md").as_deref(),
             Some("inbox-sweep")

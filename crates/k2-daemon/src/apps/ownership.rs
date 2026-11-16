@@ -240,6 +240,8 @@ fn park_row(app: &AppRow, by: &str, reason: &str) -> R<()> {
     if app.state == store::STATE_PARKED {
         return Ok(());
     }
+    // The stop's change and the park's fold into one told change.
+    let _told_once = super::state_events::hold(&app.app_id);
     super::supervisor::stop_app(app, by)?;
     {
         let db = k2_core::db::shared();
@@ -266,7 +268,8 @@ fn park_row(app: &AppRow, by: &str, reason: &str) -> R<()> {
     }
     audit(&app.app_id, "park", by, json!({ "from": app.owner_workspace, "reason": reason }));
     super::routes::mirror(&app.app_id);
-    // The workspace it left re-reads (its stop above folds into this one).
+    // The workspace it left re-reads (its stop above folds into this one:
+    // the hold arms one flush when it drops, however long the steps took).
     super::state_events::app_changed_in(&app.app_id, &app.owner_workspace);
     Ok(())
 }

@@ -33,6 +33,40 @@ fn a_park_tells_the_workspace_it_left_and_never_the_empty_owner() {
     assert!(parked.flush(t0).is_empty());
 }
 
+/// A park holds the gate across its steps: the stop and the move to no
+/// one fold into one flush however far apart they land (a slow run used
+/// to let the stop's flush go first, telling the workspace twice).
+#[test]
+fn a_hold_folds_changes_a_settle_apart_into_one_flush() {
+    let t0 = Instant::now();
+    let mut g = Gate::default();
+    g.hold();
+    assert_eq!(g.note("ws-a", t0), None, "held: nothing arms");
+    let late = t0 + SETTLE + WINDOW;
+    assert_eq!(g.note("", late), None, "still held");
+    assert_eq!(g.release(late), Some(late + SETTLE), "the release arms the one flush");
+    assert_eq!(g.flush(late + SETTLE), vec!["ws-a".to_string()]);
+    assert!(g.flush(late + SETTLE + ms(1)).is_empty(), "told once");
+}
+
+/// A flush armed before the hold that comes due inside it tells nothing;
+/// the release arms it again with everything the hold folded in.
+#[test]
+fn a_flush_due_inside_a_hold_waits_for_the_release() {
+    let t0 = Instant::now();
+    let mut g = Gate::default();
+    let at = g.note("ws-a", t0).expect("armed before the hold");
+    g.hold();
+    assert!(g.flush(at).is_empty(), "due inside the hold: nothing told yet");
+    assert_eq!(g.note("ws-b", at + ms(10)), None);
+    let end = at + ms(500);
+    assert_eq!(g.release(end), Some(end + SETTLE));
+    assert_eq!(g.flush(end + SETTLE), vec!["ws-a".to_string(), "ws-b".to_string()]);
+    // Nothing pending: a release arms nothing.
+    g.hold();
+    assert_eq!(g.release(end + SETTLE + ms(1)), None);
+}
+
 #[test]
 fn one_flush_tells_each_workspace_it_touched_once() {
     let t0 = Instant::now();

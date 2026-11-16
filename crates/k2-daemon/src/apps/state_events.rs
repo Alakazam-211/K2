@@ -31,6 +31,8 @@ pub(crate) struct Gate {
     last: Option<Instant>,
     armed: Option<Instant>,
     pending: BTreeSet<String>,
+    /// Open [`hold`]s: changes fold in, nothing arms until the last ends.
+    held: usize,
 }
 
 impl Gate {
@@ -41,7 +43,22 @@ impl Gate {
         if !ws.is_empty() {
             self.pending.insert(ws.to_string());
         }
-        if self.armed.is_some() || self.pending.is_empty() {
+        self.arm(now)
+    }
+
+    /// A [`hold`] began: changes until it ends fold into one flush.
+    pub(crate) fn hold(&mut self) {
+        self.held += 1;
+    }
+
+    /// A hold ended at `now`: `Some(at)` arms the flush it held back.
+    pub(crate) fn release(&mut self, now: Instant) -> Option<Instant> {
+        self.held = self.held.saturating_sub(1);
+        self.arm(now)
+    }
+
+    fn arm(&mut self, now: Instant) -> Option<Instant> {
+        if self.held > 0 || self.armed.is_some() || self.pending.is_empty() {
             return None;
         }
         let at = match self.last {
@@ -53,8 +70,13 @@ impl Gate {
     }
 
     /// The armed flush ran at `now`: the workspaces to tell, each once.
+    /// A flush armed before a [`hold`] that comes due inside it tells
+    /// nothing: the hold's release arms it again.
     pub(crate) fn flush(&mut self, now: Instant) -> Vec<String> {
         self.armed = None;
+        if self.held > 0 {
+            return Vec::new();
+        }
         let out: Vec<String> = std::mem::take(&mut self.pending).into_iter().collect();
         if !out.is_empty() {
             self.last = Some(now);
@@ -88,7 +110,41 @@ pub fn app_changed_in(app_id: &str, ws: &str) {
         let mut g = gates().lock().unwrap_or_else(|e| e.into_inner());
         g.entry(app_id.to_string()).or_default().note(ws, Instant::now())
     };
-    let Some(at) = arm else { return };
+    if let Some(at) = arm {
+        flush_at(app_id, at);
+    }
+}
+
+/// Fold every change to `app_id` until the returned guard drops into one
+/// flush: a park (the stop, then the row moving to no one) tells the
+/// workspace it left once however long the steps between take; the
+/// settle alone can't promise that on a slow run.
+#[must_use]
+pub fn hold(app_id: &str) -> Held {
+    let mut g = gates().lock().unwrap_or_else(|e| e.into_inner());
+    g.entry(app_id.to_string()).or_default().hold();
+    Held { app_id: app_id.to_string() }
+}
+
+/// [`hold`]'s guard: dropping it arms the flush it held back.
+pub struct Held {
+    app_id: String,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let arm = {
+            let mut g = gates().lock().unwrap_or_else(|e| e.into_inner());
+            g.get_mut(&self.app_id).and_then(|g| g.release(Instant::now()))
+        };
+        if let Some(at) = arm {
+            flush_at(&self.app_id, at);
+        }
+    }
+}
+
+/// Run `app_id`'s armed flush at `at`.
+fn flush_at(app_id: &str, at: Instant) {
     let app = app_id.to_string();
     let spawned = std::thread::Builder::new().name("app-state-event".into()).spawn(move || {
         std::thread::sleep(at.saturating_duration_since(Instant::now()));

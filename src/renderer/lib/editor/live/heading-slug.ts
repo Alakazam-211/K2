@@ -25,6 +25,23 @@ export function slugify(heading: string): string {
   return lower.replace(DROP, '').replace(/\s/g, '-')
 }
 
+/** Numbers one document's slugs in order, as github-slugger does: a taken slug bumps its original's
+ *  counter until original-N is free, and every slug given out is recorded. */
+export function slugNumberer(): (base: string) => string {
+  // Each slug used so far, with how many repeats of it as an original have been numbered.
+  const seen = new Map<string, number>()
+  return (base) => {
+    let slug = base
+    while (seen.has(slug)) {
+      const n = (seen.get(base) ?? 0) + 1
+      seen.set(base, n)
+      slug = `${base}-${n}`
+    }
+    seen.set(slug, 0)
+    return slug
+  }
+}
+
 export interface HeadingSlug {
   /** The heading's line (1-based). */
   line: number
@@ -32,11 +49,10 @@ export interface HeadingSlug {
   slug: string
 }
 
-/** Every heading with a slug, in document order, repeats numbered (code fences skipped). */
+/** Every heading and its slug, in document order, repeats numbered (code fences skipped). */
 export function headingSlugs(text: string): HeadingSlug[] {
   const out: HeadingSlug[] = []
-  // Each slug used so far, with how many repeats of it as an original have been numbered.
-  const seen = new Map<string, number>()
+  const unique = slugNumberer()
   let fence = false
   text.split('\n').forEach((l, i) => {
     if (/^ {0,3}(```|~~~)/.test(l)) {
@@ -48,14 +64,7 @@ export function headingSlugs(text: string): HeadingSlug[] {
     if (!m) return
     const words = (m[1] ?? '').trim()
     const base = slugify(words)
-    let slug = base
-    while (seen.has(slug)) {
-      const n = (seen.get(base) ?? 0) + 1
-      seen.set(base, n)
-      slug = `${base}-${n}`
-    }
-    seen.set(slug, 0)
-    out.push({ line: i + 1, text: words, slug })
+    out.push({ line: i + 1, text: words, slug: unique(base) })
   })
   return out
 }

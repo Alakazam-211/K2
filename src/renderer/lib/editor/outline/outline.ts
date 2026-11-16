@@ -2,12 +2,13 @@
 // (`## Setup`) and setext (a paragraph over `===` or `---`), outside fenced
 // and indented code, as plain words (no `**`, backticks or link targets), with
 // the slug of its address (`@h:<slug>`, lib/editor/live/heading-slug: the
-// kit's grammar, repeats numbered the same way) and the line each starts on.
+// markdown pack's rules, from the heading as written, repeats numbered the
+// same way) and the line each starts on.
 // Read from the text, so it's the same in Write, Read, Source and a live doc.
 // Pure.
 
 import type { Text } from '@codemirror/state'
-import { slugify } from '@/lib/editor/live/heading-slug'
+import { slugNumberer, slugify } from '@/lib/editor/live/heading-slug'
 
 export interface OutlineItem {
   level: number
@@ -42,15 +43,10 @@ const paragraphLine = (s: string): boolean =>
 
 export function outlineOf(doc: Text): OutlineItem[] {
   const out: OutlineItem[] = []
-  // Repeats in document order get -1, -2, as headingSlugs numbers them.
-  const seen = new Map<string, number>()
-  const slugOf = (raw: string): string => {
-    const base = slugify(raw)
-    if (!base) return ''
-    const n = seen.get(base) ?? 0
-    seen.set(base, n + 1)
-    return n === 0 ? base : `${base}-${n}`
-  }
+  // Repeats in document order are numbered as headingSlugs numbers them (never a slug already used;
+  // a heading with nothing kept has the empty slug, and numbers too, as the pack does).
+  const unique = slugNumberer()
+  const slugOf = (raw: string): string => unique(slugify(raw))
   let fence: { ch: string; len: number } | null = null
   // The paragraph so far: its first line and its words.
   let para: { line: number; text: string } | null = null

@@ -43,8 +43,8 @@ describe('the outline', () => {
     ])
   })
 
-  it('slugs each, numbering repeats', () => {
-    expect(items.map((h) => h.slug)).toEqual(['quill', 'setup', 'the-bold-code-and-a-link', 'setext-two', 'setext-one', 'setup-1', 'six'])
+  it('slugs each from the heading as written (the pack’s rule: a link’s target counts), numbering repeats', () => {
+    expect(items.map((h) => h.slug)).toEqual(['quill', 'setup', 'the-bold-code-and-a-linkxmd', 'setext-two', 'setext-one', 'setup-1', 'six'])
   })
 
   it('an ATX heading’s slug is its address slug (heading-slug.ts), so outline and addresses agree', () => {
@@ -58,6 +58,11 @@ describe('the outline', () => {
     expect(headingAt(items, 13)).toBe(4)
     expect(headingAt(items, 100)).toBe(6)
     expect(headingAt(outlineOf(Text.of(['Intro', '', '## Later'])), 1)).toBe(-1)
+  })
+
+  it('repeats never take a slug already used (setext ones too), as the addresses number them', () => {
+    const doc = ['# Notes', '# Notes', 'Notes', '=====', '# Notes 1', '# A', '# A-1', '# A'].join('\n')
+    expect(outlineOf(Text.of(doc.split('\n'))).map((h) => h.slug)).toEqual(['notes', 'notes-1', 'notes-2', 'notes-1-1', 'a', 'a-1', 'a-2'])
   })
 
   it('an empty file has no headings', () => {

@@ -86,39 +86,39 @@ afterEach(() => cleanup())
 describe('App Approvals across servers', () => {
   it('shows each owned or admined server in its own block; Member and signed-out servers are never read', async () => {
     pool.entries = {
-      'box.k2.dev': owner('box.k2.dev'),
+      'box.example.test': owner('box.example.test'),
       // 0.46.13: an Admin approves too, so its servers are read.
-      'admin.k2.dev': owner('admin.k2.dev', { role: 'admin' }),
-      'member.k2.dev': owner('member.k2.dev', { role: 'member' }),
-      'out.k2.dev': owner('out.k2.dev', { auth: 'signin-required' }),
+      'admin.example.test': owner('admin.example.test', { role: 'admin' }),
+      'member.example.test': owner('member.example.test', { role: 'member' }),
+      'out.example.test': owner('out.example.test', { auth: 'signin-required' }),
     }
     const lists: Record<string, AppRequest[]> = {
       local: [req('w_here', 'notes')],
-      'box.k2.dev': [req('w_box', 'shop')],
-      'admin.k2.dev': [req('w_adm', 'crm')],
+      'box.example.test': [req('w_box', 'shop')],
+      'admin.example.test': [req('w_adm', 'crm')],
     }
     h.get.mockImplementation(async (host: string, route: string) => {
       if (route !== 'app/approvals' || !(host in lists)) throw new Error(`unexpected GET ${host} ${route}`)
       return { ok: true, requests: lists[host], ownerConfirm: OK }
     })
     render(<AppApprovalsSection />)
-    const box = await screen.findByTestId('app-approvals-server-box.k2.dev')
-    expect(box.textContent).toContain('Server box.k2.dev')
+    const box = await screen.findByTestId('app-approvals-server-box.example.test')
+    expect(box.textContent).toContain('Server box.example.test')
     expect(box.textContent).toContain('shop wants api.example.test')
     const here = screen.getByTestId('app-approvals-server-local')
     expect(here.textContent).toContain('This computer')
     expect(here.textContent).toContain("this window's server")
     expect(here.textContent).toContain('notes wants api.example.test')
-    const adm = screen.getByTestId('app-approvals-server-admin.k2.dev')
+    const adm = screen.getByTestId('app-approvals-server-admin.example.test')
     expect(adm.textContent).toContain('crm wants api.example.test')
     expect(screen.getByTestId('app-approve-w_adm')).toBeTruthy()
     expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('App Approvals (3)')
     const read = new Set(h.get.mock.calls.map((c) => c[0]))
-    expect(read).toEqual(new Set(['local', 'box.k2.dev', 'admin.k2.dev']))
+    expect(read).toEqual(new Set(['local', 'box.example.test', 'admin.example.test']))
   })
 
   it("approves with THAT server's confirm and denies on that server", async () => {
-    pool.entries = { 'box.k2.dev': owner('box.k2.dev') }
+    pool.entries = { 'box.example.test': owner('box.example.test') }
     let boxDone = false
     h.get.mockImplementation(async (host: string) => ({
       ok: true,
@@ -146,11 +146,11 @@ describe('App Approvals across servers', () => {
     await waitFor(() => expect(h.post.mock.calls.some((c) => c[1] === 'app/approve')).toBe(true))
     const approveCalls = h.post.mock.calls.filter((c) => c[1] !== 'app/deny')
     expect(approveCalls.map((c) => [c[0], c[1]])).toEqual([
-      ['box.k2.dev', 'vault/confirm/start'],
-      ['box.k2.dev', 'vault/confirm/finish'],
-      ['box.k2.dev', 'app/approve'],
+      ['box.example.test', 'vault/confirm/start'],
+      ['box.example.test', 'vault/confirm/finish'],
+      ['box.example.test', 'app/approve'],
     ])
-    expect(approveCalls[2][2]).toEqual({ request: 'w_box', confirmToken: 'tok-box.k2.dev' })
+    expect(approveCalls[2][2]).toEqual({ request: 'w_box', confirmToken: 'tok-box.example.test' })
 
     fireEvent.click(screen.getByTestId('app-deny-w_here'))
     fireEvent.click(screen.getByTestId('app-deny-send-w_here'))
@@ -160,14 +160,14 @@ describe('App Approvals across servers', () => {
   })
 
   it('a server that does not answer is named; the others still show', async () => {
-    pool.entries = { 'down.k2.dev': owner('down.k2.dev') }
+    pool.entries = { 'down.example.test': owner('down.example.test') }
     h.get.mockImplementation(async (host: string) => {
-      if (host === 'down.k2.dev') throw new Error('server unreachable')
+      if (host === 'down.example.test') throw new Error('server unreachable')
       return { ok: true, requests: [req('w_here', 'notes')], ownerConfirm: OK }
     })
     render(<AppApprovalsSection />)
-    const err = await screen.findByTestId('app-approvals-error-down.k2.dev')
-    expect(err.textContent).toContain('Server down.k2.dev')
+    const err = await screen.findByTestId('app-approvals-error-down.example.test')
+    expect(err.textContent).toContain('Server down.example.test')
     expect(err.textContent).toContain('server unreachable')
     expect(screen.getByTestId('app-request-w_here')).toBeTruthy()
   })

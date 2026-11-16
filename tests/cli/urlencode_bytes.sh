@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# urlencode puts a value into a query string. It used to fall back to the
-# RAW value whenever Python failed, and Python fails on a value that is not
-# valid UTF-8: 'a\xffb&x' went out as 'a<FF>b&x', so the '&' started a new
-# query parameter. Now it encodes byte by byte, and when it cannot encode
-# at all (no python3) it says so and stops instead of sending the raw text.
+# urlencode puts a value into a query string. It encodes the bytes it is
+# given, so a byte that is not valid UTF-8 becomes %XX, and when it cannot
+# encode at all (no python3) it prints an error and ends the command, so
+# nothing is sent.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -29,7 +28,7 @@ want "query specials" "a&b=c?d#e%f+g h/i" "a%26b%3Dc%3Fd%23e%25f%2Bg%20h%2Fi"
 want "UTF-8" "é☃" "%C3%A9%E2%98%83"
 want "emoji" "😀" "%F0%9F%98%80"
 want "empty" "" ""
-# The case that went out raw before: one invalid byte, then '&x'.
+# Invalid bytes are percent-encoded, and so is everything after them.
 want "invalid UTF-8 then &" "$(printf 'a\xffb&x')" "a%FFb%26x"
 want "invalid UTF-8 then a parameter" "$(printf '\xc3\x28&project=other')" "%C3%28%26project%3Dother"
 want "lone continuation bytes" "$(printf '\x80\xbf')" "%80%BF"

@@ -97,7 +97,7 @@ describe('App Approvals badge store', () => {
 
     // A server switch: 0 until the new server answers, then its count.
     api.fetchAppApprovals.mockResolvedValue(rows(['pending']))
-    host.switchTo({ hostKey: 'other.k2.dev' })
+    host.switchTo({ hostKey: 'other.example.test' })
     expect(useAppApprovalsStore.getState().pending).toBe(0)
     await vi.waitFor(() => expect(useAppApprovalsStore.getState().pending).toBe(1))
   })
@@ -115,24 +115,24 @@ describe('App Approvals badge store', () => {
     host.switchTo({ hostKey: 'local' })
     api.fetchAppApprovals.mockImplementation(async (_state: string, scope: { hostKey: string }) => {
       if (scope.hostKey === 'local') return rows(['pending'])
-      if (scope.hostKey === 'box.k2.dev') return rows(['pending', 'pending', 'approved'])
-      if (scope.hostKey === 'admin.k2.dev') return rows(['pending'])
-      if (scope.hostKey === 'down.k2.dev') throw new Error('offline')
+      if (scope.hostKey === 'box.example.test') return rows(['pending', 'pending', 'approved'])
+      if (scope.hostKey === 'admin.example.test') return rows(['pending'])
+      if (scope.hostKey === 'down.example.test') throw new Error('offline')
       throw new Error(`never read ${scope.hostKey}`)
     })
     // Owned or admined (0.46.13: an Admin approves too) and signed in:
     // read. A Member, a server not signed in, an unsaved one: never read.
     pool.set({
-      'box.k2.dev': entry('box.k2.dev'),
-      'down.k2.dev': entry('down.k2.dev'),
-      'admin.k2.dev': entry('admin.k2.dev', { role: 'admin' }),
-      'member.k2.dev': entry('member.k2.dev', { role: 'member' }),
-      'out.k2.dev': entry('out.k2.dev', { auth: 'signin-required' }),
-      'gone.k2.dev': entry('gone.k2.dev', { saved: false }),
+      'box.example.test': entry('box.example.test'),
+      'down.example.test': entry('down.example.test'),
+      'admin.example.test': entry('admin.example.test', { role: 'admin' }),
+      'member.example.test': entry('member.example.test', { role: 'member' }),
+      'out.example.test': entry('out.example.test', { auth: 'signin-required' }),
+      'gone.example.test': entry('gone.example.test', { saved: false }),
     })
     await vi.waitFor(() => expect(useAppApprovalsStore.getState().pending).toBe(4))
     const read = api.fetchAppApprovals.mock.calls.map((c) => (c[1] as { hostKey: string }).hostKey)
-    expect(new Set(read)).toEqual(new Set(['local', 'box.k2.dev', 'admin.k2.dev', 'down.k2.dev']))
+    expect(new Set(read)).toEqual(new Set(['local', 'box.example.test', 'admin.example.test', 'down.example.test']))
 
     // The window's push replaces only its own share.
     const rev = useAppApprovalsStore.getState().revision

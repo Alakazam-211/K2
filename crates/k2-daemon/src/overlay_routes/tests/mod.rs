@@ -2737,8 +2737,8 @@ fn skin_thread_post_injects_agent_pty_and_stamps_pass_username() {
     );
 }
 
-/// 0.46.13: the owner token with no `from` or `from=k2` is the owner, not
-/// the room (it used to stamp the room handle, so it read as the agent's).
+/// 0.46.13: a post with the owner token and no `from`, or `from=k2`, is
+/// stamped as the owner's, never the room's.
 #[test]
 fn thread_post_empty_or_k2_from_is_the_poster_never_the_room() {
     let handle = format!("globex-bff{}", &uuid::Uuid::new_v4().to_string()[..8]);

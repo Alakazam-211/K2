@@ -226,7 +226,8 @@ fn a_joiner_gets_a_key_first_and_its_ask_is_never_throttled() {
 }
 
 /// Count what a socket viewer gets for `dur`, acking each frame at once.
-async fn take_video(c: &mut Client, dur: Duration) -> Vec<VideoHeader> {
+/// Each frame bumps `progress` (another viewer can wait on this one's).
+async fn take_video(c: &mut Client, dur: Duration, progress: Option<&tokio::sync::watch::Sender<usize>>) -> Vec<VideoHeader> {
     let deadline = tokio::time::Instant::now() + dur;
     let mut heads = Vec::new();
     loop {
@@ -239,8 +240,30 @@ async fn take_video(c: &mut Client, dur: Duration) -> Vec<VideoHeader> {
             assert_eq!(h.key, is_keyframe(au));
             ack(c, h.seq).await;
             heads.push(h);
+            if let Some(p) = progress {
+                p.send_replace(heads.len());
+            }
         }
     }
+}
+
+/// The fake screen always has a new frame, so each layer's rate is its own
+/// schedule's (the hub's pacer compares clock readings) and never the fake
+/// screen's sleeps. A sleep-paced 60 Hz screen is only as fast as the
+/// host's timers: in a K2 Compute job on a Mac mini (launchd without
+/// `ProcessType=Interactive`) a 16 ms sleep took ~110 ms, so the screen
+/// made ~9 frames a second and a 60 fps viewer got 15–23 frames in 2 s.
+fn screen_always_ready(b: &Booted) {
+    b.fake.source_hz.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// A viewer's frame rate from its frames' capture times (the K2SV
+/// `ts_ms`): the rate its layer encoded at, whatever the socket's pace.
+fn capture_fps(hs: &[VideoHeader]) -> f64 {
+    assert!(hs.len() >= 2, "a rate needs two frames, got {}", hs.len());
+    let span_ms = hs[hs.len() - 1].ts_ms.saturating_sub(hs[0].ts_ms);
+    assert!(span_ms > 0, "{} frames captured in the same ms", hs.len());
+    (hs.len() - 1) as f64 * 1000.0 / span_ms as f64
 }
 
 /// (b) Two H.264 viewers at 60 and 15 fps: two layers, two encoders, each
@@ -251,15 +274,18 @@ fn two_rates_are_two_layers_and_three_viewers_at_one_rate_are_one_encoder() {
     let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let log = fake::install();
     let b = boot_fake("tiers");
+    screen_always_ready(&b);
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().expect("rt");
     rt.block_on(async {
         let (mut fast, s1) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "60")]).await;
         let (mut slow, s2) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "15")]).await;
         assert_eq!(next_text(&mut fast).await["fps"], 60);
         assert_eq!(next_text(&mut slow).await["fps"], 15);
-        let (f, s) = tokio::join!(take_video(&mut fast, Duration::from_secs(2)), take_video(&mut slow, Duration::from_secs(2)));
-        assert!((90..=130).contains(&f.len()), "60 fps viewer: {} in 2 s", f.len());
-        assert!((22..=36).contains(&s.len()), "15 fps viewer: {} in 2 s", s.len());
+        let (f, s) = tokio::join!(take_video(&mut fast, Duration::from_secs(2), None), take_video(&mut slow, Duration::from_secs(2), None));
+        // Each at its own tier: past the next tier down, never past its own.
+        let (ff, sf) = (capture_fps(&f), capture_fps(&s));
+        assert!((40.0..=66.0).contains(&ff), "60 fps viewer: {ff:.1} fps ({} frames)", f.len());
+        assert!((10.0..=16.5).contains(&sf), "15 fps viewer: {sf:.1} fps ({} frames)", s.len());
         for hs in [&f, &s] {
             assert!(hs[0].key, "each starts on a key unit");
             assert!(hs.windows(2).all(|w| w[1].key || w[1].seq == w[0].seq + 1), "no delta after a gap");
@@ -356,26 +382,37 @@ fn a_slow_acker_skips_to_keyframes_and_never_gets_a_delta_after_a_gap() {
     let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _log = fake::install();
     let b = boot_fake("skips");
+    screen_always_ready(&b);
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().expect("rt");
     rt.block_on(async {
         let (mut slow, s1) = open(&b, &[("codecs", "h264,jpeg"), ("win", "1"), ("fps", "60")]).await;
         let (mut fast, s2) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "60")]).await;
         let _ = (next_text(&mut slow).await, next_text(&mut fast).await);
+        // How many frames the fast viewer has: the slow one's stalls are
+        // counted in the layer's own frames, not in sleeps (a host whose
+        // timers are coalesced stretched a 5 ms sleep past a frame).
+        let (progress, fast_got) = tokio::sync::watch::channel(0usize);
         let slow_run = async {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
             let mut heads = Vec::new();
-            let delays = [5u64, 5, 5, 60];
+            let mut fast_got = fast_got;
             while let Ok(m) = tokio::time::timeout_at(deadline, slow.next()).await {
                 if let Message::Binary(bin) = m.expect("open").expect("ok") {
                     let (h, _) = VideoHeader::decode(&bin).expect("K2SV");
-                    tokio::time::sleep(Duration::from_millis(delays[heads.len() % delays.len()])).await;
+                    // Three frames acked at once (it keeps up), the fourth
+                    // held while the layer encodes three more: with a window
+                    // of one, a delta finds no room and the viewer skips.
+                    if heads.len() % 4 == 3 {
+                        let until = *fast_got.borrow() + 3;
+                        let _ = tokio::time::timeout_at(deadline, fast_got.wait_for(|n| *n >= until)).await;
+                    }
                     ack(&mut slow, h.seq).await;
                     heads.push(h);
                 }
             }
             heads
         };
-        let (s, f) = tokio::join!(slow_run, take_video(&mut fast, Duration::from_secs(3)));
+        let (s, f) = tokio::join!(slow_run, take_video(&mut fast, Duration::from_secs(3), Some(&progress)));
         for (who, hs) in [("slow", &s), ("fast", &f)] {
             assert!(hs[0].key, "{who} starts on a key unit");
             for w in hs.windows(2) {
@@ -384,7 +421,8 @@ fn a_slow_acker_skips_to_keyframes_and_never_gets_a_delta_after_a_gap() {
         }
         assert!(s.iter().skip(1).any(|h| h.key), "the slow viewer skipped to a keyframe at least once");
         assert!(s.windows(2).any(|w| !w[1].key), "and took deltas while it kept up");
-        assert!(f.len() >= 120, "the fast viewer keeps its rate: {} in 3 s", f.len());
+        let ff = capture_fps(&f);
+        assert!(ff >= 40.0, "the fast viewer keeps its rate: {ff:.1} fps ({} frames in 3 s)", f.len());
         drop((slow, fast));
         for s in [s1, s2] {
             tokio::time::timeout(Duration::from_secs(5), s).await.expect("server ends").expect("join");

@@ -311,7 +311,11 @@ impl DeskdManager {
         self.inner.lock().unwrap().tcc
     }
 
-    /// Calls `f` with K2 Screen's flags each time it says them.
+    /// Calls `f` with K2 Screen's flags each time it says them, before
+    /// the state they imply is published (so a caller that sees that state
+    /// knows `f` has run). `f` runs on the link's own thread: it may call
+    /// [`Self::restart_helper`], but must not wait on a reply from K2
+    /// Screen.
     pub fn on_tcc(&self, f: TccHook) {
         *self.on_tcc.lock().unwrap() = Some(f);
     }
@@ -510,9 +514,18 @@ impl DeskdManager {
             g.link = Some(Arc::clone(&link));
             g.frames = o.frames;
             g.tcc = Some(hello.tcc);
-            self.set_state_locked(&mut g, DeskdState::from_hello(&hello));
         }
+        // The hook hears the hello before the state it implies is
+        // published: whoever wakes on that state (`enable`, which turns the
+        // permission flow on next) finds the flow already told. The link
+        // is in place, so a `restart_helper` from the hook closes it.
         self.tell_tcc(hello.tcc);
+        if !self.publish_for(&link, DeskdState::from_hello(&hello), Some(gen)) {
+            // Closed (restarted from the hook) or disabled meanwhile: no
+            // reader for it; drop it as if it had ended.
+            self.link_ended(&link);
+            return None;
+        }
         let me = Arc::clone(self);
         let mut reader = o.reader;
         let l2 = Arc::clone(&link);
@@ -549,16 +562,18 @@ impl DeskdManager {
         let Ok(ev) = serde_json::from_value::<Event>(v) else { return };
         match ev {
             Event::TccChanged { tcc } => {
-                {
+                let state = {
                     let mut g = self.inner.lock().unwrap();
                     let backend = g.link.as_ref().map(|l| l.hello.backend.clone()).unwrap_or_default();
                     let mut h = link.hello.clone();
                     h.tcc = tcc;
                     h.backend = backend;
                     g.tcc = Some(tcc);
-                    self.set_state_locked(&mut g, DeskdState::from_hello(&h));
-                }
+                    DeskdState::from_hello(&h)
+                };
+                // Same order as the hello: the hook first, then the state.
                 self.tell_tcc(tcc);
+                self.publish_for(link, state, None);
             }
             Event::LocalInput { hold } => self.broadcast(DeskdEvent::LocalInput { hold }),
             Event::BannerDisconnect => self.broadcast(DeskdEvent::BannerDisconnect),
@@ -568,6 +583,20 @@ impl DeskdManager {
             Event::CaptureError { display, code, error } => self.broadcast(DeskdEvent::CaptureError { display, code, error }),
             Event::Hello(_) => {}
         }
+    }
+
+    /// Sets `s` if `link` is still the live link (and, with `gen`, the
+    /// supervisor's generation is still current). `false`: it isn't.
+    fn publish_for(&self, link: &Arc<Link>, s: DeskdState, gen: Option<u64>) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        let current = g.enabled
+            && gen.is_none_or(|n| g.gen == n)
+            && g.link.as_ref().is_some_and(|l| Arc::ptr_eq(l, link))
+            && link.alive.load(Ordering::SeqCst);
+        if current {
+            self.set_state_locked(&mut g, s);
+        }
+        current
     }
 
     fn link_ended(&self, link: &Arc<Link>) {
@@ -1405,6 +1434,56 @@ mod tests {
         assert_eq!(fake.opens.load(Ordering::SeqCst), 2, "reconnected to the fresh K2 Screen");
         assert_eq!(*heard.lock().unwrap(), vec![none, granted()], "and heard its hello");
         assert_eq!(m.tcc(), Some(granted()));
+        m.disable().unwrap();
+    }
+
+    /// The hook runs before the state K2 Screen's flags imply is
+    /// published, for a hello and for `tcc_changed`: whoever wakes on the
+    /// state (`enable`, then the permission flow's `turned_on`) finds the
+    /// hook already told. Published first, the hook raced the caller and
+    /// the permission-flow test above flaked on Linux.
+    #[test]
+    fn the_hook_hears_k2_screen_before_its_state_is_published() {
+        let none = Tcc { required: true, screen: false, accessibility: false };
+        let fake = Fake::with(vec![hello(PROTOCOL_VERSION, none, "macos")]);
+        let m = DeskdManager::new(fake.clone());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (s2, weak) = (Arc::clone(&seen), Arc::downgrade(&m));
+        m.on_tcc(Arc::new(move |t: Tcc| s2.lock().unwrap().push((t, weak.upgrade().expect("manager").state().name()))));
+        assert_eq!(m.enable(SETTLE), DeskdState::NeedsPermission { screen: false, accessibility: false });
+        assert_eq!(*seen.lock().unwrap(), vec![(none, "starting")], "the hello's hook ran before needs_permission was set");
+        fake.push_event(json!({"event": "tcc_changed", "tcc": {"required": true, "screen": true, "accessibility": true}}));
+        assert_eq!(wait_for(&m, |s| s.name() == "ready"), DeskdState::Ready { backend: "macos".into() });
+        assert_eq!(*seen.lock().unwrap(), vec![(none, "starting"), (granted(), "needs_permission")], "tcc_changed's hook ran before ready was set");
+        m.disable().unwrap();
+    }
+
+    /// The permission flow restarts K2 Screen from the hook when a grant
+    /// comes through: the old process's `ready` is never shown, the state
+    /// goes straight to `starting`, and the fresh hello sets `ready`.
+    #[test]
+    fn a_restart_from_the_hook_skips_the_old_links_state() {
+        let none = Tcc { required: true, screen: false, accessibility: false };
+        let fake = Fake::with(vec![hello(PROTOCOL_VERSION, none, "macos"), hello(PROTOCOL_VERSION, granted(), "macos")]);
+        let m = DeskdManager::new(fake.clone());
+        let (weak, once) = (Arc::downgrade(&m), Arc::new(AtomicBool::new(false)));
+        m.on_tcc(Arc::new(move |t: Tcc| {
+            if t.screen && !once.swap(true, Ordering::SeqCst) {
+                weak.upgrade().expect("manager").restart_helper().expect("restart from the hook");
+            }
+        }));
+        assert_eq!(m.enable(SETTLE), DeskdState::NeedsPermission { screen: false, accessibility: false });
+        let events = m.subscribe();
+        fake.push_event(json!({"event": "tcc_changed", "tcc": {"required": true, "screen": true, "accessibility": true}}));
+        let mut states = Vec::new();
+        while !matches!(states.last(), Some(DeskdState::Ready { .. })) {
+            if let DeskdEvent::State(s) = events.recv_timeout(SETTLE).expect("a state within SETTLE") {
+                states.push(s);
+            }
+        }
+        assert_eq!(states, vec![DeskdState::Starting, DeskdState::Ready { backend: "macos".into() }]);
+        assert_eq!(fake.restarts.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.opens.load(Ordering::SeqCst), 2, "reconnected to the fresh K2 Screen");
         m.disable().unwrap();
     }
 

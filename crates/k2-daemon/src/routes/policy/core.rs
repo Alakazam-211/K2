@@ -403,10 +403,10 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/docs/status", Member),
     post("/cli/docs/tool", Member),
     post("/cli/docs/undo", Member),
+    post("/cli/docs/unshare", Admin),
     // Use their version after an outside save (`docs/theirs.rs`): the kit's
     // replace at the current version, the edit right, one undoable change.
     post("/cli/docs/use-theirs", Member),
-    post("/cli/docs/unshare", Admin),
     get("/cli/docs/versions", Member),
     post("/cli/docs/view", Member),
     get("/cli/docs/who", Member),

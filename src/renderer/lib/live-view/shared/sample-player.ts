@@ -11,6 +11,8 @@ export interface PlayerStep<S> {
 export interface PlayerScenario<S> {
   id: string
   label: string
+  /** A heading for the banner's menu when there are many (the scene's 24). */
+  group?: string
   steps: readonly PlayerStep<S>[]
 }
 
@@ -63,8 +65,8 @@ export class SamplePlayer<S> {
     return { playing: this.playing, position: this.i + 1, length: this.sc.steps.length, label: this.sc.steps[this.i].label, scenario: this.sc.id }
   }
 
-  scenarioList(): readonly { id: string; label: string }[] {
-    return this.scenarios.map((s) => ({ id: s.id, label: s.label }))
+  scenarioList(): readonly { id: string; label: string; group?: string }[] {
+    return this.scenarios.map((s) => (s.group ? { id: s.id, label: s.label, group: s.group } : { id: s.id, label: s.label }))
   }
 
   onState(cb: (s: S) => void): () => void {

@@ -14,7 +14,7 @@ export function ShellSampleBanner<S>({ player, line }: { player: SamplePlayer<S>
   return (
     <SampleBannerView<string>
       line={line}
-      scenarios={player.scenarioList().map((s) => ({ value: s.id, label: s.label }))}
+      scenarios={player.scenarioList().map((s) => ({ value: s.id, label: s.label, group: s.group }))}
       scenario={st.scenario}
       onScenario={(id) => player.setScenario(id)}
       status={st}

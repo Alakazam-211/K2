@@ -29,6 +29,16 @@ export interface ShellHeroProps {
   narrow: boolean
 }
 
+/** What a view's own side panel gets from the shell (the scene's outliner and properties). */
+export interface ShellPanelProps {
+  snap: LiveShellSnapshot
+  followingId: string | null
+  onFollow: (id: string) => void
+  /** Not connected: people read "as you last saw them". */
+  offline: boolean
+  narrow: boolean
+}
+
 export interface ShellConfig {
   kind: 'scene' | 'timeline'
   kindLabel: string
@@ -49,6 +59,8 @@ export interface ShellConfig {
   /** What a message to `to` points at: words for the chip, the address it carries. */
   sayAddress: (snap: LiveShellSnapshot, to: string) => { label: string; title: string; address: string } | null
   Hero: (p: ShellHeroProps) => React.JSX.Element
+  /** The view's own side panel, for the snapshots it knows (`when`); the shell's sections otherwise. */
+  Panel?: { when: (snap: LiveShellSnapshot) => boolean; View: (p: ShellPanelProps) => React.JSX.Element | null }
   /** Open the copy, History, Open saved versions, Save it again, Ask: wired by the view. */
   onNoticeAction?: (id: NoticeActionId, n: LiveNotice) => void
 }

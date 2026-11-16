@@ -4,9 +4,12 @@
 // The workbook's banner (../SampleBanner.tsx) is a thin adapter over this.
 
 import { Button, Segmented } from '@/components/ui'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { InfoGlyph, PauseGlyph, PlayGlyph, RestartGlyph, StepGlyph } from '../parts'
 
 export const SAMPLE_BANNER_TITLE = 'Sample data, not this file'
+/** More scenarios than this (the scene's 24) go in a grouped menu instead of segments. */
+const MAX_SEGMENTS = 5
 
 export interface SampleBannerStatus {
   playing: boolean
@@ -27,7 +30,7 @@ export function SampleBannerView<T extends string>({
   onRestart,
 }: {
   line: string
-  scenarios: readonly { value: T; label: string }[]
+  scenarios: readonly { value: T; label: string; group?: string }[]
   scenario: T
   onScenario: (s: T) => void
   status: SampleBannerStatus
@@ -38,7 +41,7 @@ export function SampleBannerView<T extends string>({
 }): React.JSX.Element {
   return (
     <div className="flex flex-none items-center gap-3 border-b border-[color-mix(in_srgb,var(--color-status-warn)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-status-warn)_8%,var(--color-bg))] px-3 py-1" role="note" aria-label={SAMPLE_BANNER_TITLE} data-testid="lv-sample-banner" data-one-row="">
-      <div className="flex min-w-0 flex-1 items-center gap-2" title={`${SAMPLE_BANNER_TITLE}. ${line}`}>
+      <div className="flex min-w-[112px] flex-1 items-center gap-2" title={`${SAMPLE_BANNER_TITLE}. ${line}`}>
       <span aria-hidden="true" className="inline-flex flex-none text-[var(--color-status-warn-text)]">
         <InfoGlyph size={15} />
       </span>
@@ -47,9 +50,22 @@ export function SampleBannerView<T extends string>({
         <span className="type-hint font-semibold text-[var(--color-text-primary)]">{SAMPLE_BANNER_TITLE}.</span> <span className="type-hint text-[var(--color-text-secondary)]">{line}</span>
       </div>
       </div>
-      <div className="flex min-w-0 flex-none items-center gap-2">
-      <Segmented<T> aria-label="Sample" value={scenario} onChange={onScenario} options={scenarios.map((s) => ({ value: s.value, label: s.label, buttonProps: { 'data-testid': `lv-sample-scenario-${s.value}` } }))} />
-      <div className="flex items-center gap-1" role="group" aria-label="Sample player">
+      <div className="flex min-w-0 items-center gap-2">
+      <span data-testid="lv-sample-scenarios" className="inline-flex min-w-0 shrink">
+        {scenarios.length > MAX_SEGMENTS ? (
+          <SettingDropdown
+            compact
+            ariaLabel="Sample"
+            value={scenario}
+            onChange={(v) => onScenario(v as T)}
+            options={scenarios.map((s) => ({ value: s.value, label: s.label, ...(s.group ? { group: s.group } : {}) }))}
+            className="min-w-0 max-w-[300px]"
+          />
+        ) : (
+          <Segmented<T> aria-label="Sample" value={scenario} onChange={onScenario} options={scenarios.map((s) => ({ value: s.value, label: s.label, buttonProps: { 'data-testid': `lv-sample-scenario-${s.value}` } }))} />
+        )}
+      </span>
+      <div className="flex min-w-0 items-center gap-1" role="group" aria-label="Sample player">
         <Button size="sm" variant="ghost" aria-label={status.playing ? 'Pause the sample' : 'Play the sample'} onClick={status.playing ? onPause : onPlay} data-testid="lv-sample-play">
           {status.playing ? <PauseGlyph size={12} /> : <PlayGlyph size={12} />}
         </Button>
@@ -59,7 +75,7 @@ export function SampleBannerView<T extends string>({
         <Button size="sm" variant="ghost" aria-label="Start over" onClick={onRestart} data-testid="lv-sample-restart">
           <RestartGlyph size={12} />
         </Button>
-        <span className="lv-num type-hint text-[var(--color-text-secondary)]" aria-live="off" data-testid="lv-sample-position">
+        <span className="lv-num type-hint min-w-0 truncate whitespace-nowrap text-[var(--color-text-secondary)]" aria-live="off" data-testid="lv-sample-position">
           {Math.min(status.position, status.length)}/{status.length}
           {status.label ? ` · ${status.label}` : ''}
         </span>

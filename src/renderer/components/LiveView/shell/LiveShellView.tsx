@@ -27,7 +27,10 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
   const name = fileName ?? sample?.sample.fileName ?? ''
   const back = s.follow.control === 'back' && !config.backInHeader ? <BackButton label={s.follow.label} disabled={offline} onBack={() => dispatchFollow({ type: 'back' })} /> : null
 
-  const panel = (
+  const OwnPanel = config.Panel && config.Panel.when(snap) ? config.Panel.View : null
+  const panel = OwnPanel ? (
+    <OwnPanel snap={snap} followingId={followingId} onFollow={(id) => dispatchFollow({ type: 'follow', who: id })} offline={offline} narrow={narrow} />
+  ) : (
     <>
       {config.panel.map((p) =>
         p.id === 'watching' ? (

@@ -146,7 +146,7 @@ fn scratch_home() -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
     home
 }
 
@@ -380,7 +380,7 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     // so the test process's exit never takes it.
     let procs = k2_core::test_env::StubProcs::new();
     procs.watch(&home);
-    let k2 = home.join(".k2");
+    let k2 = k2_core::paths::k2_home_in(&home);
     let bin = home.join("bin");
     let run = home.join("run");
     let tmp = home.join("tmp");
@@ -673,7 +673,7 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     assert_eq!(st, 200, "{body}");
     assert!(body.contains("\"running\":true"), "{}", dump(&format!("tunnel status: {body}")));
     assert_eq!(
-        std::fs::read_to_string(home.join(".k2/frpc.log"))
+        std::fs::read_to_string(k2_core::paths::k2_home_in(&home).join("frpc.log"))
             .unwrap()
             .matches("start proxy success")
             .count(),

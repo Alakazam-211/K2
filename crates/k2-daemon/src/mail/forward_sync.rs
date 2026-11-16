@@ -850,7 +850,7 @@ fn removed_dir() -> std::path::PathBuf {
         // House rule: tests never touch the real `~/.k2`.
         return std::env::temp_dir().join(format!("k2-mail-sieve-removed-test-{}", std::process::id()));
     }
-    k2_core::paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".k2").join("mail-sieve-removed")
+    k2_core::paths::k2_home().join("mail-sieve-removed")
 }
 
 #[cfg(test)]

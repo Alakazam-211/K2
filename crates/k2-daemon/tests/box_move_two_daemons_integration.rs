@@ -41,7 +41,7 @@ impl Drop for KillOnDrop {
 /// A short scratch HOME (the vault socket path must fit SUN_LEN).
 fn scratch_home(tag: &str) -> PathBuf {
     let home = k2_core::test_env::short_tmp(format!("k2bm-{tag}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
-    std::fs::create_dir_all(home.join(".k2")).expect("mkdir home");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("mkdir home");
     home
 }
 
@@ -56,7 +56,7 @@ struct Box {
 }
 
 async fn start(home: &Path, wait_vault_open: bool) -> Box {
-    let k2_dir = home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&home);
     // The owner's Connect login, in this box's user store (written before
     // the daemon starts; one test per binary, so HOME is ours to point).
     std::env::set_var("HOME", home);
@@ -177,7 +177,7 @@ async fn a_box_move_carries_the_vault_and_the_tunnel_token_to_a_box_stuck_on_vau
     // boot), one of the owner's secrets, a vault password.
     let old_home = scratch_home("old");
     std::fs::write(
-        old_home.join(".k2/tunnel.json"),
+        k2_core::paths::k2_home_in(&old_home).join("tunnel.json"),
         json!({ "token": TUNNEL_TOKEN, "subdomain": "boxmove-e2e", "enabled": false }).to_string(),
     )
     .expect("seed tunnel.json");
@@ -188,7 +188,7 @@ async fn a_box_move_carries_the_vault_and_the_tunnel_token_to_a_box_stuck_on_vau
                 "valueB64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, VALUE) }),
     );
     assert_eq!(c, 200, "set: {set}");
-    let tunnel_json = std::fs::read_to_string(old_home.join(".k2/tunnel.json")).expect("tunnel.json");
+    let tunnel_json = std::fs::read_to_string(k2_core::paths::k2_home_in(&old_home).join("tunnel.json")).expect("tunnel.json");
     assert!(!tunnel_json.contains(TUNNEL_TOKEN), "the token moved into the vault: {tunnel_json}");
     assert!(tunnel_json.contains("\"tokenHome\": \"vault\""), "the marker says where it went: {tunnel_json}");
     let old_id = old.get("/cli/vault/status")["vaultId"].as_str().expect("vault id").to_string();
@@ -196,15 +196,15 @@ async fn a_box_move_carries_the_vault_and_the_tunnel_token_to_a_box_stuck_on_vau
     // ── the new box: a /home copy of the old one WITHOUT the key (the customer
     // move). Its vault can't open, and the tunnel token is locked in it.
     let new_home = scratch_home("new");
-    std::fs::create_dir_all(new_home.join(".k2/vault")).expect("mkdir");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&new_home).join("vault")).expect("mkdir");
     // A consistent copy of the old vault.db (VACUUM INTO through sqlite).
-    let copy = new_home.join(".k2/vault/vault.db");
+    let copy = k2_core::paths::k2_home_in(&new_home).join("vault/vault.db");
     {
-        let conn = rusqlite::Connection::open_with_flags(old_home.join(".k2/vault/vault.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let conn = rusqlite::Connection::open_with_flags(k2_core::paths::k2_home_in(&old_home).join("vault/vault.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .expect("open old vault.db");
         conn.execute("VACUUM INTO ?1", rusqlite::params![copy.to_string_lossy().to_string()]).expect("copy vault.db");
     }
-    std::fs::write(new_home.join(".k2/tunnel.json"), &tunnel_json).expect("copy tunnel.json");
+    std::fs::write(k2_core::paths::k2_home_in(&new_home).join("tunnel.json"), &tunnel_json).expect("copy tunnel.json");
     let new = start(&new_home, false).await;
     let st = new.get("/cli/vault/status");
     assert_eq!((st["open"].clone(), st["error"]["code"].clone()), (json!(false), json!("vault_key_missing")), "{st}");
@@ -269,7 +269,7 @@ async fn a_box_move_carries_the_vault_and_the_tunnel_token_to_a_box_stuck_on_vau
     let tun = new.get("/cli/tunnel/status");
     assert!(tun.get("token_locked").is_none(), "{tun}");
     // The pre-sync copy was kept aside, never deleted.
-    let replaced: Vec<_> = std::fs::read_dir(new_home.join(".k2/vault"))
+    let replaced: Vec<_> = std::fs::read_dir(k2_core::paths::k2_home_in(&new_home).join("vault"))
         .expect("ls")
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().starts_with("replaced-"))

@@ -67,8 +67,7 @@ pub struct DaemonPlist {
 impl DaemonPlist {
     /// Canonical config: k2-daemon, always-on, logs under `~/.k2/`.
     pub fn canonical(program: PathBuf) -> Self {
-        let k2_dir = crate::paths::home_dir()
-            .map(|h| h.join(".k2"))
+        let k2_dir = crate::paths::k2_home_opt()
             .unwrap_or_else(|| PathBuf::from("."));
         Self {
             label: "dev.k2.daemon".to_string(),
@@ -87,8 +86,7 @@ impl DaemonPlist {
     /// the window. The helper's Quit daemon unloads this label after the
     /// daemon's, so `KeepAlive` does not bring the icon back.
     pub fn menu_bar_helper(program: PathBuf) -> Self {
-        let k2_dir = crate::paths::home_dir()
-            .map(|h| h.join(".k2"))
+        let k2_dir = crate::paths::k2_home_opt()
             .unwrap_or_else(|| PathBuf::from("."));
         Self {
             label: MENU_BAR_HELPER_LABEL.to_string(),

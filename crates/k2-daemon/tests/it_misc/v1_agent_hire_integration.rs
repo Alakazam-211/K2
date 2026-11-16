@@ -520,8 +520,8 @@ async fn owner_changes_a_hire_keys_app_access_limit() {
     let (cli_key, _) = mint("cli-side", full.clone());
     let (ui_key, _) = mint("settings-side", full);
     let cli_home = env.tmp.join("cli-home");
-    std::fs::create_dir_all(cli_home.join(".k2")).expect("cli home");
-    std::fs::write(cli_home.join(".k2/heartbeat.token"), OWNER_TOKEN).expect("token file");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&cli_home)).expect("cli home");
+    std::fs::write(k2_core::paths::k2_home_in(&cli_home).join("heartbeat.token"), OWNER_TOKEN).expect("token file");
     let out = std::process::Command::new(k2_core::test_env::bash_program())
         .arg(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2"))
         .args(["api-key", "hire-ceiling", &cli_key, "--app-login"])

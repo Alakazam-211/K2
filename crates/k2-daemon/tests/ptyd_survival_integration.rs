@@ -206,11 +206,11 @@ impl Harness {
         // Short path: ptyd's control socket and the cell sockets live under it.
         let home = k2_core::test_env::short_tmp(format!("k2sv{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join(".k2")).unwrap();
+        std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
         std::fs::create_dir_all(home.join("ws")).unwrap();
         std::fs::create_dir_all(home.join("xdg")).unwrap();
         std::fs::create_dir_all(home.join("tmp")).unwrap();
-        let k2 = home.join(".k2");
+        let k2 = k2_core::paths::k2_home_in(&home);
         Harness { home, k2, daemon: None, boots: 0, agent_pid: None, ptyd_pid: None, ptyd_env: Some("1"), extra_env: Vec::new() }
     }
 

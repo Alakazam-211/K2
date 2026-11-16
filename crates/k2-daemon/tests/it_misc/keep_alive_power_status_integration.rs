@@ -53,7 +53,7 @@ fn spawn_daemon() -> Daemon {
             .expect("clock after epoch")
             .as_nanos()
     ));
-    std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("create temp HOME");
     let shim = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim).expect("create empty agent shim dir");
     let rt = k2_core::test_env::DaemonRuntime::new(&home);
@@ -68,8 +68,8 @@ fn spawn_daemon() -> Daemon {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn k2-daemon");
-    let port_file = home.join(".k2").join("daemon.port");
-    let token_file = home.join(".k2").join("daemon.token");
+    let port_file = k2_core::paths::k2_home_in(&home).join("daemon.port");
+    let token_file = k2_core::paths::k2_home_in(&home).join("daemon.token");
     let deadline = Instant::now() + Duration::from_secs(20);
     let (port, owner) = loop {
         let port = read_trimmed(&port_file).and_then(|p| p.parse::<u16>().ok());

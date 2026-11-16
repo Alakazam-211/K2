@@ -749,7 +749,7 @@ async fn one_click_tickets_and_declared_toolchains() {
 
     // Trust the test key (the owner's rotation file).
     let (pubk, _) = k2_core::compute::ticket::mint_with_seed(&seed, kid, "x", "y", "z", 1, "n").unwrap();
-    std::fs::write(env.home.join(".k2/compute-ticket-keys.json"), json!({"keys": [{"kid": kid, "pub": pubk}]}).to_string()).unwrap();
+    std::fs::write(k2_core::paths::k2_home_in(&env.home).join("compute-ticket-keys.json"), json!({"keys": [{"kid": kid, "pub": pubk}]}).to_string()).unwrap();
 
     // Refusals: another server's ticket, another key's signature, another node's key.
     let (_, other_sub) = k2_core::compute::ticket::mint_with_seed(&seed, kid, "akzm", &fp, "tk1", now + 600, "nonce-1").unwrap();

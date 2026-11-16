@@ -31,7 +31,7 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
         test_agent_bin();
         let home = PathBuf::from(format!("/tmp/k2pb-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join(".k2")).unwrap();
+        std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
         for k in std::env::vars().map(|(k, _)| k).filter(|k| k.starts_with("K2_") || k.starts_with("K2SO_")).collect::<Vec<_>>() {
             std::env::remove_var(k);
         }
@@ -46,7 +46,7 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
         std::env::set_var("HOME", &home);
         std::env::set_var("K2_PTYD", "1");
         std::env::set_var("K2_PTYD_BIN", &bin);
-        k2_core::terminal::ptyd::client::set_home_for_tests(&home.join(".k2"));
+        k2_core::terminal::ptyd::client::set_home_for_tests(&k2_core::paths::k2_home_in(&home));
     });
     g
 }
@@ -447,7 +447,7 @@ fn first_attach_flood_round(round: usize, pause_ms: u64, flood_ms: u64) -> (usiz
     let failed: Vec<String> = spawned.iter().filter_map(|(d, r)| r.as_ref().err().map(|e| format!("{}: {e}", d.display()))).collect();
     assert!(failed.is_empty(), "spawn failed while the program flooded its first attach ({} of {}):\n{}", failed.len(), spawned.len(), failed.join("\n"));
     let sessions: Vec<_> = spawned.into_iter().map(|(d, r)| (d, r.expect("checked above"))).collect();
-    let log = home().join(".k2/logs/ptyd.log");
+    let log = k2_core::paths::k2_home_in(home()).join("logs/ptyd.log");
     let mut overran = 0;
     for (dir, s) in &sessions {
         assert_eq!(s.backend_name(), "ptyd");

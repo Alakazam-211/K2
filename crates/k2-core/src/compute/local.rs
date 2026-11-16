@@ -190,7 +190,7 @@ pub fn platform() -> &'static str {
 }
 
 /// Spots in a home that jobs could read when the home is open to others.
-pub const HOME_SPOTS: &[&str] = &[".ssh", ".k2", ".env", ".config", ".aws", ".gnupg", "DevProjects", "Projects", "projects", "src", "code", "Documents", "Desktop"];
+pub const HOME_SPOTS: &[&str] = &[".ssh", crate::paths::HOME_DIR_NAME, ".env", ".config", ".aws", ".gnupg", "DevProjects", "Projects", "projects", "src", "code", "Documents", "Desktop"];
 
 /// The home-folder check the enable sheet shows (§5.1 step 3): is the
 /// human's home readable by other users (and so by jobs), and what's in it.

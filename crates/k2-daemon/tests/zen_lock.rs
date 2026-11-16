@@ -419,7 +419,7 @@ fn read_trimmed(path: &Path) -> Option<String> {
 }
 
 fn spawn_daemon(home: &Path) -> Daemon {
-    let port_file = home.join(".k2").join("daemon.port");
+    let port_file = k2_core::paths::k2_home_in(&home).join("daemon.port");
     let rt = k2_core::test_env::DaemonRuntime::new(home);
     let child = Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
         .env("HOME", home)
@@ -432,7 +432,7 @@ fn spawn_daemon(home: &Path) -> Daemon {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn k2-daemon");
-    let token_file = home.join(".k2").join("daemon.token");
+    let token_file = k2_core::paths::k2_home_in(&home).join("daemon.token");
     let deadline = Instant::now() + Duration::from_secs(20);
     let (port, owner) = loop {
         let port = read_trimmed(&port_file).and_then(|p| p.parse::<u16>().ok());

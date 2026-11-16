@@ -97,7 +97,7 @@ fn isolated_home(tag: &str) -> PathBuf {
             .as_nanos()
     ));
     let _ = std::fs::remove_dir_all(&home);
-    std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("create temp HOME");
     home
 }
 
@@ -127,8 +127,8 @@ fn spawn_daemon(tag: &str) -> Daemon {
             .spawn()
             .expect("spawn k2-daemon"),
     );
-    let port_file = home.join(".k2").join("daemon.port");
-    let token_file = home.join(".k2").join("daemon.token");
+    let port_file = k2_core::paths::k2_home_in(&home).join("daemon.port");
+    let token_file = k2_core::paths::k2_home_in(&home).join("daemon.token");
     let deadline = Instant::now() + Duration::from_secs(20);
     let (port, owner) = loop {
         let port = read_trimmed(&port_file).and_then(|p| p.parse::<u16>().ok());
@@ -269,7 +269,7 @@ async fn expect_open(ws: &mut WsClient, quiet: Duration, name: &str) {
 }
 
 fn sessions_file(d: &Daemon) -> PathBuf {
-    d.home.join(".k2").join("connect-sessions.json")
+    k2_core::paths::k2_home_in(&d.home).join("connect-sessions.json")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

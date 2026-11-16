@@ -371,12 +371,12 @@ fn gs46_grammar_is_frozen() {
 #[test]
 fn gs46_real_home_guard_panics_under_test() {
     let real = Path::new("/Users/someone");
-    let hit = std::panic::catch_unwind(|| sync::guard_real_home_with(&real.join(".k2/zen"), true, Some(real)));
+    let hit = std::panic::catch_unwind(|| sync::guard_real_home_with(&k2_core::paths::k2_home_in(&real).join("zen"), true, Some(real)));
     assert!(hit.is_err(), "a test-mode ZenFiles on the real ~/.k2/zen must panic");
-    let below = std::panic::catch_unwind(|| sync::guard_real_home_with(&real.join(".k2/zen/gardens"), true, Some(real)));
+    let below = std::panic::catch_unwind(|| sync::guard_real_home_with(&k2_core::paths::k2_home_in(&real).join("zen/gardens"), true, Some(real)));
     assert!(below.is_err(), "anything under the real ~/.k2/zen must panic too");
     sync::guard_real_home_with(&std::env::temp_dir().join("x/.k2/zen"), true, Some(real));
-    sync::guard_real_home_with(&real.join(".k2/zen"), false, Some(real));
+    sync::guard_real_home_with(&k2_core::paths::k2_home_in(&real).join("zen"), false, Some(real));
     // This test binary itself never points at the real home.
     let (_t, z) = temp_dir("guard");
     sync::guard_real_home(&z);
@@ -1549,7 +1549,7 @@ fn read_trimmed(path: &Path) -> Option<String> {
 }
 
 fn spawn_daemon(home: &Path) -> Daemon {
-    let port_file = home.join(".k2").join("daemon.port");
+    let port_file = k2_core::paths::k2_home_in(&home).join("daemon.port");
     let rt = k2_core::test_env::DaemonRuntime::new(home);
     let child = Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
         .env("HOME", home)
@@ -1562,7 +1562,7 @@ fn spawn_daemon(home: &Path) -> Daemon {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn k2-daemon");
-    let token_file = home.join(".k2").join("daemon.token");
+    let token_file = k2_core::paths::k2_home_in(&home).join("daemon.token");
     let deadline = Instant::now() + Duration::from_secs(20);
     let (port, owner) = loop {
         let port = read_trimmed(&port_file).and_then(|p| p.parse::<u16>().ok());

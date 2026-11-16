@@ -73,7 +73,7 @@ fn spawn(home: &Path, rt: &k2_core::test_env::DaemonRuntime, hang: bool) -> Kill
 /// Port + token, then `/boot-status` phase `ready` within `budget`.
 /// Returns (port, token, seconds from spawn to ready).
 fn wait_ready(home: &Path, started: Instant, budget: Duration) -> (String, String, Duration) {
-    let k2 = home.join(".k2");
+    let k2 = k2_core::paths::k2_home_in(&home);
     let deadline = started + budget;
     let (port, token) = loop {
         if let (Some(p), Some(t)) = (read_trimmed(&k2.join("heartbeat.port")), read_trimmed(&k2.join("heartbeat.token"))) {

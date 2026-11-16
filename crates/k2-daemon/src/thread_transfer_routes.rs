@@ -92,7 +92,7 @@ fn export(who: &Who, body: &[u8], home: &std::path::Path) -> R<J> {
             .map_err(|e| no("export_failed", 500, e))?
     };
     let bytes = export.to_json().map_err(|e| no("export_failed", 500, e))?;
-    let dir = home.join(".k2").join("clone-tmp");
+    let dir = k2_core::paths::k2_home_in(home).join("clone-tmp");
     std::fs::create_dir_all(&dir).map_err(|e| no("export_failed", 500, format!("clone-tmp: {e}")))?;
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let path = dir.join(format!("threads-{}-{ts}.json", w.handle.replace('/', "_")));
@@ -126,7 +126,7 @@ fn import(who: &Who, body: &[u8], home: &std::path::Path) -> R<J> {
     let w = ws(s(&v, "to"))?;
     // Only files this server's export wrote or a person put in clone-tmp.
     let canon = dunce::canonicalize(&path).map_err(|e| no("bad_request", 400, format!("{path}: {e}")))?;
-    let tmp = dunce::canonicalize(&home.join(".k2").join("clone-tmp")).unwrap_or_else(|_| home.join(".k2").join("clone-tmp"));
+    let tmp = dunce::canonicalize(&k2_core::paths::k2_home_in(home).join("clone-tmp")).unwrap_or_else(|_| k2_core::paths::k2_home_in(home).join("clone-tmp"));
     if !canon.starts_with(&tmp) {
         return Err(no("bad_request", 400, format!("put the file in {} first", tmp.display())));
     }

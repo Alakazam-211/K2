@@ -40,7 +40,7 @@ impl Drop for Home {
 
 fn new_home(tag: &str) -> Home {
     let home = std::env::temp_dir().join(format!("k2-zen-widgets-{tag}-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME/.k2");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("create temp HOME/.k2");
     std::fs::create_dir_all(home.join("agent-shim-empty")).expect("shim dir");
     Home(home)
 }
@@ -151,7 +151,7 @@ fn read_trimmed(path: &Path) -> Option<String> {
 }
 
 fn spawn_daemon(home: &Path) -> Daemon {
-    let port_file = home.join(".k2").join("daemon.port");
+    let port_file = k2_core::paths::k2_home_in(&home).join("daemon.port");
     let rt = k2_core::test_env::DaemonRuntime::new(home);
     let child = Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
         .env("HOME", home)
@@ -168,7 +168,7 @@ fn spawn_daemon(home: &Path) -> Daemon {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn k2-daemon");
-    let token_file = home.join(".k2").join("daemon.token");
+    let token_file = k2_core::paths::k2_home_in(&home).join("daemon.token");
     let (port, owner) = wait_for("daemon.port + daemon.token", Duration::from_secs(20), || {
         let port = read_trimmed(&port_file).and_then(|p| p.parse::<u16>().ok())?;
         Some((port, read_trimmed(&token_file)?))
@@ -496,7 +496,7 @@ async fn widgets_work_with_zero_clicks_and_only_a_person_resumes_a_pause() {
             let (s, v) = owner(m, p, if *m == "POST" { Some("{}") } else { None });
             assert_eq!(s, *status, "{m} {p} is gone: {v}");
         }
-        assert!(!home.join(".k2/zen-grant.key").exists(), "no grant key any more");
+        assert!(!k2_core::paths::k2_home_in(&home).join("zen-grant.key").exists(), "no grant key any more");
 
         // The runaway pause: bad bodies first.
         let pause = format!(r#"{{"garden":"{garden}","placement":"arcade","reason":"runaway"}}"#);
@@ -614,7 +614,7 @@ async fn uwb15_lib_routes_refuse_downloads_air_gapped_and_serve_the_cache() {
 
         // A file already in the cache is still served, and fetch says cached.
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        let cached = home.join(".k2/cache/zen-lib/cdn").join(format!("sha256-{hex}.js"));
+        let cached = k2_core::paths::k2_home_in(&home).join("cache/zen-lib/cdn").join(format!("sha256-{hex}.js"));
         std::fs::create_dir_all(cached.parent().expect("parent")).expect("mkdir cache");
         std::fs::write(&cached, bytes).expect("seed cache");
         let (s, body) = Conn::try_open(port).expect("connect").request("GET", &format!("{file_q}&token={tok}"), None);

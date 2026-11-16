@@ -437,7 +437,7 @@ pub enum PathOutcome {
 }
 
 fn opt_out_path(home: &Path) -> PathBuf {
-    home.join(".k2").join(OPT_OUT_FILE)
+    crate::paths::k2_home_in(home).join(OPT_OUT_FILE)
 }
 
 /// The person removed the PATH line from Settings (the boot heal leaves it).
@@ -536,7 +536,7 @@ struct HomeLock(#[allow(dead_code)] fs::File);
 
 impl HomeLock {
     fn take(home: &Path) -> Result<Self, String> {
-        let dir = home.join(".k2");
+        let dir = crate::paths::k2_home_in(home);
         fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
         let path = dir.join(".cli-install.lock");
         let file = fs::OpenOptions::new()

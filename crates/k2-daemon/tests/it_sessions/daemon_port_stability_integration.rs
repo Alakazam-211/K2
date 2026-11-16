@@ -33,7 +33,7 @@ fn isolated_home(tag: &str) -> PathBuf {
             .as_nanos()
     ));
     let _ = std::fs::remove_dir_all(&home);
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
     home
 }
 
@@ -61,7 +61,7 @@ impl Drop for KillOnDrop {
 /// resolving the real `~/.local/bin/claude` (which opened a browser OAuth
 /// login under a fresh HOME). `Command` inherits env, so the child sees it.
 fn boot_once_and_read_port(home: &PathBuf) -> u16 {
-    let k2_dir = home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&home);
     let daemon_port = k2_dir.join("daemon.port");
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).unwrap();

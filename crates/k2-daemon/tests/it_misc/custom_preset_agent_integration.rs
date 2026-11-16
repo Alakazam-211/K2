@@ -89,7 +89,7 @@ fn setup() -> TestEnv {
     #[cfg(windows)]
     let home = std::env::temp_dir().join(format!("k2cp-{:x}", nanos % 0xffff_ffff));
     let shim_dir = home.join("shim");
-    std::fs::create_dir_all(home.join(".k2")).expect("k2 home");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("k2 home");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("board-keeper");
     k2_core::test_env::write_executable(&shim, &keeper_script(&home));

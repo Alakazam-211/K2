@@ -22,7 +22,7 @@ impl Drop for Home {
 
 fn new_home(tag: &str) -> Home {
     let home = std::env::temp_dir().join(format!("k2-zen-shot-{tag}-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME/.k2");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("create temp HOME/.k2");
     std::fs::create_dir_all(home.join("agent-shim-empty")).expect("shim dir");
     Home(home)
 }
@@ -106,7 +106,7 @@ fn spawn_daemon(home: &Path) -> Daemon {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn k2-daemon");
-    let k2 = home.join(".k2");
+    let k2 = k2_core::paths::k2_home_in(&home);
     let (port, owner) = wait_for("daemon.port + daemon.token", Duration::from_secs(20), || {
         let port = read_trimmed(&k2.join("daemon.port")).and_then(|p| p.parse::<u16>().ok())?;
         Some((port, read_trimmed(&k2.join("daemon.token"))?))

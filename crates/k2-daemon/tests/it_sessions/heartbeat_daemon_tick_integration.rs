@@ -71,7 +71,7 @@ fn open(db: &Path) -> rusqlite::Connection {
 #[test]
 fn headless_daemon_fires_with_no_external_ticker_within_150s() {
     let home = scratch("home");
-    let k2_dir = home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&home);
     std::fs::create_dir_all(&k2_dir).expect(".k2");
     let shim_dir = home.join("agent-shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");

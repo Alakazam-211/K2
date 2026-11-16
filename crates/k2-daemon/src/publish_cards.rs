@@ -373,7 +373,7 @@ mod tests {
         // and on the shared one other tests' sites are in it (soak 2026-10-31,
         // shuffled: 7, not 4), and "Keep them all public" would decide theirs.
         let _db = k2_core::db::scoped_for_test();
-        std::fs::write(_home.path().join(".k2/tunnel.json"), json!({ "token": "t", "subdomain": "rosson", "e2e": true }).to_string()).expect("tunnel.json");
+        std::fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), json!({ "token": "t", "subdomain": "rosson", "e2e": true }).to_string()).expect("tunnel.json");
         let id = uuid::Uuid::new_v4().simple().to_string();
         let ws = format!("ws-{id}");
         let site = |n: &str| format!("{n}-{}", &id[..8]);

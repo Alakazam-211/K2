@@ -109,7 +109,7 @@ fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_pauses_it_as_the_admin
         .expect("a changed row")
     };
     assert_eq!(actor, Some(format!("user:{admin}")), "the heartbeat's history names the person who allowed it");
-    let audit = std::fs::read_to_string(home.path().join(".k2").join("auth-audit.jsonl")).expect("audited");
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).expect("audited");
     assert!(audit.contains(&format!("paused:{comp}/{name}")) && audit.contains(&format!("login:{admin}")), "{audit}");
     assert!(audit.contains("permission-card"), "{audit}");
 

@@ -192,9 +192,9 @@ mod tests {
         let _db = k2_core::db::scoped_for_test();
         let _env = k2_core::test_env::lock();
         let was = ga::set_switch(false);
-        let mark = home.path().join(".k2").join(SWITCH_MARK);
+        let mark = k2_core::paths::k2_home_in(home.path()).join(SWITCH_MARK);
         assert!(!mark.exists(), "0.46.2 had no mark");
-        std::fs::create_dir_all(home.path().join(".k2")).expect("k2 home");
+        std::fs::create_dir_all(k2_core::paths::k2_home_in(home.path())).expect("k2 home");
         let f = k2_core::zen::ZenFiles::local();
         f.setup().expect("zen setup");
         let g = f.find_garden("Garden 1").expect("Garden 1").1.id;
@@ -241,7 +241,7 @@ mod tests {
             "cli",
         ))
         .expect("audit line");
-        std::fs::write(home.path().join(".k2").join("settings.json"), r#"{"defaultAgent":"codex"}"#)
+        std::fs::write(k2_core::paths::k2_home_in(home.path()).join("settings.json"), r#"{"defaultAgent":"codex"}"#)
             .expect("0.46.2 settings file");
         assert!(k2_core::app_settings::load().garden_access, "a 0.46.2 file reads on");
 

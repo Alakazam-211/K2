@@ -96,7 +96,7 @@ pub fn displays() -> Result<Vec<Display>, String> {
 
 /// deskd's socket: `$HOME/.k2/run/deskd.sock` (the daemon's `~/.k2`).
 pub fn socket_path() -> std::path::PathBuf {
-    crate::home_dir().join(".k2").join("run").join(k2_deskd_proto::SOCKET_NAME)
+    crate::home_dir().join(crate::K2_HOME_DIR_NAME).join("run").join(k2_deskd_proto::SOCKET_NAME)
 }
 
 pub fn run() -> ! {

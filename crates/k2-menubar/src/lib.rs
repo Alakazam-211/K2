@@ -22,6 +22,9 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 pub const DAEMON_LABEL: &str = "dev.k2.daemon";
 /// This helper's own LaunchAgent (written by the desktop app).
 pub const HELPER_LABEL: &str = "dev.k2.menubar";
+/// The K2 home folder's name under the user home. k2-menubar links no K2
+/// crate, so it keeps its own copy of `k2_client::paths::HOME_DIR_NAME`.
+pub const K2_HOME_DIR_NAME: &str = ".k2";
 pub const STATUS_RUNNING: &str = "Daemon: Running";
 pub const STATUS_NOT_RUNNING: &str = "Daemon: Not running";
 pub const QUIT_LABEL: &str = "Quit daemon";
@@ -245,7 +248,7 @@ pub fn quit_daemon() -> Result<(), String> {
     };
     if path.exists() {
         if let Some(home) = home_dir() {
-            if let Err(e) = write_stop_intent(&home.join(".k2"), "menubar", unix_now()) {
+            if let Err(e) = write_stop_intent(&home.join(K2_HOME_DIR_NAME), "menubar", unix_now()) {
                 eprintln!("[k2-menubar] stop intent not written ({e}); the daemon will keep its agents");
             }
         }
@@ -365,7 +368,7 @@ pub fn launchctl_print_stdout(uid: u32) -> String {
 pub fn probe_live() -> DaemonState {
     let print_stdout = launchctl_print_stdout(current_uid());
     let port = home_dir()
-        .and_then(|home| std::fs::read_to_string(home.join(".k2").join("daemon.port")).ok())
+        .and_then(|home| std::fs::read_to_string(home.join(K2_HOME_DIR_NAME).join("daemon.port")).ok())
         .as_deref()
         .and_then(read_daemon_port);
     let boot = match port {

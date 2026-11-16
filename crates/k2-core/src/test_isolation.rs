@@ -77,7 +77,7 @@ pub fn reachable_prod_files(home: &Path, real_home: Option<&Path>) -> Vec<PathBu
     }
     PROD_FILES
         .iter()
-        .map(|f| real.join(".k2").join(f))
+        .map(|f| crate::paths::k2_home_in(real).join(f))
         .filter(|p| p.exists())
         .collect()
 }
@@ -127,7 +127,7 @@ pub fn assert_isolated_from_prod() {
 /// would change the production daemon's data (docs.redb, MI14).
 pub fn store_in_real_home(path: &Path, real_home: Option<&Path>) -> bool {
     let Some(real) = real_home else { return false };
-    let k2 = real.join(".k2");
+    let k2 = crate::paths::k2_home_in(real);
     let dir = path.parent().unwrap_or(path);
     same_dir(dir, &k2) || path.starts_with(&k2)
 }
@@ -305,11 +305,11 @@ mod tests {
     fn a_redirected_store_in_the_real_home_is_caught() {
         let real = std::env::temp_dir().join(format!("k2-guard-store-real-{}", std::process::id()));
         let temp = std::env::temp_dir().join(format!("k2-guard-store-temp-{}", std::process::id()));
-        std::fs::create_dir_all(real.join(".k2")).expect("mkdir");
-        assert!(store_in_real_home(&real.join(".k2/docs.redb"), Some(&real)));
-        assert!(store_in_real_home(&real.join(".k2/sub/docs.redb"), Some(&real)));
+        std::fs::create_dir_all(crate::paths::k2_home_in(&real)).expect("mkdir");
+        assert!(store_in_real_home(&crate::paths::k2_home_in(&real).join("docs.redb"), Some(&real)));
+        assert!(store_in_real_home(&crate::paths::k2_home_in(&real).join("sub/docs.redb"), Some(&real)));
         assert!(!store_in_real_home(&temp.join("docs.redb"), Some(&real)));
-        assert!(!store_in_real_home(&real.join(".k2/docs.redb"), None));
+        assert!(!store_in_real_home(&crate::paths::k2_home_in(&real).join("docs.redb"), None));
         std::fs::remove_dir_all(&real).expect("cleanup");
     }
 
@@ -317,11 +317,11 @@ mod tests {
     fn prod_files_count_only_under_the_real_home() {
         let real = std::env::temp_dir().join(format!("k2-guard-real-{}", std::process::id()));
         let temp = std::env::temp_dir().join(format!("k2-guard-temp-{}", std::process::id()));
-        std::fs::create_dir_all(real.join(".k2")).expect("mkdir");
+        std::fs::create_dir_all(crate::paths::k2_home_in(&real)).expect("mkdir");
         std::fs::create_dir_all(temp.join(".k2")).expect("mkdir");
-        std::fs::write(real.join(".k2/daemon.port"), "1").expect("write");
+        std::fs::write(crate::paths::k2_home_in(&real).join("daemon.port"), "1").expect("write");
         std::fs::write(temp.join(".k2/daemon.port"), "1").expect("write");
-        assert_eq!(reachable_prod_files(&real, Some(&real)), vec![real.join(".k2/daemon.port")]);
+        assert_eq!(reachable_prod_files(&real, Some(&real)), vec![crate::paths::k2_home_in(&real).join("daemon.port")]);
         assert!(reachable_prod_files(&temp, Some(&real)).is_empty(), "a temp HOME is isolated");
         assert!(reachable_prod_files(&real, None).is_empty());
         std::fs::remove_dir_all(&real).expect("cleanup");

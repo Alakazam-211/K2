@@ -49,9 +49,7 @@ use super::config::{self, TunnelConfig};
 /// Path of the tombstone note a release leaves behind:
 /// `~/.k2/unpaired.json`. Honors `$HOME` so tests can redirect it.
 pub fn tombstone_path() -> PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    crate::paths::k2_home()
         .join("unpaired.json")
 }
 

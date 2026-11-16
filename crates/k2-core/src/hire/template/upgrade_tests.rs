@@ -22,7 +22,7 @@ fn setup() -> crate::test_env::TempHome {
 }
 
 fn library(home: &crate::test_env::TempHome, id: &str, v: u32, extra: &str, files: &[(&str, &str)]) -> PathBuf {
-    let dir = home.path().join(".k2/agent-templates").join(id).join(format!("v{v}"));
+    let dir = crate::paths::k2_home_in(home.path()).join("agent-templates").join(id).join(format!("v{v}"));
     let manifest = format!(
         "schema = 1\nid = \"{id}\"\nversion = {v}\nname = \"Example\"\nsummary = \"An example.\"\nauthor = \"user:sam\"\n{extra}"
     );

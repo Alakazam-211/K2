@@ -902,9 +902,7 @@ impl Default for DbOutboundStore {
                 std::env::temp_dir().join(format!("k2-mail-outbound-testdefault-{}", std::process::id())),
             );
         }
-        let dir = k2_core::paths::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".k2")
+        let dir = k2_core::paths::k2_home()
             .join("mail-outbound");
         Self::in_dir(dir)
     }

@@ -434,7 +434,7 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
     let bundle = Path::new(&bundle_path);
     assert!(bundle.is_file(), "bundle missing at {bundle_path}");
     assert!(
-        bundle.starts_with(home.join(".k2").join("clone-tmp")),
+        bundle.starts_with(k2_core::paths::k2_home_in(&home).join("clone-tmp")),
         "bundle must land in <home>/.k2/clone-tmp, got {bundle_path}"
     );
     assert_eq!(job.size_bytes, Some(fs::metadata(bundle).unwrap().len()));
@@ -499,7 +499,7 @@ fn pack_job_enforces_transfer_ceiling() {
         job.error
     );
     assert!(job.bundle_path.is_none(), "failed job must not expose a path");
-    let leftovers: Vec<_> = fs::read_dir(home.join(".k2").join("clone-tmp"))
+    let leftovers: Vec<_> = fs::read_dir(k2_core::paths::k2_home_in(&home).join("clone-tmp"))
         .map(|rd| {
             rd.flatten()
                 .filter(|e| e.path().to_string_lossy().ends_with(".tar.gz"))
@@ -561,7 +561,7 @@ fn unpack_removes_the_uploaded_bundle_file() {
     // Simulate the uploaded bundle living under the dest's clone-tmp dir so
     // we assert the EXACT delete-after-unpack behaviour.
     let remote_home = root.path().join("remote-home");
-    let clone_tmp = remote_home.join(".k2").join("clone-tmp");
+    let clone_tmp = k2_core::paths::k2_home_in(&remote_home).join("clone-tmp");
     fs::create_dir_all(&clone_tmp).unwrap();
     let uploaded = clone_tmp.join("My Agent-20260605-000000.tar.gz");
     fs::copy(&bundle, &uploaded).unwrap();

@@ -1370,8 +1370,8 @@ pub fn window_state_set(state: &WindowState, only_maximized_flag: bool) -> Resul
 /// every boot. After moving, removes `workspaceLayouts` from
 /// settings.json so the read side stops fighting the DB.
 pub fn migrate_workspace_layouts_to_db() {
-    let Some(home) = crate::paths::home_dir() else { return };
-    let settings_path = home.join(".k2").join("settings.json");
+    let Some(k2) = crate::paths::k2_home_opt() else { return };
+    let settings_path = k2.join("settings.json");
     if !settings_path.exists() {
         return;
     }

@@ -174,7 +174,7 @@ fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_lands_and_retires() {
     assert_eq!(m.worktree_ws_id, None);
     let turn = last_turn(&ws);
     assert!(turn.contains("Landed 1 commit on main"), "{turn}");
-    let audit = std::fs::read_to_string(home.path().join(".k2").join("auth-audit.jsonl")).expect("audited");
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).expect("audited");
     assert!(audit.contains("sidecar-land") && audit.contains(&format!("login:{admin}")), "{audit}");
 
     // Asking again: the sidecar is retired, so the ask is refused.

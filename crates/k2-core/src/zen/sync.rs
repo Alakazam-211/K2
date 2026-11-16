@@ -1292,7 +1292,7 @@ pub fn guard_real_home_with(root: &Path, test_mode: bool, real_home: Option<&Pat
         return;
     }
     let Some(real) = real_home else { return };
-    let real_zen = real.join(".k2").join("zen");
+    let real_zen = crate::paths::k2_home_in(real).join("zen");
     let canon = |p: &Path| -> PathBuf {
         let parent = p.parent().and_then(|d| dunce::canonicalize(&d).ok());
         match (parent, p.file_name()) {

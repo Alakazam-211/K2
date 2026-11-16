@@ -336,7 +336,7 @@ fn the_engine_is_asked_only_when_it_lists_the_verb() {
 #[test]
 fn the_cache_file_round_trips() {
     let home = crate::test_support::TempHome::new();
-    let path = home.path().join(".k2").join(CACHE_FILE);
+    let path = k2_core::paths::k2_home_in(home.path()).join(CACHE_FILE);
     assert_eq!(load_cache_file(&path), Cache::default(), "missing = empty");
     let mut c = Cache::default();
     c.workspaces.insert("ws-1".into(), FolderScan { bytes: 9, parts: [("uploads".to_string(), 8)].into(), partial: true, scanned_at: 3 });

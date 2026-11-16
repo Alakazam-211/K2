@@ -1422,12 +1422,10 @@ pub fn api_enabled_setting() -> bool {
 // ── File I/O ─────────────────────────────────────────────────────────────
 
 fn settings_dir() -> PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_else(|| {
-            log_debug!("[app_settings] WARNING: no home dir, using current dir");
-            PathBuf::from(".")
-        })
-        .join(".k2")
+    crate::paths::k2_home_opt().unwrap_or_else(|| {
+        log_debug!("[app_settings] WARNING: no home dir, using current dir");
+        crate::paths::k2_home_in(".")
+    })
 }
 
 fn settings_file() -> PathBuf {

@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn allow_and_forget_are_audited_and_a_migrated_allow_says_so() {
         let home = crate::test_support::TempHome::new();
-        let d = home.path().join(".k2/zen");
+        let d = k2_core::paths::k2_home_in(home.path()).join("zen");
         std::fs::create_dir_all(&d).expect("mkdir");
         let (s, v) = call(&d, "/cli/zen/downloads/allow", true, &Caller::Owner, &[], json!({"garden": "g-1", "widget": "board", "migrated": true}));
         assert_eq!((s.as_str(), v["added"].as_bool()), ("200 OK", Some(true)), "{v}");

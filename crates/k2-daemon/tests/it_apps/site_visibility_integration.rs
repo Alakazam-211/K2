@@ -137,7 +137,7 @@ impl Drop for Daemon {
 
 impl Daemon {
     fn k2(&self) -> PathBuf {
-        self.home.join(".k2")
+        k2_core::paths::k2_home_in(&self.home)
     }
 
     fn port(&self) -> u16 {
@@ -214,7 +214,7 @@ fn wait_until(secs: u64, what: &str, log: impl Fn() -> String, mut f: impl FnMut
 }
 
 fn boot(home: &Path, cp_port: u16) -> Daemon {
-    let k2 = home.join(".k2");
+    let k2 = k2_core::paths::k2_home_in(&home);
     for f in ["daemon.port", "daemon.token", "tunnel-https.port"] {
         let _ = std::fs::remove_file(k2.join(f));
     }
@@ -271,7 +271,7 @@ fn scratch() -> PathBuf {
 }
 
 fn open_db(home: &Path) -> Connection {
-    let c = Connection::open(home.join(".k2").join("k2.db")).expect("open k2.db");
+    let c = Connection::open(k2_core::paths::k2_home_in(&home).join("k2.db")).expect("open k2.db");
     c.busy_timeout(Duration::from_secs(10)).unwrap();
     c
 }
@@ -328,7 +328,7 @@ fn the_upgrade_keeps_public_sites_and_each_mode_holds_through_the_real_gate() {
 
     // What the box had: its tunnel, and a routing map on disk with a label
     // only the control plane knows.
-    let k2 = home.join(".k2");
+    let k2 = k2_core::paths::k2_home_in(&home);
     std::fs::write(
         k2.join("tunnel.json"),
         serde_json::json!({ "server_addr": "127.0.0.1", "server_port": 1, "token": TOKEN, "subdomain": SUB, "auto_start": true, "e2e": true }).to_string(),

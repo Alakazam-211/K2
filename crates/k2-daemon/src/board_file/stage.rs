@@ -39,7 +39,7 @@ pub fn owner_of(pid: &str) -> String {
 }
 
 fn root() -> PathBuf {
-    k2_core::paths::home_dir().unwrap_or_else(std::env::temp_dir).join(".k2").join("board-stage")
+    k2_core::paths::k2_home_opt().unwrap_or_else(|| k2_core::paths::k2_home_in(std::env::temp_dir())).join("board-stage")
 }
 
 fn folder(owner: &str) -> PathBuf {

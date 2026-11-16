@@ -600,7 +600,7 @@ impl Watcher {
 
 /// `~/.k2/desktop-permission.json`: which prompts K2 has fired.
 pub fn asked_path() -> PathBuf {
-    k2_core::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("desktop-permission.json")
+    k2_core::paths::k2_home().join("desktop-permission.json")
 }
 
 pub fn read_asked() -> Asked {

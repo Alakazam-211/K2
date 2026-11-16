@@ -36,7 +36,7 @@ fn count(conn: &Connection, table: &str) -> i64 {
 }
 
 fn zen(home: &TempHome) -> ZenFiles {
-    let f = ZenFiles::new(home.path().join(".k2").join("zen"));
+    let f = ZenFiles::new(crate::paths::k2_home_in(home.path()).join("zen"));
     f.setup().expect("zen setup");
     f
 }

@@ -227,7 +227,7 @@ fn clean(raw: &str) -> String {
 }
 
 fn dir() -> PathBuf {
-    crate::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2")
+    crate::paths::k2_home()
 }
 
 /// `~/.k2/desktop-audit.jsonl`

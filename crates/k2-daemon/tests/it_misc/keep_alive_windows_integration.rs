@@ -64,7 +64,7 @@ fn daemon_child(supervisor: u32, what: &str) -> u32 {
 #[test]
 fn a_killed_daemon_comes_back_and_a_stop_ends_the_supervisor() {
     let home: PathBuf = std::env::temp_dir().join(format!("k2-keepalive-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
-    let k2 = home.join(".k2");
+    let k2 = k2_core::paths::k2_home_in(&home);
     std::fs::create_dir_all(&k2).unwrap();
     let shim = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim).unwrap();

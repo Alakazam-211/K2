@@ -167,7 +167,7 @@ fn daemon_uninstall_blocking() -> Result<(), String> {
 
     // Best-effort cleanup of the port/token/log files. Missing files
     // are fine.
-    if let Some(dir) = k2_client::paths::home_dir().map(|h| h.join(".k2")) {
+    if let Some(dir) = k2_client::paths::k2_home_opt() {
         for f in &["daemon.port", "daemon.token"] {
             let _ = std::fs::remove_file(dir.join(f));
         }
@@ -235,9 +235,8 @@ pub async fn daemon_restart() -> Result<(), String> {
 /// to reveal the file in Finder or tail it via a child process.
 #[tauri::command]
 pub fn daemon_log_path() -> Result<String, String> {
-    let dir = k2_client::paths::home_dir()
-        .ok_or_else(|| "home dir unavailable".to_string())?
-        .join(".k2");
+    let dir = k2_client::paths::k2_home_opt()
+        .ok_or_else(|| "home dir unavailable".to_string())?;
     Ok(dir.join("daemon.stdout.log").to_string_lossy().to_string())
 }
 
@@ -304,8 +303,9 @@ pub fn daemon_ws_url() -> DaemonWsUrlResponse {
 /// a test's existence-check and its assertion (TOCTOU), which made the
 /// old `ws_url_not_installed_when_files_missing` test flaky.
 fn daemon_ws_url_in(home: &std::path::Path) -> DaemonWsUrlResponse {
-    let port_path = home.join(".k2/heartbeat.port");
-    let token_path = home.join(".k2/heartbeat.token");
+    let k2 = k2_client::paths::k2_home_in(home);
+    let port_path = k2.join("heartbeat.port");
+    let token_path = k2.join("heartbeat.token");
 
     let port_raw = match std::fs::read_to_string(&port_path) {
         Ok(s) => s,

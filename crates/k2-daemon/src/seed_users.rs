@@ -35,9 +35,7 @@ use k2_core::log_debug;
 
 /// Path to the consume-once seed file: `~/.k2/seed-users.json`.
 pub fn seed_file_path() -> std::path::PathBuf {
-    k2_core::paths::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".k2")
+    k2_core::paths::k2_home()
         .join("seed-users.json")
 }
 

@@ -272,7 +272,7 @@ impl Harness {
         for d in [".k2", "xdg", "tmp", "probes", WS] {
             std::fs::create_dir_all(home.join(d)).unwrap();
         }
-        let k2 = home.join(".k2");
+        let k2 = k2_core::paths::k2_home_in(&home);
         let ws = home.join(WS);
         Harness { home, k2, ws, daemon: None, boots: 0, agents: Vec::new(), ptyd_pid: None, port: 0 }
     }

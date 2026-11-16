@@ -124,7 +124,7 @@ mod tests {
         let _env = crate::test_env::lock();
         let home = crate::test_isolation::real_home().expect("this test needs the uid's real home from the password database");
         let r = {
-            let _blobs = crate::test_env::EnvVar::set(ENV_BLOBS, home.join(".k2").join(BLOBS_DIR));
+            let _blobs = crate::test_env::EnvVar::set(ENV_BLOBS, crate::paths::k2_home_in(&home).join(BLOBS_DIR));
             std::panic::catch_unwind(blobs_path)
         };
         if let Err(e) = r {

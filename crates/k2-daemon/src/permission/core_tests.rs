@@ -194,7 +194,7 @@ fn two_allows_at_once_apply_once_with_one_audit_line() {
     statuses.sort();
     assert_eq!(statuses, ["200 OK", "409 Conflict"], "exactly one wins");
     assert_eq!(testkit::applied(&ws.id, "test.slow"), 1, "exactly one apply");
-    let audit = std::fs::read_to_string(home.path().join(".k2/auth-audit.jsonl")).expect("audit file");
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).expect("audit file");
     let lines: Vec<&str> = audit.lines().filter(|l| l.contains(&id) && l.contains("permission-answer")).collect();
     assert_eq!(lines.len(), 1, "one answer audit line: {audit}");
     assert!(lines[0].contains("via=owner-token"), "{}", lines[0]);
@@ -579,7 +579,7 @@ fn a_dismissed_permission_card_grants_nothing_is_no_denial_and_is_audited() {
         format!("[permission:{id}] dismissed by owner: \"Not needed now.\" Nothing was applied, and it is not a denial: ask again if you still need it.")
     );
     // The audit says dismissed, not denied.
-    let audit = std::fs::read_to_string(home.path().join(".k2/auth-audit.jsonl")).expect("audit file");
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).expect("audit file");
     let lines: Vec<&str> = audit.lines().filter(|l| l.contains(&id) && l.contains("permission-answer")).collect();
     assert_eq!(lines.len(), 1, "one answer audit line: {audit}");
     assert!(lines[0].contains(&format!("{id} test.switch dismissed via=owner-token")), "{}", lines[0]);

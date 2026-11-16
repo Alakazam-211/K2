@@ -73,7 +73,7 @@ pub fn enabled() -> bool {
 
 /// `<home>/.k2/bin/agents`: the links. A folder of its own, never on PATH.
 pub fn link_dir_at(home: &Path) -> PathBuf {
-    home.join(".k2").join("bin").join("agents")
+    crate::paths::k2_home_in(home).join("bin").join("agents")
 }
 
 /// The process name for an agent's session: the agent's name, plus

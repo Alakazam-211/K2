@@ -14,9 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn themes_dir() -> PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_default()
-        .join(".k2")
+    crate::paths::k2_home()
         .join("themes")
 }
 

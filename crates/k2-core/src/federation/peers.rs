@@ -39,9 +39,7 @@ static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// `~/.k2/` — honors `$HOME` so tests redirect it to a tempdir (matches
 /// `tunnel::tls::k2_dir` / `config::config_dir`).
 fn k2_dir() -> PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    crate::paths::k2_home()
 }
 
 /// Path to the persisted trust store (`~/.k2/federation-peers.json`, 0600).

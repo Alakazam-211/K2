@@ -23,7 +23,7 @@ use provider::{K2Provider, SavedLogins};
 pub const QUIT_LEAVE_BOUND: Duration = Duration::from_secs(1);
 
 fn k2_dir() -> PathBuf {
-    k2_client::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2")
+    k2_client::paths::k2_home()
 }
 
 /// The engine's data folder. With K2's store it holds only the server's pins.

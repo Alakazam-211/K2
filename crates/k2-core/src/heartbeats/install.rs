@@ -268,7 +268,7 @@ pub fn plist_path(home: &Path) -> PathBuf {
 
 /// `<home>/.k2/heartbeat.sh`.
 pub fn script_path(home: &Path) -> PathBuf {
-    home.join(".k2/heartbeat.sh")
+    crate::paths::k2_home_in(home).join("heartbeat.sh")
 }
 
 /// Which OS scheduler carries the tick. Tests pass one explicitly so the
@@ -620,7 +620,7 @@ pub(crate) fn retire_with(
         fs::remove_file(&script).map_err(|e| format!("remove {}: {e}", script.display()))?;
         removed.push("deleted heartbeat.sh".to_string());
     }
-    let _ = fs::remove_file(home.join(".k2/heartbeat-projects.txt"));
+    let _ = fs::remove_file(crate::paths::k2_home_in(home).join("heartbeat-projects.txt"));
     Ok(if removed.is_empty() {
         RetireOutcome { changed: false, message: "no OS tick job to remove.".to_string() }
     } else {
@@ -798,7 +798,7 @@ mod transport_guard_tests {
 
     fn assert_no_scheduler_files(home: &Path) {
         let plist = home.join("Library/LaunchAgents/dev.k2.heartbeat.plist");
-        let script = home.join(".k2/heartbeat.sh");
+        let script = crate::paths::k2_home_in(&home).join("heartbeat.sh");
         assert!(!plist.exists(), "guard let a plist be written at {}", plist.display());
         assert!(!script.exists(), "guard let heartbeat.sh be written at {}", script.display());
     }

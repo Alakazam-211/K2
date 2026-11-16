@@ -42,9 +42,7 @@ pub const MAX_DEAD_PER_PEER: usize = 200;
 
 /// `~/.k2/` (honors `$HOME` so tests redirect it).
 fn k2_dir() -> PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    crate::paths::k2_home()
 }
 
 /// Root of the durable outbox tree (`~/.k2/federation-outbox/`).

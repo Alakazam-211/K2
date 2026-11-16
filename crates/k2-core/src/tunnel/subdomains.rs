@@ -591,9 +591,7 @@ pub fn refresh_once(primary: &str, token: &str) -> Result<(usize, bool), String>
 
 /// `~/.k2/tunnel-routes.json`.
 pub fn persisted_path() -> std::path::PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".k2")
+    crate::paths::k2_home()
         .join("tunnel-routes.json")
 }
 
@@ -1254,7 +1252,7 @@ mod tests {
         let first = refresh_once("rosson", "tok_refresh");
         let second = refresh_once("rosson", "tok_refresh");
         let persisted: SubdomainMap = serde_json::from_slice(
-            &std::fs::read(home.path().join(".k2/tunnel-routes.json"))
+            &std::fs::read(crate::paths::k2_home_in(home.path()).join("tunnel-routes.json"))
                 .expect("refresh must persist the landed map"),
         )
         .expect("persisted map parses");

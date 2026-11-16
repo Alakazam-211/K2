@@ -1057,7 +1057,7 @@ mod tests {
     fn hire_template_loader_refuses_a_bad_library_template() {
         let home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
-        let lib = home.path().join(".k2/agent-templates");
+        let lib = k2_core::paths::k2_home_in(home.path()).join("agent-templates");
         let write = |id: &str, toml: &str, role: Option<&str>| {
             let d = lib.join(id).join("v1");
             fs::create_dir_all(&d).expect("mkdir");

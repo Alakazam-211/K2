@@ -28,9 +28,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn k2_home_dir() -> PathBuf {
-    k2_client::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    k2_client::paths::k2_home()
 }
 
 /// Path to `~/.k2/connect-hosts.json`.

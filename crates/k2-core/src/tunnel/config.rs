@@ -491,9 +491,7 @@ impl TunnelConfig {
 /// Directory holding `~/.k2/tunnel.json`. Honors `$HOME` so tests can
 /// redirect it to a tempdir.
 fn config_dir() -> PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    crate::paths::k2_home()
 }
 
 /// Path to the tunnel config file.

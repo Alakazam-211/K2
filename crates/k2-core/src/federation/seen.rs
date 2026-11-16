@@ -31,9 +31,7 @@ pub const SEEN_PER_PEER_CAP: usize = 512;
 
 /// `~/.k2/federation-seen.json` (honors `$HOME` so tests redirect it).
 fn store_path() -> PathBuf {
-    crate::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    crate::paths::k2_home()
         .join("federation-seen.json")
 }
 

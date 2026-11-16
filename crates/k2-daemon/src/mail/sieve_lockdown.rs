@@ -1214,9 +1214,7 @@ pub fn hosted_domains() -> Result<HashSet<String>, String> {
 /// `~/.k2/mail-sieve-flagged.json`: the flag keys already recorded, so a
 /// kept unrecognised script is reported once, not at every start.
 fn flagged_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".k2")
+    k2_core::paths::k2_home()
         .join("mail-sieve-flagged.json")
 }
 

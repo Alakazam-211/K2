@@ -84,9 +84,7 @@ pub struct FileSecretStore {
 
 /// The old file location (adoption reads it once).
 pub fn legacy_path() -> PathBuf {
-    k2_core::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    k2_core::paths::k2_home()
         .join("mail-secrets.json")
 }
 

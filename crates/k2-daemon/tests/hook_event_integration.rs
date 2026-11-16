@@ -300,7 +300,7 @@ async fn hook_event_transport_auth_and_owner_check() {
         assert_eq!(run["report"]["action"], "install");
         assert_eq!(run["report"]["claudeVersion"], serde_json::Value::Null, "no real claude probed under a temp HOME");
         assert_eq!(run["report"]["claudeEventSet"], "base");
-        assert!(home.join(".k2/hooks/notify.sh").is_file());
+        assert!(k2_core::paths::k2_home_in(&home).join("hooks/notify.sh").is_file());
         let settings: serde_json::Value =
             serde_json::from_slice(&std::fs::read(home.join(".claude/settings.json")).expect("settings")).expect("json");
         assert!(settings["hooks"]["Stop"].is_array(), "{settings}");

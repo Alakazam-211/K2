@@ -439,7 +439,7 @@ async fn async_main() {
     {
         let report = k2_core::private_home::tighten_home();
         if let Some(home) = k2_core::paths::home_dir() {
-            if let Some(line) = report.log_line(&home.join(".k2")) {
+            if let Some(line) = report.log_line(&k2_core::paths::k2_home_in(&home)) {
                 k2_core::log_debug!("{line}");
             }
         }
@@ -599,8 +599,8 @@ async fn async_main() {
 
     log_debug!("[daemon] {}", BANNER);
 
-    let k2_dir = match k2_core::paths::home_dir() {
-        Some(h) => h.join(".k2"),
+    let k2_dir = match k2_core::paths::k2_home_opt() {
+        Some(h) => h,
         None => {
             log_debug!("[daemon] FATAL: cannot determine home directory");
             std::process::exit(2);

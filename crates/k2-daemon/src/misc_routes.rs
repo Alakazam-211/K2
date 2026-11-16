@@ -1002,8 +1002,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             CliResponse::ok_json(
                 serde_json::json!({
                     "port": k2_core::hook_config::get_port(),
-                    "notify_script": k2_core::paths::home_dir()
-                        .map(|h| h.join(".k2/hooks/notify.sh").to_string_lossy().to_string())
+                    "notify_script": k2_core::paths::k2_home_opt()
+                        .map(|h| h.join("hooks/notify.sh").to_string_lossy().to_string())
                         .unwrap_or_default(),
                     // H7.1: scan per-CLI config files for notify.sh
                     // injection so `k2 hooks status` reports the

@@ -276,7 +276,7 @@ impl Rig {
     }
 
     fn record(&self, id: &str) -> Record {
-        let p = self.home.join(".k2").join("desktop").join(vd::folder_slug(id)).join("state.json");
+        let p = k2_core::paths::k2_home_in(&self.home).join("desktop").join(vd::folder_slug(id)).join("state.json");
         serde_json::from_slice(&std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))).expect("state.json")
     }
 }
@@ -325,7 +325,7 @@ fn start_runs_xvfb_then_the_session_with_a_clean_env_and_never_ac() {
     assert!(pos("-session.service") < pos("set-property --runtime k2-desktops-virtual.slice MemoryMax=2147483648 TasksMax=512 CPUQuota=200%"));
     assert!(all.iter().any(|l| l == "systemctl --user set-property --runtime k2-desktops.slice MemoryMax=17179869184 CPUQuota=800%"), "{all:?}");
     // The cookie: 0600, one wild MIT-MAGIC-COOKIE-1.
-    let cookie = r.home.join(".k2/desktop/virtual/Xauthority");
+    let cookie = k2_core::paths::k2_home_in(&r.home).join("desktop/virtual/Xauthority");
     let bytes = std::fs::read(&cookie).expect("cookie");
     assert_eq!(bytes.len(), 44);
     assert_eq!(&bytes[8..26], b"MIT-MAGIC-COOKIE-1");
@@ -333,7 +333,7 @@ fn start_runs_xvfb_then_the_session_with_a_clean_env_and_never_ac() {
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&cookie).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(std::fs::metadata(r.home.join(".k2/desktop/virtual")).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(k2_core::paths::k2_home_in(&r.home).join("desktop/virtual")).unwrap().permissions().mode() & 0o777, 0o700);
     }
     let rec = r.record("virtual");
     assert_eq!((rec.state, rec.display.as_deref(), rec.size), (State::Ready, Some(":100"), size(1600, 900)));
@@ -366,7 +366,7 @@ fn each_desktop_has_its_own_profile_folder() {
     let a = r.m.profile_dir("virtual:w1").expect("made");
     let b = r.m.profile_dir("virtual:w2").expect("made");
     assert_ne!(a, b);
-    assert_eq!(a, r.home.join(".k2/desktop/virtual-w1/profile"));
+    assert_eq!(a, k2_core::paths::k2_home_in(&r.home).join("desktop/virtual-w1/profile"));
     for p in [&a, &b] {
         let m = std::fs::symlink_metadata(p).unwrap();
         assert!(m.is_dir() && !m.file_type().is_symlink(), "{}", p.display());
@@ -388,11 +388,11 @@ fn each_desktop_has_its_own_profile_folder() {
 fn a_new_cookie_each_start() {
     let r = Rig::new(true, true);
     r.m.start("virtual", Asker::Person, None).unwrap();
-    let first = std::fs::read(r.home.join(".k2/desktop/virtual/Xauthority")).unwrap();
+    let first = std::fs::read(k2_core::paths::k2_home_in(&r.home).join("desktop/virtual/Xauthority")).unwrap();
     r.m.close_with("virtual", CloseReason::ClosedBy { by: "rosson".into() });
-    assert!(!r.home.join(".k2/desktop/virtual/Xauthority").exists(), "a closed desktop's cookie goes");
+    assert!(!k2_core::paths::k2_home_in(&r.home).join("desktop/virtual/Xauthority").exists(), "a closed desktop's cookie goes");
     r.m.start("virtual", Asker::Person, None).unwrap();
-    let second = std::fs::read(r.home.join(".k2/desktop/virtual/Xauthority")).unwrap();
+    let second = std::fs::read(k2_core::paths::k2_home_in(&r.home).join("desktop/virtual/Xauthority")).unwrap();
     assert_ne!(first, second);
 }
 
@@ -417,7 +417,7 @@ fn two_ids_get_two_folders_slices_and_displays() {
     assert_eq!(a.display.as_deref(), Some(":100"));
     assert_eq!(b.display.as_deref(), Some(":101"));
     assert_ne!(a.units.slice, b.units.slice);
-    assert!(r.home.join(".k2/desktop/virtual").is_dir() && r.home.join(".k2/desktop/virtual-9c1e-44").is_dir());
+    assert!(k2_core::paths::k2_home_in(&r.home).join("desktop/virtual").is_dir() && k2_core::paths::k2_home_in(&r.home).join("desktop/virtual-9c1e-44").is_dir());
     assert!(r.runs("systemd-run").iter().any(|l| l.contains("--slice=k2-desktops-virtual:9c1e\\x2d44.slice")));
     assert_eq!(r.m.screen_env("virtual:9c1e-44").unwrap()[0], ("DISPLAY".to_string(), ":101".to_string()));
 }
@@ -719,7 +719,7 @@ fn a_state_file_whose_units_are_gone_reads_as_closed_and_is_cleaned() {
     assert!(st.message().starts_with("The desktop stopped unexpectedly"), "{}", st.message());
     assert!(r2.host.lines().iter().any(|l| l == "systemctl --user stop k2-desktops-virtual.slice"), "what was left is stopped");
     assert_eq!(r2.record("virtual").state, State::Closed);
-    assert!(!r2.home.join(".k2/desktop/virtual/display").exists());
+    assert!(!k2_core::paths::k2_home_in(&r2.home).join("desktop/virtual/display").exists());
 }
 
 #[test]
@@ -1045,7 +1045,7 @@ mod xvfb {
         let id = id();
         assert_eq!(m.start(&id, Asker::Person, None), Ok(State::Ready));
         let display = m.status(&id).display.expect("a display");
-        let cookie = cookie_of(&home.join(".k2/desktop").join(vd::folder_slug(&id)).join("Xauthority"));
+        let cookie = cookie_of(&k2_core::paths::k2_home_in(&home).join("desktop").join(vd::folder_slug(&id)).join("Xauthority"));
         let mut x = connect(&display, Some(&cookie)).expect("the desktop's cookie opens it");
         assert!(x.root != 0);
         assert!(connect(&display, None).is_err(), "no cookie: refused");
@@ -1074,8 +1074,8 @@ mod xvfb {
         m.start(&b, Asker::Agent, None).unwrap();
         let (da, db) = (m.status(&a).display.unwrap(), m.status(&b).display.unwrap());
         assert_ne!(da, db, "two displays");
-        let ca = cookie_of(&home.join(".k2/desktop").join(vd::folder_slug(&a)).join("Xauthority"));
-        let cb = cookie_of(&home.join(".k2/desktop").join(vd::folder_slug(&b)).join("Xauthority"));
+        let ca = cookie_of(&k2_core::paths::k2_home_in(&home).join("desktop").join(vd::folder_slug(&a)).join("Xauthority"));
+        let cb = cookie_of(&k2_core::paths::k2_home_in(&home).join("desktop").join(vd::folder_slug(&b)).join("Xauthority"));
         assert_ne!(ca, cb, "two cookies");
         assert!(connect(&db, Some(&ca)).is_err(), "A's cookie doesn't open B's display");
         assert!(connect(&da, Some(&cb)).is_err(), "B's cookie doesn't open A's display");
@@ -1099,7 +1099,7 @@ mod xvfb {
         let id = id();
         m.start(&id, Asker::Person, None).unwrap();
         let first = m.status(&id).display;
-        let cookie = cookie_of(&home.join(".k2/desktop").join(vd::folder_slug(&id)).join("Xauthority"));
+        let cookie = cookie_of(&k2_core::paths::k2_home_in(&home).join("desktop").join(vd::folder_slug(&id)).join("Xauthority"));
         let mut x = connect(first.as_deref().unwrap(), Some(&cookie)).unwrap();
         let w = x.window(5, 6, 120, 80, "kept");
         assert_eq!(m.start(&id, Asker::Person, Some(Size { width: 1920, height: 1080 })), Ok(State::Ready));
@@ -1115,7 +1115,7 @@ mod xvfb {
         let (m, home) = real();
         let id = id();
         m.start(&id, Asker::Person, None).unwrap();
-        let rec: Record = serde_json::from_slice(&std::fs::read(home.join(".k2/desktop").join(vd::folder_slug(&id)).join("state.json")).unwrap()).unwrap();
+        let rec: Record = serde_json::from_slice(&std::fs::read(k2_core::paths::k2_home_in(&home).join("desktop").join(vd::folder_slug(&id)).join("state.json")).unwrap()).unwrap();
         match rec.mode {
             RunMode::Detached => {
                 // SAFETY: the Xvfb we started.
@@ -1132,7 +1132,7 @@ mod xvfb {
         }
         let st = m.status(&id);
         assert_eq!(st.closed.as_ref().map(|c| c.reason.code()), Some("crashed"), "{st:?}");
-        assert!(!home.join(".k2/desktop").join(vd::folder_slug(&id)).join("Xauthority").exists());
+        assert!(!k2_core::paths::k2_home_in(&home).join("desktop").join(vd::folder_slug(&id)).join("Xauthority").exists());
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -1144,7 +1144,7 @@ mod xvfb {
         let id = id();
         m.start(&id, Asker::Person, None).unwrap();
         let display = m.status(&id).display.unwrap();
-        let cookie = cookie_of(&home.join(".k2/desktop").join(vd::folder_slug(&id)).join("Xauthority"));
+        let cookie = cookie_of(&k2_core::paths::k2_home_in(&home).join("desktop").join(vd::folder_slug(&id)).join("Xauthority"));
         let mut x = connect(&display, Some(&cookie)).unwrap();
         let w = x.window(40, 50, 640, 480, "before sleep");
         assert_eq!(x.geometry(w), (40, 50, 640, 480));

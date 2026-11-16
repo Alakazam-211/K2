@@ -29,7 +29,7 @@ struct StubHome {
 impl StubHome {
     fn new() -> Self {
         let home = crate::test_support::stub_home_dir("codex-nd");
-        std::fs::create_dir_all(home.join(".k2")).expect("create stub HOME");
+        std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("create stub HOME");
         let home_var = k2_core::test_env::EnvVar::set("HOME", &home);
         assert!(
             !k2_core::terminal::agent_spawn_guard::GuardEnv::from_process().home_is_temp(),

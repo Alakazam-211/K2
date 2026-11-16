@@ -44,7 +44,7 @@ fn fixture(public: bool) -> Box1 {
     let home = crate::test_support::TempHome::new();
     let _ = k2_core::db::init_for_tests();
     std::fs::write(
-        home.path().join(".k2/tunnel.json"),
+        k2_core::paths::k2_home_in(home.path()).join("tunnel.json"),
         json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true }).to_string(),
     )
     .expect("tunnel.json");
@@ -299,7 +299,7 @@ fn moving_a_public_site_behind_the_gate_warns_and_needs_yes() {
 fn e2e_off_refuses_private_and_pin_and_says_so() {
     let b = fixture(false);
     std::fs::write(
-        b.home.path().join(".k2/tunnel.json"),
+        k2_core::paths::k2_home_in(b.home.path()).join("tunnel.json"),
         json!({ "token": "tok_test", "subdomain": "rosson", "e2e": false }).to_string(),
     )
     .expect("tunnel.json");

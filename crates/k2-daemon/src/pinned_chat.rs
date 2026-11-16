@@ -1266,7 +1266,7 @@ mod tests {
             !other.join(".k2").exists(),
             "nothing may be written into another workspace"
         );
-        let audit = std::fs::read_to_string(home.path().join(".k2").join("auth-audit.jsonl"))
+        let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl"))
             .expect("refusal is audited");
         assert!(audit.contains("\"event\":\"canonical-swap\""), "audit: {audit}");
         assert!(audit.contains("refused:other_workspace"), "audit: {audit}");

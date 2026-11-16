@@ -92,7 +92,7 @@ fn handoff_keeps_the_app_front_port_and_its_connections() {
     app_fixture::require_python3();
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let home: PathBuf = std::env::temp_dir().join(format!("k2-afp-{}-{nanos}", std::process::id()));
-    let k2 = home.join(".k2");
+    let k2 = k2_core::paths::k2_home_in(&home);
     let (run, tmp, shim, ws_dir) = (home.join("run"), home.join("tmp"), home.join("shim"), home.join("ws-afp"));
     for d in [&k2, &run, &tmp, &shim, &ws_dir] {
         std::fs::create_dir_all(d).unwrap();

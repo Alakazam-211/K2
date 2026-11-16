@@ -338,7 +338,7 @@ fn no_tunnel_never_hits_control_plane() {
 fn run_refuses_label_owned_by_other_workspace_before_any_write() {
     let _home = crate::test_support::TempHome::new();
     let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     let mock = start_mock_cp(
         200,
         r#"{"subdomains":[{"label":"rosson","primary":true,"connected":true,"tier":"pro"}]}"#,
@@ -421,7 +421,7 @@ fn run_refuses_label_owned_by_other_workspace_before_any_write() {
 fn run_refuses_the_daemon_port_for_everyone() {
     let _home = crate::test_support::TempHome::new();
     let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     let mock = start_mock_cp(
         200,
         r#"{"subdomains":[{"label":"rosson","primary":true,"connected":true,"tier":"pro"}]}"#,
@@ -482,7 +482,7 @@ fn run_refuses_the_daemon_port_for_everyone() {
 fn an_agent_never_repoints_an_existing_label_its_workspace_doesnt_hold() {
     let _home = crate::test_support::TempHome::new();
     let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     let mock = start_mock_cp(409, r#"{"error":"label_taken"}"#, "*");
     let dir = _home.path().join("ws-taken");
     fs::create_dir_all(&dir).unwrap();
@@ -523,7 +523,7 @@ fn an_agent_never_repoints_an_existing_label_its_workspace_doesnt_hold() {
 fn rm_never_releases_another_workspaces_label() {
     let _home = crate::test_support::TempHome::new();
     let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     let mock = start_mock_cp(200, r#"{"removed":"x"}"#, "*");
     let dir_a = _home.path().join("ws-rm-a");
     let dir_b = _home.path().join("ws-rm-b");
@@ -575,7 +575,7 @@ fn nested_without_pro_fails_before_spawn() {
         "subdomain": "rosson",
         "e2e": true
     });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     let _mock = start_mock_cp(
         200,
         r#"{"subdomains":[{"label":"rosson","primary":true,"connected":true,"tier":"free"}]}"#,
@@ -634,7 +634,7 @@ fn hostname_fail_does_not_leave_desired_running() {
         "subdomain": "rosson",
         "e2e": true
     });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     // GET = Pro; POST create fails.
     let hits = StdArc::new(AtomicUsize::new(0));
     let hits2 = StdArc::clone(&hits);
@@ -865,7 +865,7 @@ fn a_dev_server_runs_in_the_live_folder_on_loopback_and_says_how_it_runs() {
     let _home = crate::test_support::TempHome::new();
     let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
     let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     let dir = _home.path().join("ws-dev");
     fs::create_dir_all(&dir).unwrap();
     let project_id = make_project(&dir.to_string_lossy());
@@ -945,7 +945,7 @@ fn dev_refuses_skin_and_no_tunnel_before_anything_starts() {
 fn e2e_off_refuses_a_dev_server_and_ps_says_private_isnt_enforced() {
     let _home = crate::test_support::TempHome::new();
     let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": false });
-    fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(_home.path()).join("tunnel.json"), cfg.to_string()).unwrap();
     let dir = _home.path().join("ws-e2e");
     fs::create_dir_all(&dir).unwrap();
     let project_id = make_project(&dir.to_string_lossy());
@@ -1192,7 +1192,7 @@ fn start_pro_cp(label: &str, port: u16) -> ProCp {
 
 fn write_pro_tunnel(home: &Path) {
     let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
-    fs::write(home.join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    fs::write(k2_core::paths::k2_home_in(&home).join("tunnel.json"), cfg.to_string()).unwrap();
 }
 
 /// Local: binds after the default window (300 ms here) but inside its

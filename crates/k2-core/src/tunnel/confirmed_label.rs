@@ -105,7 +105,7 @@ pub fn label_ok(l: &str) -> bool {
 
 /// `~/.k2/tunnel-label.json`.
 pub fn cache_path() -> PathBuf {
-    crate::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("tunnel-label.json")
+    crate::paths::k2_home().join("tunnel-label.json")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

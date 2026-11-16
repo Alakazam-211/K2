@@ -120,7 +120,7 @@ fn undo_as(ws: &Ws, card: &str, who: &Answerer) -> (String, Value) {
 }
 
 fn audit_lines(home: &crate::test_support::TempHome, needle: &str) -> Vec<String> {
-    let audit = std::fs::read_to_string(home.path().join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).unwrap_or_default();
     audit.lines().filter(|l| l.contains(needle)).map(str::to_string).collect()
 }
 

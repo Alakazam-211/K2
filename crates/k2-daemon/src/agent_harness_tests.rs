@@ -144,7 +144,7 @@ fn an_agent_is_held_not_switched() {
     assert_eq!(pinned(&id), ("grok".to_string(), Some(old)));
     assert!(live(&id).is_none(), "a refused switch never spawns");
     assert!(!std::path::Path::new(&path).join(".k2").join("handoffs").exists(), "no handoff for a refused switch");
-    let audit = std::fs::read_to_string(home.path().join(".k2").join("auth-audit.jsonl")).expect("the refusal is audited");
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).expect("the refusal is audited");
     assert!(audit.contains("\"event\":\"harness-switch\"") && audit.contains("refused:needs_person"), "{audit}");
 }
 

@@ -99,12 +99,12 @@ pub const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `~/.k2/hooks/notify.sh` under `home`.
 pub fn script_path(home: &Path) -> PathBuf {
-    home.join(".k2").join("hooks").join("notify.sh")
+    crate::paths::k2_home_in(home).join("hooks").join("notify.sh")
 }
 
 /// `~/.k2/hooks/statusline.sh` under `home`.
 pub fn statusline_script_path(home: &Path) -> PathBuf {
-    home.join(".k2").join("hooks").join("statusline.sh")
+    crate::paths::k2_home_in(home).join("hooks").join("statusline.sh")
 }
 
 fn claude_settings_path(home: &Path) -> PathBuf {
@@ -1320,7 +1320,7 @@ mod tests {
         let home = TempHome::new("cur");
         let h = home.path();
         std::fs::create_dir_all(h.join(".cursor")).unwrap();
-        let legacy = format!("[ -x '{p}' ] && '{p}' Start || true", p = h.join(".k2/hooks/notify.sh").display());
+        let legacy = format!("[ -x '{p}' ] && '{p}' Start || true", p = crate::paths::k2_home_in(&h).join("hooks/notify.sh").display());
         std::fs::write(
             cursor_hooks_path(h),
             serde_json::to_string(&json!({ "beforeSubmitPrompt": [ { "command": legacy } ], "hooks": { "afterFileEdit": [ { "command": "./fmt.sh" } ] } })).unwrap(),
@@ -1590,8 +1590,8 @@ mod tests {
         write_script(&script_path(home.path()), "0.44.3", generate_hook_script("0.44.3")).expect("script");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
-        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
-        std::fs::write(home.path().join(".k2/heartbeat.token"), "owner-tok").unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.port"), port.to_string()).unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.token"), "owner-tok").unwrap();
         let server = serve_one(ServerSock::Tcp(listener), "204 No Content");
         let mut payload = String::from("{\"hook_event_name\":\"PostToolUse\",\"tool_response\":\"");
         payload.push_str(&"x".repeat(super::super::envelope::MAX_BODY_BYTES + 10));
@@ -1627,12 +1627,12 @@ mod tests {
     fn windows_script_posts_the_raw_payload_with_the_passport() {
         use std::io::{Read, Write};
         let home = TempHome::new("win");
-        std::fs::create_dir_all(home.path().join(".k2")).expect(".k2");
+        std::fs::create_dir_all(crate::paths::k2_home_in(home.path())).expect(".k2");
         write_script(&script_path(home.path()), "0.46.5", generate_hook_script("0.46.5")).expect("script");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
-        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).expect("port file");
-        std::fs::write(home.path().join(".k2/heartbeat.token"), "owner-tok").expect("token file");
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.port"), port.to_string()).expect("port file");
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.token"), "owner-tok").expect("token file");
         let server = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().expect("accept");
             let mut raw = Vec::new();
@@ -1692,9 +1692,9 @@ mod tests {
         write_script(&script_path(home.path()), "0.44.3", generate_hook_script("0.44.3")).expect("script");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
-        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
-        std::fs::write(home.path().join(".k2/heartbeat.token"), "owner-tok").unwrap();
-        std::fs::write(home.path().join(".k2/daemon.token"), "owner-tok").unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.port"), port.to_string()).unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.token"), "owner-tok").unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("daemon.token"), "owner-tok").unwrap();
         let (code, stdout, _) = run_script(
             home.path(),
             &[("K2_PANE_ID", "pane-nopass")],
@@ -1746,7 +1746,7 @@ mod tests {
         // A reserved port nobody listens on.
         let closed = crate::test_env::ClosedPort::new();
         let port = closed.port();
-        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.port"), port.to_string()).unwrap();
         let (code, stdout, took) = run_script(
             home.path(),
             &[("K2_PANE_ID", "p"), ("K2_HOOK_SOCK", "/tmp/k2-no-such.sock")],
@@ -1811,8 +1811,8 @@ mod tests {
         // socket); the owner token on disk is never read.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
-        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
-        std::fs::write(home.path().join(".k2/heartbeat.token"), "owner-argv-secret").unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.port"), port.to_string()).unwrap();
+        std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.token"), "owner-argv-secret").unwrap();
         let server = serve_one(ServerSock::Tcp(listener), "204 No Content");
         let (code, _, _) = run_script(
             home.path(),
@@ -1910,7 +1910,7 @@ mod tests {
         use std::io::Write as _;
         use std::os::unix::fs::PermissionsExt;
         let home = TempHome::new("sl-run");
-        let hooks = home.path().join(".k2").join("hooks");
+        let hooks = crate::paths::k2_home_in(home.path()).join("hooks");
         std::fs::create_dir_all(&hooks).expect("hooks dir");
         let capture = home.path().join("capture.txt");
         // A stand-in notify.sh: records its argument, source and stdin.

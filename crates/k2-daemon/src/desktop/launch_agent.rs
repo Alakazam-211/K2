@@ -182,7 +182,7 @@ impl Agent {
         let path = self.plist();
         let dir = path.parent().expect("plist has a folder");
         std::fs::create_dir_all(dir).map_err(|e| AgentError::Failed(format!("{}: {e}", dir.display())))?;
-        let log = self.home.join(".k2").join("logs").join("deskd.log");
+        let log = k2_core::paths::k2_home_in(&self.home).join("logs").join("deskd.log");
         if let Some(d) = log.parent() {
             let _ = std::fs::create_dir_all(d);
         }

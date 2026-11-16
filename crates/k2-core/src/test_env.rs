@@ -469,7 +469,7 @@ impl TempHome {
     }
 
     fn at_locked(lock: EnvLock, home: PathBuf) -> Self {
-        std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME/.k2");
+        std::fs::create_dir_all(crate::paths::k2_home_in(&home)).expect("create temp HOME/.k2");
         let prev = std::env::var_os("HOME");
         std::env::set_var("HOME", &home);
         crate::test_isolation::assert_isolated_from_prod();
@@ -525,7 +525,7 @@ impl StubHome {
         let base = if !is_temp(&beside) { beside } else { PathBuf::from("/var/tmp") };
         assert!(!is_temp(&base), "no stub HOME outside the OS temp roots (beside the test binary, /var/tmp); is TMPDIR=/var/tmp?");
         let home = base.join(name);
-        std::fs::create_dir_all(home.join(".k2")).expect("create stub HOME/.k2");
+        std::fs::create_dir_all(crate::paths::k2_home_in(&home)).expect("create stub HOME/.k2");
         let var = EnvVar::set("HOME", &home);
         drop(lock);
         crate::test_isolation::assert_isolated_from_prod();

@@ -88,7 +88,7 @@ fn spawn_daemon() -> Daemon {
             .as_nanos()
     ));
     let _ = std::fs::remove_dir_all(&home);
-    std::fs::create_dir_all(home.join(".k2")).expect("temp HOME");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("temp HOME");
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let rt = k2_core::test_env::DaemonRuntime::new(&home);
@@ -102,8 +102,8 @@ fn spawn_daemon() -> Daemon {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn k2-daemon");
-    let port_file = home.join(".k2").join("daemon.port");
-    let token_file = home.join(".k2").join("daemon.token");
+    let port_file = k2_core::paths::k2_home_in(&home).join("daemon.port");
+    let token_file = k2_core::paths::k2_home_in(&home).join("daemon.token");
     let deadline = Instant::now() + Duration::from_secs(20);
     let (port, owner) = loop {
         let port = read_trimmed(&port_file).and_then(|p| p.parse::<u16>().ok());
@@ -132,7 +132,7 @@ fn set(d: &Daemon, token: &str, body: serde_json::Value) -> Resp {
 }
 
 fn saved_mode(d: &Daemon) -> String {
-    let raw = std::fs::read_to_string(d.home.join(".k2").join("settings.json")).expect("settings.json written");
+    let raw = std::fs::read_to_string(k2_core::paths::k2_home_in(&d.home).join("settings.json")).expect("settings.json written");
     let v: serde_json::Value = serde_json::from_str(&raw).expect("settings JSON");
     v["keepAwake"]["mode"].as_str().expect("keepAwake.mode saved").to_string()
 }

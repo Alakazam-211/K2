@@ -569,9 +569,9 @@ async fn cli_role_paths_round_trip() {
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
     let home = env.path().to_path_buf();
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
-    std::fs::write(home.join(".k2/heartbeat.port"), port.to_string()).unwrap();
-    std::fs::write(home.join(".k2/heartbeat.token"), OWNER).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
+    std::fs::write(k2_core::paths::k2_home_in(&home).join("heartbeat.port"), port.to_string()).unwrap();
+    std::fs::write(k2_core::paths::k2_home_in(&home).join("heartbeat.token"), OWNER).unwrap();
     let tag = &uuid::Uuid::new_v4().to_string()[..6];
     let docs = seed_ws(&env, &format!("docs{tag}"));
     seed_jobs(&docs);

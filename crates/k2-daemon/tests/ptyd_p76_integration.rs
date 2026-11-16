@@ -88,10 +88,10 @@ async fn canonical_chat_and_heartbeat_spawns_land_on_ptyd_unless_the_owner_turne
     // Short path: the ptyd socket lives under HOME (sun_path is 104 bytes on macOS).
     let home = k2_core::test_env::short_tmp(format!("k2p76-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
     std::env::set_var("HOME", &home);
     std::env::set_var("K2_PTYD_BIN", &bin);
-    k2_core::terminal::ptyd::client::set_home_for_tests(&home.join(".k2"));
+    k2_core::terminal::ptyd::client::set_home_for_tests(&k2_core::paths::k2_home_in(&home));
     // Heartbeat wakes spawn `cat` instead of the workspace's agent CLI.
     std::env::set_var("K2SO_WAKE_HEADLESS_TEST_COMMAND", "cat");
 

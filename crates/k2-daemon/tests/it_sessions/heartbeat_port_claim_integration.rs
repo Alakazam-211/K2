@@ -31,7 +31,7 @@ fn isolated_home(tag: &str) -> PathBuf {
             .as_nanos()
     ));
     let _ = std::fs::remove_dir_all(&home);
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
     home
 }
 
@@ -56,7 +56,7 @@ impl Drop for KillOnDrop {
 #[tokio::test(flavor = "current_thread")]
 async fn daemon_writes_heartbeat_port_eagerly_on_startup() {
     let home = isolated_home("eager");
-    let k2_dir = home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&home);
     // Spawn guard (2026-09-12): this boots the REAL daemon binary under a
     // temp HOME. It needs no agent, so `K2_TEST_AGENT_SHIM_DIR` points at
     // an EMPTY dir — any spawn attempt inside the child fails loudly

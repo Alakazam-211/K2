@@ -46,9 +46,7 @@ mod unix_impl {
 
     /// `~/.k2/run/cells` — the per-cell socket directory (`0700`).
     pub fn cells_dir() -> PathBuf {
-        k2_core::paths::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".k2")
+        k2_core::paths::k2_home()
             .join("run")
             .join("cells")
     }

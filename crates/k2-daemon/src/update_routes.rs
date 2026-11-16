@@ -739,8 +739,8 @@ fn clear_jobs_for_test() -> k2_core::test_env::SerialGuard {
 /// + verified artifacts. Falls back to the system temp dir if `$HOME`
 /// can't be resolved.
 fn job_stage_dir(job_id: &str) -> PathBuf {
-    let base = k2_core::paths::home_dir()
-        .map(|h| h.join(".k2").join("update"))
+    let base = k2_core::paths::k2_home_opt()
+        .map(|h| h.join("update"))
         .unwrap_or_else(|| std::env::temp_dir().join("k2so-update"));
     base.join(job_id)
 }
@@ -756,8 +756,8 @@ fn job_stage_dir(job_id: &str) -> PathBuf {
 /// when the backup was made (the Linux `pending.json`, the helper script),
 /// never a name worked out from a version.
 fn backup_path(running_version: &str) -> PathBuf {
-    let base = k2_core::paths::home_dir()
-        .map(|h| h.join(".k2").join("update"))
+    let base = k2_core::paths::k2_home_opt()
+        .map(|h| h.join("update"))
         .unwrap_or_else(|| std::env::temp_dir().join("k2so-update"));
     base.join(format!("backup-{running_version}"))
 }
@@ -1610,9 +1610,7 @@ fn pending_update_path() -> PathBuf {
 
 #[cfg(target_os = "linux")]
 fn k2_home() -> PathBuf {
-    k2_core::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/"))
-        .join(".k2")
+    k2_core::paths::k2_home_opt().unwrap_or_else(|| k2_core::paths::k2_home_in("/"))
 }
 
 #[cfg(target_os = "linux")]
@@ -1942,8 +1940,8 @@ exit 0
 /// which is the safe direction).
 #[cfg(not(target_os = "linux"))]
 fn daemon_port_hint() -> String {
-    k2_core::paths::home_dir()
-        .map(|h| h.join(".k2").join("daemon.port"))
+    k2_core::paths::k2_home_opt()
+        .map(|h| h.join("daemon.port"))
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -3200,7 +3198,7 @@ mod tests {
     }
 
     fn read_backup(home: &Path, name: &str) -> Vec<u8> {
-        let p = home.join(".k2").join("update").join(name);
+        let p = k2_core::paths::k2_home_in(&home).join("update").join(name);
         std::fs::read(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
     }
 
@@ -3217,7 +3215,7 @@ mod tests {
         let running = home.path().join("k2-daemon");
         std::fs::write(&running, format!("BIN-{cur}")).expect("running");
         // The backup the earlier upgrade older → cur left behind: it holds older.
-        let update_dir = home.path().join(".k2").join("update");
+        let update_dir = k2_core::paths::k2_home_in(home.path()).join("update");
         std::fs::create_dir_all(&update_dir).expect("update dir");
         std::fs::write(update_dir.join(format!("backup-{older}")), b"BIN-0.0.1").expect("older backup");
 
@@ -3245,7 +3243,7 @@ mod tests {
         let home = crate::test_support::TempHome::new();
         let _g = clear_jobs_for_test();
         let cur = current_version();
-        let update_dir = home.path().join(".k2").join("update");
+        let update_dir = k2_core::paths::k2_home_in(home.path()).join("update");
         std::fs::create_dir_all(&update_dir).expect("update dir");
         let name = format!("backup-{cur}");
         // An older daemon upgrading to cur named ITS binary `backup-<cur>`.
@@ -3481,7 +3479,7 @@ mod tests {
         let home = crate::test_support::TempHome::new();
         let _guard = clear_jobs_for_test();
         let running = home.path().join("k2-daemon");
-        let legacy = home.path().join(".k2").join("update").join("backup-0.46.13");
+        let legacy = k2_core::paths::k2_home_in(home.path()).join("update").join("backup-0.46.13");
         std::fs::create_dir_all(legacy.parent().expect("dir")).expect("update dir");
         std::fs::write(&running, b"NEW-BROKEN").expect("seed running");
         std::fs::write(&legacy, b"OLD-GOOD-0.46.12").expect("seed legacy backup");

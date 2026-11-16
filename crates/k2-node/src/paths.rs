@@ -243,11 +243,15 @@ pub const JOB_CACHES_DIR: &str = "job-caches";
 /// compute node must never run as (or be installed for) such a user.
 pub const PROD_FILES: &[&str] = &["daemon.port", "daemon.token", "heartbeat.port", "heartbeat.token"];
 
+/// The K2 home folder's name under a user home. k2-node links no K2 crate
+/// that has `k2_client::paths::HOME_DIR_NAME`, so it keeps its own copy.
+pub const K2_HOME_DIR_NAME: &str = ".k2";
+
 /// Which of [`PROD_FILES`] exist under `<home>/.k2`.
 pub fn k2_files_in(home: &Path) -> Vec<String> {
     PROD_FILES
         .iter()
-        .map(|f| home.join(".k2").join(f))
+        .map(|f| home.join(K2_HOME_DIR_NAME).join(f))
         .filter(|p| p.exists())
         .map(|p| p.display().to_string())
         .collect()

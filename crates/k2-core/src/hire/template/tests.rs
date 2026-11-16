@@ -56,7 +56,7 @@ fn statuses(r: &ApplyReport, step: &str) -> Vec<&'static str> {
 }
 
 fn library_template(home: &crate::test_env::TempHome, id: &str, v: u32, files: &[(&str, &str)]) -> PathBuf {
-    let dir = home.path().join(".k2/agent-templates").join(id).join(format!("v{v}"));
+    let dir = crate::paths::k2_home_in(home.path()).join("agent-templates").join(id).join(format!("v{v}"));
     for (rel, body) in files {
         let p = dir.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();

@@ -72,7 +72,7 @@ fn stop_every_app_in_this_process() {
 /// `~/.k2/apps/<id>/run/<deployment>.json`, and leads its own process group.
 #[cfg(unix)]
 pub fn reap_apps_under(home: &Path) {
-    let Ok(apps) = std::fs::read_dir(home.join(".k2/apps")) else { return };
+    let Ok(apps) = std::fs::read_dir(k2_core::paths::k2_home_in(&home).join("apps")) else { return };
     for app in apps.flatten() {
         let Ok(runs) = std::fs::read_dir(app.path().join("run")) else { continue };
         for run in runs.flatten() {

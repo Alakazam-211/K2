@@ -531,7 +531,7 @@ async fn wallet_routes_end_to_end() {
     let t = tool_doc(&claude_doc, "claude");
     assert_eq!(t["switchedBy"], "login:admin1", "who made it the default");
     assert!(t["switchedAt"].as_i64().is_some_and(|x| x > 0), "since when: {t}");
-    let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(&env.home).join("auth-audit.jsonl")).unwrap_or_default();
     assert!(audit.contains("claude default Default → Work"), "one audit line per switch: {audit}");
 
     // A Connect login is how a desktop window on ANOTHER computer reads this
@@ -577,7 +577,7 @@ async fn wallet_routes_end_to_end() {
     let r = post(port, "/cli/llm/accounts/remove", OWNER, json!({"id": work_id}));
     assert_eq!(r.status, 200, "{}", r.body);
     let moved = PathBuf::from(js(&r)["removed"]["movedTo"].as_str().unwrap());
-    assert!(moved.starts_with(env.home.join(".k2/llm-accounts/.removed")));
+    assert!(moved.starts_with(k2_core::paths::k2_home_in(&env.home).join("llm-accounts/.removed")));
     assert!(moved.join(".credentials.json").exists());
 
     // Refresh re-reads state.
@@ -586,7 +586,7 @@ async fn wallet_routes_end_to_end() {
 
     // Nothing secret anywhere.
     assert!(!db_dump().contains(MARKER), "no token in the DB");
-    let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(&env.home).join("auth-audit.jsonl")).unwrap_or_default();
     assert!(!audit.contains(MARKER) && !audit.contains(PASTED), "audit stays clean");
     assert!(audit.contains("llm_accounts.switch"), "switch is audited: {audit}");
 }
@@ -676,7 +676,7 @@ async fn an_outside_login_is_saved_as_its_own_token_and_nothing_is_blocked() {
     assert_eq!(std::fs::read_to_string(&third_slot).unwrap(), third, "the outside sign-in kept whole");
     assert_eq!(account_by_label(&list, "claude", "Default")["addedOutsideK2"], false);
     assert_eq!(outside_notices(), 1, "one notice for Owners/Admins");
-    let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(&env.home).join("auth-audit.jsonl")).unwrap_or_default();
     assert!(audit.contains("llm_accounts.outside_adopted"), "adoption audited: {audit}");
     let adopted_lines: Vec<&str> = audit.lines().filter(|l| l.contains("llm_accounts.outside_adopted")).collect();
     assert!(!adopted_lines.is_empty() && adopted_lines.iter().all(|l| !l.contains('@')), "token ids only, no email: {adopted_lines:?}");
@@ -863,7 +863,7 @@ async fn airgap_refuses_sign_in_but_allows_local_changes() {
     let r = req(port, "POST", &format!("/cli/claude-auth/refresh-now?token={OWNER}"), Some("{}"));
     assert_eq!(r.status, 410, "{}", r.body);
     std::env::remove_var("K2_AIRGAP");
-    assert!(!env.home.join(".k2/llm-accounts/.login").read_dir().map(|mut d| d.next().is_some()).unwrap_or(false));
+    assert!(!k2_core::paths::k2_home_in(&env.home).join("llm-accounts/.login").read_dir().map(|mut d| d.next().is_some()).unwrap_or(false));
 }
 
 // ── Pins at the spawn doors ─────────────────────────────────────────
@@ -1086,7 +1086,7 @@ async fn pinned_sessions_run_on_their_login_and_resume_keeps_the_recorded_home()
         out
     };
     assert!(!dump.contains(MARKER), "no secret in the DB");
-    let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(&env.home).join("auth-audit.jsonl")).unwrap_or_default();
     assert!(!audit.contains(MARKER), "no secret in the audit log");
     assert!(audit.contains("llm_accounts.pin"));
     kill_sessions_under(&env.home);

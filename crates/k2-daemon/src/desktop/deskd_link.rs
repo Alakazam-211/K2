@@ -833,7 +833,7 @@ fn default_transport() -> Arc<dyn Transport> {
         match exe.filter(|p| p.is_file()) {
             Some(program) => Arc::new(MacTransport {
                 agent: super::launch_agent::Agent { home: home(), uid: uid(), program, runner: Arc::new(SystemRunner) },
-                socket: home().join(".k2").join("run").join(k2_deskd_proto::SOCKET_NAME),
+                socket: k2_core::paths::k2_home_in(home()).join("run").join(k2_deskd_proto::SOCKET_NAME),
             }),
             None => Arc::new(Unavailable(OpenError::NeedsApp)),
         }
@@ -1085,7 +1085,7 @@ pub fn linux_binary() -> Result<PathBuf, String> {
             return Err("the embedded k2-deskd fails its hash".into());
         }
         static PLACED: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-        return PLACED.get_or_init(|| placed_copy(&home().join(".k2"), bytes, sha).map_err(|e| format!("placing k2-deskd: {e}"))).clone();
+        return PLACED.get_or_init(|| placed_copy(&k2_core::paths::k2_home_in(home()), bytes, sha).map_err(|e| format!("placing k2-deskd: {e}"))).clone();
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sib = exe.parent().map(|d| d.join(k2_deskd_proto::BINARY_NAME)).ok_or("no exe folder")?;

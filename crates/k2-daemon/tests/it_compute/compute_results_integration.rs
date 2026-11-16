@@ -338,7 +338,7 @@ async fn online_node(env: &Env, port: u16, name: &str, parallel: u32) -> (Runnin
 /// The real `cli/k2` against this daemon (owner token from disk, a clean
 /// env so the outer K2 cell never leaks in). Returns (exit, stdout, stderr).
 fn k2(env: &Env, port: u16, cwd: &Path, args: &[&str]) -> (i32, String, String) {
-    let k2_dir = env.home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&env.home);
     std::fs::create_dir_all(&k2_dir).unwrap();
     std::fs::write(k2_dir.join("heartbeat.port"), port.to_string()).unwrap();
     std::fs::write(k2_dir.join("heartbeat.token"), OWNER).unwrap();
@@ -568,7 +568,7 @@ async fn never_stuck_timeouts_moves_lost_nodes_retries_and_set_aside() {
     //    new attempt runs on the other node, and the CLI follows it.
     let cli_env_home = env.home.clone();
     let ws_path = ws.path.clone();
-    let k2_dir = env.home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&env.home);
     std::fs::create_dir_all(&k2_dir).unwrap();
     std::fs::write(k2_dir.join("heartbeat.port"), port.to_string()).unwrap();
     std::fs::write(k2_dir.join("heartbeat.token"), OWNER).unwrap();

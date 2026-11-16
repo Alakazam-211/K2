@@ -457,7 +457,7 @@ fn layout_tab<'a>(layout: &'a Value, pg: &str) -> Option<&'a Value> {
 }
 
 fn audit_lines(env: &TestEnv) -> Vec<Value> {
-    std::fs::read_to_string(env.home.join(".k2").join("auth-audit.jsonl"))
+    std::fs::read_to_string(k2_core::paths::k2_home_in(&env.home).join("auth-audit.jsonl"))
         .unwrap_or_default()
         .lines()
         .map(|l| serde_json::from_str(l).expect("audit line JSON"))
@@ -810,7 +810,7 @@ async fn owner_new_list_stop_resume_and_msg_wake() {
     assert!(saw_label, "no session_added frame for {agent}");
 
     // The brief never reaches the audit log or any daemon-home file.
-    for entry in walk(&env.home.join(".k2")) {
+    for entry in walk(&k2_core::paths::k2_home_in(&env.home)) {
         let text = std::fs::read(&entry).unwrap_or_default();
         assert!(
             !String::from_utf8_lossy(&text).contains(&marker),

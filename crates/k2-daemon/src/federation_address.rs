@@ -398,7 +398,7 @@ mod tests {
 
         // Box B: a separate HOME with A pinned as Trusted at "afs".
         let home_b = k2_core::test_env::unique_temp_path("fed-address-b");
-        std::fs::create_dir_all(home_b.join(".k2")).expect("mk b");
+        std::fs::create_dir_all(k2_core::paths::k2_home_in(&home_b)).expect("mk b");
         let b_key;
         {
             let _b = k2_core::test_env::EnvVar::set("HOME", home_b.to_string_lossy().to_string());

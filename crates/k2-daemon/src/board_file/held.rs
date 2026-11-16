@@ -61,7 +61,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn root() -> PathBuf {
-    k2_core::paths::home_dir().unwrap_or_else(std::env::temp_dir).join(".k2").join("board-held")
+    k2_core::paths::k2_home_opt().unwrap_or_else(|| k2_core::paths::k2_home_in(std::env::temp_dir())).join("board-held")
 }
 
 fn person_dir(pid: &str) -> PathBuf {

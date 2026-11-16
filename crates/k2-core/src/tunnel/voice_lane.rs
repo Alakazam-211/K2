@@ -76,7 +76,7 @@ pub fn voice_log_path() -> PathBuf {
 }
 
 fn k2_dir() -> PathBuf {
-    crate::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2")
+    crate::paths::k2_home()
 }
 
 // ── the preview switch ───────────────────────────────────────────────────

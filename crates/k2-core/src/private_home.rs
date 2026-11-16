@@ -143,7 +143,7 @@ pub fn tighten_home_at(home: &Path) -> TightenReport {
     let mut report = TightenReport::default();
     #[cfg(unix)]
     {
-        let canonical = home.join(".k2");
+        let canonical = crate::paths::k2_home_in(home);
         // `~/.k2` itself may be a symlink an operator made to another disk;
         // follow it (chmod applies to the target dir, which is ours).
         if canonical.is_dir() {
@@ -380,7 +380,7 @@ mod tests {
     fn sweep_tightens_open_home_dbs_and_secret_dirs() {
         let t = TempDir::new("sweep");
         let home = &t.0;
-        let k2 = home.join(".k2");
+        let k2 = crate::paths::k2_home_in(home);
         std::fs::create_dir_all(&k2).unwrap();
         set(&k2, 0o755);
         for f in ["k2so.db", "k2so.db-wal", "k2so.db-shm", "k2-threads.redb"] {
@@ -447,7 +447,7 @@ mod tests {
     fn sweep_leaves_files_outside_the_k2_home_alone() {
         let t = TempDir::new("outside");
         let home = &t.0;
-        let k2 = home.join(".k2");
+        let k2 = crate::paths::k2_home_in(home);
         std::fs::create_dir_all(&k2).unwrap();
         set(&k2, 0o755);
         // A workspace next to the K2 home, with a SQLite DB and a public dir.
@@ -475,7 +475,7 @@ mod tests {
         // Real legacy dir (mixed-version leftover): tightened.
         let t = TempDir::new("legacy-real");
         let home = &t.0;
-        std::fs::create_dir_all(home.join(".k2")).unwrap();
+        std::fs::create_dir_all(crate::paths::k2_home_in(home)).unwrap();
         let legacy = home.join(".k2so");
         std::fs::create_dir_all(&legacy).unwrap();
         set(&legacy, 0o755);
@@ -488,7 +488,7 @@ mod tests {
         // swept once via its own name.
         let t2 = TempDir::new("legacy-link");
         let home2 = &t2.0;
-        let k2 = home2.join(".k2");
+        let k2 = crate::paths::k2_home_in(home2);
         std::fs::create_dir_all(&k2).unwrap();
         set(&k2, 0o755);
         std::os::unix::fs::symlink(&k2, home2.join(".k2so")).unwrap();
@@ -506,7 +506,7 @@ mod tests {
     fn sweep_does_not_follow_symlinks_out_of_the_home() {
         let t = TempDir::new("symlink-out");
         let home = &t.0;
-        let k2 = home.join(".k2");
+        let k2 = crate::paths::k2_home_in(home);
         std::fs::create_dir_all(&k2).unwrap();
         let outside = home.join("elsewhere");
         write(&outside.join("shared.db"), 0o644);

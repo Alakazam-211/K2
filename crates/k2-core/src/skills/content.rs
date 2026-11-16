@@ -127,8 +127,8 @@ pub fn extract_section(content: &str, heading: &str) -> Option<String> {
 /// Load user-created custom layers from ~/.k2so/templates/{tier}/*.md.
 /// Returns concatenated markdown sections with titles derived from filenames.
 pub fn load_custom_layers(tier: &str) -> String {
-    let dir = match crate::paths::home_dir() {
-        Some(h) => h.join(".k2/templates").join(tier),
+    let dir = match crate::paths::k2_home_opt() {
+        Some(h) => h.join("templates").join(tier),
         None => return String::new(),
     };
     if !dir.exists() { return String::new(); }

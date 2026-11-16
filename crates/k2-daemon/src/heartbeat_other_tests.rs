@@ -72,7 +72,7 @@ fn call_as_agent(me: &Ws, extra: &[(&str, &str)]) -> (String, Value) {
 }
 
 fn audit(home: &crate::test_support::TempHome) -> String {
-    std::fs::read_to_string(home.path().join(".k2").join("auth-audit.jsonl")).unwrap_or_default()
+    std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).unwrap_or_default()
 }
 
 fn login(name: &str, role: Role) -> String {

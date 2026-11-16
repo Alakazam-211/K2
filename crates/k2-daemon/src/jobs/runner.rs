@@ -25,7 +25,7 @@ const POLL: Duration = Duration::from_millis(100);
 
 /// `~/.k2/jobs`.
 pub fn jobs_dir() -> PathBuf {
-    k2_core::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("jobs")
+    k2_core::paths::k2_home().join("jobs")
 }
 
 fn private_dir(d: &Path) -> std::io::Result<()> {

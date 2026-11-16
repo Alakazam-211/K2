@@ -166,7 +166,7 @@ fn the_call_starts_a_closed_desktop_at_1280x720_and_answers_what_to_use() {
     let display = r["display"].as_str().expect("a display");
     assert!(display.starts_with(':'), "{r}");
     let home = &e.rig.home;
-    let folder = home.join(".k2/desktop/virtual-w1");
+    let folder = k2_core::paths::k2_home_in(&home).join("desktop/virtual-w1");
     assert_eq!(r["xauthority"], json!(folder.join("Xauthority").display().to_string()));
     assert_eq!(r["profile"], json!(folder.join("profile").display().to_string()));
     assert!(folder.join("profile").is_dir(), "the profile folder exists");

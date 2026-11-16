@@ -394,9 +394,9 @@ async fn thread_attachments_send_view_open_and_scope() {
 
     // ── The CLI ───────────────────────────────────────────────────────
     let home = env.path().to_path_buf();
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
-    std::fs::write(home.join(".k2/heartbeat.port"), port.to_string()).unwrap();
-    std::fs::write(home.join(".k2/heartbeat.token"), OWNER).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
+    std::fs::write(k2_core::paths::k2_home_in(&home).join("heartbeat.port"), port.to_string()).unwrap();
+    std::fs::write(k2_core::paths::k2_home_in(&home).join("heartbeat.token"), OWNER).unwrap();
     let cli_dir = ws.path.clone();
     let run = move |args: Vec<String>| {
         let cli = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");

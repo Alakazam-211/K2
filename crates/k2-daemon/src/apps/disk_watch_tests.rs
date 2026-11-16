@@ -143,7 +143,7 @@ impl NoticeSink for TicketRec {
 #[test]
 fn a_new_device_number_after_a_reboot_keeps_the_same_ticket() {
     let home = crate::test_support::TempHome::new();
-    let path = home.path().join(".k2").join(STATE_FILE);
+    let path = k2_core::paths::k2_home_in(home.path()).join(STATE_FILE);
     let sink = Rec::default();
     let mut st = load_state(&path);
     let now = 1_800_000_000;
@@ -261,7 +261,7 @@ fn old_device_keys_and_duplicate_tickets_are_merged_once() {
 #[test]
 fn notices_go_once_to_the_owner_and_the_three_biggest_agents() {
     let home = crate::test_support::TempHome::new();
-    let path = home.path().join(".k2").join(STATE_FILE);
+    let path = k2_core::paths::k2_home_in(home.path()).join(STATE_FILE);
     let sink = Rec::default();
     let mut st = load_state(&path);
     let now = 1_800_000_000;

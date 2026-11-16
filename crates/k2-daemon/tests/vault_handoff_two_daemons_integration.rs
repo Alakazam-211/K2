@@ -59,7 +59,7 @@ fn isolated_home(tag: &str) -> PathBuf {
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let _ = std::fs::remove_dir_all(&home);
-    std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("create temp HOME");
     home
 }
 
@@ -92,8 +92,8 @@ fn spawn_daemon(tag: &str, federation: bool) -> Daemon {
     let child = KillOnDrop(cmd.spawn().expect("spawn k2-daemon"));
     let deadline = Instant::now() + Duration::from_secs(30);
     let (port, owner) = loop {
-        let port = read_trimmed(&home.join(".k2/daemon.port")).and_then(|p| p.parse::<u16>().ok());
-        let owner = read_trimmed(&home.join(".k2/daemon.token"));
+        let port = read_trimmed(&k2_core::paths::k2_home_in(&home).join("daemon.port")).and_then(|p| p.parse::<u16>().ok());
+        let owner = read_trimmed(&k2_core::paths::k2_home_in(&home).join("daemon.token"));
         if let (Some(p), Some(o)) = (port, owner) {
             break (p, o);
         }
@@ -173,7 +173,7 @@ fn write_peers(d: &Daemon, peers: &[(&str, &str, String)]) {
             serde_json::to_value(p).expect("peer json")
         })
         .collect();
-    let path = d.home.join(".k2/federation-peers.json");
+    let path = k2_core::paths::k2_home_in(&d.home).join("federation-peers.json");
     std::fs::write(&path, serde_json::json!({ "version": 1, "peers": rows }).to_string()).expect("peer store");
     #[cfg(unix)]
     {

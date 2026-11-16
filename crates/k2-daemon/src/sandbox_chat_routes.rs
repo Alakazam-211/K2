@@ -35,9 +35,7 @@ struct SandboxChat {
 /// Root of the per-workspace sandbox homes (daemon-home only — never a caller
 /// path). Mirrors `v1_sandboxes::policy::sandbox_homes_root`.
 pub fn sandbox_homes_root() -> PathBuf {
-    k2_core::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    k2_core::paths::k2_home()
         .join("sandbox-homes")
 }
 

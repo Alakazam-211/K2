@@ -28,7 +28,7 @@ fn scratch_home() -> PathBuf {
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
     home
 }
 
@@ -78,7 +78,7 @@ fn ok_stdout(out: Output, what: &str) -> String {
 #[tokio::test(flavor = "current_thread")]
 async fn headless_push_log_route_and_cli() {
     let home = scratch_home();
-    let k2_dir = home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&home);
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).unwrap();
     let workspace = home.join("ws-push-log");

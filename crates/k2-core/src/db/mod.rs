@@ -443,9 +443,8 @@ pub fn open_home_database_for_test() -> Result<Arc<DbLock>> {
 /// Open (or create) `~/.k2/k2.db`: the home switch, the main database's
 /// pragmas, migrations, seed and its read pool. Publishes nothing.
 fn open_home_database(opts: &home_switch::SwitchOpts) -> Result<(Arc<DbLock>, home_switch::SwitchReport)> {
-    let db_dir = crate::paths::home_dir()
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Could not determine home directory".to_string()))?
-        .join(".k2");
+    let db_dir = crate::paths::k2_home_opt()
+        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Could not determine home directory".to_string()))?;
     std::fs::create_dir_all(&db_dir)
         .map_err(|e| rusqlite::Error::InvalidParameterName(format!("Could not create ~/.k2 directory: {}", e)))?;
     // Owner-only K2 home: the app may create it before the daemon's boot

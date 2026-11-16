@@ -40,6 +40,10 @@ pub mod notify;
 #[cfg(target_os = "linux")]
 pub mod x11;
 
+/// The K2 home folder's name under [`home_dir`]. k2-deskd links no K2
+/// crate, so it keeps its own copy of `k2_client::paths::HOME_DIR_NAME`.
+pub const K2_HOME_DIR_NAME: &str = ".k2";
+
 /// `$HOME`, else the passwd entry's home.
 pub fn home_dir() -> std::path::PathBuf {
     if let Some(h) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {

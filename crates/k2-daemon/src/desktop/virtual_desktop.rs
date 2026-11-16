@@ -156,7 +156,7 @@ pub struct Config {
 
 impl Config {
     pub fn for_home(home: &Path) -> Config {
-        Config { root: home.join(".k2").join("desktop"), home: home.to_path_buf(), session: None, display_wait: Duration::from_secs(5), display_base: vd::DISPLAY_BASE }
+        Config { root: k2_core::paths::k2_home_in(home).join("desktop"), home: home.to_path_buf(), session: None, display_wait: Duration::from_secs(5), display_base: vd::DISPLAY_BASE }
     }
 }
 

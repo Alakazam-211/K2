@@ -1594,9 +1594,7 @@ pub fn scoped_hook_authorizes(presented: &str, path: &str, pane: &str) -> bool {
 /// Path to `~/.k2/hook-sessions.json` (mirrors
 /// `connect_users::sessions_store_path`).
 pub fn store_path() -> PathBuf {
-    k2_core::paths::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+    k2_core::paths::k2_home()
         .join("hook-sessions.json")
 }
 

@@ -43,7 +43,7 @@ fn new_home() -> Home {
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME/.k2");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("create temp HOME/.k2");
     std::fs::create_dir_all(home.join("agent-shim-empty")).expect("shim dir");
     Home(home)
 }
@@ -71,7 +71,7 @@ fn read_trimmed(path: &Path) -> Option<String> {
 }
 
 fn spawn_daemon(home: &Path) -> Daemon {
-    let port_file = home.join(".k2").join("daemon.port");
+    let port_file = k2_core::paths::k2_home_in(&home).join("daemon.port");
     let _ = std::fs::remove_file(&port_file);
     let rt = k2_core::test_env::DaemonRuntime::new(home);
     let child = Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
@@ -85,7 +85,7 @@ fn spawn_daemon(home: &Path) -> Daemon {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn k2-daemon");
-    let token_file = home.join(".k2").join("daemon.token");
+    let token_file = k2_core::paths::k2_home_in(&home).join("daemon.token");
     let deadline = Instant::now() + Duration::from_secs(20);
     let (port, owner) = loop {
         let port = read_trimmed(&port_file).and_then(|p| p.parse::<u16>().ok());
@@ -172,7 +172,7 @@ fn call(port: u16, method: &str, path: &str, body: Option<&str>) -> (u16, J) {
 }
 
 fn zen_dir(home: &Path) -> PathBuf {
-    home.join(".k2").join("zen")
+    k2_core::paths::k2_home_in(&home).join("zen")
 }
 
 /// `zen.toml` with `acent` (a typo) at line 7, column 3.

@@ -26,7 +26,7 @@ fn scratch_home() -> PathBuf {
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()
     ));
-    std::fs::create_dir_all(home.join(".k2")).expect("mkdir home");
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).expect("mkdir home");
     home
 }
 
@@ -72,7 +72,7 @@ fn ok(o: &Output, what: &str) -> String {
 #[tokio::test(flavor = "current_thread")]
 async fn carry_import_goes_by_workspace_id_never_by_name() {
     let home = scratch_home();
-    let k2_dir = home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&home);
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).expect("mkdir");
     let _rt = k2_core::test_env::DaemonRuntime::new(&home);

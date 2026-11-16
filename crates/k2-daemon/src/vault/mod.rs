@@ -82,7 +82,7 @@ fn keychain_home(k2_home: &Path, real_home: Option<&Path>) -> bool {
         return false;
     }
     let Some(real) = real_home else { return false };
-    let want = real.join(".k2");
+    let want = k2_core::paths::k2_home_in(real);
     match (dunce::canonicalize(&k2_home), dunce::canonicalize(&want)) {
         (Ok(a), Ok(b)) => a == b,
         _ => k2_home == want,
@@ -956,13 +956,13 @@ mod tests {
     fn only_the_accounts_own_home_uses_the_keychain() {
         let d = k2_vault::fsutil::TestDir::new("kc-home");
         let real = d.path().join("real");
-        std::fs::create_dir_all(real.join(".k2")).expect("mkdir");
+        std::fs::create_dir_all(k2_core::paths::k2_home_in(&real)).expect("mkdir");
         let other = d.path().join("other").join(".k2");
         std::fs::create_dir_all(&other).expect("mkdir");
         assert!(!super::keychain_home(&other, Some(&real)));
-        assert!(!super::keychain_home(&real.join(".k2"), None));
+        assert!(!super::keychain_home(&k2_core::paths::k2_home_in(&real), None));
         let marked = std::env::var_os("K2_TEST_AGENT_SHIM_DIR").is_some();
-        assert_eq!(super::keychain_home(&real.join(".k2"), Some(&real)), !marked);
+        assert_eq!(super::keychain_home(&k2_core::paths::k2_home_in(&real), Some(&real)), !marked);
     }
 
     /// KV33: text K2 stores (here a ticket comment and an inbox note) never
@@ -1036,7 +1036,7 @@ mod tests {
         std::fs::create_dir_all(&creds).expect("mkdir creds");
         std::fs::write(creds.join(super::systemd_creds::CREDENTIAL_NAME), [7u8; 32]).expect("write credential");
         let _c = k2_core::test_env::EnvVar::set("CREDENTIALS_DIRECTORY", &creds);
-        let ks = super::select_key_store(&home.path().join(".k2"));
+        let ks = super::select_key_store(&k2_core::paths::k2_home_in(home.path()));
         assert_eq!(ks.kind(), k2_vault::KeyHome::File, "a test daemon took the box's key home");
     }
 }

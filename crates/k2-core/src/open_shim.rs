@@ -41,7 +41,7 @@ const VERSION_PREFIX: &str = "# K2_OPEN_SHIM_VERSION:";
 
 /// `<home>/.k2/bin` — the staging directory.
 pub fn bin_dir_at(home: &Path) -> PathBuf {
-    home.join(".k2").join("bin")
+    crate::paths::k2_home_in(home).join("bin")
 }
 
 /// `<home>/.k2/bin/k2-open` — the canonical shim path.

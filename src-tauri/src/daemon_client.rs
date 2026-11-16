@@ -280,9 +280,7 @@ fn pct_encode(s: &str) -> String {
 }
 
 fn k2_home_dir() -> Result<PathBuf, String> {
-    Ok(k2_client::paths::home_dir()
-        .ok_or_else(|| "home dir unavailable".to_string())?
-        .join(".k2"))
+    k2_client::paths::k2_home_opt().ok_or_else(|| "home dir unavailable".to_string())
 }
 
 fn read_port(path: &std::path::Path) -> Result<u16, String> {

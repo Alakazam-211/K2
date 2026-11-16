@@ -383,7 +383,7 @@ pub(crate) fn watchdog_tick(
 /// be counted. Best-effort: never fails the watchdog.
 fn watchdog_field_log(line: &str) {
     if let Ok(home) = std::env::var("HOME") {
-        let log_path = std::path::Path::new(&home).join(".k2").join("webview-watchdog.log");
+        let log_path = k2_client::paths::k2_home_in(&home).join("webview-watchdog.log");
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
             use std::io::Write;
             let _ = writeln!(f, "{} {line}", k2_client::log_timestamp());

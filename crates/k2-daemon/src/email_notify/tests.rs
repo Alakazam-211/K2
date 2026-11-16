@@ -849,7 +849,7 @@ fn a_closed_vault_keeps_no_relay_and_writes_no_file() {
     let e = relay::add(&relay_args(), "owner", now()).expect_err("vault closed");
     assert_eq!((e.status, e.code), (503, "vault_closed"));
     assert!(relay::list().expect("list").is_empty(), "no row without its password");
-    assert!(!f._home.path().join(".k2").join("mail-secrets.json").exists(), "never the 0600 file fallback");
+    assert!(!k2_core::paths::k2_home_in(f._home.path()).join("mail-secrets.json").exists(), "never the 0600 file fallback");
     assert!(!format!("{:?}", relay_args()).contains("S3CRET"), "Debug is redacted");
 }
 

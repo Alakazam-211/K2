@@ -32,8 +32,8 @@ fn downloads_dir() -> Result<PathBuf, String> {
 fn dest_dir(dest: Option<&str>) -> Result<PathBuf, String> {
     match dest {
         None | Some("downloads") => downloads_dir(),
-        Some("clone-tmp") => k2_client::paths::home_dir()
-            .map(|h| h.join(".k2").join("clone-tmp"))
+        Some("clone-tmp") => k2_client::paths::k2_home_opt()
+            .map(|h| h.join("clone-tmp"))
             .ok_or_else(|| "Cannot resolve the home directory".to_string()),
         Some(other) => Err(format!("Unknown download destination mode: {other}")),
     }

@@ -29,7 +29,7 @@ fn scratch_home() -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(home.join(".k2")).unwrap();
+    std::fs::create_dir_all(k2_core::paths::k2_home_in(&home)).unwrap();
     home
 }
 
@@ -84,7 +84,7 @@ fn k2_cli(home: &Path, workspace: &str, args: &[&str]) -> String {
 #[tokio::test(flavor = "current_thread")]
 async fn headless_list_route_and_cli_show_next_fire_and_wait_reason() {
     let home = scratch_home();
-    let k2_dir = home.join(".k2");
+    let k2_dir = k2_core::paths::k2_home_in(&home);
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).unwrap();
     let workspace = home.join("ws-s3");

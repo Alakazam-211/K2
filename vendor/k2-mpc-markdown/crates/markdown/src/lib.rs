@@ -66,6 +66,12 @@ impl Pack for MarkdownPack {
     fn verbs(&self) -> &'static [PackVerb] {
         VERBS
     }
+    fn errors(&self) -> &'static [k2_mpc_base::errors::ErrorEntry] {
+        section::ERRORS
+    }
+    fn ids(&self) -> &'static [k2_mpc_base::ids::IdKind] {
+        section::IDS
+    }
 }
 
 /// True when `path` has a live-Markdown extension.
@@ -105,6 +111,38 @@ mod tests {
         let names: Vec<&str> = p.verbs().iter().map(|v| v.name()).collect();
         assert_eq!(names, ["replace-section"]);
     }
+
+    /// `docs/IDS.md`'s table is the pack's own address kinds ([`Pack::ids`]), as the kit
+    /// renders them; the kinds name only registered verbs; the pack's refusal is registered.
+    /// `MPC_BLESS=1` rewrites the file.
+    #[test]
+    fn the_id_table_is_the_docs() {
+        use k2_mpc_base::parity::Registry;
+        use k2_mpc_base::session::Pack;
+        let p = super::PACK;
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/IDS.md");
+        let md = format!("{IDS_HEAD}{}", k2_mpc_base::ids::markdown(p.ids()));
+        if std::env::var_os("MPC_BLESS").is_some() {
+            std::fs::write(path, &md).expect("write docs/IDS.md");
+        }
+        let on_disk = std::fs::read_to_string(path).expect("docs/IDS.md");
+        assert_eq!(
+            on_disk, md,
+            "docs/IDS.md is generated: MPC_BLESS=1 cargo test"
+        );
+        let kinds: Vec<&str> = p.ids().iter().map(|k| k.kind).collect();
+        assert_eq!(kinds, ["heading-address", "heading-text"]);
+        let r = Registry::for_pack(&p).expect("registry");
+        k2_mpc_base::ids::check(p.ids(), |v| r.get(v).is_some()).unwrap_or_else(|e| panic!("{e}"));
+        let ids: Vec<&str> = p.errors().iter().map(|e| e.id).collect();
+        assert_eq!(ids, ["MARKDOWN-E001"]);
+    }
+
+    const IDS_HEAD: &str = "# IDs and addresses\n\n\
+        <!-- Generated from crates/markdown/src/section.rs (`section::IDS`) by the lib test \
+        `the_id_table_is_the_docs`; don't edit by hand. Regenerate: MPC_BLESS=1 cargo test. -->\n\n\
+        The Markdown pack's own address kinds (`Pack::ids`). The kit's kinds (lines, `L:C`, \
+        versions, changes...) apply as well: see the kit's `docs/IDS.md`.\n\n";
 
     #[test]
     fn schema_builds_a_doc() {

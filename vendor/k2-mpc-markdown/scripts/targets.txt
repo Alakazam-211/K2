@@ -11,3 +11,4 @@ k2-mpc-markdown|example|multiplayer_demo||built-only:check: the demo program, wi
 k2-mpc-markdown|test|agent_parity||check
 k2-mpc-markdown|test|demo_transcript||check
 k2-mpc-markdown|test|fidelity||check
+k2-mpc-markdown|test|heading_slugs||check

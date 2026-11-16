@@ -26,6 +26,10 @@ export interface TimelineView {
   /** The scenario and step this came from (the sample's). */
   scenario?: string
   step?: number
+  /** The sample world: only then does the monitor draw the sample's footage. */
+  sample?: boolean
+  /** K2 Render's facts per source (the sample's own, until T8). */
+  facts?: MediaFacts
 }
 
 export interface TimelineSnapshot extends SampleSnapshot {
@@ -37,6 +41,8 @@ export interface SnapshotOpts {
   /** Added to the state's times (the sample's are offsets from 0). */
   clock0?: number
   scenario?: string
+  /** The sample world (its footage may be drawn). */
+  sample?: boolean
 }
 
 /** The agent to follow: whoever made the latest change; else whoever acted last; else an agent with a playhead; else any agent. */
@@ -221,7 +227,7 @@ export function timelineSnapshot(S: SimState, o: SnapshotOpts): TimelineSnapshot
     features: { viewAddress: true, timePosition: true, say: true },
     clock: clock0 + nowOf(S),
     hints: failedSay ? { sayFails: true } : {},
-    timeline: { state: S, model: M, scenario: o.scenario, step: S.i },
+    timeline: { state: S, model: M, scenario: o.scenario, step: S.i, sample: !!o.sample, facts: o.facts },
   }
 }
 

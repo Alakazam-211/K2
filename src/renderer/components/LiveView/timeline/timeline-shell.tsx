@@ -1,9 +1,10 @@
 // The live timeline tab on the shared shell: the header (its sentence takes
 // its own row when narrow), the side panel (Watching, Messages, Changes),
 // the notices and the say row, always there while live so the lanes never
-// jump. The content (TimelineHero) is the monitor's place, a row with Back
-// to X, zoom and View, and the lanes and ruler (T3); the monitor and
-// transport fill in with T4 (build-live-timeline.md).
+// jump. The content (TimelineHero) places the say row and the panel itself:
+// the monitor and its transport (T4) with the say row under them, beside
+// the panel, then the lanes and ruler (T3) full width under all of it
+// (build-live-timeline.md).
 
 import { personById } from '@/lib/live-view/shared/people'
 import { FilmGlyph } from '../shell/glyphs'
@@ -24,6 +25,8 @@ export const TIMELINE_SHELL: ShellConfig = {
   sentenceRowWhenNarrow: true,
   backInHeader: false,
   sayAlways: true,
+  // The lanes run full width under the say row and the panel (the mock's layout).
+  placesSayAndPanel: true,
   kept: 'who’s watching, the changes and your playhead',
   sayAddress: (snap, to) => {
     const p = personById(snap.people, to)

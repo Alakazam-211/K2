@@ -60,6 +60,8 @@ export interface LanesProps {
   onMeasure: (tw: number) => void
   onKey: (e: React.KeyboardEvent) => void
   onJump: (side: Edge) => void
+  /** The monitor's playhead (the monitor's own: yours, or whom you follow); from the state's own playhead when unset. */
+  monitor?: { f: number; colour: string; name: string } | null
 }
 
 const PROBES = ['lv-tl-name', 'lv-tl-tagfont'] as const
@@ -109,7 +111,7 @@ export function Lanes(p: LanesProps): React.JSX.Element {
   const heads = playheadsOf(S, M, now)
   const live = S.tier === 'live' && !S.loading
   const mine = heads.find((h) => h.self)
-  const monitor = live ? { f: mine?.f ?? 0, colour: 'var(--color-accent)', name: 'your playhead' } : null
+  const monitor = !live ? null : p.monitor !== undefined ? p.monitor : { f: mine?.f ?? 0, colour: 'var(--color-accent)', name: 'your playhead' }
 
   // Keep the middle in place on a zoom; fit goes to the start; a new sample (or the monitor leaving the screen) brings its playhead to a third in.
   const last = useRef<{ ppf: number; scenario?: string; step?: number; fit: number; centre?: string } | null>(null)

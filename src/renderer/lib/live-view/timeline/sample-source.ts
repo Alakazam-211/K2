@@ -10,14 +10,14 @@
 import type { PlayerScenario, PlayerStep } from '../shared/sample-player'
 import { SampleShellSource, type SampleShellOptions } from '../shared/sample-shell'
 import type { ShellSample } from '../shared/samples'
-import { CONN, GOLDEN, HOLDGONE, LARGE_SC, OPEN, SAVES, TURN, WATCH } from './scenarios'
+import { CONN, GOLDEN, HOLDGONE, LARGE_SC, OPEN, PREP, SAVES, STATES, TURN, WATCH } from './scenarios'
 import { simulate, type Scenario } from './sim'
 import { SAMPLE_CLOCK0, timelineSnapshot, type TimelineSnapshot } from './snapshot'
-import { CTX, FACTS } from './world'
+import { ATLAS, CTX, FACTS, SELF } from './world'
 
 /** A sample step's snapshot: scenario `sc` played to step `i`. */
 export function sampleSnapshot(sc: Scenario, i: number): TimelineSnapshot {
-  return timelineSnapshot(simulate(sc, i, CTX), { facts: FACTS, clock0: SAMPLE_CLOCK0, scenario: sc.id })
+  return timelineSnapshot(simulate(sc, i, CTX), { facts: FACTS, clock0: SAMPLE_CLOCK0, scenario: sc.id, sample: true })
 }
 
 /** One banner step from a scenario's step, its snapshot worked out once, when first read. */
@@ -33,11 +33,33 @@ function lazyStep(sc: Scenario, i: number, label?: string): PlayerStep<TimelineS
 
 const whole = (sc: Scenario, id: string, label: string, group: string): PlayerScenario<TimelineSnapshot> => ({ id, label, group, steps: sc.steps.map((_, i) => lazyStep(sc, i)) })
 
-/** The banner's menu headings: the people and changes (T2), then the lanes (T3). */
+/** The banner's menu headings: the people and changes (T2), the lanes (T3), then the monitor (T4). */
 const PEOPLE = 'People and changes'
 const LANES = 'The lanes'
+const MONITOR = 'The monitor'
 
-/** The banner's scenarios: the panel's (T2) and the lanes' (T3). Every mock scenario stays in `SCENARIOS` for the monitor. */
+/** A scenario played on your own playhead: Atlas's moves become yours and nobody is followed. The monitor shows yours until Follow is wired (T5). */
+export function onYourPlayhead(sc: Scenario, id: string): Scenario {
+  return {
+    ...sc,
+    id,
+    steps: sc.steps.map((st) => ({
+      ...st,
+      events: st.events.map((e) => {
+        if (e.kind === 'presence' && e.who === ATLAS && e.type === 'timePosition') return { ...e, who: SELF }
+        if (e.kind === 'local' && 'follow' in e.v) {
+          const { follow, ...rest } = e.v
+          void follow
+          return { ...e, v: rest }
+        }
+        return e
+      }),
+    })),
+  }
+}
+const MON_STATES = onYourPlayhead(STATES, 'states')
+
+/** The banner's scenarios: the panel's (T2), the lanes' (T3) and the monitor's (T4). Every mock scenario stays in `SCENARIOS` for the monitor. */
 export function timelineBannerScenarios(): PlayerScenario<TimelineSnapshot>[] {
   const last = (sc: Scenario, label: string): PlayerStep<TimelineSnapshot> => lazyStep(sc, sc.steps.length - 1, label)
   const save = (id: string): Scenario => SAVES.find((s) => s.id === id)!
@@ -55,6 +77,9 @@ export function timelineBannerScenarios(): PlayerScenario<TimelineSnapshot>[] {
     // The lanes (T3): the pinned file as K2 Cores pinned it, and a long edit (the overview, small lanes, virtualising).
     whole(GOLDEN, 'golden', 'Pinned file', LANES),
     whole(LARGE_SC, 'large', 'Long edit', LANES),
+    // The monitor (T4): every state of the design section, then preparing video.
+    whole(MON_STATES, 'states', 'Monitor states', MONITOR),
+    whole(PREP, 'prep', 'Preparing video', MONITOR),
   ]
 }
 

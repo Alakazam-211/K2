@@ -28,10 +28,10 @@ const goTo = (scenario: string, label: string): TimelineSnapshot => {
 const doing = (s: TimelineSnapshot, id: string): string | null | undefined => personById(s.people, id)?.doing
 
 describe('the banner', () => {
-  it('opens on the watched edit; seven scenarios (the pinned file and a long edit for the lanes), each step a whole snapshot', () => {
+  it('opens on the watched edit; nine scenarios (the pinned file and a long edit for the lanes, the monitor’s states and preparing video), each step a whole snapshot', () => {
     expect(src.kind).toBe('sample')
     expect(src.player.status()).toMatchObject({ scenario: 'watch', position: 1, length: WATCH.steps.length })
-    expect(src.player.scenarioList().map((s) => s.label)).toEqual(['First open', 'Watching an edit', 'Two agents', 'Outside saves', 'Connection', 'Pinned file', 'Long edit'])
+    expect(src.player.scenarioList().map((s) => s.label)).toEqual(['First open', 'Watching an edit', 'Two agents', 'Outside saves', 'Connection', 'Pinned file', 'Long edit', 'Monitor states', 'Preparing video'])
     expect(snap().timeline.scenario).toBe('watch')
     expect(snap().timeline.model.count).toBe(33)
   })

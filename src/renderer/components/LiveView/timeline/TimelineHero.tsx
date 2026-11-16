@@ -1,25 +1,39 @@
-// The timeline tab's content area (T3): the monitor's place on top (its
-// picture and transport come in T4), a row under it for Back to X, zoom
-// and fit, and the View menu; then the lanes and ruler, which take what
-// they need up to 46% of the area so the monitor stays the biggest thing.
+// The timeline tab's content (T4), laid out as the mock: an upper row with
+// the monitor, the transport under it (Back to X, loop, zoom and fit, and
+// View live on its right) and the say row, beside the side panel; then the
+// lanes and ruler, full width under all of it. The lanes take what they
+// need up to 38% of the area, so the monitor stays the biggest thing. The
+// watching keys work anywhere in the tab but the say field and the menus.
 // Without a timeline beside the snapshot (the shell's own sample) it stays
 // the Phase 1 placeholder.
 
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui'
-import { defaultPpf, fitPpf, loadPrefs, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
+import { personById } from '@/lib/live-view/shared/people'
+import { KEY_MAP, keysHint, playbackKey, type WatchKey } from '@/lib/live-view/timeline/keys'
+import { bracketsOf, defaultPpf, fitPpf, isBig, lanesHeight, loadPrefs, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
+import { detailRows } from '@/lib/live-view/timeline/monitor-details'
+import { monitorView } from '@/lib/live-view/timeline/monitor-view'
+import { loopRange } from '@/lib/live-view/timeline/picture'
 import { RULER_H } from '@/lib/live-view/timeline/ruler'
-import type { TimelineSnapshot, TimelineView } from '@/lib/live-view/timeline/snapshot'
+import { monitorSourceFor } from '@/lib/live-view/timeline/sample-footage'
+import { nowOf, type TimelineSnapshot, type TimelineView } from '@/lib/live-view/timeline/snapshot'
+import { editStarts, scrubMarks, whoLine } from '@/lib/live-view/timeline/transport'
 import { FACTS } from '@/lib/live-view/timeline/world'
 import type { ShellHeroProps } from '../shell/shell-config'
 import { StagePlaceholder } from '../shell/StagePlaceholder'
+import { box } from './box'
 import { FitGlyph, ZoomInGlyph, ZoomOutGlyph } from './glyphs'
 import { Lanes } from './Lanes'
+import { MONITOR_CSS } from './monitorCss'
+import { Monitor } from './Monitor'
 import { TIMELINE_CSS } from './timelineCss'
+import { Transport } from './Transport'
+import { usePlayback } from './usePlayback'
 import { ViewMenu } from './ViewMenu'
 
-/** The lanes take at most this share of the content area (the say row and the banner sit outside it, so a little more than the mock's 38% of the tab). */
-export const LANES_SHARE = 0.46
+/** The monitor row takes at least 62% of the content area; the lanes the rest, up to what they need. */
+export const MONITOR_SHARE = 0.62
 
 function Placeholder({ p }: { p: ShellHeroProps }): React.JSX.Element {
   const line = p.state === 'loading' ? 'Opening the edit. The lanes come first, then the pictures.' : 'The edit’s monitor and lanes show here: everyone’s playhead, and each change as it lands.'
@@ -28,7 +42,15 @@ function Placeholder({ p }: { p: ShellHeroProps }): React.JSX.Element {
       {p.back}
     </div>
   ) : null
-  return <StagePlaceholder kind="timeline" line={line} p={p} below={below} />
+  return (
+    <div className="relative flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <StagePlaceholder kind="timeline" line={line} p={p} below={below} />
+        {p.say}
+      </div>
+      {p.panel}
+    </div>
+  )
 }
 
 function useHeight(): [React.RefObject<HTMLDivElement | null>, number] {
@@ -44,8 +66,13 @@ function useHeight(): [React.RefObject<HTMLDivElement | null>, number] {
   return [ref, h]
 }
 
+/** Keys inside these are theirs: typing, menus, dialogs. */
+const OWN_KEYS = 'input, textarea, select, [role=dialog], [contenteditable=true]'
+
 function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView }): React.JSX.Element {
   const M = view.model
+  const S = view.state
+  const facts = view.facts ?? FACTS
   const tab = M.T.name || 'timeline'
   const [prefs, setPrefs] = useState<ViewPrefs>(() => loadPrefs(tab, M))
   // Pixels a frame: null is the edit's default for the width, 'fit' the whole edit at any width.
@@ -53,6 +80,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
   const [fitTick, setFitTick] = useState(0)
   const tw = useRef(1000)
   const [ref, heroH] = useHeight()
+  const [upper, setUpper] = useState<HTMLDivElement | null>(null)
   // A new edit (another file or sample): its own choices and zoom.
   const key = `${tab}|${view.scenario}`
   const [seen, setSeen] = useState(key)
@@ -62,7 +90,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
     setPpf(null)
   }
   // A step that zooms (the sample's "fit", "zoom in" on a long edit): the lanes follow it.
-  const z = view.state.zoom
+  const z = S.zoom
   const cue = z && z.at === view.step ? `${key}|${view.step}` : null
   const [cued, setCued] = useState<string | null>(null)
   if (z && cue && cued !== cue) {
@@ -72,6 +100,21 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
   }
   const centre = z && cue && !z.fit && z.center != null ? { f: z.center, key: cue } : null
 
+  // The monitor: whose playhead (T5 wires Follow here; yours until then), your own playback, and what it shows.
+  const whose: string | null = null
+  const fps = M.T.rate ? M.T.rate.fps : 24
+  const [local, setLocal] = usePlayback(`${key}|${view.step}`, M.endF, fps)
+  const now = nowOf(S)
+  const mv = monitorView({ S, M, facts, now, whose, local, people: p.snap.people })
+  const source = monitorSourceFor(!!view.sample)
+  const marks = useMemo(() => scrubMarks(S, M, mv, now), [S, M, mv, now])
+  const agent = p.snap.agent ? personById(p.snap.people, p.snap.agent) : undefined
+  const agentName = agent?.name ?? 'the agent'
+  const edits = useMemo(() => editStarts(S, p.snap.agent), [S, p.snap.agent])
+  const latest = useMemo(() => bracketsOf(S).filter((b) => b.who === p.snap.agent).pop() ?? null, [S, p.snap.agent])
+  const loop = local?.loop ? local.loop : null
+  const headPerson = mv.head.self ? (p.snap.people.find((x) => x.self) ?? null) : (personById(p.snap.people, mv.head.id) ?? null)
+
   const onMeasure = useCallback((w: number) => {
     tw.current = w
   }, [])
@@ -80,47 +123,124 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
     setPpf('fit')
     setFitTick((n) => n + 1)
   }
-  const onKey = (e: React.KeyboardEvent): void => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return
-    if (e.key === '=' || e.key === '+') zoom(1)
-    else if (e.key === '-') zoom(-1)
-    else if (e.key === '\\') fit()
-    else return
-    e.preventDefault()
+  const play = (): void => {
+    const next = playbackKey('play', local, { f: mv.head.f, playing: mv.playing, canPlay: mv.canPlay, ended: mv.state === 'ended', endF: M.endF, edits })
+    if (next) setLocal(next)
+  }
+  const onWatchKey = (k: WatchKey): boolean => {
+    if (k === 'zoom+') zoom(1)
+    else if (k === 'zoom-') zoom(-1)
+    else if (k === 'fit') fit()
+    else if (k === 'escape') {
+      if (!local?.loop) return false
+      setLocal({ f: mv.head.f, rate: 0 })
+    } else {
+      const next = playbackKey(k, local, { f: mv.head.f, playing: mv.playing, canPlay: mv.canPlay, ended: mv.state === 'ended', endF: M.endF, edits })
+      if (next) setLocal(next)
+    }
+    return true
+  }
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return
+    const k = KEY_MAP[e.key]
+    if (!k) return
+    const t = e.target as HTMLElement
+    if (t.closest?.(OWN_KEYS)) return
+    if (e.key === ' ' && t.closest?.('button')) return // Space on a button presses it
+    if (onWatchKey(k)) e.preventDefault()
+  }
+  const toggleLoop = (): void => {
+    if (local?.loop) return setLocal({ f: mv.head.f, rate: 0 })
+    if (!latest) return
+    const r = loopRange(M, latest)
+    setLocal({ f: r.f0, rate: 1, loop: { f0: r.f0, f1: r.f1, who: agentName, verb: latest.verb } })
   }
   const choose = (group: keyof ViewPrefs, value: string): void => {
     const next = { ...prefs, [group]: value } as ViewPrefs
     setPrefs(next)
     savePrefs(tab, next)
   }
-  const maxFrame = Math.max(72, Math.round(heroH * LANES_SHARE) - RULER_H)
-  const line = p.state === 'loading' ? 'Opening the edit. The lanes come first, then the pictures.' : 'The edit’s picture plays here.'
+
+  // The lanes take what they need, up to 38% of the area; the monitor row the rest.
+  const big = isBig(M)
+  const need = RULER_H + lanesHeight(M, prefs.lanes) + 16 + (big ? 14 : 0)
+  const upperH = Math.max(heroH * MONITOR_SHARE, heroH - need)
+  const maxFrame = Math.max(48, Math.round(heroH - upperH) - RULER_H - (big ? 14 : 0) - 1)
+  const details = detailRows(S, M, mv, M.T.name || 'this timeline')
+
+  const zoomNode = (
+    <span role="group" aria-label="Zoom" data-zoom="" className="inline-flex items-center gap-1">
+      <Button variant="quiet" size="sm" className="!px-1.5" aria-label="Zoom out" title="Zoom out ( - )" data-testid="lv-zoom-out" onClick={() => zoom(-1)}>
+        <ZoomOutGlyph size={14} />
+      </Button>
+      <Button variant="quiet" size="sm" className="!px-1.5" aria-label="Zoom in" title="Zoom in ( = )" data-testid="lv-zoom-in" onClick={() => zoom(1)}>
+        <ZoomInGlyph size={14} />
+      </Button>
+      <Button variant="quiet" size="sm" className="!px-1.5" aria-label="Fit the whole edit" title="Fit the whole edit ( \ )" data-testid="lv-zoom-fit" onClick={fit}>
+        <FitGlyph size={14} />
+      </Button>
+    </span>
+  )
 
   return (
-    <div ref={ref} data-testid="lv-hero" data-kind="timeline" data-state={p.state} data-jumped={p.jumped ?? undefined} className="lv-tl flex min-h-0 flex-1 flex-col">
-      <style>{TIMELINE_CSS}</style>
-      <div className="flex min-h-[72px] flex-1 flex-col px-2.5 pt-2.5">
-        <div data-k2-chamfer="surface" data-testid="lv-monitor-place" className="lv-stage relative flex min-h-0 flex-1 items-center justify-center rounded-[var(--radius-box)]">
-          <p className="type-row m-0 max-w-[44ch] px-6 text-center text-[var(--color-text-secondary)]">{line}</p>
+    <div ref={ref} data-testid="lv-hero" data-kind="timeline" data-state={p.state} data-jumped={p.jumped ?? undefined} className="lv-tl flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
+      <style>{TIMELINE_CSS + MONITOR_CSS}</style>
+      <div ref={setUpper} data-testid="lv-upper" className="lv-tl-mon-row relative flex min-h-0 flex-1 px-2.5 pt-2.5">
+        <div className="flex min-w-0 flex-1 flex-col" data-testid="lv-moncol">
+          <Monitor
+            view={box(mv)}
+            model={box(M)}
+            source={source}
+            people={p.snap.people}
+            details={details}
+            narrow={p.narrow}
+            sheetHost={upper}
+            onSkip={(f) => {
+              const it = monitorView({ S, M, facts, now, whose, local: { f, rate: 0 } }).picture?.it
+              setLocal({ f, rate: 0, skipped: it?.name ?? null })
+            }}
+            onRestart={() => setLocal({ f: 0, rate: 1 })}
+            onShowCant={fit}
+          />
+          <Transport
+            model={box(M)}
+            view={box(mv)}
+            marks={marks}
+            who={whoLine(S, mv, local)}
+            person={headPerson}
+            narrow={p.narrow}
+            agentName={agentName}
+            hasEdits={edits.length > 0}
+            canLoop={!!latest}
+            loop={loop}
+            back={p.back}
+            zoom={zoomNode}
+            viewMenu={<ViewMenu prefs={prefs} onChange={choose} />}
+            keysHint={keysHint(agentName)}
+            onKey={(k) => onWatchKey(k)}
+            onPlay={play}
+            onLoop={toggleLoop}
+            onScrub={(f) => setLocal({ f, rate: 0 })}
+          />
+          {p.say}
         </div>
+        {p.panel}
       </div>
-      <div data-testid="lv-transport-place" className="flex flex-none items-center gap-2 px-2.5 py-1.5">
-        {p.back}
-        <span className="flex-1" />
-        <span role="group" aria-label="Zoom" className="inline-flex items-center gap-1">
-          <Button variant="quiet" size="sm" className="!px-1.5" aria-label="Zoom out" title="Zoom out ( - )" data-testid="lv-zoom-out" onClick={() => zoom(-1)}>
-            <ZoomOutGlyph size={14} />
-          </Button>
-          <Button variant="quiet" size="sm" className="!px-1.5" aria-label="Zoom in" title="Zoom in ( = )" data-testid="lv-zoom-in" onClick={() => zoom(1)}>
-            <ZoomInGlyph size={14} />
-          </Button>
-          <Button variant="quiet" size="sm" className="!px-1.5" aria-label="Fit the whole edit" title="Fit the whole edit ( \ )" data-testid="lv-zoom-fit" onClick={fit}>
-            <FitGlyph size={14} />
-          </Button>
-        </span>
-        <ViewMenu prefs={prefs} onChange={choose} />
-      </div>
-      <Lanes view={view} facts={FACTS} people={p.snap.people} narrow={p.narrow} prefs={prefs} ppf={ppf} fitTick={fitTick} centre={centre} maxFrame={maxFrame} onMeasure={onMeasure} onKey={onKey} onJump={p.onJump} />
+      <Lanes
+        view={view}
+        facts={facts}
+        people={p.snap.people}
+        narrow={p.narrow}
+        prefs={prefs}
+        ppf={ppf}
+        fitTick={fitTick}
+        centre={centre}
+        maxFrame={maxFrame}
+        onMeasure={onMeasure}
+        onKey={() => {}}
+        onJump={p.onJump}
+        monitor={{ f: mv.head.f, colour: mv.head.self ? 'var(--color-accent)' : mv.head.colour, name: mv.head.self ? 'your playhead' : `${mv.head.name}’s playhead` }}
+      />
     </div>
   )
 }

@@ -10,9 +10,21 @@ import {
   ChevronDownIcon,
   ChevronsLeftRightIcon,
   EyeOffIcon,
+  CloudOffIcon,
   FilmIcon,
+  ImageIcon,
+  ImageOffIcon,
+  InfoIcon,
+  KeyboardIcon,
   LayersIcon,
   LockIcon,
+  PauseIcon,
+  PlayIcon,
+  RepeatIcon,
+  SkipBackIcon,
+  SkipForwardIcon,
+  StepBackIcon,
+  StepForwardIcon,
   TypeIcon,
   VolumeXIcon,
   ZoomInIcon,
@@ -36,6 +48,22 @@ export const ZoomOutGlyph = glyph(ZoomOutIcon)
 export const FitGlyph = glyph(ChevronsLeftRightIcon)
 export const DownGlyph = glyph(ChevronDownIcon)
 export const CheckGlyph = glyph(CheckIcon)
+// The monitor and transport (T4).
+export const PlayGlyph = glyph(PlayIcon)
+export const PauseGlyph = glyph(PauseIcon)
+export const FrameBackGlyph = glyph(StepBackIcon)
+export const FrameFwdGlyph = glyph(StepForwardIcon)
+export const PrevEditGlyph = glyph(SkipBackIcon)
+export const NextEditGlyph = glyph(SkipForwardIcon)
+export const LoopGlyph = glyph(RepeatIcon)
+export const KeysGlyph = glyph(KeyboardIcon)
+export const InfoGlyph = glyph(InfoIcon)
+export const NoPreviewGlyph = glyph(ImageOffIcon)
+export const OfflineGlyph = glyph(CloudOffIcon)
+export const NestGlyph = glyph(LayersIcon)
+export const ImageGlyph = glyph(ImageIcon)
+export const AudioGlyph = glyph(AudioLinesIcon)
+export const FilmCardGlyph = glyph(FilmIcon)
 
 const KIND: Record<KindGlyph, (p: { size?: number }) => React.JSX.Element> = {
   title: glyph(TypeIcon),

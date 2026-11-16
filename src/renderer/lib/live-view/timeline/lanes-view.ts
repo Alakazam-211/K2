@@ -137,6 +137,9 @@ export function ghostsOf(S: SimState, M: TimelineModel = modelOf(S.B)): Ghost[] 
 export interface Bracket {
   f0: number
   f1: number
+  /** Whose change (the agent's handle) and its verb ("clip trim"). */
+  who: string
+  verb: string | null
   colour: string
   line: string
   fresh: boolean
@@ -158,7 +161,7 @@ export function bracketsOf(S: SimState): Bracket[] {
           f1 = Math.max(f1, x.f1)
         }
     if (!Number.isFinite(f0)) continue
-    out.push({ f0, f1, colour: colourOf(actorOf(e.actor).colour), line: framePhrase(e.frame, e.before, e.after).line, fresh: e.i === S.i })
+    out.push({ f0, f1, who: actorOf(e.actor).id, verb: e.frame.verb ?? null, colour: colourOf(actorOf(e.actor).colour), line: framePhrase(e.frame, e.before, e.after).line, fresh: e.i === S.i })
   }
   return out
 }

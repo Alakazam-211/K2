@@ -1068,8 +1068,8 @@ impl Core {
                 if mb.ref_frame == INTRA_FRAME {
                     h.write_tree(&YMODE_TREE, &DEFAULT_YMODE_PROBS, mb.y_mode);
                     if mb.y_mode == B_PRED {
-                        for b in 0..16 {
-                            h.write_tree(&BMODE_TREE, &BMODE_PROBS, mb.bmodes[b]);
+                        for &m in &mb.bmodes {
+                            h.write_tree(&BMODE_TREE, &BMODE_PROBS, m);
                         }
                     }
                     h.write_tree(&UV_MODE_TREE, &DEFAULT_UV_MODE_PROBS, mb.uv_mode);

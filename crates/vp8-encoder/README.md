@@ -24,6 +24,8 @@ VP8, which every browser decodes.
 For simulcast, run one encoder per layer, each at its own size, and make
 the smaller pictures with `scale_i420`.
 
+**MSRV:** Rust 1.80 (`rust-version` in Cargo.toml).
+
 ```rust
 use vp8_encoder::{EncodeError, Encoder, EncoderConfig, Picture};
 
@@ -85,6 +87,20 @@ the same Ryzen core.
   WebCodecs, byte-identical to vp8-decoder's output
   (`scripts/libvpx-crosscheck.sh`, `scripts/chrome-check.sh`).
 
+## Issues
+
+The source is in [`crates/vp8-encoder`](https://github.com/Alakazam-211/K2/tree/main/crates/vp8-encoder)
+of the K2 repository, and its issues are on that repository's tracker
+under the `vp8` label:
+- [report a bug or ask a question](https://github.com/Alakazam-211/K2/issues/new?labels=vp8&template=vp8.yml)
+  (a short form for the vp8 crates);
+- [the vp8 issues so far](https://github.com/Alakazam-211/K2/issues?q=label%3Avp8).
+
+Please give the crate version, your platform and CPU and, if you can
+share one, a sample stream or a minimal repro. A crash or hang on a
+malicious stream is a security problem: report it privately (see
+Security, below).
+
 ## Licence
 
 `(MIT OR Apache-2.0) AND BSD-3-Clause`. This crate builds on
@@ -101,5 +117,8 @@ contributions. Google's VP8 patent grant covers only Google's own code.
 Users who want patent cover can join Google's free VP8 Patent
 Cross-License themselves.
 
-Report security problems privately through GitHub's "Report a
-vulnerability" on [Alakazam-211/K2](https://github.com/Alakazam-211/K2/security).
+## Security
+
+Report security problems privately, never in a public issue: see
+[SECURITY.md](https://github.com/Alakazam-211/K2/blob/main/SECURITY.md) (GitHub's private vulnerability reporting on the
+Security tab of [Alakazam-211/K2](https://github.com/Alakazam-211/K2/security)).

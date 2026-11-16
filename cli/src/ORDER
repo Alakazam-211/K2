@@ -88,6 +88,7 @@ schema/fed.entries
 schema/setup.entries
 schema/remind.entries
 schema/box.entries
+schema/notify.entries
 schema-tail.sh
 explain.sh
 setup.sh

@@ -7,24 +7,25 @@ _push_usage() {
     cat <<'EOF'
 k2 push — the phones that get this server's pushes, and encrypted pushes
 
-  k2 push devices [--json]          every phone: platform, login, previews,
+  k2 push devices [--json]          (also ls) every phone: platform, login, previews,
                                     encryption (Encrypted / Not encrypted
                                     (override) / Update app …) and a token
                                     fingerprint (8 hex). Never the token. Two
                                     rows with the same fingerprint are one
                                     phone registered twice.
   k2 push e2e [--json]              the server switch (pushE2E)
-  k2 push e2e off|sealed-when-supported|sealed-only
+  k2 push e2e off|sealed-when-supported|sealed-only [--json]
                                     off = today's pushes for every phone (instant
                                     rollback); sealed-when-supported (default) =
                                     encrypted for phones on the current K2
                                     Companion, as before for the rest;
                                     sealed-only = older apps get "K2 / New message"
-  k2 push device e2e <deviceId> off|sealed|default
+  k2 push device e2e <deviceId> off|sealed|default [--json]
                                     one phone's override (testing): off = today's
                                     pushes, sealed = encrypted when it can,
                                     default = follow the server switch
-  k2 push device remove <deviceId>  stop pushing to one phone: removes its
+  k2 push device remove <deviceId> [--json]
+                                    (also rm) stop pushing to one phone: removes its
                                     registration and its push key (a stale or
                                     duplicate row, a lost phone). Not a block: the
                                     phone registers again when its app next opens

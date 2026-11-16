@@ -93,6 +93,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         blurb: 'Ask a person to approve exact bytes on their phone (Face ID); they sign there, K2 only carries it.',
         example: 'k2 approve request --payload p.bin --wait --out approval.json',
       },
+      {
+        noun: 'notify',
+        blurb: 'Email a person on this server, once the owner turned it on for this workspace (text only).',
+        example: 'k2 notify email owner --subject "Build done" --text "All green."',
+      },
     ],
   },
   {
@@ -253,6 +258,8 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'daemon', blurb: 'Status, start/stop and logs of the K2 daemon.', example: 'k2 daemon status' },
       { noun: 'settings', blurb: 'Read/update daemon and workspace settings.', example: 'k2 settings' },
       { noun: 'setup', blurb: 'Your setup list on this server: what is done, what is left.', example: 'k2 setup' },
+      { noun: 'push', blurb: "The phones that get this server's pushes, and encrypted pushes.", example: 'k2 push devices' },
+      { noun: 'notifications', blurb: "The senders K2's notification mail leaves from, and your notice address.", example: 'k2 notifications email' },
       { noun: 'vault', blurb: 'Secrets: fetch by name, never paste.', example: 'k2 vault list' },
       { noun: 'job', blurb: 'Scripts on a schedule, run by the daemon with their own secrets.', example: 'k2 job list' },
       { noun: 'update', blurb: 'Update the K2 app (the CLI updates with it).', example: 'k2 update --app' },

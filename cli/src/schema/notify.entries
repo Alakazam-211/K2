@@ -1,0 +1,295 @@
+    {
+      "name": "push",
+      "usage": "k2 push devices|e2e|device e2e|device remove|log ...",
+      "description": "The phones that get this server's pushes (K2 Companion's), and end-to-end encrypted pushes. Owner only (the owner token or an Owner login), except device remove (also an Admin). A custom App's own phone app is k2 app push. Exit 2 usage, 3 not allowed, 4 no such device.",
+      "args": [{"name": "verb", "required": true, "description": "devices | e2e | device | log"}],
+      "flags": []
+    },
+    {
+      "name": "push devices",
+      "usage": "k2 push devices [--json]",
+      "description": "Every phone: platform, login, previews, encryption and a token fingerprint (8 hex), never the token. Two rows with the same fingerprint are one phone registered twice. Also ls.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "push e2e",
+      "usage": "k2 push e2e [off|sealed-when-supported|sealed-only] [--json]",
+      "description": "Read or set the server switch (pushE2E). off: today's pushes for every phone (instant rollback); sealed-when-supported (default): encrypted for phones on the current K2 Companion, as before for the rest; sealed-only: older apps get \"K2 / New message\".",
+      "args": [{"name": "mode", "required": false, "description": "off | sealed-when-supported | sealed-only; none reads it."}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "push device e2e",
+      "usage": "k2 push device e2e <deviceId> off|sealed|default [--json]",
+      "description": "One phone's override (testing). off: today's pushes; sealed: encrypted when it can; default: follow the server switch.",
+      "args": [{"name": "deviceId", "required": true}, {"name": "mode", "required": true, "description": "off | sealed | default"}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "push device remove",
+      "usage": "k2 push device remove <deviceId> [--json]",
+      "description": "Stop pushing to one phone: removes its registration and push key (a stale or duplicate row, a lost phone). Not a block: the phone registers again when its app next opens signed in. Owner or Admin. Also rm.",
+      "args": [{"name": "deviceId", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "push log",
+      "usage": "k2 push log [--device <id>] [--json]",
+      "description": "What happened to each phone, oldest first: send lines (one per phone per relay call: lane, bytes, relay status, vendor result) and add/update/remove lines (a registration changed, with the reason). Each kind keeps its last 200, in memory only (a restart empties both). Never message text, titles or tokens.",
+      "args": [],
+      "flags": [
+        {"name": "--device", "arg": "id", "description": "One phone: the whole id or its first 8 characters (k2 push devices lists ids)."},
+        {"name": "--json", "arg": null, "description": "\"attempts\" and \"events\" as two lists."}
+      ]
+    },
+    {
+      "name": "notify",
+      "usage": "k2 notify email <login|owner> --subject \"...\" (--text \"...\" | --text-file <file>) | k2 notify email off | k2 notify email mute|unmute <workspace>",
+      "description": "Agent email notices: an agent emails a person on this server (text only). Off by default per workspace; the owner turns it on (k2 notifications email agent on).",
+      "args": [{"name": "verb", "required": true, "description": "email"}],
+      "flags": []
+    },
+    {
+      "name": "notify email",
+      "usage": "k2 notify email <login|owner> --subject \"...\" (--text \"...\" | --text-file <file>)",
+      "description": "One email to that person, from the workspace you run it in (there is no --workspace) and its own sender. K2 adds a line saying which agent sent it and a link to stop them. Refusals: agent_email_off (only the owner turns it on: run the Ask with: line if there is one, else a Thread message), no_notice_address (the person hasn't confirmed an address; tell them), person_muted (don't retry), rate_limited (10 an hour, 50 a day per workspace; retryAfterMs says when).",
+      "args": [{"name": "to", "required": true, "description": "Their K2 login on this server, or owner literally. Never an email address."}],
+      "flags": [
+        {"name": "--subject", "arg": "text", "description": "Required. Up to 200 characters."},
+        {"name": "--text", "arg": "text", "description": "The body, up to 16 KB. No HTML, no attachments, no Reply-To."},
+        {"name": "--text-file", "arg": "file", "description": "The body from a file (not with --text)."}
+      ]
+    },
+    {
+      "name": "notify email off",
+      "usage": "k2 notify email off",
+      "description": "Turn this workspace's notices off. Only the owner turns them back on.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "notify email mute",
+      "usage": "k2 notify email mute <workspace>",
+      "description": "For people, from their own terminal: stop that workspace's notices to you.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "notify email unmute",
+      "usage": "k2 notify email unmute <workspace>",
+      "description": "For people, from their own terminal: let that workspace's notices reach you again.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "notifications",
+      "usage": "k2 notifications email [status|sender|suppressions|system-sender|relay|log|settings|address|agent] ...",
+      "description": "Email Notifications: the senders K2's notification mail leaves from. Owner and Admins only; adding a sender or a relay, choosing the system sender and test sends need the owner in person (Touch ID, login or vault password) from a terminal outside K2. A person's own notice address (address) is any person's, never an agent's. Guide: k2 study email-notifications.",
+      "args": [{"name": "verb", "required": true, "description": "email"}],
+      "flags": []
+    },
+    {
+      "name": "notifications email",
+      "usage": "k2 notifications email [status] [--json]",
+      "description": "The box switch, hosted mail, the system sender, every sender and relay, and the log settings.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "notifications email sender add",
+      "usage": "k2 notifications email sender add <address> [--name N] [--lock-name] [--reply-to <addr>]... [--relay <relay id> | --via <bounce subdomain>]",
+      "description": "A send-only account K2 creates (hosted mail, Linux) or an address on a relay; never a mailbox, no agent can read it. A hosted sender needs its domain Verified (k2 hostmail domain check) and a DMARC record. On a Mac (no hosted mail), add a relay first.",
+      "args": [{"name": "address", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "N", "description": "The From name."},
+        {"name": "--lock-name", "arg": null, "description": "Lock the From name."},
+        {"name": "--reply-to", "arg": "addr", "description": "A Reply-To address (repeatable)."},
+        {"name": "--relay", "arg": "relay id", "description": "Send through this relay."},
+        {"name": "--via", "arg": "bounce subdomain", "description": "Send as noreply@brand.com when brand.com's mail lives elsewhere (hosted mail only). Host the subdomain here first (k2 hostmail domain add); brand.com's DMARC must not be strict on both checks."}
+      ]
+    },
+    {
+      "name": "notifications email sender list",
+      "usage": "k2 notifications email sender [list] [--all] [--json]",
+      "description": "The senders; paused ones are marked (with the resume command) and each App's is shown.",
+      "args": [],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Include removed (retired) senders too."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "notifications email sender check",
+      "usage": "k2 notifications email sender check <sender>",
+      "description": "Re-check DMARC and the domain. <sender> is its address or its id from sender list.",
+      "args": [{"name": "sender", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "notifications email sender set",
+      "usage": "k2 notifications email sender set <sender> [--name N] [--lock-name|--unlock-name] [--reply-to <addr>]...",
+      "description": "Change a sender's From name, name lock or Reply-To.",
+      "args": [{"name": "sender", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "N", "description": "The From name."},
+        {"name": "--lock-name", "arg": null, "description": "Lock the From name."},
+        {"name": "--unlock-name", "arg": null, "description": "Unlock it."},
+        {"name": "--reply-to", "arg": "addr", "description": "A Reply-To address (repeatable)."}
+      ]
+    },
+    {
+      "name": "notifications email sender rm",
+      "usage": "k2 notifications email sender rm <sender>",
+      "description": "Remove a sender; its address stays reserved 30 days.",
+      "args": [{"name": "sender", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "notifications email sender resume",
+      "usage": "k2 notifications email sender resume <sender>",
+      "description": "The owner, with a confirm: an App's sender that K2 paused (over 5% hard bounces or 0.1% spam complaints of at least 50 recipients in 24 h) sends again, and the 24-hour count starts from zero. The system sender is never paused.",
+      "args": [{"name": "sender", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "notifications email suppressions",
+      "usage": "k2 notifications email suppressions [list] [<address>] [--limit N] [--json]",
+      "description": "Addresses K2 won't send to: a hard bounce (every sender), a spam complaint (that sender only), or added by hand. Kept hashed: the list shows the domain, reason and hash; give an address to see only its entries.",
+      "args": [{"name": "address", "required": false}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "At most N rows."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "notifications email suppressions add",
+      "usage": "k2 notifications email suppressions add <address> [--sender <sender>] [--json]",
+      "description": "Owner or Admin. Without --sender: every sender.",
+      "args": [{"name": "address", "required": true}],
+      "flags": [
+        {"name": "--sender", "arg": "sender", "description": "Only this sender."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "notifications email suppressions rm",
+      "usage": "k2 notifications email suppressions rm <address> [--sender <sender> | --all] [--json]",
+      "description": "The owner: mail may go to it again. No flag removes its every-sender entry (a hard bounce, or one added for every sender).",
+      "args": [{"name": "address", "required": true}],
+      "flags": [
+        {"name": "--sender", "arg": "sender", "description": "That sender's entry (a complaint)."},
+        {"name": "--all", "arg": null, "description": "Every entry for the address."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "notifications email system-sender",
+      "usage": "k2 notifications email system-sender [show] | set <sender> | clear | test",
+      "description": "K2's own mail (owner password resets with no --from, codes) comes from it. test sends one test email to the owner address (k2 notifications email settings --owner-email).",
+      "args": [{"name": "verb", "required": false, "description": "show (default) | set <sender> | clear | test"}],
+      "flags": []
+    },
+    {
+      "name": "notifications email relay add",
+      "usage": "k2 notifications email relay add --host H [--port P] [--tls implicit|starttls] --username U --from-domain D",
+      "description": "An SMTP relay to send through. The password (SMTP password or API key) is read from stdin, never an argument.",
+      "args": [],
+      "flags": [
+        {"name": "--host", "arg": "H", "description": "Required."},
+        {"name": "--port", "arg": "P", "description": "A number."},
+        {"name": "--tls", "arg": "implicit|starttls", "description": "The TLS mode."},
+        {"name": "--username", "arg": "U", "description": "Required."},
+        {"name": "--from-domain", "arg": "D", "description": "Required. The domain its senders send as."}
+      ]
+    },
+    {
+      "name": "notifications email relay list",
+      "usage": "k2 notifications email relay [list]",
+      "description": "The relays and each one's last test.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "notifications email relay rm",
+      "usage": "k2 notifications email relay rm <relay>",
+      "description": "Remove a relay.",
+      "args": [{"name": "relay", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "notifications email relay test",
+      "usage": "k2 notifications email relay test <relay> --from <sender>",
+      "description": "One test to your own address; the sender goes ready when the relay takes it.",
+      "args": [{"name": "relay", "required": true}],
+      "flags": [{"name": "--from", "arg": "sender", "description": "Required."}]
+    },
+    {
+      "name": "notifications email log",
+      "usage": "k2 notifications email log [--app <app>] [--limit N] [--json]",
+      "description": "The notification mail log.",
+      "args": [],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "One App's mail."},
+        {"name": "--limit", "arg": "N", "description": "At most N rows."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "notifications email settings",
+      "usage": "k2 notifications email settings [--retention-days 7-90] [--owner-email <you@...>]",
+      "description": "How long the log is kept, and the owner address. Test emails only ever go to --owner-email.",
+      "args": [],
+      "flags": [
+        {"name": "--retention-days", "arg": "7-90", "description": "Days the log is kept."},
+        {"name": "--owner-email", "arg": "address", "description": "Where test emails go."}
+      ]
+    },
+    {
+      "name": "notifications email address",
+      "usage": "k2 notifications email address [show] [--person <login>] [--json]",
+      "description": "Your notice address (where emails from this server's agents reach you): the confirmed one and any still waiting for a confirm (up to 3). Any person with a login here, or the owner, from a terminal outside K2; an agent is refused (403).",
+      "args": [],
+      "flags": [
+        {"name": "--person", "arg": "login", "description": "Another person's (the server's owner or an Admin only)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "notifications email address set",
+      "usage": "k2 notifications email address set <you@example.com> [--json]",
+      "description": "Emails that address a confirm link from the system sender (valid 24 hours). Notices go there only after you press Confirm; your current address keeps working until then. Setting the same address again sends a fresh link. Your own only; never an agent.",
+      "args": [{"name": "address", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "notifications email address remove",
+      "usage": "k2 notifications email address remove [<address>] [--person <login>] [--json]",
+      "description": "Stop notices to <address> now, confirmed or still waiting. With no address: all of them. Never an agent.",
+      "args": [{"name": "address", "required": false}],
+      "flags": [
+        {"name": "--person", "arg": "login", "description": "Another person's (the server's owner or an Admin)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "notifications email agent",
+      "usage": "k2 notifications email agent [list] [--json]",
+      "description": "Which workspaces' agents may email people here (agents' email notices; off by default).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "notifications email agent on",
+      "usage": "k2 notifications email agent on <workspace> --sender <address>",
+      "description": "The owner, with a confirm: the workspace's agent may email people here from <address> (a sender of its own, not the system sender or an App's; add it first with sender add). Agents then send with k2 notify email.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [{"name": "--sender", "arg": "address", "description": "Required."}]
+    },
+    {
+      "name": "notifications email agent off",
+      "usage": "k2 notifications email agent off <workspace>",
+      "description": "Turn a workspace's agent notices off. The owner or an Admin.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": []
+    },

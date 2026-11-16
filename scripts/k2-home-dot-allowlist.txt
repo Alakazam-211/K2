@@ -1,0 +1,54 @@
+# k2-home-gate, the .k2 half (scripts/k2-home-dot-gate.py).
+# Rust lines outside the two path helpers (k2_client::paths, k2_core::workspace_dir)
+# that still spell the `.k2` folder name. Format, one line each:
+#   <repo-relative path> :: <text the line contains> :: <why it stays>
+# Every entry needs a reason. An entry that matches nothing fails the gate:
+# remove it. Shrink freely; grow only with review.
+
+# ── Folder guards: they refuse a path by the folder's name. Each moves onto
+# k2_client::paths::is_workspace_dot_dir in its own signed-off commit
+# (K5 plan, Amendment 4, G2/G3), with a .k5/.k2so/upper-case test.
+crates/k2-core/src/clone/inventory.rs :: (w[0] == ".k2" || w[0] == ".k2so") :: folder guard (is_vault_path / is_llm_wallet_path); Amendment 4 rows 1-2
+crates/k2-core/src/clone/inventory.rs :: const AGENT_DOT_DIRS :: folder guard list (clone inventory's agent config folders); Amendment 4
+crates/k2-core/src/clone/scrub.rs :: has_dir_component(rel_path, ".k2") :: folder guard (clone scrub); Amendment 4
+crates/k2-daemon/src/board_file/routes.rs :: let k2_ok = rel == ".k2" :: folder guard (walk_boards); Amendment 4 row 8
+crates/k2-daemon/src/board_file/routes.rs :: rel.starts_with(".k2") && !k2_ok :: folder guard (walk_boards); Amendment 4 row 8
+crates/k2-daemon/src/docs/target.rs :: None => ".k2".to_string() :: folder guard's spelling (is_k2_config normalises every name to .k2); Amendment 4 rows 9-10
+crates/k2-daemon/src/heartbeat_app_routes.rs :: if k2 == ".k2" && hbs == "heartbeats" :: folder guard (exact_wakeup_name); Amendment 4 rows 11-13
+crates/k2-daemon/src/mail/routes_send.rs :: p.eq_ignore_ascii_case(".k2") :: folder guard (attachment_path_refusal); Amendment 4 row 14
+crates/k2-node-proto/src/frames.rs :: c != ".k2") :: folder guard (valid_layout_path), node protocol: links no K2 crate; Amendment 4 row 16
+crates/k2-root-proto/src/sew.rs :: seg == ".k2" || seg == ".k2so" :: folder guard (mirror_path_ok), root helper protocol: links no K2 crate; Amendment 4 row 17
+crates/k2-daemon/src/fs_routes.rs :: .map(|r| r.join(".k2").join("heartbeats") :: jail check: a heartbeat file's parent must be that heartbeat's folder; moves with the heartbeat guards (Amendment 4 rows 11-13)
+crates/k2-core/src/workspace/onboarding.rs :: matches!(parent, Some(".k2") | Some(".k2so")) :: folder guard (is the AGENTS.md ours); Amendment 4 behaviour site
+crates/k2-core/src/workspace/onboarding.rs :: [".k2", ".k2so"] :: folder guard (a link target inside the workspace folder); Amendment 4 behaviour site
+crates/k2-daemon/src/docs/host.rs :: d.join(".k2").is_dir() :: probe: finds the workspace root by its folder; learns .k5 with the readers (Amendment 4 G3 step 5)
+crates/k2-core/src/compute/sync.rs :: const K2_DIR: &str = ".k2"; :: folder guard (compute sync never sends a workspace's .k2); Amendment 4
+crates/k2-core/src/deploy/seed.rs :: pub const ALWAYS_EXCLUDED :: folder guard (a deploy never ships a workspace's .k2); Amendment 4
+
+# ── The App sign-in door: a URL namespace (/.k2/auth/...), not a folder.
+crates/k2-daemon/src/apps/auth_door.rs :: !lower.contains(".k2") :: the /.k2/auth door's URL check: a wire contract (Amendment 4 G5.1), not a folder
+
+# ── The folder name when the resolver's path has no last part (never, for a
+# path it built): the default it would have picked.
+crates/k2-core/src/workspace/canonical.rs :: .unwrap_or_else(|| ".k2".to_string()), :: fallback name for workspace_dot_dir's file_name (unreachable)
+crates/k2-core/src/workspace/context_layers.rs :: .unwrap_or_else(|| ".k2".into()); :: fallback name for workspace_dot_dir's file_name (unreachable)
+crates/k2-core/src/workspace/context_layers.rs :: dot_name != ".k2" :: rewrites a .k2/ path for a workspace served from .k2so; reads the resolver's answer
+crates/k2-core/src/workspace/onboarding.rs :: .unwrap_or_else(|| ".k2".to_string()); :: fallback name for workspace_dot_dir's file_name (unreachable)
+
+# ── The 0.40.4 .k2so -> .k2 migration names both folders by definition.
+crates/k2-core/src/workspace/dot_dir_migration.rs :: let new = root.join(".k2"); :: migration: the folder it renames .k2so to
+crates/k2-core/src/workspace/dot_dir_migration.rs :: let dot = root.join(".k2"); :: migration hygiene: the folder it sweeps
+crates/k2-core/src/workspace/dot_dir_migration.rs :: line.replacen(".k2so", ".k2", 1) :: migration: rewrites .gitignore lines from .k2so to .k2
+
+# ── Crates that link no K2 crate keep one copy of the name each.
+crates/k2-deskd/src/lib.rs :: pub const K2_HOME_DIR_NAME: &str = ".k2"; :: k2-deskd's copy of paths::HOME_DIR_NAME (links no K2 crate)
+crates/k2-menubar/src/lib.rs :: pub const K2_HOME_DIR_NAME: &str = ".k2"; :: k2-menubar's copy of paths::HOME_DIR_NAME (links no K2 crate)
+crates/k2-node/src/paths.rs :: pub const K2_HOME_DIR_NAME: &str = ".k2"; :: k2-node's copy of paths::HOME_DIR_NAME (never links k2-core, CN26)
+crates/k2-node/src/toolchain.rs :: root.join(".k2/compute.toml") :: a repo's compute.toml read on the node, which never links k2-core (CN26)
+
+# ── Debt, sign-off areas: route through workspace_dot_dir with K2's OK.
+crates/k2-daemon/src/v1_capabilities.rs :: workspace.join(".k2").join("caps") :: debt: capability token staging; sign-off area
+crates/k2-daemon/src/v1_capabilities.rs :: fs::set_permissions(workspace.join(".k2") :: debt: capability token staging; sign-off area
+
+# ── Test-only module included by #[path] under #[cfg(test)].
+crates/k2-daemon/src/apps/db_connect_real_pg.rs :: ws_dir.join(".k2/db/migrations :: test-only module (#[cfg(test)] #[path] from db_connect.rs): a fixture workspace's layout

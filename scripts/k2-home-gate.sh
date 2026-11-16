@@ -1,5 +1,6 @@
 #!/bin/bash
-# k2-home-gate — CI guard: no new home-anchored ~/.k2so path literals.
+# k2-home-gate — CI guard: no new home-anchored ~/.k2so path literals, and
+# no new `.k2` folder name spelled out in Rust outside the two path helpers.
 #
 # Canonical home is ~/.k2 (k2_core::paths::k2_home()). The ~/.k2so name is
 # compat-only (symlink / dual-read). This gate keeps the 0.40.33 class of
@@ -51,4 +52,10 @@ if [ "$fail" -ne 0 ]; then
   echo "allowlist. ~/.k2 is canonical. See .k2/prds/prd-k2so-cleanup-v1.md."
   exit 1
 fi
+
+# The .k2 half: a path into the K2 home comes from k2_core::paths::k2_home()
+# (k2_home_in / k2_home_opt), one into a workspace's folder from
+# k2_core::workspace_dot_dir(). Rust lines that still spell `.k2` are listed,
+# each with its reason, in scripts/k2-home-dot-allowlist.txt.
+python3 scripts/k2-home-dot-gate.py
 echo "k2-home-gate: clean"

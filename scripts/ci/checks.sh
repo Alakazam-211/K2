@@ -69,6 +69,7 @@ part_web() {
     step "macOS sidecars build once (stubbed)";    bash tests/packaging/build-once.sh
     step "bun install";                            bun install --frozen-lockfile
     step "k2-home gate";                           bash scripts/k2-home-gate.sh
+    step "k2-home gate's .k2 half on broken trees"; bash tests/garden/k2-home-dot-gate.sh
     step "brand inventory script";                 bash tests/garden/brand-inventory.sh
     step "brand gate (no new product name or k2.dev)"; bash scripts/brand-gate.sh
     step "zone gate on broken trees";              bash tests/garden/zone-gate.sh

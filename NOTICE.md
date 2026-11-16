@@ -416,6 +416,35 @@ the kit from its public cut, which has no `fuzz/`.
 | **Dependencies** | the kit and k2-mpc-opc (above), and roxmltree 0.21 (MIT OR Apache-2.0) |
 | **Formats** | docx, pptx and xlsx are file formats specified by ECMA-376 and ISO/IEC 29500. The pack is not affiliated with, endorsed by or sponsored by the formats' original vendor |
 
+## Multiplayer kit: k2-mpc-timeline v0.1.0 (vendored)
+
+The kit's pack for video timelines: OTIO, FCPXML and PRPROJ files are read into the kit's
+structure index, and an OTIO file can also be a live keyed doc written back to its own bytes.
+Vendored whole beside the kit (its `fuzz/` crate is test tooling K2 doesn't build). K2 doesn't
+build or run it yet.
+
+| | |
+|--|--|
+| **What** | `vendor/k2-mpc-timeline` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-timeline`, tag `v0.1.0` (`c0c0efe`) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project |
+| **Dependencies** | the kit (above), thiserror 2, roxmltree 0.21 (with memchr: Unlicense OR MIT) and flate2 1 (MIT OR Apache-2.0) |
+| **Formats** | OTIO is the file format of OpenTimelineIO, a project of the Academy Software Foundation. FCPXML and PRPROJ are the file formats of other companies' video editing products. This project is not affiliated with, endorsed by or sponsored by any of them; their names and marks belong to their owners and are used here only to name the file formats |
+
+## Multiplayer kit: k2-mpc-fab v0.1.0 (vendored)
+
+The kit's pack for circuit board fabrication files: photoplot and drill files are read into the
+kit's structure index (read only; no writer). Vendored whole beside the kit (its `fuzz/` crate is
+test tooling K2 doesn't build). K2 doesn't build or run it yet.
+
+| | |
+|--|--|
+| **What** | `vendor/k2-mpc-fab` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-fab`, tag `v0.1.0` (`1bc238a`) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project, and no text, tables or figures from the specifications it reads: it cites their section numbers only (the *Gerber Layer Format Specification*, revision 2026.05, and the *XNC Format Specification*, revision 2021.11) |
+| **Dependencies** | the kit only (above) |
+| **Formats** | Gerber Format is a registered trademark of Ucamco NV; the photoplot reader reads files in that format and is not affiliated with, endorsed by or sponsored by Ucamco. XNC is Ucamco's subset of the IPC-NC-349 drill format; Excellon is a trademark of its owner. These names are used here only to name the file formats |
+
 Update these sections on every kit bump.
 
 ## Third-party: deckcraft v0.18.1, for .pptx previews (MIT OR Apache-2.0, vendored)

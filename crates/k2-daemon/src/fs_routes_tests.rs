@@ -1283,3 +1283,59 @@ fn a_folder_made_in_the_window_is_resolved_and_allowed() {
     assert!(!refused(&root, Some(&got)), "an ordinary drop folder is allowed");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The editors' autosave: `expect` (the SHA-256 of the file as read) makes
+/// `fs/write-file` refuse to write over another program's save, 409 with
+/// what is there now; `absent` guards a new file; no `expect` is as before.
+#[test]
+fn write_file_with_expect_never_writes_over_another_save() {
+    let dir = untitled_tmp("expect");
+    let f = dir.join("notes.md");
+    let path = f.to_string_lossy().to_string();
+    std::fs::write(&f, "# mine\n").unwrap();
+    let read_hash = content_sha256(b"# mine\n");
+    assert_eq!(read_hash.len(), 64);
+    let write = |content: &str, expect: Option<&str>| {
+        let mut b = serde_json::json!({ "path": path, "content": content });
+        if let Some(e) = expect {
+            b["expect"] = serde_json::json!(e);
+        }
+        handle_write_file(b.to_string().as_bytes())
+    };
+    // Unchanged since the read: written.
+    let r = write("# mine, edited\n", Some(&read_hash));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "# mine, edited\n");
+    // Another program saves; the editor's next autosave carries its old base.
+    let mine = content_sha256(b"# mine, edited\n");
+    std::fs::write(&f, "# theirs\n").unwrap();
+    let r = write("# mine, edited more\n", Some(&mine));
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(v["code"], "file_changed", "{v}");
+    assert_eq!(v["current"]["sha256"], content_sha256(b"# theirs\n").as_str(), "{v}");
+    assert_eq!(v["current"]["content"], "# theirs\n", "the text, to merge without another read: {v}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "# theirs\n", "their save stays");
+    // A new file: absent while nothing is there, file_exists after.
+    let new = dir.join("new.md");
+    let new_path = new.to_string_lossy().to_string();
+    let w_new = |expect: &str| handle_write_file(serde_json::json!({ "path": new_path, "content": "hi", "expect": expect }).to_string().as_bytes());
+    assert_eq!(w_new(EXPECT_ABSENT).status, "200 OK");
+    let r = w_new(EXPECT_ABSENT);
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert!(r.body.contains("file_exists"), "{}", r.body);
+    // The file goes: file_missing.
+    std::fs::remove_file(&new).unwrap();
+    let r = w_new(&content_sha256(b"hi"));
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert!(r.body.contains("file_missing"), "{}", r.body);
+    assert!(!new.exists(), "nothing written");
+    // A malformed expect is a 400; none at all writes as before.
+    assert_eq!(write("x", Some("ABC")).status, "400 Bad Request");
+    assert_eq!(write("# no check\n", None).status, "200 OK");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "# no check\n");
+    // An App guest's write gets the code and the hash, never the text.
+    let skin_like = expect_unchanged(&path, Some(&mine), false).expect_err("changed");
+    assert!(!skin_like.body.contains("no check") && skin_like.body.contains("file_changed"), "{}", skin_like.body);
+    let _ = std::fs::remove_dir_all(&dir);
+}

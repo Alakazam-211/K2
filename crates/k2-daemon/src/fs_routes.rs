@@ -312,6 +312,69 @@ pub fn handle_resolve_links_guest(body: &[u8], pass: &SkinPass) -> CliResponse {
 struct WriteFileBody {
     path: String,
     content: String,
+    /// The file as the caller last read it: the SHA-256 (64 lowercase hex)
+    /// of its bytes, or [`EXPECT_ABSENT`] for a file that wasn't there.
+    #[serde(default)]
+    expect: Option<String>,
+}
+
+/// `expect` for a file the caller saw missing (a new file): the write goes
+/// only while nothing is there.
+pub const EXPECT_ABSENT: &str = "absent";
+
+/// SHA-256 of `bytes`, 64 lowercase hex.
+pub fn content_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `fs/write-file`'s `expect` (the editors' autosave, so it never writes
+/// over another program's save): the file at `path` must still be what the
+/// caller read: its bytes' SHA-256, or, with [`EXPECT_ABSENT`], no file.
+/// Otherwise 409 and nothing is written:
+/// - `file_changed`: another save landed since; `current: {sha256,
+///   content?}` (the text as `fs/read-file` gives it, when it can and
+///   `with_content`: the owner and Connect logins, never an App guest) so the
+///   editor can merge without another read;
+/// - `file_missing`: the file is gone (it expected one);
+/// - `file_exists`: it expected none and there is one (`current` as above).
+///
+/// A malformed `expect` is a 400. No `expect`: no check (as before). The
+/// check runs right before the write: a save in the same instant can still
+/// cross it, which the editor's next check sees.
+pub fn expect_unchanged(path: &str, expect: Option<&str>, with_content: bool) -> Result<(), CliResponse> {
+    let Some(expect) = expect.map(str::trim) else { return Ok(()) };
+    let absent = expect == EXPECT_ABSENT;
+    if !absent && !(expect.len() == 64 && expect.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))) {
+        return Err(CliResponse::bad_request(format!(
+            "expect is the SHA-256 (64 lowercase hex) of the file as you read it, or \"{EXPECT_ABSENT}\""
+        )));
+    }
+    let conflict = |code: &str, error: &str, current: Option<serde_json::Value>| {
+        let mut body = serde_json::json!({ "error": error, "code": code });
+        if let Some(c) = current {
+            body["current"] = c;
+        }
+        CliResponse { status: "409 Conflict", content_type: "application/json", body: body.to_string() }
+    };
+    let current = |bytes: &[u8]| {
+        let mut c = serde_json::json!({ "sha256": content_sha256(bytes) });
+        if let Some(f) = with_content.then(|| fsc::read_file_coded(path).ok()).flatten() {
+            c["content"] = serde_json::json!(f.content);
+        }
+        c
+    };
+    let on_disk = match fsc::validate_path(path) {
+        Ok(p) => std::fs::read(p).ok(),
+        Err(e) => return Err(CliResponse::bad_request(e)),
+    };
+    match (on_disk, absent) {
+        (None, true) => Ok(()),
+        (Some(bytes), true) => Err(conflict("file_exists", "a file is there now; read it before you write", Some(current(&bytes)))),
+        (None, false) => Err(conflict("file_missing", "the file is gone since you read it", None)),
+        (Some(bytes), false) if content_sha256(&bytes) == expect => Ok(()),
+        (Some(bytes), false) => Err(conflict("file_changed", "the file changed on disk since you read it", Some(current(&bytes)))),
+    }
 }
 
 pub fn handle_write_file(body: &[u8]) -> CliResponse {
@@ -319,6 +382,9 @@ pub fn handle_write_file(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
+    if let Err(r) = expect_unchanged(&parsed.path, parsed.expect.as_deref(), true) {
+        return r;
+    }
     match fsc::write_file(&parsed.path, &parsed.content) {
         Ok(()) => {
             crate::session_events::emit_fs_changed_for_paths([parsed.path]);
@@ -787,6 +853,9 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
         return r;
     }
     let abs = jailed.to_string_lossy().to_string();
+    if let Err(r) = expect_unchanged(&abs, v.get("expect").and_then(|x| x.as_str()), false) {
+        return r;
+    }
     match fsc::write_file(&abs, &content) {
         Ok(()) => {
             crate::session_events::emit_fs_changed_for_paths([abs]);

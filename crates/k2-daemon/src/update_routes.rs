@@ -745,14 +745,111 @@ fn job_stage_dir(job_id: &str) -> PathBuf {
     base.join(job_id)
 }
 
-/// `~/.k2so/update/backup-<ver>` — where `apply` copies the CURRENTLY
-/// running binary before the swap, so the detached helper can restore it
-/// if the new binary fails its health-check.
-fn backup_path(version: &str) -> PathBuf {
+/// `~/.k2/update/backup-<ver>` — the name `apply` prefers for its copy of
+/// the CURRENTLY running binary, so a failed update can put it back.
+/// `<ver>` is the RUNNING (source) version: the file holds that version.
+///
+/// Before 0.46.13 the name used the TARGET version, so a downgrade
+/// 0.46.13 → 0.46.12 saved the running 0.46.13 as `backup-0.46.12` over the
+/// real 0.46.12 backup. Backups made under that naming stay where they are
+/// and are still restored: every rollback reads the exact path recorded
+/// when the backup was made (the Linux `pending.json`, the helper script),
+/// never a name worked out from a version.
+fn backup_path(running_version: &str) -> PathBuf {
     let base = k2_core::paths::home_dir()
         .map(|h| h.join(".k2").join("update"))
         .unwrap_or_else(|| std::env::temp_dir().join("k2so-update"));
-    base.join(format!("backup-{version}"))
+    base.join(format!("backup-{running_version}"))
+}
+
+/// Most alternates [`back_up_running_binary`] tries before it refuses.
+const MAX_BACKUP_ALTERNATES: u32 = 99;
+
+/// Copy the running binary to `plan.backup_path` (named for the running
+/// version, [`backup_path`]) and point `plan.backup_path` at the file it
+/// actually used.
+///
+/// Never overwrites a DIFFERENT binary: if that name already holds other
+/// bytes (a backup made under the old target-version naming, or a different
+/// build of the same version), the copy goes to `<name>.alt1`, `.alt2`, …
+/// and both are kept. A file that already holds these exact bytes is reused.
+/// The copy is written to a temp file and renamed into place, so a name
+/// never holds half a binary.
+fn back_up_running_binary(plan: &mut ApplyPlan) -> std::io::Result<()> {
+    let preferred = plan.backup_path.clone();
+    let dir = preferred
+        .parent()
+        .ok_or_else(|| std::io::Error::other("backup path has no parent dir"))?;
+    let name = preferred
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("backup path has no file name"))?
+        .to_string_lossy()
+        .into_owned();
+    std::fs::create_dir_all(dir)?;
+    for n in 0..=MAX_BACKUP_ALTERNATES {
+        let candidate = if n == 0 { preferred.clone() } else { dir.join(format!("{name}.alt{n}")) };
+        match std::fs::symlink_metadata(&candidate) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                copy_into_place(&plan.running_path, &candidate)?;
+                plan.backup_path = candidate;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+            Ok(meta) if meta.is_file() && files_identical(&plan.running_path, &candidate)? => {
+                plan.backup_path = candidate;
+                return Ok(());
+            }
+            Ok(_) => continue,
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "{} and its {MAX_BACKUP_ALTERNATES} alternates all hold other binaries",
+        preferred.display()
+    )))
+}
+
+/// `src` → a temp file beside `dst` → `rename` onto `dst`.
+fn copy_into_place(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let dir = dst
+        .parent()
+        .ok_or_else(|| std::io::Error::other("backup path has no parent dir"))?;
+    let tmp = dir.join(format!(".backup.tmp.{}", std::process::id()));
+    if let Err(e) = std::fs::copy(src, &tmp).and_then(|_| std::fs::rename(&tmp, dst)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Whether two files hold the same bytes (streamed; the binaries are large).
+fn files_identical(a: &Path, b: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    fn read_full(f: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut n = 0;
+        while n < buf.len() {
+            match f.read(&mut buf[n..]) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(n)
+    }
+    if std::fs::metadata(a)?.len() != std::fs::metadata(b)?.len() {
+        return Ok(false);
+    }
+    let (mut fa, mut fb) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
+    let (mut ba, mut bb) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    loop {
+        let (na, nb) = (read_full(&mut fa, &mut ba)?, read_full(&mut fb, &mut bb)?);
+        if na != nb || ba[..na] != bb[..nb] {
+            return Ok(false);
+        }
+        if na == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1299,7 +1396,9 @@ pub fn prepare_apply(job_id: &str) -> Result<ApplyPlan, CliResponse> {
         target_version: job.target_version.clone(),
         staged_path,
         running_path,
-        backup_path: backup_path(&job.target_version),
+        // Named for the version RUNNING now (the bytes it will hold), never
+        // the target: a downgrade must not overwrite the target's backup.
+        backup_path: backup_path(current_version()),
     })
 }
 
@@ -1336,7 +1435,7 @@ pub fn handle_apply(
         return package_install_refusal();
     }
 
-    let plan = match prepare_apply(&req.job_id) {
+    let mut plan = match prepare_apply(&req.job_id) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -1359,11 +1458,10 @@ pub fn handle_apply(
     // ── LIVE PATH (e2e-smoke-test-pending) ─────────────────────────────
     // k2-ptyd P58: decided before anything stops (the session map is live).
     let agents_restart = crate::daemon_stop::agents_restart_on_update();
-    // 1. Back up the running binary so we can roll back.
-    if let Err(e) = std::fs::create_dir_all(plan.backup_path.parent().unwrap_or(Path::new("/"))) {
-        return CliResponse::internal_error(format!("create backup dir: {e}"));
-    }
-    if let Err(e) = std::fs::copy(&plan.running_path, &plan.backup_path) {
+    // 1. Back up the running binary so we can roll back. This settles the
+    // backup's final path (an `.altN` when the name holds another binary)
+    // BEFORE the verifier marker / helper script record it.
+    if let Err(e) = back_up_running_binary(&mut plan) {
         return CliResponse::internal_error(format!("back up running binary: {e}"));
     }
     set_phase(&plan.job_id, Phase::Applying);
@@ -3068,12 +3166,124 @@ mod tests {
         };
         assert_eq!(plan.target_version, "999.0.0");
         assert_eq!(plan.staged_path, staged);
-        assert!(
-            plan.backup_path.to_string_lossy().contains("backup-999.0.0"),
+        // The backup holds the RUNNING binary, so it is named for the
+        // running version, not the target (0.46.13 rollback test).
+        assert_eq!(
+            plan.backup_path.file_name().map(|n| n.to_string_lossy().into_owned()),
+            Some(format!("backup-{}", current_version())),
             "backup path: {}",
             plan.backup_path.display()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Plan an apply of `target` from a staged job, the way the route does.
+    fn plan_for(target: &str, staged: &Path) -> ApplyPlan {
+        let id = create_job(target);
+        update_job(&id, |j| {
+            j.phase = Phase::Staged;
+            j.staged_path = Some(staged.to_path_buf());
+            j.version_override = true;
+        });
+        prepare_apply(&id).unwrap_or_else(|e| panic!("plan {target}: {} {}", e.status, e.body))
+    }
+
+    fn read_backup(home: &Path, name: &str) -> Vec<u8> {
+        let p = home.join(".k2").join("update").join(name);
+        std::fs::read(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
+    }
+
+    // 0.46.13 upgrade-and-rollback test: a downgrade 0.46.13 → 0.46.12 saved
+    // the running 0.46.13 as `backup-0.46.12`, over the real 0.46.12 backup.
+    #[test]
+    fn an_upgrade_then_a_downgrade_keeps_both_backups_named_for_what_they_hold() {
+        let home = crate::test_support::TempHome::new();
+        let _g = clear_jobs_for_test();
+        let cur = current_version();
+        let older = "0.0.1";
+        let staged = home.path().join("staged-k2-daemon");
+        std::fs::write(&staged, b"STAGED").expect("staged");
+        let running = home.path().join("k2-daemon");
+        std::fs::write(&running, format!("BIN-{cur}")).expect("running");
+        // The backup the earlier upgrade older → cur left behind: it holds older.
+        let update_dir = home.path().join(".k2").join("update");
+        std::fs::create_dir_all(&update_dir).expect("update dir");
+        std::fs::write(update_dir.join(format!("backup-{older}")), b"BIN-0.0.1").expect("older backup");
+
+        // Upgrade cur → 999.0.0: the backup holds cur and says so.
+        let mut up = plan_for("999.0.0", &staged);
+        up.running_path = running.clone();
+        back_up_running_binary(&mut up).expect("upgrade backup");
+        assert_eq!(up.backup_path, update_dir.join(format!("backup-{cur}")));
+        assert_eq!(read_backup(home.path(), &format!("backup-{cur}")), format!("BIN-{cur}").into_bytes());
+        assert!(!update_dir.join("backup-999.0.0").exists(), "nothing is named for the target");
+
+        // Downgrade cur → older (the owner's override): older's backup is untouched.
+        let mut down = plan_for(older, &staged);
+        down.running_path = running.clone();
+        back_up_running_binary(&mut down).expect("downgrade backup");
+        assert_eq!(down.backup_path, update_dir.join(format!("backup-{cur}")), "same bytes reuse the name");
+        assert_eq!(read_backup(home.path(), &format!("backup-{older}")), b"BIN-0.0.1", "older's backup survives");
+        assert_eq!(read_backup(home.path(), &format!("backup-{cur}")), format!("BIN-{cur}").into_bytes());
+    }
+
+    // A name that already holds OTHER bytes (an old target-named backup, or
+    // another build of this version) is kept; the new copy goes beside it.
+    #[test]
+    fn a_backup_never_overwrites_a_different_binary_under_the_same_name() {
+        let home = crate::test_support::TempHome::new();
+        let _g = clear_jobs_for_test();
+        let cur = current_version();
+        let update_dir = home.path().join(".k2").join("update");
+        std::fs::create_dir_all(&update_dir).expect("update dir");
+        let name = format!("backup-{cur}");
+        // An older daemon upgrading to cur named ITS binary `backup-<cur>`.
+        std::fs::write(update_dir.join(&name), b"LEGACY-OLDER-BIN").expect("legacy");
+        let running = home.path().join("k2-daemon");
+        std::fs::write(&running, b"RUNNING-A").expect("running");
+        let mut plan = ApplyPlan {
+            job_id: "j".into(),
+            target_version: "999.0.0".into(),
+            staged_path: home.path().join("staged"),
+            running_path: running.clone(),
+            backup_path: backup_path(cur),
+        };
+        back_up_running_binary(&mut plan).expect("backup");
+        assert_eq!(plan.backup_path, update_dir.join(format!("{name}.alt1")));
+        assert_eq!(read_backup(home.path(), &name), b"LEGACY-OLDER-BIN", "the legacy backup is kept");
+        assert_eq!(read_backup(home.path(), &format!("{name}.alt1")), b"RUNNING-A");
+
+        // The same bytes again reuse `.alt1`; different bytes get `.alt2`.
+        plan.backup_path = backup_path(cur);
+        back_up_running_binary(&mut plan).expect("again");
+        assert_eq!(plan.backup_path, update_dir.join(format!("{name}.alt1")));
+        std::fs::write(&running, b"RUNNING-B").expect("rebuild");
+        plan.backup_path = backup_path(cur);
+        back_up_running_binary(&mut plan).expect("other build");
+        assert_eq!(plan.backup_path, update_dir.join(format!("{name}.alt2")));
+        assert_eq!(read_backup(home.path(), &format!("{name}.alt1")), b"RUNNING-A");
+        assert_eq!(read_backup(home.path(), &format!("{name}.alt2")), b"RUNNING-B");
+        let strays: Vec<_> = std::fs::read_dir(&update_dir)
+            .expect("ls")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".backup.tmp"))
+            .collect();
+        assert!(strays.is_empty(), "no temp copies left: {strays:?}");
+    }
+
+    #[test]
+    fn files_identical_compares_bytes_not_just_length() {
+        let home = crate::test_support::TempHome::new();
+        let (a, b, c) = (home.path().join("a"), home.path().join("b"), home.path().join("c"));
+        let big: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let mut other = big.clone();
+        other[150_000] ^= 1;
+        std::fs::write(&a, &big).expect("a");
+        std::fs::write(&b, &big).expect("b");
+        std::fs::write(&c, &other).expect("c");
+        assert!(files_identical(&a, &b).expect("a b"));
+        assert!(!files_identical(&a, &c).expect("a c"), "a flipped bit past the first chunk differs");
     }
 
     // ── handle_apply test seam (None shutdown_tx ⇒ no swap/restart) ──
@@ -3249,6 +3459,34 @@ mod tests {
             !pending_update_path().exists(),
             "marker cleared after rollback"
         );
+    }
+
+    // A marker armed by a 0.46.12 daemon names its backup after the TARGET
+    // (`backup-0.46.13` holds 0.46.12). Rollback reads the recorded path
+    // as-is, so a backup made under the old naming is still restored.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn boot_verifier_restores_a_backup_named_under_the_old_target_naming() {
+        let home = crate::test_support::TempHome::new();
+        let _guard = clear_jobs_for_test();
+        let running = home.path().join("k2-daemon");
+        let legacy = home.path().join(".k2").join("update").join("backup-0.46.13");
+        std::fs::create_dir_all(legacy.parent().expect("dir")).expect("update dir");
+        std::fs::write(&running, b"NEW-BROKEN").expect("seed running");
+        std::fs::write(&legacy, b"OLD-GOOD-0.46.12").expect("seed legacy backup");
+        // Field for field what a 0.46.12 daemon wrote (no newer fields).
+        let marker = serde_json::json!({
+            "job_id": "legacy",
+            "target_version": "0.46.13",
+            "running_path": running,
+            "backup_path": legacy,
+            "boots": 2,
+            "from_version": "0.46.12",
+        });
+        std::fs::write(pending_update_path(), marker.to_string()).expect("old marker");
+        assert!(verify_pending_update("0.46.12"), "the third boot rolls back");
+        assert_eq!(std::fs::read(&running).expect("running"), b"OLD-GOOD-0.46.12");
+        assert!(!pending_update_path().exists(), "marker cleared after rollback");
     }
 
     // ── A hand-off that never took over (Rosson 2026-11-05) ─────────

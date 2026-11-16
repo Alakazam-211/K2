@@ -1346,6 +1346,10 @@ pub fn handle_projects_open_in_editor(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // A file that is a live doc: the version the editor opens is noted
+    // first (kit v0.21.0), so the editor's save merges from it. A folder,
+    // or a file no doc is loaded for, is opened as before.
+    crate::docs::opened::before_app_opens(std::path::Path::new(&b.path));
     unit_ok(k2_core::editors::open_in_editor(&b.editor_id, &b.path))
 }
 

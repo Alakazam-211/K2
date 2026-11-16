@@ -1084,12 +1084,42 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         // and whose it is (kit v0.18.0: `KeyedAtLimit`, with the limit's
         // source; the details carry `limit` and `limit_source`).
         SessionError::KeyedAtLimit { limit, from, .. } => kit_report(e, Some(&keyed_at_limit_hint(*limit, *from))),
+        // Kit v0.21.0 (MPC-E180 to MPC-E182): noting the version an app
+        // opened ([`super::opened`]) was refused. Nothing was noted, so that
+        // app's next save merges as it always did; the kit's id, name and
+        // exit, with K2's words and what to do next.
+        SessionError::OpenedUnknown { version } => kit_report(e, Some(&opened_unknown_hint(*version))),
+        SessionError::OpenedGone { version } => kit_report(e, Some(&opened_gone_hint(*version))),
+        SessionError::OpenedNoFile => kit_report(e, Some(OPENED_NO_FILE_HINT)),
         // Every other kit refusal (the structure index, comments, claims by
         // node, annotation limits, and any a later kit adds): the kit's
         // report, its name as the code, with what to do next.
         other => kit_report(other, None),
     }
 }
+
+/// What `MPC-E180` (`opened_version_unknown`) says: the doc never had that
+/// version, so nothing was noted.
+pub(super) fn opened_unknown_hint(version: u64) -> String {
+    format!(
+        "this doc has no version {version}, so nothing was noted: the app's next save merges from the doc's latest \
+         version, as it always did. Name a version the doc has (k2 doc versions), or open the file as it is now"
+    )
+}
+
+/// What `MPC-E181` (`opened_version_gone`) says: the version was purged or
+/// not kept. The same version never works again; K2 notes the file as it is
+/// now instead ([`super::opened::note`]).
+pub(super) fn opened_gone_hint(version: u64) -> String {
+    format!(
+        "version {version} of this doc is gone (purged or not kept), so nothing was noted. Don't ask for that version \
+         again: note the file as it is now (open it again)"
+    )
+}
+
+/// What `MPC-E182` (`opened_no_file`) says.
+pub(super) const OPENED_NO_FILE_HINT: &str = "this doc has no file on disk (or its file is missing), so no other app \
+     saves it: nothing was noted. Nothing to do; edit it with k2 doc";
 
 /// What `MPC-E822` (`keyed_at_limit`) tells the person or agent: the limit,
 /// and which one applied (this server's for the file type, the file type's
@@ -1760,6 +1790,19 @@ fn tool_notes(notes: &Notes, warnings: &k2_mpc_base::tools::Warnings) -> Value {
     Value::String(lines.join("\n"))
 }
 
+/// A pack's own refusal (kit v0.21.0): an id the pack registered
+/// (`<PACK>-Ennn`, `Pack::errors`), or the kit's `MPC-E823 pack_refused`
+/// for one a pack gives in text. The kit's own refusals (`MPC-E…`) aren't.
+pub(super) fn is_pack_refusal(id: &str) -> bool {
+    id == "MPC-E823" || !id.starts_with("MPC-")
+}
+
+/// The kit's result object (`ToolOutput::result`, `mpc.result/1`) as the
+/// reply's JSON, unchanged.
+pub(super) fn result_value(r: &k2_mpc_base::errors::Value) -> Value {
+    serde_json::from_str(&r.to_json()).expect("the kit's result is JSON")
+}
+
 fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     let mut argv: Vec<String> = match c.input.body.get("argv") {
         Some(Value::Array(a)) if !a.is_empty() && a.len() <= MAX_ARGV => a
@@ -1780,7 +1823,10 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     // it named one): an edit from a stale read is refused, exit 1.
     let guarded = if is_edit { super::claims::guard_argv(c.caller, &key, &mut argv) } else { None };
     let j = join(s, c, Stay::UntilIdle)?;
-    let mut opts = k2_mpc_base::tools::ToolOptions::new().policy(policy(c));
+    // Kit v0.21.0: `json: true` (the CLI's `--json`) asks for the call's
+    // result as data (`mpc.result/1`): every outcome is one object, its exit
+    // the text form's, and stdout is that object's JSON line.
+    let mut opts = k2_mpc_base::tools::ToolOptions::new().policy(policy(c)).result_json(c.input.flag("json"));
     if let Some(t) = c.turn {
         opts = opts.turn(t);
     }
@@ -1801,11 +1847,22 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         super::claims::record_read(c.caller, &key, out.version);
     }
     let me = c.caller.participant(c.on_behalf);
-    let stderr = if out.changed.is_some() {
+    let mut stderr = if out.changed.is_some() {
         format!("{} as {}", out.stderr_summary, me.name)
     } else {
         out.stderr_summary.clone()
     };
+    // A pack's own refusal (kit v0.21.0: its registered id, or MPC-E823
+    // `pack_refused` for one the pack gives in text) says what it means and
+    // what to do next, as the any-file docs' tool reports do.
+    if let Some(r) = out.refusal.as_ref().filter(|r| is_pack_refusal(r.id())) {
+        stderr.push_str(&format!("\n{} ({}). {}", r.message(), r.id(), r.next()));
+    }
+    // Kit v0.21.0: the call's result as data, when asked (`json: true`).
+    // The kit's object as it is (`mpc.result/1`: typed data is
+    // `data_schema: "typed"` with its shape in `data_spec`); the CLI prints
+    // it as the one stdout line and exits with its `exit`.
+    let result = out.result().map(result_value);
     let (stdout, stdout_b64) = match String::from_utf8(out.stdout) {
         Ok(text) => (Value::String(text), Value::Null),
         Err(e) => (Value::Null, Value::String(b64(e.as_bytes()))),
@@ -1830,9 +1887,15 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         "notes": tool_notes(&out.notes, &out.warnings),
         "forEdit": out.for_edit.as_ref().map(|f| f.to_string()),
         "ifVersion": guarded,
+        // The refusal as `explain --json` has it (an edit's "no", a pack's
+        // refusal by its id), or null.
+        "refusal": out.refusal.as_ref().map(super::tier0::report_value),
     });
     if !stdout_b64.is_null() {
         v["stdoutB64"] = stdout_b64;
+    }
+    if let Some(r) = result {
+        v["result"] = r;
     }
     if let (Some(person), Some(r)) = (c.on_behalf, out.changed.as_ref()) {
         v["onBehalfOf"] = json!(person);
@@ -2831,6 +2894,65 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("clean up");
     }
 
+    /// Kit v0.21.0: `json: true` (the CLI's `--json`) asks for the call's
+    /// result as data. The reply's `result` is the kit's `mpc.result/1`
+    /// object unchanged and stdout is that object's one line; a verb's text
+    /// is `data_schema: "text"` with no `data_spec`; a refusal is the
+    /// object's `error` with its exit (a pack's own id, MARKDOWN-E001, for a
+    /// heading address that names no heading). Text stays the default.
+    #[test]
+    fn a_tool_calls_result_is_the_kits_object_as_data() {
+        use k2_mpc_base::session::{AuditEvent, Config, Host, Participant, Rights, SessionManager};
+        use k2_mpc_base::tools::ToolOptions;
+
+        struct OwnerHost;
+        impl Host for OwnerHost {
+            fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+                Rights::full().with_owner(true)
+            }
+            fn now_ms(&self) -> u64 {
+                1_000
+            }
+            fn on_event(&self, _: &AuditEvent) {}
+        }
+        let dir = std::env::temp_dir().join(format!("k2-tool-result-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("open a temp docs store"));
+        let mgr = SessionManager::new(store, Arc::new(OwnerHost), Config::default());
+        let key = DocKey { space: "ws".into(), path: "notes.md".into() };
+        let s = mgr.open(Arc::new(k2_mpc_markdown::PACK), &key, Some(b"# Goals\n\none\n")).expect("import");
+        let agent = Participant::new("agent:p1", "Agent", "#123456", ParticipantKind::Agent, "cli");
+        let conn = s.join(agent, Stay::Held).expect("join").conn;
+        let argv = |a: &[&str]| a.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let as_data = ToolOptions::new().result_json(true);
+
+        let out = s.run_tool_with(conn, ROOT, &argv(&["cat"]), b"", &as_data).expect("a read");
+        let r = result_value(out.result().expect("the result, asked for"));
+        assert_eq!(r["schema"], json!("mpc.result/1"), "{r}");
+        assert_eq!((&r["verb"], &r["kind"], &r["exit"]), (&json!("cat"), &json!("read"), &json!(0)), "{r}");
+        assert_eq!((&r["data_schema"], &r["data_spec"]), (&json!("text"), &Value::Null), "{r}");
+        let line: Value = serde_json::from_slice(&out.stdout).expect("stdout is the result's JSON");
+        assert_eq!(line, r, "stdout is the result, one line");
+        assert!(out.stdout.ends_with(b"}\n") && out.stdout.iter().filter(|b| **b == b'\n').count() == 1, "one line");
+
+        let out = s
+            .run_tool_with(conn, ROOT, &argv(&["replace-section", "--heading", "@h:nope"]), b"# Nope\n\nx\n", &as_data)
+            .expect("with the result asked for, a refusal is one object too");
+        let r = result_value(out.result().expect("the result"));
+        assert_eq!((out.exit, &r["exit"]), (2, &json!(2)), "{r}");
+        assert_eq!(r["error"]["id"], json!("MARKDOWN-E001"), "{r}");
+        assert_eq!(r["changed"], Value::Null, "nothing applied: {r}");
+        assert!(is_pack_refusal("MARKDOWN-E001") && is_pack_refusal("MPC-E823"), "a pack's ids");
+        assert!(!is_pack_refusal("MPC-E125") && !is_pack_refusal("MPC-E180"), "the kit's own");
+
+        let out = s.run_tool_with(conn, ROOT, &argv(&["cat"]), b"", &ToolOptions::new()).expect("text");
+        assert!(out.result().is_none(), "text stays the default");
+        assert_eq!(out.stdout, b"# Goals\n\none\n");
+        drop(s);
+        mgr.release().expect("release");
+        std::fs::remove_dir_all(&dir).expect("clean up");
+    }
+
     /// Kit v0.10.2's new refusals have their own codes, the kit's ids and the
     /// kit's exits: never the 500 `docs_failed` of the catch-all.
     #[test]
@@ -2889,6 +3011,46 @@ mod tests {
             );
             assert!(hint.contains("every other doc works as usual"), "{hint}");
             assert!(!hint.contains("native-stamp-1"), "the stamp stays out of the text: {hint}");
+        }
+    }
+
+    /// Kit v0.21.0 (MPC-E180 to MPC-E182): a refused `note_opened` answers
+    /// with the kit's id, name and exit, never the catch-all's words: K2's
+    /// line says nothing was noted and what to do next. E181's next step is
+    /// the file as it is now, never the same version again.
+    #[test]
+    fn the_opened_version_refusals_have_the_kits_ids_and_k2s_words() {
+        let cases: Vec<(SessionError, &str, &str, u8, &str, &str)> = vec![
+            (
+                SessionError::OpenedUnknown { version: 41 },
+                "opened_version_unknown",
+                "MPC-E180",
+                4,
+                "404 Not Found",
+                "this doc has no version 41, so nothing was noted",
+            ),
+            (
+                SessionError::OpenedGone { version: 7 },
+                "opened_version_gone",
+                "MPC-E181",
+                8,
+                "409 Conflict",
+                "version 7 of this doc is gone (purged or not kept), so nothing was noted. Don't ask for that version again",
+            ),
+            (SessionError::OpenedNoFile, "opened_no_file", "MPC-E182", 2, "400 Bad Request", "this doc has no file on disk"),
+        ];
+        for (err, code, id, exit, status, starts) in cases {
+            let r = err.report();
+            assert_eq!((r.id(), r.entry().name, r.exit()), (id, code, exit), "the kit's registry");
+            let resp = session_error(&err);
+            assert_eq!(resp.status, status, "{err:?}");
+            let e = error_of(&resp);
+            assert_eq!(e["code"], json!(code), "{err:?}");
+            assert_eq!(e["id"], json!(id), "{err:?}");
+            assert_eq!(e["exit"], json!(exit), "{err:?}");
+            let hint = e["hint"].as_str().expect("a hint");
+            assert!(hint.starts_with(starts), "{err:?}: {hint}");
+            assert!(hint.contains("nothing was noted"), "{hint}");
         }
     }
 

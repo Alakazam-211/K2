@@ -224,8 +224,12 @@ pub fn hunks(hs: &[Hunk]) -> Value {
 /// a client tell a lost edit that landed late from an undo that landed late
 /// under the same client ID. `turn` (wire 3) is the host turn of the agent
 /// step that made it ([`super::turn`]); `verb` the pack verb's id.
+/// `kept_pairs` (kit v0.21.0, additive): on an outside save's change whose
+/// merge kept both sides, where (`[{live: {first, last}, file: {first,
+/// last}}]`, 1-based inclusive lines in the root's text after the change);
+/// left out when there are none, as the kit's WIRE.md and goldens.
 pub fn change(e: &ChangeEvent) -> Value {
-    Value::obj([
+    let mut fields = vec![
         ("version", Value::from(e.version)),
         ("pid", Value::from(e.pid.as_str())),
         ("client", Value::from(e.client)),
@@ -237,7 +241,17 @@ pub fn change(e: &ChangeEvent) -> Value {
         ("on_behalf_of", e.on_behalf_of.as_deref().map_or(Value::Null, Value::from)),
         ("turn", e.turn.as_ref().map_or(Value::Null, |t| Value::from(t.as_str()))),
         ("verb", e.verb.as_deref().map_or(Value::Null, Value::from)),
-    ])
+    ];
+    if !e.kept_pairs.is_empty() {
+        let pairs = e.kept_pairs.iter().map(|p| Value::obj([("live", line_pair(p.live)), ("file", line_pair(p.file))]));
+        fields.push(("kept_pairs", Value::List(pairs.collect())));
+    }
+    Value::obj(fields)
+}
+
+/// Lines `first..=last` (1-based, inclusive): `{first, last}`.
+fn line_pair((first, last): (usize, usize)) -> Value {
+    Value::obj([("first", Value::from(first)), ("last", Value::from(last))])
 }
 
 /// `"edit"` (read and edit), `"read"` (read only), else `"none"`.
@@ -580,21 +594,32 @@ pub fn roster_event_for(e: &RosterEvent, me: Value) -> Option<Value> {
             }
             Value::obj(fields)
         }
+        // `bytes` (kit v0.21.0, additive): the claim's span when it was
+        // taken, in UTF-8 bytes of its root's text at `version`, half-open
+        // (`{start, end}`); left out when it has none (a grid's line claim).
         RosterEvent::ClaimStarted {
-            who: w, claim, lines: l, note, hold, for_edit, expires_ms, version, actor: a, started_ms, ..
-        } => Value::obj([
-            ("kind", Value::from("claim_started")),
-            ("who", who(w)),
-            ("claim", Value::from(claim.to_string())),
-            ("lines", lines(l)),
-            ("note", note.as_deref().map_or(Value::Null, Value::from)),
-            ("hold", Value::from(*hold)),
-            ("for_edit", Value::from(*for_edit)),
-            ("expires_ms", Value::from(*expires_ms)),
-            ("version", Value::from(*version)),
-            ("actor", actor(w, a)),
-            ("started_ms", Value::from(*started_ms)),
-        ]),
+            who: w, claim, lines: l, bytes, note, hold, for_edit, expires_ms, version, actor: a, started_ms, ..
+        } => {
+            let mut fields = vec![
+                ("kind", Value::from("claim_started")),
+                ("who", who(w)),
+                ("claim", Value::from(claim.to_string())),
+                ("lines", lines(l)),
+            ];
+            if let Some(b) = bytes {
+                fields.push(("bytes", Value::obj([("start", Value::from(b.start)), ("end", Value::from(b.end))])));
+            }
+            fields.extend([
+                ("note", note.as_deref().map_or(Value::Null, Value::from)),
+                ("hold", Value::from(*hold)),
+                ("for_edit", Value::from(*for_edit)),
+                ("expires_ms", Value::from(*expires_ms)),
+                ("version", Value::from(*version)),
+                ("actor", actor(w, a)),
+                ("started_ms", Value::from(*started_ms)),
+            ]);
+            Value::obj(fields)
+        }
         // Wire 3: a claim on elements (a deck's shapes or slides).
         RosterEvent::ClaimStartedElems { who: w, claim, root, addresses, note, hold, expires_ms, version, actor: a, started_ms, .. } => {
             Value::obj([

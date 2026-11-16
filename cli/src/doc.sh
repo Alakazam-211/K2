@@ -270,7 +270,10 @@ Sharing with another workspace (people only):
 
 Flags (any verb): -w/--workspace <ws> (a relative path is then inside it;
 default: the file you name, from where you stand) · --on-behalf-of <person>
-(agents: the edit is yours, for that person to approve) · --json · --fence /
+(agents: the edit is yours, for that person to approve) · --json (on a
+text doc's verb: its result as data, one JSON line: verb, exit, versions,
+what changed, data with data_schema "text" or "typed" and data_spec, the
+error; the exit is the call's) · --fence /
 --no-fence (read output framed as shared, untrusted data; on in a K2
 terminal) · --host <server> [--token T].
 
@@ -511,10 +514,31 @@ _doc_fence_on() {
 # The answer is in $_DOC_OUT (a file: `cat` of a whole any-file doc can be
 # big). Heads-up notes (who else is on those lines) go to stderr; binary
 # bytes never go onto a terminal.
+# --json: a text doc's tool call gives its result as data (the kit's
+# mpc.result/1, one JSON line on stdout, its exit the call's; K2's own lines
+# on stderr); any other answer is printed whole.
 _doc_print_tool() {
     if [ "${_DOC_JSON:-0}" = "1" ]; then
-        cat "$_DOC_OUT"; echo
-        python3 -c 'import json,sys; sys.exit(int(json.load(open(sys.argv[1])).get("exit", 1)))' "$_DOC_OUT"
+        python3 -c '
+import json, sys
+raw = open(sys.argv[1], encoding="utf-8").read()
+try:
+    v = json.loads(raw)
+except ValueError:
+    sys.stdout.write(raw + "\n")
+    sys.exit(1)
+r = v.get("result") if isinstance(v, dict) else None
+if not isinstance(r, dict):
+    sys.stdout.write(raw + "\n")
+    sys.exit(int(v.get("exit", 1)) if isinstance(v, dict) else 1)
+sys.stdout.write(v["stdout"].rstrip("\n") + "\n")
+if v.get("ifVersion") is not None and v.get("changed"):
+    sys.stderr.write("(checked against v%s, the version you last read)\n" % v["ifVersion"])
+a = v.get("approval")
+if isinstance(a, dict):
+    sys.stderr.write("on behalf of %s: %s\n" % (a.get("onBehalfOf"), a.get("state")))
+sys.exit(int(r["exit"]))
+' "$_DOC_OUT"
         exit $?
     fi
     local fence=0
@@ -559,7 +583,7 @@ sys.exit(int(v.get("exit", 1)))
 # A tool call's body, built in one place (argv, the doc, stdin when the
 # verb reads it): `--old-file P` / `--new-file P` become `--old` / `--new`
 # with the file's text (the kit does no I/O). Written to stdout as JSON.
-_DOC_TOOL_PY='import json, sys
+_DOC_TOOL_PY='import json, os, sys
 ws, ob, text_set, text, path, argv = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4], sys.argv[5], sys.argv[6:]
 def die(msg, rc=2):
     print("Error: " + msg, file=sys.stderr)
@@ -597,6 +621,8 @@ opts = rest[: rest.index("--")] if "--" in rest else rest
 exact = any(a in ("--old", "--new") or a.startswith("--old=") or a.startswith("--new=") for a in opts)
 reads = verb in ("diff", "patch", "apply", "append", "insert", "replace-section") or (verb == "replace" and not exact) or "-" in opts
 d = {"argv": out}
+if os.environ.get("_DOC_JSON") == "1":
+    d["json"] = True
 if ws:
     d["workspace"] = ws
 if path:
@@ -656,7 +682,7 @@ _doc_tool() {
     for ((i = 0; i < n - 1; i++)); do argv+=("${_DOC_ARGS[$i]}"); done
     path="$(_doc_path "$path")"
     _doc_tmp
-    python3 -c "$_DOC_TOOL_PY" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$path" ${argv[@]+"${argv[@]}"} >"$_DOC_TMPD/tool.json" || exit $?
+    _DOC_JSON="${_DOC_JSON:-0}" python3 -c "$_DOC_TOOL_PY" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$path" ${argv[@]+"${argv[@]}"} >"$_DOC_TMPD/tool.json" || exit $?
     _doc_call_file POST /cli/docs/tool "" "$_DOC_TMPD/tool.json"
     _doc_print_tool
 }

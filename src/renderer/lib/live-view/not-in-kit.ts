@@ -1,5 +1,5 @@
 // What the live workbook view reads that the kit's TS client (k2-mpc-base
-// v0.20.0, `@k2/mpc-client`) doesn't type. Everything else (frames, roster
+// v0.21.0, `@k2/mpc-client`) doesn't type. Everything else (frames, roster
 // events, corners, ranges, cells, the grid slot, derived values) is imported
 // from the kit, never redefined here. Each type below says why it is still
 // ours; when the kit (or K2's host) types it, it goes.

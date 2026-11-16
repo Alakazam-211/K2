@@ -50,6 +50,7 @@ macro_rules! kit_golden {
 
 const CHANGE_EVENTS: &str = kit_golden!("change_events.json");
 const CHANGE_EVENTS_APP: &str = kit_golden!("change_events_app.json");
+const CHANGE_EVENTS_KEPT: &str = kit_golden!("change_events_kept.json");
 const ROSTER_EVENTS: &str = kit_golden!("roster_events.json");
 const ROSTER_EVENTS_APP: &str = kit_golden!("roster_events_app.json");
 const ERRORS: &str = kit_golden!("errors.json");
@@ -779,6 +780,54 @@ fn k2s_live_encoder_writes_the_kits_rollup_golden() {
         ("final", encoded_one(&late[0], &me, &mut st)),
     ]));
     same("roster_events_rollup.json", &members_by_handle(ROSTER_ROLLUP), &members_by_handle(&got));
+}
+
+/// The kit's `an_outside_saves_kept_pairs_are_golden` (kit v0.21.0), encoded
+/// by K2: `change_events_kept.json`. An outside save that overlaps a live
+/// edit keeps both sides and its change says where (`kept_pairs`: the live
+/// line, then the file's); a later save on another line merges cleanly, and
+/// its change has no `kept_pairs` (left out, not empty).
+#[test]
+fn k2s_live_encoder_writes_the_kits_kept_pairs_golden() {
+    let f = FileFx::new("kept");
+    let ada = f.join("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab");
+    let rx = f.s.subscribe(ada).expect("subscribe");
+    let v0 = f.s.status().expect("status").version;
+    let text0 = f.text(ada);
+    assert_eq!(text0, DOC);
+    // Ada rewrites line 4 live (not written back); an editor rewrites the
+    // same line in the file: both are kept.
+    let two = DOC.find("two\n").expect("line two");
+    f.s.edit_at_base(ada, ROOT, v0, vec![h(two, two + 4, "two (ada)\n")], &EditOptions::new()).expect("ada's edit");
+    f.host.now.fetch_add(10_000, Ordering::SeqCst);
+    std::fs::write(&f.file, DOC.replace("two\n", "two (editor)\n")).expect("the editor's save");
+    f.s.file_changed().expect("taken in");
+    let kept = f.text(ada);
+    assert_eq!(kept, "# Notes\n\none\ntwo (ada)\ntwo (editor)\nthree\n");
+    // The kit writes the kept text back; then a save on another line: clean.
+    f.save(ada, &kept.replace("one\n", "one (editor)\n"));
+    let final_text = f.text(ada);
+    assert_eq!(final_text, "# Notes\n\none (editor)\ntwo (ada)\ntwo (editor)\nthree\n");
+    let evs = drain(&rx);
+    assert_eq!(evs.len(), 3, "{evs:?}");
+    let pairs = |e: &ChangeEvent| -> Vec<_> { e.kept_pairs.iter().map(|p| (p.live, p.file)).collect() };
+    assert_eq!(pairs(&evs[0]), []);
+    assert_eq!(pairs(&evs[1]), [((4, 4), (5, 5))]);
+    assert_eq!(pairs(&evs[2]), []);
+    let mut st = f.stable();
+    // The outside saves' participant: one fixed number, as the kit's.
+    st.clients.insert(evs[1].client, 9);
+    let mut events = Value::List(evs.iter().map(change).collect());
+    st.rewrite(&mut events);
+    let got = file(Value::obj([
+        ("root", Value::from(ROOT)),
+        ("text", Value::from(text0.as_str())),
+        ("version", Value::from(v0)),
+        ("events", events),
+        ("final_text", Value::from(final_text.as_str())),
+        ("final_version", Value::from(evs[2].version)),
+    ]));
+    same("change_events_kept.json", CHANGE_EVENTS_KEPT, &got);
 }
 
 /// The kit's `per_connection_carets_are_golden` (kit v0.10.1), encoded by K2:

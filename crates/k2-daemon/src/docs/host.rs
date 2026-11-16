@@ -566,6 +566,14 @@ impl Host for K2Host {
             // (K2 sets no writers cap, so of the kit's 8,192). Every writer
             // stays in a doc for good; said once per load. Counts only.
             AuditEvent::WritersNearCap { key, count, max } => log_writers_near_cap(key, *count, *max),
+            // Kit v0.21.0: the version an app opened (`note_opened`, which
+            // K2 calls when it opens a doc's file in another app,
+            // [`super::opened`]) was pinned, or the pin went (`cleared`, its
+            // version gone at use, `replaced` by a later note). Metadata only.
+            AuditEvent::OpenedNoted { key, version, .. } => audit(AUDIT_FILE, "k2", opened_noted_outcome(key, *version)),
+            AuditEvent::OpenedDropped { key, version, why, .. } => {
+                audit(AUDIT_FILE, "k2", opened_dropped_outcome(key, *version, why))
+            }
             // `AuditEvent` is `#[non_exhaustive]` (the kit adds events in
             // patch releases), so a catch-all is required; it logs the event
             // rather than dropping it.
@@ -605,6 +613,18 @@ pub fn writers_near_cap_line(key: &DocKey, count: u64, max: u64) -> String {
         "[docs] WARN: writers near cap key={} writers={count} max={max} (each writer stays in the doc for good)",
         key_label(key)
     )
+}
+
+/// The Access Audit outcome of [`AuditEvent::OpenedNoted`]: the doc and the
+/// version an app opened (a live doc's change, a blob doc's version id).
+pub fn opened_noted_outcome(key: &DocKey, version: u64) -> String {
+    format!("{} opened_in_app version={version}", key_label(key))
+}
+
+/// The Access Audit outcome of [`AuditEvent::OpenedDropped`]: the doc, the
+/// pinned version and why the pin went (`cleared`, `not_held`, `replaced`).
+pub fn opened_dropped_outcome(key: &DocKey, version: u64, why: &str) -> String {
+    format!("{} opened_in_app_dropped version={version} why={why}", key_label(key))
 }
 
 #[cfg(test)]

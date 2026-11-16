@@ -29,6 +29,7 @@
 //! | [`turn`] | the host turn of an agent's write (from its activity row), and `turn_end` |
 //! | [`host_events`] | host events on the docs socket: `preview_ready`, `turn_end`, comment relay |
 //! | [`preview`] | live previews: one host service, a renderer per doc type (`.pptx` today) |
+//! | [`opened`] | the version an app opened: K2 notes it when it opens a doc's file in another app, so that app's save merges from it |
 //!
 //! **Disk sync** (kit C4): every doc is opened with `open_file`, so the file
 //! on disk stays true. The kit writes changes back (1 s quiet, 5 s at most,
@@ -63,6 +64,7 @@ pub mod live;
 pub mod live_deck;
 pub mod live_watch;
 pub mod live_wire;
+pub mod opened;
 pub mod preview;
 pub mod routes;
 pub mod say;
@@ -245,6 +247,8 @@ fn config() -> Config {
 /// Kit v0.20.0's writer settings stay at the kit's defaults: no writers cap
 /// (`writers_max` 0), and person-writer reuse on, which changes nothing
 /// while K2 sends no device key (`JoinOptions::device`; it sends none).
+/// Kit v0.21.0's hold after the version an app opened is noted
+/// (`opened_hold_ms`, [`opened`]) stays at the kit's 10 s.
 fn kit_config(memory_budget_bytes: u64) -> Config {
     let mut c = Config::default();
     c.memory_budget_bytes = memory_budget_bytes;
@@ -840,6 +844,16 @@ mod tests {
         assert_eq!(c.participants_max, Config::default().participants_max, "the kit's participant cap");
         assert!(c.reuse_person_writers, "the kit's default; nothing changes without a device key");
         assert_eq!(k2_mpc_base::session::WRITERS_NOTICE_MAX, 8_192, "the near-cap notice's ceiling with no cap");
+    }
+
+    /// Kit v0.21.0: after K2 notes the file an app opened, the kit holds its
+    /// write-backs for the kit's default (10 s), so the app reads the
+    /// version noted; K2 doesn't change it.
+    #[test]
+    fn k2_keeps_the_kits_opened_hold() {
+        let c = kit_config(256 << 20);
+        assert_eq!(c.opened_hold_ms, Config::default().opened_hold_ms, "the kit's hold");
+        assert_eq!(c.opened_hold_ms, 10_000, "10 s");
     }
 
     #[test]

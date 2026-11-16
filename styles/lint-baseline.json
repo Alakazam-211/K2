@@ -18,7 +18,7 @@
     "src/renderer/components/Feedback/badges.tsx": 2,
     "src/renderer/components/Feedback/brief-srcdoc.ts": 14,
     "src/renderer/components/FileViewerPane/CodeEditor.tsx": 3,
-    "src/renderer/components/FileViewerPane/FileViewerPane.tsx": 2,
+    "src/renderer/components/FileViewerPane/FilePreview.tsx": 2,
     "src/renderer/components/FileViewerPane/LiveDocView.tsx": 4,
     "src/renderer/components/FileViewerPane/MediaViewer.tsx": 1,
     "src/renderer/components/FileViewerPane/modelScene.ts": 1,

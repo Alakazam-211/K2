@@ -25,7 +25,7 @@
 # re-add these by hand if it does.)
 1672 src/renderer/components/TabBar/TabBar.tsx
 1354 src/renderer/components/LiveEditor/mount.ts
-1264 src/renderer/components/FileViewerPane/FileViewerPane.tsx
+1180 src/renderer/components/FileViewerPane/FileViewerPane.tsx
 1082 src/renderer/components/FileViewerPane/CodeEditor.tsx
 
 # Held: a lane is still adding to these. Both rules skip them.

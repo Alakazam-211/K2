@@ -30,6 +30,7 @@ import { BetaTag, Button, Callout, Spinner, Toggle } from '@/components/ui'
 import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SettingSwitchRow } from '../controls/SettingControls'
 import { ActionNote, readFailure, useActionNote } from './ActionNote'
 import { LivePreviewSwitches } from '@/components/LiveView/LivePreviewSwitches'
+import { EditorPreviewSwitch } from '@/components/Editor/EditorPreviewSwitch'
 
 export const MULTIPLAYER_INTRO =
   "People and agents work in the same file at the same time, with presence, history and everyone's own undo. " +
@@ -56,6 +57,8 @@ export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
     description: 'Turn each multiplayer core on or off for this server: Markdown, Text and code, Any other file (PSD, CAD, 3D and .blend files), Board. And open .k5board files in a Board tab.',
     keywords: ['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard', 'PSD', 'CAD', '3D', 'blend', 'DWG', 'STEP', 'STL', 'any other file', 'file lock', 'versions'],
   },
+  { id: 'multiplayer.new-markdown-editor', section: 'multiplayer', group: 'New editors (preview)', label: 'New markdown editor', description: 'Markdown files open in the new editor: Write, Read and Source', keywords: ['editor', 'new editor', 'preview', 'write', 'read', 'source', 'markdown', 'beta'] },
+  { id: 'multiplayer.new-code-editor', section: 'multiplayer', group: 'New editors (preview)', label: 'New code editor', description: 'Code, config, text and logs open in the new editor', keywords: ['editor', 'new editor', 'preview', 'code', 'source', 'json', 'yaml', 'csv', 'html', 'beta'] },
 ]
 
 const CONTENT_WIDTH = 'max-w-[52rem]'
@@ -215,6 +218,7 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
           <PreviewRow on={data.boardFilePreview} canChange={data.canChange} busy={busy === 'board-file-preview'} onFlip={flipPreview} />
         </SettingsGroup>
       ) : null}
+      <EditorPreviewSwitch />
       {data?.canChange ? <LivePreviewSwitches /> : null}
       {data && later.length > 0 ? (
         <p className={SETTING_ROW_HINT} data-testid="multiplayer-later">

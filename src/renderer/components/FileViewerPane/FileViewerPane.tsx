@@ -2,7 +2,6 @@ import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, useLay
 import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
 import { isRemoteMacTmpPath } from '@/lib/remote-mac-tmp'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
-import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 // 0.39.0 bundle-perf: PDFViewer pulls in pdfjs-dist (~600KB gzip),
 // DocxViewer pulls in mammoth (~200KB), CodeEditor pulls in
 // @codemirror/* (~100KB). Lazy-load heavy viewers so they only enter
@@ -16,18 +15,11 @@ const CodeEditor = lazy(() => import('./CodeEditor').then((m) => ({ default: m.C
 // core is on (it pulls CodeEditor's language and theme tables too).
 const LiveDocPane = lazy(() => import('./LiveDocPane').then((m) => ({ default: m.LiveDocPane })))
 const ZipViewer = lazy(() => import('./ZipViewer').then((m) => ({ default: m.ZipViewer })))
-const CsvViewer = lazy(() => import('./CsvViewer').then((m) => ({ default: m.CsvViewer })))
 const MediaViewer = lazy(() => import('./MediaViewer').then((m) => ({ default: m.MediaViewer })))
-const DiagramViewer = lazy(() =>
-  import('./DiagramViewer').then((m) => ({ default: m.DiagramViewer })),
-)
-// CAD previews (ported from the K2 Companion). Each viewer dynamic-imports
-// its heavy half again: dxf-parser (`./dxfModel`) and three.js
-// (`./modelScene`, then one loader chunk per format).
-const DxfViewer = lazy(() => import('./DxfViewer').then((m) => ({ default: m.DxfViewer })))
-const DxfHostBytesViewer = lazy(() => import('./DxfViewer').then((m) => ({ default: m.DxfHostBytesViewer })))
+// The 3D preview (ported from the K2 Companion) dynamic-imports three.js
+// again, then one loader chunk per format. CSV, diagrams, DXF and HTML: FilePreview.
 const ModelViewer = lazy(() => import('./ModelViewer').then((m) => ({ default: m.ModelViewer })))
-// "New file editor (preview)" (Settings → Code): markdown and code in the editor frame on the live shell.
+// The new editors (Settings → Multiplayer, "New markdown editor" and "New code editor"): one frame on the live shell.
 const EditorTab = lazy(() => import('@/components/Editor/EditorTab').then((m) => ({ default: m.EditorTab })))
 // `getLanguageName` is a synchronous helper used in the status bar —
 // importing it eagerly is fine (it's a small string table, not the
@@ -38,8 +30,7 @@ import { DiffViewer } from '@/components/DiffViewer/DiffViewer'
 import { ImageViewer } from './ImageViewer'
 import { BinaryEmptyState } from './BinaryEmptyState'
 import { BoardFileCard } from './BoardFileCard'
-import { ViewerNote } from './ViewerNote'
-import { dxfReadErrorNote, dxfReadsAsBytes } from './dxfReadError'
+import { FilePreview, hasFilePreview } from './FilePreview'
 import {
   REREAD_DELETED_MESSAGE,
   REREAD_FAILED_MESSAGE,
@@ -65,7 +56,7 @@ import { AnyFileDocPanel } from './AnyFileDocPanel'
 import { LivePreviewEntry } from '@/components/LiveView/LivePreviewEntry'
 import { DeckPreviewPane } from './DeckPreviewPane'
 import { DocConflictNotice } from './DocConflictNotice'
-import { newEditorKind, useNewEditorPreview } from '@/lib/editor/preview-switch'
+import { EditorPreviewLiveNote, editorFrameRoute, useEditorFrameKind } from '@/components/Editor/editorFrameRoute'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -264,7 +255,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   flushRef.current = { filePath, editedContent, content }
 
   const category = getFileCategory(filePath)
-  const editorKind = useNewEditorPreview() ? newEditorKind(category) : null
+  const editorKind = useEditorFrameKind(category)
   const [viewMode, setViewMode] = useState<ViewMode>(getDefaultViewMode(category))
   // A locked pane can't save. It reports unsaved changes only when it
   // holds edits made before the file stopped being text (`keptText`), so
@@ -812,8 +803,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     </div>
   )
 
-  // The editor frame (preview): no toolbar, no path bar. Live, any-file and deck files keep today's view until E4.
-  if (editorKind && !showTextLock && !liveOn && !anyFile && liveCore.status !== 'deck') {
+  const frameRoute = editorFrameRoute(editorKind, { locked: textLock !== null, liveOn, anyFile, deck: liveCore.status === 'deck' }) // the new editors: no toolbar, no path bar
+  const preview = hasFilePreview(category) && <FilePreview category={category} filePath={filePath} text={editedContent ?? content} saved={content} readError={readError} contentRef={contentRef} />
+  if (frameRoute === 'frame' && editorKind) {
     return (
       <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
         <Suspense fallback={null}>
@@ -829,6 +821,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             notice={<>{liveEndedBar}{rereadBar}</>}
             onSave={() => void saveFile(editedContent ?? undefined)}
             renderEditor={(o) => codeEditor(o, o.readOnly)}
+            renderPreview={preview ? () => preview : undefined}
           />
         </Suspense>
       </div>
@@ -1030,7 +1023,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       )}
 
-      {liveEndedBar}
+      {liveEndedBar}<EditorPreviewLiveNote kind={frameRoute === 'kept-live' ? editorKind : null} />
 
       {/* Tier 0 kept both versions after another program's save (once per copy) */}
       {anyFile && <DocConflictNotice scope={room.scope} filePath={filePath} />}
@@ -1115,37 +1108,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             />
           </Suspense>
         </div>
-      ) : category === 'csv' && viewMode === 'rendered' ? (
-        <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading table…</div>}>
-            <CsvViewer content={editedContent ?? content} filePath={filePath} />
-          </Suspense>
-        </div>
-      ) : category === 'mermaid' && viewMode === 'rendered' ? (
-        <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading diagram…</div>}>
-            <DiagramViewer content={editedContent ?? content} filePath={filePath} mode="mermaid" />
-          </Suspense>
-        </div>
-      ) : category === 'diagram' && viewMode === 'rendered' ? (
-        <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading diagram…</div>}>
-            <DiagramViewer content={editedContent ?? content} filePath={filePath} mode="source" />
-          </Suspense>
-        </div>
-      ) : category === 'cad2d' && viewMode === 'rendered' ? (
-        <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading drawing…</div>}>
-            {readError && !content && dxfReadsAsBytes(readError) ? (
-              // Over read-file's 10 MB cap, or not UTF-8: read the bytes.
-              <DxfHostBytesViewer filePath={filePath} />
-            ) : readError && !content ? (
-              <ViewerNote tone="error" testId="dxf-read-error" {...dxfReadErrorNote(readError)} />
-            ) : (
-              <DxfViewer text={editedContent ?? content} />
-            )}
-          </Suspense>
-        </div>
+      ) : preview && viewMode === 'rendered' ? (
+        preview
       ) : category === 'model3d' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading 3D viewer…</div>}>
@@ -1177,22 +1141,6 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           <div className="markdown-content p-4" style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
             <MemoizedMarkdown content={content} />
           </div>
-        </div>
-      ) : category === 'html' && viewMode === 'rendered' ? (
-        // Render HTML in a sandboxed <iframe> — NOT via
-        // dangerouslySetInnerHTML. HtmlFrame `scripted`: null-origin
-        // sandbox (`allow-scripts`, never `allow-same-origin`) plus a
-        // per-frame CSP meta, so the page's inline scripts run but it
-        // cannot reach the K2 app, the daemon on loopback, or any
-        // plain-http host (prd-html-frame-csp-v1.md). White background
-        // so dark-themed app chrome doesn't bleed into light HTML.
-        <div className="flex-1 overflow-hidden bg-white" ref={contentRef}>
-          <HtmlFrame
-            title={fileName}
-            html={content}
-            profile="scripted"
-            className="w-full h-full border-0 bg-white"
-          />
         </div>
       ) : (
         <>

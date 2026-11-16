@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { initialMode, modeForKey, usableMode } from './modes'
 import { countWords, lineEnding, readingMinutes } from './words'
-import { NEW_EDITOR_PREVIEW_KEY, newEditorKind, readNewEditorPreview, setNewEditorPreview, subscribeNewEditorPreview } from './preview-switch'
+import { EDITOR_KEYS, LEGACY_EDITOR_PREVIEW_KEY, migrateLegacyEditorPreview, newEditorKind, readEditorPreview, setEditorPreview, subscribeEditorPreview } from './preview-switch'
 import { readLocalFlag, setLocalFlag } from './local-flag'
 
 const key = (k: string, mods: { meta?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean } = {}) => ({
@@ -18,24 +18,46 @@ const key = (k: string, mods: { meta?: boolean; ctrl?: boolean; shift?: boolean;
 
 afterEach(() => window.localStorage.clear())
 
-describe('the preview switch', () => {
-  it('is off by default, kept per computer, and tells listeners', () => {
-    expect(readNewEditorPreview()).toBe(false)
-    let told = 0
-    const off = subscribeNewEditorPreview(() => told++)
-    setNewEditorPreview(true)
-    expect(window.localStorage.getItem(NEW_EDITOR_PREVIEW_KEY)).toBe('1')
-    expect(readNewEditorPreview()).toBe(true)
-    setNewEditorPreview(false)
-    expect(window.localStorage.getItem(NEW_EDITOR_PREVIEW_KEY)).toBeNull()
-    expect(told).toBe(2)
-    off()
+describe('the preview switches', () => {
+  it('each is off by default, kept per computer, and tells listeners', () => {
+    for (const kind of ['markdown', 'code'] as const) {
+      expect(readEditorPreview(kind)).toBe(false)
+      let told = 0
+      const off = subscribeEditorPreview(() => told++)
+      setEditorPreview(kind, true)
+      expect(window.localStorage.getItem(EDITOR_KEYS[kind])).toBe('1')
+      expect(readEditorPreview(kind)).toBe(true)
+      expect(readEditorPreview(kind === 'markdown' ? 'code' : 'markdown')).toBe(false)
+      setEditorPreview(kind, false)
+      expect(window.localStorage.getItem(EDITOR_KEYS[kind])).toBeNull()
+      expect(told).toBe(2)
+      off()
+    }
   })
 
-  it('gates markdown and code files only', () => {
+  it('the old single switch, on, turns both on once, and goes', () => {
+    window.localStorage.setItem(LEGACY_EDITOR_PREVIEW_KEY, '1')
+    migrateLegacyEditorPreview()
+    expect(window.localStorage.getItem(LEGACY_EDITOR_PREVIEW_KEY)).toBeNull()
+    expect(readEditorPreview('markdown')).toBe(true)
+    expect(readEditorPreview('code')).toBe(true)
+    setEditorPreview('code', false)
+    migrateLegacyEditorPreview()
+    expect(readEditorPreview('code')).toBe(false)
+  })
+
+  it('the old switch, off or missing: both stay off', () => {
+    window.localStorage.setItem(LEGACY_EDITOR_PREVIEW_KEY, '0')
+    migrateLegacyEditorPreview()
+    expect(window.localStorage.getItem(LEGACY_EDITOR_PREVIEW_KEY)).toBeNull()
+    expect(readEditorPreview('markdown')).toBe(false)
+    expect(readEditorPreview('code')).toBe(false)
+  })
+
+  it('markdown goes to the markdown editor; every text file K2 edits in CodeMirror to the code editor', () => {
     expect(newEditorKind('markdown')).toBe('markdown')
-    expect(newEditorKind('text')).toBe('code')
-    for (const c of ['html', 'csv', 'mermaid', 'image', 'pdf', 'cad2d', 'binary'] as const) expect(newEditorKind(c)).toBeNull()
+    for (const c of ['text', 'html', 'csv', 'mermaid', 'diagram', 'cad2d'] as const) expect(newEditorKind(c)).toBe('code')
+    for (const c of ['image', 'pdf', 'docx', 'audio', 'video', 'zip', 'model3d', 'board', 'binary'] as const) expect(newEditorKind(c)).toBeNull()
   })
 
   it('a flag with a default reads it until set', () => {

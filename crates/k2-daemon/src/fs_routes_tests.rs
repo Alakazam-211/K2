@@ -1070,11 +1070,15 @@ fn guest_writes_into_the_agent_folder_are_refused_under_each_of_its_names() {
         let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
         assert_protected(&r, &format!("write-file {path}"));
     }
-    // The target of a root link into the leftover folder, by the link's
-    // own name and through a linked folder.
-    for path in ["SKILL.md", "oldskills/k2-cli/SKILL.md", "oldskills/new/SKILL.md"] {
+    // A root FILE link into the leftover folder: the jail refuses writing
+    // through a leaf link before the folder check runs. Refused either way.
+    let r = handle_write_file_gated(&write_body(&room, "SKILL.md", "guest text"), Some(pass.clone()));
+    assert_ne!(r.status, "200 OK", "write-file through the root link SKILL.md: {}", r.body);
+    // Through a linked FOLDER the jail lets the path in and the folder
+    // check must refuse it.
+    for path in ["oldskills/k2-cli/SKILL.md", "oldskills/new/SKILL.md"] {
         let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
-        assert_protected(&r, &format!("write-file through a link: {path}"));
+        assert_protected(&r, &format!("write-file through a linked folder: {path}"));
     }
     // upload-binary and upload-chunk.
     for (dir, name) in [(".k2so/skills/k2-cli", "x.bin"), (".k2so", "x.bin"), (".", ".k2so"), (".", ".k5"), (".k5/agent", "x.bin"), ("oldskills", "x.bin")] {

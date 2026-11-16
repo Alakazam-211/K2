@@ -1,0 +1,9 @@
+target/
+*.log
+.DS_Store
+__pycache__/
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/coverage/
+.corpus/

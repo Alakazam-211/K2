@@ -1,0 +1,10 @@
+{
+  "verb": "object place",
+  "exit": 2,
+  "error": {
+    "id": "MPC-E122",
+    "exit": 2,
+    "message": "nothing to change: give a field",
+    "details": {}
+  }
+}

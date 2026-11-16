@@ -1,0 +1,21 @@
+{
+  "verb": "object place",
+  "exit": 4,
+  "error": {
+    "id": "BLEND-E006",
+    "exit": 4,
+    "message": "nothing is @ob:Nobody",
+    "next": "The address names no collection or object in the scene as it is now. Nothing was applied. List them again and use an address from the list.",
+    "next_step": {
+      "verb": "scene list",
+      "args": [],
+      "why": "List the collections, then each one's objects."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_not_found",
+      "verb": "object place",
+      "address": "@ob:Nobody"
+    }
+  }
+}

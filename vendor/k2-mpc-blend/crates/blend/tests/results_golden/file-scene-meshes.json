@@ -1,0 +1,67 @@
+{
+  "verb": "scene meshes",
+  "data_spec": "blend.file.scene-meshes/1",
+  "data": {
+    "scene": "S",
+    "scene_from": "current",
+    "meshes": 1,
+    "objects": 2,
+    "cameras": 1,
+    "hidden": 1,
+    "transform_not_evaluated": 0,
+    "modifiers_truncated": 0,
+    "collection_instances": 0,
+    "heap": 77037,
+    "drawn": [
+      {
+        "name": "Cube",
+        "key": "@obj:1",
+        "mesh": 0,
+        "mesh_hash": "63f24dd90c121144651c125312a8aec8762ce3770c3744236da8455116d7e54a",
+        "vertices": 8,
+        "triangles": 12,
+        "hidden": null,
+        "modifiers": [],
+        "transform_not_evaluated": false
+      },
+      {
+        "name": "Ghost",
+        "key": "@obj:2",
+        "mesh": 0,
+        "mesh_hash": "63f24dd90c121144651c125312a8aec8762ce3770c3744236da8455116d7e54a",
+        "vertices": 8,
+        "triangles": 12,
+        "hidden": "self",
+        "modifiers": [],
+        "transform_not_evaluated": false
+      }
+    ],
+    "drawn_cameras": [
+      {
+        "name": "Cam",
+        "key": "@cam:4",
+        "yfov": 0.39959648,
+        "aspect": 1.7777778,
+        "sensor_fit": "auto",
+        "active": true
+      }
+    ],
+    "skipped": [
+      {
+        "name": "Ortho",
+        "reason": "camera_not_perspective"
+      }
+    ],
+    "triangulation": {
+      "faces": 6,
+      "triangles": 12,
+      "convex": 6,
+      "ear_clipped": 0,
+      "degenerate": 0,
+      "ear_clip_failed": 0,
+      "large_face_fanned": 0,
+      "ear_tests": 0
+    },
+    "k2scene_bytes": 960
+  }
+}

@@ -1,0 +1,18 @@
+# cargo-deny's configuration for scripts/check-advisories.sh (`cargo deny check advisories`, a
+# step of scripts/check.sh): every locked crate against the RustSec advisory database. Licences
+# are checked by scripts/check-licences.sh, so only the advisories are set here.
+
+[graph]
+# the test-only features' dependencies too
+all-features = true
+
+[advisories]
+# A vulnerability always fails the step; so does an unmaintained or unsound crate anywhere in the
+# tree, and a yanked version. One advisory is ignored, by its id, with its reason; a new one fails.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = [
+    # smallstr
+    { id = "RUSTSEC-2026-0215", reason = "unmaintained, no known vulnerability; accepted, via the kit's dependency" },
+]

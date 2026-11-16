@@ -1,0 +1,55 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object place",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "obj_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@obj:2",
+        "root": "obj_props",
+        "key": "o2",
+        "field": "xform",
+        "op": "set",
+        "before": "0,0,0.25,0,0,0,1,1,1",
+        "after": "1,2,3,0,0,0,2,2,2"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "object": "@obj:2",
+    "transform": {
+      "location": [1, 2, 3],
+      "rotation": [0, 0, 0],
+      "scale": [2, 2, 2]
+    },
+    "changed": true
+  },
+  "data_schema": "typed",
+  "data_spec": "blend.object-place/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

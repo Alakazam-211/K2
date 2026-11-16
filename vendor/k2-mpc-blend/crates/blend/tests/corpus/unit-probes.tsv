@@ -1,0 +1,7 @@
+# Probes of the scenes' unit settings (tests/corpus_place.rs, BLEND_UNIT_PROBES), fetched by
+# reference with scripts/fetch-corpus.sh DIR crates/blend/tests/corpus/unit-probes.tsv: the same
+# columns as manifest.tsv. Never committed. Demo files their publisher lists as CC0 (Classroom,
+# Christophe Seux) and CC BY, version not stated by the publisher (Barcelona Pavilion, eMirage);
+# PROVENANCE.md has the credit.
+classroom.blend	https://download.blender.org/demo/test/classroom.zip	CC0-1.0	0f0ecc58d45f12b2f4272a53e2d8e69135518e16e956b118f10c20d8dcfdf5e6	classroom/classroom.blend	5c526ea3f280566e80253673c9955640527cd0f247ea41b1742620b5bc39f7a4
+pavillon_barcelone_v1.2.blend	https://download.blender.org/demo/test/pabellon_barcelona_v1.scene_.zip	CC BY, version not stated by the publisher	0a85bf512329f1780563069512b934d679a6c543eeb1a4ec4f60cddeab706697	3d/pavillon_barcelone_v1.2.blend	92162db8cabcd03641c53df95554b604b494ba74a76a099c7e06637e9379120a

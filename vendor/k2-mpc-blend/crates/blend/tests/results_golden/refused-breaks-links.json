@@ -1,0 +1,42 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object rename",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: blend_breaks_links: other files that link @ob:Cube by its name won't follow the rename: they lose the object. Name that loss with --break-links\nnext: object rename @obj:2 --name \"Box\" --break-links\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "BLEND-E005",
+    "exit": 2,
+    "message": "other files that link @ob:Cube by its name won't follow the rename: they lose the object. Name that loss with --break-links",
+    "next": "Other files link an object by its name, so a rename breaks those links: they lose the object. Nothing was applied. Run the rename again with --break-links to accept that loss.",
+    "next_step": {
+      "verb": "object rename",
+      "args": ["{address}", "--name", "{name}", "--break-links"],
+      "why": "Rename it, accepting that other files linking it by its old name lose it."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_breaks_links",
+      "next": "object rename @obj:2 --name \"Box\" --break-links",
+      "verb": "object rename",
+      "address": "@obj:2",
+      "name": "Box"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

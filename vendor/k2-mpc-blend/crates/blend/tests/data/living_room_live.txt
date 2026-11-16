@@ -1,0 +1,43 @@
+# The living room's live view (testgen::scenes::living_room): what tests/scenes.rs compares.
+# Tab-separated. `fact NAME VALUE`: the scene map's facts.
+# `coll KEY KIND NAME PARENT HIDDEN`: each collection, in key order.
+# `obj KEY TYPE NAME COLL ALSO PARENT XFORM ROTMODE QUAT HIDDEN NORENDER EDIT`: each object, in
+# key order; XFORM is location, Euler rotation and scale, each the f32's shortest decimal; `-`
+# for none. COLL and ALSO together are the collections holding the object.
+fact	version	4.02
+fact	header	classic
+fact	pointer_size	8
+fact	endian	little
+fact	storage	zstd
+fact	name_max	63
+fact	unit_scale	1
+coll	c1	scene	Scene	-	0
+coll	c2	collection	Room	c1	0
+coll	c3	collection	Furniture	c1	0
+coll	c4	collection	Props	c3	0
+obj	o1	camera	Camera	c1	-	-	-2.6,-3.4,1.35,1.4137167,0,-0.62831855,1,1,1	xyz	-	0	0	1
+obj	o2	light	Key light	c1	-	-	3.2,-2.4,4.6,0.6632251,0,0.55850536,1,1,1	xyz	-	0	0	1
+obj	o3	light	Fill light	c1	-	-	-4.1,-1.6,3.3,0.9075712,0,-1.012291,1,1,1	xyz	-	0	0	1
+obj	o4	mesh	Floor	c2	-	-	0,0,0,0,0,0,3,2.5,1	xyz	-	0	0	1
+obj	o5	mesh	Wall.Back	c2	-	-	0,2.5,0.6,1.5707964,0,0,3,0.6,1	xyz	-	0	0	1
+obj	o6	mesh	Wall.Left	c2	-	-	-3,0,0.6,1.5707964,0,1.5707964,2.5,0.6,1	xyz	-	1	0	1
+obj	o7	mesh	Window	c2	-	-	1.2,2.46,0.72,1.5707964,0,0,0.7,0.3,1	xyz	-	0	0	1
+obj	o8	mesh	Rug	c2	-	-	0.2,-0.3,0.005,0,0,0,1.6,1.1,1	xyz	-	0	0	1
+obj	o9	mesh	Ceiling fan	c2	-	-	0,0,2.75,0,0,0,1,1,1	quaternion	0.9238795,0,0,0.38268343	0	1	t
+obj	o10	mesh	Table	c3	-	-	0.6,0.4,0,0,0,0,1,1,1	xyz	-	0	0	1
+obj	o11	mesh	Chair.001	c3	-	-	0.6,-0.35,0,0,0,0,1,1,1	xyz	-	0	0	1
+obj	o12	mesh	Chair.002	c3	-	-	0.6,1.15,0,0,0,3.1415927,1,1,1	xyz	-	0	0	1
+obj	o13	mesh	Chair.003	c3	-	-	-0.15,0.4,0,0,0,-1.5707964,1,1,1	xyz	-	0	0	1
+obj	o14	mesh	Chair.004	c3	-	-	1.35,0.4,0,0,0,1.5707964,1,1,1	xyz	-	0	0	1
+obj	o15	mesh	Sofa	c3	-	-	-1.9,-1.2,0,0,0,1.5707964,1,1,1	xyz	-	0	0	1
+obj	o16	mesh	Shelf	c3	-	-	2.6,2.2,0,0,0,0,1,1,1	xyz	-	0	0	1
+obj	o17	mesh	Book.001	c3	-	o16	-0.3,0,1.12,0,0,0,1,1,1	xyz	-	0	0	1
+obj	o18	mesh	Book.002	c3	-	o16	-0.05,0,1.12,0,0.17453292,0,1,1,1	xyz	-	0	0	1
+obj	o19	mesh	Floor lamp	c3	c2	-	-2.55,1.95,0,0,0,0,1,1,1	xyz	-	0	0	1
+obj	o20	mesh	Vase	c4	-	o10	0,0,0.76,0,0,0,1,1,1	xyz	-	0	0	1
+obj	o21	mesh	Mug	c4	-	-	2.75,2.15,0.62,0,0,0,1,1,1	xyz	-	0	0	1
+obj	o22	empty	Clock	c4	-	-	-0.6,2.44,0.86,1.5707964,0,0,1,1,1	xyz	-	0	0	1
+obj	o23	mesh	Clock hand	c4	-	o22	0,0,0.01,0,0,0.5934119,1,1,1	xyz	-	0	0	a
+obj	o24	empty	Plant	c4	-	-	2.3,-1.9,0,0,0,0,1,1,1	xyz	-	0	0	0
+obj	o25	empty	Measure guide	c0	-	-	0,0,0,0,0,0,0.5,0.5,0.5	xyz	-	0	1	1
+obj	o26	camera	Camera.001	c1	-	-	1.75,-0.75,1.3,1.2915436,0,0.7679449,1,1,1	xyz	-	0	0	1

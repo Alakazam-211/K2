@@ -1,0 +1,15 @@
+{
+  "verb": "scene list",
+  "exit": 2,
+  "error": {
+    "id": "BLEND-E012",
+    "exit": 2,
+    "message": "the file can't be read: not a BLEND file",
+    "next": "The file starts with no BLEND header, plain or compressed, so no verb of this pack reads it. Nothing was applied.",
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_not_blend",
+      "verb": "scene list"
+    }
+  }
+}

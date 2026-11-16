@@ -1,0 +1,659 @@
+fishy_cat.blend	version	2.73
+fishy_cat.blend	form	classic
+fishy_cat.blend	compression	gzip
+fishy_cat.blend	pointer_size	8
+fishy_cat.blend	id	@sc:Scene_cat
+fishy_cat.blend	holds	@sc:Scene_cat	objects=@ob:ENV @ob:LGT_reflector @ob:LGT_sun1 @ob:LGT_sun2 @ob:camera_filter @ob:sparkles_background @ob:sparkles_foreground @ob:grass_blade1 @ob:grass_blade3 @ob:grass_blade2 @ob:sparkle_particle @ob:grass_blade4 @ob:grass @ob:DOF @ob:CAM_camera1 @ob:fish @ob:fish_string2 @ob:fish_string4 @ob:fish_string3 @ob:fish_string1 @ob:fish_eye @ob:cat @ob:cat_tongue @ob:cat_eye_tearline @ob:cat_spit @ob:cat_eye @ob:cornea_cat	collections=
+fishy_cat.blend	id	@sc:Scene_grain
+fishy_cat.blend	holds	@sc:Scene_grain	objects=@ob:camera_grain @ob:particle_speckle_white5 @ob:particle_speckle_white4 @ob:particle_speckle_white3 @ob:particle_speckle_white2 @ob:particle_speckle_white1 @ob:particle_speckle_white7 @ob:particle_speckle_white6 @ob:plane_mid_gray @ob:particle_speckle_black6 @ob:particle_speckle_black5 @ob:particle_speckle_black4 @ob:particle_speckle_black3 @ob:particle_speckle_black2 @ob:particle_speckle_black1 @ob:particle_speckle1 @ob:particle_hair7 @ob:particle_hair6 @ob:particle_hair5 @ob:particle_hair4 @ob:particle_hair3 @ob:particle_hair2 @ob:particle_hair1 @ob:plane_bg @ob:particle_pixel_blackish @ob:plane_grain @ob:particle_pixel_whiteish	collections=
+fishy_cat.blend	id	@cu:fish_string1
+fishy_cat.blend	id	@cu:fish_string2
+fishy_cat.blend	id	@cu:fish_string3
+fishy_cat.blend	id	@cu:fish_string4
+fishy_cat.blend	id	@im:eye_iris.png
+fishy_cat.blend	id	@im:fish.png
+fishy_cat.blend	id	@im:Render%20Result
+fishy_cat.blend	id	@im:Viewer%20Node
+fishy_cat.blend	id	@ca:CAM_camera1
+fishy_cat.blend	id	@ca:camera_grain
+fishy_cat.blend	id	@la:LGT_sun1
+fishy_cat.blend	id	@la:LGT_sun2
+fishy_cat.blend	id	@ke:Key
+fishy_cat.blend	id	@ke:Key.001
+fishy_cat.blend	id	@ke:Key.002
+fishy_cat.blend	id	@ke:Key.003
+fishy_cat.blend	id	@ke:Key.004
+fishy_cat.blend	id	@ke:Key.005
+fishy_cat.blend	id	@ke:Key.006
+fishy_cat.blend	id	@ke:Key.009
+fishy_cat.blend	id	@ke:Key.010
+fishy_cat.blend	id	@ke:Key.011
+fishy_cat.blend	id	@ke:Key.012
+fishy_cat.blend	id	@ke:Key.013
+fishy_cat.blend	id	@wo:World
+fishy_cat.blend	id	@wo:World_grain
+fishy_cat.blend	id	@tx:frame_list_formatting
+fishy_cat.blend	id	@tx:INFO
+fishy_cat.blend	id	@tx:set_ray_visibilities_for_selected_objects.py
+fishy_cat.blend	id	@tx:subsurf_change_level
+fishy_cat.blend	id	@tx:unwrap_with_smart_uv
+fishy_cat.blend	id	@tx:VSE_copy_proxy_path_to_all_strips.py
+fishy_cat.blend	id	@gr:grass
+fishy_cat.blend	holds	@gr:grass	objects=@ob:grass_blade1 @ob:grass_blade3 @ob:grass_blade2 @ob:grass_blade4	collections=
+fishy_cat.blend	id	@gr:hairs
+fishy_cat.blend	holds	@gr:hairs	objects=@ob:particle_hair7 @ob:particle_hair6 @ob:particle_hair5 @ob:particle_hair4 @ob:particle_hair3 @ob:particle_hair2 @ob:particle_hair1	collections=
+fishy_cat.blend	id	@gr:speckles_blackish
+fishy_cat.blend	holds	@gr:speckles_blackish	objects=@ob:particle_speckle_black6 @ob:particle_speckle_black5 @ob:particle_speckle_black4 @ob:particle_speckle_black3 @ob:particle_speckle_black2 @ob:particle_speckle_black1 @ob:particle_speckle1 @ob:particle_pixel_blackish @ob:particle_pixel_whiteish	collections=
+fishy_cat.blend	id	@gr:speckles_whiteish
+fishy_cat.blend	holds	@gr:speckles_whiteish	objects=@ob:particle_speckle_white5 @ob:particle_speckle_white4 @ob:particle_speckle_white3 @ob:particle_speckle_white2 @ob:particle_speckle_white1 @ob:particle_speckle_white7 @ob:particle_speckle_white6	collections=
+fishy_cat.blend	id	@ob:CAM_camera1
+fishy_cat.blend	object	@ob:CAM_camera1	data=@ca:CAM_camera1	parent=@ob:ENV	loc=419b3a8f,c2413ea0,c0237286
+fishy_cat.blend	id	@ob:camera_filter
+fishy_cat.blend	object	@ob:camera_filter	data=@me:camera_filter	parent=@ob:ENV	loc=418afbf3,c22f68e6,bfcf6856
+fishy_cat.blend	id	@ob:camera_grain
+fishy_cat.blend	object	@ob:camera_grain	data=@ca:camera_grain	parent=-	loc=00000000,00000000,41cc7934
+fishy_cat.blend	id	@ob:cat
+fishy_cat.blend	object	@ob:cat	data=@me:cat	parent=-	loc=00000000,00000000,40d9444c
+fishy_cat.blend	id	@ob:cat_eye
+fishy_cat.blend	object	@ob:cat_eye	data=@me:cat_eye	parent=@ob:cat	loc=401d5e9f,bea35db4,40d066a6
+fishy_cat.blend	id	@ob:cat_eye_tearline
+fishy_cat.blend	object	@ob:cat_eye_tearline	data=@me:cat_eye_tearline	parent=@ob:cat	loc=406b5713,bfa746ab,40d1f10b
+fishy_cat.blend	id	@ob:cat_spit
+fishy_cat.blend	object	@ob:cat_spit	data=@me:cat_spit	parent=@ob:cat	loc=406b5713,bfa746ab,40d1f10b
+fishy_cat.blend	id	@ob:cat_tongue
+fishy_cat.blend	object	@ob:cat_tongue	data=@me:cat_tongue	parent=@ob:cat	loc=3b460800,c0390d35,40af3049
+fishy_cat.blend	id	@ob:cornea_cat
+fishy_cat.blend	object	@ob:cornea_cat	data=@me:cornea_cat	parent=@ob:cat_eye	loc=4047c868,bf82a9b7,40d290a8
+fishy_cat.blend	id	@ob:DOF
+fishy_cat.blend	object	@ob:DOF	data=-	parent=@ob:ENV	loc=40404b2e,bff920c7,40d356f7
+fishy_cat.blend	id	@ob:ENV
+fishy_cat.blend	object	@ob:ENV	data=-	parent=-	loc=00000000,00000000,00000000
+fishy_cat.blend	id	@ob:fish
+fishy_cat.blend	object	@ob:fish	data=@me:fish	parent=-	loc=c0470483,c0e0b52a,41196e55
+fishy_cat.blend	id	@ob:fish_eye
+fishy_cat.blend	object	@ob:fish_eye	data=@me:fish_eye	parent=@ob:fish	loc=c05b8e87,c0d7e353,410c1bff
+fishy_cat.blend	id	@ob:fish_string1
+fishy_cat.blend	object	@ob:fish_string1	data=@cu:fish_string1	parent=@ob:fish	loc=c050701a,c0dd8004,41235ce5
+fishy_cat.blend	id	@ob:fish_string2
+fishy_cat.blend	object	@ob:fish_string2	data=@cu:fish_string2	parent=@ob:fish	loc=c04e6a82,c0d8e0c8,412c72e6
+fishy_cat.blend	id	@ob:fish_string3
+fishy_cat.blend	object	@ob:fish_string3	data=@cu:fish_string3	parent=@ob:fish	loc=c050701a,c0dd8004,41223bd9
+fishy_cat.blend	id	@ob:fish_string4
+fishy_cat.blend	object	@ob:fish_string4	data=@cu:fish_string4	parent=@ob:fish	loc=c0502e81,c0de31c8,41245fd6
+fishy_cat.blend	id	@ob:grass
+fishy_cat.blend	object	@ob:grass	data=@me:grass	parent=@ob:ENV	loc=408adeda,c193505f,c006df1e
+fishy_cat.blend	id	@ob:grass_blade1
+fishy_cat.blend	object	@ob:grass_blade1	data=@me:grass_blade1	parent=@ob:ENV	loc=40fb07b0,c1b798f4,c13d8412
+fishy_cat.blend	id	@ob:grass_blade2
+fishy_cat.blend	object	@ob:grass_blade2	data=@me:grass_blade2	parent=@ob:ENV	loc=40f0b9b8,c1bb69b3,c13eaea9
+fishy_cat.blend	id	@ob:grass_blade3
+fishy_cat.blend	object	@ob:grass_blade3	data=@me:grass_blade3	parent=@ob:ENV	loc=40d04c34,c1bb69b3,c13eaea9
+fishy_cat.blend	id	@ob:grass_blade4
+fishy_cat.blend	object	@ob:grass_blade4	data=@me:grass_blade4	parent=@ob:ENV	loc=40e179d4,c1bb69b3,c13eaea9
+fishy_cat.blend	id	@ob:LGT_reflector
+fishy_cat.blend	object	@ob:LGT_reflector	data=@me:LGT_reflector	parent=@ob:ENV	loc=c057981c,bc8c4c54,bf10a35c
+fishy_cat.blend	id	@ob:LGT_sun1
+fishy_cat.blend	object	@ob:LGT_sun1	data=@la:LGT_sun1	parent=@ob:ENV	loc=c1cf98b8,c172e75f,41f91a6c
+fishy_cat.blend	id	@ob:LGT_sun2
+fishy_cat.blend	object	@ob:LGT_sun2	data=@la:LGT_sun2	parent=@ob:ENV	loc=4223e905,41341b53,41038170
+fishy_cat.blend	id	@ob:particle_hair1
+fishy_cat.blend	object	@ob:particle_hair1	data=@me:particle_hair1	parent=-	loc=c0b1b37c,c163bb42,35938b0c
+fishy_cat.blend	id	@ob:particle_hair2
+fishy_cat.blend	object	@ob:particle_hair2	data=@me:particle_hair2	parent=-	loc=befbf6d2,c15fc434,358e408e
+fishy_cat.blend	id	@ob:particle_hair3
+fishy_cat.blend	object	@ob:particle_hair3	data=@me:particle_hair3	parent=-	loc=3fdd60a2,c17012fe,3ec448e5
+fishy_cat.blend	id	@ob:particle_hair4
+fishy_cat.blend	object	@ob:particle_hair4	data=@me:particle_hair4	parent=-	loc=406e7298,c1806cd1,3f1bef7a
+fishy_cat.blend	id	@ob:particle_hair5
+fishy_cat.blend	object	@ob:particle_hair5	data=@me:particle_hair5	parent=-	loc=40cbd3af,c18b4dc3,3f6f1542
+fishy_cat.blend	id	@ob:particle_hair6
+fishy_cat.blend	object	@ob:particle_hair6	data=@me:particle_hair6	parent=-	loc=412273fa,c197db24,3fde3d10
+fishy_cat.blend	id	@ob:particle_hair7
+fishy_cat.blend	object	@ob:particle_hair7	data=@me:particle_hair7	parent=-	loc=4158a632,c19433c7,3f8b1411
+fishy_cat.blend	id	@ob:particle_pixel_blackish
+fishy_cat.blend	object	@ob:particle_pixel_blackish	data=@me:Plane.026	parent=-	loc=bfb3546c,c1862ffc,c101201b
+fishy_cat.blend	id	@ob:particle_pixel_whiteish
+fishy_cat.blend	object	@ob:particle_pixel_whiteish	data=@me:Plane.026	parent=-	loc=bf70940e,c184a675,c0ea825b
+fishy_cat.blend	id	@ob:particle_speckle1
+fishy_cat.blend	object	@ob:particle_speckle1	data=@me:Plane.016	parent=-	loc=c092a4cc,c1862ffc,c06595c8
+fishy_cat.blend	id	@ob:particle_speckle_black1
+fishy_cat.blend	object	@ob:particle_speckle_black1	data=@me:Plane.017	parent=-	loc=c08023d8,c1862ffc,c06595c8
+fishy_cat.blend	id	@ob:particle_speckle_black2
+fishy_cat.blend	object	@ob:particle_speckle_black2	data=@me:Plane.018	parent=-	loc=c06440b3,c1862ffc,c06777af
+fishy_cat.blend	id	@ob:particle_speckle_black3
+fishy_cat.blend	object	@ob:particle_speckle_black3	data=@me:Plane.019	parent=-	loc=c048a4cd,c1862ffc,c0589e03
+fishy_cat.blend	id	@ob:particle_speckle_black4
+fishy_cat.blend	object	@ob:particle_speckle_black4	data=@me:Plane.020	parent=-	loc=c01f7080,c1862ffc,c068b8f4
+fishy_cat.blend	id	@ob:particle_speckle_black5
+fishy_cat.blend	object	@ob:particle_speckle_black5	data=@me:Plane.021	parent=-	loc=bffa9c28,c1862ffc,c067b7f1
+fishy_cat.blend	id	@ob:particle_speckle_black6
+fishy_cat.blend	object	@ob:particle_speckle_black6	data=@me:Plane.022	parent=-	loc=bfb3546c,c1862ffc,c06f3f85
+fishy_cat.blend	id	@ob:particle_speckle_white1
+fishy_cat.blend	object	@ob:particle_speckle_white1	data=@me:Plane.020	parent=-	loc=c01f7080,c1862ffc,c0b40630
+fishy_cat.blend	id	@ob:particle_speckle_white2
+fishy_cat.blend	object	@ob:particle_speckle_white2	data=@me:Plane.019	parent=-	loc=c048a4cd,c1862ffc,c0abf8b8
+fishy_cat.blend	id	@ob:particle_speckle_white3
+fishy_cat.blend	object	@ob:particle_speckle_white3	data=@me:Plane.018	parent=-	loc=c06440b3,c1862ffc,c0b3658e
+fishy_cat.blend	id	@ob:particle_speckle_white4
+fishy_cat.blend	object	@ob:particle_speckle_white4	data=@me:Plane.017	parent=-	loc=c08023d8,c1862ffc,c0b2749a
+fishy_cat.blend	id	@ob:particle_speckle_white5
+fishy_cat.blend	object	@ob:particle_speckle_white5	data=@me:Plane.016	parent=-	loc=c092a4cc,c1862ffc,c0b2749a
+fishy_cat.blend	id	@ob:particle_speckle_white6
+fishy_cat.blend	object	@ob:particle_speckle_white6	data=@me:Plane.022	parent=-	loc=bfb3546c,c1862ffc,c0b74978
+fishy_cat.blend	id	@ob:particle_speckle_white7
+fishy_cat.blend	object	@ob:particle_speckle_white7	data=@me:Plane.021	parent=-	loc=bffa9c28,c1862ffc,c0b385ae
+fishy_cat.blend	id	@ob:plane_bg
+fishy_cat.blend	object	@ob:plane_bg	data=@me:plane_bg	parent=-	loc=00000000,00000000,c115f44c
+fishy_cat.blend	id	@ob:plane_grain
+fishy_cat.blend	object	@ob:plane_grain	data=@me:plane_grain	parent=-	loc=00000000,00000000,00000000
+fishy_cat.blend	id	@ob:plane_mid_gray
+fishy_cat.blend	object	@ob:plane_mid_gray	data=@me:plane_mid_gray	parent=-	loc=00000000,00000000,c0302204
+fishy_cat.blend	id	@ob:sparkle_particle
+fishy_cat.blend	object	@ob:sparkle_particle	data=@me:sparkle_particle	parent=@ob:ENV	loc=42101c2f,3d2b39c0,c1c79e4a
+fishy_cat.blend	id	@ob:sparkles_background
+fishy_cat.blend	object	@ob:sparkles_background	data=@me:sparkles_background	parent=@ob:ENV	loc=c20b1d50,428d539f,41b2d6af
+fishy_cat.blend	id	@ob:sparkles_foreground
+fishy_cat.blend	object	@ob:sparkles_foreground	data=@me:sparkles_foreground	parent=@ob:ENV	loc=c14bb7fc,41b20784,4143841a
+fishy_cat.blend	id	@ma:cat_eye_cornea
+fishy_cat.blend	id	@ma:cat_eye_iris
+fishy_cat.blend	id	@ma:cat_eye_pupil
+fishy_cat.blend	id	@ma:cat_eye_white
+fishy_cat.blend	id	@ma:cat_hair_long
+fishy_cat.blend	id	@ma:cat_hair_short
+fishy_cat.blend	id	@ma:cat_skin
+fishy_cat.blend	id	@ma:cat_tear_line
+fishy_cat.blend	id	@ma:cat_tongue
+fishy_cat.blend	id	@ma:env_grass
+fishy_cat.blend	id	@ma:env_reflector
+fishy_cat.blend	id	@ma:env_sparkle
+fishy_cat.blend	id	@ma:env_yellow%20filter
+fishy_cat.blend	id	@ma:fish_eye
+fishy_cat.blend	id	@ma:fish_skin
+fishy_cat.blend	id	@ma:fish_string
+fishy_cat.blend	id	@ma:grain_black
+fishy_cat.blend	id	@ma:grain_blackish
+fishy_cat.blend	id	@ma:grain_hair
+fishy_cat.blend	id	@ma:grain_transp
+fishy_cat.blend	id	@ma:grain_whiteish
+fishy_cat.blend	id	@te:fish
+fishy_cat.blend	id	@te:rough_brush
+fishy_cat.blend	id	@te:tear_line
+fishy_cat.blend	id	@te:tongue
+fishy_cat.blend	id	@me:camera_filter
+fishy_cat.blend	id	@me:cat
+fishy_cat.blend	id	@me:cat_eye
+fishy_cat.blend	id	@me:cat_eye_tearline
+fishy_cat.blend	id	@me:cat_spit
+fishy_cat.blend	id	@me:cat_tongue
+fishy_cat.blend	id	@me:cornea_cat
+fishy_cat.blend	id	@me:fish
+fishy_cat.blend	id	@me:fish_eye
+fishy_cat.blend	id	@me:grass
+fishy_cat.blend	id	@me:grass_blade1
+fishy_cat.blend	id	@me:grass_blade2
+fishy_cat.blend	id	@me:grass_blade3
+fishy_cat.blend	id	@me:grass_blade4
+fishy_cat.blend	id	@me:LGT_reflector
+fishy_cat.blend	id	@me:particle_hair1
+fishy_cat.blend	id	@me:particle_hair2
+fishy_cat.blend	id	@me:particle_hair3
+fishy_cat.blend	id	@me:particle_hair4
+fishy_cat.blend	id	@me:particle_hair5
+fishy_cat.blend	id	@me:particle_hair6
+fishy_cat.blend	id	@me:particle_hair7
+fishy_cat.blend	id	@me:Plane.016
+fishy_cat.blend	id	@me:Plane.017
+fishy_cat.blend	id	@me:Plane.018
+fishy_cat.blend	id	@me:Plane.019
+fishy_cat.blend	id	@me:Plane.020
+fishy_cat.blend	id	@me:Plane.021
+fishy_cat.blend	id	@me:Plane.022
+fishy_cat.blend	id	@me:Plane.026
+fishy_cat.blend	id	@me:plane_bg
+fishy_cat.blend	id	@me:plane_grain
+fishy_cat.blend	id	@me:plane_mid_gray
+fishy_cat.blend	id	@me:sparkle_particle
+fishy_cat.blend	id	@me:sparkles_background
+fishy_cat.blend	id	@me:sparkles_foreground
+fishy_cat.blend	id	@pa:hairs
+fishy_cat.blend	id	@pa:long_hair
+fishy_cat.blend	id	@pa:ParticleSettings
+fishy_cat.blend	id	@pa:ParticleSettings.001
+fishy_cat.blend	id	@pa:sparkles
+fishy_cat.blend	id	@pa:sparkles.001
+fishy_cat.blend	id	@pa:speckles
+fishy_cat.blend	id	@pa:speckles_med_blackish
+fishy_cat.blend	id	@pa:speckles_med_whiteish
+fishy_cat.blend	id	@pa:speckles_pixels_blackish
+fishy_cat.blend	id	@pa:speckles_pixels_whiteish
+fishy_cat.blend	id	@pa:speckles_small_blackish
+fishy_cat.blend	id	@pa:speckles_small_whiteish
+fishy_cat.blend	id	@nt:eye_CORNEA
+fishy_cat.blend	id	@nt:eye_IRIS
+fishy_cat.blend	id	@nt:basic_glossy
+fishy_cat.blend	id	@br:1%20-%20Brush
+fishy_cat.blend	id	@br:2%20-%20Soften
+fishy_cat.blend	id	@br:3%20-%20Fill
+fishy_cat.blend	id	@br:3%20-%20Trim
+fishy_cat.blend	id	@br:4%20-%20Eraser
+fishy_cat.blend	id	@br:5%20-%20Smear
+fishy_cat.blend	id	@br:Add
+fishy_cat.blend	id	@br:Blob
+fishy_cat.blend	id	@br:Blur
+fishy_cat.blend	id	@br:Clay
+fishy_cat.blend	id	@br:Clay%20Strips
+fishy_cat.blend	id	@br:Clone
+fishy_cat.blend	id	@br:Crease
+fishy_cat.blend	id	@br:Darken
+fishy_cat.blend	id	@br:Draw
+fishy_cat.blend	id	@br:Fill%2FDeepen
+fishy_cat.blend	id	@br:Flatten%2FContrast
+fishy_cat.blend	id	@br:Grab
+fishy_cat.blend	id	@br:Inflate%2FDeflate
+fishy_cat.blend	id	@br:Layer
+fishy_cat.blend	id	@br:Lighten
+fishy_cat.blend	id	@br:Mask
+fishy_cat.blend	id	@br:Mix
+fishy_cat.blend	id	@br:Multiply
+fishy_cat.blend	id	@br:Nudge
+fishy_cat.blend	id	@br:Pinch%2FMagnify
+fishy_cat.blend	id	@br:Polish
+fishy_cat.blend	id	@br:Scrape%2FPeaks
+fishy_cat.blend	id	@br:SculptDraw
+fishy_cat.blend	id	@br:Smooth
+fishy_cat.blend	id	@br:Snake%20Hook
+fishy_cat.blend	id	@br:Subtract
+fishy_cat.blend	id	@br:TexDraw
+fishy_cat.blend	id	@br:Thumb
+fishy_cat.blend	id	@br:Twist
+fishy_cat.blend	id	@pl:Palette
+fishy_cat.blend	id	@pl:Palette.001
+gizmo_array.blend	version	4.03
+gizmo_array.blend	form	classic
+gizmo_array.blend	compression	zstd
+gizmo_array.blend	pointer_size	8
+gizmo_array.blend	id	@sc:Scene
+gizmo_array.blend	holds	@sc:Scene	objects=	collections=@gr:Collection
+gizmo_array.blend	id	@pl:Palette
+gizmo_array.blend	id	@gr:Collection
+gizmo_array.blend	holds	@gr:Collection	objects=@ob:Area @ob:Cube	collections=
+gizmo_array.blend	id	@ob:Area
+gizmo_array.blend	object	@ob:Area	data=@la:Area	parent=-	loc=40124050,405a0a50,40eda3e4
+gizmo_array.blend	id	@ob:Cube
+gizmo_array.blend	object	@ob:Cube	data=@me:Cube.001	parent=-	loc=00000000,00000000,00000000
+gizmo_array.blend	id	@la:Area
+gizmo_array.blend	id	@me:Cube.001
+gizmo_array.blend	id	@wo:World
+gizmo_array.blend	id	@ls:LineStyle
+gizmo_array.blend	id	@tx:README
+gizmo_array.blend	id	@nt:Array%20with%20Gizmos
+gizmo_array.blend	id	@nt:Transform%20with%20Gizmo
+jiggly_pudding.blend	version	3.06
+jiggly_pudding.blend	form	classic
+jiggly_pudding.blend	compression	zstd
+jiggly_pudding.blend	pointer_size	8
+jiggly_pudding.blend	id	@sc:Scene
+jiggly_pudding.blend	holds	@sc:Scene	objects=@ob:Pudding @ob:Empty	collections=
+jiggly_pudding.blend	id	@br:Add
+jiggly_pudding.blend	id	@br:Airbrush
+jiggly_pudding.blend	id	@br:Average
+jiggly_pudding.blend	id	@br:Blob
+jiggly_pudding.blend	id	@br:Blur
+jiggly_pudding.blend	id	@br:Boundary
+jiggly_pudding.blend	id	@br:Clay
+jiggly_pudding.blend	id	@br:Clay%20Strips
+jiggly_pudding.blend	id	@br:Clay%20Thumb
+jiggly_pudding.blend	id	@br:Clone
+jiggly_pudding.blend	id	@br:Clone%20Stroke
+jiggly_pudding.blend	id	@br:Cloth
+jiggly_pudding.blend	id	@br:Crease
+jiggly_pudding.blend	id	@br:Darken
+jiggly_pudding.blend	id	@br:Draw
+jiggly_pudding.blend	id	@br:Draw%20Face%20Sets
+jiggly_pudding.blend	id	@br:Draw%20Sharp
+jiggly_pudding.blend	id	@br:Elastic%20Deform
+jiggly_pudding.blend	id	@br:Eraser%20Hard
+jiggly_pudding.blend	id	@br:Eraser%20Point
+jiggly_pudding.blend	id	@br:Eraser%20Soft
+jiggly_pudding.blend	id	@br:Eraser%20Stroke
+jiggly_pudding.blend	id	@br:Fill
+jiggly_pudding.blend	id	@br:Fill%20Area
+jiggly_pudding.blend	id	@br:Fill%2FDeepen
+jiggly_pudding.blend	id	@br:Flatten%2FContrast
+jiggly_pudding.blend	id	@br:Grab
+jiggly_pudding.blend	id	@br:Grab%20Stroke
+jiggly_pudding.blend	id	@br:Inflate%2FDeflate
+jiggly_pudding.blend	id	@br:Ink%20Pen
+jiggly_pudding.blend	id	@br:Ink%20Pen%20Rough
+jiggly_pudding.blend	id	@br:Layer
+jiggly_pudding.blend	id	@br:Lighten
+jiggly_pudding.blend	id	@br:Marker%20Bold
+jiggly_pudding.blend	id	@br:Marker%20Chisel
+jiggly_pudding.blend	id	@br:Mask
+jiggly_pudding.blend	id	@br:Mix
+jiggly_pudding.blend	id	@br:Multi-plane%20Scrape
+jiggly_pudding.blend	id	@br:Multiply
+jiggly_pudding.blend	id	@br:Multires%20Displacement%20Eraser
+jiggly_pudding.blend	id	@br:Nudge
+jiggly_pudding.blend	id	@br:Paint
+jiggly_pudding.blend	id	@br:Pen
+jiggly_pudding.blend	id	@br:Pencil
+jiggly_pudding.blend	id	@br:Pencil%20Soft
+jiggly_pudding.blend	id	@br:Pinch%20Stroke
+jiggly_pudding.blend	id	@br:Pinch%2FMagnify
+jiggly_pudding.blend	id	@br:Pose
+jiggly_pudding.blend	id	@br:Push%20Stroke
+jiggly_pudding.blend	id	@br:Randomize%20Stroke
+jiggly_pudding.blend	id	@br:Rotate
+jiggly_pudding.blend	id	@br:Scrape%2FPeaks
+jiggly_pudding.blend	id	@br:SculptDraw
+jiggly_pudding.blend	id	@br:Simplify
+jiggly_pudding.blend	id	@br:Slide%20Relax
+jiggly_pudding.blend	id	@br:Smear
+jiggly_pudding.blend	id	@br:Smooth
+jiggly_pudding.blend	id	@br:Smooth%20Stroke
+jiggly_pudding.blend	id	@br:Snake%20Hook
+jiggly_pudding.blend	id	@br:Soften
+jiggly_pudding.blend	id	@br:Strength%20Stroke
+jiggly_pudding.blend	id	@br:Subtract
+jiggly_pudding.blend	id	@br:TexDraw
+jiggly_pudding.blend	id	@br:Thickness%20Stroke
+jiggly_pudding.blend	id	@br:Thumb
+jiggly_pudding.blend	id	@br:Tint
+jiggly_pudding.blend	id	@br:Twist%20Stroke
+jiggly_pudding.blend	id	@br:Vertex%20Average
+jiggly_pudding.blend	id	@br:Vertex%20Blur
+jiggly_pudding.blend	id	@br:Vertex%20Draw
+jiggly_pudding.blend	id	@br:Vertex%20Replace
+jiggly_pudding.blend	id	@br:Vertex%20Smear
+jiggly_pudding.blend	id	@br:Weight%20Draw
+jiggly_pudding.blend	id	@pl:Palette
+jiggly_pudding.blend	id	@ob:Empty
+jiggly_pudding.blend	object	@ob:Empty	data=-	parent=-	loc=c0b6455b,4031b4da,3fa83a08
+jiggly_pudding.blend	id	@ob:Pudding
+jiggly_pudding.blend	object	@ob:Pudding	data=@me:Pudding	parent=-	loc=00000000,00000000,3dd9c2db
+jiggly_pudding.blend	id	@me:Pudding
+jiggly_pudding.blend	id	@wo:World
+jiggly_pudding.blend	id	@ls:LineStyle
+jiggly_pudding.blend	id	@ma:Plate
+jiggly_pudding.blend	id	@ma:Pudding
+jiggly_pudding.blend	id	@im:Viewer%20Node
+jiggly_pudding.blend	id	@tx:README
+jiggly_pudding.blend	id	@nt:Pudding
+mandelbrot_grow.blend	version	5.00
+mandelbrot_grow.blend	form	large
+mandelbrot_grow.blend	compression	zstd
+mandelbrot_grow.blend	pointer_size	8
+mandelbrot_grow.blend	id	@sc:Scene
+mandelbrot_grow.blend	holds	@sc:Scene	objects=	collections=@gr:Collection
+mandelbrot_grow.blend	id	@pl:Palette
+mandelbrot_grow.blend	id	@gr:Collection
+mandelbrot_grow.blend	holds	@gr:Collection	objects=@ob:Mandelbrot @ob:Camera @ob:Sun	collections=
+mandelbrot_grow.blend	id	@ob:Camera
+mandelbrot_grow.blend	object	@ob:Camera	data=@ca:Camera.001	parent=-	loc=40b44718,c2301288,3de36051
+mandelbrot_grow.blend	id	@ob:Mandelbrot
+mandelbrot_grow.blend	object	@ob:Mandelbrot	data=@me:Cube.001	parent=-	loc=00000000,00000000,00000000
+mandelbrot_grow.blend	id	@ob:Sun
+mandelbrot_grow.blend	object	@ob:Sun	data=@la:Sun.001	parent=-	loc=40ac9ae1,c2314fa2,3d9d5374
+mandelbrot_grow.blend	id	@ca:Camera.001
+mandelbrot_grow.blend	id	@la:Sun.001
+mandelbrot_grow.blend	id	@me:Cube.001
+mandelbrot_grow.blend	id	@wo:World
+mandelbrot_grow.blend	id	@ls:LineStyle
+mandelbrot_grow.blend	id	@ma:Mandelbrot%20Grow
+mandelbrot_grow.blend	id	@im:Viewer%20Node
+mandelbrot_grow.blend	id	@tx:README
+mandelbrot_grow.blend	id	@nt:Compositor%20Nodes
+mandelbrot_grow.blend	id	@ac:Material.001Action
+mesh_fracturing.blend	version	3.06
+mesh_fracturing.blend	form	classic
+mesh_fracturing.blend	compression	none
+mesh_fracturing.blend	pointer_size	8
+mesh_fracturing.blend	id	@sc:Scene
+mesh_fracturing.blend	holds	@sc:Scene	objects=	collections=@gr:Collection
+mesh_fracturing.blend	id	@br:Add
+mesh_fracturing.blend	id	@br:Airbrush
+mesh_fracturing.blend	id	@br:Average
+mesh_fracturing.blend	id	@br:Blob
+mesh_fracturing.blend	id	@br:Blur
+mesh_fracturing.blend	id	@br:Boundary
+mesh_fracturing.blend	id	@br:Clay
+mesh_fracturing.blend	id	@br:Clay%20Strips
+mesh_fracturing.blend	id	@br:Clay%20Thumb
+mesh_fracturing.blend	id	@br:Clone
+mesh_fracturing.blend	id	@br:Clone%20Stroke
+mesh_fracturing.blend	id	@br:Cloth
+mesh_fracturing.blend	id	@br:Crease
+mesh_fracturing.blend	id	@br:Darken
+mesh_fracturing.blend	id	@br:Draw
+mesh_fracturing.blend	id	@br:Draw%20Face%20Sets
+mesh_fracturing.blend	id	@br:Draw%20Sharp
+mesh_fracturing.blend	id	@br:Elastic%20Deform
+mesh_fracturing.blend	id	@br:Eraser%20Hard
+mesh_fracturing.blend	id	@br:Eraser%20Point
+mesh_fracturing.blend	id	@br:Eraser%20Soft
+mesh_fracturing.blend	id	@br:Eraser%20Stroke
+mesh_fracturing.blend	id	@br:Fill
+mesh_fracturing.blend	id	@br:Fill%20Area
+mesh_fracturing.blend	id	@br:Fill%2FDeepen
+mesh_fracturing.blend	id	@br:Flatten%2FContrast
+mesh_fracturing.blend	id	@br:Grab
+mesh_fracturing.blend	id	@br:Grab%20Stroke
+mesh_fracturing.blend	id	@br:Inflate%2FDeflate
+mesh_fracturing.blend	id	@br:Ink%20Pen
+mesh_fracturing.blend	id	@br:Ink%20Pen%20Rough
+mesh_fracturing.blend	id	@br:Layer
+mesh_fracturing.blend	id	@br:Lighten
+mesh_fracturing.blend	id	@br:Marker%20Bold
+mesh_fracturing.blend	id	@br:Marker%20Chisel
+mesh_fracturing.blend	id	@br:Mask
+mesh_fracturing.blend	id	@br:Mix
+mesh_fracturing.blend	id	@br:Multi-plane%20Scrape
+mesh_fracturing.blend	id	@br:Multiply
+mesh_fracturing.blend	id	@br:Multires%20Displacement%20Eraser
+mesh_fracturing.blend	id	@br:Multires%20Displacement%20Smear
+mesh_fracturing.blend	id	@br:Nudge
+mesh_fracturing.blend	id	@br:Paint
+mesh_fracturing.blend	id	@br:Pen
+mesh_fracturing.blend	id	@br:Pencil
+mesh_fracturing.blend	id	@br:Pencil%20Soft
+mesh_fracturing.blend	id	@br:Pinch%20Stroke
+mesh_fracturing.blend	id	@br:Pinch%2FMagnify
+mesh_fracturing.blend	id	@br:Pose
+mesh_fracturing.blend	id	@br:Push%20Stroke
+mesh_fracturing.blend	id	@br:Randomize%20Stroke
+mesh_fracturing.blend	id	@br:Rotate
+mesh_fracturing.blend	id	@br:Scrape%2FPeaks
+mesh_fracturing.blend	id	@br:SculptDraw
+mesh_fracturing.blend	id	@br:Simplify
+mesh_fracturing.blend	id	@br:Slide%20Relax
+mesh_fracturing.blend	id	@br:Smear
+mesh_fracturing.blend	id	@br:Smooth
+mesh_fracturing.blend	id	@br:Smooth%20Stroke
+mesh_fracturing.blend	id	@br:Snake%20Hook
+mesh_fracturing.blend	id	@br:Soften
+mesh_fracturing.blend	id	@br:Strength%20Stroke
+mesh_fracturing.blend	id	@br:Subtract
+mesh_fracturing.blend	id	@br:TexDraw
+mesh_fracturing.blend	id	@br:Thickness%20Stroke
+mesh_fracturing.blend	id	@br:Thumb
+mesh_fracturing.blend	id	@br:Tint
+mesh_fracturing.blend	id	@br:Twist%20Stroke
+mesh_fracturing.blend	id	@br:Vertex%20Average
+mesh_fracturing.blend	id	@br:Vertex%20Blur
+mesh_fracturing.blend	id	@br:Vertex%20Draw
+mesh_fracturing.blend	id	@br:Vertex%20Replace
+mesh_fracturing.blend	id	@br:Vertex%20Smear
+mesh_fracturing.blend	id	@br:Weight%20Average
+mesh_fracturing.blend	id	@br:Weight%20Blur
+mesh_fracturing.blend	id	@br:Weight%20Draw
+mesh_fracturing.blend	id	@br:Weight%20Smear
+mesh_fracturing.blend	id	@pl:Palette
+mesh_fracturing.blend	id	@gr:Collection
+mesh_fracturing.blend	holds	@gr:Collection	objects=@ob:Cube	collections=
+mesh_fracturing.blend	id	@ob:Cube
+mesh_fracturing.blend	object	@ob:Cube	data=@me:Suzanne	parent=-	loc=00000000,00000000,00000000
+mesh_fracturing.blend	id	@me:Suzanne
+mesh_fracturing.blend	id	@wo:World
+mesh_fracturing.blend	id	@ls:LineStyle
+mesh_fracturing.blend	id	@ma:burst
+mesh_fracturing.blend	id	@ma:Dots%20Stroke
+mesh_fracturing.blend	id	@ma:Fractured%20Cube
+mesh_fracturing.blend	id	@im:Render%20Result
+mesh_fracturing.blend	id	@im:Viewer%20Node
+mesh_fracturing.blend	id	@tx:Readme
+mesh_fracturing.blend	id	@nt:Cut%20Fracturing
+repeat_zone_fractal_raymarch.blend	version	5.00
+repeat_zone_fractal_raymarch.blend	form	large
+repeat_zone_fractal_raymarch.blend	compression	zstd
+repeat_zone_fractal_raymarch.blend	pointer_size	8
+repeat_zone_fractal_raymarch.blend	id	@sc:Scene
+repeat_zone_fractal_raymarch.blend	holds	@sc:Scene	objects=	collections=@gr:Set
+repeat_zone_fractal_raymarch.blend	id	@pl:Palette
+repeat_zone_fractal_raymarch.blend	id	@gr:Set
+repeat_zone_fractal_raymarch.blend	holds	@gr:Set	objects=@ob:Camera @ob:Cube	collections=
+repeat_zone_fractal_raymarch.blend	id	@ob:Camera
+repeat_zone_fractal_raymarch.blend	object	@ob:Camera	data=@ca:Camera.003	parent=-	loc=c141d0e7,40d29f80,40f8f5b4
+repeat_zone_fractal_raymarch.blend	id	@ob:Cube
+repeat_zone_fractal_raymarch.blend	object	@ob:Cube	data=@me:Sphere.001	parent=-	loc=00000000,00000000,00000000
+repeat_zone_fractal_raymarch.blend	id	@ca:Camera.003
+repeat_zone_fractal_raymarch.blend	id	@me:Sphere.001
+repeat_zone_fractal_raymarch.blend	id	@wo:World.001
+repeat_zone_fractal_raymarch.blend	id	@ma:Raymarch%20Fractal%201
+repeat_zone_fractal_raymarch.blend	id	@im:Render%20Result
+repeat_zone_fractal_raymarch.blend	id	@tx:README
+repeat_zone_fractal_raymarch.blend	id	@nt:Co-Planar%20Edge%20Detection
+repeat_zone_fractal_raymarch.blend	id	@nt:Compositor%20Nodes
+repeat_zone_fractal_raymarch.blend	id	@nt:Curvature
+repeat_zone_fractal_raymarch.blend	id	@nt:Geometry%20Nodes
+repeat_zone_fractal_raymarch.blend	id	@nt:NPR%20Tree
+repeat_zone_fractal_raymarch.blend	id	@nt:Raymarch
+repeat_zone_fractal_raymarch.blend	id	@nt:SDF
+repeat_zone_fractal_raymarch.blend	id	@nt:Shading%20Models
+repeat_zone_fractal_raymarch.blend	id	@nt:Surface%20Curvature
+repeat_zone_fractal_raymarch.blend	id	@ac:CameraAction.003
+repeat_zone_fractal_raymarch.blend	id	@ac:Raymarch%20Fractal%201Action
+repeat_zone_fractal_raymarch.blend	id	@ac:Raymarch%20Fractal%201Action.001
+repeat_zone_fractal_raymarch.blend	id	@ac:Raymarch%20MAction
+repeat_zone_fractal_raymarch.blend	id	@ac:Sphere.002Action
+skeleton-arm-xray.blend	version	5.01
+skeleton-arm-xray.blend	form	large
+skeleton-arm-xray.blend	compression	zstd
+skeleton-arm-xray.blend	pointer_size	8
+skeleton-arm-xray.blend	id	@sc:Scene
+skeleton-arm-xray.blend	holds	@sc:Scene	objects=	collections=@gr:Set @gr:Arm%20Rig
+skeleton-arm-xray.blend	id	@br:Add
+skeleton-arm-xray.blend	id	@br:Airbrush
+skeleton-arm-xray.blend	id	@br:Average
+skeleton-arm-xray.blend	id	@br:Blob
+skeleton-arm-xray.blend	id	@br:Blur
+skeleton-arm-xray.blend	id	@br:Boundary
+skeleton-arm-xray.blend	id	@br:Clay
+skeleton-arm-xray.blend	id	@br:Clay%20Strips
+skeleton-arm-xray.blend	id	@br:Clay%20Thumb
+skeleton-arm-xray.blend	id	@br:Clone
+skeleton-arm-xray.blend	id	@br:Clone%20Stroke
+skeleton-arm-xray.blend	id	@br:Cloth
+skeleton-arm-xray.blend	id	@br:Crease
+skeleton-arm-xray.blend	id	@br:Darken
+skeleton-arm-xray.blend	id	@br:Draw
+skeleton-arm-xray.blend	id	@br:Draw%20Face%20Sets
+skeleton-arm-xray.blend	id	@br:Draw%20Sharp
+skeleton-arm-xray.blend	id	@br:Elastic%20Deform
+skeleton-arm-xray.blend	id	@br:Eraser%20Hard
+skeleton-arm-xray.blend	id	@br:Eraser%20Point
+skeleton-arm-xray.blend	id	@br:Eraser%20Soft
+skeleton-arm-xray.blend	id	@br:Eraser%20Stroke
+skeleton-arm-xray.blend	id	@br:Fill
+skeleton-arm-xray.blend	id	@br:Fill%20Area
+skeleton-arm-xray.blend	id	@br:Fill%2FDeepen
+skeleton-arm-xray.blend	id	@br:Flatten%2FContrast
+skeleton-arm-xray.blend	id	@br:Grab
+skeleton-arm-xray.blend	id	@br:Grab%20Stroke
+skeleton-arm-xray.blend	id	@br:Inflate%2FDeflate
+skeleton-arm-xray.blend	id	@br:Ink%20Pen
+skeleton-arm-xray.blend	id	@br:Ink%20Pen%20Rough
+skeleton-arm-xray.blend	id	@br:Layer
+skeleton-arm-xray.blend	id	@br:Lighten
+skeleton-arm-xray.blend	id	@br:Marker%20Bold
+skeleton-arm-xray.blend	id	@br:Marker%20Chisel
+skeleton-arm-xray.blend	id	@br:Mask
+skeleton-arm-xray.blend	id	@br:Mix
+skeleton-arm-xray.blend	id	@br:Multi-plane%20Scrape
+skeleton-arm-xray.blend	id	@br:Multiply
+skeleton-arm-xray.blend	id	@br:Multires%20Displacement%20Eraser
+skeleton-arm-xray.blend	id	@br:Multires%20Displacement%20Smear
+skeleton-arm-xray.blend	id	@br:Nudge
+skeleton-arm-xray.blend	id	@br:Paint
+skeleton-arm-xray.blend	id	@br:Pen
+skeleton-arm-xray.blend	id	@br:Pencil
+skeleton-arm-xray.blend	id	@br:Pencil%20Soft
+skeleton-arm-xray.blend	id	@br:Pinch%20Stroke
+skeleton-arm-xray.blend	id	@br:Pinch%2FMagnify
+skeleton-arm-xray.blend	id	@br:Pose
+skeleton-arm-xray.blend	id	@br:Push%20Stroke
+skeleton-arm-xray.blend	id	@br:Randomize%20Stroke
+skeleton-arm-xray.blend	id	@br:Rotate
+skeleton-arm-xray.blend	id	@br:Scrape%2FPeaks
+skeleton-arm-xray.blend	id	@br:SculptDraw
+skeleton-arm-xray.blend	id	@br:Simplify
+skeleton-arm-xray.blend	id	@br:Slide%20Relax
+skeleton-arm-xray.blend	id	@br:Smear
+skeleton-arm-xray.blend	id	@br:Smooth
+skeleton-arm-xray.blend	id	@br:Smooth%20Stroke
+skeleton-arm-xray.blend	id	@br:Snake%20Hook
+skeleton-arm-xray.blend	id	@br:Soften
+skeleton-arm-xray.blend	id	@br:Strength%20Stroke
+skeleton-arm-xray.blend	id	@br:Subtract
+skeleton-arm-xray.blend	id	@br:TexDraw
+skeleton-arm-xray.blend	id	@br:Thickness%20Stroke
+skeleton-arm-xray.blend	id	@br:Thumb
+skeleton-arm-xray.blend	id	@br:Tint
+skeleton-arm-xray.blend	id	@br:Twist%20Stroke
+skeleton-arm-xray.blend	id	@br:Vertex%20Average
+skeleton-arm-xray.blend	id	@br:Vertex%20Blur
+skeleton-arm-xray.blend	id	@br:Vertex%20Draw
+skeleton-arm-xray.blend	id	@br:Vertex%20Replace
+skeleton-arm-xray.blend	id	@br:Vertex%20Smear
+skeleton-arm-xray.blend	id	@br:Weight%20Average
+skeleton-arm-xray.blend	id	@br:Weight%20Blur
+skeleton-arm-xray.blend	id	@br:Weight%20Draw
+skeleton-arm-xray.blend	id	@br:Weight%20Smear
+skeleton-arm-xray.blend	id	@pl:Palette
+skeleton-arm-xray.blend	id	@gr:Arm%20Rig
+skeleton-arm-xray.blend	holds	@gr:Arm%20Rig	objects=@ob:Armature @ob:D%20Circle @ob:Arm%20Bones @ob:Arm%20Skin	collections=
+skeleton-arm-xray.blend	id	@gr:Set
+skeleton-arm-xray.blend	holds	@gr:Set	objects=@ob:Point @ob:Camera @ob:Point.001	collections=
+skeleton-arm-xray.blend	id	@ob:Arm%20Bones
+skeleton-arm-xray.blend	object	@ob:Arm%20Bones	data=@me:Plane.003	parent=@ob:Armature	loc=00000000,00000000,00000000
+skeleton-arm-xray.blend	id	@ob:Arm%20Skin
+skeleton-arm-xray.blend	object	@ob:Arm%20Skin	data=@me:Plane.002	parent=@ob:Armature	loc=00000000,00000000,00000000
+skeleton-arm-xray.blend	id	@ob:Armature
+skeleton-arm-xray.blend	object	@ob:Armature	data=@ar:Armature	parent=-	loc=00000000,00000000,00000000
+skeleton-arm-xray.blend	id	@ob:Camera
+skeleton-arm-xray.blend	object	@ob:Camera	data=@ca:Camera.002	parent=-	loc=3f4ffede,bf10f070,bd9a6cdf
+skeleton-arm-xray.blend	id	@ob:D%20Circle
+skeleton-arm-xray.blend	object	@ob:D%20Circle	data=@me:Circle	parent=-	loc=00000000,00000000,00000000
+skeleton-arm-xray.blend	id	@ob:Point
+skeleton-arm-xray.blend	object	@ob:Point	data=@la:Point	parent=-	loc=be71ed0e,be935f16,bdc64a48
+skeleton-arm-xray.blend	id	@ob:Point.001
+skeleton-arm-xray.blend	object	@ob:Point.001	data=@la:Point.001	parent=-	loc=3e94faae,3f0c5654,be85d6de
+skeleton-arm-xray.blend	id	@ca:Camera.002
+skeleton-arm-xray.blend	id	@la:Point
+skeleton-arm-xray.blend	id	@la:Point.001
+skeleton-arm-xray.blend	id	@me:Circle
+skeleton-arm-xray.blend	id	@me:Plane.002
+skeleton-arm-xray.blend	id	@me:Plane.003
+skeleton-arm-xray.blend	id	@ar:Armature
+skeleton-arm-xray.blend	id	@wo:World
+skeleton-arm-xray.blend	id	@ls:LineStyle
+skeleton-arm-xray.blend	id	@ma:Arm%20Bone
+skeleton-arm-xray.blend	id	@ma:Arm%20Skin
+skeleton-arm-xray.blend	id	@ma:Dots%20Stroke
+skeleton-arm-xray.blend	id	@im:Leadenhall%20Market%20256.png
+skeleton-arm-xray.blend	id	@im:Render%20Result
+skeleton-arm-xray.blend	id	@tx:README
+skeleton-arm-xray.blend	id	@nt:Compositor%20Nodes
+skeleton-arm-xray.blend	id	@ac:Action.001
+skeleton-arm-xray.blend	id	@ac:CameraAction
+skeleton-arm-xray.blend	id	@ac:WorldAction

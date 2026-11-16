@@ -1,0 +1,55 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object visibility",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "obj_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@obj:4",
+        "root": "obj_props",
+        "key": "o4",
+        "field": "norender",
+        "op": "set",
+        "before": "0",
+        "after": "1"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "object": "@obj:4",
+    "visibility": {
+      "viewport": true,
+      "select": true,
+      "render": false
+    },
+    "changed": true
+  },
+  "data_schema": "typed",
+  "data_spec": "blend.object-visibility/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object show",
+  "kind": "read",
+  "ok": false,
+  "exit": 4,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: blend_not_found: @obj:999 names nothing in the scene\nnext: scene list\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "BLEND-E006",
+    "exit": 4,
+    "message": "@obj:999 names nothing in the scene",
+    "next": "The address names no collection or object in the scene as it is now. Nothing was applied. List them again and use an address from the list.",
+    "next_step": {
+      "verb": "scene list",
+      "args": [],
+      "why": "List the collections, then each one's objects."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_not_found",
+      "next": "scene list",
+      "verb": "object show",
+      "address": "@obj:999"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

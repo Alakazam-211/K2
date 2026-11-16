@@ -1,0 +1,41 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object place",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: blend_driven: its transform is driven (animation, drivers or a constraint): the app would recompute it on load\nnext: object show @obj:6\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "BLEND-E002",
+    "exit": 2,
+    "message": "its transform is driven (animation, drivers or a constraint): the app would recompute it on load",
+    "next": "Animation, drivers or a constraint drive the object's transform, so the app recomputes it when it loads the file and a placement written here wouldn't hold. Nothing was applied. Change what drives it in the app, or place another object; its visibility and name are still written.",
+    "next_step": {
+      "verb": "object show",
+      "args": ["{address}"],
+      "why": "Read the object's fields: `edit` is `a` when its transform is driven."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_driven",
+      "next": "object show @obj:6",
+      "verb": "object place",
+      "address": "@obj:6"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

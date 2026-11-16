@@ -1,0 +1,43 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "scene list",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "collections": [
+      {
+        "address": "@coll:1",
+        "kind": "scene",
+        "name": "Scene",
+        "parent": null,
+        "objects": 1,
+        "hidden": false
+      },
+      {
+        "address": "@coll:2",
+        "kind": "collection",
+        "name": "Set",
+        "parent": "@coll:1",
+        "objects": 5,
+        "hidden": false
+      }
+    ]
+  },
+  "data_schema": "typed",
+  "data_spec": "blend.scene-list/1",
+  "page": {
+    "next": {
+      "verb": "scene list",
+      "args": ["--limit", "2", "--after", "@coll:2"]
+    }
+  },
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

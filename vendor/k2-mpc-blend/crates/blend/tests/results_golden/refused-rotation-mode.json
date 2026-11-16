@@ -1,0 +1,41 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object place",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: blend_rotation_mode: it rotates by quaternion, not by Euler angles\nnext: object place @obj:5 --loc X,Y,Z --scale X,Y,Z\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "BLEND-E003",
+    "exit": 2,
+    "message": "it rotates by quaternion, not by Euler angles",
+    "next": "The object rotates by quaternion or by axis and angle, and a rotation given here is Euler angles. Nothing was applied. Place it without a rotation (its location and scale are written), or change its rotation mode in the app.",
+    "next_step": {
+      "verb": "object show",
+      "args": ["{address}"],
+      "why": "Read the object's rotation mode and transform."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_rotation_mode",
+      "next": "object place @obj:5 --loc X,Y,Z --scale X,Y,Z",
+      "verb": "object place",
+      "address": "@obj:5"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

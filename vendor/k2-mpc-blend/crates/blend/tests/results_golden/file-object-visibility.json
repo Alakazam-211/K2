@@ -1,0 +1,12 @@
+{
+  "verb": "object visibility",
+  "data_spec": "blend.file.object-visibility/1",
+  "data": {
+    "object": "@ob:Light",
+    "hidden": {
+      "viewport": true,
+      "select": null,
+      "render": false
+    }
+  }
+}

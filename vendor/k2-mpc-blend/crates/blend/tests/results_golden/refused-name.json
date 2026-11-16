@@ -1,0 +1,41 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object rename",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: blend_name: another object of the file has it\nnext: object rename @obj:2 --name NAME --break-links\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "BLEND-E004",
+    "exit": 2,
+    "message": "another object of the file has it",
+    "next": "An object's name is not empty, holds no NUL, fits the file's name field, and is no other object's of the file. Nothing was applied. Give another name.",
+    "next_step": {
+      "verb": "scene list",
+      "args": [],
+      "why": "List the collections, then each one's objects, with the names they hold."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_name",
+      "next": "object rename @obj:2 --name NAME --break-links",
+      "verb": "object rename",
+      "address": "@obj:2"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

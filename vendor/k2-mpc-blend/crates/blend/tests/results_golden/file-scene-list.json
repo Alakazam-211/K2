@@ -1,0 +1,137 @@
+{
+  "verb": "scene list",
+  "data_spec": "blend.file.scene-list/1",
+  "data": {
+    "collections": [
+      {
+        "address": "@gr:Set",
+        "name": "Set",
+        "holders": ["@sc:Scene"],
+        "objects": ["@ob:Cube", "@ob:Light"],
+        "hidden": {
+          "viewport": false,
+          "select": false,
+          "render": false
+        }
+      },
+      {
+        "address": "@gr:Inner",
+        "name": "Inner",
+        "holders": ["@gr:Set"],
+        "objects": ["@ob:Child"],
+        "hidden": {
+          "viewport": false,
+          "select": false,
+          "render": false
+        }
+      },
+      {
+        "address": "@gr:Props",
+        "name": "Props",
+        "holders": ["@sc:Scene"],
+        "objects": ["@ob:Cube"],
+        "hidden": {
+          "viewport": false,
+          "select": false,
+          "render": false
+        }
+      }
+    ],
+    "objects": [
+      {
+        "address": "@ob:Camera",
+        "name": "Camera",
+        "data": {
+          "key": "@ca:Cam",
+          "kind": "camera"
+        },
+        "parent": null,
+        "collections": ["@sc:Scene"],
+        "location": [1, 2, 3],
+        "rotation": [0, 0, 0],
+        "rotation_mode": "quaternion",
+        "scale": [1, 1, 1],
+        "hidden": {
+          "viewport": false,
+          "select": false,
+          "render": false
+        },
+        "linked": false
+      },
+      {
+        "address": "@ob:Cube",
+        "name": "Cube",
+        "data": {
+          "key": "@me:Cube",
+          "kind": "mesh"
+        },
+        "parent": null,
+        "collections": ["@gr:Set", "@gr:Props"],
+        "location": [0, 0, 0.25],
+        "rotation": [0, 0, 0],
+        "rotation_mode": "quaternion",
+        "scale": [1, 1, 1],
+        "hidden": {
+          "viewport": false,
+          "select": false,
+          "render": false
+        },
+        "linked": false
+      },
+      {
+        "address": "@ob:Child",
+        "name": "Child",
+        "data": null,
+        "parent": "@ob:Cube",
+        "collections": ["@gr:Inner"],
+        "location": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "rotation_mode": "quaternion",
+        "scale": [1, 1, 1],
+        "hidden": {
+          "viewport": true,
+          "select": false,
+          "render": true
+        },
+        "linked": false
+      },
+      {
+        "address": "@ob:Light",
+        "name": "Light",
+        "data": {
+          "key": "@la:Lamp",
+          "kind": "light"
+        },
+        "parent": null,
+        "collections": ["@gr:Set"],
+        "location": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "rotation_mode": "quaternion",
+        "scale": [1, 1, 1],
+        "hidden": {
+          "viewport": false,
+          "select": false,
+          "render": false
+        },
+        "linked": false
+      }
+    ],
+    "cameras": [
+      {
+        "object": "@ob:Camera",
+        "name": "Camera",
+        "data": "@ca:Cam",
+        "active_in": ["@sc:Scene"],
+        "fields": {
+          "type": "0",
+          "lens": "50",
+          "clipsta": "0.1",
+          "clipend": "100",
+          "sensor_x": "36",
+          "camera_type": "perspective"
+        },
+        "linked": false
+      }
+    ]
+  }
+}

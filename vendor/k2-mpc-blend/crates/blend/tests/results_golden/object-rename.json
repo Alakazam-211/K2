@@ -1,0 +1,62 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object rename",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "obj_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 2,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@obj:2",
+        "root": "obj_props",
+        "key": "o2",
+        "field": "name",
+        "op": "set",
+        "before": "Cube",
+        "after": "Box"
+      },
+      {
+        "address": "@obj:2",
+        "root": "obj_props",
+        "key": "o2",
+        "field": "nid",
+        "op": "set",
+        "before": "@ob:Cube",
+        "after": "@ob:Box"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "object": "@obj:2",
+    "name": "Box",
+    "key": "@ob:Box",
+    "was": "@ob:Cube",
+    "changed": true
+  },
+  "data_schema": "typed",
+  "data_spec": "blend.object-rename/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

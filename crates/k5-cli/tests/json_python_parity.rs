@@ -364,6 +364,27 @@ fn floats_print_as_pythons_repr() {
 }
 
 #[test]
+fn a_float_halfway_between_two_shortest_forms_takes_the_even_digit() {
+    // Each of these is exactly ...25 or ...75 past the last digit printed.
+    for (input, expected) in [
+        ("659774685697112.25", "659774685697112.2"),
+        ("659774685697112.3", "659774685697112.2"),
+        ("611998825668431.25", "611998825668431.2"),
+        ("562949953421312.25", "562949953421312.2"),
+        ("562949953421312.75", "562949953421312.8"),
+        ("1125899906842624.75", "1125899906842624.8"),
+        ("-1125899906842624.25", "-1125899906842624.2"),
+        ("1.00000762939453125", "1.0000076293945312"),
+        ("1.00002288818359375", "1.0000228881835938"),
+        // 2**-24: the even candidate (...062) is a different float, so the
+        // odd one stays.
+        ("5.9604644775390625e-08", "5.960464477539063e-08"),
+    ] {
+        assert_eq!(default_print(input), expected, "input {input}");
+    }
+}
+
+#[test]
 fn nan_and_the_infinities_are_read_and_printed() {
     assert_eq!(
         default_print("[NaN, Infinity, -Infinity]"),

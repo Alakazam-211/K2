@@ -695,6 +695,72 @@ fn push_unit_escape(out: &mut String, unit: u32) {
     }
 }
 
+/// A finite float above zero as `(digits, exponent)`: `1.2345e2` is
+/// `("12345", 2)`. `precision` is the number of digits after the first one,
+/// or `None` for the shortest digits that read back as the same float.
+fn scientific(number: f64, precision: Option<usize>) -> (String, i32) {
+    let text = match precision {
+        Some(precision) => format!("{number:.precision$e}"),
+        None => format!("{number:e}"),
+    };
+    let (mantissa, exponent) = text
+        .split_once('e')
+        .expect("`{:e}` of a finite float has an exponent");
+    let exponent = exponent
+        .parse()
+        .expect("`{:e}` of a finite float has a whole exponent");
+    (mantissa.chars().filter(|c| *c != '.').collect(), exponent)
+}
+
+/// No float needs more digits than this to be written out exactly.
+const EXACT_DIGITS: usize = 800;
+
+/// The shortest digits that read back as `number` (finite, above zero), the
+/// way Python picks them.
+///
+/// Rust's `{:e}` finds the shortest digits too. The two differ only on a
+/// tie: the float is exactly halfway between two candidates of that length
+/// (`659774685697112.25` between `...2.2` and `...2.3`). Python takes the
+/// candidate whose last digit is even, as long as it reads back as the same
+/// float; Rust may take the other.
+fn shortest_digits(number: f64) -> (String, i32) {
+    let (digits, exponent) = scientific(number, None);
+    let count = digits.len();
+
+    // A tie has exactly one more digit than the shortest form, and it is a 5.
+    let (longer, longer_exponent) = scientific(number, Some(count));
+    if !longer.ends_with('5') {
+        return (digits, exponent);
+    }
+    let (exact, _) = scientific(number, Some(EXACT_DIGITS));
+    if exact.trim_end_matches('0') != longer {
+        return (digits, exponent);
+    }
+
+    // The candidate below is `longer` without its 5; the one above is that
+    // plus one in the last place. Only one of them ends in an even digit.
+    let mut even = longer.into_bytes();
+    even.pop();
+    match even.last_mut() {
+        // Ending in 9, the one above would be shorter: not a tie after all.
+        None | Some(b'9') => return (digits, exponent),
+        Some(last) if (*last - b'0') % 2 == 1 => *last += 1,
+        Some(_) => {}
+    }
+    let even = String::from_utf8(even).expect("digits are ASCII");
+    if even == digits {
+        return (digits, exponent);
+    }
+    // Next to a power of two the float's neighbours are not the same
+    // distance away, and the even candidate may be a different float.
+    let reads_back = format!("{even}e{}", longer_exponent - (count as i32 - 1)).parse::<f64>();
+    if reads_back == Ok(number) {
+        (even, longer_exponent)
+    } else {
+        (digits, exponent)
+    }
+}
+
 /// Python's `repr(float)`, with JSON's names for NaN and the infinities.
 ///
 /// The digits are the shortest that read back as the same float. They are
@@ -717,15 +783,7 @@ fn write_float(number: f64, out: &mut String) {
         return;
     }
 
-    // Rust's `{:e}` gives the shortest digits too, as `d.ddde-7` or `de16`.
-    let scientific = format!("{:e}", number.abs());
-    let (mantissa, exponent) = scientific
-        .split_once('e')
-        .expect("`{:e}` of a finite float has an exponent");
-    let exponent: i32 = exponent
-        .parse()
-        .expect("`{:e}` of a finite float has a whole exponent");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let (digits, exponent) = shortest_digits(number.abs());
 
     if (-4..16).contains(&exponent) {
         if exponent < 0 {

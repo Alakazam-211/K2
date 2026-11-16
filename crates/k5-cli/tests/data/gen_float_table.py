@@ -160,6 +160,28 @@ def float_inputs():
             text = "-" + text
         rows.append(text)
 
+    # Ties: floats whose exact value is halfway between the two shortest
+    # candidates. Python takes the one with the even last digit (0.25 above a
+    # whole number near 2**50 prints as .2, 0.75 as .8). Rust's own shortest
+    # digits go the other way on some of these.
+    rows += ["659774685697112.2", "659774685697112.25", "611998825668431.3",
+             "611998825668431.25", "562949953421312.75", "562949953421312.25",
+             "1125899906842624.25", "1125899906842624.75",
+             "1.00000762939453125", "1.00002288818359375"]
+    for _ in range(200):
+        whole = rng.randrange(2 ** 49, 2 ** 51)
+        rows.append(repr(whole + rng.choice([0.25, 0.75])))
+    # Odd m over 2**j ends in a 5 at the j-th decimal place; many are ties.
+    for j in range(1, 71):
+        for _ in range(8):
+            m = rng.randrange(2 ** 52, 2 ** 53) | 1
+            rows.append(repr(m / 2 ** j))
+            rows.append(repr((m % 2 ** rng.randint(1, 40) | 1) / 2 ** j))
+    for j in range(17, 53):
+        for _ in range(6):
+            m = rng.randrange(2 ** j, 2 ** (j + 1)) | 1
+            rows.append(repr(m / 2 ** j))
+
     return rows
 
 

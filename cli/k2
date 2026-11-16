@@ -1514,8 +1514,20 @@ _cli_warn_key_on_argv() {
     echo "warning: passing a key on the command line is deprecated and will be refused in the next release; use --key-stdin" >&2
 }
 
+# Percent-encode one value for a query string: every byte except ASCII
+# letters, digits and `_.-~` becomes %XX. Byte-safe: a value that is not
+# valid UTF-8 is encoded byte by byte (os.fsencode gives back the bytes the
+# shell passed). Never falls back to the raw value: a raw `&` or `=` would
+# start a new query parameter. When it cannot encode (no python3), it says
+# so and ends the whole command.
 urlencode() {
-    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1" 2>/dev/null || echo "$1"
+    local out
+    if out="$(python3 -c "import os, sys, urllib.parse; print(urllib.parse.quote_from_bytes(os.fsencode(sys.argv[1]), safe=''))" "$1")"; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    echo "Error: k2 could not encode a value for its request (python3 failed or is missing); nothing was sent." >&2
+    _k2_end_command 1
 }
 
 # Absolute form of a path whose parents may not exist yet. Resolves the

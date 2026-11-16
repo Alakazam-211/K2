@@ -63,6 +63,8 @@ fn splice(body: &str, field: &str) -> Option<String> {
 }
 
 /// Cell socket: the dispatch result, for this cell's passport.
+// The cell socket is a unix socket (cell_server is unix-only); tests call it everywhere.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn stamp_cell(status: &str, body: &str, session_id: &str, principal: &HookPrincipal) -> Option<String> {
     if !oc::enabled() || !status_ok(status) {
         return None;

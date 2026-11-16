@@ -107,6 +107,13 @@ pub enum Event {
     /// `bypassed`, `strikes` or `permanent` change; the same reading is in
     /// [`crate::Stats::capture_stage`].
     CaptureStage(CaptureStageStats),
+    /// The phone backend changed mode ([`crate::AudioEngine::set_phone_mode`]),
+    /// with how long the device was stopped for it.
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    PhoneMode(crate::phone::PhoneModeChange),
 }
 
 /// The receiving end of the event queue (bounded, lock-free). When it is

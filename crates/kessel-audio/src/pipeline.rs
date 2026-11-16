@@ -3,7 +3,7 @@
 //! the mixer and the meters. The engine's processing thread drives it in
 //! 10 ms blocks; tests drive it directly with a simulated clock.
 
-use crate::apm::{Apm, ApmSettings};
+use crate::apm::{Apm, ApmSettings, Chain};
 use crate::codec::{has_lbrr, Decoded, OpusDec, OpusEnc};
 use crate::error::AudioError;
 use crate::events::{Level, Levels};
@@ -417,6 +417,26 @@ impl Core {
     /// gap of more than a second: reset the capture stage.
     pub(crate) fn reset_capture_stage(&mut self) {
         self.apm.reset_stage();
+    }
+
+    /// Swap in another sonora chain (the phone backend changed mode) and
+    /// hand back the old one, to be freed off this thread. Allocates and
+    /// frees nothing; the capture stage keeps its state.
+    #[cfg_attr(
+        not(any(
+            test,
+            all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) fn replace_processing(&mut self, chain: Box<Chain>) -> Box<Chain> {
+        self.apm.replace_chain(chain)
+    }
+
+    /// The sonora chain running now.
+    #[cfg(test)]
+    pub(crate) fn processing(&self) -> &Chain {
+        self.apm.chain()
     }
 
     /// True once after the capture stage's state changed (a bypass, a retry).

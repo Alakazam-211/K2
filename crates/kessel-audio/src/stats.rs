@@ -82,4 +82,10 @@ pub struct Stats {
     pub recv_queue_drops: u64,
     /// Received frames for participants that were never added.
     pub unknown_participant_frames: u64,
+    /// Phone mode changes applied (`AudioEngine::set_phone_mode` on iOS
+    /// and Android). Always 0 on other backends.
+    pub phone_mode_switches: u64,
+    /// How long the device was stopped for the last phone mode change that
+    /// restarted it (`None` before one). See `PhoneModeChange::gap`.
+    pub last_phone_mode_gap: Option<std::time::Duration>,
 }

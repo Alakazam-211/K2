@@ -1,9 +1,19 @@
 //! The phone backend's state machine on a fake OS: deferred start, session
 //! activate and deactivate, suspend and resume, route changes, faults and
-//! retries. The state machine tests drive it directly; the engine tests run
+//! retries, and the mode switch between the OS's voice processing and raw
+//! capture. The state machine tests drive it directly; the engine tests run
 //! it on the engine's real threads with a fake device that plays a clock.
+//!
+//! Everything here is a fake: the OS calls themselves (the audio units on
+//! iOS, AAudio on Android) are only type-checked. What the fakes prove is
+//! the state machine, which path each mode asks the OS for, and what sonora
+//! runs.
 
-use super::{check_selection, Ends, Faults, Opened, OsEffects, Phone, PhoneIo};
+use super::{
+    android_input, check_selection, ios_effects_ok, ios_unit, AndroidPreset, Ends, Faults, IosUnit,
+    Opened, OsEffects, Phone, PhoneIo, PhoneMode, PhoneModeChange, Processing, RawCapture,
+    RAW_PROCESSING,
+};
 use crate::apm::{ApmSettings, ProcessingConfig};
 use crate::config::{Backend, EngineConfig};
 use crate::device::NullDevice;
@@ -32,6 +42,7 @@ struct State {
     rate: u32,
     mic: bool,
     fail: Option<ErrorCode>,
+    fail_raw: Option<ErrorCode>,
     /// Drive the rings from a thread at `rate`, in real time.
     clock: bool,
     log: Vec<String>,
@@ -48,6 +59,7 @@ impl FakeOs {
             rate,
             mic: true,
             fail: None,
+            fail_raw: None,
             clock: false,
             log: Vec::new(),
             faults: None,
@@ -65,6 +77,10 @@ impl FakeOs {
     }
     fn fail(&self, code: Option<ErrorCode>) {
         lock(&self.0).fail = code;
+    }
+    /// Only the raw path fails to open.
+    fn fail_raw(&self, code: Option<ErrorCode>) {
+        lock(&self.0).fail_raw = code;
     }
     /// What happened since the last call.
     fn log(&self) -> Vec<String> {
@@ -108,14 +124,26 @@ impl PhoneIo for FakeDev {
         Some(lock(&self.0 .0).rate)
     }
 
-    fn open(&mut self, ends: Ends) -> Result<Opened, AudioError> {
+    fn open(&mut self, ends: Ends, mode: PhoneMode) -> Result<Opened, AudioError> {
         let mut st = lock(&self.0 .0);
         let rate = st.rate;
-        if let Some(code) = st.fail {
-            st.log.push(format!("open {rate} failed"));
+        // The log says which path opened: "open 48000" is the OS's voice
+        // processing (as before 0.2.1), "open raw 48000" the raw one.
+        let what = match mode {
+            PhoneMode::Os => format!("open {rate}"),
+            PhoneMode::Raw(r) if r.unprocessed_supported => format!("open raw unprocessed {rate}"),
+            PhoneMode::Raw(_) => format!("open raw {rate}"),
+        };
+        let fail = if mode.is_raw() {
+            st.fail.or(st.fail_raw)
+        } else {
+            st.fail
+        };
+        if let Some(code) = fail {
+            st.log.push(format!("{what} failed"));
             return Err(AudioError::new(code, "scripted failure"));
         }
-        st.log.push(format!("open {rate}"));
+        st.log.push(what);
         st.faults = Some(ends.faults.clone());
         let mic = st.mic;
         let clock = st.clock;
@@ -194,20 +222,81 @@ fn ctrl(shared: &Shared) -> Vec<String> {
                 assert_eq!(why, Pause::Device, "the backend only sends device pauses");
                 (if on { "pause" } else { "unpause" }).into()
             }
+            Ctrl::Processing(c) => format!("processing {}", describe(c.settings())),
             _ => panic!("unexpected control message"),
         });
     }
     out
 }
 
-fn errors(shared: &Shared) -> Vec<ErrorCode> {
-    let mut out = Vec::new();
-    while let Some(e) = shared.events.pop() {
-        if let Event::Error(e) = e {
-            out.push(e.code);
-        }
+/// What sonora runs, as words: "hpf+aec+agc", "none", ...
+fn describe(s: ApmSettings) -> String {
+    let mut on = Vec::new();
+    if s.high_pass || s.echo_cancellation {
+        on.push("hpf".to_string());
     }
-    out
+    if s.echo_cancellation {
+        on.push("aec".into());
+    }
+    if let Some(n) = s.noise_suppression {
+        on.push(format!("ns {n:?}"));
+    }
+    if s.gain_control {
+        on.push("agc".into());
+    }
+    if let Some(n) = s.stage_fallback_ns {
+        on.push(format!("floor {n:?}"));
+    }
+    if on.is_empty() {
+        "none".into()
+    } else {
+        on.join("+")
+    }
+}
+
+/// sonora in raw mode.
+const RAW: &str = "processing hpf+aec+agc";
+/// sonora in the OS's mode with the OS doing everything: nothing.
+const OS: &str = "processing none";
+
+fn events(shared: &Shared) -> Vec<Event> {
+    std::iter::from_fn(|| shared.events.pop()).collect()
+}
+
+fn errors(shared: &Shared) -> Vec<ErrorCode> {
+    events(shared)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Error(e) => Some(e.code),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Errors and mode changes, in order (devices and levels left out).
+fn notices(shared: &Shared) -> Vec<String> {
+    events(shared)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Error(e) => Some(format!("error {:?}", e.code)),
+            Event::PhoneMode(PhoneModeChange { mode, gap }) => Some(format!(
+                "mode {} {}",
+                if mode.is_raw() { "raw" } else { "os" },
+                if gap.is_some() { "restarted" } else { "closed" }
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The default caller (everything on, no stage) with the OS doing it all,
+/// as Sew starts.
+fn procs() -> Processing {
+    Processing {
+        fx: OsEffects::default(),
+        asked: ProcessingConfig::default().settings(),
+        stage_latency: None,
+    }
 }
 
 fn in_use(shared: &Shared) -> (Option<String>, Option<String>) {
@@ -219,10 +308,18 @@ const OPENED: [&str; 3] = ["capture", "play", "unpause"];
 const CLOSED: [&str; 3] = ["pause", "capture off", "play off"];
 
 fn rig(session_active: bool) -> (Arc<Shared>, FakeOs, Phone) {
+    rig_in(session_active, PhoneMode::Os)
+}
+
+fn rig_in(session_active: bool, mode: PhoneMode) -> (Arc<Shared>, FakeOs, Phone) {
     let s = shared();
     let os = FakeOs::new(48_000);
-    let p = Phone::start(&s, os.io(), session_active);
+    let p = start(&s, &os, session_active, mode);
     (s, os, p)
+}
+
+fn start(s: &Arc<Shared>, os: &FakeOs, session_active: bool, mode: PhoneMode) -> Phone {
+    Phone::start(s, os.io(), session_active, procs(), mode)
 }
 
 #[test]
@@ -364,7 +461,7 @@ fn a_failed_open_raises_once_and_is_retried() {
     let s = shared();
     let os = FakeOs::new(48_000);
     os.fail(Some(ErrorCode::DeviceBusy));
-    let mut p = Phone::start(&s, os.io(), true);
+    let mut p = start(&s, &os, true, PhoneMode::Os);
     assert_eq!(os.log(), ["open 48000 failed"]);
     assert_eq!(errors(&s), [ErrorCode::DeviceBusy]);
     assert_eq!(ctrl(&s), ["pause"]);
@@ -388,7 +485,7 @@ fn a_failed_open_raises_once_and_is_retried() {
 fn a_device_rate_out_of_range_is_refused_and_closed() {
     let s = shared();
     let os = FakeOs::new(192_000);
-    let _p = Phone::start(&s, os.io(), true);
+    let _p = start(&s, &os, true, PhoneMode::Os);
     assert_eq!(os.log(), ["open 192000", "close"]);
     assert_eq!(errors(&s), [ErrorCode::UnsupportedConfig]);
     assert_eq!(ctrl(&s), ["pause"]);
@@ -399,7 +496,7 @@ fn no_microphone_plays_and_keeps_the_capture_path_paused() {
     let s = shared();
     let os = FakeOs::new(48_000);
     os.set_mic(false);
-    let _p = Phone::start(&s, os.io(), true);
+    let _p = start(&s, &os, true, PhoneMode::Os);
     assert_eq!(os.log(), ["open 48000"]);
     assert_eq!(ctrl(&s), ["pause", "play"]);
     assert_eq!(errors(&s), [ErrorCode::NoPermission]);
@@ -482,9 +579,384 @@ fn a_capture_stage_survives_the_os_effects() {
     assert!(cfg.processing.capture_stage.is_some());
 }
 
+// ---- Raw mode and the mode switch, driven directly ----
+
+#[test]
+fn each_platform_opens_the_path_its_mode_asks_for() {
+    let all = OsEffects::default();
+    let none = OsEffects {
+        echo_cancellation: false,
+        noise_suppression: false,
+        gain_control: false,
+    };
+    let no_agc = OsEffects {
+        gain_control: false,
+        ..all
+    };
+    // iOS: the voice processing unit in the OS's mode, as 0.2.0 opened it.
+    assert_eq!(ios_unit(all, PhoneMode::Os), IosUnit::VoiceProcessing);
+    assert_eq!(ios_unit(no_agc, PhoneMode::Os), IosUnit::VoiceProcessing);
+    // Raw: the plain RemoteIO unit, whatever the effects say.
+    assert_eq!(ios_unit(all, PhoneMode::raw()), IosUnit::RemoteIo);
+    assert_eq!(ios_unit(none, PhoneMode::raw()), IosUnit::RemoteIo);
+    // No OS effects in the OS's mode: RemoteIO too, sonora does it all.
+    assert_eq!(ios_unit(none, PhoneMode::Os), IosUnit::RemoteIo);
+
+    // iOS takes both of the unit's effects or none; raw takes anything.
+    assert!(ios_effects_ok(all, PhoneMode::Os));
+    assert!(ios_effects_ok(no_agc, PhoneMode::Os));
+    assert!(ios_effects_ok(none, PhoneMode::Os));
+    let half = OsEffects {
+        noise_suppression: false,
+        ..all
+    };
+    assert!(!ios_effects_ok(half, PhoneMode::Os));
+    let agc_only = OsEffects {
+        gain_control: true,
+        ..none
+    };
+    assert!(!ios_effects_ok(agc_only, PhoneMode::Os));
+    assert!(ios_effects_ok(half, PhoneMode::raw()));
+
+    // Android: voice communication in the OS's mode, as 0.2.0 opened it.
+    let os = android_input(PhoneMode::Os);
+    assert_eq!(os.preset, AndroidPreset::VoiceCommunication);
+    assert!(!os.no_session);
+    // Raw: voice recognition, or unprocessed where the app says the device
+    // supports it; no session, so no NoiseSuppressor can attach.
+    let raw = android_input(PhoneMode::raw());
+    assert_eq!(raw.preset, AndroidPreset::VoiceRecognition);
+    assert!(raw.no_session);
+    let unprocessed = android_input(PhoneMode::Raw(
+        RawCapture::default().with_unprocessed_supported(true),
+    ));
+    assert_eq!(unprocessed.preset, AndroidPreset::Unprocessed);
+    assert!(unprocessed.no_session);
+
+    assert_eq!(PhoneMode::default(), PhoneMode::Os);
+    assert!(!PhoneMode::Os.is_raw());
+    assert_eq!(PhoneMode::raw(), PhoneMode::Raw(RawCapture::default()));
+    assert!(!RawCapture::default().unprocessed_supported);
+}
+
+/// Raw mode: AEC3 (and its high-pass filter) and AGC2 on, noise suppression
+/// off, the step-down floor off, whatever the caller and the OS flags say.
+#[test]
+fn raw_mode_runs_echo_cancellation_and_gain_control_and_no_noise_suppression() {
+    let callers = [
+        ProcessingConfig::default().settings(),
+        ProcessingConfig::off().settings(),
+        ProcessingConfig::default()
+            .with_noise_suppression(Some(crate::NoiseSuppressionStrength::VeryHigh))
+            .settings(),
+    ];
+    let flags = [
+        OsEffects::default(),
+        OsEffects {
+            echo_cancellation: false,
+            noise_suppression: false,
+            gain_control: false,
+        },
+    ];
+    for asked in callers {
+        for fx in flags {
+            for stage_latency in [None, Some(480)] {
+                let p = Processing {
+                    fx,
+                    asked,
+                    stage_latency,
+                };
+                for mode in [
+                    PhoneMode::raw(),
+                    PhoneMode::Raw(RawCapture::default().with_unprocessed_supported(true)),
+                ] {
+                    assert_eq!(p.settings(mode), RAW_PROCESSING);
+                }
+                assert_eq!(
+                    RAW_PROCESSING,
+                    ApmSettings {
+                        echo_cancellation: true,
+                        noise_suppression: None,
+                        gain_control: true,
+                        high_pass: true,
+                        stage_fallback_ns: None,
+                    }
+                );
+                // The sonora instances themselves.
+                let chain = p.chain(PhoneMode::raw());
+                let [pre, post, floor] = chain.sonora_configs();
+                let pre = pre.expect("raw mode runs sonora");
+                assert!(pre.echo_canceller.is_some(), "AEC3 on");
+                assert!(pre.high_pass_filter.is_some(), "the high-pass filter on");
+                assert!(pre.noise_suppression.is_none(), "no noise suppression");
+                assert!(floor.is_none(), "no step-down floor");
+                match stage_latency {
+                    // Everything in one instance, as on desktop.
+                    None => {
+                        assert!(pre.gain_controller2.is_some(), "AGC2 on");
+                        assert!(post.is_none());
+                    }
+                    // AGC2 after the stage, alone.
+                    Some(_) => {
+                        assert!(pre.gain_controller2.is_none());
+                        let post = post.expect("AGC2 after the stage");
+                        assert!(post.gain_controller2.is_some(), "AGC2 on");
+                        assert!(post.echo_canceller.is_none());
+                        assert!(post.noise_suppression.is_none());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The OS's mode is what 0.2.0 ran: sonora fills only what the OS leaves.
+#[test]
+fn the_os_mode_is_unchanged() {
+    let all = ProcessingConfig::default().settings();
+    for fx in [
+        OsEffects::default(),
+        OsEffects {
+            noise_suppression: false,
+            ..OsEffects::default()
+        },
+        OsEffects {
+            echo_cancellation: false,
+            noise_suppression: false,
+            gain_control: false,
+        },
+    ] {
+        let p = Processing {
+            fx,
+            asked: all,
+            stage_latency: None,
+        };
+        assert_eq!(p.settings(PhoneMode::Os), fx.remaining(all));
+    }
+    // The OS does everything: no sonora at all.
+    let chain = procs().chain(PhoneMode::Os);
+    assert!(
+        chain.sonora_configs().iter().all(Option::is_none),
+        "{:?}",
+        chain.sonora_configs()
+    );
+    assert_eq!(describe(chain.settings()), "none");
+    // An Android device without a suppressor, with a stage: sonora's
+    // suppression (and so no floor) runs, as before.
+    let p = Processing {
+        fx: OsEffects {
+            noise_suppression: false,
+            ..OsEffects::default()
+        },
+        asked: all,
+        stage_latency: Some(480),
+    };
+    let chain = p.chain(PhoneMode::Os);
+    let [pre, _, floor] = chain.sonora_configs();
+    assert!(pre.expect("sonora").noise_suppression.is_some());
+    assert!(floor.is_none());
+}
+
+#[test]
+fn a_raw_start_opens_the_raw_path() {
+    let (s, os, mut p) = rig_in(true, PhoneMode::raw());
+    assert_eq!(os.log(), ["open raw 48000"]);
+    // The engine built the raw chain itself; no swap at the start.
+    let mut want = vec!["pause"];
+    want.extend(OPENED);
+    assert_eq!(ctrl(&s), want);
+    assert_eq!(*lock(&s.phone_mode), PhoneMode::raw());
+    assert_eq!(notices(&s), Vec::<String>::new());
+
+    // A route change and a fault reopen in raw mode.
+    os.set_rate(16_000);
+    p.command(&s, PhoneCmd::RouteChanged);
+    assert_eq!(os.log(), ["close", "open raw 16000"]);
+    os.raise_fault();
+    p.tick(&s);
+    assert_eq!(os.log(), ["close", "open raw 16000"]);
+    // So do a suspend and resume.
+    p.command(&s, PhoneCmd::Suspend(true));
+    p.command(&s, PhoneCmd::Suspend(false));
+    assert_eq!(os.log(), ["close", "open raw 16000"]);
+    assert_eq!(errors(&s), []);
+}
+
+#[test]
+fn the_engine_config_starts_in_raw_mode() {
+    struct Nop;
+    impl crate::CaptureStage for Nop {
+        fn process(&mut self, _: &mut [f32; 480]) {}
+        fn latency_samples(&self) -> usize {
+            480
+        }
+        fn reset(&mut self) {}
+    }
+    let cfg = EngineConfig {
+        backend: Backend::TestPhone(FakeIo(FakeOs::new(48_000).io(), OsEffects::default())),
+        processing: ProcessingConfig::default().with_capture_stage(Box::new(Nop)),
+        ..EngineConfig::null(NullDevice::default())
+    }
+    .with_phone_mode(PhoneMode::raw());
+    let kept = cfg.phone_processing().expect("a phone backend");
+    assert_eq!(
+        kept,
+        Processing {
+            fx: OsEffects::default(),
+            asked: ProcessingConfig::default().settings(),
+            stage_latency: Some(480),
+        },
+        "what the caller asked for is kept for a switch back"
+    );
+    let cfg = cfg.with_os_effects();
+    assert_eq!(cfg.processing.settings(), RAW_PROCESSING);
+    assert!(cfg.processing.capture_stage.is_some(), "the stage stays");
+    // The default is the OS's mode.
+    assert_eq!(
+        EngineConfig::null(NullDevice::default()).phone_mode,
+        PhoneMode::Os
+    );
+}
+
+#[test]
+fn switching_mode_mid_call_restarts_the_device_once_and_back() {
+    let (s, os, mut p) = rig(true);
+    os.log();
+    ctrl(&s);
+    events(&s);
+
+    p.command(&s, PhoneCmd::Mode(PhoneMode::raw()));
+    assert_eq!(os.log(), ["close", "open raw 48000"], "one restart");
+    // Close, swap sonora's chain while paused, open: in that order.
+    let mut want = CLOSED.to_vec();
+    want.push(RAW);
+    want.extend(OPENED);
+    assert_eq!(ctrl(&s), want);
+    let evs = events(&s);
+    let change = evs
+        .iter()
+        .find_map(|e| match e {
+            Event::PhoneMode(c) => Some(*c),
+            _ => None,
+        })
+        .expect("a mode change event");
+    assert_eq!(change.mode, PhoneMode::raw());
+    let gap = change.gap.expect("the device restarted");
+    assert!(gap < Duration::from_millis(500), "gap {gap:?}");
+    assert!(!evs.iter().any(|e| matches!(e, Event::Error(_))), "{evs:?}");
+    assert_eq!(*lock(&s.phone_mode), PhoneMode::raw());
+    assert_eq!(s.mode_switches.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        s.last_mode_gap_us.load(Ordering::Relaxed),
+        gap.as_micros() as u64
+    );
+    assert_eq!(
+        in_use(&s),
+        (
+            Some("Fake input (48000 Hz)".into()),
+            Some("Fake output (48000 Hz)".into())
+        )
+    );
+
+    // The same mode again does nothing.
+    p.command(&s, PhoneCmd::Mode(PhoneMode::raw()));
+    assert_eq!(os.log(), Vec::<String>::new());
+    assert_eq!(ctrl(&s), Vec::<String>::new());
+    assert_eq!(notices(&s), Vec::<String>::new());
+    p.tick(&s);
+    assert_eq!(os.log(), Vec::<String>::new());
+
+    // Unprocessed is another raw mode: it restarts too.
+    let unprocessed = PhoneMode::Raw(RawCapture::default().with_unprocessed_supported(true));
+    p.command(&s, PhoneCmd::Mode(unprocessed));
+    assert_eq!(os.log(), ["close", "open raw unprocessed 48000"]);
+
+    // And back to the OS's voice processing.
+    p.command(&s, PhoneCmd::Mode(PhoneMode::Os));
+    assert_eq!(os.log(), ["close", "open 48000"]);
+    let mut want = CLOSED.to_vec();
+    want.push(RAW);
+    want.extend(OPENED);
+    want.extend(CLOSED);
+    want.push(OS);
+    want.extend(OPENED);
+    assert_eq!(ctrl(&s), want);
+    assert_eq!(notices(&s), ["mode raw restarted", "mode os restarted"]);
+    assert_eq!(*lock(&s.phone_mode), PhoneMode::Os);
+    assert_eq!(s.mode_switches.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn a_mode_change_with_the_device_closed_applies_when_it_opens() {
+    let (s, os, mut p) = rig(false);
+    ctrl(&s);
+    p.command(&s, PhoneCmd::Mode(PhoneMode::raw()));
+    assert_eq!(os.log(), Vec::<String>::new(), "nothing to restart");
+    assert_eq!(ctrl(&s), [RAW]);
+    assert_eq!(notices(&s), ["mode raw closed"]);
+    assert_eq!(
+        s.last_mode_gap_us.load(Ordering::Relaxed),
+        u64::MAX,
+        "no restart, no gap"
+    );
+    p.command(&s, PhoneCmd::Session(true));
+    assert_eq!(os.log(), ["open raw 48000"]);
+    assert_eq!(ctrl(&s), OPENED);
+
+    // Suspended: the same.
+    p.command(&s, PhoneCmd::Suspend(true));
+    os.log();
+    ctrl(&s);
+    p.command(&s, PhoneCmd::Mode(PhoneMode::Os));
+    assert_eq!(os.log(), Vec::<String>::new());
+    assert_eq!(ctrl(&s), [OS]);
+    p.command(&s, PhoneCmd::Suspend(false));
+    assert_eq!(os.log(), ["open 48000"]);
+    assert_eq!(s.mode_switches.load(Ordering::Relaxed), 2);
+}
+
+/// The call never loses its device to a mode change: if the new path won't
+/// open, the old one (open a moment ago) comes back at once.
+#[test]
+fn a_mode_that_wont_open_goes_back_to_the_one_that_did() {
+    let (s, os, mut p) = rig(true);
+    os.log();
+    ctrl(&s);
+    events(&s);
+    os.fail_raw(Some(ErrorCode::DeviceBusy));
+    p.command(&s, PhoneCmd::Mode(PhoneMode::raw()));
+    assert_eq!(
+        os.log(),
+        ["close", "open raw 48000 failed", "open 48000"],
+        "back on the OS's path"
+    );
+    let mut want = CLOSED.to_vec();
+    want.push(RAW);
+    want.push(OS);
+    want.extend(OPENED);
+    assert_eq!(ctrl(&s), want, "sonora's chain goes back too");
+    assert_eq!(notices(&s), ["error DeviceBusy"], "no mode change event");
+    assert_eq!(*lock(&s.phone_mode), PhoneMode::Os);
+    assert_eq!(s.mode_switches.load(Ordering::Relaxed), 0);
+    // Nothing left to retry.
+    std::thread::sleep(super::RETRY + Duration::from_millis(50));
+    p.tick(&s);
+    assert_eq!(os.log(), Vec::<String>::new());
+
+    // Once the raw path opens, the switch goes through.
+    os.fail_raw(None);
+    p.command(&s, PhoneCmd::Mode(PhoneMode::raw()));
+    assert_eq!(os.log(), ["close", "open raw 48000"]);
+    assert_eq!(notices(&s), ["mode raw restarted"]);
+}
+
 // ---- On the engine's threads ----
 
 fn phone_engine(os: &FakeOs, deferred: bool) -> AudioEngine {
+    phone_engine_in(os, deferred, PhoneMode::Os)
+}
+
+fn phone_engine_in(os: &FakeOs, deferred: bool, mode: PhoneMode) -> AudioEngine {
     let cfg = EngineConfig {
         backend: Backend::TestPhone(FakeIo(os.io(), OsEffects::default())),
         // DTX off: a frame every 20 ms from the tone.
@@ -494,7 +966,8 @@ fn phone_engine(os: &FakeOs, deferred: bool) -> AudioEngine {
         },
         processing_poll: Duration::from_micros(500),
         ..EngineConfig::null(NullDevice::default())
-    };
+    }
+    .with_phone_mode(mode);
     if deferred {
         AudioEngine::start_when_session_active(cfg).expect("start")
     } else {
@@ -664,4 +1137,106 @@ fn engine_suspend_works_on_the_null_device_too() {
     let last = *tail.last().unwrap_or(before.last().expect("frames"));
     let jump = after[0].wrapping_sub(last);
     assert!(jump >= 300 * 48 && jump.is_multiple_of(960), "jump {jump}");
+}
+
+/// Wait for the next mode change event; fails on any error.
+fn mode_event(e: &AudioEngine, within: Duration) -> PhoneModeChange {
+    let deadline = Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "no mode change event in {within:?}");
+        match e.events().recv_timeout(left) {
+            Some(Event::PhoneMode(c)) => return c,
+            Some(Event::Error(err)) => panic!("error during the switch: {err:?}"),
+            _ => {}
+        }
+    }
+}
+
+/// Mid-call, on the engine's threads: off to raw and back. The device
+/// restarts once each way, frames keep coming with only the restart's gap
+/// in `ts48k`, the participant and the encoder carry on, and the gap is
+/// reported.
+#[test]
+fn engine_switches_to_raw_mid_call_and_back() {
+    let os = FakeOs::new(48_000).clocked();
+    let e = phone_engine(&os, false);
+    e.add_participant(7);
+    let first = frames(&e, 10, Duration::from_secs(2));
+    assert!(steps(&first).iter().all(|&d| d == 960), "{first:?}");
+    assert_eq!(e.phone_mode(), PhoneMode::Os);
+    while e.events().try_recv().is_some() {}
+
+    e.set_phone_mode(PhoneMode::raw());
+    let to_raw = mode_event(&e, Duration::from_secs(2));
+    assert_eq!(to_raw.mode, PhoneMode::raw());
+    let gap = to_raw.gap.expect("the device restarted");
+    assert!(gap < Duration::from_millis(500), "gap {gap:?}");
+    assert_eq!(e.phone_mode(), PhoneMode::raw());
+    let mut raw = drain(&e);
+    raw.extend(frames(&e, 25, Duration::from_secs(2)));
+    assert_eq!(os.log(), ["open 48000", "close", "open raw 48000"]);
+    let s = e.stats();
+    assert_eq!(s.phone_mode_switches, 1);
+    assert_eq!(
+        s.last_phone_mode_gap,
+        Some(Duration::from_micros(gap.as_micros() as u64))
+    );
+    assert_eq!(
+        s.participants.iter().map(|p| p.0).collect::<Vec<_>>(),
+        [7],
+        "the participant is still there"
+    );
+
+    e.set_phone_mode(PhoneMode::Os);
+    let back = mode_event(&e, Duration::from_secs(2));
+    assert_eq!(back.mode, PhoneMode::Os);
+    assert!(back.gap.is_some());
+    let mut os_again = drain(&e);
+    os_again.extend(frames(&e, 25, Duration::from_secs(2)));
+    assert_eq!(os.log(), ["close", "open 48000"]);
+    assert_eq!(e.stats().phone_mode_switches, 2);
+    assert_eq!(e.phone_mode(), PhoneMode::Os);
+
+    // Time only moves forward, in whole frames; each switch is at most a
+    // short gap (it reads as a pause, like the end of a DTX gap).
+    let all: Vec<u32> = first
+        .iter()
+        .chain(raw.iter())
+        .chain(os_again.iter())
+        .copied()
+        .collect();
+    for d in steps(&all) {
+        assert!(
+            d >= 960 && d.is_multiple_of(960) && d <= 960 * 20,
+            "step {d} in {all:?}"
+        );
+    }
+    let errs: Vec<Event> = std::iter::from_fn(|| e.events().try_recv())
+        .filter(|ev| matches!(ev, Event::Error(_)))
+        .collect();
+    assert_eq!(errs, [], "a mode change is not an error");
+}
+
+#[test]
+fn engine_starts_in_raw_mode_and_switching_before_the_session_costs_no_restart() {
+    let os = FakeOs::new(48_000).clocked();
+    let e = phone_engine_in(&os, false, PhoneMode::raw());
+    frames(&e, 5, Duration::from_secs(2));
+    assert_eq!(os.log(), ["open raw 48000"]);
+    assert_eq!(e.phone_mode(), PhoneMode::raw());
+    assert_eq!(e.stats().phone_mode_switches, 0);
+    drop(e);
+
+    // With CallKit: start deferred, pick the mode, then the session opens
+    // the device once, in that mode.
+    let os = FakeOs::new(48_000).clocked();
+    let e = phone_engine(&os, true);
+    e.set_phone_mode(PhoneMode::raw());
+    let c = mode_event(&e, Duration::from_secs(2));
+    assert_eq!(c.gap, None, "no device was open");
+    e.session_activated();
+    frames(&e, 5, Duration::from_secs(2));
+    assert_eq!(os.log(), ["open raw 48000"]);
+    assert_eq!(e.stats().last_phone_mode_gap, None);
 }

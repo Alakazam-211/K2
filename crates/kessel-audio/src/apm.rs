@@ -363,15 +363,98 @@ impl StepDown {
     }
 }
 
-pub(crate) struct Apm {
+/// The sonora side of the capture path: everything but the caller's stage.
+/// Built off the processing thread (it allocates) and swapped in whole
+/// ([`Apm::replace_chain`]), so the phone backend can change what sonora
+/// runs mid-call while the stage keeps its state.
+pub(crate) struct Chain {
+    /// What this chain runs.
+    settings: ApmSettings,
     /// Without a stage, everything in one instance (as 0.1 ran it). With
     /// one: the high-pass filter, echo cancellation and noise suppression.
     inner: Option<sonora::AudioProcessing>,
     /// With a stage and gain control: AGC2 and its limiter, alone.
     post: Option<sonora::AudioProcessing>,
-    stage: Option<StageRunner>,
     /// With a stage, noise suppression off and the fallback on.
     step_down: Option<StepDown>,
+}
+
+impl Chain {
+    /// The chain for `cfg`. `stage_latency` is the capture stage's latency
+    /// in samples, or `None` without a stage.
+    #[cfg_attr(
+        not(any(
+            test,
+            all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) fn new(cfg: ApmSettings, stage_latency: Option<usize>) -> Box<Chain> {
+        Box::new(Self::build(cfg, stage_latency, AGC2_HEADROOM_DB))
+    }
+
+    fn build(cfg: ApmSettings, stage_latency: Option<usize>, headroom_db: f32) -> Chain {
+        let Some(latency) = stage_latency else {
+            return Chain {
+                settings: cfg,
+                inner: build(&cfg, headroom_db),
+                post: None,
+                step_down: None,
+            };
+        };
+        let pre = ApmSettings {
+            gain_control: false,
+            stage_fallback_ns: None,
+            ..cfg
+        };
+        let post = ApmSettings {
+            echo_cancellation: false,
+            noise_suppression: None,
+            gain_control: cfg.gain_control,
+            high_pass: false,
+            stage_fallback_ns: None,
+        };
+        let step_down = match (cfg.noise_suppression, cfg.stage_fallback_ns) {
+            (None, Some(strength)) => StepDown::new(strength, latency),
+            _ => None,
+        };
+        Chain {
+            settings: cfg,
+            inner: build(&pre, headroom_db),
+            post: build(&post, headroom_db),
+            step_down,
+        }
+    }
+
+    /// What this chain runs.
+    #[cfg(test)]
+    pub(crate) fn settings(&self) -> ApmSettings {
+        self.settings
+    }
+
+    /// The sonora configs it runs: before the stage (everything, without
+    /// one), after the stage, and the step-down suppressor's.
+    #[cfg(test)]
+    pub(crate) fn sonora_configs(&self) -> [Option<&sonora::Config>; 3] {
+        [
+            self.inner.as_ref().map(|a| a.config()),
+            self.post.as_ref().map(|a| a.config()),
+            self.step_down.as_ref().map(|s| s.ns.config()),
+        ]
+    }
+}
+
+impl std::fmt::Debug for Chain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chain")
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) struct Apm {
+    chain: Chain,
+    stage: Option<StageRunner>,
     scratch: [f32; BLOCK_SAMPLES],
     mid: [f32; BLOCK_SAMPLES],
 }
@@ -383,10 +466,8 @@ impl Apm {
 
     pub(crate) fn with_agc_headroom(cfg: impl Into<ApmSettings>, headroom_db: f32) -> Self {
         Apm {
-            inner: build(&cfg.into(), headroom_db),
-            post: None,
+            chain: Chain::build(cfg.into(), None, headroom_db),
             stage: None,
-            step_down: None,
             scratch: [0.0; BLOCK_SAMPLES],
             mid: [0.0; BLOCK_SAMPLES],
         }
@@ -414,36 +495,40 @@ impl Apm {
     }
 
     fn with_runner(cfg: ApmSettings, stage: StageRunner) -> Result<Self, AudioError> {
-        let pre = ApmSettings {
-            gain_control: false,
-            stage_fallback_ns: None,
-            ..cfg
-        };
-        let post = ApmSettings {
-            echo_cancellation: false,
-            noise_suppression: None,
-            gain_control: cfg.gain_control,
-            high_pass: false,
-            stage_fallback_ns: None,
-        };
-        let step_down = match (cfg.noise_suppression, cfg.stage_fallback_ns) {
-            (None, Some(strength)) => StepDown::new(strength, stage.latency()),
-            _ => None,
-        };
         Ok(Apm {
-            inner: build(&pre, AGC2_HEADROOM_DB),
-            post: build(&post, AGC2_HEADROOM_DB),
+            chain: Chain::build(cfg, Some(stage.latency()), AGC2_HEADROOM_DB),
             stage: Some(stage),
-            step_down,
             scratch: [0.0; BLOCK_SAMPLES],
             mid: [0.0; BLOCK_SAMPLES],
         })
     }
 
+    /// Swap in another chain (built off this thread for the same stage
+    /// latency, see [`Chain::new`]) and hand back the old one, to be freed
+    /// elsewhere. Allocates and frees nothing. The stage keeps its state;
+    /// it is reset when the capture stream restarts, as usual.
+    #[cfg_attr(
+        not(any(
+            test,
+            all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) fn replace_chain(&mut self, mut chain: Box<Chain>) -> Box<Chain> {
+        std::mem::swap(&mut self.chain, &mut *chain);
+        chain
+    }
+
+    /// The chain running now.
+    #[cfg(test)]
+    pub(crate) fn chain(&self) -> &Chain {
+        &self.chain
+    }
+
     /// Analyse one 10 ms block of the playback mix (the echo reference).
     pub(crate) fn render(&mut self, x: &[f32]) {
         debug_assert_eq!(x.len(), BLOCK_SAMPLES);
-        if let Some(apm) = self.inner.as_mut() {
+        if let Some(apm) = self.chain.inner.as_mut() {
             // Frame-size mismatches are impossible here (fixed 480-sample
             // mono blocks), so an error would be a bug in the caller.
             if apm
@@ -460,20 +545,20 @@ impl Apm {
         debug_assert_eq!(x.len(), BLOCK_SAMPLES);
         debug_assert_eq!(out.len(), BLOCK_SAMPLES);
         let Some(stage) = self.stage.as_mut() else {
-            run_capture(self.inner.as_mut(), x, out);
+            run_capture(self.chain.inner.as_mut(), x, out);
             return;
         };
-        run_capture(self.inner.as_mut(), x, &mut self.mid);
-        if let Some(sd) = self.step_down.as_mut() {
+        run_capture(self.chain.inner.as_mut(), x, &mut self.mid);
+        if let Some(sd) = self.chain.step_down.as_mut() {
             sd.feed(&self.mid);
         }
         stage.process(&mut self.mid);
-        if let Some(sd) = self.step_down.as_mut() {
+        if let Some(sd) = self.chain.step_down.as_mut() {
             let use_ns = !stage.used_stage();
             sd.apply(&mut self.mid, use_ns);
             stage.set_fallback(use_ns);
         }
-        run_capture(self.post.as_mut(), &self.mid, out);
+        run_capture(self.chain.post.as_mut(), &self.mid, out);
     }
 
     /// The capture stream restarted or had a gap: reset the capture stage.
@@ -481,7 +566,7 @@ impl Apm {
         if let Some(s) = self.stage.as_mut() {
             s.reset();
         }
-        if let Some(sd) = self.step_down.as_mut() {
+        if let Some(sd) = self.chain.step_down.as_mut() {
             sd.reset();
         }
     }
@@ -498,12 +583,16 @@ impl Apm {
 
     /// The echo canceller's delay estimate (ms).
     pub(crate) fn delay_ms(&self) -> Option<i32> {
-        self.inner.as_ref().and_then(|a| a.statistics().delay_ms)
+        self.chain
+            .inner
+            .as_ref()
+            .and_then(|a| a.statistics().delay_ms)
     }
 
     /// The echo canceller's ERLE estimate (dB).
     pub(crate) fn erle_db(&self) -> Option<f32> {
-        self.inner
+        self.chain
+            .inner
             .as_ref()
             .and_then(|a| a.statistics().echo_return_loss_enhancement)
             .map(|v| v as f32)

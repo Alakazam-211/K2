@@ -8,16 +8,21 @@
 //! f32 at 48 kHz (AAudio converts from the device's rate); a disconnected
 //! stream (a route change) is reported to the state machine, which reopens
 //! both. Needs Android 9 (API 28) for the preset and usage.
+//!
+//! In raw mode the input uses the unprocessed preset (when the app says the
+//! device supports it) or the voice-recognition preset, with no audio
+//! session, so no `AudioEffect` (a `NoiseSuppressor`, say) can attach.
+//! Playback is the same in both modes.
 #![allow(unsafe_code)]
 
-use super::{Ends, Opened, PhoneIo};
+use super::{android_input, AndroidPreset, Ends, Opened, PhoneIo, PhoneMode};
 use crate::device::{pop_playback, push_capture};
 use crate::error::{AudioError, ErrorCode};
 use crate::frame::SAMPLE_RATE;
 use ndk::audio::{
     AudioCallbackResult, AudioContentType, AudioDirection, AudioError as AaError, AudioFormat,
     AudioInputPreset, AudioPerformanceMode, AudioSharingMode, AudioStream, AudioStreamBuilder,
-    AudioUsage,
+    AudioUsage, SessionId,
 };
 
 fn aa_err(what: &str, e: AaError) -> AudioError {
@@ -69,16 +74,28 @@ fn builder(dir: AudioDirection) -> Result<AudioStreamBuilder, AaError> {
         .sample_rate(SAMPLE_RATE as i32))
 }
 
-pub(crate) struct VoiceCommunication;
+/// AAudio's two streams, set up per mode by [`android_input`].
+pub(crate) struct AAudioIo;
 
-impl PhoneIo for VoiceCommunication {
+impl PhoneIo for AAudioIo {
     fn current_rate(&self) -> Option<u32> {
         // AAudio picks and converts per stream; a route change always
         // reopens.
         None
     }
 
-    fn open(&mut self, ends: Ends) -> Result<Opened, AudioError> {
+    fn open(&mut self, ends: Ends, mode: PhoneMode) -> Result<Opened, AudioError> {
+        let setup = android_input(mode);
+        let (preset, name) = match setup.preset {
+            AndroidPreset::VoiceCommunication => {
+                (AudioInputPreset::VoiceCommunication, "Voice communication")
+            }
+            AndroidPreset::Unprocessed => (AudioInputPreset::Unprocessed, "Raw (unprocessed)"),
+            AndroidPreset::VoiceRecognition => (
+                AudioInputPreset::VoiceRecognition,
+                "Raw (voice recognition)",
+            ),
+        };
         let Ends {
             mut capture,
             mut playback,
@@ -112,19 +129,27 @@ impl PhoneIo for VoiceCommunication {
         let s = shared.clone();
         let input = builder(AudioDirection::Input)
             .map(|b| {
-                b.input_preset(AudioInputPreset::VoiceCommunication)
-                    .data_callback(Box::new(move |_, data, frames| {
-                        // SAFETY: as above, for capture.
-                        let buf = unsafe {
-                            std::slice::from_raw_parts(
-                                data.cast::<f32>().cast_const(),
-                                frames.max(0) as usize,
-                            )
-                        };
-                        push_capture(&mut capture, buf, 1, |v| v, &s.io);
-                        AudioCallbackResult::Continue
-                    }))
-                    .error_callback(Box::new(move |_, _| faults.raise()))
+                let b = b.input_preset(preset);
+                // No session: nothing can attach an AudioEffect (a
+                // NoiseSuppressor) to this stream. AAudio's default is the
+                // same; saying so keeps it that way.
+                let b = if setup.no_session {
+                    b.session_id(Some(SessionId::None))
+                } else {
+                    b
+                };
+                b.data_callback(Box::new(move |_, data, frames| {
+                    // SAFETY: as above, for capture.
+                    let buf = unsafe {
+                        std::slice::from_raw_parts(
+                            data.cast::<f32>().cast_const(),
+                            frames.max(0) as usize,
+                        )
+                    };
+                    push_capture(&mut capture, buf, 1, |v| v, &s.io);
+                    AudioCallbackResult::Continue
+                }))
+                .error_callback(Box::new(move |_, _| faults.raise()))
             })
             .and_then(|b| b.open_stream())
             .map_err(|e| aa_err("input", e))
@@ -156,7 +181,7 @@ impl PhoneIo for VoiceCommunication {
             stream: Box::new((input, out)),
             capture_rate,
             playback_rate,
-            name: "Voice communication",
+            name,
             warnings,
         })
     }

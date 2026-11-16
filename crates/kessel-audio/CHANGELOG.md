@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.2.1 (2026-11-15)
+
+Additions only; nothing changes for code written against 0.2.0.
+
+### Added
+
+- **Raw phone capture** (iOS and Android), for "noise removal off" on a call:
+  `PhoneMode::Raw(RawCapture)` (or `PhoneMode::raw()`) turns the OS's voice
+  processing off, so the far end hears the full microphone signal,
+  background noise and all, and keeps the call echo-free:
+  - iOS opens the plain RemoteIO unit instead of VoiceProcessingIO;
+  - Android opens the input with AAudio's unprocessed preset when
+    `RawCapture::unprocessed_supported` says the device supports it (the
+    app reads `AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED`), else
+    the voice-recognition preset, and with no audio session, so no
+    `NoiseSuppressor` or other `AudioEffect` can attach; playback is
+    unchanged;
+  - sonora runs AEC3 against the playback mix (with its high-pass filter, as
+    on desktop) and AGC2, and no noise suppression: neither
+    `ProcessingConfig::noise_suppression` nor the capture stage's step-down
+    floor, whatever the config says. A capture stage still runs.
+- `PhoneMode::Os` (the default) is 0.2.0's behaviour, unchanged.
+- `EngineConfig::phone_mode` / `with_phone_mode(PhoneMode)`: the starting
+  mode.
+- `AudioEngine::set_phone_mode(PhoneMode)`: switch mid-call. Never blocks.
+  With the device open, the control thread stops it and reopens it in the
+  new mode (one restart); the participants, jitter buffers, encoder and
+  capture stage carry on. sonora's chain for the new mode is built on the
+  control thread and swapped in on the processing thread while the capture
+  path is paused, so no audio thread allocates (tested with the counting
+  allocator). The capture path treats the gap like a short suspend: a frame
+  of silence ends the talkspurt and `ts48k` jumps by the gap in whole
+  frames. If the new mode won't open, the backend goes straight back to the
+  old one and raises `Event::Error`. With no device open (session inactive,
+  or suspended) the mode applies when it opens. `AudioEngine::phone_mode()`
+  says the mode in use.
+- `Event::PhoneMode(PhoneModeChange { mode, gap })`, and
+  `Stats::phone_mode_switches` and `Stats::last_phone_mode_gap`: the
+  switches and how long the device was stopped for each.
+- On iOS, `OsEffects` with all three `false` is now accepted in the OS's
+  mode: the plain RemoteIO unit, and sonora runs everything the config asks
+  for. (0.2.0 refused it with `InvalidConfig`.) Partial sets other than the
+  unit's own (echo cancellation and noise suppression, with or without gain
+  control) are still refused.
+
+### Verified
+
+- With fakes only (no phone in CI): which path each mode asks each platform
+  for, sonora's configuration in each mode (read back from the sonora
+  instances), the state machine's restarts, the go-back on a failed open,
+  the events and stats, the switch on the engine's real threads with a
+  clocked fake device, and the allocation-free swap. The iOS and Android OS
+  calls are type-checked (`aarch64-apple-ios`, `aarch64-linux-android`), not
+  run on a device: how a phone's raw microphone sounds and how long its
+  restart takes have not been measured.
+- cargo-semver-checks 0.51.0 against 0.2.0, both as the patch release this
+  is and as a minor one, on the host (all features) and for
+  `aarch64-apple-ios` (where the phone API exists): 202 checks pass, no
+  semver update required.
+
+### Unchanged
+
+- Desktop backends: with no stage the pipeline is bit for bit 0.2.0's (the
+  no-stage digest matches on the same machine); the sonora chain moved into
+  its own struct so it can be swapped, with the same instances and order.
+
 ## 0.2.0 (2026-11-15)
 
 ### Breaking

@@ -11,6 +11,7 @@
 //!   watches for hot-plug, turns snapshots into events, and frees memory the
 //!   processing thread hands back.
 
+use crate::apm::Chain;
 use crate::device::{CaptureIo, IoCounters, PlayIo};
 use crate::error::{AudioError, ErrorCode};
 use crate::events::{
@@ -35,7 +36,20 @@ pub(crate) enum Ctrl {
     Remove(u64),
     CaptureIo(Option<Box<CaptureIo>>),
     PlayIo(Option<Box<PlayIo>>),
-    Pause { why: Pause, on: bool },
+    Pause {
+        why: Pause,
+        on: bool,
+    },
+    /// Swap sonora's chain (a phone mode change); built off the processing
+    /// thread.
+    #[cfg_attr(
+        not(any(
+            test,
+            all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        )),
+        allow(dead_code)
+    )]
+    Processing(Box<Chain>),
 }
 
 /// From the caller to the phone backend (on the control thread). Other
@@ -69,6 +83,12 @@ pub(crate) enum PhoneCmd {
         allow(dead_code)
     )]
     RouteChanged,
+    /// Switch between the OS's voice processing and raw capture.
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    Mode(crate::phone::PhoneMode),
 }
 
 pub(crate) enum RecvItem {
@@ -81,6 +101,7 @@ pub(crate) enum Garbage {
     Participant(#[allow(dead_code)] Box<Participant>),
     Capture(#[allow(dead_code)] Box<CaptureIo>),
     Play(#[allow(dead_code)] Box<PlayIo>),
+    Chain(#[allow(dead_code)] Box<Chain>),
 }
 
 pub(crate) struct DevRequest {
@@ -113,6 +134,17 @@ pub(crate) struct Shared {
     pub(crate) playout_buffer_ms: u32,
     #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
     pub(crate) device_poll: Duration,
+    /// The phone mode in use (the control thread writes it).
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    pub(crate) phone_mode: Mutex<crate::phone::PhoneMode>,
+    /// Phone mode changes applied ([`Stats::phone_mode_switches`]).
+    pub(crate) mode_switches: AtomicU64,
+    /// The last restart gap for a mode change, microseconds; `u64::MAX`
+    /// for none yet.
+    pub(crate) last_mode_gap_us: AtomicU64,
 }
 
 /// Lock a mutex, ignoring poisoning (the data is plain state; a panic
@@ -152,6 +184,13 @@ impl Shared {
             core_cfg,
             playout_buffer_ms: cfg.playout_buffer_ms,
             device_poll: cfg.device_poll_interval,
+            #[cfg(any(
+                test,
+                all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+            ))]
+            phone_mode: Mutex::new(cfg.phone_mode),
+            mode_switches: AtomicU64::new(0),
+            last_mode_gap_us: AtomicU64::new(u64::MAX),
         })
     }
 
@@ -247,7 +286,13 @@ impl AudioEngine {
 
     fn start_inner(cfg: EngineConfig, session_active: bool) -> Result<AudioEngine, AudioError> {
         cfg.validate()?;
-        // The OS's voice processing replaces sonora's where it can.
+        // The OS's voice processing replaces sonora's where it can. What the
+        // caller asked for is kept for mode changes.
+        #[cfg(any(
+            test,
+            all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        ))]
+        let (phone_processing, phone_mode) = (cfg.phone_processing(), cfg.phone_mode);
         #[cfg(any(
             test,
             all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
@@ -309,11 +354,15 @@ impl AudioEngine {
             Backend::OsVoiceProcessing(c) => CtlBackend::Phone {
                 io: crate::phone::system_io(&c),
                 session_active,
+                processing: phone_processing.ok_or_else(phone_bug)?,
+                mode: phone_mode,
             },
             #[cfg(test)]
             Backend::TestPhone(f) => CtlBackend::Phone {
                 io: f.0,
                 session_active,
+                processing: phone_processing.ok_or_else(phone_bug)?,
+                mode: phone_mode,
             },
         };
         let s = shared.clone();
@@ -472,6 +521,48 @@ impl AudioEngine {
         self.phone(PhoneCmd::RouteChanged);
     }
 
+    /// Switch the phone backend between the OS's voice processing
+    /// ([`crate::PhoneMode::Os`]) and raw capture ([`crate::PhoneMode::Raw`]:
+    /// the full microphone signal with no noise suppression, echo still
+    /// cancelled). For "noise removal off" on a call: call it whenever the
+    /// person flips the setting. To start in raw mode, set
+    /// [`EngineConfig::with_phone_mode`] instead (no restart).
+    ///
+    /// Never blocks. If the device is open, the control thread stops it and
+    /// opens it again in the new mode a few milliseconds later; nothing
+    /// else stops: participants, the jitter buffers, the encoder and the
+    /// capture stage carry on, and nothing on the audio threads allocates.
+    /// The capture path treats the gap like a short
+    /// [`AudioEngine::suspend`] (a frame of silence ends the talkspurt, and
+    /// `ts48k` jumps by the gap). [`Event::PhoneMode`] reports the change
+    /// and the gap; [`Stats::phone_mode_switches`] and
+    /// [`Stats::last_phone_mode_gap`] count them. sonora's echo canceller
+    /// starts afresh in raw mode and takes a second or two of far-end
+    /// speech to converge.
+    ///
+    /// If the device won't open in the new mode, the backend goes back to
+    /// the old one at once (an [`Event::Error`] says why, and no
+    /// [`Event::PhoneMode`] is sent). The same mode again does nothing.
+    /// Other backends ignore it.
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    pub fn set_phone_mode(&self, mode: crate::phone::PhoneMode) {
+        self.phone(PhoneCmd::Mode(mode));
+    }
+
+    /// The phone mode in use: the last [`AudioEngine::set_phone_mode`] once
+    /// the control thread has applied it, or the starting mode. Other
+    /// backends say [`crate::PhoneMode::Os`].
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    pub fn phone_mode(&self) -> crate::phone::PhoneMode {
+        *lock(&self.shared.phone_mode)
+    }
+
     /// The latest levels (updated about every 50 ms). [`Event::Levels`]
     /// delivers the same readings as they happen.
     pub fn levels(&self) -> Levels {
@@ -485,6 +576,11 @@ impl AudioEngine {
         s.capture.capture_overruns = io.capture_overruns.load(Ordering::Relaxed);
         s.capture.playout_underruns = io.playout_underruns.load(Ordering::Relaxed);
         s.recv_queue_drops = self.shared.recv_drops.load(Ordering::Relaxed);
+        s.phone_mode_switches = self.shared.mode_switches.load(Ordering::Relaxed);
+        s.last_phone_mode_gap = match self.shared.last_mode_gap_us.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            us => Some(Duration::from_micros(us)),
+        };
         s
     }
 
@@ -609,6 +705,10 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
                         }
                     }
                 }
+                Ctrl::Processing(chain) => {
+                    let old = core.replace_processing(chain);
+                    let _ = shared.garbage.push(Garbage::Chain(old));
+                }
             }
         }
         while let Some(item) = shared.recv.pop() {
@@ -712,7 +812,22 @@ pub(crate) enum CtlBackend {
     Phone {
         io: Box<dyn crate::phone::PhoneIo>,
         session_active: bool,
+        processing: crate::phone::Processing,
+        mode: crate::phone::PhoneMode,
     },
+}
+
+/// A phone backend always has its processing settings; this is the error
+/// if that ever stops being true.
+#[cfg(any(
+    test,
+    all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+))]
+fn phone_bug() -> AudioError {
+    AudioError::new(
+        ErrorCode::Backend,
+        "phone backend without its processing settings",
+    )
 }
 
 #[cfg(feature = "cpal")]
@@ -748,8 +863,19 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
             test,
             all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
         ))]
-        CtlBackend::Phone { io, session_active } => {
-            phone = Some(crate::phone::Phone::start(&shared, io, session_active));
+        CtlBackend::Phone {
+            io,
+            session_active,
+            processing,
+            mode,
+        } => {
+            phone = Some(crate::phone::Phone::start(
+                &shared,
+                io,
+                session_active,
+                processing,
+                mode,
+            ));
             None
         }
     };

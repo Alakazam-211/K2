@@ -7,7 +7,9 @@
 //! - **devices:** capture and playback through cpal (CoreAudio, WASAPI,
 //!   ALSA), device lists, hot-plug, switching, and a null device for
 //!   headless use; on iOS and Android, the OS's own voice processing
-//!   (`Backend::OsVoiceProcessing`);
+//!   (`Backend::OsVoiceProcessing`), or raw capture with sonora's echo
+//!   cancellation and no noise suppression (`PhoneMode::Raw`), switchable
+//!   mid-call;
 //! - **resampling** between the device rate and 48 kHz (rubato);
 //! - **echo cancellation, noise suppression and gain control** (sonora, a
 //!   port of WebRTC's audio processing), with the playback mix as the echo
@@ -130,6 +132,6 @@ pub use frame::{
 };
 pub use jitter::JitterConfig;
 #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
-pub use phone::{OsEffects, OsVoiceConfig};
+pub use phone::{OsEffects, OsVoiceConfig, PhoneMode, PhoneModeChange, RawCapture};
 pub use stage::{CaptureStage, CaptureStageStats, StageBypassReason, MAX_STAGE_LATENCY_SAMPLES};
 pub use stats::{CaptureStats, ParticipantStats, Stats};

@@ -1,14 +1,18 @@
 //! iOS: the VoiceProcessingIO audio unit (Apple's echo cancellation, noise
-//! suppression and gain control, the FaceTime path), through coreaudio-rs.
+//! suppression and gain control, the FaceTime path), or, in raw mode or
+//! with no OS effects, the plain RemoteIO unit (no OS processing), through
+//! coreaudio-rs.
 //!
 //! The app owns the audio session (category `.playAndRecord`, mode
 //! `.voiceChat`, activated by CallKit). This module only reads it: the
 //! current sample rate and whether the person refused the microphone. One
 //! unit runs capture (element 1) and playback (element 0) at the session's
-//! rate, mono f32; the engine resamples to 48 kHz.
+//! rate, mono f32; the engine resamples to 48 kHz. Both units have the same
+//! elements, formats and callbacks; only the subtype and the gain control
+//! property differ.
 #![allow(unsafe_code)]
 
-use super::{Ends, Opened, OsEffects, PhoneIo};
+use super::{ios_unit, Ends, IosUnit, Opened, OsEffects, PhoneIo, PhoneMode};
 use crate::device::{pop_playback, push_capture};
 use crate::error::{AudioError, ErrorCode};
 use coreaudio::audio_unit::audio_format::LinearPcmFlags;
@@ -20,10 +24,7 @@ use objc2_audio_toolbox::{
 use objc2_avf_audio::{AVAudioSession, AVAudioSessionRecordPermission};
 
 fn ca_err(what: &str, e: coreaudio::Error) -> AudioError {
-    AudioError::new(
-        ErrorCode::Backend,
-        format!("voice processing unit: {what}: {e}"),
-    )
+    AudioError::new(ErrorCode::Backend, format!("audio unit: {what}: {e}"))
 }
 
 /// The session's current hardware rate, or `None` if it reports none.
@@ -46,22 +47,25 @@ fn mic_refused() -> bool {
     p == denied
 }
 
-pub(crate) struct VoiceProcessingIo {
+/// The I/O unit: VoiceProcessingIO or RemoteIO, picked per open by
+/// [`ios_unit`].
+pub(crate) struct RemoteUnit {
     fx: OsEffects,
 }
 
-impl VoiceProcessingIo {
+impl RemoteUnit {
     pub(crate) fn new(fx: OsEffects) -> Self {
-        VoiceProcessingIo { fx }
+        RemoteUnit { fx }
     }
 }
 
-impl PhoneIo for VoiceProcessingIo {
+impl PhoneIo for RemoteUnit {
     fn current_rate(&self) -> Option<u32> {
         session_rate()
     }
 
-    fn open(&mut self, ends: Ends) -> Result<Opened, AudioError> {
+    fn open(&mut self, ends: Ends, mode: PhoneMode) -> Result<Opened, AudioError> {
+        let kind = ios_unit(self.fx, mode);
         let Ends {
             mut capture,
             mut playback,
@@ -83,8 +87,11 @@ impl PhoneIo for VoiceProcessingIo {
             ));
         }
 
-        let mut unit = AudioUnit::new_uninitialized(IOType::VoiceProcessingIO)
-            .map_err(|e| ca_err("create", e))?;
+        let io_type = match kind {
+            IosUnit::VoiceProcessing => IOType::VoiceProcessingIO,
+            IosUnit::RemoteIo => IOType::RemoteIO,
+        };
+        let mut unit = AudioUnit::new_uninitialized(io_type).map_err(|e| ca_err("create", e))?;
         let on = 1u32;
         let input = u32::from(mic);
         unit.set_property(
@@ -101,7 +108,8 @@ impl PhoneIo for VoiceProcessingIo {
             Some(&on),
         )
         .map_err(|e| ca_err("enable output", e))?;
-        if !self.fx.gain_control {
+        // Only the voice processing unit has gain control to turn off.
+        if kind == IosUnit::VoiceProcessing && !self.fx.gain_control {
             let off = 0u32;
             if let Err(e) = unit.set_property(
                 kAUVoiceIOProperty_VoiceProcessingEnableAGC,
@@ -147,7 +155,10 @@ impl PhoneIo for VoiceProcessingIo {
             stream: Box::new(unit),
             capture_rate: mic.then_some(rate),
             playback_rate: rate,
-            name: "Voice processing",
+            name: match kind {
+                IosUnit::VoiceProcessing => "Voice processing",
+                IosUnit::RemoteIo => "Raw",
+            },
             warnings,
         })
     }

@@ -1,6 +1,6 @@
 [package]
 name = "kessel-audio"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 # sonora's MSRV.
 rust-version = "1.91"
@@ -30,7 +30,8 @@ cpal = ["dep:cpal", "dep:objc2", "dep:block2"]
 # On iOS and Android, `Backend::OsVoiceProcessing`: the OS's own echo
 # cancellation, noise suppression and gain control (iOS's VoiceProcessingIO
 # audio unit through coreaudio-rs; Android's AAudio through ndk, API 28 or
-# later). Does nothing on other targets.
+# later), or raw capture with sonora's echo cancellation (RemoteIO; AAudio's
+# unprocessed or voice-recognition preset). Does nothing on other targets.
 os-voice = ["dep:coreaudio-rs", "dep:objc2-audio-toolbox", "dep:objc2-avf-audio", "dep:ndk"]
 # cpal's PulseAudio host (a pure-Rust protocol client; works on PipeWire
 # through pipewire-pulse).

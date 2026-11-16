@@ -36,6 +36,12 @@ pub enum Backend {
     /// [`crate::AudioEngine::session_deactivated`], and route changes to
     /// [`crate::AudioEngine::route_changed`]. sonora runs only what
     /// [`crate::OsEffects`] says the OS doesn't do.
+    ///
+    /// [`crate::PhoneMode::Raw`] (from the start with
+    /// [`EngineConfig::with_phone_mode`], or mid-call with
+    /// [`crate::AudioEngine::set_phone_mode`]) turns the OS's processing off
+    /// for the full microphone signal: sonora cancels echo and controls
+    /// gain, and nothing suppresses noise.
     #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
     OsVoiceProcessing(crate::OsVoiceConfig),
     /// The phone backend's state machine on a fake device (tests).
@@ -135,6 +141,15 @@ pub struct EngineConfig {
     /// How often the processing thread wakes to move audio. Must be well
     /// under 10 ms.
     pub processing_poll: Duration,
+    /// The phone backend's starting mode: the OS's voice processing (the
+    /// default) or raw capture with no noise suppression. Change it during
+    /// a call with [`crate::AudioEngine::set_phone_mode`]. Other backends
+    /// ignore it.
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    pub phone_mode: crate::phone::PhoneMode,
 }
 
 impl Default for EngineConfig {
@@ -153,6 +168,11 @@ impl Default for EngineConfig {
             speaking_threshold_dbov: -45.0,
             device_poll_interval: Duration::from_secs(1),
             processing_poll: Duration::from_millis(2),
+            #[cfg(any(
+                test,
+                all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+            ))]
+            phone_mode: crate::phone::PhoneMode::Os,
         }
     }
 }
@@ -251,15 +271,45 @@ impl EngineConfig {
         self
     }
 
-    /// With a phone backend, sonora runs only what the OS doesn't. A
-    /// capture stage stays: it is the caller's, not one of the OS's effects.
+    /// Set [`phone_mode`](Self::phone_mode).
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    pub fn with_phone_mode(mut self, mode: crate::phone::PhoneMode) -> Self {
+        self.phone_mode = mode;
+        self
+    }
+
+    /// With a phone backend: what the caller asked sonora for, the stage's
+    /// latency and what the OS does, kept for mode changes.
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
+    pub(crate) fn phone_processing(&self) -> Option<crate::phone::Processing> {
+        Some(crate::phone::Processing {
+            fx: self.backend.os_effects()?,
+            asked: self.processing.settings(),
+            stage_latency: self
+                .processing
+                .capture_stage
+                .as_ref()
+                .map(|s| s.latency_samples()),
+        })
+    }
+
+    /// With a phone backend, sonora runs only what the OS doesn't (in
+    /// [`crate::phone::PhoneMode::Raw`], echo cancellation and gain control
+    /// and no noise suppression). A capture stage stays: it is the caller's,
+    /// not one of the OS's effects.
     #[cfg(any(
         test,
         all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
     ))]
     pub(crate) fn with_os_effects(mut self) -> Self {
-        if let Some(fx) = self.backend.os_effects() {
-            let left = fx.remaining(self.processing.settings());
+        if let Some(pp) = self.phone_processing() {
+            let left = pp.settings(self.phone_mode);
             let p = &mut self.processing;
             p.echo_cancellation = left.echo_cancellation;
             p.noise_suppression = left.noise_suppression;
@@ -292,7 +342,7 @@ impl EngineConfig {
         }
         #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
         if let Backend::OsVoiceProcessing(c) = &self.backend {
-            c.validate()?;
+            c.validate(self.phone_mode)?;
         }
         if let Some(d) = self.backend.null_device() {
             if d.sample_rate < 8_000

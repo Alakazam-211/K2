@@ -127,6 +127,74 @@ fn resamplers_do_not_allocate_per_block() {
     assert_eq!(n, 0, "resamplers allocated {n} times");
 }
 
+/// A phone mode switch on the processing thread: swapping sonora's chain
+/// (built beforehand, as the control thread builds it) and handing the old
+/// one to the garbage queue allocates and frees nothing, both ways, with a
+/// capture stage that keeps running across it. The control thread's part
+/// (building the chain, stopping and opening the device) is off the audio
+/// threads; the device callbacks are the same as before (tested above).
+#[test]
+fn a_phone_mode_switch_allocates_nothing_on_the_processing_thread() {
+    use crate::engine::Garbage;
+    use crate::phone::{OsEffects, PhoneMode, Processing, RAW_PROCESSING};
+    use crate::tests::stages::{still_clock, PassThrough};
+    use crossbeam_queue::ArrayQueue;
+    let _cpu = crate::tests::shared_cpu();
+    let pp = Processing {
+        fx: OsEffects::default(),
+        asked: ProcessingConfig::default().settings(),
+        stage_latency: Some(BLOCK_SAMPLES),
+    };
+    let cfg = core_cfg(pp.settings(PhoneMode::Os));
+    let mut core = Core::with_stage_clock(cfg, Some(Box::new(PassThrough::new())), still_clock())
+        .expect("core");
+    let garbage: ArrayQueue<Garbage> = ArrayQueue::new(16);
+    let mut rng = crate::testkit::Rng::new(80);
+    let x = crate::testkit::talker_track(&crate::testkit::TALKERS[0], &mut rng, 48_000);
+    let blocks = x.as_chunks::<BLOCK_SAMPLES>().0;
+    let t0 = Instant::now();
+    let mut out = [0.0f32; BLOCK_SAMPLES];
+    let mut run = |core: &mut Core, from: usize| {
+        for (i, b) in blocks[from..from + 20].iter().enumerate() {
+            core.render_block(
+                t0 + Duration::from_millis(((from + i) * 10) as u64),
+                &mut out,
+            );
+            std::hint::black_box(core.capture_block(b));
+        }
+    };
+    run(&mut core, 0);
+
+    // Built off the processing thread, as the control thread does.
+    let raw = pp.chain(PhoneMode::raw());
+    let os = pp.chain(PhoneMode::Os);
+    let ((), n) = allocations(|| {
+        let old = core.replace_processing(raw);
+        assert!(garbage.push(Garbage::Chain(old)).is_ok());
+    });
+    assert_eq!(n, 0, "swapping to raw allocated {n} times");
+    assert_eq!(core.processing().settings(), RAW_PROCESSING);
+    run(&mut core, 20);
+    let ((), n) = allocations(|| {
+        let old = core.replace_processing(os);
+        assert!(garbage.push(Garbage::Chain(old)).is_ok());
+    });
+    assert_eq!(n, 0, "swapping back allocated {n} times");
+    assert_eq!(
+        core.processing().settings(),
+        pp.settings(PhoneMode::Os),
+        "back on the OS's chain"
+    );
+    run(&mut core, 40);
+    // The stage ran through both swaps, never bypassed.
+    let mut stats = Stats::default();
+    core.fill_stats(&mut stats);
+    let st = stats.capture_stage.expect("the stage");
+    assert!(st.active && st.bypassed.is_none(), "{st:?}");
+    assert_eq!(st.blocks_processed, 60);
+    assert_eq!(garbage.len(), 2, "both old chains went to be freed");
+}
+
 #[test]
 fn report_dependency_allocations_per_second() {
     let _cpu = crate::tests::shared_cpu();

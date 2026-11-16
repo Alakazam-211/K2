@@ -22,8 +22,8 @@ the API, as Cargo allows for 0.x versions; a patch release (0.2.x) won't.
 | Linux (x86-64) | cpal: ALSA, or PulseAudio with the `pulseaudio` feature | Tested: the test suite passes. |
 | macOS (Apple Silicon) | cpal: CoreAudio | Tested: the test suite passes. |
 | Windows (x86-64) | cpal: WASAPI | Type-checked only. |
-| iOS (arm64) | The OS's voice processing (VoiceProcessingIO) | Type-checked only. The state machine behind it is tested on a fake OS. |
-| Android (arm64, API 28+) | The OS's voice processing (AAudio) | Type-checked only. The state machine behind it is tested on a fake OS. |
+| iOS (arm64) | The OS's voice processing (VoiceProcessingIO), or raw (RemoteIO) | Type-checked only. The state machine behind it, the mode switch and the raw mode's processing are tested on a fake OS. |
+| Android (arm64, API 28+) | The OS's voice processing (AAudio), or raw (unprocessed or voice-recognition preset) | Type-checked only. The state machine behind it, the mode switch and the raw mode's processing are tested on a fake OS. |
 | Any | The null device (no hardware) | Tested on Linux and macOS. |
 
 "Type-checked" means `cargo check` and `cargo clippy` pass for that target;
@@ -247,8 +247,59 @@ model:
 
 sonora runs only what `OsVoiceConfig::os_effects` says the OS doesn't do. On
 iOS that is nothing: the unit always cancels echo and suppresses noise, and
-its gain control can be turned off. On Android, set the flags from
-`AcousticEchoCanceler.isAvailable()` and friends, and sonora fills the gaps.
+its gain control can be turned off. (All three `false` on iOS opens the plain
+RemoteIO unit instead, and sonora runs everything you ask for.) On Android,
+set the flags from `AcousticEchoCanceler.isAvailable()` and friends, and
+sonora fills the gaps.
+
+### Raw mode: noise removal off
+
+The OS's voice processing removes background noise, and on iOS it can't do
+echo cancellation without it. For a person who wants the other side to hear
+everything (music, a room, a sound they're pointing at), `PhoneMode::Raw`
+turns the OS's processing off and keeps the call echo-free:
+
+- **iOS:** the plain RemoteIO unit instead of VoiceProcessingIO.
+- **Android:** the input uses AAudio's unprocessed preset if the app says the
+  device supports it, else voice recognition (which Android keeps free of
+  noise reduction), and has no audio session, so no `NoiseSuppressor` or
+  other `AudioEffect` can attach. Playback is unchanged.
+- **sonora** cancels echo (AEC3 against the playback mix, with its high-pass
+  filter, as on desktop) and controls gain (AGC2), and suppresses no noise:
+  neither `ProcessingConfig::noise_suppression` nor the capture stage's
+  step-down floor runs, whatever the config says. A capture stage you set
+  still runs.
+
+```rust,ignore
+use kessel_audio::{AudioEngine, PhoneMode, RawCapture};
+
+// Android: ask AudioManager once, in the app.
+let raw = PhoneMode::Raw(RawCapture::default().with_unprocessed_supported(unprocessed));
+
+// From the start of the call (no restart):
+let engine = AudioEngine::start_when_session_active(config.with_phone_mode(raw))?;
+
+// Or when the person flips the switch, mid-call:
+engine.set_phone_mode(raw);           // noise removal off
+engine.set_phone_mode(PhoneMode::Os); // back on
+```
+
+`set_phone_mode` never blocks. With the device open, the control thread stops
+it and opens it again in the new mode: a short gap (the device's stop and
+start time, typically tens of milliseconds; not yet measured on a device),
+which the capture path treats like a brief suspend (`ts48k` jumps by it).
+Everything else carries on: participants, jitter buffers, the encoder and the
+capture stage. Nothing on the audio threads allocates: sonora's new chain is
+built on the control thread and swapped in while the capture path is paused.
+`Event::PhoneMode` reports the change and the gap, and `Stats` counts the
+switches (`phone_mode_switches`, `last_phone_mode_gap`). If the device won't
+open in the new mode, the backend goes straight back to the old one and
+raises `Event::Error`. sonora's echo canceller starts afresh on a switch to
+raw and needs a second or two of the far end's speech to converge.
+
+Raw mode has only been tested against fake devices: the audio units and
+AAudio presets are type-checked, and how each phone's raw microphone sounds,
+and how long the restart takes, have not been checked on hardware.
 
 **The app owns the OS's audio session.** kessel-audio never configures or
 activates it. On iOS, set the category (`.playAndRecord`, mode `.voiceChat`)

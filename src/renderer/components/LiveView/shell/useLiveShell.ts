@@ -64,8 +64,9 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
     return () => clearTimeout(t)
   }, [follow])
 
-  // Say: to whom you follow, else the agent.
-  const sayTo = personById(people, followingId ?? snap.agent)
+  // Say: to whom you follow, else whom you chose to message (the editors' "Message Atlas"), else the agent.
+  const [messageTo, setMessageTo] = useState<string | null>(null)
+  const sayTo = personById(people, followingId ?? messageTo ?? snap.agent)
   const [say, dispatchSay] = useReducer(sayReducer, SAY_IDLE)
   const seen = useRef(snap.messages.length)
   useEffect(() => {
@@ -80,7 +81,7 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
       const text = say.draft.trim()
       dispatchSay({ type: again ? 'send-again' : 'send' })
       const address = config.sayAddress(snap, sayTo.id)
-      void source.say({ to: sayTo.id, text, address: address?.address ?? null }).then((r) => dispatchSay({ type: r.ok ? 'sent' : 'failed' }))
+      void source.say({ to: sayTo.id, text, address: address?.address ?? null }).then((r) => dispatchSay(r.ok ? { type: 'sent' } : { type: 'failed', reason: r.reason }))
     },
     [sayTo, say.draft, source, snap, config],
   )
@@ -121,7 +122,7 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
   const followedName = followingId ? personById(people, followingId)?.name : null
   const panelPeople = useMemo(() => people.map((p) => (p.self ? { ...p, doing: followedName ? `following ${followedName}` : (p.doing ?? 'viewing') } : p)), [people, followedName])
 
-  const showSay = live && !!sayTo && (config.sayAlways || followingId !== null)
+  const showSay = live && !!sayTo && (config.sayAlways || followingId !== null || messageTo !== null)
   const sayAddress = sayTo ? config.sayAddress(snap, sayTo.id) : null
 
   return {
@@ -136,6 +137,8 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
     followingId,
     dispatchFollow,
     sayTo,
+    messageTo,
+    setMessageTo,
     say,
     dispatchSay,
     send,

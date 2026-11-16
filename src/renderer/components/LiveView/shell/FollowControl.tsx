@@ -57,8 +57,11 @@ export function FollowControl({
         className="lv-following inline-flex items-center gap-1.5 text-[var(--color-text-primary)]"
       >
         <span aria-hidden="true" className="lv-following-dot" />
-        {view.label}
-        <span className="font-normal"> · {view.stop}</span>
+        <span className="lv-follow-words">{view.label}</span>
+        <span className="font-normal">
+          <span className="lv-follow-words"> · </span>
+          {view.stop}
+        </span>
       </Button>
     )
   } else if (view.control === 'back' && backHere) {

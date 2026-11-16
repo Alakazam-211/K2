@@ -153,6 +153,8 @@ export type LiveExtraClientFrame =
   /** K2's: the app showed this person their removed-text notes; the daemon
    *  delivers them (`take_notes`), so no later snapshot repeats them. */
   | { type: 'take_notes' }
+  /** The kit's presence frame (WIRE.md): the view this connection looks at (a text doc's heading). */
+  | { type: 'view_address'; req: number; address: string | null }
 
 export type LiveClientFrame = ClientFrame | LiveExtraClientFrame
 

@@ -90,7 +90,8 @@ export interface LiveShellSnapshot {
   clock?: number
 }
 
-export type SayResult = { ok: true } | { ok: false }
+/** A failed send may say why in words (the editors' say route) and how long to wait. */
+export type SayResult = { ok: true } | { ok: false; reason?: string; retryAfterMs?: number }
 
 export interface LiveSource {
   /** `sample` draws the "Sample data" banner; `live` is a real doc. */

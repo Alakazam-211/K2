@@ -36,6 +36,9 @@ const base: LiveDocSnapshot = {
   undoOff: null,
   othersHere: 1,
   pending: 0,
+  slots: new Map(),
+  holds: [],
+  lines: new Map(),
 }
 const snap = (p: Partial<LiveDocSnapshot>): LiveDocSnapshot => ({ ...base, ...p })
 const merged = snap({ outsideSave: { outcome: 'ingested', rev: 4, at_ms: 10 }, beforeExternal: 'before' })

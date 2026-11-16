@@ -123,7 +123,7 @@ export function EditorFrame(props: {
     <div ref={frame.root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} data-live={live ? '' : undefined} data-offline={live?.offline ? '' : undefined} style={props.style} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={onKeyDownCapture} onBlur={onBlur}>
       <style>{EDITOR_CSS + WRITE_CSS}</style>
       <LiveTabFrame
-        header={<LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} state={live?.state} sentence={live?.sentence ?? null} right={live?.right} mode={props.modeControl} panelOpen={live?.panelOpen} onTogglePanel={live?.onTogglePanel} panelLabel={live?.panelLabel} />}
+        header={<LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} state={live?.state} sentence={live?.sentence ?? null} sentenceEnd={live?.sentenceEnd} fitKey={live?.fitKey} right={live?.right} mode={props.modeControl} panelOpen={live?.panelOpen} onTogglePanel={live?.onTogglePanel} panelLabel={live?.panelLabel} />}
         notice={props.notice}
         hero={<div className="ed-body flex min-h-0 flex-1 flex-col">{save?.replaceBody ?? props.body}</div>}
         status={<EditorStatusLine items={items} toggles={status.toggles} facts={status.facts} narrow={frame.narrow} />}

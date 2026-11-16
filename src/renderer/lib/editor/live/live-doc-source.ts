@@ -20,15 +20,22 @@
 // Until the kit's next round, ChangeInfo carries only `hunks`, `by` and
 // `local` (no version, kind, turn, verb or at_ms): rows say "Atlas edited
 // Setup", and Undo works only on your own newest edit, through the server's
-// per-person undo (⌘Z). Presence on the text (flags, holds, Follow, Say) is
-// E4b: the people here carry what it needs.
+// per-person undo (⌘Z).
+//
+// Presence on the text (E4b): each other person's presence colour (slot),
+// their holds from the kit's claims (a hold names what they're doing in the
+// sentence and the Here list), and Say something: `say()` posts
+// `docs/say` and the socket's `say` frames are Messages.
 
 import type { RosterEntry } from '@k2/mpc-client'
 import type { ConnectionState as KitState, LiveEditorEvents, RemovedTextNote } from '@/components/LiveEditor'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import type { ConnectionState, OutsideSave } from '@/lib/live-view/shared/notices'
-import type { LiveChange, LiveShellSnapshot, LiveSource, SayResult } from '@/lib/live-view/shared/source'
-import { caretLine, editWords, lineAtByte, placeAt } from './sections'
+import type { LiveChange, LiveMessage, LiveShellSnapshot, LiveSource, SayResult } from '@/lib/live-view/shared/source'
+import { holdLabel, holdsReducer, pruneHolds, type Hold } from './holds'
+import { assignSlots, type Slot } from './presence-slots'
+import { addressLabel, sayFailure } from './say-words'
+import { caretLine, editWords, lineAtByte, placeAt, sectionAt } from './sections'
 import type { TappedWelcome, TransportTap } from './transport-tap'
 
 /** The kit's participant for a save made outside K2 (`EXTERNAL_PID`, session/participant.rs). */
@@ -111,6 +118,12 @@ export interface LiveDocSnapshot extends LiveShellSnapshot {
   othersHere: number
   /** Your changes not yet acknowledged by the server. */
   pending: number
+  /** Each other person's presence colour (1..4), kept while they're here. */
+  slots: ReadonlyMap<string, Slot>
+  /** Others' holds and claims on lines (never yours), oldest first. */
+  holds: Hold[]
+  /** Each person's caret line (1-based), or null: the flags and the off-screen band. */
+  lines: ReadonlyMap<string, number | null>
 }
 
 interface Run {
@@ -161,9 +174,14 @@ export class LiveDocSource implements LiveSource {
   private sentence: { who: string; text: string; until: number } | null = null
   private seq = 0
   private pending = 0
+  private slots: ReadonlyMap<string, Slot> = new Map()
+  private holds: Hold[] = []
+  private messages: LiveMessage[] = []
+  private readonly post: ((body: Record<string, unknown>) => Promise<unknown>) | null
 
-  constructor(opts: { markdown: boolean; timers?: LiveDocTimers; online?: boolean }) {
+  constructor(opts: { markdown: boolean; timers?: LiveDocTimers; online?: boolean; post?: (body: Record<string, unknown>) => Promise<unknown> }) {
     this.markdown = opts.markdown
+    this.post = opts.post ?? null
     this.timers = opts.timers ?? realTimers
     this.online = opts.online ?? (typeof navigator === 'undefined' ? true : navigator.onLine !== false)
     this.snap = this.build({})
@@ -193,6 +211,10 @@ export class LiveDocSource implements LiveSource {
       ed.on('rights', (r) => this.emit({ rights: r })),
       ed.on('change', (c) => this.onChange(c)),
       ed.on('note', (n) => this.emit({ note: n })),
+      ed.on('claim', (c) => {
+        this.holds = holdsReducer(this.holds, c, { self: this.self, people: this.roster.map((e) => ({ id: e.handle, name: e.name, kind: e.kind, self: !!e.self })), slot: (id) => this.slotOf(id) })
+        this.emit({})
+      }),
       ed.on('pending', (n) => {
         this.pending = n
         this.emit({})
@@ -234,9 +256,24 @@ export class LiveDocSource implements LiveSource {
     }, TRYING_MS)
   }
 
-  /** Say is E4b (the route is landed; the editor has no say row yet). */
-  say(): Promise<SayResult> {
-    return Promise.resolve({ ok: false })
+  /** "Say something": `docs/say {text, to, at}`; the sent line joins Messages at once. */
+  async say(msg: { to: string; text: string; address: string | null }): Promise<SayResult> {
+    if (!this.post) return { ok: false }
+    try {
+      const r = (await this.post({ text: msg.text, to: msg.to, ...(msg.address ? { at: msg.address } : {}) })) as { say?: { id?: unknown; at_ms?: unknown } } | null
+      const id = typeof r?.say?.id === 'string' ? r.say.id : `say-${++this.seq}`
+      const at = typeof r?.say?.at_ms === 'number' ? r.say.at_ms : this.timers.now()
+      this.addMessage({ id, from: this.self, to: msg.to, text: msg.text, at_ms: at, address: msg.address ? { label: addressLabel(msg.address), address: msg.address } : null })
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, ...sayFailure(e, msg.to, (id) => this.roster.find((x) => x.handle === id)?.name ?? null) }
+    }
+  }
+
+  private addMessage(m: LiveMessage): void {
+    if (this.messages.some((x) => x.id === m.id)) return
+    this.messages = [...this.messages, m]
+    this.emit({})
   }
 
   close(): void {
@@ -296,6 +333,28 @@ export class LiveDocSource implements LiveSource {
   private onFrame(f: Frame): void {
     if (f.type === 'outside_save') this.onOutsideSave(f)
     else if (f.type === 'verb_refused') this.onRefused(f)
+    else if (f.type === 'say') this.onSay(f)
+  }
+
+  private onSay(f: Frame): void {
+    const from = (f.from ?? {}) as { id?: unknown }
+    const to = (f.to ?? null) as { id?: unknown } | null
+    if (typeof f.id !== 'string' || typeof from.id !== 'string' || typeof f.text !== 'string') return
+    const at = typeof f.at === 'string' && f.at ? f.at : null
+    this.addMessage({ id: f.id, from: from.id, to: typeof to?.id === 'string' ? to.id : '', text: f.text, at_ms: typeof f.at_ms === 'number' ? f.at_ms : this.timers.now(), address: at ? { label: addressLabel(at), address: at } : null })
+  }
+
+  private slotOf(id: string): Slot {
+    const s = this.slots.get(id)
+    if (s) return s
+    this.slots = assignSlots(this.slots, [...this.roster.map((e) => ({ id: e.handle, self: !!e.self || e.handle === this.self })), { id }])
+    return this.slots.get(id) ?? 1
+  }
+
+  /** What a hold says its holder is doing, after the name ("rewriting Setup"). */
+  private holdDoing(id: string): string | null {
+    const h = this.holds.find((x) => x.who === id)
+    return h ? holdLabel(h, sectionAt(this.text, h.first, this.markdown)).slice(h.name.length + 4) : null
   }
 
   private onState(s: KitState): void {
@@ -458,7 +517,10 @@ export class LiveDocSource implements LiveSource {
     const run = this.runs.get(e.handle)
     const runPlace = run ? placeAt(this.text, run.first, this.markdown) : null
     const agent = e.kind === 'agent'
-    const doing = down
+    const held = !down && !e.away ? this.holdDoing(e.handle) : null
+    const doing = held
+      ? held
+      : down
       ? place
         ? `last seen in ${place}`
         : 'last seen'
@@ -488,12 +550,26 @@ export class LiveDocSource implements LiveSource {
     const now = this.timers.now()
     const connection = this.connection()
     const down = connection !== null && connection !== 'back'
-    const people = this.roster.filter((e) => e.handle !== EXTERNAL_PID).map((e) => this.person(e, down))
+    const present = this.roster.filter((e) => e.handle !== EXTERNAL_PID)
+    this.slots = assignSlots(this.slots, present.map((e) => ({ id: e.handle, self: !!e.self || e.handle === this.self })))
+    this.holds = pruneHolds(this.holds, present.map((e) => e.handle))
+    const people = present.map((e) => this.person(e, down))
     const othersHere = people.filter((p) => !p.self && !p.away).length
     // The header's sentence: someone editing now, else the last finished edit or refusal.
     const open = [...this.runs.values()].filter((r) => r.who !== this.self && !r.offline).sort((a, b) => b.at - a.at)[0]
     const recent = this.sentence && this.sentence.until > now ? this.sentence : null
-    const activity = down ? null : open ? { who: open.who, text: `is editing ${placeAt(this.text, open.first, this.markdown) ?? 'the file'}` } : recent ? { who: recent.who, text: recent.text } : null
+    // A hold names what its holder is doing ("is rewriting Setup").
+    const holding = this.holds.find((h) => !open || h.who === open.who)
+    const openWords = open ? (open.who === holding?.who ? this.holdDoing(open.who) : null) : null
+    const activity = down
+      ? null
+      : open
+        ? { who: open.who, text: `is ${openWords ?? `editing ${placeAt(this.text, open.first, this.markdown) ?? 'the file'}`}` }
+        : recent
+          ? { who: recent.who, text: recent.text }
+          : holding
+            ? { who: holding.who, text: `is ${this.holdDoing(holding.who) ?? 'working'}` }
+            : null
     const outsideSave = patch.outsideSave !== undefined ? patch.outsideSave : (prev?.outsideSave ?? null)
     const paused = outsideSave?.outcome === 'declined' ? 'Live edits are paused until the file is text again' : outsideSave?.outcome === 'missing' ? 'Live edits are off until the file is back' : null
     // Undo: your newest own edit (the server's per-person undo), or Redo on the one you undid.
@@ -512,10 +588,10 @@ export class LiveDocSource implements LiveSource {
       agentDone: false,
       activity,
       changes,
-      messages: [],
+      messages: this.messages,
       outsideSave,
       refusal: patch.refusal !== undefined ? patch.refusal : (prev?.refusal ?? null),
-      features: { viewAddress: this.features.includes('view_address'), timePosition: false, say: false },
+      features: { viewAddress: this.features.includes('view_address'), timePosition: false, say: this.post !== null },
       clock: now,
       rights: patch.rights !== undefined ? patch.rights : (prev?.rights ?? null),
       accessOwner: patch.accessOwner !== undefined ? patch.accessOwner : (prev?.accessOwner ?? null),
@@ -529,6 +605,9 @@ export class LiveDocSource implements LiveSource {
       undoOff: down ? 'Back online to use this' : paused,
       othersHere,
       pending: this.pending,
+      slots: this.slots,
+      holds: this.holds,
+      lines: new Map(present.map((e) => [e.handle, e.cursor ? caretLine(this.text, e.cursor) : null])),
     }
   }
 }

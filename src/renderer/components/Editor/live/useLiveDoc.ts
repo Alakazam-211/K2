@@ -14,6 +14,7 @@ import { Compartment, type Extension } from '@codemirror/state'
 import { mountLiveEditor, type LiveEditorHandle, type LiveTransport as KitLiveTransport } from '@/components/LiveEditor'
 import { wireLiveHost } from '@/components/LiveEditor/host-wiring'
 import type { ServerScope } from '@/kessel/server-scope'
+import { daemonCliPost } from '@/lib/daemon-cli'
 import { createDaemonLiveTransport } from '@/lib/docs-live-daemon'
 import type { LiveTransport } from '@/lib/docs-live-transport'
 import { LiveDocSource } from '@/lib/editor/live/live-doc-source'
@@ -40,10 +41,15 @@ export interface LiveDoc {
   takeNotes: () => void
   /** Reopen after a close. */
   reopen: () => void
+  /** Tell the others what you're looking at (a heading's address), or nothing. */
+  sendViewAddress: (address: string | null) => void
 }
 
 export function useLiveDoc({ scope, filePath, markdown, onCoreOff, createTransport }: UseLiveDocOptions): LiveDoc {
-  const [source] = useState(() => new LiveDocSource({ markdown }))
+  // Say something goes through the file's say route (an agent also gets it in its inbox).
+  const sayTo = useRef({ scope, filePath })
+  sayTo.current = { scope, filePath }
+  const [source] = useState(() => new LiveDocSource({ markdown, post: (body) => daemonCliPost(sayTo.current.scope, 'docs/say', { path: sayTo.current.filePath, ...body }) }))
   const [host] = useState(() => {
     const el = document.createElement('div')
     el.className = 'ed-live-host'
@@ -119,5 +125,8 @@ export function useLiveDoc({ scope, filePath, markdown, onCoreOff, createTranspo
   const takeNotes = useCallback(() => transport.current?.send({ type: 'take_notes' }), [])
   const reopen = useCallback(() => setMountKey((k) => k + 1), [])
   const current = useCallback(() => editor.current, [])
-  return { source, host, editor: current, configure, takeNotes, reopen }
+  // The kit's presence frame (WIRE.md `view_address`): no reply unless refused.
+  const req = useRef(0)
+  const sendViewAddress = useCallback((address: string | null) => transport.current?.send({ type: 'view_address', req: ++req.current, address }), [])
+  return { source, host, editor: current, configure, takeNotes, reopen, sendViewAddress }
 }

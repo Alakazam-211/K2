@@ -7,6 +7,7 @@
 
 export const LIVE_CSS = `
 .ed-tab .ed-live-slot { display: flex; flex-direction: column; }
+.ed-tab .ed-live-box > .ed-live-host { height: auto; }
 .ed-tab .ed-live-host { flex: 1 1 auto; height: 100%; min-height: 0; --mpc-font: var(--font-code); --mpc-font-size: 13px; --mpc-line-height: 1.55; --mpc-focus: transparent; --mpc-bg: var(--editor-bg, var(--color-bg)); }
 .ed-tab .ed-live-host > .mpc-editor { height: 100%; }
 .ed-tab .ed-live-host .mpc-body { display: flex; flex-direction: column; }

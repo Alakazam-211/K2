@@ -15,11 +15,11 @@
 //
 // Replaces LiveDocView's status line and notes for the new editors; today's
 // view keeps LiveDocView until the old path retires. Presence on the text
-// (flags, holds, the off-screen band, Follow, Say) is E4b: useLiveShell
-// already holds whom you follow, and the people carry their places.
+// (E4b: name flags, holds, the off-screen band, Follow, Say something) is
+// usePresence: its extensions go in the text's slot, its header pieces in
+// the frame.
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AvatarStack } from '@/components/LiveView/shell/AvatarStack'
 import type { ShellConfig } from '@/components/LiveView/shell/shell-config'
 import { useLiveShell, useTabWidth } from '@/components/LiveView/shell/useLiveShell'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -30,6 +30,7 @@ import { liveNoticeView, readOnlyReason, type LiveActionId } from '@/lib/editor/
 import { LIVE_UI, liveReadOnly, liveSaveStatus, pickLiveNotice, showsMerged, type LiveUi, type SaveFlow } from '@/lib/editor/live/pick-notice'
 import { replaceText } from '@/lib/editor/live/replace'
 import { readLocalFlag } from '@/lib/editor/local-flag'
+import { headingAddress } from '@/lib/editor/live/say-words'
 import type { EditorKind } from '@/lib/editor/preview-switch'
 import { failureReason } from '@/lib/editor/save-model/write'
 import type { LiveChange } from '@/lib/live-view/shared/source'
@@ -44,7 +45,9 @@ import { AskBar, type Ask } from './AskBar'
 import { LIVE_CSS } from './liveCss'
 import { LivePanel, READ_ALOUD_KEY } from './LivePanel'
 import { LiveSlot } from './LiveSlot'
+import { PRESENCE_CSS } from './presenceCss'
 import { useLiveDoc } from './useLiveDoc'
+import { usePresence } from './usePresence'
 
 const CompareView = lazy(() => import('../CompareView').then((m) => ({ default: m.CompareView })))
 
@@ -60,7 +63,15 @@ const EDITOR_SHELL: ShellConfig = {
   backInHeader: true,
   sayAlways: false,
   kept: 'who’s here and the changes',
-  sayAddress: () => null,
+  // A message points at the section its person is in ("Setup"), as a heading's address.
+  sayAddress: (snap, to) => {
+    const p = snap.people.find((x) => x.id === to)
+    const place = p?.place
+    if (!place) return null
+    const line = (snap as LiveDocSnapshot).lines?.get(to) ?? null
+    const address = /^line \d+$/.test(place) || place === 'the intro' ? (line !== null ? `line:${line}` : null) : headingAddress(place)
+    return address ? { label: place, title: `${place}, where ${p.name} is`, address } : null
+  },
   Hero: () => <></>,
 }
 
@@ -95,6 +106,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
   const [outer, tabWidth] = useTabWidth(width)
   const shell = useLiveShell(doc.source, EDITOR_SHELL, tabWidth)
   const snap = shell.snap as LiveDocSnapshot
+  const presence = usePresence({ doc, shell, snap, markdown, root: outer })
   const name = fileNameOf(filePath)
 
   const [text, setText] = useState('')
@@ -251,12 +263,13 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
   const readOnly = roomReadOnly ?? liveReadOnly(snap, readOnlyReason)
   const tabState = snap.rights === 'read' ? 'read-only-file' : shell.tabState
   const showChip = snap.tier === 'live' && !snap.closed && (snap.othersHere > 0 || snap.rights === 'read' || ALWAYS_CHIP.has(shell.tabState))
-  const withOthers = snap.people.some((p) => !p.self && (!p.away || shell.offline))
   const frameLive = useMemo<FrameLive>(
     () => ({
       state: showChip ? tabState : undefined,
-      sentence: shell.offline ? null : shell.sentence,
-      right: withOthers ? <AvatarStack people={snap.people} editor grey={shell.offline} /> : null,
+      sentence: shell.offline ? null : (presence.sentence ?? shell.sentence),
+      sentenceEnd: shell.offline ? null : presence.sentenceEnd,
+      fitKey: presence.fitKey,
+      right: presence.right,
       panel: (
         <LivePanel
           snap={snap}
@@ -268,6 +281,8 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
           onUndo={(c) => doc.source.undoChange(c.id)}
           onRedo={(c) => doc.source.redoChange(c.id)}
           onAsk={(c) => c.ask && setAsk({ to: c.ask, what: snap.refusal?.target ?? '' })}
+          followingId={shell.followingId}
+          onFollow={presence.follow}
         />
       ),
       panelOpen,
@@ -276,7 +291,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
       panelLabel: 'Live',
       offline: shell.offline,
     }),
-    [showChip, tabState, shell.offline, shell.sentence, shell.panelPeople, withOthers, snap, panelOpen, doc],
+    [showChip, tabState, shell.offline, shell.sentence, shell.panelPeople, shell.followingId, presence.sentence, presence.sentenceEnd, presence.fitKey, presence.right, presence.follow, snap, panelOpen, doc],
   )
 
   const view = notice ? liveNoticeView(notice, name) : null
@@ -285,7 +300,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
 
   return (
     <div ref={outer} className="flex h-full min-h-0 flex-col" data-testid="ed-live-file" data-live-state={snap.closed ? 'closed' : (snap.connection ?? snap.tier)} data-owner={owner ?? undefined}>
-      <style>{SAVE_CSS + LIVE_CSS}</style>
+      <style>{SAVE_CSS + LIVE_CSS + PRESENCE_CSS + presence.css}</style>
       <FrameSaveContext.Provider value={frameSave}>
         <FrameLiveContext.Provider value={frameLive}>
           <EditorTab
@@ -306,7 +321,21 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
                 </div>
               </>
             }
-            renderEditor={(o) => <LiveSlot host={doc.host} filePath={filePath} opts={o} configure={doc.configure} onUpdate={onUpdate} />}
+            renderEditor={(o) => (
+              <LiveSlot
+                host={doc.host}
+                filePath={filePath}
+                opts={o}
+                configure={doc.configure}
+                onUpdate={onUpdate}
+                presence={presence.extension}
+                onConfigured={presence.syncHolds}
+                top={presence.top}
+                bottom={presence.bottom}
+                foot={presence.say}
+                ring={presence.ring}
+              />
+            )}
             renderPreview={renderPreview ? () => renderPreview(text) : undefined}
           />
         </FrameLiveContext.Provider>

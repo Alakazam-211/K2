@@ -13,6 +13,10 @@ export interface FrameLive {
   /** None: no chip (alone, connected). */
   state?: LiveTabState
   sentence: HeaderSentence | null
+  /** After the sentence: "Back to my place" and "Follow again" once following ended. */
+  sentenceEnd?: React.ReactNode
+  /** Changes when the header's controls do: the row tries to fit whole again. */
+  fitKey?: string
   /** The avatar stack (and E4b's Follow). */
   right?: React.ReactNode
   panel: React.ReactNode

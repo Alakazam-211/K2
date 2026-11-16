@@ -8,13 +8,16 @@
 //     ChangeInfo), Redo after it, and "Ask Sam" on a refusal;
 //   - Live edits (a list you open): one line per finished edit by someone
 //     else, with the time, and "Read finished edits aloud" (off by default);
+//   - Messages: what you said to someone from the say row, and their replies;
 //   - one hint at the panel's foot, dismissed once on this computer.
+// A Here row follows its person (E4b), marked "Following" while you do.
 
 import { useState } from 'react'
 import { cx } from '@/components/ui'
 import { ChangesList } from '@/components/LiveView/shell/ChangesList'
 import { ChevronGlyph, CloseGlyph } from '@/components/LiveView/shell/glyphs'
 import { LiveAvatar } from '@/components/LiveView/shell/LiveAvatar'
+import { MessagesList } from '@/components/LiveView/shell/MessagesList'
 import { PanelSection } from '@/components/LiveView/shell/PanelSection'
 import { WatchingList } from '@/components/LiveView/shell/WatchingList'
 import { useLocalFlag } from '@/lib/editor/local-flag'
@@ -72,6 +75,8 @@ export function LivePanel({
   onUndo,
   onRedo,
   onAsk,
+  followingId = null,
+  onFollow,
 }: {
   snap: LiveDocSnapshot
   /** The panel's people (you say what you're doing). */
@@ -80,6 +85,9 @@ export function LivePanel({
   onUndo: (c: LiveChange) => void
   onRedo: (c: LiveChange) => void
   onAsk: (c: LiveChange) => void
+  followingId?: string | null
+  /** A Here row follows its person (none while disconnected). */
+  onFollow?: (id: string) => void
 }): React.JSX.Element {
   const [view, setView] = useState<'here' | 'edits'>('here')
   const [tipGone, setTipGone] = useLocalFlag(UNDO_TIP_KEY)
@@ -114,7 +122,7 @@ export function LivePanel({
         <LiveEdits snap={snap} people={people} readAloud={readAloud} onReadAloud={setReadAloud} onBack={() => setView('here')} />
       ) : (
         <>
-          <WatchingList title="Here" countAway people={people} stale={down} staleHead={{ title: 'Last seen', line: 'As you last saw them, before the connection dropped.' }} action={liveEditsBtn} />
+          <WatchingList title="Here" countAway people={people} stale={down} staleHead={{ title: 'Last seen', line: 'As you last saw them, before the connection dropped.' }} action={liveEditsBtn} followingId={followingId} onFollow={down ? undefined : onFollow} />
           <ChangesList
             changes={snap.changes}
             people={people}
@@ -127,6 +135,7 @@ export function LivePanel({
             onRedo={onRedo}
             onAsk={onAsk}
           />
+          <MessagesList messages={snap.messages} people={people} now={snap.clock ?? Date.now()} />
         </>
       )}
       <span className="flex-1" />

@@ -16,6 +16,8 @@ export interface SayState {
   last?: { from: 'you' | 'them'; text: string }
   /** The last send went through on Send again. */
   resent?: boolean
+  /** Why the last send failed, in words (the route's refusal), when known. */
+  reason?: string
 }
 
 export type SayAction =
@@ -23,7 +25,7 @@ export type SayAction =
   | { type: 'send' }
   | { type: 'send-again' }
   | { type: 'sent' }
-  | { type: 'failed' }
+  | { type: 'failed'; reason?: string }
   | { type: 'reply'; text: string }
 
 export const SAY_IDLE: SayState = { draft: '', status: 'idle', tries: 0 }
@@ -41,7 +43,7 @@ export function sayReducer(s: SayState, a: SayAction): SayState {
       if (s.status !== 'sending') return s
       return { draft: '', status: 'sent', tries: 0, last: { from: 'you', text: s.draft.trim() }, resent: s.resent }
     case 'failed':
-      return s.status === 'sending' ? { ...s, status: 'failed', tries: s.tries + 1 } : s
+      return s.status === 'sending' ? { ...s, status: 'failed', tries: s.tries + 1, reason: a.reason } : s
     case 'reply':
       return { ...s, last: { from: 'them', text: a.text }, resent: false }
   }
@@ -83,7 +85,7 @@ export function sayView(s: SayState, ctx: SayContext): SayView {
   if (s.status === 'failed')
     line = {
       tone: 'bad',
-      text: s.tries > 1 ? 'Still couldn’t send (second try). Your message is kept here.' : 'Couldn’t send: the connection dropped. Your message is kept here.',
+      text: s.reason ? `${s.tries > 1 ? 'Still couldn’t send (second try)' : 'Couldn’t send'}: ${s.reason}. Your message is kept here.` : s.tries > 1 ? 'Still couldn’t send (second try). Your message is kept here.' : 'Couldn’t send: the connection dropped. Your message is kept here.',
       action: 'Send again',
     }
   else if (s.last) {

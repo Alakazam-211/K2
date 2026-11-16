@@ -115,7 +115,7 @@ describe('alone and with others', () => {
     roster(t, everyone)
     expect((await screen.findByTestId('lv-state')).textContent).toBe('Live')
     const stack = screen.getByTestId('lv-stack')
-    expect([...stack.querySelectorAll('[data-lv-stack-item]')].map((e) => e.getAttribute('title'))).toEqual(['You', 'Atlas (agent)'])
+    expect([...stack.querySelectorAll('[data-lv-stack-item]')].map((e) => e.getAttribute('title'))).toEqual(['You', 'Atlas (agent): follow it'])
     const panel = await screen.findByTestId('ed-live-panel')
     expect(within(panel).getByTestId('ed-live-tab-count').textContent).toBe('2')
     expect(within(panel).getByTestId('lv-watching-count').textContent).toBe('2')

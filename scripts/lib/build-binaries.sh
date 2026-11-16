@@ -141,6 +141,22 @@ _k2_mac_sidecar_cargo() {
     cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}"
 }
 
+# k2_check_bundled_dfn3 <resource-dir>: the built app carries the four
+# DeepFilterNet3 files under dfn3/, and the weights hash to the pin
+# (scripts/fetch-dfn3.sh's DFN3_WEIGHTS_SHA256). Loud on any miss. Run from
+# the repo root, like the rest of this file.
+k2_check_bundled_dfn3() {
+    local res="$1" want got f
+    want="$(sed -n 's/^DFN3_WEIGHTS_SHA256="\([0-9a-f]*\)"$/\1/p' scripts/fetch-dfn3.sh)"
+    [ -n "$want" ] || { echo "FATAL: no DFN3_WEIGHTS_SHA256 in scripts/fetch-dfn3.sh" >&2; return 1; }
+    for f in dfn3_ll.nnef.tar NOTICE LICENSE-MIT LICENSE-APACHE; do
+        [ -f "$res/dfn3/$f" ] || { echo "FATAL: the app has no dfn3/$f under $res (noise removal's DeepFilterNet3)" >&2; return 1; }
+    done
+    got="$(shasum -a 256 "$res/dfn3/dfn3_ll.nnef.tar" | awk '{print $1}')"
+    [ "$got" = "$want" ] || { echo "FATAL: the app's dfn3/dfn3_ll.nnef.tar is sha256 $got, the pin says $want" >&2; return 1; }
+    echo "  DeepFilterNet3 weights bundled (sha256 ${want:0:12}…)."
+}
+
 # k2_build_mac_binaries <app-path>   e.g. target/release/bundle/macos/K2.app
 # Returns non-zero (after a FATAL line) on any failure.
 k2_build_mac_binaries() {
@@ -149,6 +165,12 @@ k2_build_mac_binaries() {
 
     k2_mac_build_env
     k2_clear_failed_cmake_dirs
+
+    # The DeepFilterNet3 weights (noise removal) ship in the bundle's
+    # Resources/dfn3/. tauri build's beforeBuildCommand stages them too; this
+    # runs first so a failed download or checksum stops the build here, before
+    # any compile, in fetch-dfn3.sh's own words.
+    ./scripts/fetch-dfn3.sh || { echo "FATAL: scripts/fetch-dfn3.sh failed (the DeepFilterNet3 weights)" >&2; return 1; }
 
     if [ "${K2_MAC_BUILD_PARALLEL:-1}" = "0" ]; then
         echo ""; echo "  Build 1/2: tauri build (frontend + k2 + bundle)..."
@@ -187,6 +209,8 @@ k2_build_mac_binaries() {
         [ -d "$app" ] || { echo "FATAL: $app missing after tauri build" >&2; return 1; }
         echo "  both builds done ($(( $(date +%s) - t0 ))s)."
     fi
+
+    k2_check_bundled_dfn3 "$app/Contents/Resources" || return 1
 
     local bin
     for bin in k2-daemon k2-power-helper k2-ptyd k2-export k2-deckrender k2-scenerender k2-node k2-menubar k2-deskd; do

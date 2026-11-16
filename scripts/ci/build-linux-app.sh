@@ -58,8 +58,17 @@ k2_repro_build_env "$ROOT"
 # k2-node sets CI=1 for every job; `tauri build` accepts only true/false
 # for CI and fails at once on 1 (0.46.5 shadow: L3 failed in 3 s).
 export CI=true
+# The DeepFilterNet3 weights (noise removal; beforeBuildCommand stages them
+# too): first, so a failed download or checksum stops the job here.
+"$ROOT/scripts/fetch-dfn3.sh"
 # linuxdeploy without FUSE (job users have no /dev/fuse).
 APPIMAGE_EXTRACT_AND_RUN=1 bunx tauri build --bundles deb,rpm,appimage
+# The deb carries them (every bundle takes the same resources).
+DEB_LIST="$(dpkg-deb -c "$B/deb/K2_${VERSION}_amd64.deb")"
+if ! printf '%s\n' "$DEB_LIST" | grep '/dfn3/dfn3_ll\.nnef\.tar$' >/dev/null; then
+    echo "FATAL: the deb has no dfn3/dfn3_ll.nnef.tar (noise removal's DeepFilterNet3)" >&2
+    exit 1
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT"

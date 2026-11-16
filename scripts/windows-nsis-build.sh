@@ -132,6 +132,17 @@ REMOTE_DIR_SCP="$(printf '%s' "$REMOTE_DIR" | tr '\\' '/')"
 "${SCP[@]}" "$FRPC_LOCAL" "${HOST}:${REMOTE_DIR_SCP}/src-tauri/binaries/frpc-${TRIPLE}.exe"
 echo "  frpc sidecar staged."
 
+# ── DeepFilterNet3 weights (noise removal): pinned + checksum-verified here ──
+if ! "$PROJECT_DIR/scripts/fetch-dfn3.sh" >"$STAGE/dfn3-fetch.log" 2>&1; then
+    echo "ERROR: could not stage the DeepFilterNet3 weights (fetch-dfn3.sh):" >&2
+    tail -20 "$STAGE/dfn3-fetch.log" >&2 || true
+    exit 1
+fi
+for f in dfn3_ll.nnef.tar NOTICE LICENSE-MIT LICENSE-APACHE; do
+    "${SCP[@]}" "$PROJECT_DIR/src-tauri/dfn3/$f" "${HOST}:${REMOTE_DIR_SCP}/src-tauri/dfn3/$f"
+done
+echo "  DeepFilterNet3 weights staged."
+
 # ── Build ──
 echo "  Building on ${HOST} (several minutes)..."
 set +e

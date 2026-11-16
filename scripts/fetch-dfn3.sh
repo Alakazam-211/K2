@@ -4,9 +4,10 @@
 # them from `<app resource dir>/dfn3/dfn3_ll.nnef.tar`; without them noise
 # removal's Standard mode stays RNNoise (the plugin logs that once).
 #
-# The four files land in src-tauri/dfn3/ (gitignored: the weights are 39 MB
-# and must never be committed), and tauri.conf.json's bundle.resources ships
-# them as `dfn3/…` in every app build:
+# The four files land in src-tauri/dfn3/ (gitignored, beside the committed
+# README.md: the weights are 39 MB and must never be committed), and
+# tauri.conf.json's bundle.resources (`dfn3/*`) ships them as `dfn3/…` in
+# every app build:
 #   dfn3/dfn3_ll.nnef.tar   the weights (MIT OR Apache-2.0, converted by
 #                           Alakazam Labs; see dfn3/NOTICE)
 #   dfn3/NOTICE             their notice (also in K2's NOTICE.md)
@@ -24,10 +25,14 @@
 #
 #   scripts/fetch-dfn3.sh            stage (download only when needed)
 #   scripts/fetch-dfn3.sh --check    change nothing; exit 0 if staged and
-#                                    right, 1 if not (release.sh's gate)
-#   scripts/fetch-dfn3.sh --if-cached
-#                                    stage from the cache only, never the
-#                                    network (dev mode: no weights is fine)
+#                                    right, 1 if not (the build paths' gate)
+#
+# Every app build path runs it: tauri.conf.json's beforeBuildCommand (any
+# `tauri build`, the Linux app leg included), scripts/lib/build-binaries.sh
+# (dev-build.sh, build-app.sh, release.sh; it also checks the built bundle),
+# scripts/windows-nsis-build.sh (stages here, copies to the Windows box), and
+# `tauri dev` (package.json dev:dfn3: there a failed fetch only warns, and
+# noise removal stays RNNoise).
 #
 # Env: DFN3_ASSET_SRC=/path/to/sew-dfn3-<v>.tar.gz  use this file instead of
 #        downloading (a box without internet; it is still checked)
@@ -49,7 +54,6 @@ MODE=stage
 case "${1:-}" in
     "") ;;
     --check) MODE=check ;;
-    --if-cached) MODE=if-cached ;;
     *) echo "fetch-dfn3: unknown argument: $1" >&2; exit 2 ;;
 esac
 
@@ -100,10 +104,6 @@ if [ -n "${DFN3_ASSET_SRC:-}" ]; then
     [ -f "$asset" ] || { echo "fetch-dfn3: FATAL — DFN3_ASSET_SRC=$asset is not a file" >&2; exit 1; }
 elif [ -f "$CACHED" ] && [ "$(sha256_of "$CACHED")" = "$DFN3_ASSET_SHA256" ]; then
     asset="$CACHED"
-elif [ "$MODE" = if-cached ]; then
-    echo "fetch-dfn3: no cached DeepFilterNet3 bundle; this build's noise removal stays RNNoise" \
-         "(scripts/fetch-dfn3.sh downloads it)" >&2
-    exit 0
 else
     mkdir -p "$CACHE"
     part="$CACHED.part.$$"
@@ -130,7 +130,8 @@ if [ -n "${part:-}" ] && [ "$asset" = "$part" ]; then
 fi
 
 # Check 2: unpack into a fresh dir beside the stage; only the four members,
-# each a regular file; then the weights' own sha256. Only then swap it in.
+# each a regular file; then the weights' own sha256. Only then move them in,
+# one file at a time (the stage's committed README.md stays).
 tmp="$(mktemp -d "$STAGE_PARENT/.dfn3.XXXXXX")"
 cleanup_tmp() { rm -rf "$tmp"; }
 trap cleanup_tmp EXIT
@@ -153,6 +154,8 @@ if [ "$got" != "$DFN3_WEIGHTS_SHA256" ]; then
     exit 1
 fi
 chmod 0644 "$tmp"/dfn3/*
-rm -rf "$STAGE"
-mv "$tmp/dfn3" "$STAGE"
+mkdir -p "$STAGE"
+for f in $DFN3_FILES; do
+    mv -f "$tmp/$f" "$STAGE_PARENT/$f"
+done
 echo "fetch-dfn3: staged Sew $DFN3_SEW_VERSION's DeepFilterNet3 weights in src-tauri/dfn3/"

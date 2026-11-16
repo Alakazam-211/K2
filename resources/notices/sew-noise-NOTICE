@@ -1,0 +1,55 @@
+sew-noise
+Copyright (c) 2026 Alakazam Labs.
+
+Licensed under either of the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT license
+(LICENSE-MIT), at your option.
+
+This crate links nnnoiseless 0.5.2 (https://github.com/jneem/nnnoiseless), the Rust port of
+RNNoise, and through it compiles in RNNoise's model weights. nnnoiseless is licensed under the
+BSD 3-Clause license. The text below is its COPYING file, unchanged:
+
+    Copyright (c) 2020, Joe Neeman
+    Copyright (c) 2017, Mozilla
+    Copyright (c) 2007-2017, Jean-Marc Valin
+    Copyright (c) 2005-2017, Xiph.Org Foundation
+    Copyright (c) 2003-2004, Mark Borgerding
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+    - Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+    - Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+
+    - Neither the name of the Xiph.Org Foundation nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+PROVENANCE.md records the nnnoiseless package and the weights file.
+
+With the `dfn3` feature, this crate runs the DeepFilterNet3 model (low-latency variant), from
+DeepFilterNet (https://github.com/Rikorose/DeepFilterNet), and src/dfn3/stream.rs is ported
+from libDF's src/lib.rs and src/tract.rs at commit 978576aa8400552a4ce9730838c635aa30db5e61,
+under MIT OR Apache-2.0:
+    Copyright (c) 2021 Hendrik Schröter
+    Licensed under either of the MIT license or the Apache License, Version 2.0, at your option.
+DeepFilterNet is the work of Hendrik Schröter and the DeepFilterNet authors.
+The model weights are not in this crate. An app that ships them ships, beside them, their
+NOTICE (which marks the converted archive as converted by Alakazam Labs) and the MIT and
+Apache-2.0 texts; PROVENANCE.md says where they come from.

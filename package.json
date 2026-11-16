@@ -9,6 +9,7 @@
     "build": "tauri build",
     "build:dev": "bash scripts/dev-build.sh",
     "vite:dev": "vite --config vite.config.ts",
+    "dev:dfn3": "bash ./scripts/fetch-dfn3.sh || echo \"fetch-dfn3: this dev run has no DeepFilterNet3 weights; noise removal stays RNNoise\"",
     "vite:build": "vite build --config vite.config.ts",
     "vite:dev:web": "vite --config vite.config.web.ts",
     "vite:build:web": "vite build --config vite.config.web.ts",

@@ -64,6 +64,11 @@ if ($pkg -ne $Version -or $cargo -ne $Version) {
 $bin = Join-Path $Tree 'src-tauri\binaries'
 $frpc = Join-Path $bin "frpc-$Triple.exe"
 if (-not (Test-Path $frpc)) { Fail "frpc sidecar missing at $frpc (windows-nsis-build.sh stages it)" }
+# The DeepFilterNet3 weights (noise removal), staged and checked on the Mac.
+foreach ($f in 'dfn3_ll.nnef.tar', 'NOTICE', 'LICENSE-MIT', 'LICENSE-APACHE') {
+    $p = Join-Path $Tree "src-tauri\dfn3\$f"
+    if (-not (Test-Path $p)) { Fail "dfn3\$f missing at $p (windows-nsis-build.sh stages it)" }
+}
 
 $nsisDir = Join-Path $Target 'release\bundle\nsis'
 $setup = Join-Path $nsisDir "K2_${Version}_x64-setup.exe"

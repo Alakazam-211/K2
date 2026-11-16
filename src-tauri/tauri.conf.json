@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../out/renderer",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "bun run vite:dev",
-    "beforeBuildCommand": "bun run vite:build && ./scripts/fetch-frpc.sh"
+    "beforeDevCommand": "bun run dev:dfn3 && bun run vite:dev",
+    "beforeBuildCommand": "bun run vite:build && ./scripts/fetch-dfn3.sh && ./scripts/fetch-frpc.sh"
   },
   "app": {
     "macOSPrivateApi": true,
@@ -71,7 +71,7 @@
         "applicationFolderPosition": { "x": 480, "y": 170 }
       }
     },
-    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs", "../resources/notices/sew-call-client-NOTICE", "../resources/notices/sew-e2ee-NOTICE", "../resources/notices/sew-lk-compat-NOTICE", "../resources/notices/sew-lkproto-NOTICE", "../resources/notices/sew-mls-crypto-NOTICE", "../resources/notices/sew-proto-NOTICE", "../resources/notices/tauri-plugin-sew-voice-NOTICE"],
+    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs", "../resources/notices/sew-call-client-NOTICE", "../resources/notices/sew-e2ee-NOTICE", "../resources/notices/sew-lk-compat-NOTICE", "../resources/notices/sew-lkproto-NOTICE", "../resources/notices/sew-mls-crypto-NOTICE", "../resources/notices/sew-proto-NOTICE", "../resources/notices/tauri-plugin-sew-voice-NOTICE", "../resources/notices/sew-noise-NOTICE", "dfn3/*"],
     "externalBin": ["binaries/frpc"]
   },
   "plugins": {

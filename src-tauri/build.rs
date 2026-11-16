@@ -19,6 +19,9 @@ fn main() {
         println!("cargo:rerun-if-changed=capabilities");
         println!("cargo:rerun-if-changed=capabilities-native-voice");
         attributes = attributes.capabilities_path_pattern("./capabilities*/**/*");
+        // bundle.resources' `dfn3/*`: tauri-build copies it next to the binary
+        // (dev runs read it there), so a later scripts/fetch-dfn3.sh copies again.
+        println!("cargo:rerun-if-changed=dfn3");
     }
     if let Err(error) = tauri_build::try_build(attributes) {
         println!("{error:#}");

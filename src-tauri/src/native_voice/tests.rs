@@ -786,6 +786,59 @@ fn the_app_ships_each_crates_notice() {
         assert_eq!(shipped, sew_crate_file(krate, "NOTICE"), "{krate}'s copy is stale");
         assert!(conf.contains(&format!("../resources/notices/{krate}-NOTICE")), "{krate} isn't in bundle.resources");
     }
+    // sew-noise (Sew 0.10.2) comes from crates.io: its NOTICE carries
+    // nnnoiseless's BSD-3-Clause text, which applies with or without dfn3.
+    let shipped = std::fs::read(root.join("resources/notices/sew-noise-NOTICE")).expect("the copy");
+    assert_eq!(shipped, registry_crate_file("sew-noise", "NOTICE"), "sew-noise's copy is stale");
+    assert!(conf.contains("../resources/notices/sew-noise-NOTICE"), "sew-noise isn't in bundle.resources");
+    let text = String::from_utf8(shipped).expect("utf-8");
+    assert!(text.contains("nnnoiseless") && text.contains("BSD 3-Clause"), "nnnoiseless's notice");
+}
+
+/// The DeepFilterNet3 weights ship as `dfn3/<file>` in the app's resources,
+/// where the plugin's `dfn3` feature looks (`Builder::dfn3_weights` unset):
+/// the bundle globs the staged folder, every build path stages it, and the
+/// folder's committed README says what goes there. Never the weights in git.
+#[test]
+fn the_app_bundles_the_dfn3_weights_folder() {
+    let root = repo_root();
+    let conf: Value = serde_json::from_str(&std::fs::read_to_string(root.join("src-tauri/tauri.conf.json")).expect("conf")).expect("json");
+    let resources: Vec<&str> = conf["bundle"]["resources"].as_array().expect("a list").iter().map(|v| v.as_str().expect("a path")).collect();
+    assert!(resources.contains(&"dfn3/*"), "{resources:?}");
+    let before_build = conf["build"]["beforeBuildCommand"].as_str().expect("beforeBuildCommand");
+    assert!(before_build.contains("./scripts/fetch-dfn3.sh"), "{before_build}");
+    let before_dev = conf["build"]["beforeDevCommand"].as_str().expect("beforeDevCommand");
+    assert!(before_dev.contains("dev:dfn3"), "{before_dev}");
+    assert!(root.join("src-tauri/dfn3/README.md").is_file(), "the folder's README keeps the glob matching");
+    let ignore = std::fs::read_to_string(root.join(".gitignore")).expect(".gitignore");
+    assert!(ignore.lines().any(|l| l == "src-tauri/dfn3/*"), "the weights stay out of git");
+    let manifest = std::fs::read_to_string(root.join("src-tauri/Cargo.toml")).expect("src-tauri/Cargo.toml");
+    let row = manifest.lines().find(|l| l.starts_with("tauri-plugin-sew-voice = ")).expect("the plugin row");
+    assert!(row.contains("\"dfn3\""), "the plugin's dfn3 feature: {row}");
+}
+
+/// A file of a crates.io crate as cargo unpacked it, at the version
+/// Cargo.lock pins (offline: this build already fetched it).
+fn registry_crate_file(krate: &str, rel: &str) -> Vec<u8> {
+    let lock = std::fs::read_to_string(repo_root().join("Cargo.lock")).expect("Cargo.lock");
+    let name_line = format!("name = \"{krate}\"");
+    let mut lines = lock.lines();
+    let version = loop {
+        let l = lines.next().unwrap_or_else(|| panic!("{krate} is not in Cargo.lock"));
+        if l == name_line {
+            let v = lines.next().expect("a version line");
+            break v.trim_start_matches("version = \"").trim_end_matches('"').to_string();
+        }
+    };
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| dirs::home_dir().expect("home").join(".cargo"));
+    let src = cargo_home.join("registry/src");
+    for entry in std::fs::read_dir(&src).unwrap_or_else(|e| panic!("read {}: {e}", src.display())) {
+        let path = entry.expect("entry").path().join(format!("{krate}-{version}")).join(rel);
+        if path.exists() {
+            return std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        }
+    }
+    panic!("{krate}-{version}/{rel} isn't under {}", src.display())
 }
 
 // ── recording: consent, Record and Stop (Sew 0.9.0, K-g) ─────────────

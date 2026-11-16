@@ -1,0 +1,8 @@
+{"OTIO_SCHEMA":"Timeline.1","name":"t","global_start_time":{"OTIO_SCHEMA":"RationalTime.1","value":0,"rate":24},
+"tracks":{"OTIO_SCHEMA":"Stack.1","children":[{"OTIO_SCHEMA":"Track.1","kind":"Video","children":[
+{"OTIO_SCHEMA":"Gap.1","source_range":{"OTIO_SCHEMA":"TimeRange.1","start_time":{"OTIO_SCHEMA":"RationalTime.1","value":0,"rate":24},"duration":{"OTIO_SCHEMA":"RationalTime.1","value":5,"rate":24}}},
+{"OTIO_SCHEMA":"Clip.1","name":"a","media_reference":{"OTIO_SCHEMA":"ExternalReference.1","target_url":"a.mov"},
+"source_range":{"OTIO_SCHEMA":"TimeRange.1","start_time":{"OTIO_SCHEMA":"RationalTime.1","value":2,"rate":24},"duration":{"OTIO_SCHEMA":"RationalTime.1","value":9,"rate":24}},
+"markers":[{"OTIO_SCHEMA":"Marker.2","name":"m","marked_range":{"OTIO_SCHEMA":"TimeRange.1","start_time":{"OTIO_SCHEMA":"RationalTime.1","value":3,"rate":24},"duration":{"OTIO_SCHEMA":"RationalTime.1","value":0,"rate":24}}}]},
+{"OTIO_SCHEMA":"Transition.1","in_offset":{"OTIO_SCHEMA":"RationalTime.1","value":1,"rate":24},"out_offset":{"OTIO_SCHEMA":"RationalTime.1","value":1,"rate":24}},
+{"OTIO_SCHEMA":"Stack.1","children":[{"OTIO_SCHEMA":"Track.1","kind":"Audio","children":[]}]}]}]}}

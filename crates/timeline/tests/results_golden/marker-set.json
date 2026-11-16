@@ -1,0 +1,50 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "marker set",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "marker_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@mk:1",
+        "root": "marker_props",
+        "key": "k1",
+        "field": "name",
+        "op": "set",
+        "before": "beat",
+        "after": "beat two"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "marker": "@mk:1",
+    "name": "beat two"
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.marker-set/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

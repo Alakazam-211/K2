@@ -1,0 +1,135 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "marker add",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "markers",
+        "inserted": 1,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 0,
+        "dropped": 0
+      },
+      {
+        "root": "marker_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 6,
+        "dropped": 0
+      },
+      {
+        "root": "timeline",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@mk:4",
+        "root": "markers",
+        "key": "k4",
+        "field": null,
+        "op": "insert",
+        "before": null,
+        "after": "marker"
+      },
+      {
+        "address": "@mk:4",
+        "root": "marker_props",
+        "key": "k4",
+        "field": "owner",
+        "op": "set",
+        "before": null,
+        "after": "i4"
+      },
+      {
+        "address": "@mk:4",
+        "root": "marker_props",
+        "key": "k4",
+        "field": "at",
+        "op": "set",
+        "before": null,
+        "after": "232848000000"
+      },
+      {
+        "address": "@mk:4",
+        "root": "marker_props",
+        "key": "k4",
+        "field": "dur",
+        "op": "set",
+        "before": null,
+        "after": "0"
+      },
+      {
+        "address": "@mk:4",
+        "root": "marker_props",
+        "key": "k4",
+        "field": "name",
+        "op": "set",
+        "before": null,
+        "after": "cue"
+      },
+      {
+        "address": "@mk:4",
+        "root": "marker_props",
+        "key": "k4",
+        "field": "note",
+        "op": "set",
+        "before": null,
+        "after": ""
+      },
+      {
+        "address": "@mk:4",
+        "root": "marker_props",
+        "key": "k4",
+        "field": "color",
+        "op": "set",
+        "before": null,
+        "after": ""
+      },
+      {
+        "address": null,
+        "root": "timeline",
+        "key": "mark/k",
+        "field": null,
+        "op": "set",
+        "before": "3",
+        "after": "4"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "marker": "@mk:4",
+    "at": {
+      "shown": "01:00:04:12",
+      "ticks": "1143072000000"
+    },
+    "owner": "@item:4"
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.marker-add/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

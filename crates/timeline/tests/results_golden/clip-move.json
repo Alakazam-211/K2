@@ -1,0 +1,54 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip move",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "item_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@item:5",
+        "root": "item_props",
+        "key": "i5",
+        "field": "geom",
+        "op": "set",
+        "before": "1524096000000,254016000000",
+        "after": "1651104000000,254016000000"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "item": "@item:5",
+    "start": {
+      "shown": "01:00:06:12",
+      "ticks": "1651104000000"
+    },
+    "track": "@trk:1"
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.clip-move/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

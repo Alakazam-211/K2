@@ -1,0 +1,38 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip show",
+  "kind": "read",
+  "ok": false,
+  "exit": 4,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_not_found: @item:99 names nothing live\nnext: track list\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E011",
+    "exit": 4,
+    "message": "@item:99 names nothing live",
+    "next": "The address names no track, item, marker or media in the timeline as it is now: it was deleted, or never was. Nothing was applied. List them again and use an address from the list.",
+    "next_step": {
+      "verb": "track list",
+      "args": [],
+      "why": "List the tracks, then their items, markers or media."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_not_found",
+      "next": "track list",
+      "verb": "clip show",
+      "address": "@item:99"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

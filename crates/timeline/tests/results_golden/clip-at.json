@@ -1,0 +1,39 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip at",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "track": "@trk:1",
+    "at": "01:00:02:00",
+    "item": {
+      "address": "@item:1",
+      "kind": "clip",
+      "track": "@trk:1",
+      "start": {
+        "shown": "01:00:01:00",
+        "ticks": "254016000000"
+      },
+      "duration": {
+        "shown": "48f",
+        "ticks": "508032000000"
+      },
+      "name": "Shot A",
+      "off": false,
+      "editable": true,
+      "retimed": false
+    }
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.clip-at/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

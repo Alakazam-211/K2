@@ -1,0 +1,62 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip list",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "track": "@trk:1",
+    "items": [
+      {
+        "address": "@item:1",
+        "kind": "clip",
+        "track": "@trk:1",
+        "start": {
+          "shown": "01:00:01:00",
+          "ticks": "254016000000"
+        },
+        "duration": {
+          "shown": "48f",
+          "ticks": "508032000000"
+        },
+        "name": "Shot A",
+        "off": false,
+        "editable": true,
+        "retimed": false
+      },
+      {
+        "address": "@item:2",
+        "kind": "clip",
+        "track": "@trk:1",
+        "start": {
+          "shown": "01:00:03:00",
+          "ticks": "762048000000"
+        },
+        "duration": {
+          "shown": "24f",
+          "ticks": "254016000000"
+        },
+        "name": "Shot B",
+        "off": false,
+        "editable": true,
+        "retimed": false
+      }
+    ]
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.clip-list/1",
+  "page": {
+    "next": {
+      "verb": "clip list",
+      "args": ["@trk:1", "--limit", "2", "--after", "@item:2"]
+    }
+  },
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

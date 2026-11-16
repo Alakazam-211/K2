@@ -1,0 +1,40 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip move",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_track_kind: the track carries another kind (video, audio)\nnext: track list\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E005",
+    "exit": 2,
+    "message": "the track carries another kind (video, audio)",
+    "next": "A clip goes only on a track of its own kind (video on video, audio on audio). Nothing was applied. Pick a track of the clip's kind.",
+    "next_step": {
+      "verb": "track list",
+      "args": [],
+      "why": "List the tracks with their kinds."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_track_kind",
+      "next": "track list",
+      "verb": "clip move"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

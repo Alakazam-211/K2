@@ -1,0 +1,43 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "track list",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "tracks": [
+      {
+        "address": "@trk:1",
+        "kind": "video",
+        "label": "V1",
+        "name": "V1",
+        "items": 5,
+        "enabled": true
+      },
+      {
+        "address": "@trk:2",
+        "kind": "audio",
+        "label": "A1",
+        "name": "A1",
+        "items": 1,
+        "enabled": true
+      }
+    ]
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.track-list/1",
+  "page": {
+    "next": {
+      "verb": "track list",
+      "args": ["--limit", "2", "--after", "@trk:2"]
+    }
+  },
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

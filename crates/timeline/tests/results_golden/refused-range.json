@@ -1,0 +1,40 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip trim",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_range: the clip would be empty or out of range\nnext: clip show @item:5\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E009",
+    "exit": 2,
+    "message": "the clip would be empty or out of range",
+    "next": "The edit would make an empty clip, start before zero, end past the longest timeline held live, put a marker outside its owner, or give a negative duration. Nothing was applied.",
+    "next_step": {
+      "verb": "timeline info",
+      "args": [],
+      "why": "Read the timeline's length, then give times within it."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_range",
+      "next": "clip show @item:5",
+      "verb": "clip trim"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

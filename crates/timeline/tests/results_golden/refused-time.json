@@ -1,0 +1,40 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip move",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_time: not a time: a time needs a unit: a timecode, f (frames) or s (seconds)\nnext: timeline info\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E003",
+    "exit": 2,
+    "message": "not a time: a time needs a unit: a timecode, f (frames) or s (seconds)",
+    "next": "The time given isn't a timecode, frames (240f) or seconds (10s, 1001/24000s) at the timeline's rate, or the timeline has no rate, or a relative time has nothing to count from. Nothing was applied.",
+    "next_step": {
+      "verb": "timeline info",
+      "args": [],
+      "why": "Read the timeline's rate and start timecode, then give the time again."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_time",
+      "next": "timeline info",
+      "verb": "clip move"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

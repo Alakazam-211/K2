@@ -1,0 +1,50 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "track rename",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "track_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@trk:3",
+        "root": "track_props",
+        "key": "t3",
+        "field": "name",
+        "op": "set",
+        "before": "V2",
+        "after": "B-roll"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "track": "@trk:3",
+    "name": "B-roll"
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.track-rename/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

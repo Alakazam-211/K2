@@ -1,0 +1,58 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip trim",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "item_props",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@item:4",
+        "root": "item_props",
+        "key": "i4",
+        "field": "geom",
+        "op": "set",
+        "before": "1016064000000,381024000000",
+        "after": "1016064000000,317520000000"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "item": "@item:4",
+    "start": {
+      "shown": "01:00:04:00",
+      "ticks": "1016064000000"
+    },
+    "duration": {
+      "shown": "30f",
+      "ticks": "317520000000"
+    },
+    "track": "@trk:1"
+  },
+  "data_schema": "typed",
+  "data_spec": "timeline.clip-trim/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

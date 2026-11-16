@@ -1,0 +1,40 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "clip rename",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: tl_not_editable: nothing writes this transition live (a transition, a nest or a retimed clip)\nnext: clip show @item:3\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "TIMELINE-OTIO-E006",
+    "exit": 2,
+    "message": "nothing writes this transition live (a transition, a nest or a retimed clip)",
+    "next": "The item is a transition, a nest or a retimed clip, which the live timeline reads but doesn't write. Nothing was applied. Edit it in the editing app.",
+    "next_step": {
+      "verb": "clip show",
+      "args": [],
+      "why": "Read the item's fields."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "tl_not_editable",
+      "next": "clip show @item:3",
+      "verb": "clip rename"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

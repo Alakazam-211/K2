@@ -1,0 +1,37 @@
+[package]
+name = "k2-mpc-timeline"
+version = "0.1.0"
+description = "Reads OTIO, FCPXML and PRPROJ timelines into one neutral model: a type pack for the multiplayer kit."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Test-only: the properties every reader keeps on any input (`k2_mpc_timeline::fuzzing`), for
+# the fuzz targets in `fuzz/` and the seed tests. No host enables it.
+fuzzing = []
+# Test-only: planted bugs (`k2_mpc_timeline::mutant`), for `tests/mutants.rs`. No host enables it.
+mutants = []
+
+[dependencies]
+# The kit (k2-mpc-base), by path: its checkout sits beside this repo's (a host vendors both side
+# by side: vendor/k2-mpc-base beside vendor/k2-mpc-timeline), at the kit release CHANGELOG.md
+# names (v0.21.0: results as data and registered refusals). Run `cargo update -p k2-mpc-base` and
+# commit the lock when it moves.
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+# The same major as the kit's, so a host gets one copy.
+thiserror = "2"
+# XML for FCPXML and PRPROJ: byte ranges per node (what a carried piece digests); its one
+# dependency, memchr, is the kit's already. The 0.21 line, the one a host builds. MIT OR Apache-2.0.
+roxmltree = "0.21"
+# gzip for PRPROJ, on its pure-Rust backend. MIT OR Apache-2.0.
+flate2 = "1"
+
+[dev-dependencies]
+# The seed tests run the fuzz properties: this crate's own test-only feature.
+k2-mpc-timeline = { path = ".", features = ["fuzzing"] }
+# The kit's test helpers: the carrier pack's byte-exact row (`test_support::carrier_judge`);
+# and its checks (`differential`): after every change and at every hand-out the kit compares the
+# kept track index with a fresh build.
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base", features = ["test-support", "differential"] }

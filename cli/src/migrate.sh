@@ -348,6 +348,7 @@ _vault_run() {
             --value|--value=*|--secret-value*)
                 echo "value_on_argv: run takes names, never values (k2 vault run --help)" >&2
                 exit 2 ;;
+            --system) echo "usage: only k2 vault list takes --system" >&2; exit 2 ;;
             --*) echo "usage: unknown flag '$1' (k2 vault run --help)" >&2; exit 2 ;;
             # NAME like `k2 vault file NAME`; --secret NAME works too.
             *) helper_args+=(--secret "$1"); named=1; shift ;;
@@ -422,7 +423,10 @@ cmd_vault() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; seen+=("$1"); shift ;;
-            --system) system=1; seen+=("$1"); shift ;;
+            --system)
+                # K2's own secrets: only list names them (K2, 2026-11-16).
+                case "$sub" in list|ls) ;; *) echo "usage: only k2 vault list takes --system" >&2; exit 2 ;; esac
+                system=1; seen+=("$1"); shift ;;
             --yes) yes=1; seen+=("$1"); shift ;;
             --remove-original) remove_original=1; seen+=("$1"); shift ;;
             --own-box-move) own_box_move=1; seen+=("$1"); shift ;;
@@ -490,13 +494,13 @@ cmd_vault() {
     done
     # Each verb takes only the flags it reads (K2, 2026-11-16, like the send
     # family): any other is refused here, before a request goes out, never
-    # parsed and dropped. --system goes wherever the name goes (the body or
-    # query), so every verb that sends the name takes it. "also" holds the
+    # parsed and dropped. --system is list's alone (refused above). "also" holds the
     # flags a verb reads only to refuse with its own words, later.
-    local S="--scope --system" takes="" also="" verb_words="$sub"
+    local S="--scope" takes="" also="" verb_words="$sub"
     case "$sub" in
         status|open|recipient|requests|presets) takes="--json" ;;
-        list|ls|show|rotate|public-key|disable|enable|get) takes="$S --json" ;;
+        list|ls) takes="--scope --system --json" ;;
+        show|rotate|public-key|disable|enable|get) takes="$S --json" ;;
         set) takes="$S --kind --for --preset --delivery --ceiling --describe --rotate-every --ttl --inject-dst --inject-header --inject-format --sign --sign-header --sign-encoding --sign-prefix --sign-ts-header --sign-template --sign-value --oauth-token-url --oauth-client-auth --json" ;;
         hosts) takes="--add --remove $S --json" ;;
         sign) takes="--sign-header --sign-encoding --sign-prefix --sign-ts-header --sign-template --sign-value --oauth-token-url --oauth-client-auth $S --json"; also="--sign" ;;
@@ -539,7 +543,6 @@ cmd_vault() {
     local name="${pos[0]:-}"
     local nj
     nj="$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]} if sys.argv[1] else {}))' "$name")"
-    [ "$system" = "1" ] && nj="$(_vault_merge "$nj" '{"system": true}')"
     case "$sub" in
         status)
             _vault_call GET status

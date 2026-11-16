@@ -182,6 +182,7 @@ _vault_sync() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
+            --system) echo "usage: only k2 vault list takes --system" >&2; exit 2 ;;
             *) echo "usage: k2 vault sync [--json]" >&2; exit 2 ;;
         esac
     done
@@ -490,6 +491,7 @@ Example: k2 vault fetch --secret STRIPE_KEY https://api.stripe.com/v1/balance
          k2 vault fetch --secret OVH_EU --json-out https://eu.api.ovh.com/1.0/me
 EOF
                 return 0 ;;
+            --system) echo "usage: only k2 vault list takes --system" >&2; exit 2 ;;
             -*) echo "usage: unknown fetch flag '$1' (k2 vault fetch --help)" >&2; exit 2 ;;
             *) [ -z "$url" ] || { echo "usage: one URL" >&2; exit 2; }; url="$1"; shift ;;
         esac
@@ -718,6 +720,7 @@ _vault_handoff() {
                 shift 2 ;;
             --value|--value=*|--secret-value*)
                 echo "value_on_argv: values are read from stdin, never an argument" >&2; exit 2 ;;
+            --system) echo "usage: only k2 vault list takes --system" >&2; exit 2 ;;
             --*) echo "usage: unknown flag '$1' (k2 vault send --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
         esac

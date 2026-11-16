@@ -276,6 +276,7 @@ _vault_systemd_cred() {
             --json) as_json=1; shift ;;
             --value|--value=*|--secret-value*)
                 echo "value_on_argv: K2 takes the value from the vault, never an argument" >&2; exit 2 ;;
+            --system) echo "usage: only k2 vault list takes --system" >&2; exit 2 ;;
             --*) echo "usage: unknown flag '$1' (k2 vault systemd-cred --help)" >&2; exit 2 ;;
             *) [ -z "$name" ] || { echo "usage: k2 vault systemd-cred NAME --unit <unit.service> [--restart] [--dry-run] | --remove | --replace" >&2; exit 2; }
                name="$1"; shift ;;
@@ -427,6 +428,7 @@ _vault_placement() {
                 case "$1" in --where) where="$2" ;; --note) note="$2" ;; --scope) scope="$2" ;; esac
                 seen+=("$1"); shift 2 ;;
             --json) as_json=1; seen+=("$1"); shift ;;
+            --system) echo "usage: only k2 vault list takes --system" >&2; exit 2 ;;
             --*) echo "usage: unknown flag '$1' (k2 vault placement --help)" >&2; exit 2 ;;
             *) [ -z "$name" ] || { echo "usage: k2 vault placement --help" >&2; exit 2; }
                name="$1"; shift ;;

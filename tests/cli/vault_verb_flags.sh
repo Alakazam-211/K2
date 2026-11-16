@@ -157,7 +157,7 @@ reaches /cli/vault/list 'q.get("scope") == "server"' vault ls --scope server --j
 reaches /cli/vault/show 'q["name"] == "K" and q["scope"] == "server"' vault show K --scope server --json
 reaches /cli/vault/set 'b["name"] == "K" and b["scope"] == "server" and b["kind"] == "generic" and b["hosts"] == ["a.example.com"] and b["delivery"] == "file" and b["ceiling"] == "env" and b["description"] == "d" and b["rotateEveryDays"] == 30 and b["ttl"] == "2h" and b["inject"] == {"dst": "header:X-Key", "fmt": "Key {}"} and b["valueB64"] == "djRsdWU="' \
     vault set K --scope server --kind generic --for a.example.com --delivery file --ceiling env --describe d --rotate-every 30 --ttl 2h --inject-header X-Key --inject-format 'Key {}' --json
-reaches /cli/vault/set 'b["preset"] == "stripe" and b["inject"]["dst"] == "query:key" and b.get("system") is True' vault set K --preset stripe --inject-dst query:key --system --json
+reaches /cli/vault/set 'b["preset"] == "stripe" and b["inject"]["dst"] == "query:key" and "system" not in b' vault set K --preset stripe --inject-dst query:key --json
 reaches /cli/vault/set 'b["inject"]["sign"] == {"scheme": "hmac-sha256-ts", "header": "X-Sig", "encoding": "base64", "tsHeader": "X-Ts", "template": "{ts}.{body}", "valueFmt": "{sig}"}' \
     vault set K --sign hmac-sha256-ts --sign-header X-Sig --sign-encoding base64 --sign-ts-header X-Ts --sign-template '{ts}.{body}' --sign-value '{sig}' --json
 reaches /cli/vault/set 'b["inject"]["sign"] == {"scheme": "oauth-refresh", "tokenUrl": "https://auth.example.com/t", "clientAuth": "basic"}' \
@@ -262,6 +262,34 @@ refused --where vault placement list --where box:/x
 import json, sys
 c = {x["name"]: x for x in json.load(sys.stdin)["commands"]}
 sys.exit(0 if "--scope" in {f["name"] for f in c["vault placements"]["flags"]} else 1)' && ok "schema: vault placements --scope" || bad "schema: vault placements lacks --scope"
+
+echo "== only k2 vault list takes --system (K2, 2026-11-16) =="
+# K2's own secrets are the daemon's: no verb but list names them, GET or
+# POST alike. Exit 2, the one line, nothing sent.
+refused_system() {
+    local before rc
+    before="$(wc -l < "$LOG")"
+    set +e
+    printf 'v4lue' | "$K2" "$@" >/dev/null 2>"$SANDBOX/err"
+    rc=$?
+    set -e
+    if [ "$rc" = 2 ] && grep -Fxq "usage: only k2 vault list takes --system" "$SANDBOX/err" && [ "$(wc -l < "$LOG")" = "$before" ]; then
+        ok "k2 $* refused: only list takes --system"
+    else
+        bad "k2 $*: exit $rc, $(( $(wc -l < "$LOG") - before )) requests, stderr $(printf %q "$(head -c 300 "$SANDBOX/err")"); want exit 2, 'usage: only k2 vault list takes --system', nothing sent"
+    fi
+}
+for args in "show K" "set K" "rotate K" "hosts K --add a.example.com" "sign K none" "public-key K" "agent-limit K" \
+    "delivery K file" "grant K --to ws:acme" "revoke K --from ws:acme" "disable K" "enable K" "destroy K --yes" "get K" \
+    "audit K" "reveal K" "rollback K --to 1" "status" "file K" "env-file K" "proxy-url K" "import .env" "doctor" \
+    "send K --to bob" "incoming" "ask bob K" "unsend hd_1" "fetch --secret K https://a.example.com/" "sync" \
+    "placements K" "placement add K --where box:/k" "systemd-cred K --unit k2-watch.service --dry-run"; do
+    # shellcheck disable=SC2086 # the words are separate arguments on purpose
+    refused_system vault $args --system
+done
+refused_system vault run --system --secret K -- true
+refused_system publish secret add api K --system
+reaches /cli/vault/list 'q.get("system") == "1"' vault list --system --json
 
 echo
 echo "vault_verb_flags: $pass passed, $fail failed"

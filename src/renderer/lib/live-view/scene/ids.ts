@@ -11,6 +11,8 @@
 export interface IdEntry {
   index: number
   id: string
+  /** Its address (`@obj:N`), when K2 Render names it (`{index, id, key}`, the queue after 0.46.14). */
+  key?: string
 }
 
 /** A decoded id image and its table. */

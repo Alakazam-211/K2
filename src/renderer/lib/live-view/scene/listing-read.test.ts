@@ -22,6 +22,15 @@ describe('an object in the listing', () => {
 
   it('has no box without whole bounds', () => {
     expect(objectListingFrom({ hidden: true })).toBeNull()
+  })
+
+  it('hidden as the mesh read says it, exactly "self" or "collection" (K2 Render, after Cores’ WIRE.md); no collection address here', () => {
+    const b = { min: [0, 0, 0], max: [1, 1, 1], approx: false }
+    expect(objectListingFrom({ bounds: b, hidden: 'self' })).toMatchObject({ hidden: true, hidden_by: 'self' })
+    expect(objectListingFrom({ bounds: b, hidden: 'collection' })).toMatchObject({ hidden: true, hidden_by: 'collection' })
+    // the live view's "collection:@coll:N" isn't the listing's: read as hidden by a collection, the address left for S8
+    expect(objectListingFrom({ bounds: b, hidden: true, hidden_by: 'collection:@coll:3' })).toMatchObject({ hidden: true, hidden_by: 'collection' })
+    expect(objectListingFrom({ bounds: b, hidden: 'nonsense' })).toMatchObject({ hidden: false, hidden_by: null })
     expect(objectListingFrom({ bounds: { min: [0, 0], max: [1, 1, 1] } })).toBeNull()
     expect(objectListingFrom(null)).toBeNull()
   })

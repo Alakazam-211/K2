@@ -18,11 +18,12 @@
 // those keys). Loud on a shape this client doesn't know; quiet (null) on a
 // field it can do without.
 //
-// TODO(K2 Cores, next mesh-read slice): a derived `mesh_hash` and
-// `hidden_by` per unit on the keyed watch. The vendored kit's WIRE.md has
-// neither yet (vendor/k2-mpc-base/client/WIRE.md, "Placements in 3D"), so
-// nothing reads them; until then hidden and hidden_by come from this
-// listing. S8's keyed source reads them from the units when they land.
+// TODO(S8, with K2 Cores' next mesh-read slice): a derived `mesh_hash` and
+// `hidden_by` per unit on the keyed watch (the live view's hidden_by is
+// "self" or "collection:@coll:N"; the vendored kit's WIRE.md has neither
+// yet). Until then the listing's hidden ("self" or "collection", never an
+// address) gives the "(hidden)" label, and naming the hiding collection
+// waits for S8's session read.
 
 import { entryOf, idIndexAt, type IdEntry, type IdLayer } from './ids'
 import { listingCameraFrom, objectListingFrom, stillCameraFrom, stillMetaFrom, type ListingCamera } from './listing-read'
@@ -118,7 +119,9 @@ function decodeBase64(b64: string): Uint8Array {
 
 function idTable(v: unknown): SceneImage['ids'] {
   if (!isObj(v) || !Array.isArray(v.objects)) return null
-  const objects = v.objects.flatMap((e): IdEntry[] => (isObj(e) && typeof e.index === 'number' && typeof e.id === 'string' ? [{ index: e.index, id: e.id }] : [])).sort((a, b) => a.index - b.index)
+  const objects = v.objects
+    .flatMap((e): IdEntry[] => (isObj(e) && typeof e.index === 'number' && typeof e.id === 'string' ? [{ index: e.index, id: e.id, ...(typeof e.key === 'string' ? { key: e.key } : {}) }] : []))
+    .sort((a, b) => a.index - b.index)
   return { count: int(v.count) ?? objects.length, objects }
 }
 
@@ -160,11 +163,14 @@ export function parseIdsImage(body: unknown): { state: SceneImage['state']; byte
   return { state: s, bytes: s === 'ready' ? decodeBase64(b.base64 as string) : null, mime: s === 'ready' ? (str(b.mime) ?? 'image/png') : null }
 }
 
-/** The address of the object at pixel (x, y): its id from the image's table, then the listed object with that title.
- *  Null for the background, an index the table left out, or an id two listed objects share (the file repeats it). */
+/** The address of the object at pixel (x, y): its entry's `key` when the table names it (K2 Render adds it after
+ *  0.46.14); else its id, matched to the one listed object with that title. Null for the background, an index the
+ *  table left out, or a name two listed objects share. */
 export function addressOfId(listing: SceneListing, layer: IdLayer, x: number, y: number): string | null {
   const i = idIndexAt(layer, x, y)
-  const id = i === null ? null : entryOf(layer, i)?.id
+  const e = i === null ? null : entryOf(layer, i)
+  if (e?.key && /^@obj:(0|[1-9]\d*)$/.test(e.key)) return e.key
+  const id = e?.id
   if (!id) return null
   const hits = listing.containers.filter((c) => c.key.startsWith('@obj:') && c.title === id)
   return hits.length === 1 ? hits[0].key : null

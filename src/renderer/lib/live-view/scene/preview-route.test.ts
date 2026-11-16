@@ -120,6 +120,21 @@ describe('the id image', () => {
     expect(addressOfId(L, layer, 0, 0)).toBeNull()
   })
 
+  it('an id entry with its key (K2 Render adds {index, id, key}): the key, first; without one, the name through the listing', () => {
+    // The fixture's table, as it will come: the sofa's entry with its key, under a name the listing doesn't have.
+    const withKey = parseSceneImage({ ...answer('scene.json', 'scene.webp'), ids: { ...(meta.ids as object), objects: (meta.ids as { objects: { index: number; id: string }[] }).objects.map((e) => (e.index === 10 ? { ...e, id: 'Couch (renamed)', key: '@obj:15' } : e)) } })
+    expect(withKey.ids!.objects[10]).toEqual({ index: 10, id: 'Couch (renamed)', key: '@obj:15' })
+    const keyed: IdLayer = { ...layer, objects: withKey.ids!.objects }
+    const sofa = extentOf(keyed, 10)!
+    const y = Math.round((sofa.y0 + sofa.y1) / 2)
+    let x = sofa.x0
+    while (keyed.values[y * keyed.width + x] !== 11) x++
+    expect(addressOfId(L, keyed, x, y)).toBe('@obj:15')
+    // a key that isn't an object address is no answer; it falls back to the name
+    const bad: IdLayer = { ...layer, objects: layer.objects.map((e) => (e.index === 10 ? { ...e, key: '@coll:2' } : e)) }
+    expect(addressOfId(L, bad, x, y)).toBe('@obj:15')
+  })
+
   it('every object’s pixels sit inside its box: listed bounds through its transform, projected with the still’s camera', () => {
     const cam = parseSceneImage(answer('scene.json', 'scene.webp')).camera!
     const objs = scene().objects

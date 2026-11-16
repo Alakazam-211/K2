@@ -21,6 +21,14 @@ const nums = (v: unknown, n: number): number[] | null => (Array.isArray(v) && v.
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const count = (v: unknown): number => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : 0)
 
+/** What hides an object, as the listing says it: exactly "self" or "collection" (K2 Render, after K2 Cores'
+ *  WIRE.md). The live view's "collection:@coll:N" (S8 reads it from the session) is read as "collection";
+ *  naming the hiding collection waits for S8. Anything else: not hidden by a word. */
+function hiddenWord(v: unknown): 'self' | 'collection' | null {
+  if (v === 'self' || v === 'collection') return v
+  return typeof v === 'string' && v.startsWith('collection:') ? 'collection' : null
+}
+
 /** One object of the listing: its local bounds (none: no box), whether they're approximate and why, and whether it's hidden. */
 export function objectListingFrom(raw: unknown): ObjectBounds | null {
   const o = obj(raw)
@@ -29,13 +37,14 @@ export function objectListingFrom(raw: unknown): ObjectBounds | null {
   const max = nums(b?.max, 3)
   if (!o || !b || !min || !max) return null
   const reason = b.approx_reason ?? o.approx_reason
+  const by = hiddenWord(o.hidden_by) ?? hiddenWord(o.hidden)
   return {
     min,
     max,
     approx: b.approx === true,
     approx_reason: reason === 'modifiers' || reason === 'driven' ? reason : null,
-    hidden: o.hidden === true,
-    hidden_by: typeof o.hidden_by === 'string' ? o.hidden_by : null,
+    hidden: by !== null || o.hidden === true,
+    hidden_by: by,
   }
 }
 

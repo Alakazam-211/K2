@@ -1,0 +1,1457 @@
+{
+ "_sample": {
+  "sample": true,
+  "not_kit_output": true,
+  "hand_made": false,
+  "built_by": "a scratch generator (gen.js) applying live/model.rs to_content by hand; no pack or kit code ran",
+  "from": "k2-mpc-timeline c9739a65 (origin main): crates/timeline/src/live/model.rs, view.rs, verbs.rs; kit client k2-mpc-base v0.17.0 client/src (keyed.ts, view.ts, presence.ts, wire.ts)",
+  "type": "the view index at rev 30: containers, then units by container in time order",
+  "notes": [
+   "bbox.x and bbox.w are record ticks as JSON numbers (exact: record < 2^53 ticks)",
+   "units carry derived.tc.geom as live/view.rs page_derived writes it: start-end timecodes",
+   "z is the unit's place in its lane by start (HYPOTHESIS: the kit's units pages order)",
+   "containers carry derived.kind_label (V1, A2) and derived.kind (video, audio), as the timeline pack gives them (main 82dfb6c0); a rename changes neither"
+  ]
+ },
+ "tier": "live",
+ "rev": 30,
+ "version": 30,
+ "page": null,
+ "fonts": [],
+ "layouts": [],
+ "containers": [
+  {
+   "key": "@trk:1",
+   "position": 1,
+   "title": "Interviews",
+   "hidden": false,
+   "layout": null,
+   "render_hash": null,
+   "fonts": [],
+   "has_fields": [
+    "edit",
+    "locked",
+    "muted",
+    "name",
+    "nid"
+   ],
+   "unit_count": 9,
+   "derived": {
+    "kind_label": "V1",
+    "kind": "video"
+   }
+  },
+  {
+   "key": "@trk:2",
+   "position": 2,
+   "title": "B-roll and titles",
+   "hidden": false,
+   "layout": null,
+   "render_hash": null,
+   "fonts": [],
+   "has_fields": [
+    "edit",
+    "locked",
+    "muted",
+    "name",
+    "nid"
+   ],
+   "unit_count": 13,
+   "derived": {
+    "kind_label": "V2",
+    "kind": "video"
+   }
+  },
+  {
+   "key": "@trk:3",
+   "position": 3,
+   "title": "Dialogue",
+   "hidden": false,
+   "layout": null,
+   "render_hash": null,
+   "fonts": [],
+   "has_fields": [
+    "edit",
+    "locked",
+    "muted",
+    "name",
+    "nid"
+   ],
+   "unit_count": 8,
+   "derived": {
+    "kind_label": "A1",
+    "kind": "audio"
+   }
+  },
+  {
+   "key": "@trk:4",
+   "position": 4,
+   "title": "Music",
+   "hidden": false,
+   "layout": null,
+   "render_hash": null,
+   "fonts": [],
+   "has_fields": [
+    "edit",
+    "locked",
+    "muted",
+    "name",
+    "nid"
+   ],
+   "unit_count": 3,
+   "derived": {
+    "kind_label": "A2",
+    "kind": "audio"
+   }
+  }
+ ],
+ "units": [
+  {
+   "key": "@item:1",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview A",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 0,
+   "bbox": {
+    "x": 0,
+    "y": 0,
+    "w": 3302208000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:00:00"
+   }
+  },
+  {
+   "key": "@item:2",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview B",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 1,
+   "bbox": {
+    "x": 3302208000000,
+    "y": 0,
+    "w": 2794176000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:13:00"
+   }
+  },
+  {
+   "key": "@item:3",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "transition",
+   "name": "Dissolve",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 2,
+   "bbox": {
+    "x": 5969376000000,
+    "y": 0,
+    "w": 254016000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "name",
+    "off",
+    "tr",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "never",
+   "derived": {
+    "tc": "01:00:23:12"
+   }
+  },
+  {
+   "key": "@item:4",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview A · take 2",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 3,
+   "bbox": {
+    "x": 6096384000000,
+    "y": 0,
+    "w": 4318272000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:24:00"
+   }
+  },
+  {
+   "key": "@item:5",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview C",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 4,
+   "bbox": {
+    "x": 10414656000000,
+    "y": 0,
+    "w": 3810240000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:41:00"
+   }
+  },
+  {
+   "key": "@item:6",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview B",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 5,
+   "bbox": {
+    "x": 14224896000000,
+    "y": 0,
+    "w": 3048192000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:56:00"
+   }
+  },
+  {
+   "key": "@item:7",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview A · closing",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 6,
+   "bbox": {
+    "x": 17781120000000,
+    "y": 0,
+    "w": 4572288000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:10:00"
+   }
+  },
+  {
+   "key": "@item:8",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview C · outro",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 7,
+   "bbox": {
+    "x": 22353408000000,
+    "y": 0,
+    "w": 3556224000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:28:00"
+   }
+  },
+  {
+   "key": "@item:9",
+   "container": "@trk:1",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview B · last word",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 8,
+   "bbox": {
+    "x": 25909632000000,
+    "y": 0,
+    "w": 4318272000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:42:00"
+   }
+  },
+  {
+   "key": "@item:10",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "generator",
+   "name": "Title: Rough cut",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 0,
+   "bbox": {
+    "x": 0,
+    "y": 0,
+    "w": 1016064000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:00:00"
+   }
+  },
+  {
+   "key": "@item:11",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 01",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 1,
+   "bbox": {
+    "x": 1270080000000,
+    "y": 0,
+    "w": 1016064000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:05:00"
+   }
+  },
+  {
+   "key": "@item:12",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 02",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 2,
+   "bbox": {
+    "x": 2540160000000,
+    "y": 0,
+    "w": 762048000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:10:00"
+   }
+  },
+  {
+   "key": "@item:13",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 03",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 3,
+   "bbox": {
+    "x": 4318272000000,
+    "y": 0,
+    "w": 1270080000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:17:00"
+   }
+  },
+  {
+   "key": "@item:14",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 04",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 4,
+   "bbox": {
+    "x": 6985440000000,
+    "y": 0,
+    "w": 1016064000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:27:12"
+   }
+  },
+  {
+   "key": "@item:15",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 05",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 5,
+   "bbox": {
+    "x": 8678880000000,
+    "y": 0,
+    "w": 762048000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:34:04"
+   }
+  },
+  {
+   "key": "@item:16",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "generator",
+   "name": "Lower third · Interview C",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 6,
+   "bbox": {
+    "x": 10414656000000,
+    "y": 0,
+    "w": 508032000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:41:00"
+   }
+  },
+  {
+   "key": "@item:17",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 06",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 7,
+   "bbox": {
+    "x": 11007360000000,
+    "y": 0,
+    "w": 1524096000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": true,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:43:08"
+   }
+  },
+  {
+   "key": "@item:18",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 07",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 8,
+   "bbox": {
+    "x": 14817600000000,
+    "y": 0,
+    "w": 1270080000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:58:08"
+   }
+  },
+  {
+   "key": "@item:19",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 08",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 9,
+   "bbox": {
+    "x": 18204480000000,
+    "y": 0,
+    "w": 1016064000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:11:16"
+   }
+  },
+  {
+   "key": "@item:20",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "B-roll 09",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 10,
+   "bbox": {
+    "x": 20109600000000,
+    "y": 0,
+    "w": 1270080000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:19:04"
+   }
+  },
+  {
+   "key": "@item:21",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "nest",
+   "name": "Map sequence",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 11,
+   "bbox": {
+    "x": 22861440000000,
+    "y": 0,
+    "w": 1778112000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "name",
+    "off",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "never",
+   "derived": {
+    "tc": "01:01:30:00"
+   }
+  },
+  {
+   "key": "@item:22",
+   "container": "@trk:2",
+   "parent": null,
+   "live": true,
+   "kind": "generator",
+   "name": "Title: Thanks",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 12,
+   "bbox": {
+    "x": 28576800000000,
+    "y": 0,
+    "w": 1270080000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:52:12"
+   }
+  },
+  {
+   "key": "@item:23",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview A",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 0,
+   "bbox": {
+    "x": 0,
+    "y": 0,
+    "w": 3302208000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:00:00"
+   }
+  },
+  {
+   "key": "@item:24",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview B",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 1,
+   "bbox": {
+    "x": 3302208000000,
+    "y": 0,
+    "w": 2794176000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:13:00"
+   }
+  },
+  {
+   "key": "@item:25",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview A · take 2",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 2,
+   "bbox": {
+    "x": 6096384000000,
+    "y": 0,
+    "w": 4318272000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:24:00"
+   }
+  },
+  {
+   "key": "@item:26",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview C",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 3,
+   "bbox": {
+    "x": 10414656000000,
+    "y": 0,
+    "w": 3810240000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:41:00"
+   }
+  },
+  {
+   "key": "@item:27",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview B",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 4,
+   "bbox": {
+    "x": 14224896000000,
+    "y": 0,
+    "w": 3048192000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:56:00"
+   }
+  },
+  {
+   "key": "@item:28",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview A · closing",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 5,
+   "bbox": {
+    "x": 17781120000000,
+    "y": 0,
+    "w": 4572288000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:10:00"
+   }
+  },
+  {
+   "key": "@item:29",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview C · outro",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 6,
+   "bbox": {
+    "x": 22353408000000,
+    "y": 0,
+    "w": 3556224000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:28:00"
+   }
+  },
+  {
+   "key": "@item:30",
+   "container": "@trk:3",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Interview B · last word",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 7,
+   "bbox": {
+    "x": 25909632000000,
+    "y": 0,
+    "w": 4318272000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:01:42:00"
+   }
+  },
+  {
+   "key": "@item:31",
+   "container": "@trk:4",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Music bed",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 0,
+   "bbox": {
+    "x": 0,
+    "y": 0,
+    "w": 14986944000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:00:00"
+   }
+  },
+  {
+   "key": "@item:32",
+   "container": "@trk:4",
+   "parent": null,
+   "live": true,
+   "kind": "transition",
+   "name": "Crossfade",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 1,
+   "bbox": {
+    "x": 14732928000000,
+    "y": 0,
+    "w": 508032000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "name",
+    "off",
+    "tr",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "never",
+   "derived": {
+    "tc": "01:00:58:00"
+   }
+  },
+  {
+   "key": "@item:33",
+   "container": "@trk:4",
+   "parent": null,
+   "live": true,
+   "kind": "clip",
+   "name": "Music bed · part 2",
+   "name_is_generic": null,
+   "alt": null,
+   "z": 2,
+   "bbox": {
+    "x": 14986944000000,
+    "y": 0,
+    "w": 15494976000000,
+    "h": 0
+   },
+   "bbox_inherited": false,
+   "rot": 0,
+   "flip": {
+    "h": false,
+    "v": false
+   },
+   "approx_box": false,
+   "text": null,
+   "fields": [
+    "edit",
+    "geom",
+    "media",
+    "name",
+    "off",
+    "rate",
+    "src",
+    "track"
+   ],
+   "hidden": false,
+   "placeholder": null,
+   "editable_text": "plain",
+   "derived": {
+    "tc": "01:00:59:00"
+   }
+  }
+ ]
+}

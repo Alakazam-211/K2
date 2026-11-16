@@ -1,0 +1,2196 @@
+{
+ "_sample": {
+  "sample": true,
+  "what": "what K2 Render will hold per source, keyed by the media file name (the last path component); hashes made up",
+  "from": "K2 Render measured work (2026-11-13): proxies on servers; poster and filmstrip cheap; the lanes media renderer not started; cut-only playback is a proposal",
+  "footage": "_footage is the mock only: each source is a drawn stand-in (no real footage), with its source timecode burned in"
+ },
+ "renderer": {
+  "proxy": {
+   "codec": "av1",
+   "ladder_px": [
+    640,
+    1280,
+    1920
+   ],
+   "packaging": "fmp4+hls",
+   "keyframe_every_s": 2,
+   "frame_exact": true,
+   "seek": "drops to a lower rung, then climbs back",
+   "seek_target_ms": 1000,
+   "first_frame_target_ms": 2000,
+   "measured": "on servers; not yet in the app"
+  },
+  "poster": {
+   "px": 640,
+   "format": "jpeg",
+   "status": "cheap, always there"
+  },
+  "filmstrip": {
+   "tile_px": 160,
+   "every_s": 2,
+   "status": "cheap, always there"
+  },
+  "lanes": {
+   "status": "not started",
+   "decoders": "the OS only",
+   "cache_key": [
+    "media_hash",
+    "source_time",
+    "width"
+   ],
+   "no_decoder": "a no-preview card in the clip's place"
+  },
+  "playback": {
+   "cut_only": "proposal (an ask): the top enabled video track, switching proxies at cuts; no effects, transitions or titles; audio mixed simply",
+   "still_at_playhead": "works with today's pieces: the nearest filmstrip tile (2 s steps) or the poster",
+   "composite_still": "planned later: a still of the composite at a record time",
+   "edit_playback": "not planned"
+  }
+ },
+ "media": {
+  "Interview A.mov": {
+   "kind": "video",
+   "hash": "b3:e7244fdab44ccace",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#3b2a1e",
+     "#c98b4a",
+     "#2f6f6a",
+     "#e8c39e"
+    ],
+    "seed": 690
+   }
+  },
+  "Interview B.mov": {
+   "kind": "video",
+   "hash": "b3:e5950e20da05e650",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#1d2633",
+     "#5f7d9c",
+     "#a3392f",
+     "#d9b08c"
+    ],
+    "seed": 175
+   }
+  },
+  "Interview C.mov": {
+   "kind": "video",
+   "hash": "b3:546755a2ae8c5d3a",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#1f2a1f",
+     "#6f8f5a",
+     "#3a4f7a",
+     "#caa080"
+    ],
+    "seed": 121
+   }
+  },
+  "Text": {
+   "kind": "generator",
+   "proxy": null,
+   "poster": null,
+   "filmstrip": null
+  },
+  "B-roll 01.mov": {
+   "kind": "video",
+   "hash": "b3:b4e1d98c95de7a5a",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#f2b46b",
+     "#e86f51",
+     "#23314f",
+     "#ffd98a"
+    ],
+    "seed": 964
+   }
+  },
+  "B-roll 02.mov": {
+   "kind": "video",
+   "hash": "b3:9520ef0a57bd625a",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#9ed0e6",
+     "#2b6f97",
+     "#0f3b5a",
+     "#ffffff"
+    ],
+    "seed": 701
+   }
+  },
+  "B-roll 03.mov": {
+   "kind": "video",
+   "hash": "b3:b7f234e22c800802",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f6c8a0",
+     "#c8768a",
+     "#1e3d52",
+     "#ffe2b8"
+    ],
+    "seed": 365
+   }
+  },
+  "B-roll 04.mov": {
+   "kind": "video",
+   "hash": "b3:46ef83df0942ad23",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#cfe3c8",
+     "#3f7a4a",
+     "#1c3a26",
+     "#f5e9a8"
+    ],
+    "seed": 821
+   }
+  },
+  "B-roll 05.mov": {
+   "kind": "video",
+   "hash": "b3:ea33a180e07ef871",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#bcd6ee",
+     "#c9a46a",
+     "#3b3b42",
+     "#f2f2f2"
+    ],
+    "seed": 823
+   }
+  },
+  "B-roll 06.mov": {
+   "kind": "video",
+   "hash": "b3:9ed7f753af0a4109",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#1a2340",
+     "#24476b",
+     "#0b1a2e",
+     "#ffe9a8"
+    ],
+    "seed": 298
+   }
+  },
+  "B-roll 07.mov": {
+   "kind": "video",
+   "hash": "b3:a77f7220eda17a85",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#0f1530",
+     "#3a2f6b",
+     "#141a2c",
+     "#ffcf5a"
+    ],
+    "seed": 168
+   }
+  },
+  "B-roll 08.mov": {
+   "kind": "video",
+   "hash": "b3:b08e49b204dc934e",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#f3d9a4",
+     "#b5652d",
+     "#4a2a14",
+     "#fff1c4"
+    ],
+    "seed": 576
+   }
+  },
+  "B-roll 09.mov": {
+   "kind": "video",
+   "hash": "b3:1efcedd63dd065ee",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f7d9a8",
+     "#d98b4a",
+     "#5a3b22",
+     "#fff4dc"
+    ],
+    "seed": 937
+   }
+  },
+  "Music bed.wav": {
+   "kind": "audio",
+   "hash": "b3:f33d53f42e40c45d",
+   "proxy": {
+    "audio": "aac"
+   },
+   "poster": null,
+   "filmstrip": null,
+   "peaks": {
+    "every_ms": 20,
+    "_status": "not started (the lanes media renderer)"
+   },
+   "_footage": {
+    "scene": "music"
+   }
+  },
+  "Map still.png": {
+   "kind": "image",
+   "hash": "b3:0e23cb4f08be651a",
+   "proxy": null,
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": null
+  },
+  "Reel 001.mov": {
+   "kind": "video",
+   "hash": "b3:0f9e7ee42292e893",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 37
+   }
+  },
+  "Reel 002.mov": {
+   "kind": "video",
+   "hash": "b3:6ce2004b71029a57",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 74
+   }
+  },
+  "Reel 003.mov": {
+   "kind": "video",
+   "hash": "b3:8f6e8e0a6d180bd2",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 111
+   }
+  },
+  "Reel 004.mov": {
+   "kind": "video",
+   "hash": "b3:77de6fa1babad007",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 148
+   }
+  },
+  "Reel 005.mov": {
+   "kind": "video",
+   "hash": "b3:af230fd93ca62679",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 185
+   }
+  },
+  "Reel 006.mov": {
+   "kind": "video",
+   "hash": "b3:0876fdaf1928ae4e",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 222
+   }
+  },
+  "Reel 007.mov": {
+   "kind": "video",
+   "hash": "b3:902e258d964f8568",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 259
+   }
+  },
+  "Reel 008.mov": {
+   "kind": "video",
+   "hash": "b3:3e64b82bb46fea01",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 296
+   }
+  },
+  "Reel 009.mov": {
+   "kind": "video",
+   "hash": "b3:0b2b81772917494e",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 333
+   }
+  },
+  "Reel 010.mov": {
+   "kind": "video",
+   "hash": "b3:4c8c31152857776d",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 370
+   }
+  },
+  "Reel 011.mov": {
+   "kind": "video",
+   "hash": "b3:28a450ec6cde3546",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 407
+   }
+  },
+  "Reel 012.mov": {
+   "kind": "video",
+   "hash": "b3:d4971bbfda460970",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 444
+   }
+  },
+  "Reel 013.mov": {
+   "kind": "video",
+   "hash": "b3:044de40fddc9821a",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 481
+   }
+  },
+  "Reel 014.mov": {
+   "kind": "video",
+   "hash": "b3:0e100fd8b75e1d6e",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 518
+   }
+  },
+  "Reel 015.mov": {
+   "kind": "video",
+   "hash": "b3:d4482143d1f29204",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 555
+   }
+  },
+  "Reel 016.mov": {
+   "kind": "video",
+   "hash": "b3:703d7990bb2eb0c7",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 592
+   }
+  },
+  "Reel 017.mov": {
+   "kind": "video",
+   "hash": "b3:ee3ed50af97f6c0a",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 629
+   }
+  },
+  "Reel 018.mov": {
+   "kind": "video",
+   "hash": "b3:d56bb856b2f099c9",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 666
+   }
+  },
+  "Reel 019.mov": {
+   "kind": "video",
+   "hash": "b3:b7ade1533a8d832a",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 703
+   }
+  },
+  "Reel 020.mov": {
+   "kind": "video",
+   "hash": "b3:0fb6feeeb5954368",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 740
+   }
+  },
+  "Reel 021.mov": {
+   "kind": "video",
+   "hash": "b3:6208cae91f474621",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 777
+   }
+  },
+  "Reel 022.mov": {
+   "kind": "video",
+   "hash": "b3:9056a55b7a180df0",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 814
+   }
+  },
+  "Reel 023.mov": {
+   "kind": "video",
+   "hash": "b3:2519835e6616c03f",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 851
+   }
+  },
+  "Reel 024.mov": {
+   "kind": "video",
+   "hash": "b3:a9573d8653bbcf5e",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 888
+   }
+  },
+  "Reel 025.mov": {
+   "kind": "video",
+   "hash": "b3:881bff35ee56cb3f",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 925
+   }
+  },
+  "Reel 026.mov": {
+   "kind": "video",
+   "hash": "b3:ecf3992d2e7a2f59",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 962
+   }
+  },
+  "Reel 027.mov": {
+   "kind": "video",
+   "hash": "b3:6896dec3ecf727f4",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 2
+   }
+  },
+  "Reel 028.mov": {
+   "kind": "video",
+   "hash": "b3:7d594fd4235a11d9",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 39
+   }
+  },
+  "Reel 029.mov": {
+   "kind": "video",
+   "hash": "b3:3e6e183cf91dc99a",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 76
+   }
+  },
+  "Reel 030.mov": {
+   "kind": "video",
+   "hash": "b3:b89e6e4a6d561eeb",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 113
+   }
+  },
+  "Reel 031.mov": {
+   "kind": "video",
+   "hash": "b3:a060d485bb607c58",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 150
+   }
+  },
+  "Reel 032.mov": {
+   "kind": "video",
+   "hash": "b3:7cefff2be555ea02",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 187
+   }
+  },
+  "Reel 033.mov": {
+   "kind": "video",
+   "hash": "b3:5c3c2c3d8c38e1b7",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 224
+   }
+  },
+  "Reel 034.mov": {
+   "kind": "video",
+   "hash": "b3:a65e163f3231ca50",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 261
+   }
+  },
+  "Reel 035.mov": {
+   "kind": "video",
+   "hash": "b3:76480f2d076e90ac",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 298
+   }
+  },
+  "Reel 036.mov": {
+   "kind": "video",
+   "hash": "b3:38fdb35a12132745",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 335
+   }
+  },
+  "Reel 037.mov": {
+   "kind": "video",
+   "hash": "b3:296bbd2eb747beee",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 372
+   }
+  },
+  "Reel 038.mov": {
+   "kind": "video",
+   "hash": "b3:874401d7115acc95",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 409
+   }
+  },
+  "Reel 039.mov": {
+   "kind": "video",
+   "hash": "b3:583350d60e8bdf97",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 446
+   }
+  },
+  "Reel 040.mov": {
+   "kind": "video",
+   "hash": "b3:ecc930d58b0b5dfd",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 483
+   }
+  },
+  "Reel 041.mov": {
+   "kind": "video",
+   "hash": "b3:aa2527420e610aa9",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 520
+   }
+  },
+  "Reel 042.mov": {
+   "kind": "video",
+   "hash": "b3:61264a2883b54334",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 557
+   }
+  },
+  "Reel 043.mov": {
+   "kind": "video",
+   "hash": "b3:f3dc596df42aecad",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 594
+   }
+  },
+  "Reel 044.mov": {
+   "kind": "video",
+   "hash": "b3:714b8ac0330ec7cf",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 631
+   }
+  },
+  "Reel 045.mov": {
+   "kind": "video",
+   "hash": "b3:886ead30c2835019",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 668
+   }
+  },
+  "Reel 046.mov": {
+   "kind": "video",
+   "hash": "b3:0c0e489c8468d8d5",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 705
+   }
+  },
+  "Reel 047.mov": {
+   "kind": "video",
+   "hash": "b3:91701ef4e5de3706",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 742
+   }
+  },
+  "Reel 048.mov": {
+   "kind": "video",
+   "hash": "b3:a87ca7c9077b4055",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 779
+   }
+  },
+  "Reel 049.mov": {
+   "kind": "video",
+   "hash": "b3:bbc4afdb3d1c0326",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 816
+   }
+  },
+  "Reel 050.mov": {
+   "kind": "video",
+   "hash": "b3:356656810c2dfa48",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 853
+   }
+  },
+  "Reel 051.mov": {
+   "kind": "video",
+   "hash": "b3:9b416ff28b468a16",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 890
+   }
+  },
+  "Reel 052.mov": {
+   "kind": "video",
+   "hash": "b3:aba27e3b16f52701",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 927
+   }
+  },
+  "Reel 053.mov": {
+   "kind": "video",
+   "hash": "b3:d53e976bc7295ea6",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 964
+   }
+  },
+  "Reel 054.mov": {
+   "kind": "video",
+   "hash": "b3:f648ce72a5308aec",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 4
+   }
+  },
+  "Reel 055.mov": {
+   "kind": "video",
+   "hash": "b3:cb133dbc483829ab",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#c0d8ee",
+     "#c4a06a",
+     "#3a3a44",
+     "#f4f4f4"
+    ],
+    "seed": 41
+   }
+  },
+  "Reel 056.mov": {
+   "kind": "video",
+   "hash": "b3:63a456c6fd538bb6",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 78
+   }
+  },
+  "Reel 057.mov": {
+   "kind": "video",
+   "hash": "b3:36fd62118c14d500",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "harbour",
+    "pal": [
+     "#f2c4a8",
+     "#b86f86",
+     "#20405a",
+     "#ffe4c0"
+    ],
+    "seed": 115
+   }
+  },
+  "Reel 058.mov": {
+   "kind": "video",
+   "hash": "b3:c274c342652ddcae",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "forest",
+    "pal": [
+     "#a8d4ea",
+     "#2d6e94",
+     "#123a56",
+     "#ffffff"
+    ],
+    "seed": 152
+   }
+  },
+  "Reel 059.mov": {
+   "kind": "video",
+   "hash": "b3:8518f77da9782bdb",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "road",
+    "pal": [
+     "#f0c27a",
+     "#d0644a",
+     "#28324a",
+     "#ffe0a0"
+    ],
+    "seed": 189
+   }
+  },
+  "Reel 060.mov": {
+   "kind": "video",
+   "hash": "b3:bb2d154ba699ac56",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#2a2f3a",
+     "#7a8fb0",
+     "#b0503a",
+     "#e0c0a0"
+    ],
+    "seed": 226
+   }
+  },
+  "shot_a.mov": {
+   "kind": "video",
+   "hash": "b3:d63eed9058695b4f",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "interview",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 62
+   }
+  },
+  "shot_b.mov": {
+   "kind": "video",
+   "hash": "b3:6126c32e014bb457",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "city",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 73
+   }
+  },
+  "shot_c.mov": {
+   "kind": "video",
+   "hash": "b3:7389bdc00551243c",
+   "proxy": {
+    "ladder_px": [
+     640,
+     1280,
+     1920
+    ]
+   },
+   "poster": {
+    "px": 640
+   },
+   "filmstrip": {
+    "tile_px": 160,
+    "every_s": 2
+   },
+   "_footage": {
+    "scene": "sea",
+    "pal": [
+     "#d4e6c8",
+     "#477d4e",
+     "#1e3c28",
+     "#f4eaa8"
+    ],
+    "seed": 683
+   }
+  },
+  "music.wav": {
+   "kind": "audio",
+   "hash": "b3:da25ce007a33a9c2",
+   "proxy": {
+    "audio": "aac"
+   },
+   "poster": null,
+   "filmstrip": null,
+   "_footage": {
+    "scene": "music"
+   }
+  }
+ }
+}

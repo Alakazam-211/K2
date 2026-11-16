@@ -1,0 +1,425 @@
+{
+ "_sample": {
+  "sample": true,
+  "not_kit_output": true,
+  "hand_made": false,
+  "built_by": "a scratch generator (gen.js) applying live/model.rs to_content by hand; no pack or kit code ran",
+  "from": "k2-mpc-timeline c9739a65 (origin main): crates/timeline/src/live/model.rs, view.rs, verbs.rs; kit client k2-mpc-base v0.17.0 client/src (keyed.ts, view.ts, presence.ts, wire.ts)",
+  "type": "presence at three points of the turn, as each client should hold it",
+  "notes": [
+   "mode_derived: editing = a claim of its own covering its selection; selecting = a selection; else viewing"
+  ]
+ },
+ "points": [
+  {
+   "id": "P1",
+   "rev": 30,
+   "at_ms": 300000,
+   "_at": "after the snapshot",
+   "peers": [
+    {
+     "handle": "person:ada",
+     "name": "Ada",
+     "kind": "person",
+     "colour": "#d9822b",
+     "isSelf": true,
+     "away": false,
+     "focus": null,
+     "selection": null,
+     "viewport": {
+      "from": {
+       "value": 0,
+       "rate": "24/1"
+      },
+      "to": {
+       "value": 1100,
+       "rate": "24/1"
+      },
+      "tracks": [
+       "@trk:2",
+       "@trk:4"
+      ]
+     },
+     "mode_derived": "viewing",
+     "timePosition": {
+      "at": "3175200000000",
+      "state": "paused",
+      "at_ms": 0
+     }
+    },
+    {
+     "handle": "person:sam",
+     "name": "Sam",
+     "kind": "person",
+     "colour": "#2b9bd9",
+     "isSelf": false,
+     "away": false,
+     "focus": null,
+     "selection": null,
+     "viewport": {
+      "from": {
+       "value": 380,
+       "rate": "24/1"
+      },
+      "to": {
+       "value": 1480,
+       "rate": "24/1"
+      },
+      "tracks": [
+       "@trk:2",
+       "@trk:3"
+      ]
+     },
+     "mode_derived": "viewing",
+     "timePosition": {
+      "at": "7472304000000",
+      "state": "paused",
+      "at_ms": 314000,
+      "_track": "@trk:1"
+     }
+    },
+    {
+     "handle": "agent:atlas",
+     "name": "Atlas",
+     "kind": "agent",
+     "colour": "#6d5bd0",
+     "isSelf": false,
+     "away": false,
+     "focus": null,
+     "selection": null,
+     "viewport": null,
+     "mode_derived": "viewing",
+     "timePosition": null
+    },
+    {
+     "handle": "agent:brook",
+     "name": "Brook",
+     "kind": "agent",
+     "colour": "#c2417a",
+     "isSelf": false,
+     "away": false,
+     "focus": null,
+     "selection": null,
+     "viewport": null,
+     "mode_derived": "viewing",
+     "timePosition": null
+    }
+   ],
+   "claims_active": [],
+   "claims_ended": []
+  },
+  {
+   "id": "P2",
+   "rev": 33,
+   "at_ms": 307400,
+   "_at": "Atlas has moved B-roll 03, holding claim-41",
+   "peers": [
+    {
+     "handle": "person:ada",
+     "name": "Ada",
+     "kind": "person",
+     "colour": "#d9822b",
+     "isSelf": true,
+     "away": false,
+     "focus": null,
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:6"
+      ]
+     },
+     "viewport": {
+      "from": {
+       "value": 0,
+       "rate": "24/1"
+      },
+      "to": {
+       "value": 1100,
+       "rate": "24/1"
+      },
+      "tracks": [
+       "@trk:2",
+       "@trk:4"
+      ]
+     },
+     "mode_derived": "selecting",
+     "timePosition": {
+      "at": "3175200000000",
+      "state": "paused",
+      "at_ms": 0
+     }
+    },
+    {
+     "handle": "person:sam",
+     "name": "Sam",
+     "kind": "person",
+     "colour": "#2b9bd9",
+     "isSelf": false,
+     "away": false,
+     "focus": null,
+     "selection": null,
+     "viewport": {
+      "from": {
+       "value": 380,
+       "rate": "24/1"
+      },
+      "to": {
+       "value": 1480,
+       "rate": "24/1"
+      },
+      "tracks": [
+       "@trk:2",
+       "@trk:3"
+      ]
+     },
+     "mode_derived": "viewing",
+     "timePosition": {
+      "at": "7472304000000",
+      "state": "paused",
+      "at_ms": 314000,
+      "_track": "@trk:1"
+     }
+    },
+    {
+     "handle": "agent:atlas",
+     "name": "Atlas",
+     "kind": "agent",
+     "colour": "#6d5bd0",
+     "isSelf": false,
+     "away": false,
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:2"
+     },
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:13"
+      ]
+     },
+     "viewport": null,
+     "mode_derived": "editing",
+     "timePosition": {
+      "at": "3683232000000",
+      "state": "paused",
+      "at_ms": 307400,
+      "_track": "@trk:2"
+     }
+    },
+    {
+     "handle": "agent:brook",
+     "name": "Brook",
+     "kind": "agent",
+     "colour": "#c2417a",
+     "isSelf": false,
+     "away": false,
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:1"
+     },
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:6"
+      ]
+     },
+     "viewport": null,
+     "mode_derived": "selecting",
+     "timePosition": {
+      "at": "14224896000000",
+      "state": "paused",
+      "at_ms": 306000,
+      "_track": "@trk:1"
+     }
+    }
+   ],
+   "claims_active": [
+    {
+     "id": "claim-41",
+     "actor": {
+      "id": "agent:atlas",
+      "name": "Atlas",
+      "kind": "agent",
+      "colour": "#6d5bd0"
+     },
+     "root": "items",
+     "keys": [
+      "@item:1",
+      "@item:13",
+      "@item:15"
+     ],
+     "note": "tightening the open",
+     "hold": true,
+     "started_ms": 302000,
+     "expires_ms": 422000
+    }
+   ],
+   "claims_ended": [
+    {
+     "id": "claim-43",
+     "how": "released",
+     "at_ms": 306900,
+     "at_rev": 32,
+     "actor": {
+      "id": "agent:brook",
+      "name": "Brook",
+      "kind": "agent",
+      "colour": "#c2417a"
+     }
+    }
+   ]
+  },
+  {
+   "id": "P3",
+   "rev": 35,
+   "at_ms": 314000,
+   "_at": "after both turns end and Sam’s scroll",
+   "peers": [
+    {
+     "handle": "person:ada",
+     "name": "Ada",
+     "kind": "person",
+     "colour": "#d9822b",
+     "isSelf": true,
+     "away": false,
+     "focus": null,
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:6"
+      ]
+     },
+     "viewport": {
+      "from": {
+       "value": 0,
+       "rate": "24/1"
+      },
+      "to": {
+       "value": 1100,
+       "rate": "24/1"
+      },
+      "tracks": [
+       "@trk:2",
+       "@trk:4"
+      ]
+     },
+     "mode_derived": "selecting",
+     "timePosition": {
+      "at": "3175200000000",
+      "state": "paused",
+      "at_ms": 0
+     }
+    },
+    {
+     "handle": "person:sam",
+     "name": "Sam",
+     "kind": "person",
+     "colour": "#2b9bd9",
+     "isSelf": false,
+     "away": false,
+     "focus": null,
+     "selection": null,
+     "viewport": {
+      "from": {
+       "value": 1150,
+       "rate": "24/1"
+      },
+      "to": {
+       "value": 2350,
+       "rate": "24/1"
+      },
+      "tracks": [
+       "@trk:2",
+       "@trk:4"
+      ]
+     },
+     "mode_derived": "viewing",
+     "timePosition": {
+      "at": "15748992000000",
+      "state": "paused",
+      "at_ms": 314000,
+      "_track": "@trk:1"
+     }
+    },
+    {
+     "handle": "agent:atlas",
+     "name": "Atlas",
+     "kind": "agent",
+     "colour": "#6d5bd0",
+     "isSelf": false,
+     "away": false,
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:2"
+     },
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:15"
+      ]
+     },
+     "viewport": null,
+     "mode_derived": "selecting",
+     "timePosition": {
+      "at": "5927040000000",
+      "state": "paused",
+      "at_ms": 309100,
+      "_track": "@trk:2"
+     }
+    },
+    {
+     "handle": "agent:brook",
+     "name": "Brook",
+     "kind": "agent",
+     "colour": "#c2417a",
+     "isSelf": false,
+     "away": false,
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:1"
+     },
+     "selection": {
+      "root": "markers",
+      "keys": [
+       "@mk:5"
+      ]
+     },
+     "viewport": null,
+     "mode_derived": "selecting",
+     "timePosition": {
+      "at": "5461344000000",
+      "state": "paused",
+      "at_ms": 311300
+     }
+    }
+   ],
+   "claims_active": [],
+   "claims_ended": [
+    {
+     "id": "claim-43",
+     "how": "released",
+     "at_ms": 306900,
+     "at_rev": 32,
+     "actor": {
+      "id": "agent:brook",
+      "name": "Brook",
+      "kind": "agent",
+      "colour": "#c2417a"
+     }
+    },
+    {
+     "id": "claim-41",
+     "how": "released",
+     "at_ms": 309600,
+     "at_rev": 34,
+     "actor": {
+      "id": "agent:atlas",
+      "name": "Atlas",
+      "kind": "agent",
+      "colour": "#6d5bd0"
+     }
+    }
+   ]
+  }
+ ]
+}

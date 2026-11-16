@@ -1,0 +1,826 @@
+{
+ "_sample": {
+  "sample": true,
+  "not_kit_output": true,
+  "hand_made": false,
+  "built_by": "a scratch generator (gen.js) applying live/model.rs to_content by hand; no pack or kit code ran",
+  "from": "k2-mpc-timeline c9739a65 (origin main): crates/timeline/src/live/model.rs, view.rs, verbs.rs; kit client k2-mpc-base v0.17.0 client/src (keyed.ts, view.ts, presence.ts, wire.ts)",
+  "type": "the turn: welcome, snapshot, Atlas's turn (revs 31, 33, 34) under claim-41, Brook's turn (rename at 32 under claim-43, marker at 35), Atlas's trim refused by Brook's claim, both turn_ends, the write-back, then an outside save kept both: the save becomes the live file (rev 36, from kit:external), and the live version at 35 is kept as a stored version and a conflict copy",
+  "notes": [
+   "frames are the kit's ops_change; seq 11 on (the snapshot took 1-10); map ops on composite roots name the element by address with the field split out",
+   "derived.units.<address>.tc is on every touched clip (ruled); units (UnitDelta) follow the xlsx and pptx goldens: HYPOTHESIS for this pack",
+   "v1 is agents act, people watch (ruled): every edit comes from an agent; Ada and Sam only move their playhead, selection and visible range",
+   "timePosition = { at (ticks, a decimal string), state, at_ms, in?, rate? } (kit main 02ddb6aa, final); viewport = { from, to, tracks: [top, bottom] } (ruled units; field names provisional)",
+   "verb_refused {at_ms, actor, client, turn, verb, unit, code, holder, claim} (real since kit c23d2349; viewers who can read) and outside_save (kit main 02ddb6aa): {outcome: \"ingested\", rev} | {outcome: \"kept_both\", rev, kept, copy: {name, path, doc?}} | {outcome: \"declined\", code, message} | {outcome: \"missing\"}, one unnumbered frame after the save's change frame; none for an unchanged file or the kit's own write are watch frames. On kept_both the save becomes the live file: an ops_change from kit:external carries it, and what was live is kept as a stored version and a conflict copy",
+   "presence (kit main 02ddb6aa): peer.viewAddress (any kit address, at most 512 bytes) and peer.timePosition {at: a decimal string in ViewSchema.time_unit (ticks here), state: playing | paused, at_ms: stamped by the kit, in?, rate?: \"n\" or \"n/d\"}; roster events ViewAddress and TimePosition, per connection. An agent's playhead moves with its verbs; a person's never does. _track is the mock's annotation of the lane (the shape has none)",
+   "the write-back host event (written) is HYPOTHESIS",
+   "_view is the wording the view is expected to write: an annotation, not on the wire"
+  ]
+ },
+ "actors": {
+  "atlas": {
+   "id": "agent:atlas",
+   "name": "Atlas",
+   "kind": "agent",
+   "colour": "#6d5bd0"
+  },
+  "brook": {
+   "id": "agent:brook",
+   "name": "Brook",
+   "kind": "agent",
+   "colour": "#c2417a"
+  },
+  "ada": {
+   "id": "person:ada",
+   "name": "Ada",
+   "kind": "person",
+   "colour": "#d9822b"
+  },
+  "sam": {
+   "id": "person:sam",
+   "name": "Sam",
+   "kind": "person",
+   "colour": "#2b9bd9"
+  },
+  "ext": {
+   "id": "kit:external",
+   "name": "outside save",
+   "kind": "file",
+   "colour": null
+  }
+ },
+ "timeline": [
+  {
+   "at_ms": 300000,
+   "event": "welcome",
+   "frame": {
+    "type": "welcome",
+    "client": 90071,
+    "self": "person:ada",
+    "rights": "edit",
+    "wire": 3,
+    "features": [
+     "presence",
+     "claims",
+     "focus",
+     "keyed_watch"
+    ],
+    "turn_idle_ms": 20000
+   }
+  },
+  {
+   "at_ms": 300050,
+   "event": "keyed_snapshot",
+   "seq": "1-10"
+  },
+  {
+   "at_ms": 302000,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "claim_started_elems",
+     "who": "agent:atlas",
+     "claim": "claim-41",
+     "root": "items",
+     "keys": [
+      "@item:1",
+      "@item:13",
+      "@item:15"
+     ],
+     "note": "tightening the open",
+     "hold": true,
+     "started_ms": 302000,
+     "expires_ms": 422000,
+     "actor": {
+      "id": "agent:atlas",
+      "name": "Atlas",
+      "kind": "agent",
+      "colour": "#6d5bd0"
+     }
+    },
+    {
+     "kind": "focus",
+     "who": "agent:atlas",
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:1"
+     }
+    },
+    {
+     "kind": "selection",
+     "who": "agent:atlas",
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:1",
+       "@item:13",
+       "@item:15"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 304500,
+   "event": "ops_change",
+   "rev": 31
+  },
+  {
+   "at_ms": 304500,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "focus",
+     "who": "agent:atlas",
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:1"
+     }
+    },
+    {
+     "kind": "selection",
+     "who": "agent:atlas",
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:1"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 305000,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "claim_started_elems",
+     "who": "agent:brook",
+     "claim": "claim-43",
+     "root": "items",
+     "keys": [
+      "@item:6"
+     ],
+     "note": "naming the interviews",
+     "hold": true,
+     "started_ms": 305000,
+     "expires_ms": 425000,
+     "actor": {
+      "id": "agent:brook",
+      "name": "Brook",
+      "kind": "agent",
+      "colour": "#c2417a"
+     }
+    },
+    {
+     "kind": "focus",
+     "who": "agent:brook",
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:1"
+     }
+    },
+    {
+     "kind": "selection",
+     "who": "agent:brook",
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:6"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 305200,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "selection",
+     "who": "person:ada",
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:6"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 306000,
+   "event": "ops_change",
+   "rev": 32
+  },
+  {
+   "at_ms": 306000,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "focus",
+     "who": "agent:brook",
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:1"
+     }
+    },
+    {
+     "kind": "selection",
+     "who": "agent:brook",
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:6"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 306600,
+   "event": "verb_refused",
+   "frame": {
+    "at_ms": 306600,
+    "actor": {
+     "id": "agent:atlas",
+     "name": "Atlas",
+     "kind": "agent",
+     "colour": "#6d5bd0"
+    },
+    "client": 4711,
+    "turn": "t:8b41f0c2a97d3e15.4",
+    "verb": "clip trim",
+    "unit": "@item:6",
+    "code": "MPC-E301",
+    "holder": {
+     "id": "agent:brook",
+     "name": "Brook",
+     "kind": "agent",
+     "colour": "#c2417a"
+    },
+    "claim": "claim-43",
+    "_view": "Atlas couldn’t trim Interview B · funding: Brook is holding it"
+   }
+  },
+  {
+   "at_ms": 306900,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "claim_ended",
+     "claim": "claim-43",
+     "how": "released",
+     "at_ms": 306900,
+     "at_rev": 32,
+     "actor": {
+      "id": "agent:brook",
+      "name": "Brook",
+      "kind": "agent",
+      "colour": "#c2417a"
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 307400,
+   "event": "ops_change",
+   "rev": 33
+  },
+  {
+   "at_ms": 307400,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "focus",
+     "who": "agent:atlas",
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:2"
+     }
+    },
+    {
+     "kind": "selection",
+     "who": "agent:atlas",
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:13"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 309100,
+   "event": "ops_change",
+   "rev": 34
+  },
+  {
+   "at_ms": 309100,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "focus",
+     "who": "agent:atlas",
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:2"
+     }
+    },
+    {
+     "kind": "selection",
+     "who": "agent:atlas",
+     "selection": {
+      "root": "items",
+      "keys": [
+       "@item:15"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 309600,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "claim_ended",
+     "claim": "claim-41",
+     "how": "released",
+     "at_ms": 309600,
+     "at_rev": 34,
+     "actor": {
+      "id": "agent:atlas",
+      "name": "Atlas",
+      "kind": "agent",
+      "colour": "#6d5bd0"
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 311000,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "TimePosition",
+     "who": "agent:brook",
+     "timePosition": {
+      "at": "5461344000000",
+      "state": "paused",
+      "at_ms": 311000
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 311300,
+   "event": "ops_change",
+   "rev": 35
+  },
+  {
+   "at_ms": 311300,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "focus",
+     "who": "agent:brook",
+     "focus": {
+      "root": "tracks",
+      "key": "@trk:1"
+     }
+    },
+    {
+     "kind": "selection",
+     "who": "agent:brook",
+     "selection": {
+      "root": "markers",
+      "keys": [
+       "@mk:5"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 312500,
+   "event": "turn_end",
+   "frame": {
+    "type": "turn_end",
+    "turn": "t:8b41f0c2a97d3e15.4",
+    "actor": {
+     "id": "agent:atlas",
+     "name": "Atlas",
+     "kind": "agent",
+     "colour": "#6d5bd0"
+    },
+    "at_ms": 312500
+   }
+  },
+  {
+   "at_ms": 312500,
+   "event": "turn_end",
+   "frame": {
+    "type": "turn_end",
+    "turn": "t:52c7e09a1f3b6d84.2",
+    "actor": {
+     "id": "agent:brook",
+     "name": "Brook",
+     "kind": "agent",
+     "colour": "#c2417a"
+    },
+    "at_ms": 312500
+   }
+  },
+  {
+   "at_ms": 314000,
+   "event": "roster_flush",
+   "roster_events": [
+    {
+     "kind": "viewport",
+     "who": "person:sam",
+     "viewport": {
+      "from": {
+       "value": 1150,
+       "rate": "24/1"
+      },
+      "to": {
+       "value": 2350,
+       "rate": "24/1"
+      },
+      "tracks": [
+       "@trk:2",
+       "@trk:4"
+      ]
+     }
+    },
+    {
+     "kind": "TimePosition",
+     "who": "person:sam",
+     "timePosition": {
+      "at": "15748992000000",
+      "state": "paused",
+      "at_ms": 314000,
+      "_track": "@trk:1"
+     }
+    }
+   ]
+  },
+  {
+   "at_ms": 315000,
+   "event": "host",
+   "note": "the kit wrote the turn back to the file (a write-back; no watch frame)",
+   "host": {
+    "type": "written",
+    "rev": 35
+   }
+  },
+  {
+   "at_ms": 321000,
+   "event": "outside_save",
+   "frame": {
+    "outcome": "kept_both",
+    "rev": 36,
+    "kept": "sv:5d1c0a7e93b24f68@35",
+    "copy": {
+     "name": "rough-cut (conflict Atlas 2026-11-13 142210).otio",
+     "path": "edits/rough-cut (conflict Atlas 2026-11-13 142210).otio"
+    },
+    "_note": "kit main 02ddb6aa: one unnumbered frame per outside save, after that save's change frame (rev 36 from kit:external), to viewers who can read the doc. copy.doc is present only when K2's host fills it; this sample shows the no-doc case"
+   }
+  }
+ ],
+ "frames": [
+  {
+   "type": "ops_change",
+   "seq": 11,
+   "rev": 31,
+   "at_ms": 304500,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:atlas",
+    "name": "Atlas",
+    "kind": "agent",
+    "colour": "#6d5bd0"
+   },
+   "client": 4711,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:8b41f0c2a97d3e15.4",
+   "verb": "clip trim",
+   "claim": "claim-41",
+   "ops": [
+    {
+     "root": "item_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@item:1",
+     "field": "geom",
+     "before": "0,3302208000000",
+     "after": "0,2921184000000"
+    }
+   ],
+   "units": [
+    {
+     "key": "@item:1",
+     "container": "@trk:1",
+     "ops": [
+      "move_resize"
+     ],
+     "geom_before": "0,3302208000000",
+     "geom_after": "0,2921184000000",
+     "fields": [
+      "geom"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@trk:1"
+   ],
+   "derived": {
+    "units": {
+     "@item:1": {
+      "tc": "01:00:00:00"
+     }
+    }
+   },
+   "render_hashes": null,
+   "_view": "Atlas trimmed the end of Interview A by 1.5s · 01:00:11:12"
+  },
+  {
+   "type": "ops_change",
+   "seq": 12,
+   "rev": 32,
+   "at_ms": 306000,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:brook",
+    "name": "Brook",
+    "kind": "agent",
+    "colour": "#c2417a"
+   },
+   "client": 4712,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:52c7e09a1f3b6d84.2",
+   "verb": "clip rename",
+   "claim": "claim-43",
+   "ops": [
+    {
+     "root": "item_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@item:6",
+     "field": "name",
+     "before": "Interview B",
+     "after": "Interview B · funding"
+    }
+   ],
+   "units": [
+    {
+     "key": "@item:6",
+     "container": "@trk:1",
+     "ops": [
+      "text"
+     ],
+     "geom_before": null,
+     "geom_after": null,
+     "fields": [
+      "name"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@trk:1"
+   ],
+   "derived": {
+    "units": {
+     "@item:6": {
+      "tc": "01:00:56:00"
+     }
+    }
+   },
+   "render_hashes": null,
+   "_view": "Brook renamed Interview B to Interview B · funding · 01:00:56:00"
+  },
+  {
+   "type": "ops_change",
+   "seq": 13,
+   "rev": 33,
+   "at_ms": 307400,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:atlas",
+    "name": "Atlas",
+    "kind": "agent",
+    "colour": "#6d5bd0"
+   },
+   "client": 4711,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:8b41f0c2a97d3e15.4",
+   "verb": "clip move",
+   "claim": "claim-41",
+   "ops": [
+    {
+     "root": "item_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@item:13",
+     "field": "geom",
+     "before": "4318272000000,1270080000000",
+     "after": "3683232000000,1270080000000"
+    }
+   ],
+   "units": [
+    {
+     "key": "@item:13",
+     "container": "@trk:2",
+     "ops": [
+      "move_resize"
+     ],
+     "geom_before": "4318272000000,1270080000000",
+     "geom_after": "3683232000000,1270080000000",
+     "fields": [
+      "geom"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@trk:2"
+   ],
+   "derived": {
+    "units": {
+     "@item:13": {
+      "tc": "01:00:14:12"
+     }
+    }
+   },
+   "render_hashes": null,
+   "_view": "Atlas moved B-roll 03 to 01:00:14:12"
+  },
+  {
+   "type": "ops_change",
+   "seq": 14,
+   "rev": 34,
+   "at_ms": 309100,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:atlas",
+    "name": "Atlas",
+    "kind": "agent",
+    "colour": "#6d5bd0"
+   },
+   "client": 4711,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:8b41f0c2a97d3e15.4",
+   "verb": "clip move",
+   "claim": "claim-41",
+   "ops": [
+    {
+     "root": "item_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@item:15",
+     "field": "geom",
+     "before": "8678880000000,762048000000",
+     "after": "5927040000000,762048000000"
+    }
+   ],
+   "units": [
+    {
+     "key": "@item:15",
+     "container": "@trk:2",
+     "ops": [
+      "move_resize"
+     ],
+     "geom_before": "8678880000000,762048000000",
+     "geom_after": "5927040000000,762048000000",
+     "fields": [
+      "geom"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@trk:2"
+   ],
+   "derived": {
+    "units": {
+     "@item:15": {
+      "tc": "01:00:23:08"
+     }
+    }
+   },
+   "render_hashes": null,
+   "_view": "Atlas moved B-roll 05 to 01:00:23:08"
+  },
+  {
+   "type": "ops_change",
+   "seq": 15,
+   "rev": 35,
+   "at_ms": 311300,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:brook",
+    "name": "Brook",
+    "kind": "agent",
+    "colour": "#c2417a"
+   },
+   "client": 4712,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:52c7e09a1f3b6d84.2",
+   "verb": "marker add",
+   "claim": null,
+   "ops": [
+    {
+     "root": "markers",
+     "kind": "list",
+     "op": "insert",
+     "key": "@mk:5",
+     "index_before": null,
+     "index_after": 4,
+     "after": "marker",
+     "effect": "visible"
+    },
+    {
+     "root": "marker_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@mk:5",
+     "field": "owner",
+     "after": ""
+    },
+    {
+     "root": "marker_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@mk:5",
+     "field": "at",
+     "after": "5461344000000"
+    },
+    {
+     "root": "marker_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@mk:5",
+     "field": "dur",
+     "after": "0"
+    },
+    {
+     "root": "marker_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@mk:5",
+     "field": "name",
+     "after": "Music hit"
+    },
+    {
+     "root": "marker_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@mk:5",
+     "field": "note",
+     "after": ""
+    },
+    {
+     "root": "marker_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@mk:5",
+     "field": "color",
+     "after": "ORANGE"
+    },
+    {
+     "root": "timeline",
+     "kind": "map",
+     "op": "set",
+     "key": "mark/k",
+     "field": null,
+     "before": "4",
+     "after": "5"
+    }
+   ],
+   "units": [],
+   "containers_changed": [],
+   "containers": [],
+   "derived": null,
+   "render_hashes": null,
+   "_view": "Brook dropped a marker “Music hit” at 01:00:21:12"
+  }
+ ]
+}

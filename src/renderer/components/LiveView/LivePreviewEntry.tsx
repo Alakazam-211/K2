@@ -16,13 +16,14 @@ import { previewTypeFor, useLivePreview, type LivePreviewType } from '@/lib/live
 
 const LiveWorkbookSample = lazy(() => import('./LiveWorkbookSample'))
 const LiveShellSample = lazy(() => import('./shell/LiveShellSample'))
+const TimelineSample = lazy(() => import('./timeline/TimelineSample'))
 
 export const WATCH_LIVE_LABEL = 'Watch live (preview)'
 
 const ENTRIES: Record<LivePreviewType, { group: string; hint: string; view: () => React.JSX.Element }> = {
   workbook: { group: 'Workbook view', hint: 'Plays K2’s sample workbook, not this file.', view: () => <LiveWorkbookSample /> },
   scene: { group: 'Scene view', hint: 'Plays K2’s sample scene, not this file.', view: () => <LiveShellSample kind="scene" /> },
-  timeline: { group: 'Timeline view', hint: 'Plays K2’s sample edit, not this file.', view: () => <LiveShellSample kind="timeline" /> },
+  timeline: { group: 'Timeline view', hint: 'Plays K2’s sample edit, not this file.', view: () => <TimelineSample /> },
 }
 
 export function LivePreviewEntry({ filePath, children, onLiveChange }: { filePath: string; children: React.ReactNode; onLiveChange?: (live: boolean) => void }): React.JSX.Element {

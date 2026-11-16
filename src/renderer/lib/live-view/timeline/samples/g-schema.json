@@ -1,0 +1,164 @@
+{
+ "_sample": {
+  "sample": true,
+  "not_kit_output": true,
+  "hand_made": false,
+  "built_by": "a scratch generator (gen.js) applying live/model.rs to_content by hand; no pack or kit code ran",
+  "from": "k2-mpc-timeline c9739a65 (origin main): crates/timeline/src/live/model.rs, view.rs, verbs.rs; kit client k2-mpc-base v0.17.0 client/src (keyed.ts, view.ts, presence.ts, wire.ts)",
+  "type": "the keyed schema and the view schema",
+  "notes": [
+   "view is live/view.rs VIEW written out as the wire’s ViewSchemaJson: field for field, plus what K2 Cores ruled on 2026-11-13 (derived container label and kind; presence in rational time)",
+   "keyed is live/mod.rs SCHEMA and COMPOSITE",
+   "field_class_prefix, grid: absent (not a table)"
+  ]
+ },
+ "keyed": {
+  "name": "timeline-otio",
+  "roots": [
+   {
+    "name": "timeline",
+    "kind": "map"
+   },
+   {
+    "name": "tracks",
+    "kind": "list"
+   },
+   {
+    "name": "items",
+    "kind": "list"
+   },
+   {
+    "name": "markers",
+    "kind": "list"
+   },
+   {
+    "name": "media",
+    "kind": "list"
+   },
+   {
+    "name": "track_props",
+    "kind": "map"
+   },
+   {
+    "name": "item_props",
+    "kind": "map"
+   },
+   {
+    "name": "marker_props",
+    "kind": "map"
+   },
+   {
+    "name": "media_props",
+    "kind": "map"
+   }
+  ],
+  "composite": [
+   {
+    "map": "track_props",
+    "list": "tracks"
+   },
+   {
+    "map": "item_props",
+    "list": "items"
+   },
+   {
+    "map": "marker_props",
+    "list": "markers"
+   },
+   {
+    "map": "media_props",
+    "list": "media"
+   }
+  ]
+ },
+ "view": {
+  "containers": "tracks",
+  "units": "items",
+  "unit_container_field": "track",
+  "container_id_field": null,
+  "native_unit": "tick",
+  "page": null,
+  "container_fields": {
+   "title": "name",
+   "hidden": null,
+   "layout": null
+  },
+  "unit_fields": {
+   "kind": {
+    "list_value": true
+   },
+   "name": "name",
+   "alt": null,
+   "text": null,
+   "hidden": "off",
+   "editable_text": {
+    "field": "edit",
+    "values": {
+     "0": "never",
+     "1": "plain"
+    }
+   },
+   "placeholder": null
+  },
+  "geometry": {
+   "field": "geom",
+   "parts": [
+    "x",
+    "w"
+   ],
+   "rot_unit": ""
+  },
+  "field_class": {
+   "geom": "geometry",
+   "src": "geometry",
+   "name": "text",
+   "off": "visibility",
+   "muted": "visibility",
+   "track": "meta",
+   "media": "meta",
+   "tr": "meta",
+   "rate": "meta",
+   "nid": "meta",
+   "edit": "meta",
+   "locked": "meta"
+  },
+  "derived": {
+   "containers": [
+    "label",
+    "kind"
+   ],
+   "units": [
+    "tc"
+   ]
+  },
+  "grid": null,
+  "presence": {
+   "_note": "timePosition and viewAddress are the kit's final shapes (kit main 02ddb6aa); viewport's field names are still the mock's (provisional)",
+   "unit": "rational_time",
+   "rate": "timeline.rate",
+   "viewport": {
+    "from": "rational_time",
+    "to": "rational_time",
+    "tracks": "[first, last] container address, top to bottom"
+   },
+   "timePosition": {
+    "at": "decimal string in ViewSchema.time_unit",
+    "state": "playing | paused",
+    "at_ms": "stamped by the kit",
+    "in": "optional",
+    "rate": "optional, \"n\" or \"n/d\""
+   },
+   "viewAddress": "any kit address, at most 512 bytes (optional)"
+  },
+  "time_unit": "tick"
+ },
+ "limits": {
+  "_from": "live/model.rs LiveLimits::default; kit keyed limit (plan §5)",
+  "max_items": 2500,
+  "max_markers": 2000,
+  "max_tracks": 200,
+  "max_file_bytes": 33554432,
+  "keyed_max_entries": 25000,
+  "record_max_ticks": "9007199254740992"
+ }
+}

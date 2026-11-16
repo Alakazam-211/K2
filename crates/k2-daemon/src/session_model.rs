@@ -9,7 +9,7 @@
 //!   that write (up to [`SAVE_WAIT`]) and puts the `model` key back
 //!   ([`k2_core::cli_model_settings`]): to the server's default for Claude
 //!   (Settings → Providers / Models), else to what it was. Then a K2 note on
-//!   the Thread: "Model switched to … for this session; your default stays …".
+//!   the Thread: "Model: … for this chat; your default stays …".
 //!   Only at the agent's prompt: mid-turn (or waiting on a person) is
 //!   refused, nothing sent. A person's move: the owner, a Connect Owner or
 //!   Admin (the route floor), or a person typing in a K2 shell tab; agents
@@ -142,7 +142,7 @@ pub(crate) fn switch_live(
 
 /// The Thread note for a switch.
 pub(crate) fn note_text(pick: &str, restore: &Result<Restore, String>) -> String {
-    let head = format!("Model switched to {pick} for this session");
+    let head = format!("Model: {pick} for this chat");
     match restore {
         Ok(Restore::Restored { to: Some(m) }) => format!("{head}; your default stays {m}."),
         Ok(Restore::Restored { to: None }) => format!("{head}; your default stays Claude's own (none saved)."),
@@ -366,7 +366,7 @@ mod tests {
             assert_eq!(r, Ok(Restore::Restored { to: Some("opus".into()) }));
             let after = std::fs::read_to_string(&path).unwrap();
             assert_eq!(after, FILE.replace("\"sonnet\"", "\"opus\""), "only the model value changed");
-            assert_eq!(note_text("haiku", &r), "Model switched to haiku for this session; your default stays opus.");
+            assert_eq!(note_text("haiku", &r), "Model: haiku for this chat; your default stays opus.");
         }
         let _ = std::fs::remove_dir_all(&home);
     }

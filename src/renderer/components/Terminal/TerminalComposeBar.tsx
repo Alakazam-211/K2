@@ -46,8 +46,11 @@ import {
   applyComposeHistoryNav,
   applyComposeTextareaAutosize,
   clearComposeCaret,
-  COMPOSE_SLASH_COMMANDS,
+  COMPOSE_MODEL_COMMAND,
+  COMPOSE_SLASH_MENU,
   COMPOSE_TEXTAREA_MAX_HEIGHT,
+  composeModelTyped,
+  filterComposeSlashMenu,
   composeCanSend,
   composeHistoryKeyAction,
   composeEmptyEnterSequence,
@@ -66,7 +69,6 @@ import {
   composeThreadUnreachableText,
   composerPermitted,
   extractImagePathsFromDraft,
-  filterComposeSlashCommands,
   mapMsgResponseToStatus,
   readComposeCaret,
   removePathFromDraft,
@@ -107,6 +109,7 @@ import {
   threadComposeTextSlotStyle,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadReplyChip, useThreadReply } from '@/components/Thread/ThreadMessageMenu'
+import { useComposeModel } from '@/components/Thread/useComposeModel'
 import { THREAD_EAR_INSET_PX, ThreadReplyBar } from '@/components/Thread/ThreadReplyBar'
 import { formatThreadReply, threadReplyKey } from '@/lib/thread-reply'
 import { isMacPlatform } from '@/lib/desktop-chrome'
@@ -315,6 +318,14 @@ export function TerminalComposeBar({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const slashBtnRef = useRef<HTMLButtonElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
+  // 0.46.13: `/model` and the model chip (this chat only; the daemon's switch).
+  const composeModel = useComposeModel({
+    scope,
+    sessionId,
+    thread: sendOnThread ? threadAddr : undefined,
+    anchor: () => barRef.current,
+    refocus: () => textareaRef.current?.focus(),
+  })
   const imagePaths = extractImagePathsFromDraft(draft)
   // Prompt stash (spec-prompt-stash-v1): the person's saved drafts on this
   // device. Cmd+S saves the draft, then clears the box; on an empty box it
@@ -1160,8 +1171,8 @@ export function TerminalComposeBar({
   const slashTypeaheadQuery = composeSlashTypeaheadQuery(draft)
   const slashMatches =
     slashMenuFromTypeahead && slashTypeaheadQuery != null
-      ? filterComposeSlashCommands(slashTypeaheadQuery)
-      : COMPOSE_SLASH_COMMANDS
+      ? filterComposeSlashMenu(slashTypeaheadQuery)
+      : COMPOSE_SLASH_MENU
   const slashMatchKey = slashMatches.map((item) => item.command).join(',')
   // The slash menu opens upward over whatever pane sits above the bar.
   useBrowserOverlay({
@@ -1183,7 +1194,15 @@ export function TerminalComposeBar({
   }, [])
 
   const selectSlashCommand = useCallback(
-    (cmd: ComposeSlashCommand, opts?: { toggle?: boolean }) => {
+    (picked: string, opts?: { toggle?: boolean }) => {
+      if (picked === COMPOSE_MODEL_COMMAND) {
+        // `/model` opens the model picker; the typed `/mo…` goes.
+        if (composeSlashTypeaheadQuery(draft) != null) setDraft(consumeComposeSlashToken(draft))
+        closeSlashMenu()
+        composeModel.open('')
+        return
+      }
+      const cmd = picked as ComposeSlashCommand
       const nextCmd = opts?.toggle && slashCommand === cmd ? null : cmd
       setSlashCommand(nextCmd)
       if (nextCmd != null && composeSlashMenuOpenFromDraft(draft)) {
@@ -1200,7 +1219,7 @@ export function TerminalComposeBar({
       }
       closeSlashMenu()
     },
-    [autoGrow, closeSlashMenu, draft, draftOwner, slashCommand],
+    [autoGrow, closeSlashMenu, composeModel, draft, draftOwner, slashCommand],
   )
 
   const handleKeyDown = useCallback(
@@ -1358,7 +1377,7 @@ export function TerminalComposeBar({
     }
     placeSlashMenu()
     setSlashMenuFromTypeahead(false)
-    setSlashHighlight(composeSlashInitialHighlight(COMPOSE_SLASH_COMMANDS, slashCommand))
+    setSlashHighlight(composeSlashInitialHighlight(COMPOSE_SLASH_MENU, slashCommand))
     setSlashMenuOpen(true)
   }, [closeSlashMenu, placeSlashMenu, slashCommand, slashMenuOpen])
 
@@ -1469,6 +1488,12 @@ export function TerminalComposeBar({
         </button>
       ) : null}
     </div>
+  ) : null
+  // A `/model` switch that failed: nothing changed, the daemon said why.
+  const modelError = composeModel.error ? (
+    <p role="alert" data-testid="compose-model-error" className="text-[11px] text-[var(--color-status-error-soft)]">
+      {composeModel.error}
+    </p>
   ) : null
   const stashNotesEl =
     stashNotes.length > 0 ? (
@@ -1594,6 +1619,14 @@ export function TerminalComposeBar({
           setHistoryIndex(-1)
           historyDraftRef.current = ''
         }
+        // `/model ` (and maybe a search): the model picker, pre-filtered.
+        const modelQuery = composeModelTyped(value)
+        if (modelQuery != null) {
+          setDraft('')
+          closeSlashMenu()
+          composeModel.open(modelQuery)
+          return
+        }
         const spaceCommit = composeSlashSpaceCommit(value)
         if (spaceCommit) {
           setSlashCommand(spaceCommit.command)
@@ -1620,7 +1653,7 @@ export function TerminalComposeBar({
         setDraft(value)
         const query = composeSlashTypeaheadQuery(value)
         if (query != null) {
-          const matches = filterComposeSlashCommands(query)
+          const matches = filterComposeSlashMenu(query)
           if (matches.length > 0) {
             if (!slashMenuOpen || slashMenuFromTypeahead) {
               placeSlashMenu()
@@ -1709,14 +1742,16 @@ export function TerminalComposeBar({
         onDrop={handleDrop}
       >
         {addrError ? <div style={{ marginBottom: 6 }}>{addrError}</div> : null}
+        {modelError ? <div style={{ marginBottom: 6 }}>{modelError}</div> : null}
         {waitingNote ? <div style={{ marginBottom: 6 }}>{waitingNote}</div> : null}
         {stashNotesEl ? <div style={{ marginBottom: 6 }}>{stashNotesEl}</div> : null}
         {fileInput}
         <ThreadComposeBox
           stacked={stacked}
           chips={
-            hasChips || replyChip ? (
+            hasChips || replyChip || composeModel.chip ? (
               <>
+              {composeModel.chip}
               {replyChip}
               {hasChips ? (
               <ThreadAttachmentChips testId="compose-image-previews">
@@ -1788,6 +1823,7 @@ export function TerminalComposeBar({
           </ThreadRoundButton>
           </div>
           {slashMenu}
+          {composeModel.picker}
           <div
             className="relative min-w-0 flex-1"
             // Stacked: first, on a line of its own; the same element, so
@@ -1839,11 +1875,13 @@ export function TerminalComposeBar({
       onDrop={handleDrop}
     >
       {addrError}
+      {modelError}
       {waitingNote}
       {stashNotesEl}
       {fileInput}
       {stashOpen ? stashDrawerEl('square') : null}
       {replyChip}
+      {composeModel.chip}
       <div
         className="flex min-w-0 w-full flex-col bg-[var(--color-bg)]"
         style={{ border: '1px solid var(--color-border)', borderRadius: 0 }}
@@ -1914,6 +1952,7 @@ export function TerminalComposeBar({
           /
         </button>
       {slashMenu}
+      {composeModel.picker}
       <div className="relative min-w-0 flex-1">
       {textarea}
       </div>

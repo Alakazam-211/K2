@@ -86,6 +86,9 @@ export interface AppSettingsResponse {
   leftPanelTabs: string[]
   rightPanelTabs: string[]
   defaultAgent: string
+  /** 0.46.13: the server's default model per harness (`claude` → `opus`);
+   *  absent while none is set. Owner or Admin to change. */
+  defaultModels?: Record<string, string>
   timer: TimerSettingsBackend
   /** Always true — agentic systems are GA; kept for settings.json wire compat. */
   agenticSystemsEnabled: boolean

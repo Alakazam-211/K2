@@ -86,6 +86,7 @@ import { AgentsManageOrgChartToggle } from './AgentsManageOrgChartToggle'
 import { AgentsReadTranscriptsToggle } from './AgentsReadTranscriptsToggle'
 import { AgentsVirtualDesktopToggle } from './AgentsVirtualDesktopToggle'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
+import { modelSuggestionsForAgent } from '@/lib/model-choices'
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
 import {
   WORKSPACE_SETTINGS_TABS,
@@ -3659,30 +3660,6 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
       />
     </SettingRow>
   )
-}
-
-function binaryTokenFromCommand(command: string): string {
-  const first = command.trim().split(/\s+/)[0] ?? ''
-  const base = first.split(/[/\\]/).pop() ?? first
-  return base.replace(/\.exe$/i, '')
-}
-
-function modelSuggestionsForAgent(command: string): string[] {
-  switch (binaryTokenFromCommand(command)) {
-    case 'claude':
-      return ['opus', 'sonnet', 'haiku']
-    case 'codex':
-      return ['gpt-5.3-codex', 'o3', 'gpt-4.1']
-    case 'grok':
-      return ['grok-4', 'grok-3-mini']
-    case 'gemini':
-      return ['gemini-2.5-pro', 'gemini-2.5-flash']
-    case 'cursor-agent':
-    case 'agent':
-      return ['composer-1']
-    default:
-      return []
-  }
 }
 
 /** Dropdown value that opens the custom ID field; never stored. */

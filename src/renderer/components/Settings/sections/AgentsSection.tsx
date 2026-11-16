@@ -27,6 +27,7 @@ import {
 } from '@/lib/ensure-cli'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
+import { DefaultModelField, presetModelHarness } from './DefaultModelField'
 import { SaveError, SaveNote, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, SETTING_ROW_HINT, SETTING_ROW_LABEL, useSaveStatus, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { Spinner } from '@/components/ui/Spinner'
 import type { SettingEntry } from '../searchManifest'
@@ -652,6 +653,8 @@ function PresetRow({
   onMove: (dir: -1 | 1) => void
 }): React.JSX.Element {
   const on = Boolean(preset.enabled)
+  // 0.46.13: the server's default model for this harness (`defaultModels`).
+  const harness = presetModelHarness(preset.command)
   return (
     <div
       data-preset-reorder-index={index}
@@ -682,6 +685,7 @@ function PresetRow({
         <code className="block type-hint font-mono text-[var(--color-text-secondary)] truncate mt-0.5" title={preset.command}>
           {preset.command}
         </code>
+        {harness ? <DefaultModelField harness={harness} /> : null}
       </div>
       <Toggle
         checked={on}

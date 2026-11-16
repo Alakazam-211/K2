@@ -278,12 +278,12 @@ describe('the Thread\'s message box (Zen look)', () => {
     expect(box().getAttribute('placeholder')).toContain('Message')
   })
 
-  it('the slash menu lists /compact and /goal, and /compact sends as the command', async () => {
+  it('the slash menu lists /compact, /goal and /model (0.46.13), and /compact sends as the command', async () => {
     renderBar()
     fireEvent.click(screen.getByTestId('compose-slash-button'))
     const menu = screen.getByTestId('compose-slash-menu')
     const rows = Array.from(menu.querySelectorAll('[role="menuitem"]')).map((r) => (r.textContent ?? '').replace(/\s+/g, ' '))
-    expect(rows).toEqual(['/compactcompact context', '/goalset a goal'])
+    expect(rows).toEqual(['/compactcompact context', '/goalset a goal', '/modelswitch model'])
     fireEvent.click(menu.querySelector('[role="menuitem"]') as HTMLElement)
     expect(screen.queryByTestId('compose-slash-menu')).toBeNull()
     expect(screen.getByTestId('compose-slash-button').getAttribute('aria-pressed')).toBe('true')

@@ -190,6 +190,39 @@ export const COMPOSE_SLASH_COMMANDS = [
 export type ComposeSlashCommandItem = (typeof COMPOSE_SLASH_COMMANDS)[number]
 export type ComposeSlashCommand = ComposeSlashCommandItem['command']
 
+/** `/model` (0.46.13): in the `/` menu, but not a command that rides a
+ *  message: it opens the model picker (`useComposeModel`), and the daemon
+ *  switches this chat only (`POST /cli/sessions/model`). */
+export const COMPOSE_MODEL_COMMAND = '/model'
+
+/** One `/` menu row: a command that rides the message, or `/model`. */
+export interface ComposeSlashMenuItem {
+  readonly command: string
+  readonly title: string
+}
+
+/** The `/` menu: the two message commands, then `/model`. */
+export const COMPOSE_SLASH_MENU: readonly ComposeSlashMenuItem[] = [
+  ...COMPOSE_SLASH_COMMANDS,
+  { command: COMPOSE_MODEL_COMMAND, title: 'switch model' },
+]
+
+/** [`filterComposeSlashCommands`] over the whole `/` menu (`/model` too). */
+export function filterComposeSlashMenu(query: string): readonly ComposeSlashMenuItem[] {
+  const q = query.trim().toLowerCase()
+  if (!q || q === '/') return COMPOSE_SLASH_MENU
+  const needle = q.startsWith('/') ? q : `/${q}`
+  return COMPOSE_SLASH_MENU.filter((item) => item.command.startsWith(needle))
+}
+
+/** `/model ` typed (the word and a space, maybe a search after it): the
+ *  picker's search text (`/model op` → `op`). Null otherwise: `/model`
+ *  alone is still the `/` menu's typeahead; `/modelx` is nothing. */
+export function composeModelTyped(draft: string): string | null {
+  const m = /^\/model\s([\s\S]*)$/i.exec(draft)
+  return m ? m[1].trim() : null
+}
+
 /**
  * Normalize a composer slash-command. Empty/whitespace → null. Optional
  * missing slash, case-insensitive exact match → canonical `/compact` or

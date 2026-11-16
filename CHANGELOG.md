@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.8: pairs with kit v0.21.0 and k2-mpc-ooxml v0.1.1
+
+**Requires `k2-mpc-base` v0.21.0** (its cut `9e6f6419`) and **`k2-mpc-ooxml` v0.1.1** (`k2-mpc-opc`
+0.1.1, unchanged), each checked out beside this repo. As for v0.1.7, the tag is a cut commit that
+leaves out the fuzz crate (`fuzz/`).
+
+- Pairs with kit v0.21.0. Its pack API additions have defaults this pack keeps (`Pack::errors`,
+  `Pack::check_merged_view`, `BlobPack::merge3_known`, `BlobPack::save_lineage`); its other
+  changes are the host's (the version an app opened, a call's result as data, kept pairs and
+  claim bytes on events). The kit's registry takes a deck's structured verbs under its new keyed
+  tier (`Tier::Keyed`), so `capabilities` lists them; an outside save merged from an opened
+  version keeps both, as with no pin, since this pack keeps `Pack::check_merged_view`'s default.
+  So decks behave as in v0.1.7.
+- `VERBS`' doc says the kit's registry takes these verbs under the keyed tier.
+- **A row for the kit's registry** (`tests/registry.rs`): `Registry::for_pack` takes every deck
+  verb under the keyed tier, and `capabilities` lists each one there.
+- `Cargo.toml`'s comment and the README name the kit's v0.21.0 and its cut. `Cargo.lock` and
+  `fuzz/Cargo.lock`: k2-mpc-base 0.21.0 and the crate version 0.1.8 (only those versions move);
+  `k2-mpc-opc` stays 0.1.1.
+
 ## v0.1.7: pairs with kit v0.20.0 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.20.0** (its cut `475a1755`) and **`k2-mpc-ooxml` v0.1.1** (`k2-mpc-opc`

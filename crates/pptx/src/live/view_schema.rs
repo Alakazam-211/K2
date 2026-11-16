@@ -9,7 +9,7 @@
 //! - [`address_of`] and [`key_of`]: a slide `s<sldId>` is `@sld:<sldId>`, a shape
 //!   `s<sldId>-<cNvPr>` is `@sld:<sldId>/sp:<cNvPr>`, the structure index's own keys, so the
 //!   two tiers name an element alike.
-//! - [`derive`]: a slide's title (its first title placeholder's text, as the index names a
+//! - [`derive()`]: a slide's title (its first title placeholder's text, as the index names a
 //!   slide), the layouts (the deck map's layout facts), each shape's `name_is_generic`.
 //!
 //! What only the file's bytes hold (fonts, render hashes, field kinds, boxes inherited from a

@@ -62,7 +62,7 @@ pub const TITLE_CUT: usize = 128;
 const EXITS: &[u8] = &[OK, USAGE, NOT_FOUND];
 
 /// The verbs, as the kit routes them. The kit's parity registry (`Registry::for_pack`) takes
-/// structured verbs only from a table pack today; `serves` names the nearest person actions.
+/// them under the keyed tier (`Tier::Keyed`); `serves` names the nearest person actions.
 pub const VERBS: &[PackVerb] = &[
     PackVerb::structured_read(
         "slide list",

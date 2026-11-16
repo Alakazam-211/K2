@@ -2,10 +2,13 @@
 //
 // A Thread is shared: the owner on this computer, Connect logins on other
 // clients and the web, the Companion phone app, and app guests all see the
-// same posts. The daemon stamps a person's post with `author: {kind, login}`
-// from the request's credential (overlay_routes.rs `handle_post`; never the
-// body): `owner` (the owner token), `user` (a Connect login, its username),
-// `guest` (an app pass, its username). Agent posts carry none. Since
+// same posts. The daemon stamps a post with `author: {kind, login}` from the
+// request's credential (overlay_routes.rs `thread_sender`; never the body):
+// `owner` (the owner token), `user` (a Connect login, its username), `guest`
+// (an app pass, its username), and since 0.46.13 (`thread-author-agent-v1`)
+// `agent` (an agent's passport, its address). K2's own notes, and agent
+// posts from before 0.46.13, carry none: "no author" still reads as the
+// agent (`isAgentThreadPost`). Since
 // thread-mine-v1 (0.46.8) the daemon also says `mine` on each person's post
 // for whoever read it (crates/k2-daemon/src/thread_mine.rs); that answer
 // wins, and the viewer below is the fallback for older servers.
@@ -25,7 +28,8 @@ import { onNotifyPrefsChanged } from '@/stores/session-events'
 
 /** `doc.author` on a Thread post. */
 export interface ThreadAuthor {
-  /** `owner` | `user` | `guest` | `imported` (a person's post that came
+  /** `owner` | `user` | `guest` | `agent` (0.46.13: an agent's post or
+   *  card, `login` its address) | `imported` (a person's post that came
    *  with a clone: a historical name, never the viewer) — a later kind
    *  still parses. */
   kind: string
@@ -61,6 +65,30 @@ export function parseThreadAuthor(raw: unknown): ThreadAuthor | null {
 }
 
 const fold = (s: string): string => s.trim().toLowerCase()
+
+/** The `agent` kind (thread-author-agent-v1, 0.46.13). */
+export const AGENT_AUTHOR_KIND = 'agent'
+
+/** Is this stamp an agent's? */
+export function isAgentThreadAuthor(author: ThreadAuthor | null): boolean {
+  return author?.kind === AGENT_AUTHOR_KIND
+}
+
+/** A person's post (a person, an app guest, an imported person): a
+ *  stamp that is not an agent's, or a `via=compose` doc from before the
+ *  field. An agent's post (the `agent` stamp, or no stamp and not
+ *  compose) and K2's own notes are not. */
+export function isPersonThreadPost(doc: { via?: string | null; author?: unknown }): boolean {
+  const author = parseThreadAuthor(doc.author)
+  if (author) return !isAgentThreadAuthor(author)
+  return doc.via === 'compose'
+}
+
+/** An agent's post: the `agent` stamp (0.46.13), or (older rows, K2's
+ *  notes) no stamp and not `via=compose`. K2 Companion's rule too. */
+export function isAgentThreadPost(doc: { via?: string | null; author?: unknown }): boolean {
+  return !isPersonThreadPost(doc)
+}
 
 /** Is `author` the person `viewer`? An unknown viewer owns nothing; a guest
  *  (or an unknown kind) is never a desktop/web viewer. */

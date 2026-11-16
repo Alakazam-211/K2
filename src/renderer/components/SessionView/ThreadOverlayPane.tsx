@@ -24,8 +24,8 @@ import {
 } from './overlayThread'
 import {
   isOwnThreadPost,
+  isPersonThreadPost,
   OWNER_VIEWER,
-  parseThreadAuthor,
   useThreadViewer,
   type ThreadViewer,
 } from '@/lib/thread-viewer'
@@ -686,10 +686,11 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   )
 })
 
-/** A person's post (the compose bar, a Garden widget, an app guest): the
- *  daemon stamped who sent it. Older docs only say `via=compose`. */
+/** A person's post (the compose bar, a Garden widget, `k2 thread` with a
+ *  person's token, an app guest): the daemon stamped a person. Older docs
+ *  only say `via=compose`; an agent's stamp (0.46.13) is the agent's. */
 function isPersonPost(doc: OverlayDoc): boolean {
-  return parseThreadAuthor(doc.author) !== null || doc.via === 'compose'
+  return isPersonThreadPost(doc)
 }
 
 /** The author line: "You" on the viewer's own post, else the sender's

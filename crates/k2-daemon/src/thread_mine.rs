@@ -27,7 +27,8 @@
 //! is nobody, so it owns nothing and nothing it posted is anyone's.
 //! App guests, imported lines and agent posts are never a person's here.
 //!
-//! Only docs with an `author` are marked, and only for a person viewer:
+//! Only docs with a person's `author` are marked (never an agent's,
+//! thread-author-agent-v1), and only for a person viewer:
 //! an agent passport or an App guest gets the doc as before, and a doc
 //! from before the field keeps the client's old rule (a `via=compose` post
 //! with no author reads as yours).
@@ -68,8 +69,11 @@ pub(crate) fn is_mine(people: &People, me: &str, author: &Value) -> bool {
     author_person(people, author).is_some_and(|a| a == me)
 }
 
+/// A person's stamp: an `author` object that is not an agent's (an agent's
+/// post, thread-author-agent-v1, carries no `mine`, like its older rows).
 fn has_author(doc: &Value) -> bool {
-    doc.get("author").is_some_and(|a| a.is_object())
+    doc.get("author")
+        .is_some_and(|a| a.is_object() && a.get("kind").and_then(Value::as_str) != Some(k2_core::overlay::doc::AUTHOR_AGENT))
 }
 
 /// Write `mine` on one doc object that has an `author`.
@@ -201,6 +205,7 @@ mod tests {
             {"id": "b", "doc": {"author": {"kind": "user", "login": "alice"}, "via": "compose"}},
             {"id": "c", "doc": {"via": "thread", "from": "k2"}},
             {"id": "d", "doc": {"via": "compose"}},
+            {"id": "g", "doc": {"author": {"kind": "agent", "login": "sales"}, "via": "thread", "from": "sales"}},
         ]);
         let agent = Viewer::Passport { workspace_id: "w".into() };
         let before = items.clone();
@@ -213,6 +218,9 @@ mod tests {
         assert_eq!(items[1]["doc"]["mine"], json!(false));
         assert!(items[2]["doc"].get("mine").is_none(), "an agent post has no author: unmarked");
         assert!(items[3]["doc"].get("mine").is_none(), "an old compose doc: unmarked");
+        assert!(items[4]["doc"].get("mine").is_none(), "an agent's stamp (0.46.13) is the agent's: unmarked, like its older rows");
+        let stamped = json!({"collection": "thread", "seq": 6, "id": "g", "doc": {"author": {"kind": "agent", "login": "sales"}}}).to_string();
+        assert_eq!(mark_frame_json(stamped.clone(), &Viewer::OwnerToken), stamped, "an agent's stamped frame is unchanged");
 
         let frame = json!({"collection": "thread", "seq": 4, "id": "e", "doc": {"author": {"kind": "user", "login": "alice"}}}).to_string();
         let marked: Value = serde_json::from_str(&mark_frame_json(frame.clone(), &login("alice"))).expect("json");

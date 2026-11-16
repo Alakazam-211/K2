@@ -1209,14 +1209,16 @@ fn thread_posts_carry_a_server_derived_author_per_poster() {
         guest.body
     );
 
-    // An agent (bound passport) asking for compose: no author at all.
+    // An agent (bound passport) asking for compose: the agent's stamp
+    // (thread-author-agent-v1), never the body's.
     let agent = post_json(
         "/cli/thread/post",
         &passport_params(&project_id, &handle),
         serde_json::json!({"addr": handle, "text": "from-agent", "via": "compose", "author": spoof}),
     );
     assert_eq!(agent.status, "200 OK", "{}", agent.body);
-    assert!(json_body(&agent)["author"].is_null(), "agent posts carry no author: {}", agent.body);
+    let agent_author = serde_json::json!({"kind": "agent", "login": handle});
+    assert_eq!(json_body(&agent)["author"], agent_author, "agent posts say so: {}", agent.body);
 
     // The stored docs (what every viewer and the Companion read).
     let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
@@ -1233,12 +1235,7 @@ fn thread_posts_carry_a_server_derived_author_per_poster() {
     assert_eq!(author_of("from-owner"), serde_json::json!({"kind": "owner", "login": "owner"}));
     assert_eq!(author_of("from-alice"), serde_json::json!({"kind": "user", "login": "alice"}));
     assert_eq!(author_of("from-guest"), serde_json::json!({"kind": "guest", "login": "guest"}));
-    assert!(author_of("from-agent").is_null(), "{snap}");
-    let agent_doc = items.iter().find(|it| it["doc"]["body"] == "from-agent").expect("agent doc");
-    assert!(
-        agent_doc["doc"].as_object().expect("doc object").get("author").is_none(),
-        "an absent author is not written: {snap}"
-    );
+    assert_eq!(author_of("from-agent"), agent_author, "{snap}");
     // `from` keeps today's values: the owner's display name, the username.
     let from_of = |text: &str| items.iter().find(|it| it["doc"]["body"] == text).expect("doc")["doc"]["from"].clone();
     assert_eq!(from_of("from-owner"), serde_json::json!(crate::workspace_msg::resolve_owner_from()));
@@ -1253,7 +1250,7 @@ fn thread_posts_carry_a_server_derived_author_per_poster() {
     };
     let lv = latest_of();
     assert_eq!(lv["items"][0]["preview"], "from-agent", "{lv}");
-    assert!(lv["items"][0]["author"].is_null(), "{lv}");
+    assert_eq!(lv["items"][0]["author"], agent_author, "{lv}");
     let bob = dispatch_post_as(
         "/cli/thread/post",
         &HashMap::new(),

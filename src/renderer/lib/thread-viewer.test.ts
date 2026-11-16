@@ -39,7 +39,9 @@ vi.mock('@/stores/session-events', () => ({
 import {
   cardAnswererLabel,
   guessThreadViewer,
+  isAgentThreadPost,
   isOwnThreadPost,
+  isPersonThreadPost,
   loadThreadViewer,
   parseThreadAuthor,
   resetThreadViewersForTests,
@@ -132,6 +134,36 @@ describe('isOwnThreadPost', () => {
     expect(isOwnThreadPost(doc(undefined), alice)).toBe(true)
     expect(isOwnThreadPost(doc(undefined), null)).toBe(true)
     expect(isOwnThreadPost(doc(undefined, 'thread'), owner)).toBe(false)
+  })
+})
+
+describe('who sent a post (thread-author-agent-v1, 0.46.13)', () => {
+  const alice = { principal: 'alice', aliases: [] }
+
+  it('an agent stamp is the agent, whatever the via, and never the viewer', () => {
+    for (const via of ['thread', 'compose', 'card', undefined]) {
+      const d = { via, author: { kind: 'agent', login: 'sales' } }
+      expect(isAgentThreadPost(d)).toBe(true)
+      expect(isPersonThreadPost(d)).toBe(false)
+      expect(isOwnThreadPost(d, alice)).toBe(false)
+    }
+    expect(isAgentThreadPost({ via: 'thread', author: { kind: 'agent', login: 'sales/review' } })).toBe(true)
+    expect(cardAnswererLabel({ kind: 'agent', login: 'sales' }, alice)).toBe('sales')
+  })
+
+  it('a person stamp is a person whatever the via (k2 thread with a person token is via=thread)', () => {
+    for (const author of [{ kind: 'owner', login: 'owner' }, { kind: 'user', login: 'bob' }, { kind: 'guest', login: 'dana' }]) {
+      expect(isPersonThreadPost({ via: 'thread', author })).toBe(true)
+      expect(isAgentThreadPost({ via: 'thread', author })).toBe(false)
+    }
+  })
+
+  it('old rows with no author keep their reading: compose is a person, anything else the agent', () => {
+    expect(isAgentThreadPost({ via: 'thread' })).toBe(true)
+    expect(isAgentThreadPost({ via: 'card' })).toBe(true)
+    expect(isAgentThreadPost({})).toBe(true)
+    expect(isPersonThreadPost({ via: 'compose' })).toBe(true)
+    expect(isAgentThreadPost({ via: 'compose' })).toBe(false)
   })
 })
 

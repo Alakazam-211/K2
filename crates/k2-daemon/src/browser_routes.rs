@@ -815,7 +815,11 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].doc.from, handle, "the agent's stamp");
         assert_eq!(items[0].doc.via.as_deref(), Some("thread"), "an agent post is not the person's compose");
-        assert!(items[0].doc.author.is_none());
+        assert_eq!(
+            items[0].doc.author,
+            Some(k2_core::overlay::PostAuthor::agent(&handle)),
+            "an agent's Design note says it is the agent's (thread-author-agent-v1)"
+        );
         assert_eq!(recorded_deliveries(&handle).len(), 1);
 
         // Another workspace: refused, nothing posted there.

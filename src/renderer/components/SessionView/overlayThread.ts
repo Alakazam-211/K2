@@ -382,9 +382,11 @@ export interface OverlayDoc {
   /** Set when a Design tab (or `k2 browser note`) sent these page notes
    *  (prd-browser-design-mode-v1 D-A10). */
   design?: { itemId?: string; url: string; notes: number } | null
-  /** Who sent a person's post, stamped by the daemon from the credential
-   *  (`owner` / `user` / `guest`). Absent on agent posts and older docs;
-   *  `isOwnThreadPost` (lib/thread-viewer) decides "You". */
+  /** Who sent it, stamped by the daemon from the credential (`owner` /
+   *  `user` / `guest`; since 0.46.13 `agent` too, thread-author-agent-v1).
+   *  Absent on K2's own notes and on agent posts from before 0.46.13;
+   *  `isOwnThreadPost` decides "You" and `isAgentThreadPost` /
+   *  `isPersonThreadPost` (lib/thread-viewer) who sent it. */
   author?: ThreadAuthor | null
   /** thread-mine-v1 (0.46.8): the daemon's answer to "is this the reader's
    *  own post?", for the credential that read it (every read page, frame

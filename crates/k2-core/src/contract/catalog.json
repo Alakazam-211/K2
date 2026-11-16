@@ -13084,7 +13084,7 @@
                           "properties": {
                             "kind": {
                               "type": "string",
-                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                              "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                             },
                             "login": {
                               "type": "string"
@@ -13158,7 +13158,7 @@
                           "properties": {
                             "kind": {
                               "type": "string",
-                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                              "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                             },
                             "login": {
                               "type": "string"
@@ -13237,7 +13237,7 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                          "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                         },
                         "login": {
                           "type": "string"
@@ -13419,7 +13419,7 @@
                           "properties": {
                             "kind": {
                               "type": "string",
-                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                              "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                             },
                             "login": {
                               "type": "string"
@@ -13493,7 +13493,7 @@
                           "properties": {
                             "kind": {
                               "type": "string",
-                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                              "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                             },
                             "login": {
                               "type": "string"
@@ -13572,7 +13572,7 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                          "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                         },
                         "login": {
                           "type": "string"
@@ -13790,7 +13790,7 @@
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                      "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                     },
                     "login": {
                       "type": "string"
@@ -14310,7 +14310,7 @@
             "properties": {
               "kind": {
                 "type": "string",
-                "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
               },
               "login": {
                 "type": "string"
@@ -14709,7 +14709,7 @@
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                        "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                       },
                       "login": {
                         "type": "string"
@@ -14783,7 +14783,7 @@
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                        "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                       },
                       "login": {
                         "type": "string"
@@ -14862,7 +14862,7 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                    "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                   },
                   "login": {
                     "type": "string"
@@ -15277,7 +15277,7 @@
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                        "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                       },
                       "login": {
                         "type": "string"
@@ -15351,7 +15351,7 @@
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                        "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                       },
                       "login": {
                         "type": "string"
@@ -15430,7 +15430,7 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                    "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                   },
                   "login": {
                     "type": "string"
@@ -16020,7 +16020,7 @@
                                 "properties": {
                                   "kind": {
                                     "type": "string",
-                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                    "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                                   },
                                   "login": {
                                     "type": "string"
@@ -16094,7 +16094,7 @@
                                 "properties": {
                                   "kind": {
                                     "type": "string",
-                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                    "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                                   },
                                   "login": {
                                     "type": "string"
@@ -16173,7 +16173,7 @@
                             "properties": {
                               "kind": {
                                 "type": "string",
-                                "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                               },
                               "login": {
                                 "type": "string"
@@ -16343,7 +16343,7 @@
                                 "properties": {
                                   "kind": {
                                     "type": "string",
-                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                    "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                                   },
                                   "login": {
                                     "type": "string"
@@ -16417,7 +16417,7 @@
                                 "properties": {
                                   "kind": {
                                     "type": "string",
-                                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                    "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                                   },
                                   "login": {
                                     "type": "string"
@@ -16496,7 +16496,7 @@
                             "properties": {
                               "kind": {
                                 "type": "string",
-                                "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                                "description": "owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author)."
                               },
                               "login": {
                                 "type": "string"

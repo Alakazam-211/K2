@@ -15,6 +15,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Calls
 - **Noise removal is on by default, with a new model.** Background noise like typing, fans and traffic is taken out of your microphone before others hear you, in voice rooms and DM calls in the desktop app. To send your full microphone instead, turn it off in Settings → Voice → Noise removal (echo cancellation and volume levelling stay on). It takes effect at once, even in a call, and this computer remembers your choice.
 
+### Threads
+- **Thread messages now always say who sent them: a person, an agent, a guest, or K2.** A message a person sends from a terminal (`k2 thread`) or straight to the API now shows as theirs, never as the agent's, whatever name it gives. An agent's messages and cards are marked as the agent's.
+
 ### The k2 command
 - **`k2 update` no longer downloads the CLI from GitHub; the CLI now updates only with K2 itself.** `k2 update --cli` shows the CLI's and the daemon's versions and how K2 updates, and changes nothing.
 

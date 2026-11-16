@@ -2551,7 +2551,7 @@ export interface AppThreadFile {
 }
 
 export interface AppPostAuthor {
-  /** owner, user (a Connect login) or guest (an App pass or guest login). */
+  /** owner, user (a Connect login), guest (an App pass or guest login) or agent (since 0.46.13: an agent; login is its address; older agent rows have no author). */
   readonly kind: string
   readonly login: string
   /** The owner's display name, on an owner's answer only. */

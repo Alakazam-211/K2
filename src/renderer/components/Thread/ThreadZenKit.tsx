@@ -30,7 +30,7 @@ import { ApprovalCard, coerceApproval } from '@/components/SessionView/ApprovalC
 import { NoticeCard, coerceNotice } from '@/components/SessionView/NoticeCard'
 import type { HandoffDecideBody, HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 import { coerceChanges, coerceHandoff, sameThreadItem, type OverlayStashOffer, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
-import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
+import { cardAnswererLabel, isAgentThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
@@ -381,9 +381,10 @@ export function threadStashOffer(item: OverlayThreadItem): OverlayStashOffer | n
   return d.stash
 }
 
-/** An agent's post (not a person's: no daemon author stamp, not compose). */
+/** An agent's post: the daemon's `agent` stamp (0.46.13), or (older rows)
+ *  no stamp and not compose. */
 function isAgentPost(item: OverlayThreadItem): boolean {
-  return !item.doc.author && item.doc.via !== 'compose'
+  return isAgentThreadPost(item.doc)
 }
 
 /** How a bubble's secret card draws. */

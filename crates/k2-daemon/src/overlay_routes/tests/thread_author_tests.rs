@@ -126,6 +126,86 @@ fn a_guest_is_always_a_guest() {
     assert_eq!(doc["from"], "guest", "{doc}");
 }
 
+/// thread-author-agent-v1: an agent's post, its cards and a sidecar's post
+/// carry `author {kind: "agent", login: <its stamped address>}`, from the
+/// passport, never the body.
+#[test]
+fn an_agents_posts_and_cards_carry_the_agent_author() {
+    let _home_lock = crate::test_support::lock_home();
+    let (handle, project_id) = room("autha");
+    let agent = serde_json::json!({"kind": "agent", "login": handle});
+    let spoof = serde_json::json!({"kind": "owner", "login": "owner"});
+
+    let post = post_json(
+        "/cli/thread/post",
+        &passport_params(&project_id, &handle),
+        serde_json::json!({ "addr": handle, "text": "agent words", "from": "mallory", "author": spoof }),
+    );
+    let doc = stored(&handle, &id_of(&post));
+    assert_eq!(doc["author"], agent, "{doc}");
+    assert_eq!(doc["from"], serde_json::json!(handle), "{doc}");
+
+    let ask = post_json(
+        "/cli/thread/ask",
+        &passport_params(&project_id, &handle),
+        serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship,Wait", "from": "mallory" }),
+    );
+    let doc = stored(&handle, &id_of(&ask));
+    assert_eq!(doc["author"], agent, "{doc}");
+
+    let secret = post_json(
+        "/cli/thread/secret",
+        &passport_params(&project_id, &handle),
+        serde_json::json!({ "addr": handle, "name": "AGENT_AUTHOR_KEY", "for": "api.example.com" }),
+    );
+    let doc = stored(&handle, &id_of(&secret));
+    assert_eq!(doc["author"], agent, "{doc}");
+
+    // A sidecar: its own stamped address.
+    let conv = uuid::Uuid::new_v4().to_string();
+    sidecar(&project_id, &conv, "reviewer");
+    let side = format!("{handle}/reviewer");
+    let post = post_json("/cli/thread/post", &passport_params(&project_id, &side), serde_json::json!({ "addr": side, "text": "sidecar words" }));
+    let doc = stored(&side, &id_of(&post));
+    assert_eq!(doc["author"], serde_json::json!({"kind": "agent", "login": side}), "{doc}");
+}
+
+/// The delete rule keeps an agent's rows out of reach, whether stamped
+/// (0.46.13) or author-less (older rows): even the owner can't delete them.
+/// A person's non-compose post is theirs, so they may.
+#[test]
+fn agent_rows_old_and_new_are_never_deletable_and_a_persons_shell_post_is() {
+    let _home_lock = crate::test_support::lock_home();
+    let (handle, project_id) = room("authd");
+    let stamped = post_json("/cli/thread/post", &passport_params(&project_id, &handle), serde_json::json!({ "addr": handle, "text": "stamped" }));
+    let stamped_id = id_of(&stamped);
+    let resolved = resolve_addr(&handle).unwrap_or_else(|r| panic!("resolve {handle}: {}", r.body));
+    let old_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let (item, _) = k2_core::overlay::post_thread(&conn, &resolved.conversation_id, &resolved.project_id, &handle, &handle, "old agent row", "thread")
+            .expect("old row");
+        item.id
+    };
+    for id in [&stamped_id, &old_id] {
+        let r = dispatch_post_as(
+            "/cli/thread/message/delete",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": id }).to_string().as_bytes(),
+            crate::session_author::OWNER_TOKEN,
+        );
+        assert_error_code(&r, "409 Conflict", "not_a_persons_message");
+    }
+    let shell = post_as(&handle, serde_json::json!({ "text": "from my shell", "via": "thread" }), "ada");
+    let r = dispatch_post_as(
+        "/cli/thread/message/delete",
+        &HashMap::new(),
+        serde_json::json!({ "addr": handle, "id": id_of(&shell) }).to_string().as_bytes(),
+        "ada",
+    );
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+}
+
 /// K2's own notes and notices (written inside the daemon) stay author-less,
 /// from the room.
 #[test]

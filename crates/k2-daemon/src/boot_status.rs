@@ -1196,6 +1196,10 @@ pub fn features() -> Vec<&'static str> {
     // thread-message-delete-v1 (0.46.11): `POST /cli/thread/message/delete`
     // and the `deleted` tombstone on Thread docs.
     out.push(crate::overlay_routes::message_delete::FEATURE);
+    // thread-author-agent-v1 (0.46.13): every Thread post and card says who
+    // sent it; an agent's carries `author {kind: "agent", login: <address>}`
+    // (rows from before carry none), a person's is theirs whatever the `via`.
+    out.push(crate::overlay_routes::FEATURE_THREAD_AUTHOR_AGENT);
     out.push(FEATURE_PROJECT_CHAT_PAGING);
     out.push(FEATURE_APP_PROJECT_CHAT);
     out.push(FEATURE_APP_MOBILE_ACCESS);
@@ -1432,6 +1436,7 @@ mod tests {
                 "thread-images-v1",
                 "thread-delta-v1",
                 "thread-message-delete-v1",
+                "thread-author-agent-v1",
                 "project-chat-paging-v1",
                 "app-project-chat-v1",
                 "app-mobile-access-v1",

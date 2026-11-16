@@ -130,6 +130,13 @@ export const REPORTED_FEATURES = {
    *  doc comes back as a tombstone (`deleted`). With it, the message menu
    *  offers Delete message on your own posts; without it, no such row. */
   'thread-message-delete-v1': 'thread-message-delete-v1',
+  /** thread-author-agent-v1 (0.46.13): every Thread post and card says who
+   *  sent it. An agent's carries `author: {kind: 'agent', login: <address>}`
+   *  (its rows from before carry none); a person's carries theirs whatever
+   *  the `via` (`k2 thread` with a person's token is the person, never the
+   *  agent). The renderer reads both through `isAgentThreadPost` /
+   *  `isPersonThreadPost` (lib/thread-viewer), so it needs no gate. */
+  'thread-author-agent-v1': 'thread-author-agent-v1',
   /** thread-delta-v1 (0.46.1): `GET /cli/thread?after_seq=N` answers the
    *  rows after N plus `changed` (rows at or below N rewritten in place:
    *  cards, deletes) and `removed`. With it, a Thread view re-syncs on

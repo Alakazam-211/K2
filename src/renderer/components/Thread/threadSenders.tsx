@@ -34,7 +34,7 @@
 // `mine` (threadAuthorLabel / isOwnThreadPost); this file never decides it.
 
 import { createContext, memo, Suspense, useContext, useLayoutEffect, useRef, type ComponentType, type CSSProperties, type JSX } from 'react'
-import { parseThreadAuthor } from '@/lib/thread-viewer'
+import { isPersonThreadPost, parseThreadAuthor } from '@/lib/thread-viewer'
 import { displayThreadAddress } from '@/lib/thread-address-bus'
 import type { OverlayDoc } from '@/components/SessionView/overlayThread'
 
@@ -86,9 +86,10 @@ export interface ThreadSenderSlot {
 
 const fold = (s: string): string => s.trim().toLowerCase()
 
-/** A person's post: the daemon stamped who sent it (older docs: compose). */
+/** A person's post: the daemon stamped a person (older docs: compose); an
+ *  agent's stamp (0.46.13) is the agent's, keyed by its address below. */
 function isPersonDoc(doc: OverlayDoc): boolean {
-  return parseThreadAuthor(doc.author) !== null || doc.via === 'compose'
+  return isPersonThreadPost(doc)
 }
 
 /** Who sent `doc`. A person is keyed by the daemon's stamp (kind + login),

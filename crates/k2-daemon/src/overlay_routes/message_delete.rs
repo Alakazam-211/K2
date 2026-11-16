@@ -151,7 +151,9 @@ fn person_of(session_author: &str) -> Option<Deleter> {
 /// The author rule, on the stored doc: the sender, or the server owner.
 fn may_delete(deleter: &Deleter, doc: &overlay::OverlayDoc) -> Result<(), String> {
     let refuse = || Err(ONLY_THE_SENDER.to_string());
-    let Some(author) = doc.author.as_ref() else { return refuse() };
+    // An agent's post (the `agent` stamp, or none on an older row) is
+    // nobody's to delete here (core refuses it first; this is the belt).
+    let Some(author) = doc.author.as_ref().filter(|a| !a.is_agent()) else { return refuse() };
     match deleter {
         Deleter::Guest(login) => {
             if author.kind == overlay::doc::AUTHOR_GUEST && author.login.trim() == login.trim() {

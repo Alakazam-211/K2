@@ -260,6 +260,50 @@ fn import_rewrites_authors_closes_cards_adds_divider_and_continues_live() {
     assert_eq!(thread_docs(&_p).len(), 9);
 }
 
+/// thread-author-agent-v1 (0.46.13): an agent's stamped post is the
+/// agent's on import, never a person's: not in the participants, and its
+/// address and its stamp follow the clone's handle (the originals ride
+/// `imported`). An older author-less agent line keeps today's handling.
+#[test]
+fn an_agent_stamped_post_imports_as_the_agent() {
+    let db = dbh();
+    let conn = db.lock();
+    let (pid, handle) = seed_project(&conn, "ct-agt");
+    let p = uid();
+    pin(&conn, &pid, &p);
+    let side = format!("{handle}/review");
+    overlay::post_thread_with_origin(&conn, &p, &pid, &handle, &handle, "stamped agent line", "thread", None, Some(PostAuthor::agent(&handle)))
+        .unwrap();
+    overlay::post_thread_with_origin(&conn, &p, &pid, &side, &handle, "sidecar line", "thread", None, Some(PostAuthor::agent(&side)))
+        .unwrap();
+    overlay::post_thread(&conn, &p, &pid, &handle, &handle, "old agent line", "thread").unwrap();
+    let ex = export_project_threads(&conn, &pid, &opts("clone-agt")).unwrap();
+    assert!(ex.participants().is_empty(), "agents are not people: {:?}", ex.participants());
+    let ex = ThreadsExport::parse(&ex.to_json().unwrap()).unwrap();
+
+    let (dst_pid, dst_handle) = seed_project(&conn, "ct-agt-dst");
+    let dst_pin = uid();
+    pin(&conn, &dst_pid, &dst_pin);
+    let ctx = ImportContext { project_id: dst_pid.clone(), ..Default::default() };
+    import_threads(&conn, &ex, &ctx).unwrap();
+    let docs = thread_docs(&dst_pin);
+    let by_body = |b: &str| docs.iter().find(|d| d.body.as_deref() == Some(b)).unwrap_or_else(|| panic!("{b}"));
+
+    let a = by_body("stamped agent line");
+    assert_eq!(a.from, dst_handle);
+    assert_eq!(a.author, Some(PostAuthor::agent(&dst_handle)));
+    assert_eq!(a.via.as_deref(), Some("thread"));
+    assert!(!a.by_person());
+    let meta = a.imported.as_ref().unwrap();
+    assert_eq!(meta.author, Some(PostAuthor::agent(&handle)));
+    assert_eq!(meta.from.as_deref(), Some(handle.as_str()));
+    let s = by_body("sidecar line");
+    assert_eq!(s.author, Some(PostAuthor::agent(&format!("{dst_handle}/review"))));
+    let old = by_body("old agent line");
+    assert!(old.author.is_none(), "an author-less agent line stays author-less: {old:?}");
+    assert_eq!(old.from, dst_handle);
+}
+
 #[test]
 fn import_is_idempotent() {
     let db = dbh();

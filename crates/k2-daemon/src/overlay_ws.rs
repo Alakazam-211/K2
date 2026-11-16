@@ -525,9 +525,9 @@ impl GuestWire {
 /// Projecting may read the database (the live Settings check, cached
 /// 2 s): async callers run it on the blocking pool ([`needs_blocking`]).
 ///
-/// thread-mine-v1: a person's post (a doc with `author`) on a person's
-/// socket gains `mine` for that socket's viewer ([`crate::thread_mine`]);
-/// a guest's socket never does.
+/// thread-mine-v1: a person's post (a doc with a person's `author`, never an
+/// agent's) on a person's socket gains `mine` for that socket's viewer
+/// ([`crate::thread_mine`]); a guest's socket never does.
 pub(crate) fn wire_json_for(frame: &OverlayFrame, guest: Option<&GuestWire>, seen: &crate::permission::view::Seen) -> String {
     let out = if let Some(doc) = frame.doc.as_ref().filter(|d| crate::permission::view::is_permission_card(d)) {
         let projected = OverlayFrame { doc: Some(seen.doc(doc).into_owned()), ..frame.clone() };
@@ -544,7 +544,7 @@ pub(crate) fn wire_json_for(frame: &OverlayFrame, guest: Option<&GuestWire>, see
 /// A person's post on a person's socket: [`wire_json_for`] adds `mine`
 /// (it reads the people list).
 fn marks_mine(frame: &OverlayFrame, seen: &crate::permission::view::Seen) -> bool {
-    seen.viewer.is_person() && frame.doc.as_ref().is_some_and(|d| d.author.is_some())
+    seen.viewer.is_person() && frame.doc.as_ref().is_some_and(|d| d.by_person())
 }
 
 /// True when [`wire_json_for`] would project this frame or mark it for

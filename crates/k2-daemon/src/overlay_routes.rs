@@ -1352,11 +1352,6 @@ fn card_actor_from(params: &HashMap<String, String>, resolved: &ResolvedOverlay,
     }
 }
 
-/// [`overlay::PostAuthor::kind`] for an agent session's answer or dismissal
-/// (prd-agent-settings-cards-v1 §6.10): `login` is the agent's stamped
-/// address. Clients that don't know the kind show the login, never "You".
-const AUTHOR_AGENT: &str = "agent";
-
 /// The card's `answeredBy`, from the same credential as [`card_actor_from`]
 /// (and as a compose post's `author`). The owner token's carries the
 /// owner's display name (`name`), the same name the agent hears in
@@ -1376,8 +1371,10 @@ fn card_actor_author(params: &HashMap<String, String>, session_author: &str) -> 
         }
         Some(author)
     } else if principal_is_bound(params) {
+        // An agent session's answer or dismissal (§6.10): its stamped
+        // address. Clients that don't know the kind show the login, never "You".
         let from = params.get("from").map(|s| s.trim()).unwrap_or("");
-        (!from.is_empty()).then(|| overlay::PostAuthor { kind: AUTHOR_AGENT.to_string(), login: from.to_string(), name: None })
+        (!from.is_empty()).then(|| overlay::PostAuthor::agent(from))
     } else {
         Some(with_owner_name(compose_author_for_session(session_author), &workspace_msg::resolve_owner_from()))
     }
@@ -1434,11 +1431,20 @@ fn overlay_sender_from(params: &HashMap<String, String>, resolved: &ResolvedOver
     }
 }
 
+/// `/boot-status` feature (0.46.13): Thread posts and cards made with an
+/// agent's passport carry `author {kind: "agent", login: <address>}`; a
+/// person's are theirs whatever the `via` ([`thread_sender`]). Older agent
+/// rows carry no author, so a client keeps reading "no author" as the agent.
+pub(crate) const FEATURE_THREAD_AUTHOR_AGENT: &str = "thread-author-agent-v1";
+
 /// Who a Thread post or card is from, from the credential, never the body
 /// (0.46.13: closes a person posting rows that read as the agent's):
 ///
 /// - an App guest: its pass username, author `guest`;
-/// - an agent passport (bound): its stamped address, no author yet;
+/// - an agent passport (bound): its stamped address (`handle`, or
+///   `handle/sidecar` for a sidecar), author `agent` with that address as
+///   its login (thread-author-agent-v1, 0.46.13; agent rows from before
+///   carry none, and readers still take "no author" as the agent);
 /// - anything else is a person (the owner token or a Connect login),
 ///   WHATEVER the `via`: the compose rule's `from` (the owner's display
 ///   name, or the username) and author `owner` / `user`. A body `from`
@@ -1454,7 +1460,9 @@ fn thread_sender(params: &HashMap<String, String>, session_author: &str) -> (Str
         let author = overlay::PostAuthor::guest(&from);
         (from, Some(author))
     } else if principal_is_bound(params) {
-        (params.get("from").cloned().unwrap_or_default(), None)
+        let from = params.get("from").cloned().unwrap_or_default();
+        let author = (!from.trim().is_empty()).then(|| overlay::PostAuthor::agent(&from));
+        (from, author)
     } else {
         (compose_from_for_session(session_author), Some(compose_author_for_session(session_author)))
     }
@@ -5218,15 +5226,17 @@ pub(crate) struct DesignDelivery {
 }
 
 /// Who a Design-notes post is from, from the credential: a bound agent's
-/// stamp, else the session (owner display name or Connect login). Never
-/// the body. Returns `(from, author, via)`.
+/// stamp (author `agent`, 0.46.13), else the session (owner display name or
+/// Connect login). Never the body. Returns `(from, author, via)`.
 fn design_sender(
     params: &HashMap<String, String>,
     resolved: &ResolvedOverlay,
     session_author: &str,
 ) -> (String, Option<overlay::PostAuthor>, &'static str) {
     if principal_is_bound(params) {
-        (overlay_sender_from(params, resolved), None, "thread")
+        let from = overlay_sender_from(params, resolved);
+        let author = (!from.trim().is_empty()).then(|| overlay::PostAuthor::agent(&from));
+        (from, author, "thread")
     } else {
         (
             compose_from_for_session(session_author),

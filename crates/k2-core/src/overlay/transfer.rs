@@ -297,8 +297,11 @@ fn machine_host_name() -> Option<String> {
     std::env::var("COMPUTERNAME").ok().filter(|s| !s.trim().is_empty())
 }
 
+/// A person's post: a person's (or guest's) `author`, or a compose post
+/// from before the field. An agent's post (the `agent` author since
+/// 0.46.13, or none) and K2's notes are not.
 fn is_person_post(doc: &OverlayDoc) -> bool {
-    doc.author.is_some() || doc.via.as_deref() == Some("compose")
+    doc.by_person() || (doc.author.is_none() && doc.via.as_deref() == Some("compose"))
 }
 
 /// Is `conversation_id` a key K2 minted for an import?
@@ -796,9 +799,17 @@ impl Rewrite<'_> {
                 meta.via = src.via.clone();
                 doc.via = Some("import".to_string());
             }
-        } else if let Some(f) = self.address(&src.from) {
-            meta.from = Some(src.from.clone());
-            doc.from = f;
+        } else {
+            if let Some(f) = self.address(&src.from) {
+                meta.from = Some(src.from.clone());
+                doc.from = f;
+            }
+            // An agent's stamp (0.46.13) names its address, which moves
+            // with the clone like `from`; the original rides `meta`.
+            if let Some(l) = src.author.as_ref().filter(|a| a.is_agent()).and_then(|a| self.address(&a.login)) {
+                meta.author = src.author.clone();
+                doc.author = Some(PostAuthor::agent(&l));
+            }
         }
         if let Some(t) = src.to.as_deref().and_then(|t| self.address(t)) {
             meta.to = src.to.clone();

@@ -14,6 +14,10 @@ content-type: application/json
       "collection": "thread",
       "conversation_id": "<UUID>",
       "doc": {
+        "author": {
+          "kind": "agent",
+          "login": "pog-thread"
+        },
         "body": "Ship it?",
         "choice": {
           "allow_custom": false,
@@ -60,6 +64,10 @@ content-type: application/json
       "collection": "thread",
       "conversation_id": "<UUID>",
       "doc": {
+        "author": {
+          "kind": "agent",
+          "login": "pog-thread"
+        },
         "body": "Ship it?",
         "choice": {
           "allow_custom": false,
@@ -106,6 +114,10 @@ content-type: application/json
       "collection": "thread",
       "conversation_id": "<UUID>",
       "doc": {
+        "author": {
+          "kind": "agent",
+          "login": "pog-thread"
+        },
         "body": "Ship it?",
         "choice": {
           "allow_custom": false,
@@ -152,6 +164,10 @@ content-type: application/json
       "collection": "thread",
       "conversation_id": "<UUID>",
       "doc": {
+        "author": {
+          "kind": "agent",
+          "login": "pog-thread"
+        },
         "body": "Ship it?",
         "choice": {
           "allow_custom": false,
@@ -193,7 +209,10 @@ content-type: application/json
       "addr": "pog-thread",
       "at": "<at>",
       "attachmentCount": 0,
-      "author": null,
+      "author": {
+        "kind": "agent",
+        "login": "pog-thread"
+      },
       "conversationId": "<UUID>",
       "from": "pog-thread",
       "kind": "choice",
@@ -219,7 +238,10 @@ content-type: application/json
       "addr": "pog-thread",
       "at": "<at>",
       "attachmentCount": 0,
-      "author": null,
+      "author": {
+        "kind": "agent",
+        "login": "pog-thread"
+      },
       "conversationId": "<UUID>",
       "from": "pog-thread",
       "kind": "choice",
@@ -245,7 +267,10 @@ content-type: application/json
       "addr": "pog-thread",
       "at": "<at>",
       "attachmentCount": 0,
-      "author": null,
+      "author": {
+        "kind": "agent",
+        "login": "pog-thread"
+      },
       "conversationId": "<UUID>",
       "from": "pog-thread",
       "kind": "choice",

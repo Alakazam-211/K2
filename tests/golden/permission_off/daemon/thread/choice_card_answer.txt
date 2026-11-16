@@ -17,6 +17,10 @@ content-type: application/json
 {
   "collection": "thread",
   "doc": {
+    "author": {
+      "kind": "agent",
+      "login": "pog-thread"
+    },
     "body": "Ship it?",
     "choice": {
       "allow_custom": false,
@@ -67,6 +71,10 @@ content-type: application/json
       "collection": "thread",
       "conversation_id": "<UUID>",
       "doc": {
+        "author": {
+          "kind": "agent",
+          "login": "pog-thread"
+        },
         "body": "Ship it?",
         "choice": {
           "allow_custom": false,
@@ -119,6 +127,10 @@ content-type: application/json
       "collection": "thread",
       "conversation_id": "<UUID>",
       "doc": {
+        "author": {
+          "kind": "agent",
+          "login": "pog-thread"
+        },
         "body": "Ship it?",
         "choice": {
           "allow_custom": false,

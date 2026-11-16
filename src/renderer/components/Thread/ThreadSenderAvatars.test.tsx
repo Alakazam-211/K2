@@ -151,6 +151,16 @@ describe('threadSenderSlots', () => {
     expect(people.slots.get('anna2')?.kind).toBe('person')
   })
 
+  it('an agent stamp (0.46.13) is the same agent as its author-less older rows; a person posting via=thread is a person', () => {
+    const old = threadSender(agent(0).doc)
+    const stamped = threadSender({ ...agent(1).doc, author: { kind: 'agent', login: agent(1).doc.from } })
+    expect(stamped.kind).toBe('agent')
+    expect(stamped.key).toBe(old.key)
+    const shell = threadSender({ ...agent(2).doc, from: 'Rosson', author: { kind: 'owner', login: 'owner' } })
+    expect(shell.kind).toBe('person')
+    expect(shell.key).toBe(threadSender(me(3).doc).key)
+  })
+
   it('the owner on two clients is one sender, not two', () => {
     const a = threadSender(me(0).doc)
     const b = threadSender({ ...me(1).doc, from: 'rosson-laptop' })

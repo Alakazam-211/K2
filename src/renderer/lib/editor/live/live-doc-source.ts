@@ -38,6 +38,7 @@ import { placeAddr, resolveAddr } from './addr'
 import { addressLabel, sayFailure } from './say-words'
 import { caretLine, editWords, lineAtByte, placeAt, sectionAt } from './sections'
 import type { TappedWelcome, TransportTap } from './transport-tap'
+import { readSayTime } from '@/lib/live-view/shared/say-time'
 
 /** The kit's participant for a save made outside K2 (`EXTERNAL_PID`, session/participant.rs). */
 export const EXTERNAL_PID = 'kit:external'
@@ -352,7 +353,8 @@ export class LiveDocSource implements LiveSource {
     const to = (f.to ?? null) as { id?: unknown } | null
     if (typeof f.id !== 'string' || typeof from.id !== 'string' || typeof f.text !== 'string') return
     const at = typeof f.at === 'string' && f.at ? f.at : null
-    this.addMessage({ id: f.id, from: from.id, to: typeof to?.id === 'string' ? to.id : '', text: f.text, at_ms: typeof f.at_ms === 'number' ? f.at_ms : this.timers.now(), address: at ? { label: this.addrLabel(at), address: at } : null })
+    const time = readSayTime(f.time)
+    this.addMessage({ id: f.id, from: from.id, to: typeof to?.id === 'string' ? to.id : '', text: f.text, at_ms: typeof f.at_ms === 'number' ? f.at_ms : this.timers.now(), address: at ? { label: this.addrLabel(at), address: at } : null, ...(time ? { time } : {}) })
   }
 
   /** A message's address in words for its chip: the heading's own text, "line 12", else as it came. */

@@ -9,11 +9,13 @@
 //     turn ends) or leaves, following ends as the editors end it: "Atlas
 //     stopped. Stopped following." with Back to my place and Follow again;
 //   - the sample's scripted follows and loops (the mock's `local`);
-//   - what the say row points at: the clip under the monitor's playhead.
+//   - what the say row points at: the clip under the monitor's playhead, or
+//     in a gap its sequence, with the time as the playhead's time position.
 
 import type { TimelineModel } from './fold'
 import type { MonitorView } from './monitor-view'
 import { loopRange } from './picture'
+import { sayTime, type SayTime } from '../shared/say-time'
 import type { SimState } from './sim'
 
 /** The time a followed playhead reads against: the snapshot's own, run on by the wall time since it came. */
@@ -61,10 +63,13 @@ export function scriptedLoop(S: SimState, M: TimelineModel, whoName: string): { 
   return { f0: r.f0, f1: r.f1, who: whoName, verb: l.loop.verb }
 }
 
-/** What the say row points at: the clip under the monitor's playhead by its unit key, else the time; both carry the time in ticks. */
-export function sayAtOf(M: TimelineModel, v: MonitorView): { label: string; title: string; address: string; time: string } {
+/** The sequence a timeline view shows when its data names none: the pack's derived key for a file's first timeline (`@d-seq:1`). */
+export const DEFAULT_SEQUENCE = '@d-seq:1'
+
+/** What the say row points at: the clip under the monitor's playhead by its unit key, else (a gap) the sequence; the time is the playhead's time position in that sequence. */
+export function sayAtOf(M: TimelineModel, v: MonitorView, sequence: string): { label: string; title: string; address: string; time: SayTime } {
   const f = Math.max(0, Math.round(v.head.f))
-  const time = String(BigInt(f) * M.FR)
+  const time = sayTime(BigInt(f) * M.FR, sequence)
   const it = v.picture?.it
-  return it ? { label: it.name, title: `${it.name} at ${M.tcF(f)}`, address: it.key, time } : { label: 'a gap', title: `a gap at ${M.tcF(f)}`, address: `@time:${time}`, time }
+  return it ? { label: it.name, title: `${it.name} at ${M.tcF(f)}`, address: it.key, time } : { label: 'a gap', title: `a gap at ${M.tcF(f)}`, address: sequence, time }
 }

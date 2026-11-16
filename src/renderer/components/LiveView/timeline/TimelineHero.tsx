@@ -11,7 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Button } from '@/components/ui'
 import { personById } from '@/lib/live-view/shared/people'
 import { KEY_MAP, keysHint, playbackKey, type WatchKey } from '@/lib/live-view/timeline/keys'
-import { finishedWords, sayAtOf, scriptedLoop } from '@/lib/live-view/timeline/follow-play'
+import { DEFAULT_SEQUENCE, finishedWords, sayAtOf, scriptedLoop } from '@/lib/live-view/timeline/follow-play'
 import { bracketsOf, type Bracket, defaultPpf, fitPpf, isBig, lanesHeight, loadPrefs, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
 import { detailRows } from '@/lib/live-view/timeline/monitor-details'
 import { monitorView, type LocalPlay } from '@/lib/live-view/timeline/monitor-view'
@@ -172,11 +172,11 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
     loopOf(latest)
   }
   // The say row points at what the monitor shows (its time settles while playing).
-  const sayAt = sayAtOf(M, mv)
+  const sayAt = sayAtOf(M, mv, view.sequence ?? DEFAULT_SEQUENCE)
   const setSayAt = p.setSayAt
   useEffect(() => {
     setSayAt?.(sayAt)
-  }, [setSayAt, sayAt.address, sayAt.label, mv.playing ? 'playing' : sayAt.time]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setSayAt, sayAt.address, sayAt.label, mv.playing ? 'playing' : sayAt.time.at]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => setSayAt?.(null), [setSayAt])
   const fw = fl.finished ? finishedWords(fl.finished) : null
   const finished = fw

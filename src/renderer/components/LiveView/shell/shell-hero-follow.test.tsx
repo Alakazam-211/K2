@@ -47,7 +47,7 @@ describe('the hero’s Follow and Say hooks', () => {
     const say = vi.spyOn(src, 'say')
     function Hero(p: ShellHeroProps): React.JSX.Element {
       const set = p.setSayAt
-      useEffect(() => set?.({ label: 'Interview C', title: 'Interview C at 01:00:44:09', address: '@item:5', time: '1234' }), [set])
+      useEffect(() => set?.({ label: 'Interview C', title: 'Interview C at 01:00:44:09', address: '@item:5', time: { at: '1234', in: '@seq:S1' } }), [set])
       return <div data-testid="lv-hero">{p.say}</div>
     }
     render(<LiveShellView source={src} config={{ ...SCENE_SHELL, sayAlways: true, placesSayAndPanel: true, Hero }} width={1440} />)
@@ -56,6 +56,6 @@ describe('the hero’s Follow and Say hooks', () => {
     expect(screen.getByTestId('lv-say-chip').getAttribute('title')).toContain('Interview C at 01:00:44:09')
     fireEvent.change(screen.getByTestId('lv-say-field'), { target: { value: 'Is this the take?' } })
     fireEvent.keyDown(screen.getByTestId('lv-say-field'), { key: 'Enter' })
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Is this the take?', address: '@item:5', time: '1234' }))
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Is this the take?', address: '@item:5', time: { at: '1234', in: '@seq:S1' } }))
   })
 })

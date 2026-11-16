@@ -7,6 +7,7 @@
 
 import type { FollowAction, FollowState } from '@/lib/live-view/shared/follow'
 import type { LiveNotice, NoticeActionId } from '@/lib/live-view/shared/notices'
+import type { SayTime } from '@/lib/live-view/shared/say-time'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import type { LiveShellSnapshot } from '@/lib/live-view/shared/source'
 import type { LiveTabState } from '@/lib/live-view/shared/state'
@@ -38,12 +39,12 @@ export interface ShellHeroProps {
   setSayAt?: (a: SayAt | null) => void
 }
 
-/** What a message points at: the chip's words and tooltip, the address it carries, and a time in ticks where the view has one. */
+/** What a message points at: the chip's words and tooltip, the address it carries, and a time (the playhead's time position) where the view has one. */
 export interface SayAt {
   label: string
   title: string
   address: string
-  time?: string | null
+  time?: SayTime | null
 }
 
 /** What a view's own side panel gets from the shell (the scene's outliner and properties). */

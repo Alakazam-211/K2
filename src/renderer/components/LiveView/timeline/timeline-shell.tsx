@@ -7,6 +7,7 @@
 // (build-live-timeline.md).
 
 import { personById } from '@/lib/live-view/shared/people'
+import { DEFAULT_SEQUENCE } from '@/lib/live-view/timeline/follow-play'
 import { FilmGlyph } from '../shell/glyphs'
 import type { ShellConfig } from '../shell/shell-config'
 import { TimelineHero } from './TimelineHero'
@@ -31,8 +32,8 @@ export const TIMELINE_SHELL: ShellConfig = {
   sayAddress: (snap, to) => {
     const p = personById(snap.people, to)
     const place = p?.place ?? null
-    if (!place) return { label: 'the edit', title: 'the whole edit', address: '@timeline' }
-    return { label: place.replace(/ on [AV]\d+$/, ''), title: place, address: p?.timePosition?.in ?? '@timeline' }
+    if (!place) return { label: 'the edit', title: 'the whole edit', address: DEFAULT_SEQUENCE }
+    return { label: place.replace(/ on [AV]\d+$/, ''), title: place, address: p?.timePosition?.in ?? DEFAULT_SEQUENCE }
   },
   Hero: TimelineHero,
 }

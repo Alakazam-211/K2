@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { modelOf } from './fold'
-import { finishedWords, followNow, sayAtOf, scriptedFollow, scriptedLoop, stoppedAt } from './follow-play'
+import { DEFAULT_SEQUENCE, finishedWords, followNow, sayAtOf, scriptedFollow, scriptedLoop, stoppedAt } from './follow-play'
 import { monitorView } from './monitor-view'
 import { WATCH } from './scenarios'
 import { simulate } from './sim'
@@ -82,18 +82,31 @@ describe('the sample’s script', () => {
 })
 
 describe('what the say row points at', () => {
-  it('the clip under the playhead by its unit key, with the time in ticks; a gap by its time', () => {
+  it('the clip under the playhead by its unit key, with the time as the playhead’s time position in the sequence', () => {
     const S = state('back to Atlas')
     const M = modelOf(S.B)
     const v = monitorView({ S, M, facts: FACTS, now: nowOf(S), whose: ATLAS, local: null })
-    const a = sayAtOf(M, v)
+    const a = sayAtOf(M, v, DEFAULT_SEQUENCE)
     expect(a.address).toBe(v.picture!.it!.key)
     expect(a.address).toMatch(/^@item:\d+$/)
     expect(a.label).toBe(v.picture!.it!.name)
-    expect(a.time).toBe(String(BigInt(Math.round(v.head.f)) * M.FR))
+    expect(a.time).toEqual({ at: String(BigInt(Math.round(v.head.f)) * M.FR), in: DEFAULT_SEQUENCE })
     expect(a.title).toBe(`${a.label} at ${M.tcF(Math.round(v.head.f))}`)
-    const g = sayAtOf(M, { ...v, picture: { kind: 'gap', f: v.head.f, skipped: [] } })
+  })
+
+  it('a gap points at its sequence, the time carrying where; no time address', () => {
+    const S = state('back to Atlas')
+    const M = modelOf(S.B)
+    const v = monitorView({ S, M, facts: FACTS, now: nowOf(S), whose: ATLAS, local: null })
+    const gap = { ...v, picture: { kind: 'gap' as const, f: v.head.f, skipped: [] } }
+    const g = sayAtOf(M, gap, DEFAULT_SEQUENCE)
     expect(g.label).toBe('a gap')
-    expect(g.address).toBe(`@time:${a.time}`)
+    expect(g.address).toBe(DEFAULT_SEQUENCE)
+    expect(g.time).toEqual({ at: String(BigInt(Math.round(v.head.f)) * M.FR), in: DEFAULT_SEQUENCE })
+    expect(JSON.stringify(g)).not.toContain('@time')
+    // a gap in a second sequence says which
+    const g2 = sayAtOf(M, gap, '@seq:S2')
+    expect(g2.address).toBe('@seq:S2')
+    expect(g2.time?.in).toBe('@seq:S2')
   })
 })

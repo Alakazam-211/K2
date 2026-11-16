@@ -107,6 +107,15 @@ describe('say', () => {
     expect(src.snapshot().messages).toEqual([{ id: 'say-2', from: 'atlas', to: 'me', text: 'Will do. One line, with the command.', at_ms: 6000, address: null }])
   })
 
+  it('reads a frame’s time as the playhead’s time position, and (this release) the old bare ticks', () => {
+    const { src, tap } = setup(async () => ({}))
+    const from = { id: 'atlas', name: 'Atlas', kind: 'agent', colour: '#7c3aed' }
+    const to = { id: 'me', name: 'You', kind: 'person', colour: '#2563eb' }
+    tap.frame({ type: 'say', id: 'say-3', from, to, text: 'Here', at: '@seq:S2', time: { at: '1200', in: '@seq:S2' }, reply_to: null, at_ms: 7000 })
+    tap.frame({ type: 'say', id: 'say-4', from, to, text: 'And here', at: '@item:5', time: '2400', reply_to: null, at_ms: 7100 })
+    expect(src.snapshot().messages.map((m) => m.time)).toEqual([{ at: '1200', in: '@seq:S2' }, { at: '2400' }])
+  })
+
   it('says why it could not send: rate limited, with the wait', async () => {
     const { src } = setup(async () => {
       throw httpError(429, 'rate_limited', { error: 'rate limited', retryAfterMs: 2400 })

@@ -139,6 +139,6 @@ describe('Follow on the timeline', () => {
     expect(chip.textContent).toBe(screen.getByTestId('lv-mon-label').textContent?.replace(/^V\d/, ''))
     fireEvent.change(screen.getByTestId('lv-say-field'), { target: { value: 'Tighter here?' } })
     fireEvent.keyDown(screen.getByTestId('lv-say-field'), { key: 'Enter' })
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ to: ATLAS, text: 'Tighter here?', address: expect.stringMatching(/^@item:\d+$/), time: expect.stringMatching(/^\d+$/) }))
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ to: ATLAS, text: 'Tighter here?', address: expect.stringMatching(/^@item:\d+$/), time: { at: expect.stringMatching(/^\d+$/), in: '@d-seq:1' } }))
   })
 })

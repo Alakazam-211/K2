@@ -16,6 +16,8 @@ import type { MediaFacts } from './picture'
 import { headOf, rtF } from './playheads'
 import type { SimState } from './sim'
 import { framePhrase, heldWhat, holdGoneText, placeOf, plural, refusalPhrase, trackRenames } from './wording'
+import { DEFAULT_SEQUENCE } from './follow-play'
+import { sayTime } from '../shared/say-time'
 
 /** The clock the sample's times count from (its at_ms are offsets). */
 export const SAMPLE_CLOCK0 = Date.UTC(2026, 10, 13, 14, 15, 0)
@@ -30,6 +32,8 @@ export interface TimelineView {
   sample?: boolean
   /** K2 Render's facts per source (the sample's own, until T8). */
   facts?: MediaFacts
+  /** The address of the sequence this view shows (`within` for times in it); the pack's first timeline when absent. */
+  sequence?: string
 }
 
 export interface TimelineSnapshot extends SampleSnapshot {
@@ -174,7 +178,7 @@ function messages(S: SimState, M: TimelineModel, clock0: number): LiveMessage[] 
     if (e.kind !== 'say' || e.failed) return []
     const it = e.ref?.item ? M.items[e.ref.item] : undefined
     const f = e.ref ? rtF(e.ref.at, M) : null
-    return [{ id: `say-${e.i}`, from: e.actor, to: e.to, text: e.text, at_ms: clock0 + e.at, address: e.ref ? { label: it ? it.name : 'a gap', address: `${it ? it.key : '@timeline'}${f != null ? ' @ ' + M.tcF(f) : ''}` } : null }]
+    return [{ id: `say-${e.i}`, from: e.actor, to: e.to, text: e.text, at_ms: clock0 + e.at, address: e.ref ? { label: it ? it.name : 'a gap', address: `${it ? it.key : DEFAULT_SEQUENCE}${f != null ? ' @ ' + M.tcF(f) : ''}` } : null, ...(e.ref && f != null ? { time: sayTime(BigInt(Math.round(f)) * M.FR, DEFAULT_SEQUENCE) } : {}) }]
   })
 }
 

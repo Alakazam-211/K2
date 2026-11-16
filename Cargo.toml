@@ -141,6 +141,18 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.sew-str0m]
 opt-level = 3
+# Noise removal runs on every 10 ms microphone block (RNNoise, and DeepFilterNet3
+# with the `dfn3` feature): dev builds optimise it too, as Sew's plugin does.
+[profile.dev.package.sew-noise]
+opt-level = 3
+[profile.dev.package.nnnoiseless]
+opt-level = 3
+[profile.dev.package.realfft]
+opt-level = 3
+[profile.dev.package.rustfft]
+opt-level = 3
+[profile.dev.package.easyfft]
+opt-level = 3
 
 [profile.release]
 strip = true
@@ -180,16 +192,17 @@ vte = { path = "third_party/vte" }
 # (third_party/SEW-VENDOR.txt). Never fetched from a registry or git.
 sew-proto = { path = "third_party/sew-proto" }
 # Native voice (src-tauri's `native-voice` feature, prd-k2-voice-rooms-v1 §14).
-# THE ONE PLACE that says where Sew's crates come from. Sew release 0.10.0:
-# sew-proto, sew-lkproto, sew-mls-crypto, sew-e2ee and sew-lk-compat 0.10.0, and
-# sew-str0m 0.25.2 (the str0m fork, library name `str0m`) with sew-str0m-is, come
-# from crates.io and need no row. sew-call-client and tauri-plugin-sew-voice 0.7.0
-# aren't on crates.io yet: Sew's public mirror, pinned by its "Sew 0.10.0" commit
+# THE ONE PLACE that says where Sew's crates come from. Sew release 0.10.2:
+# sew-proto, sew-lkproto, sew-mls-crypto, sew-e2ee, sew-lk-compat and sew-noise
+# 0.10.2, and sew-str0m 0.25.3 (the str0m fork, library name `str0m`) with
+# sew-str0m-is 0.12.2, come from crates.io and need no row. sew-call-client and
+# tauri-plugin-sew-voice 0.8.0 aren't on crates.io yet: Sew's public mirror,
+# pinned by its "Sew 0.10.2" commit
 # (the mirror has no tags). K2 names them by version, so moving to crates.io later
 # only removes these two rows. Their sew-proto 0.10 is crates.io's, beside the
 # vendored 0.3 above that sew-client uses (that path patch only matches 0.3).
-sew-call-client = { git = "https://github.com/Alakazam-211/sew-crates", rev = "8b5a2ff4f5b6393e8a678690093b563ca4b25973" }
-tauri-plugin-sew-voice = { git = "https://github.com/Alakazam-211/sew-crates", rev = "8b5a2ff4f5b6393e8a678690093b563ca4b25973" }
+sew-call-client = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c534650afc3608206b15d0a84c0219d71a5e4f02" }
+tauri-plugin-sew-voice = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c534650afc3608206b15d0a84c0219d71a5e4f02" }
 # K2's own audio crate, so one kessel-audio is built and no git source on K2 is locked.
 kessel-audio = { path = "crates/kessel-audio" }
 # kessel-video names the VP8 crates by version only (crates.io); in this

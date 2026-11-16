@@ -257,6 +257,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "anymap3"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -306,6 +312,12 @@ dependencies = [
  "cpufeatures 0.2.17",
  "password-hash",
 ]
+
+[[package]]
+name = "array-init"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
 
 [[package]]
 name = "arrayvec"
@@ -2343,6 +2355,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "easyfft"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "767e39eef2ad8a3b6f1d733be3ec70364d21d437d06d4f18ea76ce08df20b75f"
+dependencies = [
+ "array-init",
+ "generic_singleton",
+ "num-complex",
+ "realfft",
+ "rustfft",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3083,6 +3108,16 @@ dependencies = [
  "typenum",
  "version_check",
  "zeroize",
+]
+
+[[package]]
+name = "generic_singleton"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab6e923c8e978e57cf63e2e200ca967d1d20f0ea2662b28f6d4e11c44aa6ab16"
+dependencies = [
+ "anymap3",
+ "parking_lot",
 ]
 
 [[package]]
@@ -5190,23 +5225,6 @@ dependencies = [
 
 [[package]]
 name = "kessel-audio"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e152311680e06f662f77b668fb93e4bc4cabe4844e6c8b0ef9397b366a88fab3"
-dependencies = [
- "block2",
- "bytes",
- "cpal",
- "crossbeam-queue",
- "objc2",
- "ropus",
- "rtrb",
- "rubato",
- "sonora",
-]
-
-[[package]]
-name = "kessel-audio"
 version = "0.2.1"
 dependencies = [
  "block2",
@@ -5761,6 +5779,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nnnoiseless"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "805d5964d1e7a0006a7fdced7dae75084d66d18b35f1dfe81bd76929b1f8da0c"
+dependencies = [
+ "easyfft",
+ "once_cell",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5870,6 +5898,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -8957,8 +8986,8 @@ dependencies = [
 
 [[package]]
 name = "sew-call-client"
-version = "0.7.0"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=8b5a2ff4f5b6393e8a678690093b563ca4b25973#8b5a2ff4f5b6393e8a678690093b563ca4b25973"
+version = "0.8.0"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=c534650afc3608206b15d0a84c0219d71a5e4f02#c534650afc3608206b15d0a84c0219d71a5e4f02"
 dependencies = [
  "bytes",
  "futures-util",
@@ -8966,7 +8995,7 @@ dependencies = [
  "hmac 0.12.1",
  "http",
  "jni 0.21.1",
- "kessel-audio 0.1.0",
+ "kessel-audio",
  "kessel-video",
  "png 0.18.1",
  "prost 0.14.4",
@@ -8979,7 +9008,8 @@ dependencies = [
  "sew-e2ee",
  "sew-lk-compat",
  "sew-lkproto",
- "sew-proto 0.10.0",
+ "sew-noise",
+ "sew-proto 0.10.2",
  "sew-str0m",
  "sha1",
  "thiserror 2.0.18",
@@ -9016,9 +9046,9 @@ dependencies = [
 
 [[package]]
 name = "sew-e2ee"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d54c3b9d24a7914ead6fbbf61248c1ef206bd39870313a1284535f5fb9d610f0"
+checksum = "a1c0e8595fd68e44324354d09602803a50c600a23548403d3d5224e97527d71e"
 dependencies = [
  "aes-gcm 0.10.3",
  "ed25519-dalek",
@@ -9032,7 +9062,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-mls-crypto",
- "sew-proto 0.10.0",
+ "sew-proto 0.10.2",
  "sha2 0.10.9",
  "subtle",
  "thiserror 2.0.18",
@@ -9043,9 +9073,9 @@ dependencies = [
 
 [[package]]
 name = "sew-lk-compat"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57795b3a378b9dda195cc79dcd3b4d4ff57ebd98dad9cb915e8aec4d38297d89"
+checksum = "62b52e91871dde5fddc701a792a05c159fffef65cf5fdc3087398457aea426f8"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -9062,9 +9092,9 @@ dependencies = [
 
 [[package]]
 name = "sew-lkproto"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f78eb1e54786be091a0fd4c8959b76bb0b5bca5ed9491487e55027f3a6a4c06"
+checksum = "6b315b57db3061f7b3999348467957f08c4dfd416721cb2f0e7f3e839d2dbde7"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -9074,9 +9104,9 @@ dependencies = [
 
 [[package]]
 name = "sew-mls-crypto"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "165b8b655d26455c8f2408fd540a7e530593423ff86020aae14e10cf66cabe86"
+checksum = "834650064e978b0e8ac16ded40fe31e3a2bf07bf77dc602937a9408efa1759ea"
 dependencies = [
  "aes-gcm 0.10.3",
  "chacha20poly1305 0.10.1",
@@ -9098,6 +9128,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sew-noise"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f67d952ad2890ea5a90e8626c56e01dc9d27efb77a44e7e54c39a50964c18d08"
+dependencies = [
+ "nnnoiseless",
+ "realfft",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "sew-proto"
 version = "0.3.0"
 dependencies = [
@@ -9109,9 +9150,9 @@ dependencies = [
 
 [[package]]
 name = "sew-proto"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd75acff72b892e52b2818fffa940f5d77eefd533252241f9656f7588c65bb09"
+checksum = "466105c69324d698f1641b4922132784b4810059e5ef873145a10c94599149ba"
 dependencies = [
  "chrono",
  "schemars 1.2.1",
@@ -9121,9 +9162,9 @@ dependencies = [
 
 [[package]]
 name = "sew-str0m"
-version = "0.25.2"
+version = "0.25.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a16762c4263b8aec30bfba7137ed981b135d62d18d4ed19b9ae6ca4eff978f8"
+checksum = "a10cbb28e16bd79b6f192e418fe09a70ff6dd84a0c4dfea55054ddb700376150"
 dependencies = [
  "arrayvec",
  "base64ct",
@@ -9142,9 +9183,9 @@ dependencies = [
 
 [[package]]
 name = "sew-str0m-is"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c37c49ef298165ce7375398eca3bb0b354bf7a2187959f10ad463f0071ef59ed"
+checksum = "091fbce7412b6259e47ad4b1b29781168bce69cf852ff0fcf59aa274c519754e"
 dependencies = [
  "crc",
  "serde",
@@ -10105,8 +10146,8 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-sew-voice"
-version = "0.7.0"
-source = "git+https://github.com/Alakazam-211/sew-crates?rev=8b5a2ff4f5b6393e8a678690093b563ca4b25973#8b5a2ff4f5b6393e8a678690093b563ca4b25973"
+version = "0.8.0"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=c534650afc3608206b15d0a84c0219d71a5e4f02#c534650afc3608206b15d0a84c0219d71a5e4f02"
 dependencies = [
  "base64 0.22.1",
  "cpal",
@@ -10114,7 +10155,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-call-client",
- "sew-proto 0.10.0",
+ "sew-proto 0.10.2",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",

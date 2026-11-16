@@ -101,7 +101,10 @@ parking_lot = "0.12"
 # for this OS (AVFoundation, VideoToolbox and ScreenCaptureKit on macOS; Media
 # Foundation and Windows Graphics Capture; V4L2 and the portal on Linux). The
 # commands it adds need `sew-voice:video` (capabilities-native-voice/).
-tauri-plugin-sew-voice = { version = "=0.7.0", optional = true, features = ["video"] }
+# `dfn3` (0.46.13, Sew 0.10.2): noise removal's Standard mode runs DeepFilterNet3
+# from the weights the app bundles under <resources>/dfn3/ (scripts/fetch-dfn3.sh);
+# without them it stays RNNoise and logs once.
+tauri-plugin-sew-voice = { version = "=0.8.0", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

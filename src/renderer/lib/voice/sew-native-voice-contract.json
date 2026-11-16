@@ -197,5 +197,24 @@
         "state_snapshot": { "state": "connected", "participants": [{ "member_id": "48831765147549699", "is_self": true, "muted": false, "deafened": false, "server_muted": false, "server_deafened": false }], "call_id": "r_fakeroomfakeroomfakeroomfa", "target": "k2:acme", "room": "48831765147549698", "recording_controls": { "can_record": false, "can_stop": false, "source": "sew" } }
       }
     }
+  },
+  "noise_removal": {
+    "cause": "Sew 0.10.2: the microphone's noise removal on desktop, for an app's settings (no call-screen control needed). set_noise_removal {mode} (off, standard) works before or during a call (in a call from the next 10 ms block, without a click) and answers {mode, active, reason?}; noise_removal answers the same. mode is what was asked, active what runs, reason (absent when they match) why active is less: budget (the audio pipeline stopped the stage for taking too long), fault (it stopped it after a fault, for the rest of the call) or unavailable (this platform or build can't run it: phones, an audio pipeline without the capture hook). The noise_removal event carries the same shape whenever it changes (no event for a set that changes nothing). strong is refused with noise_mode_unavailable and nothing changes; any other name is invalid_args. The default is standard (Builder::noise_removal sets the app's own); the plugin stores nothing, the host keeps the person's choice and sets it at start.",
+    "permission": "sew-voice:noise-removal",
+    "default": { "mode": "standard", "active": "standard" },
+    "set": [
+      { "command": "set_noise_removal", "args": { "mode": "off" }, "answer": { "mode": "off", "active": "off" }, "event": { "mode": "off", "active": "off" } },
+      { "command": "set_noise_removal", "args": { "mode": "standard" }, "answer": { "mode": "standard", "active": "standard" }, "event": { "mode": "standard", "active": "standard" } }
+    ],
+    "get": { "command": "noise_removal", "args": {}, "answer": { "mode": "standard", "active": "standard" } },
+    "stepped_down": [
+      { "mode": "standard", "active": "off", "reason": "budget" },
+      { "mode": "standard", "active": "off", "reason": "fault" },
+      { "mode": "standard", "active": "off", "reason": "unavailable" }
+    ],
+    "errors": [
+      { "args": { "mode": "strong" }, "error": { "code": "noise_mode_unavailable", "detail": "strong" } },
+      { "args": { "mode": "loud" }, "error": { "code": "invalid_args", "detail": "unknown noise removal mode `loud`" } }
+    ]
   }
 }

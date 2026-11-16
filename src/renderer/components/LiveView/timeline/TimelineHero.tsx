@@ -2,7 +2,7 @@
 // the monitor, the transport under it (Back to X, loop, zoom and fit, and
 // View live on its right) and the say row, beside the side panel; then the
 // lanes and ruler, full width under all of it. The lanes take what they
-// need up to 38% of the area, so the monitor stays the biggest thing. The
+// need up to 34% of the area, so the monitor stays the biggest thing. The
 // watching keys work anywhere in the tab but the say field and the menus.
 // Without a timeline beside the snapshot (the shell's own sample) it stays
 // the Phase 1 placeholder.
@@ -34,8 +34,8 @@ import { usePlayback } from './usePlayback'
 import { useTimelineFollow } from './useTimelineFollow'
 import { ViewMenu } from './ViewMenu'
 
-/** The monitor row takes at least 62% of the content area; the lanes the rest, up to what they need. */
-export const MONITOR_SHARE = 0.62
+/** The monitor row takes at least 66% of the content area (the mock's 62% of a tab without the sample banner; with a notice showing too, 62% let the lanes outgrow the picture at 1440). */
+export const MONITOR_SHARE = 0.66
 
 function Placeholder({ p }: { p: ShellHeroProps }): React.JSX.Element {
   const line = p.state === 'loading' ? 'Opening the edit. The lanes come first, then the pictures.' : 'The edit’s monitor and lanes show here: everyone’s playhead, and each change as it lands.'
@@ -197,7 +197,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
     savePrefs(tab, next)
   }
 
-  // The lanes take what they need, up to 38% of the area; the monitor row the rest.
+  // The lanes take what they need, up to 34% of the area; the monitor row the rest.
   const big = isBig(M)
   const need = RULER_H + lanesHeight(M, prefs.lanes) + 16 + (big ? 14 : 0)
   const upperH = Math.max(heroH * MONITOR_SHARE, heroH - need)

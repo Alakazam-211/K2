@@ -99,12 +99,13 @@ import {
 } from './sew-api'
 import { CommandLine, CopyButton, OnceSecret, SewFailed, StatusDot, SewStatusChip, TypeToConfirm, typedMatches, useAsk, usePersonConfirm } from './sew-ui'
 import { RecordingPanel } from './SewRecordingPanel'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const SEW_MANIFEST: SettingEntry[] = [
   { id: 'sew.status', section: 'sew', label: 'Chat / Voice', description: 'The chat and voice server on this box: status and alarms', keywords: ['sew', 'chat', 'voice', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
   { id: 'sew.enable', section: 'sew', label: 'Set up chat and voice', description: 'Check this server and set up chat and voice (Linux servers)', keywords: ['sew', 'chat', 'enable', 'install', 'preflight', 'voice', 'set up'] },
   { id: 'sew.upgrade', section: 'sew', label: 'Update chat', description: 'Update or roll back the chat server', keywords: ['sew', 'chat', 'upgrade', 'update', 'rollback', 'version'] },
-  { id: 'sew.recovery-key', section: 'sew', label: 'Chat recovery key', description: 'Show the recovery key K2 keeps in the vault (after you confirm it’s you)', keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
+  { id: 'sew.recovery-key', section: 'sew', label: 'Chat recovery key', description: `Show the recovery key ${PRODUCT_NAME} keeps in the vault (after you confirm it’s you)`, keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
   { id: 'sew.backup', section: 'sew', label: 'Chat and voice backups', description: 'Back up now and see the saved backups', keywords: ['sew', 'chat', 'backup', 'restore', 'drill'] },
   { id: 'sew.offbox', section: 'sew', label: 'Copies on another machine', description: 'Where copies of chat backups and keys are kept, on another machine', keywords: ['sew', 'chat', 'offbox', 'off-box', 'mirror', 'ship', 'backup'] },
   { id: 'sew.public-url', section: 'sew', label: 'Chat web address', description: 'Where people open chat in a browser (setup links use it)', keywords: ['sew', 'chat', 'public url', 'host', 'setup link', 'web address'] },
@@ -172,10 +173,10 @@ function looksLikeCommand(s: string): boolean {
 const STATE_HINT: Record<string, string> = {
   running: 'Chat and calls are working.',
   degraded: 'Working, but something needs attention.',
-  stopped: 'Chat is down. K2 keeps trying to bring it back.',
+  stopped: `Chat is down. ${PRODUCT_NAME} keeps trying to bring it back.`,
   error: 'Setup stopped on a problem. Resume it below.',
   disabled: 'Turned off. Messages and files are kept.',
-  installing: 'K2 is setting it up. This takes a few minutes.',
+  installing: `${PRODUCT_NAME} is setting it up. This takes a few minutes.`,
   upgrading: 'Chat is updating. It’s unavailable for a moment.',
   removed: 'Uninstalled. Messages, files and keys are kept.',
 }
@@ -243,9 +244,9 @@ function StatusGroup({ status }: PanelProps): React.JSX.Element {
           <span className={VALUE} data-testid="sew-version">{versionText}</span>
         </SettingRow>
         <SettingRow label="Sign-in" hint="Chosen at setup. Changing it means deleting chat data and setting it up again.">
-          <span className={VALUE}>{status.identityProvider === 'standalone' ? 'Chat’s own accounts' : 'K2 accounts'}</span>
+          <span className={VALUE}>{status.identityProvider === 'standalone' ? 'Chat’s own accounts' : `${PRODUCT_NAME} accounts`}</span>
         </SettingRow>
-        <SettingRow label="You as owner in chat" hint="K2 makes the server owner chat’s owner too.">
+        <SettingRow label="You as owner in chat" hint={`${PRODUCT_NAME} makes the server owner chat’s owner too.`}>
           <span className={VALUE} data-testid="sew-owner">{ownerText}</span>
         </SettingRow>
         {db || sew ? (
@@ -266,7 +267,7 @@ function StatusGroup({ status }: PanelProps): React.JSX.Element {
       {status.lastError && (status.state === 'error' || status.state === 'stopped') ? (
         <Callout tone="error" className="type-hint space-y-0.5">
           <p className="font-medium">{status.state === 'error' ? 'Setup stopped on a problem.' : 'Chat stopped on a problem.'}</p>
-          <p>{status.state === 'error' ? 'Resume setup below; it picks up at the step that stopped.' : 'K2 keeps trying to start it again.'}</p>
+          <p>{status.state === 'error' ? 'Resume setup below; it picks up at the step that stopped.' : `${PRODUCT_NAME} keeps trying to start it again.`}</p>
           <p className="text-[var(--color-text-secondary)]">The server said: {status.lastError.replace(/[.\s]+$/, '')}.</p>
         </Callout>
       ) : null}
@@ -291,7 +292,7 @@ function AttentionGroup({ status, go }: PanelProps): React.JSX.Element | null {
       title="Needs attention"
       card
       testId="sew-alarms"
-      hint={offboxOnly ? 'Every K2 server shows Degraded until copies of its chat backups and keys are kept on another machine.' : undefined}
+      hint={offboxOnly ? `Every ${PRODUCT_NAME} server shows Degraded until copies of its chat backups and keys are kept on another machine.` : undefined}
     >
       {alarms.map((a) => {
         const info = alarmInfo(a)
@@ -433,12 +434,12 @@ function SetupGroup({ status, sample, canMutate, reload }: PanelProps): React.JS
     <div className="space-y-5" data-settings-id="sew.enable" data-testid="sew-enable-wizard">
       {!released ? (
         <Callout tone="warn" className="type-hint">
-          {status.notice ?? 'This version of K2 doesn’t name a chat release yet, so chat can’t be set up. Update K2, then try again.'}
+          {status.notice ?? `This version of ${PRODUCT_NAME} doesn’t name a chat release yet, so chat can’t be set up. Update ${PRODUCT_NAME}, then try again.`}
         </Callout>
       ) : null}
       <SettingsGroup
         title="Server checks"
-        hint="K2 checks this server before setup. Anything marked Needs fixing has to be fixed first."
+        hint={`${PRODUCT_NAME} checks this server before setup. Anything marked Needs fixing has to be fixed first.`}
         card
         action={
           <Button disabled={sample || !released || checking} onClick={() => void runPreflight()}>
@@ -492,7 +493,7 @@ function SetupGroup({ status, sample, canMutate, reload }: PanelProps): React.JS
           reinstall
             ? 'Sets chat up again on this server. Its messages, files and keys come back, with the sign-in it had.'
             : fresh
-              ? 'Team chat and voice calls for this server. They run beside K2, with their own database and encrypted storage.'
+              ? `Team chat and voice calls for this server. They run beside ${PRODUCT_NAME}, with their own database and encrypted storage.`
               : 'Messages, files and keys were kept. Turning it back on brings them back.'
         }
       >
@@ -501,7 +502,7 @@ function SetupGroup({ status, sample, canMutate, reload }: PanelProps): React.JS
             <fieldset className="space-y-2" disabled={!canMutate}>
               <legend className="sr-only">Sign-in</legend>
               <label className="flex items-start gap-2 cursor-pointer">
-                <Radio name="sew-identity" className="mt-0.5" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label="K2 accounts" />
+                <Radio name="sew-identity" className="mt-0.5" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label={`${PRODUCT_NAME} accounts`} />
                 <span>
                   <span className={SETTING_ROW_LABEL}>K2 accounts</span>
                   <span className={`block ${SETTING_ROW_HINT}`}>People sign in with the account they use for K2.</span>
@@ -547,7 +548,7 @@ function SetupGroup({ status, sample, canMutate, reload }: PanelProps): React.JS
         <div className="px-4 py-3 space-y-3">
           {error ? <SewFailed what="Couldn’t start setup." failure={error} next="Nothing was changed. Fix what the server says, then try again." /> : null}
           <div className="flex items-center justify-between gap-4">
-            <p className={SETTING_ROW_HINT}>{blocking.length > 0 ? 'Fix the checks marked Needs fixing first.' : 'K2 shows each step as it goes.'}</p>
+            <p className={SETTING_ROW_HINT}>{blocking.length > 0 ? 'Fix the checks marked Needs fixing first.' : `${PRODUCT_NAME} shows each step as it goes.`}</p>
             <Button variant="accent" disabled={disabled} onClick={() => void enable()}>
               {busy ? 'Starting…' : label}
             </Button>
@@ -772,7 +773,7 @@ function WebAppGroup({ status, sample, canMutate, reload }: PanelProps): React.J
   const appUrl = status.appUrl ?? null
   const web = isWebClient()
   const reason = web
-    ? 'Open it from the K2 desktop app.'
+    ? `Open it from the ${PRODUCT_NAME} desktop app.`
     : !appUrl
       ? 'Set the owner sign-in address first.'
       : status.owner !== 'set'
@@ -1290,7 +1291,7 @@ function OffboxBlock({
         : null}
       {kind === 'box-backup' && current.kind === 'box-backup' && boxBackup ? (
         <p className={`px-4 py-3 type-hint ${boxBackup.ok ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-status-warn-text)]'}`}>
-          {boxBackup.ok ? 'K2 sees the server’s scheduled backup keep them on another machine.' : 'K2 can’t see the server’s backup keep them on another machine yet. Check that scheduled backups are turned on.'}
+          {boxBackup.ok ? `${PRODUCT_NAME} sees the server’s scheduled backup keep them on another machine.` : `${PRODUCT_NAME} can’t see the server’s backup keep them on another machine yet. Check that scheduled backups are turned on.`}
           {!boxBackup.ok && boxBackup.reason ? <span className="block text-[var(--color-text-muted)]">The server said: {boxBackup.reason.replace(/[.\s]+$/, '')}.</span> : null}
         </p>
       ) : null}
@@ -1398,7 +1399,7 @@ function RecoveryKeyGroup({ status, sample }: PanelProps): React.JSX.Element | n
           hint={
             <span data-testid={inVault ? 'sew-recovery-in-vault' : undefined}>
               {inVault
-                ? 'It’s in the K2 vault (Vault → K2’s own secrets), so the vault’s own backups cover it. You don’t need to copy it.'
+                ? `It’s in the ${PRODUCT_NAME} vault (Vault → ${PRODUCT_NAME}’s own secrets), so the vault’s own backups cover it. You don’t need to copy it.`
                 : can
                   ? 'Show it with a confirm that it’s you.'
                   : 'The server owner or an admin can show it, after confirming it’s them.'}
@@ -1419,7 +1420,7 @@ function RecoveryKeyGroup({ status, sample }: PanelProps): React.JSX.Element | n
       {sheet}
       {ui}
       {key !== null ? (
-        <OnceSecret title="Chat recovery key" note="It stays in the K2 vault. Copy it only if you want a copy outside K2." warning={RECOVERY_WARNING} secret={key} onDone={() => setKey(null)} />
+        <OnceSecret title="Chat recovery key" note={`It stays in the ${PRODUCT_NAME} vault. Copy it only if you want a copy outside ${PRODUCT_NAME}.`} warning={RECOVERY_WARNING} secret={key} onDone={() => setKey(null)} />
       ) : null}
     </div>
   )
@@ -1547,7 +1548,7 @@ function UnbindSheet({ space, onClose, onDone }: { space: SewAppSpace; onClose: 
           </span>
         </label>
         <label className="flex items-start gap-2 cursor-pointer">
-          <Radio name="sew-unbind" className="mt-0.5" checked={remove} onChange={() => setRemove(true)} aria-label="Remove the people K2 added" />
+          <Radio name="sew-unbind" className="mt-0.5" checked={remove} onChange={() => setRemove(true)} aria-label={`Remove the people ${PRODUCT_NAME} added`} />
           <span>
             <span className={SETTING_ROW_LABEL}>Remove the people K2 added</span>
             <span className={`block ${DIALOG_MUTED}`}>People someone added by hand always stay.</span>
@@ -1658,7 +1659,7 @@ function AppSpacesPanel({ sample, canMutate, notify }: PanelProps): React.JSX.El
             const app = dialog.space.app
             setDialog(null)
             const what = appSpace(app)
-            notify({ tone: 'ok', text: removed ? `Disconnected ${what} and removed the people K2 added.` : `Disconnected ${what}. Everyone stays in it.` })
+            notify({ tone: 'ok', text: removed ? `Disconnected ${what} and removed the people ${PRODUCT_NAME} added.` : `Disconnected ${what}. Everyone stays in it.` })
             void load()
           }}
         />

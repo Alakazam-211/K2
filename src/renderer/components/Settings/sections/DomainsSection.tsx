@@ -41,6 +41,7 @@ import {
   type FirewallPort,
   type FirewallStatus,
 } from './domains-parse'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type { AppNameStatus, DomainRow, FirewallPort, FirewallStatus } from './domains-parse'
 
@@ -148,7 +149,7 @@ export const ZONE_MISSING_COPY =
 export function domainStatus(d: DomainRow): { tone: TagTone; label: string; hint: string } {
   if (d.zoneMissing) return { tone: 'danger', label: 'Not found', hint: ZONE_MISSING_COPY }
   if (isPendingNs(d)) {
-    return { tone: 'warn', label: 'Waiting for nameservers', hint: 'Set its nameservers at your registrar. K2 checks by itself and updates this page.' }
+    return { tone: 'warn', label: 'Waiting for nameservers', hint: `Set its nameservers at your registrar. ${PRODUCT_NAME} checks by itself and updates this page.` }
   }
   if (d.readOnly) {
     return {
@@ -157,7 +158,7 @@ export function domainStatus(d: DomainRow): { tone: TagTone; label: string; hint
       hint: `Its records still work, but your k2.dev plan is ${d.status ?? 'on hold'}, so they can’t change. Check your plan on k2.dev.`,
     }
   }
-  if (d.dnsWrite) return { tone: 'ok', label: 'Working', hint: 'K2 hosts its DNS, so K2 adds the records each name needs.' }
+  if (d.dnsWrite) return { tone: 'ok', label: 'Working', hint: `${PRODUCT_NAME} hosts its DNS, so ${PRODUCT_NAME} adds the records each name needs.` }
   return { tone: 'neutral', label: 'Your DNS', hint: 'Its DNS stays where you manage it. Add the records each name needs there.' }
 }
 
@@ -194,8 +195,8 @@ export function nameStatus(n: DomainNameRow): { tone: TagTone; label: string; hi
   if (n.app) {
     const s = appStatus(n.app)
     if (n.app.error === 'unknown_app') return { ...s, hint: `There’s no App called ${n.app.app} on this server. Remove this name, or add it again for another App.` }
-    if (n.app.external) return { ...s, hint: `${role}. Your own web server answers for it, not K2.` }
-    const extra = n.app.viaRelay ? ' Reaches this server through K2 Connect.' : ''
+    if (n.app.external) return { ...s, hint: `${role}. Your own web server answers for it, not ${PRODUCT_NAME}.` }
+    const extra = n.app.viaRelay ? ` Reaches this server through ${PRODUCT_NAME} Connect.` : ''
     const main = n.app.primary ? ' Its main address.' : ''
     return { ...s, hint: `${role}.${main}${extra}` }
   }
@@ -205,7 +206,7 @@ export function nameStatus(n: DomainNameRow): { tone: TagTone; label: string; hi
     return { tone: 'danger', label: 'Certificate expired', hint: `${role}. Its certificate expired${c.expiresAt ? ` on ${day(c.expiresAt)}` : ''}, so browsers warn visitors.` }
   }
   if (c.state === 'self-signed') {
-    return { tone: 'warn', label: 'Temporary certificate', hint: `${role}. Browsers warn visitors until K2 gets a real certificate.` }
+    return { tone: 'warn', label: 'Temporary certificate', hint: `${role}. Browsers warn visitors until ${PRODUCT_NAME} gets a real certificate.` }
   }
   if (c.state === 'issued') {
     const until = c.expiresAt ? ` until ${day(c.expiresAt)}` : ''
@@ -243,7 +244,7 @@ export function firewallPortWords(r: FirewallPort): { who: 'K2' | 'You'; what: s
     case 'sew-voice':
       return { who: 'K2', what: 'Chat / Voice: calls' }
     case 'daemon':
-      return { who: 'K2', what: 'K2 on your local network' }
+      return { who: 'K2', what: `${PRODUCT_NAME} on your local network` }
     case 'owner':
     {
       const label = r.why.replace(/^owner:\s*/, '')
@@ -280,7 +281,7 @@ export const DOMAINS_MANIFEST: SettingEntry[] = [
     id: 'domains.certificates',
     section: 'domains',
     label: 'Certificates',
-    description: 'The certificate service K2 uses, or upload your own certificate',
+    description: `The certificate service ${PRODUCT_NAME} uses, or upload your own certificate`,
     keywords: ['certificate', 'acme', 'lets encrypt', 'zerossl', 'pem', 'upload', 'tls'],
   },
   {
@@ -385,7 +386,7 @@ function DomainsGroup({
   }
 
   const checkAgain = (apex: string): void =>
-    void run(`K2 couldn’t check ${apex} with k2.dev.`, async () => {
+    void run(`${PRODUCT_NAME} couldn’t check ${apex} with k2.dev.`, async () => {
       const body = (await cliCall('/cli/domains/refresh', { apex })) as { checked?: boolean; hint?: string } | null
       if (body?.checked === false) throw new DomainApiError(body.hint || 'k2.dev didn’t answer', null)
     })
@@ -397,7 +398,7 @@ function DomainsGroup({
       confirmLabel: 'Remove',
       destructive: true,
     })
-    if (yes) void run(`K2 couldn’t remove ${d.apex}.`, () => cliCall('/cli/domains/remove', { apex: d.apex }))
+    if (yes) void run(`${PRODUCT_NAME} couldn’t remove ${d.apex}.`, () => cliCall('/cli/domains/remove', { apex: d.apex }))
   }
 
   const domains = state.kind === 'ready' ? state.data : []
@@ -477,13 +478,13 @@ function DomainsGroup({
         <GroupHeading title="Your domains" />
         <SettingsLoadState
           kind="error"
-          title="K2 couldn’t read your domains from this server"
+          title={`${PRODUCT_NAME} couldn’t read your domains from this server`}
           detail={state.unreadable ? null : state.detail}
           testId="domains-load-error"
           action={<Button variant="quiet" onClick={() => void refresh()}>Try again</Button>}
         >
           {state.unreadable
-            ? 'Its answer wasn’t a list of domains K2 can read. Your domains still work. Try again, or update K2 on the server.'
+            ? `Its answer wasn’t a list of domains ${PRODUCT_NAME} can read. Your domains still work. Try again, or update ${PRODUCT_NAME} on the server.`
             : 'Your domains still work. Try again in a moment.'}
         </SettingsLoadState>
       </section>
@@ -541,7 +542,7 @@ function AddDomainForm({
       const body = await cliCall('/cli/domains', { apex: value })
       onAdded(parseDomainAnswer(body)?.apex ?? value)
     } catch (e) {
-      onError(failure(`K2 couldn’t add ${value}.`, e))
+      onError(failure(`${PRODUCT_NAME} couldn’t add ${value}.`, e))
       setSaving(false)
     }
   }
@@ -717,13 +718,13 @@ function NamesGroup({ domains, refresh }: { domains: DomainRow[]; refresh(): Pro
     const renew = n.cert.state === 'issued' || n.cert.state === 'expired'
     void run(
       n.hostname,
-      `K2 couldn’t get a certificate for ${n.hostname}.`,
+      `${PRODUCT_NAME} couldn’t get a certificate for ${n.hostname}.`,
       renew ? 'Renewed' : 'Certificate ready',
       () => cliCall(renew ? '/cli/certs/renew' : '/cli/certs/issue', { hostname: n.hostname }),
     )
   }
   const checkNow = (n: DomainNameRow): void =>
-    void run(n.hostname, `K2 couldn’t check ${n.hostname}.`, 'Checked', () => cliCall('/cli/app/domain/check', { app: n.app?.app, host: n.hostname }))
+    void run(n.hostname, `${PRODUCT_NAME} couldn’t check ${n.hostname}.`, 'Checked', () => cliCall('/cli/app/domain/check', { app: n.app?.app, host: n.hostname }))
   const remove = async (n: DomainNameRow): Promise<void> => {
     const yes = await useConfirmDialogStore.getState().confirm({
       title: `Remove ${n.hostname}?`,
@@ -731,7 +732,7 @@ function NamesGroup({ domains, refresh }: { domains: DomainRow[]; refresh(): Pro
       confirmLabel: 'Remove',
       destructive: true,
     })
-    if (yes) void run(n.hostname, `K2 couldn’t remove ${n.hostname}.`, 'Removed', () => cliCall('/cli/domains/names/remove', { hostname: n.hostname }))
+    if (yes) void run(n.hostname, `${PRODUCT_NAME} couldn’t remove ${n.hostname}.`, 'Removed', () => cliCall('/cli/domains/names/remove', { hostname: n.hostname }))
   }
 
   return (
@@ -862,8 +863,8 @@ function AppRecords({ host, app: a, busy, onCheckNow }: { host: string; app: App
         <p className={SETTING_ROW_HINT}>
           {failing
             ? 'These records stopped pointing here. Check them where you manage this domain’s DNS.'
-            : 'Next: add these records where you manage this domain’s DNS. K2 checks by itself, or check now.'}
-          {a.recordsPath === 'connect' ? ' Visitors reach this server through K2 Connect.' : ''}
+            : `Next: add these records where you manage this domain’s DNS. ${PRODUCT_NAME} checks by itself, or check now.`}
+          {a.recordsPath === 'connect' ? ` Visitors reach this server through ${PRODUCT_NAME} Connect.` : ''}
         </p>
         <Button variant="quiet" className="flex-shrink-0" disabled={busy} onClick={onCheckNow}>
           {busy ? 'Checking…' : 'Check now'}
@@ -958,7 +959,7 @@ function AddNameForm({
       await cliCall('/cli/domains/names', { hostname: value, role: role === 'app' ? `app:${appId}` : role })
       onAdded(value)
     } catch (e) {
-      onError(failure(`K2 couldn’t add ${value}.`, e))
+      onError(failure(`${PRODUCT_NAME} couldn’t add ${value}.`, e))
       setSaving(false)
     }
   }
@@ -992,13 +993,13 @@ function AddNameForm({
           className="w-full type-control"
         />
       </SettingRow>
-      <SettingRow label="Used for" hint="Tells K2 what to serve on it and which certificate it needs." field>
+      <SettingRow label="Used for" hint={`Tells ${PRODUCT_NAME} what to serve on it and which certificate it needs.`} field>
         <SettingDropdown fullWidth ariaLabel="Used for" value={role} options={ROLE_OPTIONS} onChange={setRole} />
       </SettingRow>
       {role === 'app' && (
         <SettingRow
           label="App"
-          hint={appsError ? `K2 couldn’t list this server’s Apps. The server said: ${appsError.replace(/[.\s]+$/, '')}.` : 'The App this name opens.'}
+          hint={appsError ? `${PRODUCT_NAME} couldn’t list this server’s Apps. The server said: ${appsError.replace(/[.\s]+$/, '')}.` : 'The App this name opens.'}
           field
         >
           <SettingDropdown
@@ -1041,7 +1042,7 @@ function CertificatesGroup({ domains, refresh }: { domains: DomainRow[]; refresh
   return (
     <SettingsGroup
       title="Certificates"
-      hint="K2 gets free certificates from Let’s Encrypt and renews them before they expire. Change these only to use another service."
+      hint={`${PRODUCT_NAME} gets free certificates from Let’s Encrypt and renews them before they expire. Change these only to use another service.`}
       settingId="domains.certificates"
       card
     >
@@ -1059,7 +1060,7 @@ function CertificatesGroup({ domains, refresh }: { domains: DomainRow[]; refresh
       />
       <SettingRow
         label="Your own certificate"
-        hint="Use a certificate you already have for one of your names. K2 stops renewing that name."
+        hint={`Use a certificate you already have for one of your names. ${PRODUCT_NAME} stops renewing that name.`}
         below={uploading ? <UploadForm names={names} onDone={(ok) => { setUploading(false); if (ok) void refresh() }} /> : undefined}
       >
         {!uploading && (
@@ -1126,7 +1127,7 @@ function UploadForm({ names, onDone }: { names: string[]; onDone(ok: boolean): v
     if (!valid || busy) return
     const yes = await useConfirmDialogStore.getState().confirm({
       title: `Replace the certificate for ${host}?`,
-      message: 'K2 uses this certificate and its key from now on, and stops renewing the name by itself.',
+      message: `${PRODUCT_NAME} uses this certificate and its key from now on, and stops renewing the name by itself.`,
       confirmLabel: 'Replace',
       destructive: true,
     })
@@ -1137,7 +1138,7 @@ function UploadForm({ names, onDone }: { names: string[]; onDone(ok: boolean): v
       await cliCall('/cli/certs/upload', { hostname: host, certPem: cert, keyPem: key })
       onDone(true)
     } catch (e) {
-      setError(failure(`K2 couldn’t use this certificate for ${host}.`, e))
+      setError(failure(`${PRODUCT_NAME} couldn’t use this certificate for ${host}.`, e))
       setBusy(false)
     }
   }
@@ -1233,7 +1234,7 @@ export function FirewallPanel(): React.JSX.Element {
       confirmLabel: 'Close port',
       destructive: true,
     })
-    if (yes) void act(`K2 couldn’t close port ${r.port}/${r.proto}.`, '/cli/firewall/close', { port: `${r.port}/${r.proto}` })
+    if (yes) void act(`${PRODUCT_NAME} couldn’t close port ${r.port}/${r.proto}.`, '/cli/firewall/close', { port: `${r.port}/${r.proto}` })
   }
 
   const heading = (
@@ -1255,13 +1256,13 @@ export function FirewallPanel(): React.JSX.Element {
         {heading}
         <SettingsLoadState
           kind="error"
-          title="K2 couldn’t read the firewall from this server"
+          title={`${PRODUCT_NAME} couldn’t read the firewall from this server`}
           detail={state.unreadable ? null : state.detail}
           testId="firewall-load-error"
           action={<Button variant="quiet" onClick={() => void load()}>Try again</Button>}
         >
           {state.unreadable
-            ? 'Its answer wasn’t a list of ports K2 can read. The ports stay as they were. Try again, or update K2 on the server.'
+            ? `Its answer wasn’t a list of ports ${PRODUCT_NAME} can read. The ports stay as they were. Try again, or update ${PRODUCT_NAME} on the server.`
             : 'The ports stay as they were. Try again in a moment.'}
         </SettingsLoadState>
       </section>
@@ -1277,8 +1278,8 @@ export function FirewallPanel(): React.JSX.Element {
     <div data-testid="firewall-panel">
       <SettingsGroup
         title="Firewall"
-        hint={`The ports open to the internet on this server, worked out from what K2 runs. ${
-          st.managedBy === 'k2' ? 'K2 sets the same list at your provider.' : 'Nothing sets this list at your provider: set the same rules in its firewall.'
+        hint={`The ports open to the internet on this server, worked out from what ${PRODUCT_NAME} runs. ${
+          st.managedBy === 'k2' ? `${PRODUCT_NAME} sets the same list at your provider.` : 'Nothing sets this list at your provider: set the same rules in its firewall.'
         }`}
         settingId="domains.firewall"
         card
@@ -1315,7 +1316,7 @@ export function FirewallPanel(): React.JSX.Element {
               requestAnimationFrame(() => openRef.current?.focus())
             }}
             onOpen={async (port, label) => {
-              if (await act(`K2 couldn’t open port ${port}.`, '/cli/firewall/open', { port, label })) setOpening(false)
+              if (await act(`${PRODUCT_NAME} couldn’t open port ${port}.`, '/cli/firewall/open', { port, label })) setOpening(false)
             }}
           />
         )}
@@ -1342,7 +1343,7 @@ export function FirewallPanel(): React.JSX.Element {
                 </Button>
               ) : (
                 <span className="type-hint text-[var(--color-text-secondary)] flex-shrink-0">
-                  {r.source === 'ssh' ? 'Set below' : 'Set by K2'}
+                  {r.source === 'ssh' ? 'Set below' : `Set by ${PRODUCT_NAME}`}
                 </span>
               )}
             </div>
@@ -1350,7 +1351,7 @@ export function FirewallPanel(): React.JSX.Element {
         })}
         <SettingRow
           label="Who can reach SSH"
-          hint={sshOnly ? `Only ${st.ssh.allowFrom.join(', ')}, on port ${st.ssh.port}.` : `Anyone on the internet, on port ${st.ssh.port}. K2 records this; it doesn’t move SSH.`}
+          hint={sshOnly ? `Only ${st.ssh.allowFrom.join(', ')}, on port ${st.ssh.port}.` : `Anyone on the internet, on port ${st.ssh.port}. ${PRODUCT_NAME} records this; it doesn’t move SSH.`}
           testId="fw-ssh"
           below={
             sshOpen ? (
@@ -1359,7 +1360,7 @@ export function FirewallPanel(): React.JSX.Element {
                 busy={busy}
                 onCancel={() => setSshOpen(false)}
                 onSave={async (payload) => {
-                  if (await act('K2 couldn’t change who can reach SSH.', '/cli/firewall/ssh', payload)) setSshOpen(false)
+                  if (await act(`${PRODUCT_NAME} couldn’t change who can reach SSH.`, '/cli/firewall/ssh', payload)) setSshOpen(false)
                 }}
               />
             ) : undefined
@@ -1383,7 +1384,7 @@ export function FirewallPanel(): React.JSX.Element {
               checked={httpOn}
               disabled={busy}
               aria-label="Send http to https"
-              onChange={(next) => void act('K2 couldn’t change the http redirect.', '/cli/front/http', { on: next })}
+              onChange={(next) => void act(`${PRODUCT_NAME} couldn’t change the http redirect.`, '/cli/front/http', { on: next })}
             />
           </SettingRow>
         )}
@@ -1393,7 +1394,7 @@ export function FirewallPanel(): React.JSX.Element {
             testId="fw-guard"
             hint={
               st.guard.enabled
-                ? `Each visitor can hold ${st.guard.connsPerIp ?? '–'} connections and make ${st.guard.writesPerMin ?? '–'} changes a minute to your Apps. Turned away ${st.guard.refused} · slowed ${st.guard.limited} since K2 started.`
+                ? `Each visitor can hold ${st.guard.connsPerIp ?? '–'} connections and make ${st.guard.writesPerMin ?? '–'} changes a minute to your Apps. Turned away ${st.guard.refused} · slowed ${st.guard.limited} since ${PRODUCT_NAME} started.`
                 : 'Off: visitors to your Apps have no limits.'
             }
           >

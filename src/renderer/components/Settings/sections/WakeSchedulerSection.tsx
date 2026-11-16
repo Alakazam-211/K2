@@ -22,6 +22,7 @@ import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 import { BetaTag, Button, Segmented, Toggle } from '@/components/ui'
 import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -63,9 +64,9 @@ function wakePlatformNote(platform: string | undefined): string {
     case 'macos':
       return 'The first time, macOS asks once for an admin password to add a small helper. With the lid closed, it wakes only while plugged in.'
     case 'linux':
-      return 'Uses the wake alarm permission the K2 package sets up. Without it, K2 shows the one command to run.'
+      return `Uses the wake alarm permission the ${PRODUCT_NAME} package sets up. Without it, ${PRODUCT_NAME} shows the one command to run.`
     case 'windows':
-      return 'Windows wakes for this only when the power plan allows wake timers. K2 shows the setting below and never changes it.'
+      return `Windows wakes for this only when the power plan allows wake timers. ${PRODUCT_NAME} shows the setting below and never changes it.`
     default:
       return ''
   }
@@ -160,11 +161,11 @@ function tickerDownMessage(status: SchedulerStatus | null): string | null {
     const stale = status.ticker.staleSecs == null || status.ticker.staleSecs > 180
     if (!stale) return null
     // HB9: the daemon's own tick stamp (`lastDaemonTickAt`).
-    return `Heartbeats haven’t been checked ${since(status.ticker.lastTickAt ?? status.lastDaemonTickAt)}. K2 may be stopped or restarting on this server. When it’s back, any heartbeat less than 12 hours late runs once.`
+    return `Heartbeats haven’t been checked ${since(status.ticker.lastTickAt ?? status.lastDaemonTickAt)}. ${PRODUCT_NAME} may be stopped or restarting on this server. When it’s back, any heartbeat less than 12 hours late runs once.`
   }
   const stale = status.staleSecs == null || status.staleSecs > 180
   if (!stale) return null
-  return `Heartbeats haven’t been checked ${since(status.lastTickAt)}. Update K2 on this server so it checks them on its own every minute.`
+  return `Heartbeats haven’t been checked ${since(status.lastTickAt)}. Update ${PRODUCT_NAME} on this server so it checks them on its own every minute.`
 }
 
 /** Compact one-liner for the heartbeat list row — "Every day at 9 AM",
@@ -218,13 +219,13 @@ class UnreadableReply extends Error {}
 
 export function listReply<T>(raw: unknown): T[] {
   if (Array.isArray(raw)) return raw as T[]
-  throw new UnreadableReply('K2 couldn’t read the list')
+  throw new UnreadableReply(`${PRODUCT_NAME} couldn’t read the list`)
 }
 
 /** The scheduler status is an object; anything else is a failed read. */
 function statusReply(raw: unknown): SchedulerStatus {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as SchedulerStatus
-  throw new UnreadableReply('K2 couldn’t read the status')
+  throw new UnreadableReply(`${PRODUCT_NAME} couldn’t read the status`)
 }
 
 /** The server's own reason, or '' when there is none to show. */
@@ -251,9 +252,9 @@ export function describeDecision(decision: string): { text: string; tone: Tone }
       return { text: 'Failed: its schedule isn’t valid', tone: 'problem' }
     case 'auto_disabled':
     case 'auto_disabled_failing':
-      return { text: 'Paused by K2 after failing several times', tone: 'problem' }
+      return { text: `Paused by ${PRODUCT_NAME} after failing several times`, tone: 'problem' }
     case 'tick_gap':
-      return { text: 'Missed: K2 wasn’t checking then', tone: 'problem' }
+      return { text: `Missed: ${PRODUCT_NAME} wasn’t checking then`, tone: 'problem' }
     case 'skipped_missed':
       return { text: 'Skipped: more than 12 hours late', tone: 'problem' }
     case 'not_due':
@@ -274,8 +275,8 @@ export function describeDecision(decision: string): { text: string; tone: Tone }
     skipped_empty: 'its wakeup file is empty',
     skipped_custom_timing: 'it wasn’t its time yet',
     skipped_busy: 'the agent was busy',
-    skipped_wakeup_waiting: 'its wakeup file was missing or unreadable; K2 retries',
-    skipped_wakeup_unavailable: 'its wakeup file was missing or unreadable; K2 retries',
+    skipped_wakeup_waiting: `its wakeup file was missing or unreadable; ${PRODUCT_NAME} retries`,
+    skipped_wakeup_unavailable: `its wakeup file was missing or unreadable; ${PRODUCT_NAME} retries`,
   }
   if (decision.startsWith('skipped_')) {
     return { text: `Skipped: ${SKIPS[decision] ?? decision.slice('skipped_'.length).replace(/_/g, ' ')}`, tone: 'skip' }
@@ -331,7 +332,7 @@ function failNote(what: string, err: unknown): RowNote {
 export const PAUSED_TEXT = 'Paused. It won’t run until you turn it back on.'
 
 const PAUSED_BY_K2: Record<string, string> = {
-  failures: 'Paused by K2 after failing several times. See Recent runs, then turn it back on.',
+  failures: `Paused by ${PRODUCT_NAME} after failing several times. See Recent runs, then turn it back on.`,
   wakeup_missing: 'Paused by K2: its instructions file is missing. Edit its instructions, then turn it back on.',
   wakeup_empty: 'Paused by K2: its instructions file is empty. Edit its instructions, then turn it back on.',
 }
@@ -712,7 +713,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
           <p className={SETTING_ROW_LABEL}>{tickerDown ? 'Heartbeats aren’t being checked' : 'Checking every minute'}</p>
           <p className={SETTING_ROW_HINT}>
             {tickerDown ??
-              `${lastCheck ? `Last check ${formatClock(lastCheck)}. ` : ''}K2 checks while this computer is awake, with or without the app open. A heartbeat missed while it slept runs once when it wakes, if it is less than 12 hours late.`}
+              `${lastCheck ? `Last check ${formatClock(lastCheck)}. ` : ''}${PRODUCT_NAME} checks while this computer is awake, with or without the app open. A heartbeat missed while it slept runs once when it wakes, if it is less than 12 hours late.`}
           </p>
         </div>
       </div>
@@ -731,8 +732,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
               <p className={SETTING_ROW_LABEL}>Wake this computer for heartbeats</p>
               <p className={SETTING_ROW_HINT}>
                 {wakeOn
-                  ? 'K2 wakes this computer a minute before the next heartbeat.'
-                  : 'Off: K2 doesn’t wake this computer from sleep. Heartbeats still fire whenever it is awake.'}
+                  ? `${PRODUCT_NAME} wakes this computer a minute before the next heartbeat.`
+                  : `Off: ${PRODUCT_NAME} doesn’t wake this computer from sleep. Heartbeats still fire whenever it is awake.`}
                 {note ? ` ${note}` : ''}
               </p>
               {wakeSaving && wake.platform === 'macos' && !wakeOn && (
@@ -820,8 +821,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
       testId="heartbeats-list-error"
     >
       {heartbeatsError.oldHost
-        ? 'Update K2 on the server, then try again.'
-        : 'K2 couldn’t read the list of heartbeats on this server. They still run on their schedules. Try again in a moment.'}
+        ? `Update ${PRODUCT_NAME} on the server, then try again.`
+        : `${PRODUCT_NAME} couldn’t read the list of heartbeats on this server. They still run on their schedules. Try again in a moment.`}
     </SettingsLoadState>
   ) : heartbeats === null && heartbeatsLoading ? (
     <SettingsLoadState kind="loading" title="Loading your heartbeats…" testId="heartbeats-list-loading" />
@@ -966,7 +967,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
     <SettingsGroup
       card
       title="Recent runs"
-      hint="What K2 did each time a heartbeat was due, newest first. Open a run to see why."
+      hint={`What ${PRODUCT_NAME} did each time a heartbeat was due, newest first. Open a run to see why.`}
       action={
         fires && fires.length > 0 ? (
           <Segmented<'all' | 'problems'>

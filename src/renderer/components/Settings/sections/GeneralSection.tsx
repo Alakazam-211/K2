@@ -89,16 +89,16 @@ import {
 import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import { SendFeedbackRows } from './SendFeedbackRows'
-import { RELEASES_URL_PREFIX } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME, RELEASES_URL_PREFIX } from '@/lib/brand'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
-  { id: 'general.app-version', section: 'general', group: 'General', label: 'K2 app', description: 'The K2 version on this computer: check for, download and install updates', keywords: ['update', 'version', 'check', 'release', 'download', 'install', 'app version'] },
+  { id: 'general.app-version', section: 'general', group: 'General', label: `${PRODUCT_NAME} app`, description: `The ${PRODUCT_NAME} version on this computer: check for, download and install updates`, keywords: ['update', 'version', 'check', 'release', 'download', 'install', 'app version'] },
   { id: 'general.auto-update-checks', section: 'general', group: 'General', label: 'Check for updates automatically', description: 'Look for a new version every few hours and say when one is ready. This computer only.', keywords: ['update', 'automatic', 'auto', 'check', 'disable', 'background'] },
-  { id: 'general.cli-version', section: 'general', group: 'General', label: 'k2 command', description: 'The k2 command-line tool for terminals and agents: its version, and installing or updating it', keywords: ['k2', 'cli', 'command', 'terminal', 'install', 'update', 'path', 'cli version'] },
+  { id: 'general.cli-version', section: 'general', group: 'General', label: `${CLI_NAME} command`, description: `The ${CLI_NAME} command-line tool for terminals and agents: its version, and installing or updating it`, keywords: ['k2', 'cli', 'command', 'terminal', 'install', 'update', 'path', 'cli version'] },
   { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools, install them in one click (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
   { id: 'general.release-notes', section: 'general', group: 'General', label: 'Release notes', description: "What's new in this version and the ones before it", keywords: ['release notes', 'whats new', 'changelog', 'changes', 'new'] },
-  { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: 'The page K2 opens on: Home or Agents. This computer only.', keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
-  { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The font K2 uses for code and text. Same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
+  { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: `The page ${PRODUCT_NAME} opens on: Home or Agents. This computer only.`, keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
+  { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: `The font ${PRODUCT_NAME} uses for code and text. Same setting as Editors / Fonts → Code`, keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets. Same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.link-copy-button', section: 'general', group: 'General', label: 'Show a copy button beside links on hover', description: 'A copy icon beside links in chats, Threads and tickets. Off by default; this computer only. Right-click a link to copy it either way', keywords: ['copy', 'link', 'url', 'hover', 'button', 'icon', 'chat', 'thread', 'clipboard'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Opens the web inspector for this window, for troubleshooting. This computer only.', keywords: ['devtools', 'developer', 'console', 'inspect', 'inspector', 'debug', 'network', 'logs'] },
@@ -106,9 +106,9 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The login on your phone or laptop that counts as you', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Settings file', description: '~/.k2/settings.json, where this server keeps its settings', keywords: ['settings', 'config', 'location', 'path', 'file', 'json'] },
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset all settings', description: "Put this server's settings back to their defaults. Workspaces, agents, chats and files stay. Owner only.", keywords: ['reset', 'defaults', 'factory', 'restore'] },
-  { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 server', description: 'The background service that runs agents, terminals and heartbeats: its status, restart and log', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent', 'log', 'restart'] },
+  { id: 'general.daemon', section: 'general', group: 'Server', label: `${PRODUCT_NAME} server`, description: 'The background service that runs agents, terminals and heartbeats: its status, restart and log', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent', 'log', 'restart'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'On: the red close button hides the window and agents keep running. Off: it quits everything. Cmd+Q always quits.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
-  { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: 'Agent sessions keep running when K2 updates, restarts or crashes. On by default. Works on macOS and Linux.', keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
+  { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: `Agent sessions keep running when ${PRODUCT_NAME} updates, restarts or crashes. On by default. Works on macOS and Linux.`, keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: "When off, Admins and Members can't clone agents from this server to their own computers. Owner only.", keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected server', description: "Restart the server you're connected to, not this computer", keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected server', description: "Update the server you're connected to, not this computer", keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
@@ -309,8 +309,8 @@ function ServerTab(): React.JSX.Element {
   return (
     <>
       <SettingsGroup
-        title="K2 server"
-        hint="The background service that runs agents, terminals, heartbeats and K2 Companion."
+        title={`${PRODUCT_NAME} server`}
+        hint={`The background service that runs agents, terminals, heartbeats and ${PRODUCT_NAME} Companion.`}
         card
       >
         <DaemonRow />
@@ -408,12 +408,12 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
       below = (
         <Callout tone="info" className="flex items-start justify-between gap-4">
           <CalloutLines
-            title={`K2 ${updateVersion} is available`}
+            title={`${PRODUCT_NAME} ${updateVersion} is available`}
             detail={
               updatePackageUrl ? (
                 <span data-testid="linux-package-update-hint">
                   {linuxCanInstall
-                    ? 'K2 downloads the package, checks it, and asks for your password to install it. Then K2 restarts.'
+                    ? `${PRODUCT_NAME} downloads the package, checks it, and asks for your password to install it. Then ${PRODUCT_NAME} restarts.`
                     : 'On Linux, updates come from your package (deb, rpm or Arch). Download opens the new version on GitHub.'}
                 </span>
               ) : (
@@ -434,8 +434,8 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
       below = (
         <Callout tone="info" data-testid="linux-package-installing" role="status">
           <CalloutLines
-            title={`Installing K2 ${updateVersion ?? ''}…`}
-            detail="Downloading and checking the package. K2 asks for your password, then restarts."
+            title={`Installing ${PRODUCT_NAME} ${updateVersion ?? ''}…`}
+            detail={`Downloading and checking the package. ${PRODUCT_NAME} asks for your password, then restarts.`}
           />
         </Callout>
       )
@@ -443,18 +443,18 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
       below = (
         <Callout tone="info" role="status" className="space-y-2">
           <div className="flex items-center justify-between gap-4">
-            <CalloutLines title={`Downloading K2 ${updateVersion ?? ''}…`} />
+            <CalloutLines title={`Downloading ${PRODUCT_NAME} ${updateVersion ?? ''}…`} />
             <span className="type-hint tabular-nums text-[var(--color-text-secondary)]">{updateProgress}%</span>
           </div>
-          <ProgressBar value={updateProgress} label={`Downloading K2 ${updateVersion ?? ''}`} />
+          <ProgressBar value={updateProgress} label={`Downloading ${PRODUCT_NAME} ${updateVersion ?? ''}`} />
         </Callout>
       )
     } else if (updateStatus === 'ready') {
       below = (
         <Callout tone="ok" className="flex items-start justify-between gap-4">
           <CalloutLines
-            title={`K2 ${updateVersion ?? ''} is ready to install`}
-            detail="K2 closes and opens again to finish."
+            title={`${PRODUCT_NAME} ${updateVersion ?? ''} is ready to install`}
+            detail={`${PRODUCT_NAME} closes and opens again to finish.`}
           />
           <Button
             variant="accent"
@@ -468,7 +468,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
     } else if (updateStatus === 'error') {
       below = (
         <Callout tone="error" role="alert" className="space-y-2">
-          <CalloutLines title="K2 couldn't finish the update" detail={updateError || 'No reason was given.'} />
+          <CalloutLines title={`${PRODUCT_NAME} couldn't finish the update`} detail={updateError || 'No reason was given.'} />
           {linuxManualCommand && (
             <div className="flex items-start gap-2" data-testid="linux-package-manual-command">
               <code className="flex-1 min-w-0 break-all select-text type-hint font-mono px-2 py-1.5 rounded-[var(--radius-field)] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
@@ -497,7 +497,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
         <span className="flex items-center gap-2 min-w-0">
           <span>K2 app</span>
           {isRemote && (
-            <Tag tone="neutral" title="The K2 version on this computer. The connected server's version is under Connected server.">
+            <Tag tone="neutral" title={`The ${PRODUCT_NAME} version on this computer. The connected server's version is under Connected server.`}>
               This computer
             </Tag>
           )}
@@ -623,13 +623,13 @@ function cliPathSentence(status: CliStatus): string | null {
   const file = p.startupFile ? tildePath(p.startupFile, p.userBin) : null
   if (p.newTerminalsFindIt) {
     if (p.blockPresent && p.onLoginPath !== true && file) {
-      return `New Terminal windows will find it: K2 added a PATH line to ${file}. Windows that are already open won't.`
+      return `New Terminal windows will find it: ${PRODUCT_NAME} added a PATH line to ${file}. Windows that are already open won't.`
     }
     return 'New Terminal windows find it.'
   }
   if (!status.installed) return null
-  if (p.optedOut) return "New Terminal windows won't find it: you removed K2's PATH line."
-  if (!file) return `New Terminal windows won't find it: K2 can't set PATH for ${p.shell}. Add ${p.userBin} to your PATH.`
+  if (p.optedOut) return `New Terminal windows won't find it: you removed ${PRODUCT_NAME}'s PATH line.`
+  if (!file) return `New Terminal windows won't find it: ${PRODUCT_NAME} can't set PATH for ${p.shell}. Add ${p.userBin} to your PATH.`
   return "New Terminal windows won't find it yet."
 }
 
@@ -686,17 +686,17 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
     void run('install', 'cli_install', (next, result) => {
       const v = next?.installedVersion ? ` (${next.installedVersion})` : ''
       const at = typeof result === 'string' && result ? ` at ${tildePath(result, next?.path?.userBin)}` : ''
-      if (wasInstalled) return `Updated the k2 command${v}.`
+      if (wasInstalled) return `Updated the ${CLI_NAME} command${v}.`
       const tail = next?.path && !next.path.onLoginPath && next.path.blockPresent ? ' Open a new Terminal window to use it.' : ''
-      return `Installed the k2 command${v}${at}.${tail}`
+      return `Installed the ${CLI_NAME} command${v}${at}.${tail}`
     })
   }, [run, status?.installed])
 
   const handleAddPathLine = useCallback(() => {
     void run('path', 'cli_install', (next) =>
       next?.path?.startupFile
-        ? `Added K2's PATH line to ${tildePath(next.path.startupFile, next.path.userBin)}. Open a new Terminal window to use k2.`
-        : 'Added the k2 command to your PATH. Open a new Terminal window to use it.',
+        ? `Added ${PRODUCT_NAME}'s PATH line to ${tildePath(next.path.startupFile, next.path.userBin)}. Open a new Terminal window to use k2.`
+        : `Added the ${CLI_NAME} command to your PATH. Open a new Terminal window to use it.`,
     )
   }, [run])
 
@@ -704,16 +704,16 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
     void run('remove', 'cli_remove_path_block', (_next, result) => {
       const files = Array.isArray(result) ? (result as string[]).map((f) => tildePath(f, userBin)) : []
       const from = files.length ? ` from ${files.join(', ')}` : ''
-      return `Removed K2's PATH line${from}. Only the lines between its markers changed.`
+      return `Removed ${PRODUCT_NAME}'s PATH line${from}. Only the lines between its markers changed.`
     })
   }, [run, userBin])
 
   const handleSystemInstall = useCallback(() => {
-    void run('system', 'cli_install_system', () => `Installed the k2 command in /usr/local/bin.`)
+    void run('system', 'cli_install_system', () => `Installed the ${CLI_NAME} command in /usr/local/bin.`)
   }, [run])
 
   const hint = (() => {
-    const lead = 'Runs K2 from a terminal; agents use it too.'
+    const lead = `Runs ${PRODUCT_NAME} from a terminal; agents use it too.`
     if (readError) return `${lead} Couldn't tell whether it's installed.`
     if (!status) return `${lead} Checking…`
     if (!status.installed) return `${lead} Not installed.`
@@ -721,7 +721,7 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
     const where = status.symlinkPath ? ` It's at ${tildePath(status.symlinkPath, userBin)}.` : ''
     const pathLine = cliPathSentence(status)
     const tail = `${where}${pathLine ? ` ${pathLine}` : ''}`
-    if (status.packageManaged) return `${lead} ${v} It updates with K2's package.${tail}`
+    if (status.packageManaged) return `${lead} ${v} It updates with ${PRODUCT_NAME}'s package.${tail}`
     if (updateAvailable) return `${lead} ${v} ${status.bundledVersion} is ready to install.${tail}`
     return `${lead} ${v}${tail}`
   })()
@@ -746,7 +746,7 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
         )}
         <p className="type-hint min-w-0">
           {systemOffered ? '/usr/local/bin asks for your password. ' : ''}
-          {removeOffered ? 'Removing the line changes only what K2 added.' : ''}
+          {removeOffered ? `Removing the line changes only what ${PRODUCT_NAME} added.` : ''}
         </p>
       </div>
     ) : null
@@ -774,7 +774,7 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
   const pathLineOffered = !!status?.installed && !!p && !p.newTerminalsFindIt && !!p.startupFile
 
   return (
-    <SettingRow label="k2 command" hint={hint} settingId="general.cli-version" below={below}>
+    <SettingRow label={`${CLI_NAME} command`} hint={hint} settingId="general.cli-version" below={below}>
       {status && !status.installed && (
         <Button
           variant={primary ? 'accent' : 'default'}
@@ -848,7 +848,7 @@ function DevToolsRow(): React.JSX.Element {
       setEnabled(next)
       writeDevToolsPref(next)
       if (readDevToolsPref() === next) save.saved()
-      else save.failed("this computer's storage is blocked, so it lasts until K2 closes")
+      else save.failed(`this computer's storage is blocked, so it lasts until ${PRODUCT_NAME} closes`)
       // Optionally open immediately when enabled so the toggle is useful
       // without a second click.
       if (next) void openDevTools()
@@ -938,7 +938,7 @@ function ConfigLocationRow(): React.JSX.Element {
 export const RESET_ALL_HINT =
   "Shortcuts, fonts, workspace options, sharing and previews go back to their defaults. Workspaces, agents, chats and files stay. Owner only."
 export const RESET_ALL_CONFIRM =
-  "Every setting on this server goes back to its default: shortcuts, fonts, workspace options, sharing and preview switches. The K2 Companion password is cleared, so phones sign in again. Workspaces, agents, chats, files and this computer's look stay. This can't be undone. Only this server's owner can reset it."
+  `Every setting on this server goes back to its default: shortcuts, fonts, workspace options, sharing and preview switches. The ${PRODUCT_NAME} Companion password is cleared, so phones sign in again. Workspaces, agents, chats, files and this computer's look stay. This can't be undone. Only this server's owner can reset it.`
 
 function ResetAllRow(): React.JSX.Element {
   const resetAllSettings = useSettingsStore((s) => s.resetAllSettings)
@@ -1035,7 +1035,7 @@ function DaemonRow(): React.JSX.Element {
       setStatus(result)
       setError(null)
     } catch (e) {
-      setError(`Couldn't read the K2 server's status: ${String(e)}`)
+      setError(`Couldn't read the ${PRODUCT_NAME} server's status: ${String(e)}`)
     }
   }, [])
 
@@ -1053,9 +1053,9 @@ function DaemonRow(): React.JSX.Element {
     try {
       await invoke<string>('daemon_install')
       await refresh()
-      useToastStore.getState().addToast('The K2 server is installed and running.', 'success', 4000)
+      useToastStore.getState().addToast(`The ${PRODUCT_NAME} server is installed and running.`, 'success', 4000)
     } catch (e) {
-      setError(`Couldn't install the K2 server: ${String(e)}`)
+      setError(`Couldn't install the ${PRODUCT_NAME} server: ${String(e)}`)
     } finally {
       setBusy(null)
     }
@@ -1065,9 +1065,9 @@ function DaemonRow(): React.JSX.Element {
     async (ask: boolean) => {
       if (ask) {
         const ok = await confirm({
-          title: 'Restart the K2 server?',
+          title: `Restart the ${PRODUCT_NAME} server?`,
           message:
-            'Agents, terminals and K2 Companion disconnect for a few seconds, then reconnect. With "Agents keep running through updates and restarts" on, agent sessions carry on.',
+            `Agents, terminals and ${PRODUCT_NAME} Companion disconnect for a few seconds, then reconnect. With "Agents keep running through updates and restarts" on, agent sessions carry on.`,
           confirmLabel: 'Restart',
         })
         if (!ok) return
@@ -1079,9 +1079,9 @@ function DaemonRow(): React.JSX.Element {
         // Give launchd a moment to respawn before we query again.
         await new Promise((r) => setTimeout(r, 1200))
         await refresh()
-        useToastStore.getState().addToast('The K2 server restarted.', 'success', 4000)
+        useToastStore.getState().addToast(`The ${PRODUCT_NAME} server restarted.`, 'success', 4000)
       } catch (e) {
-        setError(`Couldn't restart the K2 server: ${String(e)}`)
+        setError(`Couldn't restart the ${PRODUCT_NAME} server: ${String(e)}`)
       } finally {
         setBusy(null)
       }
@@ -1117,12 +1117,12 @@ function DaemonRow(): React.JSX.Element {
     status?.state === 'running'
       ? ` · version ${status.version} · up ${formatUptime(status.uptime_secs)}`
       : status?.state === 'not_installed'
-        ? '. Without it, agents stop when you close K2.'
+        ? `. Without it, agents stop when you close ${PRODUCT_NAME}.`
         : ''
 
   return (
     <SettingRow
-      label="K2 server"
+      label={`${PRODUCT_NAME} server`}
       settingId="general.daemon"
       hint={
         <span title={status?.state === 'running' ? `PID ${status.pid}, port ${status.port}` : undefined}>
@@ -1281,8 +1281,8 @@ function AgentsSurviveRestartsRow(): React.JSX.Element {
       <div className={SETTING_ROW_LABEL}>{SURVIVE_LABEL}</div>
       <div className={SETTING_ROW_HINT}>
         {on
-          ? 'New agent sessions keep running when K2 updates, restarts or crashes. Sessions started before you turned this on stop at the next restart. Works on macOS and Linux.'
-          : 'Updating or restarting K2 stops running agents; they pick up their conversation afterwards.'}
+          ? `New agent sessions keep running when ${PRODUCT_NAME} updates, restarts or crashes. Sessions started before you turned this on stop at the next restart. Works on macOS and Linux.`
+          : `Updating or restarting ${PRODUCT_NAME} stops running agents; they pick up their conversation afterwards.`}
       </div>
       <SwitchError error={error} />
       <SaveError state={save.state} />
@@ -1324,8 +1324,8 @@ function KeepDaemonOnQuitRow(): React.JSX.Element {
       <div className={SETTING_ROW_LABEL}>{KEEP_LABEL}</div>
       <div className={SETTING_ROW_HINT}>
         {on
-          ? 'The red close button hides the window; agents and K2 Companion keep going. Cmd+Q quits everything.'
-          : 'The red close button quits everything, like Cmd+Q. Agents pause and K2 Companion disconnects.'}
+          ? `The red close button hides the window; agents and ${PRODUCT_NAME} Companion keep going. Cmd+Q quits everything.`
+          : `The red close button quits everything, like Cmd+Q. Agents pause and ${PRODUCT_NAME} Companion disconnects.`}
       </div>
       <SwitchError error={error} />
       <SaveError state={save.state} />
@@ -1367,7 +1367,7 @@ export function GeneralRemoteHostPanel(): React.JSX.Element | null {
       ) : (
         <SettingRow
           label="Restart and update"
-          hint={`${hostLabel} runs a K2 too old to restart or update from here${needs ? ` (needs ${needs} or later)` : ''}. Update it on that computer and these controls appear.`}
+          hint={`${hostLabel} runs a ${PRODUCT_NAME} too old to restart or update from here${needs ? ` (needs ${needs} or later)` : ''}. Update it on that computer and these controls appear.`}
           testId="remote-host-unsupported"
         >
           <Tag tone="muted">Not available</Tag>
@@ -2064,7 +2064,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
         // B1: the host's CURRENT version after ANY successful check, for
         // both up-to-date and update-available states. Hidden once a job is
         // downloading/staging (the phase line below takes over).
-        check && idle ? hostVersionCopy(hostLabel, check.current) : `Check whether a newer K2 is ready for ${hostLabel}.`
+        check && idle ? hostVersionCopy(hostLabel, check.current) : `Check whether a newer ${PRODUCT_NAME} is ready for ${hostLabel}.`
       }
       below={below.length > 0 ? <div className="space-y-2">{below}</div> : undefined}
     >

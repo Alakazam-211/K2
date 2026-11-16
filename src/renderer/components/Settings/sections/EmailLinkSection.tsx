@@ -72,6 +72,7 @@ import {
   type OauthConfig,
   type OauthProviderConfig,
 } from './email-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const EMAIL_LINK_MANIFEST: SettingEntry[] = [
   { id: 'email-link.inboxes', section: 'email-link', label: 'Connected email accounts', description: 'Your email accounts that workspaces’ agents can use', keywords: ['imap', 'gmail', 'fastmail', 'inbox', 'external', 'connect', 'email', 'account', 'app password', 'link'] },
@@ -110,7 +111,7 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }):
             window.setTimeout(() => setCopied(false), 1200)
           })
           .catch(() => {
-            useToastStore.getState().addToast('K2 couldn’t copy to the clipboard', 'error')
+            useToastStore.getState().addToast(`${PRODUCT_NAME} couldn’t copy to the clipboard`, 'error')
           })
       }}
     >
@@ -154,11 +155,11 @@ function usedBy(inbox: Inbox): string {
 function readFailure(err: unknown): { line: string; detail: string | null } {
   if (err instanceof MailReplyError) {
     return {
-      line: 'This server sent an answer K2 couldn’t read. Try again; if it keeps happening, update K2 on the server.',
+      line: `This server sent an answer ${PRODUCT_NAME} couldn’t read. Try again; if it keeps happening, update ${PRODUCT_NAME} on the server.`,
       detail: null,
     }
   }
-  return { line: 'K2 couldn’t reach this server’s email settings. Try again in a moment.', detail: mailErrorMessage(err) }
+  return { line: `${PRODUCT_NAME} couldn’t reach this server’s email settings. Try again in a moment.`, detail: mailErrorMessage(err) }
 }
 
 /** Why a step failed, in the server's words, or nothing for a reply K2
@@ -210,7 +211,7 @@ type ConnectFailure = {
 async function bindLoopback(): Promise<{ captureId: string; redirectUri: string }> {
   const bind = await invoke<{ captureId?: unknown; redirectUri?: unknown } | null>('oauth_loopback_bind')
   if (!bind || typeof bind.captureId !== 'string' || typeof bind.redirectUri !== 'string') {
-    throw new Error('K2 couldn’t open a Google sign-in window on this computer. Use the K2 desktop app, or update it.')
+    throw new Error(`${PRODUCT_NAME} couldn’t open a Google sign-in window on this computer. Use the ${PRODUCT_NAME} desktop app, or update it.`)
   }
   return { captureId: bind.captureId, redirectUri: bind.redirectUri }
 }
@@ -226,7 +227,7 @@ function signInFailure(
   if (st.state === 'denied') line = `Access wasn’t allowed on ${who}’s page. Try again and choose Allow.`
   else if (st.state === 'expired') line = 'The sign-in took too long and expired. Try again.'
   else if (st.code === 'account_mismatch') line = 'A different account signed in. Try again and sign in to the address you entered.'
-  else if (st.code === 'admin_consent_required') line = 'Your Microsoft 365 admin needs to approve K2 first. Send them the approval page, then try again.'
+  else if (st.code === 'admin_consent_required') line = `Your Microsoft 365 admin needs to approve ${PRODUCT_NAME} first. Send them the approval page, then try again.`
   else line = 'The sign-in didn’t finish. Try again.'
   return { title, line, detail: st.hint ?? null, adminConsentUrl: st.adminConsentUrl }
 }
@@ -256,14 +257,14 @@ export function microsoftLinkState(cfg: OauthConfig | null | 'error'): {
     return {
       enabled: false,
       badge: 'Update needed',
-      title: 'This server’s K2 is too old to connect Microsoft accounts. Update it to add one.',
+      title: `This server’s ${PRODUCT_NAME} is too old to connect Microsoft accounts. Update it to add one.`,
     }
   }
   if (!ms.configured) {
     return {
       enabled: false,
       badge: 'Needs an app',
-      title: 'This copy of K2 has no Microsoft sign-in app. Add your own under Sign-in apps below.',
+      title: `This copy of ${PRODUCT_NAME} has no Microsoft sign-in app. Add your own under Sign-in apps below.`,
     }
   }
   return {
@@ -460,7 +461,7 @@ function ConnectGroup({
         } else {
           setFailure({
             title: 'Couldn’t connect Microsoft',
-            line: 'This server started a sign-in K2 can’t show. Update K2 on the server and try again.',
+            line: `This server started a sign-in ${PRODUCT_NAME} can’t show. Update ${PRODUCT_NAME} on the server and try again.`,
             detail: res.hint ?? null,
           })
         }
@@ -470,7 +471,7 @@ function ConnectGroup({
         if (info.code === 'remote_unsupported') {
           setFailure({
             title: `Couldn’t connect ${name} from here`,
-            line: 'Connect this account from the K2 desktop app: it shows the sign-in page inside K2.',
+            line: `Connect this account from the ${PRODUCT_NAME} desktop app: it shows the sign-in page inside ${PRODUCT_NAME}.`,
             detail: info.hint ?? null,
           })
         } else if (e instanceof MailReplyError) {
@@ -478,7 +479,7 @@ function ConnectGroup({
         } else {
           setFailure({
             title: `Couldn’t connect ${name}`,
-            line: 'K2 couldn’t start the sign-in. Check the address and try again.',
+            line: `${PRODUCT_NAME} couldn’t start the sign-in. Check the address and try again.`,
             detail: mailErrorMessage(e),
           })
         }
@@ -517,7 +518,7 @@ function ConnectGroup({
         if (cancelled) return
         setFailure({
           title: `Couldn’t connect ${flow.provider === 'gmail' ? 'Gmail' : 'Microsoft'}`,
-          line: e instanceof MailReplyError ? readFailure(e).line : 'K2 lost track of the sign-in. Try again.',
+          line: e instanceof MailReplyError ? readFailure(e).line : `${PRODUCT_NAME} lost track of the sign-in. Try again.`,
           detail: serverReason(e),
         })
         dropFlow()
@@ -573,7 +574,7 @@ function ConnectGroup({
                 variant="quiet"
                 onClick={() =>
                   void openUrl(gmailSession.authorizationUrl).catch(() => {
-                    useToastStore.getState().addToast('K2 couldn’t open your browser', 'error')
+                    useToastStore.getState().addToast(`${PRODUCT_NAME} couldn’t open your browser`, 'error')
                   })
                 }
                 title="Use this if the page below doesn't load"
@@ -658,14 +659,14 @@ function ConnectGroup({
           />
         </SettingRow>
         <div data-settings-id="email-link.oauth">
-          <SettingRow label="Gmail" hint="Sign in with Google here in K2.">
+          <SettingRow label="Gmail" hint={`Sign in with Google here in ${PRODUCT_NAME}.`}>
             <Button
               // The IMAP form's Connect is the one filled button while it's open.
               variant={imapOpen ? 'default' : 'accent'}
               className="flex-shrink-0"
               disabled={!canStart}
               onClick={() => void start('gmail')}
-              title={notReady ?? 'Open Google’s sign-in page in K2'}
+              title={notReady ?? `Open Google’s sign-in page in ${PRODUCT_NAME}`}
             >
               {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
             </Button>
@@ -827,7 +828,7 @@ function ImapForm({
       // The daemon's own reason (bad drafts folder → the real folder list,
       // login or server failure, unknown workspace), quietly under the line.
       setError({
-        line: 'K2 couldn’t sign in to the mail server. Check the server, port and app password, then try again.',
+        line: `${PRODUCT_NAME} couldn’t sign in to the mail server. Check the server, port and app password, then try again.`,
         detail: serverReason(e),
       })
     } finally {
@@ -884,7 +885,7 @@ function ImapForm({
       )}
       {row(
         'App password',
-        'Make one in your provider’s security settings; your normal password won’t work. K2 keeps it in its vault and never shows it again.',
+        `Make one in your provider’s security settings; your normal password won’t work. ${PRODUCT_NAME} keeps it in its vault and never shows it again.`,
         <Input aria-label="App password" type="password" autoComplete="new-password" value={password} disabled={disabled} onChange={(e) => setPassword(e.target.value)} placeholder="App password" className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed" />,
       )}
       {row(
@@ -899,12 +900,12 @@ function ImapForm({
       )}
       {row(
         'Drafts folder',
-        'Optional. K2 finds it; enter a name only if it picks the wrong one.',
+        `Optional. ${PRODUCT_NAME} finds it; enter a name only if it picks the wrong one.`,
         <Input aria-label="Drafts folder" value={draftsFolder} disabled={disabled} onChange={(e) => setDraftsFolder(e.target.value)} placeholder="Found automatically" className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed" spellCheck={false} />,
       )}
       <div className="pt-3 space-y-3">
         <div className="flex items-center justify-between gap-6">
-          <span className="type-hint text-[var(--color-text-secondary)]">{missing ?? 'K2 checks the sign-in before it saves the account.'}</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">{missing ?? `${PRODUCT_NAME} checks the sign-in before it saves the account.`}</span>
           <div className="flex items-center gap-2 flex-shrink-0">
             <Button variant="quiet" onClick={onCancel} disabled={busy}>
               Cancel
@@ -1011,9 +1012,9 @@ function OauthClientRow({
   const reset = async (): Promise<void> => {
     if (!canMutate || busy !== null) return
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: `Go back to K2’s ${label} app?`,
-      message: `K2 forgets your ${label} app’s ID${hasSecret ? ' and secret' : ''}. Accounts you connected keep working until they next sign in.`,
-      confirmLabel: 'Use K2’s app',
+      title: `Go back to ${PRODUCT_NAME}’s ${label} app?`,
+      message: `${PRODUCT_NAME} forgets your ${label} app’s ID${hasSecret ? ' and secret' : ''}. Accounts you connected keep working until they next sign in.`,
+      confirmLabel: `Use ${PRODUCT_NAME}’s app`,
     })
     if (!ok) return
     setBusy('reset')
@@ -1036,7 +1037,7 @@ function OauthClientRow({
       testId={`oauth-app-${provider}`}
       hint={
         <>
-          {isCustom ? 'Signs in with your own app.' : 'Signs in with K2’s app.'}
+          {isCustom ? 'Signs in with your own app.' : `Signs in with ${PRODUCT_NAME}’s app.`}
           <SaveError state={result} />
         </>
       }
@@ -1066,7 +1067,7 @@ function OauthClientRow({
                   <div className={SETTING_ROW_HINT}>
                     {cfg.secretSet
                       ? 'A secret is saved. Leave this empty to keep it.'
-                      : 'K2 keeps it in its vault and never shows it again.'}
+                      : `${PRODUCT_NAME} keeps it in its vault and never shows it again.`}
                   </div>
                   {cfg.secretSet && clientSecret.length === 0 && idChanged && isCustom && (
                     <p className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed max-w-[75ch]">
@@ -1101,7 +1102,7 @@ function OauthClientRow({
       <SaveNote state={result} />
       {isCustom && !open && (
         <Button variant="quiet" className="flex-shrink-0" disabled={!canMutate || busy !== null} onClick={() => void reset()}>
-          {busy === 'reset' ? 'Switching…' : 'Use K2’s app…'}
+          {busy === 'reset' ? 'Switching…' : `Use ${PRODUCT_NAME}’s app…`}
         </Button>
       )}
       <Button
@@ -1136,7 +1137,7 @@ function SignInAppsGroup({
     <SettingsGroup
       title="Sign-in apps"
       badge={<Tag tone="muted">Advanced</Tag>}
-      hint="K2 signs in to Google and Microsoft with its own app. Use your own app to have your own quota and sign-in screen."
+      hint={`${PRODUCT_NAME} signs in to Google and Microsoft with its own app. Use your own app to have your own quota and sign-in screen.`}
       settingId="email-link.oauth-apps"
       card
       state={
@@ -1227,10 +1228,10 @@ export function AddCalendarAccess({
         redirectUri: bind.redirectUri,
       })
       if (res.flow !== 'loopback') {
-        throw new Error('K2 could not start a Google consent page. Try again.')
+        throw new Error(`${PRODUCT_NAME} could not start a Google consent page. Try again.`)
       }
       if (!res.authorizationUrl || !res.state) {
-        throw new Error(res.hint ?? 'K2 could not start a Google consent page. Try again.')
+        throw new Error(res.hint ?? `${PRODUCT_NAME} could not start a Google consent page. Try again.`)
       }
       const { linkId, authorizationUrl } = res
       const oauthState = res.state
@@ -1284,7 +1285,7 @@ export function AddCalendarAccess({
           deadlineMs: Date.now() + Math.min(bound, OAUTH_MAX_MS),
         })
       } else {
-        setFailure({ text: res.hint ?? 'K2 could not start a Microsoft device sign-in. Try again.' })
+        setFailure({ text: res.hint ?? `${PRODUCT_NAME} could not start a Microsoft device sign-in. Try again.` })
       }
     } catch (e) {
       setFailure({ text: e instanceof MailReplyError ? readFailure(e).line : mailErrorMessage(e) })
@@ -1449,7 +1450,7 @@ function AccountDetail({
     const confirmed = await useConfirmDialogStore.getState().confirm({
       title: `Disconnect ${inbox.address}?`,
       message:
-        'Agents in every workspace lose access to this account, and K2 deletes its saved sign-in. ' +
+        `Agents in every workspace lose access to this account, and ${PRODUCT_NAME} deletes its saved sign-in. ` +
         'Nothing in the mailbox changes. You can connect it again later.',
       confirmLabel: 'Disconnect',
       destructive: true,
@@ -1486,17 +1487,17 @@ function AccountDetail({
           label="Status"
           hint={
             inbox.status === 'error'
-              ? 'K2 couldn’t sign in to this account the last time it checked, so agents can’t use it. If its password changed, disconnect it and connect it again.'
+              ? `${PRODUCT_NAME} couldn’t sign in to this account the last time it checked, so agents can’t use it. If its password changed, disconnect it and connect it again.`
               : inbox.status === 'connected' || inbox.status === 'running'
-                ? 'K2 signs in to this account normally.'
-                : 'K2 hasn’t checked this account yet.'
+                ? `${PRODUCT_NAME} signs in to this account normally.`
+                : `${PRODUCT_NAME} hasn’t checked this account yet.`
           }
         >
           <StatusTag status={inbox.status} />
         </SettingRow>
         <SettingRow
           label="Signed in with"
-          hint={oauth ? `K2 keeps the sign-in from ${source === 'google' ? 'Google' : 'Microsoft'}; no password is stored.` : 'An app password, kept in K2’s vault.'}
+          hint={oauth ? `${PRODUCT_NAME} keeps the sign-in from ${source === 'google' ? 'Google' : 'Microsoft'}; no password is stored.` : `An app password, kept in ${PRODUCT_NAME}’s vault.`}
         >
           <span className="type-row text-[var(--color-text-secondary)]">
             {source === 'google' ? 'Google' : source === 'microsoft' ? 'Microsoft' : 'App password'}
@@ -1524,7 +1525,7 @@ function AccountDetail({
       <SettingsGroup title="Disconnect" card>
         <SettingRow
           label="Disconnect this account"
-          hint="Agents lose access and K2 deletes the saved sign-in. Nothing in the mailbox changes."
+          hint={`Agents lose access and ${PRODUCT_NAME} deletes the saved sign-in. Nothing in the mailbox changes.`}
           below={
             error ? (
               <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
@@ -1715,7 +1716,7 @@ export function EmailLinkSection(): React.JSX.Element {
                     <span>
                       {notice.kind === 'connected'
                         ? `${notice.address} is connected. Agents in ${notice.workspace} can use it now.`
-                        : `${notice.address} is disconnected. No workspace can use it, and K2 deleted its saved sign-in.`}
+                        : `${notice.address} is disconnected. No workspace can use it, and ${PRODUCT_NAME} deleted its saved sign-in.`}
                     </span>
                     <span className="flex items-center gap-2 flex-shrink-0">
                       {notice.kind === 'connected' && rows?.some((i) => i.address === notice.address) && (

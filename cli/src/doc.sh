@@ -47,21 +47,29 @@ is off every verb on its files refuses and nothing is opened or changed.
 Agents can list the cores but not switch them (k2 doc cores --help).
 
 Read (the doc's path is the LAST argument; GNU flags, a subset):
-  k2 doc cat [-n] <f>                 the doc now (exact bytes)
-  --for-edit [--ttl 30s] on cat/head/tail/grep/sed/view: also claim the lines shown
-  k2 doc head [-n N] <f> · tail [-n N] <f> · wc [-l] <f>
-  k2 doc grep [-n -i -E -C N …] <pattern> <f>
+  k2 doc cat [-n] <f>                 the doc now (exact bytes; -n numbers the
+                                      lines and prints the text instead)
+  --for-edit [--ttl 30s] on cat/head/tail/grep/sed/view: also claim the lines
+  shown (--ttl: milliseconds, or Nms, Ns, Nm)
+  k2 doc head [-n N|-c N] <f> · tail [-n N|-c N] <f> · wc [-l -w -c -m] <f>
+  k2 doc grep [-n -i -E -F -v -w -x -c -o -l -m N -A N -B N -C N -e PAT …] <pattern> <f>
   k2 doc sed -n 'a,bp' <f>            print lines (sets your viewing range)
   k2 doc view --lines a,b <f>
-  k2 doc diff [-u] <f> < old.md       what changed vs your copy (exit 1 = differs)
+  k2 doc diff [-u] [--label L] <f> < old.md   what changed vs your copy (exit 1 =
+                                      differs; or --text "..."; -u changes nothing:
+                                      the diff is always unified)
 Edit (each is one change; your own `undo` reverts it). Agents: an edit is
 checked against the version you last read (nothing is checked if you never
 read it); if the doc changed since, it is refused, nothing applied (exit 1,
 "doc changed since V (now W)"): read again, then redo it. --if-version V
 names the version yourself.
   k2 doc sed -i 's/old/new/g' <f>     (e w r R W and backup suffixes refused)
-  k2 doc patch [-p N] <f> < change.diff   all or nothing (--partial to apply what fits)
-  k2 doc append <f> < text            or --text "..."
+  k2 doc patch [-p N] <f> < change.diff   all or nothing (--partial to apply what fits);
+                                      -R reverse, --dry-run check only, -F N fuzz
+                                      (default 2), or --text "..."; -p N is accepted
+                                      and ignored: the doc named last is patched
+  k2 doc append [--ensure-newline] <f> < text   or --text "..." (--ensure-newline:
+                                      a newline first if the doc lacks one)
   k2 doc insert --line N|--after N|--at L:C <f> < text   (or --text "...")
   k2 doc replace --lines a,b|--range L:C-L:C <f> < text  (or --text "...")
   k2 doc replace --old TEXT --new TEXT [--all] <f>   exact text, no regex (exit 1:
@@ -70,8 +78,12 @@ names the version yourself.
                                       text, a final newline included), or - for stdin
   k2 doc delete --lines a,b|--range L:C-L:C <f>
   k2 doc replace-section --heading "## X" [--include-heading] [--nth K] <f> < text
+                                      Markdown docs only (or --text "...");
+                                      --include-heading: the heading line too,
+                                      so the new text carries the heading
   k2 doc mv <f> <new-name.md>         rename; the doc keeps its history and presence
   k2 doc write --base V|live <f> < whole-file   three-way merge from version V
+                                      (or --file F, --text "...")
   k2 doc undo [--steps N] [--partial|--drop] [--for <person>] <f> · redo [--steps N] <f>
   k2 doc revert <change> [--partial] <f>   reverse one change from the log, days later
   Undo only reverses your own changes and never alters a word someone else
@@ -86,9 +98,14 @@ names the version yourself.
   undo --drop removes your top step without applying it; --for <person> undoes
   what you did for them.
 Presence:
-  k2 doc who <f> · follow <name> <f> · cursor --at L:C [--to L:C] <f>
+  k2 doc who <f> · cursor --at L:C [--to L:C] <f>
+  k2 doc follow <name> <f>            where one person is now: one line (caret,
+                                      the lines they view, the lease), then exit;
+                                      exit 4 if they are not in the doc. <name>:
+                                      part of a name (any case) or a pid
   k2 doc claim --lines a,b [--ttl 2m] [--note "why"] [--hold] <f>   "I'm working
-                                      on these lines": 30 s unless --ttl (at most
+                                      on these lines": 30 s unless --ttl
+                                      (milliseconds, or Nms, Ns, Nm; at most
                                       10m); your next edit there ends it (--hold:
                                       it lasts until the ttl or --release)
   k2 doc claim --renew|--release [--id claim-N] <f> · activity [-n N] <f>
@@ -161,7 +178,8 @@ undo, claim --lines …) refuse with not_a_text_doc and say why the file isn't
 live text.
   k2 doc cat <f> (its bytes; pipe them) · who|open|leave|status|flush|watch <f>
   k2 doc view --region "page 3" <f>   say what you're looking at
-  k2 doc lease [--ttl 5m] <f>         take the lease (exit 5 while someone else has it)
+  k2 doc lease [--ttl 5m] <f>         take the lease (exit 5 while someone else has it;
+                                      --ttl: seconds, or Ns, Nm, Nh)
   k2 doc lease --renew|--release <f> · lock = lease, unlock = lease --release
   k2 doc lease --break <f>            the box owner or an Admin only
   Your own writes keep your lease; it ends at --ttl (default 5m, at most 1h),
@@ -181,21 +199,27 @@ these files (agent_write_refused, exit 2): save your version as a new file
 and comment on this one with --proposal <new file>.
   k2 doc outline [--depth N] [--kind K] [--under ADDR] [--tree] [--version V] <f>
                                       every layer in reading order, each with
-                                      its #N (no text or pixels)
-  k2 doc node ADDR... [--depth N] [--text] [--whole] [--version V] <f>
+                                      its #N (no text or pixels); --tree indents
+                                      each layer two spaces per depth
+  k2 doc node ADDR... [--depth N] [--version V] <f>
                                       layers in full; ADDR is a key, #N or a
                                       name (a name two layers share: exit 2,
                                       ambiguous_address, with each one's key);
                                       one that names nothing: exit 4, the rest
                                       still listed
+  k2 doc node ADDR --whole|--text <f>  one layer, not paged: --whole its full
+                                      record and its ancestors as one JSON line,
+                                      --text its text, raw (exit 1 if it has none)
   k2 doc layer list|show ... <f>      the same as outline and node
   k2 doc layer diff V1 [V2] <f>       what changed, layer by layer (history;
                                       V1, V2: version numbers from k2 doc
                                       versions; no V2: the current one)
   k2 doc layer blame [--version V] <f>   who made each layer as it is (history)
-  Reads come in pages (--read-budget BYTES, at least 16384): a page that ends
-  "truncated: true" names a cursor; pass it with --cursor C and the same
-  arguments for the next one (another version: stale_cursor, exit 1).
+  Reads come in pages (--read-budget BYTES: default 32768, less than 16384
+  counts as 16384): a page that ends "truncated: true" names a cursor; pass
+  it with --cursor C and the same arguments for the next one (another
+  version: stale_cursor, exit 1). --no-truncate: exit 2 (over_budget)
+  instead of paging.
   --json prints the page as JSON. Layers are read in the background after
   each save; until then a read waits a few seconds, then exits 1
   (index_pending): try again shortly.
@@ -208,20 +232,24 @@ and comment on this one with --proposal <new file>.
 Comments on any-file docs (pinned to the whole file, or on PSD/PSB files to
 a layer). They need edit, or a share with --comment; they make no version.
   k2 doc comment --doc|--node ADDR --body "text" [--mention P]... [--proposal FILE]... <f>
-                                      P: me, a login, a workspace or a pid
-  k2 doc reply ann-N --body "text" [--mention P]... <f>
+                                      P: me, a login, a workspace or a pid;
+                                      with --node: --version V (the version the
+                                      key is read in), --hint TEXT
+  k2 doc reply ann-N --body "text" [--mention P]... [--proposal FILE]... <f>
   k2 doc resolve ann-N [--reopen] <f>
   k2 doc comment --delete ann-N [--n N] <f>   its author, the person it was
-                                      for, or an owner
-  k2 doc comments [--open|--resolved] [--on KEY] [--since SEQ] [--after ann-N] [--limit N] <f>
+                                      for, or an owner (--n N: one comment;
+                                      default 0, the whole thread)
+  k2 doc comments [--open|--resolved] [--on KEY] [--since SEQ] [--after ann-N] [--limit N] [--version V] <f>
                                       each thread with its pin's state:
                                       attached, hint-stale, suspect, hidden or
                                       orphaned; --since SEQ: what changed
                                       after SEQ (pass the last page's head)
   k2 doc comments --log [ann-N] [--since SEQ] <f>   what happened to the
                                       threads (history)
-  k2 doc reanchor ann-N --doc|--node ADDR <f>   move a pin; an agent's move is
-                                      a proposal a person confirms by running
+  k2 doc reanchor ann-N --doc|--node ADDR [--version V] [--hint TEXT] <f>
+                                      move a pin; an agent's move is a
+                                      proposal a person confirms by running
                                       the same reanchor
   The box owner or an Admin only (never agents):
   k2 doc purge-comments --thread ann-N [--n N] | --text "..." | --all <f>
@@ -238,7 +266,7 @@ a doc).
 Sharing with another workspace (people only):
   k2 doc share <file-or-folder> --with <ws> [--write] [--history] [--comment] -w <ws>
                                       (--comment: a read-only share may comment)
-  k2 doc unshare <file-or-folder> --with <ws> -w <ws> · shares [-w <ws>]
+  k2 doc unshare <file-or-folder> --with <ws> -w <ws> · shares [-w <ws>] [--with <ws>]
 
 Flags (any verb): -w/--workspace <ws> (a relative path is then inside it;
 default: the file you name, from where you stand) · --on-behalf-of <person>

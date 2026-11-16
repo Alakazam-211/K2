@@ -54,6 +54,7 @@ import {
   tokenNotAccepted,
   webBundleReloadUrl,
 } from '@/lib/boot-status-view'
+import { noteReportedBrand } from '@/lib/brand'
 import { useConnectHostStore, activeHostKey, hostBaseUrl, type ConnectHost } from '@/stores/connect-host'
 import { hostPool, installHostSessionSync } from '@/lib/host-pool-instance'
 import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
@@ -120,6 +121,10 @@ interface DaemonBootStatus {
   features?: unknown
   /** homes-sync-v1: the box's stable id; absent on old daemons. */
   serverId?: unknown
+  /** The product's names and hosted zones (full view; absent on old daemons). */
+  productName?: unknown
+  cliName?: unknown
+  hostedZones?: unknown
 }
 
 /** `/boot-status` `features` as strings; a body without the list (an
@@ -518,6 +523,9 @@ export function noteAcceptedBootStatus(
   // homes-sync-v1: which box this host is (`local` for this computer).
   // `noteServerId` ignores an absent id (never clears).
   noteServerId(hostKey, status?.serverId)
+  // The product's names and hosted zones, as this window's server reports
+  // them (lib/brand). A body without them changes nothing.
+  noteReportedBrand(status)
   return opts.isRemote && tokenNotAccepted(opts.tokenSent, status)
 }
 

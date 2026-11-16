@@ -63,7 +63,7 @@ pub fn is_enabled() -> bool {
 }
 
 /// The names the perf switch is read under, newest first.
-const ENABLED_NAMES: &[&str] = &["K5_PERF", "K2SO_PERF"];
+const ENABLED_NAMES: &[&str] = crate::env_names::PERF;
 
 /// What the switch's value means: on for anything but unset, empty or `0`.
 fn enabled_by(value: Option<String>) -> bool {

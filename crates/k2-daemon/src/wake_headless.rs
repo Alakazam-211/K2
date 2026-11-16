@@ -148,7 +148,7 @@ impl std::fmt::Display for WakeFireError {
 
 /// The names the test stand-in for the agent command is read under,
 /// newest first.
-const TEST_COMMAND_NAMES: &[&str] = &["K5_WAKE_HEADLESS_TEST_COMMAND", "K2SO_WAKE_HEADLESS_TEST_COMMAND"];
+const TEST_COMMAND_NAMES: &[&str] = k2_core::env_names::WAKE_HEADLESS_TEST_COMMAND;
 
 /// A test seam compiled into the daemon: when set, a headless wake runs
 /// this command (the tests use `cat`) in place of the agent's own, and

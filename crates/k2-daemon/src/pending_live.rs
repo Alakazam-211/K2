@@ -95,7 +95,7 @@ fn pending_state() -> &'static Mutex<HashMap<String, usize>> {
 }
 
 /// The names the queue root's override is read under, newest first.
-const ROOT_NAMES: &[&str] = &["K5_PENDING_LIVE_ROOT", "K2SO_PENDING_LIVE_ROOT"];
+const ROOT_NAMES: &[&str] = k2_core::env_names::PENDING_LIVE_ROOT;
 
 /// Resolve the queue root. Daemon's `~/.k2so/daemon.pending-live/`.
 /// Tests override via env var; production uses `k2_core::paths::home_dir()`.

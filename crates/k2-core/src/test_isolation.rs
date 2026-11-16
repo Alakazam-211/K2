@@ -16,7 +16,7 @@
 //!
 //! Run tests with the session variables cleared, for example
 //! `env -u K2_HOOK_SOCK -u K2_HOOK_TOKEN … cargo test`, or
-//! `for v in $(env | grep -oE '^K2(SO)?_[A-Z0-9_]+'); do unset $v; done`.
+//! `for v in $(env | grep -oE '^K(2|2SO|5)_[A-Z0-9_]+'); do unset $v; done`.
 
 use std::path::{Path, PathBuf};
 
@@ -40,6 +40,16 @@ pub const PROD_REACH_VARS: &[&str] = &[
     "K2_REMOTE_TOKEN",
     "K2_CONNECT_BASE",
     "K2_HOME",
+    // Read under a K5_ name first (by the CLI; `k2_core::env_names`).
+    "K5_HOOK_SOCK",
+    "K5_HOOK_TOKEN",
+    "K5_PANE_ID",
+    "K5_PORT",
+    "K5_API_CELL",
+    // The home override (`paths::k2_home`): inherited, it would send a
+    // test's "temp home" to whatever folder it names.
+    "K5_HOME_OVERRIDE",
+    "K2_HOME_OVERRIDE",
 ];
 
 /// Daemon port/token files under `~/.k2` a test must never be able to read
@@ -93,7 +103,7 @@ pub fn assert_no_prod_env() {
     assert!(
         leaked.is_empty(),
         "prod-isolation guard: this test process inherited {leaked:?}, which reach the \
-         production daemon. Clear every K2_*/K2SO_* session variable before running tests."
+         production daemon. Clear every K2_*/K2SO_*/K5_* session variable before running tests."
     );
 }
 
@@ -244,9 +254,14 @@ mod tests {
             ("K2_TEST_AGENT_SHIM_DIR", "/tmp/shim"),
             ("K2_HOOK_INSTALL", "0"),
             ("K2_PORT", ""),
+            ("K5_HOOK_TOKEN", "sid.secret"),
+            ("K2_HOME_OVERRIDE", "/Users/x/.k2"),
             ("PATH", "/bin"),
         ];
-        assert_eq!(leaked_vars(vars), vec!["K2SO_PANE_ID".to_string(), "K2_HOOK_SOCK".to_string()]);
+        assert_eq!(
+            leaked_vars(vars),
+            vec!["K2SO_PANE_ID".to_string(), "K2_HOME_OVERRIDE".to_string(), "K2_HOOK_SOCK".to_string(), "K5_HOOK_TOKEN".to_string()]
+        );
     }
 
     #[test]

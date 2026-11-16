@@ -25,6 +25,13 @@ pub const PROD_REACH_VARS: &[&str] = &[
     "K2_REMOTE_TOKEN",
     "K2_CONNECT_BASE",
     "K2_HOME",
+    "K5_HOOK_SOCK",
+    "K5_HOOK_TOKEN",
+    "K5_PANE_ID",
+    "K5_PORT",
+    "K5_API_CELL",
+    "K5_HOME_OVERRIDE",
+    "K2_HOME_OVERRIDE",
 ];
 
 /// Names the node always sets itself. An agent can't override them (the
@@ -176,7 +183,7 @@ mod tests {
         for v in PROD_REACH_VARS {
             assert_eq!(env_name_refusal(v), Some("env_reaches_daemon"), "{v}");
         }
-        assert_eq!(PROD_REACH_VARS.len(), 17);
+        assert_eq!(PROD_REACH_VARS.len(), 24);
     }
 
     #[test]

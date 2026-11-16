@@ -43,7 +43,7 @@ pub const WAKEUP_TEMPLATE_K2: &str = include_str!("../../wakeup_templates/k2.md"
 /// `agent-template`, which is always dispatched with explicit orders
 /// by a manager).
 /// The names the wake-spawn trace switch is read under, newest first.
-pub const TRACE_WAKE_SPAWN_NAMES: &[&str] = &["K5_TRACE_WAKE_SPAWN", "K2SO_TRACE_WAKE_SPAWN"];
+pub const TRACE_WAKE_SPAWN_NAMES: &[&str] = crate::env_names::TRACE_WAKE_SPAWN;
 
 /// Whether the wake-spawn trace is on: the first of its names that is set
 /// is `1`. Off by default. For investigating who spawned a wake.

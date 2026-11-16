@@ -62,12 +62,12 @@ pub fn spawn(config: WatchdogConfig) -> JoinHandle<()> {
 }
 
 /// The names one watchdog setting is read under, newest first.
-const DISABLED_NAMES: &[&str] = &["K5_WATCHDOG_DISABLED", "K2_WATCHDOG_DISABLED", "K2SO_WATCHDOG_DISABLED"];
-const WARN_NAMES: &[&str] = &["K5_WATCHDOG_WARN_SECS", "K2SO_WATCHDOG_WARN_SECS"];
-const CTRL_C_NAMES: &[&str] = &["K5_WATCHDOG_CTRL_C_SECS", "K2SO_WATCHDOG_CTRL_C_SECS"];
-const KILL_NAMES: &[&str] = &["K5_WATCHDOG_KILL_SECS", "K2SO_WATCHDOG_KILL_SECS"];
-const SPAWN_GRACE_NAMES: &[&str] = &["K5_WATCHDOG_SPAWN_GRACE_SECS", "K2SO_WATCHDOG_SPAWN_GRACE_SECS"];
-const POLL_NAMES: &[&str] = &["K5_WATCHDOG_POLL_SECS", "K2SO_WATCHDOG_POLL_SECS"];
+const DISABLED_NAMES: &[&str] = k2_core::env_names::WATCHDOG_DISABLED;
+const WARN_NAMES: &[&str] = k2_core::env_names::WATCHDOG_WARN_SECS;
+const CTRL_C_NAMES: &[&str] = k2_core::env_names::WATCHDOG_CTRL_C_SECS;
+const KILL_NAMES: &[&str] = k2_core::env_names::WATCHDOG_KILL_SECS;
+const SPAWN_GRACE_NAMES: &[&str] = k2_core::env_names::WATCHDOG_SPAWN_GRACE_SECS;
+const POLL_NAMES: &[&str] = k2_core::env_names::WATCHDOG_POLL_SECS;
 
 /// Load config from environment variables, falling back to
 /// `WatchdogConfig::default()` for anything not set. If the disabled

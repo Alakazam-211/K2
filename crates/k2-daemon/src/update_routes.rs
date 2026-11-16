@@ -1137,7 +1137,7 @@ fn start_bundled_app_update(
 }
 
 /// The names the host's display name override is read under, newest first.
-const HOSTNAME_NAMES: &[&str] = &["K5_HOSTNAME", "K2SO_HOSTNAME"];
+const HOSTNAME_NAMES: &[&str] = k2_core::env_names::HOSTNAME;
 
 /// Actionable "the app isn't open" message surfaced on a bundled-app job
 /// when no co-located app is listening to drive the Tauri updater.
@@ -1962,8 +1962,9 @@ fn daemon_port_hint() -> String {
 #[cfg(not(feature = "airgap"))]
 const DEFAULT_MANIFEST_URL: &str = k2_core::brand::DAEMON_FEED_URL;
 
-/// The `daemon-latest.json` URL. Overridable via `K2SO_DAEMON_MANIFEST_URL`
-/// (self-hosting / tests). The default points at the public release
+/// The `daemon-latest.json` URL. Overridable via `K5_DAEMON_MANIFEST_URL`,
+/// `K2_DAEMON_MANIFEST_URL` or `K2SO_DAEMON_MANIFEST_URL`, read in that
+/// order (self-hosting / tests). The default points at the public release
 /// channel; P1 owns the canonical value, so this is a placeholder the
 /// parent reconciles.
 fn manifest_url() -> String {
@@ -1973,10 +1974,7 @@ fn manifest_url() -> String {
     // An airgap-tagged build has no default URL — env override still exists
     // for tests, but `handle_check` refuses before fetch because air-gap is
     // baked on.
-    if let Ok(u) = std::env::var("K2_DAEMON_MANIFEST_URL") {
-        return u;
-    }
-    if let Ok(u) = std::env::var("K2SO_DAEMON_MANIFEST_URL") {
+    if let Some((_, u)) = k2_core::env_names::first_set(k2_core::env_names::DAEMON_MANIFEST_URL) {
         return u;
     }
     #[cfg(feature = "airgap")]
@@ -2314,14 +2312,28 @@ mod tests {
     struct ManifestUrlEnv {
         _k2so: k2_core::test_env::EnvVar,
         _k2: k2_core::test_env::EnvVar,
+        _k5: k2_core::test_env::EnvVar,
     }
 
     impl ManifestUrlEnv {
         fn unset() -> Self {
+            let k5 = k2_core::test_env::EnvVar::remove("K5_DAEMON_MANIFEST_URL");
             let k2 = k2_core::test_env::EnvVar::remove("K2_DAEMON_MANIFEST_URL");
             let k2so = k2_core::test_env::EnvVar::remove("K2SO_DAEMON_MANIFEST_URL");
-            Self { _k2so: k2so, _k2: k2 }
+            Self { _k2so: k2so, _k2: k2, _k5: k5 }
         }
+    }
+
+    /// The manifest URL is read as `K5_` first, then `K2_`, then `K2SO_`.
+    #[test]
+    fn the_manifest_url_override_is_read_newest_name_first() {
+        let _env = ManifestUrlEnv::unset();
+        let _old = k2_core::test_env::EnvVar::set("K2SO_DAEMON_MANIFEST_URL", "http://k2so.invalid/m.json");
+        assert_eq!(manifest_url(), "http://k2so.invalid/m.json");
+        let _mid = k2_core::test_env::EnvVar::set("K2_DAEMON_MANIFEST_URL", "http://k2.invalid/m.json");
+        assert_eq!(manifest_url(), "http://k2.invalid/m.json");
+        let _new = k2_core::test_env::EnvVar::set("K5_DAEMON_MANIFEST_URL", "http://k5.invalid/m.json");
+        assert_eq!(manifest_url(), "http://k5.invalid/m.json");
     }
 
     #[cfg(not(feature = "airgap"))]

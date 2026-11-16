@@ -161,8 +161,8 @@ pub fn is_dismiss_armed(project_id: &str) -> bool {
 }
 
 /// The names each setting is read under, newest first.
-const TICK_SECS_NAMES: &[&str] = &["K5_ACTIVE_REAPER_TICK_SECS", "K2SO_ACTIVE_REAPER_TICK_SECS"];
-const GRACE_MS_NAMES: &[&str] = &["K5_ACTIVE_REAPER_GRACE_MS", "K2SO_ACTIVE_REAPER_GRACE_MS"];
+const TICK_SECS_NAMES: &[&str] = k2_core::env_names::ACTIVE_REAPER_TICK_SECS;
+const GRACE_MS_NAMES: &[&str] = k2_core::env_names::ACTIVE_REAPER_GRACE_MS;
 
 fn tick_interval() -> Duration {
     let secs = k2_core::env_names::first_set(TICK_SECS_NAMES)

@@ -6,7 +6,8 @@ export const SAVE_CSS = `
 .ed-tab .ed-bad { color: var(--color-status-error-text); }
 .ed-tab .ed-si [data-tone="bad"] { color: var(--color-text-primary); }
 .ed-tab .ed-save-notice p > b + span { margin-top: 1px; }
-.ed-tab[data-narrow] .ed-save-actions, .ed-tab .lv-shell[data-narrow] .ed-save-actions { flex-basis: 100%; justify-content: flex-end; }
+/* At 800 the actions wrap below the words; a lone × stays on the headline's row. */
+.ed-tab[data-narrow] .ed-save-actions:not([data-close-only]), .ed-tab .lv-shell[data-narrow] .ed-save-actions:not([data-close-only]) { flex-basis: 100%; justify-content: flex-end; }
 
 /* The kept pair: a warn tint, a bar in the left margin, a tag in the right. */
 .ed-tab .cm-line.ed-kept { position: relative; background: color-mix(in srgb, var(--color-status-warn) 11%, transparent); }

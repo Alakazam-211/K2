@@ -30,7 +30,7 @@ export function SaveNoticeBar<A extends string = SaveActionId>({ view, kind, onA
         <b className="font-semibold">{view.title}</b>
         {view.line ? <span className="text-[var(--color-text-secondary)]">{view.line}</span> : null}
       </p>
-      <div className="ed-save-actions ml-auto flex flex-none flex-wrap items-center gap-1.5">
+      <div data-close-only={view.actions.length === 0 ? '' : undefined} className="ed-save-actions ml-auto flex flex-none flex-wrap items-center gap-1.5">
         {view.actions.map((a) => (
           <Button
             key={a.id}

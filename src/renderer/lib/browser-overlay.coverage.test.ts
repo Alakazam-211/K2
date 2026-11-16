@@ -63,6 +63,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/FileViewerPane/BoardFilePane.tsx': 'the chip and sheets stay in the pane, beside a Browser column, never over it',
   'components/LiveView/timeline/ViewMenu.tsx': 'the live timeline’s View menu opens inside its own tab (absolute, clipped by the tab), never over another pane',
   'components/LiveView/timeline/Monitor.tsx': 'the monitor’s details sheet portals into its own tab’s upper row (absolute, clipped by the tab), never over another pane',
+  'components/Editor/tools/SlashMenu.tsx': 'the file editor’s / menu opens inside its own tab’s text (absolute, clipped by the tab), never over another pane',
   'components/LiveView/timeline/MonitorDetails.tsx': 'the monitor’s details (a dialog role) sit inside the monitor or its own tab’s upper row, never over another pane',
   'components/Feedback/FeedbackPage.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/TicketBoard.tsx': 'Feedback page: the room is hidden',

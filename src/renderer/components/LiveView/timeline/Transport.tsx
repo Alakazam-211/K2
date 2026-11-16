@@ -80,10 +80,10 @@ export interface TransportProps {
   onLoop: () => void
   onScrub: (f: number) => void
   /** Following ended because they stopped or left: the line, Back to my place and Follow again (none once they've left). */
-  finished?: { text: string; back: string; again: string | null; onBack: () => void; onAgain: () => void } | null
+  finished?: { text: string; title: string; back: string; backTitle: string; again: string | null; onBack: () => void; onAgain: () => void } | null
 }
 
-/** How far the right group folds when it doesn't fit: 1 hides the key hint, 2 zoom (the keys still zoom), 3 loop, 4 the mode word (its words stay in details). */
+/** How far the right group folds when it doesn't fit: 1 hides the key hint, 2 zoom (the keys still zoom), 3 loop, 4 the mode word (its words stay in details), 5 View (while Back to my place and Follow again need the room). */
 function useFold(deps: unknown[]): [React.RefObject<HTMLDivElement | null>, number] {
   const ref = useRef<HTMLDivElement>(null)
   const [fold, setFold] = useState(0)
@@ -98,7 +98,7 @@ function useFold(deps: unknown[]): [React.RefObject<HTMLDivElement | null>, numb
   useLayoutEffect(() => setFold(0), [w, ...deps]) // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const el = ref.current
-    if (el && fold < 4 && el.scrollWidth > el.clientWidth + 1) setFold(fold + 1)
+    if (el && fold < 5 && el.scrollWidth > el.clientWidth + 1) setFold(fold + 1)
   })
   return [ref, fold]
 }
@@ -128,7 +128,7 @@ export function Transport(p: TransportProps): React.JSX.Element {
               </span>
             ) : null}
             {p.finished ? (
-              <span className="lv-tl-tpw" role="status" data-testid="lv-finished" title={p.finished.text}>
+              <span className="lv-tl-tpw" role="status" data-testid="lv-finished" title={p.finished.title}>
                 {p.finished.text}
               </span>
             ) : (
@@ -163,11 +163,11 @@ export function Transport(p: TransportProps): React.JSX.Element {
           {p.back}
           {p.finished ? (
             <>
-              <Button variant="default" size="sm" className="!text-[var(--color-text-primary)]" data-testid="lv-back-home" onClick={p.finished.onBack}>
+              <Button variant="default" size="sm" className="!text-[var(--color-text-primary)]" data-testid="lv-back-home" aria-label={p.finished.backTitle} title={p.finished.backTitle} onClick={p.finished.onBack}>
                 {p.finished.back}
               </Button>
               {p.finished.again ? (
-                <Button variant="accent" size="sm" data-testid="lv-follow-again" onClick={p.finished.onAgain}>
+                <Button variant="accent" size="sm" data-testid="lv-follow-again" aria-label="Follow again" title="Follow again" onClick={p.finished.onAgain}>
                   {p.finished.again}
                 </Button>
               ) : null}

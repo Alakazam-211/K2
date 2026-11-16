@@ -113,6 +113,15 @@ describe('Follow on the timeline', () => {
     expect(who()).toBe('Atlas’s playhead')
   })
 
+  it('at 800 the finished line and its buttons take their short words, their names whole', async () => {
+    await mount(800)
+    upTo('Atlas lets go')
+    expect(screen.getByTestId('lv-finished').textContent).toBe('Atlas stopped.')
+    expect(screen.getByTestId('lv-finished').getAttribute('title')).toBe('Atlas stopped. Stopped following.')
+    expect(screen.getByRole('button', { name: 'Back to my place' }).textContent).toBe('Back')
+    expect(screen.getByRole('button', { name: 'Follow again' }).textContent).toBe('Follow')
+  })
+
   it('Back to my place puts your playhead where it was before you followed', async () => {
     await mount()
     upTo('Atlas holds')

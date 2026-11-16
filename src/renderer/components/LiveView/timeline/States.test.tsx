@@ -40,7 +40,7 @@ describe('no edit to show', () => {
     await mount()
     pick('open')
     expect(stage()?.dataset.kind).toBe('opening')
-    expect(stage()?.textContent).toMatch(/^Opening .+The lanes fill in as each part arrives; the picture comes once the clips are in\. Step 1 of \d+\./)
+    expect(stage()?.textContent).toMatch(/^Opening rough-cutThe lanes fill in as each part arrives; the picture comes once the clips are in\. Step 1 of \d+\./)
     expect(within(stage()!).getByText('Connecting')).toBeTruthy()
   })
 

@@ -29,11 +29,12 @@ export interface Finished {
   home: number
 }
 
-/** The finished line and its two ways on (no Follow again once they've left). */
-export function finishedWords(f: Finished): { text: string; back: string; again: string | null } {
+/** The finished line and its two ways on (no Follow again once they've left), with the short forms a narrow transport uses (the editors' too). */
+export function finishedWords(f: Finished): { text: string; short: string; back: string; backShort: string; again: string | null; againShort: string | null } {
+  const back = { back: 'Back to my place', backShort: 'Back' }
   return f.why === 'left'
-    ? { text: `${f.name} left the file. Stopped following.`, back: 'Back to my place', again: null }
-    : { text: `${f.name} stopped. Stopped following.`, back: 'Back to my place', again: 'Follow again' }
+    ? { text: `${f.name} left the file. Stopped following.`, short: `${f.name} left.`, ...back, again: null, againShort: null }
+    : { text: `${f.name} stopped. Stopped following.`, short: `${f.name} stopped.`, ...back, again: 'Follow again', againShort: 'Follow' }
 }
 
 /** The one you follow stopped at this step: they let go of their hold, or their turn ended. */

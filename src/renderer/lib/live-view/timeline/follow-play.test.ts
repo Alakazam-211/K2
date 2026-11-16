@@ -57,8 +57,8 @@ describe('when the one you follow stops or leaves', () => {
   })
 
   it('the finished words, as the editors say them, worded for the timeline', () => {
-    expect(finishedWords({ who: ATLAS, name: 'Atlas', why: 'stopped', home: 40 })).toEqual({ text: 'Atlas stopped. Stopped following.', back: 'Back to my place', again: 'Follow again' })
-    expect(finishedWords({ who: SAM, name: 'Sam', why: 'left', home: 40 })).toEqual({ text: 'Sam left the file. Stopped following.', back: 'Back to my place', again: null })
+    expect(finishedWords({ who: ATLAS, name: 'Atlas', why: 'stopped', home: 40 })).toEqual({ text: 'Atlas stopped. Stopped following.', short: 'Atlas stopped.', back: 'Back to my place', backShort: 'Back', again: 'Follow again', againShort: 'Follow' })
+    expect(finishedWords({ who: SAM, name: 'Sam', why: 'left', home: 40 })).toEqual({ text: 'Sam left the file. Stopped following.', short: 'Sam left.', back: 'Back to my place', backShort: 'Back', again: null, againShort: null })
   })
 })
 

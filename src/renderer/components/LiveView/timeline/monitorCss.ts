@@ -50,10 +50,11 @@ html[data-style="terminal"] .lv-mon-prep { border-radius: 0; }
 .lv-mon-card .lv-mon-sub { color: var(--lv-ink-2); }
 .lv-mon-card[data-tone="warn"] > svg { color: color-mix(in srgb, var(--color-status-warn) 60%, var(--color-media-label-text)); }
 .lv-mon-btn[data-primary] { background: var(--color-accent-fill); color: var(--color-on-accent); border-color: var(--color-accent-fill); }
-.lv-mon-open { width: min(420px, 86%); align-items: stretch; text-align: left; gap: 4px; }
+.lv-mon-open { width: min(420px, 86%); max-height: calc(100% - 20px); align-items: stretch; text-align: left; gap: 4px; }
 .lv-mon-bar { display: block; height: 4px; margin: 6px 0 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--color-media-label-text) 16%, transparent); }
 .lv-mon-bar i { display: block; height: 100%; background: var(--color-accent); }
-.lv-mon-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.lv-mon-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-height: 0; overflow-y: auto; }
+/* the rows scroll inside the cut card (a chamfered box itself never scrolls) */
 .lv-mon-rows li { display: flex; align-items: center; gap: 8px; }
 .lv-mon-rows li[data-state="wait"] { color: var(--lv-ink-2); }
 .lv-mon-st { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; color: color-mix(in srgb, var(--color-status-ok) 55%, var(--color-media-label-text)); }
@@ -108,8 +109,9 @@ html[data-style="terminal"] .lv-tl-scrub i { border-radius: 0; }
 .lv-tl-tright > :first-child { margin-left: auto; }
 .lv-tl-mode { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; box-sizing: border-box; border-radius: var(--radius-pill); border: 1px solid var(--color-control-edge); --k2-ch-bw: 1px; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; min-width: 108px; justify-content: center; }
 .lv-tl-khint { display: inline-grid; place-items: center; width: 22px; height: 22px; color: var(--color-text-secondary); border-radius: var(--radius-field); }
-.lv-tl-tright:is([data-fold="1"], [data-fold="2"], [data-fold="3"], [data-fold="4"]) .lv-tl-khint { display: none; }
-.lv-tl-tright:is([data-fold="2"], [data-fold="3"], [data-fold="4"]) [data-zoom] { display: none; }
-.lv-tl-tright:is([data-fold="3"], [data-fold="4"]) [data-testid="lv-loop"] { display: none !important; }
-.lv-tl-tright[data-fold="4"] .lv-tl-mode { display: none; }
+.lv-tl-tright[data-fold] .lv-tl-khint { display: none; }
+.lv-tl-tright:not([data-fold="1"])[data-fold] [data-zoom] { display: none; }
+.lv-tl-tright:is([data-fold="3"], [data-fold="4"], [data-fold="5"]) [data-testid="lv-loop"] { display: none !important; }
+.lv-tl-tright:is([data-fold="4"], [data-fold="5"]) .lv-tl-mode { display: none; }
+.lv-tl-tright[data-fold="5"] > :has(> [data-testid="lv-view-btn"]) { display: none; }
 `

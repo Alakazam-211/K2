@@ -190,9 +190,11 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
   const fw = fl.finished ? finishedWords(fl.finished) : null
   const finished = fw
     ? {
-        text: fw.text,
-        back: fw.back,
-        again: fw.again,
+        text: p.narrow ? fw.short : fw.text,
+        title: fw.text,
+        back: p.narrow ? fw.backShort : fw.back,
+        backTitle: fw.back,
+        again: p.narrow ? fw.againShort : fw.again,
         onBack: () => {
           const h = fl.backHome()
           if (h != null) setLocal({ f: h, rate: 0 })
@@ -246,7 +248,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
             }}
             onRestart={() => take({ f: 0, rate: 1 })}
             onShowCant={fit}
-            stage={stageCard(S, M, { agent: agent?.name ?? cardAgent(view), file: M.T.name || 'the edit' })}
+            stage={stageCard(S, M, { agent: agent?.name ?? cardAgent(view), file: p.fileName || M.T.name || 'the edit' })}
             onStageAction={(id) => {
               if (id === 'ask') ref.current?.closest('[data-testid="lv-tab"]')?.querySelector<HTMLInputElement>('[data-testid="lv-say-field"]')?.focus()
               else p.onAction?.(id)

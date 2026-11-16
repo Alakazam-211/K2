@@ -148,11 +148,7 @@ pub struct Want {
     /// on a unified GPU it (default 2G) counts against the node's memory
     /// beside `--mem` ([`Want::mem_on`]).
     pub gpu_mem: Option<u64>,
-    /// 0.46.14 (`--network none`, `--netns-dummy`): the job's own network
-    /// ask. Only nodes offering what it needs
-    /// ([`k2_core::compute::proto::jobnet::plan_features`]); never placed
-    /// where it would run with more network.
-    pub network: Option<k2_core::compute::proto::jobnet::JobNet>,
+    pub network: Option<k2_core::compute::proto::jobnet::JobNet>, // 0.46.14: only nodes offering its features (crate::compute_job_network)
 }
 
 impl Want {
@@ -191,8 +187,7 @@ impl Want {
             multi_repo: !plan.with.is_empty(),
             receipt_v2: plan.receipt_v.is_some(),
             gpu: plan.gpu,
-            gpu_mem: plan.gpu_mem,
-            network: plan.network.clone(),
+            gpu_mem: plan.gpu_mem, network: plan.network.clone(),
         }
     }
 
@@ -291,38 +286,6 @@ pub fn gpu_refusal(w: &Want, report: &CandReport, ws_handle: &str) -> Option<(&'
         return Some((codes::NO_GPU_NODE, 404, no_gpu_node_hint(ws_handle), None));
     }
     None
-}
-
-/// 0.46.14: the offer feature `w`'s `--network` ask needs that the node
-/// behind `offer` lacks, or `None` (no ask, or it has them all).
-pub fn network_skip(w: &Want, offer: &Offer) -> Option<&'static str> {
-    k2_core::compute::proto::jobnet::missing_feature(w.network.as_ref(), &offer.features)
-}
-
-/// 0.46.14: the refusal when no node is left for a `--network` ask and
-/// some were left out only for it: `job_network_needs_update` (409, exit
-/// 3). Never a job placed where it would run with more network.
-pub fn network_refusal(w: &Want, report: &CandReport) -> Option<(&'static str, u16, String)> {
-    let n = w.network.as_ref()?;
-    if !report.cands.is_empty() || report.skipped.get(skip::JOB_NETWORK).copied().unwrap_or(0) == 0 {
-        return None;
-    }
-    Some((k2_core::compute::proto::jobnet::codes::JOB_NETWORK_NEEDS_UPDATE, 409, network_needs_update_hint(n, None)))
-}
-
-/// The hint for `job_network_needs_update` (a named node, or every node
-/// this workspace may use).
-pub fn network_needs_update_hint(n: &k2_core::compute::proto::jobnet::JobNet, node: Option<&str>) -> String {
-    let which = node.map(|x| format!("'{x}' can't")).unwrap_or_else(|| "no node this workspace may use can".into());
-    if n.dummies.is_empty() {
-        format!(
-            "--network none: {which} run a job with no network yet: that needs k2-node 0.46.14 there and its job wall (Linux: sudo k2-node setup; macOS: Seatbelt). Its owner updates k2-node. K2 never runs the job with more network instead"
-        )
-    } else {
-        format!(
-            "--netns-dummy: {which} make a job's own network namespace with dummy interfaces yet: that needs a Linux node with k2-node 0.46.14 and its job wall (Macs can't). Its owner updates k2-node. K2 never runs the job with more network instead"
-        )
-    }
 }
 
 /// The hint for [`codes::GPU_MEM_NEEDS_UPDATE`] (a named node, or every
@@ -1090,8 +1053,6 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.gpu_mem.is_some() {
         f.push(k2_core::compute::proto::gpu::FEATURE_GPU_MEM);
     }
-    // 0.46.14: `--network none` (`job-network`), and `--netns-dummy`
-    // (`netns-dummy`, Linux job wall only).
     f.extend(k2_core::compute::proto::jobnet::plan_features(w.network.as_ref()));
     f
 }
@@ -1158,10 +1119,7 @@ pub mod skip {
     /// A need it can't provide at all (a Rust target where Rust is
     /// a system package with no rustup).
     pub const TOOLS_UNSUPPORTED: &str = "tools_unsupported";
-    /// 0.46.14: `--network none` / `--netns-dummy` where the node can't
-    /// run the job at that network (k2-node older than 0.46.14, its root
-    /// executor older, no job wall, or a Mac for `--netns-dummy`).
-    pub const JOB_NETWORK: &str = "job_network";
+    pub const JOB_NETWORK: &str = "job_network"; // 0.46.14: a node that can't run the job's --network ask
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -1315,12 +1273,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
             skipped(&mut out, code);
             continue;
         }
-        // 0.46.14: before the feature check too, so a node that can't run
-        // the job at its `--network` says so, not `node_too_old`.
-        if network_skip(w, &offer).is_some() {
-            skipped(&mut out, skip::JOB_NETWORK);
-            continue;
-        }
+        if crate::compute_job_network::lacks(w, &offer.features) { skipped(&mut out, skip::JOB_NETWORK); continue; } // not node_too_old
         if feats.iter().any(|f| !offer.features.iter().any(|x| x == f)) {
             skipped(&mut out, skip::NODE_TOO_OLD);
             continue;
@@ -1829,10 +1782,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::GPU_NEEDS_GRANT => "with a GPU, but your grant there doesn't say --gpu".to_string(),
         skip::GPU_MEM_NEEDS_UPDATE => "with GPU jobs, but a k2-node too old for --gpu-mem".to_string(),
         skip::TOOLS_UNSUPPORTED => "that can't provide a --needs (system Rust: no Rust targets)".to_string(),
-        skip::JOB_NETWORK => {
-            let dummies = w.network.as_ref().is_some_and(|n| !n.dummies.is_empty());
-            format!("that can't run a job at --network none{} yet (k2-node older than 0.46.14{})", if dummies { " with --netns-dummy" } else { "" }, if dummies { ", or a Mac" } else { "" })
-        }
+        skip::JOB_NETWORK => crate::compute_job_network::skip_words(w),
         other => other.to_string(),
     };
     format!("{n} {what}")
@@ -2925,8 +2875,7 @@ mod tests {
             multi_repo: false,
             receipt_v2: false,
             gpu: None,
-            gpu_mem: None,
-            network: None,
+            gpu_mem: None, network: None,
         }
     }
 
@@ -2978,46 +2927,6 @@ mod tests {
         assert_eq!(gpu_skip(&want(4), plain.grant.as_ref(), &plain.offer), None);
         assert!(required_features(&agent).contains(&k2_core::compute::proto::gpu::FEATURE_GPU));
         assert!(!required_features(&want(4)).contains(&k2_core::compute::proto::gpu::FEATURE_GPU));
-    }
-
-    /// 0.46.14: `--network none` needs `job-network` on the node, and
-    /// `--netns-dummy` `netns-dummy` too; a node without them is skipped as
-    /// `job_network` (never `node_too_old`), it's never a mover's target,
-    /// and with no node left the job is refused `job_network_needs_update`
-    /// (409, exit 3). A job without the ask sees every node as before.
-    #[test]
-    fn network_asks_place_only_on_nodes_that_offer_them() {
-        use k2_core::compute::proto::jobnet::{codes, Dummy, JobNet, JobNetMode, FEATURE_JOB_NETWORK, FEATURE_NETNS_DUMMY};
-        let plain = cand("plain", 30, 32, 0, 2);
-        let mut mac = cand("mac", 30, 32, 0, 2);
-        mac.offer.features.push(FEATURE_JOB_NETWORK.into());
-        let mut linux = cand("linux", 30, 32, 0, 2);
-        linux.offer.features.extend([FEATURE_JOB_NETWORK.to_string(), FEATURE_NETNS_DUMMY.to_string()]);
-        let none = Want { network: Some(JobNet::none()), ..want(2) };
-        let dummies = Want { network: Some(JobNet { mode: JobNetMode::None, dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }] }), ..want(2) };
-        assert_eq!(network_skip(&want(2), &plain.offer), None, "no ask: every node");
-        assert_eq!(network_skip(&none, &plain.offer), Some(FEATURE_JOB_NETWORK));
-        assert_eq!(network_skip(&none, &mac.offer), None);
-        assert_eq!(network_skip(&dummies, &mac.offer), Some(FEATURE_NETNS_DUMMY), "a Mac has no dummy interfaces");
-        assert_eq!(network_skip(&dummies, &linux.offer), None);
-        assert!(required_features(&none).contains(&FEATURE_JOB_NETWORK) && !required_features(&none).contains(&FEATURE_NETNS_DUMMY));
-        assert!(required_features(&dummies).contains(&FEATURE_NETNS_DUMMY));
-        assert!(!required_features(&want(2)).iter().any(|f| *f == FEATURE_JOB_NETWORK));
-        assert!(!movable(&plain, &none) && movable(&mac, &none) && !movable(&mac, &dummies) && movable(&linux, &dummies));
-        // No node left, some only for the ask: refused with the update hint.
-        let mut r = CandReport { visible: 2, ..Default::default() };
-        r.skipped.insert(skip::JOB_NETWORK, 2);
-        let (code, status, hint) = network_refusal(&dummies, &r).expect("refused");
-        assert_eq!((code, status), (codes::JOB_NETWORK_NEEDS_UPDATE, 409));
-        assert!(hint.contains("--netns-dummy") && hint.contains("0.46.14") && hint.contains("never runs the job with more network"), "{hint}");
-        let (_, _, hint) = network_refusal(&none, &r).expect("refused");
-        assert!(hint.starts_with("--network none: no node this workspace may use can run a job with no network yet"), "{hint}");
-        assert_eq!(network_refusal(&want(2), &r), None, "no ask: the usual no_node_fits");
-        let mut other = CandReport { visible: 2, ..Default::default() };
-        other.skipped.insert(skip::OFFLINE, 2);
-        assert_eq!(network_refusal(&none, &other), None, "left out for another reason");
-        assert!(skip_words(skip::JOB_NETWORK, 2, &dummies).contains("--network none with --netns-dummy"));
-        assert!(network_needs_update_hint(&JobNet::none(), Some("k2n7")).contains("'k2n7' can't run"));
     }
 
     /// GPU jobs: with no node left, `no_gpu_node` (404, exit 3) names both

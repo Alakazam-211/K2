@@ -1,290 +1,33 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { daemonCliGet } from '@/lib/daemon-cli'
-import { useRoom } from '@/components/Room/RoomContext'
-import * as pdfjsLib from 'pdfjs-dist'
-import { isEditableTarget } from '@/lib/editable-target'
-import { useDocVersion } from './useDocVersion'
+// A PDF file's tab: the document (usePdfDocument, read again on a new
+// version) in the PDF tab (components/Pdf/PdfTab): layers, annotations,
+// text selection and Find. While it loads or fails, the header stays.
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString()
+import { LiveHeader } from '@/components/LiveView/shell/LiveHeader'
+import { fileNameOf } from '@/components/Editor/EditorFrame'
+import { SetiFileIcon } from '@/lib/seti-file-icons/SetiFileIcon'
+import { PdfTab } from '@/components/Pdf/PdfTab'
+import { usePdfDocument } from '@/components/Pdf/usePdfDocument'
 
-// ── Types ────────────────────────────────────────────────────────────────
-
-interface PDFViewerProps {
-  filePath: string
-}
-
-const ZOOM_STEP = 0.25
-const MIN_ZOOM = 0.5
-const MAX_ZOOM = 4.0
-const DEFAULT_ZOOM = 1.0
-
-// ── Component ────────────────────────────────────────────────────────────
-
-export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
-  // Home M4: the room's server (a viewer in B's room reads B's file).
-  const scope = useRoom().scope
-  const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
-  const [numPages, setNumPages] = useState(0)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [zoom, setZoom] = useState(DEFAULT_ZOOM)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null)
-  // The file the document on screen came from.
-  const shownPathRef = useRef<string | null>(null)
-  // A new version of this file from any writer: read it again.
-  const version = useDocVersion(scope, filePath)
-
-  // Load PDF document
-  useEffect(() => {
-    let cancelled = false
-    // A new version of the PDF on screen keeps the page and zoom (the page
-    // clamped to the new length) and the old pages until the new ones are in.
-    const reread = shownPathRef.current === filePath
-
-    async function loadPdf(): Promise<void> {
-      if (!reread) {
-        shownPathRef.current = null
-        setLoading(true)
-        setError(null)
-        setPdfDoc(null)
-        setCurrentPage(1)
-      }
-
-      try {
-        // Daemon returns base64 — decode into a Uint8Array. Browser
-        // `atob` is the smallest path; ~50 MB files top out the
-        // implementation's V8 string limit headroom (~256 MB) by a
-        // wide margin so no chunking needed here.
-        const r = await daemonCliGet<{ base64: string }>(scope, 'fs/read-binary', { path: filePath })
-        const binary = atob(r.base64)
-        const data = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i)
-
-        const doc = await pdfjsLib.getDocument({ data }).promise
-
-        if (!cancelled) {
-          shownPathRef.current = filePath
-          setPdfDoc(doc)
-          setNumPages(doc.numPages)
-          setCurrentPage((p) => Math.max(1, Math.min(p, doc.numPages)))
-          setError(null)
-          setLoading(false)
-        }
-      } catch (err) {
-        if (!cancelled) {
-          shownPathRef.current = null
-          const message = err instanceof Error ? err.message : String(err)
-          setError(message)
-          setLoading(false)
-        }
-      }
-    }
-
-    loadPdf()
-    return () => { cancelled = true }
-    // `scope` is read live, as before.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, version])
-
-  // Render current page
-  useEffect(() => {
-    if (!pdfDoc || !canvasRef.current) return
-
-    let cancelled = false
-
-    async function renderPage(): Promise<void> {
-      // Cancel any in-progress render
-      if (renderTaskRef.current) {
-        try {
-          renderTaskRef.current.cancel()
-        } catch {
-          // ignore
-        }
-      }
-
-      try {
-        const page = await pdfDoc!.getPage(currentPage)
-        if (cancelled) return
-
-        const canvas = canvasRef.current!
-
-        const viewport = page.getViewport({ scale: zoom * window.devicePixelRatio })
-        canvas.width = viewport.width
-        canvas.height = viewport.height
-        canvas.style.width = `${viewport.width / window.devicePixelRatio}px`
-        canvas.style.height = `${viewport.height / window.devicePixelRatio}px`
-
-        const renderTask = page.render({
-          canvas,
-          viewport,
-        })
-        renderTaskRef.current = renderTask
-
-        await renderTask.promise
-      } catch (err) {
-        // RenderingCancelledException is expected when navigating quickly
-        if (err instanceof Error && err.message.includes('cancelled')) return
-        if (!cancelled) {
-          console.error('[pdf-viewer] Render error:', err)
-        }
-      }
-    }
-
-    renderPage()
-    return () => { cancelled = true }
-  }, [pdfDoc, currentPage, zoom])
-
-  const goToPage = useCallback((page: number) => {
-    setCurrentPage(Math.max(1, Math.min(page, numPages)))
-  }, [numPages])
-
-  const zoomIn = useCallback(() => {
-    setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM))
-  }, [])
-
-  const zoomOut = useCallback(() => {
-    setZoom((z) => Math.max(z - ZOOM_STEP, MIN_ZOOM))
-  }, [])
-
-  const resetZoom = useCallback(() => {
-    setZoom(DEFAULT_ZOOM)
-  }, [])
-
-  // Keyboard navigation. The listener is on the window, so it hears keys
-  // meant for anything else: a key typed into a text field stays there, and
-  // a viewer that isn't showing (a hidden tab, the workspace under
-  // Settings) takes no keys at all.
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent): void {
-      if (e.defaultPrevented || isEditableTarget(e.target)) return
-      const root = rootRef.current
-      if (!root || root.getClientRects().length === 0) return
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-        e.preventDefault()
-        goToPage(currentPage - 1)
-      } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault()
-        goToPage(currentPage + 1)
-      } else if (e.key === '+' || e.key === '=') {
-        if (e.metaKey || e.ctrlKey) {
-          e.preventDefault()
-          zoomIn()
-        }
-      } else if (e.key === '-') {
-        if (e.metaKey || e.ctrlKey) {
-          e.preventDefault()
-          zoomOut()
-        }
-      } else if (e.key === '0') {
-        if (e.metaKey || e.ctrlKey) {
-          e.preventDefault()
-          resetZoom()
-        }
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentPage, goToPage, zoomIn, zoomOut, resetZoom])
-
-  if (loading) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)] text-xs font-mono">
-        Loading PDF...
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-[var(--color-bg)]">
-        <span className="text-[var(--color-status-error-soft)] text-xs font-mono">Failed to load PDF</span>
-        <span className="text-[var(--color-text-muted)] text-[10px] font-mono max-w-[300px] text-center">
-          {error}
-        </span>
-      </div>
-    )
-  }
-
+export function PDFViewer({ filePath }: { filePath: string }): React.JSX.Element {
+  const { doc, binary, loading, error } = usePdfDocument(filePath)
+  if (doc && !loading) return <PdfTab doc={doc} binary={binary} filePath={filePath} />
+  const name = fileNameOf(filePath)
   return (
-    <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)]">
-      {/* Controls bar */}
-      <div className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 flex-shrink-0">
-        {/* Page navigation */}
-        <div className="flex items-center gap-1">
-          <button
-            className="px-1.5 py-0.5 text-[10px] font-mono text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-default transition-colors"
-            onClick={() => goToPage(currentPage - 1)}
-            disabled={currentPage <= 1}
-            title="Previous page"
-          >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-          <span className="text-[10px] font-mono text-[var(--color-text-secondary)] select-none">
-            {currentPage} / {numPages}
+    <div data-testid="pdf-tab-state" className="lv-shell flex h-full w-full flex-col bg-[var(--color-bg)]">
+      <LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} sentence={null} />
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-[var(--color-bg-inset)] px-6 text-center">
+        {error ? (
+          <>
+            <span role="alert" className="type-row text-[var(--color-status-error-text)]">
+              This PDF couldn’t be opened.
+            </span>
+            <span className="type-hint max-w-[420px] text-[var(--color-text-secondary)]">{error}</span>
+          </>
+        ) : (
+          <span role="status" className="type-row text-[var(--color-text-secondary)]">
+            Opening the PDF…
           </span>
-          <button
-            className="px-1.5 py-0.5 text-[10px] font-mono text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-default transition-colors"
-            onClick={() => goToPage(currentPage + 1)}
-            disabled={currentPage >= numPages}
-            title="Next page"
-          >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
-        </div>
-
-        <div className="w-px h-3 bg-[var(--color-border)]" />
-
-        {/* Zoom controls */}
-        <div className="flex items-center gap-1">
-          <button
-            className="px-1.5 py-0.5 text-[10px] font-mono text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-default transition-colors"
-            onClick={zoomOut}
-            disabled={zoom <= MIN_ZOOM}
-            title="Zoom out"
-          >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-          <button
-            className="text-[10px] font-mono text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors select-none px-1"
-            onClick={resetZoom}
-            title="Reset zoom"
-          >
-            {Math.round(zoom * 100)}%
-          </button>
-          <button
-            className="px-1.5 py-0.5 text-[10px] font-mono text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-default transition-colors"
-            onClick={zoomIn}
-            disabled={zoom >= MAX_ZOOM}
-            title="Zoom in"
-          >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      {/* PDF canvas area */}
-      <div className="flex-1 overflow-auto flex justify-center p-4 bg-[var(--color-bg)]">
-        <canvas
-          ref={canvasRef}
-          className="block shadow-[0_2px_8px_rgba(0,0,0,0.5)]"
-        />
+        )}
       </div>
     </div>
   )

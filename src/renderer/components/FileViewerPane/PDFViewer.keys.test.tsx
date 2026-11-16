@@ -14,21 +14,13 @@ vi.mock('@/lib/daemon-cli', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/daemon-cli')>()
   return { ...actual, daemonCliGet: (...args: unknown[]) => daemonCliGet(...args) }
 })
-vi.mock('pdfjs-dist', () => {
-  const page = {
-    getViewport: () => ({ width: 100, height: 140 }),
-    render: () => ({ promise: Promise.resolve(), cancel: () => undefined }),
-  }
-  const doc = { numPages: 3, getPage: async () => page }
-  return {
-    GlobalWorkerOptions: { workerSrc: '' },
-    getDocument: () => ({ promise: Promise.resolve(doc) }),
-  }
-})
+// Real pdf.js reads a two-sheet fixture; only drawing is faked.
+vi.mock('pdfjs-dist', () => import('@/test-utils/pdfjs-fake-layers'))
 
 import { PDFViewer } from './PDFViewer'
 import { Input } from '@/components/ui'
 import { renderInRoom, testRoom } from '@/test-utils/room'
+import { drawingPdf, toBase64 } from '@/test-utils/pdf-fixtures'
 
 /** The Tunnel page's k2.dev sign-in fields, with an open PDF tab elsewhere in
  *  the window (`hidden`: the workspace under Settings is display:none). */
@@ -45,7 +37,7 @@ async function mount(opts: { pdfShowing: boolean }): Promise<{ email: HTMLInputE
       </div>
     </>,
   )
-  await waitFor(() => expect(screen.getByText('1 / 3')).toBeTruthy())
+  await waitFor(() => expect(screen.getByText('1 / 2')).toBeTruthy(), { timeout: 5000 })
   return {
     email: screen.getByLabelText('Email') as HTMLInputElement,
     password: screen.getByLabelText('Password') as HTMLInputElement,
@@ -63,7 +55,7 @@ function layOut(showing: boolean): void {
 }
 
 beforeEach(() => {
-  daemonCliGet.mockResolvedValue({ base64: btoa('%PDF-1.4') })
+  daemonCliGet.mockResolvedValue({ base64: toBase64(drawingPdf()) })
 })
 
 afterEach(() => {
@@ -87,7 +79,7 @@ describe('PDF viewer arrow keys', () => {
       }
       expect(field.value).toBe(before)
     }
-    expect(screen.getByText('1 / 3')).toBeTruthy()
+    expect(screen.getByText('1 / 2')).toBeTruthy()
   })
 
   it('leaves arrows to a focused field even while the PDF is showing', async () => {
@@ -97,22 +89,22 @@ describe('PDF viewer arrow keys', () => {
     expect(fireEvent.keyDown(email, { key: 'ArrowRight' })).toBe(true)
     expect(fireEvent.keyDown(email, { key: 'ArrowLeft' })).toBe(true)
     expect(email.value).toBe('you@example.com')
-    expect(screen.getByText('1 / 3')).toBeTruthy()
+    expect(screen.getByText('1 / 2')).toBeTruthy()
   })
 
   it('still pages a showing PDF with → and ← when no field has focus', async () => {
     layOut(true)
     await mount({ pdfShowing: true })
     expect(fireEvent.keyDown(document.body, { key: 'ArrowRight' })).toBe(false)
-    await waitFor(() => expect(screen.getByText('2 / 3')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('2 / 2')).toBeTruthy())
     expect(fireEvent.keyDown(document.body, { key: 'ArrowLeft' })).toBe(false)
-    await waitFor(() => expect(screen.getByText('1 / 3')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('1 / 2')).toBeTruthy(), { timeout: 5000 })
   })
 
   it('takes no keys while hidden, even with no field focused', async () => {
     layOut(false)
     await mount({ pdfShowing: false })
     expect(fireEvent.keyDown(document.body, { key: 'ArrowRight' })).toBe(true)
-    expect(screen.getByText('1 / 3')).toBeTruthy()
+    expect(screen.getByText('1 / 2')).toBeTruthy()
   })
 })

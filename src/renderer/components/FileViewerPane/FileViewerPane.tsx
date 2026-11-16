@@ -809,11 +809,12 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const filePreview = (text: string, saved: string) => hasFilePreview(category) && <FilePreview category={category} filePath={filePath} text={text} saved={saved} readError={readError} contentRef={contentRef} />
   const preview = filePreview(editedContent ?? content, content)
   const roReason = room.readOnly ? 'You can view this file but not edit it' : null
-  if (frameRoute !== 'today' && editorKind) {
+  const pdfTab = category === 'pdf' && !anyFile // the PDF tab has its own header (components/Pdf)
+  if (pdfTab || (frameRoute !== 'today' && editorKind)) {
     return (
       <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
         <Suspense fallback={null}>
-          {frameRoute === 'live' ? (
+          {pdfTab || !editorKind ? <PDFViewer filePath={filePath} /> : frameRoute === 'live' ? (
             <LiveEditorFile key={filePath} {...{ filePath, kind: editorKind, scope: room.scope }} roomReadOnly={roReason} onCoreOff={onLiveCoreOff} renderPreview={preview ? (t) => filePreview(t, t) : undefined} />
           ) : (
             <EditorFile
@@ -1039,11 +1040,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       {/* Owner's preview keys: workbook, scene and timeline tabs offer "Watch live (preview)" (sample data). Off: just the content. */}
       <LivePreviewEntry filePath={filePath} onLiveChange={setWatchingLive} real={liveCore.status === 'timeline' ? room.scope : null}>
       {category === 'pdf' ? (
-        <div className="flex-1 overflow-hidden">
-          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading PDF…</div>}>
-            <PDFViewer filePath={filePath} />
-          </Suspense>
-        </div>
+        <div className="flex-1 overflow-hidden"><Suspense fallback={null}><PDFViewer filePath={filePath} /></Suspense></div>
       ) : category === 'docx' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading document…</div>}>

@@ -105,6 +105,8 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
             jumped={s.jumped}
             back={back}
             narrow={narrow}
+            follow={{ id: followingId, state: s.followState, dispatch: dispatchFollow }}
+            setSayAt={s.setSayAt}
             {...(placed ? { say, panel: placedPanel } : {})}
           />
         }

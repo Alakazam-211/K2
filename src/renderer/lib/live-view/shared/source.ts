@@ -101,8 +101,8 @@ export interface LiveSource {
   subscribe(cb: (s: LiveShellSnapshot) => void): () => void
   /** Reconnect now (Retry, Retry now). */
   retry(): void
-  /** Send a message to a participant, pointing at an address. */
-  say(msg: { to: string; text: string; address: string | null }): Promise<SayResult>
+  /** Send a message to a participant, pointing at an address (and a time in ticks, where the view has one: `docs/say`'s `time`). */
+  say(msg: { to: string; text: string; address: string | null; time?: string | null }): Promise<SayResult>
   /** Tell the others what you're looking at (when `features.viewAddress`). */
   setViewAddress?(address: string | null): void
   close(): void

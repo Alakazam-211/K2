@@ -5,6 +5,7 @@
 // scene and the timeline each have one (scene/scene-shell.ts,
 // timeline/timeline-shell.ts); the editors will too.
 
+import type { FollowAction, FollowState } from '@/lib/live-view/shared/follow'
 import type { LiveNotice, NoticeActionId } from '@/lib/live-view/shared/notices'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import type { LiveShellSnapshot } from '@/lib/live-view/shared/source'
@@ -31,6 +32,18 @@ export interface ShellHeroProps {
   say?: React.ReactNode
   /** The side panel (null when closed), when the view places it (`placesSayAndPanel`). */
   panel?: React.ReactNode
+  /** Whom you follow, the follow state and its dispatch: the view follows their place and looks away on its own keys and scrolling. */
+  follow?: { id: string | null; state: FollowState; dispatch: (a: FollowAction) => void }
+  /** The view says what the say row points at (the timeline: the clip under its playhead); null goes back to the config's. */
+  setSayAt?: (a: SayAt | null) => void
+}
+
+/** What a message points at: the chip's words and tooltip, the address it carries, and a time in ticks where the view has one. */
+export interface SayAt {
+  label: string
+  title: string
+  address: string
+  time?: string | null
 }
 
 /** What a view's own side panel gets from the shell (the scene's outliner and properties). */
@@ -61,7 +74,7 @@ export interface ShellConfig {
   /** What stays on screen while reconnecting, in words. */
   kept: string
   /** What a message to `to` points at: words for the chip, the address it carries. */
-  sayAddress: (snap: LiveShellSnapshot, to: string) => { label: string; title: string; address: string } | null
+  sayAddress: (snap: LiveShellSnapshot, to: string) => SayAt | null
   Hero: (p: ShellHeroProps) => React.JSX.Element
   /** The hero lays out the say row and the side panel itself (the timeline: its lanes run full width under both). */
   placesSayAndPanel?: boolean

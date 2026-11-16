@@ -14,7 +14,7 @@ import { isDisconnected, liveTabState } from '@/lib/live-view/shared/state'
 import type { LiveShellSnapshot, LiveSource } from '@/lib/live-view/shared/source'
 import type { SampleSnapshot } from '@/lib/live-view/shared/samples'
 import type { Edge } from './EdgeStack'
-import type { ShellConfig } from './shell-config'
+import type { SayAt, ShellConfig } from './shell-config'
 
 export function useSnapshot(source: LiveSource): LiveShellSnapshot {
   const [snap, setSnap] = useState(() => source.snapshot())
@@ -68,6 +68,8 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
   const [messageTo, setMessageTo] = useState<string | null>(null)
   const sayTo = personById(people, followingId ?? messageTo ?? snap.agent)
   const [say, dispatchSay] = useReducer(sayReducer, SAY_IDLE)
+  // What the view says the say row points at (the timeline's playhead), else the config's.
+  const [sayAt, setSayAt] = useState<SayAt | null>(null)
   const seen = useRef(snap.messages.length)
   useEffect(() => {
     const fresh = snap.messages.slice(seen.current)
@@ -81,10 +83,10 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
       if (!sayTo) return
       const text = say.draft.trim()
       dispatchSay({ type: again ? 'send-again' : 'send' })
-      const address = config.sayAddress(snap, sayTo.id)
-      void source.say({ to: sayTo.id, text, address: address?.address ?? null }).then((r) => dispatchSay(r.ok ? { type: 'sent', name: sayTo.name } : { type: 'failed', reason: r.reason }))
+      const address = sayAt ?? config.sayAddress(snap, sayTo.id)
+      void source.say({ to: sayTo.id, text, address: address?.address ?? null, time: address?.time ?? null }).then((r) => dispatchSay(r.ok ? { type: 'sent', name: sayTo.name } : { type: 'failed', reason: r.reason }))
     },
-    [sayTo, say.draft, source, snap, config],
+    [sayTo, say.draft, source, snap, config, sayAt],
   )
 
   // One notice at a time, connection first.
@@ -124,7 +126,7 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
   const panelPeople = useMemo(() => people.map((p) => (p.self ? { ...p, doing: followedName ? `following ${followedName}` : (p.doing ?? 'viewing') } : p)), [people, followedName])
 
   const showSay = live && !!sayTo && (config.sayAlways || followingId !== null || messageTo !== null)
-  const sayAddress = sayTo ? config.sayAddress(snap, sayTo.id) : null
+  const sayAddress = sayTo ? (sayAt ?? config.sayAddress(snap, sayTo.id)) : null
 
   return {
     snap,
@@ -135,8 +137,10 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
     people,
     panelPeople,
     follow: fv,
+    followState: follow,
     followingId,
     dispatchFollow,
+    setSayAt,
     sayTo,
     messageTo,
     setMessageTo,

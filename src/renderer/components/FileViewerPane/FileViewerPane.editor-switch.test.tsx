@@ -2,8 +2,8 @@
 //
 // The new editors' switches in a real tab (2026-11-15): a switch re-routes a
 // tab that is already open, every markdown extension opens in the markdown
-// editor, and a file whose multiplayer core is on keeps the live editor with a
-// line saying why (the new editors have no live editing until E4).
+// editor, and a file whose multiplayer core is on opens in the new editor too,
+// live (E4a): the kit's Live editor inside it, no "doesn't open live files" line.
 
 import '../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -64,6 +64,7 @@ import { FileViewerPane } from './FileViewerPane'
 // The tab loads the editors lazily: load them once up front, so a busy run doesn't time the first one out.
 beforeAll(async () => {
   await import('@/components/Editor/EditorTab')
+  await import('@/components/Editor/live/LiveEditorFile')
 }, 30_000)
 
 beforeEach(() => {
@@ -114,41 +115,45 @@ describe('every markdown extension opens in the frame when the file is not live'
 })
 
 describe('a live file with the switch on', () => {
-  it('keeps the live editor and says why in one line', async () => {
+  it('opens in the new markdown editor, live, with no line about live files', async () => {
     h.on = true
     setEditorPreview('markdown', true)
     renderInPrimaryRoom(<FileViewerPane filePath="/ws/notes.md" paneId="p" tabId="t" />)
-    await waitFor(() => expect(document.querySelector('[data-testid="file-viewer-live"]')).not.toBeNull())
-    expect(screen.getByTestId('editor-preview-live-note').textContent).toBe("The new markdown editor doesn't open live files yet. It will soon.")
-    expect(screen.queryByTestId('editor-tab')).toBeNull()
+    expect(await screen.findByTestId('ed-live-file')).toBeTruthy()
+    expect((await screen.findByTestId('editor-tab')).getAttribute('data-kind')).toBe('markdown')
+    expect(screen.getByTestId('editor-tab').hasAttribute('data-live')).toBe(true)
+    expect(document.querySelector('[data-testid="file-viewer-live"]')).toBeNull()
+    expect(screen.queryByTestId('editor-preview-live-note')).toBeNull()
+    expect(toolbar()).toBeNull()
   })
 
-  it('turning the core off moves the open tab into the frame, and the line goes', async () => {
+  it('turning the core off keeps the new editor, as a plain file', async () => {
     h.on = true
     setEditorPreview('markdown', true)
     renderInPrimaryRoom(<FileViewerPane filePath="/ws/notes.md" paneId="p" tabId="t" />)
-    await screen.findByTestId('editor-preview-live-note')
+    await screen.findByTestId('ed-live-file')
     h.on = false
     await act(async () => {
       for (const fn of events.handlers) fn({ kind: 'doc_cores_changed', core: 'markdown', on: false, by: 'Anna' })
     })
-    expect(await screen.findByTestId('editor-tab')).toBeTruthy()
-    expect(screen.queryByTestId('editor-preview-live-note')).toBeNull()
+    await waitFor(() => expect(screen.queryByTestId('ed-live-file')).toBeNull())
+    expect(screen.getByTestId('editor-tab').hasAttribute('data-live')).toBe(false)
   })
 
-  it('a live code file names the code editor', async () => {
+  it('a live code file opens in the new code editor', async () => {
     h.on = true
     h.core = 'text'
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath="/ws/app.ts" paneId="p" tabId="t" />)
-    expect((await screen.findByTestId('editor-preview-live-note')).textContent).toBe("The new code editor doesn't open live files yet. It will soon.")
+    await screen.findByTestId('ed-live-file')
+    expect(screen.getByTestId('editor-tab').getAttribute('data-kind')).toBe('code')
   })
 
-  it('switch off: a live file shows no preview line', async () => {
+  it('switch off: a live file keeps today’s live view', async () => {
     h.on = true
     renderInPrimaryRoom(<FileViewerPane filePath="/ws/notes.md" paneId="p" tabId="t" />)
     await waitFor(() => expect(document.querySelector('[data-testid="file-viewer-live"]')).not.toBeNull())
-    expect(screen.queryByTestId('editor-preview-live-note')).toBeNull()
+    expect(screen.queryByTestId('ed-live-file')).toBeNull()
   })
 })
 
@@ -158,8 +163,9 @@ describe('editorFrameRoute', () => {
     expect(editorFrameRoute(null, s)).toBe('today')
     expect(editorFrameRoute('markdown', s)).toBe('frame')
     expect(editorFrameRoute('markdown', { ...s, locked: true })).toBe('today')
-    expect(editorFrameRoute('markdown', { ...s, liveOn: true })).toBe('kept-live')
-    expect(editorFrameRoute('code', { ...s, anyFile: true })).toBe('kept-live')
-    expect(editorFrameRoute('code', { ...s, deck: true })).toBe('kept-live')
+    expect(editorFrameRoute('markdown', { ...s, liveOn: true })).toBe('live')
+    expect(editorFrameRoute('code', { ...s, liveOn: true })).toBe('live')
+    expect(editorFrameRoute('code', { ...s, anyFile: true })).toBe('today')
+    expect(editorFrameRoute('code', { ...s, deck: true })).toBe('today')
   })
 })

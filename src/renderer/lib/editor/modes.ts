@@ -36,3 +36,18 @@ export function modeForKey(mode: EditorMode, e: Keyish, readOnly: boolean, large
   if (mode === 'read') return readOnly ? null : 'write'
   return readOnly ? 'read' : 'write'
 }
+
+// A live file's mode, kept for the plain editor that carries on when live
+// editing turns off mid-session (build-editors.md E4a, "Live off"): it opens
+// in the mode you were in, once.
+const handover = new Map<string, EditorMode>()
+
+export function keepModeForHandover(path: string, mode: EditorMode): void {
+  handover.set(path, mode)
+}
+
+export function takeHandoverMode(path: string): EditorMode | undefined {
+  const m = handover.get(path)
+  handover.delete(path)
+  return m
+}

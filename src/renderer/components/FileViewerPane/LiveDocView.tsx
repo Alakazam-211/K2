@@ -27,10 +27,9 @@ import {
   type RemovedTextNote,
 } from '@/components/LiveEditor'
 import type { ServerScope } from '@/kessel/server-scope'
-import { isMacPlatform } from '@/lib/desktop-chrome'
 import { createDaemonLiveTransport } from '@/lib/docs-live-daemon'
 import type { LiveTransport } from '@/lib/docs-live-transport'
-import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
+import { wireLiveHost } from '@/components/LiveEditor/host-wiring'
 
 /** How a Live view ended for good (the editor closed and won't reconnect). */
 export interface LiveDocClosed {
@@ -78,20 +77,7 @@ export function liveStatusText(state: ConnectionState, others: number): string {
   }
 }
 
-/** Undo or redo, by the platform's chord: Cmd+Z / Shift+Cmd+Z (and Cmd+Y) on
- *  macOS, Ctrl on the others. Null for any other key. */
-export function undoChord(e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>, mac: boolean): 'undo' | 'redo' | null {
-  const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
-  if (!mod || e.altKey) return null
-  const k = e.key.toLowerCase()
-  if (k === 'z') return e.shiftKey ? 'redo' : 'undo'
-  if (k === 'y' && !e.shiftKey) return 'redo'
-  return null
-}
-
-/** How long after a pointer press outside the editor a focus loss counts as
- *  the person's own move (they clicked elsewhere): the editor leaves it. */
-const OWN_MOVE_MS = 600
+export { undoChord } from '@/components/LiveEditor/host-wiring'
 
 /** Why a closed Live view stopped, in words. */
 export function closedText(c: LiveDocClosed): string {
@@ -174,50 +160,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
       ed.view.focus()
     }
 
-    // Undo and redo are the editor's whenever the caret is in it, and every
-    // press stops here: nothing to undo, a throw, or CodeMirror sitting the
-    // key out (it ignores keys during a composition) must not hand Cmd+Z to
-    // the app menu, whose native undo lands in another text box (the chat).
-    // Capture, so CodeMirror's own binding doesn't run it a second time.
-    const mac = isMacPlatform()
-    const onKeyDown = (e: KeyboardEvent): void => {
-      const chord = undoChord(e, mac)
-      if (!chord) return
-      e.preventDefault()
-      e.stopPropagation()
-      const now = editor.current
-      if (!now) return
-      try {
-        if (chord === 'undo') now.undo()
-        else now.redo()
-      } catch (err) {
-        console.error(`[live-doc] ${chord} failed:`, err)
-      }
-    }
-
-    // The caret fell out of the editor to nothing, and not by the person's
-    // own click or a window switch: put it back, ahead of the app's poll
-    // that gives an empty focus to the message box.
-    let pressedOutsideAt = -Infinity
-    const onPointerDown = (e: Event): void => {
-      if (!el.contains(e.target as Node | null)) pressedOutsideAt = Date.now()
-    }
-    const onFocusOut = (e: FocusEvent): void => {
-      if (e.relatedTarget) return
-      setTimeout(() => {
-        const now = editor.current
-        if (!now || !el.isConnected) return
-        const active = document.activeElement
-        if (active && active !== document.body) return
-        if (Date.now() - pressedOutsideAt < OWN_MOVE_MS) return
-        if (!document.hasFocus() || isEffectivelyHidden(el)) return
-        now.view.focus()
-      }, 0)
-    }
-    el.addEventListener('keydown', onKeyDown, true)
-    el.addEventListener('focusout', onFocusOut)
-    document.addEventListener('pointerdown', onPointerDown, true)
-    document.addEventListener('mousedown', onPointerDown, true)
+    const unwire = wireLiveHost(el, () => editor.current)
 
     const offs = [
       ed.on('state', (s) => setState(s)),
@@ -238,10 +181,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
     return () => {
       for (const off of offs) off()
       transport.current = null
-      el.removeEventListener('keydown', onKeyDown, true)
-      el.removeEventListener('focusout', onFocusOut)
-      document.removeEventListener('pointerdown', onPointerDown, true)
-      document.removeEventListener('mousedown', onPointerDown, true)
+      unwire()
       if (el.contains(document.activeElement)) refocus.current = true
       if (editor.current === ed) editor.current = null
       ed.destroy()

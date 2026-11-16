@@ -91,6 +91,9 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'docs/restore': 'Restore on a version in the file tab’s panel makes it current again on B, as a new version',
   'docs/approve': 'Approve / Decline on a change made for you, in the file tab’s panel on B',
   'docs/lease': 'Take the lock, its renewal while the tab is open, and Release, from the file tab’s panel on B',
+  // A live text file in the new editors (E4a) on B: B's kit checks the rights.
+  'docs/use-theirs': 'Use their version after a save outside K2 merged into a live file on B, as one undoable edit',
+  'docs/say': 'Ask the person or agent holding part of a live file on B, from its Changes row',
   'fs/upload-binary': 'a file dropped on B’s terminal is uploaded to B',
   'fs/upload-chunk': 'a large file dropped on B’s terminal is uploaded to B',
   'fs/compress': 'compress in B’s workspace',

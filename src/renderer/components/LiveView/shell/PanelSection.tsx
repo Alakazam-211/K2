@@ -14,6 +14,7 @@ export function PanelSection({
   count,
   countTestId,
   defaultOpen = true,
+  action,
   children,
 }: {
   id: string
@@ -22,13 +23,15 @@ export function PanelSection({
   count?: number | string | null
   countTestId?: string
   defaultOpen?: boolean
+  /** A control at the heading's end, beside the fold ("Live edits"). */
+  action?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   const [open, setOpen] = useState(defaultOpen)
   const bodyId = `lv-sec-${id}`
   return (
     <section data-testid={`lv-section-${id}`} className="lv-section">
-      <h3 className="m-0">
+      <h3 className={cx('m-0', action ? 'flex items-center pr-2.5' : '')}>
         <button
           type="button"
           data-k2-focus=""
@@ -48,6 +51,7 @@ export function PanelSection({
             <ChevronGlyph size={13} />
           </span>
         </button>
+        {action}
       </h3>
       {open ? (
         <div id={bodyId} className="pb-1.5">

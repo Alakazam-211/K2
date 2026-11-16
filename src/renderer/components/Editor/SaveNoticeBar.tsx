@@ -4,9 +4,9 @@
 // notice you can put away. At 800 px the actions wrap below the words.
 
 import { CircleXIcon, Undo2Icon } from 'lucide-react'
-import { Button, cx } from '@/components/ui'
+import { Button, cx, Spinner } from '@/components/ui'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
-import { CloseGlyph, HistoryGlyph, InfoGlyph, OkGlyph, WarnGlyph } from '@/components/LiveView/shell/glyphs'
+import { CloseGlyph, HistoryGlyph, InfoGlyph, OfflineGlyph, OkGlyph, WarnGlyph } from '@/components/LiveView/shell/glyphs'
 import type { SaveActionId, SaveNoticeView } from '@/lib/editor/save-model/notices'
 
 const ICON: Record<SaveNoticeView['icon'], React.ReactNode> = {
@@ -15,15 +15,16 @@ const ICON: Record<SaveNoticeView['icon'], React.ReactNode> = {
   info: <InfoGlyph size={16} />,
   warn: <WarnGlyph size={16} />,
   ok: <OkGlyph size={16} />,
+  offline: <OfflineGlyph size={16} />,
 }
 
-const UNDO: readonly SaveActionId[] = ['undo-restore', 'undo-use-theirs', 'undo-theirs']
+const UNDO: readonly string[] = ['undo-restore', 'undo-use-theirs', 'undo-theirs', 'undo', 'confirm-undo-theirs']
 
-export function SaveNoticeBar({ view, kind, onAction }: { view: SaveNoticeView; kind: string; onAction: (id: SaveActionId) => void }): React.JSX.Element {
+export function SaveNoticeBar<A extends string = SaveActionId>({ view, kind, onAction }: { view: SaveNoticeView<A>; kind: string; onAction: (id: NoInfer<A> | 'dismiss') => void }): React.JSX.Element {
   return (
     <div role={view.role} data-testid="ed-save-notice" data-kind={kind} data-tone={view.tone} data-k2-chamfer="surface" className="lv-notice ed-save-notice mx-2.5 mt-2 flex flex-none flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-box)] border px-3 py-2">
       <span aria-hidden="true" className="lv-notice-icon inline-flex flex-none">
-        {ICON[view.icon]}
+        {view.busy ? <Spinner /> : ICON[view.icon]}
       </span>
       <p className="type-row m-0 flex min-w-[240px] flex-1 flex-col text-[var(--color-text-primary)]">
         <b className="font-semibold">{view.title}</b>
@@ -35,7 +36,8 @@ export function SaveNoticeBar({ view, kind, onAction }: { view: SaveNoticeView; 
             key={a.id}
             variant={a.primary ? 'accent' : 'default'}
             title={a.hint}
-            onClick={() => onAction(a.id)}
+            aria-disabled={a.disabled || undefined}
+            onClick={() => (a.disabled ? undefined : onAction(a.id))}
             className={cx('inline-flex items-center gap-1.5', a.primary ? '' : 'text-[var(--color-text-primary)]')}
             data-action={a.id}
           >

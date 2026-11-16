@@ -5,7 +5,7 @@
 
 import type { ConnectionState, OutsideSave } from './notices'
 
-export type LiveTabState = 'loading' | 'live' | 'live-behind' | 'reconnecting' | 'cant' | 'offline' | 'paused' | 'missing' | 'read-only'
+export type LiveTabState = 'loading' | 'live' | 'live-behind' | 'reconnecting' | 'cant' | 'offline' | 'paused' | 'missing' | 'read-only' | 'read-only-file'
 
 export type StateTone = 'ok' | 'warn' | 'danger' | 'muted'
 
@@ -19,6 +19,8 @@ const CHIPS: Record<LiveTabState, { word: string; tone: StateTone }> = {
   paused: { word: 'Edits paused', tone: 'warn' },
   missing: { word: 'File missing', tone: 'warn' },
   'read-only': { word: 'Read only (saved version)', tone: 'muted' },
+  // The editors: a live file you can read but not edit (no saved version involved).
+  'read-only-file': { word: 'Read only', tone: 'muted' },
 }
 
 export function stateChip(s: LiveTabState): { word: string; tone: StateTone } {

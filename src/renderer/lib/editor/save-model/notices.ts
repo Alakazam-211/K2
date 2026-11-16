@@ -19,24 +19,28 @@ export type SaveNotice =
 
 export type SaveActionId = 'retry' | 'save-copy' | 'undo-restore' | 'compare' | 'close-compare' | 'undo-theirs' | 'use-theirs' | 'redo-merge' | 'undo-use-theirs' | 'save-again' | 'reload' | 'dismiss'
 
-export interface SaveAction {
-  id: SaveActionId
+export interface SaveAction<A extends string = SaveActionId> {
+  id: A
   label: string
   primary?: boolean
   /** The tooltip, when the label needs one. */
   hint?: string
+  /** Off for now (still focusable; `hint` says why). */
+  disabled?: boolean
 }
 
-export interface SaveNoticeView {
+export interface SaveNoticeView<A extends string = SaveActionId> {
   tone: 'info' | 'warn' | 'bad'
   role: 'status' | 'alert'
   /** Which icon: a failure, a restore (history) or a note. */
-  icon: 'bad' | 'history' | 'info' | 'warn' | 'ok'
+  icon: 'bad' | 'history' | 'info' | 'warn' | 'ok' | 'offline'
   title: string
   line: string | null
-  actions: SaveAction[]
+  actions: SaveAction<A>[]
   /** An × at the end (a notice you can put away). */
   closable: boolean
+  /** A spinner instead of the icon (trying to reconnect). */
+  busy?: boolean
 }
 
 const RETRY: SaveAction = { id: 'retry', label: 'Retry', primary: true }

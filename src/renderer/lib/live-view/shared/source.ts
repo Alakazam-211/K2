@@ -36,6 +36,10 @@ export interface LiveChange {
   undoable?: boolean
   /** A refused verb or an outside save, drawn quieter. */
   tone?: 'refused' | 'outside'
+  /** You undid it (the editors): the row turns quiet and offers Redo. */
+  undone?: boolean
+  /** A second action asking someone (a refusal's holder): "Ask Sam". */
+  ask?: { id: string; name: string }
 }
 
 export interface LiveMessage {

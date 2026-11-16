@@ -1,13 +1,15 @@
 // Where a file tab opens while its editor's preview switch is on ("New
 // markdown editor" or "New code editor", lib/editor/preview-switch.ts): the
-// new editor (EditorTab), or today's view. Live, any-file and deck files keep
-// today's view until E4 (the new editors have no live editing yet, and the
-// daemon writes a live file), and a locked (not text) file keeps its lock. For
-// a live file, today's view says so in one line (`kept-live`), so the switch
-// never looks broken.
+// new editor (EditorTab), or today's view. A live file (its multiplayer core
+// on) opens in the new editor too (E4a, `live`: the kit's Live editor inside
+// it); any-file and deck files keep today's view, and a locked (not text)
+// file keeps its lock.
 
+import { useSettingsStore } from '@/stores/settings'
 import type { FileCategory } from '@/components/FileViewerPane/fileCategory'
+import { liveNoticeView } from '@/lib/editor/live/live-notices'
 import { newEditorKind, useEditorPreview, type EditorKind } from '@/lib/editor/preview-switch'
+import { SaveNoticeBar } from './SaveNoticeBar'
 
 /** The new editor for this file while its switch is on, else null. Follows the switch live. */
 export function useEditorFrameKind(category: FileCategory): EditorKind | null {
@@ -16,26 +18,25 @@ export function useEditorFrameKind(category: FileCategory): EditorKind | null {
   return kind && on ? kind : null
 }
 
-export type EditorFrameRoute = 'frame' | 'today' | 'kept-live'
+export type EditorFrameRoute = 'frame' | 'live' | 'today'
 
 /** `kind` is {@link useEditorFrameKind}'s answer; the rest is the file tab's state. */
 export function editorFrameRoute(
   kind: EditorKind | null,
   s: { locked: boolean; liveOn: boolean; anyFile: boolean; deck: boolean },
 ): EditorFrameRoute {
-  if (!kind || s.locked) return 'today'
-  return s.liveOn || s.anyFile || s.deck ? 'kept-live' : 'frame'
+  if (!kind || s.locked || s.anyFile || s.deck) return 'today'
+  return s.liveOn ? 'live' : 'frame'
 }
 
-/** Plain words, and no way to turn live editing off from here: that would end multiplayer for the file. */
-export const editorPreviewLiveNote = (kind: EditorKind): string => `The new ${kind} editor doesn't open live files yet. It will soon.`
-
-/** The line today's view shows, under its toolbar, for `kept-live`. */
-export function EditorPreviewLiveNote({ kind }: { kind: EditorKind | null }): React.JSX.Element | null {
-  if (!kind) return null
+/** Live editing turned off mid-session: the same editor carries on, saving on its own. */
+export function LiveOffNotice({ onDismiss }: { onDismiss: () => void }): React.JSX.Element {
+  const openSettings = useSettingsStore((s) => s.openSettings)
   return (
-    <div role="status" data-testid="editor-preview-live-note" className="type-row border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 text-[var(--color-text-primary)] flex-shrink-0">
-      {editorPreviewLiveNote(kind)}
-    </div>
+    <SaveNoticeBar
+      view={liveNoticeView({ kind: 'live-off' }, '')}
+      kind="live:live-off"
+      onAction={(id) => (id === 'open-settings' ? openSettings('multiplayer') : onDismiss())}
+    />
   )
 }

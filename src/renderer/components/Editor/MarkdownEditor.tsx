@@ -7,15 +7,16 @@
 // caret in Source; Full width and Wrap. The reading column is the Thread's
 // text width (lib/editor/measure.ts).
 
-import { useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { Segmented } from '@/components/ui'
 import { useLocalFlag } from '@/lib/editor/local-flag'
-import { initialMode, modeForKey, usableMode, type EditorMode } from '@/lib/editor/modes'
+import { initialMode, keepModeForHandover, modeForKey, takeHandoverMode, usableMode, type EditorMode } from '@/lib/editor/modes'
 import { countWords, readingMinutes } from '@/lib/editor/words'
 import { writeModeFits } from '@/lib/editor/write-mode'
 import { useSettingsStore } from '@/stores/settings'
 import { useThreadTextCapPx } from '@/components/SessionView/useThreadTextCap'
 import { editorMeasure } from '@/lib/editor/measure'
+import { FrameLiveContext } from './frameLive'
 import { useWriteMode } from './useWriteMode'
 import { EditorFrame, caretItem, fileNameOf, saveItems, saveKey, useEditorFrame, type EditorProps } from './EditorFrame'
 import type { StatusItem, StatusToggle } from './EditorStatusLine'
@@ -35,7 +36,10 @@ export function MarkdownEditor(p: EditorProps): React.JSX.Element {
   const ro = readOnly !== null
   // Decided once per file: typing past the limit doesn't throw you out of Write.
   const [large] = useState(() => !writeModeFits(text))
-  const [picked, setPicked] = useState<EditorMode>(() => initialMode('markdown', ro, large))
+  // A live file keeps its mode for the plain editor that takes over if live editing turns off.
+  const live = useContext(FrameLiveContext) !== null
+  const [picked, setPicked] = useState<EditorMode>(() => (live ? undefined : takeHandoverMode(filePath)) ?? initialMode('markdown', ro, large))
+  useEffect(() => void (live && keepModeForHandover(filePath, picked)), [live, filePath, picked])
   const mode = usableMode(picked, ro, large)
   const frame = useEditorFrame(p.width, mode)
   const extensions = useWriteMode(mode, filePath)

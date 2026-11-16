@@ -40,7 +40,7 @@ export interface ShellPanelProps {
 }
 
 export interface ShellConfig {
-  kind: 'scene' | 'timeline'
+  kind: 'scene' | 'timeline' | 'editor'
   kindLabel: string
   fileGlyph: React.ReactNode
   /** The sample banner's line. */

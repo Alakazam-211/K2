@@ -44,9 +44,10 @@ export function watching(people: readonly LivePerson[]): Watching {
 }
 
 /** Everyone but you, for the header's stack: `max` places, the last one a
- *  `+N` when there are more. Away people stay in it (the view fades them). */
-export function avatarStack(people: readonly LivePerson[], max = 4): { shown: LivePerson[]; more: LivePerson[] } {
-  const others = people.filter((p) => !p.self)
+ *  `+N` when there are more. Away people stay in it (the view fades them).
+ *  The editors' stack (`editor`): you first, then who's here; no away people. */
+export function avatarStack(people: readonly LivePerson[], max = 4, editor = false): { shown: LivePerson[]; more: LivePerson[] } {
+  const others = editor ? [...people.filter((p) => p.self), ...watching(people).here.filter((p) => !p.self)] : people.filter((p) => !p.self)
   if (others.length <= max) return { shown: others, more: [] }
   return { shown: others.slice(0, max - 1), more: others.slice(max - 1) }
 }

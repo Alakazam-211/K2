@@ -10,7 +10,7 @@ import { watching, type LivePerson } from '@/lib/live-view/shared/people'
 import { LiveAvatar } from './LiveAvatar'
 import { PanelSection } from './PanelSection'
 
-function Row({ p, following, stale, onFollow }: { p: LivePerson; following: boolean; stale: boolean; onFollow: (id: string) => void }): React.JSX.Element {
+function Row({ p, following, stale, onFollow }: { p: LivePerson; following: boolean; stale: boolean; onFollow?: (id: string) => void }): React.JSX.Element {
   const status = p.doing ?? p.place ?? (p.kind === 'agent' ? 'in the file, not editing' : 'watching')
   const inner = (
     <>
@@ -32,7 +32,7 @@ function Row({ p, following, stale, onFollow }: { p: LivePerson; following: bool
     </>
   )
   const cls = 'lv-person flex w-full items-start gap-2.5 px-3.5 py-1.5 text-left'
-  if (p.self || stale)
+  if (p.self || stale || !onFollow)
     return (
       <div data-testid={`lv-person-${p.id}`} data-away={p.away ? '' : undefined} className={cls}>
         {inner}
@@ -61,6 +61,9 @@ export function WatchingList({
   followingId = null,
   stale = false,
   title = 'Watching',
+  countAway = false,
+  staleHead,
+  action,
   onFollow,
 }: {
   people: readonly LivePerson[]
@@ -68,11 +71,20 @@ export function WatchingList({
   /** Not connected: as you last saw them. */
   stale?: boolean
   title?: string
-  onFollow: (id: string) => void
+  /** The editors' heads: "Away N" counts too. */
+  countAway?: boolean
+  /** The editors' head while not connected ("Last seen 3", then why); else "as you last saw". */
+  staleHead?: { title: string; line: string }
+  /** At the heading's end ("Live edits"). */
+  action?: React.ReactNode
+  /** None: rows only show who's here (Follow comes with E4b). */
+  onFollow?: (id: string) => void
 }): React.JSX.Element {
   const w = watching(people)
+  const head = stale && staleHead ? staleHead : null
   return (
-    <PanelSection id="watching" title={title} count={stale ? 'as you last saw' : w.count} countTestId="lv-watching-count">
+    <PanelSection id="watching" title={head?.title ?? title} count={stale && !head ? 'as you last saw' : w.count} countTestId="lv-watching-count" action={action}>
+      {head ? <p className="lv-stale-line type-hint m-0 px-3.5 pb-1 text-[var(--color-text-secondary)]">{head.line}</p> : null}
       <div data-testid="lv-watching" data-stale={stale ? '' : undefined}>
         {w.here.map((p) => (
           <Row key={p.id} p={p} following={followingId === p.id} stale={stale} onFollow={onFollow} />
@@ -80,7 +92,9 @@ export function WatchingList({
       </div>
       {w.away.length > 0 ? (
         <div data-testid="lv-away" className="lv-away">
-          <div className="lv-caption px-3.5 pb-0.5 pt-1.5">Away</div>
+          <div className="lv-caption px-3.5 pb-0.5 pt-1.5">
+            Away{countAway ? <span data-testid="lv-away-count"> {w.away.length}</span> : null}
+          </div>
           {w.away.map((p) => (
             <Row key={p.id} p={p} following={followingId === p.id} stale={stale} onFollow={onFollow} />
           ))}

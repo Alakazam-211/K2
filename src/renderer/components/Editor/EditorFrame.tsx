@@ -6,7 +6,9 @@
 // status line (EditorStatusLine), which says the save state as it is. Saving
 // (E1c) comes from EditorFile through FrameSaveContext: the save word, ⌘S in
 // every mode, autosave on blur and Compare, the same for both editors.
-// The LiveView shell's slots hold it all; nothing live yet (E4).
+// The LiveView shell's slots hold it all. A live file (E4a) adds the state
+// chip, the sentence, the avatar stack and the Live panel through
+// FrameLiveContext (frameLive.ts).
 
 import { useContext, useEffect, useRef } from 'react'
 import type { Extension } from '@codemirror/state'
@@ -19,6 +21,7 @@ import type { EditorKind } from '@/lib/editor/preview-switch'
 import { EDITOR_CSS } from './editorCss'
 import { WRITE_CSS } from './writeModeCss'
 import { EditorStatusLine, SaveWord, type StatusItem, type StatusToggle } from './EditorStatusLine'
+import { FrameLiveContext } from './frameLive'
 import { FrameSaveContext } from './frameSave'
 
 /** Narrower than this, the status line's toggles fold behind Display. */
@@ -101,8 +104,12 @@ export function EditorFrame(props: {
 }): React.JSX.Element {
   const { frame, filePath, kind, mode, full, status } = props
   const save = useContext(FrameSaveContext)
+  const live = useContext(FrameLiveContext)
   // The save model's word replaces the editor's own (none for a read-only file).
-  const items = save ? status.items.flatMap((it) => (it.id !== 'save' ? [it] : save.status ? [{ id: 'save', node: <SaveWord word={save.status.word} tone={save.status.tone} /> }] : [])) : status.items
+  const word = save?.status ? { id: 'save', node: <SaveWord word={save.status.word} tone={save.status.tone} /> } : null
+  const items = save ? status.items.flatMap((it) => (it.id !== 'save' ? [it] : word ? [word] : [])) : status.items
+  // A file Write can't edit may still owe its words (a live file whose edits are paused): say so.
+  if (word && !status.items.some((it) => it.id === 'save')) items.push(word)
   const onKeyDownCapture = (e: React.KeyboardEvent): void => {
     if (save && saveKey(e, save.saveNow)) return
     props.onKeyDownCapture?.(e)
@@ -113,19 +120,20 @@ export function EditorFrame(props: {
   const name = fileNameOf(filePath)
   return (
     // data-k2-line: the mode control measures its room against the tab, not its own wrapper (ui/segmented-fit.ts).
-    <div ref={frame.root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} style={props.style} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={onKeyDownCapture} onBlur={onBlur}>
+    <div ref={frame.root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} data-live={live ? '' : undefined} data-offline={live?.offline ? '' : undefined} style={props.style} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={onKeyDownCapture} onBlur={onBlur}>
       <style>{EDITOR_CSS + WRITE_CSS}</style>
       <LiveTabFrame
-        header={<LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} sentence={null} mode={props.modeControl} />}
+        header={<LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} state={live?.state} sentence={live?.sentence ?? null} right={live?.right} mode={props.modeControl} panelOpen={live?.panelOpen} onTogglePanel={live?.onTogglePanel} panelLabel={live?.panelLabel} />}
         notice={props.notice}
         hero={<div className="ed-body flex min-h-0 flex-1 flex-col">{save?.replaceBody ?? props.body}</div>}
         status={<EditorStatusLine items={items} toggles={status.toggles} facts={status.facts} narrow={frame.narrow} />}
-        panel={null}
-        panelOpen={false}
+        panel={live?.panel ?? null}
+        panelOpen={!!live?.panelOpen}
         panelMode="reflow"
+        panelLabel={live?.panelLabel}
         narrow={frame.narrow}
         sample={false}
-        onClosePanel={() => {}}
+        onClosePanel={live?.onClosePanel ?? (() => {})}
       />
     </div>
   )

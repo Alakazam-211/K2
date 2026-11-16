@@ -6,6 +6,7 @@
 // that opens a small group above it.
 
 import { Fragment, useEffect, useRef, useState } from 'react'
+import { OfflineGlyph } from '@/components/LiveView/shell/glyphs'
 
 export interface StatusToggle {
   id: string
@@ -28,10 +29,14 @@ function Check(): React.JSX.Element {
 }
 
 /** The save word: a tick when saved, a dot while it waits, a cross when it failed. */
-export function SaveWord({ word, tone = word === 'Saved' ? 'ok' : 'pending' }: { word: string; tone?: 'ok' | 'pending' | 'bad' }): React.JSX.Element {
+export function SaveWord({ word, tone = word === 'Saved' ? 'ok' : 'pending' }: { word: string; tone?: 'ok' | 'pending' | 'bad' | 'offline' }): React.JSX.Element {
   return (
     <>
-      {tone === 'ok' ? (
+      {tone === 'offline' ? (
+        <span aria-hidden="true" className="ed-offline inline-flex">
+          <OfflineGlyph size={11} />
+        </span>
+      ) : tone === 'ok' ? (
         <span className="ed-ok inline-flex">
           <Check />
         </span>

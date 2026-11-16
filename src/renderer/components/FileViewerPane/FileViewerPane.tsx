@@ -11,16 +11,16 @@ import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
 const PDFViewer = lazy(() => import('./PDFViewer').then((m) => ({ default: m.PDFViewer })))
 const DocxViewer = lazy(() => import('./DocxViewer').then((m) => ({ default: m.DocxViewer })))
 const CodeEditor = lazy(() => import('./CodeEditor').then((m) => ({ default: m.CodeEditor })))
-// 0.46.7 live docs: the kit's Live editor, for a file whose multiplayer
-// core is on (it pulls CodeEditor's language and theme tables too).
+// 0.46.7 live docs in today's view: the kit's Live editor (it pulls CodeEditor's language and theme tables too).
 const LiveDocPane = lazy(() => import('./LiveDocPane').then((m) => ({ default: m.LiveDocPane })))
 const ZipViewer = lazy(() => import('./ZipViewer').then((m) => ({ default: m.ZipViewer })))
 const MediaViewer = lazy(() => import('./MediaViewer').then((m) => ({ default: m.MediaViewer })))
 // The 3D preview (ported from the K2 Companion) dynamic-imports three.js
 // again, then one loader chunk per format. CSV, diagrams, DXF and HTML: FilePreview.
 const ModelViewer = lazy(() => import('./ModelViewer').then((m) => ({ default: m.ModelViewer })))
-// The new editors (Settings → Multiplayer, "New markdown editor" and "New code editor"): one frame on the live shell, saving (E1c).
+// The new editors (Settings → Multiplayer, "New markdown editor" and "New code editor"): one frame on the live shell, saving (E1c), live files (E4a).
 const EditorFile = lazy(() => import('@/components/Editor/EditorFile').then((m) => ({ default: m.EditorFile })))
+const LiveEditorFile = lazy(() => import('@/components/Editor/live/LiveEditorFile').then((m) => ({ default: m.LiveEditorFile })))
 // `getLanguageName` is a synchronous helper used in the status bar —
 // importing it eagerly is fine (it's a small string table, not the
 // CodeMirror bundle). Bundlers tree-shake the rest of the module.
@@ -56,7 +56,7 @@ import { AnyFileDocPanel } from './AnyFileDocPanel'
 import { LivePreviewEntry } from '@/components/LiveView/LivePreviewEntry'
 import { DeckPreviewPane } from './DeckPreviewPane'
 import { DocConflictNotice } from './DocConflictNotice'
-import { EditorPreviewLiveNote, editorFrameRoute, useEditorFrameKind } from '@/components/Editor/editorFrameRoute'
+import { LiveOffNotice, editorFrameRoute, useEditorFrameKind } from '@/components/Editor/editorFrameRoute'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -804,22 +804,28 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     </div>
   )
 
+  const onLiveCoreOff = (): void => void (setLiveEnded(true), setLiveEpoch((e) => e + 1), loadFile()) // the core went off: the file as the daemon wrote it back
   const frameRoute = editorFrameRoute(editorKind, { locked: textLock !== null, liveOn, anyFile, deck: liveCore.status === 'deck' }) // the new editors: no toolbar, no path bar
-  const preview = hasFilePreview(category) && <FilePreview category={category} filePath={filePath} text={editedContent ?? content} saved={content} readError={readError} contentRef={contentRef} />
-  if (frameRoute === 'frame' && editorKind) {
+  const filePreview = (text: string, saved: string) => hasFilePreview(category) && <FilePreview category={category} filePath={filePath} text={text} saved={saved} readError={readError} contentRef={contentRef} />
+  const preview = filePreview(editedContent ?? content, content)
+  const roReason = room.readOnly ? 'You can view this file but not edit it' : null
+  if (frameRoute !== 'today' && editorKind) {
     return (
       <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
         <Suspense fallback={null}>
-          <EditorFile
-            key={filePath}
-            {...{ filePath, kind: editorKind, scope: room.scope, base: content, text: editedContent ?? content, setBase: setContent, setText: setEditedContent, cursor: cursorInfo, locked: textLock !== null }}
-            baseAbsent={readOkPathRef.current !== filePath}
-            saveNew={isNewUntitledFile(filePath, readOkPathRef.current) ? (t) => saveFile(t) : undefined}
-            readOnly={room.readOnly ? 'You can view this file but not edit it' : null}
-            notice={<>{liveEndedBar}{rereadBar}</>}
-            renderEditor={(o) => codeEditor(o, o.readOnly)}
-            renderPreview={preview ? () => preview : undefined}
-          />
+          {frameRoute === 'live' ? (
+            <LiveEditorFile key={filePath} {...{ filePath, kind: editorKind, scope: room.scope }} roomReadOnly={roReason} onCoreOff={onLiveCoreOff} renderPreview={preview ? (t) => filePreview(t, t) : undefined} />
+          ) : (
+            <EditorFile
+              key={filePath}
+              {...{ filePath, kind: editorKind, scope: room.scope, base: content, text: editedContent ?? content, setBase: setContent, setText: setEditedContent, cursor: cursorInfo, locked: textLock !== null, readOnly: roReason }}
+              baseAbsent={readOkPathRef.current !== filePath}
+              saveNew={isNewUntitledFile(filePath, readOkPathRef.current) ? (t) => saveFile(t) : undefined}
+              notice={<>{liveEnded && !liveOn && <LiveOffNotice onDismiss={() => setLiveEnded(false)} />}{rereadBar}</>}
+              renderEditor={(o) => codeEditor(o, o.readOnly)}
+              renderPreview={preview ? () => preview : undefined}
+            />
+          )}
         </Suspense>
       </div>
     )
@@ -1020,7 +1026,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       )}
 
-      {liveEndedBar}<EditorPreviewLiveNote kind={frameRoute === 'kept-live' ? editorKind : null} />
+      {liveEndedBar}
 
       {/* Tier 0 kept both versions after another program's save (once per copy) */}
       {anyFile && <DocConflictNotice scope={room.scope} filePath={filePath} />}
@@ -1095,13 +1101,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
               scope={room.scope}
               filePath={filePath}
               core={liveCore.core}
-              onCoreOff={() => {
-                // The core went off: today's view, with the file as the
-                // daemon wrote it back.
-                setLiveEnded(true)
-                setLiveEpoch((e) => e + 1)
-                void loadFile()
-              }}
+              onCoreOff={onLiveCoreOff}
             />
           </Suspense>
         </div>

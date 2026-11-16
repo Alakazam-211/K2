@@ -97,7 +97,8 @@ export function canAutosave(s: SaveState, o: { locked?: boolean } = {}): boolean
 
 export interface SaveStatus {
   word: string
-  tone: 'ok' | 'pending' | 'bad'
+  /** `offline`: a live doc's words are saved on this computer until it's back. */
+  tone: 'ok' | 'pending' | 'bad' | 'offline'
 }
 
 const CONFLICT_WORD: Record<ConflictCode, string> = {

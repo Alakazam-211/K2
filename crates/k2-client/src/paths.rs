@@ -61,6 +61,25 @@ pub fn slash_rel(rel: &std::path::Path) -> String {
     rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
+/// Every name a workspace's private folder has had, newest first: `.k5`
+/// (the coming name), `.k2`, and `.k2so` (before 0.40.4). A workspace can
+/// still hold an old `.k2so/` beside its `.k2/`, and links at its root may
+/// still point into it.
+pub const WORKSPACE_DOT_DIR_NAMES: &[&str] = &[".k5", ".k2", ".k2so"];
+
+/// Whether one path segment names a workspace's private folder, under any
+/// of its names ([`WORKSPACE_DOT_DIR_NAMES`]). Letter case is ignored
+/// (`.K2` on a case-insensitive disk is the same folder) and so are
+/// trailing dots and spaces (Windows strips them: `.k2.` and `.k2 ` open
+/// `.k2`).
+///
+/// For checks that keep someone OUT of that folder. Ask this, never
+/// `== ".k2"`: a guard that knows one name leaves the others open.
+pub fn is_workspace_dot_dir(segment: &str) -> bool {
+    let name = segment.trim_end_matches(['.', ' ']);
+    WORKSPACE_DOT_DIR_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n))
+}
+
 /// The K2 home directory: `$HOME/.k2`.
 ///
 /// Falls back to a relative `.k2` when no home directory can be resolved
@@ -105,6 +124,24 @@ mod tests {
         assert_eq!(windows_home_from(os("/c/Users/u"), os(r"C:\Users\u")), Some(PathBuf::from(r"C:\Users\u")));
         assert_eq!(windows_home_from(None, os(r"C:\Users\u")), Some(PathBuf::from(r"C:\Users\u")));
         assert_eq!(windows_home_from(os("rel"), None), None);
+    }
+
+    #[test]
+    fn a_workspace_dot_dir_is_any_of_its_three_names_in_any_case() {
+        assert_eq!(WORKSPACE_DOT_DIR_NAMES, &[".k5", ".k2", ".k2so"]);
+        for s in [
+            ".k5", ".k2", ".k2so", ".K5", ".K2", ".K2SO", ".K2so", ".k2So",
+            // Windows opens these as the folder itself.
+            ".k2.", ".k2 ", ".k2. .", ".k2so..", ".K5 ",
+        ] {
+            assert!(is_workspace_dot_dir(s), "{s:?}");
+        }
+        for s in [
+            "", ".", "..", "k2", "k2so", ".k", ".k22", ".k2s", ".k2sox", ".k3", ".k2so-old", "x.k2", " .k2", ".k2/",
+            ".k2\\", ".git", ".claude", "\u{212a}2", ".\u{212a}2",
+        ] {
+            assert!(!is_workspace_dot_dir(s), "{s:?}");
+        }
     }
 
     #[test]

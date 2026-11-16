@@ -145,10 +145,11 @@ UPDATE
   update --cli [--check]                        CLI vs daemon version; the CLI updates with K2
   update --list                                 Show available versions
 
-ONBOARDING (first-launch flow)
-  onboarding scan                               Find adoptable projects
-  onboarding adopt <path>                       Register an existing folder
-  onboarding defer <path>                       Skip onboarding for now
-  onboarding start-fresh <path>                 Create new workspace from scratch
+ONBOARDING (adding a workspace: what to do with its CLAUDE.md, GEMINI.md, ...)
+  onboarding scan [<workspace-path>]            List its harness files with your own content
+  onboarding adopt <file> [<workspace-path>]    Seed .k2/PROJECT.md from that file (archived)
+  onboarding defer [<workspace-path>]           Leave its harness files alone for now
+  onboarding start-fresh [<workspace-path>]     Archive them and use K2's own
+  (<workspace-path> defaults to this folder)
 --- stderr
 --- requests

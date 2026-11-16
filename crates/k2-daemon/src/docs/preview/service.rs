@@ -21,7 +21,8 @@
 //! - **The push** ([`super::super::host_events`]), on the doc's sockets: a
 //!   render starting is `preview_rendering`; one landing is `preview_ready`
 //!   with `state: "ready"`, its `render_ms` and `without_modifiers` (and a
-//!   scene view's `camera` and id table, `ids`); one failing is
+//!   scene view's `camera`, `base_values`, `hidden_left_out` and id table,
+//!   `ids`, when there); one failing is
 //!   `preview_ready` with `state: "failed"` and its code. An older client
 //!   that knows only `preview_ready` reads it as it always did.
 //! - **Id images** ([`super::extras`]): an image that comes with one has it
@@ -604,15 +605,15 @@ fn ask_fields(look: Look, shape: Option<&'static str>) -> Vec<(String, k2_mpc_ba
 
 /// The fields a `ready` push carries after the old ones, from the image's
 /// metadata: `render_ms`, `without_modifiers`, then what is there of
-/// `look`, `shape`, `reused_from`, `camera` and `ids` (its objects listed only up to
-/// [`extras::PUSH_IDS_MAX`]).
+/// `look`, `shape`, `reused_from`, `camera`, `base_values`, `hidden_left_out`
+/// and `ids` (its objects listed only up to [`extras::PUSH_IDS_MAX`]).
 pub fn ready_fields(meta: &serde_json::Value) -> Vec<(String, k2_mpc_base::errors::Value)> {
     use k2_mpc_base::errors::Value;
     let mut f = vec![
         ("render_ms".to_string(), Value::from(meta["render_ms"].as_u64().unwrap_or(0))),
         ("without_modifiers".to_string(), Value::from(meta["without_modifiers"].as_bool().unwrap_or(false))),
     ];
-    for k in ["look", "shape", "reused_from", "camera"] {
+    for k in ["look", "shape", "reused_from", "camera", "base_values", "hidden_left_out"] {
         if let Some(v) = meta.get(k) {
             f.push((k.to_string(), extras::to_wire(v)));
         }

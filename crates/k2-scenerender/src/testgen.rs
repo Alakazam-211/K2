@@ -32,6 +32,8 @@ pub fn object(id: &str, mesh: u32, color: [f32; 3], transform: [f32; 16], double
         modifiers: Vec::new(),
         modifiers_not_applied: false,
         key: None,
+        hidden: None,
+        transform_not_evaluated: false,
     }
 }
 

@@ -62,6 +62,10 @@ pub struct Output {
     /// Each view's id image, in the same order, when the request asked for ids; else empty.
     pub ids: Vec<Vec<u8>>,
     pub objects_without_modifiers: Vec<u32>,
+    /// The scene's objects hidden in the file.
+    pub objects_hidden: Vec<u32>,
+    /// The scene's objects drawn at their base transform.
+    pub objects_not_evaluated: Vec<u32>,
 }
 
 /// The request's own checks (no scene needed): views, threads.
@@ -86,7 +90,8 @@ pub fn check_request(req: &Request, caps: &Caps) -> Result<(), Failure> {
 
 /// Plan every view of `req` against a scene's header: object and camera
 /// indices, sizes, SSAA, drawn counts. `mesh_counts` is (vertices,
-/// triangles) per mesh.
+/// triangles) per mesh. A view that names no objects draws every object not
+/// hidden in the file; one that names them draws those, hidden or not.
 pub fn plan(mesh_counts: &[(u64, u64)], objects: &[Object], cameras: &[Camera], req: &Request, caps: &Caps) -> Result<Vec<Plan>, Failure> {
     check_request(req, caps)?;
     let mut plans = Vec::with_capacity(req.views.len());
@@ -111,7 +116,7 @@ pub fn plan(mesh_counts: &[(u64, u64)], objects: &[Object], cameras: &[Camera], 
                 }
                 list.clone()
             }
-            None => (0..objects.len() as u32).collect(),
+            None => (0..objects.len() as u32).filter(|&o| objects[o as usize].hidden.is_none()).collect(),
         };
         let (mut dv, mut dt, mut without) = (0u64, 0u64, false);
         for &o in &active {
@@ -328,6 +333,8 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
             triangles: stats.triangles,
             covered_px: stats.covered_px,
             without_modifiers: p.without_modifiers,
+            base_values: p.active.iter().any(|&o| scene.objects[o as usize].transform_not_evaluated),
+            hidden_left_out: hidden_left_out(&scene.objects, req.views.get(vi).is_some_and(|v| v.objects.is_some())),
             vertex_ms: stats.vertex_us as f64 / 1e3,
             bin_ms: stats.bin_us as f64 / 1e3,
             raster_ms: stats.raster_us as f64 / 1e3,
@@ -336,9 +343,25 @@ pub fn render_planned(scene: &Scene, plans: &[Plan], req: &Request, caps: &Caps)
         views.push((meta, bytes));
         ids_images.extend(ids_png);
     }
-    let objects_without_modifiers =
-        scene.objects.iter().enumerate().filter(|(_, o)| o.modifiers_not_applied).map(|(i, _)| i as u32).collect();
-    Ok(Output { format: req.format, views, ids: ids_images, objects_without_modifiers })
+    let which = |f: fn(&Object) -> bool| -> Vec<u32> { scene.objects.iter().enumerate().filter(|(_, o)| f(o)).map(|(i, _)| i as u32).collect() };
+    Ok(Output {
+        format: req.format,
+        views,
+        ids: ids_images,
+        objects_without_modifiers: which(|o| o.modifiers_not_applied),
+        objects_hidden: which(|o| o.hidden.is_some()),
+        objects_not_evaluated: which(|o| o.transform_not_evaluated),
+    })
+}
+
+/// How many objects hidden in the file a view leaves out: all of them for a
+/// view that names no objects, none for one that names them.
+fn hidden_left_out(objects: &[Object], named: bool) -> u64 {
+    if named {
+        0
+    } else {
+        objects.iter().filter(|o| o.hidden.is_some()).count() as u64
+    }
 }
 
 /// Decode `input` (a whole K2SCENE1) and draw every view of `req`: the
@@ -415,6 +438,123 @@ mod tests {
         assert_eq!(out.objects_without_modifiers, vec![1]);
         let flags: Vec<bool> = out.views.iter().map(|v| v.0.without_modifiers).collect();
         assert_eq!(flags, [true, false, true]);
+    }
+
+    /// Four objects in a 2 x 2 grid, a small one (index 2) on top of the first
+    /// and inside their box, and one far away (index 5); the camera scene's
+    /// camera, turned to look at the small one.
+    fn hidden_scene() -> crate::scene::Scene {
+        let mut s = testgen::grid_scene(2, false);
+        s.cameras = testgen::camera_scene().cameras;
+        s.cameras[0].target = Some([0.0, 0.75, 0.0]);
+        s.objects.insert(2, testgen::object("Top", 0, [0.9, 0.2, 0.2], testgen::placed([0.0, 0.75, 0.0], [0.4, 0.4, 0.4]), None));
+        s.objects.push(testgen::object("Far", 0, [0.2, 0.2, 0.9], testgen::placed([100.0, 0.0, 0.0], [1.0, 1.0, 1.0]), None));
+        s
+    }
+
+    fn with_ids(views: Vec<View>) -> Request {
+        let mut r = Request::new(views);
+        r.ids = true;
+        r
+    }
+
+    /// The scene, a camera and a turntable frame leave a hidden object out:
+    /// a far one doesn't widen the fit (the same bytes, id images and cameras
+    /// as the scene without it), and a hidden one in the middle is never in
+    /// the id image while every other object keeps its index + 1 wherever the
+    /// hidden one didn't cover it when shown.
+    #[test]
+    fn scene_camera_and_turntable_views_leave_hidden_objects_out() {
+        let views = vec![View::new(ViewSpec::Auto, 96), View::new(ViewSpec::Camera(0), 96), View::new(ViewSpec::Turntable(2), 96), View { framing: Framing::Contents, ..View::new(ViewSpec::Auto, 96) }];
+        let mut far_hidden = hidden_scene();
+        far_hidden.objects[5].hidden = Some(crate::scene::Hidden::Itself);
+        let mut without_far = hidden_scene();
+        without_far.objects.pop();
+        let req = with_ids(views.clone());
+        let (h, w) = (render_bytes(&encode(&far_hidden), &req, &caps()).expect("far hidden").0, render_bytes(&encode(&without_far), &req, &caps()).expect("without far").0);
+        assert!(h.ids == w.ids, "the same id images");
+        for (i, (a, b)) in h.views.iter().zip(&w.views).enumerate() {
+            assert!(a.1 == b.1, "view {i}: the same still");
+            assert_eq!((a.0.camera, a.0.objects, &a.0.framing, &a.0.ids), (b.0.camera, b.0.objects, &b.0.framing, &b.0.ids), "view {i}");
+            assert_eq!((a.0.hidden_left_out, b.0.hidden_left_out), (1, 0), "view {i}");
+        }
+        assert_eq!((h.objects_hidden.clone(), w.objects_hidden.clone()), (vec![5], vec![]));
+        // The small one, hidden too ("collection"): never in the id image, the rest unmoved.
+        let mut both = far_hidden.clone();
+        both.objects[2].hidden = Some(crate::scene::Hidden::Collection);
+        let req = with_ids(views[..3].to_vec());
+        let (shown, hidden) = (render_bytes(&encode(&far_hidden), &req, &caps()).expect("small shown").0, render_bytes(&encode(&both), &req, &caps()).expect("small hidden").0);
+        for i in 0..3 {
+            let (sm, hm) = (&shown.views[i].0, &hidden.views[i].0);
+            assert_eq!(sm.camera, hm.camera, "view {i}: inside the others' box, the fit is the same");
+            assert_eq!((sm.objects, hm.objects, hm.hidden_left_out), (5, 4, 2), "view {i}");
+            let (sp, sset) = id_values(&shown.ids[i], sm.width, sm.height);
+            let (hp, hset) = id_values(&hidden.ids[i], hm.width, hm.height);
+            assert!(sset.contains(&3), "view {i}: shown, the small object is in the image");
+            assert!(!hset.contains(&3) && !hset.contains(&6), "view {i}: hidden, never");
+            assert!(!hset.is_empty() && hset.iter().all(|v| [1, 2, 4, 5].contains(v)), "view {i}: {hset:?}");
+            assert!(sp.iter().zip(&hp).all(|(s, h)| *s == 3 || s == h), "view {i}: every other pixel keeps its value");
+            assert_eq!(hm.ids.as_ref().map(|m| m.objects.iter().map(|e| e.index).collect::<Vec<_>>()), Some(hset.iter().map(|v| v - 1).collect()), "view {i}: the table lists only objects with pixels");
+        }
+        // Hiding every object: nothing drawn, and no failure.
+        let mut all = hidden_scene();
+        for o in all.objects.iter_mut() {
+            o.hidden = Some(crate::scene::Hidden::Itself);
+        }
+        let none = render_bytes(&encode(&all), &with_ids(views.clone()), &caps()).expect("all hidden").0;
+        assert!(none.views.iter().all(|v| v.0.objects == 0 && v.0.covered_px == 0 && v.0.hidden_left_out == 6));
+    }
+
+    /// A view that names a hidden object draws it alone, with its index in
+    /// the id image: the same bytes as when it is shown.
+    #[test]
+    fn an_object_view_draws_a_hidden_object() {
+        let mut s = hidden_scene();
+        let one = with_ids(vec![View { objects: Some(vec![2]), ..View::new(ViewSpec::Auto, 64) }]);
+        let shown = render_bytes(&encode(&s), &one, &caps()).expect("shown").0;
+        for how in [crate::scene::Hidden::Itself, crate::scene::Hidden::Collection] {
+            s.objects[2].hidden = Some(how);
+            let o = render_bytes(&encode(&s), &one, &caps()).expect("hidden").0;
+            let m = &o.views[0].0;
+            assert!(m.covered_px > 0 && m.objects == 1 && m.hidden_left_out == 0, "{m:?}");
+            let (_, set) = id_values(&o.ids[0], m.width, m.height);
+            assert_eq!(set.into_iter().collect::<Vec<_>>(), [3]);
+            assert!(o.views[0].1 == shown.views[0].1 && o.ids == shown.ids, "{how:?}");
+        }
+    }
+
+    /// An object whose placement isn't evaluated is drawn at its base
+    /// transform: the same pixels, flagged on each view that draws it.
+    #[test]
+    fn transform_not_evaluated_draws_the_same_and_says_base_values() {
+        let a = hidden_scene();
+        let mut b = a.clone();
+        b.objects[1].transform_not_evaluated = true;
+        let views = vec![View::new(ViewSpec::Auto, 64), View::new(ViewSpec::Camera(0), 64), View::new(ViewSpec::Turntable(4), 64), View { objects: Some(vec![1]), ..View::new(ViewSpec::Auto, 64) }, View { objects: Some(vec![0]), ..View::new(ViewSpec::Auto, 64) }];
+        let (ra, rb) = (render_bytes(&encode(&a), &with_ids(views.clone()), &caps()).expect("a").0, render_bytes(&encode(&b), &with_ids(views), &caps()).expect("b").0);
+        assert!(ra.ids == rb.ids);
+        for (x, y) in ra.views.iter().zip(&rb.views) {
+            assert!(x.1 == y.1);
+            assert!(!x.0.base_values);
+        }
+        assert_eq!(rb.views.iter().map(|v| v.0.base_values).collect::<Vec<_>>(), [true, true, true, true, false]);
+        assert_eq!((ra.objects_not_evaluated.clone(), rb.objects_not_evaluated.clone()), (vec![], vec![1]));
+        // Hidden, it is no longer drawn by the scene: no longer flagged there.
+        let mut c = b.clone();
+        c.objects[1].hidden = Some(crate::scene::Hidden::Itself);
+        let rc = render_bytes(&encode(&c), &Request::new(vec![View::new(ViewSpec::Auto, 32), View { objects: Some(vec![1]), ..View::new(ViewSpec::Auto, 32) }]), &caps()).expect("c").0;
+        assert_eq!(rc.views.iter().map(|v| v.0.base_values).collect::<Vec<_>>(), [false, true]);
+        // Off the response line when there is nothing to say; on it, they round-trip.
+        let line = |r: &Output| -> Vec<u8> {
+            crate::proto::Response { ok: true, code: None, detail: None, format: Some(ImageFormat::Webp), views: Some(r.views.iter().map(|v| v.0.clone()).collect()), ..crate::proto::Response::failed(FailureCode::TooLarge, "") }.line()
+        };
+        let la = line(&ra);
+        let text = String::from_utf8_lossy(&la);
+        assert!(!text.contains("base_values") && !text.contains("hidden"), "{text}");
+        let lc = line(&rc);
+        assert!(String::from_utf8_lossy(&lc).contains(r#""base_values":true"#));
+        let back = crate::proto::Response::parse(&lc[..lc.len() - 1]).expect("parse").views.expect("views");
+        assert_eq!(back.iter().map(|v| (v.base_values, v.hidden_left_out)).collect::<Vec<_>>(), [(false, 1), (true, 0)]);
     }
 
     #[test]

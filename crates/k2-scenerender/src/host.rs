@@ -182,6 +182,10 @@ pub struct Rendered {
     pub views: Vec<RenderedView>,
     /// The scene's objects shown without their modifiers.
     pub objects_without_modifiers: Vec<u32>,
+    /// The scene's objects hidden in the file.
+    pub objects_hidden: Vec<u32>,
+    /// The scene's objects drawn at their base transform.
+    pub objects_not_evaluated: Vec<u32>,
     pub timings: Timings,
     pub estimate_bytes: u64,
     /// The worker's stderr (debug log only).
@@ -456,13 +460,15 @@ fn decide(
         return fail(FailureCode::RendererError, format!("protocol: {m} ({})", ended(&status)));
     }
     match response {
-        Some(Response { ok: true, views: Some(metas), format: Some(format), objects_without_modifiers, timings, estimate_bytes, .. })
+        Some(Response { ok: true, views: Some(metas), format: Some(format), objects_without_modifiers, objects_hidden, objects_not_evaluated, timings, estimate_bytes, .. })
             if status.code() == Some(EXIT_OK) =>
         {
             Ok(Rendered {
                 format,
                 views: metas.into_iter().zip(images).map(|(meta, (image, ids))| RenderedView { meta, image, ids }).collect(),
                 objects_without_modifiers: objects_without_modifiers.unwrap_or_default(),
+                objects_hidden: objects_hidden.unwrap_or_default(),
+                objects_not_evaluated: objects_not_evaluated.unwrap_or_default(),
                 timings: timings.unwrap_or_default(),
                 estimate_bytes: estimate_bytes.unwrap_or(0),
                 stderr,

@@ -19,6 +19,8 @@
 //! - a camera's view: the same with `cam` (`@cam:N`, `@cam:<enc(id)>`,
 //!   `@cam-n:<i>`).
 //!
+//! An object hidden in the file is addressed the same way as a shown one.
+//!
 //! **Which survive an edit:** a key form names the same object across
 //! versions, renames included; a name form across every edit but a rename
 //! of that object (renamed, it is listed under the new name). The index form
@@ -35,15 +37,31 @@
 //! number; then for each drawn object, in
 //! order, its mesh's digest (over the mesh's counts and its data bytes as
 //! read), its transform, its base colour, its sidedness and
-//! `modifiers_not_applied` (shown with the image). The renderer's build is
-//! not in it: the host keys its cache with it.
+//! `modifiers_not_applied` (shown with the image). The scene, a camera and a
+//! turntable frame draw every object not hidden in the file: an object
+//! hidden in it is left out of the objects above and, only when one is,
+//! the indices of the hidden ones follow them (they place the drawn objects'
+//! values in the id image). So showing or hiding an object redraws those
+//! views, editing a hidden one redraws none of them, and a scene with no
+//! hidden object has the digests it had before the field. An object's own
+//! view draws it hidden or not: whether it is hidden is not in that view's
+//! digest. `transform_not_evaluated` draws nothing differently but rides
+//! with the image (`base_values`), so it is in the digest of every view that
+//! draws the object, its own included: only when some drawn object has it,
+//! the positions of those objects among the drawn ones follow (after the
+//! hidden indices), so a scene without it keeps its digests and a cached
+//! image's flag can't go stale. The renderer's build is not in it: the host
+//! keys its cache with it.
 //!
 //! **Bounds:** each object item also carries its mesh's local box
 //! ([`LocalBounds`], mesh space: the client applies the object's transform),
 //! read from the positions in the bytes; `approx` when the object's
 //! modifiers were not applied (the evaluated mesh may be larger). An empty
 //! mesh, or one with a non-finite position (which the renderer refuses), has
-//! none. Bounds are not in any digest.
+//! none. Bounds are not in any digest. Each object item also says whether the
+//! object is hidden in the file ([`Item::hidden`]: it is listed all the same,
+//! with its box) and whether its placement is not evaluated
+//! ([`Item::not_evaluated`]: the box is placed by the base transform).
 //!
 //! **Cameras:** each camera item carries the camera's display values
 //! ([`CameraDisplay`]: `active`, `lens_mm`, `sensor_mm`, `sensor_fit`, each
@@ -54,7 +72,7 @@ use serde::Serialize;
 use crate::addr;
 use crate::camera::{mesh_bounds, ViewSpec, TURNTABLE_FRAMES};
 use crate::sha256::Sha256;
-use crate::scene::{self, Camera, CameraDisplay, Header, InputError, InputLimits, MeshInfo, Object, UpAxis};
+use crate::scene::{self, Camera, CameraDisplay, Header, Hidden, InputError, InputLimits, MeshInfo, Object, UpAxis};
 
 /// Longest encoded name put in an address (bytes); a longer one gets the
 /// index form.
@@ -136,6 +154,12 @@ pub struct Item {
     pub bounds: Option<LocalBounds>,
     /// A camera's display values (`None` for every other item).
     pub camera: Option<CameraDisplay>,
+    /// An object hidden in the file, and how (`None` for a shown object and
+    /// for every other item).
+    pub hidden: Option<Hidden>,
+    /// An object whose placement is driven and not evaluated: drawn, and its
+    /// box placed, at its base transform (`false` for every other item).
+    pub not_evaluated: bool,
 }
 
 /// The addresses of one list's views (`kind` `obj` or `cam`), from each
@@ -212,7 +236,13 @@ enum Through<'a> {
     Turntable(u8),
 }
 
-fn view_digest(up: UpAxis, through: Through<'_>, objects: &[&Object], mesh: &[[u8; 32]]) -> [u8; 32] {
+/// `objects` are the drawn ones, in order; `hidden` the indices of the
+/// scene's objects a scene, camera or turntable view leaves out as hidden in
+/// the file (empty for an object's view, and for a scene with none, which
+/// then hashes as it did before the field). The drawn objects whose
+/// placement is not evaluated follow, by their position in `objects`, only
+/// when there are any.
+fn view_digest(up: UpAxis, through: Through<'_>, objects: &[&Object], hidden: &[u32], mesh: &[[u8; 32]]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"k2scenerender/view/v1\0");
     h.update(&[match up {
@@ -245,6 +275,22 @@ fn view_digest(up: UpAxis, through: Through<'_>, objects: &[&Object], mesh: &[[u
             Some(true) => 2,
         }]);
         h.update(&[o.modifiers_not_applied as u8]);
+    }
+    // After the fixed-size records counted above, so it can't read as one of them.
+    if !hidden.is_empty() {
+        h.update(b"hidden\0");
+        h.update(&(hidden.len() as u64).to_le_bytes());
+        for i in hidden {
+            h.update(&i.to_le_bytes());
+        }
+    }
+    let driven: Vec<u32> = objects.iter().enumerate().filter(|(_, o)| o.transform_not_evaluated).map(|(k, _)| k as u32).collect();
+    if !driven.is_empty() {
+        h.update(b"not_evaluated\0");
+        h.update(&(driven.len() as u64).to_le_bytes());
+        for k in &driven {
+            h.update(&k.to_le_bytes());
+        }
     }
     h.finish()
 }
@@ -283,21 +329,24 @@ fn local_box(m: &MeshInfo, data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
 }
 
 fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<([f32; 3], [f32; 3])>]) -> Vec<Item> {
-    let all: Vec<&Object> = h.objects.iter().collect();
+    // The scene, the cameras and the turntable draw every object not hidden in the file.
+    let all: Vec<&Object> = h.objects.iter().filter(|o| o.hidden.is_none()).collect();
+    let hidden: Vec<u32> = h.objects.iter().enumerate().filter(|(_, o)| o.hidden.is_some()).map(|(i, _)| i as u32).collect();
     let mut items = Vec::with_capacity(1 + h.cameras.len() + h.objects.len() + TURNTABLE_FRAMES as usize);
-    items.push(Item { key: addr::SCENE.into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, mesh), bounds: None, camera: None });
+    items.push(Item { key: addr::SCENE.into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, &hidden, mesh), bounds: None, camera: None, hidden: None, not_evaluated: false });
+    // Every object gets its address from its key or its name, hidden in the file or not.
     let cams = addresses("cam", h.cameras.iter().map(|c| (c.key.as_deref(), c.id.as_str())));
     let objs = addresses("obj", h.objects.iter().map(|o| (o.key.as_deref(), o.id.as_str())));
     for ((i, c), key) in h.cameras.iter().enumerate().zip(cams) {
-        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, mesh), bounds: None, camera: Some(c.display()) });
+        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, &hidden, mesh), bounds: None, camera: Some(c.display()), hidden: None, not_evaluated: false });
     }
     for ((i, o), key) in h.objects.iter().enumerate().zip(objs) {
         let bounds = boxes[o.mesh as usize].map(|(min, max)| LocalBounds { min, max, approx: o.modifiers_not_applied });
-        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], mesh), bounds, camera: None });
+        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], &[], mesh), bounds, camera: None, hidden: o.hidden, not_evaluated: o.transform_not_evaluated });
     }
     for k in 0..TURNTABLE_FRAMES {
         let key = format!("@turntable:{k}");
-        items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, mesh), bounds: None, camera: None });
+        items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, &hidden, mesh), bounds: None, camera: None, hidden: None, not_evaluated: false });
     }
     items
 }
@@ -415,6 +464,109 @@ mod tests {
         n.objects[0].hash = Some("y".into());
         n.objects[0].modifiers = vec!["MIRROR".into()];
         assert!(changed(&n).is_empty());
+    }
+
+    /// Hiding an object redraws the scene, the cameras and the turntable,
+    /// never its own view or another object's; editing a hidden object
+    /// redraws only its own view; a scene without the field digests as it did.
+    #[test]
+    fn hiding_an_object_dirties_the_views_that_leave_it_out() {
+        use crate::scene::Hidden;
+        let mut a = testgen::grid_scene(2, false);
+        a.cameras = testgen::camera_scene().cameras;
+        let base = digests(&a);
+        let changed = |b: &crate::scene::Scene| -> Vec<String> { base.iter().zip(digests(b)).filter(|(x, y)| x.1 != y.1).map(|(x, _)| x.0.clone()).collect() };
+        let mut tt: Vec<String> = vec!["@scene:main".into(), "@cam:Camera".into()];
+        tt.extend((0..8).map(|k| format!("@turntable:{k}")));
+        let mut h = a.clone();
+        h.objects[1].hidden = Some(Hidden::Itself);
+        assert_eq!(changed(&h), tt, "not @obj:Item.001");
+        // Self or collection: the same pixels, the same digests.
+        let mut c = a.clone();
+        c.objects[1].hidden = Some(Hidden::Collection);
+        assert_eq!(digests(&c), digests(&h));
+        // Hidden is not deleted (the others keep their indices in the id image).
+        let mut d = a.clone();
+        d.objects.remove(1);
+        assert_ne!(digests(&d)[0].1, digests(&h)[0].1);
+        // Two hidden differ from one.
+        let mut two = h.clone();
+        two.objects[3].hidden = Some(Hidden::Itself);
+        assert_ne!(digests(&two)[0].1, digests(&h)[0].1);
+        // Editing a hidden object: only its own view.
+        let mut m = h.clone();
+        m.objects[1].transform[12] += 0.5;
+        m.objects[1].base_color[0] = 0.0;
+        let hd = digests(&h);
+        let moved: Vec<String> = hd.iter().zip(digests(&m)).filter(|(x, y)| x.1 != y.1).map(|(x, _)| x.0.clone()).collect();
+        assert_eq!(moved, ["@obj:Item.001"]);
+        // The items say what they are; a hidden object keeps its box.
+        let mut hn = h.clone();
+        hn.objects[1].transform_not_evaluated = true;
+        let items = list(&encode(&hn), &InputLimits::default()).expect("list");
+        let obj = items.iter().find(|i| i.key == "@obj:Item.001").expect("listed");
+        assert_eq!((obj.hidden, obj.not_evaluated), (Some(Hidden::Itself), true));
+        assert!(obj.bounds.is_some_and(|b| !b.approx));
+        assert!(items.iter().filter(|i| i.key != "@obj:Item.001").all(|i| i.hidden.is_none() && !i.not_evaluated));
+        // A hidden object is addressed like a shown one: by its key, else its name, else its index.
+        let keys = |s: &crate::scene::Scene| -> Vec<String> { list(&encode(s), &InputLimits::default()).expect("list").into_iter().map(|i| i.key).collect() };
+        let mut k = a.clone();
+        k.objects[0].key = Some("@obj:7".into());
+        k.objects[2].id = k.objects[3].id.clone();
+        let mut kh = k.clone();
+        for o in kh.objects.iter_mut() {
+            o.hidden = Some(Hidden::Collection);
+        }
+        assert_eq!(keys(&kh), keys(&k));
+        assert_eq!(keys(&kh)[2..6], ["@obj:7".to_string(), "@obj:Item.001".into(), "@obj-n:2".into(), "@obj-n:3".into()]);
+    }
+
+    /// `transform_not_evaluated` is in the digest of every view that draws
+    /// the object, its own included, so an image's `base_values` can't go
+    /// stale; `false` hashes as absent, and a hidden object's flag dirties
+    /// only its own view.
+    #[test]
+    fn not_evaluated_dirties_the_views_that_draw_it_and_false_is_absent() {
+        let mut a = testgen::grid_scene(2, false);
+        a.cameras = testgen::camera_scene().cameras;
+        let base = digests(&a);
+        let changed = |b: &crate::scene::Scene| -> Vec<String> { base.iter().zip(digests(b)).filter(|(x, y)| x.1 != y.1).map(|(x, _)| x.0.clone()).collect() };
+        let with_tt = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).chain((0..8).map(|k| format!("@turntable:{k}"))).collect() };
+        // `false` written out is the same bytes as absent: today's digests.
+        let mut f = a.clone();
+        f.objects[2].transform_not_evaluated = false;
+        assert_eq!(digests(&f), base);
+        let plain = encode(&f);
+        let hlen = u32::from_le_bytes([plain[8], plain[9], plain[10], plain[11]]) as usize;
+        let header = String::from_utf8(plain[12..12 + hlen].to_vec()).expect("a JSON header");
+        assert!(!header.contains("transform_not_evaluated"));
+        let j = header.replacen(r#""mesh":0,"#, r#""transform_not_evaluated":false,"mesh":0,"#, 1);
+        assert!(j.contains(r#""transform_not_evaluated":false"#));
+        let mut written = plain[..8].to_vec();
+        written.extend_from_slice(&(j.len() as u32).to_le_bytes());
+        written.extend_from_slice(j.as_bytes());
+        while !written.len().is_multiple_of(4) {
+            written.push(0);
+        }
+        written.extend_from_slice(&plain[(12 + hlen + 3) & !3..]);
+        let listed: Vec<(String, [u8; 32])> = list(&written, &InputLimits::default()).expect("written false").into_iter().map(|i| (i.key, i.digest)).collect();
+        assert_eq!(listed, base, "an explicit false");
+        // True: the scene, the camera, its own view and the turntable; no other object.
+        let mut t = a.clone();
+        t.objects[2].transform_not_evaluated = true;
+        assert_eq!(changed(&t), with_tt(&["@scene:main", "@cam:Camera", "@obj:Item.002"]));
+        // Another object's flag is another digest.
+        let mut u = a.clone();
+        u.objects[3].transform_not_evaluated = true;
+        assert_ne!(digests(&u)[0].1, digests(&t)[0].1);
+        // Hidden: only its own view draws it, so only its own view changes.
+        let mut h = a.clone();
+        h.objects[2].hidden = Some(crate::scene::Hidden::Itself);
+        let hd = digests(&h);
+        let mut hn = h.clone();
+        hn.objects[2].transform_not_evaluated = true;
+        let moved: Vec<String> = hd.iter().zip(digests(&hn)).filter(|(x, y)| x.1 != y.1).map(|(x, _)| x.0.clone()).collect();
+        assert_eq!(moved, ["@obj:Item.002"]);
     }
 
     #[test]

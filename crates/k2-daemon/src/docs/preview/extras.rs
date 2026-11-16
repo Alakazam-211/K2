@@ -3,7 +3,15 @@
 //!
 //! - **A scene's listing** ([`scene_item`]): an object's local box
 //!   (`bounds {min, max, approx}`, mesh space: the client applies the
-//!   object's transform; `approx` when it is drawn without its modifiers),
+//!   object's transform; `approx` when the box may not be where or what the
+//!   file shows, and then `approx_reason` says why: `"modifiers"` when the
+//!   object is drawn without its modifiers, `"driven"` when its placement is
+//!   driven and not evaluated, so the box sits at its base transform;
+//!   `"modifiers"` wins when both are so, the evaluated mesh being the
+//!   further off), how an object hidden in the file is hidden (`hidden_by:
+//!   "self"` or `"collection"`, left out when it is shown; the container's
+//!   own `hidden` is then true, as for a hidden slide; a hidden object is
+//!   listed with its box all the same, and only its own view draws it),
 //!   a camera's display values (`camera {active, lens_mm, sensor_mm,
 //!   sensor_fit}`, each left out when the file has none), and the titles
 //!   the view shows ([`scene_title`]: "Scene", "Turntable 1" to "Turntable 8").
@@ -11,7 +19,11 @@
 //!   (`camera {view, proj, fx, fy, near, shift_x, shift_y}`: column-major
 //!   world-to-view and an OpenGL projection with an infinite far plane), so
 //!   the client can lay its own overlays over the still. Left out when the
-//!   worker had none (a degenerate scene).
+//!   worker had none (a degenerate scene). `base_values: true` when an
+//!   object it draws is shown at its base transform (the view says "shown at
+//!   base values"), and `hidden_left_out`, how many objects hidden in the
+//!   file the view left out (the scene, a camera, a turntable frame); each
+//!   left out when there is nothing to say.
 //! - **Its id table** ([`ids_meta`], the scene, object and camera views
 //!   only): `ids {layer, image_len, count, objects: [{index, id}]}`. The id
 //!   image itself is binary and cached beside the image: the client asks
@@ -74,8 +86,16 @@ pub fn scene_title(target: Target, id: &str) -> String {
     }
 }
 
-pub fn bounds(b: &LocalBounds) -> J {
-    json!({ "min": nums(&b.min), "max": nums(&b.max), "approx": b.approx })
+/// An object's box; `driven`: its placement is not evaluated. `approx_reason`
+/// only when `approx`: `"modifiers"` wins over `"driven"`.
+pub fn bounds(b: &LocalBounds, driven: bool) -> J {
+    let mut o = json!({ "min": nums(&b.min), "max": nums(&b.max), "approx": b.approx || driven });
+    if b.approx {
+        o["approx_reason"] = json!("modifiers");
+    } else if driven {
+        o["approx_reason"] = json!("driven");
+    }
+    o
 }
 
 pub fn camera_display(d: &CameraDisplay) -> J {
@@ -168,12 +188,16 @@ pub fn object_ids<'a>(listing: impl IntoIterator<Item = &'a Container>) -> HashM
         .collect()
 }
 
-/// A scene listing item's extras: `bounds` for an object with a box,
-/// `camera` (display values) for a camera, nothing else.
+/// A scene listing item's extras: `bounds` for an object with a box and
+/// `hidden_by` for one hidden in the file (not `hidden`: the container's own
+/// flag has that name), `camera` (display values) for a camera, nothing else.
 pub fn scene_item(it: &Item) -> Map<String, J> {
     let mut o = Map::new();
     if let Some(b) = &it.bounds {
-        o.insert("bounds".into(), bounds(b));
+        o.insert("bounds".into(), bounds(b, it.not_evaluated));
+    }
+    if let Some(h) = it.hidden {
+        o.insert("hidden_by".into(), json!(h.as_str()));
     }
     if let Some(d) = &it.camera {
         o.insert("camera".into(), camera_display(d));
@@ -182,7 +206,8 @@ pub fn scene_item(it: &Item) -> Map<String, J> {
 }
 
 /// A drawn scene view's extras: the `camera` that drew it, when the worker
-/// had one, then its id table (`ids`), when it was drawn with one.
+/// had one, then its id table (`ids`), when it was drawn with one, then
+/// `base_values` and `hidden_left_out` when there is something to say.
 pub fn scene_view(v: &ViewMeta) -> Map<String, J> {
     let mut o = Map::new();
     if let Some(c) = v.camera.as_ref().filter(|c| c.is_finite()) {
@@ -190,6 +215,12 @@ pub fn scene_view(v: &ViewMeta) -> Map<String, J> {
     }
     if let Some(m) = &v.ids {
         o.insert("ids".into(), ids_meta(m));
+    }
+    if v.base_values {
+        o.insert("base_values".into(), J::Bool(true));
+    }
+    if v.hidden_left_out > 0 {
+        o.insert("hidden_left_out".into(), json!(v.hidden_left_out));
     }
     o
 }

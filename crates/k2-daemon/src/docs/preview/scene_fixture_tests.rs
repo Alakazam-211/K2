@@ -308,6 +308,8 @@ fn room() -> Scene {
             hash: None,
             modifiers: if sofa { vec!["SUBSURF".into()] } else { Vec::new() },
             modifiers_not_applied: sofa,
+            hidden: None,
+            transform_not_evaluated: false,
         });
     }
     let cameras = vec![

@@ -67,6 +67,15 @@
 //!   build ([`super::cache_build`]), and the renderer's build carries
 //!   `.shape`, so no image drawn before the default became wide (4:3) is
 //!   served as one.
+//! - **Hidden and driven objects.** An object hidden in the file is listed
+//!   (`hidden` on its container, `hidden_by` and its box in the extras) and
+//!   its own view draws it; the scene, camera and turntable views leave it
+//!   out, and their digests say which objects they left out, so hiding or
+//!   showing one redraws them. An object whose placement is driven and not
+//!   evaluated is drawn at its base transform: its box is `approx`
+//!   (`approx_reason: "driven"`) and a view drawing it says `base_values`.
+//!   A scene with neither draws, digests and lists as it did, so the cache
+//!   tag stays.
 //! - **What rides along** ([`super::extras`]): each object's local box,
 //!   each camera's display values, the turntable frames' titles, and with
 //!   each image the camera that drew it and its id table.
@@ -112,7 +121,8 @@ pub fn binary() -> Option<PathBuf> {
 ///
 /// TODO(K2 Cores): call the BLEND pack's host-only mesh read here (its v1:
 /// base meshes triangulated by the pack, transforms as stored, `modifiers`
-/// and `modifiers_not_applied` per object) once the pack is vendored in K2,
+/// and `modifiers_not_applied` per object, and `hidden` and
+/// `transform_not_evaluated` where they apply) once the pack is vendored in K2,
 /// with its own bounds before it allocates; and give a live BLEND doc its
 /// tier, so [`SceneRenderer::serves`] says yes. Until then no doc is served
 /// and this answers `unsupported_part`. K2 parses no `.blend` itself.
@@ -191,7 +201,8 @@ pub fn list_k2scene(k2scene: &[u8]) -> Result<Listing, Failed> {
             extras: extras::scene_item(&it),
             key: it.key,
             position: i as u32 + 1,
-            hidden: false,
+            // An object hidden in the file (listed all the same: only its own view draws it).
+            hidden: it.hidden.is_some(),
             digest: keyed_digest(it.target, it.digest),
             locator: it.target.locator(),
         })

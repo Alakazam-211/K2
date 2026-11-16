@@ -644,6 +644,111 @@ fn an_id_table_rides_after_the_camera_and_a_push_lists_it_within_its_bound() {
     assert_eq!(pushed, json!({ "layer": "ids", "image_len": 9, "count": 5_000, "objects": [] }));
 }
 
+/// An object hidden in the file is listed with its box: its container is
+/// `hidden` and `hidden_by` says how (the route keeps `hidden` a bool). A
+/// driven object's box is approximate for that reason, the modifiers'
+/// reason winning. Only the views that leave a hidden object out get new
+/// digests; a scene with neither field lists as it did.
+#[test]
+fn a_hidden_object_is_listed_with_its_box_and_a_driven_ones_box_is_approx() {
+    use k2_scenerender::scene::Hidden;
+    let mut s = scene_with_display_fields();
+    s.objects[0].hidden = Some(Hidden::Itself);
+    s.objects[1].transform_not_evaluated = true;
+    s.objects[2].hidden = Some(Hidden::Collection);
+    s.objects[2].transform_not_evaluated = true;
+    s.objects[3].transform_not_evaluated = true;
+    let l = scene::list_k2scene(&encode(&s)).expect("a listing");
+    let plain = scene::list_k2scene(&encode(&scene_with_display_fields())).expect("plain");
+    let by = |l: &'_ Listing, key: &str| -> Container { l.containers.iter().find(|c| c.key == key).cloned().unwrap_or_else(|| panic!("no {key}")) };
+    // (key, container hidden, hidden_by, approx, approx_reason)
+    let want: [(&str, bool, Option<&str>, bool, Option<&str>); 4] = [
+        ("@obj:Item.000", true, Some("self"), false, None),
+        ("@obj:Item.001", false, None, true, Some("modifiers")),
+        ("@obj:Item.002", true, Some("collection"), true, Some("driven")),
+        ("@obj:Item.003", false, None, true, Some("driven")),
+    ];
+    for (key, hidden, by_what, approx, reason) in want {
+        let c = by(&l, key);
+        assert_eq!(c.hidden, hidden, "{key}");
+        assert_eq!(c.extras.get("hidden_by").and_then(|v| v.as_str()), by_what, "{key}");
+        let b = &c.extras["bounds"];
+        assert_eq!(b["approx"], json!(approx), "{key}");
+        assert_eq!(b.get("approx_reason").and_then(|v| v.as_str()), reason, "{key}");
+        assert_eq!(b["min"], by(&plain, key).extras["bounds"]["min"], "{key}: the same box, hidden or not");
+        // Hidden or not, an object's own view draws it; the flag it carries, base values, is in its digest.
+        assert_eq!(c.digest == by(&plain, key).digest, key == "@obj:Item.000", "{key}");
+    }
+    for key in ["@scene:main", "@cam:Camera", "@turntable:0", "@turntable:7"] {
+        assert!(!by(&l, key).hidden && by(&l, key).extras.get("hidden_by").is_none(), "{key}");
+        assert_ne!(by(&l, key).digest, by(&plain, key).digest, "{key}: it leaves the hidden ones out");
+    }
+    // Neither field: nothing hidden, and only the modifiers' reason.
+    assert!(plain.containers.iter().all(|c| !c.hidden && !c.extras.contains_key("hidden_by")));
+    assert_eq!(by(&plain, "@obj:Item.001").extras["bounds"]["approx_reason"], json!("modifiers"));
+    assert!(plain.containers.iter().filter(|c| c.key != "@obj:Item.001").all(|c| c.extras.get("bounds").is_none_or(|b| b.get("approx_reason").is_none())));
+    // Through the route and the welcome: `hidden` stays the container's bool.
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("scenes/hidden.blend");
+        let secret = *blobs.host_cache_key(&key.space, service::HASH_LABEL).expect("the cache key").secret_bytes();
+        let snap = Snapshot {
+            key: key.clone(),
+            rev: 1,
+            version: None,
+            renderer: &scene::SCENE,
+            build: scene::SCENE.build(),
+            page: l.page,
+            containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
+            bytes: Arc::new(Vec::new()),
+        };
+        let listed: Vec<serde_json::Value> = snap.containers.iter().map(|k| route::container_json(&snap, k, Look::Transparent, Shape::Wide)).collect();
+        let obj = listed.iter().find(|v| v["key"] == "@obj:Item.000").expect("the hidden object");
+        assert_eq!((obj["hidden"].clone(), obj["hidden_by"].clone(), obj["bounds"]["approx"].clone()), (json!(true), json!("self"), json!(false)));
+        let welcome = crate::docs::live_deck::previews_value(&snap).to_json();
+        assert!(welcome.contains(r#""title":"Item.000","hidden":true,"render_hash":""#), "{welcome}");
+        assert!(welcome.contains(r#""hidden_by":"self""#) && welcome.contains(r#""approx_reason":"driven""#), "{welcome}");
+    });
+}
+
+/// A view drawing an object at its base transform says `base_values`, one
+/// that left hidden objects out counts them (`hidden_left_out`), with the
+/// image and on the push; neither is said when there is nothing to say.
+#[test]
+fn base_values_and_hidden_left_out_ride_with_the_image_and_the_push() {
+    let x = extras::scene_view(&ViewMeta { base_values: true, hidden_left_out: 2, ..Default::default() });
+    assert_eq!(serde_json::Value::Object(x.clone()), json!({ "base_values": true, "hidden_left_out": 2 }));
+    assert!(extras::scene_view(&ViewMeta::default()).is_empty(), "nothing to say, nothing said");
+    let fields = service::ready_fields(&serde_json::Value::Object(x));
+    let names: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(names, ["render_ms", "without_modifiers", "base_values", "hidden_left_out"]);
+    // The real worker.
+    use k2_scenerender::scene::Hidden;
+    let bin = k2_core::test_env::workspace_bin(scene::ENV_BIN, "k2-scenerender", BINARY_NAME);
+    let mut s = scene_with_display_fields();
+    s.objects[0].hidden = Some(Hidden::Itself);
+    s.objects[2].transform_not_evaluated = true;
+    let bytes = encode(&s);
+    let l = scene::list_k2scene(&bytes).expect("listing");
+    let draw = |key: &str| -> Image {
+        let c = l.containers.iter().find(|c| c.key == key).unwrap_or_else(|| panic!("no {key}"));
+        scene::render_k2scene_with(&bin, &bytes, c, Width::Thumb, Look::Opaque, Shape::Wide, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{key}: {f:?}"))
+    };
+    for key in ["@scene:main", "@cam:Camera", "@turntable:3"] {
+        let img = draw(key);
+        assert_eq!((img.extras.get("base_values"), img.extras.get("hidden_left_out")), (Some(&json!(true)), Some(&json!(1))), "{key}");
+        assert!(img.without_modifiers, "{key}");
+        if let Some(t) = img.extras.get("ids") {
+            assert!(t["objects"].as_array().expect("objects").iter().all(|e| e["index"] != json!(0)), "{key}: the hidden object has no pixels");
+        }
+    }
+    // The hidden object's own view draws it, and says nothing of either.
+    let o = draw("@obj:Item.000");
+    assert_eq!(o.extras["ids"]["objects"], json!([{ "index": 0, "id": "Item.000" }]));
+    assert!(!o.extras.contains_key("base_values") && !o.extras.contains_key("hidden_left_out"));
+    assert_eq!(draw("@obj:Item.002").extras.get("base_values"), Some(&json!(true)));
+}
+
 fn body(r: crate::cli_response::CliResponse) -> serde_json::Value {
     serde_json::from_str(&r.body).expect("a JSON answer")
 }

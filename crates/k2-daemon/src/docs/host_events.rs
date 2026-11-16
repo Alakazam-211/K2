@@ -5,7 +5,7 @@
 //! | Event | Frame | Who gets it |
 //! |---|---|---|
 //! | a preview started drawing ([`super::preview`]) | `preview_rendering {container, render_hash, width, look?, rev}` | sockets on that doc; each forwards it only while its person may read the doc |
-//! | a preview rendered or failed, or a scene view's objects renamed (its image again, same render hash, `ids` named anew) ([`super::preview`]) | `preview_ready {container, render_hash, width, state, failed, rev, rendered_at_ms}`, then on `ready`: `render_ms`, `without_modifiers`, and when there: `look`, `reused_from`, `camera`, `ids`; on `failed`: `look` when there | the same |
+//! | a preview rendered or failed, or a scene view's objects renamed (its image again, same render hash, `ids` named anew) ([`super::preview`]) | `preview_ready {container, render_hash, width, state, failed, rev, rendered_at_ms}`, then on `ready`: `render_ms`, `without_modifiers`, and when there: `look`, `reused_from`, `camera`, `base_values`, `hidden_left_out`, `ids`; on `failed`: `look` when there | the same |
 //! | an agent's turn ended ([`super::turn::ended`]) | `turn_end {turn, actor, at_ms}` | every socket; each forwards it only for a turn its doc's changes carried |
 //! | a comment op (`AuditEvent::Annotation`) | `roster_event {kind: "comment_event", thread, comment, op, author, at_ms, anchor}` | sockets on that doc, readers only |
 //! | an anchor's state moved (`AuditEvent::AnchorState`) | `roster_event {kind: "anchor_state", thread, rev, was, now}` | the same |
@@ -57,7 +57,8 @@ pub enum HostEvent {
         rev: u64,
         rendered_at_ms: u64,
         /// Fields after the old ones (`render_ms`, `without_modifiers`,
-        /// `look`, `shape`, `reused_from`, `camera`, `ids`), in order.
+        /// `look`, `shape`, `reused_from`, `camera`, `base_values`,
+        /// `hidden_left_out`, `ids`), in order.
         extras: Vec<(String, Value)>,
     },
     /// A preview of `container` at `render_hash`, `width`, `look` (left

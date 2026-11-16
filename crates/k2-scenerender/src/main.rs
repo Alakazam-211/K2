@@ -291,6 +291,8 @@ fn run(caps: &Caps, memory: u64, sandbox: &str) -> i32 {
         format: Some(o.format),
         views: Some(o.views.iter().map(|v| v.0.clone()).collect()),
         objects_without_modifiers: Some(o.objects_without_modifiers),
+        objects_hidden: Some(o.objects_hidden).filter(|v| !v.is_empty()),
+        objects_not_evaluated: Some(o.objects_not_evaluated).filter(|v| !v.is_empty()),
         timings: Some(Timings { header_ms, data_ms, views_ms: ms(t2) }),
         estimate_bytes: Some(est),
     };

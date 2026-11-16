@@ -12,9 +12,9 @@ the shelf, the vase on the table, the clock hand on the clock, an empty).
 The snapshot has no geometry, so each mesh is a stand-in made of boxes,
 shared by every object that uses it (the four chairs, the two books). Empties
 and lights are not drawn and the hidden left wall is left out. The sofa is
-drawn without its subdivision modifier, so its listed box says `approx` and
-the scene and camera views say `without_modifiers`. The file's two cameras
-are 16:9.
+drawn without its subdivision modifier, so its listed box says `approx`
+(`approx_reason: "modifiers"`) and the scene and camera views say
+`without_modifiers`. The file's two cameras are 16:9.
 
 Addresses are the live keys, as a BLEND read gives them: each object and
 camera carries its `key` in the K2SCENE1 (`@obj:N` from the sample

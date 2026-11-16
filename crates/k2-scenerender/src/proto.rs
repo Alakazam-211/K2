@@ -17,7 +17,8 @@
 //!
 //! `view` is `"auto"` (the 3/4 view), `{"turntable": k}` (k = 0..7) or
 //! `{"camera": i}`; `objects` (optional) draws and frames only those object
-//! indices; the height is `round(width / aspect)`, the aspect from the view,
+//! indices, hidden in the file or not (absent: every object not hidden in
+//! the file, [`crate::scene`]); the height is `round(width / aspect)`, the aspect from the view,
 //! else the camera's, else 4:3. `background` (sRGB) sets the opaque images'
 //! background; `"transparent": true` draws RGBA with coverage alpha instead
 //! (straight colour, see [`crate::raster`]), and refuses a `background`.
@@ -50,6 +51,10 @@
 //! framing also carries [`FramingMeta`]: whether the contents were framed and
 //! which objects were left out of the frame. A view drawn with ids carries
 //! [`IdsMeta`]: its id image's length and the ids of the objects in it.
+//! A view drawing an object whose placement isn't evaluated says so
+//! (`base_values`), and one that left out objects hidden in the file counts
+//! them (`hidden_left_out`); both are off the line when there is nothing to
+//! say, as are the response's `objects_hidden` and `objects_not_evaluated`.
 //! The worker exits [`EXIT_OK`] after the images, [`EXIT_FAILED`] after a
 //! typed failure. Anything else (no line, a malformed one, fewer image bytes
 //! than announced, bytes after them) is a breach the host reports as
@@ -272,7 +277,8 @@ impl Ao {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub view: ViewSpec,
-    /// Draw (and frame) only these objects; `None`: all of them.
+    /// Draw (and frame) only these objects, hidden in the file or not;
+    /// `None`: every object not hidden in the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objects: Option<Vec<u32>>,
     /// The image's width in pixels.
@@ -469,10 +475,24 @@ pub struct ViewMeta {
     /// Some drawn object's mesh is its base mesh, without its modifiers
     /// (K2 Cores' `modifiers_not_applied`): the view says "shown without modifiers".
     pub without_modifiers: bool,
+    /// Some drawn object's placement is driven and not evaluated
+    /// (`transform_not_evaluated`): it is drawn at its base transform, and the
+    /// view says "shown at base values". Off the line when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_values: bool,
+    /// Objects hidden in the file that the view left out (the scene, a camera
+    /// or a turntable frame; 0 for a view that names its objects, which draws
+    /// them hidden or not). Off the line when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hidden_left_out: u64,
     pub vertex_ms: f64,
     pub bin_ms: f64,
     pub raster_ms: f64,
     pub encode_ms: f64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Where a request's shared time went, in milliseconds.
@@ -503,6 +523,13 @@ pub struct Response {
     /// Indices of the scene's objects whose modifiers were not applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objects_without_modifiers: Option<Vec<u32>>,
+    /// Indices of the scene's objects hidden in the file (off the line when none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objects_hidden: Option<Vec<u32>>,
+    /// Indices of the scene's objects drawn at their base transform, their
+    /// placement not evaluated (off the line when none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objects_not_evaluated: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<Timings>,
     /// The worker's up-front memory estimate, in bytes.
@@ -521,6 +548,8 @@ impl Response {
             format: None,
             views: None,
             objects_without_modifiers: None,
+            objects_hidden: None,
+            objects_not_evaluated: None,
             timings: None,
             estimate_bytes: None,
         }

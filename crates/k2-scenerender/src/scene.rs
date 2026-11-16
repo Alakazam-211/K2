@@ -16,7 +16,8 @@
 //!  "meshes":  [{"vertices": 8, "triangles": 12, "normals": true, "hash": "…"}],
 //!  "objects": [{"id": "Cube", "key": "@obj:12", "mesh": 0, "base_color": [0.8, 0.8, 0.8, 1.0],
 //!               "double_sided": null, "transform": [16 floats, column-major], "hash": "…",
-//!               "modifiers": ["SUBSURF", "MIRROR"], "modifiers_not_applied": true}],
+//!               "modifiers": ["SUBSURF", "MIRROR"], "modifiers_not_applied": true,
+//!               "hidden": "collection", "transform_not_evaluated": true}],
 //!  "cameras": [{"id": "Camera", "key": "@cam:3", "position": [7.4, -6.5, 5.3], "target": [0, 0, 0],
 //!               "up": [0, 0, 1], "yfov": 0.69, "aspect": 1.7778, "znear": 0.1,
 //!               "active": true, "lens_mm": 50, "sensor_mm": [36, 24], "sensor_fit": "auto"}]}
@@ -32,6 +33,20 @@
 //!   `null` draws both sides. `modifiers` names the object's modifier types
 //!   and `modifiers_not_applied` says the mesh is drawn without them: the
 //!   response passes it through so the view can say "shown without modifiers".
+//!   Two optional fields, absent from a header that predates them:
+//!   `hidden` says the object is hidden in the file, `"self"` (hidden
+//!   itself) or `"collection"` (in a hidden collection); absent, it is
+//!   shown. A hidden object stays in the file with its mesh (the client has
+//!   its geometry and its box) but the scene, camera and turntable views
+//!   leave it out: not drawn, not fitted, not classed, not in the id image;
+//!   every object keeps its index all the same. A view that names it in its
+//!   `objects` draws it (an object's own view). `transform_not_evaluated`
+//!   (`true`; absent, `false`) says the object's placement is driven
+//!   (drivers, constraints) and it is drawn at its base location, rotation
+//!   and scale, as stored: it changes no pixel, the response passes it
+//!   through so the view can say "shown at base values", and it is in the
+//!   digest of every view that draws the object (only when `true`), so that
+//!   flag is never stale on a cached image.
 //! - **Cameras** (optional): `target` or `forward`, `up`, `yfov` in radians,
 //!   `aspect` width / height; the camera's name is its `id`. Four optional
 //!   display fields, as the file has them, absent from a v1 header
@@ -99,6 +114,27 @@ pub enum SensorFit {
     Auto,
     Horizontal,
     Vertical,
+}
+
+/// How an object is hidden in the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Hidden {
+    /// The object itself is hidden.
+    #[serde(rename = "self")]
+    Itself,
+    /// The object is in a hidden collection.
+    Collection,
+}
+
+impl Hidden {
+    /// Its word on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Hidden::Itself => "self",
+            Hidden::Collection => "collection",
+        }
+    }
 }
 
 /// A camera's display values: shown with it, never drawn, in no digest.
@@ -193,6 +229,15 @@ pub struct Object {
     /// The mesh is the base mesh, drawn without its modifiers (K2 Cores' v1 read).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub modifiers_not_applied: bool,
+    /// Hidden in the file: the scene, camera and turntable views leave it
+    /// out; a view naming it draws it. `None`: shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<Hidden>,
+    /// Its placement is driven and not evaluated: drawn at its base
+    /// transform (no pixel changes; in the digest of the views drawing it
+    /// when `true`, for the flag they carry).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transform_not_evaluated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -776,6 +821,58 @@ mod tests {
         let plain = testgen::cube_scene();
         let d = decode(&encode(&plain), &InputLimits::default()).expect("decode");
         assert!(d.objects[0].modifiers.is_empty() && !d.objects[0].modifiers_not_applied);
+    }
+
+    #[test]
+    fn hidden_and_transform_not_evaluated_round_trip_and_are_absent_by_default() {
+        let mut s = testgen::grid_scene(2, false);
+        s.objects[1].hidden = Some(Hidden::Itself);
+        s.objects[2].hidden = Some(Hidden::Collection);
+        s.objects[3].transform_not_evaluated = true;
+        let b = encode(&s);
+        assert_eq!(decode(&b, &InputLimits::default()).expect("decode"), s);
+        let text = String::from_utf8_lossy(&b[12..]).into_owned();
+        assert!(text.contains(r#""hidden":"self""#) && text.contains(r#""hidden":"collection""#), "{text}");
+        assert!(text.contains(r#""transform_not_evaluated":true"#), "{text}");
+        assert_eq!((Hidden::Itself.as_str(), Hidden::Collection.as_str()), ("self", "collection"));
+        // Absent: shown and evaluated, and the JSON is what it was.
+        let plain = testgen::grid_scene(2, false);
+        let text = String::from_utf8_lossy(&encode(&plain)[12..]).into_owned();
+        assert!(!text.contains("hidden") && !text.contains("transform_not_evaluated"), "{text}");
+        let d = decode(&encode(&plain), &InputLimits::default()).expect("decode");
+        assert!(d.objects.iter().all(|o| o.hidden.is_none() && !o.transform_not_evaluated));
+    }
+
+    /// A reader ignores an object field it doesn't know, so a field added
+    /// later is safe for it.
+    #[test]
+    fn an_unknown_object_field_is_ignored() {
+        let obj = |extra: &str| format!(r#"{{"id":"a","mesh":0,"base_color":[1,1,1,1],"transform":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]{extra}}}"#);
+        let j = |extra: &str| format!(r#"{{"version":1,"meshes":[{{"vertices":0,"triangles":0,"normals":false}}],"objects":[{}]}}"#, obj(extra));
+        let lim = InputLimits::default();
+        let plain = decode(&with_header(&j(""), &[]), &lim).expect("plain");
+        let future = decode(&with_header(&j(r#","future_field":1,"another":{"x":[1,2]}"#), &[]), &lim).expect("an unknown field");
+        assert_eq!(future, plain);
+        assert!(crate::digest::list(&with_header(&j(r#","future_field":1"#), &[]), &lim).is_ok());
+        // `null` for the hidden state is shown.
+        assert_eq!(decode(&with_header(&j(r#","hidden":null"#), &[]), &lim).expect("null").objects[0].hidden, None);
+    }
+
+    #[test]
+    fn a_hidden_value_other_than_self_or_collection_is_invalid_input() {
+        let lim = InputLimits::default();
+        let j = |extra: &str| format!(r#"{{"version":1,"meshes":[{{"vertices":0,"triangles":0,"normals":false}}],"objects":[{{"id":"a","mesh":0,"base_color":[1,1,1,1],"transform":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]{extra}}}]}}"#);
+        for (extra, want) in [(r#","hidden":"self""#, Some(Hidden::Itself)), (r#","hidden":"collection""#, Some(Hidden::Collection))] {
+            assert_eq!(decode(&with_header(&j(extra), &[]), &lim).expect(extra).objects[0].hidden, want);
+        }
+        for extra in [r#","hidden":"Self""#, r#","hidden":"view_layer""#, r#","hidden":"""#, r#","hidden":true"#, r#","hidden":1"#, r#","transform_not_evaluated":"yes""#] {
+            let b = with_header(&j(extra), &[]);
+            let e = decode(&b, &lim).unwrap_err();
+            assert!(matches!(e, InputError::Header(_)), "{extra}: {e}");
+            assert_eq!(e.code(), "invalid_input", "{extra}");
+            // The listing refuses it too (it reads the header only).
+            assert!(crate::digest::list(&b, &lim).is_err(), "{extra}");
+        }
     }
 
     #[test]

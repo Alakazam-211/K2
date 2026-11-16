@@ -20,6 +20,7 @@ export interface SampleBannerStatus {
 
 export function SampleBannerView<T extends string>({
   line,
+  title = SAMPLE_BANNER_TITLE,
   scenarios,
   scenario,
   onScenario,
@@ -30,6 +31,8 @@ export function SampleBannerView<T extends string>({
   onRestart,
 }: {
   line: string
+  /** The bold words before the line (default: "Sample data, not this file"). */
+  title?: string
   scenarios: readonly { value: T; label: string; group?: string }[]
   scenario: T
   onScenario: (s: T) => void
@@ -40,14 +43,14 @@ export function SampleBannerView<T extends string>({
   onRestart: () => void
 }): React.JSX.Element {
   return (
-    <div className="flex flex-none items-center gap-3 border-b border-[color-mix(in_srgb,var(--color-status-warn)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-status-warn)_8%,var(--color-bg))] px-3 py-1" role="note" aria-label={SAMPLE_BANNER_TITLE} data-testid="lv-sample-banner" data-one-row="">
-      <div className="flex min-w-[112px] flex-1 items-center gap-2" title={`${SAMPLE_BANNER_TITLE}. ${line}`}>
+    <div className="flex flex-none items-center gap-3 border-b border-[color-mix(in_srgb,var(--color-status-warn)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-status-warn)_8%,var(--color-bg))] px-3 py-1" role="note" aria-label={title} data-testid="lv-sample-banner" data-one-row="">
+      <div className="flex min-w-[112px] flex-1 items-center gap-2" title={`${title}. ${line}`}>
       <span aria-hidden="true" className="inline-flex flex-none text-[var(--color-status-warn-text)]">
         <InfoGlyph size={15} />
       </span>
       {/* One row, as the mock's chip and banner: the line gives way (its whole text is the tooltip). */}
       <div className="min-w-0 flex-1 truncate whitespace-nowrap">
-        <span className="type-hint font-semibold text-[var(--color-text-primary)]">{SAMPLE_BANNER_TITLE}.</span> <span className="type-hint text-[var(--color-text-secondary)]">{line}</span>
+        <span className="type-hint font-semibold text-[var(--color-text-primary)]">{title}.</span> <span className="type-hint text-[var(--color-text-secondary)]">{line}</span>
       </div>
       </div>
       <div className="flex min-w-0 items-center gap-2">

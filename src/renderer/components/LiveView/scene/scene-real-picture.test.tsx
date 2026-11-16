@@ -24,6 +24,7 @@ const daemon = vi.hoisted(() => ({ answer: null as null | ((p: Record<string, un
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: async (_s: unknown, _r: string, p: Record<string, unknown>) => daemon.answer!(p) }))
 vi.mock('@/components/Room/RoomContext', () => ({ useOptionalRoom: () => ({ scope: { connectionKey: 'test' } }) }))
 const { useScenePictures } = await import('./useScenePictures')
+const { default: LiveShellSample } = await import('../shell/LiveShellSample')
 
 function fixtureRoute(fail: () => boolean): PreviewTransport {
   return {
@@ -73,6 +74,31 @@ describe('which source the tab uses', () => {
     const { result } = renderHook(() => useScenePictures(S), { wrapper: wrap(null) })
     await waitFor(() => expect(result.current?.kind).toBe('sample'))
     expect(asked).not.toHaveBeenCalled()
+  })
+})
+
+describe('the banner says what is the file’s', () => {
+  const tab = () => render(<LiveFileContext.Provider value={{ path: '/ws/living-room.blend' }}><LiveShellSample kind="scene" /></LiveFileContext.Provider>)
+  const banner = () => screen.getByTestId('lv-sample-banner')
+
+  it('the real picture: “Picture from this file.” and the rest is the sample; the player stays', async () => {
+    daemon.answer = (p) => (p.container ? null : { kind: 'scene', ...json('listing.json') })
+    tab()
+    await waitFor(() => expect(banner().textContent).toContain('Picture from this file.'))
+    expect(banner().textContent).toContain('People, holds and changes are K2’s sample until live editing arrives.')
+    expect(banner().textContent).not.toContain('nothing here comes from the file')
+    expect(screen.getByTestId('lv-sample-scenarios')).toBeTruthy()
+    expect(banner().getAttribute('aria-label')).toBe('Picture from this file')
+  })
+
+  it('the sample’s picture: the words stay as they are', async () => {
+    daemon.answer = () => {
+      throw Object.assign(new Error('no previews'), { status: 409, code: 'no_preview' })
+    }
+    tab()
+    await waitFor(() => expect(screen.getByTestId('lv-scene-stage').getAttribute('data-source')).toBe('sample'))
+    expect(banner().textContent).toContain('Sample data, not this file.')
+    expect(banner().textContent).toContain('nothing here comes from the file you opened')
   })
 })
 

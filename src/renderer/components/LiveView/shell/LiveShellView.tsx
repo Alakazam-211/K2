@@ -99,7 +99,7 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
               }
             />
           }
-          banner={sample ? <ShellSampleBanner player={sample.player} line={config.bannerLine} /> : null}
+          banner={sample ? <ShellSampleBanner player={sample.player} line={config.bannerLine} title={config.bannerTitle} /> : null}
           notice={live || s.notice?.kind === 'size' ? <NoticeBar notice={s.notice} ctx={{ fileName: name, kept: config.kept }} onAction={s.onNotice} /> : null}
           hero={
             <Hero

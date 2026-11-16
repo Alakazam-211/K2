@@ -5,13 +5,14 @@
 // the sample's doc at each rev it has seen. One source per tab, closed when
 // the tab goes.
 
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { useOptionalRoom } from '@/components/Room/RoomContext'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { DocsPreviewPictureSource, type PreviewDecoders, type PreviewTransport } from '@/lib/live-view/scene/docs-preview-source'
 import type { PictureSource } from '@/lib/live-view/scene/picture-source'
 import type { SimState } from '@/lib/live-view/scene/sim'
 import { useLiveFile } from '../live-file'
+import { PictureRealContext } from './picture-real'
 
 /** The browser's decoders: a still as a bitmap; an id PNG read back exactly (no colour conversion, no premultiplied alpha). */
 export const BROWSER_DECODERS: PreviewDecoders = {
@@ -38,6 +39,10 @@ export function useScenePictures(S: SimState | null): PictureSource | null {
   const scope = room?.scope ?? null
   const path = file?.path ?? null
   const [source, setSource] = useState<PictureSource | null>(null)
+  const report = useContext(PictureRealContext)
+  useEffect(() => {
+    if (source) report?.(source.kind === 'docs-preview')
+  }, [source, report])
   useEffect(() => {
     let made: PictureSource | null = null
     let live = true

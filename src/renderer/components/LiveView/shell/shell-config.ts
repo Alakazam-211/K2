@@ -77,6 +77,8 @@ export interface ShellConfig {
   kindLabel: string
   fileGlyph: React.ReactNode
   /** The sample banner's line. */
+  /** The banner's bold words, when they aren't "Sample data, not this file". */
+  bannerTitle?: string
   bannerLine: string
   panel: readonly PanelEntry[]
   /** Narrower than this (px) the panel starts closed and opens as a sheet. */

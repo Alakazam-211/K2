@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import type { PlayerStatus, SamplePlayer } from '@/lib/live-view/shared/sample-player'
 import { SampleBannerView } from './SampleBanner'
 
-export function ShellSampleBanner<S>({ player, line }: { player: SamplePlayer<S>; line: string }): React.JSX.Element {
+export function ShellSampleBanner<S>({ player, line, title }: { player: SamplePlayer<S>; line: string; title?: string }): React.JSX.Element {
   const [st, setSt] = useState<PlayerStatus>(() => player.status())
   useEffect(() => {
     setSt(player.status())
@@ -14,6 +14,7 @@ export function ShellSampleBanner<S>({ player, line }: { player: SamplePlayer<S>
   return (
     <SampleBannerView<string>
       line={line}
+      title={title}
       scenarios={player.scenarioList().map((s) => ({ value: s.id, label: s.label, group: s.group }))}
       scenario={st.scenario}
       onScenario={(id) => player.setScenario(id)}

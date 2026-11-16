@@ -20,7 +20,8 @@
 //!   5. A Markdown doc's welcome lists `view_address` only (no
 //!      `keyed_watch`): its view reaches the roster, its `watch` and a
 //!      `time_position` are refused (`MPC-E113`).
-//!   6. Say something (`POST /cli/docs/say`): the deck's socket gets one
+//!   6. Say something (`POST /cli/docs/say`), on a deck and on a text doc
+//!      alike: the doc's socket gets one
 //!      `say` frame (to a person, trimmed, with its address); to the deck's
 //!      agent it is also an inbox note; a reply names what it answers; GET
 //!      is 405, an over-long text 400, an unknown recipient 404, an
@@ -415,6 +416,22 @@ async fn a_live_deck_is_watched_by_key_headless() {
     }
     assert_eq!(reply.expect("reply")["to"], J::Null, "to the room");
 
+    // The same route on a text doc: its socket gets the same frame.
+    let (mut md2, _) = tokio_tungstenite::connect_async(&url(&notes)).await.expect("a socket on the Markdown doc");
+    assert_eq!(next_frame(&mut md2, "the Markdown welcome").await["type"], "welcome");
+    let (st, body) = say(json!({"path": notes, "text": "This heading?", "at": "@k:intro"}));
+    assert_eq!(st, 200, "say on a text doc: {body}");
+    let mut on_text = None;
+    while on_text.is_none() {
+        let f = next_frame(&mut md2, "the say frame on a text doc").await;
+        if f["type"] == "say" {
+            on_text = Some(f);
+        }
+    }
+    let on_text = on_text.expect("say");
+    assert_eq!((&on_text["text"], &on_text["at"], &on_text["to"]), (&json!("This heading?"), &json!("@k:intro"), &J::Null), "{on_text}");
+    drop(md2);
+
     // Refusals: GET (405), a message over the cap (400), someone unknown (404),
     // an any-file doc (no live room, 409).
     let (st, _) = http(port, "GET", &format!("/cli/docs/say?token={OWNER}&path={}&text=hi", enc(&talk)), None);
@@ -429,7 +446,7 @@ async fn a_live_deck_is_watched_by_key_headless() {
     assert_eq!(st, 409, "{body}");
     assert!(body.contains("no_live_room"), "{body}");
 
-    // The rate: a burst of 5 a sender (3 sent so far, refusals don't count),
+    // The rate: a burst of 5 a sender (4 sent so far, refusals don't count),
     // then 429 with when to try again. Sent back to back, so at most a token
     // or two refills meanwhile.
     let mut more = 0;
@@ -442,7 +459,7 @@ async fn a_live_deck_is_watched_by_key_headless() {
         more += 1;
         assert!(more <= 4, "no 429 after {more} more messages: the burst is 5");
     };
-    assert!(more >= 2, "the 3 refused calls didn't use the burst: 2 more went first, not {more}");
+    assert!(more >= 1, "the 4 refused calls didn't use the burst: 1 more went first, not {more}");
     let limited: J = serde_json::from_str(&body).expect("JSON");
     assert_eq!(limited["error"]["code"], "rate_limited", "{limited}");
     assert!(limited["retryAfterMs"].as_u64().is_some_and(|ms| ms > 0 && ms <= 3000), "{limited}");

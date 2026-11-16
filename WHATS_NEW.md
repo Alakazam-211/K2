@@ -9,6 +9,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Drop a file anywhere on a Thread to attach it.** The messages, the empty Thread and the message box all take it, the same as a drop on the box (a ticket's Thread too); "Drop to attach" shows while the file is over it.
 - **Step through your agents on Home from the keyboard.** ⌥⌘↓ opens the agent below the selected one in the Home list and ⌥⌘↑ the one above (Ctrl+Alt+Down / Up on Linux and Windows), in the order the list shows them, scrolling it into view; with none selected, ⌥⌘↓ starts at the top and ⌥⌘↑ at the bottom. Change the keys in Settings → Key Bindings → Navigation.
 
+### Live files
+- **A save from another app keeps what others typed.** When K2 opens a live file in an editor, the editor's save merges from the version it opened, so lines people and agents added in the meantime stay in the file instead of being overwritten.
+- **Agents get `k2 doc` results as data.** `--json` on a text doc's verb prints one line with what the call did: the versions, what changed, the output (marked text or typed), and the error with what to do next.
+
 ### Agent messages
 - **A message sent twice lands once.** `k2 msg` (live and `--inbox-wake`/`--inbox-silent`, local or `agent::host`), `k2 thread` and `k2 thread ask` give each send a key; when K2 is slow to answer, the command asks again with the same key and K2 delivers it once, answering with the first delivery. If K2 still doesn't answer, the error says the message may have been delivered and prints the key: run the same command with `--idempotency-key <key>` to try again without a duplicate.
 - **No more "It can't be requested." under a send that wasn't refused.** That line now closes only a refusal of the send itself, not a delivery that waits on folder trust, an unknown address or a timeout.

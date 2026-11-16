@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.1.9: pairs with kit v0.20.0
+
+**Requires `k2-mpc-base` v0.20.0**, checked out beside this repo. The crate version is `0.1.9`;
+`Cargo.lock` records k2-mpc-base 0.20.0. This pack's own code's behaviour is unchanged from v0.1.8.
+As for v0.1.8, the tag is a cut commit that leaves out the test tooling (`fuzz/`,
+`scripts/oracle/`).
+
+- Pairs with kit v0.20.0, whose changes are the host's: a store holding native-engine docs opens and
+  refuses only those docs; writer IDs follow people, devices and agents (person-writer reuse on by
+  default, used only when the host sends a device key); a writers cap per doc, off by default, with
+  a near-cap audit notice. No pack API changes, so PSD and PSB files behave as in v0.1.8.
+- **The target scan** (tooling; no library change): `scripts/targets.txt` lists every test target of
+  the pack, the vendored reader and the fuzz crate (lib unit tests, doc examples, integration tests,
+  examples, fuzz targets), every feature of their manifests, and the gate part that runs each, or
+  why none does. `scripts/check-targets.sh` reads the manifests, the sources and
+  `scripts/check.sh`'s commands, with no build, and fails on a target or feature with no row, a row
+  with no target, a part that doesn't run what its row says, a test-only feature no part turns on,
+  and an `#[ignore]` whose reason names no runner; `CHECK_TARGETS_LANDING=1` also refuses a row
+  waiting on a ruling. A tree without `fuzz/` (a release cut) leaves the fuzz crate's rows
+  unchecked. `scripts/test-check-targets.sh` plants one case of each in a copy of the tree. Both run
+  first in `scripts/check.sh`. The kit's `tools/check-targets.sh`, with the pack's gate shape. It
+  prints the md5 of its shared copy (the script but for its two settings) and of the self-test, the
+  same in every pack, so a drift shows.
+- `scripts/check.sh` runs both crates' doc examples (`cargo test --doc`), and, when the tree has
+  the fuzz crate, checks its lib and targets under the fuzzing cfg at its locked dependencies.
+- **The public-corpus tests fail without their folder**, instead of passing with nothing
+  checked: `tests/pack_anchor.rs`, `tests/pack_corpus.rs` and `tests/records_corpus.rs`'s
+  public-corpus tests are `#[ignore]`d in the gate, and `scripts/public-corpus.sh [DIR]`
+  fetches the public files (`scripts/fetch-corpus.sh`) and runs them, each by name.
+- **A counts-only corpus row** (`tests/corpus_counts.rs`): every PSD and PSB file under the
+  folder `PSD_PRIVATE_CORPUS` names is read and written back, which must give its own bytes.
+  It prints counts only, per class (files, bytes, how each fared, pass or fail), and fails on
+  any output line that could show a path or a file name, withholding it. It runs only in
+  `scripts/private-corpus.sh`, never in the gate, and fails without its folder. The vendored
+  reader's own corpus test and its `corpus` feature are not run: that test names files in its
+  output.
+- `crates/psd/Cargo.toml`'s kit comment names v0.20.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.20.0 and the crate version 0.1.9.
+
 ## v0.1.8: pairs with kit v0.19.0
 
 **Requires `k2-mpc-base` v0.19.0**, checked out beside this repo. The crate version is `0.1.8`;

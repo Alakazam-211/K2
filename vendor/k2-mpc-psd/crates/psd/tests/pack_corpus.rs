@@ -1,10 +1,9 @@
-//! The pack on the public test corpus (fetched by reference, `scripts/fetch-corpus.sh`): each
-//! file streamed from disk into a draft, checked against the full reader's own tree, and, when
-//! `PSD_TOOLS_ORACLE` names a folder of psd-tools' trees, against psd-tools node for node (the
-//! test checker that writes them is on the repository's main branch; a release tag and a vendored
-//! copy leave it out). Prints counts
-//! only. Skips, loudly, when `PSD_PUBLIC_CORPUS` is not set; a listed file that is missing
-//! fails, and so does a missing oracle tree when the oracle is set.
+//! The pack on the public test corpus (fetched by reference, `scripts/fetch-corpus.sh`): each file
+//! streamed from disk into a draft, checked against the full reader's own tree, and, when
+//! `PSD_TOOLS_ORACLE` names a folder of psd-tools' trees, against psd-tools node for node (the test
+//! checker that writes them is on the repository's main branch; a release tag and a vendored copy
+//! leave it out). Prints counts only. Fails when `PSD_PUBLIC_CORPUS` is not set; a listed file that
+//! is missing fails, and so does a missing oracle tree when the oracle is set.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -152,11 +151,10 @@ fn compare_with_oracle(name: &str, d: &IndexDraft, tsv: &str, tally: &mut Tally)
 }
 
 #[test]
+#[ignore = "the public corpus: scripts/public-corpus.sh runs it"]
 fn every_public_corpus_file_indexes_and_agrees_with_both_readers() {
-    let Some(dir) = std::env::var_os("PSD_PUBLIC_CORPUS") else {
-        eprintln!("public corpus: skipped (PSD_PUBLIC_CORPUS is not set)");
-        return;
-    };
+    let dir = std::env::var_os("PSD_PUBLIC_CORPUS")
+        .expect("PSD_PUBLIC_CORPUS: the public corpus's folder (scripts/fetch-corpus.sh)");
     let oracle = std::env::var_os("PSD_TOOLS_ORACLE");
     if oracle.is_none() {
         eprintln!("public corpus: psd-tools oracle skipped (PSD_TOOLS_ORACLE is not set)");

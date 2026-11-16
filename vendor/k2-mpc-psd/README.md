@@ -72,7 +72,11 @@ vendors both side by side: the kit at `vendor/k2-mpc-base`, this pack at `vendor
   100,000 layers, and 64 MiB of stored index. Past a bound a version stays a plain blob: its
   versions, presence and comments on the whole file still work.
 
-Build and test: `scripts/check.sh`.
+Build and test: `scripts/check.sh`. The tests that read files the repo doesn't hold are
+`#[ignore]`d there, and each fails without its folder: `scripts/public-corpus.sh [DIR]` fetches
+the public corpus (`scripts/fetch-corpus.sh`) and runs its tests by name;
+`scripts/private-corpus.sh` runs the counts-only corpus row on a folder kept outside the repo
+(`PSD_PRIVATE_CORPUS`), printing counts only.
 
 Status: the reader, the index and the anchor rules. The raster export comes next.
 

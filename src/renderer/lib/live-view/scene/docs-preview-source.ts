@@ -23,6 +23,7 @@
 
 import { httpCodeOf } from '@/lib/daemon-http-error'
 import { decodeIdPixels, type IdLayer } from './ids'
+import type { CameraLeftOut } from './left-out'
 import { sealStill, type ObjectBounds, type PictureSource, type Still, type StillRequest } from './picture-source'
 import { addressOfId, parseIdsImage, parseSceneImage, parseSceneListing, widthBucket, type SceneImage, type SceneListing } from './preview-route'
 import { releaseStill, StillCache } from './still-cache'
@@ -100,6 +101,11 @@ export class DocsPreviewPictureSource implements PictureSource {
       return L
     })
     return this.loading.finally(() => (this.loading = null))
+  }
+
+  /** The cameras the mesh read left out, as the listing says (none until it is in). */
+  camerasLeftOut(): CameraLeftOut[] {
+    return this.listing?.camerasLeftOut ?? []
   }
 
   bounds(_D: Doc, a: string): ObjectBounds | null {

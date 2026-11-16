@@ -38,6 +38,8 @@ import { ScenePane } from './ScenePane'
 import { STAGE_CSS } from './stageCss'
 import { usePaneSize, useStageScope, useStill } from './useStage'
 import { usePictureFeed } from './usePictureFeed'
+import { DocsPreviewPictureSource } from '@/lib/live-view/scene/docs-preview-source'
+import { camerasLeftOutWords } from '@/lib/live-view/scene/left-out'
 import { useSceneFollow } from './useSceneFollow'
 import { ViewPicker } from './ViewPicker'
 
@@ -97,6 +99,9 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   // The real picture says its own state; the sample's is the snapshot's.
   const status = feed.status ?? pictureStatus(S)
   const retryPicture = feed.status ? feed.retry : control.retryPicture
+  // The cameras the real picture can't show (the listing's; a new one moves the epoch).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const leftOut = useMemo(() => (source instanceof DocsPreviewPictureSource ? camerasLeftOutWords(source.camerasLeftOut()) : null), [source, feed.epoch])
   const ctx = pictureContext(S, L.pick)
   // Ask is offered only where the shell can open the say row.
   const words = pictureWords(status, { ...ctx, askAgent: ask ? ctx.askAgent : null })
@@ -235,6 +240,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
                     source={source}
                     rev={status.shown}
                     thumbView={(r) => (r.disabled ? null : r.v === '@agent' ? (ag ? stillView(ag.view, 1) : null) : stillView(r.v, 1))}
+                    leftOut={leftOut}
                   />
                   {!narrow ? <PeerChips others={others} onFollow={fl.follow} /> : null}
                 </div>

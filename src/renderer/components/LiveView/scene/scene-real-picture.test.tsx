@@ -118,6 +118,29 @@ describe('the stage on the real picture', () => {
     expect(screen.getByTestId('lv-scene-overlay')).toBeTruthy()
   })
 
+  it('the view picker says, under the cameras, how many can’t be shown here, each name and why in its tooltip', async () => {
+    const t = fixtureRoute(() => false)
+    const withLeftOut: typeof t = { get: async (p) => (p.container ? t.get(p) : { ...((await t.get(p)) as object), cameras_left_out: [{ name: 'Camera.003', key: '@cam:31', reason: 'camera_not_perspective' }, { name: 'Camera.004', reason: 'camera_sensor_fit_unknown' }] }) }
+    mount(new DocsPreviewPictureSource(withLeftOut, decoders))
+    await waitFor(() => expect(stage().getAttribute('data-state')).toBe('ready'))
+    fireEvent.click(screen.getByRole('button', { name: /Change view/ }))
+    const note = await screen.findByTestId('lv-cameras-left-out')
+    expect(note.textContent).toBe('2 cameras can’t be shown here')
+    expect(note.getAttribute('title')).toBe('Camera.003: it isn’t a perspective camera\nCamera.004: its sensor fit isn’t known')
+    expect(note.getAttribute('aria-label')).toBe('2 cameras can’t be shown here. Camera.003: it isn’t a perspective camera. Camera.004: its sensor fit isn’t known')
+    // under the cameras: after the last camera row
+    const rows = [...screen.getByRole('menu').children]
+    const lastCam = rows.map((r) => r.textContent ?? '').findLastIndex((s) => s.startsWith('Camera'))
+    expect(rows.indexOf(note.closest('[role="none"]')!)).toBe(lastCam + 1)
+  })
+
+  it('none left out: no line', async () => {
+    mount(new DocsPreviewPictureSource(fixtureRoute(() => false), decoders))
+    await waitFor(() => expect(stage().getAttribute('data-state')).toBe('ready'))
+    fireEvent.click(screen.getByRole('button', { name: /Change view/ }))
+    expect(screen.queryByTestId('lv-cameras-left-out')).toBeNull()
+  })
+
   it('a view K2 couldn’t draw: the card with Retry; the retry lands', async () => {
     let fail = true
     mount(new DocsPreviewPictureSource(fixtureRoute(() => fail), decoders))

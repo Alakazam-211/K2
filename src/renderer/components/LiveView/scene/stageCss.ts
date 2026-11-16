@@ -96,6 +96,7 @@ export const STAGE_CSS = `
 .lv-scene-hero .lv-info .lv-forag { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); display: flex; align-items: center; gap: 10px; font-size: var(--type-sm); color: var(--color-text-secondary); }
 
 /* The card over the stage, and the quiet line */
+.lv-scene-hero .lv-vleft { margin: 0 6px 6px 80px; font-size: var(--type-sm); color: var(--color-text-secondary); cursor: help; }
 .lv-scene-hero .lv-card { position: absolute; left: 50%; top: 50%; z-index: 9; transform: translate(-50%, -50%); width: min(400px, calc(100% - 36px)); padding: 16px 18px; background: var(--lv-plate); border: 1px solid var(--lv-plate-edge); color: var(--color-text-primary); }
 [data-style="glass"] .lv-scene-hero .lv-card { border-radius: var(--radius-box); box-shadow: var(--shadow-3); }
 .lv-scene-hero .lv-card[data-top] { top: 104px; transform: translateX(-50%); }

@@ -5,6 +5,7 @@
 // saved version), and the "older picture" mark. Pure: the words are the
 // mock's (live-scene-v2-notes.md, v2.4 and v2.5), tested without a browser.
 
+import { failureWords } from './left-out'
 import type { PictureStatus } from './picture-source'
 
 export type CardAction = 'retry' | 'try-camera' | 'show-list' | 'ask'
@@ -77,7 +78,7 @@ export function pictureWords(pv: PictureStatus, c: PictureContext): PictureWords
     card = {
       kind: 'nostill',
       title: 'Couldn’t draw this view',
-      body: 'The picture didn’t finish. The outliner and numbers are still live.',
+      body: `${failureWords(pv.reason)} The outliner and numbers are still live.`,
       actions: [{ id: 'retry', label: 'Retry', primary: true }, ...(c.camera ? [{ id: 'try-camera' as const, label: `Try ${c.camera}`, primary: false }] : [])],
     }
   } else if (pv.state === 'nopic' && pv.reason === 'empties') {

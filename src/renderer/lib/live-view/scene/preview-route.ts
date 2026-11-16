@@ -26,6 +26,7 @@
 // waits for S8's session read.
 
 import { entryOf, idIndexAt, type IdEntry, type IdLayer } from './ids'
+import type { CameraLeftOut } from './left-out'
 import { listingCameraFrom, objectListingFrom, stillCameraFrom, stillMetaFrom, type ListingCamera } from './listing-read'
 import type { ObjectBounds, PictureStatus, StillMeta } from './picture-source'
 import type { StillCamera } from './project'
@@ -62,6 +63,8 @@ export interface SceneListing {
   look: string | null
   shape: string | null
   containers: SceneContainer[]
+  /** The cameras the mesh read left out (`cameras_left_out`, passed through by the route); none when it says nothing. */
+  camerasLeftOut: CameraLeftOut[]
 }
 
 export function parseSceneListing(body: unknown): SceneListing {
@@ -72,6 +75,9 @@ export function parseSceneListing(body: unknown): SceneListing {
     rev: int(b.rev) ?? 0,
     look: str(b.look),
     shape: str(b.shape),
+    camerasLeftOut: Array.isArray(b.cameras_left_out)
+      ? b.cameras_left_out.flatMap((c): CameraLeftOut[] => (isObj(c) && typeof c.name === 'string' && typeof c.reason === 'string' ? [{ name: c.name, key: str(c.key), reason: c.reason }] : []))
+      : [],
     containers: b.containers.map((c, i) => {
       const o = obj(c, `containers[${i}]`)
       const key = str(o.key)

@@ -4,7 +4,7 @@
 // what it is, and its key. The highlight follows Up, Down, Home and End;
 // Enter or a click picks; Esc or Tab closes and gives focus back.
 
-import { useEffect, useRef } from 'react'
+import { Fragment, useEffect, useRef } from 'react'
 import { cx } from '@/components/ui'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { THUMB_WIDTH, type PictureSource } from '@/lib/live-view/scene/picture-source'
@@ -53,6 +53,19 @@ export interface ViewPickerProps {
   label?: string
   /** What the button is, for assistive tech ("Second view"); default "View". */
   prefix?: string
+  /** The cameras the picture can't show: one quiet line under the cameras, each name and why in its tooltip. */
+  leftOut?: { line: string; details: string[] } | null
+}
+
+/** Under the cameras: how many the picture can't show; each one's name and why in the tooltip (and read out whole). */
+function LeftOutLine({ words }: { words: { line: string; details: string[] } }): React.JSX.Element {
+  return (
+    <div role="none">
+      <div role="note" className="lv-vleft" data-testid="lv-cameras-left-out" title={words.details.join('\n')} aria-label={[words.line, ...words.details].join('. ')}>
+        {words.line}
+      </div>
+    </div>
+  )
 }
 
 export function ViewPicker(p: ViewPickerProps): React.JSX.Element {
@@ -124,32 +137,36 @@ export function ViewPicker(p: ViewPickerProps): React.JSX.Element {
       </button>
       {p.open ? (
         <div ref={menu} role="menu" aria-label="Views" className="lv-pop lv-vmenu" data-k2-chamfer="surface" onKeyDown={onKey}>
-          {p.rows.map((r) => {
+          {p.rows.map((r, i) => {
             const on = p.checked(r)
+            const lastCamera = r.kind === 'camera' && p.rows[i + 1]?.kind !== 'camera'
             return (
-              <div key={r.v} role="none">
-                {r.sep ? <div className="lv-vsep" role="separator" /> : null}
-                <button
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={on}
-                  aria-label={`${r.name}, ${r.sub}`}
-                  disabled={r.disabled}
-                  data-kbd={p.kbd && p.kbd === r.v ? '' : undefined}
-                  className={cx('lv-vrow')}
-                  onClick={() => p.onPick(r)}
-                >
-                  <Thumb source={r.disabled ? null : p.source} rev={p.rev} view={p.thumbView(r)} />
-                  <span className="lv-vt" aria-hidden="true">
-                    <b>
-                      {r.name}
-                      {on ? <span className="lv-check"> ✓</span> : null}
-                    </b>
-                    <span>{r.sub}</span>
-                  </span>
-                  {r.key ? <kbd aria-hidden="true">{r.key}</kbd> : null}
-                </button>
-              </div>
+              <Fragment key={r.v}>
+                <div role="none">
+                  {r.sep ? <div className="lv-vsep" role="separator" /> : null}
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={on}
+                    aria-label={`${r.name}, ${r.sub}`}
+                    disabled={r.disabled}
+                    data-kbd={p.kbd && p.kbd === r.v ? '' : undefined}
+                    className={cx('lv-vrow')}
+                    onClick={() => p.onPick(r)}
+                  >
+                    <Thumb source={r.disabled ? null : p.source} rev={p.rev} view={p.thumbView(r)} />
+                    <span className="lv-vt" aria-hidden="true">
+                      <b>
+                        {r.name}
+                        {on ? <span className="lv-check"> ✓</span> : null}
+                      </b>
+                      <span>{r.sub}</span>
+                    </span>
+                    {r.key ? <kbd aria-hidden="true">{r.key}</kbd> : null}
+                  </button>
+                </div>
+                {lastCamera && p.leftOut ? <LeftOutLine words={p.leftOut} /> : null}
+              </Fragment>
             )
           })}
           <div className="lv-vmfoot">These are still pictures. Pick a view to see the scene from another side.</div>

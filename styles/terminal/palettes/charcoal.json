@@ -310,7 +310,22 @@
       "$value": "#c53030",
       "$type": "color",
       "$description": "Muted destructive fill (ConfirmDialog confirm, kick buttons)."
-    }
+    },
+    "syntax-keyword": { "$value": "#c792ea", "$type": "color", "$description": "Code: keywords (import, const, return). Every syntax colour reads at 4.5:1 on bg, bg-surface and bg-inset (the editor, the pane tile and the code well)." },
+    "syntax-string": { "$value": "#c3e88d", "$type": "color", "$description": "Code: strings." },
+    "syntax-number": { "$value": "#f78c6c", "$type": "color", "$description": "Code: numbers and literals." },
+    "syntax-comment": { "$value": "#8e8e98", "$type": "color", "$description": "Code: comments. Quieter than code but still 4.5:1." },
+    "syntax-function": { "$value": "#82aaff", "$type": "color", "$description": "Code: function and method names." },
+    "syntax-type": { "$value": "#ffcb6b", "$type": "color", "$description": "Code: types and classes." },
+    "syntax-property": { "$value": "#89ddff", "$type": "color", "$description": "Code: properties and definitions." },
+    "syntax-punctuation": { "$value": "#b0b0b8", "$type": "color", "$description": "Code: punctuation and operators." },
+    "presence-1": { "$value": "#a193f7", "$type": "color", "$description": "Live editing: the first other person or agent (carets, name flags, holds). Presence colours reach 3:1 on bg and bg-surface." },
+    "presence-2": { "$value": "#55b6ec", "$type": "color", "$description": "Live editing: the second." },
+    "presence-3": { "$value": "#ef74ab", "$type": "color", "$description": "Live editing: the third." },
+    "presence-4": { "$value": "#eda055", "$type": "color", "$description": "Live editing: the fourth." },
+    "find-match": { "$value": "rgba(253, 199, 0, 0.22)", "$type": "color", "$description": "Find: every match, a wash over the editor. text-primary keeps 4.5:1 on it." },
+    "find-match-current": { "$value": "rgba(253, 199, 0, 0.28)", "$type": "color", "$description": "Find: the current match, stronger than the others." },
+    "selection": { "$value": "rgba(59, 130, 246, 0.34)", "$type": "color", "$description": "Selected text in editors. text-primary keeps 4.5:1 on it." }
   },
   "terminal": {
     "fg": {

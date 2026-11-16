@@ -4,7 +4,8 @@ import { Button, Surface, Tag, Toggle } from '@/components/ui'
 import { useSettingsStore } from '@/stores/settings'
 import { useCustomThemesStore } from '@/stores/custom-themes'
 import type { CustomTheme } from '@/stores/custom-themes'
-import { EDITOR_THEMES, CodeEditor } from '@/components/FileViewerPane/CodeEditor'
+import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
+import { EDITOR_THEMES, FOLLOW_APP_THEME_ID, resolveEditorThemeId } from '@/lib/editor/theme'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import type { EditorSettingsBackend } from '@shared/types'
 import { AppFontRows } from '../shared/AppFontRows'
@@ -54,7 +55,6 @@ export const CODE_EDITOR_MANIFEST: SettingEntry[] = [
 
 /** Fonts with programming ligatures among the bundled ones. */
 const LIGATURE_FONTS = new Set(['Fira Code', 'JetBrains Mono', 'Lilex'])
-const DEFAULT_THEME = 'k2so-dark'
 
 type BoolKey = { [K in keyof EditorSettingsBackend]: EditorSettingsBackend[K] extends boolean ? K : never }[keyof EditorSettingsBackend]
 
@@ -180,7 +180,7 @@ function DeleteThemeDialog({
       title={`Delete ${theme.name}?`}
       intro={
         inUse
-          ? 'The theme file is removed from this server. The editor uses it now, so it goes back to K2 Dark.'
+          ? 'The theme file is removed from this server. The editor uses it now, so it goes back to following the app’s look.'
           : 'The theme file is removed from this server. Other themes stay as they are.'
       }
       onClose={onClose}
@@ -370,7 +370,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
               label="Theme"
               hint={
                 <RowHint status={themeSave.status}>
-                  Colours for code in the editor and in diffs.
+                  Colours for code in the editor and in diffs. Follow app uses your look’s colours.
                   {activeCustom && (
                     <>
                       {' '}
@@ -391,7 +391,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
               <SettingDropdown
                 fullWidth
                 ariaLabel="Theme"
-                value={editor.theme}
+                value={resolveEditorThemeId(editor.theme)}
                 options={themeOptions}
                 onChange={(v) => themeSave.save({ theme: v })}
               />
@@ -541,9 +541,9 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
           onDeleted={() => {
             const name = deleting.name
             const wasInUse = editor.theme === deleting.id
-            if (wasInUse) void updateEditorSettings({ theme: DEFAULT_THEME })
+            if (wasInUse) void updateEditorSettings({ theme: FOLLOW_APP_THEME_ID })
             setDeleting(null)
-            setThemeNote(wasInUse ? `${name} is deleted. The editor is back on K2 Dark.` : `${name} is deleted.`)
+            setThemeNote(wasInUse ? `${name} is deleted. The editor follows the app’s look again.` : `${name} is deleted.`)
           }}
         />
       )}

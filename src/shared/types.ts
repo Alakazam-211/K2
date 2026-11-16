@@ -238,4 +238,4 @@ export interface EditorSettingsBackend {
   vimMode: boolean
 }
 
-export type EditorThemeId = 'k2so-dark' | 'one-dark' | 'dracula' | 'nord' | 'github-dark'
+export type EditorThemeId = 'follow-app' | 'k2-dark' | 'one-dark' | 'dracula' | 'nord' | 'github-dark' | 'gruvbox-dark' | 'ayu-mirage' | 'parchment'

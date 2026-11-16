@@ -252,9 +252,11 @@ html[data-os]:not([data-os="mac"]) select optgroup {
    box): the accent button's pair, the accent fill under on-accent text,
    which control-contrast.test pins at 4.5:1 or more in every palette. The
    browser's own highlight read 3.78:1 in Charcoal (#e4e4e7 on #51759c).
-   Gardens keep theirs. */
-html[data-style="terminal"] :is(input, textarea, [contenteditable="true"]):not([data-zen-root] *)::selection,
-html[data-style="terminal"] [contenteditable="true"]:not([data-zen-root] *) *::selection {
+   Gardens keep theirs. CodeMirror is left out: it draws the selection under
+   the text (--color-selection) and keeps the code's own colours, so on-accent
+   there turned selected code white on a pale band in the light looks. */
+html[data-style="terminal"] :is(input, textarea, [contenteditable="true"]):not([data-zen-root] *):not(.cm-content)::selection,
+html[data-style="terminal"] [contenteditable="true"]:not([data-zen-root] *):not(.cm-content) *::selection {
   background: var(--color-accent-fill);
   color: var(--color-on-accent);
 }

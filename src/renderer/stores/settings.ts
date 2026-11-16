@@ -491,7 +491,7 @@ const DEFAULT_EDITOR: EditorSettingsBackend = {
   indentGuides: true, foldGutter: true, autocomplete: true,
   bracketMatching: true, lineNumbers: true, highlightActiveLine: true,
   stickyScroll: false, minimap: false,
-  theme: 'k2so-dark', fontFamily: 'MesloLGM Nerd Font', fontLigatures: false,
+  theme: 'follow-app', fontFamily: 'MesloLGM Nerd Font', fontLigatures: false,
   cursorStyle: 'bar', cursorBlink: true,
   scrollPastEnd: false, scrollbarAnnotations: true, diffStyle: 'gutter',
   formatOnSave: false, vimMode: false,

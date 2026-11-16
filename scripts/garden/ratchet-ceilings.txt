@@ -19,6 +19,14 @@
 4214 crates/k2-core/src/chat_history.rs
 4164 crates/k2-daemon/src/mail/supervisor.rs
 4131 crates/k2-daemon/src/subscription_usage.rs
+# The file editors (build-editors.md): under the limit, but every editors
+# phase touches them, so they only shrink from here. New editor code goes in
+# lib/editor/ or components/Editor/. (--tighten drops rows under the limit;
+# re-add these by hand if it does.)
+1672 src/renderer/components/TabBar/TabBar.tsx
+1354 src/renderer/components/LiveEditor/mount.ts
+1264 src/renderer/components/FileViewerPane/FileViewerPane.tsx
+1082 src/renderer/components/FileViewerPane/CodeEditor.tsx
 
 # Held: a lane is still adding to these. Both rules skip them.
 # When the lane lands: scripts/garden/ratchet.sh --release <path>

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, highlightWhitespace, gutter, GutterMarker, Decoration, ViewPlugin, ViewUpdate, type DecorationSet, scrollPastEnd } from '@codemirror/view'
-import { EditorState, Compartment, RangeSet, type Extension } from '@codemirror/state'
+import { EditorState, RangeSet, type Extension } from '@codemirror/state'
 import { lineColToPos, onFileLineRequest, peekFileLine, takeFileLine } from '@/lib/file-open-requests'
 import { invoke } from '@tauri-apps/api/core'
 // Plan B — git diff (for the gutter) is host-aware daemon data: route it
@@ -12,11 +12,9 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
 import { useCustomThemesStore } from '@/stores/custom-themes'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { tags } from '@lezer/highlight'
 import {
   syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput,
   foldGutter, codeFolding, foldKeymap, StreamLanguage, indentUnit, syntaxTree,
-  HighlightStyle,
 } from '@codemirror/language'
 import { search, searchKeymap, highlightSelectionMatches, selectNextOccurrence } from '@codemirror/search'
 import { autocompletion, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
@@ -114,6 +112,9 @@ import { elixir } from 'codemirror-lang-elixir'
 import { svelte } from '@replit/codemirror-lang-svelte'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { zoomAwareTooltips } from './zoom-tooltips'
+import { getThemeExtension, getHighlightExtension, buildFontFamilyExtension, buildCursorExtension } from '@/lib/editor/theme'
+import { buildEditorTheme } from '@/lib/editor/named-themes'
+import { createEditorCompartments, type EditorCompartments } from '@/lib/editor/compartments'
 
 // ── Language detection ──────────────────────────────────────────────
 
@@ -343,269 +344,6 @@ export function getLanguageName(filePath: string): string {
   return names[ext] || ext.toUpperCase() || 'Plain Text'
 }
 
-// ── Editor theme definitions ─────────────────────────────────────────
-
-interface ThemeColors {
-  bg: string
-  fg: string
-  gutterBg: string
-  gutterFg: string
-  gutterBorder: string
-  activeLine: string
-  selection: string
-  cursor: string
-  bracket: string
-  bracketOutline: string
-  searchMatch: string
-  searchMatchSelected: string
-  accent: string
-  panelBg: string
-  panelBorder: string
-  tooltipBg: string
-  tooltipBorder: string
-}
-
-const THEME_COLORS: Record<string, ThemeColors> = {
-  'k2so-dark': {
-    bg: '#0a0a0a', fg: '#e4e4e7', gutterBg: '#0a0a0a', gutterFg: '#555', gutterBorder: '#1a1a1a',
-    activeLine: '#ffffff08', selection: '#3b82f633', cursor: '#3b82f6', bracket: '#3b82f633',
-    bracketOutline: '#3b82f666', searchMatch: '#b5890066', searchMatchSelected: '#b58900aa',
-    accent: '#3b82f6', panelBg: '#141414', panelBorder: '#2a2a2a', tooltipBg: '#141414', tooltipBorder: '#2a2a2a',
-  },
-  'one-dark': {
-    bg: '#282c34', fg: '#abb2bf', gutterBg: '#282c34', gutterFg: '#495162', gutterBorder: '#3b4048',
-    activeLine: '#2c313c', selection: '#3e4451', cursor: '#528bff', bracket: '#528bff33',
-    bracketOutline: '#528bff66', searchMatch: '#d19a6666', searchMatchSelected: '#d19a66aa',
-    accent: '#61afef', panelBg: '#21252b', panelBorder: '#3b4048', tooltipBg: '#21252b', tooltipBorder: '#3b4048',
-  },
-  'dracula': {
-    bg: '#282a36', fg: '#f8f8f2', gutterBg: '#282a36', gutterFg: '#6272a4', gutterBorder: '#44475a',
-    activeLine: '#44475a44', selection: '#44475a', cursor: '#f8f8f2', bracket: '#bd93f933',
-    bracketOutline: '#bd93f966', searchMatch: '#50fa7b44', searchMatchSelected: '#50fa7b88',
-    accent: '#bd93f9', panelBg: '#21222c', panelBorder: '#44475a', tooltipBg: '#21222c', tooltipBorder: '#44475a',
-  },
-  'nord': {
-    bg: '#2e3440', fg: '#d8dee9', gutterBg: '#2e3440', gutterFg: '#4c566a', gutterBorder: '#3b4252',
-    activeLine: '#3b425244', selection: '#434c5e', cursor: '#88c0d0', bracket: '#88c0d033',
-    bracketOutline: '#88c0d066', searchMatch: '#ebcb8b44', searchMatchSelected: '#ebcb8b88',
-    accent: '#88c0d0', panelBg: '#292e39', panelBorder: '#3b4252', tooltipBg: '#292e39', tooltipBorder: '#3b4252',
-  },
-  'github-dark': {
-    bg: '#0d1117', fg: '#c9d1d9', gutterBg: '#0d1117', gutterFg: '#484f58', gutterBorder: '#21262d',
-    activeLine: '#161b2244', selection: '#264f78', cursor: '#58a6ff', bracket: '#58a6ff33',
-    bracketOutline: '#58a6ff66', searchMatch: '#e3b34166', searchMatchSelected: '#e3b341aa',
-    accent: '#58a6ff', panelBg: '#161b22', panelBorder: '#30363d', tooltipBg: '#161b22', tooltipBorder: '#30363d',
-  },
-  'gruvbox-dark': {
-    bg: '#282828', fg: '#ebdbb2', gutterBg: '#282828', gutterFg: '#7c6f64', gutterBorder: '#3c3836',
-    activeLine: '#3c383644', selection: '#504945', cursor: '#83a598', bracket: '#83a59833',
-    bracketOutline: '#83a59866', searchMatch: '#fabd2e44', searchMatchSelected: '#fabd2e88',
-    accent: '#83a598', panelBg: '#1d2021', panelBorder: '#3c3836', tooltipBg: '#1d2021', tooltipBorder: '#3c3836',
-  },
-  'ayu-mirage': {
-    bg: '#242936', fg: '#cccac2', gutterBg: '#242936', gutterFg: '#5c6166', gutterBorder: '#2b313a',
-    activeLine: '#2b313a44', selection: '#33415e', cursor: '#ffcc66', bracket: '#ffcc6633',
-    bracketOutline: '#ffcc6666', searchMatch: '#e6b45066', searchMatchSelected: '#e6b450aa',
-    accent: '#ffcc66', panelBg: '#1f2430', panelBorder: '#2b313a', tooltipBg: '#1f2430', tooltipBorder: '#2b313a',
-  },
-  'parchment': {
-    bg: '#f4f0e8', fg: '#3b3228', gutterBg: '#ece8df', gutterFg: '#9e9688', gutterBorder: '#ddd8ce',
-    activeLine: '#e8e3d888', selection: '#d4cfc4', cursor: '#3b3228', bracket: '#7b685433',
-    bracketOutline: '#7b685466', searchMatch: '#e6c07b66', searchMatchSelected: '#e6c07baa',
-    accent: '#7b6854', panelBg: '#ece8df', panelBorder: '#ddd8ce', tooltipBg: '#ece8df', tooltipBorder: '#ddd8ce',
-  },
-}
-
-// ── Per-theme syntax highlight styles ────────────────────────────────
-// Each theme gets its own HighlightStyle with colors from Zed/industry standards
-
-const THEME_HIGHLIGHTS: Record<string, HighlightStyle> = {
-  'k2so-dark': HighlightStyle.define([
-    { tag: tags.keyword, color: '#c678dd' },
-    { tag: tags.operator, color: '#56b6c2' },
-    { tag: tags.string, color: '#98c379' },
-    { tag: tags.number, color: '#d19a66' },
-    { tag: tags.bool, color: '#d19a66' },
-    { tag: tags.null, color: '#d19a66' },
-    { tag: tags.comment, color: '#5c6370', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#61afef' },
-    { tag: tags.typeName, color: '#e5c07b' },
-    { tag: tags.className, color: '#e5c07b' },
-    { tag: tags.definition(tags.variableName), color: '#e06c75' },
-    { tag: tags.propertyName, color: '#e06c75' },
-    { tag: tags.variableName, color: '#e4e4e7' },
-    { tag: tags.attributeName, color: '#d19a66' },
-    { tag: tags.tagName, color: '#e06c75' },
-    { tag: tags.meta, color: '#abb2bf' },
-    { tag: tags.regexp, color: '#98c379' },
-    { tag: tags.punctuation, color: '#abb2bf' },
-  ]),
-  'one-dark': HighlightStyle.define([
-    { tag: tags.keyword, color: '#c678dd' },
-    { tag: tags.operator, color: '#56b6c2' },
-    { tag: tags.string, color: '#98c379' },
-    { tag: tags.number, color: '#d19a66' },
-    { tag: tags.bool, color: '#d19a66' },
-    { tag: tags.null, color: '#d19a66' },
-    { tag: tags.comment, color: '#5c6370', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#61afef' },
-    { tag: tags.typeName, color: '#e5c07b' },
-    { tag: tags.className, color: '#e5c07b' },
-    { tag: tags.definition(tags.variableName), color: '#e06c75' },
-    { tag: tags.propertyName, color: '#e06c75' },
-    { tag: tags.variableName, color: '#abb2bf' },
-    { tag: tags.attributeName, color: '#d19a66' },
-    { tag: tags.tagName, color: '#e06c75' },
-    { tag: tags.meta, color: '#abb2bf' },
-    { tag: tags.regexp, color: '#98c379' },
-    { tag: tags.punctuation, color: '#abb2bf' },
-  ]),
-  'dracula': HighlightStyle.define([
-    { tag: tags.keyword, color: '#ff79c6' },
-    { tag: tags.operator, color: '#ff79c6' },
-    { tag: tags.string, color: '#f1fa8c' },
-    { tag: tags.number, color: '#bd93f9' },
-    { tag: tags.bool, color: '#bd93f9' },
-    { tag: tags.null, color: '#bd93f9' },
-    { tag: tags.comment, color: '#6272a4', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#50fa7b' },
-    { tag: tags.typeName, color: '#8be9fd', fontStyle: 'italic' },
-    { tag: tags.className, color: '#8be9fd' },
-    { tag: tags.definition(tags.variableName), color: '#f8f8f2' },
-    { tag: tags.propertyName, color: '#66d9ef' },
-    { tag: tags.variableName, color: '#f8f8f2' },
-    { tag: tags.attributeName, color: '#50fa7b' },
-    { tag: tags.tagName, color: '#ff79c6' },
-    { tag: tags.meta, color: '#f8f8f2' },
-    { tag: tags.regexp, color: '#f1fa8c' },
-    { tag: tags.punctuation, color: '#f8f8f2' },
-  ]),
-  'nord': HighlightStyle.define([
-    { tag: tags.keyword, color: '#81a1c1' },
-    { tag: tags.operator, color: '#81a1c1' },
-    { tag: tags.string, color: '#a3be8c' },
-    { tag: tags.number, color: '#b48ead' },
-    { tag: tags.bool, color: '#81a1c1' },
-    { tag: tags.null, color: '#81a1c1' },
-    { tag: tags.comment, color: '#616e88', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#88c0d0' },
-    { tag: tags.typeName, color: '#8fbcbb' },
-    { tag: tags.className, color: '#8fbcbb' },
-    { tag: tags.definition(tags.variableName), color: '#d8dee9' },
-    { tag: tags.propertyName, color: '#88c0d0' },
-    { tag: tags.variableName, color: '#d8dee9' },
-    { tag: tags.attributeName, color: '#8fbcbb' },
-    { tag: tags.tagName, color: '#81a1c1' },
-    { tag: tags.meta, color: '#d8dee9' },
-    { tag: tags.regexp, color: '#ebcb8b' },
-    { tag: tags.punctuation, color: '#eceff4' },
-  ]),
-  'github-dark': HighlightStyle.define([
-    { tag: tags.keyword, color: '#ff7b72' },
-    { tag: tags.operator, color: '#ff7b72' },
-    { tag: tags.string, color: '#a5d6ff' },
-    { tag: tags.number, color: '#79c0ff' },
-    { tag: tags.bool, color: '#79c0ff' },
-    { tag: tags.null, color: '#79c0ff' },
-    { tag: tags.comment, color: '#8b949e', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#d2a8ff' },
-    { tag: tags.typeName, color: '#ffa657' },
-    { tag: tags.className, color: '#ffa657' },
-    { tag: tags.definition(tags.variableName), color: '#ffa657' },
-    { tag: tags.propertyName, color: '#79c0ff' },
-    { tag: tags.variableName, color: '#c9d1d9' },
-    { tag: tags.attributeName, color: '#79c0ff' },
-    { tag: tags.tagName, color: '#7ee787' },
-    { tag: tags.meta, color: '#c9d1d9' },
-    { tag: tags.regexp, color: '#a5d6ff' },
-    { tag: tags.punctuation, color: '#c9d1d9' },
-  ]),
-  'gruvbox-dark': HighlightStyle.define([
-    { tag: tags.keyword, color: '#fb4934' },
-    { tag: tags.operator, color: '#8ec07c' },
-    { tag: tags.string, color: '#b8bb26' },
-    { tag: tags.number, color: '#d3869b' },
-    { tag: tags.bool, color: '#d3869b' },
-    { tag: tags.null, color: '#d3869b' },
-    { tag: tags.comment, color: '#928374', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#b8bb26' },
-    { tag: tags.typeName, color: '#fabd2f' },
-    { tag: tags.className, color: '#fabd2f' },
-    { tag: tags.definition(tags.variableName), color: '#83a598' },
-    { tag: tags.propertyName, color: '#83a598' },
-    { tag: tags.variableName, color: '#ebdbb2' },
-    { tag: tags.attributeName, color: '#fabd2f' },
-    { tag: tags.tagName, color: '#8ec07c' },
-    { tag: tags.meta, color: '#ebdbb2' },
-    { tag: tags.regexp, color: '#b8bb26' },
-    { tag: tags.punctuation, color: '#a89984' },
-  ]),
-  'ayu-mirage': HighlightStyle.define([
-    { tag: tags.keyword, color: '#ffad66' },
-    { tag: tags.operator, color: '#f29e74' },
-    { tag: tags.string, color: '#d5ff80' },
-    { tag: tags.number, color: '#dfbfff' },
-    { tag: tags.bool, color: '#dfbfff' },
-    { tag: tags.null, color: '#dfbfff' },
-    { tag: tags.comment, color: '#5c6773', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#ffd173' },
-    { tag: tags.typeName, color: '#73d0ff' },
-    { tag: tags.className, color: '#73d0ff' },
-    { tag: tags.definition(tags.variableName), color: '#73d0ff' },
-    { tag: tags.propertyName, color: '#5ccfe6' },
-    { tag: tags.variableName, color: '#cccac2' },
-    { tag: tags.attributeName, color: '#ffd173' },
-    { tag: tags.tagName, color: '#73d0ff' },
-    { tag: tags.meta, color: '#cccac2' },
-    { tag: tags.regexp, color: '#95e6cb' },
-    { tag: tags.punctuation, color: '#b8cfe6' },
-  ]),
-  'parchment': HighlightStyle.define([
-    { tag: tags.keyword, color: '#8b4513' },
-    { tag: tags.operator, color: '#6b5344' },
-    { tag: tags.string, color: '#2e7d32' },
-    { tag: tags.number, color: '#7b1fa2' },
-    { tag: tags.bool, color: '#7b1fa2' },
-    { tag: tags.null, color: '#7b1fa2' },
-    { tag: tags.comment, color: '#9e9688', fontStyle: 'italic' },
-    { tag: tags.function(tags.variableName), color: '#1565c0' },
-    { tag: tags.typeName, color: '#c56200' },
-    { tag: tags.className, color: '#c56200' },
-    { tag: tags.definition(tags.variableName), color: '#ad1457' },
-    { tag: tags.propertyName, color: '#1565c0' },
-    { tag: tags.variableName, color: '#3b3228' },
-    { tag: tags.attributeName, color: '#c56200' },
-    { tag: tags.tagName, color: '#ad1457' },
-    { tag: tags.meta, color: '#6b5344' },
-    { tag: tags.regexp, color: '#2e7d32' },
-    { tag: tags.punctuation, color: '#6b5344' },
-  ]),
-}
-
-export function getHighlightExtension(themeId: string): Extension {
-  if (themeId.startsWith('custom:')) {
-    const custom = useCustomThemesStore.getState().getTheme(themeId)
-    if (custom) {
-      return [syntaxHighlighting(custom.highlight), syntaxHighlighting(defaultHighlightStyle, { fallback: true })]
-    }
-  }
-  const hl = THEME_HIGHLIGHTS[themeId] || THEME_HIGHLIGHTS['k2so-dark']
-  return [syntaxHighlighting(hl), syntaxHighlighting(defaultHighlightStyle, { fallback: true })]
-}
-
-export const EDITOR_THEMES: { id: string; label: string }[] = [
-  { id: 'k2so-dark', label: 'K2 Dark' },
-  { id: 'one-dark', label: 'One Dark' },
-  { id: 'dracula', label: 'Dracula' },
-  { id: 'nord', label: 'Nord' },
-  { id: 'github-dark', label: 'GitHub Dark' },
-  { id: 'gruvbox-dark', label: 'Gruvbox Dark' },
-  { id: 'ayu-mirage', label: 'Ayu Mirage' },
-  { id: 'parchment', label: 'Parchment' },
-]
-
-const LIGHT_THEMES = new Set(['parchment'])
-
 export const EDITOR_FONTS: { id: string; label: string }[] = [
   { id: 'MesloLGM Nerd Font', label: 'MesloLGM Nerd Font' },
   { id: 'JetBrains Mono', label: 'JetBrains Mono' },
@@ -614,116 +352,6 @@ export const EDITOR_FONTS: { id: string; label: string }[] = [
   { id: 'Menlo', label: 'Menlo' },
   { id: 'Monaco', label: 'Monaco' },
 ]
-
-function buildEditorTheme(colors: ThemeColors, isLight = false): Extension {
-  return EditorView.theme({
-    '&': {
-      backgroundColor: colors.bg,
-      color: colors.fg,
-      height: '100%',
-    },
-    '.cm-content': {
-      caretColor: colors.cursor,
-      padding: '8px 0',
-    },
-    '.cm-cursor, .cm-dropCursor': {
-      borderLeftColor: colors.cursor,
-      borderLeftWidth: '2px',
-    },
-    '.cm-selectionBackground, ::selection': {
-      backgroundColor: `${colors.selection} !important`,
-    },
-    '.cm-activeLine': {
-      backgroundColor: colors.activeLine,
-    },
-    '.cm-activeLineGutter': {
-      backgroundColor: colors.activeLine,
-      color: colors.fg,
-    },
-    '.cm-gutters': {
-      backgroundColor: colors.gutterBg,
-      color: colors.gutterFg,
-      border: 'none',
-      borderRight: `1px solid ${colors.gutterBorder}`,
-    },
-    '.cm-lineNumbers .cm-gutterElement': {
-      padding: '0 8px 0 16px',
-      minWidth: '3em',
-      fontSize: '11px',
-    },
-    '.cm-scroller': {
-      overflow: 'auto',
-      lineHeight: '1.6',
-    },
-    '.cm-matchingBracket': {
-      backgroundColor: colors.bracket,
-      outline: `1px solid ${colors.bracketOutline}`,
-    },
-    '.cm-searchMatch': {
-      backgroundColor: colors.searchMatch,
-    },
-    '.cm-searchMatch.cm-searchMatch-selected': {
-      backgroundColor: colors.searchMatchSelected,
-    },
-    '.cm-selectionMatch': {
-      backgroundColor: `${colors.accent}22`,
-    },
-    '.cm-foldGutter .cm-gutterElement': {
-      padding: '0 4px', cursor: 'pointer', color: colors.gutterFg, fontSize: '11px', transition: 'color 0.15s',
-    },
-    '.cm-foldGutter .cm-gutterElement:hover': { color: colors.fg },
-    '.cm-foldPlaceholder': {
-      backgroundColor: colors.panelBg, border: `1px solid ${colors.panelBorder}`, color: '#888',
-      padding: '0 6px', margin: '0 4px', borderRadius: 'var(--radius-selector)', cursor: 'pointer',
-    },
-    '.cm-tooltip': {
-      backgroundColor: colors.tooltipBg, border: `1px solid ${colors.tooltipBorder}`,
-      borderRadius: 'var(--radius-box)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-    },
-    '.cm-tooltip.cm-tooltip-autocomplete': {
-      backgroundColor: colors.tooltipBg, border: `1px solid ${colors.tooltipBorder}`,
-    },
-    '.cm-tooltip.cm-tooltip-autocomplete > ul': {
-      fontSize: '11px', maxHeight: '200px',
-    },
-    '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
-      padding: '3px 8px', color: colors.fg,
-    },
-    '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-      backgroundColor: `${colors.accent}33`, color: '#fff',
-    },
-    '.cm-completionMatchedText': { color: colors.accent, textDecoration: 'none' },
-    '.cm-panel.cm-search': {
-      backgroundColor: colors.panelBg, borderBottom: `1px solid ${colors.panelBorder}`,
-      padding: '4px 8px', gap: '4px', fontSize: '11px', color: colors.fg,
-    },
-    '.cm-panel.cm-search input': {
-      backgroundColor: colors.bg, border: `1px solid ${colors.panelBorder}`, color: colors.fg,
-      padding: '2px 6px', borderRadius: 'var(--radius-field)', fontSize: '11px', outline: 'none',
-    },
-    '.cm-panel.cm-search input:focus': { borderColor: colors.accent },
-    '.cm-panel.cm-search button': {
-      backgroundColor: colors.panelBg, border: `1px solid ${colors.panelBorder}`,
-      color: colors.fg, padding: '2px 8px', borderRadius: 'var(--radius-field)', fontSize: '11px', cursor: 'pointer',
-    },
-    '.cm-panel.cm-search button:hover': { backgroundColor: colors.panelBorder, color: colors.fg },
-    '.cm-panel.cm-search label': { color: colors.gutterFg, fontSize: '11px' },
-    '.cm-indentation-marker': { opacity: '0.15' },
-    '.cm-indentation-marker.active': { opacity: '0.35' },
-    '&.cm-focused': { outline: 'none' },
-  }, { dark: !isLight })
-}
-
-export function getThemeExtension(themeId: string): Extension {
-  if (themeId.startsWith('custom:')) {
-    const custom = useCustomThemesStore.getState().getTheme(themeId)
-    if (custom) {
-      return buildEditorTheme(custom.colors, custom.isLight)
-    }
-  }
-  const colors = THEME_COLORS[themeId] || THEME_COLORS['k2so-dark']
-  return buildEditorTheme(colors, LIGHT_THEMES.has(themeId))
-}
 
 // ── Component ────────────────────────────────────────────────────────
 
@@ -759,27 +387,6 @@ interface CodeEditorProps {
    *  that server's, not this computer's. Omitted = true (window surfaces). */
   localFormat?: boolean
 }
-
-// ── Compartments for live-reconfigurable settings ───────────────────
-const wrapCompartment = new Compartment()
-const tabSizeCompartment = new Compartment()
-const whitespaceCompartment = new Compartment()
-const indentGuidesCompartment = new Compartment()
-const foldCompartment = new Compartment()
-const autocompleteCompartment = new Compartment()
-const lineNumbersCompartment = new Compartment()
-const activeLineCompartment = new Compartment()
-const bracketCompartment = new Compartment()
-const fontSizeCompartment = new Compartment()
-const fontFamilyCompartment = new Compartment()
-const cursorCompartment = new Compartment()
-const themeCompartment = new Compartment()
-const scrollPastEndCompartment = new Compartment()
-const vimCompartment = new Compartment()
-const stickyScrollCompartment = new Compartment()
-const minimapCompartment = new Compartment()
-const gitGutterCompartment = new Compartment()
-const highlightCompartment = new Compartment()
 
 // ── Git gutter markers ──────────────────────────────────────────────
 
@@ -974,58 +581,6 @@ function buildGitGutterExtension(
   return exts
 }
 
-// ── Setting helpers ──────────────────────────────────────────────────
-
-export function buildFontFamilyExtension(family: string, ligatures: boolean): Extension {
-  const fontStack = `"${family}", "Menlo", "Monaco", "Courier New", monospace`
-  const ligatureCSS = ligatures
-    ? { fontVariantLigatures: 'normal', fontFeatureSettings: '"liga" 1, "calt" 1' }
-    : { fontVariantLigatures: 'none', fontFeatureSettings: '"liga" 0, "calt" 0' }
-  return EditorView.theme({
-    '&': { fontFamily: fontStack },
-    '.cm-scroller': { fontFamily: 'inherit' },
-    '.cm-content': ligatureCSS,
-    '.cm-line': ligatureCSS,
-    '.cm-tooltip.cm-tooltip-autocomplete > ul': { fontFamily: fontStack },
-  })
-}
-
-function buildCursorExtension(style: string, blink: boolean): Extension {
-  const blinkRate = blink ? undefined : '0' // 0 = no animation
-  if (style === 'block') {
-    return EditorView.theme({
-      '.cm-cursor': {
-        borderLeft: 'none',
-        backgroundColor: '#3b82f680',
-        width: '0.6em',
-        ...(blinkRate ? { animationDuration: blinkRate } : {}),
-      },
-      '&.cm-focused .cm-cursor': {
-        ...(blinkRate ? { animationDuration: blinkRate } : {}),
-      },
-    })
-  }
-  if (style === 'underline') {
-    return EditorView.theme({
-      '.cm-cursor': {
-        borderLeft: 'none',
-        borderBottom: '2px solid #3b82f6',
-        width: '0.6em',
-        height: '0 !important',
-        ...(blinkRate ? { animationDuration: blinkRate } : {}),
-      },
-    })
-  }
-  // Default: bar
-  return EditorView.theme({
-    '.cm-cursor, .cm-dropCursor': {
-      borderLeftColor: '#3b82f6',
-      borderLeftWidth: '2px',
-      ...(blinkRate ? { animationDuration: blinkRate } : {}),
-    },
-  })
-}
-
 // ── Per-language tab size defaults ───────────────────────────────────
 
 const LANGUAGE_TAB_DEFAULTS: Record<string, number> = {
@@ -1048,10 +603,11 @@ function getEffectiveTabSize(filePath: string, settingsTabSize: number): number 
 
 const BRACKET_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}' }
 const CLOSE_BRACKETS = new Set([')', ']', '}'])
-const RAINBOW_COLORS = ['#fbbf24', '#c084fc', '#22d3ee', '#f472b6', '#34d399', '#fb923c']
+// Bracket colours by depth: classes the theme colours (lib/editor/theme.ts).
+const RAINBOW = Array.from({ length: 6 }, (_, i) => Decoration.mark({ class: `cm-rainbow-${i}` }))
 
 function buildRainbowDecorations(view: EditorView): DecorationSet {
-  const decorations: { from: number; to: number; color: string }[] = []
+  const decorations: { from: number; to: number; depth: number }[] = []
   const stack: { char: string; pos: number }[] = []
 
   // Only scan visible viewport + 500 char buffer (not entire document)
@@ -1079,25 +635,19 @@ function buildRainbowDecorations(view: EditorView): DecorationSet {
     const ch = visible[i]
     const absPos = scanFrom + i
     if (BRACKET_PAIRS[ch]) {
-      const depth = stack.length
-      const color = RAINBOW_COLORS[depth % RAINBOW_COLORS.length]
+      decorations.push({ from: absPos, to: absPos + 1, depth: stack.length })
       stack.push({ char: ch, pos: absPos })
-      decorations.push({ from: absPos, to: absPos + 1, color })
     } else if (CLOSE_BRACKETS.has(ch)) {
       const last = stack.length > 0 ? stack[stack.length - 1] : null
       if (last && BRACKET_PAIRS[last.char] === ch) {
         stack.pop()
-        const depth = stack.length
-        const color = RAINBOW_COLORS[depth % RAINBOW_COLORS.length]
-        decorations.push({ from: absPos, to: absPos + 1, color })
+        decorations.push({ from: absPos, to: absPos + 1, depth: stack.length })
       }
     }
   }
 
   return Decoration.set(
-    decorations.map(d =>
-      Decoration.mark({ attributes: { style: `color: ${d.color}` } }).range(d.from, d.to)
-    ),
+    decorations.map(d => RAINBOW[d.depth % RAINBOW.length].range(d.from, d.to)),
     true
   )
 }
@@ -1183,6 +733,9 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
   localFormatRef.current = localFormat
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const compartmentsRef = useRef<EditorCompartments | null>(null)
+  compartmentsRef.current ??= createEditorCompartments()
+  const c = compartmentsRef.current
   const onSaveRef = useRef(onSave)
   const onChangeRef = useRef(onChange)
   const onCursorChangeRef = useRef(onCursorChange)
@@ -1260,31 +813,31 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
       // forces users to scroll mid-paragraph, which is awful UX.
       // Code files (TS, Rust, etc.) keep the user's chosen behavior
       // because indentation and column alignment matter there.
-      wrapCompartment.of((es.wordWrap || isMarkdownPath(filePath)) ? EditorView.lineWrapping : []),
-      tabSizeCompartment.of([EditorState.tabSize.of(effectiveTabSize), indentUnit.of(' '.repeat(effectiveTabSize))]),
-      whitespaceCompartment.of(es.showWhitespace ? highlightWhitespace() : []),
-      indentGuidesCompartment.of(es.indentGuides ? indentationMarkers({ highlightActiveBlock: true, hideFirstIndent: false }) : []),
-      foldCompartment.of(es.foldGutter ? [codeFolding(), foldGutter({ openText: '▾', closedText: '▸' })] : []),
-      autocompleteCompartment.of(es.autocomplete ? autocompletion({ activateOnTyping: true, maxRenderedOptions: 30 }) : []),
+      c.wrap.of((es.wordWrap || isMarkdownPath(filePath)) ? EditorView.lineWrapping : []),
+      c.tabSize.of([EditorState.tabSize.of(effectiveTabSize), indentUnit.of(' '.repeat(effectiveTabSize))]),
+      c.whitespace.of(es.showWhitespace ? highlightWhitespace() : []),
+      c.indentGuides.of(es.indentGuides ? indentationMarkers({ highlightActiveBlock: true, hideFirstIndent: false }) : []),
+      c.fold.of(es.foldGutter ? [codeFolding(), foldGutter({ openText: '▾', closedText: '▸' })] : []),
+      c.autocomplete.of(es.autocomplete ? autocompletion({ activateOnTyping: true, maxRenderedOptions: 30 }) : []),
       // The completion list and hovers stay under the caret at any app zoom.
       zoomAwareTooltips(),
-      lineNumbersCompartment.of(es.lineNumbers ? lineNumbers() : []),
-      activeLineCompartment.of(es.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
-      bracketCompartment.of(es.bracketMatching ? bracketMatching() : []),
-      fontSizeCompartment.of(EditorView.theme({ '&': { fontSize: `${es.fontSize || 13}px` }, '.cm-gutters': { fontSize: `${Math.max((es.fontSize || 13) - 1, 10)}px` } })),
-      fontFamilyCompartment.of(buildFontFamilyExtension(es.fontFamily || 'MesloLGM Nerd Font', es.fontLigatures ?? false)),
-      cursorCompartment.of(buildCursorExtension(es.cursorStyle || 'bar', es.cursorBlink ?? true)),
-      scrollPastEndCompartment.of(es.scrollPastEnd ? scrollPastEnd() : []),
-      minimapCompartment.of(es.minimap ? showMinimap.compute(['doc'], () => ({
+      c.lineNumbers.of(es.lineNumbers ? lineNumbers() : []),
+      c.activeLine.of(es.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
+      c.bracket.of(es.bracketMatching ? bracketMatching() : []),
+      c.fontSize.of(EditorView.theme({ '&': { fontSize: `${es.fontSize || 13}px` }, '.cm-gutters': { fontSize: `${Math.max((es.fontSize || 13) - 1, 10)}px` } })),
+      c.fontFamily.of(buildFontFamilyExtension(es.fontFamily || 'MesloLGM Nerd Font', es.fontLigatures ?? false)),
+      c.cursor.of(buildCursorExtension(es.cursorStyle || 'bar', es.cursorBlink ?? true)),
+      c.scrollPastEnd.of(es.scrollPastEnd ? scrollPastEnd() : []),
+      c.minimap.of(es.minimap ? showMinimap.compute(['doc'], () => ({
         create: () => ({ dom: document.createElement('div') }),
         displayText: 'blocks' as const, showOverlay: 'mouse-over' as const,
       })) : []),
-      stickyScrollCompartment.of(es.stickyScroll ? stickyScrollPlugin : []),
-      vimCompartment.of(es.vimMode ? vim() : []),
+      c.stickyScroll.of(es.stickyScroll ? stickyScrollPlugin : []),
+      c.vim.of(es.vimMode ? vim() : []),
       // Rainbow bracket colorization
       rainbowBrackets,
       // Git gutter (populated async after mount)
-      gitGutterCompartment.of([]),
+      c.gitGutter.of([]),
       // Search with replace panel
       search({ top: true }),
       // Keymaps (Cmd+D = select next occurrence)
@@ -1299,16 +852,16 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
         indentWithTab,
       ]),
       // Syntax highlighting (per-theme colors via compartment)
-      highlightCompartment.of(
+      c.highlight.of(
         themeOverride
           ? [syntaxHighlighting(themeOverride.highlight), syntaxHighlighting(defaultHighlightStyle, { fallback: true })]
-          : getHighlightExtension(es.theme || 'k2so-dark')
+          : getHighlightExtension(es.theme)
       ),
       // Theme (via compartment for live switching)
-      themeCompartment.of(
+      c.theme.of(
         themeOverride
           ? buildEditorTheme(themeOverride.colors, themeOverride.isLight)
-          : getThemeExtension(es.theme || 'k2so-dark')
+          : getThemeExtension(es.theme)
       ),
       // Change tracking
       updateListener,
@@ -1432,35 +985,35 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
 
     view.dispatch({
       effects: [
-        wrapCompartment.reconfigure((editorSettings.wordWrap || isMarkdownPath(filePath)) ? EditorView.lineWrapping : []),
-        tabSizeCompartment.reconfigure([EditorState.tabSize.of(editorSettings.tabSize), indentUnit.of(' '.repeat(editorSettings.tabSize))]),
-        whitespaceCompartment.reconfigure(editorSettings.showWhitespace ? highlightWhitespace() : []),
-        indentGuidesCompartment.reconfigure(editorSettings.indentGuides ? indentationMarkers({ highlightActiveBlock: true, hideFirstIndent: false }) : []),
-        foldCompartment.reconfigure(editorSettings.foldGutter ? [codeFolding(), foldGutter({ openText: '▾', closedText: '▸' })] : []),
-        autocompleteCompartment.reconfigure(editorSettings.autocomplete ? autocompletion({ activateOnTyping: true, maxRenderedOptions: 30 }) : []),
-        lineNumbersCompartment.reconfigure(editorSettings.lineNumbers ? lineNumbers() : []),
-        activeLineCompartment.reconfigure(editorSettings.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
-        bracketCompartment.reconfigure(editorSettings.bracketMatching ? bracketMatching() : []),
-        fontSizeCompartment.reconfigure(EditorView.theme({ '&': { fontSize: `${editorSettings.fontSize}px` }, '.cm-gutters': { fontSize: `${Math.max(editorSettings.fontSize - 1, 10)}px` } })),
-        fontFamilyCompartment.reconfigure(buildFontFamilyExtension(editorSettings.fontFamily || 'MesloLGM Nerd Font', editorSettings.fontLigatures ?? false)),
-        cursorCompartment.reconfigure(buildCursorExtension(editorSettings.cursorStyle || 'bar', editorSettings.cursorBlink ?? true)),
-        themeCompartment.reconfigure(
+        c.wrap.reconfigure((editorSettings.wordWrap || isMarkdownPath(filePath)) ? EditorView.lineWrapping : []),
+        c.tabSize.reconfigure([EditorState.tabSize.of(editorSettings.tabSize), indentUnit.of(' '.repeat(editorSettings.tabSize))]),
+        c.whitespace.reconfigure(editorSettings.showWhitespace ? highlightWhitespace() : []),
+        c.indentGuides.reconfigure(editorSettings.indentGuides ? indentationMarkers({ highlightActiveBlock: true, hideFirstIndent: false }) : []),
+        c.fold.reconfigure(editorSettings.foldGutter ? [codeFolding(), foldGutter({ openText: '▾', closedText: '▸' })] : []),
+        c.autocomplete.reconfigure(editorSettings.autocomplete ? autocompletion({ activateOnTyping: true, maxRenderedOptions: 30 }) : []),
+        c.lineNumbers.reconfigure(editorSettings.lineNumbers ? lineNumbers() : []),
+        c.activeLine.reconfigure(editorSettings.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
+        c.bracket.reconfigure(editorSettings.bracketMatching ? bracketMatching() : []),
+        c.fontSize.reconfigure(EditorView.theme({ '&': { fontSize: `${editorSettings.fontSize}px` }, '.cm-gutters': { fontSize: `${Math.max(editorSettings.fontSize - 1, 10)}px` } })),
+        c.fontFamily.reconfigure(buildFontFamilyExtension(editorSettings.fontFamily || 'MesloLGM Nerd Font', editorSettings.fontLigatures ?? false)),
+        c.cursor.reconfigure(buildCursorExtension(editorSettings.cursorStyle || 'bar', editorSettings.cursorBlink ?? true)),
+        c.theme.reconfigure(
           themeOverride
             ? buildEditorTheme(themeOverride.colors, themeOverride.isLight)
-            : getThemeExtension(editorSettings.theme || 'k2so-dark')
+            : getThemeExtension(editorSettings.theme)
         ),
-        highlightCompartment.reconfigure(
+        c.highlight.reconfigure(
           themeOverride
             ? [syntaxHighlighting(themeOverride.highlight), syntaxHighlighting(defaultHighlightStyle, { fallback: true })]
-            : getHighlightExtension(editorSettings.theme || 'k2so-dark')
+            : getHighlightExtension(editorSettings.theme)
         ),
-        scrollPastEndCompartment.reconfigure(editorSettings.scrollPastEnd ? scrollPastEnd() : []),
-        minimapCompartment.reconfigure(editorSettings.minimap ? showMinimap.compute(['doc'], () => ({
+        c.scrollPastEnd.reconfigure(editorSettings.scrollPastEnd ? scrollPastEnd() : []),
+        c.minimap.reconfigure(editorSettings.minimap ? showMinimap.compute(['doc'], () => ({
           create: () => ({ dom: document.createElement('div') }),
           displayText: 'blocks' as const, showOverlay: 'mouse-over' as const,
         })) : []),
-        stickyScrollCompartment.reconfigure(editorSettings.stickyScroll ? stickyScrollPlugin : []),
-        vimCompartment.reconfigure(editorSettings.vimMode ? vim() : []),
+        c.stickyScroll.reconfigure(editorSettings.stickyScroll ? stickyScrollPlugin : []),
+        c.vim.reconfigure(editorSettings.vimMode ? vim() : []),
       ],
     })
   }, [editorSettings, themeOverride, customThemes])
@@ -1491,7 +1044,7 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
     if (demoLineChanges) {
       const es = useSettingsStore.getState().editor
       const ext = buildGitGutterExtension(demoLineChanges, es.scrollbarAnnotations ?? true, es.diffStyle ?? 'gutter')
-      view.dispatch({ effects: gitGutterCompartment.reconfigure(ext) })
+      view.dispatch({ effects: c.gitGutter.reconfigure(ext) })
       return
     }
 
@@ -1505,12 +1058,12 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
         const es = useSettingsStore.getState().editor
         const ext = buildGitGutterExtension(lineChanges, es.scrollbarAnnotations ?? true, es.diffStyle ?? 'gutter')
         if (viewRef.current) {
-          viewRef.current.dispatch({ effects: gitGutterCompartment.reconfigure(ext) })
+          viewRef.current.dispatch({ effects: c.gitGutter.reconfigure(ext) })
         }
       } catch {
         // Not in a git repo or file not tracked — clear gutter
         if (viewRef.current) {
-          viewRef.current.dispatch({ effects: gitGutterCompartment.reconfigure([]) })
+          viewRef.current.dispatch({ effects: c.gitGutter.reconfigure([]) })
         }
       }
     }

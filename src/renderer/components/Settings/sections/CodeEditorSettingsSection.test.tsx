@@ -9,7 +9,6 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => {}), listen: vi.fn(async () => () => {}) }))
 // The preview editor is CodeMirror; the page's rows are what's under test.
 vi.mock('@/components/FileViewerPane/CodeEditor', () => ({
-  EDITOR_THEMES: [{ id: 'k2so-dark', label: 'K2 Dark' }, { id: 'one-dark', label: 'One Dark' }],
   EDITOR_FONTS: [{ id: 'MesloLGM Nerd Font', label: 'MesloLGM Nerd Font' }, { id: 'Fira Code', label: 'Fira Code' }],
   CodeEditor: () => <div data-testid="preview-editor" />,
 }))
@@ -61,17 +60,45 @@ describe('CodeEditorSettingsSection', () => {
     expect(screen.getByText(/MesloLGM Nerd Font has no ligatures/)).toBeTruthy()
   })
 
-  it('Delete asks first; deleting the theme in use goes back to K2 Dark and says so', async () => {
+  it('Delete asks first; deleting the theme in use goes back to Follow app and says so', async () => {
     render(<CodeEditorSettingsSection />)
     fireEvent.click(screen.getByRole('button', { name: 'Delete Midnight' }))
     expect(del).not.toHaveBeenCalled()
-    expect(screen.getByTestId('code-theme-delete').textContent).toContain('goes back to K2 Dark')
+    expect(screen.getByTestId('code-theme-delete').textContent).toContain('goes back to following the app’s look')
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Delete theme' }))
     })
     expect(del).toHaveBeenCalledWith('custom:midnight')
-    expect(update).toHaveBeenCalledWith({ theme: 'k2so-dark' })
-    expect(screen.getByTestId('code-theme-note').textContent).toBe('Midnight is deleted. The editor is back on K2 Dark.')
+    expect(update).toHaveBeenCalledWith({ theme: 'follow-app' })
+    expect(screen.getByTestId('code-theme-note').textContent).toBe('Midnight is deleted. The editor follows the app’s look again.')
+  })
+
+  it('the old default shows as Follow app (default), first in the list, then the named themes and yours', () => {
+    useSettingsStore.setState((s) => ({ editor: { ...s.editor, theme: 'k2so-dark' } }))
+    render(<CodeEditorSettingsSection />)
+    const trigger = screen.getByRole('button', { name: 'Theme' })
+    expect(trigger.textContent).toContain('Follow app (default)')
+    fireEvent.click(trigger)
+    const values = Array.from(screen.getByTestId('setting-dropdown-menu').querySelectorAll('button[data-value]')).map((b) => b.getAttribute('data-value'))
+    expect(values).toEqual(['follow-app', 'k2-dark', 'one-dark', 'dracula', 'nord', 'github-dark', 'gruvbox-dark', 'ayu-mirage', 'parchment', 'custom:midnight', 'custom:mint'])
+    expect(screen.getByTestId('setting-dropdown-menu').querySelector('button[data-value="follow-app"]')?.hasAttribute('data-selected')).toBe(true)
+  })
+
+  it('picking Follow app saves it and says Saved; a named theme saves too', async () => {
+    render(<CodeEditorSettingsSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Theme' }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('setting-dropdown-menu').querySelector('button[data-value="follow-app"]')!)
+    })
+    expect(update).toHaveBeenCalledWith({ theme: 'follow-app' })
+    expect(useSettingsStore.getState().editor.theme).toBe('follow-app')
+    expect(document.querySelector('[data-settings-id="code-editor.theme"] [data-save-note]')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Theme' }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('setting-dropdown-menu').querySelector('button[data-value="dracula"]')!)
+    })
+    expect(update).toHaveBeenLastCalledWith({ theme: 'dracula' })
+    expect(screen.getByRole('button', { name: 'Theme' }).textContent).toContain('Dracula')
   })
 
   it('a failed delete keeps the theme and the dialog, with the reason', async () => {

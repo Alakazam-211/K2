@@ -72,7 +72,22 @@
     "ring-shadow": { "$value": "rgba(0, 0, 0, 0.06)", "$type": "color", "$description": "Drop shadow between hairline and gap." },
     "ring-gap": { "$value": "rgba(255, 255, 255, 0.85)", "$type": "color", "$description": "THE bright gap — zite's #fffc." },
     "ring-key-shade": { "$value": "rgba(0, 0, 0, 0.10)", "$type": "color", "$description": "Keycap bottom shade." },
-    "ring-key-line": { "$value": "rgba(17, 17, 17, 0.20)", "$type": "color", "$description": "Keycap outline." }
+    "ring-key-line": { "$value": "rgba(17, 17, 17, 0.20)", "$type": "color", "$description": "Keycap outline." },
+    "syntax-keyword": { "$value": "#84298a", "$type": "color", "$description": "Code: keywords (import, const, return). Every syntax colour reads at 4.5:1 on bg, bg-surface and bg-inset (the editor, the pane tile and the code well)." },
+    "syntax-string": { "$value": "#3f6b12", "$type": "color", "$description": "Code: strings." },
+    "syntax-number": { "$value": "#9a4a06", "$type": "color", "$description": "Code: numbers and literals." },
+    "syntax-comment": { "$value": "#625b51", "$type": "color", "$description": "Code: comments. Quieter than code but still 4.5:1." },
+    "syntax-function": { "$value": "#1d5a92", "$type": "color", "$description": "Code: function and method names." },
+    "syntax-type": { "$value": "#6e5200", "$type": "color", "$description": "Code: types and classes." },
+    "syntax-property": { "$value": "#6234a0", "$type": "color", "$description": "Code: properties and definitions." },
+    "syntax-punctuation": { "$value": "#4a4437", "$type": "color", "$description": "Code: punctuation and operators." },
+    "presence-1": { "$value": "#5b45c9", "$type": "color", "$description": "Live editing: the first other person or agent (carets, name flags, holds). Presence colours reach 3:1 on bg and bg-surface." },
+    "presence-2": { "$value": "#1d6aa1", "$type": "color", "$description": "Live editing: the second." },
+    "presence-3": { "$value": "#ad2d67", "$type": "color", "$description": "Live editing: the third." },
+    "presence-4": { "$value": "#9a520f", "$type": "color", "$description": "Live editing: the fourth." },
+    "find-match": { "$value": "rgba(214, 160, 0, 0.28)", "$type": "color", "$description": "Find: every match, a wash over the editor. text-primary keeps 4.5:1 on it." },
+    "find-match-current": { "$value": "rgba(214, 150, 0, 0.40)", "$type": "color", "$description": "Find: the current match, stronger than the others." },
+    "selection": { "$value": "rgba(37, 90, 146, 0.20)", "$type": "color", "$description": "Selected text in editors. text-primary keeps 4.5:1 on it." }
   },
   "terminal": {
     "fg": { "$value": "#1c1b18", "$type": "color" },

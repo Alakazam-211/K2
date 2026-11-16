@@ -61,6 +61,13 @@ const REQUIRED_COLOR_SLOTS = [
   'code-inline', 'danger-hover',
   'overlay-soft-bg', 'overlay-soft-border',
   'scrollbar-thumb', 'scrollbar-thumb-hover', 'scrollbar-thumb-strong', 'scrollbar-thumb-strong-hover',
+  // The editors (build-editors.md E1a): code colours, live presence, find and
+  // the selection. A custom look must carry them too, so restoring a default
+  // look always brings them back.
+  'syntax-keyword', 'syntax-string', 'syntax-number', 'syntax-comment',
+  'syntax-function', 'syntax-type', 'syntax-property', 'syntax-punctuation',
+  'presence-1', 'presence-2', 'presence-3', 'presence-4',
+  'find-match', 'find-match-current', 'selection',
 ]
 
 const REQUIRED_TERMINAL_SLOTS = ['fg', 'bg', 'cursor', 'selection', 'ansi']

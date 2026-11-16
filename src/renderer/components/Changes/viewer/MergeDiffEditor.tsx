@@ -14,12 +14,8 @@ import { MergeView, unifiedMergeView, getChunks, type Chunk } from '@codemirror/
 import { useSettingsStore } from '@/stores/settings'
 import { useCustomThemesStore } from '@/stores/custom-themes'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
-import {
-  getLanguageExtension,
-  getThemeExtension,
-  getHighlightExtension,
-  buildFontFamilyExtension,
-} from '@/components/FileViewerPane/CodeEditor'
+import { getLanguageExtension } from '@/components/FileViewerPane/CodeEditor'
+import { getThemeExtension, getHighlightExtension, buildFontFamilyExtension, resolveEditorThemeId } from '@/lib/editor/theme'
 import { k2DiffTheme, autoHeightTheme, fillHeightTheme } from './diffTheme'
 import { notesExtension, setNoteMarks, type NoteMark, type NotesHandlers } from './notesExtension'
 import type { ChangesDiffLayout } from './types'
@@ -70,7 +66,7 @@ export function chunkStarts(chunks: readonly Chunk[]): number[] {
 }
 
 function useEditorLook(): { theme: Extension; highlight: Extension; font: Extension } {
-  const themeId = useSettingsStore((s) => s.editor.theme) || 'k2so-dark'
+  const themeId = resolveEditorThemeId(useSettingsStore((s) => s.editor.theme))
   const size = useSettingsStore((s) => s.editor.fontSize) || 13
   const family = useSettingsStore((s) => s.editor.fontFamily) || 'MesloLGM Nerd Font'
   const ligatures = useSettingsStore((s) => s.editor.fontLigatures) ?? false

@@ -1076,7 +1076,7 @@ class LiveEditor implements LiveEditorHandle {
         keymap.of(defaultKeymap),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ "aria-multiline": "true", role: "textbox" }),
-        EditorView.editorAttributes.of({ class: `mpc-labels-${this.labels}` }),
+        EditorView.editorAttributes.of({ class: `mpc-cm mpc-labels-${this.labels}` }),
         editorTheme,
         this.opts.extensions ?? [],
       ],

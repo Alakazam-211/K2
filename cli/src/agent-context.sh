@@ -895,6 +895,8 @@ SERVER SWITCHES (the owner only)
     agentProcessNames       Activity Monitor shows each agent's Claude Code
                             by the agent's name, not its version (new
                             sessions; off = today's)
+    homeChat                people and channels on Home (DMs and channels
+                            in the K5 Space; needs chat on this server)
   All of them are off until the owner turns them on.
   Run it as the owner in a plain terminal on the server (not a K2 tab): the
   CLI picks up the owner's credential there by itself. These are the only

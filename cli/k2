@@ -48772,7 +48772,7 @@ cmd_settings() {
 # on POST /cli/settings/update (settings_routes OWNER_ONLY_KEYS); the daemon
 # refuses agents and every other login, so this CLI decides nothing but the
 # allowlist and the value. Order = the order help prints them.
-_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview ciPreview boardFilePreview videoRoomsPreview usageSingleRecord agentProcessNames)
+_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview ciPreview boardFilePreview videoRoomsPreview usageSingleRecord agentProcessNames homeChat)
 
 _settings_set_keys_line() {
     local IFS=","
@@ -48842,6 +48842,7 @@ nxt = {
     "videoRoomsPreview": "Video in voice rooms shows in the K2 desktop app'"'"'s call panel (preview).",
     "usageSingleRecord": "One usage percent per token: the top bar, Settings and the phone read one record. Off goes straight back.",
     "agentProcessNames": "Claude Code sessions started from now on show their agent name in Activity Monitor (ps -c shows it too). Running sessions keep theirs until they restart.",
+    "homeChat": "People and channels on Home (needs chat on this server: k2 hostchat status). The K2 app and the phone show them once they reconnect.",
 }
 if want:
     print("Next: " + nxt[key])
@@ -53687,7 +53688,7 @@ cmd_schema() {
     {
       "name": "settings",
       "usage": "k2 settings [--mode <off|custom|manager|k2>] | k2 settings set <key> <true|false>",
-      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview, videoRoomsPreview, usageSingleRecord or agentProcessNames (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
+      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview, videoRoomsPreview, usageSingleRecord, agentProcessNames or homeChat (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
       "args": [],
       "flags": []
     },
@@ -68580,6 +68581,8 @@ SERVER SWITCHES (the owner only)
     agentProcessNames       Activity Monitor shows each agent's Claude Code
                             by the agent's name, not its version (new
                             sessions; off = today's)
+    homeChat                people and channels on Home (DMs and channels
+                            in the K5 Space; needs chat on this server)
   All of them are off until the owner turns them on.
   Run it as the owner in a plain terminal on the server (not a K2 tab): the
   CLI picks up the owner's credential there by itself. These are the only

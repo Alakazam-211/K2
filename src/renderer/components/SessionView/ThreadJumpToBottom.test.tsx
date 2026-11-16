@@ -138,9 +138,11 @@ beforeEach(() => {
   threadHook.items = [textItem('t1', 1), textItem('t2', 2)]
   threadHook.outbox = []
   motion.reduced = false
-  // Words measure by length (jsdom lays nothing out).
+  // Words measure by length (jsdom lays nothing out). Only the words: the
+  // arrow (icon or glyph) is in the fixed part.
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    const w = this.hasAttribute('data-jump-inner') ? (this.textContent ?? '').length * 7 + 36 : 0
+    const words = this.querySelector('[data-jump-text]')?.textContent ?? ''
+    const w = this.hasAttribute('data-jump-inner') ? words.length * 7 + 36 : 0
     return { width: w, height: 24, top: 0, left: 0, right: w, bottom: 24, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
   })
 })

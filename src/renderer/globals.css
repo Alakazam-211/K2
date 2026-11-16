@@ -2504,6 +2504,29 @@ html[data-style="glass"][data-palette="veil"] {
   --k2-float-text-shadow: none;
   --k2-float-picture-lift: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.18));
 }
+/* The Jump to bottom pill (ThreadJumpPill): K2 Companion's JumpPill on the
+   shared Frost (the phone's .zen-glass). Its fill is the phone's 10% white
+   over a black scrim at 60%: on the dark canvas that's the phone's colour
+   (#1d1d1d against #232323), and over a bright picture or your blue bubble
+   the white words still read at 4.5:1 (the phone's frost alone: 1:1 and 3:1).
+   Its rim is the phone's at 32% instead of 22%, 3:1 on the canvas and the
+   tile. The phone's white ink, 32px tall, 14px sides, 13px type. Light Glass
+   (the phone has none): Veil's 72% white frost, no scrim, dark words (10:1
+   over anything) and a dark rim at 45% (3:1 on the canvas and the tile). */
+html[data-style="glass"] {
+  --k2-jump-tint: var(--color-frost-fill);
+  --k2-jump-scrim: rgba(0, 0, 0, 0.6);
+  --k2-jump-edge: rgba(255, 255, 255, 0.32);
+  --k2-jump-ink: #ffffff;
+  --k2-jump-h: 32px;
+  --k2-jump-pad: 14px;
+  --k2-jump-type: var(--type-lg);
+}
+html[data-style="glass"][data-scheme="light"] {
+  --k2-jump-scrim: transparent;
+  --k2-jump-edge: rgba(0, 0, 0, 0.45);
+  --k2-jump-ink: var(--color-text-primary);
+}
 html[data-style="glass"] button[data-k2-float][data-k2-float][aria-pressed="true"],
 html[data-style="glass"] button[data-k2-float][data-k2-float][aria-expanded="true"] { background: var(--k2-float-fill-lit); }
 html[data-style="glass"][data-palette="veil"] button[data-k2-float="round"][aria-pressed="true"] {

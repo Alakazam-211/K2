@@ -29,8 +29,22 @@
 //
 // Colours come from the `--zen-*` variables, so the desktop Thread (which
 // maps them to the app's Style, THREAD_ZEN_DESKTOP_TOKENS) and any Garden
-// that draws it each keep their own look. Glass: Frost (the frost rule
-// stops at a Garden root). Terminal: a chamfered small control.
+// that draws it each keep their own look. They ride variables (`--jump-*`),
+// never inline paint, so the Style's own rules can take over.
+//
+// Glass (Rosson 2026-11-15, "the same glass theme that mobile has"): K2
+// Companion's JumpPill. The shared Frost material (data-material="frost":
+// the phone's .zen-glass, 10% white over a 28px blur at 180%, a 0.5px rim,
+// a 1px light catch), a full pill, 13px words 32px tall with 14px sides, a
+// "↓" glyph, and the same quiet pill for every state (the phone has no
+// accent one). It rises 6px from 96% over 220ms and fades out in 140ms, as
+// the phone's does. Two changes keep it readable over the messages, where
+// the phone's frost alone drops white words to 3:1 over your blue bubble
+// and 1:1 over a white picture: its fill sits over a dark scrim (invisible
+// on the dark canvas, so it looks the same there), and its rim is a little
+// brighter (3:1 on the canvas). Light Glass, which the phone hasn't got,
+// takes Veil's light frost with dark words. The tokens are `--k2-jump-*`
+// (globals.css). Terminal: a chamfered small control.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { ArrowDownIcon } from '@/components/icons/K2Icons'
@@ -80,26 +94,34 @@ const WIDTH = `${THREAD_JUMP_PILL_WIDTH_MS}ms var(--motion-ease-standard, cubic-
 const RING = 'var(--zen-focus-ring, var(--zen-accent))'
 /** Rides the activity bar: its slide's length and curve. */
 const RIDE = `translate ${ZEN_DRAWER_MS}ms var(${THREAD_DOCK_EASE_VAR}, ${ZEN_DRAWER_EASE_IN})`
-/** Glass with its Frost on (the desktop Thread only; a Garden draws its own):
- *  the quiet pill lets a little of the blurred list through. */
-const GLASS = 'html[data-style="glass"]:not([data-frost="tile"]) [data-k2-thread-zen]'
+/** The desktop Thread under Glass (a Garden draws its own pill). */
+const GLASS = 'html[data-style="glass"] [data-k2-thread-zen]'
+/** …with its Frost on (not the tile fallback for reduced transparency). The
+ *  `[data-material]` outranks the shared Frost rules (the 1x rim too). */
+const FROST = `html[data-style="glass"]:not([data-frost="tile"]) [data-k2-thread-zen] ${P}[data-material="frost"]`
+/** The phone's entrance (`zen-pill-in`) and its tap fade-out. */
+const ENTER = `${THREAD_JUMP_PILL_WIDTH_MS}ms var(--motion-ease-standard, cubic-bezier(0.22, 1, 0.36, 1))`
+const LEAVE_MS = 140
+const LEAVE = `${LEAVE_MS}ms ease-out`
 
-/** The pill's rules (in ThreadZenStyles). Colours are inline: they win
- *  over Glass's frost tint and 0.5px rim, which can miss 4.5:1 / 3:1 over
- *  the messages; Glass's quiet fill is the raised surface at 86% over the
- *  frost blur (solid with reduced transparency). */
+/** The pill's rules (in ThreadZenStyles). Terminal paints from the
+ *  `--jump-*` variables through its chamfer layers; Glass takes the shared
+ *  Frost (styles/glass/overrides.css) and the `--k2-jump-*` tokens. */
 export const THREAD_JUMP_PILL_CSS = `
-${P} { left: 50%; bottom: calc(var(${THREAD_DOCK_BOX_VAR}, var(${BASE_VAR}, 0px)) + ${THREAD_JUMP_PILL_GAP}px); translate: 0 calc(-1 * var(${THREAD_DOCK_ABOVE_VAR}, 0px)); z-index: 3; display: inline-flex; max-width: calc(100% - 2 * var(--zen-gap, 12px)); align-items: center; margin: 0; padding: 0; border-radius: var(--zen-pill-radius, 999px); font: inherit; font-size: var(--zen-type-sm, 0.8em); line-height: 16px; white-space: nowrap; cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, 6px); transition: opacity ${FADE}, transform ${FADE}, ${RIDE}, visibility 0s linear var(--motion-duration-fast, 140ms); }
+${P} { left: 50%; bottom: calc(var(${THREAD_DOCK_BOX_VAR}, var(${BASE_VAR}, 0px)) + ${THREAD_JUMP_PILL_GAP}px); translate: 0 calc(-1 * var(${THREAD_DOCK_ABOVE_VAR}, 0px)); z-index: 3; display: inline-flex; max-width: calc(100% - 2 * var(--zen-gap, 12px)); align-items: center; margin: 0; padding: 0; border-radius: var(--zen-pill-radius, 999px); background: var(--jump-fill); border: 1px solid var(--jump-edge); color: var(--jump-ink); font: inherit; font-size: var(--zen-type-sm, 0.8em); line-height: 16px; white-space: nowrap; cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, 6px); transition: opacity ${FADE}, transform ${FADE}, ${RIDE}, visibility 0s linear var(--motion-duration-fast, 140ms); }
 ${P}[data-shown] { opacity: 1; visibility: visible; pointer-events: auto; transform: translate(-50%, 0); transition: opacity ${FADE}, transform ${FADE}, ${RIDE}, visibility 0s; }
 ${P} [data-jump-clip] { display: block; overflow: hidden; max-width: 100%; }
 ${P} [data-jump-inner] { display: inline-flex; align-items: center; gap: 6px; width: max-content; padding: 4px 10px 4px 12px; }
+${P} [data-jump-glyph] { display: none; }
 ${P}.${THREAD_JUMP_PILL_ANIMATING} [data-jump-clip] { transition: width ${WIDTH}; }
-${GLASS} ${P}:not([data-accent]) { background: color-mix(in srgb, var(--zen-surface-raised) 86%, transparent) !important; }
+${GLASS} ${P} { min-height: var(--k2-jump-h); color: var(--k2-jump-ink); font-size: var(--k2-jump-type); font-weight: 400; transform: translate(-50%, 6px) scale(0.96); transition: opacity ${LEAVE}, ${RIDE}, transform 0s linear ${LEAVE_MS}ms, visibility 0s linear ${LEAVE_MS}ms; }
+${GLASS} ${P}[data-shown] { transform: translate(-50%, 0) scale(1); transition: opacity ${ENTER}, transform ${ENTER}, ${RIDE}, visibility 0s; }
+${GLASS} ${P} [data-jump-inner] { gap: 0.25em; padding: 0 var(--k2-jump-pad); }
+${GLASS} ${P} [data-jump-glyph] { display: inline; }
+${GLASS} ${P} [data-k2-icon] { display: none; }
+${FROST} { background: linear-gradient(var(--k2-jump-tint) 0 0), var(--k2-jump-scrim); border-color: var(--k2-jump-edge); }
 ${P}:focus-visible { outline: 2px solid ${RING}; outline-offset: 2px; }
 ${CHAMFER_SCOPE} ${P}[data-chamfer]:focus-visible { outline: none; --ch-edge: ${RING} !important; --ch-bw: 2px !important; }
-@media (prefers-reduced-transparency: reduce) {
-  ${GLASS} ${P}:not([data-accent]) { background: var(--zen-surface-raised) !important; }
-}
 @media (prefers-reduced-motion: reduce) {
   ${P}, ${P}[data-shown], ${P}.${THREAD_JUMP_PILL_ANIMATING} [data-jump-clip] { transition: none !important; }
 }
@@ -177,10 +199,13 @@ export function ThreadJumpPill({ shown, unseen, sent, reducedMotion, onJump, bot
   const style: CSSProperties = {
     // Inline: Terminal's chamfer rule makes a cut element `relative`.
     position: 'absolute',
-    ...({ [BASE_VAR]: `${bottom}px` } as CSSProperties),
-    background: fill,
-    border: `1px solid ${edge}`,
-    color: accent ? 'var(--zen-accent-text)' : 'var(--zen-text)',
+    // Paint as variables, never inline paint, so Glass's Frost can take over.
+    ...({
+      [BASE_VAR]: `${bottom}px`,
+      '--jump-fill': fill,
+      '--jump-edge': edge,
+      '--jump-ink': accent ? 'var(--zen-accent-text)' : 'var(--zen-text)',
+    } as CSSProperties),
     // Terminal Style: a small control's cut, its edge drawn by the layers.
     ...chamferVars({ cut: CHAMFER_CUT.button, fill, edge, border: 1 }),
   }
@@ -213,6 +238,10 @@ export function ThreadJumpPill({ shown, unseen, sent, reducedMotion, onJump, bot
         >
           <span ref={innerRef} data-jump-inner="">
             <span data-jump-text="">{text}</span>
+            {/* Glass: the phone's glyph, in the words' own font. Terminal: the icon. */}
+            <span data-jump-glyph="" aria-hidden="true">
+              ↓
+            </span>
             <ArrowDownIcon size={14} />
           </span>
         </span>

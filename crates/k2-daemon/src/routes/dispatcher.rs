@@ -12732,9 +12732,12 @@ async fn handle_one_request(
                         }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let session = crate::session_token::require_hook(presented_bearer(&query, bearer_token.as_deref()), p).map(|v| v.session_id);
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::handle_users_post_as(agent_ws.as_deref(), &body, &actor),
+                            crate::apps::user_hold::scoped("/cli/skin/users", agent_ws.as_deref(), session.as_deref(), &body, || {
+                                crate::skin_routes::handle_users_post_as(agent_ws.as_deref(), &body, &actor)
+                            }),
                             &actor,
                         )
                     })
@@ -12799,9 +12802,11 @@ async fn handle_one_request(
                         }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let session = crate::session_token::require_hook(presented_bearer(&query, bearer_token.as_deref()), p).map(|v| v.session_id);
                     tokio::task::spawn_blocking(move || {
                         let r = match agent_ws.as_deref() {
-                            Some(ws) => crate::app_user_invites::handle_agent_reset(&body, &actor, ws, is_post),
+                            // 0.46.14: a login of its own App reaching another workspace's room is held (`user_hold`).
+                            Some(ws) => crate::apps::user_hold::reset(ws, session.as_deref(), &body, &actor, is_post),
                             None => crate::app_user_invites::handle_reset_link(&body, &actor, is_post),
                         };
                         crate::skin_routes::stamp_actor(r, &actor)
@@ -12878,9 +12883,12 @@ async fn handle_one_request(
                         }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let session = crate::session_token::require_hook(presented_bearer(&query, bearer_token.as_deref()), p).map(|v| v.session_id);
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/users/password", &body, &actor, crate::skin_routes::handle_users_password),
+                            crate::apps::user_hold::scoped("/cli/skin/users/password", agent_ws.as_deref(), session.as_deref(), &body, || {
+                                crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/users/password", &body, &actor, crate::skin_routes::handle_users_password)
+                            }),
                             &actor,
                         )
                     })
@@ -13037,9 +13045,12 @@ async fn handle_one_request(
                         }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let session = crate::session_token::require_hook(presented_bearer(&query, bearer_token.as_deref()), p).map(|v| v.session_id);
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/users/remove", &body, &actor, crate::skin_routes::handle_users_remove),
+                            crate::apps::user_hold::scoped("/cli/skin/users/remove", agent_ws.as_deref(), session.as_deref(), &body, || {
+                                crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/users/remove", &body, &actor, crate::skin_routes::handle_users_remove)
+                            }),
                             &actor,
                         )
                     })
@@ -13187,9 +13198,12 @@ async fn handle_one_request(
                         }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let session = crate::session_token::require_hook(presented_bearer(&query, bearer_token.as_deref()), p).map(|v| v.session_id);
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/assign", &body, &actor, crate::skin_routes::handle_roles_assign),
+                            crate::apps::user_hold::scoped("/cli/skin/roles/assign", agent_ws.as_deref(), session.as_deref(), &body, || {
+                                crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/assign", &body, &actor, crate::skin_routes::handle_roles_assign)
+                            }),
                             &actor,
                         )
                     })

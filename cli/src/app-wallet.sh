@@ -265,6 +265,17 @@ cmd_app() {
     esac
 }
 
+# 0.46.14: an agent refused on `k2 app grant add|rm` while permission cards
+# are off has no "Ask with:" line (`k2 permission` is unknown to it): say
+# what the owner can do instead. Cards on, the refusal's own line stands.
+_grant_owner_next_step() {
+    [ -n "${SCOPED_TOKEN:-}" ] || return 0
+    case "$1" in *'"owner_only"'*) ;; *) return 0 ;; esac
+    _permission_cli_enabled && return 0
+    echo "Logins are the owner's: ask your human to do it (Settings → Apps → <the App> → Add a person, or this same k2 app grant command from a terminal outside K2), or to turn on permission cards (Settings → Permission Cards) so you can ask on a card." >&2
+    return 0
+}
+
 cmd_skin() {
     local sub="${1:-}"
     shift || true
@@ -340,6 +351,7 @@ if role:
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/users" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | K2_SKIN_APP="$app" python3 -c '
 import json,os,sys
 d=json.load(sys.stdin)
@@ -524,6 +536,7 @@ if w.get("rooms"):
                     fi
                     raw=$(cli_post_json "/cli/skin/users/reset-link" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$raw"; return 0; fi
                     printf '%s' "$raw" | python3 -c '
 import json,sys
@@ -558,6 +571,7 @@ import json,os
 print(json.dumps({"username": os.environ["K2_SKIN_USER"], "password": os.environ.get("K2_SKIN_PW","")}))')
                     raw=$(cli_post_json "/cli/skin/users/password" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -769,6 +783,7 @@ for u in users:
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
                     raw=$(cli_post_json "/cli/skin/users/remove" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -825,6 +840,7 @@ if w.get("rooms"):
                     body=$(K2_SKIN_USER="$username" K2_SKIN_ROLE="$role" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"], "role": os.environ["K2_SKIN_ROLE"]}))')
                     raw=$(cli_post_json "/cli/skin/roles/assign" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -840,6 +856,7 @@ if w.get("rooms"):
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
                     raw=$(cli_post_json "/cli/skin/roles/unassign" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -1295,6 +1312,7 @@ if rooms:
     b["rooms"]=rooms
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/grants" "$body")
+                    _grant_owner_next_step "$raw"
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys
@@ -1354,6 +1372,7 @@ else:
         "targetId": os.environ.get("K2_GRANT_TARGET",""),
     }))')
                     raw=$(cli_post_json "/cli/skin/grants/delete" "$body")
+                    _grant_owner_next_step "$raw"
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys

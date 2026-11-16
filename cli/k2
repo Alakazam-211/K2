@@ -8930,6 +8930,28 @@ sys.exit(1)
 '
 }
 
+# A change held for an owner or admin (202 "held": a card on the agent's
+# Thread, Settings → App Approvals): say what waits and exit 2 until it is
+# decided. Anything else passes (exit 0). 0.46.14: `k2 app user …` on a
+# login of the agent's own App that reaches another workspace's room.
+_skin_exit_if_held() {
+    python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    sys.exit(0)
+if not isinstance(d, dict) or d.get("status") != "held":
+    sys.exit(0)
+r = d.get("request") or {}
+print("Held for the owner (request %s): %s" % (r.get("id") or "?", r.get("summary") or ""))
+if d.get("hint"):
+    print("  " + d["hint"])
+if d.get("afterApproval"):
+    print("  " + d["afterApproval"])
+sys.exit(2)'
+}
+
 _teach_skin_now_app() {
     echo "k2 skin is now k2 app — this command still works." >&2
 }
@@ -8939,7 +8961,8 @@ _teach_skin_token_now_app_token() {
 }
 
 _skin_usage() {
-    cat >&2 <<'EOF'
+    # `#if-cards` / `#if-no-cards` lines: `_perm_lines` (permission.sh).
+    cat <<'EOF' | _perm_lines >&2
 Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
        k2 app token <create|list|revoke|rooms> ...
        k2 app validate [<name>] [--dir <path>] [--json]
@@ -8993,11 +9016,14 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         extra access waiting for the person's own password starts. --code: the link is printed for you to hand over. Mailing it needs --from
                                         <an address no agent reads>; a tied person's stored email
                                         (or one from before 0.46.4 you haven't set) needs --to.
-                                        An agent wanting --code, --to or --from asks a person on a card,
-                                        k2 permission request apps.user-password-reset user=<username>
-                                        [app=<app>] [mode=password|link|email] --why "<why>". The
-                                        person who allows it sees the new password (or a one-time
-                                        link) once, on their own screen; you never see it
+                                        An agent wanting --code, --to or --from asks a person on a card, #if-cards
+                                        k2 permission request apps.user-password-reset user=<username> #if-cards
+                                        [app=<app>] [mode=password|link|email] --why "<why>". The #if-cards
+                                        person who allows it sees the new password (or a one-time #if-cards
+                                        link) once, on their own screen; you never see it #if-cards
+                                        An agent wanting --code, --to or --from asks the owner or an admin #if-no-cards
+                                        to run it (Settings → User Access), or to turn on permission cards #if-no-cards
+                                        (Settings → Permission Cards) so it can ask on a card #if-no-cards
   k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--max-devices <n>] …
                                         The App's link lives, set-password page, own mail text
                                         and how many devices a person may keep signed in
@@ -9010,8 +9036,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app recording <app> [set [--start-level L] [--audio-max-days N|org] [--required on|off] [--server-read on|off]]
                                         Recording in the App's calls (Sew 0.9.0). All off by default;
                                         each person still consents. --required on and --server-read on
-                                        are the owner's only (an agent asks: k2 permission request
-                                        apps.recording app=<app> server-read=on --why "…").
+                                        are the owner's only (an agent asks: k2 permission request #if-cards
+                                        apps.recording app=<app> server-read=on --why "…"). #if-cards
+                                        are the owner's only (an agent asks the owner to run it). #if-no-cards
                                         k2 app recording --help, k2 study app-recording
   k2 app account-deletion <app> | complete|cancel <app> <request|user>
                                         Pending account deletions: list, complete now, undo
@@ -9022,7 +9049,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all]
                                         Their browsers and devices in that App; end one or all (their chat
                                         session too). That App only, and their password stays the same (a stolen
-                                        password: k2 permission request apps.user-password-reset). The owner, or
+                                        password: k2 permission request apps.user-password-reset). The owner, or #if-cards
+                                        password: the owner or an admin resets it, k2 app user reset). The owner, or #if-no-cards
                                         the App's own agent with "Let this agent manage its Apps' users"; never
                                         a box login
   k2 app user email <username> [--email e]
@@ -9090,10 +9118,13 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app grant list                    Grants (subject, kind, target, role|scope; chat rows show hook state).
                                         An agent sees the logins on its own workspace's Apps.
   k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]
-                                        Owner only. An App's own agent asks for a login on its App on a
-                                        permission card: the refusal ends with the line to ask with
-                                        (k2 permission request app.login-grant op=add|remove user=… app=… role=…);
-                                        the owner's Allow makes it, so don't run the add again.
+                                        Owner only. An App's own agent asks for a login on its App on a #if-cards
+                                        permission card: the refusal ends with the line to ask with #if-cards
+                                        (k2 permission request app.login-grant op=add|remove user=… app=… role=…); #if-cards
+                                        the owner's Allow makes it, so don't run the add again. #if-cards
+                                        Owner only. An App's own agent asks its owner to run it (from a #if-no-cards
+                                        terminal outside K2, or Settings → Apps → <the App> → Add a person), or #if-no-cards
+                                        to turn on permission cards (Settings → Permission Cards) so it can ask on a card. #if-no-cards
                                         kind=app is a login on one App: --role, or --room (repeatable;
                                         Thread-only rooms). --target: host, a service id, or <workspace>/<name>.
                                         Other kinds need --scope and no --role (recorded, not enforced).
@@ -21060,6 +21091,17 @@ cmd_app() {
     esac
 }
 
+# 0.46.14: an agent refused on `k2 app grant add|rm` while permission cards
+# are off has no "Ask with:" line (`k2 permission` is unknown to it): say
+# what the owner can do instead. Cards on, the refusal's own line stands.
+_grant_owner_next_step() {
+    [ -n "${SCOPED_TOKEN:-}" ] || return 0
+    case "$1" in *'"owner_only"'*) ;; *) return 0 ;; esac
+    _permission_cli_enabled && return 0
+    echo "Logins are the owner's: ask your human to do it (Settings → Apps → <the App> → Add a person, or this same k2 app grant command from a terminal outside K2), or to turn on permission cards (Settings → Permission Cards) so you can ask on a card." >&2
+    return 0
+}
+
 cmd_skin() {
     local sub="${1:-}"
     shift || true
@@ -21135,6 +21177,7 @@ if role:
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/users" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | K2_SKIN_APP="$app" python3 -c '
 import json,os,sys
 d=json.load(sys.stdin)
@@ -21319,6 +21362,7 @@ if w.get("rooms"):
                     fi
                     raw=$(cli_post_json "/cli/skin/users/reset-link" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$raw"; return 0; fi
                     printf '%s' "$raw" | python3 -c '
 import json,sys
@@ -21353,6 +21397,7 @@ import json,os
 print(json.dumps({"username": os.environ["K2_SKIN_USER"], "password": os.environ.get("K2_SKIN_PW","")}))')
                     raw=$(cli_post_json "/cli/skin/users/password" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -21564,6 +21609,7 @@ for u in users:
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
                     raw=$(cli_post_json "/cli/skin/users/remove" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -21620,6 +21666,7 @@ if w.get("rooms"):
                     body=$(K2_SKIN_USER="$username" K2_SKIN_ROLE="$role" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"], "role": os.environ["K2_SKIN_ROLE"]}))')
                     raw=$(cli_post_json "/cli/skin/roles/assign" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -21635,6 +21682,7 @@ if w.get("rooms"):
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
                     raw=$(cli_post_json "/cli/skin/roles/unassign" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | _skin_exit_if_held || exit $?
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -22090,6 +22138,7 @@ if rooms:
     b["rooms"]=rooms
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/grants" "$body")
+                    _grant_owner_next_step "$raw"
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys
@@ -22149,6 +22198,7 @@ else:
         "targetId": os.environ.get("K2_GRANT_TARGET",""),
     }))')
                     raw=$(cli_post_json "/cli/skin/grants/delete" "$body")
+                    _grant_owner_next_step "$raw"
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys
@@ -62708,7 +62758,8 @@ FROM JS: uploadToDoor in @k2/server (k2 app sdk add) does the loop above:
 EOF
 }
 _study_page_skins() {
-    cat <<'EOF'
+    # `#if-cards` / `#if-no-cards` lines: `_perm_lines` (permission.sh).
+    cat <<'EOF' | _perm_lines
 k2 study apps — Apps
 
 FIND THE ROOM, THEN THE FUNCTIONS
@@ -62816,6 +62867,15 @@ PER-APP LOGINS (0.45.5)
   their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
   people get that App only, never the box login: an agent add without
   --app is refused (owner_only); box logins are the owner's.
+  A LOGIN OF YOUR APP IN ANOTHER WORKSPACE'S ROOM (0.46.14): add (with a
+  box-wide role naming that room), remove, user role, reset and
+  password on a login only of your own Apps that talks in another workspace's
+  room are held for the owner or an admin on a card (exit 2: "Held for the
+  owner", the request id). Approved, K2 makes exactly that change; denied,
+  nothing. A held password or add never keeps the password: after approval
+  set it once (k2 app user password <u> --password-stdin, within 24 h). A
+  reset mails the person the App's one-time link. Another App's login stays
+  refused.
   WHAT WORKS AT ONCE: such a login uses the App's own room right away, with no
   owner step. Its role says what else it gets: the agent that owns the App may
   put any room on this box and any cap on that App's roles and logins, with no
@@ -62830,7 +62890,10 @@ PER-APP LOGINS (0.45.5)
   at their next request; nobody signs out for it. An agent may end its App's
   people's sessions (k2 app user sessions <u> --app <app> --revoke-all); it sets
   the password of, names or removes only people its own agent added, and a box login's
-  access is a card for the owner (k2 permission request apps.user-grant-box).
+  access is a card for the owner (k2 permission request apps.user-grant-box). #if-cards
+  access is the owner's: they give it (Settings → Apps → <the App> → Add a person, or k2 app grant #if-no-cards
+  add from a terminal outside K2) or turn on permission cards (Settings → #if-no-cards
+  Permission Cards) so you can ask on a card. #if-no-cards
   WAITS FOR THEIR OWN PASSWORD: a person an agent created, or whose password
   or email it set (or an App key made) is tied to that agent's workspace. If
   you give them more than that workspace's room (another App or room, a room on
@@ -105488,6 +105551,25 @@ _permission_cli_enabled() {
         fi
     fi
     [ "$_K2_PERMISSION_ON" = 1 ]
+}
+
+# A help or study page through this filter names `k2 permission request`
+# only where it exists (0.46.14): a line ending " #if-cards" is printed
+# (without the tag) only while permission cards are on for this caller, a
+# line ending " #if-no-cards" only while they're off; every other line as
+# it is. Off, `k2 permission` is an unknown command, so those pages say
+# what the owner can do instead.
+_perm_lines() {
+    local on=0 line
+    if _permission_cli_enabled; then on=1; fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            *' #if-cards') if [ "$on" = 1 ]; then printf '%s\n' "${line% #if-cards}"; fi ;;
+            *' #if-no-cards') if [ "$on" = 0 ]; then printf '%s\n' "${line% #if-no-cards}"; fi ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done
+    return 0
 }
 
 # For `k2 permission <sub>`: does the family exist for this caller?

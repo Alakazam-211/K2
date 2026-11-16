@@ -44,6 +44,7 @@ mod app_role_room_hold_integration;
 mod app_selfmove_integration;
 mod app_sew_routes_reachable_integration;
 mod app_transfers_integration;
+mod app_user_outside_room_hold_integration;
 mod app_user_profile_integration;
 mod app_users_end_to_end_integration;
 mod app_users_switch_integration;

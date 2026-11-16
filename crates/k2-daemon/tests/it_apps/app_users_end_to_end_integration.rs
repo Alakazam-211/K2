@@ -1024,7 +1024,25 @@ async fn an_apps_agent_ends_its_own_guests_sessions() {
     let q4 = format!("app={}&user={}", enc(&shop), enc(&bx));
     let r = get(port, "/cli/skin/users/sessions", &agent, &q4).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
-    assert!(r.body.contains("apps.user-grant-box"), "{}", r.body);
+    // Permission cards off for this agent: `k2 permission` is unknown to it,
+    // so the refusal says what the owner can do instead (0.46.14).
+    let hint = r.json()["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(!hint.contains("k2 permission request"), "never an unknown command: {hint}");
+    assert!(
+        hint.contains(&format!("k2 app grant add --subject-kind principal --subject {bx} --kind app")) && hint.contains("Settings → Permission Cards"),
+        "the owner's own path, and where cards turn on: {hint}"
+    );
+    // Cards on (the server's switch and this agent's): it names the card.
+    let r = post(port, "/cli/settings/update", OWNER, json!({ "permissionCards": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({ "toggle": "permission_cards", "workspace": b.sales.id, "value": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = get(port, "/cli/skin/users/sessions", &agent, &q4).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    let hint = r.json()["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(hint.contains(&format!("k2 permission request apps.user-grant-box user={bx}")), "{hint}");
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({ "toggle": "permission_cards", "workspace": b.sales.id, "value": false })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
 
     // The switch off: its own refusal.
     allow_manage(&b.sales, false);

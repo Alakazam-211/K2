@@ -53,6 +53,25 @@ _permission_cli_enabled() {
     [ "$_K2_PERMISSION_ON" = 1 ]
 }
 
+# A help or study page through this filter names `k2 permission request`
+# only where it exists (0.46.14): a line ending " #if-cards" is printed
+# (without the tag) only while permission cards are on for this caller, a
+# line ending " #if-no-cards" only while they're off; every other line as
+# it is. Off, `k2 permission` is an unknown command, so those pages say
+# what the owner can do instead.
+_perm_lines() {
+    local on=0 line
+    if _permission_cli_enabled; then on=1; fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            *' #if-cards') if [ "$on" = 1 ]; then printf '%s\n' "${line% #if-cards}"; fi ;;
+            *' #if-no-cards') if [ "$on" = 0 ]; then printf '%s\n' "${line% #if-no-cards}"; fi ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done
+    return 0
+}
+
 # For `k2 permission <sub>`: does the family exist for this caller?
 _permission_family_available() {
     local sub="${1:-}"

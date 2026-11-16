@@ -729,7 +729,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
                 let its_own = skin::creators::workspace_of(&p.id).ok().flatten().as_deref() == Some(ws.as_str());
                 // Never a box login (review 0.46.4).
                 if crate::skin_routes::has_box_login(&p.id, &grants) {
-                    return crate::skin_routes::box_login_refused(&p.username);
+                    return crate::skin_routes::box_login_refused(Some(ws.as_str()), &p.username);
                 }
                 if test_guest || !in_ws || !on_app || !its_own {
                     return owner_only(&format!(
@@ -1137,7 +1137,7 @@ pub fn handle_agent_reset(body: &[u8], actor: &str, ws: &str, is_post: bool) -> 
         Err(e) => return CliResponse::internal_error(e),
     };
     if crate::skin_routes::has_box_login(&person.id, &grants) {
-        return crate::skin_routes::box_login_refused(&person.username);
+        return crate::skin_routes::box_login_refused(Some(ws), &person.username);
     }
     if skin::test_guests::get(&person.id).ok().flatten().is_some() {
         return owner_only("a test guest has no reset: set its password with k2 app test-guest");

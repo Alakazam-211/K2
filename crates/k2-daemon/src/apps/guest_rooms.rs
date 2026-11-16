@@ -362,11 +362,11 @@ fn guest_set(who: &Who, body: &[u8]) -> R<J> {
         // The rules (`gr::set`) already keep it to THIS App's guests and the
         // owner's grant (which may name other rooms on purpose); on top,
         // never a box login and never an owner-made test guest.
-        let _ = ws;
+        // `ws` names the agent in the box-login refusal (permission cards on or off).
         let grants = k2_core::skin::list_grants().map_err(store)?;
         if let Some(p) = k2_core::skin::list_principals().map_err(store)?.into_iter().find(|p| p.username == user.trim().to_ascii_lowercase()) {
             if crate::skin_routes::has_box_login(&p.id, &grants) {
-                return Err(super::agent_grants::refusal_of(&crate::skin_routes::box_login_refused(&p.username)));
+                return Err(super::agent_grants::refusal_of(&crate::skin_routes::box_login_refused(Some(ws), &p.username)));
             }
         }
         if let Some(r) = crate::skin_routes::agent_test_guest_refused(&actor(who), user) {
@@ -503,7 +503,7 @@ fn chat_set(who: &Who, body: &[u8]) -> R<J> {
         let want = user.trim().to_ascii_lowercase();
         if let Some(p) = k2_core::skin::list_principals().map_err(store)?.into_iter().find(|p| p.username == want) {
             if crate::skin_routes::has_box_login(&p.id, &grants) {
-                return Err(super::agent_grants::refusal_of(&crate::skin_routes::box_login_refused(&p.username)));
+                return Err(super::agent_grants::refusal_of(&crate::skin_routes::box_login_refused(super::routes::agent_ws(who), &p.username)));
             }
         }
         if let Some(r) = crate::skin_routes::agent_test_guest_refused(&actor(who), user) {

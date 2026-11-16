@@ -810,6 +810,12 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
             if route == super::role_room_hold::APPLY_ROUTE {
                 return super::role_room_hold::apply(r, by);
             }
+            // 0.46.14: a change to a login of the agent's own App that
+            // reaches another workspace's room, as the person who approved
+            // it (`user_hold`).
+            if let Some(done) = super::user_hold::apply(r, by) {
+                return done;
+            }
             // 0.46.4: an agent's App-grant owner steps (copy-host, the
             // guests-rooms grant, a label transfer), run as the owner with
             // exactly the values the request showed.

@@ -57,6 +57,9 @@ pub mod guard;
 pub mod move_plan;
 /// Test guests of one App, made by a person (0.46.4).
 pub mod test_guests;
+/// `k2 app user …` by an App's agent on a login of its own App that reaches
+/// another workspace's room: held for an owner or admin (0.46.14).
+pub mod user_hold;
 /// Legacy `--cmd` services, labelled (0.46.3).
 pub mod legacy;
 /// Admission-lite: the box's App memory pool (`check_memory`, §4.3).

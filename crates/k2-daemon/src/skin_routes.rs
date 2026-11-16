@@ -673,7 +673,7 @@ const WRITE_AUDIT_FIELDS: &[&str] = &[
 /// The Apps a write on `body` touches: the one it names, its role's, its login's.
 /// An agent's only ever its own workspace's. Read before the write as well as
 /// after it: a removed role has no App afterwards, a new login none before.
-fn write_apps(path: &str, body: &[u8], ws: Option<&str>) -> Vec<String> {
+pub(crate) fn write_apps(path: &str, body: &[u8], ws: Option<&str>) -> Vec<String> {
     if write_event(path).is_none() {
         return Vec::new();
     }
@@ -704,7 +704,7 @@ fn write_apps(path: &str, body: &[u8], ws: Option<&str>) -> Vec<String> {
 /// (`k2 app history <app> --users`). A write that names no App (a box-wide role, a
 /// platform pass of the workspace) goes on the record of each of the agent's Apps,
 /// which it reaches through their logins.
-fn audit_write(path: &str, body: &[u8], actor: &str, ws: Option<&str>, before: Vec<String>, r: &CliResponse) {
+pub(crate) fn audit_write(path: &str, body: &[u8], actor: &str, ws: Option<&str>, before: Vec<String>, r: &CliResponse) {
     if !r.status.starts_with("200") {
         return;
     }
@@ -832,12 +832,12 @@ pub fn notify_owner_of_admin_reset(admin: &str, username: &str, how: &str) {
     }
 }
 
-/// The refusal for an agent on a guest that holds a box login.
-pub(crate) fn box_login_refused(username: &str) -> CliResponse {
-    owner_only_with_hint(&format!(
-        "'{username}' has a box login: an agent never manages a box login, whatever its switches (ask your human; App users are App-only). To give them access to your App, ask the owner on a card: k2 permission request apps.user-grant-box user={username} app=<your app> role=<role> --why \"<what you need it for>\""
-    ))
+/// The refusal for an agent (of `ws`, when known) on a guest that holds a box
+/// login (`apps::user_hold::box_login_hint`: the card, or the owner's own path).
+pub(crate) fn box_login_refused(ws: Option<&str>, username: &str) -> CliResponse {
+    owner_only_with_hint(&crate::apps::user_hold::box_login_hint(ws, username))
 }
+
 
 pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
     // A body the handler can't read is its 400, not ours.
@@ -862,7 +862,7 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
     // Rosson's rule (review 0.46.4): never a box login. A guest whose box
     // login reaches only the agent's room is still a box login.
     if has_box_login(&p.id, &grants) {
-        return Err(box_login_refused(&p.username));
+        return Err(box_login_refused(Some(ws), &p.username));
     }
     match path {
         // Security review 2026-11-02: only people this workspace's agent
@@ -1725,7 +1725,7 @@ pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
 
 /// `agent_ws`: an agent of that workspace set it (agent-app-users R2): the
 /// guest is tied to the workspace in the same transaction.
-fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
+pub(crate) fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,

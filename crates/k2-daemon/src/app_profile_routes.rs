@@ -633,7 +633,7 @@ fn agent_may_end_sessions(ws: &str, app: &str, user: &str) -> Result<(), CliResp
         return Err(not_here());
     }
     if crate::skin_routes::has_box_login(&p.id, &grants) {
-        return Err(crate::skin_routes::box_login_refused(&p.username));
+        return Err(crate::skin_routes::box_login_refused(Some(ws), &p.username));
     }
     Ok(())
 }

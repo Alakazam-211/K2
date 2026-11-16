@@ -1,5 +1,6 @@
 _study_page_skins() {
-    cat <<'EOF'
+    # `#if-cards` / `#if-no-cards` lines: `_perm_lines` (permission.sh).
+    cat <<'EOF' | _perm_lines
 k2 study apps — Apps
 
 FIND THE ROOM, THEN THE FUNCTIONS
@@ -107,6 +108,15 @@ PER-APP LOGINS (0.45.5)
   their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
   people get that App only, never the box login: an agent add without
   --app is refused (owner_only); box logins are the owner's.
+  A LOGIN OF YOUR APP IN ANOTHER WORKSPACE'S ROOM (0.46.14): add (with a
+  box-wide role naming that room), remove, user role, reset and
+  password on a login only of your own Apps that talks in another workspace's
+  room are held for the owner or an admin on a card (exit 2: "Held for the
+  owner", the request id). Approved, K2 makes exactly that change; denied,
+  nothing. A held password or add never keeps the password: after approval
+  set it once (k2 app user password <u> --password-stdin, within 24 h). A
+  reset mails the person the App's one-time link. Another App's login stays
+  refused.
   WHAT WORKS AT ONCE: such a login uses the App's own room right away, with no
   owner step. Its role says what else it gets: the agent that owns the App may
   put any room on this box and any cap on that App's roles and logins, with no
@@ -121,7 +131,10 @@ PER-APP LOGINS (0.45.5)
   at their next request; nobody signs out for it. An agent may end its App's
   people's sessions (k2 app user sessions <u> --app <app> --revoke-all); it sets
   the password of, names or removes only people its own agent added, and a box login's
-  access is a card for the owner (k2 permission request apps.user-grant-box).
+  access is a card for the owner (k2 permission request apps.user-grant-box). #if-cards
+  access is the owner's: they give it (Settings → Apps → <the App> → Add a person, or k2 app grant #if-no-cards
+  add from a terminal outside K2) or turn on permission cards (Settings → #if-no-cards
+  Permission Cards) so you can ask on a card. #if-no-cards
   WAITS FOR THEIR OWN PASSWORD: a person an agent created, or whose password
   or email it set (or an App key made) is tied to that agent's workspace. If
   you give them more than that workspace's room (another App or room, a room on

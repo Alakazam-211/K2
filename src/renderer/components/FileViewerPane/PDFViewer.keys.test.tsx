@@ -7,7 +7,7 @@
 // viewer that isn't showing takes no keys.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, screen } from '@testing-library/react'
 
 const daemonCliGet = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/daemon-cli', async (importOriginal) => {
@@ -22,6 +22,16 @@ import { Input } from '@/components/ui'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { drawingPdf, toBase64 } from '@/test-utils/pdf-fixtures'
 
+// Opening the PDF is real pdf.js work (parsing the fixture in a fake worker),
+// which a busy full run can slow well past testing-library's 1 s default.
+// So the one wait is on the tab's own "document is in" state (the PDF tab
+// renders only once pdf.js has the document), with a generous bound, and the
+// test's own timeout covers it. Paging is a synchronous state change that
+// fireEvent's act() commits before it returns: those steps assert at once,
+// with no polling to time out.
+const LOAD_MS = 15_000
+vi.setConfig({ testTimeout: 30_000 })
+
 /** The Tunnel page's k2.dev sign-in fields, with an open PDF tab elsewhere in
  *  the window (`hidden`: the workspace under Settings is display:none). */
 async function mount(opts: { pdfShowing: boolean }): Promise<{ email: HTMLInputElement; password: HTMLInputElement }> {
@@ -32,12 +42,13 @@ async function mount(opts: { pdfShowing: boolean }): Promise<{ email: HTMLInputE
         <Input type="email" aria-label="Email" defaultValue="you@example.com" />
         <Input type="password" aria-label="Password" defaultValue="secret" />
       </form>
-      <div data-testid="pdf-tab" style={opts.pdfShowing ? undefined : { display: 'none' }}>
+      <div data-testid="pdf-host" style={opts.pdfShowing ? undefined : { display: 'none' }}>
         <PDFViewer filePath="/work/manual.pdf" />
       </div>
     </>,
   )
-  await waitFor(() => expect(screen.getByText('1 / 2')).toBeTruthy(), { timeout: 5000 })
+  await screen.findByTestId('pdf-tab', undefined, { timeout: LOAD_MS })
+  expect(screen.getByText('1 / 2')).toBeTruthy()
   return {
     email: screen.getByLabelText('Email') as HTMLInputElement,
     password: screen.getByLabelText('Password') as HTMLInputElement,
@@ -49,7 +60,7 @@ async function mount(opts: { pdfShowing: boolean }): Promise<{ email: HTMLInputE
 function layOut(showing: boolean): void {
   const real = HTMLElement.prototype.getClientRects
   vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (this: HTMLElement) {
-    if (!showing || this.closest('[data-testid="pdf-tab"]') === null) return real.call(this)
+    if (!showing || this.closest('[data-testid="pdf-host"]') === null) return real.call(this)
     return [new DOMRect(0, 0, 400, 600)] as unknown as DOMRectList
   })
 }
@@ -96,9 +107,9 @@ describe('PDF viewer arrow keys', () => {
     layOut(true)
     await mount({ pdfShowing: true })
     expect(fireEvent.keyDown(document.body, { key: 'ArrowRight' })).toBe(false)
-    await waitFor(() => expect(screen.getByText('2 / 2')).toBeTruthy())
+    expect(screen.getByText('2 / 2')).toBeTruthy()
     expect(fireEvent.keyDown(document.body, { key: 'ArrowLeft' })).toBe(false)
-    await waitFor(() => expect(screen.getByText('1 / 2')).toBeTruthy(), { timeout: 5000 })
+    expect(screen.getByText('1 / 2')).toBeTruthy()
   })
 
   it('takes no keys while hidden, even with no field focused', async () => {

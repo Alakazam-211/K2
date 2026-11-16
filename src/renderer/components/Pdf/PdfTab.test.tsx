@@ -7,7 +7,7 @@
 // layers it was given.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react'
 
 const daemonCliGet = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/daemon-cli', async (importOriginal) => {
@@ -21,10 +21,19 @@ import { renderInRoom, testRoom } from '@/test-utils/room'
 import { drawingPdf, namesOnlyPdf, plainPdf, toBase64 } from '@/test-utils/pdf-fixtures'
 import { holdOperatorLists, renders, resetRenders } from '@/test-utils/pdfjs-fake-layers'
 
+// Real pdf.js does the reading here (the document, its annotations, the
+// layer check page by page, the text for Find), each step async. A busy full
+// run can slow any of them past testing-library's 1 s default, so every wait
+// in this file gets a generous bound, the document's own load the longest,
+// and the test timeout covers them. Fast runs still pass at once.
+configure({ asyncUtilTimeout: 10_000 })
+vi.setConfig({ testTimeout: 40_000 })
+const LOAD_MS = 15_000
+
 async function mount(bytes = drawingPdf()): Promise<void> {
   daemonCliGet.mockResolvedValue({ base64: toBase64(bytes) })
   renderInRoom(testRoom({ tabs: {} }), <PDFViewer filePath="/work/A-101 plans.pdf" />)
-  await screen.findByTestId('pdf-tab', undefined, { timeout: 5000 })
+  await screen.findByTestId('pdf-tab', undefined, { timeout: LOAD_MS })
   await waitFor(() => expect(mainRenders().length).toBeGreaterThan(0))
 }
 

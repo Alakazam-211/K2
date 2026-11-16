@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.7: pairs with kit v0.20.0 and k2-mpc-ooxml v0.1.1
+
+**Requires `k2-mpc-base` v0.20.0** (its cut `475a1755`) and **`k2-mpc-ooxml` v0.1.1** (`k2-mpc-opc`
+0.1.1, unchanged), each checked out beside this repo. As for v0.1.6, the tag is a cut commit that
+leaves out the fuzz crate (`fuzz/`).
+
+- Pairs with kit v0.20.0, whose changes are the host's: a store holding native-engine docs opens and
+  refuses only those docs; writer IDs follow people, devices and agents (person-writer reuse on by
+  default, used only when the host sends a device key); a writers cap per doc, off by default, with
+  a near-cap audit notice. No pack API changes, so decks behave as in v0.1.6.
+- `Cargo.toml`'s comment and the README name the kit's v0.20.0 and its cut. `Cargo.lock` and
+  `fuzz/Cargo.lock`: k2-mpc-base 0.20.0 and the crate version 0.1.7 (only those versions move);
+  `k2-mpc-opc` stays 0.1.1.
+
 ## v0.1.6: pairs with kit v0.19.0 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.19.0** (its cut `b8db699e`) and **`k2-mpc-ooxml` v0.1.1**

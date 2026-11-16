@@ -23,6 +23,8 @@ import type {
   ISplineEntity,
   ITextEntity,
 } from 'dxf-parser'
+import { entityColor, FG, hex } from './dxf/color'
+import { readExtras } from './dxf/parse-extras'
 
 /** Affine 2D: x' = a·x + c·y + e, y' = b·x + d·y + f (SVG `matrix()`). */
 export type Mat = [number, number, number, number, number, number]
@@ -63,24 +65,13 @@ export type DxfDrawing = {
   layers: number
 }
 
-/** The theme foreground: ACI 7 is "white on black, black on white". */
-export const FG = 'currentColor'
+export { FG } from './dxf/color'
 const MAX_NODES = 250_000
 const MAX_DEPTH = 12
 const MAX_ARRAY = 400
 
 export function isBinaryDxf(text: string): boolean {
   return text.startsWith('AutoCAD Binary DXF')
-}
-
-// ── Colours ──
-
-/** dxf-parser resolves ACI 1–255 to RGB (`color`); ACI 7 is white. */
-function hex(rgb: number | undefined): string {
-  if (typeof rgb !== 'number' || !Number.isFinite(rgb)) return FG
-  // Pure white/black would vanish on one theme or the other.
-  if (rgb === 0xffffff || rgb === 0) return FG
-  return `#${rgb.toString(16).padStart(6, '0')}`
 }
 
 type LayerInfo = { c: string; hidden: boolean }
@@ -245,6 +236,7 @@ type Ctx = {
 export function buildDrawing(text: string): DxfDrawing {
   if (isBinaryDxf(text)) throw new Error('Binary DXF is not supported. Save it as ASCII DXF.')
   const parser = new DxfParser()
+  readExtras(parser)
   let dxf: IDxf | null
   try {
     dxf = parser.parseSync(text)
@@ -280,12 +272,7 @@ export function drawingFromDxf(dxf: IDxf, census: Record<string, number> = {}): 
   const layerOf = (e: IEntity, ctx: Ctx) =>
     (e.layer === '0' || !e.layer) && ctx.insertLayer ? ctx.insertLayer : (e.layer ?? '0')
 
-  const colorOf = (e: IEntity, ctx: Ctx): string => {
-    const idx = e.colorIndex
-    if (idx === 0) return ctx.blockColor
-    if (typeof idx === 'number' && idx > 0 && idx < 256) return hex(e.color)
-    return layers.get(layerOf(e, ctx))?.c ?? FG
-  }
+  const colorOf = (e: IEntity, ctx: Ctx): string => entityColor(e, ctx.blockColor, layers.get(layerOf(e, ctx))?.c)
 
   const skip = (type: string, top: boolean) => {
     if (top) skipped[type] = (skipped[type] ?? 0) + 1

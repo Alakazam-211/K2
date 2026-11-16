@@ -17,6 +17,8 @@ import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 import { AvatarStack } from '@/components/LiveView/shell/AvatarStack'
 import { FollowControl } from '@/components/LiveView/shell/FollowControl'
+import { EdgeArrow, FollowGlyph } from '@/components/LiveView/shell/glyphs'
+import { GIVE_UP } from '@/components/LiveView/shell/LiveHeader'
 import { SayBar } from '@/components/LiveView/shell/SayBar'
 import type { LiveShell } from '@/components/LiveView/shell/useLiveShell'
 import { Button } from '@/components/ui'
@@ -207,17 +209,23 @@ export function usePresence({ doc, shell, snap, markdown, root }: { doc: LiveDoc
       {fin ? null : <FollowControl view={shell.follow} disabled={shell.offline} onFollow={follow} onStop={stop} onBack={() => (shell.follow.target ? follow(shell.follow.target) : undefined)} />}
     </>
   )
-  const sentence = fin && finishedWho ? { who: finishedWho, text: fin.text } : null
-  const sentenceEnd = fin ? (
-    <span className="inline-flex flex-none items-center gap-1.5" data-testid="ed-follow-finished">
-      <Button size="md" onClick={back} className="ed-finished-btn text-[var(--color-text-primary)]">
-        {fin.back}
-      </Button>
-      <Button size="md" onClick={again} className="ed-finished-btn text-[var(--color-text-primary)]">
-        {fin.again}
-      </Button>
-    </span>
-  ) : null
+  const sentence = fin && finishedWho ? { who: finishedWho, text: fin.text, short: fin.short } : null
+  // As the header narrows the buttons give up their words first ("Back"), then all but their marks;
+  // the sentence keeps its short form ("Atlas finished.") to the end. The full words stay as names.
+  const finButton = (label: string, short: string, glyph: React.ReactNode, onClick: () => void, tight: number): React.ReactNode => (
+    <Button size={tight >= GIVE_UP.shortWords ? 'sm' : 'md'} onClick={onClick} aria-label={label} title={label} className={`ed-finished-btn inline-flex items-center gap-1.5 text-[var(--color-text-primary)]${tight >= GIVE_UP.shortWords ? ' ed-finished-mark' : ''}`}>
+      {tight >= GIVE_UP.words ? glyph : null}
+      {tight >= GIVE_UP.shortWords ? null : tight >= GIVE_UP.words ? short : label}
+    </Button>
+  )
+  const sentenceEnd = fin
+    ? (tight: number) => (
+        <span className="inline-flex flex-none items-center gap-1.5" data-testid="ed-follow-finished" data-tight={tight || undefined}>
+          {finButton(fin.back, fin.backShort, <EdgeArrow side="left" />, back, tight)}
+          {finButton(fin.again, fin.againShort, <FollowGlyph size={14} />, again, tight)}
+        </span>
+      )
+    : null
 
   const sayAddress = shell.sayAddress
   const say =

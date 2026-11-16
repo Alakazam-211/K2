@@ -47,7 +47,17 @@ export function textFollowReducer(s: TextFollow, a: TextFollowAction): TextFollo
   }
 }
 
-/** The header's words once following ended because they finished. */
-export function finishedWords(s: TextFollow): { text: string; back: string; again: string } | null {
-  return s.kind === 'finished' ? { text: 'finished. Stopped following.', back: 'Back to my place', again: 'Follow again' } : null
+export interface FinishedWords {
+  text: string
+  /** What a narrow header keeps: "Atlas finished." */
+  short: string
+  back: string
+  backShort: string
+  again: string
+  againShort: string
+}
+
+/** The header's words once following ended because they finished (with the short forms a narrow header uses). */
+export function finishedWords(s: TextFollow): FinishedWords | null {
+  return s.kind === 'finished' ? { text: 'finished. Stopped following.', short: 'finished.', back: 'Back to my place', backShort: 'Back', again: 'Follow again', againShort: 'Follow' } : null
 }

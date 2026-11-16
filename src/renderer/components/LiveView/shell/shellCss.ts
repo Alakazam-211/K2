@@ -45,10 +45,10 @@ export const LIVE_SHELL_CSS = `
 .lv-shell .lv-panel[data-sheet] { box-shadow: var(--ring-surface); }
 .lv-shell .lv-say { border-top: 1px solid var(--color-border); }
 /* The header gives things up in order while it would run past the tab (LiveHeader). */
-.lv-shell .lv-head:is([data-tight="1"], [data-tight="2"], [data-tight="3"], [data-tight="4"]) [data-lv-give="1"] { display: none; }
-.lv-shell .lv-head:is([data-tight="2"], [data-tight="3"], [data-tight="4"]) [data-testid="lv-stack"] { display: none; }
-.lv-shell .lv-head:is([data-tight="3"], [data-tight="4"]) [data-variant="following"] .lv-follow-words { display: none; }
-.lv-shell .lv-head[data-tight="4"] [data-lv-give="4"] { display: none; }
+.lv-shell .lv-head:is([data-tight="1"], [data-tight="2"], [data-tight="3"], [data-tight="4"], [data-tight="5"], [data-tight="6"]) [data-lv-give="1"] { display: none; }
+.lv-shell .lv-head:is([data-tight="2"], [data-tight="3"], [data-tight="4"], [data-tight="5"], [data-tight="6"]) [data-testid="lv-stack"] { display: none; }
+.lv-shell .lv-head:is([data-tight="3"], [data-tight="4"], [data-tight="5"], [data-tight="6"]) [data-variant="following"] .lv-follow-words { display: none; }
+.lv-shell .lv-head:is([data-tight="4"], [data-tight="5"], [data-tight="6"]) [data-lv-give="4"] { display: none; }
 @keyframes lv-pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .lv-shell *, .lv-shell *::before, .lv-shell *::after { animation: none !important; transition: none !important; } }
 `

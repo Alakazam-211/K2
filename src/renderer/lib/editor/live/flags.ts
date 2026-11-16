@@ -8,8 +8,11 @@
 //     code, which have no column);
 //   - two flags at one height sit side by side, never on each other;
 //   - when the margin can't hold the name, the flag shrinks to the initial;
-//     when it can't hold that either, it steps away (the caret's colour and
-//     the Live list still say who it is);
+//   - when it can't hold that either (the Thread's 820px column in a narrow
+//     tab), it falls back to the shared editors' name tag: a small chip just
+//     above the caret line, shown for TAG_MS after that caret moves or types
+//     and while the pointer is over the caret or its selection (TagClock),
+//     never taking the pointer. Margin flags win whenever they fit;
 //   - a caret half out of view gets no flag until its line is in view.
 //
 // Pure: the layer measures (positions in the layer's coordinates, widths of
@@ -22,6 +25,9 @@ export const FLAG_GAP = 12
 export const FLAG_EDGE = 6
 /** The initial's flag: a square. */
 export const FLAG_MINI_W = 20
+/** The fallback caret tag's height, and how long it stays after its caret moves. */
+export const TAG_H = 18
+export const TAG_MS = 2000
 
 export interface FlagCaret {
   id: string
@@ -51,11 +57,13 @@ export interface Flag {
   name: string
   agent: boolean
   mini: boolean
+  /** The fallback: a passing name tag over the caret line, not a margin flag. */
+  tag: boolean
   left: number
   top: number
   width: number
-  /** The hairline from the caret to the flag, along the line's top. */
-  line: { x0: number; x1: number; y: number }
+  /** The hairline from the caret to the flag, along the line's top (none for a tag). */
+  line: { x0: number; x1: number; y: number } | null
 }
 
 export function placeFlags(carets: readonly FlagCaret[], room: FlagRoom): Flag[] {
@@ -76,8 +84,16 @@ export function placeFlags(carets: readonly FlagCaret[], room: FlagRoom): Flag[]
     let flag: Pick<Flag, 'label' | 'mini' | 'width'> | null = null
     if (left + full <= limit) flag = { label: c.name, mini: false, width: full }
     else if (left + FLAG_MINI_W <= limit) flag = { label: initial, mini: true, width: FLAG_MINI_W }
-    if (!flag) continue
-    out.push({ id: c.id, name: c.name, agent: c.agent, left, top, ...flag, line: { x0: Math.round(c.x + 1), x1: left, y: Math.round(c.top) } })
+    if (flag) {
+      out.push({ id: c.id, name: c.name, agent: c.agent, left, top, tag: false, ...flag, line: { x0: Math.round(c.x + 1), x1: left, y: Math.round(c.top) } })
+      continue
+    }
+    // No room even for the initial: the name tag just above the caret line (under it on the top line), kept whole in view.
+    const w = Math.min(full, Math.max(FLAG_MINI_W, limit - room.clip.left))
+    const tagLeft = Math.round(Math.max(room.clip.left, Math.min(c.x, limit - w)))
+    const above = Math.round(c.top - TAG_H - 1)
+    const tagTop = above >= room.clip.top ? above : Math.round(c.bottom + 1)
+    out.push({ id: c.id, name: c.name, agent: c.agent, left: tagLeft, top: tagTop, tag: true, label: c.name, mini: false, width: w, line: null })
   }
   return out
 }
@@ -85,3 +101,42 @@ export function placeFlags(carets: readonly FlagCaret[], room: FlagRoom): Flag[]
 /** Two boxes share a point (a flag on a glyph). */
 export const touches = (a: { left: number; top: number; right: number; bottom: number }, b: { left: number; top: number; right: number; bottom: number }): boolean =>
   a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+/** When each caret last moved, and which one the pointer is over: whether its tag shows. */
+export class TagClock {
+  private readonly at = new Map<string, { pos: number; moved: number }>()
+  private hovered: string | null = null
+
+  /** The caret is at `pos` now; a new place (a move or typing) restarts its time. */
+  observe(id: string, pos: number, now: number): void {
+    const prev = this.at.get(id)
+    if (!prev || prev.pos !== pos) this.at.set(id, { pos, moved: now })
+  }
+
+  /** The pointer is over this person's caret or selection (null: none). True when it changed. */
+  hover(id: string | null): boolean {
+    if (this.hovered === id) return false
+    this.hovered = id
+    return true
+  }
+
+  visible(id: string, now: number): boolean {
+    if (this.hovered === id) return true
+    const a = this.at.get(id)
+    return !!a && now - a.moved < TAG_MS
+  }
+
+  /** The next time a shown tag goes (to redraw then), or null. */
+  nextExpiry(now: number): number | null {
+    let next: number | null = null
+    for (const a of this.at.values()) {
+      const end = a.moved + TAG_MS
+      if (end > now && (next === null || end < next)) next = end
+    }
+    return next
+  }
+
+  forget(present: ReadonlySet<string>): void {
+    for (const id of [...this.at.keys()]) if (!present.has(id)) this.at.delete(id)
+  }
+}

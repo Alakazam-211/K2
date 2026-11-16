@@ -11,7 +11,7 @@
 //     and every flag sits wholly inside the clip box.
 
 import { describe, expect, it } from 'vitest'
-import { FLAG_EDGE, FLAG_GAP, FLAG_H, FLAG_MINI_W, placeFlags, touches, type FlagCaret, type FlagRoom } from './flags'
+import { FLAG_EDGE, FLAG_GAP, FLAG_H, FLAG_MINI_W, TAG_H, TAG_MS, TagClock, placeFlags, touches, type FlagCaret, type FlagRoom } from './flags'
 import { assignSlots, caretSlotCss } from './presence-slots'
 
 interface Glyph {
@@ -61,11 +61,21 @@ describe('placeFlags', () => {
     expect(touches(box(a), box(b))).toBe(false)
   })
 
-  it('shrinks to the initial when the margin is tight, then steps away', () => {
+  it('shrinks to the initial when the margin is tight', () => {
     const tight = placeFlags([caret('brook', 100, 2)], room([], { right: 600 + FLAG_GAP + FLAG_MINI_W + FLAG_EDGE + 10 }))
     expect(tight).toHaveLength(1)
-    expect(tight[0]).toMatchObject({ label: 'B', mini: true, width: FLAG_MINI_W, name: 'Brook' })
-    expect(placeFlags([caret('brook', 100, 2)], room([], { right: 600 + FLAG_GAP + 4 }))).toEqual([])
+    expect(tight[0]).toMatchObject({ label: 'B', mini: true, tag: false, width: FLAG_MINI_W, name: 'Brook' })
+  })
+
+  it('with no room in the margin even for the initial, falls back to a name tag just above the caret line', () => {
+    const [t] = placeFlags([caret('brook', 100, 2, { agent: true })], room([], { right: 600 + FLAG_GAP + 4 }))
+    expect(t).toMatchObject({ tag: true, mini: false, label: 'Brook', left: 100, top: 2 * 24 - TAG_H - 1 })
+    expect(t.line).toBeNull()
+    // Near the clip's right edge it shifts left to stay whole; on the first visible line it sits under the line.
+    const [r] = placeFlags([caret('brook', 590, 2)], room([], { right: 610 }))
+    expect(r.left + r.width).toBeLessThanOrEqual(610 - FLAG_EDGE)
+    const [b] = placeFlags([caret('brook', 100, 0)], room([], { right: 604 }))
+    expect(b.top).toBe(24 + 1)
   })
 
   it('gives no flag to a caret half out of view', () => {
@@ -94,6 +104,8 @@ describe('placeFlags', () => {
         return caret(['atlas', 'sam', 'brook', 'quill'][i], g.left + Math.round(rnd() * (g.right - g.left)), l, { agent: i === 0 })
       })
       for (const f of placeFlags(carets, r)) {
+        // The caret tag is a passing label over the text, in fallback only: the margin rule skips it.
+        if (f.tag) continue
         const b = box(f)
         for (const g of glyphs) expect(touches(b, g), `layout ${n}: ${f.id} on a glyph`).toBe(false)
         expect(b.right).toBeLessThanOrEqual(r.clip.right - FLAG_EDGE)
@@ -101,6 +113,32 @@ describe('placeFlags', () => {
         expect(b.bottom).toBeLessThanOrEqual(r.clip.bottom)
       }
     }
+  })
+})
+
+describe('the caret tag clock', () => {
+  it('shows a tag for 2 seconds after the caret moves or types, then hides it', () => {
+    const c = new TagClock()
+    c.observe('atlas', 120, 1000)
+    expect(c.visible('atlas', 1000)).toBe(true)
+    expect(c.visible('atlas', 1000 + TAG_MS - 1)).toBe(true)
+    expect(c.visible('atlas', 1000 + TAG_MS)).toBe(false)
+    // The same place again isn't a move; a new place is.
+    c.observe('atlas', 120, 2500)
+    expect(c.visible('atlas', 3100)).toBe(false)
+    c.observe('atlas', 121, 3200)
+    expect(c.visible('atlas', 3300)).toBe(true)
+    expect(c.nextExpiry(3300)).toBe(3200 + TAG_MS)
+    expect(c.nextExpiry(3200 + TAG_MS)).toBeNull()
+  })
+
+  it('keeps the tag while the pointer is over that caret or its selection', () => {
+    const c = new TagClock()
+    c.observe('sam', 50, 0)
+    c.hover('sam')
+    expect(c.visible('sam', 10_000)).toBe(true)
+    c.hover(null)
+    expect(c.visible('sam', 10_000)).toBe(false)
   })
 })
 

@@ -18,6 +18,10 @@ ${SLOTS}
 .ed-tab .ed-flag { position: absolute; display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; height: 20px; padding: 0 7px 0 5px; border-radius: var(--radius-badge); background: var(--pc); color: var(--color-bg); font: 600 12px/20px var(--font-ui); white-space: nowrap; overflow: hidden; pointer-events: none; }
 .ed-tab .ed-flag svg { flex: none; }
 .ed-tab .ed-flag.ed-flag-mini { padding: 0; justify-content: center; }
+.ed-tab .ed-caret-tag { position: absolute; display: inline-flex; align-items: center; gap: 3px; box-sizing: border-box; height: 18px; padding: 0 6px 0 4px; border-radius: var(--radius-badge); background: var(--pc); color: var(--color-bg); font: 600 11px/18px var(--font-ui); white-space: nowrap; overflow: hidden; pointer-events: none; opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-ease-standard); }
+.ed-tab .ed-caret-tag svg { flex: none; }
+.ed-tab .ed-caret-tag.ed-caret-tag-shown { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .ed-tab .ed-caret-tag { transition: none; } }
 .ed-tab .ed-fline { position: absolute; height: 0; border-top: 1px dashed var(--pc); opacity: 0.75; }
 
 .ed-tab .ed-hold-layer .ed-hold-tint { background: color-mix(in srgb, var(--pc) 9%, transparent); border-radius: 0 var(--radius-box) var(--radius-box) 0; }
@@ -45,4 +49,5 @@ html[data-style="terminal"] .ed-tab :is(.ed-hold-label, .ed-hold-msg, .ed-hold-h
 .ed-tab .ed-edge:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
 .ed-tab .ed-edge:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
 .ed-tab .ed-finished-btn { height: 26px; }
+.ed-tab .ed-finished-btn.ed-finished-mark { height: 26px; width: 28px; padding: 0; justify-content: center; }
 `

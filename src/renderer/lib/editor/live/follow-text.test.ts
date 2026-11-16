@@ -30,7 +30,7 @@ describe('textFollowReducer', () => {
     expect(run(s, { type: 'finished', who: 'sam', name: 'Sam' })).toBe(s)
     const f = run(s, { type: 'finished', who: 'atlas', name: 'Atlas' })
     expect(f).toEqual({ kind: 'finished', who: 'atlas', name: 'Atlas', home: 420 })
-    expect(finishedWords(f)).toEqual({ text: 'finished. Stopped following.', back: 'Back to my place', again: 'Follow again' })
+    expect(finishedWords(f)).toEqual({ text: 'finished. Stopped following.', short: 'finished.', back: 'Back to my place', backShort: 'Back', again: 'Follow again', againShort: 'Follow' })
     expect(finishedWords(s)).toBeNull()
   })
 

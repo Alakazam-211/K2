@@ -3,7 +3,10 @@
 // adds what K2 draws around them:
 //   - a layer above the text with each caret's name flag in the right margin
 //     and a dashed hairline back to the caret (lib/editor/live/flags.ts places
-//     them; the kit's inline names are hidden by the host's CSS);
+//     them; the kit's inline names are hidden by the host's CSS). With no room
+//     in the margin, a name tag just above the caret instead, for 2 s after it
+//     moves and while the pointer is over it (TagClock); it fades, and never
+//     takes the pointer;
 //   - a watch that sorts people above and below the view for the off-screen
 //     band, names the heading at the top of the view (your view address), and
 //     tells the host when you scroll or type (that stops following).
@@ -11,7 +14,7 @@
 
 import { StateEffect, type Extension } from '@codemirror/state'
 import { EditorView, ViewPlugin, layer, type LayerMarker, type ViewUpdate } from '@codemirror/view'
-import { placeFlags, type Flag, type FlagCaret } from './flags'
+import { placeFlags, TagClock, type Flag, type FlagCaret } from './flags'
 import { bandCentre, offscreen, sameOffscreen, type Offscreen } from './offscreen'
 import type { Slot } from './presence-slots'
 
@@ -78,21 +81,58 @@ class FlagMarker implements LayerMarker {
   }
 }
 
+/** The fallback name tag over a caret. Kept drawn while hidden, so showing and hiding fade in place. */
+class TagMarker implements LayerMarker {
+  constructor(
+    readonly f: Flag,
+    readonly slot: Slot,
+    readonly shown: boolean,
+  ) {}
+  eq(o: LayerMarker): boolean {
+    return o instanceof TagMarker && o.slot === this.slot && o.shown === this.shown && o.f.id === this.f.id && o.f.label === this.f.label && o.f.left === this.f.left && o.f.top === this.f.top && o.f.width === this.f.width
+  }
+  draw(): HTMLElement {
+    const el = document.createElement('span')
+    el.dataset.who = this.f.id
+    el.dataset.testid = 'ed-caret-tag'
+    el.dataset.k2Chamfer = 'chip'
+    el.setAttribute('aria-hidden', 'true')
+    if (this.f.agent) el.appendChild(agentGlyph())
+    el.appendChild(document.createTextNode(this.f.label))
+    this.place(el)
+    return el
+  }
+  update(dom: HTMLElement, prev: LayerMarker): boolean {
+    if (!(prev instanceof TagMarker) || prev.f.id !== this.f.id || prev.f.label !== this.f.label || prev.f.agent !== this.f.agent) return false
+    this.place(dom)
+    return true
+  }
+  private place(el: HTMLElement): void {
+    el.className = `ed-caret-tag ed-pc-${this.slot}${this.shown ? ' ed-caret-tag-shown' : ''}`
+    el.style.left = `${this.f.left}px`
+    el.style.top = `${this.f.top}px`
+    el.style.maxWidth = `${this.f.width}px`
+  }
+}
+
 class LineMarker implements LayerMarker {
   constructor(
     readonly f: Flag,
     readonly slot: Slot,
   ) {}
   eq(o: LayerMarker): boolean {
-    return o instanceof LineMarker && o.slot === this.slot && o.f.line.x0 === this.f.line.x0 && o.f.line.x1 === this.f.line.x1 && o.f.line.y === this.f.line.y
+    const a = (o as LineMarker).f?.line
+    const b = this.f.line
+    return o instanceof LineMarker && o.slot === this.slot && !!a && !!b && a.x0 === b.x0 && a.x1 === b.x1 && a.y === b.y
   }
   draw(): HTMLElement {
+    const line = this.f.line ?? { x0: 0, x1: 0, y: 0 }
     const el = document.createElement('span')
     el.className = `ed-fline ed-pc-${this.slot}`
     el.dataset.who = this.f.id
-    el.style.left = `${this.f.line.x0}px`
-    el.style.top = `${this.f.line.y}px`
-    el.style.width = `${Math.max(0, this.f.line.x1 - this.f.line.x0)}px`
+    el.style.left = `${line.x0}px`
+    el.style.top = `${line.y}px`
+    el.style.width = `${Math.max(0, line.x1 - line.x0)}px`
     return el
   }
 }
@@ -120,7 +160,7 @@ const baseOf = (view: EditorView): { left: number; top: number } => {
   return { left: r.left - view.scrollDOM.scrollLeft, top: r.top - view.scrollDOM.scrollTop }
 }
 
-function flagMarkers(view: EditorView, host: PresenceHost): LayerMarker[] {
+function flagMarkers(view: EditorView, host: PresenceHost, clock: TagClock, now: number): LayerMarker[] {
   const people = new Map(host.people().map((p) => [p.id, p]))
   const base = baseOf(view)
   const carets: FlagCaret[] = []
@@ -131,6 +171,12 @@ function flagMarkers(view: EditorView, host: PresenceHost): LayerMarker[] {
     // One flag a person (their most active caret: the kit draws it first), none for away people.
     if (!p || p.self || p.away || seen.has(id)) continue
     seen.add(id)
+    // Where the caret is now: a new place (a move or typing) restarts its tag's time.
+    try {
+      clock.observe(id, view.posAtDOM(el), now)
+    } catch {
+      // Not in the document this instant (a redraw): no move to note.
+    }
     const r = el.getBoundingClientRect()
     carets.push({ id, name: p.name, agent: p.agent, x: r.left - base.left, top: r.top - base.top, bottom: r.bottom - base.top })
   }
@@ -163,6 +209,7 @@ function flagMarkers(view: EditorView, host: PresenceHost): LayerMarker[] {
   })
   return flags.flatMap((f) => {
     const slot = people.get(f.id)?.slot ?? 1
+    if (f.tag) return [new TagMarker(f, slot, clock.visible(f.id, now))]
     return [new LineMarker(f, slot), new FlagMarker(f, slot)]
   })
 }
@@ -170,8 +217,24 @@ function flagMarkers(view: EditorView, host: PresenceHost): LayerMarker[] {
 const touched = (u: ViewUpdate): boolean => u.docChanged || u.viewportChanged || u.geometryChanged || u.selectionSet || u.transactions.length > 0
 
 /** The flags layer, the off-screen watch and your moves. */
-export function presenceExtension(host: PresenceHost): Extension {
-  const flagLayer = layer({ above: true, class: 'ed-flag-layer', update: touched, markers: (view) => flagMarkers(view, host) })
+export function presenceExtension(host: PresenceHost, now: () => number = Date.now): Extension {
+  const clock = new TagClock()
+  let expiry: ReturnType<typeof setTimeout> | null = null
+  const flagLayer = layer({
+    above: true,
+    class: 'ed-flag-layer',
+    update: touched,
+    markers: (view) => {
+      const t = now()
+      const out = flagMarkers(view, host, clock, t)
+      // A tag that is showing goes when its time is up: redraw then.
+      if (expiry) clearTimeout(expiry)
+      const next = clock.nextExpiry(t)
+      expiry = next === null ? null : setTimeout(() => view.dispatch({ effects: presenceChanged.of(null) }), next - t + 16)
+      return out
+    },
+    destroy: () => void (expiry && clearTimeout(expiry)),
+  })
   const watch = ViewPlugin.fromClass(
     class {
       private last: Offscreen & { centre: number } = { above: [], below: [], centre: -1 }
@@ -191,7 +254,27 @@ export function presenceExtension(host: PresenceHost): Extension {
         if (e.target instanceof Element && e.target.closest('.ed-hold-label')) return
         host.onUserMove()
       }
+      // The pointer over a caret (within a few px of its bar) or its selection keeps that tag up.
+      private readonly onPointer = (e: PointerEvent): void => {
+        let who: string | null = null
+        const t = e.target instanceof Element ? e.target.closest<HTMLElement>('[data-mpc-caret]') : null
+        if (t) who = (t.dataset.mpcCaret ?? '').replace(/#\d+$/, '')
+        else
+          for (const c of this.view.contentDOM.querySelectorAll<HTMLElement>('.cm-mpc-caret[data-mpc-caret]')) {
+            const r = c.getBoundingClientRect()
+            if (e.clientX >= r.left - 4 && e.clientX <= r.right + 4 && e.clientY >= r.top && e.clientY <= r.bottom) {
+              who = (c.dataset.mpcCaret ?? '').replace(/#\d+$/, '')
+              break
+            }
+          }
+        if (clock.hover(who)) this.view.dispatch({ effects: presenceChanged.of(null) })
+      }
+      private readonly onLeave = (): void => {
+        if (clock.hover(null)) this.view.dispatch({ effects: presenceChanged.of(null) })
+      }
       constructor(readonly view: EditorView) {
+        view.contentDOM.addEventListener('pointermove', this.onPointer, { passive: true })
+        view.contentDOM.addEventListener('pointerleave', this.onLeave, { passive: true })
         view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true })
         for (const t of ['wheel', 'touchmove', 'mousedown']) view.scrollDOM.addEventListener(t, this.onMove, { passive: true })
         view.dom.addEventListener('keydown', this.onMove, true)
@@ -232,6 +315,8 @@ export function presenceExtension(host: PresenceHost): Extension {
       }
       destroy(): void {
         if (this.frame) cancelAnimationFrame(this.frame)
+        this.view.contentDOM.removeEventListener('pointermove', this.onPointer)
+        this.view.contentDOM.removeEventListener('pointerleave', this.onLeave)
         this.view.scrollDOM.removeEventListener('scroll', this.onScroll)
         for (const t of ['wheel', 'touchmove', 'mousedown']) this.view.scrollDOM.removeEventListener(t, this.onMove)
         this.view.dom.removeEventListener('keydown', this.onMove, true)

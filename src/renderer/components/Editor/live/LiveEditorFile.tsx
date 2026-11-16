@@ -47,6 +47,7 @@ import { LivePanel, READ_ALOUD_KEY } from './LivePanel'
 import { LiveSlot } from './LiveSlot'
 import { PRESENCE_CSS } from './presenceCss'
 import { useLiveDoc } from './useLiveDoc'
+import { useBeforeText } from './useBeforeText'
 import { usePresence } from './usePresence'
 
 const CompareView = lazy(() => import('../CompareView').then((m) => ({ default: m.CompareView })))
@@ -107,6 +108,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
   const shell = useLiveShell(doc.source, EDITOR_SHELL, tabWidth)
   const snap = shell.snap as LiveDocSnapshot
   const presence = usePresence({ doc, shell, snap, markdown, root: outer })
+  const before = useBeforeText(scope, filePath, snap)
   const name = fileNameOf(filePath)
 
   const [text, setText] = useState('')
@@ -192,7 +194,16 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
       case 'reopen':
         return doc.reopen()
       case 'compare':
-        return patch({ comparing: true })
+      case 'retry-before':
+        // The earlier text: seen on this connection, else read from the save's stored version.
+        if (id === 'retry-before') flow('merged')
+        patch({ comparing: true })
+        void before.get().then((t) => {
+          if (t !== null) return
+          patch({ comparing: false })
+          flow('load-failed')
+        })
+        return
       case 'close-compare':
         return patch({ comparing: false })
       case 'undo-theirs':
@@ -200,9 +211,15 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
       case 'cancel':
         return flow('merged')
       case 'confirm-undo-theirs':
-        if (ed && snap.beforeExternal !== null) replaceText(ed.view, snap.beforeExternal)
-        patch({ comparing: false })
-        return flow('undid')
+        // One edit of yours (replace.ts), so Undo can reverse it; not docs/restore.
+        void before.get().then((t) => {
+          const view = doc.editor()?.view
+          patch({ comparing: false })
+          if (t === null || !view) return flow('before-gone')
+          replaceText(view, t)
+          flow('undid')
+        })
+        return
       case 'use-theirs':
         return takeTheirs()
       case 'redo':
@@ -243,7 +260,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
     return () => clearTimeout(t)
   }, [waiting])
   const status = liveSaveStatus(slow ? snap : { ...snap, pending: 0 }, merged)
-  const comparing = ui.comparing && snap.beforeExternal !== null
+  const comparing = ui.comparing && (before.text !== null || before.status === 'loading')
   const frameSave = useMemo<FrameSave>(
     () => ({
       status,
@@ -251,12 +268,18 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
       saveNow: () => undefined,
       onLeave: () => undefined,
       replaceBody: comparing ? (
-        <Suspense fallback={null}>
-          <CompareView before={snap.beforeExternal ?? ''} now={text} width={width} />
-        </Suspense>
+        before.text === null ? (
+          <div data-testid="ed-compare-loading" role="status" className="type-row flex flex-1 items-center justify-center text-[var(--color-text-secondary)]">
+            Loading the text from before that save…
+          </div>
+        ) : (
+          <Suspense fallback={null}>
+            <CompareView before={before.text} now={text} width={width} />
+          </Suspense>
+        )
       ) : null,
     }),
-    [status, comparing, snap.beforeExternal, text, width],
+    [status, comparing, before.text, text, width],
   )
 
   const owner = snap.accessOwner
@@ -296,7 +319,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
 
   const view = notice ? liveNoticeView(notice, name) : null
   // Compare needs the text from before the save (seen on this connection).
-  const shown = view && snap.beforeExternal === null ? { ...view, actions: view.actions.filter((a) => a.id !== 'compare' && a.id !== 'undo-theirs') } : view
+  const shown = view && !before.available ? { ...view, actions: view.actions.filter((a) => a.id !== 'compare' && a.id !== 'undo-theirs') } : view
 
   return (
     <div ref={outer} className="flex h-full min-h-0 flex-col" data-testid="ed-live-file" data-live-state={snap.closed ? 'closed' : (snap.connection ?? snap.tier)} data-owner={owner ?? undefined}>

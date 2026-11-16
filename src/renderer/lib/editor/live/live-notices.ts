@@ -15,6 +15,7 @@ export type LiveActionId =
   | 'reopen'
   | 'compare'
   | 'close-compare'
+  | 'retry-before'
   | 'undo-theirs'
   | 'confirm-undo-theirs'
   | 'cancel'
@@ -37,6 +38,8 @@ export type EditorLiveNotice =
   | { kind: 'used-theirs' }
   | { kind: 'theirs-gone'; comparing: boolean }
   | { kind: 'theirs-failed'; reason: string }
+  | { kind: 'before-failed' }
+  | { kind: 'before-gone' }
   | { kind: 'missing' }
   | { kind: 'save-failed'; reason: string }
   | { kind: 'declined'; message: string }
@@ -135,6 +138,10 @@ export function liveNoticeView(n: EditorLiveNotice, fileName: string): LiveNotic
       return { tone: 'info', role: 'status', icon: 'history', title: 'Using the version saved outside K2.', line: 'Your words are in History. Undo brings them back.', actions: [{ id: 'undo', label: 'Undo' }], closable: true }
     case 'theirs-gone':
       return { tone: 'warn', role: 'alert', icon: 'warn', title: 'K2 no longer has the text of that save.', line: 'A newer save came, or K2 restarted. Compare, or undo their save.', actions: [COMPARE(n.comparing), UNDO_THEIRS], closable: true }
+    case 'before-failed':
+      return { tone: 'bad', role: 'alert', icon: 'bad', title: 'K2 couldn’t load the text from before that save.', line: 'The merged text is still here. Try again in a moment.', actions: [{ id: 'retry-before', label: 'Retry', primary: true }], closable: true }
+    case 'before-gone':
+      return { tone: 'warn', role: 'alert', icon: 'warn', title: 'K2 no longer has the text from before that save.', line: 'The merged text is still here, and History may have that version.', actions: [], closable: true }
     case 'theirs-failed':
       return { tone: 'bad', role: 'alert', icon: 'bad', title: `Couldn’t use their version: ${n.reason}.`, line: 'The merged text is still here.', actions: [{ id: 'use-theirs', label: 'Retry', primary: true }], closable: true }
     case 'missing':

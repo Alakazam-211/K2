@@ -110,8 +110,12 @@ export interface LiveDocSnapshot extends LiveShellSnapshot {
   note: RemovedTextNote | null
   /** The editor closed for good (core off, idle, removed…). */
   closed: LiveDocClose | null
-  /** The text as it was before the last outside save. */
+  /** The text as it was before the last outside save, as seen on this connection. */
   beforeExternal: string | null
+  /** The stored version from before the last outside save (`before_version`): Compare and
+   *  Undo their save read it (`docs/show`) when this connection didn't see the text itself
+   *  (a tab that only got the save replayed after its welcome). Null for missing and declined. */
+  beforeVersion: number | null
   /** Why Undo and Redo are off now, or null. */
   undoOff: string | null
   /** Others here (not away, not you): the Live chip and panel. */
@@ -177,6 +181,10 @@ export class LiveDocSource implements LiveSource {
   private slots: ReadonlyMap<string, Slot> = new Map()
   private holds: Hold[] = []
   private messages: LiveMessage[] = []
+  /** The last outside save handled (its at_ms): a reconnect without resume replays it. */
+  private lastSaveAt: number | null = null
+  /** An external change came on this connection since the last outside save: its text-before is this save's. */
+  private externalSinceSave = false
   private readonly post: ((body: Record<string, unknown>) => Promise<unknown>) | null
 
   constructor(opts: { markdown: boolean; timers?: LiveDocTimers; online?: boolean; post?: (body: Record<string, unknown>) => Promise<unknown> }) {
@@ -402,6 +410,7 @@ export class LiveDocSource implements LiveSource {
     const now = this.timers.now()
     // An outside save (the kit's external participant): keep the text from before it.
     if (!c.local && c.by === EXTERNAL_PID) {
+      this.externalSinceSave = true
       this.emit({ beforeExternal: before })
       return
     }
@@ -463,6 +472,8 @@ export class LiveDocSource implements LiveSource {
 
   private onOutsideSave(f: Frame): void {
     const at = typeof f.at_ms === 'number' ? f.at_ms : this.timers.now()
+    // The same save again (replayed to a reconnect without resume): already handled.
+    if (typeof f.at_ms === 'number' && f.at_ms === this.lastSaveAt) return
     const outcome = f.outcome
     let save: OutsideSave
     if (outcome === 'ingested' && typeof f.rev === 'number') save = { outcome, rev: f.rev }
@@ -470,8 +481,13 @@ export class LiveDocSource implements LiveSource {
     else if (outcome === 'declined') save = { outcome, code: String(f.code ?? ''), message: String(f.message ?? '') }
     else return
     const words = outcome === 'ingested' ? '· merged' : outcome === 'missing' ? '· the file was deleted or moved' : '· live edits paused'
+    this.lastSaveAt = at
     this.changes.push({ id: `save-${++this.seq}`, who: 'file', verb: 'saved', text: words, at_ms: at, target: null, tone: 'outside' })
-    this.emit({ outsideSave: { ...save, at_ms: at } })
+    const bv = outcome === 'ingested' && typeof f.before_version === 'number' ? f.before_version : null
+    // The text seen here is this save's only when its external change came on this connection.
+    const seen = this.externalSinceSave
+    this.externalSinceSave = false
+    this.emit({ outsideSave: { ...save, at_ms: at }, beforeVersion: bv, ...(seen ? {} : { beforeExternal: null }) })
   }
 
   private onRefused(f: Frame): void {
@@ -602,6 +618,7 @@ export class LiveDocSource implements LiveSource {
       note: patch.note !== undefined ? patch.note : (prev?.note ?? null),
       closed: patch.closed !== undefined ? patch.closed : (prev?.closed ?? null),
       beforeExternal: patch.beforeExternal !== undefined ? patch.beforeExternal : (prev?.beforeExternal ?? null),
+      beforeVersion: patch.beforeVersion !== undefined ? patch.beforeVersion : (prev?.beforeVersion ?? null),
       undoOff: down ? 'Back online to use this' : paused,
       othersHere,
       pending: this.pending,

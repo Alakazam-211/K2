@@ -37,6 +37,7 @@ const base: LiveDocSnapshot = {
   othersHere: 1,
   pending: 0,
   slots: new Map(),
+  beforeVersion: null,
   holds: [],
   lines: new Map(),
 }

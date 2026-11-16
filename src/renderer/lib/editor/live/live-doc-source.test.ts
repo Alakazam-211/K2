@@ -263,6 +263,39 @@ describe('outside saves and refusals', () => {
     expect(s.changes.map((c) => [c.who, c.text, c.tone])).toEqual([['file', '· merged', 'outside']])
   })
 
+  it('keeps before_version (the stored version from before their save); missing and declined have none', () => {
+    const { tap, snap } = setup()
+    tap.frame({ type: 'outside_save', at_ms: 5, doc: 'd', outcome: 'ingested', rev: 41, before_version: 40 })
+    expect(snap().beforeVersion).toBe(40)
+    tap.frame({ type: 'outside_save', at_ms: 6, doc: 'd', outcome: 'missing', before_version: null })
+    expect(snap().beforeVersion).toBeNull()
+    tap.frame({ type: 'outside_save', at_ms: 7, doc: 'd', outcome: 'declined', code: 'not_text', message: 'x', before_version: null })
+    expect(snap().beforeVersion).toBeNull()
+  })
+
+  it('a replayed save (no external change seen on this connection) is the merged save, with no text from before it', () => {
+    const { tap, snap } = setup()
+    tap.frame({ type: 'outside_save', at_ms: 5, doc: 'd', outcome: 'ingested', rev: 41, before_version: 40 })
+    expect(snap().outsideSave).toEqual({ outcome: 'ingested', rev: 41, at_ms: 5 })
+    expect(snap().beforeExternal).toBeNull()
+    expect(snap().changes.filter((c) => c.tone === 'outside')).toHaveLength(1)
+  })
+
+  it('the same save again after a reconnect without resume (same at_ms) adds no second row', () => {
+    const { ed, tap, snap } = setup()
+    tap.frame({ type: 'outside_save', at_ms: 5, doc: 'd', outcome: 'ingested', rev: 41, before_version: 40 })
+    ed.emit('state', 'reconnecting')
+    ed.emit('state', 'live')
+    tap.welcome()
+    tap.frame({ type: 'outside_save', at_ms: 5, doc: 'd', outcome: 'ingested', rev: 41, before_version: 40 })
+    expect(snap().changes.filter((c) => c.tone === 'outside').map((c) => c.text)).toEqual(['· merged'])
+    expect(snap().beforeVersion).toBe(40)
+    // A later save is new.
+    tap.frame({ type: 'outside_save', at_ms: 9, doc: 'd', outcome: 'ingested', rev: 45, before_version: 44 })
+    expect(snap().changes.filter((c) => c.tone === 'outside')).toHaveLength(2)
+    expect(snap().beforeVersion).toBe(44)
+  })
+
   it('missing and declined', () => {
     const { tap, snap, src } = setup()
     tap.frame({ type: 'outside_save', at_ms: 6, doc: 'd', outcome: 'missing' })

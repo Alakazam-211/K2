@@ -15,7 +15,8 @@ import type { EditorLiveNotice } from './live-notices'
 /** Where you are with the last outside save (keyed by its `at_ms`). */
 export interface SaveFlow {
   at: number
-  step: 'merged' | 'confirm' | 'undid' | 'used' | 'gone' | 'failed' | 'dismissed'
+  /** `load-failed`: the earlier text (before_version) didn't load; `before-gone`: there is none to put back. */
+  step: 'merged' | 'confirm' | 'undid' | 'used' | 'gone' | 'failed' | 'load-failed' | 'before-gone' | 'dismissed'
   reason?: string
 }
 
@@ -45,6 +46,8 @@ export function pickLiveNotice(s: LiveDocSnapshot, ui: LiveUi): EditorLiveNotice
       if (step === 'undid') return { kind: 'undid-theirs' }
       if (step === 'used') return { kind: 'used-theirs' }
       if (step === 'gone') return { kind: 'theirs-gone', comparing: ui.comparing }
+      if (step === 'load-failed') return { kind: 'before-failed' }
+      if (step === 'before-gone') return { kind: 'before-gone' }
       return { kind: 'theirs-failed', reason: f?.reason ?? 'the server refused it' }
     }
     if (os.outcome === 'missing' || os.outcome === 'declined') {
@@ -62,7 +65,7 @@ export function showsMerged(s: LiveDocSnapshot, ui: LiveUi): boolean {
   const os = s.outsideSave
   if (os?.outcome !== 'ingested') return false
   const step = ui.flow?.at === os.at_ms ? ui.flow.step : 'merged'
-  return step === 'merged' || step === 'confirm' || step === 'gone' || step === 'failed'
+  return step === 'merged' || step === 'confirm' || step === 'gone' || step === 'failed' || step === 'load-failed' || step === 'before-gone'
 }
 
 /** The status line's save word for a live file (none when you can't edit it). */

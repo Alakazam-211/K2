@@ -54,9 +54,13 @@ pub const TIME_POSITION_FEATURE: &str = "time_position";
 /// watch, for readers and editors alike (the kit refuses only a watcher, and
 /// K2 joins none): [`VIEW_ADDRESS_FEATURE`] and [`TIME_POSITION_FEATURE`].
 /// Follow uses the view address (a scene's `@cam:<id>`, a deck's slide) and
-/// the timeline's playheads the time position. A text doc lists neither: its
-/// Live view has carets and lines (`cursor`, `view`) instead.
+/// the timeline's playheads the time position.
 pub const PRESENCE_FEATURES: [&str; 2] = [VIEW_ADDRESS_FEATURE, TIME_POSITION_FEATURE];
+
+/// What a text doc's socket lists in `welcome.features`: the view address
+/// (the editor's Follow by heading), beside its carets and lines; no keyed
+/// watch, no playhead.
+pub const TEXT_SOCKET_FEATURES: [&str; 1] = [VIEW_ADDRESS_FEATURE];
 
 /// Everything a keyed doc's socket lists in `welcome.features`: the keyed
 /// watch when the doc has it ([`features`]), then [`PRESENCE_FEATURES`].

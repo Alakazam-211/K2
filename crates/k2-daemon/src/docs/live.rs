@@ -58,8 +58,9 @@
 //!   Anywhere else, `error` with `MPC-E113`.
 //! - `view_address` / `time_position` (a keyed doc's socket: its welcome
 //!   lists both, kit v0.18.0) → `set_view_address` / `set_time_position`;
-//!   no reply, a refusal is `presence_refused {req, error}`. On a text doc's
-//!   socket (not listed), `error` with `MPC-E113`.
+//!   no reply, a refusal is `presence_refused {req, error}`. A text doc's
+//!   socket lists `view_address` only; `time_position` there is `error`
+//!   with `MPC-E113`.
 //!
 //! The kit's `tick` (every 250 ms, `docs/mod.rs`) also flushes rosters, so
 //! carets arrive without a timer of our own.
@@ -580,7 +581,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         Some(v) if v > read.version => true,
         Some(v) => session.events_since(conn, v).is_err(),
     };
-    let welcome = wire::welcome_frame(
+    let mut welcome = wire::welcome_frame(
         ROOT,
         read.version,
         with_text.then_some(text.as_str()),
@@ -591,6 +592,12 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         t.tier.family(),
         &t.rel,
     );
+    // A text doc's socket takes the view address too (kit v0.18.0: Follow
+    // by heading, `@k:` or a native address), never the keyed watch.
+    let features = super::live_watch::TEXT_SOCKET_FEATURES.to_vec();
+    if let Value::Obj(o) = &mut welcome {
+        o.push(("features".into(), super::live_watch::features_value(&features)));
+    }
     Ok(Opened {
         session,
         conn,
@@ -602,7 +609,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         changes,
         roster,
         welcome,
-        features: Vec::new(),
+        features,
         deck: false,
         rel: t.rel.clone(),
         events,

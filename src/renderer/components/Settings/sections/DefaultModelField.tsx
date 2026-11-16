@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { ModelPicker, MODEL_PICKER_WORDS } from '@/components/Thread/ModelPicker'
 import { binaryTokenFromCommand, defaultModelHarness, modelLabel, modelPickerRows } from '@/lib/model-choices'
 import { useDefaultModelsStore } from '@/stores/default-models'
+import { SETTING_ROW_LABEL } from '../controls/SettingControls'
 
 /** The harness a preset command can have a server default for, if any. */
 export function presetModelHarness(command: string): string | null {
@@ -31,7 +32,7 @@ export function DefaultModelField({ harness }: { harness: string }): JSX.Element
   )
   return (
     <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5" data-testid={`default-model-${harness}`}>
-      <span className="type-hint text-[var(--color-text-secondary)]">Default model</span>
+      <span className={SETTING_ROW_LABEL}>Default model</span>
       <button
         ref={btn}
         type="button"

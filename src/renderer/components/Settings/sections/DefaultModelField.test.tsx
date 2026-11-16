@@ -16,6 +16,7 @@ vi.mock('@/lib/daemon-settings', () => ({ settingsGet: h.settingsGet, settingsUp
 
 import { DefaultModelField, presetModelHarness } from './DefaultModelField'
 import { useDefaultModelsStore } from '@/stores/default-models'
+import { SETTING_ROW_LABEL } from '../controls/SettingControls'
 
 describe('Default model (Settings)', () => {
   beforeEach(() => {
@@ -27,6 +28,13 @@ describe('Default model (Settings)', () => {
   it('shows for harness presets only', () => {
     expect(presetModelHarness('claude --dangerously-skip-permissions')).toBe('claude')
     expect(presetModelHarness('ollama run llama3.2')).toBeNull()
+  })
+
+  it('"Default model" is a row label: the same tier and size as the page’s other row labels', () => {
+    render(<DefaultModelField harness="claude" />)
+    const label = screen.getByText('Default model')
+    expect(label.className).toBe(SETTING_ROW_LABEL)
+    expect(SETTING_ROW_LABEL).toBe('type-row text-[var(--color-text-primary)]')
   })
 
   it('unset reads Harness default; a pick saves this harness’s default', async () => {

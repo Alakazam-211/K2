@@ -105,7 +105,7 @@ describe('the composer’s /model', () => {
     // The server default is Opus too, so it stays in the filtered list.
     expect(options.map((o) => o.getAttribute('data-value'))).toEqual(['', 'opus'])
     expect(search.getAttribute('aria-activedescendant')).toBe(options[0].id)
-    expect(screen.getByTestId('compose-model-picker-footer').textContent).toBe(MODEL_PICKER_WORDS.threadFooter)
+    expect(screen.getByTestId('compose-model-picker-footer').textContent).toBe('This chat only, from your next message.')
     fireEvent.keyDown(search, { key: 'Enter' })
     await waitFor(() => expect(modelPosts()).toHaveLength(1))
     expect(modelPosts()[0][1]).toEqual({ session_id: 'sess-1', model: 'opus', thread: 'sales' })

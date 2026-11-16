@@ -27,7 +27,7 @@ export const MODEL_PICKER_WORDS = {
   error: 'Couldn’t load models',
   retry: 'Retry',
   noMatch: (q: string) => `No model matches ‘${q}’.`,
-  threadFooter: 'Changes this chat only. Takes effect on the next message.',
+  threadFooter: 'This chat only, from your next message.',
   settingFooter: 'Every new chat on this server starts with this model.',
 } as const
 

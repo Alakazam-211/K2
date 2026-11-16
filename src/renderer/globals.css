@@ -2279,6 +2279,12 @@ html[data-style="glass"] input[data-k2-search][data-material="frost"]:not(:focus
 html[data-style="glass"] input[data-k2-search][data-material="frost"]:focus:not([data-zen-root] *) {
   border: 1px solid var(--color-accent);
 }
+/* In a menu (the model picker, the reaction picker) focus is the shared ring
+   alone (.k2-focus, 2px of the accent as text, 2px out): an accent edge
+   inside it read as one thick double ring. The field keeps the control edge. */
+html[data-style="glass"] [data-k2-menu] input[data-k2-search][data-material="frost"]:focus:not([data-zen-root] *) {
+  border-color: var(--color-control-edge);
+}
 @media (prefers-reduced-motion: reduce) {
   html[data-style="glass"] [data-material="frost"]:not([data-zen-root] *) { animation: none !important; }
   html[data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: 1; }

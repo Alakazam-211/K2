@@ -42,10 +42,10 @@
 //! alpha, the order of every operation).
 //!
 //! **Ambient occlusion** ([`render_shaded`] and an [`Ao`]), off unless asked for: before the colour
-//! pass, a depth pass draws the same bands depth only and keeps one sample of each pixel (1/w at a
-//! fixed place in it; 0 where nothing is drawn there) for the whole frame. Each covered pixel then
-//! gets a factor in [0, 1] from that depth image ([`occlusion`]: above thumbnail widths worked out
-//! on a half grid, every other pixel of every other row, and brought back to every pixel without
+//! pass, a depth pass draws the same bands depth only, at one sample of each pixel (1/w at a fixed
+//! place in it; 0 where nothing is drawn there) for the whole frame. Each covered pixel then gets a
+//! factor in [0, 1] from that depth image ([`occlusion`]: above thumbnail widths worked out on a
+//! half grid, every other pixel of every other row, and brought back to every pixel without
 //! crossing a depth edge), and the colour pass multiplies every covered sample's linear colour by
 //! its pixel's factor before the box filter: the whole light (ambient, key and fill) is darkened,
 //! the background and the coverage alpha are not. A factor of exactly 1 leaves the sample's bits as
@@ -823,10 +823,17 @@ fn shade(ctx: &Ctx, ob: &Obj, v: [usize; 3], front: bool) -> [[f32; 3]; 3] {
 /// Draw one triangle into the band: colour and depth, or depth alone (`COLOR` false: no shading,
 /// the colour buffer untouched); with `IDS`, the object's index + 1 into each sample it wins too.
 fn draw_tri<const COLOR: bool, const IDS: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 3], buf: &mut Band, y_lo: i64, y_hi: i64) {
-    let f = [ctx.vfix[v[0]], ctx.vfix[v[1]], ctx.vfix[v[2]]];
-    let fast = f.iter().all(|p| p[0] != NEEDS_CLIP);
     let flat = !ob.smooth;
     let id = ob.index.saturating_add(1);
+    for_each_tri::<COLOR>(ctx, ob, v, |t| raster_tri::<COLOR, IDS>(buf, t, flat, y_lo, y_hi, ctx.ws, id));
+}
+
+/// One triangle as screen triangles in sample space: faced, culled, shaded when `COLOR` (else
+/// no colour), and clipped (a triangle with a marked vertex: one per piece of its clipped
+/// polygon, in order). The one setup of every pass.
+fn for_each_tri<const COLOR: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 3], mut emit: impl FnMut([SV; 3])) {
+    let f = [ctx.vfix[v[0]], ctx.vfix[v[1]], ctx.vfix[v[2]]];
+    let fast = f.iter().all(|p| p[0] != NEEDS_CLIP);
     if fast {
         let area = edge(f[0], f[1], f[2]);
         if area == 0 {
@@ -838,7 +845,7 @@ fn draw_tri<const COLOR: bool, const IDS: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 
         }
         let col = if COLOR { shade(ctx, ob, v, front) } else { [[0.0; 3]; 3] };
         let sv = |k: usize| SV { x: f[k][0] as i64, y: f[k][1] as i64, iw: 1.0 / -ctx.vpos[v[k]][2], c: col[k] };
-        raster_tri::<COLOR, IDS>(buf, [sv(0), sv(1), sv(2)], flat, y_lo, y_hi, ctx.ws, id);
+        emit([sv(0), sv(1), sv(2)]);
     } else {
         let c = [clip_of(ctx.vpos[v[0]], &ctx.cam), clip_of(ctx.vpos[v[1]], &ctx.cam), clip_of(ctx.vpos[v[2]], &ctx.cam)];
         if trivially_out(&c, ctx.cam.near) {
@@ -865,7 +872,7 @@ fn draw_tri<const COLOR: bool, const IDS: bool>(ctx: &Ctx, ob: &Obj, v: [usize; 
             sv[k] = SV { x: fx[0] as i64, y: fx[1] as i64, iw: 1.0 / p[2], c: [p[3], p[4], p[5]] };
         }
         for k in 1..n - 1 {
-            raster_tri::<COLOR, IDS>(buf, [sv[0], sv[k], sv[k + 1]], flat, y_lo, y_hi, ctx.ws, id);
+            emit([sv[0], sv[k], sv[k + 1]]);
         }
     }
 }
@@ -952,6 +959,80 @@ fn raster_tri<const COLOR: bool, const IDS: bool>(buf: &mut Band, v: [SV; 3], fl
         ra += sya;
         rb += syb;
         rc += syc;
+    }
+}
+
+/// [`raster_tri`] depth only, at one sample of each pixel: the sample at column and row `s / 2`
+/// of each pixel's `s` x `s` (sample space rows [y_lo, y_hi), `y_lo` a multiple of `s`), into
+/// `depth` at the output size, `w` to a row. The same integer edge values, the same fill rule and
+/// the same float operations as [`raster_tri`] at those samples, so each keeps, bit for bit, the
+/// 1/w the full pass leaves there; the other samples are never visited.
+fn raster_depth_one(depth: &mut [f32], v: [SV; 3], y_lo: i64, y_hi: i64, ws: i64, s: i64, w: usize) {
+    let a = v[0];
+    let mut b = v[1];
+    let mut c = v[2];
+    let mut area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if area == 0 {
+        return;
+    }
+    if area < 0 {
+        std::mem::swap(&mut b, &mut c);
+        area = -area;
+    }
+    let minx = a.x.min(b.x).min(c.x);
+    let maxx = a.x.max(b.x).max(c.x);
+    let miny = a.y.min(b.y).min(c.y);
+    let maxy = a.y.max(b.y).max(c.y);
+    let x0 = ceil_div(minx - HALF, ONE).max(0);
+    let x1 = floor_div(maxx - HALF, ONE).min(ws - 1);
+    let y0 = ceil_div(miny - HALF, ONE).max(y_lo);
+    let y1 = floor_div(maxy - HALF, ONE).min(y_hi - 1);
+    // The first kept sample at or after (x0, y0).
+    let k = s / 2;
+    let x0 = x0 + (k - x0).rem_euclid(s);
+    let y0 = y0 + (k - y0).rem_euclid(s);
+    if x0 > x1 || y0 > y1 {
+        return;
+    }
+    let px0 = x0 * ONE + HALF;
+    let py0 = y0 * ONE + HALF;
+    let setup = |p: SV, q: SV| -> (i64, i64, i64, i64) {
+        let dx = q.x - p.x;
+        let dy = q.y - p.y;
+        let e = dx * (py0 - p.y) - dy * (px0 - p.x);
+        let top_left = (dy == 0 && dx > 0) || dy < 0;
+        (e, -dy * ONE * s, dx * ONE * s, if top_left { 0 } else { -1 })
+    };
+    let (mut ra, sxa, sya, ba) = setup(b, c);
+    let (mut rb, sxb, syb, bb) = setup(c, a);
+    let (mut rc, sxc, syc, bc) = setup(a, b);
+    let inv_area = 1.0 / area as f32;
+    let (ia, ib, ic) = (a.iw, b.iw, c.iw);
+    let mut y = y0;
+    while y <= y1 {
+        let row = ((y - y_lo) / s) as usize * w;
+        let (mut ea, mut eb, mut ec) = (ra, rb, rc);
+        let mut x = x0;
+        while x <= x1 {
+            if ea + ba >= 0 && eb + bb >= 0 && ec + bc >= 0 {
+                let la = ea as f32 * inv_area;
+                let lb = eb as f32 * inv_area;
+                let lc = ec as f32 * inv_area;
+                let iw = la * ia + lb * ib + lc * ic;
+                let i = row + (x / s) as usize;
+                if iw > depth[i] {
+                    depth[i] = iw;
+                }
+            }
+            ea += sxa;
+            eb += sxb;
+            ec += sxc;
+            x += s;
+        }
+        ra += sya;
+        rb += syb;
+        rc += syc;
+        y += s;
     }
 }
 
@@ -1045,29 +1126,27 @@ fn resolve_rgba(buf: &Band, rows_s: usize, ws: usize, s: usize, out: &mut [u8], 
 }
 
 /// The depth pass for ambient occlusion: every band drawn depth only (the colour pass's own
-/// triangles, rasterization and depth test), each pixel keeping the 1/w of one sample, the same
-/// one in every pixel ([`Lens::sample_at`]), 0 where it is not covered; the whole frame,
-/// row-major. One fixed sample, not (say) the nearest of the pixel's: on a plane, 1/w at points a
-/// whole number of pixels apart is then exactly affine, which the kernel's flat test relies on.
+/// triangles, rasterization and depth test), at one sample of each pixel, the same one in every
+/// pixel ([`Lens::sample_at`]), its 1/w kept, 0 where it is not covered; the whole frame,
+/// row-major. Only that sample is drawn ([`raster_depth_one`]), so the pass costs about one
+/// sample a pixel, not `s` x `s`, and leaves exactly the values a pass over every sample would.
+/// One fixed sample, not (say) the nearest of the pixel's: on a plane, 1/w at points a whole
+/// number of pixels apart is then exactly affine, which the kernel's flat test relies on.
 fn depth_pass(ctx: &Ctx, bands: &[Vec<u32>], threads: usize, s: usize, w: usize, h: usize) -> Vec<f32> {
     let mut depth = vec![0f32; w * h];
     let rows = BAND_PX as usize * w;
-    let ws = ctx.ws as usize;
-    let n = ws * ctx.band_rows as usize;
     let items: Vec<(usize, &mut [f32])> = depth.chunks_mut(rows).enumerate().collect();
     par_each(
         threads,
         items,
-        || Band { color: Vec::new(), depth: vec![0.0; n], id: Vec::new() },
-        |buf, (b, out)| {
+        || (),
+        |_, (b, out)| {
             let refs = &bands[b];
             if refs.is_empty() {
                 return;
             }
             let y_lo = b as i64 * ctx.band_rows;
             let y_hi = (y_lo + ctx.band_rows).min(ctx.hs);
-            let rows_s = (y_hi - y_lo) as usize;
-            buf.depth[..rows_s * ws].fill(0.0);
             let mut oi = 0usize;
             for &g in refs {
                 let g = g as u64;
@@ -1075,14 +1154,7 @@ fn depth_pass(ctx: &Ctx, bands: &[Vec<u32>], threads: usize, s: usize, w: usize,
                     oi += 1;
                 }
                 let ob = &ctx.objs[oi];
-                draw_tri::<false, false>(ctx, ob, tri_vertices(ctx, ob, g), buf, y_lo, y_hi);
-            }
-            let c = s / 2;
-            for r in 0..rows_s / s {
-                let row = (r * s + c) * ws + c;
-                for px in 0..w {
-                    out[r * w + px] = buf.depth[row + px * s];
-                }
+                for_each_tri::<false>(ctx, ob, tri_vertices(ctx, ob, g), |t| raster_depth_one(out, t, y_lo, y_hi, ctx.ws, s as i64, w));
             }
         },
     );
@@ -1726,6 +1798,77 @@ mod tests {
         let p = Params { width: 120, height: 90, ssaa: 2, threads: 2, background_srgb: BG, transparent: false };
         let (ids, _, _, _) = ids_of(&s, &[5], ViewSpec::Auto, &p, None, None);
         assert!(ids.iter().all(|&i| i == 0 || i == 6) && ids.contains(&6));
+    }
+
+    /// The depth pass drawn over every sample of every pixel, then one sample kept per pixel:
+    /// what [`depth_pass`] must equal.
+    fn depth_every_sample(ctx: &Ctx, bands: &[Vec<u32>], s: usize, w: usize, h: usize) -> Vec<f32> {
+        let mut depth = vec![0f32; w * h];
+        let ws = ctx.ws as usize;
+        let mut buf = Band { color: Vec::new(), depth: vec![0.0; ws * ctx.band_rows as usize], id: Vec::new() };
+        for (b, out) in depth.chunks_mut(BAND_PX as usize * w).enumerate() {
+            let y_lo = b as i64 * ctx.band_rows;
+            let y_hi = (y_lo + ctx.band_rows).min(ctx.hs);
+            let rows_s = (y_hi - y_lo) as usize;
+            buf.depth.fill(0.0);
+            let mut oi = 0usize;
+            for &g in &bands[b] {
+                let g = g as u64;
+                while g >= ctx.objs[oi].tbase + ctx.objs[oi].tris {
+                    oi += 1;
+                }
+                let ob = &ctx.objs[oi];
+                draw_tri::<false, false>(ctx, ob, tri_vertices(ctx, ob, g), &mut buf, y_lo, y_hi);
+            }
+            let c = s / 2;
+            for r in 0..rows_s / s {
+                for px in 0..w {
+                    out[r * w + px] = buf.depth[(r * s + c) * ws + c + px * s];
+                }
+            }
+        }
+        depth
+    }
+
+    #[test]
+    fn the_depth_pass_keeps_exactly_what_a_pass_over_every_sample_keeps() {
+        let mut cases: Vec<(&str, Scene, ViewSpec, u32, u32)> = vec![
+            ("interior", testgen::interior_scene(), ViewSpec::Auto, 333, 250),
+            ("interior-turntable", testgen::interior_scene(), ViewSpec::Turntable(3), 961, 721),
+            ("grid", testgen::grid_scene(12, true), ViewSpec::Auto, 400, 300),
+            ("terrain", testgen::large_scene(200_000), ViewSpec::Auto, 640, 480),
+            ("mirrored", testgen::mirrored_scene(), ViewSpec::Auto, 201, 149),
+        ];
+        // An object hidden in the file: left out of the drawn objects, as the scene view does.
+        let mut hidden = testgen::interior_scene();
+        let sofa = hidden.objects.iter().position(|o| o.id == "Sofa").expect("the sofa");
+        hidden.objects[sofa].hidden = Some(crate::scene::Hidden::Itself);
+        cases.push(("interior-sofa-hidden", hidden, ViewSpec::Auto, 333, 250));
+        // Clipped triangles (a camera inside the geometry, one looking away).
+        for (name, sc) in testgen::degenerate_scenes() {
+            if !sc.cameras.is_empty() {
+                cases.push((name, sc, ViewSpec::Camera(0), 160, 120));
+            }
+        }
+        for (name, sc, spec, w, h) in cases {
+            // The drawn objects as a scene, camera or turntable view has them: not the hidden ones.
+            let active: Vec<u32> = (0..sc.objects.len() as u32).filter(|&o| sc.objects[o as usize].hidden.is_none()).collect();
+            let Ok(f) = frame(&sc, &active, spec, w as f64 / h as f64) else { continue };
+            for ssaa in 1..=4u32 {
+                let p = Params { width: w, height: h, ssaa, threads: 3, background_srgb: BG, transparent: false };
+                let mut st = Stats::default();
+                let (ctx, bands) = prepare(&sc, &active, &f, &p, None, &mut st);
+                let one = depth_pass(&ctx, &bands, 3, ssaa as usize, w as usize, h as usize);
+                let every = depth_every_sample(&ctx, &bands, ssaa as usize, w as usize, h as usize);
+                assert!(one.iter().zip(&every).all(|(a, b)| a.to_bits() == b.to_bits()), "{name}, ssaa {ssaa}");
+                if name.starts_with("interior") {
+                    assert!(one.iter().filter(|&&d| d > 0.0).count() > (w * h / 10) as usize, "{name}: drawn");
+                }
+                if name == "interior-sofa-hidden" {
+                    assert!(active.len() + 1 == sc.objects.len() && ctx.objs.iter().all(|o| o.index != sofa as u32), "{name}: the sofa isn't drawn");
+                }
+            }
+        }
     }
 
     /// The depth image and occlusion factors of every object of `s` through `spec` (strength 1).

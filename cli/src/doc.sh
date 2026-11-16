@@ -1428,7 +1428,9 @@ failed = r.get("failed") or []
 if as_json:
     print(json.dumps({"multiplayerCores": v.get("multiplayerCores") or {}, "multiplayerCoresReport": r}))
     sys.exit(1 if failed else 0)
-name = {"markdown": "The Markdown core", "text": "The text and code core", "any-file": "The any-file core", "board": "The Board core"}[core]
+# A core with no name here (a newer one) is named by its id: the daemon
+# has already made the change, so this line must not fail on it.
+name = {"markdown": "The Markdown core", "text": "The text and code core", "any-file": "The any-file core", "board": "The Board core"}.get(core) or "The %s core" % core
 changed = any(c.get("core") == core for c in r.get("changed") or [])
 if not changed:
     print("%s is already %s." % (name, action))

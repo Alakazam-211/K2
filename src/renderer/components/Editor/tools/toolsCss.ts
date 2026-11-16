@@ -52,9 +52,10 @@ html[data-style="terminal"] .ed-tab .ed-fmt[data-docked] { background: var(--col
 .ed-tab .ed-fsep { width: 1px; height: 18px; margin: 0 3px; background: var(--color-border-strong); }
 
 /* The / menu: under the "/" line. */
-.ed-tab .ed-slash { z-index: 21; width: 280px; padding: 6px; border: 1px solid var(--color-control-edge); border-radius: var(--radius-box); background: var(--color-bg-elevated); box-shadow: var(--shadow-2); font: 12.5px/1.3 var(--font-ui); }
+.ed-tab .ed-slash { z-index: 21; width: 280px; padding: 6px; display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--color-control-edge); border-radius: var(--radius-box); background: var(--color-bg-elevated); box-shadow: var(--shadow-2); font: 12.5px/1.3 var(--font-ui); }
 html[data-style="terminal"] .ed-tab .ed-slash { background: var(--color-bg); border-color: var(--color-border-strong); }
-.ed-tab .ed-slash-head { margin: 0; padding: 4px 8px 6px; font-size: 11.5px; color: var(--color-text-secondary); }
+.ed-tab .ed-slash-head { flex: none; margin: 0; padding: 4px 8px 6px; font-size: 11.5px; color: var(--color-text-secondary); white-space: nowrap; }
+.ed-tab .ed-slash-list { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .ed-tab .ed-slash-opt { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: calc(var(--radius-box) - 6px); color: var(--color-text-primary); cursor: pointer; }
 html[data-style="terminal"] .ed-tab .ed-slash-opt { border-radius: 0; }
 .ed-tab .ed-slash-opt:hover, .ed-tab .ed-slash-on { background: var(--color-row-hover); }

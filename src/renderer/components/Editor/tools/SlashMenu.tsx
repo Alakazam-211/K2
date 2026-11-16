@@ -5,17 +5,24 @@
 // row with aria-activedescendant; a press picks a row. Glass draws it on the
 // frost float, Terminal cut.
 
+import { forwardRef, useLayoutEffect, useRef } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { cx, floatMaterial } from '@/components/ui'
 import { filterBlocks, pickBlock, type SlashState } from '@/lib/editor/slash/slash'
 import { ToolGlyph } from './glyphs'
 
-export function SlashMenu({ view, state, id, style }: { view: EditorView; state: SlashState; id: string; style: React.CSSProperties }): React.JSX.Element {
+export const SlashMenu = forwardRef<HTMLDivElement, { view: EditorView; state: SlashState; id: string; style: React.CSSProperties }>(function SlashMenu({ view, state, id, style }, ref) {
   const blocks = filterBlocks(state.query)
+  const list = useRef<HTMLDivElement>(null)
+  // A capped list keeps the chosen row in view.
+  useLayoutEffect(() => {
+    const on = list.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (on && typeof on.scrollIntoView === 'function') on.scrollIntoView({ block: 'nearest' })
+  }, [state.active, state.query])
   return (
-    <div data-testid="ed-slash" data-k2-chamfer="surface" className="ed-slash no-drag" style={style} {...floatMaterial('menu', 'frost')} onMouseDown={(e) => e.preventDefault()}>
-      <p className="ed-slash-head">{blocks.length ? 'Insert a block. Keep typing to filter.' : 'No blocks match. Esc closes this.'}</p>
-      <div role="listbox" id={`${id}-menu`} aria-label="Insert a block">
+    <div ref={ref} data-testid="ed-slash" data-k2-chamfer="surface" className="ed-slash no-drag" style={style} {...floatMaterial('menu', 'frost')} onMouseDown={(e) => e.preventDefault()}>
+      <p className="ed-slash-head">{blocks.length ? 'Type to filter' : 'No blocks match'}</p>
+      <div ref={list} role="listbox" id={`${id}-menu`} aria-label="Insert a block" className="ed-slash-list">
         {blocks.map((b, i) => (
           <div
             key={b.id}
@@ -38,4 +45,4 @@ export function SlashMenu({ view, state, id, style }: { view: EditorView; state:
       </div>
     </div>
   )
-}
+})

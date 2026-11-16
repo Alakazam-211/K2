@@ -9,7 +9,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, describe, expect, it } from 'vitest'
 import '../../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
 import { useEffect, useRef } from 'react'
-import { EditorSelection, EditorState } from '@codemirror/state'
+import { EditorSelection, EditorState, type Extension } from '@codemirror/state'
+import { highlightSelectionMatches } from '@codemirror/search'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { EditorTab, type EditorTabProps, type EditorMountOptions } from '../EditorTab'
@@ -21,11 +22,11 @@ afterEach(() => {
 
 const README = ['# Quill', '', 'Quill writes a draft, then a second draft.', '', '## Setup', '', 'Open the draft.', '', '## Configuration', '', 'Last line.'].join('\n')
 
-function RealEditor({ o, text }: { o: EditorMountOptions; text: string }): React.JSX.Element {
+function RealEditor({ o, text, extra = [] }: { o: EditorMountOptions; text: string; extra?: Extension }): React.JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const view = new EditorView({
-      state: EditorState.create({ doc: text, extensions: [history(), keymap.of([...historyKeymap, ...defaultKeymap]), o.readOnly ? EditorState.readOnly.of(true) : [], o.frame ?? [], o.extensions] }),
+      state: EditorState.create({ doc: text, extensions: [history(), keymap.of([...historyKeymap, ...defaultKeymap]), o.readOnly ? EditorState.readOnly.of(true) : [], extra, o.frame ?? [], o.extensions] }),
       parent: box.current!,
     })
     return () => view.destroy()
@@ -35,9 +36,9 @@ function RealEditor({ o, text }: { o: EditorMountOptions; text: string }): React
   return <div ref={box} data-testid="real-editor" />
 }
 
-function mount(p: Partial<EditorTabProps> = {}): void {
+function mount(p: Partial<EditorTabProps> = {}, extra?: Extension): void {
   const text = p.text ?? README
-  render(<EditorTab filePath="/ws/quill/README.md" kind="markdown" text={text} dirty={false} saving={false} readOnly={null} cursor={{ line: 1, col: 1 }} width={1440} renderEditor={(o) => <RealEditor o={o} text={text} />} {...p} />)
+  render(<EditorTab filePath="/ws/quill/README.md" kind="markdown" text={text} dirty={false} saving={false} readOnly={null} cursor={{ line: 1, col: 1 }} width={1440} renderEditor={(o) => <RealEditor o={o} text={text} extra={extra} />} {...p} />)
 }
 const view = (): EditorView => EditorView.findFromDOM(document.querySelector('[data-testid="real-editor"] .cm-editor') as HTMLElement)!
 const tab = (): HTMLElement => screen.getByTestId('editor-tab')
@@ -164,6 +165,26 @@ describe('find', () => {
     expect(inCode.map((m) => m.textContent)).toEqual(['brief'])
   })
 
+  it('a code chip stays one box even under a mark that would split it (the selection matches)', () => {
+    const text = 'Intro.\n\nBriefs live in `briefs/`, one per piece. A brief.\n\nEnd.'
+    mount({ text }, highlightSelectionMatches({ minSelectionLength: 2 }))
+    const at = text.lastIndexOf('brief')
+    act(() => view().dispatch({ selection: EditorSelection.single(at, at + 5) }))
+    expect(document.querySelectorAll('.cm-selectionMatch').length).toBeGreaterThan(0)
+    expect([...document.querySelectorAll('.cm-md-code')].map((c) => c.textContent)).toEqual(['briefs/'])
+  })
+
+  it('Write shows no selection matches (they split the page’s marks); Source and code do', () => {
+    const text = 'A brief here.\n\nAnother brief there.'
+    mount({ text })
+    const at = text.indexOf('brief')
+    act(() => view().dispatch({ selection: EditorSelection.single(at, at + 5) }))
+    expect(document.querySelectorAll('.cm-selectionMatch')).toHaveLength(0)
+    key('e', { shift: true })
+    act(() => view().dispatch({ selection: EditorSelection.single(at, at + 5) }))
+    expect(document.querySelectorAll('.cm-selectionMatch').length).toBeGreaterThan(0)
+  })
+
   it('CodeMirror’s own search panel never shows', () => {
     mount()
     key('f')
@@ -172,9 +193,9 @@ describe('find', () => {
 })
 
 describe('go to line', () => {
-  it('⌘L opens it; "L9" goes to line 9 and closes it', () => {
+  it('⌃G opens it; "L9" goes to line 9 and closes it', () => {
     mount()
-    key('l')
+    act(() => void fireEvent.keyDown(tab(), { key: 'g', ctrlKey: true }))
     const field = screen.getByRole('textbox', { name: 'Go to line' })
     expect(document.activeElement).toBe(field)
     fireEvent.change(field, { target: { value: 'L9' } })
@@ -185,7 +206,7 @@ describe('go to line', () => {
 
   it('out of range says how many lines there are, and stays open', () => {
     mount()
-    key('l')
+    act(() => void fireEvent.keyDown(tab(), { key: 'g', ctrlKey: true }))
     const field = screen.getByRole('textbox', { name: 'Go to line' })
     fireEvent.change(field, { target: { value: '400' } })
     fireEvent.keyDown(field, { key: 'Enter' })
@@ -195,9 +216,38 @@ describe('go to line', () => {
   it('the status line’s Ln, Col is a button that opens it (code)', () => {
     mount({ filePath: '/ws/quill/src/a.ts', kind: 'code', text: 'a\nb\nc', cursor: { line: 2, col: 1 } })
     const pos = screen.getByRole('button', { name: /Ln 2, Col 1/ })
-    expect(pos.title).toBe('Go to line (⌘L)')
+    expect(pos.title).toBe('Go to line (⌃G)')
     fireEvent.click(pos)
     expect(screen.getByRole('textbox', { name: 'Go to line' })).toBeTruthy()
+  })
+})
+
+describe('the app’s keys', () => {
+  it('⌘K and ⌘L pass through the editor to the app (the command palette and the server switcher)', () => {
+    mount()
+    const at = README.indexOf('second')
+    act(() => view().dispatch({ selection: EditorSelection.single(at, at + 6) }))
+    const seen: string[] = []
+    const onKey = (e: KeyboardEvent): void => void seen.push(e.key)
+    window.addEventListener('keydown', onKey)
+    try {
+      for (const k of ['k', 'l']) act(() => void view().contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: k, metaKey: true, bubbles: true, cancelable: true })))
+    } finally {
+      window.removeEventListener('keydown', onKey)
+    }
+    expect(seen).toEqual(['k', 'l'])
+    expect(view().state.doc.toString()).toBe(README)
+    expect(screen.queryByRole('textbox', { name: 'Go to line' })).toBeNull()
+  })
+
+  it('pasting a URL over selected words in Write makes a link', () => {
+    mount()
+    const at = README.indexOf('second')
+    act(() => view().dispatch({ selection: EditorSelection.single(at, at + 6) }))
+    const e = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+    Object.defineProperty(e, 'clipboardData', { value: { getData: (t: string) => (t === 'text/plain' ? 'https://example.com/2' : '') } })
+    act(() => void view().contentDOM.dispatchEvent(e))
+    expect(view().state.doc.toString()).toContain('a [second](https://example.com/2) draft')
   })
 })
 

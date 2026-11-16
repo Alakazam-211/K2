@@ -9,8 +9,8 @@
 
 import type { Extension } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap } from '@codemirror/view'
-import { search } from '@codemirror/search'
-import { FORMAT_IDS, FORMAT_KEYS, formatSpec } from './md-commands'
+import { highlightSelectionMatches, search } from '@codemirror/search'
+import { FORMAT_IDS, FORMAT_KEYS, formatSpec, pasteLinkSpec } from './md-commands'
 import { slashExtension } from './slash/slash'
 import { findMarks } from './find/find-view'
 
@@ -71,18 +71,29 @@ export const findPanelExtension: Extension = search({
   },
 })
 
-/** Write's format keys (⌘B, ⌘I, ⇧⌘C, ⌘K, ⌥⌘2, ⇧⌘8); they stop here, so ⌘K never reaches the palette. */
-const formatKeys: Extension = keymap.of(
-  FORMAT_IDS.map((id) => ({
-    key: FORMAT_KEYS[id].key,
-    stopPropagation: true,
-    run: (view: EditorView) => {
-      const spec = formatSpec(view.state, id)
-      if (spec) view.dispatch(spec)
+/** Write's format keys (⌘B, ⌘I, ⇧⌘C, ⌥⌘2, ⇧⌘8). Link has no key (⌘K is the app's palette): a URL pasted over words makes a link. */
+const formatKeys: Extension = [
+  keymap.of(
+    FORMAT_IDS.flatMap((id) => {
+      const k = FORMAT_KEYS[id]
+      if (!k) return []
+      return [{ key: k.key, run: (view: EditorView) => {
+        const spec = formatSpec(view.state, id)
+        if (spec) view.dispatch(spec)
+        return true
+      } }]
+    }),
+  ),
+  EditorView.domEventHandlers({
+    paste(e, view) {
+      const spec = pasteLinkSpec(view.state, e.clipboardData?.getData('text/plain') ?? '')
+      if (!spec) return false
+      e.preventDefault()
+      view.dispatch(spec)
       return true
     },
-  })),
-)
+  }),
+]
 
 /** One mode's extension for the frame's view. `write`: the / menu and the format keys too. */
 export function frameExtension(store: FrameView, o: { write: boolean }): Extension {
@@ -94,5 +105,6 @@ export function frameExtension(store: FrameView, o: { write: boolean }): Extensi
       destroy: () => s.detach(view),
     }
   })
-  return [findMarks, plugin, findPanelExtension, o.write ? [slashExtension(store.slashId), formatKeys] : []]
+  // Selection matches only outside Write: on the page they'd split its marks (a code chip, a link).
+  return [findMarks, plugin, findPanelExtension, o.write ? [slashExtension(store.slashId), formatKeys] : highlightSelectionMatches()]
 }

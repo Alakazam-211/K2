@@ -15,13 +15,14 @@ export type FormatState = Record<FormatId, boolean>
 
 export const FORMAT_NAMES: Record<FormatId, string> = { bold: 'Bold', italic: 'Italic', code: 'Code', link: 'Link', heading: 'Heading', list: 'List' }
 
-/** Each command's key: CodeMirror's name for it, the glyphs the tooltip shows, and aria-keyshortcuts. */
-export const FORMAT_KEYS: Record<FormatId, { key: string; label: string; aria: string }> = {
+/** Each command's key: CodeMirror's name for it, the glyphs the tooltip shows, and aria-keyshortcuts.
+ *  Link has none: ⌘K is the app's command palette. Paste a URL over the words instead (pasteLinkSpec). */
+export const FORMAT_KEYS: Record<FormatId, { key: string; label: string; aria: string } | null> = {
   bold: { key: 'Mod-b', label: '⌘B', aria: 'Meta+B' },
   italic: { key: 'Mod-i', label: '⌘I', aria: 'Meta+I' },
   // ⌘E is Write | Read: Code takes ⇧⌘C.
   code: { key: 'Mod-Shift-c', label: '⇧⌘C', aria: 'Meta+Shift+C' },
-  link: { key: 'Mod-k', label: '⌘K', aria: 'Meta+K' },
+  link: null,
   heading: { key: 'Mod-Alt-2', label: '⌥⌘2', aria: 'Meta+Alt+2' },
   list: { key: 'Mod-Shift-8', label: '⇧⌘8', aria: 'Meta+Shift+8' },
 }
@@ -123,6 +124,18 @@ function toggleList(state: EditorState): TransactionSpec {
     return { changes: { from: line.from, insert: '- ' }, userEvent: 'input.format' }
   }
   return { changes, userEvent: 'input.format' }
+}
+
+const URL_ONLY = /^(?:https?:\/\/|mailto:)\S+$/i
+
+/** Pasting a URL over selected words on one line makes them a link to it (not inside a link already). Else null: paste as usual. */
+export function pasteLinkSpec(state: EditorState, pasted: string): TransactionSpec | null {
+  const url = pasted.trim()
+  const { from, to } = state.selection.main
+  if (state.readOnly || from === to || !URL_ONLY.test(url) || state.selection.ranges.length > 1) return null
+  if (state.doc.lineAt(from).number !== state.doc.lineAt(to).number || enclosing(state, 'Link')) return null
+  const insert = `[${state.sliceDoc(from, to)}](${url})`
+  return { changes: { from, to, insert }, selection: EditorSelection.cursor(from + insert.length), userEvent: 'input.paste' }
 }
 
 /** What a toolbar button (or its key) does to the text; null when the file is read only. */

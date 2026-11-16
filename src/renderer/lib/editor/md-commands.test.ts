@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { ensureSyntaxTree } from '@codemirror/language'
 import { gfmMarkdown } from './write-mode/language'
-import { FORMAT_IDS, FORMAT_KEYS, formatSpec, formatState, type FormatId } from './md-commands'
+import { FORMAT_IDS, FORMAT_KEYS, formatSpec, formatState, pasteLinkSpec, type FormatId } from './md-commands'
 
 function st(doc: string, from: number, to = from): EditorState {
   const s = EditorState.create({ doc, selection: EditorSelection.single(from, to), extensions: [gfmMarkdown()] })
@@ -83,8 +83,33 @@ describe('the formatting commands', () => {
 })
 
 describe('keys', () => {
-  it('every button has a key, shown as the title shows it', () => {
+  it('every button but Link has a key; Link has none, so ⌘K stays the app’s command palette', () => {
     expect(FORMAT_IDS).toEqual(['bold', 'italic', 'code', 'link', 'heading', 'list'])
-    expect(FORMAT_IDS.map((id) => FORMAT_KEYS[id].label)).toEqual(['⌘B', '⌘I', '⇧⌘C', '⌘K', '⌥⌘2', '⇧⌘8'])
+    expect(FORMAT_IDS.map((id) => FORMAT_KEYS[id]?.label ?? null)).toEqual(['⌘B', '⌘I', '⇧⌘C', null, '⌥⌘2', '⇧⌘8'])
+  })
+})
+
+describe('pasting a URL over selected words', () => {
+  const P = 'See the style guide for more.'
+  it('makes the words a link to it', () => {
+    const s = st(P, ...sel(P, 'style guide'))
+    const next = s.update(pasteLinkSpec(s, 'https://example.com/style')!).state
+    expect(next.doc.toString()).toBe('See the [style guide](https://example.com/style) for more.')
+    expect(next.selection.main.head).toBe(next.doc.toString().indexOf(' for more'))
+  })
+  it('takes http, https and mailto, with spaces around trimmed', () => {
+    for (const url of ['http://a.b', ' https://a.b/c?d=1 ', 'mailto:sam@example.com']) expect(pasteLinkSpec(st(P, ...sel(P, 'style')), url)).not.toBeNull()
+  })
+  it('anything else pastes as usual: not a URL, no selection, a selection over lines, a URL with spaces, or inside a link', () => {
+    expect(pasteLinkSpec(st(P, ...sel(P, 'style')), 'style guide')).toBeNull()
+    expect(pasteLinkSpec(st(P, 4), 'https://a.b')).toBeNull()
+    expect(pasteLinkSpec(st('one\ntwo', 0, 7), 'https://a.b')).toBeNull()
+    expect(pasteLinkSpec(st(P, ...sel(P, 'style')), 'https://a.b and more')).toBeNull()
+    const L = 'See [the guide](docs/style.md) now.'
+    expect(pasteLinkSpec(st(L, ...sel(L, 'guide')), 'https://a.b')).toBeNull()
+  })
+  it('read only: nothing', () => {
+    const s = EditorState.create({ doc: P, selection: EditorSelection.single(4, 9), extensions: [gfmMarkdown(), EditorState.readOnly.of(true)] })
+    expect(pasteLinkSpec(s, 'https://a.b')).toBeNull()
   })
 })

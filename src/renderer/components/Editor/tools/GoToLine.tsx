@@ -1,4 +1,4 @@
-// Go to line (build-editors.md E3): ⌘L, or the status line's Ln, Col. A small
+// Go to line (build-editors.md E3): ⌃G, or the status line's Ln, Col. A small
 // field over the status line's left end: "12" or "L12", a column after it if
 // you like ("12:4", "L12:C4"). Enter goes there and puts the keyboard back in
 // the text; a line past the end says how many there are; Esc closes it.

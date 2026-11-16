@@ -124,7 +124,7 @@ export function EditorFrame(props: {
   const tools = useFrameTools({ store: frame.store, fileName: name, mode, readOnly: props.readOnly ?? null })
   const side = useFramePanel({ kind, live, view: tools.view, version: tools.version, narrow: frame.narrow })
   // Ln, Col opens go to line.
-  const pos = (it: StatusItem): StatusItem => (it.id === 'pos' && tools.openGoto ? { id: 'pos', node: <button type="button" data-k2-focus="" data-k2-chamfer="chip" title="Go to line (⌘L)" onClick={tools.openGoto} className="ed-sb no-drag">{it.node}</button> } : it)
+  const pos = (it: StatusItem): StatusItem => (it.id === 'pos' && tools.openGoto ? { id: 'pos', node: <button type="button" data-k2-focus="" data-k2-chamfer="chip" title="Go to line (⌃G)" onClick={tools.openGoto} className="ed-sb no-drag">{it.node}</button> } : it)
   const items = (save ? status.items.flatMap((it) => (it.id !== 'save' ? [it] : word ? [word] : [])) : status.items).map(pos)
   // A file Write can't edit may still owe its words (a live file whose edits are paused): say so.
   if (word && !status.items.some((it) => it.id === 'save')) items.push(word)

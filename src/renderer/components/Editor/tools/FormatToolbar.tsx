@@ -63,8 +63,8 @@ export const FormatToolbar = forwardRef<HTMLDivElement, FormatToolbarProps>(func
             tabIndex={i === stop ? 0 : -1}
             aria-label={FORMAT_NAMES[id]}
             aria-pressed={active[id]}
-            aria-keyshortcuts={FORMAT_KEYS[id].aria}
-            title={`${FORMAT_NAMES[id]} (${FORMAT_KEYS[id].label})`}
+            aria-keyshortcuts={FORMAT_KEYS[id]?.aria}
+            title={`${FORMAT_NAMES[id]} (${FORMAT_KEYS[id]?.label ?? 'or paste a URL over the words'})`}
             className="ed-fb"
             onFocus={() => setStop(i)}
             onKeyDown={(e) => go(e, i)}

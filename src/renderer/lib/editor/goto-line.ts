@@ -1,4 +1,4 @@
-// Go to line (build-editors.md E3): what the small field under ⌘L (or the
+// Go to line (build-editors.md E3): what the small field under ⌃G (or the
 // status line's Ln, Col) takes. "12" or "L12", with a column after it if you
 // like: "12:4", "L12:C4", "L12 C4", even the status line's own "Ln 12, Col 4".
 // Pure.

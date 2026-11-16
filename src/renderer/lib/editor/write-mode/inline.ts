@@ -240,7 +240,8 @@ export function buildInline(state: EditorState, vis: [number, number], read: boo
         case 'InlineCode': {
           const marks = n.node.getChildren('CodeMark')
           if (marks.length === 2) {
-            if (marks[1].from > marks[0].to) b.add(mark('cm-md-code'), marks[0].to, marks[1].from)
+            // The chip is the outermost mark (with the hanging ones, at lowest precedence): no other mark splits its box.
+            if (marks[1].from > marks[0].to) b.hang.push(mark('cm-md-code').range(marks[0].to, marks[1].from))
             b.marker(marks[0].from, marks[0].to)
             b.marker(marks[1].from, marks[1].to)
           }

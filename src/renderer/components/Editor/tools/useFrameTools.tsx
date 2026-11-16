@@ -1,6 +1,6 @@
 // The frame's E3 tools in one place (build-editors.md E3), so EditorFrame
 // only places them: the find bar (⌘F, ⌥⌘F with Replace, ⌘G and ⇧⌘G), go to
-// line (⌘L and the status line's Ln, Col), and in Write the formatting
+// line (⌃G and the status line's Ln, Col), and in Write the formatting
 // toolbar over a selection (⌥F10 takes the keyboard to it) and the / menu.
 // They all act on the view the frame's store holds (lib/editor/frame-view).
 //
@@ -40,6 +40,10 @@ export function useFrameView(store: FrameView): { view: EditorView | null; versi
 }
 
 type Place = { left: number; top: number } | 'dock' | null
+type SlashPlace = { left: number; top: number; maxHeight: number | null }
+
+/** The / menu's height before it's measured (the help line and eight rows). */
+const SLASH_H = 340
 
 export interface FrameToolsOptions {
   store: FrameView
@@ -57,7 +61,8 @@ export function useFrameTools(o: FrameToolsOptions) {
   const hero = useRef<HTMLDivElement>(null)
   const fmtRef = useRef<HTMLDivElement>(null)
   const [fmtPlace, setFmtPlace] = useState<Place>(null)
-  const [slashPlace, setSlashPlace] = useState<{ left: number; top: number } | null>(null)
+  const [slashPlace, setSlashPlace] = useState<SlashPlace | null>(null)
+  const slashRef = useRef<HTMLDivElement>(null)
 
   const write = o.mode === 'write' && o.readOnly === null && !!view && !view.state.readOnly
   const sel = view?.state.selection.main
@@ -90,13 +95,14 @@ export function useFrameTools(o: FrameToolsOptions) {
       openFind(e.altKey)
       return take()
     }
-    if ((mod && k === 'g' && !e.altKey) || e.key === 'F3') {
-      if (!find.open || !spec.search) openFind(false)
-      else hero.current?.closest('[data-testid="editor-tab"]')?.querySelector<HTMLButtonElement>(`[data-testid="ed-find"] [aria-label="${e.shiftKey ? 'Previous match' : 'Next match'}"]`)?.click()
+    // ⌃G: go to line (⌘L is the app's server switcher). ⌘G, ⇧⌘G and F3: the next and previous match.
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && k === 'g') {
+      setGoto(true)
       return take()
     }
-    if (mod && k === 'l' && !e.shiftKey && !e.altKey) {
-      setGoto(true)
+    if ((e.metaKey && k === 'g' && !e.altKey) || e.key === 'F3') {
+      if (!find.open || !spec.search) openFind(false)
+      else hero.current?.closest('[data-testid="editor-tab"]')?.querySelector<HTMLButtonElement>(`[data-testid="ed-find"] [aria-label="${e.shiftKey ? 'Previous match' : 'Next match'}"]`)?.click()
       return take()
     }
     if (e.altKey && e.key === 'F10' && fmtRef.current) {
@@ -140,8 +146,21 @@ export function useFrameTools(o: FrameToolsOptions) {
         const at = view.coordsAtPos(slash.from, 1)
         const width = 280
         const left = at ? Math.min(Math.max(8, clientToCssPx(at.left - hr.left) - 10), Math.max(8, clientToCssPx(hr.width) - width - 8)) : 8
-        const below = at ? clientToCssPx(at.bottom - hr.top) + 6 : 8
-        setSlashPlace({ left: Math.round(left), top: Math.round(below) })
+        // It stays inside the text's scroll area: under the line when it fits, else over it,
+        // else on the roomier side with its list capped (it scrolls).
+        const lo = clientToCssPx(sr.top - hr.top) + 4
+        const hi = clientToCssPx(sr.bottom - hr.top) - 4
+        const below = at ? clientToCssPx(at.bottom - hr.top) + 6 : lo
+        const aboveEnd = at ? clientToCssPx(at.top - hr.top) - 6 : lo
+        const h = slashRef.current?.scrollHeight || SLASH_H
+        const roomBelow = hi - below
+        const roomAbove = aboveEnd - lo
+        const place: SlashPlace =
+          h <= roomBelow ? { left, top: below, maxHeight: null }
+          : h <= roomAbove ? { left, top: aboveEnd - h, maxHeight: null }
+          : roomBelow >= roomAbove ? { left, top: below, maxHeight: Math.max(80, roomBelow) }
+          : { left, top: Math.max(lo, aboveEnd - roomAbove), maxHeight: Math.max(80, roomAbove) }
+        setSlashPlace({ ...place, left: Math.round(place.left), top: Math.round(place.top) })
       } else setSlashPlace(null)
     }
     place()
@@ -155,7 +174,7 @@ export function useFrameTools(o: FrameToolsOptions) {
       if (frame) cancelAnimationFrame(frame)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, version, fmtWanted, !!slash])
+  }, [view, version, fmtWanted, !!slash, slash?.query])
 
   const run = (id: FormatId): void => {
     if (!view) return
@@ -175,7 +194,7 @@ export function useFrameTools(o: FrameToolsOptions) {
     floats: (
       <>
         {fmtPlace && fmtPlace !== 'dock' ? toolbar(false) : null}
-        {view && slash ? <SlashMenu view={view} state={slash} id={o.store.slashId} style={{ position: 'absolute', left: slashPlace?.left ?? 8, top: slashPlace?.top ?? 8 }} /> : null}
+        {view && slash ? <SlashMenu ref={slashRef} view={view} state={slash} id={o.store.slashId} style={{ position: 'absolute', left: slashPlace?.left ?? 8, top: slashPlace?.top ?? 8, ...(slashPlace?.maxHeight ? { maxHeight: slashPlace.maxHeight } : {}), visibility: slashPlace ? undefined : 'hidden' }} /> : null}
       </>
     ),
     /** In the file bar when the margin has no room. */

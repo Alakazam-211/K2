@@ -1,11 +1,13 @@
 // The outline of a markdown file (build-editors.md E3): its headings, ATX
 // (`## Setup`) and setext (a paragraph over `===` or `---`), outside fenced
 // and indented code, as plain words (no `**`, backticks or link targets), with
-// GitHub's slug and the line each starts on. Read from the text, so it's the
-// same in Write, Read, Source and a live doc. Pure.
+// the slug of its address (`@h:<slug>`, lib/editor/live/heading-slug: the
+// kit's grammar, repeats numbered the same way) and the line each starts on.
+// Read from the text, so it's the same in Write, Read, Source and a live doc.
+// Pure.
 
 import type { Text } from '@codemirror/state'
-import { headingSlugger } from './slug'
+import { slugify } from '@/lib/editor/live/heading-slug'
 
 export interface OutlineItem {
   level: number
@@ -40,13 +42,20 @@ const paragraphLine = (s: string): boolean =>
 
 export function outlineOf(doc: Text): OutlineItem[] {
   const out: OutlineItem[] = []
-  const slugger = headingSlugger()
+  // Repeats in document order get -1, -2, as headingSlugs numbers them.
+  const seen = new Map<string, number>()
+  const slugOf = (raw: string): string => {
+    const base = slugify(raw)
+    if (!base) return ''
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    return n === 0 ? base : `${base}-${n}`
+  }
   let fence: { ch: string; len: number } | null = null
   // The paragraph so far: its first line and its words.
   let para: { line: number; text: string } | null = null
   const add = (level: number, raw: string, line: number): void => {
-    const words = plainHeading(raw)
-    out.push({ level, text: words, slug: slugger.slug(words), line })
+    out.push({ level, text: plainHeading(raw), slug: slugOf(raw.trim()), line })
   }
   let n = 0
   for (const iter = doc.iterLines(); !iter.next().done; ) {

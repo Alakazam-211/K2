@@ -1,37 +1,12 @@
 // The outline (build-editors.md E3): the headings of a markdown file, with
-// GitHub's anchor slugs (`@h:<slug>`), the line each starts on, and which one
-// the top of the view is in. Pure.
+// the slugs of their addresses (`@h:<slug>`, the same as
+// lib/editor/live/heading-slug), the line each starts on, and which one the
+// top of the view is in. Pure.
 
 import { describe, expect, it } from 'vitest'
 import { Text } from '@codemirror/state'
-import { githubSlug, headingSlugger, slugAddress } from './slug'
+import { headingSlugs } from '@/lib/editor/live/heading-slug'
 import { headingAt, outlineOf } from './outline'
-
-describe('GitHub anchor slugs', () => {
-  it('lower case, spaces to hyphens, punctuation dropped', () => {
-    expect(githubSlug('Setup')).toBe('setup')
-    expect(githubSlug('How a draft moves')).toBe('how-a-draft-moves')
-    expect(githubSlug('Tokens & limits!')).toBe('tokens--limits')
-    expect(githubSlug('What’s new in 0.46.14?')).toBe('whats-new-in-04614')
-    expect(githubSlug('  Leading and trailing  ')).toBe('--leading-and-trailing--')
-  })
-
-  it('keeps letters and numbers in any script, hyphens and underscores; drops emoji', () => {
-    expect(githubSlug('Café au lait')).toBe('café-au-lait')
-    expect(githubSlug('日本語 の 見出し')).toBe('日本語-の-見出し')
-    expect(githubSlug('snake_case-and-kebab')).toBe('snake_case-and-kebab')
-    expect(githubSlug('Ship it 🚀')).toBe('ship-it-')
-  })
-
-  it('a heading used twice gets -1, -2 after it, as GitHub numbers them', () => {
-    const s = headingSlugger()
-    expect([s.slug('Notes'), s.slug('Notes'), s.slug('Notes'), s.slug('Notes 1')]).toEqual(['notes', 'notes-1', 'notes-2', 'notes-1-1'])
-  })
-
-  it('the address is @h:<slug>', () => {
-    expect(slugAddress('how-a-draft-moves')).toBe('@h:how-a-draft-moves')
-  })
-})
 
 const DOC = [
   '# Quill',
@@ -70,6 +45,11 @@ describe('the outline', () => {
 
   it('slugs each, numbering repeats', () => {
     expect(items.map((h) => h.slug)).toEqual(['quill', 'setup', 'the-bold-code-and-a-link', 'setext-two', 'setext-one', 'setup-1', 'six'])
+  })
+
+  it('an ATX heading’s slug is its address slug (heading-slug.ts), so outline and addresses agree', () => {
+    const atx = ['# Quill', '## Setup', '## Tokens & limits!', '## The **bold** `code` and [a link](x.md)', '### Setup', '## What’s new in 0.46.14?'].join('\n\n')
+    expect(outlineOf(Text.of(atx.split('\n'))).map((h) => h.slug)).toEqual(headingSlugs(atx).map((h) => h.slug))
   })
 
   it('the heading a line is in: the last one at or above it, none above the first', () => {

@@ -68,7 +68,8 @@ describe('the formatting toolbar', () => {
 
   it('each button has its key in the tooltip and for assistive tech', () => {
     const { buttons } = mount()
-    expect(buttons.map((b) => b.title)).toEqual(['Bold (⌘B)', 'Italic (⌘I)', 'Code (⇧⌘C)', 'Link (⌘K)', 'Heading (⌥⌘2)', 'List (⇧⌘8)'])
+    expect(buttons.map((b) => b.title)).toEqual(['Bold (⌘B)', 'Italic (⌘I)', 'Code (⇧⌘C)', 'Link (or paste a URL over the words)', 'Heading (⌥⌘2)', 'List (⇧⌘8)'])
+    expect(buttons[3].hasAttribute('aria-keyshortcuts')).toBe(false)
     expect(buttons[0].getAttribute('aria-keyshortcuts')).toBe('Meta+B')
     expect(buttons[4].getAttribute('aria-keyshortcuts')).toBe('Meta+Alt+2')
   })

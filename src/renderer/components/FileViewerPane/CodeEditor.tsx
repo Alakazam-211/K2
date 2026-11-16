@@ -808,7 +808,7 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
       rectangularSelection(),
       indentOnInput(),
       closeBrackets(),
-      highlightSelectionMatches(),
+      display ? [] : highlightSelectionMatches(), // in the editor frame its own extension brings them (not in Write)
       // Settings-driven compartments. Markdown always soft-wraps (prose shouldn't scroll sideways) unless the frame says.
       c.wrap.of((display?.wrap ?? (es.wordWrap || isMarkdownPath(filePath))) ? EditorView.lineWrapping : []),
       c.tabSize.of([EditorState.tabSize.of(effectiveTabSize), indentUnit.of(' '.repeat(effectiveTabSize))]),

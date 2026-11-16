@@ -139,7 +139,7 @@ describe('Replace', () => {
   it('a held range takes the replace (holds never refuse a person), and the hold keeps its lines', () => {
     const doc = ['# Harbor', '', '## Setup', '', '1. Clone the draft.', '2. Open the draft.', '', '## Notes', 'A draft.'].join('\n')
     let s = EditorState.create({ doc, extensions: [holdField] })
-    s = s.update({ effects: setHolds.of([{ who: 'atlas', claim: 'c1', name: 'Atlas', agent: true, slot: 1, first: 3, last: 6, note: 'rewriting Setup', hold: true }]) }).state
+    s = s.update({ effects: setHolds.of([{ who: 'atlas', claim: 'c1', name: 'Atlas', agent: true, slot: 1, first: 3, last: 6, at: 0, note: 'rewriting Setup', hold: true }]) }).state
     const tr = s.update(replaceAllSpec(s, spec('draft', { replace: 'sketch' }))!)
     expect(tr.state.doc.toString().match(/sketch/g)).toHaveLength(3)
     const [h] = holdsIn(tr.state)

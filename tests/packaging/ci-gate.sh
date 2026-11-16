@@ -383,8 +383,9 @@ for g in k2-home-gate.sh private-docs-gate.sh; do
 done
 # ...and still catches what it's for, in a tree of the test's own.
 mkdir -p "$tmp/gt/scripts" "$tmp/gt/crates/x" "$tmp/gt/src-tauri" "$tmp/gt/src" "$tmp/gt/cli" "$tmp/gt/.k2/prds" "$tmp/gt/.k2/notes"
-cp "$ROOT/scripts/k2-home-gate.sh" "$ROOT/scripts/private-docs-gate.sh" "$tmp/gt/scripts/"
+cp "$ROOT/scripts/k2-home-gate.sh" "$ROOT/scripts/k2-home-dot-gate.py" "$ROOT/scripts/private-docs-gate.sh" "$tmp/gt/scripts/"
 : > "$tmp/gt/scripts/k2-home-allowlist.txt"
+: > "$tmp/gt/scripts/k2-home-dot-allowlist.txt"
 printf 'let p = "~/.k2so/x";\n// a comment: ~/.k2so is fine\n' > "$tmp/gt/crates/x/lib.rs"
 mkdir -p "$tmp/gt/crates/x/target"; printf 'let p = "~/.k2so/built";\n' > "$tmp/gt/crates/x/target/out.rs"
 rc=0; out="$(PATH="$tmp/nogit:$PATH" bash "$tmp/gt/scripts/k2-home-gate.sh" 2>&1)" || rc=$?

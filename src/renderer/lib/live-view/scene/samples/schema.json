@@ -1,0 +1,113 @@
+{
+ "_golden": {
+  "sample": true,
+  "hand_made": true,
+  "from": "k2-mpc-blend 2c25e100: live/mod.rs SCHEMA and COMPOSITE, live/view.rs VIEW, live/place.rs SPACE; serialised as kit v0.18.0 wire.ts KeyedSchema and ViewSchemaJson; collection nesting as a schema relation per K2 Cores' ruling of 2026-11-13",
+  "replace_with": "K2 Cores' pinned expected-view snapshot (after Nov 19), in the pptx goldens' shape",
+  "notes": [
+   "relations: collection nesting is a generic relation in the kit; its name (\"parent\") and shape are PROVISIONAL"
+  ]
+ },
+ "keyed": {
+  "name": "blend",
+  "roots": [
+   {
+    "name": "colls",
+    "kind": "list"
+   },
+   {
+    "name": "objs",
+    "kind": "list"
+   },
+   {
+    "name": "coll_props",
+    "kind": "map"
+   },
+   {
+    "name": "obj_props",
+    "kind": "map"
+   },
+   {
+    "name": "scene",
+    "kind": "map"
+   }
+  ],
+  "composite": [
+   {
+    "map": "coll_props",
+    "list": "colls"
+   },
+   {
+    "map": "obj_props",
+    "list": "objs"
+   }
+  ]
+ },
+ "view": {
+  "containers": "colls",
+  "units": "objs",
+  "unit_container_field": "coll",
+  "container_id_field": null,
+  "native_unit": "scene-unit",
+  "page": null,
+  "container_fields": {
+   "title": "name",
+   "hidden": "hidden",
+   "layout": null
+  },
+  "unit_fields": {
+   "kind": {
+    "list_value": true
+   },
+   "name": "name",
+   "alt": null,
+   "text": null,
+   "hidden": "hidden",
+   "editable_text": null,
+   "placeholder": null
+  },
+  "relations": [
+   {
+    "name": "parent",
+    "from": "colls",
+    "field": "parent",
+    "to": "colls",
+    "_provisional": "the relation's name and shape are not pinned yet (K2 Cores, 2026-11-13)"
+   }
+  ],
+  "geometry": null,
+  "field_class": {
+   "xform": "geometry",
+   "quat": "geometry",
+   "hidden": "visibility",
+   "noselect": "visibility",
+   "norender": "visibility",
+   "name": "text",
+   "nid": "meta",
+   "coll": "meta",
+   "also": "meta",
+   "data": "meta",
+   "parent": "meta",
+   "rotmode": "meta",
+   "edit": "meta"
+  },
+  "derived": {
+   "containers": [],
+   "units": []
+  },
+  "unit_derived": [
+   "transform",
+   "data"
+  ],
+  "space": {
+   "unit_fields": [
+    "xform",
+    "rotmode",
+    "quat",
+    "parent"
+   ],
+   "container_fields": [],
+   "precision": "f32"
+  }
+ }
+}

@@ -1,12 +1,14 @@
-// The live 3D scene tab on the shared shell. Phase 1: the header, the side
-// panel (Activity, then People and holds: the scene's order), the notices
-// and the say row while following; the picture's place is a placeholder.
-// Later phases (build-live-scene.md S2–S8) fill the hero.
+// The live 3D scene tab on the shared shell: the header, the notices and the
+// say row while following; the side panel is the scene's own (S2: Activity,
+// People and holds, Outliner, Properties, from the scene model). The
+// picture's place is still a placeholder; later phases (build-live-scene.md
+// S3–S8) fill the hero.
 
 import { personById } from '@/lib/live-view/shared/people'
 import { CubeGlyph } from '../shell/glyphs'
 import type { ShellConfig, ShellHeroProps } from '../shell/shell-config'
 import { StagePlaceholder } from '../shell/StagePlaceholder'
+import { ScenePanel, scenePanelFor } from './ScenePanel'
 
 function SceneHero(p: ShellHeroProps): React.JSX.Element {
   const line = p.state === 'loading' ? 'Opening the scene. The list of objects comes first, then the picture.' : 'The scene’s picture shows here: who’s looking where, and each change as it lands.'
@@ -35,4 +37,7 @@ export const SCENE_SHELL: ShellConfig = {
     return { label, title: p.place ?? 'the whole scene', address: p.viewAddress ?? '@scene' }
   },
   Hero: SceneHero,
+  // The scene's own panel (Activity, People and holds, Outliner, Properties) for
+  // snapshots that carry the scene; the shell's sections otherwise.
+  Panel: { when: scenePanelFor, View: ScenePanel },
 }

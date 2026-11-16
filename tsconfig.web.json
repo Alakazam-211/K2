@@ -41,6 +41,7 @@
     "src/shared/**/*.ts",
     "src/shared/**/*.json",
     "src/renderer/lib/live-view/samples/*.json",
-    "src/renderer/lib/live-view/timeline/samples/*.json"
+    "src/renderer/lib/live-view/timeline/samples/*.json",
+    "src/renderer/lib/live-view/scene/samples/*.json"
   ]
 }

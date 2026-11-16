@@ -1,0 +1,73 @@
+{
+ "_golden": {
+  "sample": true,
+  "hand_made": true,
+  "not_kit_output": true,
+  "from": "K2 Render's measured k2-scenerender (clay still: no textures, Lambert, plain background, lossless WebP; 320 px in 4-250 ms, 1920 px in 60-400 ms; views @scene, @cam:<id>, @obj:<id>, an 8-frame turntable; states ready, stale, rendering, failed; widths 320, 640, 1920)",
+  "type": "views of the file + preview records",
+  "notes": [
+   "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason",
+   "view and projection matrices per still are an ASK: the mock computes them the way it draws them",
+   "local bounds per object are an ASK (from the mesh read): the mock reads them from its own sample shapes"
+  ]
+ },
+ "views": [
+  {
+   "view": "@scene",
+   "name": "Scene",
+   "kind": "scene"
+  },
+  {
+   "view": "@cam:1",
+   "name": "Camera",
+   "_name": "PROVISIONAL: K2 Cores' mesh read doesn't carry camera names or lenses yet; until it does the tab shows Camera 1, Camera 2 (in view-list order) and no lens",
+   "kind": "camera",
+   "object": "@obj:1",
+   "active": true
+  },
+  {
+   "view": "@cam:26",
+   "name": "Camera.001",
+   "_name": "PROVISIONAL (see above)",
+   "kind": "camera",
+   "object": "@obj:26"
+  },
+  {
+   "view": "@obj:*",
+   "name": "Framed object",
+   "kind": "object"
+  },
+  {
+   "view": "@scene/turntable",
+   "name": "Turntable",
+   "kind": "turntable",
+   "frames": 8
+  }
+ ],
+ "widths": [
+  320,
+  640,
+  1920
+ ],
+ "background": {
+  "_note": "K2 Render sends a lossless WebP WITH ALPHA and no background: the tab paints the look's picture surface behind it (K2 tokens: Glass dark --color-bg-elevated, Glass light --color-bg-inset, Terminal dark --color-bg-inset, Terminal light --color-bg-elevated). Contact shadows are alpha",
+  "alpha": true
+ },
+ "bounds": {
+  "_note": "local bounds from the mesh read; approx: modifiers marks bounds that miss geometry a modifier adds (the box is drawn dashed, the note is in the picture details)",
+  "@obj:16": {
+   "approx": "modifiers",
+   "why": "an array modifier adds boards the bounds leave out"
+  }
+ },
+ "records": [
+  {
+   "rev": 60,
+   "view": "@scene",
+   "state": "ready",
+   "width": 1920,
+   "ms": 212,
+   "without_modifiers": false
+  }
+ ]
+}

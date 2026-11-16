@@ -1,0 +1,944 @@
+{
+ "_golden": {
+  "sample": true,
+  "hand_made": true,
+  "not_kit_output": true,
+  "from": "verbs.rs at 2c25e100 (ops per verb: object place sets xform, object visibility the named bits, object rename name and nid in one change); OpsChangeFrame, UnitDelta, roster events (kit v0.18.0 wire.ts); refusal and outside-save events per K2 Cores' rulings of 2026-11-13",
+  "type": "timeline + OpsChangeFrame[]",
+  "notes": [
+   "at_ms is a fake clock",
+   "turn ids made up in the daemon's form",
+   "every edit is an agent's: v1 is \"agents act, people watch\"",
+   "UnitDelta ops for a rename (props) are GUESSED: the pack pins none",
+   "the rename's nid escapes the space as %20 (scene.rs escape_name)",
+   "viewAddress (presence) and outside_save are the kit's final shapes (main 02ddb6aa); preview events are PROVISIONAL (asked of K2 Render)",
+   "verb_refused (K2 Cores kit c23d2349): {at_ms, actor, client, turn, verb, unit, code, holder, claim}, seen by every viewer who can read. Field names from the kit; values here are sample",
+   "outside_save (kit main 02ddb6aa, final): one unnumbered frame per outside save, sent AFTER that save's change frame, only to viewers who can read the doc. {outcome: ingested, rev} | {outcome: kept_both, rev, kept, copy: {name, path, doc?}} | {outcome: declined, code, message} (once, on the transition) | {outcome: missing} (once, on the transition). No frame for an unchanged file or the kit's own write. kept = the stored version id of what was live before; copy.doc only when K2's host fills it",
+   "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+  ]
+ },
+ "actors": {
+  "agent:atlas": {
+   "id": "agent:atlas",
+   "name": "Atlas",
+   "kind": "agent",
+   "colour": "#7c6ae0"
+  },
+  "agent:brook": {
+   "id": "agent:brook",
+   "name": "Brook",
+   "kind": "agent",
+   "colour": "#3fa37a"
+  },
+  "person:ada": {
+   "id": "person:ada",
+   "name": "Ada",
+   "kind": "person",
+   "colour": "#e8872a"
+  },
+  "person:sam": {
+   "id": "person:sam",
+   "name": "Sam",
+   "kind": "person",
+   "colour": "#2b9bd9"
+  },
+  "kit:external": {
+   "id": "kit:external",
+   "name": "kit:external",
+   "kind": "file",
+   "colour": null
+  }
+ },
+ "timeline": [
+  {
+   "event": "welcome",
+   "at_ms": 300000,
+   "frame": {
+    "type": "welcome",
+    "client": 90122,
+    "self": "person:ada",
+    "rights": "edit",
+    "wire": 3,
+    "features": [
+     "presence",
+     "claims",
+     "focus",
+     "range",
+     "keyed_watch"
+    ],
+    "turn_idle_ms": 20000
+   }
+  },
+  {
+   "event": "keyed_snapshot",
+   "at_ms": 300040,
+   "seq": 1,
+   "upto": 60,
+   "pages": 10,
+   "_note": "5 keyed_page runs (colls, objs, coll_props, obj_props, scene) then 5 units pages, one per container"
+  },
+  {
+   "event": "roster_flush",
+   "at_ms": 301000,
+   "roster_events": [
+    {
+     "kind": "claim_started_elems",
+     "who": "agent:atlas",
+     "claim": "claim-12",
+     "root": "objs",
+     "keys": [
+      "@obj:10",
+      "@obj:11",
+      "@obj:12"
+     ],
+     "note": "arranging the dining set",
+     "hold": true,
+     "expires_ms": 361000,
+     "version": 60,
+     "actor": {
+      "id": "agent:atlas",
+      "name": "Atlas",
+      "kind": "agent",
+      "colour": "#7c6ae0"
+     },
+     "started_ms": 301000
+    },
+    {
+     "kind": "focus",
+     "who": "agent:atlas",
+     "focus": {
+      "root": "colls",
+      "key": "@coll:3"
+     },
+     "client": 4711
+    },
+    {
+     "kind": "selection",
+     "who": "agent:atlas",
+     "selection": {
+      "root": "objs",
+      "keys": [
+       "@obj:10",
+       "@obj:11",
+       "@obj:12"
+      ]
+     },
+     "client": 4711
+    },
+    {
+     "kind": "ViewAddress",
+     "who": "agent:atlas",
+     "viewAddress": "@obj:10",
+     "client": 4711
+    }
+   ],
+   "_note": "Atlas holds the dining set. Its view is the still it last asked K2 Render for: Table, framed (the view field is PROVISIONAL)"
+  },
+  {
+   "event": "roster_flush",
+   "at_ms": 301800,
+   "roster_events": [
+    {
+     "kind": "claim_started_elems",
+     "who": "agent:brook",
+     "claim": "claim-13",
+     "root": "objs",
+     "keys": [
+      "@obj:20"
+     ],
+     "note": "restyling the vase",
+     "hold": true,
+     "expires_ms": 363000,
+     "version": 60,
+     "actor": {
+      "id": "agent:brook",
+      "name": "Brook",
+      "kind": "agent",
+      "colour": "#3fa37a"
+     },
+     "started_ms": 301800
+    },
+    {
+     "kind": "focus",
+     "who": "agent:brook",
+     "focus": {
+      "root": "colls",
+      "key": "@coll:4"
+     },
+     "client": 4712
+    },
+    {
+     "kind": "selection",
+     "who": "agent:brook",
+     "selection": {
+      "root": "objs",
+      "keys": [
+       "@obj:20"
+      ]
+     },
+     "client": 4712
+    },
+    {
+     "kind": "ViewAddress",
+     "who": "agent:brook",
+     "viewAddress": "@cam:26",
+     "client": 4712
+    }
+   ],
+   "_note": "Brook, a second agent, joins, holds Vase for \"restyling the vase\" and looks through Camera.001"
+  },
+  {
+   "event": "ops_change",
+   "at_ms": 302500,
+   "rev": 61,
+   "_note": "Atlas moves Table. The kit's place op moves its box at once (Vase rides along: it is parented); the picture is redrawn by K2 Render"
+  },
+  {
+   "event": "roster_flush",
+   "at_ms": 302520,
+   "after_rev": 61,
+   "roster_events": [
+    {
+     "kind": "selection",
+     "who": "agent:atlas",
+     "selection": {
+      "root": "objs",
+      "keys": [
+       "@obj:10"
+      ]
+     },
+     "client": 4711
+    }
+   ],
+   "_note": "the kit moves an agent's selection to the objects its verb touched, focus to their collection (plan section 3)"
+  },
+  {
+   "event": "preview",
+   "at_ms": 302515,
+   "frame": {
+    "type": "preview",
+    "rev": 61,
+    "view": "@scene",
+    "state": "rendering",
+    "width": 1920,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   },
+   "after_rev": 61
+  },
+  {
+   "event": "preview",
+   "at_ms": 302895,
+   "frame": {
+    "type": "preview",
+    "rev": 61,
+    "view": "@scene",
+    "state": "ready",
+    "width": 1920,
+    "ms": 380,
+    "without_modifiers": false,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   }
+  },
+  {
+   "event": "ops_change",
+   "at_ms": 304000,
+   "rev": 62,
+   "_note": "Atlas turns Table 15 degrees"
+  },
+  {
+   "event": "preview",
+   "at_ms": 304015,
+   "frame": {
+    "type": "preview",
+    "rev": 62,
+    "view": "@scene",
+    "state": "rendering",
+    "width": 1920,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   },
+   "after_rev": 62
+  },
+  {
+   "event": "preview",
+   "at_ms": 304355,
+   "frame": {
+    "type": "preview",
+    "rev": 62,
+    "view": "@scene",
+    "state": "ready",
+    "width": 1920,
+    "ms": 340,
+    "without_modifiers": false,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   }
+  },
+  {
+   "event": "ops_change",
+   "at_ms": 305200,
+   "rev": 63,
+   "_note": "Atlas resizes Rug (no claim: Rug isn't held)"
+  },
+  {
+   "event": "roster_flush",
+   "at_ms": 305220,
+   "after_rev": 63,
+   "roster_events": [
+    {
+     "kind": "focus",
+     "who": "agent:atlas",
+     "focus": {
+      "root": "colls",
+      "key": "@coll:2"
+     },
+     "client": 4711
+    },
+    {
+     "kind": "selection",
+     "who": "agent:atlas",
+     "selection": {
+      "root": "objs",
+      "keys": [
+       "@obj:8"
+      ]
+     },
+     "client": 4711
+    },
+    {
+     "kind": "ViewAddress",
+     "who": "agent:atlas",
+     "viewAddress": "@scene",
+     "client": 4711
+    }
+   ]
+  },
+  {
+   "event": "preview",
+   "at_ms": 305215,
+   "frame": {
+    "type": "preview",
+    "rev": 63,
+    "view": "@scene",
+    "state": "rendering",
+    "width": 1920,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   },
+   "after_rev": 63
+  },
+  {
+   "event": "preview",
+   "at_ms": 305625,
+   "frame": {
+    "type": "preview",
+    "rev": 63,
+    "view": "@scene",
+    "state": "ready",
+    "width": 1920,
+    "ms": 410,
+    "without_modifiers": false,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   }
+  },
+  {
+   "event": "verb_refused",
+   "at_ms": 306200,
+   "frame": {
+    "type": "verb_refused",
+    "actor": {
+     "id": "agent:atlas",
+     "name": "Atlas",
+     "kind": "agent",
+     "colour": "#7c6ae0"
+    },
+    "client": 4711,
+    "turn": "t:7b3e91c04d2a58f6.4",
+    "verb": "object place",
+    "unit": "@obj:20",
+    "code": "MPC-E301",
+    "holder": "agent:brook",
+    "claim": "claim-13",
+    "at_ms": 306200,
+    "_provisional": "verb_refused (K2 Cores kit c23d2349): {at_ms, actor, client, turn, verb, unit, code, holder, claim}, seen by every viewer who can read. Field names from the kit; values here are sample"
+   },
+   "_note": "Atlas tries to move Vase; Brook holds it, so the verb is refused (MPC-E301). Nothing changes; the watch says who, what and why"
+  },
+  {
+   "event": "turn_end",
+   "at_ms": 308500,
+   "frame": {
+    "type": "turn_end",
+    "turn": "t:7b3e91c04d2a58f6.4",
+    "actor": {
+     "id": "agent:atlas",
+     "name": "Atlas",
+     "kind": "agent",
+     "colour": "#7c6ae0"
+    },
+    "at_ms": 308500
+   },
+   "_note": "host event (K2): Atlas is done and lets go of the dining set"
+  },
+  {
+   "event": "roster_flush",
+   "at_ms": 308500,
+   "roster_events": [
+    {
+     "kind": "claim_ended",
+     "who": "agent:atlas",
+     "claim": "claim-12",
+     "how": "released",
+     "version": 63,
+     "actor": {
+      "id": "agent:atlas",
+      "name": "Atlas",
+      "kind": "agent",
+      "colour": "#7c6ae0"
+     },
+     "at_ms": 308500,
+     "at_rev": null
+    }
+   ]
+  },
+  {
+   "event": "ops_change",
+   "at_ms": 316000,
+   "rev": 64,
+   "_note": "Brook renames Vase to Tall vase (name and nid in one change). The shape didn't change, so the picture isn't redrawn"
+  },
+  {
+   "event": "roster_flush",
+   "at_ms": 316020,
+   "after_rev": 64,
+   "roster_events": [
+    {
+     "kind": "claim_ended",
+     "who": "agent:brook",
+     "claim": "claim-13",
+     "how": "released",
+     "version": 64,
+     "actor": {
+      "id": "agent:brook",
+      "name": "Brook",
+      "kind": "agent",
+      "colour": "#3fa37a"
+     },
+     "at_ms": 316020,
+     "at_rev": 64
+    }
+   ]
+  },
+  {
+   "event": "preview",
+   "at_ms": 316025,
+   "frame": {
+    "type": "preview",
+    "rev": 64,
+    "view": "@scene",
+    "state": "ready",
+    "width": 1920,
+    "reused_from": 63,
+    "ms": 0,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   },
+   "after_rev": 64
+  },
+  {
+   "event": "turn_end",
+   "at_ms": 317000,
+   "after_rev": 64,
+   "frame": {
+    "type": "turn_end",
+    "turn": "t:2c91d0e4b7a35f18.2",
+    "actor": {
+     "id": "agent:brook",
+     "name": "Brook",
+     "kind": "agent",
+     "colour": "#3fa37a"
+    },
+    "at_ms": 317000
+   },
+   "_note": "host event (K2)"
+  },
+  {
+   "event": "ops_change",
+   "at_ms": 330000,
+   "rev": 65,
+   "_note": "an outside save: someone moved Sofa and renamed Mug to Cup in the app and saved. Paired by nid, else by data: Mug is the one object holding @me:Mug, so it keeps @obj:21"
+  },
+  {
+   "event": "outside_save",
+   "at_ms": 330010,
+   "after_rev": 65,
+   "frame": {
+    "type": "outside_save",
+    "outcome": "ingested",
+    "rev": 65
+   },
+   "_note": "the save settles: taken in (ingested). Its changes arrived just before as a change by kit:external"
+  },
+  {
+   "event": "preview",
+   "at_ms": 330015,
+   "frame": {
+    "type": "preview",
+    "rev": 65,
+    "view": "@scene",
+    "state": "rendering",
+    "width": 1920,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   },
+   "after_rev": 65
+  },
+  {
+   "event": "preview",
+   "at_ms": 330465,
+   "frame": {
+    "type": "preview",
+    "rev": 65,
+    "view": "@scene",
+    "state": "ready",
+    "width": 1920,
+    "ms": 450,
+    "without_modifiers": false,
+    "_provisional": "preview event: not pinned (asked of K2 Render, 2026-11-13). The client hears rendering when a still for a newer rev starts, ready when it lands (the stale still stays up meanwhile), failed with a reason"
+   }
+  }
+ ],
+ "frames": [
+  {
+   "type": "ops_change",
+   "seq": 11,
+   "rev": 61,
+   "at_ms": 302500,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:atlas",
+    "name": "Atlas",
+    "kind": "agent",
+    "colour": "#7c6ae0"
+   },
+   "client": 4711,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:7b3e91c04d2a58f6.4",
+   "verb": "object place",
+   "claim": "claim-12",
+   "ops": [
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:10",
+     "field": "xform",
+     "before": "0.6,0.4,0,0,0,0,1,1,1",
+     "after": "0.2,0.9,0,0,0,0,1,1,1"
+    }
+   ],
+   "units": [
+    {
+     "key": "@obj:10",
+     "container": "@coll:3",
+     "ops": [
+      "place"
+     ],
+     "geom_before": null,
+     "geom_after": null,
+     "fields": [
+      "xform"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null,
+     "placement_after": {
+      "relative_to": null,
+      "steps": [
+       {
+        "trs": {
+         "loc": [
+          0.2,
+          0.9,
+          0
+         ],
+         "rot": {
+          "euler": "XYZ",
+          "angles": [
+           0,
+           0,
+           0
+          ]
+         },
+         "scale": [
+          1,
+          1,
+          1
+         ]
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@coll:3"
+   ],
+   "derived": {
+    "units": {
+     "@obj:10": {
+      "transform": "loc 0.2,0.9,0 rot 0,0,0 scale 1,1,1"
+     }
+    }
+   },
+   "render_hashes": null
+  },
+  {
+   "type": "ops_change",
+   "seq": 12,
+   "rev": 62,
+   "at_ms": 304000,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:atlas",
+    "name": "Atlas",
+    "kind": "agent",
+    "colour": "#7c6ae0"
+   },
+   "client": 4711,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:7b3e91c04d2a58f6.4",
+   "verb": "object place",
+   "claim": "claim-12",
+   "ops": [
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:10",
+     "field": "xform",
+     "before": "0.2,0.9,0,0,0,0,1,1,1",
+     "after": "0.2,0.9,0,0,0,0.2617994,1,1,1"
+    }
+   ],
+   "units": [
+    {
+     "key": "@obj:10",
+     "container": "@coll:3",
+     "ops": [
+      "place"
+     ],
+     "geom_before": null,
+     "geom_after": null,
+     "fields": [
+      "xform"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null,
+     "placement_after": {
+      "relative_to": null,
+      "steps": [
+       {
+        "trs": {
+         "loc": [
+          0.2,
+          0.9,
+          0
+         ],
+         "rot": {
+          "euler": "XYZ",
+          "angles": [
+           0,
+           0,
+           0.2617994
+          ]
+         },
+         "scale": [
+          1,
+          1,
+          1
+         ]
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@coll:3"
+   ],
+   "derived": {
+    "units": {
+     "@obj:10": {
+      "transform": "loc 0.2,0.9,0 rot 0,0,0.2617994 scale 1,1,1"
+     }
+    }
+   },
+   "render_hashes": null
+  },
+  {
+   "type": "ops_change",
+   "seq": 13,
+   "rev": 63,
+   "at_ms": 305200,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:atlas",
+    "name": "Atlas",
+    "kind": "agent",
+    "colour": "#7c6ae0"
+   },
+   "client": 4711,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:7b3e91c04d2a58f6.4",
+   "verb": "object place",
+   "claim": null,
+   "ops": [
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:8",
+     "field": "xform",
+     "before": "0.2,-0.3,0.005,0,0,0,1.6,1.1,1",
+     "after": "0.2,-0.3,0.005,0,0,0,2,1.4,1"
+    }
+   ],
+   "units": [
+    {
+     "key": "@obj:8",
+     "container": "@coll:2",
+     "ops": [
+      "place"
+     ],
+     "geom_before": null,
+     "geom_after": null,
+     "fields": [
+      "xform"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null,
+     "placement_after": {
+      "relative_to": null,
+      "steps": [
+       {
+        "trs": {
+         "loc": [
+          0.2,
+          -0.3,
+          0.005
+         ],
+         "rot": {
+          "euler": "XYZ",
+          "angles": [
+           0,
+           0,
+           0
+          ]
+         },
+         "scale": [
+          2,
+          1.4,
+          1
+         ]
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@coll:2"
+   ],
+   "derived": {
+    "units": {
+     "@obj:8": {
+      "transform": "loc 0.2,-0.3,0.005 rot 0,0,0 scale 2,1.4,1"
+     }
+    }
+   },
+   "render_hashes": null
+  },
+  {
+   "type": "ops_change",
+   "seq": 14,
+   "rev": 64,
+   "at_ms": 316000,
+   "change_kind": "edit",
+   "actor": {
+    "id": "agent:brook",
+    "name": "Brook",
+    "kind": "agent",
+    "colour": "#3fa37a"
+   },
+   "client": 4712,
+   "via": "cli",
+   "on_behalf_of": null,
+   "turn": "t:2c91d0e4b7a35f18.2",
+   "verb": "object rename",
+   "claim": "claim-13",
+   "ops": [
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:20",
+     "field": "name",
+     "before": "Vase",
+     "after": "Tall vase"
+    },
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:20",
+     "field": "nid",
+     "before": "@ob:Vase",
+     "after": "@ob:Tall%20vase"
+    }
+   ],
+   "units": [
+    {
+     "key": "@obj:20",
+     "container": "@coll:4",
+     "ops": [
+      "props"
+     ],
+     "geom_before": null,
+     "geom_after": null,
+     "fields": [
+      "name",
+      "nid"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@coll:4"
+   ],
+   "derived": null,
+   "render_hashes": null
+  },
+  {
+   "type": "ops_change",
+   "seq": 15,
+   "rev": 65,
+   "at_ms": 330000,
+   "change_kind": "external",
+   "actor": {
+    "id": "kit:external",
+    "name": "kit:external",
+    "kind": "file",
+    "colour": null
+   },
+   "client": 0,
+   "via": "file",
+   "on_behalf_of": null,
+   "turn": null,
+   "verb": null,
+   "claim": null,
+   "ops": [
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:15",
+     "field": "xform",
+     "before": "-1.9,-1.2,0,0,0,1.5707964,1,1,1",
+     "after": "-2.1,-0.9,0,0,0,1.5707964,1,1,1"
+    },
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:21",
+     "field": "name",
+     "before": "Mug",
+     "after": "Cup"
+    },
+    {
+     "root": "obj_props",
+     "kind": "map",
+     "op": "set",
+     "key": "@obj:21",
+     "field": "nid",
+     "before": "@ob:Mug",
+     "after": "@ob:Cup"
+    }
+   ],
+   "units": [
+    {
+     "key": "@obj:15",
+     "container": "@coll:3",
+     "ops": [
+      "place"
+     ],
+     "geom_before": null,
+     "geom_after": null,
+     "fields": [
+      "xform"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null,
+     "placement_after": {
+      "relative_to": null,
+      "steps": [
+       {
+        "trs": {
+         "loc": [
+          -2.1,
+          -0.9,
+          0
+         ],
+         "rot": {
+          "euler": "XYZ",
+          "angles": [
+           0,
+           0,
+           1.5707964
+          ]
+         },
+         "scale": [
+          1,
+          1,
+          1
+         ]
+        }
+       }
+      ]
+     }
+    },
+    {
+     "key": "@obj:21",
+     "container": "@coll:4",
+     "ops": [
+      "props"
+     ],
+     "geom_before": null,
+     "geom_after": null,
+     "fields": [
+      "name",
+      "nid"
+     ],
+     "hidden_after": null,
+     "placeholder_type": null
+    }
+   ],
+   "containers_changed": [],
+   "containers": [
+    "@coll:3",
+    "@coll:4"
+   ],
+   "derived": {
+    "units": {
+     "@obj:15": {
+      "transform": "loc -2.1,-0.9,0 rot 0,0,1.5707964 scale 1,1,1"
+     }
+    }
+   },
+   "render_hashes": null
+  }
+ ]
+}

@@ -1,0 +1,178 @@
+{
+ "_golden": {
+  "sample": true,
+  "hand_made": true,
+  "from": "expectations written by hand for the mock's checks",
+  "type": "presence and claims at points P1-P3",
+  "notes": [
+   "peer.viewAddress (kit main 02ddb6aa): any kit address, at most 512 bytes; optional; agents get it from the kit and their verbs move it, people's clients set it. The scene has no timePosition (that is the timeline's)"
+  ]
+ },
+ "start": [
+  {
+   "handle": "person:ada",
+   "name": "Ada",
+   "kind": "person",
+   "colour": "#e8872a",
+   "away": false,
+   "isSelf": true,
+   "focus": {
+    "root": "colls",
+    "key": "@coll:1"
+   },
+   "selection": null,
+   "viewAddress": "@scene"
+  },
+  {
+   "handle": "person:sam",
+   "name": "Sam",
+   "kind": "person",
+   "colour": "#2b9bd9",
+   "away": false,
+   "focus": {
+    "root": "colls",
+    "key": "@coll:2"
+   },
+   "selection": {
+    "root": "objs",
+    "keys": [
+     "@obj:4"
+    ]
+   },
+   "viewAddress": "@scene"
+  },
+  {
+   "handle": "agent:atlas",
+   "name": "Atlas",
+   "kind": "agent",
+   "colour": "#7c6ae0",
+   "away": false,
+   "focus": null,
+   "selection": null,
+   "viewAddress": "@scene"
+  }
+ ],
+ "points": [
+  {
+   "id": "P1",
+   "after": "claim-12 started",
+   "rev": 60,
+   "on": {
+    "agent:atlas": [
+     "@obj:10",
+     "@obj:11",
+     "@obj:12"
+    ],
+    "person:sam": [
+     "@obj:4"
+    ]
+   },
+   "focus": {
+    "agent:atlas": "@coll:3",
+    "person:sam": "@coll:2"
+   },
+   "views": {
+    "agent:atlas": "@obj:10",
+    "person:sam": "@scene",
+    "person:ada": "@scene"
+   },
+   "claims": [
+    {
+     "claim": "claim-12",
+     "by": "agent:atlas",
+     "keys": [
+      "@obj:10",
+      "@obj:11",
+      "@obj:12"
+     ],
+     "note": "arranging the dining set"
+    }
+   ],
+   "modes": {
+    "agent:atlas": "editing",
+    "person:sam": "selecting"
+   }
+  },
+  {
+   "id": "P2",
+   "after": "rev 63",
+   "rev": 63,
+   "on": {
+    "agent:atlas": [
+     "@obj:8"
+    ],
+    "person:sam": [
+     "@obj:4"
+    ],
+    "agent:brook": [
+     "@obj:20"
+    ]
+   },
+   "focus": {
+    "agent:atlas": "@coll:2",
+    "person:sam": "@coll:2",
+    "agent:brook": "@coll:4"
+   },
+   "views": {
+    "agent:atlas": "@scene",
+    "agent:brook": "@cam:26"
+   },
+   "claims": [
+    {
+     "claim": "claim-12",
+     "by": "agent:atlas",
+     "keys": [
+      "@obj:10",
+      "@obj:11",
+      "@obj:12"
+     ],
+     "note": "arranging the dining set"
+    },
+    {
+     "claim": "claim-13",
+     "by": "agent:brook",
+     "keys": [
+      "@obj:20"
+     ],
+     "note": "restyling the vase"
+    }
+   ],
+   "modes": {
+    "agent:atlas": "selecting",
+    "person:sam": "selecting",
+    "agent:brook": "editing"
+   }
+  },
+  {
+   "id": "P3",
+   "after": "rev 65",
+   "rev": 65,
+   "on": {
+    "agent:atlas": [
+     "@obj:8"
+    ],
+    "person:sam": [
+     "@obj:4"
+    ],
+    "agent:brook": [
+     "@obj:20"
+    ]
+   },
+   "focus": {
+    "agent:atlas": "@coll:2",
+    "person:sam": "@coll:2",
+    "agent:brook": "@coll:4"
+   },
+   "views": {
+    "agent:atlas": "@scene",
+    "agent:brook": "@cam:26"
+   },
+   "claims": [],
+   "modes": {
+    "agent:atlas": "selecting",
+    "person:sam": "selecting",
+    "agent:brook": "selecting"
+   }
+  }
+ ]
+}

@@ -1,0 +1,375 @@
+{
+ "_golden": {
+  "sample": true,
+  "hand_made": true,
+  "not_kit_output": true,
+  "from": "K2 Cores ruling 2026-11-13 (outside saves are never silently ignored: an outside-save frame once the save settles, since kit c23d2349: one outside_save frame, outcome ingested, kept_both, declined or missing; kept_both makes the save the live file and keeps what was live as a version and a conflict copy); k2-mpc-blend 2c25e100 live/mod.rs reconcile (pair by nid, else the data rule, else a new element) and model.rs declines",
+  "type": "one entry per outside-save case",
+  "notes": [
+   "outside_save (kit main 02ddb6aa, final): one unnumbered frame per outside save, sent AFTER that save's change frame, only to viewers who can read the doc. {outcome: ingested, rev} | {outcome: kept_both, rev, kept, copy: {name, path, doc?}} | {outcome: declined, code, message} (once, on the transition) | {outcome: missing} (once, on the transition). No frame for an unchanged file or the kit's own write. kept = the stored version id of what was live before; copy.doc only when K2's host fills it",
+   "the copy's name and the version number are invented"
+  ]
+ },
+ "cases": [
+  {
+   "id": "O1",
+   "title": "a save on a synced file: taken in",
+   "base_rev": 64,
+   "frame_rev": 65,
+   "settled": {
+    "type": "outside_save",
+    "outcome": "ingested",
+    "rev": 65
+   },
+   "means": "Taken in: the save's changes arrive as one change by the file (kit:external): Sofa moved; Mug renamed Cup keeps its address (paired by data: the one object with @me:Mug). A quiet one-line notice says so"
+  },
+  {
+   "id": "O2",
+   "title": "a save made over unwritten edits: kept both",
+   "base_rev": 63,
+   "synced_rev": 62,
+   "settled": {
+    "type": "outside_save",
+    "outcome": "kept_both",
+    "rev": 64,
+    "kept": 15,
+    "copy": {
+     "name": "living-room (conflict Atlas 2026-11-13 142210).blend",
+     "path": "scenes/living-room (conflict Atlas 2026-11-13 142210).blend"
+    }
+   },
+   "means": "The file held rev 62 while Atlas's rev 63 (Rug resized) was still unwritten. The save wins: it becomes the live file, arriving as a change by the file (Rug back to its old size, Floor lamp moved). What was live before, with Atlas's edits, is kept as stored version 15 and as a conflict copy beside the file"
+  },
+  {
+   "id": "O3",
+   "title": "a save that can't pair an object: taken in as a new object",
+   "base_rev": 60,
+   "frame": {
+    "type": "ops_change",
+    "seq": 41,
+    "rev": 61,
+    "at_ms": 302000,
+    "change_kind": "external",
+    "actor": {
+     "id": "kit:external",
+     "name": "kit:external",
+     "kind": "file",
+     "colour": null
+    },
+    "client": 0,
+    "via": "file",
+    "on_behalf_of": null,
+    "turn": null,
+    "verb": null,
+    "claim": null,
+    "ops": [
+     {
+      "root": "objs",
+      "kind": "list",
+      "op": "delete",
+      "key": "@obj:13",
+      "index_before": 13,
+      "index_after": null,
+      "before": "mesh",
+      "effect": "visible"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "coll",
+      "before": "@coll:3"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "data",
+      "before": "mesh @me:Chair"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "edit",
+      "before": "1"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "hidden",
+      "before": "0"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "name",
+      "before": "Chair.003"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "nid",
+      "before": "@ob:Chair.003"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "norender",
+      "before": "0"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "noselect",
+      "before": "0"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "rotmode",
+      "before": "xyz"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "delete",
+      "key": "@obj:13",
+      "field": "xform",
+      "before": "-0.15,0.4,0,0,0,-1.5707964,1,1,1"
+     },
+     {
+      "root": "objs",
+      "kind": "list",
+      "op": "insert",
+      "key": "@obj:27",
+      "index_before": null,
+      "index_after": 13,
+      "after": "mesh",
+      "effect": "visible"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "coll",
+      "after": "@coll:3"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "data",
+      "after": "mesh @me:Stool"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "edit",
+      "after": "1"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "hidden",
+      "after": "0"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "name",
+      "after": "Stool"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "nid",
+      "after": "@ob:Stool"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "norender",
+      "after": "0"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "noselect",
+      "after": "0"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "rotmode",
+      "after": "xyz"
+     },
+     {
+      "root": "obj_props",
+      "kind": "map",
+      "op": "set",
+      "key": "@obj:27",
+      "field": "xform",
+      "after": "-0.15,0.4,0,0,0,-1.5707964,1,1,1"
+     },
+     {
+      "root": "scene",
+      "kind": "map",
+      "op": "set",
+      "key": "mark/o",
+      "field": null,
+      "before": "26",
+      "after": "27"
+     }
+    ],
+    "units": [
+     {
+      "key": "@obj:13",
+      "container": "@coll:3",
+      "ops": [
+       "delete"
+      ],
+      "geom_before": null,
+      "geom_after": null,
+      "fields": [],
+      "hidden_after": null,
+      "placeholder_type": null
+     },
+     {
+      "key": "@obj:27",
+      "container": "@coll:3",
+      "ops": [
+       "add"
+      ],
+      "geom_before": null,
+      "geom_after": null,
+      "fields": [
+       "coll",
+       "data",
+       "edit",
+       "hidden",
+       "name",
+       "nid",
+       "norender",
+       "noselect",
+       "rotmode",
+       "xform"
+      ],
+      "hidden_after": false,
+      "placeholder_type": null,
+      "placement_after": {
+       "relative_to": null,
+       "steps": [
+        {
+         "trs": {
+          "loc": [
+           -0.15,
+           0.4,
+           0
+          ],
+          "rot": {
+           "euler": "XYZ",
+           "angles": [
+            0,
+            0,
+            -1.5707964
+           ]
+          },
+          "scale": [
+           1,
+           1,
+           1
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ],
+    "containers_changed": [],
+    "containers": [
+     "@coll:3"
+    ],
+    "derived": {
+     "units": {
+      "@obj:27": {
+       "transform": "loc -0.15,0.4,0 rot 0,0,-1.5707964 scale 1,1,1",
+       "data": "mesh @me:Stool"
+      }
+     }
+    },
+    "render_hashes": null,
+    "_new_unit": {
+     "kind": "mesh",
+     "name": "Stool"
+    }
+   },
+   "settled": {
+    "type": "outside_save",
+    "outcome": "ingested",
+    "rev": 61
+   },
+   "means": "Chair.003 renamed Stool and given another mesh in one save: no name match, no data match, so it is a new element (@obj:27, past the mark) and @obj:13 is deleted. Never a guess. Taken in"
+  },
+  {
+   "id": "O4",
+   "title": "a save K2 can't keep live: declined, edits pause",
+   "base_rev": 65,
+   "settled": {
+    "type": "outside_save",
+    "outcome": "declined",
+    "code": "live_version",
+    "message": "saved in file format 5.02; live reads 3.06 to 5.01"
+   },
+   "declined": {
+    "code": "live_version",
+    "message": "saved as version 5.02; the writer writes 3.06 to 5.01",
+    "version": "5.02",
+    "write_from": "3.06",
+    "write_to": "5.01"
+   },
+   "means": "Declined: the file can't be live any more (saved in a newer format than live editing reads). Live edits pause; the tab says why in plain words and offers the saved versions. The last live version is stored as version 14"
+  },
+  {
+   "id": "O5",
+   "title": "the file is moved or deleted outside K2: missing",
+   "base_rev": 65,
+   "settled": {
+    "type": "outside_save",
+    "outcome": "missing"
+   },
+   "means": "The file was deleted or moved outside K2. The live version is kept (stored as version 14); the tab offers to save it again"
+  }
+ ]
+}

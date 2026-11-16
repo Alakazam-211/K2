@@ -1,0 +1,487 @@
+{
+  "tier": "live",
+  "rev": 1,
+  "version": null,
+  "page": null,
+  "fonts": [],
+  "layouts": [],
+  "containers": [
+    {
+      "key": "@coll:1",
+      "position": 1,
+      "title": "Scene",
+      "hidden": false,
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 1
+    },
+    {
+      "key": "@coll:2",
+      "position": 2,
+      "title": "Set",
+      "hidden": false,
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 5,
+      "parent": "@coll:1"
+    },
+    {
+      "key": "@coll:3",
+      "position": 3,
+      "title": "Inner",
+      "hidden": false,
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 2,
+      "parent": "@coll:2"
+    },
+    {
+      "key": "@coll:4",
+      "position": 4,
+      "title": "Props",
+      "hidden": false,
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 0,
+      "parent": "@coll:1"
+    },
+    {
+      "key": "@coll:0",
+      "position": 5,
+      "title": null,
+      "hidden": false,
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 2
+    }
+  ],
+  "space": {
+    "length_unit": "scene-unit",
+    "metres_per_unit": null,
+    "up": "z",
+    "handed": "right"
+  },
+  "units": [
+    {
+      "key": "@obj:1",
+      "container": "@coll:1",
+      "parent": null,
+      "live": true,
+      "kind": "camera",
+      "name": "Camera",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [1, 2, 3],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "derived": {
+        "transform": "loc 1,2,3 rot 0,0,0 scale 1,1,1",
+        "data": "camera @ca:Cam"
+      }
+    },
+    {
+      "key": "@obj:2",
+      "container": "@coll:2",
+      "parent": null,
+      "live": true,
+      "kind": "mesh",
+      "name": "Cube",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0.25],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "derived": {
+        "transform": "loc 0,0,0.25 rot 0,0,0 scale 1,1,1",
+        "data": "mesh @me:Cube"
+      }
+    },
+    {
+      "key": "@obj:4",
+      "container": "@coll:2",
+      "parent": null,
+      "live": true,
+      "kind": "light",
+      "name": "Lamp",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 1,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [4, -1, 6],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "derived": {
+        "transform": "loc 4,-1,6 rot 0,0,0 scale 1,1,1",
+        "data": "light @la:Lamp"
+      }
+    },
+    {
+      "key": "@obj:5",
+      "container": "@coll:2",
+      "parent": null,
+      "live": true,
+      "kind": "mesh",
+      "name": "Spin",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 2,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "quat": [1, 0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "derived": {
+        "transform": "loc 0,0,0 rot 0,0,0 scale 1,1,1",
+        "data": "mesh @me:Ball"
+      }
+    },
+    {
+      "key": "@obj:6",
+      "container": "@coll:2",
+      "parent": null,
+      "live": true,
+      "kind": "mesh",
+      "name": "Walker",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 3,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ],
+        "approx": "driven"
+      },
+      "derived": {
+        "transform": "loc 0,0,0 rot 0,0,0 scale 1,1,1",
+        "data": "mesh @me:Ball"
+      }
+    },
+    {
+      "key": "@obj:8",
+      "container": "@coll:2",
+      "parent": null,
+      "live": true,
+      "kind": "empty",
+      "name": "Idle",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 4,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [-3, 0, 0],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "derived": {
+        "transform": "loc -3,0,0 rot 0,0,0 scale 1,1,1"
+      }
+    },
+    {
+      "key": "@obj:3",
+      "container": "@coll:3",
+      "parent": null,
+      "live": true,
+      "kind": "empty",
+      "name": "Child",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": true,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "transform": "loc 0,1,0 rot 0,0,0 scale 1,1,1"
+      }
+    },
+    {
+      "key": "@obj:7",
+      "container": "@coll:3",
+      "parent": null,
+      "live": true,
+      "kind": "empty",
+      "name": "Held",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 1,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ],
+        "approx": "driven"
+      },
+      "derived": {
+        "transform": "loc 0,0,0 rot 0,0,0 scale 1,1,1"
+      }
+    },
+    {
+      "key": "@obj:9",
+      "container": "@coll:0",
+      "parent": null,
+      "live": true,
+      "kind": "empty",
+      "name": "Loose",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0.5, 0.5, 0.5],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "derived": {
+        "transform": "loc 0.5,0.5,0.5 rot 0,0,0 scale 1,1,1"
+      }
+    },
+    {
+      "key": "@obj:10",
+      "container": "@coll:0",
+      "parent": null,
+      "live": true,
+      "kind": "empty",
+      "name": "Far",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 1,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "derived": {
+        "transform": "loc 0,0,0 rot 0,0,0 scale 1,1,1"
+      }
+    }
+  ]
+}

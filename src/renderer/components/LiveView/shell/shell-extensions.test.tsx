@@ -4,12 +4,14 @@
 // its own words, a frame with status and find-bar slots and a panel that
 // reflows the text when narrow; and the hook the views share.
 
-import { cleanup, render, renderHook, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SampleShellSource } from '@/lib/live-view/shared/sample-shell'
 import { shellSample } from '@/lib/live-view/shared/samples'
 import { LiveHeader } from './LiveHeader'
+import { LiveShellView } from './LiveShellView'
 import { LiveTabFrame } from './LiveTabFrame'
+import type { ShellHeroProps } from './shell-config'
 import { useLiveShell } from './useLiveShell'
 import { SCENE_SHELL } from '../scene/scene-shell'
 
@@ -70,6 +72,32 @@ describe('LiveTabFrame slots', () => {
     expect(panel.hasAttribute('data-sheet')).toBe(false)
     expect(panel.className).not.toContain('absolute')
     expect(panel.getAttribute('aria-label')).toBe('Outline and Live')
+  })
+})
+
+describe('a view that places the say row and the panel itself', () => {
+  it('gets both as nodes, laid out where it puts them; the frame holds neither', () => {
+    const src = new SampleShellSource(shellSample('scene'), { autoplay: false, scenario: 'people' })
+    function Hero(p: ShellHeroProps): React.JSX.Element {
+      return (
+        <div data-testid="lv-hero">
+          <div data-testid="upper">
+            {p.say}
+            {p.panel}
+          </div>
+          <div data-testid="lower" />
+        </div>
+      )
+    }
+    render(<LiveShellView source={src} config={{ ...SCENE_SHELL, sayAlways: true, placesSayAndPanel: true, Hero }} width={1440} />)
+    const upper = screen.getByTestId('upper')
+    expect(upper.contains(screen.getByTestId('lv-say'))).toBe(true)
+    expect(upper.contains(screen.getByTestId('lv-panel'))).toBe(true)
+    expect(screen.getAllByTestId('lv-panel')).toHaveLength(1)
+    expect(screen.getAllByTestId('lv-say')).toHaveLength(1)
+    // the toggle still opens and closes it
+    fireEvent.click(screen.getByTestId('lv-panel-toggle'))
+    expect(screen.queryByTestId('lv-panel')).toBeNull()
   })
 })
 

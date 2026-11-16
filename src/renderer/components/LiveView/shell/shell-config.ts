@@ -27,6 +27,10 @@ export interface ShellHeroProps {
   /** "Back to X", when this view keeps Back out of the header. */
   back: React.ReactNode
   narrow: boolean
+  /** The say row, when the view places it (`placesSayAndPanel`). */
+  say?: React.ReactNode
+  /** The side panel (null when closed), when the view places it (`placesSayAndPanel`). */
+  panel?: React.ReactNode
 }
 
 /** What a view's own side panel gets from the shell (the scene's outliner and properties). */
@@ -59,6 +63,8 @@ export interface ShellConfig {
   /** What a message to `to` points at: words for the chip, the address it carries. */
   sayAddress: (snap: LiveShellSnapshot, to: string) => { label: string; title: string; address: string } | null
   Hero: (p: ShellHeroProps) => React.JSX.Element
+  /** The hero lays out the say row and the side panel itself (the timeline: its lanes run full width under both). */
+  placesSayAndPanel?: boolean
   /** The view's own side panel, for the snapshots it knows (`when`); the shell's sections otherwise. */
   Panel?: { when: (snap: LiveShellSnapshot) => boolean; View: (p: ShellPanelProps) => React.JSX.Element | null }
   /** Open the copy, History, Open saved versions, Save it again, Ask: wired by the view. */

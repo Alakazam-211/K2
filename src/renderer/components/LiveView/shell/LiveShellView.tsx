@@ -11,7 +11,7 @@ import { AvatarStack } from './AvatarStack'
 import { ChangesList } from './ChangesList'
 import { BackButton, FollowControl } from './FollowControl'
 import { LiveHeader } from './LiveHeader'
-import { LiveTabFrame } from './LiveTabFrame'
+import { LivePanel, LiveTabFrame } from './LiveTabFrame'
 import { MessagesList } from './MessagesList'
 import { NoticeBar } from './NoticeBar'
 import { SayBar } from './SayBar'
@@ -44,13 +44,35 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
     </>
   )
 
+  const say =
+    s.showSay && sayTo ? (
+      <SayBar
+        toName={sayTo.name}
+        address={s.sayAddress ? { label: s.sayAddress.label, title: s.sayAddress.title } : null}
+        state={s.say}
+        offline={offline}
+        paused={tabState === 'paused'}
+        onDraft={(text) => s.dispatchSay({ type: 'draft', text })}
+        onSend={() => s.send(false)}
+        onSendAgain={() => s.send(true)}
+      />
+    ) : null
+  // A view that places the say row and the panel itself gets them as nodes; the frame then holds neither.
+  const placed = !!config.placesSayAndPanel
+  const placedPanel =
+    placed && s.panelOpen ? (
+      <LivePanel narrow={narrow} onClose={() => s.setPanelOpen(false)}>
+        {panel}
+      </LivePanel>
+    ) : null
+
   const Hero = config.Hero
   return (
     <div ref={s.root} className="flex h-full min-h-0 flex-col">
       <LiveTabFrame
         sample={source.kind === 'sample'}
         narrow={narrow}
-        panelOpen={s.panelOpen}
+        panelOpen={placed ? false : s.panelOpen}
         onClosePanel={() => s.setPanelOpen(false)}
         header={
           <LiveHeader
@@ -74,21 +96,19 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
         }
         banner={sample ? <ShellSampleBanner player={sample.player} line={config.bannerLine} /> : null}
         notice={live ? <NoticeBar notice={s.notice} ctx={{ fileName: name, kept: config.kept }} onAction={s.onNotice} /> : null}
-        hero={<Hero snap={snap} state={tabState} offscreen={s.offscreen} onJump={s.onJump} jumped={s.jumped} back={back} narrow={narrow} />}
-        foot={
-          s.showSay && sayTo ? (
-            <SayBar
-              toName={sayTo.name}
-              address={s.sayAddress ? { label: s.sayAddress.label, title: s.sayAddress.title } : null}
-              state={s.say}
-              offline={offline}
-              paused={tabState === 'paused'}
-              onDraft={(text) => s.dispatchSay({ type: 'draft', text })}
-              onSend={() => s.send(false)}
-              onSendAgain={() => s.send(true)}
-            />
-          ) : null
+        hero={
+          <Hero
+            snap={snap}
+            state={tabState}
+            offscreen={s.offscreen}
+            onJump={s.onJump}
+            jumped={s.jumped}
+            back={back}
+            narrow={narrow}
+            {...(placed ? { say, panel: placedPanel } : {})}
+          />
         }
+        foot={placed ? null : say}
         panel={panel}
       />
     </div>

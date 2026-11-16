@@ -4,7 +4,9 @@
 // closable side panel beside it. When the tab is narrow the panel starts
 // closed and opens as an opaque sheet over the hero, so the hero never
 // squeezes; or, in 'reflow' (the editor's), beside it, narrowing the text
-// with no scrim. The panel scrolls with soft ends (ScrollEdgeFrame).
+// with no scrim. The panel scrolls with soft ends (ScrollEdgeFrame). A view
+// that lays out its own rows (the timeline: the lanes run full width under
+// the panel) places LivePanel itself and leaves `panelOpen` off here.
 
 import { ScrollEdgeFrame, cx } from '@/components/ui'
 import { CloseGlyph } from './glyphs'
@@ -46,7 +48,6 @@ export function LiveTabFrame({
   sample: boolean
   onClosePanel: () => void
 }): React.JSX.Element {
-  const sheet = narrow && panelMode === 'sheet'
   return (
     <div data-testid="lv-tab" data-sample={sample ? '' : undefined} data-narrow={narrow ? '' : undefined} className="lv-shell flex h-full min-h-0 flex-col overflow-hidden">
       <style>{LIVE_SHELL_CSS}</style>
@@ -61,31 +62,53 @@ export function LiveTabFrame({
           {status}
         </div>
         {panelOpen ? (
-          <aside
-            data-testid="lv-panel"
-            data-sheet={sheet ? '' : undefined}
-            aria-label={panelLabel}
-            className={cx('lv-panel flex flex-col', sheet ? 'absolute inset-y-0 right-0 z-20 w-[min(340px,100%)]' : 'w-[300px] flex-none')}
-          >
-            {narrow ? (
-              <div className="flex flex-none justify-end px-2 pt-1.5">
-                <button
-                  type="button"
-                  data-k2-focus=""
-                  aria-label="Close the side panel"
-                  onClick={onClosePanel}
-                  className="lv-icon-btn no-drag inline-flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-[var(--radius-field)] text-[var(--color-text-secondary)]"
-                >
-                  <CloseGlyph size={14} />
-                </button>
-              </div>
-            ) : null}
-            <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto" testId="lv-panel-scroll">
-              {panel}
-            </ScrollEdgeFrame>
-          </aside>
+          <LivePanel narrow={narrow} mode={panelMode} label={panelLabel} onClose={onClosePanel}>
+            {panel}
+          </LivePanel>
         ) : null}
       </div>
     </div>
+  )
+}
+
+/** The closable side panel: beside the hero, or a sheet over it when narrow (the nearest positioned box holds it). */
+export function LivePanel({
+  narrow,
+  mode = 'sheet',
+  label = 'Who’s watching and the changes',
+  onClose,
+  children,
+}: {
+  narrow: boolean
+  mode?: 'sheet' | 'reflow'
+  label?: string
+  onClose: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  const sheet = narrow && mode === 'sheet'
+  return (
+    <aside
+      data-testid="lv-panel"
+      data-sheet={sheet ? '' : undefined}
+      aria-label={label}
+      className={cx('lv-panel flex flex-col', sheet ? 'absolute inset-y-0 right-0 z-20 w-[min(340px,100%)]' : 'w-[300px] flex-none')}
+    >
+      {narrow ? (
+        <div className="flex flex-none justify-end px-2 pt-1.5">
+          <button
+            type="button"
+            data-k2-focus=""
+            aria-label="Close the side panel"
+            onClick={onClose}
+            className="lv-icon-btn no-drag inline-flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-[var(--radius-field)] text-[var(--color-text-secondary)]"
+          >
+            <CloseGlyph size={14} />
+          </button>
+        </div>
+      ) : null}
+      <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto" testId="lv-panel-scroll">
+        {children}
+      </ScrollEdgeFrame>
+    </aside>
   )
 }

@@ -27,6 +27,7 @@ import { entityColor, FG, hex } from './dxf/color'
 import { layerFlags, layerHidden } from './dxf/layers'
 import { readExtras } from './dxf/parse-extras'
 import { ESTIMATED_METRICS, fontSizeFor, type TextMetrics } from './dxf/text-metrics'
+import { placeText } from './dxf/text-place'
 
 /** Affine 2D: x' = a·x + c·y + e, y' = b·x + d·y + f (SVG `matrix()`). */
 export type Mat = [number, number, number, number, number, number]
@@ -51,6 +52,8 @@ export type DxfNode =
       y0: number
       /** Line pitch for MTEXT. */
       lh: number
+      /** Aligned and fit TEXT: stretched to this length along the baseline. */
+      len?: number
       c: string
     }
   | { k: 'group'; m: Mat; children: DxfNode[] }
@@ -347,11 +350,12 @@ export function drawingFromDxf(
     lh: number,
     c: string,
     ctx: Ctx,
+    len?: number,
   ): DxfNode | null {
     const visible = lines.filter((l) => l.length > 0)
     if (!visible.length) return null
-    // Rough extent for the fit: 0.6em per character.
-    const w = Math.max(...lines.map((l) => l.length)) * h * 0.6
+    // Rough extent for the fit: 0.6·h per character (K2DRAW1 §7).
+    const w = len ?? Math.max(...lines.map((l) => l.length)) * h * 0.6
     const r = (rot * Math.PI) / 180
     const dx = anchor === 'start' ? 0 : anchor === 'middle' ? -w / 2 : -w
     for (const [px, py] of [
@@ -362,7 +366,8 @@ export function drawingFromDxf(
     ]) {
       add(ctx.m, x + px * Math.cos(r) - py * Math.sin(r), y + px * Math.sin(r) + py * Math.cos(r))
     }
-    return { k: 'text', x, y, h, fs: fontSizeFor(h, metrics), rot, lines, anchor, y0, lh, c }
+    const node: DxfNode = { k: 'text', x, y, h, fs: fontSizeFor(h, metrics), rot, lines, anchor, y0, lh, c }
+    return len === undefined ? node : { ...node, len }
   }
 
   function entity(e: IEntity, ctx: Ctx, top: boolean): DxfNode | null {
@@ -487,12 +492,9 @@ export function drawingFromDxf(
       }
       case 'TEXT': {
         const t = e as ITextEntity
-        const h = n(t.textHeight, 1) || 1
-        const aligned = (t.halign || t.valign) && t.endPoint
-        const at = aligned ? t.endPoint : t.startPoint
-        const anchor = t.halign === 1 || t.halign === 4 ? 'middle' : t.halign === 2 ? 'end' : 'start'
-        const y0 = t.valign === 3 ? h : t.valign === 2 ? h / 2 : t.valign === 1 ? -0.2 * h : 0
-        node = textNode(n(at?.x), n(at?.y), h, n(t.rotation), [decodeSpecials(t.text ?? '')], anchor, y0, h, c, ctx)
+        const line = decodeSpecials(t.text ?? '')
+        const p = placeText(t, line, metrics)
+        node = textNode(p.x, p.y, p.h, p.rot, [line], p.anchor, p.y0, p.h, c, ctx, p.len)
         break
       }
       case 'MTEXT': {

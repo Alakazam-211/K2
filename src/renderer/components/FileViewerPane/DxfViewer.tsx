@@ -77,7 +77,8 @@ function renderNode(node: DxfNode, key: number): ReactNode {
           stroke="none"
         >
           {node.lines.length === 1 ? (
-            <tspan x={0} y={node.y0}>
+            // Aligned and fit TEXT run exactly from their first point to their second.
+            <tspan x={0} y={node.y0} {...(node.len ? { textLength: node.len, lengthAdjust: 'spacingAndGlyphs' } : {})}>
               {node.lines[0]}
             </tspan>
           ) : (

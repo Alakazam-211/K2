@@ -30,6 +30,35 @@ describe('O4 #2: a layer frozen only in new viewports', () => {
   })
 })
 
+describe('O4 #3: aligned (72 = 3) and fit (72 = 5) TEXT', () => {
+  const text = fixture('dxf-aligned-fit-text.dxf')
+  const [aligned, fit, tilted] = of(buildDrawing(text).nodes, 'text')
+
+  it('start at the first point, run along p1→p2 and are stretched to its length', () => {
+    for (const [t, x, y, rot, len] of [
+      [aligned, 0, 0, 0, 100],
+      [fit, 0, -30, 0, 100],
+      [tilted, 0, -70, (Math.atan2(20, 60) * 180) / Math.PI, Math.hypot(60, 20)],
+    ] as const) {
+      expect([t.x, t.y, t.anchor, t.y0]).toEqual([x, y, 'start', 0])
+      expect(t.rot).toBeCloseTo(rot, 9)
+      expect(t.len).toBeCloseTo(len, 9)
+    }
+  })
+
+  it('fit keeps its height; aligned scales its height with its width', () => {
+    expect(fit.h).toBe(5)
+    // "ALIGNED" at cap height h is 7 × 0.6·h wide by the estimate: 100 = 4.2·h.
+    expect(aligned.h).toBeCloseTo(100 / 4.2, 9)
+    expect(aligned.fs).toBeCloseTo(100 / 4.2 / 0.7, 9)
+    // With the page's own advance widths.
+    const m = { cap: 0.7, advance: (s: string) => s.length * 0.5 }
+    const [a2] = of(buildDrawing(text, m).nodes, 'text')
+    // Font size f draws 7 × 0.5·f = 100.
+    expect(a2.fs).toBeCloseTo(100 / 3.5, 9)
+  })
+})
+
 describe('O4 #4: a DXF text height is the cap height', () => {
   const text = fixture('dxf-cap-height.dxf')
 

@@ -121,6 +121,20 @@ describe('DxfViewer', () => {
     expect(screen.getByTestId('dxf-shapes').style.fontFamily).toBe('var(--font-ui)')
   })
 
+  it('aligned and fit TEXT start at the first point and are stretched to the second', async () => {
+    const dxf = readFileSync(resolve(__dirname, '__fixtures__/dxf-aligned-fit-text.dxf'), 'utf8')
+    renderInPrimaryRoom(<DxfViewer text={dxf} />)
+    const svg = await screen.findByTestId('dxf-svg')
+    const [aligned, fit] = Array.from(svg.querySelectorAll('text'))
+    expect(aligned.getAttribute('transform')).toBe('translate(0 0) scale(1 -1)')
+    expect(fit.getAttribute('transform')).toBe('translate(0 -30) scale(1 -1)')
+    for (const t of [aligned, fit]) {
+      expect(t.getAttribute('text-anchor')).toBe('start')
+      expect(t.querySelector('tspan')!.getAttribute('textLength')).toBe('100')
+      expect(t.querySelector('tspan')!.getAttribute('lengthAdjust')).toBe('spacingAndGlyphs')
+    }
+  })
+
   it('wheel zooms around the cursor; Fit and double-click restore the fitted view', async () => {
     renderInPrimaryRoom(<DxfViewer text={DXF_FIXTURE} />)
     const svg = await screen.findByTestId('dxf-svg')

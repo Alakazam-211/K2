@@ -93,7 +93,10 @@ pub struct JobNet {
 
 impl JobNet {
     pub fn none() -> Self {
-        JobNet { mode: JobNetMode::None, dummies: Vec::new() }
+        JobNet {
+            mode: JobNetMode::None,
+            dummies: Vec::new(),
+        }
     }
 
     /// One line for logs and views: `none`, `none; dummies: sewlane0
@@ -102,7 +105,15 @@ impl JobNet {
         if self.dummies.is_empty() {
             return self.mode.as_str().to_string();
         }
-        format!("{}; dummies: {}", self.mode.as_str(), self.dummies.iter().map(Dummy::line).collect::<Vec<_>>().join(", "))
+        format!(
+            "{}; dummies: {}",
+            self.mode.as_str(),
+            self.dummies
+                .iter()
+                .map(Dummy::line)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -119,7 +130,9 @@ pub fn plan_features(n: Option<&JobNet>) -> Vec<&'static str> {
 
 /// The first feature `n` needs that `offered` lacks, if any.
 pub fn missing_feature(n: Option<&JobNet>, offered: &[String]) -> Option<&'static str> {
-    plan_features(n).into_iter().find(|f| !offered.iter().any(|o| o == f))
+    plan_features(n)
+        .into_iter()
+        .find(|f| !offered.iter().any(|o| o == f))
 }
 
 pub mod codes {
@@ -139,13 +152,20 @@ pub mod codes {
 /// not `lo` (the namespace's own loopback).
 pub fn check_ifname(name: &str) -> Result<(), String> {
     if name.is_empty() || name.len() > MAX_IFNAME {
-        return Err(format!("interface name {name:?}: 1-{MAX_IFNAME} characters (the kernel's limit)"));
+        return Err(format!(
+            "interface name {name:?}: 1-{MAX_IFNAME} characters (the kernel's limit)"
+        ));
     }
-    if !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-') {
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+    {
         return Err(format!("interface name {name:?}: only A-Z a-z 0-9 . _ -"));
     }
     if !name.as_bytes()[0].is_ascii_alphanumeric() {
-        return Err(format!("interface name {name:?}: starts with a letter or digit"));
+        return Err(format!(
+            "interface name {name:?}: starts with a letter or digit"
+        ));
     }
     if name == "lo" {
         return Err("interface name \"lo\" is the namespace's own loopback".into());
@@ -155,12 +175,18 @@ pub fn check_ifname(name: &str) -> Result<(), String> {
 
 /// `<address>/<prefix>` → the address and prefix (the prefix is required).
 pub fn parse_cidr(s: &str) -> Result<(IpAddr, u8), String> {
-    let (a, p) = s.split_once('/').ok_or_else(|| format!("{s:?}: <address>/<prefix>, e.g. 10.254.254.1/32"))?;
-    let ip: IpAddr = a.parse().map_err(|_| format!("{s:?}: {a:?} isn't an IPv4 or IPv6 address"))?;
+    let (a, p) = s
+        .split_once('/')
+        .ok_or_else(|| format!("{s:?}: <address>/<prefix>, e.g. 10.254.254.1/32"))?;
+    let ip: IpAddr = a
+        .parse()
+        .map_err(|_| format!("{s:?}: {a:?} isn't an IPv4 or IPv6 address"))?;
     if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) || p.len() > 3 {
         return Err(format!("{s:?}: the prefix is a number (/32, /24, /128)"));
     }
-    let prefix: u8 = p.parse().map_err(|_| format!("{s:?}: the prefix is a number"))?;
+    let prefix: u8 = p
+        .parse()
+        .map_err(|_| format!("{s:?}: the prefix is a number"))?;
     let max = if ip.is_ipv4() { 32 } else { 128 };
     if prefix == 0 || prefix > max {
         return Err(format!("{s:?}: the prefix is 1-{max}"));
@@ -190,12 +216,20 @@ pub const ALLOWED_V6: &[(Ipv6Addr, u8)] = &[
 ];
 
 fn in_v4(a: Ipv4Addr, prefix: u8, net: Ipv4Addr, len: u8) -> bool {
-    let mask = if len == 0 { 0 } else { u32::MAX << (32 - u32::from(len)) };
+    let mask = if len == 0 {
+        0
+    } else {
+        u32::MAX << (32 - u32::from(len))
+    };
     prefix >= len && (u32::from(a) & mask) == (u32::from(net) & mask)
 }
 
 fn in_v6(a: Ipv6Addr, prefix: u8, net: Ipv6Addr, len: u8) -> bool {
-    let mask = if len == 0 { 0 } else { u128::MAX << (128 - u32::from(len)) };
+    let mask = if len == 0 {
+        0
+    } else {
+        u128::MAX << (128 - u32::from(len))
+    };
     prefix >= len && (u128::from(a) & mask) == (u128::from(net) & mask)
 }
 
@@ -221,9 +255,14 @@ pub fn check_addr(s: &str) -> Result<String, String> {
 
 /// `name=addr/prefix` (the CLI's `--netns-dummy`) → a checked [`Dummy`].
 pub fn parse_dummy(s: &str) -> Result<Dummy, String> {
-    let (name, addr) = s.split_once('=').ok_or_else(|| format!("--netns-dummy {s:?}: <name>=<address>/<prefix>, e.g. sewlane0=10.254.254.1/32"))?;
+    let (name, addr) = s.split_once('=').ok_or_else(|| {
+        format!("--netns-dummy {s:?}: <name>=<address>/<prefix>, e.g. sewlane0=10.254.254.1/32")
+    })?;
     check_ifname(name)?;
-    Ok(Dummy { name: name.to_string(), addr: check_addr(addr)? })
+    Ok(Dummy {
+        name: name.to_string(),
+        addr: check_addr(addr)?,
+    })
 }
 
 /// Everything a plan's `network` must be (both ends check it): at most
@@ -231,7 +270,10 @@ pub fn parse_dummy(s: &str) -> Result<Dummy, String> {
 /// canonical, no name or address twice.
 pub fn check(n: &JobNet) -> Result<(), String> {
     if n.dummies.len() > MAX_DUMMIES {
-        return Err(format!("at most {MAX_DUMMIES} dummy interfaces per job ({} asked)", n.dummies.len()));
+        return Err(format!(
+            "at most {MAX_DUMMIES} dummy interfaces per job ({} asked)",
+            n.dummies.len()
+        ));
     }
     let mut names = std::collections::BTreeSet::new();
     let mut addrs = std::collections::BTreeSet::new();
@@ -239,7 +281,10 @@ pub fn check(n: &JobNet) -> Result<(), String> {
         check_ifname(&d.name)?;
         let canon = check_addr(&d.addr)?;
         if canon != d.addr {
-            return Err(format!("dummy address {:?} isn't canonical ({canon})", d.addr));
+            return Err(format!(
+                "dummy address {:?} isn't canonical ({canon})",
+                d.addr
+            ));
         }
         if !names.insert(d.name.as_str()) {
             return Err(format!("dummy interface {} named twice", d.name));
@@ -265,11 +310,30 @@ mod tests {
 
     #[test]
     fn interface_names_follow_the_kernels_rules_and_ours() {
-        for ok in ["sewlane0", "a", "eth-test.1", "x_y", "0dummy", "fifteen-chars15"] {
+        for ok in [
+            "sewlane0",
+            "a",
+            "eth-test.1",
+            "x_y",
+            "0dummy",
+            "fifteen-chars15",
+        ] {
             assert_eq!(check_ifname(ok), Ok(()), "{ok}");
         }
         assert_eq!("fifteen-chars15".len(), 15);
-        for bad in ["", "sixteen-chars-16", "lo", "has space", "a/b", "a:b", "-lead", ".lead", "_lead", "é", "a\0b"] {
+        for bad in [
+            "",
+            "sixteen-chars-16",
+            "lo",
+            "has space",
+            "a/b",
+            "a:b",
+            "-lead",
+            ".lead",
+            "_lead",
+            "é",
+            "a\0b",
+        ] {
             assert!(check_ifname(bad).is_err(), "{bad:?} must be refused");
         }
     }
@@ -325,41 +389,96 @@ mod tests {
 
     #[test]
     fn a_cli_dummy_is_name_equals_cidr() {
-        assert_eq!(parse_dummy("sewlane0=10.254.254.1/32"), Ok(Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }));
+        assert_eq!(
+            parse_dummy("sewlane0=10.254.254.1/32"),
+            Ok(Dummy {
+                name: "sewlane0".into(),
+                addr: "10.254.254.1/32".into()
+            })
+        );
         assert_eq!(parse_dummy("v6=fd00:0::1/128").unwrap().addr, "fd00::1/128");
-        for bad in ["sewlane0", "sewlane0=", "=10.0.0.1/32", "lo=10.0.0.1/32", "sewlane0=8.8.8.8/32", "much-too-long-name=10.0.0.1/32"] {
+        for bad in [
+            "sewlane0",
+            "sewlane0=",
+            "=10.0.0.1/32",
+            "lo=10.0.0.1/32",
+            "sewlane0=8.8.8.8/32",
+            "much-too-long-name=10.0.0.1/32",
+        ] {
             assert!(parse_dummy(bad).is_err(), "{bad:?}");
         }
     }
 
     #[test]
     fn a_plan_has_at_most_four_distinct_canonical_dummies() {
-        let d = |n: &str, a: &str| Dummy { name: n.into(), addr: a.into() };
-        let mut n = JobNet { mode: JobNetMode::None, dummies: (0..4).map(|i| d(&format!("d{i}"), &format!("10.0.0.{}/32", i + 1))).collect() };
+        let d = |n: &str, a: &str| Dummy {
+            name: n.into(),
+            addr: a.into(),
+        };
+        let mut n = JobNet {
+            mode: JobNetMode::None,
+            dummies: (0..4)
+                .map(|i| d(&format!("d{i}"), &format!("10.0.0.{}/32", i + 1)))
+                .collect(),
+        };
         assert_eq!(check(&n), Ok(()));
         n.dummies.push(d("d4", "10.0.0.9/32"));
         assert!(check(&n).unwrap_err().contains("at most 4"));
-        let twice = JobNet { mode: JobNetMode::None, dummies: vec![d("a", "10.0.0.1/32"), d("a", "10.0.0.2/32")] };
+        let twice = JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![d("a", "10.0.0.1/32"), d("a", "10.0.0.2/32")],
+        };
         assert!(check(&twice).unwrap_err().contains("named twice"));
-        let same_ip = JobNet { mode: JobNetMode::None, dummies: vec![d("a", "10.0.0.1/32"), d("b", "10.0.0.1/24")] };
+        let same_ip = JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![d("a", "10.0.0.1/32"), d("b", "10.0.0.1/24")],
+        };
         assert!(check(&same_ip).unwrap_err().contains("given twice"));
-        let not_canon = JobNet { mode: JobNetMode::None, dummies: vec![d("a", "fd00:0::1/128")] };
+        let not_canon = JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![d("a", "fd00:0::1/128")],
+        };
         assert!(check(&not_canon).unwrap_err().contains("canonical"));
-        let public = JobNet { mode: JobNetMode::None, dummies: vec![d("a", "8.8.8.8/32")] };
+        let public = JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![d("a", "8.8.8.8/32")],
+        };
         assert!(check(&public).is_err());
         assert_eq!(check(&JobNet::none()), Ok(()));
     }
 
     #[test]
     fn wire_shape_and_features() {
-        let n = JobNet { mode: JobNetMode::None, dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }] };
-        assert_eq!(serde_json::to_string(&n).unwrap(), r#"{"mode":"none","dummies":[{"name":"sewlane0","addr":"10.254.254.1/32"}]}"#);
-        assert_eq!(serde_json::to_string(&JobNet::none()).unwrap(), r#"{"mode":"none"}"#, "no dummies: no field");
-        assert!(serde_json::from_str::<JobNet>(r#"{"mode":"on"}"#).is_err(), "a job can't ask for more network");
+        let n = JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![Dummy {
+                name: "sewlane0".into(),
+                addr: "10.254.254.1/32".into(),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_string(&n).unwrap(),
+            r#"{"mode":"none","dummies":[{"name":"sewlane0","addr":"10.254.254.1/32"}]}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&JobNet::none()).unwrap(),
+            r#"{"mode":"none"}"#,
+            "no dummies: no field"
+        );
+        assert!(
+            serde_json::from_str::<JobNet>(r#"{"mode":"on"}"#).is_err(),
+            "a job can't ask for more network"
+        );
         assert!(serde_json::from_str::<JobNet>(r#"{"mode":"none","extra":1}"#).is_err());
         assert_eq!(plan_features(None), Vec::<&str>::new());
-        assert_eq!(plan_features(Some(&JobNet::none())), vec![FEATURE_JOB_NETWORK]);
-        assert_eq!(plan_features(Some(&n)), vec![FEATURE_JOB_NETWORK, FEATURE_NETNS_DUMMY]);
+        assert_eq!(
+            plan_features(Some(&JobNet::none())),
+            vec![FEATURE_JOB_NETWORK]
+        );
+        assert_eq!(
+            plan_features(Some(&n)),
+            vec![FEATURE_JOB_NETWORK, FEATURE_NETNS_DUMMY]
+        );
         let old = vec!["needs".to_string(), FEATURE_JOB_NETWORK.to_string()];
         assert_eq!(missing_feature(Some(&JobNet::none()), &old), None);
         assert_eq!(missing_feature(Some(&n), &old), Some(FEATURE_NETNS_DUMMY));

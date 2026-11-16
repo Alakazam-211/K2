@@ -290,10 +290,20 @@ impl Node {
         }
         // 0.46.14 (protocol 10): a job's own `--network none`, and dummy
         // interfaces in its own namespace (Linux job wall only).
-        if t.speaks_gens() && self.offers_job_network() && !f.iter().any(|x| x == k2_node_proto::jobnet::FEATURE_JOB_NETWORK) {
+        if t.speaks_gens()
+            && self.offers_job_network()
+            && !f
+                .iter()
+                .any(|x| x == k2_node_proto::jobnet::FEATURE_JOB_NETWORK)
+        {
             f.push(k2_node_proto::jobnet::FEATURE_JOB_NETWORK.to_string());
         }
-        if t.speaks_gens() && self.offers_netns_dummy() && !f.iter().any(|x| x == k2_node_proto::jobnet::FEATURE_NETNS_DUMMY) {
+        if t.speaks_gens()
+            && self.offers_netns_dummy()
+            && !f
+                .iter()
+                .any(|x| x == k2_node_proto::jobnet::FEATURE_NETNS_DUMMY)
+        {
             f.push(k2_node_proto::jobnet::FEATURE_NETNS_DUMMY.to_string());
         }
         // O2 (protocol 10): `Outputs.stats`, the job's 5 s series.
@@ -482,7 +492,9 @@ mod job_network_tests {
     use std::time::Duration;
 
     use k2_node_proto::frames::{Frame, JobState, PROTOCOL_CI, PROTOCOL_GENS};
-    use k2_node_proto::jobnet::{codes, Dummy, JobNet, JobNetMode, FEATURE_JOB_NETWORK, FEATURE_NETNS_DUMMY};
+    use k2_node_proto::jobnet::{
+        codes, Dummy, JobNet, JobNetMode, FEATURE_JOB_NETWORK, FEATURE_NETNS_DUMMY,
+    };
 
     use crate::node::{Node, NodeOptions, Tenant};
     use crate::wall::Wall;
@@ -504,22 +516,42 @@ mod job_network_tests {
             None => o.dev = true,
         }
         o.cancel_grace = Duration::from_millis(100);
-        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        o.facts = Some(crate::config::MachineFacts {
+            cores: 8,
+            mem_bytes: 32 << 30,
+            disk_total_bytes: 1 << 40,
+            has_battery: false,
+            is_macos: false,
+        });
         Node::open(o).await.unwrap()
     }
 
     fn feats(n: &Node, t: &Tenant) -> (bool, bool) {
         let f = n.session_features(t);
-        (f.iter().any(|x| x == FEATURE_JOB_NETWORK), f.iter().any(|x| x == FEATURE_NETNS_DUMMY))
+        (
+            f.iter().any(|x| x == FEATURE_JOB_NETWORK),
+            f.iter().any(|x| x == FEATURE_NETNS_DUMMY),
+        )
     }
 
     fn sew() -> JobNet {
-        JobNet { mode: JobNetMode::None, dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }] }
+        JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![Dummy {
+                name: "sewlane0".into(),
+                addr: "10.254.254.1/32".into(),
+            }],
+        }
     }
 
     /// The node's answer to an assign of a plan with `net`, and whether it
     /// kept a ledger row.
-    async fn assign_answer(n: &std::sync::Arc<Node>, t: &std::sync::Arc<Tenant>, job: &str, net: JobNet) -> (JobState, Option<String>, bool) {
+    async fn assign_answer(
+        n: &std::sync::Arc<Node>,
+        t: &std::sync::Arc<Tenant>,
+        job: &str,
+        net: JobNet,
+    ) -> (JobState, Option<String>, bool) {
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         t.hub.attach(tx);
         let mut a = crate::ledger::tests::assign(job, 1);
@@ -528,7 +560,11 @@ mod job_network_tests {
         a.fence.plan_digest = a.plan.digest().unwrap();
         assert_eq!(n.on_assign(t, a), None, "never taken");
         let s = loop {
-            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("no answer").expect("hub closed") {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .expect("no answer")
+                .expect("hub closed")
+            {
                 Frame::State(s) if s.job_id == job => break s,
                 _ => continue,
             }
@@ -539,13 +575,32 @@ mod job_network_tests {
 
     #[tokio::test]
     async fn offered_to_protocol_10_behind_a_wall_that_runs_it() {
-        let n = node("jobnet-offer", Some(Wall::JobUser { user: "k2job".into() }), true).await;
+        let n = node(
+            "jobnet-offer",
+            Some(Wall::JobUser {
+                user: "k2job".into(),
+            }),
+            true,
+        )
+        .await;
         let owner = n.owner();
         owner.protocol.store(PROTOCOL_CI, Ordering::SeqCst);
-        assert_eq!(feats(&n, &owner), (false, false), "a protocol-9 server never sees them");
+        assert_eq!(
+            feats(&n, &owner),
+            (false, false),
+            "a protocol-9 server never sees them"
+        );
         owner.protocol.store(PROTOCOL_GENS, Ordering::SeqCst);
-        assert_eq!(feats(&n, &owner), (true, true), "Linux job wall + an executor that says netns");
-        assert_eq!(n.job_network_refusal(&owner, &crate::ledger::tests::assign("x", 1).plan), None, "no ask, nothing to refuse");
+        assert_eq!(
+            feats(&n, &owner),
+            (true, true),
+            "Linux job wall + an executor that says netns"
+        );
+        assert_eq!(
+            n.job_network_refusal(&owner, &crate::ledger::tests::assign("x", 1).plan),
+            None,
+            "no ask, nothing to refuse"
+        );
         let mut p = crate::ledger::tests::assign("x", 1).plan;
         p.network = Some(JobNet::none());
         assert_eq!(n.job_network_refusal(&owner, &p), None);
@@ -553,25 +608,60 @@ mod job_network_tests {
         assert_eq!(n.job_network_refusal(&owner, &p), None);
         // A plan whose dummy breaks the rules (a public address) is refused
         // even here, by the node itself.
-        p.network = Some(JobNet { mode: JobNetMode::None, dummies: vec![Dummy { name: "x".into(), addr: "8.8.8.8/32".into() }] });
-        assert_eq!(n.job_network_refusal(&owner, &p).map(|r| r.0), Some(codes::JOB_NETWORK_INVALID));
+        p.network = Some(JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![Dummy {
+                name: "x".into(),
+                addr: "8.8.8.8/32".into(),
+            }],
+        });
+        assert_eq!(
+            n.job_network_refusal(&owner, &p).map(|r| r.0),
+            Some(codes::JOB_NETWORK_INVALID)
+        );
         // The offer itself carries them.
         let off = n.offer(&owner);
-        assert!(off.features.iter().any(|f| f == FEATURE_JOB_NETWORK) && off.features.iter().any(|f| f == FEATURE_NETNS_DUMMY), "{:?}", off.features);
+        assert!(
+            off.features.iter().any(|f| f == FEATURE_JOB_NETWORK)
+                && off.features.iter().any(|f| f == FEATURE_NETNS_DUMMY),
+            "{:?}",
+            off.features
+        );
     }
 
     /// An older root executor (no `netns` in Ready): neither is offered, and
     /// a plan that asks fails at assign with no ledger row.
     #[tokio::test]
     async fn an_older_executor_offers_neither_and_refuses_the_plan() {
-        let n = node("jobnet-oldexec", Some(Wall::JobUser { user: "k2job".into() }), false).await;
+        let n = node(
+            "jobnet-oldexec",
+            Some(Wall::JobUser {
+                user: "k2job".into(),
+            }),
+            false,
+        )
+        .await;
         let owner = n.owner();
         owner.protocol.store(PROTOCOL_GENS, Ordering::SeqCst);
         assert_eq!(feats(&n, &owner), (false, false));
         let (state, reason, row) = assign_answer(&n, &owner, "oldexec", JobNet::none()).await;
-        assert_eq!((state, reason.as_deref(), row), (JobState::Failed, Some(codes::JOB_NETWORK_UNAVAILABLE), false));
+        assert_eq!(
+            (state, reason.as_deref(), row),
+            (
+                JobState::Failed,
+                Some(codes::JOB_NETWORK_UNAVAILABLE),
+                false
+            )
+        );
         let (state, reason, row) = assign_answer(&n, &owner, "oldexec2", sew()).await;
-        assert_eq!((state, reason.as_deref(), row), (JobState::Failed, Some(codes::JOB_NETWORK_UNAVAILABLE), false));
+        assert_eq!(
+            (state, reason.as_deref(), row),
+            (
+                JobState::Failed,
+                Some(codes::JOB_NETWORK_UNAVAILABLE),
+                false
+            )
+        );
         // The executor updated (a later Ready says netns): offered again.
         n.exec_netns.store(true, Ordering::SeqCst);
         assert_eq!(feats(&n, &owner), (true, true));
@@ -586,16 +676,37 @@ mod job_network_tests {
         owner.protocol.store(PROTOCOL_GENS, Ordering::SeqCst);
         assert_eq!(feats(&n, &owner), (false, false));
         let (state, reason, row) = assign_answer(&n, &owner, "nowall", JobNet::none()).await;
-        assert_eq!((state, reason.as_deref(), row), (JobState::Failed, Some(codes::JOB_NETWORK_UNAVAILABLE), false));
+        assert_eq!(
+            (state, reason.as_deref(), row),
+            (
+                JobState::Failed,
+                Some(codes::JOB_NETWORK_UNAVAILABLE),
+                false
+            )
+        );
     }
 
     /// A protocol-9 session can't ask: refused (it never saw the feature).
     #[tokio::test]
     async fn a_protocol_9_session_cant_ask() {
-        let n = node("jobnet-p9", Some(Wall::JobUser { user: "k2job".into() }), true).await;
+        let n = node(
+            "jobnet-p9",
+            Some(Wall::JobUser {
+                user: "k2job".into(),
+            }),
+            true,
+        )
+        .await;
         let owner = n.owner();
         owner.protocol.store(PROTOCOL_CI, Ordering::SeqCst);
         let (state, reason, row) = assign_answer(&n, &owner, "p9", JobNet::none()).await;
-        assert_eq!((state, reason.as_deref(), row), (JobState::Failed, Some(codes::JOB_NETWORK_UNAVAILABLE), false));
+        assert_eq!(
+            (state, reason.as_deref(), row),
+            (
+                JobState::Failed,
+                Some(codes::JOB_NETWORK_UNAVAILABLE),
+                false
+            )
+        );
     }
 }

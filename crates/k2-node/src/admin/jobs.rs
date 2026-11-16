@@ -689,7 +689,13 @@ pub fn interface_addrs_named() -> Vec<(String, std::net::IpAddr, u32)> {
             continue;
         }
         // SAFETY: getifaddrs gives every node a NUL-terminated name.
-        let name = if ifa.ifa_name.is_null() { String::new() } else { unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }.to_string_lossy().into_owned() };
+        let name = if ifa.ifa_name.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
+                .to_string_lossy()
+                .into_owned()
+        };
         // SAFETY: sockaddr pointers from getifaddrs, read per family.
         unsafe {
             match (*ifa.ifa_addr).sa_family as i32 {
@@ -1360,11 +1366,15 @@ impl Executor {
                 let _ = systemctl(&["reset-failed", u]);
                 // 0.46.14: its own network namespace goes with it (the
                 // namespace itself lives until its last process ends).
-                let netns = super::netns::netns_name(u).filter(|n| super::netns::netns_path(n).exists()).map(|n| match super::netns::remove(&n) {
-                    Ok(()) => format!("{n}: removed"),
-                    Err(e) => format!("{n}: {e}"),
-                });
-                Ok(JobAnswer::Done { detail: json!({"released": u, "stop": stopped.err(), "netns": netns}) })
+                let netns = super::netns::netns_name(u)
+                    .filter(|n| super::netns::netns_path(n).exists())
+                    .map(|n| match super::netns::remove(&n) {
+                        Ok(()) => format!("{n}: removed"),
+                        Err(e) => format!("{n}: {e}"),
+                    });
+                Ok(JobAnswer::Done {
+                    detail: json!({"released": u, "stop": stopped.err(), "netns": netns}),
+                })
             }),
             JobOp::Reclaim { path, slot } => self.reclaim_path(path, *slot),
             JobOp::Tenants => Ok(JobAnswer::Tenants(self.tenant_wall())),
@@ -1508,10 +1518,16 @@ impl Executor {
         // and only as the rules say (both ends check them).
         if !s.netns_dummies.is_empty() {
             if !s.network_none || network != Network::None {
-                return Err(refuse(code::BAD_ARGS, "netns_dummies go only with network_none (the job's own namespace)"));
+                return Err(refuse(
+                    code::BAD_ARGS,
+                    "netns_dummies go only with network_none (the job's own namespace)",
+                ));
             }
-            k2_node_proto::jobnet::check(&k2_node_proto::jobnet::JobNet { mode: k2_node_proto::jobnet::JobNetMode::None, dummies: s.netns_dummies.clone() })
-                .map_err(|e| refuse(code::BAD_ARGS, format!("netns_dummies: {e}")))?;
+            k2_node_proto::jobnet::check(&k2_node_proto::jobnet::JobNet {
+                mode: k2_node_proto::jobnet::JobNetMode::None,
+                dummies: s.netns_dummies.clone(),
+            })
+            .map_err(|e| refuse(code::BAD_ARGS, format!("netns_dummies: {e}")))?;
         }
         let restrict_userns = team_unit(s.tenant, entry.as_ref().map(|e| e.trust));
         let v = systemd();
@@ -1565,10 +1581,19 @@ impl Executor {
             if !s.netns_dummies.is_empty() {
                 let gone = super::netns::sweep();
                 if !gone.is_empty() {
-                    crate::nlog!("job network namespaces: removed {} left by units that are gone", gone.len());
+                    crate::nlog!(
+                        "job network namespaces: removed {} left by units that are gone",
+                        gone.len()
+                    );
                 }
-                let name = super::netns::netns_name(&unit).ok_or_else(|| refuse(code::BAD_ARGS, "not a K2 job unit"))?;
-                let path = super::netns::make(&name, &s.netns_dummies).map_err(|e| refuse(k2_node_proto::jobnet::codes::JOB_NETWORK_UNAVAILABLE, format!("the job's network namespace: {e}")))?;
+                let name = super::netns::netns_name(&unit)
+                    .ok_or_else(|| refuse(code::BAD_ARGS, "not a K2 job unit"))?;
+                let path = super::netns::make(&name, &s.netns_dummies).map_err(|e| {
+                    refuse(
+                        k2_node_proto::jobnet::codes::JOB_NETWORK_UNAVAILABLE,
+                        format!("the job's network namespace: {e}"),
+                    )
+                })?;
                 plan.netns = Some(path);
                 netns = Some(name);
             }
@@ -2167,12 +2192,22 @@ mod tests {
         assert!(has("NetworkNamespacePath=/run/netns/k2job-j1-g1"), "{a:?}");
         assert!(!has("PrivateNetwork=yes"), "one namespace: root's");
         assert!(has("IPAddressDeny=any"));
-        assert!(has("IPAddressAllow=localhost 10.254.254.1/32 fd00::1/128"), "{a:?}");
-        assert!(a.iter().any(|x| x.contains("-/run/systemd/resolve")), "no DNS side channel");
+        assert!(
+            has("IPAddressAllow=localhost 10.254.254.1/32 fd00::1/128"),
+            "{a:?}"
+        );
+        assert!(
+            a.iter().any(|x| x.contains("-/run/systemd/resolve")),
+            "no DNS side channel"
+        );
         // The namespace is only ever for `none`: on/no-lan never get one.
         p.network = Network::NoLan;
         let a = systemd_run_argv(&p);
-        assert!(!a.iter().any(|x| x.starts_with("NetworkNamespacePath") || x.starts_with("IPAddressAllow")), "{a:?}");
+        assert!(
+            !a.iter()
+                .any(|x| x.starts_with("NetworkNamespacePath") || x.starts_with("IPAddressAllow")),
+            "{a:?}"
+        );
         // The wire: a start carries its dummies; an older executor's
         // Started names no namespace (the node then stops the unit).
         let s = JobStart {
@@ -2190,16 +2225,35 @@ mod tests {
             job_uid: false,
             gpu: None,
             cpu_weight: None,
-            netns_dummies: vec![k2_node_proto::jobnet::Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }],
+            netns_dummies: vec![k2_node_proto::jobnet::Dummy {
+                name: "sewlane0".into(),
+                addr: "10.254.254.1/32".into(),
+            }],
         };
         let text = serde_json::to_string(&JobOp::Start(s.clone())).unwrap();
-        assert!(text.contains(r#""netns_dummies":[{"name":"sewlane0","addr":"10.254.254.1/32"}]"#), "{text}");
-        assert_eq!(serde_json::from_str::<JobOp>(&text).unwrap(), JobOp::Start(s));
-        let old: JobAnswer = serde_json::from_str(r#"{"answer":"started","unit":"k2job-j1-g1.service"}"#).unwrap();
+        assert!(
+            text.contains(r#""netns_dummies":[{"name":"sewlane0","addr":"10.254.254.1/32"}]"#),
+            "{text}"
+        );
+        assert_eq!(
+            serde_json::from_str::<JobOp>(&text).unwrap(),
+            JobOp::Start(s)
+        );
+        let old: JobAnswer =
+            serde_json::from_str(r#"{"answer":"started","unit":"k2job-j1-g1.service"}"#).unwrap();
         assert!(matches!(old, JobAnswer::Started { netns: None, .. }));
-        let new = JobAnswer::Started { unit: "k2job-j1-g1.service".into(), uid_index: None, gpu: None, netns: Some("k2job-j1-g1".into()) };
-        assert_eq!(serde_json::from_str::<JobAnswer>(&serde_json::to_string(&new).unwrap()).unwrap(), new);
-        let ready: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job","netns":true}"#).unwrap();
+        let new = JobAnswer::Started {
+            unit: "k2job-j1-g1.service".into(),
+            uid_index: None,
+            gpu: None,
+            netns: Some("k2job-j1-g1".into()),
+        };
+        assert_eq!(
+            serde_json::from_str::<JobAnswer>(&serde_json::to_string(&new).unwrap()).unwrap(),
+            new
+        );
+        let ready: JobAnswer =
+            serde_json::from_str(r#"{"answer":"ready","job_user":"k2job","netns":true}"#).unwrap();
         assert!(matches!(ready, JobAnswer::Ready { netns: true, .. }));
     }
 

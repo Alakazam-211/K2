@@ -245,25 +245,76 @@ fn root_makes_and_removes_a_job_namespace_with_dummies() {
     use k2_node::admin::netns;
     use k2_node_proto::jobnet::Dummy;
     assert_eq!(unsafe { libc::geteuid() }, 0, "root only");
-    let name = format!("k2job-nstest-{}-g1", &k2_node_proto::crypto::random_id().unwrap()[..8]);
-    let d = vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }, Dummy { name: "sewv6".into(), addr: "fd00:6b32::7/128".into() }];
+    let name = format!(
+        "k2job-nstest-{}-g1",
+        &k2_node_proto::crypto::random_id().unwrap()[..8]
+    );
+    let d = vec![
+        Dummy {
+            name: "sewlane0".into(),
+            addr: "10.254.254.1/32".into(),
+        },
+        Dummy {
+            name: "sewv6".into(),
+            addr: "fd00:6b32::7/128".into(),
+        },
+    ];
     let path = netns::make(&name, &d).expect("the namespace");
     assert_eq!(path, netns::netns_path(&name));
     assert!(path.exists());
-    let out = std::process::Command::new("ip").args(["-n", &name, "-o", "addr", "show"]).output().unwrap();
+    let out = std::process::Command::new("ip")
+        .args(["-n", &name, "-o", "addr", "show"])
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.lines().any(|l| l.contains("sewlane0") && l.contains("10.254.254.1/32")), "{text}");
-    assert!(text.lines().any(|l| l.contains("sewv6") && l.contains("fd00:6b32::7/128") && !l.contains("tentative")), "nodad: usable at once: {text}");
-    assert!(text.lines().any(|l| l.contains(" lo ") && l.contains("127.0.0.1/8")), "lo up: {text}");
-    let links = std::process::Command::new("ip").args(["-n", &name, "-o", "link", "show"]).output().unwrap();
+    assert!(
+        text.lines()
+            .any(|l| l.contains("sewlane0") && l.contains("10.254.254.1/32")),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|l| l.contains("sewv6")
+            && l.contains("fd00:6b32::7/128")
+            && !l.contains("tentative")),
+        "nodad: usable at once: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l.contains(" lo ") && l.contains("127.0.0.1/8")),
+        "lo up: {text}"
+    );
+    let links = std::process::Command::new("ip")
+        .args(["-n", &name, "-o", "link", "show"])
+        .output()
+        .unwrap();
     let links = String::from_utf8_lossy(&links.stdout);
-    assert_eq!(links.lines().count(), 3, "lo and the two dummies only: {links}");
-    assert!(links.lines().filter(|l| l.contains("sewlane0") || l.contains("sewv6")).all(|l| l.contains("UP")), "{links}");
+    assert_eq!(
+        links.lines().count(),
+        3,
+        "lo and the two dummies only: {links}"
+    );
+    assert!(
+        links
+            .lines()
+            .filter(|l| l.contains("sewlane0") || l.contains("sewv6"))
+            .all(|l| l.contains("UP")),
+        "{links}"
+    );
     // Its unit isn't loaded: the sweep takes it.
-    assert!(netns::sweep().contains(&name), "a namespace whose unit is gone is swept");
+    assert!(
+        netns::sweep().contains(&name),
+        "a namespace whose unit is gone is swept"
+    );
     assert!(!path.exists());
-    assert_eq!(netns::remove(&name), Ok(()), "removing what isn't there is fine");
-    let public = vec![Dummy { name: "x".into(), addr: "8.8.8.8/32".into() }];
+    assert_eq!(
+        netns::remove(&name),
+        Ok(()),
+        "removing what isn't there is fine"
+    );
+    let public = vec![Dummy {
+        name: "x".into(),
+        addr: "8.8.8.8/32".into(),
+    }];
     assert!(netns::make(&name, &public).is_err());
     assert!(!path.exists(), "nothing made for a refused ask");
 }
@@ -284,7 +335,10 @@ async fn a_job_asking_network_none_gets_loopback_only_and_its_dummies() {
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
     let feats = n.node.offer(&n.node.owner()).features;
-    assert!(feats.iter().any(|f| f == "job-network") && feats.iter().any(|f| f == "netns-dummy"), "the executor's self-test passed: {feats:?}");
+    assert!(
+        feats.iter().any(|f| f == "job-network") && feats.iter().any(|f| f == "netns-dummy"),
+        "the executor's self-test passed: {feats:?}"
+    );
     // This machine's own address on its default route: the control reaches it.
     let s = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
     s.connect("192.0.2.1:9").expect("a default route");
@@ -293,7 +347,10 @@ async fn a_job_asking_network_none_gets_loopback_only_and_its_dummies() {
     let addr = lan.local_addr().unwrap().to_string();
     let argv = probe_argv(&r.bin, &[], &[], &[addr.clone()]);
     let control = probe_direct(&argv);
-    assert!(ok(&control, "connect", &addr), "control connects to {addr}: {control}");
+    assert!(
+        ok(&control, "connect", &addr),
+        "control connects to {addr}: {control}"
+    );
     assert_eq!(control["loopback"], "ok");
 
     // --network none.
@@ -304,12 +361,26 @@ async fn a_job_asking_network_none_gets_loopback_only_and_its_dummies() {
     let fr = run_to_receipt(&mut c, "jn1").await;
     assert_eq!(last(&fr, "jn1").state, JobState::Done, "{fr:?}");
     let v = probe_json(&fr, "jn1");
-    assert!(v["connect"][&addr].as_str().unwrap().starts_with("error:"), "--network none let a socket out: {v}");
+    assert!(
+        v["connect"][&addr].as_str().unwrap().starts_with("error:"),
+        "--network none let a socket out: {v}"
+    );
     assert_eq!(v["loopback"], "ok", "its own loopback works: {v}");
-    let ifs: Vec<String> = v["ifaddrs"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
-    assert!(!ifs.is_empty() && ifs.iter().all(|x| x.starts_with("lo ")), "only lo: {ifs:?}");
+    let ifs: Vec<String> = v["ifaddrs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !ifs.is_empty() && ifs.iter().all(|x| x.starts_with("lo ")),
+        "only lo: {ifs:?}"
+    );
     let log = text(&logs_of(&fr, "jn1"), LogStream::Sys);
-    assert!(log.contains("network: none (this job asked, --network none)"), "{log}");
+    assert!(
+        log.contains("network: none (this job asked, --network none)"),
+        "{log}"
+    );
 
     // --netns-dummy sewlane0=10.254.254.1/32 (and a v6 one).
     let target = "10.254.254.1:9".to_string();
@@ -318,24 +389,60 @@ async fn a_job_asking_network_none_gets_loopback_only_and_its_dummies() {
     let mut p = plan("jn2", &argv_s);
     p.network = Some(JobNet {
         mode: JobNetMode::None,
-        dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }, Dummy { name: "sewv6".into(), addr: "fd00:6b32::7/128".into() }],
+        dummies: vec![
+            Dummy {
+                name: "sewlane0".into(),
+                addr: "10.254.254.1/32".into(),
+            },
+            Dummy {
+                name: "sewv6".into(),
+                addr: "fd00:6b32::7/128".into(),
+            },
+        ],
     });
     c.send(Frame::Assign(assign(p, 1)));
     let fr = run_to_receipt(&mut c, "jn2").await;
     assert_eq!(last(&fr, "jn2").state, JobState::Done, "{fr:?}");
     let v = probe_json(&fr, "jn2");
-    assert!(v["connect"][&addr].as_str().unwrap().starts_with("error:"), "dummies never open the outside: {v}");
+    assert!(
+        v["connect"][&addr].as_str().unwrap().starts_with("error:"),
+        "dummies never open the outside: {v}"
+    );
     let to_dummy = v["connect"][&target].as_str().unwrap();
-    assert!(to_dummy.contains("refused"), "its own dummy address answers (nothing listens on 9), the filter lets it: {v}");
+    assert!(
+        to_dummy.contains("refused"),
+        "its own dummy address answers (nothing listens on 9), the filter lets it: {v}"
+    );
     assert_eq!(v["loopback"], "ok", "{v}");
-    let ifs: Vec<String> = v["ifaddrs"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
-    assert!(ifs.iter().any(|x| x == "sewlane0 10.254.254.1/32"), "{ifs:?}");
+    let ifs: Vec<String> = v["ifaddrs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        ifs.iter().any(|x| x == "sewlane0 10.254.254.1/32"),
+        "{ifs:?}"
+    );
     assert!(ifs.iter().any(|x| x == "sewv6 fd00:6b32::7/128"), "{ifs:?}");
-    assert!(ifs.iter().all(|x| x.starts_with("lo ") || x.starts_with("sewlane0 ") || x.starts_with("sewv6 ")), "nothing of the host: {ifs:?}");
+    assert!(
+        ifs.iter()
+            .all(|x| x.starts_with("lo ") || x.starts_with("sewlane0 ") || x.starts_with("sewv6 ")),
+        "nothing of the host: {ifs:?}"
+    );
     let log = text(&logs_of(&fr, "jn2"), LogStream::Sys);
-    assert!(log.contains("Dummy interfaces, up: sewlane0 10.254.254.1/32, sewv6 fd00:6b32::7/128"), "{log}");
-    assert!(!unit_loaded("k2job-jn2-g1.service"), "released after the job");
-    assert!(!std::path::Path::new("/run/netns/k2job-jn2-g1").exists(), "its namespace went with the unit");
+    assert!(
+        log.contains("Dummy interfaces, up: sewlane0 10.254.254.1/32, sewv6 fd00:6b32::7/128"),
+        "{log}"
+    );
+    assert!(
+        !unit_loaded("k2job-jn2-g1.service"),
+        "released after the job"
+    );
+    assert!(
+        !std::path::Path::new("/run/netns/k2job-jn2-g1").exists(),
+        "its namespace went with the unit"
+    );
     drop(n);
 }
 

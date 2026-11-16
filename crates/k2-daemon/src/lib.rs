@@ -371,6 +371,8 @@ pub mod compute_advertise;
 pub mod compute_allow;
 // `--cache-required`: a job pinned to the node that holds its cache.
 pub mod compute_cache_pin;
+// A compute job's GPU ask (0.46.11): parse, placement skip, refusals.
+pub mod compute_gpu_ask;
 // A compute job's own --network ask (0.46.14): parse, placement, refusals.
 pub mod compute_job_network;
 // Git access for compute jobs (0.46.9, GH#78): `k2 compute git-access`.

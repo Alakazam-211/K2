@@ -266,7 +266,24 @@ pub async fn probe_exec_caps(admin_socket: &Path) -> ExecCaps {
     })
     .await;
     match r {
-        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, netns, .. })) => ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, netns },
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready {
+            stdin,
+            job_uid,
+            gpus,
+            gpu_usage,
+            gens_wall,
+            cpu_weight,
+            netns,
+            ..
+        })) => ExecCaps {
+            stdin,
+            job_uid,
+            gpus,
+            gpu_usage,
+            gens_wall,
+            cpu_weight,
+            netns,
+        },
         _ => ExecCaps::default(),
     }
 }
@@ -830,20 +847,29 @@ impl Node {
     /// interfaces (`--netns-dummy`)? Linux job wall and an executor whose
     /// namespace self-test passed; never a Mac.
     pub fn offers_netns_dummy(&self) -> bool {
-        cfg!(target_os = "linux") && matches!(self.wall, Wall::JobUser { .. }) && self.exec_netns.load(std::sync::atomic::Ordering::SeqCst)
+        cfg!(target_os = "linux")
+            && matches!(self.wall, Wall::JobUser { .. })
+            && self.exec_netns.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// 0.46.14: why this node won't run `plan`'s own network ask for `t`
     /// now, or `None` (no ask, or it can): `(code, detail)`. Checked at
     /// assign and again as the job starts; never run with more network.
-    pub fn job_network_refusal(&self, t: &Tenant, plan: &k2_node_proto::frames::Plan) -> Option<(&'static str, String)> {
+    pub fn job_network_refusal(
+        &self,
+        t: &Tenant,
+        plan: &k2_node_proto::frames::Plan,
+    ) -> Option<(&'static str, String)> {
         use k2_node_proto::jobnet::{self, codes};
         let n = plan.network.as_ref()?;
         if let Err(e) = jobnet::check(n) {
             return Some((codes::JOB_NETWORK_INVALID, format!("--network: {e}")));
         }
         if !t.speaks_gens() {
-            return Some((codes::JOB_NETWORK_UNAVAILABLE, "this server never saw job-network offered here (protocol 10)".into()));
+            return Some((
+                codes::JOB_NETWORK_UNAVAILABLE,
+                "this server never saw job-network offered here (protocol 10)".into(),
+            ));
         }
         if !self.offers_job_network() {
             return Some((
@@ -1707,7 +1733,8 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None, network: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
+            network: None,
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

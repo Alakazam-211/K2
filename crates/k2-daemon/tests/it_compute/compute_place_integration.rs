@@ -560,7 +560,9 @@ async fn gpu_jobs_place_only_on_granted_gpu_nodes() {
 /// before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn network_asks_place_only_on_nodes_that_run_them() {
-    use k2_core::compute::proto::jobnet::{Dummy, JobNet, JobNetMode, FEATURE_JOB_NETWORK, FEATURE_NETNS_DUMMY};
+    use k2_core::compute::proto::jobnet::{
+        Dummy, JobNet, JobNetMode, FEATURE_JOB_NETWORK, FEATURE_NETNS_DUMMY,
+    };
     let env = setup();
     let d = test_harness::start(OWNER).await;
     let me = seed_ws(&env, "netws");
@@ -570,21 +572,55 @@ async fn network_asks_place_only_on_nodes_that_run_them() {
     let _a = compute_ws::test_attach("n-old", offer(1, 60, 64, 0));
     // An older node only: refused, auto or named; a plain job runs there.
     let r = run(d.port, &agent, &me, json!({"network": "none"})).await;
-    assert_eq!((r.status, code(&r)), (409, "job_network_needs_update".to_string()), "{}", r.body);
-    assert!(r.body.contains("--network none") && r.body.contains("0.46.14"), "{}", r.body);
-    let r = run(d.port, &agent, &me, json!({"node": "n-old", "network": "none"})).await;
-    assert_eq!((r.status, code(&r)), (409, "job_network_needs_update".to_string()), "named: {}", r.body);
+    assert_eq!(
+        (r.status, code(&r)),
+        (409, "job_network_needs_update".to_string()),
+        "{}",
+        r.body
+    );
+    assert!(
+        r.body.contains("--network none") && r.body.contains("0.46.14"),
+        "{}",
+        r.body
+    );
+    let r = run(
+        d.port,
+        &agent,
+        &me,
+        json!({"node": "n-old", "network": "none"}),
+    )
+    .await;
+    assert_eq!(
+        (r.status, code(&r)),
+        (409, "job_network_needs_update".to_string()),
+        "named: {}",
+        r.body
+    );
     assert_eq!(j(&r)["error"]["node"], "n-old", "{}", r.body);
-    for bad in [json!({"network": "on"}), json!({"netnsDummies": ["sewlane0=8.8.8.8/32"]}), json!({"netnsDummies": ["lo=10.0.0.1/32"]})] {
+    for bad in [
+        json!({"network": "on"}),
+        json!({"netnsDummies": ["sewlane0=8.8.8.8/32"]}),
+        json!({"netnsDummies": ["lo=10.0.0.1/32"]}),
+    ] {
         let r = run(d.port, &agent, &me, bad.clone()).await;
-        assert_eq!((r.status, code(&r)), (400, "job_network_invalid".to_string()), "{bad}: {}", r.body);
+        assert_eq!(
+            (r.status, code(&r)),
+            (400, "job_network_invalid".to_string()),
+            "{bad}: {}",
+            r.body
+        );
     }
     let r = run(d.port, &agent, &me, json!({})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(node_of(&r), "n-old");
-    let plan = row(j(&r)["job"]["id"].as_str().unwrap()).plan().expect("a plan");
+    let plan = row(j(&r)["job"]["id"].as_str().unwrap())
+        .plan()
+        .expect("a plan");
     assert_eq!(plan.network, None);
-    assert!(!serde_json::to_string(&plan).unwrap().contains("network"), "no ask: the plan as before");
+    assert!(
+        !serde_json::to_string(&plan).unwrap().contains("network"),
+        "no ask: the plan as before"
+    );
     // A Mac-like node: `job-network`, no `netns-dummy`.
     active_node("n-mac");
     grant("n-mac", &me, None, 4);
@@ -593,35 +629,90 @@ async fn network_asks_place_only_on_nodes_that_run_them() {
     let _b = compute_ws::test_attach("n-mac", mac);
     let r = run(d.port, &agent, &me, json!({"network": "none"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(node_of(&r), "n-mac", "the older, bigger node is skipped: {}", r.body);
-    assert_eq!(j(&r)["placement"]["skipped"]["job_network"], 1, "{}", r.body);
+    assert_eq!(
+        node_of(&r),
+        "n-mac",
+        "the older, bigger node is skipped: {}",
+        r.body
+    );
+    assert_eq!(
+        j(&r)["placement"]["skipped"]["job_network"],
+        1,
+        "{}",
+        r.body
+    );
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
-    assert_eq!(row(&job).plan().expect("a plan").network, Some(JobNet::none()));
-    let r = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
+    assert_eq!(
+        row(&job).plan().expect("a plan").network,
+        Some(JobNet::none())
+    );
+    let r = get(
+        d.port,
+        "/cli/compute/jobs/get",
+        &agent,
+        &format!("job={job}"),
+    )
+    .await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(j(&r)["network"]["line"], "none", "{}", r.body);
     assert_eq!(j(&r)["result"]["network"]["mode"], "none", "{}", r.body);
     let dummies = json!({"netnsDummies": ["sewlane0=10.254.254.1/32"]});
     let r = run(d.port, &agent, &me, dummies.clone()).await;
-    assert_eq!((r.status, code(&r)), (409, "job_network_needs_update".to_string()), "no node makes dummies yet: {}", r.body);
+    assert_eq!(
+        (r.status, code(&r)),
+        (409, "job_network_needs_update".to_string()),
+        "no node makes dummies yet: {}",
+        r.body
+    );
     assert!(r.body.contains("--netns-dummy"), "{}", r.body);
     // A Linux node with a 0.46.14 executor: both.
     active_node("n-lin");
     grant("n-lin", &me, None, 4);
     let mut lin = offer(1, 30, 32, 0);
-    lin.features.extend([FEATURE_JOB_NETWORK.to_string(), FEATURE_NETNS_DUMMY.to_string()]);
+    lin.features.extend([
+        FEATURE_JOB_NETWORK.to_string(),
+        FEATURE_NETNS_DUMMY.to_string(),
+    ]);
     let _c = compute_ws::test_attach("n-lin", lin);
-    let r = run(d.port, &agent, &me, json!({"netnsDummies": ["sewlane0=10.254.254.1/32"], "plan": true})).await;
+    let r = run(
+        d.port,
+        &agent,
+        &me,
+        json!({"netnsDummies": ["sewlane0=10.254.254.1/32"], "plan": true}),
+    )
+    .await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(j(&r)["network"]["line"], "none; dummies: sewlane0 10.254.254.1/32", "{}", r.body);
+    assert_eq!(
+        j(&r)["network"]["line"],
+        "none; dummies: sewlane0 10.254.254.1/32",
+        "{}",
+        r.body
+    );
     let r = run(d.port, &agent, &me, dummies).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(node_of(&r), "n-lin", "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
-    let want = JobNet { mode: JobNetMode::None, dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }] };
+    let want = JobNet {
+        mode: JobNetMode::None,
+        dummies: vec![Dummy {
+            name: "sewlane0".into(),
+            addr: "10.254.254.1/32".into(),
+        }],
+    };
     assert_eq!(row(&job).plan().expect("a plan").network, Some(want));
-    let r = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
-    assert_eq!(j(&r)["network"]["dummies"][0]["addr"], "10.254.254.1/32", "{}", r.body);
+    let r = get(
+        d.port,
+        "/cli/compute/jobs/get",
+        &agent,
+        &format!("job={job}"),
+    )
+    .await;
+    assert_eq!(
+        j(&r)["network"]["dummies"][0]["addr"],
+        "10.254.254.1/32",
+        "{}",
+        r.body
+    );
     compute_ws::test_detach("n-old");
     compute_ws::test_detach("n-mac");
     compute_ws::test_detach("n-lin");

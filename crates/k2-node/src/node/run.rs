@@ -311,7 +311,11 @@ pub fn asked_network_line(n: &k2_node_proto::jobnet::JobNet, mac: bool) -> Strin
     if !n.dummies.is_empty() {
         s.push_str(&format!(
             ". Dummy interfaces, up: {} (no route out)",
-            n.dummies.iter().map(k2_node_proto::jobnet::Dummy::line).collect::<Vec<_>>().join(", ")
+            n.dummies
+                .iter()
+                .map(k2_node_proto::jobnet::Dummy::line)
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     s
@@ -736,7 +740,20 @@ impl Node {
             None => network,
             Some(_) => {
                 if let Some((code, detail)) = self.job_network_refusal(&t, &a.plan) {
-                    self.finish_job(&t, &a, None, JobState::Failed, Some(code), Some(&detail), None, None, None, None, None).await;
+                    self.finish_job(
+                        &t,
+                        &a,
+                        None,
+                        JobState::Failed,
+                        Some(code),
+                        Some(&detail),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
                     return;
                 }
                 network.min(Network::None)
@@ -866,8 +883,14 @@ impl Node {
         // starts (or the line of the `none` it falls back to).
         let mac_no_lan = cfg!(target_os = "macos") && network == Network::NoLan;
         if let Some(n) = &a.plan.network {
-            sys(&mut journal, &asked_network_line(n, cfg!(target_os = "macos")));
-        } else if let Some(line) = (t.speaks_easy() && !mac_no_lan).then(|| self.job_network_line(&t, network)).flatten() {
+            sys(
+                &mut journal,
+                &asked_network_line(n, cfg!(target_os = "macos")),
+            );
+        } else if let Some(line) = (t.speaks_easy() && !mac_no_lan)
+            .then(|| self.job_network_line(&t, network))
+            .flatten()
+        {
             sys(&mut journal, &line);
         }
         // Toolchains: explicit needs (required) + what the repo declares
@@ -2015,7 +2038,12 @@ impl Node {
             // GPU jobs (0.46.11): root picks and leases the device.
             gpu: a.plan.gpu,
             // 0.46.14: root makes the job's own namespace with these.
-            netns_dummies: a.plan.network.as_ref().map(|n| n.dummies.clone()).unwrap_or_default(),
+            netns_dummies: a
+                .plan
+                .network
+                .as_ref()
+                .map(|n| n.dummies.clone())
+                .unwrap_or_default(),
         };
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.
@@ -2982,12 +3010,37 @@ pub(super) mod tests {
         use k2_node_proto::jobnet::{Dummy, JobNet, JobNetMode};
         let plain = asked_network_line(&JobNet::none(), false);
         assert!(plain.starts_with("network: none (this job asked, --network none): a network namespace of its own, loopback only; no DNS"), "{plain}");
-        assert!(plain.contains("--cache") && !plain.contains("Dummy"), "{plain}");
-        let sew = JobNet { mode: JobNetMode::None, dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }, Dummy { name: "v6".into(), addr: "fd00::1/128".into() }] };
+        assert!(
+            plain.contains("--cache") && !plain.contains("Dummy"),
+            "{plain}"
+        );
+        let sew = JobNet {
+            mode: JobNetMode::None,
+            dummies: vec![
+                Dummy {
+                    name: "sewlane0".into(),
+                    addr: "10.254.254.1/32".into(),
+                },
+                Dummy {
+                    name: "v6".into(),
+                    addr: "fd00::1/128".into(),
+                },
+            ],
+        };
         let line = asked_network_line(&sew, false);
-        assert!(line.ends_with(". Dummy interfaces, up: sewlane0 10.254.254.1/32, v6 fd00::1/128 (no route out)"), "{line}");
+        assert!(
+            line.ends_with(
+                ". Dummy interfaces, up: sewlane0 10.254.254.1/32, v6 fd00::1/128 (no route out)"
+            ),
+            "{line}"
+        );
         let mac = asked_network_line(&JobNet::none(), true);
-        assert!(mac.contains("no remote IP") && mac.contains("Mac's own services") && !mac.contains("namespace"), "{mac}");
+        assert!(
+            mac.contains("no remote IP")
+                && mac.contains("Mac's own services")
+                && !mac.contains("namespace"),
+            "{mac}"
+        );
     }
 
     /// A job that starts with less than full network says so in its log:

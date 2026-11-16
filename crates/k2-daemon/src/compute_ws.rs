@@ -2882,7 +2882,9 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
         }
         // 0.46.14: `--network none` / `--netns-dummy` only to a node that
         // offers them right now.
-        if k2_core::compute::proto::jobnet::missing_feature(plan.network.as_ref(), &offer.features).is_some() {
+        if k2_core::compute::proto::jobnet::missing_feature(plan.network.as_ref(), &offer.features)
+            .is_some()
+        {
             wait(job_network_feature_wait(), &mut pass);
             continue;
         }
@@ -3151,7 +3153,10 @@ pub fn kick(node_id: &str) {
     }
     // 0.46.14: never a `--network none` plan to a node that doesn't run it
     // at that network now (an older one would refuse its digest anyway).
-    let offered = offer.as_ref().map(|o| o.features.clone()).unwrap_or_default();
+    let offered = offer
+        .as_ref()
+        .map(|o| o.features.clone())
+        .unwrap_or_default();
     if k2_core::compute::proto::jobnet::missing_feature(plan.network.as_ref(), &offered).is_some() {
         let w = job_network_feature_wait();
         if job.reason.as_deref() != Some(w.code.as_str()) {
@@ -3446,7 +3451,8 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None, network: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
+            network: None,
             with: Vec::new(),
         };
         store::insert_job(

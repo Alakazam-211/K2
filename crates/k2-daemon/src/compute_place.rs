@@ -42,6 +42,7 @@ use k2_core::compute::share::{self, pending};
 use k2_core::compute::store::{self, AnyFilter, AttemptNote, GrantRow, JobCtl, JobRow, NodeRow};
 use k2_core::compute::{self as compute, scheduler};
 
+pub use crate::compute_gpu_ask::{gpu_mem_needs_update_hint, gpu_refusal, gpu_skip};
 use crate::compute_ws;
 
 /// The native tools' need states (android-ndk, cargo-ndk).
@@ -148,7 +149,9 @@ pub struct Want {
     /// on a unified GPU it (default 2G) counts against the node's memory
     /// beside `--mem` ([`Want::mem_on`]).
     pub gpu_mem: Option<u64>,
-    pub network: Option<k2_core::compute::proto::jobnet::JobNet>, // 0.46.14: only nodes offering its features (crate::compute_job_network)
+    /// 0.46.14 (`--network none`, `--netns-dummy`): only nodes offering
+    /// what it needs ([`crate::compute_job_network`]).
+    pub network: Option<k2_core::compute::proto::jobnet::JobNet>,
 }
 
 impl Want {
@@ -187,7 +190,8 @@ impl Want {
             multi_repo: !plan.with.is_empty(),
             receipt_v2: plan.receipt_v.is_some(),
             gpu: plan.gpu,
-            gpu_mem: plan.gpu_mem, network: plan.network.clone(),
+            gpu_mem: plan.gpu_mem,
+            network: plan.network.clone(),
         }
     }
 
@@ -233,70 +237,6 @@ pub fn plan_mem_on(plan: &Plan, offer: Option<&Offer>) -> Option<u64> {
 /// or an Admin (prd-compute-job-tiers-v1 §5.1, T12).
 pub fn ci_allowed(admin: bool, grant: Option<&GrantRow>, offer: Option<&Offer>) -> bool {
     share::share_allows_ci(offer) && (admin || grant.is_some_and(|g| g.allow_ci))
-}
-
-/// GPU jobs (0.46.11): why a node can't take `w`'s GPU ask, or `None`.
-/// [`skip::NO_GPU`]: it runs no GPU jobs for this server (no `gpu` feature
-/// in this session, or no GPU of that vendor open to it in `host.gpus`).
-/// [`skip::GPU_NEEDS_GRANT`]: it does, but this workspace's grant there
-/// doesn't say `--gpu` and the caller isn't the owner or an Admin.
-pub fn gpu_skip(w: &Want, grant: Option<&GrantRow>, offer: &Offer) -> Option<&'static str> {
-    use k2_core::compute::proto::gpu;
-    let ask = w.gpu.as_ref()?;
-    let has = offer.features.iter().any(|f| f == gpu::FEATURE_GPU) && offer.host.as_ref().is_some_and(|h| gpu::any_for(&h.gpus, ask));
-    if !has {
-        return Some(skip::NO_GPU);
-    }
-    if !(w.admin || grant.is_some_and(|g| g.allow_gpu)) {
-        return Some(skip::GPU_NEEDS_GRANT);
-    }
-    // S6: an explicit `--gpu-mem` only where the node watches it.
-    if w.gpu_mem.is_some() && !offer.features.iter().any(|f| f == gpu::FEATURE_GPU_MEM) {
-        return Some(skip::GPU_MEM_NEEDS_UPDATE);
-    }
-    None
-}
-
-/// GPU jobs (0.46.11): the refusal when no node is left for a GPU ask.
-/// `gpu_needs_grant` (403, an agent's card) when a node has a GPU for this
-/// server but the grant lacks `--gpu`; `no_gpu_node` (404) when no node
-/// this workspace may see runs GPU jobs for it. Both exit 3. `None`: no
-/// GPU ask, or nodes are left.
-pub fn gpu_refusal(w: &Want, report: &CandReport, ws_handle: &str) -> Option<(&'static str, u16, String, Option<String>)> {
-    use k2_core::compute::proto::gpu::{codes, no_gpu_node_hint};
-    w.gpu.as_ref()?;
-    if !report.cands.is_empty() {
-        return None;
-    }
-    // S6: GPU nodes for this server, but none takes `--gpu-mem` yet.
-    if report.skipped.get(skip::GPU_MEM_NEEDS_UPDATE).copied().unwrap_or(0) > 0 && report.gpu_needs_grant.is_empty() {
-        return Some((codes::GPU_MEM_NEEDS_UPDATE, 409, gpu_mem_needs_update_hint(None), None));
-    }
-    if let Some(node) = report.gpu_needs_grant.first() {
-        return Some((
-            codes::GPU_NEEDS_GRANT,
-            403,
-            format!(
-                "--gpu: {node} runs GPU jobs for this server, but workspace {ws_handle}'s grant there doesn't allow them. The owner or an Admin: k2 compute grant {node} --workspace {ws_handle} --gpu"
-            ),
-            Some(node.clone()),
-        ));
-    }
-    if report.skipped.get(skip::NO_GPU).copied().unwrap_or(0) > 0 || report.visible == 0 {
-        return Some((codes::NO_GPU_NODE, 404, no_gpu_node_hint(ws_handle), None));
-    }
-    None
-}
-
-/// The hint for [`codes::GPU_MEM_NEEDS_UPDATE`] (a named node, or every
-/// GPU node this workspace may use).
-///
-/// [`codes::GPU_MEM_NEEDS_UPDATE`]: k2_core::compute::proto::gpu::codes::GPU_MEM_NEEDS_UPDATE
-pub fn gpu_mem_needs_update_hint(node: Option<&str>) -> String {
-    let which = node.map(|n| format!("'{n}' runs GPU jobs for this server, but its k2-node")).unwrap_or_else(|| "the nodes that run GPU jobs for this server run a k2-node that".into());
-    format!(
-        "--gpu-mem: {which} is older than 0.46.11 and can't watch a job's GPU memory. Its owner updates k2-node there; or run without --gpu-mem (an older node doesn't count or watch GPU memory at all: on an APU, leave headroom in --mem)"
-    )
 }
 
 /// F10 (CP-A4): an explicit `--timeout` within the grant's max per job.
@@ -1053,7 +993,10 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.gpu_mem.is_some() {
         f.push(k2_core::compute::proto::gpu::FEATURE_GPU_MEM);
     }
-    f.extend(k2_core::compute::proto::jobnet::plan_features(w.network.as_ref()));
+    // 0.46.14: `job-network`, and `netns-dummy` for dummy interfaces.
+    f.extend(k2_core::compute::proto::jobnet::plan_features(
+        w.network.as_ref(),
+    ));
     f
 }
 
@@ -1119,7 +1062,10 @@ pub mod skip {
     /// A need it can't provide at all (a Rust target where Rust is
     /// a system package with no rustup).
     pub const TOOLS_UNSUPPORTED: &str = "tools_unsupported";
-    pub const JOB_NETWORK: &str = "job_network"; // 0.46.14: a node that can't run the job's --network ask
+    /// 0.46.14: a node that can't run the job's `--network` ask (k2-node
+    /// or its executor older than 0.46.14, no job wall, or a Mac for
+    /// `--netns-dummy`).
+    pub const JOB_NETWORK: &str = "job_network";
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -1264,16 +1210,17 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
             skipped(&mut out, skip::OFFLINE);
             continue;
         };
-        // GPU jobs (0.46.11): before the feature check, so a node without
-        // GPU jobs for this server says `no_gpu`, not `node_too_old`.
-        if let Some(code) = gpu_skip(w, grant.as_ref(), &offer) {
+        // GPU jobs (0.46.11) and the `--network` ask (0.46.14): before the
+        // feature check, so a node without GPU jobs for this server says
+        // `no_gpu`, one that can't run the job's network `job_network`,
+        // not `node_too_old`.
+        if let Some(code) = crate::compute_job_network::ask_skip(w, grant.as_ref(), &offer) {
             if code == skip::GPU_NEEDS_GRANT {
                 out.gpu_needs_grant.push(n.name.clone());
             }
             skipped(&mut out, code);
             continue;
         }
-        if crate::compute_job_network::lacks(w, &offer.features) { skipped(&mut out, skip::JOB_NETWORK); continue; } // not node_too_old
         if feats.iter().any(|f| !offer.features.iter().any(|x| x == f)) {
             skipped(&mut out, skip::NODE_TOO_OLD);
             continue;
@@ -2875,7 +2822,8 @@ mod tests {
             multi_repo: false,
             receipt_v2: false,
             gpu: None,
-            gpu_mem: None, network: None,
+            gpu_mem: None,
+            network: None,
         }
     }
 

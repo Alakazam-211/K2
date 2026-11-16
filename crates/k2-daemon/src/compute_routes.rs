@@ -34,6 +34,8 @@ use k2_core::compute::{self as compute, codes, scheduler, store};
 use k2_core::connect_users::Role;
 
 use crate::cli_response::CliResponse;
+use crate::compute_gpu_ask::{gpu_from, gpu_mem_from};
+use crate::compute_job_network as job_net;
 use crate::compute_manage::Manager;
 use crate::compute_views::{self as views, cancel_one, granted_node_ids, job_summary, node_visible, queue_view};
 use crate::compute_ws;
@@ -1621,7 +1623,8 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         multi_repo: false,
         receipt_v2: false,
         gpu: None,
-        gpu_mem: None, network: None,
+        gpu_mem: None,
+        network: None,
     };
     // Every matching node: each one's package states are reported, and the
     // names their owners must approve go out as ONE batched request (§7.3).
@@ -1861,6 +1864,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let gpu = gpu_from(v)?;
     // GPU jobs S6 (`--gpu-mem`): its GPU memory budget, only with `--gpu`.
     let gpu_mem = gpu_mem_from(v, gpu.is_some())?;
+    // 0.46.14 (`--network none`, `--netns-dummy`): the job's own network,
+    // only ever narrower than its node's.
+    let network = job_net::from_body(v)?;
     if cache.is_some() && !secret_asks.is_empty() {
         return Err(no(pcache::codes::CACHE_WITH_SECRET, 400, "--cache and --secret don't mix: a job with secret env keeps nothing between runs on the node"));
     }
@@ -1971,7 +1977,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         multi_repo: !with_asks(v)?.is_empty(),
         receipt_v2: receipt_v.is_some(),
         gpu,
-        gpu_mem, network: crate::compute_job_network::from_body(v)?, // 0.46.14: the job's own network, only ever narrower
+        gpu_mem,
+        network,
     };
     // `--mem auto` never asks more than the largest node this job could
     // run on allows per job (R1: capped at the node's cap; the job still
@@ -2239,8 +2246,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // of that vendor open to it), and the grant must say `--gpu` unless the
     // caller is the owner or an Admin. Auto-placement already kept only
     // such nodes; a named one is checked here. Never a GPU job on the CPU.
-    if let Some(r) = crate::compute_job_network::named_refusal(&want, grant.as_ref(), tier_offer.as_ref(), &node.name, &ws.handle) {
-        return Err(r); // 0.46.14: then a --network ask the node can't run (job_network_needs_update)
+    // 0.46.14: likewise a `--network` ask only to a node that runs it.
+    let refused = job_net::named_refusal(
+        &want,
+        grant.as_ref(),
+        tier_offer.as_ref(),
+        &node.name,
+        &ws.handle,
+    );
+    if let Some(r) = refused {
+        return Err(r);
     }
     // Limits first, before any source is read or bundled (A8): each
     // refusal names the whole grant and the owner's command.
@@ -2560,7 +2575,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cache_commit,
         cache_ref,
         setup: Vec::new(),
-        cpus_burst: None, network: want.network.clone(), provenance: crate::compute_provenance::ask(&node_features(&node)), // build statements: `provenance-v1` nodes only
+        cpus_burst: None, provenance: crate::compute_provenance::ask(&node_features(&node)), // build statements: `provenance-v1` nodes only
+        // 0.46.14: only ever placed where it runs at that network.
+        network: want.network.clone(),
     };
     let job = {
         let db = k2_core::db::shared();
@@ -2840,64 +2857,6 @@ fn cache_from(v: &serde_json::Value) -> R<Option<String>> {
             format!("--cache NAME: 1–{} of a-z 0-9 . _ -, starting with a letter or digit (e.g. fuzz-corpus)", pcache::NAME_MAX),
         )),
     }
-}
-
-/// `gpu` from a run request (`--gpu [any|amd|intel]`): `{"vendor": "any",
-/// "count": 1}`. NVIDIA is refused until tested on real hardware.
-fn gpu_from(v: &serde_json::Value) -> R<Option<k2_core::compute::proto::gpu::GpuAsk>> {
-    use k2_core::compute::proto::gpu::{GpuAsk, GpuVendor};
-    let g = match v.get("gpu") {
-        None | Some(serde_json::Value::Null) => return Ok(None),
-        Some(g) => g,
-    };
-    let bad = || no(codes::BAD_REQUEST, 400, "--gpu is any, amd or intel (one GPU per job): gpu = {\"vendor\": \"any\", \"count\": 1}");
-    let vendor = g.get("vendor").and_then(|x| x.as_str()).and_then(GpuVendor::parse).ok_or_else(bad)?;
-    if vendor == GpuVendor::Nvidia {
-        return Err(no(codes::BAD_REQUEST, 400, "--gpu nvidia: NVIDIA GPU jobs aren't supported yet (not tested on real hardware); use --gpu any, amd or intel"));
-    }
-    let count = match g.get("count") {
-        None | Some(serde_json::Value::Null) => 1,
-        Some(c) => c.as_u64().filter(|c| *c <= u64::from(u32::MAX)).ok_or_else(bad)? as u32,
-    };
-    let ask = GpuAsk { vendor, count };
-    ask.check().map_err(|e| no(codes::BAD_REQUEST, 400, format!("--gpu: {e}")))?;
-    Ok(Some(ask))
-}
-
-/// `gpuMemBytes` from a run request (`--gpu-mem 4G`): only with `--gpu`.
-fn gpu_mem_from(v: &serde_json::Value, gpu: bool) -> R<Option<u64>> {
-    let b = match v.get("gpuMemBytes") {
-        None | Some(serde_json::Value::Null) => return Ok(None),
-        Some(x) => x.as_u64().ok_or_else(|| no(codes::BAD_REQUEST, 400, "--gpu-mem is a size: --gpu-mem 4G (gpuMemBytes, bytes)"))?,
-    };
-    if !gpu {
-        return Err(no(codes::BAD_REQUEST, 400, "--gpu-mem needs --gpu: it is the GPU memory budget of a GPU job (k2 compute run --gpu --gpu-mem 4G --mem 8G -- <command>)"));
-    }
-    k2_core::compute::proto::gpu::check_gpu_mem(b).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
-    Ok(Some(b))
-}
-
-/// A named node that can't take a `--gpu` job (`gpu_skip`'s code): exit 3.
-pub(crate) fn gpu_node_refusal(code: &str, node: &str, ws: &str) -> Refusal {
-    use k2_core::compute::proto::gpu::codes as g;
-    if code == crate::compute_place::skip::GPU_MEM_NEEDS_UPDATE {
-        return no(g::GPU_MEM_NEEDS_UPDATE, 409, crate::compute_place::gpu_mem_needs_update_hint(Some(node))).with("node", node.to_string());
-    }
-    if code == crate::compute_place::skip::GPU_NEEDS_GRANT {
-        return no(
-            g::GPU_NEEDS_GRANT,
-            403,
-            format!("--gpu: '{node}' runs GPU jobs for this server, but workspace {ws}'s grant there doesn't allow them. The owner or an Admin: k2 compute grant {node} --workspace {ws} --gpu"),
-        )
-        .with("node", node.to_string());
-    }
-    no(
-        g::NO_GPU_NODE,
-        404,
-        format!(
-            "--gpu: '{node}' runs no GPU jobs for this server (or none of that vendor). Its owner turns them on at the machine: sudo k2-node admin gpu on --server <this server>; then: k2 compute grant {node} --workspace {ws} --gpu. Or leave the node off and K2 picks one that has a GPU for you"
-        ),
-    )
 }
 
 /// `tier` from a run request (`gate: true` is the old spelling of CI).
@@ -3244,7 +3203,7 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
         "toolsLine": crate::compute_place::tools_words(&need_states),
         "ranking": ranking,
         "artifacts": f.artifacts,
-        "warnings": f.warnings, "network": f.want.network.as_ref().map(crate::compute_views::network_json),
+        "warnings": f.warnings,
     });
     if !f.secrets.is_empty() {
         // Names and coverage only, never a value (SE7).
@@ -3253,6 +3212,10 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     out["placement"] = serde_json::to_value(f.placement).unwrap_or_default();
     out["effective"] = f.effective.cloned().unwrap_or_default();
     out["tier"] = f.tier.as_str().into();
+    // 0.46.14: the job's own network ask, only when it asked.
+    if let Some(net) = f.want.network.as_ref() {
+        out["network"] = crate::compute_views::network_json(net);
+    }
     // GPU jobs (0.46.11): the ask, the GPUs there open to this server, and
     // how many are free now (root picks the device at the start).
     if let Some(g) = f.want.gpu {
@@ -3422,7 +3385,7 @@ fn pick_node(
     // GPU jobs (0.46.11): no node left for `--gpu` is `no_gpu_node` (or
     // `gpu_needs_grant` naming a GPU node whose grant lacks `--gpu`), never
     // a job placed without its GPU.
-    if let Some((code, status, hint, node)) = crate::compute_job_network::auto_refusal(want, &report, &ws.handle) {
+    if let Some((code, status, hint, node)) = job_net::auto_refusal(want, &report, &ws.handle) {
         let mut r = no(code, status, hint);
         if let Some(n) = node {
             r = r.with("node", n);
@@ -3935,7 +3898,8 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None, network: None,
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
+        network: None,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

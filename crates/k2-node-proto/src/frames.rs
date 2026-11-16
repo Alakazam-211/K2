@@ -1960,7 +1960,8 @@ mod tests {
             cache_commit: None,
             cache_ref: None,
             setup: Vec::new(),
-            cpus_burst: None, provenance: None, network: None,
+            cpus_burst: None, provenance: None,
+            network: None,
         }
     }
 

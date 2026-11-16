@@ -142,7 +142,8 @@ impl Node {
         // 0.46.14: a job's own network ask only where it runs at that
         // network (never with more).
         if let Some((code, detail)) = self.job_network_refusal(t, &a.plan) {
-            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(code), Some(&detail)));
+            t.hub
+                .send(self.state_frame(&job, gen, JobState::Failed, Some(code), Some(&detail)));
             return None;
         }
         // Build statements: a version this node doesn't sign, or a session

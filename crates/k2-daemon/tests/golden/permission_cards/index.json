@@ -11,7 +11,7 @@
     {
       "file": "admin-wait-confirm__approved__cards2.json",
       "form": "cards2",
-      "sha256": "2d2e93fdd726e7acab30fbc7ea7cceab913ed202726aad04773ba5c404a11771",
+      "sha256": "a8e7046b969da27660cb0e3fbc81d42676ee876e74aabe21e6813a682c7aca5b",
       "state": "approved",
       "transport": "doc",
       "view": "admin-wait-confirm"
@@ -27,7 +27,7 @@
     {
       "file": "admin-wait-confirm__pending__cards2.json",
       "form": "cards2",
-      "sha256": "9ee0ef6f3e42dd0a0017daa913b8d5c86e7a6a8651a2a60c15ec795b6758308f",
+      "sha256": "f0accc589073a684938dc3050f911e73b48e18f252c91a26cb1b510fa80aa82f",
       "state": "pending",
       "transport": "doc",
       "view": "admin-wait-confirm"
@@ -435,7 +435,7 @@
     {
       "file": "approver-confirm__approved__cards2.json",
       "form": "cards2",
-      "sha256": "a60a9cd9794a754147266af69c1eebe0dd955828bd8ed8267e80c2f76d9259c8",
+      "sha256": "391421cee277ada017848f266d363af6246364e1917c2786a0f7f2566a4d432e",
       "state": "approved",
       "transport": "doc",
       "view": "approver-confirm"
@@ -451,7 +451,7 @@
     {
       "file": "approver-confirm__pending__cards2.json",
       "form": "cards2",
-      "sha256": "aabbedbc272f1dc9155796ceefba923d9f79787375d79a6c98b94544cf674cf7",
+      "sha256": "1471372601d5adc517ace685f17d78111dc113d37fb9f35ddba9c66ce2f12b5f",
       "state": "pending",
       "transport": "doc",
       "view": "approver-confirm"
@@ -643,7 +643,7 @@
     {
       "file": "batch-admin__done__cards2.json",
       "form": "cards2",
-      "sha256": "1353adcae06019fb542c4c469e6e8575eca695881868ee3559cbc4c414b77f8d",
+      "sha256": "e331aef1652ccd79cab2791ca9a93653b3fc105e5c97e785f0b6fbc5b7fdacb2",
       "state": "done",
       "transport": "doc",
       "view": "batch-admin"
@@ -659,7 +659,7 @@
     {
       "file": "batch-admin__partial__cards2.json",
       "form": "cards2",
-      "sha256": "50b8608cac87fd32bbce766c294dbba6f87f05985636d7120399487e09e1db76",
+      "sha256": "0c6b67f9e65d3c797a7829347d9396ad5158950c68bab45ea711c1e1d0d7b7c2",
       "state": "partial",
       "transport": "doc",
       "view": "batch-admin"
@@ -675,7 +675,7 @@
     {
       "file": "batch-admin__pending__cards2.json",
       "form": "cards2",
-      "sha256": "9304d120d13b662df2d95e5e0c089bc3c5def2c1ce460d2474e32446c8eea6d9",
+      "sha256": "bfbeae5f57286ab3aca0f4a70618fb0548caeb06ecd4751b87ac2f1f52cb3746",
       "state": "pending",
       "transport": "doc",
       "view": "batch-admin"
@@ -691,7 +691,7 @@
     {
       "file": "batch-approver__done__cards2.json",
       "form": "cards2",
-      "sha256": "2c65e41df374cb69daa0aa6ddaa13d983e703f59f3f2eccbea9029a4e99d7803",
+      "sha256": "08c30b91d4dcf31a2a1aecac0c9f1f11df3e686d635e192f7f82d29f4a32889b",
       "state": "done",
       "transport": "doc",
       "view": "batch-approver"
@@ -707,7 +707,7 @@
     {
       "file": "batch-approver__partial__cards2.json",
       "form": "cards2",
-      "sha256": "34ad62361b5908c1a3098505acac26a5c7399579285fd16cc993efaaf16f6e0f",
+      "sha256": "80d11f1ad46964e9105ae235d2db0db1e997bdb80255f5c70ff75f596ff495f3",
       "state": "partial",
       "transport": "doc",
       "view": "batch-approver"
@@ -723,7 +723,7 @@
     {
       "file": "batch-approver__pending__cards2.json",
       "form": "cards2",
-      "sha256": "06578e0a32dda94a43186e9d2374cdd305d6e29ad9f2cd7b88d770b7bd13ebe3",
+      "sha256": "3c00d2115f9b1c795cbe16acc30e9f6c8bc08e735b9c3ece7eb4aa9eb15c9811",
       "state": "pending",
       "transport": "doc",
       "view": "batch-approver"

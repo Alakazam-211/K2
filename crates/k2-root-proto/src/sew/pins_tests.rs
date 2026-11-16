@@ -85,23 +85,23 @@ fn the_0_9_3_entry_equals_its_sha256sums() {
     );
 }
 
-/// The 0.10.0 pin is exactly its SHA256SUMS (vendored, sha256
+/// 0.10.0 (the pin before 0.10.2; an upgrade source and rollback target) is
+/// exactly its SHA256SUMS (vendored, sha256
 /// 4b3bce65…905a, as Sew's pin note names it): every core and sidecar
 /// tarball and binary member line, plus the App kit's. The core tarballs
 /// and binaries, the sidecar tarballs and the kit are also checked against
 /// the hashes in Sew's pin note, so a slip in either the table or the
 /// vendored file fails.
 #[test]
-fn the_0_10_0_pin_equals_its_sha256sums() {
+fn the_0_10_0_entry_equals_its_sha256sums() {
     let sums = include_str!("../../testdata/sew/sew-0.10.0.SHA256SUMS");
     assert_eq!(
         sha256_hex(sums.as_bytes()),
         "4b3bce65cec92e144811a77365390de2946543cc4a83cff048055317f1f6905a",
         "the vendored SUMS file is the published one"
     );
-    assert_eq!(SEW_RELEASES.last().unwrap().version, "0.10.0", "0.10.0 is the pin");
     assert_eq!(pin_equals_sums("0.10.0", sums), 17, "4 binaries × 2 arches × (tarball, member) + the App kit");
-    let pin = SEW_RELEASES.last().unwrap();
+    let pin = SEW_RELEASES.iter().find(|r| r.version == "0.10.0").expect("0.10.0 is known");
     let bin = |side: Option<&SewSidecar>, arch: &str| {
         let arts = side.map(|s| s.artifacts).unwrap_or(pin.artifacts);
         arts.iter().find(|a| a.arch == arch).map(|a| (a.tarball_sha256, a.binary_sha256)).expect("pinned")
@@ -130,6 +130,64 @@ fn the_0_10_0_pin_equals_its_sha256sums() {
     assert_eq!(version_cmp("0.9.3", pin.version), Some(std::cmp::Ordering::Less));
 }
 
+/// The 0.10.2 pin is exactly its SHA256SUMS (vendored, sha256
+/// 1b1ae068…ae33): every core and sidecar tarball and binary member line,
+/// the App kit's, and the DeepFilterNet3 bundle's two lines (the asset and
+/// its weights member). Each hash in Sew's pin note is checked here too, so a
+/// slip in either the table or the vendored file fails.
+#[test]
+fn the_0_10_2_pin_equals_its_sha256sums() {
+    let sums = include_str!("../../testdata/sew/sew-0.10.2.SHA256SUMS");
+    assert_eq!(
+        sha256_hex(sums.as_bytes()),
+        "1b1ae068e250b9bd0ec18a504507379cdfb755d6bb168c09b76f9f705a73ae33",
+        "the vendored SUMS file is the published one"
+    );
+    assert_eq!(SEW_RELEASES.last().unwrap().version, "0.10.2", "0.10.2 is the pin");
+    assert_eq!(
+        pin_equals_sums("0.10.2", sums),
+        19,
+        "4 binaries × 2 arches × (tarball, member) + the App kit + the DeepFilterNet3 asset and weights"
+    );
+    let pin = SEW_RELEASES.last().unwrap();
+    let bin = |side: Option<&SewSidecar>, arch: &str| {
+        let arts = side.map(|s| s.artifacts).unwrap_or(pin.artifacts);
+        arts.iter().find(|a| a.arch == arch).map(|a| (a.tarball_sha256, a.binary_sha256)).expect("pinned")
+    };
+    assert_eq!(
+        bin(None, "x86_64"),
+        ("846ae420121a8bfb061519d8e2a69e1e1b20b9659f9965f758cbdb7fc8f38aa2", "43213a2387d60fe7bcb7dc609222004ce5bcff816d4c83a7d938606329333fe5")
+    );
+    assert_eq!(
+        bin(None, "aarch64"),
+        ("170f9564ca1cea0c7bd92bd8cf1be0bab4d7822bf7a0c2410fe78006c9bfdfd3", "8ee7eb268cadbe11f5f91a214db6ae7be6534764e4d2d1af9b6327d65bae0901")
+    );
+    for (side, x86, arm) in [
+        (pin.media.as_ref(), "aecc84fe3ad805055b594953c5d057328a548e906c1163eb1e641d72d766a4e0", "0a01057e7c6a834d6d54e5cac8ea520a84bdd6b833c0a83e9577a1d343d27018"),
+        (pin.transcriber.as_ref(), "5b443957de94a9a853773eebb294b4444a441e9d3c613b363ff354cf277fafc1", "7ef1508b12539af202a2a0075d3ddc3d0c2a4394bb16b70454cfadb9f8d91b96"),
+        (pin.recorder.as_ref(), "7f4ec4b70cd6a4e8cb265bb433b3d9657b34c4cdf2a715a00c785800cce6c090", "d2abc955ef395db085ff076b51ddcde305475a7f356ef0c65ffdeae15eeccaf6"),
+    ] {
+        assert_eq!((bin(side, "x86_64").0, bin(side, "aarch64").0), (x86, arm), "{:?}", side.map(|s| s.version));
+    }
+    assert_eq!(
+        SEW_APP_KITS.iter().find(|k| k.version == "0.10.2").map(|k| k.sha256),
+        Some("1615bc10998f16483dc6883c0e7c61a90b388ee0eb2f6ffad2ca4b584df023dc")
+    );
+    let d = SEW_DFN3.iter().find(|d| d.version == "0.10.2").expect("0.10.2 ships DeepFilterNet3");
+    assert_eq!(
+        (d.file, d.sha256, d.bytes, d.weights_sha256),
+        (
+            "sew-dfn3-0.10.2.tar.gz",
+            "153721fd5f9f33663da7d831b3b611adcb9ca9e65233a6128d94941ad48d6697",
+            36_353_582,
+            "b6e52c0bc66b82e42e3403d22cdd3b847143026d6a41cc4380a97b044f7766af"
+        )
+    );
+    // 0.10.0 is older (an upgrade source; no migration between them, so the
+    // rollback to it is the plain one), by number, not as a string.
+    assert_eq!(version_cmp("0.10.0", pin.version), Some(std::cmp::Ordering::Less));
+}
+
 /// A box moved to Sew 0.8.3 by hand (never K2's pin) upgrades to the
 /// 0.9.0 pin as a plain release: its published binary (the sha256 its
 /// own `sew version` printed on a compute node, 37c7d41d… on x86_64) is
@@ -148,7 +206,7 @@ fn a_box_on_sew_0_8_3_upgrades_to_the_0_9_0_pin_as_a_known_release() {
     for a in r.artifacts {
         assert_eq!(known_binary(a.binary_sha256, a.arch), Some("0.8.3"), "{}", a.arch);
     }
-    assert_eq!(pinned().version, "0.10.0");
+    assert_eq!(pinned().version, "0.10.2");
     assert_eq!(version_cmp("0.8.3", pinned().version), Some(std::cmp::Ordering::Less), "an upgrade, not a downgrade");
     assert_eq!(version_cmp("0.8.2", "0.8.3"), Some(std::cmp::Ordering::Less), "0.8.3 sits between 0.8.2 and the pin");
     for arch in ["x86_64", "aarch64"] {

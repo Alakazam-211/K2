@@ -16,6 +16,10 @@ src-tauri/target/
 # Bundled frpc tunnel sidecar (Apache-2.0, fatedier/frp). Staged into the
 # build by scripts/fetch-frpc.sh; a ~14MB binary must not bloat the repo.
 src-tauri/binaries/
+# DeepFilterNet3 noise-removal weights (39 MB), staged by scripts/fetch-dfn3.sh
+# from the pinned Sew release asset; bundled as app resources, never committed.
+src-tauri/dfn3/
+src-tauri/.dfn3.*
 *.dmg
 *.zip
 *.app

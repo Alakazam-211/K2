@@ -55,14 +55,14 @@ describe('no edit to show', () => {
     expect(stage()).toBeNull()
   })
 
-  it('a file that can’t be live: why, Open saved versions and Ask Atlas, for each reason', async () => {
+  it('a file that can’t be live: why, Open the saved file and Ask Atlas, for each reason', async () => {
     await mount()
     pick('errors')
     const titles: string[] = []
     for (let i = 0; i < 4; i++) {
       const c = stage()!
       expect(c.getAttribute('role')).toBe('alert')
-      expect(within(c).getByRole('button', { name: 'Open saved versions' })).toBeTruthy()
+      expect(within(c).getByRole('button', { name: 'Open the saved file' })).toBeTruthy()
       expect(within(c).getByRole('button', { name: 'Ask Atlas' })).toBeTruthy()
       titles.push(c.querySelector('b')!.textContent!)
       if (i < 3) step(1)

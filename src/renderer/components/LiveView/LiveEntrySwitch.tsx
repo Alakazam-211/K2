@@ -26,6 +26,9 @@ export interface LiveEntrySwitchValue {
 const Ctx = createContext<LiveEntrySwitchValue | null>(null)
 export const LiveEntrySwitchProvider = Ctx.Provider
 
+/** The tab's File | Live switch, when the live view sits in a file tab (Open the saved file flips it to File). */
+export const useLiveEntrySwitch = (): LiveEntrySwitchValue | null => useContext(Ctx)
+
 /** `compact`: in a live header, "File | Live" (the header already says it's live; the words fit an 800 px window). */
 export function LiveEntrySwitchView({ v, compact = false }: { v: LiveEntrySwitchValue; compact?: boolean }): React.JSX.Element {
   return (

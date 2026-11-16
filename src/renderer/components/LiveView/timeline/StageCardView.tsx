@@ -1,8 +1,8 @@
 // The card in the monitor's place when there's no edit to show (T6): the
 // file opening part by part, no clips yet, or a file that can't be watched
 // live. The words come from stage-card.ts; the actions go to the tab
-// (Ask focuses the say row; Open saved versions goes to the shell's
-// notice handler).
+// (Ask focuses the say row; Open the saved file goes to the shell, which
+// switches the tab to File).
 
 import { Spinner } from '@/components/ui'
 import type { CardAction, StageCard } from '@/lib/live-view/timeline/stage-card'

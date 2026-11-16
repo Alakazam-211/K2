@@ -4,7 +4,7 @@
 //     fill in under it, the picture comes once the clips are in;
 //   - no clips yet, with Ask <agent>;
 //   - a file that can't be watched live (the kit's refusal at open), with
-//     why, Open saved versions and Ask <agent>.
+//     why, Open the saved file and Ask <agent>.
 // Actions are the shell's notice actions, so one handler answers both.
 
 import type { NoticeActionId } from '../shared/notices'
@@ -12,7 +12,7 @@ import type { TimelineModel } from './fold'
 import type { SimState } from './sim'
 
 export interface CardAction {
-  id: Extract<NoticeActionId, 'open-saved' | 'ask'>
+  id: Extract<NoticeActionId, 'open-saved-file' | 'ask'>
   label: string
   primary?: true
 }
@@ -60,7 +60,7 @@ export function stageCard(S: SimState, M: TimelineModel, o: { agent: string; fil
     }
     return head
   }
-  if (S.tier === 'declined' && S.decline) return { kind: 'declined', title: S.decline.title, line: S.decline.text, actions: [{ id: 'open-saved', label: 'Open saved versions', primary: true }, ask] }
+  if (S.tier === 'declined' && S.decline) return { kind: 'declined', title: S.decline.title, line: S.decline.text, actions: [{ id: 'open-saved-file', label: 'Open the saved file', primary: true }, ask] }
   if (S.tier === 'live' && !M.count) return { kind: 'empty', title: 'No clips on this timeline yet', line: `When ${o.agent} adds clips, the picture shows here.`, actions: [ask] }
   return null
 }

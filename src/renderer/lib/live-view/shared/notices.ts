@@ -5,7 +5,7 @@
 //     both, declined (edits pause), missing;
 //   - a refused verb (`verb_refused`): who couldn't do what, and who holds it;
 //   - the connection: reconnecting (Retry now), trying (a disabled
-//     "Trying…"), can't reconnect (Retry, Open saved versions), offline, and
+//     "Trying…"), can't reconnect (Retry, Open the saved file), offline, and
 //     back ("Back." with what came in).
 //
 // A connection notice outranks the rest; it is said once (here), and the
@@ -26,7 +26,7 @@ export type LiveNotice =
   | { kind: 'refused'; actor: string; verb: string; target: string; holder: string | null }
   | { kind: 'connection'; state: ConnectionState; changes?: number; following?: string | null; retried?: boolean }
 
-export type NoticeActionId = 'retry' | 'open-saved' | 'open-copy' | 'history' | 'save-again' | 'ask' | 'dismiss'
+export type NoticeActionId = 'retry' | 'open-saved-file' | 'open-copy' | 'history' | 'save-again' | 'ask' | 'dismiss'
 
 export interface NoticeAction {
   id: NoticeActionId
@@ -74,7 +74,7 @@ function saveView(save: OutsideSave, ctx: NoticeContext): NoticeView {
         : view('warn', 'alert', 'Saved outside K2: that save is now live.', 'What was live before is kept in History.', [{ id: 'history', label: 'History' }, DISMISS])
     case 'declined':
       return view('bad', 'alert', 'Saved outside K2, and the file can’t be live any more.', `${save.message.trim() || 'K2 can’t watch this save live.'} Edits are paused.`, [
-        { id: 'open-saved', label: 'Open saved versions', primary: true },
+        { id: 'open-saved-file', label: 'Open the saved file', primary: true },
       ])
     case 'missing':
       return view('warn', 'alert', `${ctx.fileName} was moved or deleted outside K2.`, 'The live version is kept. Save it again to keep working on it.', [
@@ -93,7 +93,7 @@ function connectionView(n: Extract<LiveNotice, { kind: 'connection' }>, ctx: Not
     case 'cant':
       return view('bad', 'alert', 'Can’t reach this file’s server.', `${n.retried ? 'Tried again just now: still no answer. ' : ''}K2 stopped trying. You see things as they were; anything new shows when you’re back.`, [
         { id: 'retry', label: 'Retry', primary: true },
-        { id: 'open-saved', label: 'Open saved versions' },
+        { id: 'open-saved-file', label: 'Open the saved file' },
       ])
     case 'offline':
       return view('warn', 'status', 'You’re offline.', 'You see things as they were; anything new shows when you’re back online.', [{ id: 'retry', label: 'Retry' }])

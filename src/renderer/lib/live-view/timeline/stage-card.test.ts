@@ -40,14 +40,14 @@ describe('the monitor with no edit to show', () => {
     expect(card(empty, 1)).toBeNull()
   })
 
-  it('a file that can’t be watched live: why, with Open saved versions and Ask Atlas', () => {
+  it('a file that can’t be watched live: why, with Open the saved file and Ask Atlas', () => {
     const c = card(errors, 0)
     expect(c).toEqual({
       kind: 'declined',
       title: 'This file holds 3 timelines',
       line: 'K2 watches one timeline per file live. You can still open the file’s saved versions.',
       actions: [
-        { id: 'open-saved', label: 'Open saved versions', primary: true },
+        { id: 'open-saved-file', label: 'Open the saved file', primary: true },
         { id: 'ask', label: 'Ask Atlas' },
       ],
     })

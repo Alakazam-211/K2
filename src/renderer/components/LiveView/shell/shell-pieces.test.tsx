@@ -259,7 +259,7 @@ describe('NoticeBar', () => {
   it('each outcome says its own words with its own next step', () => {
     const cases = [
       [{ outcome: 'ingested', rev: 2 }, 'status', 'Saved outside K2 · now in the live file', ['Dismiss']],
-      [{ outcome: 'declined', code: 'x', message: 'Not a timeline.' }, 'alert', 'Saved outside K2, and the file can’t be live any more.', ['Open saved versions']],
+      [{ outcome: 'declined', code: 'x', message: 'Not a timeline.' }, 'alert', 'Saved outside K2, and the file can’t be live any more.', ['Open the saved file']],
       [{ outcome: 'missing' }, 'alert', 'rough-cut was moved or deleted outside K2.', ['Save it again']],
     ] as const
     for (const [save, role, title, actions] of cases) {

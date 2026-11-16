@@ -38,7 +38,7 @@ describe('outside saves', () => {
     const v = noticeView({ kind: 'outside_save', save: { outcome: 'declined', code: 'not_a_timeline', message: 'The save isn’t a timeline K2 can read.' } }, ctx)
     expect(v).toMatchObject({ tone: 'bad', role: 'alert', title: 'Saved outside K2, and the file can’t be live any more.' })
     expect(v.line).toBe('The save isn’t a timeline K2 can read. Edits are paused.')
-    expect(ids({ kind: 'outside_save', save: { outcome: 'declined', code: 'x', message: '' } })).toEqual(['open-saved'])
+    expect(ids({ kind: 'outside_save', save: { outcome: 'declined', code: 'x', message: '' } })).toEqual(['open-saved-file'])
     expect(noticeView({ kind: 'outside_save', save: { outcome: 'declined', code: 'x', message: '' } }, ctx).line).toBe('K2 can’t watch this save live. Edits are paused.')
   })
 
@@ -67,7 +67,7 @@ describe('connection', () => {
     const v = noticeView({ kind: 'connection', state: 'cant' }, ctx)
     expect(v).toMatchObject({ tone: 'bad', role: 'alert', title: 'Can’t reach this file’s server.' })
     expect(v.line).toBe('K2 stopped trying. You see things as they were; anything new shows when you’re back.')
-    expect(v.actions.map((a) => [a.label, !!a.primary])).toEqual([['Retry', true], ['Open saved versions', false]])
+    expect(v.actions.map((a) => [a.label, !!a.primary])).toEqual([['Retry', true], ['Open the saved file', false]])
     expect(noticeView({ kind: 'connection', state: 'cant', retried: true }, ctx).line).toMatch(/^Tried again just now: still no answer\. /)
   })
 

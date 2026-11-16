@@ -15,6 +15,7 @@ import type { LiveShellSnapshot, LiveSource } from '@/lib/live-view/shared/sourc
 import type { SampleSnapshot } from '@/lib/live-view/shared/samples'
 import type { Edge } from './EdgeStack'
 import type { SayAt, ShellConfig } from './shell-config'
+import { useLiveEntrySwitch } from '../LiveEntrySwitch'
 
 export function useSnapshot(source: LiveSource): LiveShellSnapshot {
   const [snap, setSnap] = useState(() => source.snapshot())
@@ -97,9 +98,12 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
   if (snap.outsideSave) notices.push({ kind: 'outside_save', save: snap.outsideSave })
   if (snap.refusal) notices.push({ kind: 'refused', actor: snap.refusal.actor, verb: snap.refusal.verb, target: snap.refusal.target, holder: snap.refusal.holder })
   const notice = pickNotice({ connection, notices, dismissed: (n) => dismissed.has(noticeKey(n)) })
-  const onNotice = (id: NoticeActionId, n: LiveNotice): void => {
+  // Open the saved file: the tab's File | Live switch goes to File, which shows the file as saved.
+  const entry = useLiveEntrySwitch()
+  const onNotice = (id: NoticeActionId, n: LiveNotice | null): void => {
     if (id === 'retry') source.retry()
-    else if (id === 'dismiss') setDismissed((d) => new Set(d).add(noticeKey(n)))
+    else if (id === 'open-saved-file') entry?.onMode('file')
+    else if (id === 'dismiss' && n) setDismissed((d) => new Set(d).add(noticeKey(n)))
     config.onNoticeAction?.(id, n)
   }
 

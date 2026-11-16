@@ -37,7 +37,7 @@ export interface ShellHeroProps {
   follow?: { id: string | null; state: FollowState; dispatch: (a: FollowAction) => void }
   /** The view says what the say row points at (the timeline: the clip under its playhead); null goes back to the config's. */
   setSayAt?: (a: SayAt | null) => void
-  /** The view's own actions (a card's Open saved versions) go to the same handler as the notices'. */
+  /** The view's own actions (a card's Open the saved file) go to the same handler as the notices'. */
   onAction?: (id: NoticeActionId) => void
   /** The file's name as the header shows it (a card says "Opening rough-cut"). */
   fileName?: string
@@ -85,6 +85,6 @@ export interface ShellConfig {
   placesSayAndPanel?: boolean
   /** The view's own side panel, for the snapshots it knows (`when`); the shell's sections otherwise. */
   Panel?: { when: (snap: LiveShellSnapshot) => boolean; View: (p: ShellPanelProps) => React.JSX.Element | null }
-  /** Open the copy, History, Open saved versions, Save it again, Ask: wired by the view. `n` is null for an action from the view's own content (a card in the picture). */
+  /** Open the copy, History, Save it again, Ask: wired by the view (Open the saved file the shell does itself: it switches the tab to File). `n` is null for an action from the view's own content (a card in the picture). */
   onNoticeAction?: (id: NoticeActionId, n: LiveNotice | null) => void
 }

@@ -39,6 +39,8 @@ pub mod account_session;
 pub mod airgap;
 pub mod app_settings_view;
 pub mod bg_proc;
+/// The product's names, one definition each (`k2_core::brand`).
+pub mod brand;
 pub mod browser_notes;
 /// The retired `k2so` CLI alias check, on every OS (Windows Install CLI too).
 pub mod cli_alias;

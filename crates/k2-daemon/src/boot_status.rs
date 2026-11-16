@@ -301,6 +301,13 @@ fn full_body_base(settings: &k2_core::app_settings::AppSettings) -> serde_json::
         // version}` from the daemon's last probe and auto-heal (never a
         // root call per request); null off Linux.
         "rootHelper": crate::root_helper::boot_status_value(),
+        // The product's names and the zones boxes are served under, from
+        // one definition (`k2_core::brand`), so clients read them from the
+        // server instead of carrying their own. Additive: a client reads an
+        // absent key as "use your own default".
+        "productName": k2_core::brand::PRODUCT_NAME,
+        "cliName": k2_core::brand::CLI_NAME,
+        "hostedZones": k2_core::brand::HOSTED_ZONES,
     })
 }
 
@@ -1608,9 +1615,19 @@ mod tests {
         for k in [
             "version", "protocol", "phase", "detail", "instanceId", "serverId", "publicHost", "features",
             "installKind", "webClient", "scopedHooks", "ops", "api", "airgap", "listen", "connectLogin", "homeDb",
-            "rootHelper",
+            "rootHelper", "productName", "cliName", "hostedZones",
         ] {
             assert!(full.get(k).is_some(), "full keeps {k}");
+        }
+        // The names come from the brand module, on the full view only (the
+        // public and compat shapes above are exact).
+        assert_eq!(full["productName"], k2_core::brand::PRODUCT_NAME);
+        assert_eq!(full["cliName"], k2_core::brand::CLI_NAME);
+        assert_eq!(full["hostedZones"], serde_json::json!(k2_core::brand::HOSTED_ZONES));
+        assert_eq!(full["hostedZones"], serde_json::json!(["k2.dev"]));
+        for k in ["productName", "cliName", "hostedZones"] {
+            assert!(!raw.contains(k), "compat has no {k}: {raw}");
+            assert!(!public.contains(k), "public has no {k}: {public}");
         }
         // The root helper rides the full view only: an object on Linux,
         // null elsewhere.

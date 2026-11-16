@@ -20,7 +20,7 @@ So the count can only fall. When this fails, call `hosts::box_host`,
 service address beside the others and say why in the commit.
 
 What is counted: a line under crates/ or src-tauri/src/ in a .rs file that
-has `k2.dev` outside a `//` comment. Not counted: the hosts module itself,
+has `k2.dev` outside a `//` comment. Not counted: the hosts and brand modules,
 test files (a path part named tests, benches, fuzz or fixtures, or a file
 named *_tests.rs, *_test.rs, tests.rs or test_*.rs), and everything from a
 file's first `#[cfg(test)] mod` on. Tests keep the literal on purpose: they
@@ -28,7 +28,7 @@ pin what the zone is.
 
 The renderer area (--area renderer) is the same idea for src/: .ts and
 .tsx lines with `k2.dev` outside a comment, test files (*.test.ts, *.test.tsx,
-*.wktest.ts, fixtures) left out, the module being src/renderer/lib/hosts.ts and
+*.wktest.ts, fixtures) left out, the modules being src/renderer/lib/hosts.ts and brand.ts, and
 the ceilings scripts/garden/zone-ceilings-renderer.txt. Much of what is left
 there is copy shown to people ("your k2.dev account"): it stays listed until
 the copy itself is decided.
@@ -50,7 +50,7 @@ AREA_RULES = {
         "dirs": ("crates", "src-tauri/src"),
         "ext": (".rs",),
         "test_file": re.compile(r"(^tests\.rs$|_tests?\.rs$|^test_.*\.rs$)"),
-        "module": "crates/k2-client/src/hosts.rs",
+        "modules": ("crates/k2-client/src/hosts.rs", "crates/k2-client/src/brand.rs"),
         "ceilings": "zone-ceilings.txt",
         "use": "k2_core::hosts",
         "comment": ("//",),
@@ -60,7 +60,7 @@ AREA_RULES = {
         "dirs": ("src",),
         "ext": (".ts", ".tsx"),
         "test_file": re.compile(r"(\.test\.tsx?$|\.wktest\.ts$|\.spec\.tsx?$|-fixture\.ts$|\.d\.ts$|\.generated\.ts$)"),
-        "module": "src/renderer/lib/hosts.ts",
+        "modules": ("src/renderer/lib/hosts.ts", "src/renderer/lib/brand.ts"),
         "ceilings": "zone-ceilings-renderer.txt",
         "use": "@/lib/hosts",
         "comment": ("//", "*", "/*", "{/*"),
@@ -97,7 +97,7 @@ def scan(root, rules=None):
                     continue
                 full = os.path.join(dirpath, name)
                 rel = os.path.relpath(full, root).replace(os.sep, "/")
-                if rel == rules["module"]:
+                if rel in rules["modules"]:
                     continue
                 hits = counted_lines(full, rules)
                 if hits:

@@ -3009,6 +3009,36 @@
     "description": "Clear a soft disable."
    },
    {
+    "name": "migrate",
+    "usage": "k2 migrate status | import-secrets begin | export-secrets | import-secrets | approve <mv_...>",
+    "description": "Move this box's vault to new hardware (0.46.6+ on both boxes) as one encrypted file; the old box's key never leaves it. export, import --apply, --undo and --unfreeze are the box owner's as a person, with the vault confirm, from their own terminal or SSH login; anyone else (an agent, a script) gets the step HELD as mv_... (exit 2, \"status\": \"held\" with --json) for the owner to approve. begin, status and the dry run need no approval. Exit 0 done, 2 held (or a usage error; --json tells them apart), 3 refused, 4 not found. The steps: k2 migrate --help; more: k2 study box-move."
+   },
+   {
+    "name": "migrate status",
+    "usage": "k2 migrate status [--json]",
+    "description": "Held steps (pending, done, failed) and the result once one ran, and the move key. Anyone."
+   },
+   {
+    "name": "migrate import-secrets begin",
+    "usage": "k2 migrate import-secrets begin [--new] [--json]",
+    "description": "New box, step 1: print a one-time move key (age1...) and its fingerprint for the old box's owner. It lasts 24 h or one import; begin again shows the same key. An agent may run it."
+   },
+   {
+    "name": "migrate export-secrets",
+    "usage": "k2 migrate export-secrets --to <age1...> --out <file> [--json] | k2 migrate export-secrets --unfreeze [--json]",
+    "description": "Old box: write the vault to a file encrypted to the new box's move key and freeze this vault (reads keep working, writes wait: vault_moved_out). Run it as late as you can, and check the printed fingerprint. --unfreeze calls the move off: lifts the freeze and drops the move key. Owner with the vault confirm; anyone else is held."
+   },
+   {
+    "name": "migrate import-secrets",
+    "usage": "k2 migrate import-secrets <file> [--apply] [--json] | k2 migrate import-secrets --undo [--json]",
+    "description": "New box. Without --apply a dry run anyone may run: checks the file and lists what it holds (secret counts, tunnel token present or MISSING, systemd credentials to re-place). --apply replaces this box's vault (the old files go to ~/.k2/vault/replaced-<time>/) and works while this box's vault is closed. --undo, before the cut-over, puts the replaced vault back. --apply and --undo are the owner's with the vault confirm; anyone else is held."
+   },
+   {
+    "name": "migrate approve",
+    "usage": "k2 migrate approve <mv_...> [--json]",
+    "description": "Run a held move step exactly as it was asked. The box owner, from their own terminal (asks the vault confirm). An agent asks instead with k2 permission request vault.move-approve request=mv_... --why \"...\". A held step expires after 24 h."
+   },
+   {
     "name": "skills",
     "usage": "k2 skills <list|create|remove|profile|...> [...]",
     "description": "Manage skill profiles (SKILL.md) for workspaces/agents."

@@ -54682,6 +54682,60 @@ cmd_schema() {
       "flags": []
     },
     {
+      "name": "migrate",
+      "usage": "k2 migrate status | import-secrets begin | export-secrets | import-secrets | approve <mv_...>",
+      "description": "Move this box's vault to new hardware (0.46.6+ on both boxes) as one encrypted file; the old box's key never leaves it. export, import --apply, --undo and --unfreeze are the box owner's as a person, with the vault confirm, from their own terminal or SSH login; anyone else (an agent, a script) gets the step HELD as mv_... (exit 2, \"status\": \"held\" with --json) for the owner to approve. begin, status and the dry run need no approval. Exit 0 done, 2 held (or a usage error; --json tells them apart), 3 refused, 4 not found. The steps: k2 migrate --help; more: k2 study box-move.",
+      "args": [{"name": "verb", "required": true, "description": "status | import-secrets | export-secrets | approve"}],
+      "flags": []
+    },
+    {
+      "name": "migrate status",
+      "usage": "k2 migrate status [--json]",
+      "description": "Held steps (pending, done, failed) and the result once one ran, and the move key. Anyone.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "migrate import-secrets begin",
+      "usage": "k2 migrate import-secrets begin [--new] [--json]",
+      "description": "New box, step 1: print a one-time move key (age1...) and its fingerprint for the old box's owner. It lasts 24 h or one import; begin again shows the same key. An agent may run it.",
+      "args": [],
+      "flags": [
+        {"name": "--new", "arg": null, "description": "Make another key (files made for the old one then no longer open)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "migrate export-secrets",
+      "usage": "k2 migrate export-secrets --to <age1...> --out <file> [--json] | k2 migrate export-secrets --unfreeze [--json]",
+      "description": "Old box: write the vault to a file encrypted to the new box's move key and freeze this vault (reads keep working, writes wait: vault_moved_out). Run it as late as you can, and check the printed fingerprint. --unfreeze calls the move off: lifts the freeze and drops the move key. Owner with the vault confirm; anyone else is held.",
+      "args": [],
+      "flags": [
+        {"name": "--to", "arg": "age1...", "description": "The new box's move key."},
+        {"name": "--out", "arg": "file", "description": "Where to write the move file. Also -o."},
+        {"name": "--unfreeze", "arg": null, "description": "Lift the freeze and drop the move key instead."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "migrate import-secrets",
+      "usage": "k2 migrate import-secrets <file> [--apply] [--json] | k2 migrate import-secrets --undo [--json]",
+      "description": "New box. Without --apply a dry run anyone may run: checks the file and lists what it holds (secret counts, tunnel token present or MISSING, systemd credentials to re-place). --apply replaces this box's vault (the old files go to ~/.k2/vault/replaced-<time>/) and works while this box's vault is closed. --undo, before the cut-over, puts the replaced vault back. --apply and --undo are the owner's with the vault confirm; anyone else is held.",
+      "args": [{"name": "file", "required": false, "description": "The move file (not with --undo)."}],
+      "flags": [
+        {"name": "--apply", "arg": null, "description": "Really import."},
+        {"name": "--undo", "arg": null, "description": "Put the replaced vault back (keeps the imported one in ~/.k2/vault/undone-<time>/)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "migrate approve",
+      "usage": "k2 migrate approve <mv_...> [--json]",
+      "description": "Run a held move step exactly as it was asked. The box owner, from their own terminal (asks the vault confirm). An agent asks instead with k2 permission request vault.move-approve request=mv_... --why \"...\". A held step expires after 24 h.",
+      "args": [{"name": "id", "required": true, "description": "mv_... from k2 migrate status."}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
       "name": "skills",
       "usage": "k2 skills <list|create|remove|profile|...> [...]",
       "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",

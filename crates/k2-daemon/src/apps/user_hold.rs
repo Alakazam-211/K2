@@ -765,8 +765,8 @@ pub(crate) fn box_login_hint(ws: Option<&str>, username: &str) -> String {
 /// to an App themselves, or turns cards on so the agent can ask.
 pub(crate) fn box_login_grant_by_owner(username: &str) -> String {
     format!(
-        "To give them access to your App, ask your human to do it: Settings → Apps → <your App> → Add a person (the server's logins are listed there too), or k2 app grant add \
-         --subject-kind principal --subject {username} --kind app --target <your app> --role <role> from a terminal outside K2. \
+        "To give {username} access to your App, ask your human to do it: Settings → Apps → <your App> → Add a person (the server's logins are listed there too), or k2 app grant add \
+         --subject-kind principal --subject <{username}'s principal id> --kind app --target <your app> --role <role> from a terminal outside K2. \
          Or they turn on permission cards ({PERMISSION_CARDS_ON_PATH}) and you ask on a card."
     )
 }

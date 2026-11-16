@@ -231,8 +231,10 @@ async fn s2_an_agent_adds_app_users_of_its_own_apps_only() {
     )
     .await;
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": shop, "role": wide })).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "a box-wide role reaching elsewhere: {}", r.body);
-    assert!(!principal_exists(&u2), "no row after any refusal");
+    // 0.46.14: a box-wide role reaching another workspace's room on its own
+    // App is held for the owner (`apps::user_hold`), not written.
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "a box-wide role reaching elsewhere: {}", r.body);
+    assert!(!principal_exists(&u2), "no row after any refusal or hold");
 
     // A role of its own workspace is fine.
     let staff = format!("staff{tag}");

@@ -345,7 +345,7 @@ async fn another_apps_login_and_an_agent_without_the_switch_stay_refused() {
     // A login on its own App AND another workspace's: still another App's.
     let gus = format!("gus{t}");
     owner_post(port, "/cli/skin/users", json!({ "username": gus, "app": b.shop, "role": b.wide })).await;
-    owner_post(port, "/cli/skin/grants", json!({ "subjectKind": "principal", "subject": gus, "kind": "app", "target": crm, "rooms": [] })).await;
+    owner_post(port, "/cli/skin/grants", json!({ "subjectKind": "principal", "subject": principal(&gus).id, "kind": "app", "target": crm, "rooms": [] })).await;
     let r = post(port, "/cli/skin/users/remove", &b.agent, json!({ "username": gus })).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
 

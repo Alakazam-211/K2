@@ -949,7 +949,11 @@ mod tests {
         let last_fit: i32 = 715_827_881;
         let sum = |level: i32| level.checked_mul(3).and_then(|v| v.checked_add(4));
         assert!(sum(last_fit).is_some(), "{last_fit} must fit");
-        assert!(sum(last_fit + 1).is_none(), "{} must overflow", last_fit + 1);
+        assert!(
+            sum(last_fit + 1).is_none(),
+            "{} must overflow",
+            last_fit + 1
+        );
         let levels = [
             i32::MIN,
             i32::MIN + 1,
@@ -972,8 +976,8 @@ mod tests {
                     let p = FilterParams::new(level, sharpness, keyframe);
                     let (mb, sub) = Limits::for_level(level, &p);
                     let wide = |extra: i128| -> u8 {
-                        (i128::from(level) * 2 + extra + i128::from(p.interior_limit))
-                            .clamp(0, 255) as u8
+                        (i128::from(level) * 2 + extra + i128::from(p.interior_limit)).clamp(0, 255)
+                            as u8
                     };
                     let what = format!("level {level} sharpness {sharpness} key {keyframe}");
                     assert_eq!(mb.edge, wide(4), "macroblock edge limit: {what}");

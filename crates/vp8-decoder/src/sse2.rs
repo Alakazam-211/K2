@@ -13,9 +13,7 @@
 
 use core::arch::x86_64::*;
 
-use crate::loop_filter::{
-    chroma_edge_portable, luma_edge_portable, rows_len, span, Kind, Limits,
-};
+use crate::loop_filter::{chroma_edge_portable, luma_edge_portable, rows_len, span, Kind, Limits};
 
 /// Eight taps (p3 to q3) of 16 segments, one vector per tap.
 type Taps = [__m128i; 8];

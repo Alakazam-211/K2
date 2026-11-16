@@ -12,9 +12,7 @@
 
 use core::arch::aarch64::*;
 
-use crate::loop_filter::{
-    chroma_edge_portable, luma_edge_portable, rows_len, span, Kind, Limits,
-};
+use crate::loop_filter::{chroma_edge_portable, luma_edge_portable, rows_len, span, Kind, Limits};
 
 // ---------------------------------------------------------------------------
 // Loop filter.

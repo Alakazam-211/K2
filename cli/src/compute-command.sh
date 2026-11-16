@@ -121,7 +121,7 @@ cmd_compute() {
             # match (--workspace-all: every job of the workspace); queued
             # only unless --force.
             local cjob="" force=0 scope="" ctag="" cstate="" cnode="" cws="" ifq=0
-            local cusage="usage: k2 compute cancel <job> [--force|--if-queued]  |  k2 compute cancel --all-mine|--workspace-all [--tag T] [--state queued|running|any] [--node N] [--force]"
+            local cusage="usage: k2 compute cancel <job> [--force|--if-queued]  |  k2 compute cancel --all-mine|--workspace-all [--tag T] [--state queued|running|any] [--node N] [--workspace WS] [--force]"
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --force|-f) force=1; shift ;;

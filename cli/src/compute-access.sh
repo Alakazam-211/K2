@@ -342,7 +342,7 @@ print("  " + v["note"])'
 cmd_compute_move() {
     local to="" auto=0 os="" arch="" scope="" mtag="" mnode="" mws="" as_json=0
     local -a jobs=() avoids=() labels=()
-    local musage="usage: k2 compute move <job>... --auto [--avoid <node>]... [--os O|any] [--arch A|any] [--label k=v]  |  k2 compute move <job>... --to <node>  |  k2 compute move --all-mine|--workspace-all [--tag T] [--node N] (--auto … | --to <node>)"
+    local musage="usage: k2 compute move <job>... --auto [--avoid <node>]... [--os O|any] [--arch A|any] [--label k=v]  |  k2 compute move <job>... --to <node>  |  k2 compute move --all-mine|--workspace-all [--tag T] [--node N] [--workspace WS] (--auto … | --to <node>)"
     while [ $# -gt 0 ]; do
         case "$1" in
             --auto) auto=1; shift ;;

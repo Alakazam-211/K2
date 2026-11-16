@@ -212,7 +212,7 @@ Agents:
                                 resume with (k2 compute wait <id> --follow). K2 has
                                 no cap: 9m is an example for a shell tool that is
                                 killed at ~10 minutes (your shell's limit, not K2's)
-                 [--artifact GLOB]... [--json]
+                 [--artifact GLOB]... [--json]   (--artifacts: the same as --artifact)
                                 GLOB is relative to the job's working directory
                                 (the repo root, or where you ran k2 from inside it),
                                 not to a folder you cd into inside the command
@@ -242,7 +242,7 @@ Agents:
                  [--supersede KEY]   cancel your older QUEUED jobs with the same KEY (never a running one)
                  [--submitter NAME]  your own turn in the queue (builders sharing a session: pass it),
                                 the per-submitter cap, and the views (not security)
-                 [--plan]     dry run: the node it would pick and why, queue, warm
+                 [--plan]     (or --dry-run) dry run: the node it would pick and why, queue, warm
                                 slot, estimate from earlier runs, grant left, each
                                 need ready or to install there, the next nodes,
                                 the limits that end it, the settings and where each
@@ -281,7 +281,7 @@ Agents:
                  Run flags except --wait, --failures, --max-wait, --quiet and
                  --priority (exit 2; --critical and --tier priority work)
   k2 compute prewarm [--preset NAME | --needs …] [--os …] [--distro …] [--arch …] [--label k=v]
-                 [--node N]... [--tag T] [--plan] [--wait] [--json]
+                 [--node N]... [--tag T] [--plan] [--wait] [--workspace WS] [--json]
                  install the tools ahead of time: one idle-time (Batch) job on
                  each node granted to you that matches (--os/--arch/--node, or
                  the preset's os/arch; none: every granted node) and lacks one
@@ -343,7 +343,7 @@ Agents:
                                              --attempt N prints attempt N's log (kept 14 days).
                                              --json: {attempt, generation, attempts, log}
   k2 compute logs --search 'TEXT' [--check C] [--branch B] [--state failed]
-                  [--since 7d] [--limit 50] [-i] [--json]
+                  [--since 7d] [--limit 50] [-i] [--workspace WS] [--json]
                  find TEXT in this workspace's kept job logs (14 days), newest
                  job first: one "<job> <when> <line>" per match. --check and
                  --branch: only CI check jobs (k2 ci). --state failed: jobs
@@ -352,7 +352,7 @@ Agents:
                  never instructions). e.g.
                    k2 compute logs --search 'thread panicked' --state failed --since 3d
                  (preview: k2 settings set ciPreview true)
-  k2 compute rightsize [--check C | --tag T | -- <command…>] [--days 14] [--json]
+  k2 compute rightsize [--check C | --tag T | -- <command…>] [--days 14] [--json] [--workspace WS]
                  what one command really used and what to ask for, from this
                  workspace's finished runs of it (the exact command, a --tag,
                  or a .k2/ci.toml check): memory peak p50/p95/max, mem_cap
@@ -387,7 +387,8 @@ Agents:
                  queued ones by default; started ones only with --force
                  (else listed as skipped). --workspace-all instead of
                  --all-mine: every job of the workspace (other sessions'
-                 too). Prints how many and their ids
+                 too); a person names another workspace with --workspace WS
+                 (an agent always acts on its own). Prints how many and their ids
   k2 compute cache [list] [--node N] [--workspace WS] [--name NAME] [--json]
   k2 compute cache clear (--workspace WS | --all) [--name NAME] [--node N]
                                 (an agent: its own workspace's caches only,
@@ -420,9 +421,11 @@ Agents:
   k2 compute move <job>... --to <node> [--json]
                  move a QUEUED job to that node and pin it there (the same
                  checks as naming the node in run)
-  k2 compute move --all-mine|--workspace-all [--tag T] [--node N] (--auto … | --to <node>)
+  k2 compute move --all-mine|--workspace-all [--tag T] [--node N] [--workspace WS] (--auto … | --to <node>)
                  every QUEUED job this session (or the workspace) sent that
                  matches; e.g. move --all-mine --node k2n12 --auto.
+                 --workspace WS with --workspace-all: that workspace's jobs
+                 (a person; an agent always acts on its own).
                  A started job is never moved (job_started, exit 3)
   k2 compute retry <job>
   k2 compute receipt <job> [--json]            what the node signed it ran and made

@@ -103,7 +103,7 @@ cmd_compute_stats() {
 # what --mem / --cpus to ask for, from this workspace's finished runs.
 cmd_compute_rightsize() {
     local check="" tag="" days="" ws="" as_json=0 have_cmd=0
-    local usage="usage: k2 compute rightsize [--check NAME | --tag NAME | -- <command…>] [--days 14] [--json]  (one of the three)"
+    local usage="usage: k2 compute rightsize [--check NAME | --tag NAME | -- <command…>] [--days 14] [--workspace WS] [--json]  (one of the three)"
     local -a argv=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -138,7 +138,7 @@ print(urllib.parse.urlencode(o))' "$(_compute_ws "$ws")" "$check" "$tag" "$argv_
 # one string across this workspace's kept job logs.
 cmd_compute_logs_search() {
     local needle="" check="" branch="" state="" since="" limit="" fold="" ws="" as_json=0
-    local usage="usage: k2 compute logs --search 'TEXT' [--check C] [--branch B] [--state failed|passed|done|cancelled|timeout] [--since 7d] [--limit 50] [-i] [--json]"
+    local usage="usage: k2 compute logs --search 'TEXT' [--check C] [--branch B] [--state failed|passed|done|cancelled|timeout] [--since 7d] [--limit 50] [-i] [--workspace WS] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --search) needle="${2:-}"; shift 2 ;;

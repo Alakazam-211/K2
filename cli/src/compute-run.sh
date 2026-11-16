@@ -783,7 +783,7 @@ cmd_compute_prewarm() {
             --plan|--dry-run) plan=1; shift ;;
             --wait) wait=1; shift ;;
             --json) as_json=1; shift ;;
-            *) echo "usage: k2 compute prewarm [--preset NAME | --needs rust@stable,cmake@3] [--os linux|macos] [--distro ubuntu@24.04] [--arch A] [--label k=v] [--node N]... [--tag T] [--plan] [--wait] [--json] (unknown '$1')" >&2; exit 2 ;;
+            *) echo "usage: k2 compute prewarm [--preset NAME | --needs rust@stable,cmake@3] [--os linux|macos] [--distro ubuntu@24.04] [--arch A] [--label k=v] [--node N]... [--tag T] [--plan] [--wait] [--workspace WS] [--json] (unknown '$1')" >&2; exit 2 ;;
         esac
     done
     # No --preset or --needs: the needs come from .k2/compute.toml's

@@ -445,6 +445,21 @@ test tooling K2 doesn't build). K2 doesn't build or run it yet.
 | **Dependencies** | the kit only (above) |
 | **Formats** | Gerber Format is a registered trademark of Ucamco NV; the photoplot reader reads files in that format and is not affiliated with, endorsed by or sponsored by Ucamco. XNC is Ucamco's subset of the IPC-NC-349 drill format; Excellon is a trademark of its owner. These names are used here only to name the file formats |
 
+## Multiplayer kit: k2-mpc-blend v0.1.0 (vendored)
+
+The kit's pack for BLEND files (3D scenes): a file is read into the kit's structure index, its
+meshes and cameras can be read for previews, and a file can also be a live keyed doc (objects'
+placement, visibility and names) written back to its own bytes. Vendored whole beside the kit
+(its `fuzz/` crate is test tooling K2 doesn't build). K2 doesn't build or run it yet.
+
+| | |
+|--|--|
+| **What** | `vendor/k2-mpc-blend` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-blend`, tag `v0.1.0` (`521bb8b`) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project; `PROVENANCE.md` says what it was written from |
+| **Dependencies** | the kit (above), thiserror 2 and flate2 1 (MIT OR Apache-2.0), and ruzstd 0.9 (MIT; files saved zstd-compressed, in pure Rust) |
+| **Formats** | BLEND is the file format of Blender, a project of the Blender Foundation. "Blender" is a trademark of its owner, named here only to say whose file format this is. This project is not affiliated with, endorsed by or sponsored by it |
+
 Update these sections on every kit bump.
 
 ## Third-party: deckcraft v0.18.1, for .pptx previews (MIT OR Apache-2.0, vendored)

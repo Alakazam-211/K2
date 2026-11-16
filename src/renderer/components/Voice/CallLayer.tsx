@@ -77,6 +77,13 @@ export const callActions = {
   leave: () => voice.leave(),
   startRecording: () => voice.startRecording(),
   stopRecording: () => voice.stopRecording(),
+  setNoiseRemoval: (on: boolean) => voice.setNoiseRemoval(on),
+}
+
+/** The wave button's state: Settings → Voice → Noise removal (on unless
+ *  turned off), with the native engine only; null on a seat-only call. */
+export function useCallNoiseRemoval(): boolean | null {
+  return useVoice((s) => (s.engineKind === 'native' ? s.prefs.noiseRemoval : null))
 }
 
 /** K2's recording notice, in every window, video or not. */
@@ -90,6 +97,7 @@ function NoticeLayer({ call }: { call: VoiceCall }): React.JSX.Element | null {
 }
 
 function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
+  const noiseRemoval = useCallNoiseRemoval()
   const open = useCallScreen((s) => s.open)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen) === true
   const live = useCallVideoLive(video, call.participants)
@@ -121,7 +129,7 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
 
   // In its own window: that window draws it.
   if (poppedOut) return null
-  const host = live ? <CallExpanded call={call} video={video} actions={callActions} /> : null
+  const host = live ? <CallExpanded call={call} video={video} actions={callActions} noiseRemoval={noiseRemoval} /> : null
   // Expanded: the view is drawn there; the tile and the call view wait (one
   // sink per track).
   if (expanded) return host
@@ -157,7 +165,7 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
     return (
       <>
         {host}
-        <CallTile call={call} video={video} actions={callActions} />
+        <CallTile call={call} video={video} actions={callActions} noiseRemoval={noiseRemoval} />
       </>
     )
   }

@@ -25,8 +25,8 @@ import { VoiceChatOnlyChip } from './VoiceChatOnlyChip'
 const JOINING_WAIT = 'Joining… wait a moment'
 import { video } from '@/stores/video'
 import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
-import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
-import { HeadphonesIcon, MicIcon, MicOffIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
+import { CALL_PANEL_ICON, CallPanelButton, noiseRemovalLabel } from './CallControls'
+import { HeadphonesIcon, MicIcon, MicOffIcon, NoiseWaveIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -139,6 +139,16 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
         >
           <HeadphonesIcon off={call.deafened} size={CALL_PANEL_ICON} />
         </CallPanelButton>
+        {engineKind === 'native' ? (
+          <CallPanelButton
+            testId="voice-noise"
+            label={noiseRemovalLabel(prefs.noiseRemoval)}
+            on={!prefs.noiseRemoval}
+            onPress={() => voice.setNoiseRemoval(!prefs.noiseRemoval)}
+          >
+            <NoiseWaveIcon off={!prefs.noiseRemoval} size={CALL_PANEL_ICON} />
+          </CallPanelButton>
+        ) : null}
         {videoOn ? <VideoCallButtons ctl={video} disabled={busy} /> : null}
         <CallPanelButton testId="voice-leave" label="Leave call" danger onPress={() => void voice.leave()}>
           <PhoneOffIcon size={CALL_PANEL_ICON} />

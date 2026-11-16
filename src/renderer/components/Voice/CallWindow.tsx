@@ -27,7 +27,7 @@ import { loadSharePick } from '@/stores/call-share'
 import { retainVideo, video } from '@/stores/video'
 import { retainVoice, useVoice } from '@/stores/voice'
 import CallControls from './CallControls'
-import { callActions } from './CallLayer'
+import { callActions, useCallNoiseRemoval } from './CallLayer'
 import CallStage from './CallStage'
 import { useCallDuration } from './CallTile'
 import { PopInButton } from './CallViewButtons'
@@ -72,6 +72,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
 
   const call = useVoice((s) => s.call)
   const native = useVoice((s) => s.engineKind) === 'native'
+  const noiseRemoval = useCallNoiseRemoval()
   const preview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const people = call?.participants ?? NO_PEOPLE
   const tiles = useStageTiles(video, people)
@@ -158,7 +159,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
             </div>
           )}
           <div className="flex flex-shrink-0 flex-col items-center gap-1 border-t border-[var(--color-border)] px-2 py-1.5">
-            <CallControls variant="overlay" call={call} actions={callActions} video={video} />
+            <CallControls variant="overlay" call={call} actions={callActions} video={video} noiseRemoval={noiseRemoval} />
             <ScreenPicker ctl={video} />
             <VideoNoticeLine ctl={video} noticeOnly />
           </div>

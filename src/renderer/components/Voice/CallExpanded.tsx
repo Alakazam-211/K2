@@ -34,6 +34,8 @@ export interface CallExpandedProps {
   call: VoiceCall
   video: VideoController
   actions: CallControlsProps['actions']
+  /** The wave button (CallControls), with the native engine. */
+  noiseRemoval?: boolean | null
 }
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -55,7 +57,7 @@ function keepFocusIn(e: React.KeyboardEvent<HTMLElement>): void {
   }
 }
 
-function View({ call, video, actions }: CallExpandedProps): React.JSX.Element {
+function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.JSX.Element {
   const time = useCallDuration(call.connectedAt)
   const shrinkRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -109,7 +111,7 @@ function View({ call, video, actions }: CallExpandedProps): React.JSX.Element {
         <CallStage ctl={video} people={call.participants} callId={call.callId} className="flex-1" />
         <footer data-testid="call-expanded-controls" className="flex flex-shrink-0 flex-col items-center gap-1 px-3 pb-3 pt-1">
           <Surface role2="elevated" chamfer data-material="frost" data-frost-shape="pill" data-frost-static="" className="flex items-center px-2 py-1.5">
-            <CallControls variant="overlay" call={call} actions={actions} video={video} />
+            <CallControls variant="overlay" call={call} actions={actions} video={video} noiseRemoval={noiseRemoval} />
           </Surface>
           <ScreenPicker ctl={video} />
           <VideoNoticeLine ctl={video} noticeOnly />

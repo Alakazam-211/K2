@@ -645,6 +645,17 @@ export function HeadphonesIcon({ off = false, ...props }: K2IconProps & { off?: 
   )
 }
 
+/** The call's noise removal: Lucide `audio-waveform` (a wave); `off` adds the
+ *  slash. */
+export function NoiseWaveIcon({ off = false, ...props }: K2IconProps & { off?: boolean }): React.JSX.Element {
+  return (
+    <svg {...iconProps(off ? 'audio-waveform-off' : 'audio-waveform', props)}>
+      <path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2" />
+      {off ? <path d="M2 2l20 20" /> : null}
+    </svg>
+  )
+}
+
 /** The call's camera: Lucide `video`, squared; `off` adds the slash. */
 export function VideoIcon({ off = false, ...props }: K2IconProps & { off?: boolean }): React.JSX.Element {
   return (

@@ -582,6 +582,22 @@ describe('video in the call (videoRoomsPreview)', () => {
     expect(voice.store.getState().call).toBeNull()
   })
 
+  it('the wave button: noise removal on by default, one tap turns it off live, in step with Settings → Voice', async () => {
+    await inCall()
+    const wave = await screen.findByTestId('call-topbar-noise')
+    expect(wave.getAttribute('data-state')).toBe('on')
+    expect(wave.getAttribute('aria-pressed')).toBe('true')
+    expect(wave.getAttribute('title')).toBe('Noise removal on')
+    fireEvent.click(wave)
+    // The same choice Settings → Voice reads and writes.
+    expect(voice.store.getState().prefs.noiseRemoval).toBe(false)
+    await waitFor(() => expect(screen.getByTestId('call-topbar-noise').getAttribute('data-state')).toBe('off'))
+    expect(screen.getByTestId('call-topbar-noise').getAttribute('title')).toBe('Noise removal off')
+    // Turned back on from Settings: the button follows.
+    act(() => voice.setPrefs({ noiseRemoval: true }))
+    await waitFor(() => expect(screen.getByTestId('call-topbar-noise').getAttribute('data-state')).toBe('on'))
+  })
+
   it('a seat-only call (web client, no native engine) offers no video', async () => {
     h.videoPreview = true
     await inCall()

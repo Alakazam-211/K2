@@ -1,4 +1,5 @@
-// The call's quick controls: Mute, Deafen, Camera and Share screen (with
+// The call's quick controls: Mute, Deafen, Noise removal (the wave; native
+// engine only), Camera and Share screen (with
 // video rooms on) and Hang up. They sit in the top bar beside the headset while the call has no
 // video, and under the floating video tile while it has.
 //
@@ -15,6 +16,7 @@ import {
   HeadphonesIcon,
   MicIcon,
   MicOffIcon,
+  NoiseWaveIcon,
   PhoneOffIcon,
   ScreenShareIcon,
   TOP_BAR_ICON_REST_CLASS,
@@ -160,9 +162,21 @@ export interface CallControlsProps {
     leave(): Promise<void>
     startRecording?(): Promise<void>
     stopRecording?(): Promise<void>
+    /** Noise removal (Sew 0.10.2): the same choice as Settings → Voice →
+     *  Noise removal, saved for this computer and sent to the live call. */
+    setNoiseRemoval?(on: boolean): void
   }
   /** With video rooms on: the camera button. */
   video: VideoController | null
+  /** The wave button's state (the voice prefs' `noiseRemoval`), with the
+   *  native engine only; absent or null: no button (a seat-only call). */
+  noiseRemoval?: boolean | null
+}
+
+/** "Noise removal on / off". On is the plain look (it's the default, nothing
+ *  to warn about); off is engaged, like a muted mic, with the slash. */
+export function noiseRemovalLabel(on: boolean): string {
+  return on ? 'Noise removal on' : 'Noise removal off'
 }
 
 function CameraButton({ variant, video, busy }: { variant: CallControlsVariant; video: VideoController; busy: boolean }): React.JSX.Element | null {
@@ -248,7 +262,7 @@ export function RecordingBadge({ call, variant }: { call: VoiceCall; variant: Ca
 }
 
 
-export default function CallControls({ variant, call, actions, video }: CallControlsProps): React.JSX.Element {
+export default function CallControls({ variant, call, actions, video, noiseRemoval }: CallControlsProps): React.JSX.Element {
   const busy = call.phase === 'joining'
   const locked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
   const micOff = call.muted || call.micDenied || call.deafened || locked !== null
@@ -287,6 +301,19 @@ export default function CallControls({ variant, call, actions, video }: CallCont
       >
         <HeadphonesIcon off={call.deafened} size={size} />
       </CallButton>
+      {typeof noiseRemoval === 'boolean' && actions.setNoiseRemoval ? (
+        <CallButton
+          variant={variant}
+          label={noiseRemovalLabel(noiseRemoval)}
+          pressed={noiseRemoval}
+          on={!noiseRemoval}
+          testId={`call-${variant}-noise`}
+          state={noiseRemoval ? 'on' : 'off'}
+          onPress={() => actions.setNoiseRemoval?.(!noiseRemoval)}
+        >
+          <NoiseWaveIcon off={!noiseRemoval} size={size} />
+        </CallButton>
+      ) : null}
       {video ? <CameraButton variant={variant} video={video} busy={busy} /> : null}
       {video ? <ScreenButton variant={variant} video={video} busy={busy} /> : null}
       {rec.canRecord && actions.startRecording ? (

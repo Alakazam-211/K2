@@ -261,10 +261,11 @@ afterEach(() => {
 })
 
 describe('voice only: the controls are in the top bar, and there is no tile', () => {
-  it('shows Mute, Deafen, Camera and Leave call beside the headset', async () => {
+  it('shows Mute, Deafen, Noise removal, Camera and Leave call beside the headset', async () => {
     await inCall()
     const bar = await screen.findByTestId('call-topbar-controls')
-    expect(bar.querySelectorAll('button')).toHaveLength(4)
+    expect(bar.querySelectorAll('button')).toHaveLength(5)
+    expect(screen.getByTestId('call-topbar-noise').getAttribute('aria-label')).toBe('Noise removal on')
     expect(screen.getByTestId('call-topbar-mute').getAttribute('aria-label')).toBe('Mute')
     expect(screen.getByTestId('call-topbar-deafen').getAttribute('aria-label')).toBe('Deafen')
     expect(screen.getByTestId('call-topbar-camera').getAttribute('aria-label')).toBe('Turn camera on')
@@ -275,7 +276,7 @@ describe('voice only: the controls are in the top bar, and there is no tile', ()
   it('with video rooms off: no Camera, and still no tile', async () => {
     h.videoPreview = false
     await inCall()
-    expect(screen.getByTestId('call-topbar-controls').querySelectorAll('button')).toHaveLength(3)
+    expect(screen.getByTestId('call-topbar-controls').querySelectorAll('button')).toHaveLength(4)
     expect(screen.queryByTestId('call-topbar-camera')).toBeNull()
     expect(screen.queryByTestId('call-tile')).toBeNull()
   })
@@ -308,8 +309,8 @@ describe('video on: the tile with its strip, and the top bar gives way', () => {
     const tile = await cameraOn()
     expect(tile.dataset.picture).toBe('local:camera')
     expect(screen.getByTestId('call-tile-strip')).toBeTruthy()
-    // Mute, Deafen, Camera, Share screen, Leave call.
-    expect(screen.getByTestId('call-tile-controls').querySelectorAll('button')).toHaveLength(5)
+    // Mute, Deafen, Noise removal, Camera, Share screen, Leave call.
+    expect(screen.getByTestId('call-tile-controls').querySelectorAll('button')).toHaveLength(6)
     expect(screen.queryByTestId('call-topbar-controls')).toBeNull()
     // The call's time, on the picture at its bottom right (no band under it).
     expect(screen.getByTestId('call-tile-duration').textContent).toMatch(/^\d+:\d\d$/)
@@ -782,8 +783,8 @@ describe('expand: the call over K2, inside the app', () => {
     const bar = screen.getByTestId('call-expanded-controls')
     expect(bar.tagName).toBe('FOOTER')
     expect(screen.getByTestId('call-expanded').lastElementChild).toBe(bar)
-    // Mute, Deafen, Camera, Share screen, Leave call.
-    expect(within(bar).getByTestId('call-overlay-controls').querySelectorAll('button')).toHaveLength(5)
+    // Mute, Deafen, Noise removal, Camera, Share screen, Leave call.
+    expect(within(bar).getByTestId('call-overlay-controls').querySelectorAll('button')).toHaveLength(6)
     fireEvent.click(within(bar).getByTestId('call-overlay-mute'))
     expect(voice.store.getState().call?.muted).toBe(true)
     expect(screen.getByTestId('call-expanded-duration').textContent).toMatch(/^\d+:\d\d$/)

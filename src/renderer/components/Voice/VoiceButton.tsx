@@ -21,7 +21,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { headsetState } from './voice-labels'
 import VoicePopover from './VoicePopover'
 import CallControls from './CallControls'
-import { useCallTileShown } from './CallLayer'
+import { useCallNoiseRemoval, useCallTileShown } from './CallLayer'
 import VideoDemo from './VideoDemo'
 import { retainVideo, video } from '@/stores/video'
 import { useVoiceOpenRequest } from '@/stores/voice-open-request'
@@ -49,6 +49,7 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   const servers = useVoice((s) => s.servers)
   const rooms = useVoice((s) => s.rooms)
   const call = useVoice((s) => s.call)
+  const noiseRemoval = useCallNoiseRemoval()
   const open = useVoice((s) => s.popoverOpen)
   const preview = useSettingsStore((s) => s.voiceRoomsPreview)
   const videoPreview = useSettingsStore((s) => s.videoRoomsPreview) === true
@@ -125,7 +126,7 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
       </div>
       {showControls && call ? (
         <div className="ml-0.5 flex items-center no-drag" style={noDrag}>
-          <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} />
+          <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} noiseRemoval={noiseRemoval} />
         </div>
       ) : null}
       {withPipe ? <TopBarPipe /> : null}

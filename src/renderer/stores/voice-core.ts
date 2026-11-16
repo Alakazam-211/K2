@@ -218,6 +218,9 @@ export interface VoiceController {
   setMuted(muted: boolean): void
   setDeafened(deafened: boolean): void
   setPrefs(patch: Partial<VoicePrefs>): void
+  /** The call's wave button and Settings → Voice: one choice (`prefs.noiseRemoval`),
+   *  saved for this computer and sent to the live call at once. */
+  setNoiseRemoval(on: boolean): void
   engine(): VoiceEngine | null
   /** Read the audio devices for the call panel (`state.devices`). */
   loadDevices(): Promise<void>
@@ -1210,6 +1213,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     setMuted,
     setDeafened,
     setPrefs,
+    setNoiseRemoval: (on: boolean) => setPrefs({ noiseRemoval: on }),
     engine: () => engine,
     loadDevices,
     openMicSettings,

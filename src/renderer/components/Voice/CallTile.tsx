@@ -208,6 +208,8 @@ export interface CallTileProps {
   call: VoiceCall
   video: VideoController
   actions: CallControlsProps['actions']
+  /** The wave button (CallControls), with the native engine. */
+  noiseRemoval?: boolean | null
 }
 
 /** The room the tile may take now: the free content area, less the insets,
@@ -260,7 +262,7 @@ function ResizeHandles({ corner, onDown }: { corner: Corner; onDown: (e: React.P
   )
 }
 
-function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
+function Card({ call, video, actions, noiseRemoval }: CallTileProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
   const people = call.participants
@@ -477,7 +479,7 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
         <ResizeHandles corner={corner} onDown={onResizeDown} />
       </Surface>
       <Surface ref={stripRef} role2="elevated" elevation={held ? 5 : 3} data-testid="call-tile-strip" className="pointer-events-auto p-1.5">
-        <CallControls variant="tile" call={call} actions={actions} video={video} />
+        <CallControls variant="tile" call={call} actions={actions} video={video} noiseRemoval={noiseRemoval} />
         {/* The share list (where the OS has no picker of its own) and why a
             camera or share was refused, with the way to the privacy settings. */}
         <ScreenPicker ctl={video} />

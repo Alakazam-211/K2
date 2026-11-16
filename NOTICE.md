@@ -401,7 +401,7 @@ checkers.
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | roxmltree 0.21 (MIT OR Apache-2.0), flate2 (MIT OR Apache-2.0, with miniz_oxide: MIT OR Zlib OR Apache-2.0), crc32fast (MIT OR Apache-2.0) |
 
-## Multiplayer kit: k2-mpc-pptx v0.1.7 (vendored)
+## Multiplayer kit: k2-mpc-pptx v0.1.8 (vendored)
 
 The kit's pack for `.pptx` decks: a deck as a live keyed doc (slides and shapes by their own
 ids), agent verbs, and the file written back by splicing only what changed into its own
@@ -411,7 +411,7 @@ the kit from its public cut, which has no `fuzz/`.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-pptx` (depends on `../k2-mpc-base/crates/base` and `../k2-mpc-ooxml/crates/opc`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-pptx`, tag `v0.1.7` (the cut `2c0993d`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-pptx`, tag `v0.1.8` (the cut `1e85b83`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | the kit and k2-mpc-opc (above), and roxmltree 0.21 (MIT OR Apache-2.0) |
 | **Formats** | docx, pptx and xlsx are file formats specified by ECMA-376 and ISO/IEC 29500. The pack is not affiliated with, endorsed by or sponsored by the formats' original vendor |

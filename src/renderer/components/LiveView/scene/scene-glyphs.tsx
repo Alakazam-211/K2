@@ -7,7 +7,7 @@
 // views (Scene, a camera, a framed object, the turntable), a picture, done.
 
 import type { LucideIcon } from 'lucide-react'
-import { Axis3dIcon, BoxIcon, CheckIcon, EyeIcon, EyeOffIcon, LayersIcon, LightbulbIcon, LinkIcon, LockIcon, PanelTopIcon, RotateCwIcon, Rotate3dIcon, ScanIcon, SquareDashedIcon, ImageIcon, TriangleAlertIcon, VideoIcon, WavesIcon } from 'lucide-react'
+import { Axis3dIcon, BoxIcon, CheckIcon, Columns2Icon, Rows2Icon, EyeIcon, EyeOffIcon, LayersIcon, LightbulbIcon, LinkIcon, LockIcon, PanelTopIcon, RotateCwIcon, Rotate3dIcon, ScanIcon, SquareDashedIcon, ImageIcon, TriangleAlertIcon, VideoIcon, WavesIcon } from 'lucide-react'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 
 function glyph(Icon: LucideIcon, stroke = K2_ICON_STROKE): (p: { size?: number; className?: string }) => React.JSX.Element {
@@ -47,3 +47,6 @@ export const SceneViewGlyph = KIND.mesh
 export const TurntableGlyph = glyph(Rotate3dIcon)
 export const PictureGlyph = glyph(ImageIcon)
 export const DoneGlyph = glyph(CheckIcon, 2)
+/** Two views: side by side, or one above the other. */
+export const TwoSideGlyph = glyph(Columns2Icon)
+export const TwoStackGlyph = glyph(Rows2Icon)

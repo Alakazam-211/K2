@@ -46,7 +46,7 @@ export function ScenePicture({ lb, still, label, dim, ground, motion }: { lb: Le
 
   const g = useMemo(() => (ground ? { W: STILL_WIDTH, H: stillHeight(STILL_WIDTH, lb.shape), ...groundOf(ground, STILL_WIDTH, stillHeight(STILL_WIDTH, lb.shape)) } : null), [ground, lb.shape])
   return (
-    <div className="lv-frame" data-dim={dim ? '' : undefined} data-rev={still?.rev} data-view={still?.view} style={{ left: lb.left, top: lb.top, width: lb.width, height: lb.height }}>
+    <div className="lv-frame" data-cover={lb.cover ? '' : undefined} data-dim={dim ? '' : undefined} data-rev={still?.rev} data-view={still?.view} style={{ left: lb.left, top: lb.top, width: lb.width, height: lb.height }}>
       {g ? (
         <svg data-testid="lv-scene-ground" className="lv-ground" viewBox={`0 0 ${g.W} ${g.H}`} preserveAspectRatio="none" aria-hidden="true">
           {g.lines.map((l, i) => (

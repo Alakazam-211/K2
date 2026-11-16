@@ -34,7 +34,7 @@ export const SCENE_PANEL_CSS = `
 .lv-scene-panel .lv-tm { flex: none; margin-top: 1px; font-size: var(--type-xs); font-variant-numeric: tabular-nums; color: var(--color-text-secondary); white-space: nowrap; }
 .lv-scene-panel .lv-arow[data-kind="refused"] { cursor: help; }
 .lv-scene-panel .lv-arow[data-kind="refused"] .lv-tm { color: var(--color-status-warn-text); }
-.lv-scene-panel .lv-arow[data-kind="done"] .lv-at { color: var(--color-status-ok); }
+.lv-scene-panel .lv-arow[data-kind="done"] .lv-at { color: var(--color-text-primary); }
 .lv-scene-panel .lv-lk { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; color: var(--lv-c, var(--color-status-warn-text)); }
 .lv-scene-panel .lv-refchip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px 0 6px; flex: none; font-size: var(--type-xs); font-weight: 600; color: var(--color-text-primary); background: var(--color-row-hover); border: 1px solid var(--color-border); border-radius: var(--radius-pill); white-space: nowrap; }
 

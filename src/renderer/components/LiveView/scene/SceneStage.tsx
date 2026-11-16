@@ -1,39 +1,43 @@
 // The scene's hero: the picture on its dark stage. The stage carries the
 // look's dark palette (so everything on it reads in the light looks too),
-// the still letterboxed in a 16 px faded margin, and on its corners (18 px,
-// 24 px between the chips and the key hint): the view picker top-left, the
-// older-picture mark top-right, the compass bottom-left, the state chips
-// beside it, the key hint and ⓘ bottom-right. The card says what the
+// and one view or two (ScenePane: the still, its overlay, its picker and
+// compass). On the stage's corners (18 px, 24 px between the chips and the
+// key hint): the older-picture mark top-right, the state chips, the key
+// hint, the two-views switch and ⓘ along the foot. The card says what the
 // picture can't show. Keys on the picture: Home Scene, 0 the file's main
 // camera, . frames the selection, Esc closes the details or the menu, else
-// goes back. Over the still, the overlay (S4): boxes, holds, selections,
-// the live change and chips for what is off the picture. People on other
-// views and two views (S5) come later.
+// goes back. S5: the picture shows whom you follow's view (choosing a view
+// yourself looks away), the chips by the picker follow whoever looks
+// through another view, the finished line when following ends, the say
+// row points at the view on screen, and the turntable strip.
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { cx } from '@/components/ui'
 import { nameOf } from '@/lib/live-view/scene/fold'
+import { othersOnViews, paneRects, sayAtOf } from '@/lib/live-view/scene/follow-view'
 import { localStore, type SceneLocal } from '@/lib/live-view/scene/local'
 import { agentView, framedOf, pictureContext, pictureDetails, pictureStatus, viewOnScreen } from '@/lib/live-view/scene/picture-model'
-import { STILL_WIDTH, letterbox, type PictureSource } from '@/lib/live-view/scene/picture-source'
+import { STILL_WIDTH, coverBox, letterbox, type PictureSource, type StillRequest } from '@/lib/live-view/scene/picture-source'
 import { pictureWords, type CardAction } from '@/lib/live-view/scene/picture-words'
 import type { SceneControl } from '@/lib/live-view/scene/sample-source'
 import { fromMockView } from '@/lib/live-view/scene/sample-views'
 import type { SimState } from '@/lib/live-view/scene/sim'
-import { SCENE_VIEW } from '@/lib/live-view/scene/view-address'
+import { SCENE_VIEW, parseView, turntableView } from '@/lib/live-view/scene/view-address'
 import { goView, isTurntable, mainCamera, objectView, sameView, stillView, viewKey, viewName, viewRows, type ViewRow } from '@/lib/live-view/scene/views'
 import type { Doc } from '@/lib/live-view/scene/types'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import { EdgeStack, type Edge } from '../shell/EdgeStack'
 import { OkGlyph } from '../shell/glyphs'
-import { Compass } from './Compass'
+import type { ShellHeroProps } from '../shell/shell-config'
 import { DetailsPopover, InfoButton } from './DetailsPopover'
+import { FinishedLine, PeerChips, TurntableStrip, TwoViewsButton } from './FollowChrome'
+import { FOLLOW_CSS } from './followCss'
 import { OVERLAY_CSS } from './overlayCss'
 import { KeyHint, OlderMark, PictureCard, PictureChips } from './PictureChrome'
-import { SceneOverlay } from './SceneOverlay'
-import { ScenePicture } from './ScenePicture'
+import { ScenePane } from './ScenePane'
 import { STAGE_CSS } from './stageCss'
 import { usePaneSize, useStageScope, useStill } from './useStage'
+import { useSceneFollow } from './useSceneFollow'
 import { ViewPicker } from './ViewPicker'
 
 const EDGE_PLACE = {
@@ -52,7 +56,15 @@ export interface SceneStageProps {
   size?: { width: number; height: number }
   offscreen: { side: Edge; people: LivePerson[] }[]
   onJump: (side: Edge) => void
+  /** Whom you follow (the shell's) and its dispatch. */
+  follow?: ShellHeroProps['follow']
+  /** The say row points at the view on screen. */
+  setSayAt?: ShellHeroProps['setSayAt']
+  /** Who's here, for names. */
+  people?: readonly LivePerson[]
 }
+
+const onlyOneOf = (s: { split: string } | null): boolean => !s || s.split === 'one'
 
 const reducedMotion = (): boolean => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -64,7 +76,7 @@ function showList(from: HTMLElement | null): void {
   requestAnimationFrame(() => tab.querySelector<HTMLElement>('[role="tree"]')?.focus())
 }
 
-export function SceneStage({ S, control, source, narrow, size, offscreen, onJump }: SceneStageProps): React.JSX.Element {
+export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [] }: SceneStageProps): React.JSX.Element {
   const store = localStore(S)
   const L = useSyncExternalStore(store.subscribe, store.get, store.get)
   const set = (patch: Partial<SceneLocal>): void => store.set((s) => ({ ...s, ...patch }))
@@ -72,17 +84,24 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const pane = usePaneSize(ref, size)
   const { scope, style } = useStageScope()
 
-  const view = viewOnScreen(S, L)
+  const own = viewOnScreen(S, L)
+  const fl = useSceneFollow({ follow, snap: { people } as ShellHeroProps['snap'] }, S, own, (v) => set({ view: v }))
+  const view = fl.theirView ?? own
   const framed = framedOf(S, L.pick)
   const status = pictureStatus(S)
   const words = pictureWords(status, { ...pictureContext(S, L.pick), askAgent: null })
-  const lb = pane ? letterbox(pane.width, pane.height) : null
-  const tt = S.ui.tt ?? 0
-  const req = words.still && lb && status.shown != null ? { rev: status.shown, view, shape: lb.shape, width: STILL_WIDTH, ids: true } : null
-  const still = useStill(source, req)
+  const layout = L.layout ?? (S.layout === 2 ? 2 : 1)
+  const split = pane ? paneRects(pane.width, pane.height, layout) : null
+  const ag = agentView(S)
+  const view2 = L.view2 ?? ag?.view ?? SCENE_VIEW
+  const reqOf = (v: string, i: number): StillRequest | null => {
+    const r = split?.panes[i]
+    return words.still && r && status.shown != null ? { rev: status.shown, view: v, shape: (onlyOneOf(split) ? letterbox(r.w, r.h) : coverBox(r.w, r.h)).shape, width: STILL_WIDTH, ids: true } : null
+  }
+  const still = useStill(source, reqOf(view, 0))
+  const still2 = useStill(source, layout === 2 ? reqOf(view2, 1) : null)
   const ground = words.ground && S.D ? S.D : null
   const name = S.D ? viewName(S.D, view) : 'Scene'
-  const ag = agentView(S)
   const rows = useMemo(() => (S.D ? viewRows(S.D, { framed, agent: ag ? { name: ag.name, view: ag.view } : null }) : []), [S.D, framed, ag?.name, ag?.view])
   const menu = L.menu ?? S.menu
   const details = L.info && S.D ? pictureDetails(S, { view, pick: L.pick, size: still ? { width: still.width, height: still.height } : null, bounds: source?.bounds ? (D, a) => source.bounds?.(D, a) ?? null : undefined, meta: still?.meta ?? null }) : null
@@ -95,16 +114,27 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
     return () => clearTimeout(t)
   }, [L.flash, store])
 
+  // The say row points at the view on screen.
+  useEffect(() => {
+    if (setSayAt && S.D) setSayAt(sayAtOf(S.D, view))
+  }, [setSayAt, S.D, view])
+  useEffect(() => () => setSayAt?.(null), [setSayAt])
+
+  /** You choose a view: following looks away. */
   const go = (v: string, say?: string): void => {
+    fl.lookAway()
     const nav = goView(L, view, v)
     set({ view: nav.view, back: nav.back, menu: false, flash: say ?? null })
   }
   const pick = (r: ViewRow): void => {
-    // Following the agent's view is S5's; until then it shows the view the agent is on.
-    const v = r.v === '@agent' ? (ag?.view ?? SCENE_VIEW) : r.v
-    go(v, `Now looking through ${r.v === '@agent' ? `${ag?.name ?? 'the agent'}’s view` : r.kind === 'object' ? 'the framed object' : r.name}`)
+    if (r.v === '@agent') {
+      // "Atlas's view" follows the agent.
+      if (ag) fl.follow(ag.id)
+      set({ menu: false, flash: `Now following ${ag?.name ?? 'the agent'}’s view` })
+    } else go(r.v, `Now looking through ${r.kind === 'object' ? 'the framed object' : r.name}`)
     ref.current?.focus()
   }
+  const pick2 = (r: ViewRow): void => set({ view2: r.v === '@agent' ? null : r.v, menu2: false })
   const onCard = (id: CardAction): void => {
     if (id === 'retry') control.retryPicture()
     else if (id === 'try-camera') {
@@ -114,13 +144,14 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
     } else if (id === 'show-list') showList(ref.current)
   }
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    // Keys typed in a field, or moving in the views menu (it handles its own), aren't the picture's.
-    if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, .lv-vmenu')) return
+    // Keys typed in a field, or moving in a menu or the turntable (they handle their own), aren't the picture's.
+    if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, .lv-vmenu, .lv-tt')) return
     if (e.key === 'Escape' && L.info) set({ info: false })
     else if (e.key === 'Escape' && menu) set({ menu: false })
     else {
       const nav = S.D && !S.loading ? viewKey(L, e.key, { cur: view, camera: mainCamera(S.D), framed }) : null
       if (!nav) return
+      fl.lookAway()
       set({ view: nav.view, back: nav.back })
     }
     e.preventDefault()
@@ -135,9 +166,17 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
 
   const ready = !!S.D && !S.loading
   const keys = !narrow && !isTurntable(view) && ready
+  const others = ready ? othersOnViews(S, view) : []
+  const tt = parseView(view)
+  const frame = tt?.kind === 'turntable' ? tt.frame : 0
+  const motion = !reducedMotion()
+  const onlyOne = layout === 1 || !split
+  // The labels are placed again when the stage's own chrome changes, and wait while a menu or the details lie over them.
+  const chromeKey = `${fl.ended ? 'fin' : ''}|${flash ?? ''}|${isTurntable(view) ? 'tt' : ''}|${others.length}|${words.chips.length}|${layout}`
+  const shared = { S, pick: L.pick, dim: words.dim, ground, bounds: source?.bounds ? bounds : null, overlay: words.still, motion, onFrame: frameObject, size: pane ?? { width: 0, height: 0 }, chromeKey }
   return (
     <div className="lv-scene-hero" data-testid="lv-hero" data-kind="scene">
-      <style>{STAGE_CSS + OVERLAY_CSS}</style>
+      <style>{STAGE_CSS + OVERLAY_CSS + FOLLOW_CSS}</style>
       <div
         ref={ref}
         data-testid="lv-scene-stage"
@@ -146,46 +185,96 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
         data-k2-chamfer="surface"
         data-state={S.conn !== 'ok' ? 'lost' : status.state}
         data-view={view}
+        data-following={fl.whose ?? undefined}
+        data-layout={split?.split ?? 'one'}
         tabIndex={0}
         role="group"
         aria-label={`The scene’s picture: ${name}. Keys: Home Scene, 0 Camera, . Frame, Esc Back`}
         className={cx('lv-sstage')}
         onKeyDown={onKeyDown}
       >
-        {lb ? <ScenePicture lb={lb} still={still} label={`Clay picture of the scene, ${name}`} dim={words.dim} ground={ground} motion={!reducedMotion()} /> : null}
-        {lb && pane && still?.camera && source?.bounds && words.still ? <SceneOverlay S={S} pick={L.pick} still={still} lb={lb} bounds={bounds} motion={!reducedMotion()} stage={ref} pane={pane} onFrame={frameObject} /> : null}
+        {pane && split ? (
+          <ScenePane
+            {...shared}
+            index={0}
+            quiet={menu || L.info}
+            rect={onlyOne ? null : split.panes[0]}
+            still={still}
+            name={name}
+            top={
+              ready ? (
+                <div className="lv-vtop">
+                  <ViewPicker
+                    name={name}
+                    view={view}
+                    rows={rows}
+                    checked={(r) => (r.v === '@agent' ? !!fl.whose && fl.whose === ag?.id : !fl.whose && sameView(r.v, view))}
+                    open={menu}
+                    kbd={S.menu && L.menu === null ? fromMockView(S.D, S.ui.menuCur, S.ui.tt ?? 0) : null}
+                    onOpen={(open) => set({ menu: open })}
+                    onPick={pick}
+                    source={source}
+                    rev={status.shown}
+                    thumbView={(r) => (r.disabled ? null : r.v === '@agent' ? (ag ? stillView(ag.view, 1) : null) : stillView(r.v, 1))}
+                  />
+                  {!narrow ? <PeerChips others={others} onFollow={fl.follow} /> : null}
+                </div>
+              ) : null
+            }
+          >
+            {ready && isTurntable(view) ? <TurntableStrip frame={frame} source={source} rev={status.shown} onFrame={(k) => { fl.lookAway(); set({ view: turntableView(k) }) }} /> : null}
+          </ScenePane>
+        ) : null}
+        {pane && split && !onlyOne && ready ? (
+          <ScenePane
+            {...shared}
+            index={1}
+            quiet={L.menu2 || L.info}
+            rect={split.panes[1]}
+            still={still2}
+            name={viewName(S.D, view2)}
+            top={
+              <div className="lv-vtop">
+                <ViewPicker
+                  name={viewName(S.D, view2)}
+                  label={L.view2 == null && ag ? `${ag.name}’s view` : undefined}
+                  prefix="Second view"
+                  view={view2}
+                  rows={rows}
+                  checked={(r) => (r.v === '@agent' ? L.view2 == null : L.view2 != null && sameView(r.v, view2))}
+                  open={L.menu2}
+                  kbd={null}
+                  onOpen={(open) => set({ menu2: open })}
+                  onPick={pick2}
+                  source={source}
+                  rev={status.shown}
+                  thumbView={(r) => (r.disabled ? null : r.v === '@agent' ? (ag ? stillView(ag.view, 1) : null) : stillView(r.v, 1))}
+                />
+                {L.view2 == null && ag ? <span className="lv-plabel lv-plate" data-k2-chamfer="chip">{viewName(S.D, view2)}</span> : null}
+              </div>
+            }
+          />
+        ) : null}
         {words.card ? <PictureCard card={words.card} onAction={onCard} /> : null}
-        {ready ? (
-          <div className="lv-vtop">
-            <ViewPicker
-              name={name}
-              view={view}
-              rows={rows}
-              checked={(r) => (r.v === '@agent' ? false : sameView(r.v, view))}
-              open={menu}
-              kbd={S.menu && L.menu === null ? fromMockView(S.D, S.ui.menuCur, tt) : null}
-              onOpen={(open) => set({ menu: open })}
-              onPick={pick}
-              source={source}
-              rev={status.shown}
-              thumbView={(r) => (r.disabled ? null : r.v === '@agent' ? (ag ? stillView(ag.view, 1) : null) : stillView(r.v, 1))}
-            />
-          </div>
-        ) : null}
         {words.older ? <OlderMark text={words.older} /> : null}
-        {still?.camera ? (
-          <div className="lv-cmpslot">
-            <Compass camera={still.camera} />
-          </div>
-        ) : null}
         <div className="lv-vfoot">
           <PictureChips chips={words.chips} onRetry={() => control.retryPicture()} />
           <span className="lv-sp" />
           {keys ? <KeyHint /> : null}
+          {ready ? <TwoViewsButton two={layout === 2} stacked={split?.split === 'stacked' || (!!pane && paneRects(pane.width, pane.height, 2).split === 'stacked')} onToggle={() => set({ layout: layout === 2 ? 1 : 2 })} /> : null}
           {ready ? <InfoButton open={L.info} onToggle={() => set({ info: !L.info })} /> : null}
         </div>
         {details ? <DetailsPopover details={details} narrow={narrow} /> : null}
-        {flash ? (
+        {fl.ended ? (
+          <FinishedLine
+            words={fl.ended}
+            onBack={() => {
+              const h = fl.backHome()
+              set({ view: h ?? own })
+            }}
+            onAgain={fl.followAgain}
+          />
+        ) : flash ? (
           <div className="lv-tslot">
             <div className="lv-toast lv-plate" data-k2-chamfer="chip" role="status" aria-label="View changed">
               <OkGlyph size={14} />

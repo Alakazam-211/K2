@@ -16,9 +16,15 @@ export interface SceneLocal {
   menu: boolean | null
   info: boolean
   flash: string | null
+  /** One view or two; null: as the step says. */
+  layout: 1 | 2 | null
+  /** The second pane's own view; null: it follows the agent's view. */
+  view2: string | null
+  /** The second pane's views menu. */
+  menu2: boolean
 }
 
-export const LOCAL0: SceneLocal = { pick: undefined, view: null, back: [], menu: null, info: false, flash: null }
+export const LOCAL0: SceneLocal = { pick: undefined, view: null, back: [], menu: null, info: false, flash: null, layout: null, view2: null, menu2: false }
 
 export interface LocalStore {
   get(): SceneLocal

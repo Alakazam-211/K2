@@ -1,8 +1,10 @@
 // The live 3D scene tab on the shared shell: the header, the notices and the
 // say row while following; the side panel is the scene's own (S2: Activity,
 // People and holds, Outliner, Properties, from the scene model); the hero is
-// the picture on its dark stage (S3). Later phases (build-live-scene.md
-// S4–S8) add the overlays, following and the real sources.
+// the picture on its dark stage (S3), with its overlays (S4) and following,
+// two views and the turntable (S5: the hero gets whom you follow and tells
+// the say row what it points at). Later phases (build-live-scene.md S6–S8)
+// add the remaining states and the real sources.
 
 import { SCENE_VIEW } from '@/lib/live-view/scene/view-address'
 import { personById } from '@/lib/live-view/shared/people'

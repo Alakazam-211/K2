@@ -129,6 +129,8 @@ export interface Letterbox {
   top: number
   width: number
   height: number
+  /** It covers its pane (cropped), so its edges aren't feathered. */
+  cover?: boolean
 }
 
 /** The still's place in a pane: a `pad` margin all round (its edges fade into the stage), the shape the pane asks for, letterboxed and centred. */
@@ -144,6 +146,19 @@ export function letterbox(paneW: number, paneH: number, pad = 16): Letterbox {
     w = H * k
   }
   return { shape, left: pad + (W - w) / 2, top: pad + (H - h) / 2, width: w, height: h }
+}
+
+/** The still covering a pane (a view in half the stage): the shape nearest the pane's, scaled to fill it, centred, cropped where it overflows. No margin and no feathered edge: the pane's edges are the picture's. */
+export function coverBox(paneW: number, paneH: number): Letterbox {
+  const shape = shapeFor(paneW, paneH)
+  const k = SHAPE_ASPECT[shape]
+  let w = paneW
+  let h = paneW / k
+  if (h < paneH) {
+    h = paneH
+    w = paneH * k
+  }
+  return { shape, left: (paneW - w) / 2, top: (paneH - h) / 2, width: w, height: h, cover: true }
 }
 
 /** A still's height for a width and shape. */

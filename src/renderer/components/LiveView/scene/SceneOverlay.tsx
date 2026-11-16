@@ -20,8 +20,8 @@ import { LockGlyph } from './scene-glyphs'
 
 /** The slide: the mock's 380 ms, easing out. */
 export const SLIDE_MS = 380
-/** What labels keep clear of: the picker, the older-picture mark, the compass, chips, the key hint, ⓘ, the quiet line, the card, menus, people at the edges. */
-const CHROME = '.lv-vbtn, .lv-oldpic, .lv-cmpslot, .lv-chip, .lv-keys, .lv-infob, .lv-toast, .lv-card, .lv-pop, [data-testid^="lv-edge-"]'
+/** What labels keep clear of: the picker and who's on other views, the older-picture mark, the compass, chips, the key hint, ⓘ, two views, the quiet line, the finished line, the turntable strip, the card, menus, people at the edges. */
+const CHROME = '.lv-vbtn, .lv-vpeer, .lv-oldpic, .lv-cmpslot, .lv-chip, .lv-keys, .lv-infob, .lv-twob, .lv-toast, .lv-fin, .lv-tt, .lv-card, .lv-pop, [data-testid^="lv-edge-"]'
 /** Chips sit 18 px in from the stage's edge, like the corner slots. */
 const EDGE_IN = 14
 const PRIO: Record<TagSpec['kind'], number> = { live: 1, hold: 2, mine: 3, note: 4, sel: 5 }
@@ -76,9 +76,13 @@ export interface SceneOverlayProps {
   stage: React.RefObject<HTMLDivElement | null>
   pane: { width: number; height: number }
   onFrame: (a: string) => void
+  /** A menu or the details lie over the picture: no labels (they'd be under it). */
+  quiet?: boolean
+  /** Changes when the stage's own chrome does (the finished line, the quiet line, the turntable strip): place the labels again. */
+  chromeKey?: string
 }
 
-export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, onFrame }: SceneOverlayProps): React.JSX.Element | null {
+export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, onFrame, quiet = false, chromeKey = '' }: SceneOverlayProps): React.JSX.Element | null {
   const lc = liveChange(S)
   const animKey = lc && lc.phase === 'live' && motion ? `${lc.f.rev}:${S.i}` : null
   const [anim, setAnim] = useState<{ key: string | null; t: number }>({ key: null, t: 1 })
@@ -104,15 +108,23 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
   const toStage = (r: Rect): Rect => ({ x0: lb.left + r.x0 * k, y0: lb.top + r.y0 * k, x1: lb.left + r.x1 * k, y1: lb.top + r.y1 * k })
   const els = useRef(new Map<string, HTMLElement>())
   const [pos, setPos] = useState<Record<string, Placed>>({})
-  const labels: { id: string; tag?: TagSpec; chip?: ChipSpec; text: string }[] = draw
+  const labels: { id: string; tag?: TagSpec; chip?: ChipSpec; text: string }[] = draw && !quiet
     ? [...draw.chips.map((c) => ({ id: `chip:${c.a}`, chip: c, text: c.name })), ...draw.tags.map((g) => ({ id: g.id, tag: g, text: `${g.who} ${g.text} ${g.sub ?? ''}` }))]
     : []
-  const sig = JSON.stringify(labels.map((l) => [l.id, l.text, l.tag?.anchor, l.chip?.at])) + `|${lb.left},${lb.top},${lb.width},${lb.height}|${pane.width},${pane.height}`
+  const sig = JSON.stringify(labels.map((l) => [l.id, l.text, l.tag?.anchor, l.chip?.at])) + `|${lb.left},${lb.top},${lb.width},${lb.height}|${pane.width},${pane.height}|${chromeKey}`
+  // Once more a frame later: chrome that came in with this change (the finished line, a toast) has its size by then.
+  const [late, setLate] = useState(0)
+  useEffect(() => {
+    if (typeof requestAnimationFrame === 'undefined') return
+    const r = requestAnimationFrame(() => setLate((n) => n + 1))
+    return () => cancelAnimationFrame(r)
+  }, [sig])
   useLayoutEffect(() => {
     const el = stage.current
     if (!el) return
     const sr = el.getBoundingClientRect()
-    const obstacles = [...el.querySelectorAll<HTMLElement>(CHROME)]
+    // The whole stage's chrome (a pane's overlay keeps clear of the stage's foot too), in this pane's pixels.
+    const obstacles = [...(el.closest('.lv-sstage') ?? el).querySelectorAll<HTMLElement>(CHROME)]
       .map((e) => e.getBoundingClientRect())
       .filter((r) => r.width > 0 && r.height > 0)
       .map((r) => ({ x0: r.left - sr.left, y0: r.top - sr.top, x1: r.right - sr.left, y1: r.bottom - sr.top }))
@@ -126,11 +138,13 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
       const g = l.tag!
       return { id: l.id, kind: g.place, anchor: toStage(g.anchor), w, h, prio: PRIO[g.kind] }
     })
-    const placed = placeLabels(reqs, { frame: { x0: lb.left, y0: lb.top, x1: lb.left + lb.width, y1: lb.top + lb.height } })
+    // The picture as seen: a still that covers its pane is cropped at the pane's edges.
+    const frame = { x0: Math.max(0, lb.left), y0: Math.max(0, lb.top), x1: Math.min(pane.width, lb.left + lb.width), y1: Math.min(pane.height, lb.top + lb.height) }
+    const placed = placeLabels(reqs, { frame })
     const next = Object.fromEntries(placed.map((p) => [p.id, p]))
     setPos((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `sig` is everything the placement reads
-  }, [sig, stage])
+  }, [sig, stage, late])
 
   if (!draw) return null
   const at = (id: string): CSSProperties => {
@@ -164,7 +178,7 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
         ))}
       </svg>
       <div className="lv-tags" data-testid="lv-scene-tags">
-        {draw.chips.map((c) => {
+        {quiet ? null : draw.chips.map((c) => {
           const id = `chip:${c.a}`
           const say = `${c.name} is off the picture. Frame it`
           return (
@@ -189,7 +203,7 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
             </button>
           )
         })}
-        {draw.tags.map((g) => (
+        {quiet ? null : draw.tags.map((g) => (
           <div
             key={g.id}
             ref={ref(g.id)}

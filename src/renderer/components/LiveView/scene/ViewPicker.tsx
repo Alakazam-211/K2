@@ -49,6 +49,10 @@ export interface ViewPickerProps {
   source: PictureSource | null
   rev: number | null
   thumbView: (r: ViewRow) => string | null
+  /** The button's own words (the second pane: "Atlas’s view"); default the view's name. */
+  label?: string
+  /** What the button is, for assistive tech ("Second view"); default "View". */
+  prefix?: string
 }
 
 export function ViewPicker(p: ViewPickerProps): React.JSX.Element {
@@ -110,12 +114,12 @@ export function ViewPicker(p: ViewPickerProps): React.JSX.Element {
         data-k2-chamfer="control"
         aria-haspopup="menu"
         aria-expanded={p.open}
-        aria-label={`View: ${p.name}. Change view`}
+        aria-label={`${p.prefix ?? 'View'}: ${p.label ?? p.name}. Change view`}
         className="lv-vbtn lv-plate no-drag"
         onClick={() => p.onOpen(!p.open)}
       >
         <ViewGlyph v={p.view} />
-        <span>{p.name}</span>
+        <span>{p.label ?? p.name}</span>
         <ChevronGlyph size={13} />
       </button>
       {p.open ? (

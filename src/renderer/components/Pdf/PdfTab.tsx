@@ -6,7 +6,7 @@
 // Everything here is this tab's view of the file: which layers show, the
 // page, the zoom. Nothing is written to the file.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { ChevronLeftIcon, ChevronRightIcon, MinusIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
@@ -26,16 +26,15 @@ import { keepChoices, readLayers, setAllLayers, setLayer, type OcConfig } from '
 import { makeLinkService } from '@/lib/pdf/link-service'
 import { scanAnnotDicts } from '@/lib/pdf/raw-annots'
 import { allPageText } from '@/lib/pdf/text-cache'
+import { MAX_ZOOM, MIN_ZOOM, fitScale, zoomStep, type ZoomMode } from '@/lib/pdf/zoom'
 import { AnnotPopover } from './AnnotPopover'
 import { PDF_CSS } from './pdfCss'
 import { PdfFindBar } from './PdfFindBar'
 import { PdfPageView, type Mark } from './PdfPageView'
 import { PdfPanel, type PdfPanelTab } from './PdfPanel'
+import { PdfZoomMenu, type ZoomChoice } from './PdfZoomMenu'
 import type { PdfDoc } from './usePdfDocument'
 
-export const ZOOM_STEP = 0.25
-export const MIN_ZOOM = 0.5
-export const MAX_ZOOM = 4
 const PANEL_LABEL = 'layers, annotations and pages'
 
 function IconBtn({ label, onClick, disabled, pressed, children }: { label: string; onClick: () => void; disabled?: boolean; pressed?: boolean; children: React.ReactNode }): React.JSX.Element {
@@ -51,7 +50,34 @@ export function PdfTab({ doc, binary, filePath, width }: { doc: PdfDoc; binary: 
   const narrow = tabWidth < EDITOR_NARROW_BELOW
   const numPages = doc.numPages
   const [page, setPage] = useState(1)
-  const [zoom, setZoom] = useState(1)
+  // Zoom: Fit page until the person picks (lib/pdf/zoom.ts); their pick stays for this tab.
+  const [zoomMode, setZoomMode] = useState<ZoomMode>('page')
+  const [customZoom, setCustomZoom] = useState(1)
+  const desk = useRef<HTMLDivElement>(null)
+  const [deskBox, setDeskBox] = useState<{ w: number; h: number } | null>(null)
+  useLayoutEffect(() => {
+    const el = desk.current
+    if (!el) return
+    const read = (): void => setDeskBox((b) => (b && b.w === el.clientWidth && b.h === el.clientHeight ? b : { w: el.clientWidth, h: el.clientHeight }))
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  // This page's size at 100% (sheets in a set can differ).
+  const [base, setBase] = useState<{ page: number; w: number; h: number } | null>(null)
+  useEffect(() => {
+    let live = true
+    void doc.getPage(page).then((p) => {
+      const v = p.getViewport({ scale: 1 })
+      if (live) setBase({ page, w: v.width, h: v.height })
+    })
+    return () => void (live = false)
+  }, [doc, page])
+  // Until the page's size is known, a fit has nothing to draw at.
+  const fitted = zoomMode === 'custom' ? customZoom : base && deskBox ? fitScale(zoomMode, base, deskBox) : null
+  const zoom = fitted ?? 1
   const pageRef = useRef(page)
   pageRef.current = page
   const goToPage = useCallback((n: number) => setPage(Math.max(1, Math.min(n, numPages))), [numPages])
@@ -201,9 +227,16 @@ export function PdfTab({ doc, binary, filePath, width }: { doc: PdfDoc; binary: 
     root.current?.querySelector<HTMLElement>('[data-pdf-find-toggle] button')?.focus()
   }
 
-  const zoomIn = useCallback(() => setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM)), [])
-  const zoomOut = useCallback(() => setZoom((z) => Math.max(z - ZOOM_STEP, MIN_ZOOM)), [])
-  const resetZoom = useCallback(() => setZoom(1), [])
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  const setCustom = useCallback((z: number) => {
+    setZoomMode('custom')
+    setCustomZoom(z)
+  }, [])
+  const zoomIn = useCallback(() => setCustom(zoomStep(zoomRef.current, 1)), [setCustom])
+  const zoomOut = useCallback(() => setCustom(zoomStep(zoomRef.current, -1)), [setCustom])
+  const resetZoom = useCallback(() => setCustom(1), [setCustom])
+  const chooseZoom = (c: ZoomChoice): void => (c === 'actual' ? setCustom(1) : setZoomMode(c))
 
   // Keys. The listener is on the window, so it hears keys meant for anything
   // else: a key typed into a field stays there, and a tab that isn't showing
@@ -243,7 +276,6 @@ export function PdfTab({ doc, binary, filePath, width }: { doc: PdfDoc; binary: 
   }, [root, goToPage, zoomIn, zoomOut, resetZoom])
 
   // A new page starts at its top.
-  const desk = useRef<HTMLDivElement>(null)
   useEffect(() => {
     desk.current?.scrollTo?.({ top: 0 })
   }, [page])
@@ -266,9 +298,7 @@ export function PdfTab({ doc, binary, filePath, width }: { doc: PdfDoc; binary: 
       <IconBtn label="Zoom out" onClick={zoomOut} disabled={zoom <= MIN_ZOOM}>
         <MinusIcon size={16} strokeWidth={K2_ICON_STROKE} aria-hidden="true" />
       </IconBtn>
-      <button type="button" data-k2-focus="" data-k2-chamfer="control" aria-label={`Zoom ${pct}, reset to 100%`} title="Reset zoom (⌘0)" onClick={resetZoom} className="lv-icon-btn pdf-zoom-btn type-row lv-num no-drag">
-        {pct}
-      </button>
+      <PdfZoomMenu pct={pct} mode={zoomMode} zoom={zoom} onChoose={chooseZoom} />
       <IconBtn label="Zoom in" onClick={zoomIn} disabled={zoom >= MAX_ZOOM}>
         <PlusIcon size={16} strokeWidth={K2_ICON_STROKE} aria-hidden="true" />
       </IconBtn>
@@ -319,7 +349,7 @@ export function PdfTab({ doc, binary, filePath, width }: { doc: PdfDoc; binary: 
               <PdfPageView
                 doc={doc}
                 pageNumber={page}
-                zoom={zoom}
+                zoom={fitted}
                 cfg={cfg}
                 cfgKey={cfgKey}
                 linkService={linkService}

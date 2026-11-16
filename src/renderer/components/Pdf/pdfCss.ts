@@ -10,6 +10,13 @@ export const PDF_CSS = `
 .pdf-tab .pdf-head-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-field); background: transparent; color: var(--color-text-secondary); cursor: pointer; }
 .pdf-tab .pdf-head-btn:disabled { opacity: .4; cursor: default; background: transparent; }
 .pdf-tab .pdf-zoom-btn { height: 30px; min-width: 50px; padding: 0 6px; border: 0; border-radius: var(--radius-field); background: transparent; color: var(--color-text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.pdf-tab .pdf-zoom-wrap { position: relative; display: inline-flex; }
+.pdf-tab .pdf-zoom-btn[aria-expanded="true"] { background: var(--color-control-hover-quiet); }
+.pdf-tab .pdf-zoom-menu { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 40; min-width: 148px; padding: 4px; display: flex; flex-direction: column; background: var(--color-bg-elevated); border: 1px solid var(--color-border-strong); border-radius: var(--radius-box); box-shadow: var(--shadow-2); }
+.pdf-tab .pdf-zoom-item { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 10px 0 6px; border: 0; border-radius: var(--radius-selector); background: transparent; color: var(--color-text-primary); text-align: left; white-space: nowrap; cursor: pointer; font-family: var(--font-ui); }
+.pdf-tab .pdf-zoom-item:is(:hover, :focus-visible) { background: var(--color-row-hover); outline: none; }
+.pdf-tab .pdf-zoom-item:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent-text); }
+.pdf-tab .pdf-zoom-tick { width: 16px; flex: none; display: inline-flex; justify-content: center; color: var(--color-accent-text); }
 .pdf-tab .pdf-page-of { min-width: 48px; text-align: center; color: var(--color-text-primary); white-space: nowrap; }
 .pdf-tab .pdf-head-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--color-border); flex: none; }
 .pdf-tab :is(.pdf-head-btn, .pdf-zoom-btn, .pdf-find-btn, .pdf-chip, .pdf-panel-tab, .pdf-thumb, .pdf-annot-row, .pdf-group-btn, .pdf-pop-close):focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
@@ -18,7 +25,7 @@ export const PDF_CSS = `
 .pdf-tab .ed-status { min-width: 0; overflow: hidden; }
 
 /* The desk and the paper. */
-.pdf-tab .pdf-desk { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--color-bg-inset); }
+.pdf-tab .pdf-desk { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-gutter: stable; background: var(--color-bg-inset); }
 .pdf-tab .pdf-desk-inner { display: flex; justify-content: center; align-items: flex-start; box-sizing: border-box; min-width: fit-content; min-height: 100%; padding: 24px; }
 .pdf-tab .pdf-sheet { position: relative; flex: none; box-shadow: var(--shadow-2); --scale-round-x: 1px; --scale-round-y: 1px; }
 .pdf-tab .pdf-canvas { display: block; }
@@ -96,7 +103,8 @@ html[data-style="glass"] .pdf-tab .pdf-find-field { background: var(--color-bg-e
 .pdf-tab .pdf-wrap { overflow-wrap: anywhere; color: var(--color-text-primary); }
 .pdf-tab .pdf-layer-row[data-empty] .pdf-wrap { color: var(--color-text-secondary); }
 .pdf-tab .pdf-empty-group { margin-top: 6px; border-top: 1px solid var(--color-border); }
-.pdf-tab .pdf-group-btn { font-size: var(--type-md); line-height: 1.4; display: flex; width: 100%; align-items: center; gap: 6px; padding: 8px 14px; text-align: left; color: var(--color-text-secondary); cursor: pointer; border-radius: var(--radius-selector); }
+.pdf-tab .pdf-group-words { font-weight: 400; overflow-wrap: anywhere; }
+.pdf-tab .pdf-group-btn { display: flex; width: 100%; align-items: center; gap: 6px; padding: 8px 14px; text-align: left; color: var(--color-text-secondary); cursor: pointer; border-radius: var(--radius-selector); }
 .pdf-tab .pdf-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 4px 14px; }
 .pdf-tab .pdf-group-head { padding: 10px 14px 4px; color: var(--color-text-secondary); font-weight: 600; }
 .pdf-tab .pdf-annot-row { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; padding: 6px 14px; text-align: left; cursor: pointer; }

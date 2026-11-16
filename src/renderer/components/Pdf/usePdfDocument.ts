@@ -9,7 +9,11 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useDocVersion } from '@/components/FileViewerPane/useDocVersion'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
+// One pdf.js worker for every PDF tab: ours (pdf.worker.ts), so the Map
+// polyfill is in it before pdf.js's worker code runs.
+if (typeof Worker !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerPort) {
+  pdfjsLib.GlobalWorkerOptions.workerPort = new Worker(new URL('./pdf.worker.ts', import.meta.url), { type: 'module', name: 'k2-pdf' })
+}
 
 export type PdfDoc = pdfjsLib.PDFDocumentProxy
 

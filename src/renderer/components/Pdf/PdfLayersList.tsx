@@ -69,11 +69,14 @@ export function PdfLayersList({ view, coverage, onSet, onAll }: { view: LayerVie
       </ul>
       {n > 0 ? (
         <div data-testid="pdf-layers-empty" className="pdf-empty-group">
-          <button type="button" data-k2-focus="" aria-expanded={emptyOpen} onClick={() => setEmptyOpen((o) => !o)} className="lv-row-btn pdf-group-btn no-drag type-row">
+          <button type="button" data-k2-focus="" aria-expanded={emptyOpen} onClick={() => setEmptyOpen((o) => !o)} className="lv-row-btn pdf-group-btn no-drag">
             <span aria-hidden="true" className={emptyOpen ? 'inline-flex' : 'inline-flex -rotate-90'}>
               <ChevronGlyph size={13} />
             </span>
-            {n} {n === 1 ? 'layer' : 'layers'} with nothing on {n === 1 ? 'it' : 'them'}
+            {/* The rows' own size and weight (the button's font is reset by the shell's row buttons). */}
+            <span className="pdf-group-words type-row">
+              {n} {n === 1 ? 'layer' : 'layers'} with nothing on {n === 1 ? 'it' : 'them'}
+            </span>
           </button>
           {emptyOpen ? (
             <ul className="m-0 list-none p-0">

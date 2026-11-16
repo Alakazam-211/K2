@@ -49,7 +49,8 @@ export function PdfPageView({
 }: {
   doc: PdfDoc
   pageNumber: number
-  zoom: number
+  /** Null until the fit is known (the page's size, the desk's): nothing draws. */
+  zoom: number | null
   cfg: OcConfig | null
   /** Changes whenever a layer does: the canvas redraws. */
   cfgKey: number
@@ -78,15 +79,17 @@ export function PdfPageView({
 
   // The canvas.
   useEffect(() => {
+    if (zoom === null) return
+    const z = zoom
     let cancelled = false
     void (async () => {
       renderTask.current?.cancel()
       const page = await doc.getPage(pageNumber)
       if (cancelled) return
-      const css = page.getViewport({ scale: zoom }) as unknown as Viewport
+      const css = page.getViewport({ scale: z }) as unknown as Viewport
       setVp((old) => (old && old.width === css.width && old.height === css.height ? old : css))
       const dpr = window.devicePixelRatio || 1
-      const viewport = page.getViewport({ scale: zoom * dpr })
+      const viewport = page.getViewport({ scale: z * dpr })
       const canvas = canvasRef.current
       if (!canvas) return
       canvas.width = Math.floor(viewport.width)
@@ -112,7 +115,8 @@ export function PdfPageView({
     let cancelled = false
     const textDiv = textRef.current
     const annotDiv = annotRef.current
-    if (!textDiv || !annotDiv) return
+    if (!textDiv || !annotDiv || zoom === null) return
+    const z = zoom
     textDiv.replaceChildren()
     annotDiv.replaceChildren()
     textItems.current = { divs: [], strs: [] }
@@ -120,7 +124,7 @@ export function PdfPageView({
     void (async () => {
       const page = await doc.getPage(pageNumber)
       if (cancelled) return
-      const viewport = page.getViewport({ scale: zoom })
+      const viewport = page.getViewport({ scale: z })
       const { content } = await pageTextOf(doc, pageNumber)
       if (cancelled) return
       const tl = new pdfjsLib.TextLayer({ textContentSource: content as never, container: textDiv, viewport })
@@ -220,7 +224,7 @@ export function PdfPageView({
       data-testid="pdf-sheet"
       data-page={pageNumber}
       className="pdf-sheet"
-      style={{ width: vp?.width, height: vp?.height, ['--scale-factor' as string]: zoom, ['--user-unit' as string]: userUnit, ['--total-scale-factor' as string]: zoom * userUnit }}
+      style={{ width: vp?.width, height: vp?.height, ['--scale-factor' as string]: zoom ?? 1, ['--user-unit' as string]: userUnit, ['--total-scale-factor' as string]: (zoom ?? 1) * userUnit }}
     >
       <canvas ref={canvasRef} data-testid="pdf-canvas" className="pdf-canvas" />
       <div ref={textRef} data-testid="pdf-text-layer" className="textLayer" />

@@ -19,6 +19,19 @@ export function AnnotPopover({ annot, box, pageW, pageH, onClose }: { annot: Pdf
     const desk = ref.current?.closest('.pdf-desk')
     if (desk && desk.clientWidth > 0) setW(Math.max(160, Math.min(W, desk.clientWidth - 16)))
   }, [annot.key])
+  // A sheet fitted small (the panel open at 800) is narrower than the popover: keep it inside the desk's view, not the sheet's.
+  const [shift, setShift] = useState({ x: 0, y: 0 })
+  useLayoutEffect(() => {
+    const el = ref.current
+    const desk = el?.closest('.pdf-desk')
+    if (!el || !desk) return
+    const d = desk.getBoundingClientRect()
+    const p = el.getBoundingClientRect()
+    if (d.width <= 0 || d.height <= 0) return
+    const fit = (start: number, size: number, lo: number, hi: number): number => (start + size > hi - 8 ? Math.max(lo + 8 - start, hi - 8 - (start + size)) : start < lo + 8 ? lo + 8 - start : 0)
+    const next = { x: fit(p.left - shift.x, p.width, d.left, d.right), y: fit(p.top - shift.y, p.height, d.top, d.bottom) }
+    if (Math.abs(next.x - shift.x) > 0.5 || Math.abs(next.y - shift.y) > 0.5) setShift(next)
+  }, [annot.key, w, shift, box])
   useEffect(() => {
     ref.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [annot.key, w])
@@ -36,11 +49,11 @@ export function AnnotPopover({ annot, box, pageW, pageH, onClose }: { annot: Pdf
       if (back?.isConnected && ref.current?.contains(document.activeElement)) back.focus({ preventScroll: true })
     }
   }, [annot.key, onClose])
-  // Below the annotation, or above it when the page ends first; inside the page's width.
+  // Below the annotation, or above it when the page ends first; then moved, if it must, to stay in the desk's view.
   const [x1, y1, x2, y2] = box
   const left = Math.max(8, Math.min(Math.min(x1, x2), pageW - w - 8))
   const below = Math.max(y1, y2) + 8
-  const place: React.CSSProperties = below + 140 < pageH ? { top: below } : { bottom: pageH - Math.min(y1, y2) + 8 }
+  const place: React.CSSProperties = below + 140 < pageH ? { top: below + shift.y } : { bottom: pageH - Math.min(y1, y2) + 8 - shift.y }
   return (
     <div
       ref={ref}
@@ -51,7 +64,7 @@ export function AnnotPopover({ annot, box, pageW, pageH, onClose }: { annot: Pdf
       data-k2-chamfer="control"
       {...floatMaterial('popover')}
       className="pdf-pop"
-      style={{ left, width: w, ...place }}
+      style={{ left: left + shift.x, width: w, ...place }}
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return
         e.preventDefault()

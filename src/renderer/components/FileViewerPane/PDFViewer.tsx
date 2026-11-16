@@ -1,7 +1,9 @@
 // A PDF file's tab: the document (usePdfDocument, read again on a new
 // version) in the PDF tab (components/Pdf/PdfTab): layers, annotations,
 // text selection and Find. While it loads or fails, the header stays.
+// The Map polyfill goes first: pdf.js 5 needs it on older WebKit.
 
+import '@/lib/pdf/install-map-polyfill'
 import { LiveHeader } from '@/components/LiveView/shell/LiveHeader'
 import { fileNameOf } from '@/components/Editor/EditorFrame'
 import { SetiFileIcon } from '@/lib/seti-file-icons/SetiFileIcon'

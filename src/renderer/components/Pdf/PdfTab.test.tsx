@@ -58,6 +58,60 @@ afterEach(() => {
   daemonCliGet.mockReset()
 })
 
+/** The desk's size (jsdom lays nothing out). */
+function deskSize(w: number, h: number): void {
+  for (const [prop, v] of [['clientWidth', w], ['clientHeight', h]] as const) {
+    const real = Object.getOwnPropertyDescriptor(Element.prototype, prop)!.get!
+    vi.spyOn(Element.prototype, prop, 'get').mockImplementation(function (this: Element) {
+      return this.getAttribute('data-testid') === 'pdf-desk' ? v : real.call(this)
+    })
+  }
+}
+
+describe('zoom', () => {
+  it('opens at Fit page, offers Fit width and 100%, and keeps a chosen zoom across pages', async () => {
+    deskSize(1000, 500)
+    await mount()
+    const status = screen.getByTestId('editor-status')
+    await waitFor(() => expect(within(status).getByText('73%')).toBeTruthy())
+    expect(screen.getByTestId('pdf-sheet').style.width).toBe(`${792 * 0.73}px`)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Zoom 73%/ }))
+    const menu = screen.getByRole('menu', { name: 'Zoom' })
+    expect(within(menu).getAllByRole('menuitemradio').map((i) => [i.textContent, i.getAttribute('aria-checked')])).toEqual([
+      ['Fit page', 'true'],
+      ['Fit width', 'false'],
+      ['100%', 'false'],
+    ])
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Fit width' }))
+    await waitFor(() => expect(within(status).getByText('120%')).toBeTruthy())
+    expect(screen.queryByRole('menu', { name: 'Zoom' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Zoom 120%/ }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '100%' }))
+    await waitFor(() => expect(within(status).getByText('100%')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+    await waitFor(() => expect(within(status).getByText('125%')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    await waitFor(() => expect(pageShown()).toBe('2 / 2'))
+    expect(within(status).getByText('125%')).toBeTruthy()
+  })
+
+  it('closes the zoom menu with Escape, focus back on its button', async () => {
+    await mount()
+    const btn = screen.getByRole('button', { name: /^Zoom 100%/ })
+    fireEvent.click(btn)
+    const menu = screen.getByRole('menu', { name: 'Zoom' })
+    expect(document.activeElement).toBe(within(menu).getByRole('menuitemradio', { name: 'Fit page' }))
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(within(menu).getByRole('menuitemradio', { name: 'Fit width' }))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: 'Zoom' })).toBeNull()
+    expect(document.activeElement).toBe(btn)
+  })
+})
+
 describe('the header and status line', () => {
   it('names the file once, pages it, and says page, zoom and layers below', async () => {
     await mount()

@@ -632,7 +632,7 @@ for r in v.get("replaced") or []:
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; print("%s sites: %s" % (m.get("name"), ", ".join(m.get("hosts") or []) or "none"))'
             ;;
         sign)
-            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|none [--sign-header …] (k2 vault sign --help)" >&2; exit 2; }
+            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|oauth-refresh|none [--sign-header …] (k2 vault sign --help)" >&2; exit 2; }
             [ -z "$sign_scheme" ] || { echo "usage: the scheme is the second word: k2 vault sign NAME ${sign_scheme}" >&2; exit 2; }
             local gj
             if [ "${pos[1]}" = "none" ]; then

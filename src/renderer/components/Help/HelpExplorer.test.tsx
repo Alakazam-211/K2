@@ -155,10 +155,11 @@ describe('the rail lists the CLI tools and the pages', () => {
     fireEvent.click(within(compute).getByRole('button', { expanded: false }))
     expect(within(compute).getAllByTestId('help-verb').map((v) => v.getAttribute('data-verb'))).toContain('k2 compute run')
     expect(within(compute).queryByText(/run commands on your own machines/)).toBeNull()
-    // vault's --help prints without a daemon (per-verb help), so it is captured too.
+    // vault is in --schema now too: its card lists the commands, not the captured --help.
     const vault = screen.getByTestId('help-noun-k2:vault')
     fireEvent.click(within(vault).getByRole('button', { expanded: false }))
-    expect(within(vault).getByText(/secrets for agents, without showing them the value/)).toBeTruthy()
+    expect(within(vault).getAllByTestId('help-verb').map((v) => v.getAttribute('data-verb'))).toContain('k2 vault send')
+    expect(within(vault).queryByText(/secrets for agents, without showing them the value/)).toBeNull()
     expect(within(vault).queryByText('k2 help vault')).toBeNull()
     // hooks's --help is not captured (it does not print without a daemon): point at k2 help.
     const hooks = screen.getByTestId('help-noun-k2:hooks')

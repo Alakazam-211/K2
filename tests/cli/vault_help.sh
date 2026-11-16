@@ -42,7 +42,7 @@ top="$(k2n vault --help)" || fail "vault --help"
 <<<"$top" grep -Fq -- "--inject-dst header:<Name>|query:<param>|basic|body" || fail "top-level help lacks --inject-dst"
 ok "k2 vault --help: no daemon needed, names --inject-dst and per-verb help"
 
-for verb in status list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
+for verb in status open list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
     doctor env-file run proxy-url import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign \
     systemd-cred placement placements public-key agent-limit; do
     out="$(k2n vault "$verb" --help 2>&1)" || fail "vault $verb --help exited non-zero: $out"

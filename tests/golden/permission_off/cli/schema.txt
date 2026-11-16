@@ -5188,6 +5188,697 @@ exit: 0
       ]
     },
     {
+      "name": "vault",
+      "usage": "k2 vault <status|open|list|show|set|rotate|hosts|delivery|sign|public-key|agent-limit|grant|revoke|disable|enable|destroy|fetch|get|audit|requests|presets|env-file|file|proxy-url|run|sync|import|service|doctor|send|incoming|sent|accept-from|send-allow|ask|asks|unsend|placement|placements|reveal|recovery|confirm-password|kek|rekey|rollback|systemd-cred|backup|restore|recipient|carry> [...]",
+      "description": "Secrets for agents, without showing them the value. Agents: use k2 vault fetch (K2 makes the call and adds the key), never paste a key into a file or chat; ask a person with k2 thread secret. Each verb has its own help: k2 vault <verb> --help.",
+      "args": [{"name": "verb", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "vault status",
+      "usage": "k2 vault status [--json]",
+      "description": "Where the vault's key lives, the recovery key, the vault password, and counts. Ends with one honest line on what the vault protects. Values are never shown.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault open",
+      "usage": "k2 vault open [--json]",
+      "description": "Open a vault that didn't open at start (a locked or cancelled Keychain prompt); may ask once.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault list",
+      "usage": "k2 vault list [--scope ws:<name>|server|session] [--system] [--json]",
+      "description": "Names, scope, kind, delivery, version and sites of the secrets you can see. Never values.",
+      "args": [],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "One scope only."},
+        {"name": "--system", "arg": null, "description": "Also K2's own secrets. The owner and Admins see their names; agents and Members get a count and why they're hidden."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault show",
+      "usage": "k2 vault show NAME [--scope <s>] [--json]",
+      "description": "One secret: kind, sites, where fetch puts it, delivery and ceiling, who gave it, shares, recent use. Never the value.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault set",
+      "usage": "k2 vault set NAME [options] [--json] < value",
+      "description": "Create a secret, or a new version of NAME. The value comes on stdin, never as an argument. A new version changes only the value; the options apply when NAME is created. Better than set: ask a person with k2 thread secret, so the value never passes through you.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--kind", "arg": "api_key|password|oauth_token|ssh_key|tls_key|dsn|url|generic", "description": "What it is (default api_key); picks the default delivery."},
+        {"name": "--delivery", "arg": "fetch|agent|file|env|api", "description": "How agents get it (default: by kind; agent: ssh keys sign on $SSH_AUTH_SOCK, never shown)."},
+        {"name": "--ceiling", "arg": "fetch|agent|file|env|api", "description": "The loosest delivery allowed later (default env, or --delivery if looser)."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Default: your workspace."},
+        {"name": "--for", "arg": "host[,host]", "description": "The sites fetch may send it to (exact hosts)."},
+        {"name": "--preset", "arg": "stripe|openai|anthropic|xai|gemini|github|slack|supabase|ovh-eu|ovh-ca|ovh-us", "description": "Fills the sites and where the key goes in a request (ovh-*: fills --for and --sign ovh)."},
+        {"name": "--inject-dst", "arg": "header:<Name>|query:<param>|basic|body", "description": "Where fetch puts the value (default header:Authorization; body: a person only)."},
+        {"name": "--inject-header", "arg": "Name", "description": "The same as --inject-dst header:<Name>."},
+        {"name": "--inject-format", "arg": "fmt", "description": "How it's written, exactly one {} (e.g. 'Bearer {}'; default {})."},
+        {"name": "--sign", "arg": "ovh|hmac-sha256|hmac-sha256-ts|oauth-refresh", "description": "K2 signs each request with the secret instead of pasting it (oauth-refresh: a sign-in K2 keeps fresh)."},
+        {"name": "--sign-header", "arg": "Name", "description": "The signature header (HMAC schemes)."},
+        {"name": "--sign-encoding", "arg": "hex|base64", "description": "Default hex."},
+        {"name": "--sign-prefix", "arg": "p", "description": "hmac-sha256 only, e.g. 'sha256=' (at most 32 characters)."},
+        {"name": "--sign-ts-header", "arg": "Name", "description": "hmac-sha256-ts: also send the timestamp here."},
+        {"name": "--sign-template", "arg": "t", "description": "hmac-sha256-ts: what's signed, one {ts} and one {body} (default '{ts}.{body}')."},
+        {"name": "--sign-value", "arg": "v", "description": "hmac-sha256-ts: the header value, one {sig}, at most one {ts} (default '{sig}')."},
+        {"name": "--oauth-token-url", "arg": "url", "description": "oauth-refresh: the provider's token URL (https)."},
+        {"name": "--oauth-client-auth", "arg": "basic|post|none", "description": "oauth-refresh: how the client proves itself (default post; none = a public client)."},
+        {"name": "--describe", "arg": "text", "description": "A description."},
+        {"name": "--rotate-every", "arg": "days", "description": "When a rotation is due."},
+        {"name": "--ttl", "arg": "2h", "description": "Session scope: how long it lasts (90s, 10m, 2h, 7d or plain seconds; default 24h, 60s to 7d)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault rotate",
+      "usage": "k2 vault rotate NAME [--scope <s>] [--json] < value",
+      "description": "A new version of an existing secret (value on stdin). An agent may rotate a secret a person gave it (the owner is told, with undo).",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault hosts",
+      "usage": "k2 vault hosts NAME --add <host> | --remove <host> [--scope <s>] [--json]",
+      "description": "The sites fetch may send NAME to. Exact hosts only. Adding a site widens the secret: an agent may do it only for secrets its own workspace created.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--add", "arg": "host", "description": "Add a site (repeatable)."},
+        {"name": "--remove", "arg": "host", "description": "Remove a site (repeatable)."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault delivery",
+      "usage": "k2 vault delivery NAME fetch|agent|proxy|file|env|api [--ceiling <d>] [--scope <s>] [--json]",
+      "description": "NAME's default delivery (what its own workspace gets without a grant) and, with --ceiling, the loosest delivery allowed. An agent widens only secrets its own workspace created; otherwise vault_owner_confirm_required (exit 3). No --env-name or --file-name here: names live on grants.",
+      "args": [{"name": "NAME", "required": true}, {"name": "delivery", "required": true}],
+      "flags": [
+        {"name": "--ceiling", "arg": "fetch|agent|proxy|file|env|api", "description": "The loosest delivery allowed."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault sign",
+      "usage": "k2 vault sign NAME ovh | hmac-sha256 --sign-header <Name> [--sign-encoding hex|base64] [--sign-prefix '<p>'] | hmac-sha256-ts --sign-header <Name> [--sign-ts-header <Name>] [--sign-template '<t>'] [--sign-value '<v>'] | oauth-refresh --oauth-token-url <url> [--oauth-client-auth basic|post|none] | none; each takes [--scope <s>] [--json]",
+      "description": "Set or remove how K2 signs requests made with NAME; k2 vault fetch then adds the signer's headers on every request. Changing the signer of a secret a person gave you is the owner's call. oauth-refresh can't be removed once set.",
+      "args": [{"name": "NAME", "required": true}, {"name": "scheme", "required": true, "description": "ovh, hmac-sha256, hmac-sha256-ts, oauth-refresh or none (the second word, not --sign)."}],
+      "flags": [
+        {"name": "--sign-header", "arg": "Name", "description": "The signature header (HMAC schemes)."},
+        {"name": "--sign-encoding", "arg": "hex|base64", "description": "Default hex."},
+        {"name": "--sign-prefix", "arg": "p", "description": "hmac-sha256 only, e.g. 'sha256='."},
+        {"name": "--sign-ts-header", "arg": "Name", "description": "hmac-sha256-ts: also send the timestamp here."},
+        {"name": "--sign-template", "arg": "t", "description": "hmac-sha256-ts: what's signed."},
+        {"name": "--sign-value", "arg": "v", "description": "hmac-sha256-ts: the header value."},
+        {"name": "--oauth-token-url", "arg": "url", "description": "oauth-refresh: the provider's token URL."},
+        {"name": "--oauth-client-auth", "arg": "basic|post|none", "description": "oauth-refresh: how the client proves itself."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault public-key",
+      "usage": "k2 vault public-key NAME [--scope <s>] [--json]",
+      "description": "Print an ssh key's public half (the .pub line, comment NAME) and its SHA256 fingerprint. Never the private key.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault agent-limit",
+      "usage": "k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded | --no-forwarded] [--scope <s>] [--json]",
+      "description": "The ssh-agent settings of an ssh key with agent delivery; with no option, prints them. Raising a limit or allowing forwarding is widening: a secret a person gave you needs the owner. Advisory, not a security control.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--burst", "arg": "N", "description": "At most N signatures a second per session (1-600, default 60)."},
+        {"name": "--per-minute", "arg": "M", "description": "At most M a minute per session (1-6000, default 240)."},
+        {"name": "--allow-forwarded", "arg": null, "description": "Sign even when the ssh client says the connection is a forwarded agent."},
+        {"name": "--no-forwarded", "arg": null, "description": "Refuse forwarded agents (the default)."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault grant",
+      "usage": "k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node>|compute:<ws>/lane:<owner>/<lane> [--as <d>] [--env-name X] [--file-name F] [--ttl 2h] [--scope <s>] [--json]",
+      "description": "Share NAME, or set how one consumer gets it (one grant per consumer and delivery; a new one replaces the old). A share they can read (file, env or api) asks you to confirm first, from your own terminal; a K2 terminal can't. compute: grants are people only, --as env only.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "who", "description": "ws:<name>, ws:*, session:<id>, service:<label>, job:<name>, compute:<ws>/<node>, compute:<ws>/* or compute:<ws>/lane:<owner>/<lane>."},
+        {"name": "--as", "arg": "fetch|agent|proxy|file|env|api", "description": "Default: the secret's delivery. Never above the secret's ceiling."},
+        {"name": "--env-name", "arg": "X", "description": "The variable for env delivery (default: NAME in capitals, - and . as _)."},
+        {"name": "--file-name", "arg": "F", "description": "The file in $K2_SECRETS_DIR (default NAME)."},
+        {"name": "--ttl", "arg": "2h", "description": "The share ends by itself that long from now (90s, 10m, 2h, 7d or plain seconds); without it, it stays until revoked."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault revoke",
+      "usage": "k2 vault revoke NAME --from <who> [--scope <s>] [--json] | k2 vault revoke --grant <id> [--json]",
+      "description": "Remove a share. New sessions and fetches stop getting it; a value already read stays read.",
+      "args": [{"name": "NAME", "required": false}],
+      "flags": [
+        {"name": "--from", "arg": "who", "description": "As in grant --to."},
+        {"name": "--grant", "arg": "id", "description": "A grant id (k2 vault show --json)."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault disable",
+      "usage": "k2 vault disable NAME [--scope <s>] [--json]",
+      "description": "Stop every use of NAME without deleting it.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault enable",
+      "usage": "k2 vault enable NAME [--scope <s>] [--json]",
+      "description": "Start NAME again. Enabling counts as widening: a secret a person gave needs the owner.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault destroy",
+      "usage": "k2 vault destroy NAME --yes [--scope <s>] [--json]",
+      "description": "Delete every version on this box. The name can't be used again. To pause instead: k2 vault disable.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--yes", "arg": null, "description": "Required."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault fetch",
+      "usage": "k2 vault fetch --secret NAME [--scope session|server|ws:<name>] [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file] [--max-bytes N] [--timeout S] [--include-headers] [-o file] [--json-out] URL",
+      "description": "K2 makes the call and adds the secret (header and format fixed by whoever created it); only to the secret's sites. You never see the key; echoes of the value come back as [k2v:NAME].",
+      "args": [{"name": "URL", "required": true}],
+      "flags": [
+        {"name": "--secret", "arg": "NAME", "description": "The secret to add."},
+        {"name": "--scope", "arg": "session|server|ws:<name>", "description": "This session's own secret of that name, or one shared with you from there."},
+        {"name": "-X", "arg": "METHOD", "description": "The HTTP method."},
+        {"name": "-H", "arg": "'Name: value'", "description": "A request header (repeatable)."},
+        {"name": "-d", "arg": "'text'|@file", "description": "The request body."},
+        {"name": "--json", "arg": "@file|'text'", "description": "The request body, sent as application/json (not an output switch here)."},
+        {"name": "--max-bytes", "arg": "N", "description": "The most response bytes."},
+        {"name": "--timeout", "arg": "S", "description": "Seconds."},
+        {"name": "--include-headers", "arg": null, "description": "Print the response headers too."},
+        {"name": "-o", "arg": "file", "description": "Write the response to a file inside your workspace."},
+        {"name": "--json-out", "arg": null, "description": "Print the daemon's answer as one JSON object (status, headers, truncated, redirected, body)."}
+      ]
+    },
+    {
+      "name": "vault get",
+      "usage": "k2 vault get NAME [--scope <s>] [--json]",
+      "description": "Print the value. Needs api delivery. The value lands in your transcript and logs; prefer fetch, or env/file for tools.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault audit",
+      "usage": "k2 vault audit [NAME] [--since <rfc3339>] [--scope <s>] [--json]",
+      "description": "Uses, changes, shares and refusals, names only. Agents see their own workspace's; the owner and Admins see all.",
+      "args": [{"name": "NAME", "required": false}],
+      "flags": [
+        {"name": "--since", "arg": "rfc3339", "description": "Only after this time."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault requests",
+      "usage": "k2 vault requests [--json]",
+      "description": "Thread secret cards (k2 thread secret) and their state: pending, set or declined.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault presets",
+      "usage": "k2 vault presets [--json]",
+      "description": "Known key formats: the sites and where the key goes. Use one with k2 vault set NAME --preset <id>.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault env-file",
+      "usage": "k2 vault env-file NAME [NAME2 …] [--scope session|server|ws:<name>] [--ttl 90s] [--wait 10m] [--json] | k2 vault env-file --done <path> [--json]",
+      "description": "From a K2 terminal: a short-lived 0600 file of NAME=value lines for docker/podman --env-file; prints the path. Each secret needs env delivery for you.",
+      "args": [{"name": "NAME", "required": false}],
+      "flags": [
+        {"name": "--scope", "arg": "session|server|ws:<name>", "description": "Where the secret lives."},
+        {"name": "--ttl", "arg": "90s", "description": "Removed after this long (default 60s, 5s to 1h)."},
+        {"name": "--wait", "arg": "10m", "description": "Block until a person saves the card that asks for it."},
+        {"name": "--done", "arg": "path", "description": "Remove the file now."},
+        {"name": "--secret", "arg": "NAME", "description": "The same as naming it."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault file",
+      "usage": "k2 vault file NAME [--scope session|server|ws:<name>] [--ttl 90s] [--wait 10m] [--json] | k2 vault file --done <path> [--json]",
+      "description": "From a K2 terminal: the value of NAME, as is, in a short-lived 0600 file; prints the path, so the value never goes on a command line or into your transcript. Fetch-only secrets are refused. With --wait: exit 4 if no open card asks for NAME, 5 when the card closed without a value, 3 for card_expired, no_answer or card_declined.",
+      "args": [{"name": "NAME", "required": false}],
+      "flags": [
+        {"name": "--scope", "arg": "session|server|ws:<name>", "description": "Where the secret lives."},
+        {"name": "--ttl", "arg": "90s", "description": "Removed after this long (default 60s, 5s to 1h)."},
+        {"name": "--wait", "arg": "10m", "description": "If the secret isn't there yet, block until a person saves the Thread card for NAME (at most 24h)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."},
+        {"name": "--done", "arg": "path", "description": "Remove the file now."},
+        {"name": "--secret", "arg": "NAME", "description": "The same as naming it."}
+      ]
+    },
+    {
+      "name": "vault proxy-url",
+      "usage": "k2 vault proxy-url NAME [--scope session|server|ws:<name>] [--ttl 2h] [--json]",
+      "description": "From a K2 terminal: a placeholder key and a loopback base URL for one secret, so an SDK or script can use it and never hold the real key. Works for any secret you may fetch that has exactly one site.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "session|server|ws:<name>", "description": "Where the secret lives."},
+        {"name": "--ttl", "arg": "2h", "description": "The placeholder ends then (else with this session)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault run",
+      "usage": "k2 vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]",
+      "description": "From a K2 terminal: run one command with its secrets, now, with no session restart. What the child gets is what you already have, never more. Exit: the command's own (128 + the signal if a signal killed it); 2 usage, 3 refused, 4 no such secret.",
+      "args": [{"name": "cmd", "required": true, "description": "After --: the command and its arguments."}],
+      "flags": [
+        {"name": "--secret", "arg": "NAME[=ENV_NAME]", "description": "A secret for the command (repeatable; NAME alone works too)."},
+        {"name": "--env-file", "arg": ".env.k2", "description": "Resolve each KEY=k2v://… line through the vault; the file must be inside your workspace."},
+        {"name": "--scope", "arg": "workspace|server|session", "description": "Where the secrets live."},
+        {"name": "--no-mask", "arg": null, "description": "Let the command use your terminal (TTY); output is then not masked, and the run is logged as no-mask."}
+      ]
+    },
+    {
+      "name": "vault sync",
+      "usage": "k2 vault sync [--json]",
+      "description": "From a K2 terminal: write every file secret this session is granted and doesn't have yet into its $K2_SECRETS_DIR, now. Says delivered, present, restart or skipped (skipped: exit 1).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault import",
+      "usage": "k2 vault import <.env file> [--scope ws:<name>|server] [--delivery env|file|fetch] [--remove-original] [--json]",
+      "description": "Move a .env's secret-looking values into the vault and write .env.k2 beside it: the same lines with k2v:// references, safe to commit.",
+      "args": [{"name": "file", "required": true, "description": "The .env file."}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server", "description": "Where they go."},
+        {"name": "--delivery", "arg": "env|file|fetch", "description": "Default env, so tools still find $NAME in new sessions."},
+        {"name": "--remove-original", "arg": null, "description": "Remove the original .env."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault service",
+      "usage": "k2 vault service <service> [clean|legacy] [--env-file .env.k2] [--json]",
+      "description": "Show or set a k2 publish service's environment: clean (base environment + granted secrets) or legacy (the daemon's whole environment; owner only, being retired). Restart the service to apply.",
+      "args": [{"name": "service", "required": true}, {"name": "mode", "required": false}],
+      "flags": [
+        {"name": "--env-file", "arg": ".env.k2", "description": "Point it at a .env.k2 of k2v:// references."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault doctor",
+      "usage": "k2 vault doctor [--json] | k2 vault doctor --transcripts [--json]",
+      "description": "Problems: no confirmed recovery key, tamper, rotations due, plaintext secret-looking values in .env files, CLI login files that hold a credential. Exit 1 on an error.",
+      "args": [],
+      "flags": [
+        {"name": "--transcripts", "arg": null, "description": "Only the transcript scan: which secret names appear in which LLM CLI transcript files, never a value. Exit 1 on a leak or a scan that couldn't cover everything."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault send",
+      "usage": "k2 vault send NAME --to <agent>|<agent>::<host> [--as NEWNAME] [--note \"…\"] [--ttl 7d] [--delivery file|env|fetch] [--kind K] [--reply <ask-id>] [--workspace <ws> | --scope ws:<ws>|server|session] [--json] | printf '%s' \"$KEY\" | k2 vault send NAME --to <agent>::<host> --stdin [--kind K] [--for host[,host]]",
+      "description": "Hand a vault secret to another agent by name (you never see the value). A flag send doesn't use is refused (exit 2), never dropped. It arrives pending: a person on the receiving server accepts it, unless that agent accepts from you or you answer its ask. Exit: 0 landed, 3 a person must act (don't retry), 2 bad request or the peer can't, 4 no such secret or agent, 1 unreachable or internal.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "agent|agent::host", "description": "Who gets it (same server: vault to vault; another server: sealed to its vault)."},
+        {"name": "--as", "arg": "NEWNAME", "description": "The name it lands under."},
+        {"name": "--note", "arg": "text", "description": "A note for the receiver."},
+        {"name": "--ttl", "arg": "7d", "description": "The copy (and a pending card) ends that long after it was sent."},
+        {"name": "--delivery", "arg": "file|env|fetch", "description": "How the copy is delivered; can't go above your own copy's ceiling (delivery_above_ceiling, exit 3)."},
+        {"name": "--kind", "arg": "K", "description": "The copy's kind (e.g. generic for a code or token for a CLI)."},
+        {"name": "--reply", "arg": "ask-id", "description": "Answer an ask: it lands straight in."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "People: which secret of that name to send (default: the workspace one). Refused from a K2 terminal: an agent sends its own workspace's."},
+        {"name": "--workspace", "arg": "ws", "description": "People: the secret of this workspace (the same as --scope ws:<ws>). Refused from a K2 terminal."},
+        {"name": "--stdin", "arg": null, "description": "People only: a value you type in on stdin, to another server only (no --scope or --workspace)."},
+        {"name": "--for", "arg": "host[,host]", "description": "With --stdin only: the sites the value may be sent to (a named send keeps the secret's own)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault incoming",
+      "usage": "k2 vault incoming [--workspace <ws>] [--json]",
+      "description": "Secrets sent to this agent (names only), and how to use each one.",
+      "args": [],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Which workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault incoming accept",
+      "usage": "k2 vault incoming accept <id> [--as NEW] [--replace] [--always] [--json]",
+      "description": "People only (your own terminal, not a K2 terminal; the card does the same): accept a delivery.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--as", "arg": "NEW", "description": "Land it under another name."},
+        {"name": "--replace", "arg": null, "description": "Take the incoming delivery over a same-named secret."},
+        {"name": "--always", "arg": null, "description": "Accept from this sender from now on."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault incoming decline",
+      "usage": "k2 vault incoming decline <id> [--json]",
+      "description": "People only (your own terminal, not a K2 terminal; the card does the same): decline a delivery.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault sent",
+      "usage": "k2 vault sent [--workspace <ws>] [--json]",
+      "description": "What this agent sent.",
+      "args": [],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Which workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault accept-from",
+      "usage": "k2 vault accept-from [list] [--workspace <ws>] [--json]",
+      "description": "Who may land secrets here without asking.",
+      "args": [],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Which workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault accept-from add",
+      "usage": "k2 vault accept-from add <ws:agent|agent|agent::host|team:id> --workspace <ws> [--json]",
+      "description": "People only (your own terminal, not a K2 terminal): let a sender land secrets here without asking.",
+      "args": [{"name": "sender", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "The receiving workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault accept-from remove",
+      "usage": "k2 vault accept-from remove <ws:agent|agent|agent::host|team:id> --workspace <ws> [--json]",
+      "description": "People only (your own terminal, not a K2 terminal): take a sender off the list.",
+      "args": [{"name": "sender", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "The receiving workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault send-allow",
+      "usage": "k2 vault send-allow [list] [--workspace <ws>] [--json]",
+      "description": "What you may send to another server without asking.",
+      "args": [],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Which workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault send-allow add",
+      "usage": "k2 vault send-allow add NAME --to <agent>::<host> --workspace <ws> [--json]",
+      "description": "People only (your own terminal, not a K2 terminal): a standing yes to send NAME to that agent; asks for the vault confirm.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "agent::host", "description": "The receiving agent."},
+        {"name": "--workspace", "arg": "ws", "description": "The sending workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault send-allow remove",
+      "usage": "k2 vault send-allow remove NAME --to <agent>::<host> --workspace <ws> [--json]",
+      "description": "People only (your own terminal, not a K2 terminal): take the standing yes back.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "agent::host", "description": "The receiving agent."},
+        {"name": "--workspace", "arg": "ws", "description": "The sending workspace."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault ask",
+      "usage": "k2 vault ask <agent>|<agent>::<host> NAME [--note \"…\"] [--workspace <ws>] [--json]",
+      "description": "Ask an agent for a secret (no value travels).",
+      "args": [{"name": "agent", "required": true}, {"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--note", "arg": "text", "description": "A note."},
+        {"name": "--workspace", "arg": "ws", "description": "People: the workspace that asks (an agent asks for itself)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault asks",
+      "usage": "k2 vault asks [--workspace <ws>] [--json]",
+      "description": "Open and closed asks, in and out.",
+      "args": [],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "People: whose asks (an agent sees its own)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault unsend",
+      "usage": "k2 vault unsend <delivery-id> [--json]",
+      "description": "Take a delivery back (not a revoke: rotate the key).",
+      "args": [{"name": "delivery-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault placement add",
+      "usage": "k2 vault placement add NAME --where <host>:<path> [--note <text>] [--scope <s>] [--json]",
+      "description": "Note a place the value lives that K2 doesn't write (another box, a hosting provider). No value is stored, only the place. Agents may keep these for their own workspace's secrets.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--where", "arg": "host:path", "description": "The place (at most 200 characters)."},
+        {"name": "--note", "arg": "text", "description": "A note (at most 500)."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault placement done",
+      "usage": "k2 vault placement done ID [--json]",
+      "description": "Mark a place as holding the new value after a rotate.",
+      "args": [{"name": "ID", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault placement rm",
+      "usage": "k2 vault placement rm ID [--json]",
+      "description": "Remove a placement note.",
+      "args": [{"name": "ID", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault placements",
+      "usage": "k2 vault placements [NAME] [--json]",
+      "description": "Where values live outside the vault (due after a rotate).",
+      "args": [{"name": "NAME", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault reveal",
+      "usage": "k2 vault reveal NAME [--scope <s>]",
+      "description": "People only, from your own terminal or SSH (not a K2 terminal). Show a value after a confirm (Touch ID or the vault password).",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."}
+      ]
+    },
+    {
+      "name": "vault recovery",
+      "usage": "k2 vault recovery status|show-once|rotate",
+      "description": "The recovery key opens the vault if this box's key is lost. status shows its state. Agents: don't run show-once or rotate; tell your owner.",
+      "args": [{"name": "action", "required": false, "description": "status (default), show-once or rotate."}],
+      "flags": []
+    },
+    {
+      "name": "vault recovery show-once",
+      "usage": "k2 vault recovery show-once",
+      "description": "People only: make and show the recovery key once; type back 3 words.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "vault recovery rotate",
+      "usage": "k2 vault recovery rotate",
+      "description": "People only: replace the recovery key (asks for a confirm).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "vault confirm-password set",
+      "usage": "k2 vault confirm-password set",
+      "description": "People only: set the vault password used for confirms where Touch ID isn't available (10+ characters; asks for the old one's confirm first).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "vault kek rotate",
+      "usage": "k2 vault kek rotate",
+      "description": "Rotate the box key that wraps the vault. Owner only, from their own terminal, with a confirm.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "vault rekey",
+      "usage": "k2 vault rekey",
+      "description": "Rotate the data key (re-encrypts every secret). Owner only, from their own terminal, with a confirm.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "vault rollback",
+      "usage": "k2 vault rollback NAME --to <version> [--scope <s>] [--accept-agent-value]",
+      "description": "People only: put an older version's value back, as a new version (asks for a confirm). Undoes an agent's rotate.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "version", "description": "The version to put back."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which scope (default inside a workspace: ws:<workspace>)."},
+        {"name": "--accept-agent-value", "arg": null, "description": "Needed when root units load the secret and no person wrote that version."}
+      ]
+    },
+    {
+      "name": "vault systemd-cred",
+      "usage": "k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] [--restart] [--dry-run] [--scope <s>] [--json] | k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] --remove [--scope <s>] [--json] | k2 vault systemd-cred NAME --replace [--dry-run] [--scope <s>] [--json]",
+      "description": "People only, on Linux (systemd 250+), from your own terminal or SSH (not a K2 terminal), with a confirm: seal the secret's current value as a systemd encrypted credential and bind it to a root unit K2 doesn't run.",
+      "args": [{"name": "NAME", "required": true}],
+      "flags": [
+        {"name": "--unit", "arg": "unit.service", "description": "The unit that gets it (one the box's admin listed)."},
+        {"name": "--cred-name", "arg": "id", "description": "The credential's name (default: NAME)."},
+        {"name": "--restart", "arg": null, "description": "Queue systemctl try-restart after (at most every 30 s)."},
+        {"name": "--dry-run", "arg": null, "description": "Show what it would write and the confirm text."},
+        {"name": "--remove", "arg": null, "description": "Take it off: the drop-in, then the .cred."},
+        {"name": "--replace", "arg": null, "description": "After a rotate: re-place the new version into every unit it is placed on."},
+        {"name": "--accept-agent-value", "arg": null, "description": "Place a version no person wrote (an agent's rotate): review it first with k2 vault reveal NAME."},
+        {"name": "--scope", "arg": "ws:<name>|server|session", "description": "Which secret of that name: ws:<name>, server or session (default server)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON (with --dry-run: the plan and the confirm text)."}
+      ]
+    },
+    {
+      "name": "vault backup",
+      "usage": "k2 vault backup <dir>",
+      "description": "Owner only, from your own terminal: a ciphertext snapshot of the vault into <dir>; it opens with the recovery words or a backup key.",
+      "args": [{"name": "dir", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "vault backup key",
+      "usage": "k2 vault backup key <age1…> | k2 vault backup key remove",
+      "description": "Owner only, with a confirm: add (or replace) an age key that can open backups on a new box, or take it off.",
+      "args": [{"name": "key", "required": true, "description": "An age1… key, or remove."}],
+      "flags": []
+    },
+    {
+      "name": "vault restore",
+      "usage": "k2 vault restore --from <dir> [--holder recovery|backup] [--dry-run] [--replace]",
+      "description": "People only: restore a backup on this box. The recovery words (or the backup key) come on stdin or are asked for.",
+      "args": [],
+      "flags": [
+        {"name": "--from", "arg": "dir", "description": "The backup folder."},
+        {"name": "--holder", "arg": "recovery|backup", "description": "Which key opens it."},
+        {"name": "--dry-run", "arg": null, "description": "Check first."},
+        {"name": "--replace", "arg": null, "description": "Overwrite a vault that already has secrets."}
+      ]
+    },
+    {
+      "name": "vault recipient",
+      "usage": "k2 vault recipient [--json]",
+      "description": "This vault's carry address (an age recipient) and vault id. Run it on the box secrets move to.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
+      "name": "vault carry export",
+      "usage": "k2 vault carry export --recipient <age1…> --target <vault-id> --workspace <ws> [--target-workspace <id>] [--server NAME] [--own-box-move] --out <file>",
+      "description": "Move secrets to another box: seal them so only the target vault opens them. Owner, Admin, or an agent allowed to manage server-wide secrets.",
+      "args": [],
+      "flags": [
+        {"name": "--recipient", "arg": "age1…", "description": "The target vault's carry address."},
+        {"name": "--target", "arg": "vault-id", "description": "The target vault's id."},
+        {"name": "--workspace", "arg": "ws", "description": "A workspace whose secrets go (repeatable)."},
+        {"name": "--target-workspace", "arg": "id", "description": "The workspace id on the target box."},
+        {"name": "--server", "arg": "NAME", "description": "A server-wide secret to carry (repeatable)."},
+        {"name": "--own-box-move", "arg": null, "description": "Mark the carry as an owner move (the import list says so)."},
+        {"name": "--out", "arg": "file", "description": "The file to write (must not exist)."}
+      ]
+    },
+    {
+      "name": "vault carry import",
+      "usage": "k2 vault carry import <file> [--workspace <id>] [--apply] [--json]",
+      "description": "Lists first (with the target workspace id) and changes nothing until --apply. Workspace secrets match by id, never by name. Owner, Admin, or an agent allowed to manage server-wide secrets.",
+      "args": [{"name": "file", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "id", "description": "The workspace id on this box."},
+        {"name": "--apply", "arg": null, "description": "Put them in this box's vault."},
+        {"name": "--json", "arg": null, "description": "Print the daemon's answer as JSON."}
+      ]
+    },
+    {
       "name": "wiki",
       "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
       "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain. Hosting is being rebuilt on the K2 runtime; public chat is unavailable.",

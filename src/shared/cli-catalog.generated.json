@@ -2924,6 +2924,321 @@
     "description": "Stop being a compute node. It lists the jobs running here first; with jobs running it asks (or needs --yes): they stop now."
    },
    {
+    "name": "vault",
+    "usage": "k2 vault <status|open|list|show|set|rotate|hosts|delivery|sign|public-key|agent-limit|grant|revoke|disable|enable|destroy|fetch|get|audit|requests|presets|env-file|file|proxy-url|run|sync|import|service|doctor|send|incoming|sent|accept-from|send-allow|ask|asks|unsend|placement|placements|reveal|recovery|confirm-password|kek|rekey|rollback|systemd-cred|backup|restore|recipient|carry> [...]",
+    "description": "Secrets for agents, without showing them the value. Agents: use k2 vault fetch (K2 makes the call and adds the key), never paste a key into a file or chat; ask a person with k2 thread secret. Each verb has its own help: k2 vault <verb> --help."
+   },
+   {
+    "name": "vault status",
+    "usage": "k2 vault status [--json]",
+    "description": "Where the vault's key lives, the recovery key, the vault password, and counts. Ends with one honest line on what the vault protects. Values are never shown."
+   },
+   {
+    "name": "vault open",
+    "usage": "k2 vault open [--json]",
+    "description": "Open a vault that didn't open at start (a locked or cancelled Keychain prompt); may ask once."
+   },
+   {
+    "name": "vault list",
+    "usage": "k2 vault list [--scope ws:<name>|server|session] [--system] [--json]",
+    "description": "Names, scope, kind, delivery, version and sites of the secrets you can see. Never values."
+   },
+   {
+    "name": "vault show",
+    "usage": "k2 vault show NAME [--scope <s>] [--json]",
+    "description": "One secret: kind, sites, where fetch puts it, delivery and ceiling, who gave it, shares, recent use. Never the value."
+   },
+   {
+    "name": "vault set",
+    "usage": "k2 vault set NAME [options] [--json] < value",
+    "description": "Create a secret, or a new version of NAME. The value comes on stdin, never as an argument. A new version changes only the value; the options apply when NAME is created. Better than set: ask a person with k2 thread secret, so the value never passes through you."
+   },
+   {
+    "name": "vault rotate",
+    "usage": "k2 vault rotate NAME [--scope <s>] [--json] < value",
+    "description": "A new version of an existing secret (value on stdin). An agent may rotate a secret a person gave it (the owner is told, with undo)."
+   },
+   {
+    "name": "vault hosts",
+    "usage": "k2 vault hosts NAME --add <host> | --remove <host> [--scope <s>] [--json]",
+    "description": "The sites fetch may send NAME to. Exact hosts only. Adding a site widens the secret: an agent may do it only for secrets its own workspace created."
+   },
+   {
+    "name": "vault delivery",
+    "usage": "k2 vault delivery NAME fetch|agent|proxy|file|env|api [--ceiling <d>] [--scope <s>] [--json]",
+    "description": "NAME's default delivery (what its own workspace gets without a grant) and, with --ceiling, the loosest delivery allowed. An agent widens only secrets its own workspace created; otherwise vault_owner_confirm_required (exit 3). No --env-name or --file-name here: names live on grants."
+   },
+   {
+    "name": "vault sign",
+    "usage": "k2 vault sign NAME ovh | hmac-sha256 --sign-header <Name> [--sign-encoding hex|base64] [--sign-prefix '<p>'] | hmac-sha256-ts --sign-header <Name> [--sign-ts-header <Name>] [--sign-template '<t>'] [--sign-value '<v>'] | oauth-refresh --oauth-token-url <url> [--oauth-client-auth basic|post|none] | none; each takes [--scope <s>] [--json]",
+    "description": "Set or remove how K2 signs requests made with NAME; k2 vault fetch then adds the signer's headers on every request. Changing the signer of a secret a person gave you is the owner's call. oauth-refresh can't be removed once set."
+   },
+   {
+    "name": "vault public-key",
+    "usage": "k2 vault public-key NAME [--scope <s>] [--json]",
+    "description": "Print an ssh key's public half (the .pub line, comment NAME) and its SHA256 fingerprint. Never the private key."
+   },
+   {
+    "name": "vault agent-limit",
+    "usage": "k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded | --no-forwarded] [--scope <s>] [--json]",
+    "description": "The ssh-agent settings of an ssh key with agent delivery; with no option, prints them. Raising a limit or allowing forwarding is widening: a secret a person gave you needs the owner. Advisory, not a security control."
+   },
+   {
+    "name": "vault grant",
+    "usage": "k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node>|compute:<ws>/lane:<owner>/<lane> [--as <d>] [--env-name X] [--file-name F] [--ttl 2h] [--scope <s>] [--json]",
+    "description": "Share NAME, or set how one consumer gets it (one grant per consumer and delivery; a new one replaces the old). A share they can read (file, env or api) asks you to confirm first, from your own terminal; a K2 terminal can't. compute: grants are people only, --as env only."
+   },
+   {
+    "name": "vault revoke",
+    "usage": "k2 vault revoke NAME --from <who> [--scope <s>] [--json] | k2 vault revoke --grant <id> [--json]",
+    "description": "Remove a share. New sessions and fetches stop getting it; a value already read stays read."
+   },
+   {
+    "name": "vault disable",
+    "usage": "k2 vault disable NAME [--scope <s>] [--json]",
+    "description": "Stop every use of NAME without deleting it."
+   },
+   {
+    "name": "vault enable",
+    "usage": "k2 vault enable NAME [--scope <s>] [--json]",
+    "description": "Start NAME again. Enabling counts as widening: a secret a person gave needs the owner."
+   },
+   {
+    "name": "vault destroy",
+    "usage": "k2 vault destroy NAME --yes [--scope <s>] [--json]",
+    "description": "Delete every version on this box. The name can't be used again. To pause instead: k2 vault disable."
+   },
+   {
+    "name": "vault fetch",
+    "usage": "k2 vault fetch --secret NAME [--scope session|server|ws:<name>] [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file] [--max-bytes N] [--timeout S] [--include-headers] [-o file] [--json-out] URL",
+    "description": "K2 makes the call and adds the secret (header and format fixed by whoever created it); only to the secret's sites. You never see the key; echoes of the value come back as [k2v:NAME]."
+   },
+   {
+    "name": "vault get",
+    "usage": "k2 vault get NAME [--scope <s>] [--json]",
+    "description": "Print the value. Needs api delivery. The value lands in your transcript and logs; prefer fetch, or env/file for tools."
+   },
+   {
+    "name": "vault audit",
+    "usage": "k2 vault audit [NAME] [--since <rfc3339>] [--scope <s>] [--json]",
+    "description": "Uses, changes, shares and refusals, names only. Agents see their own workspace's; the owner and Admins see all."
+   },
+   {
+    "name": "vault requests",
+    "usage": "k2 vault requests [--json]",
+    "description": "Thread secret cards (k2 thread secret) and their state: pending, set or declined."
+   },
+   {
+    "name": "vault presets",
+    "usage": "k2 vault presets [--json]",
+    "description": "Known key formats: the sites and where the key goes. Use one with k2 vault set NAME --preset <id>."
+   },
+   {
+    "name": "vault env-file",
+    "usage": "k2 vault env-file NAME [NAME2 …] [--scope session|server|ws:<name>] [--ttl 90s] [--wait 10m] [--json] | k2 vault env-file --done <path> [--json]",
+    "description": "From a K2 terminal: a short-lived 0600 file of NAME=value lines for docker/podman --env-file; prints the path. Each secret needs env delivery for you."
+   },
+   {
+    "name": "vault file",
+    "usage": "k2 vault file NAME [--scope session|server|ws:<name>] [--ttl 90s] [--wait 10m] [--json] | k2 vault file --done <path> [--json]",
+    "description": "From a K2 terminal: the value of NAME, as is, in a short-lived 0600 file; prints the path, so the value never goes on a command line or into your transcript. Fetch-only secrets are refused. With --wait: exit 4 if no open card asks for NAME, 5 when the card closed without a value, 3 for card_expired, no_answer or card_declined."
+   },
+   {
+    "name": "vault proxy-url",
+    "usage": "k2 vault proxy-url NAME [--scope session|server|ws:<name>] [--ttl 2h] [--json]",
+    "description": "From a K2 terminal: a placeholder key and a loopback base URL for one secret, so an SDK or script can use it and never hold the real key. Works for any secret you may fetch that has exactly one site."
+   },
+   {
+    "name": "vault run",
+    "usage": "k2 vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]",
+    "description": "From a K2 terminal: run one command with its secrets, now, with no session restart. What the child gets is what you already have, never more. Exit: the command's own (128 + the signal if a signal killed it); 2 usage, 3 refused, 4 no such secret."
+   },
+   {
+    "name": "vault sync",
+    "usage": "k2 vault sync [--json]",
+    "description": "From a K2 terminal: write every file secret this session is granted and doesn't have yet into its $K2_SECRETS_DIR, now. Says delivered, present, restart or skipped (skipped: exit 1)."
+   },
+   {
+    "name": "vault import",
+    "usage": "k2 vault import <.env file> [--scope ws:<name>|server] [--delivery env|file|fetch] [--remove-original] [--json]",
+    "description": "Move a .env's secret-looking values into the vault and write .env.k2 beside it: the same lines with k2v:// references, safe to commit."
+   },
+   {
+    "name": "vault service",
+    "usage": "k2 vault service <service> [clean|legacy] [--env-file .env.k2] [--json]",
+    "description": "Show or set a k2 publish service's environment: clean (base environment + granted secrets) or legacy (the daemon's whole environment; owner only, being retired). Restart the service to apply."
+   },
+   {
+    "name": "vault doctor",
+    "usage": "k2 vault doctor [--json] | k2 vault doctor --transcripts [--json]",
+    "description": "Problems: no confirmed recovery key, tamper, rotations due, plaintext secret-looking values in .env files, CLI login files that hold a credential. Exit 1 on an error."
+   },
+   {
+    "name": "vault send",
+    "usage": "k2 vault send NAME --to <agent>|<agent>::<host> [--as NEWNAME] [--note \"…\"] [--ttl 7d] [--delivery file|env|fetch] [--kind K] [--reply <ask-id>] [--workspace <ws> | --scope ws:<ws>|server|session] [--json] | printf '%s' \"$KEY\" | k2 vault send NAME --to <agent>::<host> --stdin [--kind K] [--for host[,host]]",
+    "description": "Hand a vault secret to another agent by name (you never see the value). A flag send doesn't use is refused (exit 2), never dropped. It arrives pending: a person on the receiving server accepts it, unless that agent accepts from you or you answer its ask. Exit: 0 landed, 3 a person must act (don't retry), 2 bad request or the peer can't, 4 no such secret or agent, 1 unreachable or internal."
+   },
+   {
+    "name": "vault incoming",
+    "usage": "k2 vault incoming [--workspace <ws>] [--json]",
+    "description": "Secrets sent to this agent (names only), and how to use each one."
+   },
+   {
+    "name": "vault incoming accept",
+    "usage": "k2 vault incoming accept <id> [--as NEW] [--replace] [--always] [--json]",
+    "description": "People only (your own terminal, not a K2 terminal; the card does the same): accept a delivery."
+   },
+   {
+    "name": "vault incoming decline",
+    "usage": "k2 vault incoming decline <id> [--json]",
+    "description": "People only (your own terminal, not a K2 terminal; the card does the same): decline a delivery."
+   },
+   {
+    "name": "vault sent",
+    "usage": "k2 vault sent [--workspace <ws>] [--json]",
+    "description": "What this agent sent."
+   },
+   {
+    "name": "vault accept-from",
+    "usage": "k2 vault accept-from [list] [--workspace <ws>] [--json]",
+    "description": "Who may land secrets here without asking."
+   },
+   {
+    "name": "vault accept-from add",
+    "usage": "k2 vault accept-from add <ws:agent|agent|agent::host|team:id> --workspace <ws> [--json]",
+    "description": "People only (your own terminal, not a K2 terminal): let a sender land secrets here without asking."
+   },
+   {
+    "name": "vault accept-from remove",
+    "usage": "k2 vault accept-from remove <ws:agent|agent|agent::host|team:id> --workspace <ws> [--json]",
+    "description": "People only (your own terminal, not a K2 terminal): take a sender off the list."
+   },
+   {
+    "name": "vault send-allow",
+    "usage": "k2 vault send-allow [list] [--workspace <ws>] [--json]",
+    "description": "What you may send to another server without asking."
+   },
+   {
+    "name": "vault send-allow add",
+    "usage": "k2 vault send-allow add NAME --to <agent>::<host> --workspace <ws> [--json]",
+    "description": "People only (your own terminal, not a K2 terminal): a standing yes to send NAME to that agent; asks for the vault confirm."
+   },
+   {
+    "name": "vault send-allow remove",
+    "usage": "k2 vault send-allow remove NAME --to <agent>::<host> --workspace <ws> [--json]",
+    "description": "People only (your own terminal, not a K2 terminal): take the standing yes back."
+   },
+   {
+    "name": "vault ask",
+    "usage": "k2 vault ask <agent>|<agent>::<host> NAME [--note \"…\"] [--workspace <ws>] [--json]",
+    "description": "Ask an agent for a secret (no value travels)."
+   },
+   {
+    "name": "vault asks",
+    "usage": "k2 vault asks [--workspace <ws>] [--json]",
+    "description": "Open and closed asks, in and out."
+   },
+   {
+    "name": "vault unsend",
+    "usage": "k2 vault unsend <delivery-id> [--json]",
+    "description": "Take a delivery back (not a revoke: rotate the key)."
+   },
+   {
+    "name": "vault placement add",
+    "usage": "k2 vault placement add NAME --where <host>:<path> [--note <text>] [--scope <s>] [--json]",
+    "description": "Note a place the value lives that K2 doesn't write (another box, a hosting provider). No value is stored, only the place. Agents may keep these for their own workspace's secrets."
+   },
+   {
+    "name": "vault placement done",
+    "usage": "k2 vault placement done ID [--json]",
+    "description": "Mark a place as holding the new value after a rotate."
+   },
+   {
+    "name": "vault placement rm",
+    "usage": "k2 vault placement rm ID [--json]",
+    "description": "Remove a placement note."
+   },
+   {
+    "name": "vault placements",
+    "usage": "k2 vault placements [NAME] [--json]",
+    "description": "Where values live outside the vault (due after a rotate)."
+   },
+   {
+    "name": "vault reveal",
+    "usage": "k2 vault reveal NAME [--scope <s>]",
+    "description": "People only, from your own terminal or SSH (not a K2 terminal). Show a value after a confirm (Touch ID or the vault password)."
+   },
+   {
+    "name": "vault recovery",
+    "usage": "k2 vault recovery status|show-once|rotate",
+    "description": "The recovery key opens the vault if this box's key is lost. status shows its state. Agents: don't run show-once or rotate; tell your owner."
+   },
+   {
+    "name": "vault recovery show-once",
+    "usage": "k2 vault recovery show-once",
+    "description": "People only: make and show the recovery key once; type back 3 words."
+   },
+   {
+    "name": "vault recovery rotate",
+    "usage": "k2 vault recovery rotate",
+    "description": "People only: replace the recovery key (asks for a confirm)."
+   },
+   {
+    "name": "vault confirm-password set",
+    "usage": "k2 vault confirm-password set",
+    "description": "People only: set the vault password used for confirms where Touch ID isn't available (10+ characters; asks for the old one's confirm first)."
+   },
+   {
+    "name": "vault kek rotate",
+    "usage": "k2 vault kek rotate",
+    "description": "Rotate the box key that wraps the vault. Owner only, from their own terminal, with a confirm."
+   },
+   {
+    "name": "vault rekey",
+    "usage": "k2 vault rekey",
+    "description": "Rotate the data key (re-encrypts every secret). Owner only, from their own terminal, with a confirm."
+   },
+   {
+    "name": "vault rollback",
+    "usage": "k2 vault rollback NAME --to <version> [--scope <s>] [--accept-agent-value]",
+    "description": "People only: put an older version's value back, as a new version (asks for a confirm). Undoes an agent's rotate."
+   },
+   {
+    "name": "vault systemd-cred",
+    "usage": "k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] [--restart] [--dry-run] [--scope <s>] [--json] | k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] --remove [--scope <s>] [--json] | k2 vault systemd-cred NAME --replace [--dry-run] [--scope <s>] [--json]",
+    "description": "People only, on Linux (systemd 250+), from your own terminal or SSH (not a K2 terminal), with a confirm: seal the secret's current value as a systemd encrypted credential and bind it to a root unit K2 doesn't run."
+   },
+   {
+    "name": "vault backup",
+    "usage": "k2 vault backup <dir>",
+    "description": "Owner only, from your own terminal: a ciphertext snapshot of the vault into <dir>; it opens with the recovery words or a backup key."
+   },
+   {
+    "name": "vault backup key",
+    "usage": "k2 vault backup key <age1…> | k2 vault backup key remove",
+    "description": "Owner only, with a confirm: add (or replace) an age key that can open backups on a new box, or take it off."
+   },
+   {
+    "name": "vault restore",
+    "usage": "k2 vault restore --from <dir> [--holder recovery|backup] [--dry-run] [--replace]",
+    "description": "People only: restore a backup on this box. The recovery words (or the backup key) come on stdin or are asked for."
+   },
+   {
+    "name": "vault recipient",
+    "usage": "k2 vault recipient [--json]",
+    "description": "This vault's carry address (an age recipient) and vault id. Run it on the box secrets move to."
+   },
+   {
+    "name": "vault carry export",
+    "usage": "k2 vault carry export --recipient <age1…> --target <vault-id> --workspace <ws> [--target-workspace <id>] [--server NAME] [--own-box-move] --out <file>",
+    "description": "Move secrets to another box: seal them so only the target vault opens them. Owner, Admin, or an agent allowed to manage server-wide secrets."
+   },
+   {
+    "name": "vault carry import",
+    "usage": "k2 vault carry import <file> [--workspace <id>] [--apply] [--json]",
+    "description": "Lists first (with the target workspace id) and changes nothing until --apply. Workspace secrets match by id, never by name. Owner, Admin, or an agent allowed to manage server-wide secrets."
+   },
+   {
     "name": "wiki",
     "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
     "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain. Hosting is being rebuilt on the K2 runtime; public chat is unavailable."
@@ -3970,8 +4285,7 @@
    }
   ],
   "help": {
-   "sidecar": "k2 sidecar — open extra AI sessions (sidecars) in a workspace\n\n  k2 sidecar new <name> --harness <preset> [--brief <file>|-] [--brief-text \"…\"]\n                 [--worktree [--base <ref>]] [--workspace <ws>] [--model <model>] [--json]\n  k2 sidecar list [--workspace <ws>] [--json]\n  k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]\n  k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]\n  k2 sidecar interrupt <name> [--workspace <ws>] [--json]\n  k2 sidecar access on|off|status [--workspace <ws>]      owner/admin\n\nWorktree sidecars only (each task in its own git worktree):\n  k2 sidecar review <name> [--workspace <ws>] [--json]\n  k2 sidecar land <name> [--keep] [--yes] [--workspace <ws>] [--json]     people only\n  k2 sidecar retire <name> [--discard] [--keep-branch] [--yes] [--workspace <ws>] [--json]\n                                                                           people only\n\nA sidecar shares this workspace's role, skills and inbox. Its address is\n<workspace>/<name>. Message it with k2 msg <address>; it replies the same way.\nnew on a stopped name resumes the same conversation.\ninterrupt stops the sidecar's current turn (its Esc / Ctrl+C); the process keeps\nrunning. stop ends the process.\narchive takes stopped sidecars off this list. Its conversation stays: new on that\nname with the same harness resumes it, and k2 sessions --past finds it. It refuses a\nrunning sidecar, and a worktree sidecar (that's retire). --all-stopped skips running\nsidecars, worktree sidecars and any you may not archive, and says which.\nHarnesses: claude, grok, codex, gemini, cursor-agent, pi, hermes (any preset that runs them).\nAgents: only the main session, only with \"Let this agent manage its sidecars\" on.\nHiring a new agent (k2 agent hire) is a separate switch, \"Let this agent hire agents\".\nDo not put secrets in a brief. --workspace defaults to this workspace.\n\n--worktree runs the sidecar in its own git worktree: folder .worktrees/k2-<name>\nunder the workspace root (gitignored), branch k2/<name>, cut from --base (default:\nthe workspace's default branch, e.g. main). It commits there; your checkout is\nuntouched. At most 8 per workspace; stopped ones count until retired, and only a\nperson retires. You can't move an existing sidecar into a worktree: start a new one.\n  review   the commits not on the base yet, the files they change, uncommitted\n           files, and whether land would work (and if not, why).\n  land     cherry-picks those commits onto the base in the workspace's main\n           checkout (as commits on the base branch), after showing them and\n           asking (--yes skips the question).\n           It refuses when the main checkout has uncommitted changes, is on another\n           branch, or the branch moved since the review; on a conflict it stops\n           and nothing changes on the base. Then it retires the sidecar\n           (--keep: don't; if retiring is refused, the land still stands and\n           it says why).\n  retire   stops the sidecar, sends the worktree folder to the Trash and deletes\n           its branch. Its Thread stays, read-only, and its name stays taken.\n           It refuses while the worktree has commits not on the base or\n           uncommitted files; --discard throws those away (files to the Trash).\n           --keep-branch keeps the branch.\nOnly people land and retire. An agent that runs them exits 3. With permission\ncards on, the error ends with the full command to ask with (\"Ask with: k2\npermission request git.land sidecar=<name> tip=<sha> --why …\", or sidecar.retire):\nrun it as printed, adding only --why. When a person allows the card, K2 lands\n(or retires) it as that person and tells you. With cards off, ask your human on\nyour Thread (k2 thread ask): they run k2 sidecar land <workspace>/<name>.\nSee also: k2 sessions (everyone in this workspace, past conversations)\nMore: k2 study sidecars",
-   "vault": "k2 vault — secrets for agents, without showing them the value\n\n  k2 vault status                          where the key lives, recovery, honest line\n  k2 vault open                            open a vault that didn't open at start (a locked\n                                           or cancelled Keychain prompt); may ask once\n  k2 vault list [--scope <s>] [--system]   names, scope, sites, delivery (never values)\n  k2 vault show NAME [--scope <s>]         one secret: sites, delivery, shares, recent use\n  k2 vault set NAME [options] < value      create, or a new version (value on stdin)\n  k2 vault rotate NAME < value             a new version\n  k2 vault hosts NAME --add <host> | --remove <host>\n  k2 vault delivery NAME fetch|agent|file|env|api [--ceiling <d>]\n                                           (no --env-name here: names live on grants)\n  k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|none [--sign-header …]\n                                           K2 signs fetch requests with the secret\n  k2 vault public-key NAME                 an ssh key's .pub line (never the private key)\n  k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded|--no-forwarded]\n                                           an ssh key's agent signing limits (agent delivery)\n  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node>|compute:<ws>/lane:<owner>/<lane> [--as <d>] [--env-name X] [--ttl 2h]\n  k2 vault revoke NAME --from <who>        (or --grant <id>)\n  k2 vault disable|enable NAME             destroy NAME --yes\n  k2 vault fetch --secret NAME [-X M] [-H 'N: v'] [-d @file] URL\n                                           K2 makes the call and adds the key; you never see it\n  k2 vault get NAME                        print a value (needs an api grant; it lands in your transcript)\n  k2 vault audit [NAME] [--since <rfc3339>]\n  k2 vault requests                        Thread secret cards (pending / set / declined)\n  k2 vault presets                         known key formats (Stripe, OpenAI, Anthropic, …)\n  k2 vault env-file NAME [--ttl 90s]       a short-lived 0600 file for docker/podman --env-file\n  k2 vault file NAME [--ttl 90s]           a short-lived 0600 file holding one secret delivered to you\n                                           as file (or env): pass the file, never the value\n                                           (tool --code - < \"$(k2 vault file NAME)\")\n  k2 vault sync                            files granted since this session started, into $K2_SECRETS_DIR now\n  k2 vault import .env [--scope <s>] [--remove-original]   move a .env in; writes .env.k2 (references)\n  k2 vault service <service> [clean|legacy] [--env-file .env.k2]   a published service's environment\n  k2 publish secret add|remove|list <service> NAME [--as file|env]   secrets a service gets at start\n  k2 vault doctor                          plaintext .env files, due rotations, problems\n  k2 vault send NAME --to <agent>[::<host>] [--note …]   hand a secret to another agent by name\n  k2 vault incoming | sent | accept-from | send-allow   handoffs to and from this agent (k2 vault send --help)\n  k2 vault placement add NAME --where <host>:<path> [--note …] | done ID | rm ID\n                                           note a place the value lives that K2 doesn't write\n  k2 vault placements [NAME]               where values live outside the vault (due after a rotate)\n\n  People only (from your own terminal or SSH, not a K2 terminal):\n  k2 vault reveal NAME                     show a value (asks for a confirm)\n  k2 vault recovery show-once              make and show the recovery key once; type back 3 words\n  k2 vault recovery rotate                 replace the recovery key (asks for a confirm)\n  k2 vault confirm-password set            set the vault password used for confirms\n  k2 vault kek rotate | rekey              rotate the box key / the data key (owner, confirm)\n  k2 vault rollback NAME --to <version>    put an older version back (confirm)\n  k2 vault systemd-cred NAME --unit <unit.service> [--restart] [--dry-run] | --remove\n                                           seal it as a root unit's systemd credential (Linux, confirm)\n  k2 vault systemd-cred NAME --replace     re-place a new version into its root units (confirm)\n  k2 vault backup <dir>                    a ciphertext snapshot of the vault (owner)\n  k2 vault backup key <age1…> | remove     let this backup key open the vault, or take it off (owner, confirm)\n  k2 vault restore --from <dir> [--holder recovery|backup] [--dry-run] [--replace]\n                                           restore a backup on this box (recovery words or backup key on stdin)\n\n  Moving secrets to another box (owner, Admin, or an agent allowed to manage server-wide secrets):\n  k2 vault recipient                       this vault's carry address (run it on the target box)\n  k2 vault carry export --recipient <age1…> --target <vault-id> --workspace <ws> [--target-workspace <id>] [--server NAME] [--own-box-move] --out <file>\n  k2 vault carry import <file> [--workspace <id>] [--apply]\n                                           lists first (with the target workspace id); --apply puts them in this box's vault.\n                                           Workspace secrets match by id, never by name: --workspace <id> on this box, or the\n                                           id the carry was made for (--target-workspace). A name works only if it is that id.\n\nScope (--scope): ws:<workspace> (default inside a workspace), server, session.\nset options:\n  --kind api_key|password|oauth_token|ssh_key|tls_key|dsn|url|generic   (default api_key)\n  --for <host>[,<host>]       sites this secret may be sent to (exact hosts)\n  --preset stripe|openai|anthropic|xai|gemini|github|slack|supabase|ovh-eu|ovh-ca|ovh-us\n                              fills the sites and where the key goes in a request\n  --sign ovh|hmac-sha256|hmac-sha256-ts [--sign-header <Name> …]\n                              K2 signs each request instead (k2 vault set --help)\n  --inject-dst header:<Name>|query:<param>|basic|body   where fetch puts the key\n  --inject-header <Name>      same as --inject-dst header:<Name>\n  --inject-format '<fmt>'     how it's written, one {} (e.g. 'Bearer {}'; default {})\n  --delivery fetch|agent|file|env|api   how agents get it (default fetch for keys;\n                              agent: ssh keys sign on $SSH_AUTH_SOCK, never shown)\n  --ceiling fetch|agent|file|env|api    the loosest delivery allowed later\n  --describe <text>  --rotate-every <days>  --ttl 2h (session scope)\n\nTimes (--ttl on set, grant, file, env-file and secret cards): 90s, 10m, 2h,\n7d, or plain seconds (3600).\n\nWhere the key goes is fixed by whoever creates the secret (header and\nformat); agents name the secret and K2 adds it. The presets fill this in\nfor common key formats, so you usually just confirm.\n\nAgents: use `k2 vault fetch` (K2 makes the call and adds the key), never\npaste a key into a file or chat; ask a person with `k2 thread secret`.\nEach verb has its own help: k2 vault <verb> --help.\nMore: k2 study vault"
+   "sidecar": "k2 sidecar — open extra AI sessions (sidecars) in a workspace\n\n  k2 sidecar new <name> --harness <preset> [--brief <file>|-] [--brief-text \"…\"]\n                 [--worktree [--base <ref>]] [--workspace <ws>] [--model <model>] [--json]\n  k2 sidecar list [--workspace <ws>] [--json]\n  k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]\n  k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]\n  k2 sidecar interrupt <name> [--workspace <ws>] [--json]\n  k2 sidecar access on|off|status [--workspace <ws>]      owner/admin\n\nWorktree sidecars only (each task in its own git worktree):\n  k2 sidecar review <name> [--workspace <ws>] [--json]\n  k2 sidecar land <name> [--keep] [--yes] [--workspace <ws>] [--json]     people only\n  k2 sidecar retire <name> [--discard] [--keep-branch] [--yes] [--workspace <ws>] [--json]\n                                                                           people only\n\nA sidecar shares this workspace's role, skills and inbox. Its address is\n<workspace>/<name>. Message it with k2 msg <address>; it replies the same way.\nnew on a stopped name resumes the same conversation.\ninterrupt stops the sidecar's current turn (its Esc / Ctrl+C); the process keeps\nrunning. stop ends the process.\narchive takes stopped sidecars off this list. Its conversation stays: new on that\nname with the same harness resumes it, and k2 sessions --past finds it. It refuses a\nrunning sidecar, and a worktree sidecar (that's retire). --all-stopped skips running\nsidecars, worktree sidecars and any you may not archive, and says which.\nHarnesses: claude, grok, codex, gemini, cursor-agent, pi, hermes (any preset that runs them).\nAgents: only the main session, only with \"Let this agent manage its sidecars\" on.\nHiring a new agent (k2 agent hire) is a separate switch, \"Let this agent hire agents\".\nDo not put secrets in a brief. --workspace defaults to this workspace.\n\n--worktree runs the sidecar in its own git worktree: folder .worktrees/k2-<name>\nunder the workspace root (gitignored), branch k2/<name>, cut from --base (default:\nthe workspace's default branch, e.g. main). It commits there; your checkout is\nuntouched. At most 8 per workspace; stopped ones count until retired, and only a\nperson retires. You can't move an existing sidecar into a worktree: start a new one.\n  review   the commits not on the base yet, the files they change, uncommitted\n           files, and whether land would work (and if not, why).\n  land     cherry-picks those commits onto the base in the workspace's main\n           checkout (as commits on the base branch), after showing them and\n           asking (--yes skips the question).\n           It refuses when the main checkout has uncommitted changes, is on another\n           branch, or the branch moved since the review; on a conflict it stops\n           and nothing changes on the base. Then it retires the sidecar\n           (--keep: don't; if retiring is refused, the land still stands and\n           it says why).\n  retire   stops the sidecar, sends the worktree folder to the Trash and deletes\n           its branch. Its Thread stays, read-only, and its name stays taken.\n           It refuses while the worktree has commits not on the base or\n           uncommitted files; --discard throws those away (files to the Trash).\n           --keep-branch keeps the branch.\nOnly people land and retire. An agent that runs them exits 3. With permission\ncards on, the error ends with the full command to ask with (\"Ask with: k2\npermission request git.land sidecar=<name> tip=<sha> --why …\", or sidecar.retire):\nrun it as printed, adding only --why. When a person allows the card, K2 lands\n(or retires) it as that person and tells you. With cards off, ask your human on\nyour Thread (k2 thread ask): they run k2 sidecar land <workspace>/<name>.\nSee also: k2 sessions (everyone in this workspace, past conversations)\nMore: k2 study sidecars"
   }
  },
  "study": [

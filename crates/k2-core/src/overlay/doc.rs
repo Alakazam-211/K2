@@ -406,6 +406,13 @@ pub const AUTHOR_GUEST: &str = "guest";
 /// original login, `name` the label shown. Older viewers treat an unknown
 /// kind as someone else's post and show its `from` (the same label).
 pub const AUTHOR_IMPORTED: &str = "imported";
+/// [`PostAuthor::kind`] for an agent: a post, card or Design note an
+/// agent's passport made (thread-author-agent-v1, 0.46.13), and an agent's
+/// own card answer (`answeredBy`, prd-agent-settings-cards-v1 §6.10).
+/// `login` is the agent's stamped address (`handle` or `handle/sidecar`).
+/// Agent rows from before 0.46.13 carry no author at all, so a reader
+/// treats "no author" as the agent too (K2's own notes are author-less).
+pub const AUTHOR_AGENT: &str = "agent";
 
 impl PostAuthor {
     pub fn owner() -> Self {
@@ -427,6 +434,16 @@ impl PostAuthor {
 
     pub fn guest(username: &str) -> Self {
         Self { kind: AUTHOR_GUEST.to_string(), login: username.trim().to_string(), name: None }
+    }
+
+    /// An agent, by its stamped address (see [`AUTHOR_AGENT`]).
+    pub fn agent(address: &str) -> Self {
+        Self { kind: AUTHOR_AGENT.to_string(), login: address.trim().to_string(), name: None }
+    }
+
+    /// True for an agent's stamp ([`AUTHOR_AGENT`]).
+    pub fn is_agent(&self) -> bool {
+        self.kind == AUTHOR_AGENT
     }
 
     /// A historical person from an imported Thread (see [`AUTHOR_IMPORTED`]).
@@ -472,9 +489,12 @@ pub struct OverlayDoc {
     /// on every other doc and on docs from before this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ThreadContext>,
-    /// Set on a person's post (the compose bar, a Garden widget, an app
-    /// guest): who sent it, from the credential. None on agent posts and
-    /// on docs written before this field.
+    /// Who sent it, from the credential (never the body): a person
+    /// (`owner` / `user`, whatever the `via`), an app guest (`guest`), or
+    /// since 0.46.13 an agent (`agent`, thread-author-agent-v1). None on
+    /// K2's own notes and notices, and on agent posts written before
+    /// 0.46.13 (so "no author" still reads as the agent). See
+    /// [`OverlayDoc::by_person`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<PostAuthor>,
     /// Set on a line K2 collected from an outside agent product (a local
@@ -758,6 +778,14 @@ pub struct CollectedMeta {
 }
 
 impl OverlayDoc {
+    /// A person's (or an app guest's, or an imported person's) doc: it
+    /// carries an `author` that is not an agent's. An agent's doc (the
+    /// `agent` author, or no author on a row from before 0.46.13) and K2's
+    /// own notes are not.
+    pub fn by_person(&self) -> bool {
+        self.author.as_ref().is_some_and(|a| !a.is_agent())
+    }
+
     /// A settings (action) card: a choice card carrying `choice.action`
     /// (keep-as-mine today; permission cards later). An owner/admin ask: App
     /// guests never see one, neither as a card nor as any fallback text.

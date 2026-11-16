@@ -188,6 +188,19 @@ struct Room {
     path: PathBuf,
 }
 
+/// The room agent's passport: its Thread replies go through it (0.46.13: an
+/// owner-token post is the owner's, whatever the `via`, never the agent's).
+fn agent_passport(room: &Room) -> String {
+    let sid = SessionId::new();
+    k2_daemon::session_token::mint_session_token(
+        &sid,
+        &sid.to_string(),
+        k2_daemon::session_token::HookPrincipal { workspace_uuid: room.project_id.clone(), agent_address: room.handle.clone() },
+        k2_daemon::session_token::CredMode::ApiKey,
+        k2_daemon::session_token::Provider::Anthropic,
+    )
+}
+
 fn seed_room(home: &Path, handle: &str) -> Room {
     let path = home.join("ws").join(handle);
     std::fs::create_dir_all(&path).expect("workspace dir");
@@ -457,7 +470,7 @@ async fn a_compose_turn_streams_its_steps_and_ends_on_the_reply() {
 
             // The agent answers in Thread while its turn runs: a message
             // inside the turn, not its end (Rosson 2026-10-12).
-            let reply = post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+            let reply = post_ok(port, &agent_passport(&room), "/cli/thread/post", serde_json::json!({
                 "addr": room.handle, "text": "Fixed 2 failing tests.", "from": room.handle
             }));
             assert_eq!(reply["via"], "thread");
@@ -551,7 +564,7 @@ async fn early_replies_joined_composes_silent_ends_and_foreign_stamps() {
             let started = first["startedAt"].as_i64().expect("startedAt");
             append(&file, &[&queued_line(&room.handle, "can you check the build")]);
             tokio::time::sleep(Duration::from_millis(500)).await;
-            post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+            post_ok(port, &agent_passport(&room), "/cli/thread/post", serde_json::json!({
                 "addr": room.handle, "text": "On it.", "from": room.handle
             }));
             let mut frames = Vec::new();
@@ -682,7 +695,7 @@ async fn a_reply_keeps_the_strip_while_subagents_run() {
 
             // The agent replies while both run (and its lead still works):
             // a message, the strip goes on.
-            post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+            post_ok(port, &agent_passport(&room), "/cli/thread/post", serde_json::json!({
                 "addr": room.handle, "text": "Two reviewers are on it.", "from": room.handle
             }));
             let caught = catch_up(port, OWNER_TOKEN, &room.handle).json();
@@ -768,7 +781,7 @@ async fn a_reply_with_a_background_task_monitors_until_superseded() {
             }));
             open_until(&mut a, &turn, "a background task", |a| a["background"] == 1).await;
 
-            post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+            post_ok(port, &agent_passport(&room), "/cli/thread/post", serde_json::json!({
                 "addr": room.handle, "text": "Dev server is up.", "from": room.handle
             }));
             // The lead stops with the server still running: the strip stays
@@ -806,7 +819,7 @@ async fn a_reply_with_a_background_task_monitors_until_superseded() {
                 "tool_name": "KillShell", "tool_use_id": "toolu_k1", "tool_input": {"shell_id": "bash_1"}, "tool_response": {}
             }));
             open_until(&mut a, &next, "the task stopped", |a| a["background"] == 0).await;
-            post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+            post_ok(port, &agent_passport(&room), "/cli/thread/post", serde_json::json!({
                 "addr": room.handle, "text": "Linter is clean.", "from": room.handle
             }));
             assert_eq!(catch_up(port, OWNER_TOKEN, &room.handle).json()["turn"]["turnId"], next.as_str(), "the reply is not the end");
@@ -858,7 +871,7 @@ async fn a_flood_of_activity_frames_closes_no_thread_socket() {
             }
             // Both sockets still deliver the next Thread message.
             for (ws, room, conv) in [(&mut on_busy, &busy, &busy_conv), (&mut on_quiet, &quiet, &quiet_conv)] {
-                let posted = post_ok(port, OWNER_TOKEN, "/cli/thread/post", serde_json::json!({
+                let posted = post_ok(port, &agent_passport(&room), "/cli/thread/post", serde_json::json!({
                     "addr": room.handle, "text": "still here", "from": room.handle
                 }));
                 assert_eq!(posted["conversation_id"], conv.as_str());

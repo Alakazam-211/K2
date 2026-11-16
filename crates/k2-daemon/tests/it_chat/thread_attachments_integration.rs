@@ -160,11 +160,13 @@ async fn thread_attachments_send_view_open_and_scope() {
     let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "" })).await;
     assert_eq!((r.status, code_of(&r).as_str()), (400, "usage"), "{}", r.body);
 
-    // ── A good post ───────────────────────────────────────────────────
+    // ── A good post (the agent's, with its passport: 0.46.13 made an
+    // owner-token post the owner's) ────────────────────────────────────
+    let agent = passport(&ws);
     let abs_plan = ws.path.join("docs/plan.md").to_string_lossy().into_owned();
     let r = thread_post(
         port,
-        OWNER,
+        &agent,
         &addr,
         "The report is ready",
         json!([
@@ -197,7 +199,7 @@ async fn thread_attachments_send_view_open_and_scope() {
     // The push preview counts the files and never names one.
     let pv = k2_daemon::thread_push::last_preview(&conv).expect("a push preview for the agent's post");
     assert_eq!(pv, "The report is ready [4 files]");
-    let r = thread_post(port, OWNER, &addr, "", json!([{ "path": "docs/report.pdf" }])).await;
+    let r = thread_post(port, &agent, &addr, "", json!([{ "path": "docs/report.pdf" }])).await;
     assert_eq!(r.status, 200, "text is optional with a file: {}", r.body);
     let only_file_id = r.json()["id"].as_str().unwrap().to_string();
     assert_eq!(k2_daemon::thread_push::last_preview(&conv).as_deref(), Some("[file]"));

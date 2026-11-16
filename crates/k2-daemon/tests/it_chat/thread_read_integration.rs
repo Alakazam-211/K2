@@ -276,11 +276,15 @@ fn warm_up(port: u16, handle: &str, seeded: &str) -> String {
     seeded.to_string()
 }
 
-/// An agent-shaped Thread post (owner token, not the compose bar: the
-/// daemon stamps the room handle, no person author).
+/// An agent's Thread post, with its passport (0.46.13: an owner-token post
+/// is the owner's, whatever the `via`).
 fn agent_post(port: u16, addr: &str, text: &str) -> i64 {
-    let v = ok(port, "POST", &format!("/cli/thread/post?token={OWNER_TOKEN}"), Some(serde_json::json!({ "addr": addr, "text": text })));
-    assert!(v["author"].is_null(), "an agent-shaped post has no person author: {v}");
+    let ws: String = k2_core::db::shared()
+        .lock()
+        .query_row("SELECT id FROM projects WHERE handle = ?1", params![addr], |r| r.get(0))
+        .expect("the handle's workspace");
+    let v = ok(port, "POST", &format!("/cli/thread/post?token={}", passport(&ws)), Some(serde_json::json!({ "addr": addr, "text": text })));
+    assert!(!matches!(v["author"]["kind"].as_str(), Some("owner" | "user" | "guest")), "an agent's post is never a person's: {v}");
     v["seq"].as_i64().expect("seq")
 }
 

@@ -12,6 +12,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use k2_core::db::schema::WorkspaceSession;
+use k2_core::session::SessionId;
+use k2_daemon::session_token::{CredMode, HookPrincipal, Provider};
 use k2_daemon::test_harness;
 use rusqlite::params;
 use serde_json::{json, Value as J};
@@ -152,9 +154,23 @@ fn seed_thread(prefix: &str) -> (String, String) {
     (handle, conv)
 }
 
+/// An agent's Thread post, with its passport (0.46.13: an owner-token post
+/// is the owner's, whatever the `via`).
 fn agent_post(port: u16, addr: &str, text: &str) -> i64 {
-    let v = ok(port, "POST", &format!("/cli/thread/post?token={OWNER_TOKEN}"), Some(json!({ "addr": addr, "text": text })));
-    assert!(v["author"].is_null(), "an agent-shaped post has no person author: {v}");
+    let ws: String = k2_core::db::shared()
+        .lock()
+        .query_row("SELECT id FROM projects WHERE handle = ?1", params![addr], |r| r.get(0))
+        .expect("the handle's workspace");
+    let sid = SessionId::new();
+    let passport = k2_daemon::session_token::mint_session_token(
+        &sid,
+        &sid.to_string(),
+        HookPrincipal { workspace_uuid: ws, agent_address: "hints-agent".to_string() },
+        CredMode::ApiKey,
+        Provider::Anthropic,
+    );
+    let v = ok(port, "POST", &format!("/cli/thread/post?token={passport}"), Some(json!({ "addr": addr, "text": text })));
+    assert!(!matches!(v["author"]["kind"].as_str(), Some("owner" | "user" | "guest")), "an agent's post is never a person's: {v}");
     v["seq"].as_i64().expect("seq")
 }
 

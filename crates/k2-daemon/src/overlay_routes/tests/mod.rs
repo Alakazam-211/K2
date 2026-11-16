@@ -84,6 +84,18 @@ fn passport_params(project_id: &str, from: &str) -> HashMap<String, String> {
     ])
 }
 
+/// An agent passport's params for `addr` (`handle` or `handle/sidecar`):
+/// 0.46.13 made an owner-token post the owner's whatever the `via`, so a
+/// test that means the agent posts with its passport.
+fn agent_of(addr: &str) -> HashMap<String, String> {
+    let handle = addr.split('/').next().expect("handle");
+    let id: String = k2_core::db::shared()
+        .lock()
+        .query_row("SELECT id FROM projects WHERE handle = ?1", params![handle], |r| r.get(0))
+        .expect("the handle's workspace");
+    passport_params(&id, addr)
+}
+
 fn assert_error_code(resp: &CliResponse, status: &str, code: &str) {
     assert_eq!(resp.status, status, "{}", resp.body);
     let v = json_body(resp);
@@ -608,7 +620,7 @@ fn thread_write_then_read_json_has_from_and_seq() {
 
     let post = dispatch_post(
         "/cli/thread/post",
-        &HashMap::new(),
+        &passport_params(&project_id, &handle),
         serde_json::json!({
             "addr": handle,
             "text": "hi",
@@ -622,7 +634,7 @@ fn thread_write_then_read_json_has_from_and_seq() {
     assert_eq!(posted["ok"], true, "{posted}");
     assert_eq!(
         posted["from"], handle,
-        "empty/k2 from stamps the room handle: {posted}"
+        "an agent's post is stamped with its address, never the body's: {posted}"
     );
     assert!(
         posted["seq"].as_i64().is_some(),
@@ -980,7 +992,7 @@ fn the_kanban_2_board_posts_to_its_agent_and_reads_the_reply() {
     // The agent answers in its Thread; the panel's subscription reads it.
     let reply = dispatch_post(
         "/cli/thread/post",
-        &HashMap::new(),
+        &agent_of(&g.handle),
         serde_json::json!({"addr": g.handle, "text": "On it: **Doing** is mine.", "from": "k2"}).to_string().as_bytes(),
     );
     assert_eq!(reply.status, "200 OK", "{}", reply.body);
@@ -2728,8 +2740,10 @@ fn skin_thread_post_injects_agent_pty_and_stamps_pass_username() {
     );
 }
 
+/// 0.46.13: the owner token with no `from` or `from=k2` is the owner, not
+/// the room (it used to stamp the room handle, so it read as the agent's).
 #[test]
-fn thread_post_empty_or_k2_from_stamps_room_handle_not_k2() {
+fn thread_post_empty_or_k2_from_is_the_poster_never_the_room() {
     let handle = format!("globex-bff{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let (project_id, _) = seed(&handle);
     let pin_id = uuid::Uuid::new_v4().to_string();
@@ -2747,12 +2761,10 @@ fn thread_post_empty_or_k2_from_stamps_room_handle_not_k2() {
     );
     assert_eq!(no_from.status, "200 OK", "{}", no_from.body);
     let posted = json_body(&no_from);
-    assert_eq!(
-        posted["from"].as_str().expect("from"),
-        handle.as_str(),
-        "missing from must stamp the room handle, not k2: {posted}"
-    );
-    assert_ne!(posted["from"], "k2");
+    let owner_name = crate::workspace_msg::resolve_owner_from();
+    assert_eq!(posted["from"], serde_json::json!(owner_name), "missing from is the poster: {posted}");
+    assert_eq!(posted["author"], serde_json::json!({"kind": "owner", "login": "owner"}), "{posted}");
+    assert_ne!(posted["from"], serde_json::json!(handle));
 
     let as_k2 = dispatch_post(
         "/cli/thread/post",
@@ -2767,11 +2779,8 @@ fn thread_post_empty_or_k2_from_stamps_room_handle_not_k2() {
     );
     assert_eq!(as_k2.status, "200 OK", "{}", as_k2.body);
     let posted_k2 = json_body(&as_k2);
-    assert_eq!(
-        posted_k2["from"].as_str().expect("from"),
-        handle.as_str(),
-        "from=k2 must rewrite to the room handle: {posted_k2}"
-    );
+    assert_eq!(posted_k2["from"], serde_json::json!(owner_name), "from=k2 names nobody: {posted_k2}");
+    assert_eq!(posted_k2["author"], serde_json::json!({"kind": "owner", "login": "owner"}), "{posted_k2}");
     assert_ne!(posted_k2["from"], "k2");
 
     let pass = skin_pass(&[project_id]);
@@ -3176,8 +3185,11 @@ fn sidecar_stamp_forbids_canonical_when_body_from_is_bare_handle() {
     );
 }
 
+/// 0.46.13: the owner token's non-compose post is the owner's, whatever
+/// its body `from` says (owner-shaped, or another agent's handle). It used
+/// to store the room handle, or the named handle, so it read as an agent's.
 #[test]
-fn owner_token_owner_shaped_from_stores_room_handle() {
+fn owner_token_any_body_from_is_the_owner() {
     // Reads `$HOME` (the owner display name): hold the env lock so a
     // concurrent temp-HOME test cannot swap it mid-test.
     let _home_lock = crate::test_support::lock_home();
@@ -3218,13 +3230,13 @@ fn owner_token_owner_shaped_from_stores_room_handle() {
         let posted = json_body(&post);
         assert_eq!(
             posted["from"].as_str().expect("json from"),
-            handle,
-            "owner-shaped from {from:?} must store the room handle: {posted}"
+            owner_name,
+            "owner-shaped from {from:?} is the owner: {posted}"
         );
-        assert_ne!(posted["from"], "owner");
+        assert_eq!(posted["author"], serde_json::json!({"kind": "owner", "login": "owner"}), "{posted}");
         assert_eq!(posted["via"].as_str().expect("via"), "thread");
         let (stored_from, stored_via) = stored_text(&handle, &text);
-        assert_eq!(stored_from, handle, "stored from for {from:?}");
+        assert_eq!(stored_from, owner_name, "stored from for {from:?}");
         assert_eq!(stored_via, "thread");
     }
 
@@ -3244,11 +3256,12 @@ fn owner_token_owner_shaped_from_stores_room_handle() {
     let posted = json_body(&post);
     assert_eq!(
         posted["from"].as_str().expect("json from"),
-        other,
-        "explicit non-owner handle is stored trimmed, not rewritten: {posted}"
+        owner_name,
+        "another agent's handle in the body names nobody: {posted}"
     );
+    assert_eq!(posted["author"], serde_json::json!({"kind": "owner", "login": "owner"}), "{posted}");
     let (stored_from, _) = stored_text(&handle, &text);
-    assert_eq!(stored_from, other);
+    assert_eq!(stored_from, owner_name);
 }
 
 #[test]
@@ -3380,6 +3393,8 @@ fn bound_stamp_owner_is_not_rewritten_to_room_handle() {
 
 #[test]
 fn forged_principal_bound_does_not_keep_from_owner() {
+    let _home_lock = crate::test_support::lock_home();
+    let owner_name = workspace_msg::resolve_owner_from();
     let handle = format!("ovlforge{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let (project_id, _) = seed(&handle);
     pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -3403,14 +3418,15 @@ fn forged_principal_bound_does_not_keep_from_owner() {
         );
         assert_eq!(post.status, "200 OK", "{label}: {}", post.body);
         let posted = json_body(&post);
+        // Not bound: the owner token's own post (0.46.13), never the agent's.
         assert_eq!(
             posted["from"].as_str().expect("json from"),
-            handle,
-            "forged principal_bound ({label}) must not keep from=owner: {posted}"
+            owner_name,
+            "forged principal_bound ({label}) is the owner's post: {posted}"
         );
-        assert_ne!(posted["from"], "owner");
+        assert_eq!(posted["author"], serde_json::json!({"kind": "owner", "login": "owner"}), "{label}: {posted}");
         let (stored_from, _) = stored_text(&handle, &text);
-        assert_eq!(stored_from, handle, "{label}");
+        assert_eq!(stored_from, owner_name, "{label}");
     }
 }
 
@@ -3498,12 +3514,12 @@ fn ask_and_secret_follow_from_rules_and_echo_from() {
     );
     assert_eq!(ask_owner.status, "200 OK", "{}", ask_owner.body);
     let ask_owner_body = json_body(&ask_owner);
+    let owner_name = workspace_msg::resolve_owner_from();
     assert_eq!(
         ask_owner_body["from"].as_str().expect("ask json from"),
-        handle,
-        "unbound ask owner-shaped from must be the room handle: {ask_owner_body}"
+        owner_name,
+        "an unbound ask is the owner's (0.46.13): {ask_owner_body}"
     );
-    assert_ne!(ask_owner_body["from"], "owner");
 
     let ask_peer = dispatch_post(
         "/cli/thread/ask",
@@ -3521,8 +3537,8 @@ fn ask_and_secret_follow_from_rules_and_echo_from() {
     let ask_peer_body = json_body(&ask_peer);
     assert_eq!(
         ask_peer_body["from"].as_str().expect("ask json from"),
-        other,
-        "{ask_peer_body}"
+        owner_name,
+        "another agent's handle in the body names nobody: {ask_peer_body}"
     );
 
     let secret_owner_name = format!("OWN_{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -3542,7 +3558,7 @@ fn ask_and_secret_follow_from_rules_and_echo_from() {
     let secret_owner_body = json_body(&secret_owner);
     assert_eq!(
         secret_owner_body["from"].as_str().expect("secret json from"),
-        handle,
+        owner_name,
         "{secret_owner_body}"
     );
 
@@ -3563,8 +3579,8 @@ fn ask_and_secret_follow_from_rules_and_echo_from() {
     let secret_peer_body = json_body(&secret_peer);
     assert_eq!(
         secret_peer_body["from"].as_str().expect("secret json from"),
-        other,
-        "explicit secret from is the trimmed handle: {secret_peer_body}"
+        owner_name,
+        "an unbound secret card is the owner's, whatever the body says: {secret_peer_body}"
     );
 }
 
@@ -3845,18 +3861,18 @@ fn agent_posts_at_all_three_sites_push_previews_but_never_secrets() {
     let (sec_ws, sec_conv) = push_ws("s");
     let mark = crate::push_routes::test_push_capture::mark();
 
-    let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": text_ws, "text": "## Plan\n\nThe **launch** plan is ready. Read it tonight. Then sleep.", "from": "k2" }));
+    let r = post_json("/cli/thread/post", &agent_of(&text_ws), serde_json::json!({ "addr": text_ws, "text": "## Plan\n\nThe **launch** plan is ready. Read it tonight. Then sleep.", "from": "k2" }));
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let seq = json_body(&r)["seq"].as_i64().expect("seq");
     let r = post_json(
         "/cli/thread/ask",
-        &HashMap::new(),
+        &agent_of(&ask_ws),
         serde_json::json!({ "addr": ask_ws, "prompt": "Ship *it*?", "options": "Go,Stop", "from": "k2" }),
     );
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let r = post_json(
         "/cli/thread/secret",
-        &HashMap::new(),
+        &agent_of(&sec_ws),
         serde_json::json!({ "addr": sec_ws, "name": "STRIPE_KEY", "for": "api.stripe.com", "from": "k2" }),
     );
     assert_eq!(r.status, "200 OK", "{}", r.body);
@@ -3932,7 +3948,8 @@ fn every_thread_change_moves_rev_with_a_frame() {
         if let Some(e) = expires {
             body["expires"] = serde_json::json!(e);
         }
-        let r = post_json("/cli/thread/ask", &HashMap::new(), body);
+        // The agent's card (its passport), so the agent may withdraw it below.
+        let r = post_json("/cli/thread/ask", &passport_params(&project_id, &handle), body);
         assert_eq!(r.status, "200 OK", "{}", r.body);
         json_body(&r)["id"].as_str().expect("id").to_string()
     };
@@ -4011,11 +4028,28 @@ fn push_titles_use_the_display_name_not_the_handle() {
             .expect("seed");
         }
     }
+    // The agent-post push itself, for any stamped `from` (0.46.13: only an
+    // agent's passport reaches it from the post route, and a passport's
+    // stamp is its own workspace, so the other names go straight in).
     let title_for = |from: &str| {
         let (ws, conv) = push_ws("name");
+        let pid: String = k2_core::db::shared()
+            .lock()
+            .query_row("SELECT id FROM projects WHERE handle = ?1", params![ws], |r| r.get(0))
+            .expect("the room's workspace");
         let mark = crate::push_routes::test_push_capture::mark();
-        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": ws, "text": "Done.", "from": from }));
-        assert_eq!(r.status, "200 OK", "{}", r.body);
+        crate::thread_push::on_agent_post(
+            &conv,
+            &pid,
+            &ws,
+            from,
+            1,
+            k2_core::push::ThreadMsgKind::Text,
+            "Done.",
+            0,
+            &uuid::Uuid::new_v4().to_string(),
+            overlay::now_secs(),
+        );
         let t = thread_pushes(mark, &conv);
         assert_eq!(t.len(), 1, "from {from}: one push");
         let ev = k2_core::push::PushEvent::ThreadPost(t[0].clone());
@@ -4068,7 +4102,7 @@ fn airgap_on_means_no_thread_push() {
     let (ws, conv) = push_ws("air");
     crate::push_routes::set_test_airgap(true);
     let mark = crate::push_routes::test_push_capture::mark();
-    let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": ws, "text": "x", "from": "k2" }));
+    let r = post_json("/cli/thread/post", &agent_of(&ws), serde_json::json!({ "addr": ws, "text": "x", "from": "k2" }));
     crate::push_routes::set_test_airgap(false);
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert!(thread_pushes(mark, &conv).is_empty(), "air-gap: zero sends");
@@ -4231,3 +4265,7 @@ mod message_delete_route;
 // person can't save.
 #[path = "secret_card_no_site_tests.rs"]
 mod secret_card_no_site;
+
+// 0.46.13: Thread authorship (a person is always a person; agents say so).
+#[path = "thread_author_tests.rs"]
+mod thread_author;

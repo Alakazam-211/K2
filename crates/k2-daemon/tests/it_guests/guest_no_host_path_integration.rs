@@ -152,15 +152,18 @@ async fn app_guests_never_see_a_host_path_in_a_rooms_thread() {
     let owner_url = format!("ws://127.0.0.1:{port}/cli/overlay/events?conversation={conv}&token={}", enc(OWNER));
     let (mut osock, _) = tokio_tungstenite::connect_async(&owner_url).await.expect("owner overlay WS");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let r = post(
-        port,
-        "/cli/thread/post",
-        OWNER,
-        json!({ "addr": addr, "from": ws_path, "text": format!("K2: job **x** changed; logs in {ws_path}/logs") }),
-    )
-    .await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    let id = r.json()["id"].as_str().expect("id").to_string();
+    // K2's own line, written inside the daemon with the folder as sender
+    // (0.46.13: an owner-token post can no longer name its sender, so the
+    // line is stored and published the way a daemon note is).
+    let id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let body = format!("K2: job **x** changed; logs in {ws_path}/logs");
+        let (item, links) =
+            k2_core::overlay::post_thread(&conn, &conv, &ws.id, &ws_path, &ws_path, &body, "k2-jobs").expect("folder-sender line");
+        k2_daemon::overlay_ws::emit_links(&links, &item.doc);
+        item.id
+    };
     let graw = frame_for(&mut gsock, &id).await;
     assert_no_host_path("overlay WS frame", &graw, &ws_path, &home);
     let gv: Value = serde_json::from_str(&graw).unwrap();
@@ -171,7 +174,9 @@ async fn app_guests_never_see_a_host_path_in_a_rooms_thread() {
     assert_eq!(ov["doc"]["from"], ws_path.as_str(), "the owner's frame is the stored doc: {oraw}");
 
     // ── The source: a post addressed by the folder stores the name ────
-    let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": ws_path, "text": "addressed by folder", "from": "k2" })).await;
+    // (the agent's own post, with its passport: since 0.46.13 an owner-token
+    // post is the owner's, from the owner's name)
+    let r = post(port, "/cli/thread/post", &passport(&ws), json!({ "addr": ws_path, "text": "addressed by folder", "from": "k2" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let new_id = r.json()["id"].as_str().expect("id").to_string();
     let r = get(port, "/cli/thread", OWNER, &format!("addr={}", enc(&addr))).await;

@@ -1434,6 +1434,32 @@ fn overlay_sender_from(params: &HashMap<String, String>, resolved: &ResolvedOver
     }
 }
 
+/// Who a Thread post or card is from, from the credential, never the body
+/// (0.46.13: closes a person posting rows that read as the agent's):
+///
+/// - an App guest: its pass username, author `guest`;
+/// - an agent passport (bound): its stamped address, no author yet;
+/// - anything else is a person (the owner token or a Connect login),
+///   WHATEVER the `via`: the compose rule's `from` (the owner's display
+///   name, or the username) and author `owner` / `user`. A body `from`
+///   names nobody. Before 0.46.13 a person's non-compose post (`k2 thread`
+///   with no passport, a direct POST) kept the body's `from` and no author,
+///   so it read as the agent's, under any name.
+///
+/// K2's own notes and notices never come through here (they are written
+/// inside the daemon, author-less, from the room).
+fn thread_sender(params: &HashMap<String, String>, session_author: &str) -> (String, Option<overlay::PostAuthor>) {
+    if let Some(pass) = request_skin() {
+        let from = skin_from_stamp(&pass);
+        let author = overlay::PostAuthor::guest(&from);
+        (from, Some(author))
+    } else if principal_is_bound(params) {
+        (params.get("from").cloned().unwrap_or_default(), None)
+    } else {
+        (compose_from_for_session(session_author), Some(compose_author_for_session(session_author)))
+    }
+}
+
 /// One audit line per Thread post a Garden widget sends for the person
 /// (`zen.widget.post`): which widget, which Garden, to whom, how long.
 /// Never the text itself.
@@ -1746,26 +1772,14 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     } else {
         via_in
     };
-    // Skin: pass username only (never body `from`). No principal +
-    // via=compose: session actor, still ignoring body `from`. Bound:
-    // restored stamp. Else owner-shaped `from` becomes the room handle.
-    let from = if let Some(pass) = request_skin() {
-        skin_from_stamp(&pass)
-    } else if !bound && via == "compose" {
-        compose_from_for_session(session_author)
-    } else {
-        overlay_sender_from(params, &resolved)
-    };
-    // Who sent a person's post, from the same credential as `from` (never
-    // the body): the shared Thread paints "You" only on the viewer's own.
-    // Agent posts (bound, or an unbound non-compose post) carry none.
-    let author = if let Some(pass) = request_skin() {
-        Some(overlay::PostAuthor::guest(&skin_from_stamp(&pass)))
-    } else if !bound && via == "compose" {
-        Some(compose_author_for_session(session_author))
-    } else {
-        None
-    };
+    // Who sent it, from the credential, never the body ([`thread_sender`]):
+    // a guest's pass username, an agent's stamp, else the person (whatever
+    // the `via`). The shared Thread paints "You" only on the viewer's own.
+    // A person's post that isn't the compose bar (`k2 thread` with the
+    // owner token, a direct POST) is stored as theirs and, as before, never
+    // delivered; it is never the agent's reply either (no activity end, no
+    // push: the arm below is the agent's own).
+    let (from, author) = thread_sender(params, session_author);
     let command = if via == "compose" {
         match workspace_msg::normalize_composer_slash_command(
             &opt_param(params, "command").unwrap_or_default(),
@@ -1957,7 +1971,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 }
             } else if let Some(pass) = request_skin() {
                 inject_skin_thread(&resolved, &pass, &inject_text, ThreadTurn::new(&resolved, &item.id, received_at));
-            } else {
+            } else if bound {
                 // TW4 (a): the agent answered in Thread (not the compose
                 // bar, not an app guest): the strip ends with the reply.
                 crate::thread_activity::note_reply(&resolved.conversation_id);
@@ -2157,7 +2171,7 @@ fn collect_ask_options(params: &HashMap<String, String>) -> Result<Vec<String>, 
 
 
 
-fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
+fn handle_ask(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     if let Err(e) = reject_wait(params) {
         return e;
     }
@@ -2198,13 +2212,16 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
         return r;
     }
     let principal = crate::caller_workspace::principal_from_params(params);
-    let from = overlay_sender_from(params, &resolved);
+    // From the credential, never the body ([`thread_sender`]): a person's
+    // card is theirs, whatever the body's `from`.
+    let (from, author) = thread_sender(params, session_author);
+    let agent_card = request_skin().is_none() && principal_is_bound(params);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match overlay::post_choice(
+    match overlay::post_choice_by(
         &conn,
         &resolved.conversation_id,
         &resolved.project_id,
@@ -2214,13 +2231,17 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
         options,
         allow_custom,
         expires_at,
+        author,
     ) {
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
             drop(conn);
-            // TW4 (a): an agent's card is its Thread reply.
-            crate::thread_activity::note_reply(&resolved.conversation_id);
-            push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, 0);
+            // TW4 (a): an agent's card is its Thread reply (a person's
+            // card is not: no activity end, no push).
+            if agent_card {
+                crate::thread_activity::note_reply(&resolved.conversation_id);
+                push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, 0);
+            }
             let choice = item.doc.choice.as_ref();
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
@@ -2247,7 +2268,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
-fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
+fn handle_secret(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     if let Err(e) = reject_wait(params) {
         return e;
     }
@@ -2297,7 +2318,9 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         return r;
     }
     let principal = crate::caller_workspace::principal_from_params(params);
-    let from = overlay_sender_from(params, &resolved);
+    // From the credential, never the body ([`thread_sender`]).
+    let (from, author) = thread_sender(params, session_author);
+    let agent_card = request_skin().is_none() && principal_is_bound(params);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
@@ -2331,7 +2354,8 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Some(Err(e)) => return error_json("400 Bad Request", e.code, format!("--ttl: {}", e.hint)),
         None => None,
     };
-    match create_secret_card(&vault, &resolved, &from, name.trim(), prompt.as_deref(), proposal, session_id, ttl_secs, false) {
+    // A person's card is not the agent's reply: quiet (no activity end, no push).
+    match create_secret_card(&vault, &resolved, &from, author, name.trim(), prompt.as_deref(), proposal, session_id, ttl_secs, !agent_card) {
         Err(e) => e,
         Ok(item) => {
             let secret = item.doc.secret.as_ref();
@@ -2360,13 +2384,16 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
 
 /// Post a secret card and create its vault request together (§10.1).
 /// Shared by `thread/secret` and the clone's leave-blank cards
-/// (prd-clone-carries-threads-and-vault-v1 §6.6). `quiet`: no push and no
-/// activity turn (a clone posts its cards in a batch, as history).
+/// (prd-clone-carries-threads-and-vault-v1 §6.6). `author`: who asked,
+/// from the credential (None on K2's own cards). `quiet`: no push and no
+/// activity turn (a clone posts its cards in a batch, as history; a
+/// person's card is not the agent's reply).
 #[allow(clippy::too_many_arguments)]
 fn create_secret_card(
     vault: &k2_vault::LocalVault,
     resolved: &ResolvedOverlay,
     from: &str,
+    author: Option<overlay::PostAuthor>,
     name: &str,
     prompt: Option<&str>,
     proposal: overlay::SecretProposal,
@@ -2376,7 +2403,7 @@ fn create_secret_card(
 ) -> Result<overlay::OverlayItem, CliResponse> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let (item, links) = overlay::post_secret(
+    let (item, links) = overlay::post_secret_by(
         &conn,
         &resolved.conversation_id,
         &resolved.project_id,
@@ -2386,6 +2413,7 @@ fn create_secret_card(
         prompt,
         proposal.clone(),
         Some(overlay::now_secs() + k2_vault::vault::REQUEST_EXPIRY_DAYS * 24 * 60 * 60),
+        author,
     )
     .map_err(|e| error_json("400 Bad Request", "usage", e))?;
     drop(conn);
@@ -2515,7 +2543,7 @@ pub(crate) fn post_clone_secret_card(
         ..Default::default()
     };
     card_names(&vault, &resolved, None, name, &mut proposal);
-    create_secret_card(&vault, &resolved, addr, name, Some(prompt), proposal, None, None, true)
+    create_secret_card(&vault, &resolved, addr, None, name, Some(prompt), proposal, None, None, true)
         .map(|item| item.id)
         .map_err(|r| r.body)
 }
@@ -2537,7 +2565,7 @@ pub(crate) fn post_oauth_reconnect_card(workspace: &str, scope_word: &str, m: &k
     card_names(&vault, &resolved, None, &m.name, &mut proposal);
     const PROMPT: &str = "This sign-in stopped working, so agents can't use it. Paste a new one: JSON with access_token, refresh_token and client_id.";
     let from = resolved.addr.clone();
-    create_secret_card(&vault, &resolved, &from, &m.name, Some(PROMPT), proposal, None, None, false).map(|_| ()).map_err(|r| r.body)
+    create_secret_card(&vault, &resolved, &from, None, &m.name, Some(PROMPT), proposal, None, None, false).map(|_| ()).map_err(|r| r.body)
 }
 
 /// One plain Thread line on a clone's Thread (the leave-blank overflow).
@@ -5505,8 +5533,8 @@ pub fn dispatch_post_as(
     }
     match path {
         "/cli/thread/post" => handle_post(&params, session_author),
-        "/cli/thread/ask" => handle_ask(&params),
-        "/cli/thread/secret" => handle_secret(&params),
+        "/cli/thread/ask" => handle_ask(&params, session_author),
+        "/cli/thread/secret" => handle_secret(&params, session_author),
         "/cli/thread/answer" => handle_answer(&params, session_author),
         "/cli/thread/void" => handle_void(&params, session_author),
         message_delete::ROUTE => message_delete::handle(&params, session_author),

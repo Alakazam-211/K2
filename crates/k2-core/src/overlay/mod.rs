@@ -509,6 +509,24 @@ pub fn post_choice(
     post_choice_with_action(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, None)
 }
 
+/// [`post_choice`] stamped with who asked (`thread/ask`, 0.46.13): the
+/// caller's credential, never the body. K2's own cards keep none.
+#[allow(clippy::too_many_arguments)]
+pub fn post_choice_by(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    prompt: &str,
+    options: Vec<String>,
+    allow_custom: bool,
+    expires_at: Option<i64>,
+    author: Option<PostAuthor>,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    post_choice_inner(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, None, author)
+}
+
 /// [`post_choice`] with an action (0.46.3, agents present settings cards):
 /// K2 runs `action` when a person taps an option (the daemon's answer route
 /// refuses agents, K2 terminals, widgets and guests for it).
@@ -524,6 +542,23 @@ pub fn post_choice_with_action(
     allow_custom: bool,
     expires_at: Option<i64>,
     action: Option<CardAction>,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    post_choice_inner(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, action, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn post_choice_inner(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    prompt: &str,
+    options: Vec<String>,
+    allow_custom: bool,
+    expires_at: Option<i64>,
+    action: Option<CardAction>,
+    author: Option<PostAuthor>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
@@ -555,6 +590,7 @@ pub fn post_choice_with_action(
         c.expires_at = expires_at;
         c.action = action;
     }
+    doc.author = author;
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     if let Some(at) = expires_at {
         store::index_card_expiry(&id, conversation_id, at)?;
@@ -577,6 +613,24 @@ pub fn post_secret(
     proposal: SecretProposal,
     expires_at: Option<i64>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    post_secret_by(conn, conversation_id, project_id, from, to, name, prompt, proposal, expires_at, None)
+}
+
+/// [`post_secret`] stamped with who asked (`thread/secret`, 0.46.13): the
+/// caller's credential, never the body. K2's own cards keep none.
+#[allow(clippy::too_many_arguments)]
+pub fn post_secret_by(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    name: &str,
+    prompt: Option<&str>,
+    proposal: SecretProposal,
+    expires_at: Option<i64>,
+    author: Option<PostAuthor>,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     vault::validate_name(name)?;
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
@@ -596,6 +650,7 @@ pub fn post_secret(
     if let Some(s) = doc.secret.as_mut() {
         s.expires_at = expires_at;
     }
+    doc.author = author;
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     if let Some(at) = expires_at {
         store::index_card_expiry(&id, conversation_id, at)?;
@@ -1180,8 +1235,9 @@ pub enum MessageRef {
 
 /// Refusals [`delete_thread_message`] returns (the daemon maps them).
 pub const DELETE_NOT_FOUND: &str = "message not found";
-/// Only a person's own post (`author` set, kind `text`) can be deleted:
-/// an agent's post, a card, a notice or a collected line can't.
+/// Only a person's own post ([`OverlayDoc::by_person`], kind `text`) can
+/// be deleted: an agent's post (the `agent` author, or none on an older
+/// row), a card, a notice or a collected line can't.
 pub const DELETE_NOT_A_PERSONS_MESSAGE: &str = "not a person's message";
 
 /// A message after [`delete_thread_message`]: the stored tombstone, and
@@ -1237,7 +1293,7 @@ pub fn delete_thread_message(
     if item.doc.imported.is_some() {
         return Err(IMPORTED_READ_ONLY.to_string());
     }
-    if item.doc.author.is_none() || item.doc.kind != "text" || item.doc.external.is_some() {
+    if !item.doc.by_person() || item.doc.kind != "text" || item.doc.external.is_some() {
         return Err(DELETE_NOT_A_PERSONS_MESSAGE.to_string());
     }
     may(&item.doc)?;

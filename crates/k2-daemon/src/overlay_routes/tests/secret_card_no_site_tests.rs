@@ -112,7 +112,7 @@ fn a_stored_fetch_card_with_no_site_saves_as_a_file() {
         kind: Some("password".into()),
         ..Default::default()
     };
-    let item = create_secret_card(&vault, &resolved, "k2", "OLD_ADMIN", Some("an admin password"), proposal, None, None, true).map_err(|r| r.body).expect("card");
+    let item = create_secret_card(&vault, &resolved, "k2", None, "OLD_ADMIN", Some("an admin password"), proposal, None, None, true).map_err(|r| r.body).expect("card");
     assert_eq!(vault.request_get(&item.id).expect("request").proposed_delivery, k2_vault::Delivery::Fetch);
 
     // As it stands it can't go anywhere.

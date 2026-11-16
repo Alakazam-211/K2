@@ -359,7 +359,7 @@
     "write_from": "3.06",
     "write_to": "5.01"
    },
-   "means": "Declined: the file can't be live any more (saved in a newer format than live editing reads). Live edits pause; the tab says why in plain words and offers the saved versions. The last live version is stored as version 14"
+   "means": "Declined: the file can't be live any more (saved in a newer format than live editing reads). Live edits pause; the tab says why in plain words. You can still open the saved file. The last live version is stored as version 14"
   },
   {
    "id": "O5",

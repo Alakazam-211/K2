@@ -45,7 +45,7 @@ describe('the monitor with no edit to show', () => {
     expect(c).toEqual({
       kind: 'declined',
       title: 'This file holds 3 timelines',
-      line: 'K2 watches one timeline per file live. You can still open the file’s saved versions.',
+      line: 'K2 watches one timeline per file live. You can still open the saved file.',
       actions: [
         { id: 'open-saved-file', label: 'Open the saved file', primary: true },
         { id: 'ask', label: 'Ask Atlas' },

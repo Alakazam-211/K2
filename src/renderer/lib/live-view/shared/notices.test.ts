@@ -34,7 +34,7 @@ describe('outside saves', () => {
     expect(noCopy.actions.map((a) => a.id)).toEqual(['history', 'dismiss'])
   })
 
-  it('declined: edits pause, and the saved versions are the next step', () => {
+  it('declined: edits pause, and the saved file is the next step', () => {
     const v = noticeView({ kind: 'outside_save', save: { outcome: 'declined', code: 'not_a_timeline', message: 'The save isn’t a timeline K2 can read.' } }, ctx)
     expect(v).toMatchObject({ tone: 'bad', role: 'alert', title: 'Saved outside K2, and the file can’t be live any more.' })
     expect(v.line).toBe('The save isn’t a timeline K2 can read. Edits are paused.')
@@ -63,7 +63,7 @@ describe('connection', () => {
     expect(v.actions).toEqual([{ id: 'retry', label: 'Trying…', disabled: true }])
   })
 
-  it('can’t reconnect: Retry and the saved versions; says when a retry failed', () => {
+  it('can’t reconnect: Retry and the saved file; says when a retry failed', () => {
     const v = noticeView({ kind: 'connection', state: 'cant' }, ctx)
     expect(v).toMatchObject({ tone: 'bad', role: 'alert', title: 'Can’t reach this file’s server.' })
     expect(v.line).toBe('K2 stopped trying. You see things as they were; anything new shows when you’re back.')

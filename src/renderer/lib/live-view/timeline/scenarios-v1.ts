@@ -185,10 +185,10 @@ export function buildEmpty(): Scenario[] {
       title: 'Errors: files that can’t be watched live',
       base: initTurn,
       steps: [
-        step('many timelines', [decl('live_many_timelines', 'This file holds 3 timelines', 'K2 watches one timeline per file live. You can still open the file’s saved versions.')]),
+        step('many timelines', [decl('live_many_timelines', 'This file holds 3 timelines', 'K2 watches one timeline per file live. You can still open the saved file.')]),
         step('overlap', [decl('live_overlap', 'Two clips overlap on V2', 'K2 can only watch a timeline live when the clips on a track don’t overlap (except across a transition). Fix it in the file and K2 tries again on the next save.')]),
-        step('between frames', [decl('live_time_off_tick', 'Some times fall between frames', 'A few clips start or end at times K2 can’t count exactly, so it won’t watch this file live. You can still open its saved versions.')]),
-        step('too large', [decl('live_too_large', 'Too large to watch live, for now', 'This timeline has 2,612 items. K2 watches up to 2,500 live today. You can still open its saved versions.')]),
+        step('between frames', [decl('live_time_off_tick', 'Some times fall between frames', 'A few clips start or end at times K2 can’t count exactly, so it won’t watch this file live. You can still open the saved file.')]),
+        step('too large', [decl('live_too_large', 'Too large to watch live, for now', 'This timeline has 2,612 items. K2 watches up to 2,500 live today. You can still open the saved file.')]),
       ],
     },
   ]

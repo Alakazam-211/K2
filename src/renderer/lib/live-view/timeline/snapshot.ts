@@ -122,7 +122,7 @@ function people(S: SimState, M: TimelineModel, o: SnapshotOpts): LivePerson[] {
 
 function activity(S: SimState, M: TimelineModel, agent: string | null): LiveShellSnapshot['activity'] {
   if (S.loading) return null
-  if (S.tier !== 'live') return { who: null, text: 'Not live: you see the file’s saved versions' }
+  if (S.tier !== 'live') return { who: null, text: 'Not live: you see the saved file' }
   const lastFrame = S.log.filter((e) => e.kind === 'frame').pop()
   const letGo = S.log.filter((e) => e.kind === 'claim_end' && e.i === S.i && (e.how === 'released' || e.how === 'gone_outside_save')).pop()
   if (S.refused && S.refused.at === S.i) {

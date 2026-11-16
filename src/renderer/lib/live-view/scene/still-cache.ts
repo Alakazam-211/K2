@@ -53,6 +53,11 @@ export class StillCache {
     }
   }
 
+  /** Let a still go without closing it (it may be on screen still; the collector frees it). */
+  forget(key: string): void {
+    this.map.delete(key)
+  }
+
   clear(): void {
     for (const st of this.map.values()) releaseStill(st)
     this.map.clear()

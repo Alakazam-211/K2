@@ -40,6 +40,7 @@
 //! the test [`tests::rows_agree_with_the_registry`] keeps this map and the
 //! registry in step as they land.
 
+use k2_core::{cli_name, product_name};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -127,41 +128,41 @@ const fn row(target: Target, matches: WallMatch, prefix: &'static str, method: W
 
 /// "a person does this in Settings" for never / dropped walls a broad row
 /// would otherwise claim.
-const IN_SETTINGS: &str = "a person with the owner role does this, in Settings or from a terminal outside K2";
+const IN_SETTINGS: &str = concat!("a person with the owner role does this, in Settings or from a terminal outside ", product_name!());
 
 /// The box's firewall (0.46.6): the owner or an Admin, never an agent.
 const FIREWALL_WHERE: &str =
-    "the owner or an admin does this, in Settings → Network → Custom Domains → Firewall or with k2 firewall from a terminal outside K2";
+    concat!("the owner or an admin does this, in Settings → Network → Custom Domains → Firewall or with ", cli_name!(), " firewall from a terminal outside ", product_name!());
 
 /// `k2 desktop env` (0.46.12): the agent's own desktop only, one session of
 /// a workspace at a time, and only while the Owner keeps virtual desktops on.
-const DESKTOP_OWN_WHERE: &str = "k2 desktop env always gives you your own workspace's desktop: run it with no --desktop";
+const DESKTOP_OWN_WHERE: &str = concat!(cli_name!(), " desktop env always gives you your own workspace's desktop: run it with no --desktop");
 const DESKTOP_IN_USE_WHERE: &str =
-    "another session of your workspace holds the desktop: wait until it runs k2 desktop env --release or its hold ends (the error says when)";
+    concat!("another session of your workspace holds the desktop: wait until it runs ", cli_name!(), " desktop env --release or its hold ends (the error says when)");
 const DESKTOP_OFF_WHERE: &str =
-    "virtual desktops are off on this server: the owner turns them on in Settings → Remote Desktop or with k2 desktop enable from a terminal outside K2";
-const DESKTOP_ENV_WHERE: &str = "k2 desktop env is for agents: people open a Desktop tab, or use k2 desktop start";
+    concat!("virtual desktops are off on this server: the owner turns them on in Settings → Remote Desktop or with ", cli_name!(), " desktop enable from a terminal outside ", product_name!());
+const DESKTOP_ENV_WHERE: &str = concat!(cli_name!(), " desktop env is for agents: people open a Desktop tab, or use ", cli_name!(), " desktop start");
 
 /// Remote desktop (0.46.11): people only; an agent can't see or drive the
 /// screen, and can't ask to.
 const DESKTOP_WHERE: &str =
-    "remote desktop is for people only: the owner turns it on and lets logins watch, in Settings → Remote Desktop or with k2 desktop from a terminal outside K2";
+    concat!("remote desktop is for people only: the owner turns it on and lets logins watch, in Settings → Remote Desktop or with ", cli_name!(), " desktop from a terminal outside ", product_name!());
 
 /// K2's front on :443 (`k2 front`): the owner, an Admin or a shell tab.
-const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over SSH or in a K2 shell tab";
+const FRONT_WHERE: &str = concat!("the owner or an admin does this, with ", cli_name!(), " front over SSH or in a ", product_name!(), " shell tab");
 
 /// The box's daily cap on new outside forward addresses: the owner's alone.
 /// An agent must not be able to loosen its own limit, so mail.manage (the
 /// `/cli/mail/` row) is not the answer here.
-const FORWARD_CAP_WHERE: &str = "the owner does this, with k2 hostmail config --forward-new-per-day <n>";
-const FORWARD_COPIES_DAY_WHERE: &str = "the owner does this, with k2 hostmail config --forward-copies-per-day <n>";
-const FORWARD_COPIES_HOUR_WHERE: &str = "the owner does this, with k2 hostmail config --forward-copies-per-hour <n>";
+const FORWARD_CAP_WHERE: &str = concat!("the owner does this, with ", cli_name!(), " hostmail config --forward-new-per-day <n>");
+const FORWARD_COPIES_DAY_WHERE: &str = concat!("the owner does this, with ", cli_name!(), " hostmail config --forward-copies-per-day <n>");
+const FORWARD_COPIES_HOUR_WHERE: &str = concat!("the owner does this, with ", cli_name!(), " hostmail config --forward-copies-per-hour <n>");
 
 /// Sew's home client (AG-21): the owner's alone, never an agent's; an
 /// App's App-only mark off: the owner or an admin.
-const HOME_CLIENT_WHERE: &str = "the server's owner does this, with k2 hostchat home client from a terminal outside K2 or in a K2 shell tab";
+const HOME_CLIENT_WHERE: &str = concat!("the server's owner does this, with ", cli_name!(), " hostchat home client from a terminal outside ", product_name!(), " or in a ", product_name!(), " shell tab");
 const HOME_APP_WHERE: &str =
-    "the owner or an admin turns App-only off, with k2 hostchat home app from a terminal outside K2 or in a K2 shell tab";
+    concat!("the owner or an admin turns App-only off, with ", cli_name!(), " hostchat home app from a terminal outside ", product_name!(), " or in a ", product_name!(), " shell tab");
 
 /// The v1 card-able actions (PRD §5.2): the 17 Agent-tab switches, the 5
 /// held-request actions, `garden.keep-mine` (K2-presented, no wall) and
@@ -975,7 +976,7 @@ pub(crate) const MACHINE_HINTS: &[(&str, &str)] = &[(
 pub(crate) const WHY_PLACEHOLDER: &str = "<what you need it for>";
 
 /// Generic `where` for a passport refusal no row names.
-pub(crate) const WHERE_DEFAULT: &str = "a person does this, in Settings or from a terminal outside K2";
+pub(crate) const WHERE_DEFAULT: &str = concat!("a person does this, in Settings or from a terminal outside ", product_name!());
 
 /// The refused request, as the wrapper sees it.
 pub(crate) struct Refused<'a> {
@@ -1294,8 +1295,8 @@ fn json_body(raw: &[u8]) -> Option<Value> {
 }
 
 /// The teaching hint on the cell's gated body.
-pub(crate) const CELL_GATED_HINT: &str = "a person does this (the owner, or an admin where Settings allows), \
-     not an agent: this route isn't open to agents. Use Settings or a terminal outside K2.";
+pub(crate) const CELL_GATED_HINT: &str = concat!("a person does this (the owner, or an admin where Settings allows), \
+     not an agent: this route isn't open to agents. Use Settings or a terminal outside ", product_name!(), ".");
 
 /// Cell socket, a route that isn't an agent verb (`:488-495`; vs-live C3):
 /// with the gate on for this **valid** passport, the codeless 403 becomes a

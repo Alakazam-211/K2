@@ -20,6 +20,7 @@
 //! — that's how the Agent Skills Settings UI's user-editable tab
 //! injects project-global conventions into every agent of a given tier.
 
+use crate::{cli_name, product_name};
 use std::fs;
 use std::path::PathBuf;
 
@@ -266,13 +267,13 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
     skill.push_str("## Team — Connected Workspaces\n\n");
     skill.push_str("These are other workspace-agents you can collaborate with. Each is itself an agent (hands, memory, skills) — peers, not subordinates.\n\n");
     skill.push_str("To message one — or read what they're doing:\n\n");
-    skill.push_str("    k2 msg <workspace-name> \"your message\"              # live (SHORT messages only)\n");
-    skill.push_str("    k2 msg <workspace-name> --inbox-wake <path> [path…]  # package + knock (preferred)\n");
-    skill.push_str("    k2 msg <workspace-name> --inbox-silent <path> [path…] # package only, no notify\n");
-    skill.push_str("    k2 read <workspace-name>                             # read their live terminal (peek before you inject)\n\n");
-    skill.push_str("The recipient reads a live `msg` immediately if running, or a tray package via `k2 inbox read <id>` on their own schedule. Not `k2 mail`.\n\n");
+    skill.push_str(concat!("    ", cli_name!(), " msg <workspace-name> \"your message\"              # live (SHORT messages only)\n"));
+    skill.push_str(concat!("    ", cli_name!(), " msg <workspace-name> --inbox-wake <path> [path…]  # package + knock (preferred)\n"));
+    skill.push_str(concat!("    ", cli_name!(), " msg <workspace-name> --inbox-silent <path> [path…] # package only, no notify\n"));
+    skill.push_str(concat!("    ", cli_name!(), " read <workspace-name>                             # read their live terminal (peek before you inject)\n\n"));
+    skill.push_str(concat!("The recipient reads a live `msg` immediately if running, or a tray package via `", cli_name!(), " inbox read <id>` on their own schedule. Not `", cli_name!(), " mail`.\n\n"));
     skill.push_str("**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets truncated by their terminal input widget. Use `--inbox-wake` / `--inbox-silent` for anything substantial (task briefs, file contents, multi-line notes).\n\n");
-    skill.push_str("**`read` for human-in-the-loop:** before injecting into another agent (especially one waiting on a human), `k2 read <workspace-name>` shows the last ~50 lines of its live terminal so you can see what it's doing or waiting on. Add `--agent <name>` for a specific agent, `--lines N` for more history.\n\n");
+    skill.push_str(concat!("**`read` for human-in-the-loop:** before injecting into another agent (especially one waiting on a human), `", cli_name!(), " read <workspace-name>` shows the last ~50 lines of its live terminal so you can see what it's doing or waiting on. Add `--agent <name>` for a specific agent, `--lines N` for more history.\n\n"));
 
     match crate::connections::list_peers(project_path) {
         Ok(peers) if !peers.is_empty() => {
@@ -281,15 +282,15 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
                 skill.push_str(&format!("  - {}\n", peer.project_name));
             }
             skill.push('\n');
-            skill.push_str("To add a connection:    k2 connections add <other-workspace-path>\n");
-            skill.push_str("To see all connections: k2 connections list\n\n");
+            skill.push_str(concat!("To add a connection:    ", cli_name!(), " connections add <other-workspace-path>\n"));
+            skill.push_str(concat!("To see all connections: ", cli_name!(), " connections list\n\n"));
         }
         // Project not registered (Err) OR no peers (Ok empty) — same
         // user-facing message either way: tell them how to wire one up.
         _ => {
             skill.push_str("### No connected workspaces yet\n\n");
             skill.push_str("You're operating in isolation. To collaborate with another workspace-agent:\n\n");
-            skill.push_str("    k2 connections add <other-workspace-path>\n\n");
+            skill.push_str(concat!("    ", cli_name!(), " connections add <other-workspace-path>\n\n"));
         }
     }
 
@@ -643,7 +644,7 @@ This skill lists the full daily + power-user CLI surface so you can triage, mess
     );
 
     // ── Organic role-integration directive (PRD §3.2/§3.3) ──
-    skill.push_str(&organic_role_integration_section("K2 Agent"));
+    skill.push_str(&organic_role_integration_section(concat!(product_name!(), " Agent")));
 
     // Let user layers inject project-specific policy on top
     let custom_layers = load_custom_layers("k2so-agent");
@@ -995,7 +996,7 @@ impl OptInSkill {
                 "Workspace Manager role knowledge — integrate organically into AGENT.md"
             }
             OptInSkill::K2Agent => {
-                "K2 Agent (planner) role knowledge — integrate organically into AGENT.md"
+                concat!(product_name!(), " Agent (planner) role knowledge — integrate organically into AGENT.md")
             }
             OptInSkill::K2CanonicalAgent => {
                 "Unify this workspace's AI-harness files safely (diagnose → merge → mirror → unwind)"
@@ -1266,7 +1267,7 @@ pub fn compose_agent_wake_context(
                     name, their_role, their_profile.to_string_lossy()
                 ));
             }
-            md.push_str("\nYou can create new agents (`k2 skills create <name> --role \"...\"`) or update existing ones (`k2 agent update --name <name> --field role --value \"...\"`).\n\n");
+            md.push_str(concat!("\nYou can create new agents (`", cli_name!(), " skills create <name> --role \"...\"`) or update existing ones (`", cli_name!(), " agent update --name <name> --field role --value \"...\"`).\n\n"));
         } else {
             md.push_str("## Other Agents\n");
             md.push_str("You can delegate work to these agents:\n\n");
@@ -1329,7 +1330,7 @@ pub fn generate_agent_claude_md_content(
 
 /// Frontmatter description of the `k2-permissions` skill.
 pub const K2_PERMISSIONS_SKILL_DESCRIPTION: &str =
-    "Permission cards (Beta): when K2 refuses you, ask a person to allow it with one command";
+    concat!("Permission cards (Beta): when ", product_name!(), " refuses you, ask a person to allow it with one command");
 
 /// The `k2-permissions` skill body (permission cards, Beta; PRD rev 3.1
 /// §3.4, §11.4, §11.5; the agent sheet). Written to

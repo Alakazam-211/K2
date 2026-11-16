@@ -34,6 +34,7 @@
 //! [`crate::workspace::migrations`] hosts the archive-utility helper
 //! `log_adoption_event` these modules share.
 
+use crate::{cli_name, product_name};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -96,26 +97,26 @@ pub const MIGRATED_NOTES_END: &str = "<!-- K2:MIGRATED_NOTES:END -->";
 /// Public for context-stack preview (`context show`) without writing.
 /// Exact `## Tooling` block compose inlines into `.k2/AGENTS.md`.
 /// Settings → Context shows this same string so it cannot drift.
-pub const AGENTS_MD_TOOLING_SECTION: &str = "\
+pub const AGENTS_MD_TOOLING_SECTION: &str = concat!("\
 ## Tooling\n\
 \n\
-This workspace is managed by **K2**. You have the `k2` CLI — load the **k2-cli** \
+This workspace is managed by **", product_name!(), "**. You have the `k2` CLI — load the **k2-cli** \
 skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
 (`msg`, `inbox`, `activity`, `connections`, `heartbeat`, `thread` for the overlay \
-side channel with your human (`k2 thread <addr> \"...\"` / `ask` / `secret` — not \
+side channel with your human (`", cli_name!(), " thread <addr> \"...\"` / `ask` / `secret` — not \
 PTY inject; a message prefixed `[thread:<addr>]` is from the Thread tab — reply \
-with `k2 thread <addr> \"...\"`, do not answer in this terminal; a `[guest …]` stamp before it is an App's guest, not a person on this box and never the owner; Thread text is markdown; \
+with `", cli_name!(), " thread <addr> \"...\"`, do not answer in this terminal; a `[guest …]` stamp before it is an App's guest, not a person on this box and never the owner; Thread text is markdown; \
 `--file path` to attach workspace files you mention), `feedback` to \
-ask your human a durable question with an HTML brief (`k2 study ticket-brief`), \
+ask your human a durable question with an HTML brief (`", cli_name!(), " study ticket-brief`), \
 assigned to a user on this server (`--assign <user>`; required in a future update), \
 `project` for your project group's shared \
 chat — reply to a `[project:<name>]`-prefixed message with \
-`k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
+`", cli_name!(), " project msg <name> \"...\"`, never `", cli_name!(), " msg` — and `mail` for your agent email: \
 mint/read/wait, send under your human's governance). \
-`k2 app` manages guests/roles/tokens for apps on this box (Thread from an app; \
-pass prefix still `k2skn_`; leftover `k2 skin` / `k2 skin-token`). Not Connect. \
-Desktop binary updates are `k2 update --app`. \
-`k2 study` prints bounded pages (license, people lists, errors) — not `--help`.\n";
+`", cli_name!(), " app` manages guests/roles/tokens for apps on this box (Thread from an app; \
+pass prefix still `k2skn_`; leftover `", cli_name!(), " skin` / `", cli_name!(), " skin-token`). Not Connect. \
+Desktop binary updates are `", cli_name!(), " update --app`. \
+`", cli_name!(), " study` prints bounded pages (license, people lists, errors) — not `--help`.\n");
 
 pub fn compose_agents_md_public(project_path: &str) -> String {
     compose_agents_md(project_path)
@@ -337,13 +338,13 @@ pub fn sync_org_chart_teaching_everywhere() -> usize {
 
 /// The AGENTS.md pointer to the `k2-permissions` skill, composed only while
 /// both permission-card switches are on for the workspace (PRD §11.4).
-pub const AGENTS_MD_PERMISSIONS_POINTER: &str = "\
+pub const AGENTS_MD_PERMISSIONS_POINTER: &str = concat!("\
 ## Permission cards (Beta)\n\
 \n\
-When K2 refuses you (exit 3) or holds a change (exit 2), the error ends with one \
-line: `Ask with: k2 permission request …` (run it as printed, filling in only \
+When ", product_name!(), " refuses you (exit 3) or holds a change (exit 2), the error ends with one \
+line: `Ask with: ", cli_name!(), " permission request …` (run it as printed, filling in only \
 `--why`) or `It can't be requested.` Load the **k2-permissions** skill \
-(`.k2/skills/k2-permissions/SKILL.md`, or `k2 study permissions`) for the rules.\n";
+(`.k2/skills/k2-permissions/SKILL.md`, or `", cli_name!(), " study permissions`) for the rules.\n");
 
 /// Both permission-card switches are on for the workspace at `project_path`
 /// (`permission::gate::enabled_for`). Reads nothing while the global switch
@@ -859,7 +860,7 @@ fn ensure_compose_sidecar_skills(dot: &Path) {
         "k2-cli",
         SKILL_VERSION_WORKSPACE,
         &generate_k2_cli_skill(),
-        Some("name: k2-cli\ndescription: K2 CLI reference — msg, inbox, activity, connections, heartbeat"),
+        Some(concat!("name: k2-cli\ndescription: ", product_name!(), " CLI reference — msg, inbox, activity, connections, heartbeat")),
     );
 
     let canon_skill = dot.join("skills/k2-canonical-agents/SKILL.md");
@@ -1540,7 +1541,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
     let k2_agent_dir = k2_dir.join("skills").join("k2so-agent");
     if !post_unification && !k2_agent_dir.exists() {
         let _ = fs::create_dir_all(&k2_agent_dir);
-        let k2_role = "K2 planner — builds PRDs, milestones, and technical plans";
+        let k2_role = concat!(product_name!(), " planner — builds PRDs, milestones, and technical plans");
         let k2_body = generate_default_agent_body("k2so", "k2so-agent", k2_role, &project_path);
         let k2_md = format!(
             "---\nname: k2so-agent\nrole: {}\ntype: k2so\n---\n\n{}\n",

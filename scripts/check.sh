@@ -3,6 +3,10 @@
 # Expects k2-mpc-base checked out beside this repo.
 set -eu
 cd "$(dirname "$0")/.."
+# every test target, feature and #[ignore] accounted for, and the scan's self-test (text only;
+# CHECK_TARGETS_LANDING=1, the mode for landing a change, refuses pending rows)
+sh scripts/check-targets.sh
+sh scripts/test-check-targets.sh
 cargo fmt -p k2-mpc-markdown -- --check   # own crate only: path deps (the kit, its vendored model) keep their own style
 cargo clippy -q --locked --all-targets -- -D warnings
 cargo test -q --locked --all-targets

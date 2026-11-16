@@ -953,6 +953,26 @@ impl DaemonPtySession {
                 }
             }
         }
+        // Owner switch `agentProcessNames` (off by default): an agent's
+        // Claude Code runs from `~/.k2/bin/agents/<agent>`, a hard link to
+        // the version PATH resolves to now, so Activity Monitor shows the
+        // agent's name instead of `2.1.322`. Exec argv only: the session's
+        // stored `program` stays `claude`. Any miss keeps the program as is.
+        let guarded_program = match guarded_program {
+            Some(prog) if !matches!(cfg.sandbox, crate::terminal::SandboxSpec::Microvm) => {
+                let (linked, outcome) =
+                    crate::terminal::agent_process_name::apply(&prog, &child_env, path_for_resolve);
+                if !matches!(
+                    outcome,
+                    crate::terminal::agent_process_name::Outcome::Off
+                        | crate::terminal::agent_process_name::Outcome::NotVerified
+                ) {
+                    log_debug!("[daemon_pty] agent process name: {:?} session={}", outcome, cfg.session_id);
+                }
+                Some(linked.unwrap_or(prog))
+            }
+            other => other,
+        };
         let shell = guarded_program.as_deref().map(|prog| {
             let (program, args) =
                 crate::terminal::win_cmd::resolve_spawn(prog, &spawn_args, path_for_resolve);

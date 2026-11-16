@@ -1662,7 +1662,7 @@ cmd_settings() {
 # on POST /cli/settings/update (settings_routes OWNER_ONLY_KEYS); the daemon
 # refuses agents and every other login, so this CLI decides nothing but the
 # allowlist and the value. Order = the order help prints them.
-_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview ciPreview boardFilePreview videoRoomsPreview usageSingleRecord)
+_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview ciPreview boardFilePreview videoRoomsPreview usageSingleRecord agentProcessNames)
 
 _settings_set_keys_line() {
     local IFS=","
@@ -1731,6 +1731,7 @@ nxt = {
     "boardFilePreview": "Board files open in a tab in the K2 app.",
     "videoRoomsPreview": "Video in voice rooms shows in the K2 desktop app'"'"'s call panel (preview).",
     "usageSingleRecord": "One usage percent per token: the top bar, Settings and the phone read one record. Off goes straight back.",
+    "agentProcessNames": "Claude Code sessions started from now on show their agent name in Activity Monitor (ps -c shows it too). Running sessions keep theirs until they restart.",
 }
 if want:
     print("Next: " + nxt[key])

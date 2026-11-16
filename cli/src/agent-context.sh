@@ -889,9 +889,12 @@ SERVER SWITCHES (the owner only)
                             too)
     boardFilePreview        board files open in a tab
     videoRoomsPreview       video in voice rooms: camera and screen share
-    usageSingleRecord       one usage percent per token (preview; off = today's)
                             in the K2 desktop app's call panel (needs
                             voiceRoomsPreview on too)
+    usageSingleRecord       one usage percent per token (preview; off = today's)
+    agentProcessNames       Activity Monitor shows each agent's Claude Code
+                            by the agent's name, not its version (new
+                            sessions; off = today's)
   All of them are off until the owner turns them on.
   Run it as the owner in a plain terminal on the server (not a K2 tab): the
   CLI picks up the owner's credential there by itself. These are the only

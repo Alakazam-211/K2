@@ -152,6 +152,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     "computePreview",
     // One usage record per token (prd-usage-single-source-v1): off = today.
     "usageSingleRecord",
+    // Agent names in Activity Monitor: changes the file every new Claude
+    // Code session is launched from (a hard link under ~/.k2/bin/agents).
+    "agentProcessNames",
     // CI on K2 Compute preview (0.46.10 ships it dark): rosters, lanes,
     // seats, signer pairing, lane secrets, `k2 ci`. Owner only.
     "ciPreview",
@@ -592,6 +595,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             k2_core::federation::set_enabled(merged.federation_enabled);
             k2_core::compute::set_enabled(merged.compute_preview);
             crate::usage_store::set_single_record(merged.usage_single_record);
+            k2_core::terminal::agent_process_name::set_enabled(merged.agent_process_names);
             k2_core::compute::set_ci_enabled(merged.ci_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&merged.compute_placement));
             // Voice rooms: the previews' mirrors; a preview or count change
@@ -683,6 +687,7 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
             crate::usage_store::set_single_record(defaults.usage_single_record);
+            k2_core::terminal::agent_process_name::set_enabled(defaults.agent_process_names);
             k2_core::compute::set_ci_enabled(defaults.ci_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
             k2_core::voice_preview::set_enabled(defaults.voice_rooms_preview);
@@ -1210,6 +1215,35 @@ mod tests {
                 k2_core::app_settings::load().push_gateway_url.as_deref(),
                 Some("https://push.example")
             );
+        });
+    }
+
+    /// Agent names in Activity Monitor: off by default, Owner only, and a
+    /// write flips the spawn path's mirror at once (no restart).
+    #[test]
+    fn agent_process_names_is_owner_only_and_mirrored() {
+        use k2_core::terminal::agent_process_name as apn;
+        with_temp_home(|| {
+            assert!(!k2_core::app_settings::load().agent_process_names, "default off");
+            let admin = session_actor("adminapn", connect_users::Role::Admin);
+            let member = session_actor("memberapn", connect_users::Role::Member);
+            for actor in [admin, member] {
+                let r = handle_settings_update(br#"{"agentProcessNames":true}"#, actor);
+                assert_eq!(r.status, "403 Forbidden", "{actor:?}: {}", r.body);
+            }
+            assert!(!k2_core::app_settings::load().agent_process_names, "403 leaves it off");
+            assert!(!apn::enabled(), "403 leaves the mirror off");
+
+            let r = handle_settings_update(br#"{"agentProcessNames":true}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "owner: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["agentProcessNames"], serde_json::json!(true), "{}", r.body);
+            assert!(k2_core::app_settings::load().agent_process_names);
+            assert!(apn::enabled(), "the mirror follows the write");
+
+            let r = handle_settings_update(br#"{"agentProcessNames":false}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "owner off: {}", r.body);
+            assert!(!apn::enabled(), "off goes straight back");
         });
     }
 

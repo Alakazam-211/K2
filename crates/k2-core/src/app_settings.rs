@@ -498,6 +498,14 @@ pub struct AppSettings {
     /// Rosson's smoke test says otherwise.
     #[serde(default)]
     pub usage_single_record: bool,
+    /// Agent names in Activity Monitor
+    /// ([`crate::terminal::agent_process_name`]): new Claude Code sessions
+    /// run from a hard link named after their agent, so the process shows
+    /// as `cortana`, not `2.1.322`. Owner only. Off by default; off changes
+    /// nothing about how agents launch. Mirrored into
+    /// `agent_process_name::set_enabled`.
+    #[serde(default)]
+    pub agent_process_names: bool,
     /// CI on K2 Compute preview (prd-ci-on-compute-for-clients-v1; 0.46.10
     /// ships it dark): `k2 ci` and its loop, node rosters, lanes, seats,
     /// owner trust, signer pairing, lane secrets, receipt v2 on submit.
@@ -1300,6 +1308,7 @@ impl Default for AppSettings {
             federation_enabled: false,
             compute_preview: false,
             usage_single_record: false,
+            agent_process_names: false,
             ci_preview: false,
             voice_rooms_preview: false,
             home_chat: false,

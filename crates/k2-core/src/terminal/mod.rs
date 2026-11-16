@@ -52,6 +52,10 @@ pub mod agent_spawn_guard;
 // commands under it inherit the FIRST session's K2 passport. Add
 // `--no-daemon` to Codex TUI launches when the binary supports it.
 pub mod codex_no_daemon;
+// Owner switch `agentProcessNames` (off by default): launch an agent's
+// Claude Code through a hard link named after the agent, so Activity
+// Monitor shows the agent, not the version file's name.
+pub mod agent_process_name;
 // Windows CreateProcess PATHEXT / .cmd wrap (npm `claude.cmd`).
 pub mod win_cmd;
 // UTF-8 locale defaulting for spawned children (launchd/systemd give

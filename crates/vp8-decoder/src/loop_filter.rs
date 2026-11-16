@@ -10,7 +10,9 @@
 //! exactly the RFC's clamping (`c()` in Section 15.2) and which the
 //! compiler can turn into vector code. On aarch64 and x86_64 the gathering
 //! and filtering use NEON or SSE2 instead (`neon.rs`, `sse2.rs`), with the
-//! same results bit for bit; `--cfg vp8_portable` turns them off.
+//! same results bit for bit; `--cfg vp8_portable` turns them off. Strides
+//! under a segment's width, where the rows overlap, always take the
+//! portable code (only the hidden `filter_mb` can pass them).
 
 /// Per-macroblock filter parameters.
 #[derive(Clone, Copy, Debug, Default)]
@@ -47,8 +49,9 @@ impl FilterParams {
 /// 7 = q3) of segment `i`.
 pub(crate) type Segs = [[u8; 16]; 8];
 
-/// The limits of one edge, as 8-bit values. The edge limit is at most
-/// (63 + 2) * 2 + 63 = 193 and the others at most 63, so they fit.
+/// The limits of one edge, as 8-bit values. For the RFC's levels (0 to
+/// 63) the edge limit is at most (63 + 2) * 2 + 63 = 193 and the others at
+/// most 63, so they fit; any other level is clamped to 0..=255.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
     pub(crate) edge: u8,
@@ -57,13 +60,27 @@ pub(crate) struct Limits {
 }
 
 impl Limits {
-    fn new(edge: i32, p: &FilterParams) -> Self {
-        let byte = |v: i32| v.clamp(0, 255) as u8;
+    fn new(edge: i64, p: &FilterParams) -> Self {
+        let byte = |v: i64| v.clamp(0, 255) as u8;
         Limits {
             edge: byte(edge),
-            interior: byte(p.interior_limit),
-            hev: byte(p.hev_threshold),
+            interior: byte(p.interior_limit.into()),
+            hev: byte(p.hev_threshold.into()),
         }
+    }
+
+    /// The limits of a macroblock's own edges and of the edges between its
+    /// subblocks (Section 15.2): edge limits `(level + 2) * 2 + interior`
+    /// and `level * 2 + interior`. `filter_mb` is reachable from outside
+    /// the crate, so `level` may be any `i32`: the sums are done in `i64`,
+    /// where they can't overflow (they are within 3 * 2^31 + 4 of zero),
+    /// and then clamped to a byte.
+    fn for_level(level: i32, p: &FilterParams) -> (Self, Self) {
+        let (level, interior) = (i64::from(level), i64::from(p.interior_limit));
+        (
+            Limits::new((level + 2) * 2 + interior, p),
+            Limits::new(level * 2 + interior, p),
+        )
     }
 }
 
@@ -497,8 +514,7 @@ pub(crate) fn filter_mb_impl<const PORTABLE: bool>(
     simple: bool,
 ) {
     let p = FilterParams::new(level, sharpness, keyframe);
-    let mb = Limits::new((level + 2) * 2 + p.interior_limit, &p);
-    let sub = Limits::new(level * 2 + p.interior_limit, &p);
+    let (mb, sub) = Limits::for_level(level, &p);
     let s = planes.y_stride;
     let pos = rows_len(mul(row, 16), s, mul(col, 16));
     let y = planes.y;
@@ -741,7 +757,7 @@ mod tests {
             } else {
                 level * 2 + p.interior_limit
             };
-            let l = Limits::new(edge, &p);
+            let l = Limits::new(edge.into(), &p);
             for kind in [Kind::Simple, Kind::Macroblock, Kind::Subblock] {
                 // The reference on a horizontal edge of 16 columns.
                 let mut want = pixels.clone();
@@ -847,24 +863,151 @@ mod tests {
         }
     }
 
-    /// Strides smaller than a block (rows that overlap) give the same bytes
-    /// on every path: the SIMD path hands vertical luma edges with a stride
-    /// under 8 to the portable code.
+    /// Strides under a segment's width (rows that overlap: under 16 pixels
+    /// across a horizontal luma edge, under eight otherwise) give the same
+    /// bytes on every path: the SIMD path hands them to the portable code.
     #[test]
     fn tiny_strides_match_the_portable_code() {
         let mut rng = Rng(0x0bad_cafe);
-        for s in [1usize, 3, 7, 8] {
+        let p = FilterParams::new(30, 0, false);
+        let l = Limits::new((30 * 2 + p.interior_limit).into(), &p);
+        for s in [0usize, 1, 3, 7, 8, 9, 15, 16] {
             for kind in [Kind::Simple, Kind::Macroblock, Kind::Subblock] {
-                let p = FilterParams::new(30, 0, false);
-                let l = Limits::new(30 * 2 + p.interior_limit, &p);
-                let buf = picture(&mut rng, 15 * s + 8 + 8);
-                let mut a = buf.clone();
-                let mut b = buf.clone();
-                luma_edge_portable(&mut a, 4, s, true, kind, l);
-                luma_edge::<false>(&mut b, 4, s, true, kind, l);
-                assert_eq!(a, b, "{kind:?} stride {s}");
+                for vertical in [false, true] {
+                    // q0 of the first segment: four pixels (vertical) or four
+                    // rows (horizontal) in, with 16 bytes of slack at the end.
+                    let pos = if vertical { 4 } else { 4 * s };
+                    let len = 15 * s + 16 + 16;
+                    let buf = picture(&mut rng, len);
+                    let mut a = buf.clone();
+                    let mut b = buf.clone();
+                    luma_edge_portable(&mut a, pos, s, vertical, kind, l);
+                    luma_edge::<false>(&mut b, pos, s, vertical, kind, l);
+                    assert_eq!(a, b, "luma {kind:?} vertical {vertical} stride {s}");
+
+                    let (u, v) = (picture(&mut rng, len), picture(&mut rng, len));
+                    let (mut ua, mut va) = (u.clone(), v.clone());
+                    let (mut ub, mut vb) = (u.clone(), v.clone());
+                    chroma_edge_portable(&mut ua, &mut va, pos, s, vertical, kind, l);
+                    chroma_edge::<false>(&mut ub, &mut vb, pos, s, vertical, kind, l);
+                    assert_eq!(ua, ub, "U {kind:?} vertical {vertical} stride {s}");
+                    assert_eq!(va, vb, "V {kind:?} vertical {vertical} stride {s}");
+                }
             }
         }
+    }
+
+    /// Whole macroblocks through `filter_mb` at strides whose rows overlap
+    /// (luma under 16, chroma under 8): the platform path matches the
+    /// portable one byte for byte.
+    #[test]
+    fn overlapping_strides_through_filter_mb_match_the_portable_code() {
+        let mut rng = Rng(0x0dd5_7a1d);
+        let mut changed = 0;
+        for (ys, cs) in [(1usize, 1usize), (4, 3), (8, 7), (15, 7), (15, 8), (16, 4)] {
+            for (row, col) in [(0usize, 0usize), (1, 1)] {
+                for simple in [false, true] {
+                    let y = picture(&mut rng, 40 * ys + 64);
+                    let u = picture(&mut rng, 20 * cs + 32);
+                    let v = picture(&mut rng, 20 * cs + 32);
+                    let mut out = Vec::new();
+                    for portable in [true, false] {
+                        let (mut y, mut u, mut v) = (y.clone(), u.clone(), v.clone());
+                        let planes = Planes {
+                            y: &mut y,
+                            u: &mut u,
+                            v: &mut v,
+                            y_stride: ys,
+                            uv_stride: cs,
+                        };
+                        if portable {
+                            filter_mb_impl::<true>(planes, row, col, 40, 0, false, true, simple);
+                        } else {
+                            filter_mb(planes, row, col, 40, 0, false, true, simple);
+                        }
+                        out.push((y, u, v));
+                    }
+                    let what = format!("strides {ys}/{cs}, mb ({row}, {col}), simple {simple}");
+                    assert!(out[1].0 == out[0].0, "luma differs: {what}");
+                    assert!(out[1].1 == out[0].1, "U differs: {what}");
+                    assert!(out[1].2 == out[0].2, "V differs: {what}");
+                    changed += (out[0].0 != y) as u32;
+                }
+            }
+        }
+        assert!(changed > 0, "no case changed the luma");
+    }
+
+    /// The edge limits at the ends of `i32`, and where the old `i32` sum
+    /// `(level + 2) * 2 + interior` overflowed (at sharpness 0 the
+    /// interior limit is `level`, so the sum is `3 * level + 4`): computed
+    /// exactly, then clamped. `filter_mb` doesn't panic at any of them,
+    /// and its platform and portable paths agree.
+    #[test]
+    fn extreme_levels_give_clamped_limits() {
+        // The largest level where 3 * level + 4 still fits in an i32.
+        let last_fit: i32 = 715_827_881;
+        let sum = |level: i32| level.checked_mul(3).and_then(|v| v.checked_add(4));
+        assert!(sum(last_fit).is_some(), "{last_fit} must fit");
+        assert!(sum(last_fit + 1).is_none(), "{} must overflow", last_fit + 1);
+        let levels = [
+            i32::MIN,
+            i32::MIN + 1,
+            -1,
+            0,
+            1,
+            63,
+            64,
+            last_fit,
+            last_fit + 1,
+            i32::MAX / 2 - 2,
+            i32::MAX / 2 - 1,
+            i32::MAX - 1,
+            i32::MAX,
+        ];
+        let mut rng = Rng(0x7e57_0001);
+        for level in levels {
+            for sharpness in [0u8, 7] {
+                for keyframe in [false, true] {
+                    let p = FilterParams::new(level, sharpness, keyframe);
+                    let (mb, sub) = Limits::for_level(level, &p);
+                    let wide = |extra: i128| -> u8 {
+                        (i128::from(level) * 2 + extra + i128::from(p.interior_limit))
+                            .clamp(0, 255) as u8
+                    };
+                    let what = format!("level {level} sharpness {sharpness} key {keyframe}");
+                    assert_eq!(mb.edge, wide(4), "macroblock edge limit: {what}");
+                    assert_eq!(sub.edge, wide(0), "subblock edge limit: {what}");
+                    assert_eq!(mb.interior, sub.interior, "{what}");
+                    assert_eq!(mb.hev, sub.hev, "{what}");
+
+                    let (y, u, v) = (
+                        picture(&mut rng, 48 * 48),
+                        picture(&mut rng, 24 * 24),
+                        picture(&mut rng, 24 * 24),
+                    );
+                    let mut out = Vec::new();
+                    for which in 1..3u8 {
+                        let (mut y, mut u, mut v) = (y.clone(), u.clone(), v.clone());
+                        filter_frame(
+                            which,
+                            (&mut y, &mut u, &mut v),
+                            level,
+                            sharpness,
+                            keyframe,
+                            true,
+                            false,
+                        );
+                        out.push((y, u, v));
+                    }
+                    assert!(out[0] == out[1], "portable and platform differ: {what}");
+                }
+            }
+        }
+        // At the RFC's top level the limits are unchanged.
+        let p = FilterParams::new(63, 0, true);
+        let (mb, sub) = Limits::for_level(63, &p);
+        assert_eq!((mb.edge, sub.edge, mb.interior, mb.hev), (193, 189, 63, 2));
     }
 
     /// Frames of one macroblock to several, with strides from the tightest

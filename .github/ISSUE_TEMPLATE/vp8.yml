@@ -1,0 +1,49 @@
+name: vp8-decoder / vp8-encoder
+description: A bug, wrong output or question about the vp8-decoder or vp8-encoder crates.
+title: "vp8: "
+labels: ["vp8"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A crash, hang or memory problem on a malicious stream is a security issue: please report it privately with "Report a vulnerability" on the Security tab instead of here.
+  - type: dropdown
+    id: crate
+    attributes:
+      label: Crate
+      options:
+        - vp8-decoder
+        - vp8-encoder
+        - both
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Crate version
+      description: From your Cargo.lock, for example 0.1.2.
+      placeholder: "0.1.2"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and CPU
+      description: OS, target triple and CPU, plus any RUSTFLAGS such as --cfg vp8_portable or target-cpu.
+      placeholder: "Linux, x86_64-unknown-linux-gnu, AMD Ryzen 7 3800X"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead (error, panic message, wrong pixels, bitrate).
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro or sample
+      description: A minimal repro, or a sample stream (an IVF file or raw frames; drag a file in or link one) if you can share it.
+    validations:
+      required: false

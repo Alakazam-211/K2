@@ -13,7 +13,9 @@
 
 use core::arch::x86_64::*;
 
-use crate::loop_filter::{luma_edge_portable, rows_len, span, Kind, Limits};
+use crate::loop_filter::{
+    chroma_edge_portable, luma_edge_portable, rows_len, span, Kind, Limits,
+};
 
 /// Eight taps (p3 to q3) of 16 segments, one vector per tap.
 type Taps = [__m128i; 8];
@@ -352,12 +354,17 @@ pub(crate) fn luma_edge(
     kind: Kind,
     l: Limits,
 ) {
+    // A stride under a segment's width (eight pixels across a vertical
+    // edge, 16 across a horizontal one) makes the rows overlap. The
+    // kernels write back every tap and the portable code only the taps
+    // the filter may change, which with overlapping rows is not the same,
+    // so the portable code handles those strides. A decoded frame's stride
+    // always covers its width: only the hidden `filter_mb` gets here.
+    let width = if vertical { 8 } else { 16 };
+    if s < width {
+        return luma_edge_portable(buf, pos, s, vertical, kind, l);
+    }
     if vertical {
-        if s < 8 {
-            // Rows that overlap can't be split into two halves; the
-            // portable code handles them (and gives the same bytes).
-            return luma_edge_portable(buf, pos, s, vertical, kind, l);
-        }
         // Rows 0..16, each eight pixels from p3.
         let block = &mut buf[span(pos, 0, 4, s, 15, 8)];
         let (top, bottom) = block.split_at_mut(8 * s);
@@ -383,6 +390,11 @@ pub(crate) fn chroma_edge(
     kind: Kind,
     l: Limits,
 ) {
+    // Overlapping rows (a stride under eight pixels): the portable code,
+    // as in `luma_edge`.
+    if s < 8 {
+        return chroma_edge_portable(ub, vb, pos, s, vertical, kind, l);
+    }
     if vertical {
         let r = span(pos, 0, 4, s, 7, 8);
         let (u, v) = (&mut ub[r.clone()], &mut vb[r]);

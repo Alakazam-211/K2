@@ -805,8 +805,8 @@ impl Decoder {
         if !bd.read(hdr.prob_intra) {
             mb.y_mode = bd.read_tree(&YMODE_TREE, &self.entropy.ymode);
             if mb.y_mode == B_PRED {
-                for b in 0..16 {
-                    mb.bmodes[b] = bd.read_tree(&BMODE_TREE, &BMODE_PROBS);
+                for m in mb.bmodes.iter_mut() {
+                    *m = bd.read_tree(&BMODE_TREE, &BMODE_PROBS);
                 }
             } else {
                 mb.bmodes = [implied_bmode(mb.y_mode); 16];
@@ -1264,10 +1264,9 @@ fn predict_inter(
                 bilinear,
             );
         } else {
-            for b in 0..16 {
+            for (b, mv) in mb.mvs.iter().enumerate() {
                 let bx = x + (b & 3) * 4;
                 let by = y + (b >> 2) * 4;
-                let mv = mb.mvs[b];
                 predict::inter_predict(
                     &mut cur.y.data,
                     by * s + bx,

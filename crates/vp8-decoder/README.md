@@ -16,6 +16,8 @@ It decodes every bitstream version (0 to 3), with:
 
 It matches the WebM project's 59 VP8 test vectors bit for bit (see Testing).
 
+**MSRV:** Rust 1.80 (`rust-version` in Cargo.toml).
+
 ## Using it
 
 Input is one raw VP8 frame at a time, starting at the frame tag: no IVF,
@@ -124,10 +126,23 @@ pictures at every filter level and sharpness). Build with
 `RUSTFLAGS="--cfg vp8_portable"` to leave them out; the decoder is then
 entirely safe Rust, and about half as fast on aarch64.
 
-Please report a crash
-or hang on a malicious stream privately, through GitHub's "Report a
-vulnerability" on the Security tab of
-[Alakazam-211/K2](https://github.com/Alakazam-211/K2/security).
+**Reporting:** please report a crash or hang on a malicious stream, or
+any other security problem, privately, never in a public issue: see
+[SECURITY.md](https://github.com/Alakazam-211/K2/blob/main/SECURITY.md) (GitHub's private vulnerability reporting on the
+Security tab of [Alakazam-211/K2](https://github.com/Alakazam-211/K2/security)).
+
+## Issues
+
+The source is in [`crates/vp8-decoder`](https://github.com/Alakazam-211/K2/tree/main/crates/vp8-decoder)
+of the K2 repository, and its issues are on that repository's tracker
+under the `vp8` label:
+- [report a bug or ask a question](https://github.com/Alakazam-211/K2/issues/new?labels=vp8&template=vp8.yml)
+  (a short form for the vp8 crates);
+- [the vp8 issues so far](https://github.com/Alakazam-211/K2/issues?q=label%3Avp8).
+
+Please give the crate version, your platform and CPU and, if you can
+share one, a sample stream or a minimal repro. A crash or hang on a
+malicious stream is a security problem: report it privately (see Security).
 
 ## Licence, provenance and patents
 

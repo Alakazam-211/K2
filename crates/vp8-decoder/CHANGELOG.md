@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.1.2
+
+Where the crate lives and where to report issues, plus two fixes in the
+loop filter's hidden shared module. Decoded pictures don't change.
+
+### Links, metadata and issues
+
+- The crate's homepage is now its folder in the K2 repository,
+  [`crates/vp8-decoder`](https://github.com/Alakazam-211/K2/tree/main/crates/vp8-decoder).
+- The README's new Issues section links a short issue form for the vp8
+  crates (label `vp8`; `.github/ISSUE_TEMPLATE/vp8.yml` in the
+  repository) and the vp8 issues so far, and asks for the crate version,
+  the platform and CPU, and a sample stream or a minimal repro.
+- The `documentation` link points to docs.rs.
+- The README states the MSRV, Rust 1.80 (the `rust-version` it already
+  had), and points security reports to the repository's SECURITY.md:
+  privately, never in a public issue.
+- The `include` list is anchored to the crate's root and names exactly
+  what the .crate holds: the source, README, CHANGELOG, the licences,
+  NOTICE and PROVENANCE.md. The packaged files don't change.
+
+### Loop filter
+
+- **Overlapping rows take the portable code.** With a stride under a
+  segment's width (under 16 pixels across a horizontal luma edge, under
+  eight for chroma), the rows overlap. The NEON and SSE2 kernels write
+  back every tap and the portable code only the taps the filter may
+  change, so there the two could give different bytes. These strides now
+  take the portable code on aarch64 and x86_64, as vertical luma edges
+  under eight pixels already did, so the SIMD and portable paths give the
+  same bytes at every stride, as the docs say. Only the hidden
+  `loop_filter::filter_mb` can be given such strides; the decoder never
+  does.
+- **Edge limits can't overflow.** `filter_mb` computes its edge limits,
+  `(level + 2) * 2 + interior` and `level * 2 + interior`, in 64-bit
+  arithmetic and then clamps them to a byte, so any `level` gives the
+  exact value, clamped. Before, a very large or very negative level (from
+  715,827,882 up at sharpness 0) overflowed 32-bit arithmetic: a panic in
+  debug builds, a wrapped limit in release builds. The decoder only uses
+  levels 0 to 63, whose limits are unchanged.
+
+### Tests
+
+- Strides under a segment's width, for every edge kind, both directions,
+  luma and chroma, on their own and through `filter_mb`: the platform
+  path matches the portable one byte for byte.
+- Edge limits at both ends of `i32` and on either side of the old
+  overflow, at two sharpnesses and both frame types, with `filter_mb`
+  run at each level on both paths.
+
 ## 0.1.1
 
 Faster decoding, the same output byte for byte. Nothing in the public API

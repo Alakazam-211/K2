@@ -35,7 +35,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import { historyField } from "@codemirror/commands";
+import { historyField, isolateHistory } from "@codemirror/commands";
 import { remoteChange } from "./codemirror";
 import type { Hunk, LiveText, Mark, Range16 } from "@k2/mpc-client";
 import { ByteIndex } from "./bytes";
@@ -446,10 +446,13 @@ export class Binding {
     for (const tr of u.transactions) {
       if (!isLocal(tr)) continue;
       const kind = tr.isUserEvent("input") ? "input" : tr.isUserEvent("delete") ? "delete" : (tr.annotation(Transaction.userEvent) ?? "other");
-      if (kind !== this.kind) {
+      // `isolateHistory` (Replace all): an undo step of its own, as CodeMirror's history keeps it
+      const isolate = tr.annotation(isolateHistory);
+      if (kind !== this.kind || isolate === "before" || isolate === "full") {
         this.kind = kind;
         this.group++;
       }
+      if (isolate === "after" || isolate === "full") this.kind = "";
       let hunks: Hunk[];
       if (this.held && this.shadow) {
         // live.text is the editor's text plus the held changes (the shadow): map this change

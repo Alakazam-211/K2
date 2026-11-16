@@ -84,9 +84,9 @@ export function MarkdownEditor(p: EditorProps): React.JSX.Element {
   // One element in every mode, so switching keeps the editor (and its undo history).
   const body = (
     <div data-testid={mode === 'read' ? 'editor-read' : undefined} aria-label={mode === 'read' ? `${name}, reading view` : undefined} className="min-h-0 flex-1 overflow-hidden">
-      {p.renderEditor({ mode, readOnly: ro, lineNumbers: mode === 'source' ? lineNumbers : false, wrap: mode === 'read' || wrap, extensions })}
+      {p.renderEditor({ mode, readOnly: ro, lineNumbers: mode === 'source' ? lineNumbers : false, wrap: mode === 'read' || wrap, extensions, frame: frame.extensionFor(mode === 'write') })}
     </div>
   )
 
-  return <EditorFrame frame={frame} filePath={filePath} kind="markdown" mode={mode} full={full} style={{ '--ed-measure': measure } as React.CSSProperties} modeControl={modeControl} notice={p.notice} body={body} status={{ items, toggles, facts: [] }} onKeyDownCapture={onKeyDownCapture} />
+  return <EditorFrame frame={frame} filePath={filePath} kind="markdown" mode={mode} full={full} style={{ '--ed-measure': measure } as React.CSSProperties} modeControl={modeControl} readOnly={readOnly} notice={p.notice} body={body} status={{ items, toggles, facts: [] }} onKeyDownCapture={onKeyDownCapture} />
 }

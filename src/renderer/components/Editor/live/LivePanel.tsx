@@ -12,7 +12,7 @@
 //   - one hint at the panel's foot, dismissed once on this computer.
 // A Here row follows its person (E4b), marked "Following" while you do.
 
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import { cx } from '@/components/ui'
 import { ChangesList } from '@/components/LiveView/shell/ChangesList'
 import { ChevronGlyph, CloseGlyph } from '@/components/LiveView/shell/glyphs'
@@ -24,6 +24,7 @@ import { useLocalFlag } from '@/lib/editor/local-flag'
 import type { LiveDocSnapshot } from '@/lib/editor/live/live-doc-source'
 import type { LiveChange } from '@/lib/live-view/shared/source'
 import { personById, watching, type LivePerson } from '@/lib/live-view/shared/people'
+import { PanelTabs, PanelTabsContext } from '../outline/PanelTabs'
 
 const UNDO_TIP_KEY = 'k2.editor.liveUndoTip.v1'
 export const READ_ALOUD_KEY = 'k2.editor.readEditsAloud.v1'
@@ -90,6 +91,8 @@ export function LivePanel({
   onFollow?: (id: string) => void
 }): React.JSX.Element {
   const [view, setView] = useState<'here' | 'edits'>('here')
+  // A markdown file's panel: Outline and Live share one strip (E3).
+  const tabs = useContext(PanelTabsContext)
   const [tipGone, setTipGone] = useLocalFlag(UNDO_TIP_KEY)
   const [readAloud, setReadAloud] = useLocalFlag(READ_ALOUD_KEY)
   const down = snap.connection !== null && snap.connection !== 'back'
@@ -110,14 +113,14 @@ export function LivePanel({
   )
   return (
     <div data-testid="ed-live-panel" className="flex min-h-full flex-col">
-      <div role="tablist" aria-label="Side panel" className="flex flex-none items-center gap-1 px-3 pb-1 pt-2">
+      {tabs ? <PanelTabs {...tabs} /> : <div role="tablist" aria-label="Side panel" className="flex flex-none items-center gap-1 px-3 pb-1 pt-2">
         <span role="tab" aria-selected="true" data-k2-chamfer="control" className="ed-panel-tab type-row inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-[var(--color-control-edge)] px-3 py-1 font-semibold text-[var(--color-text-primary)]">
           Live
           <span data-testid="ed-live-tab-count" data-stale={down ? '' : undefined} title={down ? 'As you last saw it' : undefined} className={cx('font-normal text-[var(--color-text-secondary)]', down ? 'line-through' : '')}>
             {here}
           </span>
         </span>
-      </div>
+      </div>}
       {view === 'edits' && !down ? (
         <LiveEdits snap={snap} people={people} readAloud={readAloud} onReadAloud={setReadAloud} onBack={() => setView('here')} />
       ) : (

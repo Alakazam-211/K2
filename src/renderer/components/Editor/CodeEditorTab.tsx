@@ -62,9 +62,9 @@ export function CodeEditorTab(p: EditorProps): React.JSX.Element {
       </div>
     ) : (
       <div className="min-h-0 flex-1 overflow-hidden">
-        {p.renderEditor({ mode: 'source', readOnly: p.readOnly !== null, lineNumbers, wrap, extensions: NONE })}
+        {p.renderEditor({ mode: 'source', readOnly: p.readOnly !== null, lineNumbers, wrap, extensions: NONE, frame: frame.extensionFor(false) })}
       </div>
     )
 
-  return <EditorFrame frame={frame} filePath={filePath} kind="code" mode={mode} modeControl={modeControl} notice={p.notice} body={body} status={{ items, toggles, facts }} onKeyDownCapture={onKeyDownCapture} />
+  return <EditorFrame frame={frame} filePath={filePath} kind="code" mode={mode} modeControl={modeControl} readOnly={p.readOnly} notice={p.notice} body={body} status={{ items, toggles, facts }} onKeyDownCapture={onKeyDownCapture} />
 }

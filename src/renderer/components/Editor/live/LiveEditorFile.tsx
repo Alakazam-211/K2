@@ -33,6 +33,7 @@ import { readLocalFlag } from '@/lib/editor/local-flag'
 import type { EditorKind } from '@/lib/editor/preview-switch'
 import { failureReason } from '@/lib/editor/save-model/write'
 import type { LiveChange } from '@/lib/live-view/shared/source'
+import { watching } from '@/lib/live-view/shared/people'
 import { useSettingsStore } from '@/stores/settings'
 import { EDITOR_NARROW_BELOW, fileNameOf } from '../EditorFrame'
 import { EditorTab } from '../EditorTab'
@@ -312,6 +313,8 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
       onClosePanel: () => setPanelOpen(false),
       panelLabel: 'Live',
       offline: shell.offline,
+      here: watching(shell.panelPeople).count,
+      hereStale: snap.connection !== null && snap.connection !== 'back',
     }),
     [showChip, tabState, shell.offline, shell.sentence, shell.panelPeople, shell.followingId, presence.sentence, presence.sentenceEnd, presence.fitKey, presence.right, presence.follow, snap, panelOpen, doc],
   )

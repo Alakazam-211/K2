@@ -387,7 +387,7 @@ interface CodeEditorProps {
    *  that server's, not this computer's. Omitted = true (window surfaces). */
   localFormat?: boolean
   /** The editor frame's own Wrap and line numbers, and its mode's extension (EditorTab); else the settings'. */
-  display?: { wrap: boolean; lineNumbers: boolean; extensions?: Extension }
+  display?: { wrap: boolean; lineNumbers: boolean; extensions?: Extension; frame?: Extension }
 }
 
 // ── Git gutter markers ──────────────────────────────────────────────
@@ -858,7 +858,7 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
           ? buildEditorTheme(themeOverride.colors, themeOverride.isLight)
           : getThemeExtension(es.theme)
       ),
-      c.extra.of(display?.extensions ?? []), // the editor frame's Write and Read
+      c.extra.of([display?.extensions ?? [], display?.frame ?? []]), // the editor frame's Write and Read, and its tools (E3)
       updateListener,
     ]
 
@@ -1009,10 +1009,10 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
         })) : []),
         c.stickyScroll.reconfigure(editorSettings.stickyScroll ? stickyScrollPlugin : []),
         c.vim.reconfigure(editorSettings.vimMode ? vim() : []),
-        c.extra.reconfigure(display?.extensions ?? []),
+        c.extra.reconfigure([display?.extensions ?? [], display?.frame ?? []]),
       ],
     })
-  }, [editorSettings, themeOverride, customThemes, display?.wrap, display?.lineNumbers, display?.extensions])
+  }, [editorSettings, themeOverride, customThemes, display?.wrap, display?.lineNumbers, display?.extensions, display?.frame])
 
   // Update content when external changes arrive (file polling)
   useEffect(() => {

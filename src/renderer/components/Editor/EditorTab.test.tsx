@@ -55,16 +55,17 @@ describe('header', () => {
     expect(within(head).getAllByText('README.md')).toHaveLength(1)
     expect(head.querySelector('[data-k2-chamfer="control"].lv-file-glyph')).toBeTruthy()
     expect(within(modes()).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Write', 'Read', 'Source'])
-    // No state chip on a plain file, no panel toggle, no old toolbar, no path bar.
+    // No state chip on a plain file, no old toolbar, no path bar; the panel toggle is the Outline's (E3).
     expect(screen.queryByTestId('lv-state')).toBeNull()
-    expect(screen.queryByTestId('lv-panel-toggle')).toBeNull()
+    expect(screen.getByTestId('lv-panel-toggle').getAttribute('aria-label')).toBe('Hide the outline')
     for (const t of ['Search (Cmd+F)', 'Toggle word wrap', 'Refresh', 'Close', 'Pin tab (keeps it at the left)']) expect(document.querySelector(`[title="${t}"]`)).toBeNull()
     expect(screen.getByTestId('editor-tab').textContent).not.toContain('/ws/quill/README.md')
   })
 
-  it('code: no mode control', () => {
+  it('code: no mode control, no outline', () => {
     mount({ filePath: '/ws/quill/src/brief.ts', kind: 'code', text: TS })
     expect(screen.queryByRole('radiogroup', { name: 'Mode' })).toBeNull()
+    expect(screen.queryByTestId('lv-panel-toggle')).toBeNull()
     expect(screen.getByTestId('stub-editor').getAttribute('data-line-numbers')).toBe('true')
   })
 })

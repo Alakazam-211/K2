@@ -47,6 +47,7 @@ export function LiveSlot({ host, filePath, opts, configure, onUpdate, presence, 
       getHighlightExtension(theme),
       lang ?? [],
       extensions,
+      opts.frame ?? [],
       presence ?? [],
       numbers ? lineNumbers() : [],
       EditorView.updateListener.of((u) => {
@@ -56,7 +57,7 @@ export function LiveSlot({ host, filePath, opts, configure, onUpdate, presence, 
         update.current(u.state.doc.toString(), { line: line.number, col: head - line.from + 1 })
       }),
     ]
-  }, [mode, numbers, extensions, filePath, theme, presence])
+  }, [mode, numbers, extensions, opts.frame, filePath, theme, presence])
 
   useLayoutEffect(() => {
     const el = box.current

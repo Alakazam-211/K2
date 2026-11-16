@@ -27,6 +27,9 @@ export interface FrameLive {
   panelLabel: string
   /** Not connected: others' carets freeze in grey. */
   offline: boolean
+  /** The Live tab's count (who's here, you included) beside Outline, and whether it's as you last saw it. */
+  here?: number
+  hereStale?: boolean
 }
 
 export const FrameLiveContext = createContext<FrameLive | null>(null)

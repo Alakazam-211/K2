@@ -110,6 +110,7 @@ export function LiveHeader({
   sentenceRow = false,
   right,
   mode,
+  docked,
   panelOpen = false,
   onTogglePanel,
   panelLabel = 'who’s watching and the changes',
@@ -135,6 +136,8 @@ export function LiveHeader({
   right?: React.ReactNode
   /** The view's modes (the editor's Write | Read | Source), after `right`. */
   mode?: React.ReactNode
+  /** In the sentence's place while it's set (the editor's formatting toolbar when the margin has no room, w17). */
+  docked?: React.ReactNode
   panelOpen?: boolean
   /** No handler: no panel toggle. */
   onTogglePanel?: () => void
@@ -164,7 +167,7 @@ export function LiveHeader({
       </div>
       {state && !(state === 'live' && tight >= GIVE_UP.liveChip) ? <StateChip state={state} why={stateWhy} short={tight >= GIVE_UP.shortWords} /> : null}
       <div ref={box} aria-live="polite" className={cx('lv-sentence-box flex min-w-0 items-center overflow-hidden', sentenceRow ? 'order-last basis-full' : sentenceEnd ? 'flex-initial' : 'flex-1')}>
-        {sentence ? (
+        {docked ?? (sentence ? (
           <span className={cx('type-row inline-flex items-center gap-1.5 whitespace-nowrap text-[var(--color-text-primary)]', fits ? '' : 'invisible')} aria-hidden={fits ? undefined : true}>
             {sentence.who ? <LiveAvatar person={sentence.who} size={18} /> : null}
             <span data-testid="lv-sentence">
@@ -173,7 +176,7 @@ export function LiveHeader({
               {words}
             </span>
           </span>
-        ) : null}
+        ) : null)}
       </div>
       {typeof sentenceEnd === 'function' ? sentenceEnd(tight) : sentenceEnd}
       {sentenceRow || sentenceEnd ? <span className="flex-1" /> : null}

@@ -17,6 +17,12 @@
 // The bounds, cameras and meta are read by listing-read.ts (one place for
 // those keys). Loud on a shape this client doesn't know; quiet (null) on a
 // field it can do without.
+//
+// TODO(K2 Cores, next mesh-read slice): a derived `mesh_hash` and
+// `hidden_by` per unit on the keyed watch. The vendored kit's WIRE.md has
+// neither yet (vendor/k2-mpc-base/client/WIRE.md, "Placements in 3D"), so
+// nothing reads them; until then hidden and hidden_by come from this
+// listing. S8's keyed source reads them from the units when they land.
 
 import { entryOf, idIndexAt, type IdEntry, type IdLayer } from './ids'
 import { listingCameraFrom, objectListingFrom, stillCameraFrom, stillMetaFrom, type ListingCamera } from './listing-read'

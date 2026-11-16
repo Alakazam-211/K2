@@ -81,7 +81,7 @@ const h = vi.hoisted(() => {
     // Slice 4 — host-aware set-chat-session client (workspace-agent.ts).
     // The dropdown switch persists the picked session id + PROVIDER
     // through this, no longer via a raw daemonCliGet call.
-    setChatSession: vi.fn<(project: string, sessionId: string, provider?: string) => Promise<void>>(
+    setChatSession: vi.fn<(project: string, sessionId: string, provider?: string, thread?: string) => Promise<void>>(
       async () => undefined,
     ),
     resumeChatArgs: vi.fn(async () => ({
@@ -406,7 +406,7 @@ describe('#683 daemon-owned path — refresh & switch issue forceRespawn', () =>
 
     await waitFor(() => {
       // persisted via the setChatSession client (id + provider)
-      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'other-sess', 'claude')
+      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'other-sess', 'claude', 'keep_main')
       // then a forceRespawn ensure
       expect(lastEnsureCall()?.forceRespawn).toBe(true)
     })
@@ -487,7 +487,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
     fireEvent.click(screen.getByText('Pi chat'))
 
     await waitFor(() => {
-      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'pi-sess', 'pi')
+      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'pi-sess', 'pi', 'keep_main')
       // The respawn goes through ensure-pinned-chat — the DAEMON resolves
       // the stored harness's command; the renderer sends no command/args.
       expect(lastEnsureCall()?.forceRespawn).toBe(true)
@@ -513,8 +513,81 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
 
     fireEvent.click(screen.getByText('Legacy chat'))
     await waitFor(() => {
-      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'legacy-sess', 'claude')
+      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'legacy-sess', 'claude', 'keep_main')
     })
+  })
+})
+
+// ── 0.46.14 — a picked chat with its own Thread: which Thread the main chat shows ──
+
+describe('picking a chat that has its own Thread asks which Thread the main chat keeps', () => {
+  const ROWS = [{ sessionId: 'side-sess', title: 'Reviewer', timestamp: 2, messageCount: 3, provider: 'claude' }]
+  const post = (id: string) => ({ collection: 'thread', seq: 1, id, doc: { id, kind: 'text', from: 'owner', body: id } })
+  /** `thread` reads: the picked chat (`side-sess`) and the main chat (any
+   *  other address) answer with a message when told to. */
+  function threads(main: boolean, picked: boolean): void {
+    h.daemonCliGet.mockImplementation(async (route: string, params?: unknown): Promise<unknown> => {
+      if (route === 'chat/list') return ROWS
+      if (route === 'chat/custom-names') return {}
+      if (route === 'thread') {
+        const addr = (params as { addr?: string } | undefined)?.addr ?? ''
+        const has = addr === 'side-sess' ? picked : main
+        return { conversation_id: addr, items: has ? [post(`m-${addr}`)] : [], has_more: false }
+      }
+      return undefined
+    })
+  }
+  async function pick(): Promise<void> {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.setChatSession.mockClear()
+    fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
+    await waitFor(() => expect(screen.queryByText('Reviewer')).not.toBeNull())
+    fireEvent.click(screen.getByText('Reviewer'))
+  }
+
+  it('both have a Thread: the dialog asks, keep the main Thread is picked first, and it is what is sent', async () => {
+    threads(true, true)
+    await pick()
+    const dialog = await screen.findByTestId('main-thread-choice')
+    expect(dialog.textContent).toContain('Make Reviewer the main chat')
+    expect(h.setChatSession).not.toHaveBeenCalled()
+    const keep = dialog.querySelector<HTMLInputElement>('[data-main-thread-choice="keep_main"]')
+    expect(keep?.checked).toBe(true)
+    fireEvent.click(screen.getByText('Make main chat'))
+    await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'side-sess', 'claude', 'keep_main'))
+    expect(screen.queryByTestId('main-thread-choice')).toBeNull()
+  })
+
+  it("choosing the picked chat's Thread sends adopt_sidecar", async () => {
+    threads(true, true)
+    await pick()
+    await screen.findByTestId('main-thread-choice')
+    fireEvent.click(screen.getByLabelText("Use Reviewer's Thread"))
+    fireEvent.click(screen.getByText('Make main chat'))
+    await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'side-sess', 'claude', 'adopt_sidecar'))
+  })
+
+  it('Cancel and Esc change nothing', async () => {
+    threads(true, true)
+    await pick()
+    await screen.findByTestId('main-thread-choice')
+    fireEvent.click(screen.getByText('Cancel'))
+    await waitFor(() => expect(screen.queryByTestId('main-thread-choice')).toBeNull())
+    fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
+    await waitFor(() => expect(screen.queryByText('Reviewer')).not.toBeNull())
+    fireEvent.click(screen.getByText('Reviewer'))
+    await screen.findByTestId('main-thread-choice')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('main-thread-choice')).toBeNull())
+    expect(h.setChatSession).not.toHaveBeenCalled()
+  })
+
+  it('the picked chat has no Thread: no dialog, the main Thread follows (keep_main)', async () => {
+    threads(true, false)
+    await pick()
+    await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'side-sess', 'claude', 'keep_main'))
+    expect(screen.queryByTestId('main-thread-choice')).toBeNull()
   })
 })
 

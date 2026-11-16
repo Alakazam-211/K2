@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useDismissOnOutside } from '@/hooks/useDismissOnOutside'
 import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { ProgressiveHeaderBlur } from '@/components/ui'
@@ -23,6 +24,8 @@ import {
 } from '@/components/ChatHistory/ContinueNewChatDialog'
 import { agentDisplayName, claimAgentLock, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
+import { needsMainThreadChoice, type MainThreadChoice } from '@/lib/main-thread-choice'
+import { MainThreadChoiceDialog } from './MainThreadChoiceDialog'
 import { useStore } from 'zustand'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged, onAgentIdentityChanged } from '@/stores/session-events'
 import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
@@ -231,7 +234,7 @@ interface ChatHeaderProps {
   /** Slice 4 — the picked row's provider rides along so the daemon can
    *  persist workspace_sessions.harness with the id (the canonical
    *  session's agent may differ from the workspace default). */
-  onSwitchSession: (newSessionId: string, provider: string) => void
+  onSwitchSession: (newSessionId: string, provider: string, thread?: MainThreadChoice) => void
   viewTab: SessionViewTab
   splitLeft: SplitPaneView
   splitRight: SplitPaneView
@@ -358,6 +361,24 @@ function ChatHeader({
     ? chatDisplayName(currentSession) || 'New chat'
     : 'New chat'
   const canContinue = currentSessionId != null && currentSessionId !== ''
+
+  // 0.46.14 — picking another chat (a sidecar, a past chat) as the main
+  // chat: when both have a Thread (the main one read by its conversation id,
+  // else the workspace's address), the person chooses which one the main
+  // chat shows (MainThreadChoiceDialog); otherwise the main Thread follows
+  // the main chat (keep_main). Cancel leaves everything as it was.
+  const [threadChoiceFor, setThreadChoiceFor] = useState<HistorySession | null>(null)
+  const pickSession = async (s: HistorySession): Promise<void> => {
+    if (s.sessionId === currentSessionId) {
+      onSwitchSession(s.sessionId, s.provider)
+      return
+    }
+    if (await needsMainThreadChoice(room.scope, currentSessionId || overlayAddr, s.sessionId)) {
+      setThreadChoiceFor(s)
+      return
+    }
+    onSwitchSession(s.sessionId, s.provider, 'keep_main')
+  }
 
   // 0.46.6 — "Move pinned chat to …": one item per harness an enabled preset
   // runs, except the one the pinned chat is on. The daemon does the move
@@ -575,7 +596,7 @@ function ChatHeader({
                   {...MENU_ROW}
                   onClick={() => {
                     setHistoryOpen(false)
-                    onSwitchSession(s.sessionId, s.provider)
+                    void pickSession(s)
                   }}
                   className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors no-drag cursor-pointer ${
                     isCurrent
@@ -603,6 +624,20 @@ function ChatHeader({
       )}
       </div>
       ) : null}
+      {threadChoiceFor
+        ? createPortal(
+          <MainThreadChoiceDialog
+            name={chatDisplayName(threadChoiceFor) || 'this chat'}
+            onCancel={() => setThreadChoiceFor(null)}
+            onChoose={(choice) => {
+              const s = threadChoiceFor
+              setThreadChoiceFor(null)
+              onSwitchSession(s.sessionId, s.provider, choice)
+            }}
+          />,
+          document.body,
+        )
+        : null}
       {shows('refresh') ? (
       <button
         type="button"
@@ -1285,7 +1320,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // ensure-pinned-chat then resolves THAT harness's command+grammar
   // (a pi pick respawns `pi --session <id>`, not claude).
   const handleSwitchSession = useCallback(
-    async (newSessionId: string, provider: string): Promise<void> => {
+    async (newSessionId: string, provider: string, thread?: MainThreadChoice): Promise<void> => {
       if (!newSessionId || newSessionId === canonicalSessionId) return
       switchingConversationRef.current = true
       freshHoldProviderIdRef.current = null
@@ -1294,8 +1329,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       beginEnsure()
       try {
         // HOST-AWARE persist of the pinned session (same client the legacy
-        // path uses; the route reads query params).
-        await setChatSession(room.scope, projectPath, newSessionId, provider)
+        // path uses; the route reads query params). `thread`: which Thread
+        // the main chat shows afterwards (the pick's dialog).
+        await setChatSession(room.scope, projectPath, newSessionId, provider, thread)
       } catch (err) {
         console.error('[AgentChatPane] switchToSession DB update failed:', err)
         setRefreshing(false)
@@ -1450,7 +1486,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       currentSessionId={canonicalSessionId}
       onRefresh={() => void handleRefresh()}
       refreshing={refreshing}
-      onSwitchSession={(sid, provider) => void handleSwitchSession(sid, provider)}
+      onSwitchSession={(sid, provider, thread) => void handleSwitchSession(sid, provider, thread)}
       viewTab={viewTab}
       splitLeft={splitLeft}
       splitRight={splitRight}
@@ -1848,12 +1884,12 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   // closes its own popover before invoking this, so no dropdown state here.
   // Slice 4: the picked row's provider is persisted with the id so the
   // refresh's daemon resolve speaks that harness's grammar.
-  const switchToSession = useCallback(async (newSessionId: string, provider: string): Promise<void> => {
+  const switchToSession = useCallback(async (newSessionId: string, provider: string, thread?: MainThreadChoice): Promise<void> => {
     if (!newSessionId || newSessionId === currentSessionId) {
       return
     }
     try {
-      await setChatSession(room.scope, projectPath, newSessionId, provider)
+      await setChatSession(room.scope, projectPath, newSessionId, provider, thread)
     } catch (err) {
       console.error('[AgentChatPane] switchToSession DB update failed:', err)
       return
@@ -2077,7 +2113,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       currentSessionId={currentSessionId}
       onRefresh={() => void handleRefresh()}
       refreshing={refreshing}
-      onSwitchSession={(sid, provider) => void switchToSession(sid, provider)}
+      onSwitchSession={(sid, provider, thread) => void switchToSession(sid, provider, thread)}
       viewTab={viewTab}
       splitLeft={splitLeft}
       splitRight={splitRight}

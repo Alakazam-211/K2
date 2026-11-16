@@ -20,6 +20,7 @@
 
 import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { assertScopeMayWrite, scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
+import type { MainThreadChoice } from '@/lib/main-thread-choice'
 
 /** Resolve the workspace's primary-agent display name. Total — the daemon
  *  always returns a string (display_name → name → project name fallback).
@@ -79,12 +80,17 @@ export async function setAgentHandle(
  *  owns the picked session ("claude"/"pi"/"codex"/…). When present the
  *  daemon persists it to `workspace_sessions.harness` alongside the id
  *  so the resume resolver picks the right ProviderResume adapter.
- *  Omitted = keep the stored harness (backward compatible). */
+ *  Omitted = keep the stored harness (backward compatible).
+ *
+ *  0.46.14 — `thread`: a person picked another chat as the main chat, and
+ *  this says which Thread the main chat shows afterwards (`keep_main`: its
+ *  own; `adopt_sidecar`: the picked chat's). Omitted = the pin alone moves. */
 export async function setChatSession(
   scope: ServerScope,
   projectPath: string,
   sessionId: string,
   provider?: string,
+  thread?: MainThreadChoice,
 ): Promise<void> {
   // A GET that writes: held to the room's write rules (never from a
   // view-only room; on the allowlist for a usable one).
@@ -93,6 +99,7 @@ export async function setChatSession(
     project: projectPath,
     session_id: sessionId,
     ...(provider ? { provider } : {}),
+    ...(thread ? { thread } : {}),
   })
 }
 

@@ -101446,6 +101446,12 @@ Presence:
   a message in its terminal (also in Chatter): the lines are free, at
   version V. If yours bounced: don't retry in a loop; on that message,
   read again, then redo the edit.
+  k2 doc say <f> [--to <who>] [--at <address>] [--time <ticks>] [--reply-to <id>] "text"
+                                      say something in a live doc's room (people
+                                      watching it see it; an agent gets an inbox
+                                      note). --to: one person or agent who can
+                                      read it; --at: what you look at (@cam:c1);
+                                      at most 1024 bytes, 5 at once then 1 / 3 s
   k2 doc open <f> · leave <f>         stay present / leave now
   k2 doc watch <f>                    print each change as it lands (also: tail -f)
 State and history:
@@ -103028,6 +103034,33 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
             fi ;;
         watch) _doc_parse "$@"; _doc_watch ;;
         who) _doc_parse "$@"; _doc_who "" ;;
+        say)
+            local to="" at="" time="" reply=""
+            local -a rest=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --to) [ $# -ge 2 ] || _doc_die usage "--to needs a person or agent"; to="$2"; shift 2 ;;
+                    --at) [ $# -ge 2 ] || _doc_die usage "--at needs an address"; at="$2"; shift 2 ;;
+                    --time) [ $# -ge 2 ] || _doc_die usage "--time needs a time"; time="$2"; shift 2 ;;
+                    --reply-to) [ $# -ge 2 ] || _doc_die usage "--reply-to needs a message id"; reply="$2"; shift 2 ;;
+                    *) rest+=("$1"); shift ;;
+                esac
+            done
+            _doc_parse ${rest[@]+"${rest[@]}"}
+            [ ${#_DOC_ARGS[@]} -ge 1 ] || _doc_die usage "k2 doc say <file> [--to <who>] [--at <address>] \"text\""
+            local path msg
+            path="$(_doc_path "${_DOC_ARGS[0]}")"
+            if [ ${#_DOC_ARGS[@]} -ge 2 ]; then
+                msg="${_DOC_ARGS[*]:1}"
+            elif [ "${_DOC_TEXT_SET:-0}" = "1" ]; then
+                msg="$_DOC_TEXT"
+            else
+                _doc_die usage "k2 doc say <file> [--to <who>] \"text\": say what?"
+            fi
+            # The text rides as --text does (never read as a body flag).
+            _DOC_TEXT="$msg"; _DOC_TEXT_SET=1
+            _doc_call POST /cli/docs/say "$(_doc_body "$path" text @text to "$to" at "$at" time "$time" reply_to "$reply")"
+            _doc_print_json_or 'import json,sys; v=json.load(sys.stdin)["say"]; print("said %s%s" % (v["id"], " to " + v["to"] if v.get("to") else " to the room"))' ;;
         follow)
             _doc_parse "$@"
             [ ${#_DOC_ARGS[@]} -ge 1 ] || _doc_die usage "k2 doc follow <name> <file.md>"

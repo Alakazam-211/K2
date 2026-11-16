@@ -10,9 +10,13 @@
 //! | a comment op (`AuditEvent::Annotation`) | `roster_event {kind: "comment_event", thread, comment, op, author, at_ms, anchor}` | sockets on that doc, readers only |
 //! | an anchor's state moved (`AuditEvent::AnchorState`) | `roster_event {kind: "anchor_state", thread, rev, was, now}` | the same |
 //!
+//! | someone said something in the doc's live room (`POST /cli/docs/say`, [`super::say`]) | `say {id, from, to, text, at, time, reply_to, at_ms}` (`from`/`to` actor records; `to`, `at`, `time`, `reply_to` null when absent) | sockets on that doc, readers only |
+//!
 //! **Never content.** A preview names a hash, a turn its id and actor, a
 //! comment its thread, op and author: a body is read on demand through the
-//! rights-checked routes. (A scene view's `camera` is the projection its
+//! rights-checked routes. (A `say` is the exception by design: the message
+//! is the room's own, bounded, sent only to the doc's readers, never
+//! logged.) (A scene view's `camera` is the projection its
 //! still was drawn with, and its `ids` the ids of the objects in it, sent to
 //! readers only, as the image is.)
 //!
@@ -63,6 +67,19 @@ pub enum HostEvent {
     Comment { key: DocKey, thread: String, comment: Option<u32>, op: String, author: String, at_ms: u64, anchor: Option<String> },
     /// A thread's anchor changed state at `version`.
     AnchorState { key: DocKey, thread: String, version: u64, was: Option<String>, now: String },
+    /// Someone watching the doc said something in its live room
+    /// ([`super::say`]): to one participant (`to`, a pid) or the room.
+    Say {
+        key: DocKey,
+        id: String,
+        from: String,
+        to: Option<String>,
+        text: String,
+        at: Option<String>,
+        time: Option<String>,
+        reply_to: Option<String>,
+        at_ms: u64,
+    },
 }
 
 impl HostEvent {
@@ -72,7 +89,8 @@ impl HostEvent {
             HostEvent::PreviewReady { key, .. }
             | HostEvent::PreviewRendering { key, .. }
             | HostEvent::Comment { key, .. }
-            | HostEvent::AnchorState { key, .. } => Some(key),
+            | HostEvent::AnchorState { key, .. }
+            | HostEvent::Say { key, .. } => Some(key),
             HostEvent::TurnEnd { .. } => None,
         }
     }
@@ -130,6 +148,17 @@ impl HostEvent {
                 ("was", was.as_deref().map_or(Value::Null, Value::from)),
                 ("now", Value::from(now.as_str())),
             ])),
+            HostEvent::Say { id, from, to, text, at, time, reply_to, at_ms, .. } => Value::obj([
+                ("type", Value::from("say")),
+                ("id", Value::from(id.as_str())),
+                ("from", author(from)),
+                ("to", to.as_deref().map_or(Value::Null, &author)),
+                ("text", Value::from(text.as_str())),
+                ("at", at.as_deref().map_or(Value::Null, Value::from)),
+                ("time", time.as_deref().map_or(Value::Null, Value::from)),
+                ("reply_to", reply_to.as_deref().map_or(Value::Null, Value::from)),
+                ("at_ms", Value::from(*at_ms)),
+            ]),
         }
     }
 }

@@ -141,7 +141,7 @@ pub const ROUTES: &[&str] = &[
     STATUS, super::cores::CORES_ROUTE, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
     super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
-    super::annotations::PURGE, super::annotations::ERASE, super::preview::route::PREVIEW,
+    super::annotations::PURGE, super::annotations::ERASE, super::preview::route::PREVIEW, super::say::SAY,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
@@ -180,6 +180,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/export/cancel"
             | "/cli/docs/comments/purge"
             | "/cli/docs/erase"
+            | "/cli/docs/say"
     ) || is_edit_route(path)
 }
 
@@ -395,6 +396,10 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     // (history for a version, in the route).
     if path == super::preview::route::PREVIEW {
         return super::preview::route::handle(&rt, &call);
+    }
+    // Say something in the doc's live room (read right, POST only, rate-limited).
+    if path == super::say::SAY {
+        return super::say::handle(&rt, &call);
     }
     // `k2 doc export` (P24), on either tier: the kit's export verb decides
     // which right (read; history with a version).

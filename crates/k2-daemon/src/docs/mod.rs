@@ -65,6 +65,7 @@ pub mod live_watch;
 pub mod live_wire;
 pub mod preview;
 pub mod routes;
+pub mod say;
 pub mod shares;
 pub mod target;
 pub mod tier0;

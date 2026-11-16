@@ -19,6 +19,11 @@
 //!      `presence_refused {req}` with `MPC-E114`, and a cleared view is null.
 //!   5. A Markdown doc's welcome lists no `keyed_watch`, and its `watch` is
 //!      refused (`MPC-E113`); nor `view_address`, refused the same way.
+//!   6. Say something (`POST /cli/docs/say`): the deck's socket gets one
+//!      `say` frame (to a person, trimmed, with its address); to the deck's
+//!      agent it is also an inbox note; a reply names what it answers; GET
+//!      is 405, an over-long text 400, an unknown recipient 404, an
+//!      any-file doc 409 `no_live_room`; past a sender's burst, 429.
 //!
 //! The preview worker isn't built here: a slide's re-render may fail
 //! (`preview_ready` with a failure), which this test ignores.
@@ -350,4 +355,82 @@ async fn a_live_deck_is_watched_by_key_headless() {
     }
     let err = err.expect("error");
     assert_eq!(err["error"]["id"], "MPC-E113", "{err}");
+    drop(md);
+
+    // ── 6. Say something: a POST into the deck's room reaches its sockets ──
+    let (mut room, _) = tokio_tungstenite::connect_async(&url(&talk)).await.expect("a socket in the deck's room");
+    let w_room = next_frame(&mut room, "the room's welcome").await;
+    assert_eq!(w_room["type"], "welcome", "{w_room}");
+    let say = |body: J| http(port, "POST", &format!("/cli/docs/say?token={OWNER}"), Some(&body.to_string()));
+    let (st, body) = say(json!({"path": talk, "text": "  Can you lighten slide 2?  ", "to": "owner", "at": "@sld:257"}));
+    assert_eq!(st, 200, "say: {body}");
+    let out: J = serde_json::from_str(&body).expect("say JSON");
+    let id = out["say"]["id"].as_str().expect("an id").to_string();
+    assert!(id.starts_with("say_"), "{out}");
+    assert_eq!(out["say"]["to"], "person:owner", "{out}");
+    assert!(out["sockets"].as_u64().is_some_and(|n| n >= 1), "the room's socket took it: {out}");
+    assert_eq!(out["inbox"], false, "a person watches live; no inbox note: {out}");
+    let mut frame = None;
+    while frame.is_none() {
+        let f = next_frame(&mut room, "the say frame").await;
+        if f["type"] == "say" {
+            frame = Some(f);
+        }
+    }
+    let frame = frame.expect("say");
+    assert_eq!(frame["id"], id.as_str(), "{frame}");
+    assert_eq!(frame["text"], "Can you lighten slide 2?", "trimmed: {frame}");
+    assert_eq!((&frame["at"], &frame["time"], &frame["reply_to"]), (&json!("@sld:257"), &J::Null, &J::Null), "{frame}");
+    assert_eq!((&frame["from"]["id"], &frame["from"]["kind"]), (&json!("person:owner"), &json!("person")), "{frame}");
+    assert_eq!(frame["to"]["id"], "person:owner", "{frame}");
+    assert!(frame["at_ms"].as_u64().is_some_and(|ms| ms > 0), "{frame}");
+
+    // To the deck's agent (by its workspace): an inbox note too, and its reply.
+    let (st, body) = say(json!({"path": talk, "text": "Lamp a bit left?", "to": "deckws", "time": "48000"}));
+    assert_eq!(st, 200, "say to an agent: {body}");
+    let to_agent: J = serde_json::from_str(&body).expect("JSON");
+    assert!(to_agent["say"]["to"].as_str().is_some_and(|p| p.starts_with("agent:")), "{to_agent}");
+    assert_eq!(to_agent["inbox"], true, "the agent holds no socket: an inbox note: {to_agent}");
+    let (st, body) = say(json!({"path": talk, "text": "Done.", "reply_to": id}));
+    assert_eq!(st, 200, "a reply to the room: {body}");
+    let mut reply = None;
+    while reply.is_none() {
+        let f = next_frame(&mut room, "the reply").await;
+        if f["type"] == "say" && f["reply_to"] == id.as_str() {
+            reply = Some(f);
+        }
+    }
+    assert_eq!(reply.expect("reply")["to"], J::Null, "to the room");
+
+    // Refusals: GET (405), a message over the cap (400), someone unknown (404),
+    // an any-file doc (no live room, 409).
+    let (st, _) = http(port, "GET", &format!("/cli/docs/say?token={OWNER}&path={}&text=hi", enc(&talk)), None);
+    assert_eq!(st, 405, "POST only");
+    let (st, body) = say(json!({"path": talk, "text": "x".repeat(1025)}));
+    assert_eq!(st, 400, "{body}");
+    let (st, body) = say(json!({"path": talk, "text": "hi", "to": "nobody-here"}));
+    assert_eq!(st, 404, "{body}");
+    let photo = ws_dir.join("photo.png");
+    std::fs::write(&photo, [0x89u8, b'P', b'N', b'G', 0, 1, 2, 3]).expect("png");
+    let (st, body) = say(json!({"path": photo.to_string_lossy(), "text": "hi"}));
+    assert_eq!(st, 409, "{body}");
+    assert!(body.contains("no_live_room"), "{body}");
+
+    // The rate: a burst of 5 a sender (3 sent so far, refusals don't count),
+    // then 429 with when to try again. Sent back to back, so at most a token
+    // or two refills meanwhile.
+    let mut more = 0;
+    let body = loop {
+        let (st, body) = say(json!({"path": talk, "text": format!("more {more}")}));
+        if st == 429 {
+            break body;
+        }
+        assert_eq!(st, 200, "within the burst: {body}");
+        more += 1;
+        assert!(more <= 4, "no 429 after {more} more messages: the burst is 5");
+    };
+    assert!(more >= 2, "the 3 refused calls didn't use the burst: 2 more went first, not {more}");
+    let limited: J = serde_json::from_str(&body).expect("JSON");
+    assert_eq!(limited["error"]["code"], "rate_limited", "{limited}");
+    assert!(limited["retryAfterMs"].as_u64().is_some_and(|ms| ms > 0 && ms <= 3000), "{limited}");
 }

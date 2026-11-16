@@ -394,6 +394,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/docs/redo", Member),
     post("/cli/docs/restore", Member),
     post("/cli/docs/revert", Member),
+    // Say something in a live doc's room (`docs/say.rs`): the doc's read
+    // right, as the Live socket; agents with the same access; rate-limited.
+    post("/cli/docs/say", Member),
     post("/cli/docs/share", Admin),
     get("/cli/docs/shares", Admin),
     get("/cli/docs/show", Member),

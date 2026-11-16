@@ -19,3 +19,13 @@ describe('O4 #1: true colour (group 420)', () => {
     expect(of(d.nodes, 'path').map((p) => p.c)).toEqual(['#3399cc', '#ff8800', '#8844aa', '#0000ff', '#ff0000'])
   })
 })
+
+describe('O4 #2: a layer frozen only in new viewports', () => {
+  const d = buildDrawing(fixture('dxf-frozen-new-vp.dxf'))
+
+  it('is drawn in model space; frozen (flag 1) and off layers are not', () => {
+    // THAWED green, NEWVP blue, LOCKED magenta; FROZEN and OFF hidden.
+    expect(of(d.nodes, 'path').map((p) => p.c)).toEqual(['#00ff00', '#0000ff', '#ff00ff'])
+    expect(d.drawn).toBe(3)
+  })
+})

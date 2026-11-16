@@ -24,6 +24,7 @@ import type {
   ITextEntity,
 } from 'dxf-parser'
 import { entityColor, FG, hex } from './dxf/color'
+import { layerFlags, layerHidden } from './dxf/layers'
 import { readExtras } from './dxf/parse-extras'
 
 /** Affine 2D: x' = a·x + c·y + e, y' = b·x + d·y + f (SVG `matrix()`). */
@@ -244,13 +245,17 @@ export function buildDrawing(text: string): DxfDrawing {
     throw new Error(`This DXF could not be read: ${e instanceof Error ? e.message : String(e)}`)
   }
   if (!dxf) throw new Error('This DXF could not be read.')
-  return drawingFromDxf(dxf, censusEntities(text))
+  return drawingFromDxf(dxf, censusEntities(text), layerFlags(text))
 }
 
-export function drawingFromDxf(dxf: IDxf, census: Record<string, number> = {}): DxfDrawing {
+export function drawingFromDxf(
+  dxf: IDxf,
+  census: Record<string, number> = {},
+  flags: Map<string, number> = new Map(),
+): DxfDrawing {
   const layers = new Map<string, LayerInfo>()
   for (const [name, l] of Object.entries(dxf.tables?.layer?.layers ?? {})) {
-    layers.set(name, { c: hex(l.color), hidden: l.visible === false || l.frozen === true })
+    layers.set(name, { c: hex(l.color), hidden: layerHidden(l, flags.get(name)) })
   }
   const blocks = dxf.blocks ?? {}
   const bounds: Bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }

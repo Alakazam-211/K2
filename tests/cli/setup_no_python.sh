@@ -228,7 +228,10 @@ assert_eq "kessel --about: exit 2" "$rc" "2"
 assert_eq "kessel --about: says so" "$err" "k2 setup kessel: no --about"
 run setup --help
 case "$out" in *"k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G]"*) ok "help: k2 setup kessel" ;; *) bad "help: no k2 setup kessel" ;; esac
-case "$out" in *K5*|*k5*) bad "help: still names the old agent" ;; *) ok "help: says Kessel only" ;; esac
+# The old agent's own forms ("meet K5", "setup k5", "K5 (k5)", the k5FirstRun
+# switch and the meet_k5 offer), not the letters K5: the command and the
+# product may be named k5 one day, and the help may say so.
+case "$out" in *"setup k5"*|*"meet K5"*|*"K5 (k5)"*|*k5FirstRun*|*meet_k5*) bad "help: still names the old agent" ;; *) ok "help: says Kessel only" ;; esac
 run setup k5
 assert_eq "k5 is no verb: exit 2" "$rc" "2"
 assert_eq "usage: nothing sent" "$(cat "$LOG_FILE")" ""

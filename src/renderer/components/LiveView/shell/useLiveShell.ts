@@ -39,7 +39,7 @@ export function useTabWidth(given: number | undefined): [React.RefObject<HTMLDiv
   return [ref, given ?? w]
 }
 
-const noticeKey = (n: LiveNotice): string => (n.kind === 'connection' ? `c:${n.state}` : n.kind === 'outside_save' ? `s:${n.save.outcome}` : `r:${n.actor}:${n.verb}:${n.target}`)
+const noticeKey = (n: LiveNotice): string => (n.kind === 'connection' ? `c:${n.state}` : n.kind === 'outside_save' ? `s:${n.save.outcome}` : n.kind === 'size' ? `z:${n.size}` : `r:${n.actor}:${n.verb}:${n.target}`)
 
 export function useLiveShell(source: LiveSource, config: ShellConfig, width?: number) {
   const snap = useSnapshot(source)
@@ -95,22 +95,32 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
   useEffect(() => setDismissed(new Set()), [snap.outsideSave, snap.refusal, snap.connection])
   const connection = snap.connection ? { kind: 'connection' as const, state: snap.connection, changes: snap.caughtUp, retried: snap.retried, following: followingId ? personById(people, followingId)?.name : null } : null
   const notices: LiveNotice[] = []
+  // The file's size first: anything newer outranks it.
+  if (snap.size) notices.push({ kind: 'size', ...snap.size })
   if (snap.outsideSave) notices.push({ kind: 'outside_save', save: snap.outsideSave })
   const r = snap.refusal
   const refused = r ? { kind: 'refused' as const, actor: r.actor, verb: r.verb, target: r.target, holder: r.holder, ...(r.why !== undefined ? { why: r.why } : {}), ...(r.ask !== undefined ? { ask: r.ask } : {}), ...(r.address !== undefined ? { address: r.address } : {}) } : null
   // A view that draws the refusal on its picture gets it there; the bar doesn't say it too.
   if (refused && !config.refusalOnPicture) notices.push(refused)
   const notice = pickNotice({ connection, notices, dismissed: (n) => dismissed.has(noticeKey(n)) })
+  // Ask someone: the say row, to them, about what you point at.
+  const ask = useCallback((id: string, address?: SayAt | null): void => {
+    setMessageTo(id)
+    if (address) setSayAt(address)
+  }, [])
   // Open the saved file: the tab's File | Live switch goes to File, which shows the file as saved.
   const entry = useLiveEntrySwitch()
   const onNotice = (id: NoticeActionId, n: LiveNotice | null): void => {
     if (id === 'retry') source.retry()
     else if (id === 'open-saved-file') entry?.onMode('file')
     else if (id === 'dismiss' && n) setDismissed((d) => new Set(d).add(noticeKey(n)))
-    else if (id === 'ask' && n?.kind === 'refused' && n.ask) {
-      // Ask: the say row, to whom the refusal names, about what was refused.
-      setMessageTo(n.ask.id)
-      if (n.address) setSayAt({ label: n.address.label, title: n.address.label, address: n.address.address })
+    else if (id === 'ask' && n?.kind === 'refused' && n.ask) ask(n.ask.id, n.address ? { label: n.address.label, title: n.address.label, address: n.address.address } : null)
+    else if (id === 'find') {
+      // The panel, and you in the view's find field once it's drawn.
+      setPanelOpen(true)
+      const focus = (): void => root.current?.querySelector<HTMLElement>('[data-lv-find]')?.focus()
+      requestAnimationFrame(focus)
+      setTimeout(focus, 60)
     }
     config.onNoticeAction?.(id, n)
   }
@@ -165,6 +175,7 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
     notice,
     onNotice,
     heroRefusal,
+    ask,
     offline,
     tabState,
     live,

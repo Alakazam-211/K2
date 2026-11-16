@@ -50,6 +50,8 @@ export interface ShellHeroProps {
   fileName?: string
   /** A refusal the view draws on its picture (`refusalOnPicture`): the shell's words and actions ("Ask Atlas"). */
   refusal?: HeroRefusal | null
+  /** Ask someone: opens the say row to them, about `address` when given. */
+  ask?: (id: string, address?: SayAt | null) => void
 }
 
 /** What a message points at: the chip's words and tooltip, the address it carries, and a time (the playhead's time position) where the view has one. */

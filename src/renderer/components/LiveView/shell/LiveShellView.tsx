@@ -100,7 +100,7 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
             />
           }
           banner={sample ? <ShellSampleBanner player={sample.player} line={config.bannerLine} /> : null}
-          notice={live ? <NoticeBar notice={s.notice} ctx={{ fileName: name, kept: config.kept }} onAction={s.onNotice} /> : null}
+          notice={live || s.notice?.kind === 'size' ? <NoticeBar notice={s.notice} ctx={{ fileName: name, kept: config.kept }} onAction={s.onNotice} /> : null}
           hero={
             <Hero
               snap={snap}
@@ -115,6 +115,7 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
               onAction={(id) => s.onNotice(id, null)}
               fileName={name}
               refusal={s.heroRefusal}
+              ask={s.ask}
               {...(placed ? { say, panel: placedPanel } : {})}
             />
           }

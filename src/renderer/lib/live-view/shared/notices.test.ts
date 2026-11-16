@@ -104,6 +104,14 @@ describe('a refusal', () => {
   })
 })
 
+describe('the file’s size', () => {
+  it('large, without groups: the plain line and Find', () => {
+    const v = noticeView({ kind: 'size', size: 'large', noun: 'timeline', count: 2400, unit: 'items' }, ctx)
+    expect(v.text).toBe('A large timeline: 2,400 items. The list draws only what fits.')
+    expect(v.actions.map((a) => a.id)).toEqual(['find', 'dismiss'])
+  })
+})
+
 describe('every notice', () => {
   const all: LiveNotice[] = [
     { kind: 'outside_save', save: { outcome: 'ingested', rev: 1 } },
@@ -111,6 +119,8 @@ describe('every notice', () => {
     { kind: 'outside_save', save: { outcome: 'declined', code: 'x', message: 'm' } },
     { kind: 'outside_save', save: { outcome: 'missing' } },
     { kind: 'refused', actor: 'Atlas', verb: 'move', target: 'Vase', holder: 'Brook' },
+    { kind: 'size', size: 'large', noun: 'scene', count: 2000, unit: 'objects', find: 'Find an object' },
+    { kind: 'size', size: 'too_large', noun: 'scene', count: 2600, unit: 'objects', limit: 2000 },
     ...(['reconnecting', 'trying', 'cant', 'offline', 'back'] as const).map((state) => ({ kind: 'connection' as const, state })),
   ]
   it('offers a next step and names no vendor app', () => {

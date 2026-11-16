@@ -228,7 +228,7 @@ export function SceneOutliner(p: OutlinerProps): React.JSX.Element {
   return (
     <>
       <div className="lv-otool">
-        <SearchField className="w-full" placeholder="Find an object" aria-label="Find an object by name" value={p.q}onChange={(e) => p.onQuery(e.target.value)} onClear={() => p.onQuery('')} />
+        <SearchField className="w-full" placeholder="Find an object" aria-label="Find an object by name" data-lv-find="" value={p.q} onChange={(e) => p.onQuery(e.target.value)} onClear={() => p.onQuery('')} />
       </div>
       {none ? (
         <div className="lv-nohit" role="status">

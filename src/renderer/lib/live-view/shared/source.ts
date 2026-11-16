@@ -18,7 +18,7 @@
 //     person's `viewAddress`.
 
 import type { LivePerson } from './people'
-import type { ConnectionState, OutsideSave } from './notices'
+import type { ConnectionState, LiveNotice, OutsideSave } from './notices'
 import type { LiveTier } from './state'
 import type { SayTime } from './say-time'
 
@@ -85,6 +85,8 @@ export interface LiveShellSnapshot {
   /** The latest outside save, with when it came. */
   outsideSave: (OutsideSave & { at_ms: number }) | null
   /** The latest refused verb, by name. */
+  /** The file's size, when it matters: large (the list draws what fits) or too large to watch live (the saved version). */
+  size?: Omit<Extract<LiveNotice, { kind: 'size' }>, 'kind'> | null
   refusal?: {
     actor: string
     verb: string

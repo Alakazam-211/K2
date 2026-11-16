@@ -6,7 +6,9 @@
 //   - a refused verb (`verb_refused`): who couldn't do what, and who holds it;
 //   - the connection: reconnecting (Retry now), trying (a disabled
 //     "Trying…"), can't reconnect (Retry, Open the saved file), offline, and
-//     back ("Back." with what came in).
+//     back ("Back." with what came in);
+//   - the file's size: large ("A large scene: …", Find), too large to watch
+//     live (the saved version, Open the saved file).
 //
 // A connection notice outranks the rest; it is said once (here), and the
 // header's chip only names the state. Copy from the council-passed mocks
@@ -38,7 +40,23 @@ export type LiveNotice =
     }
   | { kind: 'connection'; state: ConnectionState; changes?: number; following?: string | null; retried?: boolean }
 
-export type NoticeActionId = 'retry' | 'open-saved-file' | 'open-copy' | 'history' | 'save-again' | 'ask' | 'dismiss'
+  | {
+      kind: 'size'
+      size: 'large' | 'too_large'
+      /** What the file is, in a word ("scene"). */
+      noun: string
+      count: number
+      /** What it counts ("objects"). */
+      unit: string
+      /** About where live editing stops. */
+      limit?: number
+      /** How they're grouped ("100 collections"): the list opens them closed. */
+      groups?: { count: number; unit: string }
+      /** The find field's name ("Find an object"). */
+      find?: string
+    }
+
+export type NoticeActionId = 'retry' | 'open-saved-file' | 'open-copy' | 'history' | 'save-again' | 'ask' | 'find' | 'dismiss'
 
 export interface NoticeAction {
   id: NoticeActionId
@@ -117,9 +135,24 @@ function connectionView(n: Extract<LiveNotice, { kind: 'connection' }>, ctx: Not
   }
 }
 
+const num = (n: number): string => n.toLocaleString('en-US')
+
+function sizeView(n: Extract<LiveNotice, { kind: 'size' }>): NoticeView {
+  if (n.size === 'too_large')
+    return view('info', 'status', 'Too large to watch live', `This ${n.noun} has ${num(n.count)} ${n.unit}${n.limit ? `; live editing stops at about ${num(n.limit)}` : ''}. You see the last saved version, read-only.`, [
+      { id: 'open-saved-file', label: 'Open the saved file' },
+    ])
+  const g = n.groups
+  return view('info', 'status', `A large ${n.noun}: ${num(n.count)} ${n.unit}${g ? ` in ${num(g.count)} ${g.unit}` : ''}.`, `${g ? `${g.unit[0].toUpperCase()}${g.unit.slice(1)} start closed and the` : 'The'} list draws only what fits.`, [
+    { id: 'find', label: n.find ?? 'Find' },
+    DISMISS,
+  ])
+}
+
 export function noticeView(n: LiveNotice, ctx: NoticeContext): NoticeView {
   if (n.kind === 'outside_save') return saveView(n.save, ctx)
   if (n.kind === 'connection') return connectionView(n, ctx)
+  if (n.kind === 'size') return sizeView(n)
   const why = n.holder ? `${n.holder} is holding it` : n.why
   const title = `${n.actor} couldn’t ${n.verb} ${n.target}${why ? `: ${why}` : ''}.`
   const ask = n.ask !== undefined ? (n.ask?.name ?? null) : n.holder

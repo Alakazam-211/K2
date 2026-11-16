@@ -36,7 +36,7 @@ export function NoticeBar({
       role={v.role}
       data-testid="lv-notice"
       data-tone={v.tone}
-      data-kind={notice.kind === 'connection' ? `connection:${notice.state}` : notice.kind === 'outside_save' ? `save:${notice.save.outcome}` : notice.kind}
+      data-kind={notice.kind === 'connection' ? `connection:${notice.state}` : notice.kind === 'outside_save' ? `save:${notice.save.outcome}` : notice.kind === 'size' ? `size:${notice.size}` : notice.kind}
       data-k2-chamfer="surface"
       className="lv-notice mx-2.5 mt-2 flex flex-none flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-[var(--radius-box)] border px-3 py-2"
     >

@@ -11,7 +11,7 @@ import type { SampleSnapshot, ShellSample } from '../shared/samples'
 import { SampleShellSource, type SampleShellOptions } from '../shared/sample-shell'
 import type { LiveChange, LiveMessage, LiveShellSnapshot } from '../shared/source'
 import type { OutsideSave } from '../shared/notices'
-import { nameOf } from './fold'
+import { CONT, nameOf, UNITS } from './fold'
 import { actorOf, framePhrase, refusalWhy, VERB_WORD } from './wording'
 import { agentId, type SimState } from './sim'
 import { simulate, type Scenario } from './turn'
@@ -90,6 +90,7 @@ export function sceneSnapshot(S: SimState, sc: Scenario, step: number, control: 
     changes,
     messages,
     outsideSave: S.notice ? ({ ...stripI(S.notice), at_ms: S.at ?? 0 } as OutsideSave & { at_ms: number }) : null,
+    size: sizeOf(S, step),
     refusal: callout ? refusalOf(S, callout, live) : null,
     behind: S.pv.state === 'failed' && S.pv.shown != null,
     features: { viewAddress: true, timePosition: false, say: true },
@@ -97,6 +98,19 @@ export function sceneSnapshot(S: SimState, sc: Scenario, step: number, control: 
     hints: { sayFails: S.sendFail },
     scene: { S, scenario: sc.id, step, label: sc.steps[step].label ?? '', fileName: SCENE_SAMPLE_FILE, control },
   }
+}
+
+/** About where live editing stops (provisional: the kit's keyed limit isn't pinned). */
+export const LIVE_OBJECT_LIMIT = 2000
+
+/** Large (said on opening, with Find an object) or too large to watch live (the saved version). */
+function sizeOf(S: SimState, step: number): SceneSnapshot['size'] {
+  if (!S.big || !S.D) return null
+  const count = (S.D.lists[UNITS] ?? []).length
+  if (S.tier === 'blob') return { size: 'too_large', noun: 'scene', count, unit: 'objects', limit: LIVE_OBJECT_LIMIT }
+  if (step > 0) return null
+  const colls = (S.D.lists[CONT] ?? []).filter((c) => S.D!.kinds[c] === 'collection').length
+  return { size: 'large', noun: 'scene', count, unit: 'objects', groups: { count: colls, unit: 'collections' }, find: 'Find an object' }
 }
 
 /** A refusal as the shell says it: why in words when no one holds it; Ask the holder, else the one refused, while they're here. */

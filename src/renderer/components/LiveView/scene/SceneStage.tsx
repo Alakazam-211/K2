@@ -21,7 +21,7 @@ import { STILL_WIDTH, coverBox, letterbox, type PictureSource, type StillRequest
 import { pictureWords, type CardAction } from '@/lib/live-view/scene/picture-words'
 import type { SceneControl } from '@/lib/live-view/scene/sample-source'
 import { fromMockView } from '@/lib/live-view/scene/sample-views'
-import type { SimState } from '@/lib/live-view/scene/sim'
+import { agentId, type SimState } from '@/lib/live-view/scene/sim'
 import { SCENE_VIEW, parseView, turntableView } from '@/lib/live-view/scene/view-address'
 import { goView, isTurntable, mainCamera, objectView, sameView, stillView, viewKey, viewName, viewRows, type ViewRow } from '@/lib/live-view/scene/views'
 import type { Doc } from '@/lib/live-view/scene/types'
@@ -64,6 +64,8 @@ export interface SceneStageProps {
   people?: readonly LivePerson[]
   /** A refusal, drawn by its object in the first pane (the shell's words and actions). */
   refusal?: ShellHeroProps['refusal']
+  /** Ask someone (the shell's say row): the empty scene's Ask Atlas. */
+  ask?: ShellHeroProps['ask']
 }
 
 const onlyOneOf = (s: { split: string } | null): boolean => !s || s.split === 'one'
@@ -78,7 +80,7 @@ function showList(from: HTMLElement | null): void {
   requestAnimationFrame(() => tab.querySelector<HTMLElement>('[role="tree"]')?.focus())
 }
 
-export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [], refusal = null }: SceneStageProps): React.JSX.Element {
+export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [], refusal = null, ask }: SceneStageProps): React.JSX.Element {
   const store = localStore(S)
   const L = useSyncExternalStore(store.subscribe, store.get, store.get)
   const set = (patch: Partial<SceneLocal>): void => store.set((s) => ({ ...s, ...patch }))
@@ -91,7 +93,9 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const view = fl.theirView ?? own
   const framed = framedOf(S, L.pick)
   const status = pictureStatus(S)
-  const words = pictureWords(status, { ...pictureContext(S, L.pick), askAgent: null })
+  const ctx = pictureContext(S, L.pick)
+  // Ask is offered only where the shell can open the say row.
+  const words = pictureWords(status, { ...ctx, askAgent: ask ? ctx.askAgent : null })
   const layout = L.layout ?? (S.layout === 2 ? 2 : 1)
   const split = pane ? paneRects(pane.width, pane.height, layout) : null
   const ag = agentView(S)
@@ -144,6 +148,10 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
       if (cam) go(cam)
       control.retryPicture()
     } else if (id === 'show-list') showList(ref.current)
+    else if (id === 'ask' && ask) {
+      const ag = agentId(S)
+      if (ag) ask(ag, { label: 'the scene', title: 'the whole scene', address: SCENE_VIEW })
+    }
   }
   const onKeyDown = (e: React.KeyboardEvent): void => {
     // Keys typed in a field, or moving in a menu or the turntable (they handle their own), aren't the picture's.

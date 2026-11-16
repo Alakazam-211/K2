@@ -2,12 +2,13 @@
 // shell's `.lv-shell`): section heads, the outliner's rows, Properties'
 // transform table, People and Activity, as the mock draws them (v2.5).
 // Every colour, radius and size is a token; a person's colour comes from
-// the data as `--lv-c`. Your own selection is the look's warm accent
-// (`--lv-mine`: the mock's orange in Glass). Object kinds take the chart
+// the data as `--lv-c`. Your own selection (`--lv-mine`) is a presence colour,
+// the warm one (`--color-presence-4`, the mock's orange), not a status
+// colour: warn means something is wrong. Object kinds take the chart
 // palette (a mesh blue, a light amber, a camera violet mixed from it).
 
 export const SCENE_PANEL_CSS = `
-.lv-scene-panel { --lv-mine: var(--color-status-warn); --lv-row: 26px; display: flex; flex-direction: column; min-height: 100%; padding-bottom: 8px; font-size: var(--type-md); }
+.lv-scene-panel { --lv-mine: var(--color-presence-4); --lv-row: 26px; display: flex; flex-direction: column; min-height: 100%; padding-bottom: 8px; font-size: var(--type-md); }
 .lv-scene-panel .lv-ssec { border-bottom: 1px solid var(--color-border); flex: none; }
 .lv-scene-panel .lv-ssec:last-of-type { border-bottom: 0; }
 .lv-scene-panel .lv-foot { flex: 1 1 auto; }

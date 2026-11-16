@@ -3,10 +3,11 @@
 // object kind as the mock draws them (a box for a mesh, a camera, a light,
 // axes for an empty), collections (a panel for a collection, layers for the
 // scene, a dashed box for "Not in a collection"), and the marks on a row:
-// held, driven, turns by quaternion, linked, shown or hidden.
+// held, driven, turns by quaternion, linked, shown or hidden. The picture's
+// views (Scene, a camera, a framed object, the turntable), a picture, done.
 
 import type { LucideIcon } from 'lucide-react'
-import { Axis3dIcon, BoxIcon, EyeIcon, EyeOffIcon, LayersIcon, LightbulbIcon, LinkIcon, LockIcon, PanelTopIcon, RotateCwIcon, ScanIcon, SquareDashedIcon, TriangleAlertIcon, VideoIcon, WavesIcon } from 'lucide-react'
+import { Axis3dIcon, BoxIcon, CheckIcon, EyeIcon, EyeOffIcon, LayersIcon, LightbulbIcon, LinkIcon, LockIcon, PanelTopIcon, RotateCwIcon, Rotate3dIcon, ScanIcon, SquareDashedIcon, ImageIcon, TriangleAlertIcon, VideoIcon, WavesIcon } from 'lucide-react'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 
 function glyph(Icon: LucideIcon, stroke = K2_ICON_STROKE): (p: { size?: number; className?: string }) => React.JSX.Element {
@@ -43,3 +44,6 @@ export const FramedGlyph = glyph(ScanIcon, 2)
 export const RefusedGlyph = glyph(TriangleAlertIcon, 2)
 export const CameraGlyph = KIND.camera
 export const SceneViewGlyph = KIND.mesh
+export const TurntableGlyph = glyph(Rotate3dIcon)
+export const PictureGlyph = glyph(ImageIcon)
+export const DoneGlyph = glyph(CheckIcon, 2)

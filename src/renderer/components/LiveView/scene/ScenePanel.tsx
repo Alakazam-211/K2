@@ -7,7 +7,10 @@
 // Properties sits right under it: the spare room goes to the panel's foot,
 // so the gap above Properties never changes.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { LOCAL0, localStore, type SceneLocal } from '@/lib/live-view/scene/local'
+import { viewOnScreen } from '@/lib/live-view/scene/picture-model'
+import { goView, objectView } from '@/lib/live-view/scene/views'
 import { EMPTY_ACTIVITY, PANEL, activityItems, isLive, myPick, openByDefault, outlinerModel, peopleRows, propsModel, recentMap, target, type SectionId } from '@/lib/live-view/scene/panel'
 import { isSceneSnapshot } from '@/lib/live-view/scene/sample-source'
 import { ancestorsOf, sceneTree } from '@/lib/live-view/scene/tree'
@@ -24,7 +27,10 @@ const MIN_ROWS = { wide: 5, narrow: 9 }
 /** Without a measured panel (tests, first paint), this many rows. */
 const UNMEASURED_ROWS = 40
 
-export const scenePanelFor = (snap: LiveShellSnapshot): boolean => isSceneSnapshot(snap)
+const NO_SUB = (): (() => void) => () => undefined
+const NO_LOCAL = (): SceneLocal => LOCAL0
+
+export const scenePanelFor =(snap: LiveShellSnapshot): boolean => isSceneSnapshot(snap)
 
 /** Whole outliner rows in the panel's room, and the panel's height for its foot. */
 function useRoom(root: React.RefObject<HTMLDivElement | null>, narrow: boolean, key: string): { rows: number; minHeight: number | undefined } {
@@ -74,8 +80,15 @@ export function ScenePanel({ snap, followingId, onFollow, offline, narrow }: She
   const isOpen = (id: SectionId): boolean => open[id] ?? openByDefault(id, narrow)
   const toggle = (id: SectionId): void => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))
 
-  // The step's own view state; yours until the step changes.
-  const [pick, setPick] = useState<string | null | undefined>(undefined)
+  // The step's own view state; yours until the step changes. Your pick is
+  // shared with the picture (it frames what you pick, and "." frames it).
+  const store = S ? localStore(S) : null
+  const local = useSyncExternalStore(store?.subscribe ?? NO_SUB, store?.get ?? NO_LOCAL, store?.get ?? NO_LOCAL)
+  const pick = local.pick
+  const setPick = (a: string): void => {
+    if (!S || !store) return
+    store.set((s) => ({ ...s, pick: a, ...goView(s, viewOnScreen(S, s), objectView(S.D, a)) }))
+  }
   const [cur, setCur] = useState<string | null>(null)
   const [q, setQ] = useState(S?.ui.q ?? '')
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set(S?.ui.collapsed ?? []))
@@ -83,7 +96,6 @@ export function ScenePanel({ snap, followingId, onFollow, offline, narrow }: She
   const [owner, setOwner] = useState(S)
   if (owner !== S) {
     setOwner(S)
-    setPick(undefined)
     setCur(null)
     setQ(S?.ui.q ?? '')
     setCollapsed(new Set(S?.ui.collapsed ?? []))

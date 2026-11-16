@@ -16,14 +16,21 @@ import { actorOf, framePhrase, VERB_WORD } from './wording'
 import { agentId, type SimState } from './sim'
 import { simulate, type Scenario } from './turn'
 import { SCENARIOS } from './scenarios-more'
-import { agentDone, peopleRows, viewShort } from './panel'
+import { agentDone, peerView, peopleRows, viewShort } from './panel'
+import { fromMockView } from './sample-views'
 
 export const SCENE_SAMPLE_FILE = 'living-room'
 export const SCENE_SAMPLE_REPLY = 'On it.'
 
+/** What the picture asks of the source: draw again (Retry). The sample steps its scenario on (the next step is the retry's outcome); the live source (S8) asks K2 Render. */
+export interface SceneControl {
+  retryPicture(): void
+}
+const NO_CONTROL: SceneControl = { retryPicture: () => undefined }
+
 /** A scene step: the shell's snapshot and the scene's own state. */
 export interface SceneSnapshot extends SampleSnapshot {
-  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string }
+  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string; control: SceneControl }
 }
 
 export const isSceneSnapshot = (s: LiveShellSnapshot): s is SceneSnapshot => 'scene' in s && !!(s as SceneSnapshot).scene
@@ -31,7 +38,7 @@ export const isSceneSnapshot = (s: LiveShellSnapshot): s is SceneSnapshot => 'sc
 const CONN: Record<string, LiveShellSnapshot['connection']> = { lost: 'reconnecting', gaveup: 'cant' }
 
 /** One step of a scenario as the shell reads it. */
-export function sceneSnapshot(S: SimState, sc: Scenario, step: number): SceneSnapshot {
+export function sceneSnapshot(S: SimState, sc: Scenario, step: number, control: SceneControl = NO_CONTROL): SceneSnapshot {
   const live = S.tier === 'live' || S.tier === 'paused'
   const rows = peopleRows(S)
   const people: LivePerson[] = rows.map((r) => ({
@@ -43,7 +50,7 @@ export function sceneSnapshot(S: SimState, sc: Scenario, step: number): SceneSna
     self: r.self,
     doing: r.what,
     place: r.view,
-    viewAddress: S.peers[r.id]?.view ?? null,
+    viewAddress: peerView(S, r.id),
     editing: r.mode === 'editing',
   }))
   const agent = agentId(S)
@@ -58,7 +65,7 @@ export function sceneSnapshot(S: SimState, sc: Scenario, step: number): SceneSna
     return [{ id: `rev-${e.rev}`, who: file ? 'file' : e.actor, verb: p.text.split(' ')[0], text: p.text, at_ms: e.at ?? S.at ?? 0, target: p.target, ...(file ? { tone: 'outside' as const } : {}) }]
   })
   const messages: LiveMessage[] = S.log.flatMap((e): LiveMessage[] => {
-    if (e.kind === 'said') return [{ id: `said-${e.i}`, from: S.self, to: e.to, text: e.text, at_ms: e.at ?? 0, address: e.ref ? { label: e.ref.startsWith('@obj:') ? nameOf(S.D, e.ref) : viewShort(S.D, e.ref), address: e.ref } : null }]
+    if (e.kind === 'said') return [{ id: `said-${e.i}`, from: S.self, to: e.to, text: e.text, at_ms: e.at ?? 0, address: e.ref ? { label: /^@obj:\d+$/.test(e.ref) ? nameOf(S.D, e.ref) : viewShort(S.D, fromMockView(S.D, e.ref) ?? e.ref), address: e.ref } : null }]
     if (e.kind === 'reply') return [{ id: `reply-${e.i}`, from: e.actor, to: S.self, text: e.text, at_ms: e.at ?? 0 }]
     return []
   })
@@ -81,7 +88,7 @@ export function sceneSnapshot(S: SimState, sc: Scenario, step: number): SceneSna
     features: { viewAddress: true, timePosition: false, say: true },
     clock: S.at ?? undefined,
     hints: { sayFails: S.sendFail },
-    scene: { S, scenario: sc.id, step, label: sc.steps[step].label ?? '', fileName: SCENE_SAMPLE_FILE },
+    scene: { S, scenario: sc.id, step, label: sc.steps[step].label ?? '', fileName: SCENE_SAMPLE_FILE, control },
   }
 }
 
@@ -91,7 +98,7 @@ function stripI<T extends { i: number; type?: string }>(n: T): Omit<T, 'i' | 'ty
 }
 
 /** The scenario list for the banner: the mock's 24, each step worked out when first shown. */
-export function sceneScenarios(): PlayerScenario<SceneSnapshot>[] {
+export function sceneScenarios(control: SceneControl = NO_CONTROL): PlayerScenario<SceneSnapshot>[] {
   return SCENARIOS.map((sc) => ({
     id: sc.id,
     label: scenarioLabel(sc),
@@ -101,7 +108,7 @@ export function sceneScenarios(): PlayerScenario<SceneSnapshot>[] {
       return {
         label: stepLabel(st),
         get state(): SceneSnapshot {
-          return (memo = memo ?? sceneSnapshot(simulate(sc, i), sc, i))
+          return (memo = memo ?? sceneSnapshot(simulate(sc, i), sc, i, control))
         },
       }
     }),
@@ -127,14 +134,17 @@ export function stepLabel(st: Scenario['steps'][number]): string {
   return '—'
 }
 
-export function sceneSample(): ShellSample {
-  return { kind: 'scene', fileName: SCENE_SAMPLE_FILE, scenarios: sceneScenarios(), reply: SCENE_SAMPLE_REPLY }
+export function sceneSample(control: SceneControl = NO_CONTROL): ShellSample {
+  return { kind: 'scene', fileName: SCENE_SAMPLE_FILE, scenarios: sceneScenarios(control), reply: SCENE_SAMPLE_REPLY }
 }
 
 /** The scene's sample, on the shell's sample source (so the banner and player are the shell's). */
 export class SampleSceneSource extends SampleShellSource {
   constructor(o: SampleShellOptions = {}) {
-    super(sceneSample(), { ...o, scenario: o.scenario ?? 'turn' })
+    const control: SceneControl = { retryPicture: () => undefined }
+    super(sceneSample(control), { ...o, scenario: o.scenario ?? 'turn' })
+    // The sample's retry is its scenario's next step (the mock's Retry).
+    control.retryPicture = () => this.player.step()
   }
   override snapshot(): SceneSnapshot {
     return super.snapshot() as SceneSnapshot

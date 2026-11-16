@@ -11,7 +11,9 @@ import { UNITS, metres, nameOf, numsOf, objOf, worldOf, type Nums, type SceneObj
 import { flatRows, sceneTree, type Row, type SceneTree } from './tree'
 import { actorOf, changesOf, framePhrase, phraseOne, refusalText, type Touched } from './wording'
 import { agentId, agentTarget, claimOn, whoOn, type Claim, type LogEntry, type Peer, type SimState } from './sim'
-import { camLabel } from './scenarios'
+import { fromMockView } from './sample-views'
+import { SCENE_VIEW, parseView } from './view-address'
+import { objectOfView, objectView, viewName } from './views'
 import type { Actor, Doc, Frame } from './types'
 
 export type SectionId = 'activity' | 'people' | 'outliner' | 'props'
@@ -38,21 +40,22 @@ export function target(S: SimState, local: string | null | undefined): string | 
   return a && (S.D.props[a] || S.D.removed[a]) ? a : null
 }
 
-/** A view address in words: "Scene", "Camera 2", "Table, framed", "Turntable". */
-export function viewShort(D: Doc, v: string): string {
-  if (v === '@scene') return 'Scene'
-  if (v.startsWith('@scene/turntable')) return 'Turntable'
-  if (v.startsWith('@cam:')) return camLabel(v)
-  if (v.startsWith('@obj:')) return nameOf(D, v) + ', framed'
-  return v
-}
+/** A view address (K2 Render's, view-address.ts) in words: "Scene", "Camera 2", "Table, framed", "Turntable". */
+export const viewShort = (D: Doc, v: string): string => viewName(D, v)
 
-/** The view on screen: whom you follow's, else yours (picked) or the scenario's. */
+/** A peer's view as K2 Render names it (the sample keeps the mock's names inside). */
+export const peerView = (S: SimState, h: string): string | null => fromMockView(S.D, S.peers[h]?.view, S.ui.tt ?? 0)
+
+/** The view on screen, as K2 Render names it: whom you follow's, else yours (`view`, already K2 Render's) or the scenario's. */
 export function viewNow(S: SimState, o: { followingId?: string | null; view?: string | null; pick?: string | null } = {}): string {
   const w = o.followingId && S.peers[o.followingId] ? o.followingId : null
-  let v = w ? S.peers[w].view || '@scene' : o.view || S.view || '@scene'
-  if (v === '@obj:*') v = myPick(S, o.pick) || agentTarget(S) || '@scene'
-  if (v.startsWith('@obj:') && !(S.D && S.D.props[v])) v = '@scene'
+  let v = (w ? peerView(S, w) : o.view || fromMockView(S.D, S.view, S.ui.tt ?? 0)) || SCENE_VIEW
+  if (v === '@obj:*') {
+    const a = myPick(S, o.pick) || agentTarget(S)
+    v = a && S.D ? objectView(S.D, a) : SCENE_VIEW
+  }
+  const kind = parseView(v)?.kind
+  if (!kind || ((kind === 'object' || kind === 'camera') && !(S.D && objectOfView(S.D, v)))) v = SCENE_VIEW
   return v
 }
 
@@ -100,11 +103,11 @@ export function peopleRows(S: SimState, o: { followingId?: string | null; view?:
   const ps = Object.values(S.peers).sort((x, y) => (x.isSelf ? 1 : 0) - (y.isSelf ? 1 : 0))
   return ps.map((p) => {
     const cl = S.claims.filter((c) => actorOf(c.actor).id === p.handle)
-    const view = p.isSelf ? viewNow(S, o) : p.view
+    const view = p.isSelf ? viewNow(S, o) : peerView(S, p.handle)
     const done = p.kind === 'agent' && agentDone(S, p.handle)
     const what = cl.length ? cl.map((c) => c.label).join(', ') : done ? 'done' : p.selection && p.selection.keys.length ? 'on ' + p.selection.keys.map((k) => nameOf(S.D, k)).join(', ') : p.away ? 'away' : 'viewing'
-    const v = view || '@scene'
-    return { id: p.handle, name: p.isSelf ? 'You' : p.name, kind: p.kind, colour: p.colour, away: p.away, self: !!p.isSelf, mode: p.mode ?? 'viewing', view: viewShort(S.D, v), camera: v.startsWith('@cam:'), following: o.followingId === p.handle, what, holding: cl.length > 0 }
+    const v = view || SCENE_VIEW
+    return { id: p.handle, name: p.isSelf ? 'You' : p.name, kind: p.kind, colour: p.colour, away: p.away, self: !!p.isSelf, mode: p.mode ?? 'viewing', view: viewShort(S.D, v), camera: v.startsWith('@cam'), following: o.followingId === p.handle, what, holding: cl.length > 0 }
   })
 }
 

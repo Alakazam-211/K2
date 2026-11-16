@@ -4481,6 +4481,69 @@ exit: 0
       "flags": []
     },
     {
+      "name": "setup",
+      "usage": "k2 setup [--json] | k2 setup hide|show|dismiss-offer | k2 setup skip <step> | k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G] | k2 setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok [--focus-group G]",
+      "description": "Your setup list on this server: [x] done, [ ] to do, [-] skipped. Each step is done by doing it (the list reads what is set up, never a tick). The owner and the logins the owner linked share one list; every other login has its own. Agents have no setup list (exit 3), except Kessel running k2 setup chief-of-staff.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (every verb takes it)."}
+      ]
+    },
+    {
+      "name": "setup hide",
+      "usage": "k2 setup hide [--json]",
+      "description": "Hide the list in the app (k2 setup still prints it).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "setup show",
+      "usage": "k2 setup show [--json]",
+      "description": "Bring the list back in the app, skipped steps included, even after it finished.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "setup skip",
+      "usage": "k2 setup skip <step> [--json]",
+      "description": "Skip one step: dev_tools, llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in.",
+      "args": [{"name": "step", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "setup kessel",
+      "usage": "k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G] [--json]",
+      "description": "Meet Kessel, the agent that runs K2 (its setup, settings and agents); it helps you hire your Chief of Staff. Only when the owner has turned on kesselFirstRun. Owner, Owner or Admin login.",
+      "args": [],
+      "flags": [
+        {"name": "--tool", "arg": "claude|codex|grok", "description": "Default: the server default (it must be signed in: k2 llm tokens)."},
+        {"name": "--name", "arg": "N", "description": "Default Kessel."},
+        {"name": "--handle", "arg": "H", "description": "Default kessel; its folder is <hire root>/<handle>."},
+        {"name": "--focus-group", "arg": "G", "description": "Put it in a Focus Group (id or name; none by default)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "setup chief-of-staff",
+      "usage": "k2 setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok [--focus-group G] [--json]",
+      "description": "Hire this person's Chief of Staff, their lead agent. It joins Kessel's Focus Group unless --focus-group names another. For Kessel only, from Kessel's own pinned chat, never a sidecar, another agent or a person (exit 3). Ask your person for all three values first.",
+      "args": [],
+      "flags": [
+        {"name": "--name", "arg": "N", "description": "Required. Its folder comes from the name (no --handle)."},
+        {"name": "--about", "arg": "text", "description": "Required. What they do."},
+        {"name": "--tool", "arg": "claude|codex|grok", "description": "Required."},
+        {"name": "--focus-group", "arg": "G", "description": "A Focus Group (id or name) instead of Kessel's."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "setup dismiss-offer",
+      "usage": "k2 setup dismiss-offer [--json]",
+      "description": "\"Not now\" on the Meet Kessel offer (yours only).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
       "name": "skills",
       "usage": "k2 skills <list|create|remove|profile|...> [...]",
       "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",

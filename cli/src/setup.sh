@@ -29,6 +29,8 @@ k2 setup chief-of-staff --name N --about "what they do" --tool claude|codex|grok
                         sidecar, another agent or a person (exit 3).
 k2 setup dismiss-offer  "Not now" on the Meet Kessel offer (yours only)
 
+Every verb takes --json: the daemon's JSON as is.
+
 Each step is done by doing it: the list reads what is set up on this
 server, never a tick. dev_tools shows only while git does not run here:
 on a Mac, k2 git-tools install opens the Apple installer on its screen. It is yours: the owner and the logins the owner

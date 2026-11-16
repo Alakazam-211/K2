@@ -84,6 +84,7 @@ schema/skin.entries
 schema/remote-session.entries
 schema/wiki-zen.entries
 schema/whoami-done.entries
+schema/fed.entries
 schema-tail.sh
 explain.sh
 setup.sh

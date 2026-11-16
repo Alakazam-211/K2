@@ -5,7 +5,7 @@
 #   k2 fed pubkey [--pem|--fingerprint|--json]   export THIS box's SPKI pubkey
 #   k2 fed send <peer>::<workspace>::<agent> "message"
 #   k2 fed outbox                                queued + dead-lettered per peer
-#   k2 fed pair-start [--subdomain S] [--url URL]   pairing v2, step 1 (then
+#   k2 fed pair-start [--subdomain S] [--url URL] [--label L]   pairing v2, step 1 (then
 #   k2 fed pair-join / pair-finish / pair-verify <token>)
 #   k2 fed pair-request --pubkey <spki.pem> ...   pre-0.45.2 pairing (known peers only)
 #   k2 fed confirm <fingerprint> <sas-code>
@@ -370,10 +370,10 @@ for p in peers:
 print(f\"total queued: {d.get('total_queued',0)}\")"
             ;;
         *)
-            echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-start|pair-join|pair-finish|pair-verify|confirm> ..." >&2
+            echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-start|pair-join|pair-finish|pair-verify|pair-request|confirm> ..." >&2
             echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
             echo "  peers: list pinned servers (use their host with k2 msg agent::host)" >&2
-            echo "  pair-start [--subdomain S] [--url http://host:port]: start a pairing (prints a token for the other owner)" >&2
+            echo "  pair-start [--subdomain S] [--url http://host:port] [--label L]: start a pairing (prints a token for the other owner)" >&2
             echo "  pair-join / pair-finish / pair-verify <token>: the next steps; both owners then compare codes and confirm" >&2
             echo "  pair-request: the pre-0.45.2 pairing; refused for a server not paired yet" >&2
             echo "  send/outbox/pair-*/confirm need federation ON; pubkey works anytime" >&2

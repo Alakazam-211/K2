@@ -2539,6 +2539,76 @@
     "description": "From inside an API-launched session: send a response line to the API caller (it reads them from the session's messages route). Call it as often as you like while you work; --final marks the last. Nothing to say: k2 done. Outside such a session it fails (exit 1); no message is a usage error (exit 1)."
    },
    {
+    "name": "fed",
+    "usage": "k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-start|pair-join|pair-finish|pair-verify|pair-request|confirm> ...",
+    "description": "Federation: messages between agents on paired K2 servers. The /cli/federation/* routes answer only while federation is on (k2 fed enable); pubkey works anytime. Inside an agent session pair-start, pair-join, pair-finish, pair-verify, confirm and outbox are the server owner's (refused, exit 3) and send goes with the session's passport. No --help: a bare or unknown verb prints the usage and exits 2."
+   },
+   {
+    "name": "fed enable",
+    "usage": "k2 fed enable",
+    "description": "Turn federation on for this server (the saved switch, same as Settings, live at once with no restart). Owner-gated by the settings route."
+   },
+   {
+    "name": "fed disable",
+    "usage": "k2 fed disable",
+    "description": "Turn federation off for this server (the saved switch, live at once). Owner-gated by the settings route."
+   },
+   {
+    "name": "fed status",
+    "usage": "k2 fed status",
+    "description": "Print whether federation is on for this server."
+   },
+   {
+    "name": "fed peers",
+    "usage": "k2 fed peers",
+    "description": "List the servers pinned on this one, A to Z: host, trust, fingerprint, label, a re-pair hint and any pending or failed address notice. Use a peer's host with k2 msg agent::host. The owner token or an agent's passport."
+   },
+   {
+    "name": "fed pubkey",
+    "usage": "k2 fed pubkey [--pem|--fingerprint|--json]",
+    "description": "Print this server's federation public key (SPKI PEM, the fingerprint on stderr). Read from the on-box key with openssl, so it works while federation is off."
+   },
+   {
+    "name": "fed send",
+    "usage": "k2 fed send <peer>::<workspace>::<agent> \"message\"",
+    "description": "Send one message to an agent on a paired server (the wire form; k2 msg agent::host is the everyday form). Inside an agent session it goes with the session's passport and is bound to that workspace; in a person's terminal it goes with the owner token. The daemon allows only a peer the sending workspace is connected to."
+   },
+   {
+    "name": "fed outbox",
+    "usage": "k2 fed outbox",
+    "description": "Per peer: cross-server messages still queued (retried with backoff) and the ones dead-lettered. The server owner's: refused in an agent session (exit 3)."
+   },
+   {
+    "name": "fed pair-start",
+    "usage": "k2 fed pair-start [--subdomain S] [--url http://host:port] [--label L]",
+    "description": "Pairing step 1, on the server that starts: prints a k2pair1: token for the other server's owner (valid 10 minutes, single use). They run pair-join. The server owner's: refused in an agent session (exit 3)."
+   },
+   {
+    "name": "fed pair-join",
+    "usage": "k2 fed pair-join <k2pair1:token>",
+    "description": "Pairing step 2, on the other server: takes the k2pair1: token and prints a k2pair2: token to send back. The server owner's: refused in an agent session (exit 3)."
+   },
+   {
+    "name": "fed pair-finish",
+    "usage": "k2 fed pair-finish <k2pair2:token>",
+    "description": "Pairing step 3, on the server that started: takes the k2pair2: token, prints a k2pair3: token for the other owner and this side's pairing code. The server owner's: refused in an agent session (exit 3)."
+   },
+   {
+    "name": "fed pair-verify",
+    "usage": "k2 fed pair-verify <k2pair3:token>",
+    "description": "Pairing step 4, on the other server: takes the k2pair3: token and prints this side's pairing code. Both owners compare codes, then each runs k2 fed confirm. The server owner's: refused in an agent session (exit 3)."
+   },
+   {
+    "name": "fed pair-request",
+    "usage": "k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S] [--url http://host:port]",
+    "description": "The pre-0.45.2 pairing: asks a server to pin this key as a Pending peer (an open route: no token is sent, and it runs inside an agent session too). Refused for a server not paired yet."
+   },
+   {
+    "name": "fed confirm",
+    "usage": "k2 fed confirm <fingerprint> <sas-code>",
+    "description": "Trust the peer once both owners' pairing codes match. The server owner's: refused in an agent session (exit 3)."
+   },
+   {
     "name": "skills",
     "usage": "k2 skills <list|create|remove|profile|...> [...]",
     "description": "Manage skill profiles (SKILL.md) for workspaces/agents."

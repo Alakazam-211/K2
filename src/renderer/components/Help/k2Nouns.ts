@@ -235,6 +235,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'tunnel', blurb: 'The tunnel to your *.k2.dev address.', example: 'k2 tunnel status' },
       { noun: 'connect', blurb: 'Pair a k2.dev subdomain to this device (headless login).', example: 'k2 connect status' },
       { noun: 'remote-session', blurb: 'Owner/admin remote shells behind grants.', example: 'k2 remote-session status' },
+      { noun: 'fed', blurb: 'Federation: pair with another K2 server so agents can message across.', example: 'k2 fed peers' },
     ],
   },
   {

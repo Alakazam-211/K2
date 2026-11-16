@@ -1,5 +1,5 @@
 {
-  "about": "Hidden by: the rule in docs/WIRE.md. Each case: the scene's master collection, its collections (own viewport flag, children in the file's order), its objects (own viewport flag, the collections holding each), and each object's expected value: \"self\", \"collection:<address>\", or null (absent).",
+  "about": "Hidden by: the rule in docs/WIRE.md. Each case: the scene's master collection, its collections (own viewport flag, children in the file's order), its objects (own viewport flag, the collections holding each), optionally `moves` (a collection moved live: taken out from under every parent and put under `to`, after its other children, in order), and each object's expected value: \"self\", \"collection:<address>\", or null (absent).",
   "cases": [
     {
       "name": "shown, in a collection and in the master collection",
@@ -156,6 +156,38 @@
         {"key": "@obj:25", "hidden": false, "in": []}
       ],
       "expect": {"@obj:5": null, "@obj:6": "self", "@obj:19": null, "@obj:20": "collection:@coll:4", "@obj:25": null}
+    },
+    {
+      "name": "a collection moved live under a hidden parent",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2", "@coll:3"]},
+        {"key": "@coll:2", "hidden": true, "children": []},
+        {"key": "@coll:3", "hidden": false, "children": ["@coll:4"]},
+        {"key": "@coll:4", "hidden": false, "children": []}
+      ],
+      "moves": [{"collection": "@coll:4", "to": "@coll:2"}],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:4"]},
+        {"key": "@obj:2", "hidden": false, "in": ["@coll:3"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:2", "@obj:2": null}
+    },
+    {
+      "name": "a collection moved live comes after its new parent's other children",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:3", "@coll:2"]},
+        {"key": "@coll:2", "hidden": false, "children": ["@coll:4"]},
+        {"key": "@coll:3", "hidden": false, "children": ["@coll:5"]},
+        {"key": "@coll:4", "hidden": true, "children": []},
+        {"key": "@coll:5", "hidden": true, "children": []}
+      ],
+      "moves": [{"collection": "@coll:4", "to": "@coll:3"}],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:4", "@coll:5"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:5"}
     }
   ]
 }

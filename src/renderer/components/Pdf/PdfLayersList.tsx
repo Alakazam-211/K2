@@ -26,7 +26,7 @@ function Row({ l, empty, onSet }: { l: CoveredLayer; empty?: boolean; onSet: (id
           {itemsWord(l.items)}
         </span>
       ) : null}
-      <Toggle size="sm" checked={l.visible} disabled={empty} aria-label={l.name} onChange={(v) => onSet(l.id, v)} />
+      <Toggle size="sm" checked={!empty && l.visible} disabled={empty} aria-label={l.name} onChange={(v) => onSet(l.id, v)} />
     </li>
   )
 }

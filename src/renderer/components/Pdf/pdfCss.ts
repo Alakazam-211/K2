@@ -38,6 +38,8 @@ export const PDF_CSS = `
 .pdf-tab .annotationLayer { position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: 0 0; color-scheme: only light; }
 .pdf-tab .annotationLayer section { position: absolute; text-align: initial; pointer-events: auto; box-sizing: border-box; transform-origin: 0 0; user-select: none; -webkit-user-select: none; }
 .pdf-tab .textLayer.selecting ~ .annotationLayer section { pointer-events: none; }
+.pdf-tab .annotationLayer .annotationTextContent { position: absolute; inset: 0; opacity: 0; color: transparent; pointer-events: none; user-select: none; -webkit-user-select: none; }
+.pdf-tab .annotationLayer .annotationTextContent span { position: relative; }
 .pdf-tab .annotationLayer .annotationContent { position: absolute; width: 100%; height: 100%; pointer-events: none; }
 .pdf-tab .annotationLayer :is(.popupAnnotation, .popup) { display: none !important; }
 .pdf-tab .annotationLayer .textAnnotation img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
@@ -76,7 +78,7 @@ html[data-style="glass"] .pdf-tab .pdf-find-field { background: var(--color-bg-e
 .pdf-tab .pdf-find-case[aria-pressed="true"] { color: var(--color-text-primary); background: color-mix(in srgb, var(--color-accent) 14%, transparent); box-shadow: inset 0 0 0 1px var(--color-accent-text); }
 
 /* The side panel. */
-.pdf-tab .pdf-panel-tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid transparent; border-radius: var(--radius-pill); background: transparent; color: var(--color-text-secondary); font: inherit; cursor: pointer; }
+.pdf-tab .pdf-panel-tab { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; font-size: 12.5px; white-space: nowrap; border: 1px solid transparent; border-radius: var(--radius-pill); background: transparent; color: var(--color-text-secondary); font-family: inherit; cursor: pointer; }
 .pdf-tab .pdf-panel-tab:hover { color: var(--color-text-primary); background: var(--color-control-hover-quiet); }
 .pdf-tab .pdf-panel-tab[aria-selected="true"] { border-color: var(--color-control-edge); color: var(--color-text-primary); }
 .pdf-tab .pdf-tab-count, .pdf-tab .pdf-chip-count, .pdf-tab .pdf-quiet, .pdf-tab .pdf-kind { color: var(--color-text-secondary); }
@@ -97,7 +99,7 @@ html[data-style="glass"] .pdf-tab .pdf-find-field { background: var(--color-bg-e
 .pdf-tab .pdf-annot-row { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; padding: 6px 14px; text-align: left; cursor: pointer; }
 .pdf-tab .pdf-row-on { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
 .pdf-tab .pdf-annot-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; color: var(--color-text-primary); }
-.pdf-tab .pdf-annot-text { color: var(--color-text-secondary); overflow-wrap: anywhere; min-width: 0; }
+.pdf-tab .pdf-annot-text { color: var(--color-text-primary); overflow-wrap: anywhere; min-width: 0; }
 .pdf-tab .pdf-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; padding: 10px 14px; }
 .pdf-tab .pdf-thumb { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 4px; padding: 6px; border: 1px solid transparent; border-radius: var(--radius-field); background: transparent; color: var(--color-text-secondary); cursor: pointer; }
 .pdf-tab .pdf-thumb:hover { background: var(--color-row-hover); }

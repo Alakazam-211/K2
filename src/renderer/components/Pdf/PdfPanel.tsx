@@ -47,7 +47,7 @@ export function PdfPanel(props: {
   }
   return (
     <div data-testid="pdf-panel" className="flex min-h-full flex-col">
-      <div ref={strip} role="tablist" aria-label="Side panel" className="flex flex-none flex-wrap items-center gap-1 px-3 pb-1 pt-2" onKeyDown={onKey}>
+      <div ref={strip} role="tablist" aria-label="Side panel" className="flex flex-none items-center gap-0.5 px-3 pb-1 pt-2" onKeyDown={onKey}>
         {TABS.map((t) => {
           const on = t.id === props.tab
           return (
@@ -62,7 +62,7 @@ export function PdfPanel(props: {
               data-k2-focus=""
               data-k2-chamfer="control"
               onClick={() => props.onTab(t.id)}
-              className={cx('pdf-panel-tab type-row no-drag', on ? 'ed-panel-tab font-semibold' : '')}
+              className={cx('pdf-panel-tab no-drag', on ? 'ed-panel-tab font-semibold' : '')}
             >
               {t.label}
               {counts[t.id] !== null ? <span className="pdf-tab-count lv-num font-normal">{counts[t.id]}</span> : null}

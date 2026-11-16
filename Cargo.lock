@@ -4981,7 +4981,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-psd"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "k2-mpc-base",
  "photocraft-psd",

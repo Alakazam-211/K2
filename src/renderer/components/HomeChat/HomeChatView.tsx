@@ -37,6 +37,7 @@ import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder, ThreadWindowSpac
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { ThreadReplyChip } from '@/components/Thread/ThreadMessageMenu'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { usePrependHold } from '@/components/Thread/usePrependHold'
 import { threadRunWindow } from '@/components/Thread/threadRuns'
 import { SelectableRegion } from '@/components/common/SelectableText'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -254,6 +255,15 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
       el.scrollTop = el.scrollHeight
     },
   })
+  // An older page (Earlier messages, a reply's original read back) keeps
+  // the message being read where it is.
+  usePrependHold({
+    keys,
+    scroller: () => scrollRef.current,
+    rows: () => scrollRef.current?.querySelector<HTMLElement>('[data-thread-column]') ?? null,
+    following: () => followingRef.current,
+    wrote: win.wrote,
+  })
   const runInputs = useMemo(
     () => (messages ?? []).map((m) => ({ mine: !!me && m.authorId === me, from: m.authorId, at: m.createdAt })),
     [messages, me],
@@ -298,15 +308,9 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   const onLoadOlder = useCallback(async () => {
     if (growTop() || loadingOlder) return
     setLoadingOlder(true)
-    const el = scrollRef.current
-    const prevHeight = el?.scrollHeight ?? 0
-    const prevTop = el?.scrollTop ?? 0
     try {
+      // The page keeps the message being read where it is (usePrependHold).
       await loadOlder()
-      requestAnimationFrame(() => {
-        const a = scrollRef.current
-        if (a) a.scrollTop = prevTop + (a.scrollHeight - prevHeight)
-      })
     } catch (e) {
       setLoadError(daemonErrorText(e) || String(e))
     } finally {

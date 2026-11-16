@@ -76,6 +76,7 @@ import {
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { usePrependHold } from '@/components/Thread/usePrependHold'
 import { threadRunWindow } from '@/components/Thread/threadRuns'
 import { useFollowOnResize } from '@/hooks/useStickToBottom'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
@@ -253,6 +254,15 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     },
   })
   const toNewest = win.toNewest
+  // Earlier history (and a refetch that brings some) keeps the message
+  // being read where it is.
+  usePrependHold({
+    keys,
+    scroller: () => scrollRef.current,
+    rows: () => scrollRef.current?.querySelector<HTMLElement>('[data-thread-column]') ?? null,
+    following: () => followingRef.current,
+    wrote: win.wrote,
+  })
   // The Thread's runs (threadRuns): names over others' runs, your status
   // line under yours, Glass's tail on the last of each.
   const runs = useMemo(() => threadRunWindow(runInputs, win.lo, win.hi), [runInputs, win.lo, win.hi])
@@ -299,16 +309,10 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     const next = nextEarlierLimit(limitRef.current)
     setLimit(next)
     setLoadingEarlier(true)
-    // Anchor the viewport: prepended history must not yank the scroll.
-    const el = scrollRef.current
-    const prevHeight = el?.scrollHeight ?? 0
-    const prevTop = el?.scrollTop ?? 0
     try {
+      // Prepended history keeps the message being read where it is
+      // (usePrependHold).
       await load(next)
-      requestAnimationFrame(() => {
-        const anchored = scrollRef.current
-        if (anchored) anchored.scrollTop = prevTop + (anchored.scrollHeight - prevHeight)
-      })
     } finally {
       setLoadingEarlier(false)
     }

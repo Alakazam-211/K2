@@ -18,6 +18,7 @@ import {
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { ThreadAttachmentSourceProvider, type ThreadAttachmentSource } from '@/components/Thread/ThreadImageObjects'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { usePrependHold } from '@/components/Thread/usePrependHold'
 import {
   ThreadSenderAvatarContext,
   threadSender,
@@ -154,7 +155,6 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const didInitialScroll = useRef(false)
-  const prevHeightRef = useRef<number | null>(null)
   const pinBottomRef = useRef(true)
   const savedScrollTopRef = useRef<number | null>(null)
   const lastClientHeightRef = useRef(0)
@@ -166,7 +166,6 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
   useEffect(() => {
     didInitialScroll.current = false
     pinBottomRef.current = true
-    prevHeightRef.current = null
     savedScrollTopRef.current = null
     lastClientHeightRef.current = 0
   }, [addr])
@@ -179,12 +178,6 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
       el.scrollTop = el.scrollHeight
       didInitialScroll.current = true
       pinBottomRef.current = true
-      savedScrollTopRef.current = el.scrollTop
-      return
-    }
-    if (prevHeightRef.current != null) {
-      el.scrollTop += el.scrollHeight - prevHeightRef.current
-      prevHeightRef.current = null
       savedScrollTopRef.current = el.scrollTop
       return
     }
@@ -226,6 +219,17 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
     stick: (el) => {
       el.scrollTop = el.scrollHeight
     },
+    onScrollWrite: (top) => {
+      savedScrollTopRef.current = top
+    },
+  })
+  // An older page keeps the message being read where it is.
+  usePrependHold({
+    keys,
+    scroller: () => listRef.current,
+    rows: () => contentRef.current,
+    following: () => pinBottomRef.current,
+    wrote: win.wrote,
     onScrollWrite: (top) => {
       savedScrollTopRef.current = top
     },
@@ -274,7 +278,6 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
     // Memory first: rows above the window come back before a fetch.
     if (win.growTop()) return
     if (!hasMore || loadingOlder) return
-    prevHeightRef.current = el.scrollHeight
     void loadOlder()
   }
 

@@ -43,6 +43,7 @@ import {
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { THREAD_JUMP_BOTTOM_PX, ThreadJumpPill } from '@/components/Thread/ThreadJumpPill'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { usePrependHold } from '@/components/Thread/usePrependHold'
 import {
   ThreadSenderAvatarContext,
   sameSenderSlot,
@@ -334,25 +335,6 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const isTabVisibleRef = useRef(isTabVisible)
   isTabVisibleRef.current = isTabVisible
 
-  // Rows came in above the oldest (an "Earlier messages" page): the row the
-  // reader is on and its place in the content, read before the commit that
-  // draws them; that commit puts it back (syncListScroll). Read when the
-  // page lands, not when it was asked for: a height kept from the ask was
-  // spent by any re-pin meanwhile (a trim, the activity bar), and the page
-  // then landed with the reader thrown to its first row, at the very top,
-  // where no scroll event asks for the next one.
-  const oldestRef = useRef<string | null>(items[0]?.id ?? null)
-  const landRef = useRef<{ el: HTMLElement; top: number } | null>(null)
-  const oldestNow = items[0]?.id ?? null
-  if (oldestRef.current !== oldestNow) {
-    const was = oldestRef.current
-    oldestRef.current = oldestNow
-    const prepended = was !== null && items.some((it, i) => i > 0 && it.id === was)
-    landRef.current = prepended && !pinBottomRef.current ? readingRow(listRef.current, contentRef.current) : null
-  }
-  /** The render window's `wrote` (set once the window exists). */
-  const windowWroteRef = useRef<() => void>(() => {})
-
   // The Jump to bottom pill (ThreadJumpPill): shown while scrolled up; the
   // messages from others that arrived meanwhile, and whether the person
   // sent (a send never moves a list they scrolled up). Both reset at the
@@ -374,7 +356,6 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   useEffect(() => {
     didInitialScroll.current = false
     pinBottomRef.current = true
-    landRef.current = null
     savedScrollTopRef.current = null
     lastClientHeightRef.current = 0
     noteBottom(true)
@@ -414,17 +395,6 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
       el.scrollTop = el.scrollHeight
       didInitialScroll.current = true
       pinBottomRef.current = true
-      savedScrollTopRef.current = el.scrollTop
-      return
-    }
-    const land = landRef.current
-    landRef.current = null
-    if (land && land.el.isConnected) {
-      const dy = land.el.offsetTop - land.top
-      if (Math.abs(dy) >= 1) {
-        el.scrollTop += dy
-        windowWroteRef.current()
-      }
       savedScrollTopRef.current = el.scrollTop
       return
     }
@@ -495,7 +465,17 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
       savedScrollTopRef.current = top
     },
   })
-  windowWroteRef.current = win.wrote
+  // An "Earlier messages" page keeps the message being read where it is.
+  usePrependHold({
+    keys,
+    scroller: () => listRef.current,
+    rows: () => contentRef.current,
+    following: () => pinBottomRef.current,
+    wrote: win.wrote,
+    onScrollWrite: (top) => {
+      savedScrollTopRef.current = top
+    },
+  })
 
   // Thread view's search (the object beside the bell): this Thread finds,
   // draws, scrolls to and paints the matches.
@@ -705,17 +685,6 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     </div>
   )
 })
-
-/** The first row (partly) on screen in `list` and its offset in the
- *  content: where the reader is. */
-function readingRow(list: HTMLElement | null, content: HTMLElement | null): { el: HTMLElement; top: number } | null {
-  if (!list || !content || !(list.clientHeight > 0)) return null
-  const top = list.getBoundingClientRect().top
-  for (const r of Array.from(content.querySelectorAll<HTMLElement>(':scope > [data-zen-message]'))) {
-    if (r.getBoundingClientRect().bottom > top + 1) return { el: r, top: r.offsetTop }
-  }
-  return null
-}
 
 /** A person's post (the compose bar, a Garden widget, an app guest): the
  *  daemon stamped who sent it. Older docs only say `via=compose`. */

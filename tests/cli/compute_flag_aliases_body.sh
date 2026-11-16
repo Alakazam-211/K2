@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# k2 compute: flags `k2 --schema` and the help list as other names, and the
-# people-only --workspace flags, checked by what reaches the daemon. A tiny
+# k2 compute: flags `k2 --schema` and the help list as other names, the
+# people-only --workspace flags, and a few more once-hidden flags, checked
+# by what reaches the daemon. A tiny
 # stub daemon on loopback (python3 http.server) records every request and
 # refuses it, so nothing runs. No real daemon, no ~/.k2, no keychain: HOME
 # is a throwaway dir.
@@ -11,6 +12,10 @@
 #   --workspace WS   names that workspace on move, cancel (--workspace-all),
 #                    prewarm, rightsize and logs --search; without it the
 #                    CLI names the checkout's own workspace instead
+#   test --partition hash|count   reaches nextest's --partition (default
+#                    hash; only with --shards above 1); another value: exit 2
+#   node admin list --limit N, node servers list --refresh: in the query
+#   local status --json   prints the daemon's answer as it came
 #   k2 --schema lists each of them on its verb
 
 set -euo pipefail
@@ -62,6 +67,14 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         self.record({"method": "GET", "path": u.path, "query": {k: v[0] for k, v in parse_qs(u.query).items()}})
+        if u.path == "/cli/compute/local/status":
+            b = json.dumps({"installed": False, "elevation": "helper", "stub": "local-status"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
         return self.refuse()
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -149,6 +162,48 @@ own="$(k2_sent compute logs --search 'thread panicked')"
 expect_eq "logs --search --workspace" "$(field "$ws" 'v["path"], v["query"].get("workspace"), v["query"].get("search")')" '["/cli/compute/logs/search", "acme-ws", "thread panicked"]'
 expect_ne "logs --search without --workspace names another" "$(field "$own" 'v["query"].get("workspace")')" '"acme-ws"'
 
+echo "== test --partition picks how nextest splits the shards =="
+# script <json>: the sh -c script compute test sends as the job's command.
+script() { python3 -c 'import json,sys; print(json.loads(sys.argv[1])["body"]["argv"][2])' "$1"; }
+has() { if grep -Fq -- "$3" <<<"$2"; then ok "$1"; else bad "$1 (missing $(printf %q "$3"))"; fi; }
+hasnt() { if grep -Fq -- "$3" <<<"$2"; then bad "$1 (found $(printf %q "$3"))"; else ok "$1"; fi; }
+count="$(k2_sent compute test --no-source --mem 2G --shards 2 --partition count -- -p k2-core)"
+hash="$(k2_sent compute test --no-source --mem 2G --shards 2 --partition hash -- -p k2-core)"
+dflt="$(k2_sent compute test --no-source --mem 2G --shards 2 -- -p k2-core)"
+one="$(k2_sent compute test --no-source --mem 2G --partition count -- -p k2-core)"
+expect_eq "two shards" "$(field "$count" 'v["path"], v["body"].get("shards")')" '["/cli/compute/run", 2]'
+has "--partition count reaches nextest" "$(script "$count")" "--partition count:{shard}/{shards}"
+has "--partition hash reaches nextest" "$(script "$hash")" "--partition hash:{shard}/{shards}"
+has "no --partition: hash" "$(script "$dflt")" "--partition hash:{shard}/{shards}"
+hasnt "one shard: no nextest --partition" "$(script "$one")" "--partition"
+before="$(wc -l < "$LOG")"
+set +e
+"$K2" compute test --no-source --mem 2G --shards 2 --partition random -- -p x >/dev/null 2>"$SANDBOX/err"
+rc=$?
+set -e
+expect_eq "--partition random exits 2" "$rc" "2"
+has "... and says the values" "$(cat "$SANDBOX/err")" "usage: --partition hash|count"
+expect_eq "... and sends nothing" "$(wc -l < "$LOG")" "$before"
+
+echo "== node admin list --limit =="
+lim="$(k2_sent compute node admin list --state all --limit 7)"
+expect_eq "admin list --limit" "$(field "$lim" 'v["path"], v["query"].get("limit"), v["query"].get("state")')" '["/cli/compute/admin/requests", "7", "all"]'
+nolim="$(k2_sent compute node admin list --state all)"
+expect_eq "no --limit: no limit key (the daemon's 50)" "$(field "$nolim" 'v["query"].get("limit")')" 'null'
+
+echo "== node servers list --refresh =="
+ref="$(k2_sent compute node servers k2n12 list --refresh)"
+expect_eq "servers list --refresh" "$(field "$ref" 'v["path"], v["query"].get("node"), v["query"].get("refresh")')" '["/cli/compute/nodes/servers", "k2n12", "1"]'
+plain="$(k2_sent compute node servers k2n12)"
+expect_eq "no --refresh: no refresh key" "$(field "$plain" 'v["query"].get("node"), v["query"].get("refresh")')" '["k2n12", null]'
+
+echo "== local status --json =="
+out="$("$K2" compute local status --json)"
+expect_eq "local status --json prints the daemon's answer" "$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]); print(v["stub"], v["installed"])' "$out")" "local-status False"
+out="$("$K2" compute local status)"
+has "local status without --json: text" "$out" "This computer is not a compute node."
+hasnt "... not JSON" "$out" '"stub"'
+
 echo "== --schema lists them =="
 schema_flags() {
     "$K2" --schema | python3 -c '
@@ -163,6 +218,10 @@ has_flag "schema: run --artifacts" "$run_flags" "--artifacts"
 for verb in move cancel prewarm rightsize logs; do
     has_flag "schema: $verb --workspace" "$(schema_flags "compute $verb")" "--workspace"
 done
+has_flag "schema: test --partition" "$(schema_flags 'compute test')" "--partition"
+has_flag "schema: node admin list --limit" "$(schema_flags 'compute node admin list')" "--limit"
+has_flag "schema: node servers --refresh" "$(schema_flags 'compute node servers')" "--refresh"
+has_flag "schema: local status --json" "$(schema_flags 'compute local status')" "--json"
 
 echo
 echo "compute_flag_aliases_body: $pass passed, $fail failed"

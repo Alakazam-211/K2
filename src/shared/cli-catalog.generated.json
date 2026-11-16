@@ -2430,7 +2430,7 @@
    },
    {
     "name": "compute test",
-    "usage": "k2 compute test [<node>] [--shards N] [--profile P] [--runner CMD] [--preset NAME] [run flags] [-- <nextest args>]",
+    "usage": "k2 compute test [<node>] [--shards N] [--partition hash|count] [--profile P] [--runner CMD] [--preset NAME] [run flags] [-- <nextest args>]",
     "description": "A cargo-nextest suite split across nodes (nextest --partition), JUnit kept and parsed, one combined result. It takes run's flags except --wait, --failures, --max-wait, --quiet and --priority (the code refuses those here; --critical and --tier work)."
    },
    {
@@ -2600,7 +2600,7 @@
    },
    {
     "name": "compute node servers",
-    "usage": "k2 compute node servers <node> [--json]",
+    "usage": "k2 compute node servers <node> [list [--refresh]] [--json]",
     "description": "Sharing a node with other K2 servers (the node's owner server): every server on it with slot, state, trust, share, today's use, end date and pending SAS."
    },
    {
@@ -2690,7 +2690,7 @@
    },
    {
     "name": "compute node admin list",
-    "usage": "k2 compute node admin list [--node N] [--state open|pending|all] [--json]",
+    "usage": "k2 compute node admin list [--node N] [--state open|pending|all] [--limit N] [--json]",
     "description": "Node admin requests. Node admin: agents need Allow this agent to operate compute nodes."
    },
    {
@@ -2885,7 +2885,7 @@
    },
    {
     "name": "compute local status",
-    "usage": "k2 compute local status",
+    "usage": "k2 compute local status [--json]",
     "description": "This computer's node state."
    },
    {

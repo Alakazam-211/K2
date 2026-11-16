@@ -4210,11 +4210,12 @@ exit: 0
     },
     {
       "name": "compute test",
-      "usage": "k2 compute test [<node>] [--shards N] [--profile P] [--runner CMD] [--preset NAME] [run flags] [-- <nextest args>]",
+      "usage": "k2 compute test [<node>] [--shards N] [--partition hash|count] [--profile P] [--runner CMD] [--preset NAME] [run flags] [-- <nextest args>]",
       "description": "A cargo-nextest suite split across nodes (nextest --partition), JUnit kept and parsed, one combined result. It takes run's flags except --wait, --failures, --max-wait, --quiet and --priority (the code refuses those here; --critical and --tier work).",
       "args": [{"name": "node", "required": false, "description": "Pin to this node (not with --shards above 1)."}, {"name": "nextest args", "required": false, "description": "After --: nextest's own arguments."}],
       "flags": [
         {"name": "--shards", "arg": "N", "description": "How many shards (1 to 16), each on its own node."},
+        {"name": "--partition", "arg": "hash|count", "description": "How nextest splits the suite across the shards (nextest --partition hash or count; default hash). Only with --shards above 1."},
         {"name": "--profile", "arg": "P", "description": "Use the repo's own nextest profile."},
         {"name": "--runner", "arg": "CMD", "description": "Replace cargo nextest run."},
         {"name": "--preset", "arg": "NAME", "description": "The .k2/compute.toml preset, as for run."}
@@ -4577,10 +4578,11 @@ exit: 0
     },
     {
       "name": "compute node servers",
-      "usage": "k2 compute node servers <node> [--json]",
+      "usage": "k2 compute node servers <node> [list [--refresh]] [--json]",
       "description": "Sharing a node with other K2 servers (the node's owner server): every server on it with slot, state, trust, share, today's use, end date and pending SAS.",
       "args": [{"name": "node", "required": true}],
       "flags": [
+        {"name": "--refresh", "arg": null, "description": "With list: ask the node for its server list now, instead of the copy K2 keeps (fetched again by itself once it is old)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -4751,12 +4753,13 @@ exit: 0
     },
     {
       "name": "compute node admin list",
-      "usage": "k2 compute node admin list [--node N] [--state open|pending|all] [--json]",
+      "usage": "k2 compute node admin list [--node N] [--state open|pending|all] [--limit N] [--json]",
       "description": "Node admin requests. Node admin: agents need Allow this agent to operate compute nodes.",
       "args": [],
       "flags": [
         {"name": "--node", "arg": "N", "description": "Only this node."},
         {"name": "--state", "arg": "open|pending|all", "description": "Which requests."},
+        {"name": "--limit", "arg": "N", "description": "At most N requests (default 50)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -5115,10 +5118,12 @@ exit: 0
     },
     {
       "name": "compute local status",
-      "usage": "k2 compute local status",
+      "usage": "k2 compute local status [--json]",
       "description": "This computer's node state.",
       "args": [],
-      "flags": []
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's answer as JSON."}
+      ]
     },
     {
       "name": "compute local pause",

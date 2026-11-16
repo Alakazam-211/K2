@@ -279,7 +279,9 @@ Agents:
                  the repo's own nextest profile, --runner to replace cargo nextest run
                  (--preset NAME is the .k2/compute.toml preset, as for run).
                  Run flags except --wait, --failures, --max-wait, --quiet and
-                 --priority (exit 2; --critical and --tier priority work)
+                 --priority (exit 2; --critical and --tier priority work).
+                 --partition hash|count: how nextest splits the suite across
+                 the shards (default hash; only with --shards above 1)
   k2 compute prewarm [--preset NAME | --needs …] [--os …] [--distro …] [--arch …] [--label k=v]
                  [--node N]... [--tag T] [--plan] [--wait] [--workspace WS] [--json]
                  install the tools ahead of time: one idle-time (Batch) job on
@@ -450,8 +452,9 @@ Owner / admin (refused for agents and inside K2 terminals, except where
                    there; K2 never chooses it by itself (owner or Admin)
   k2 compute node route add|rm <name> <url>    LAN or tailnet URL the node may dial
 Sharing a node with other K2 servers (the node's owner server; 0.46.3):
-  k2 compute node servers <node> [--json]      every server on it: slot, state,
+  k2 compute node servers <node> [list [--refresh]] [--json]   every server on it: slot, state,
                    trust, share, today's use, end date, pending SAS
+                   (--refresh: ask the node now, not the copy K2 keeps)
   k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team]
                    [--for 7d|none] [--weight N] [--max-running N] [--max-queued N]
                    [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G]
@@ -630,7 +633,7 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
                    homes.private (chmod 700 the homes others can read)
   k2 compute node admin propose <node> --plan plan.json --reason "…"
                    held for the owner: exit 2 with the request id
-  k2 compute node admin list [--node N] [--state open|pending|all] [--json]
+  k2 compute node admin list [--node N] [--state open|pending|all] [--limit N (default 50)] [--json]
   k2 compute node admin withdraw <id>
                    Ask the owner to approve a held request in their chat
                    (permission cards on; an agent that may operate or manage
@@ -662,7 +665,7 @@ Node admin, owner only (refused for agents and inside K2 terminals):
                    grant/revoke any workspace (each act in Access Audit). Still
                    yours: preview on|off, node remove, and this switch
 This computer (its owner):
-  k2 compute local status|pause [--now]|drain|resume
+  k2 compute local status [--json]|pause [--now]|drain|resume
   k2 compute local policy key=value...    (cpu_cap_percent, mem_cap_gb, availability, …)
   k2 compute local enable [--controller URL --enroll CODE.FP --name NAME]
                           [--private-home | --no-private-home]

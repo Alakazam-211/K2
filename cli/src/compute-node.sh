@@ -960,7 +960,7 @@ print(json.dumps(a))' "$args_json" "$file" "$interp" "$timeout")" || exit 2
                     --state) q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
                     --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
                     --json) as_json=1; shift ;;
-                    *) echo "usage: k2 compute node admin list [--node N] [--state open|pending|all]" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute node admin list [--node N] [--state open|pending|all] [--limit N] [--json]" >&2; exit 2 ;;
                 esac
             done
             _compute_call GET /cli/compute/admin/requests "${q#&}"

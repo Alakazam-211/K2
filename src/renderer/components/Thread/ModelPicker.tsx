@@ -2,7 +2,7 @@
 // the Thread composer's `/model` (and its model chip) and Settings →
 // Providers / Models "Default model". The reaction picker's menu popover:
 // the app's menu material (Frost in Glass, the cut surface in Terminal),
-// 320px wide, at most 60vh, the list scrolling inside a ScrollEdgeFrame.
+// 320px wide, at most 60% of the window's height, the list scrolling inside a ScrollEdgeFrame.
 //
 // A listbox: the search ("Find a model") keeps focus and names the active
 // row with aria-activedescendant; ↑↓ move, Enter picks, Esc closes and gives
@@ -201,7 +201,7 @@ export function ModelPicker({
         {...floatMaterial('menu', 'frost')}
         {...MENU_LIST}
         className="flex flex-col gap-1.5 border border-[var(--color-border)] bg-[var(--color-bg)] [box-shadow:var(--shadow-3)]"
-        style={{ width: MODEL_PICKER_WIDTH, maxHeight: '60vh' }}
+        style={{ width: MODEL_PICKER_WIDTH, maxHeight: 'calc(var(--k2-vh) * 0.6)' }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault()

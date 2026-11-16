@@ -1081,7 +1081,7 @@ fn guest_writes_into_the_agent_folder_are_refused_under_each_of_its_names() {
         assert_protected(&r, &format!("write-file through a linked folder: {path}"));
     }
     // upload-binary and upload-chunk.
-    for (dir, name) in [(".k2so/skills/k2-cli", "x.bin"), (".k2so", "x.bin"), (".", ".k2so"), (".", ".k5"), (".k5/agent", "x.bin"), ("oldskills", "x.bin")] {
+    for (dir, name) in [(".k2so/skills/k2-cli", "x.bin"), (".k2so", "x.bin"), (".", ".k2so"), (".", ".k5"), (".k5/agent", "x.bin"), ("oldskills/k2-cli", "x.bin"), ("oldskills/brandnew", "x.bin")] {
         let r = handle_upload_binary_gated(&upload_body(&room, dir, name), Some(pass.clone()));
         assert_protected(&r, &format!("upload-binary {dir}/{name}"));
     }
@@ -1094,7 +1094,7 @@ fn guest_writes_into_the_agent_folder_are_refused_under_each_of_its_names() {
         let body = json_bytes(serde_json::json!({"workspace": h, "path": path, "is_directory": is_dir}));
         assert_protected(&handle_create_gated(&body, Some(pass.clone())), &format!("create {path}"));
     }
-    for dest in [".k2so/agent", ".k2so/skills/k2-cli", ".k5/agent", "oldskills"] {
+    for dest in [".k2so/agent", ".k2so/skills/k2-cli", ".k5/agent", "oldskills/k2-cli"] {
         let body = json_bytes(serde_json::json!({"workspace": h, "sources": ["notes/a.md"], "destination": dest}));
         assert_protected(&handle_copy_gated(&body, Some(pass.clone())), &format!("copy into {dest}"));
         assert_protected(&handle_move_gated(&body, Some(pass.clone())), &format!("move into {dest}"));

@@ -1085,11 +1085,15 @@ fn scope_write_target(
 // delete door. The owner token, Connect users, agent sessions and the
 // daemon never take this path (they never carry a `SkinPass`).
 
-/// `true` when one path segment names the agent config folder: `.k2`,
-/// ASCII case-folded (`.K2` on a case-insensitive disk is the same
-/// folder), with trailing dots/spaces ignored (Windows strips them).
+/// `true` when one path segment names the agent config folder under any
+/// of its names (`.k2`, the older `.k2so`, the coming `.k5`), ASCII
+/// case-folded (`.K2` on a case-insensitive disk is the same folder), with
+/// trailing dots/spaces ignored (Windows strips them). A workspace can
+/// keep a `.k2so/` beside its `.k2/`, with root links (`CLAUDE.md`,
+/// `.claude/skills/…`) still pointing into it: a write there changes what
+/// the agent loads just as a write under `.k2/` does.
 fn is_agent_config_segment(seg: &str) -> bool {
-    seg.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".k2")
+    k2_core::paths::is_workspace_dot_dir(seg)
 }
 
 /// `true` when a room-root name is one a guest's `files:write` alone doesn't

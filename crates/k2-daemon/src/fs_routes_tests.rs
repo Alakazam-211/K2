@@ -1025,6 +1025,110 @@ fn upload_chunk_publishes_beside_a_leaf_symlink_and_still_guards_k2() {
     std::fs::remove_dir_all(&outside).expect("cleanup outside");
 }
 
+/// The agent's folder has had three names: `.k2`, `.k2so` before it, and
+/// `.k5` next. A room can still hold a leftover `.k2so/` beside its
+/// `.k2/`, with the root links (`CLAUDE.md`, `.claude/skills/…`) pointing
+/// into it: the migration only re-pointed them when it renamed the folder.
+/// A guest's `files:write` stops at every one of the three, under any
+/// spelling, and at the target of such a link.
+#[test]
+fn guest_writes_into_the_agent_folder_are_refused_under_each_of_its_names() {
+    let room = config_room("names");
+    let h = room.handle.clone();
+    // The leftover folder with a skill in it, and the root link that
+    // still points there; and a folder under the coming name.
+    std::fs::create_dir_all(room.dir.join(".k2so/skills/k2-cli")).expect("old skills dir");
+    std::fs::create_dir_all(room.dir.join(".k2so/agent")).expect("old agent dir");
+    std::fs::write(room.dir.join(".k2so/skills/k2-cli/SKILL.md"), b"old skill").expect("old skill");
+    std::fs::write(room.dir.join(".k2so/agent/ROLE.md"), b"old role").expect("old role");
+    k2_core::test_env::symlink(room.dir.join(".k2so/skills/k2-cli/SKILL.md"), room.dir.join("SKILL.md")).expect("root link");
+    k2_core::test_env::symlink(room.dir.join(".k2so/skills"), room.dir.join("oldskills")).expect("dir link");
+    std::fs::create_dir_all(room.dir.join(".k5/agent")).expect("new agent dir");
+    std::fs::write(room.dir.join(".k5/agent/ROLE.md"), b"new role").expect("new role");
+    let pass = writer(&room, false);
+
+    // write-file: each name, an upper-case spelling of each, a trailing
+    // dot, a backslash, and the folder itself.
+    for path in [
+        ".k2so/skills/k2-cli/SKILL.md",
+        ".k2so/agent/ROLE.md",
+        ".k2so/agent/new.txt",
+        ".k2so",
+        ".K2SO/skills/k2-cli/SKILL.md",
+        ".K2so/agent/ROLE.md",
+        ".k2so./agent/x.md",
+        ".k2so\\agent\\ROLE.md",
+        "./.k2so/agent/x.md",
+        ".k5/agent/ROLE.md",
+        ".k5/agent/new.txt",
+        ".k5",
+        ".K5/agent/ROLE.md",
+        ".k5 /agent/x.md",
+        ".k2/agent/ROLE.md",
+        ".K2/agent/ROLE.md",
+    ] {
+        let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+        assert_protected(&r, &format!("write-file {path}"));
+    }
+    // The target of a root link into the leftover folder, by the link's
+    // own name and through a linked folder.
+    for path in ["SKILL.md", "oldskills/k2-cli/SKILL.md", "oldskills/new/SKILL.md"] {
+        let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+        assert_protected(&r, &format!("write-file through a link: {path}"));
+    }
+    // upload-binary and upload-chunk.
+    for (dir, name) in [(".k2so/skills/k2-cli", "x.bin"), (".k2so", "x.bin"), (".", ".k2so"), (".", ".k5"), (".k5/agent", "x.bin"), ("oldskills", "x.bin")] {
+        let r = handle_upload_binary_gated(&upload_body(&room, dir, name), Some(pass.clone()));
+        assert_protected(&r, &format!("upload-binary {dir}/{name}"));
+    }
+    for dir in [".k2so/agent", ".K2SO/agent", ".k5/agent", "oldskills/k2-cli"] {
+        let r = handle_upload_chunk_gated(&chunk_body(&room, dir, "big.bin"), Some(pass.clone()));
+        assert_protected(&r, &format!("upload-chunk {dir}"));
+    }
+    // create, copy and move INTO, move and rename OUT OF, rename INTO.
+    for (path, is_dir) in [(".k2so/skills/new", true), (".k2so/agent/new.md", false), (".k5/skills", true), ("oldskills/new", true)] {
+        let body = json_bytes(serde_json::json!({"workspace": h, "path": path, "is_directory": is_dir}));
+        assert_protected(&handle_create_gated(&body, Some(pass.clone())), &format!("create {path}"));
+    }
+    for dest in [".k2so/agent", ".k2so/skills/k2-cli", ".k5/agent", "oldskills"] {
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": ["notes/a.md"], "destination": dest}));
+        assert_protected(&handle_copy_gated(&body, Some(pass.clone())), &format!("copy into {dest}"));
+        assert_protected(&handle_move_gated(&body, Some(pass.clone())), &format!("move into {dest}"));
+    }
+    for src in [".k2so/agent/ROLE.md", ".k2so/skills", ".k5/agent/ROLE.md", "oldskills/k2-cli/SKILL.md"] {
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": [src], "destination": "notes"}));
+        assert_protected(&handle_move_gated(&body, Some(pass.clone())), &format!("move out {src}"));
+    }
+    for (path, new_name) in [(".k2so/agent/ROLE.md", "ROLE.old"), (".k2so/skills", "box"), (".k5/agent", "box"), ("notes", ".k2so"), ("notes", ".K5")] {
+        let body = json_bytes(serde_json::json!({"workspace": h, "path": path, "new_name": new_name}));
+        assert_protected(&handle_rename_gated(&body, Some(pass.clone())), &format!("rename {path} -> {new_name}"));
+    }
+
+    // Nothing changed on disk.
+    assert_eq!(std::fs::read_to_string(room.dir.join(".k2so/skills/k2-cli/SKILL.md")).expect("old skill"), "old skill");
+    assert_eq!(std::fs::read_to_string(room.dir.join(".k2so/agent/ROLE.md")).expect("old role"), "old role");
+    assert_eq!(std::fs::read_to_string(room.dir.join(".k5/agent/ROLE.md")).expect("new role"), "new role");
+    assert_eq!(room.read_role(), "original role");
+    assert!(!room.dir.join(".k2so/agent/new.txt").exists());
+    assert!(!room.dir.join(".k2so/skills/new").exists());
+    assert!(!room.dir.join(".k5/skills").exists());
+    assert!(room.dir.join("notes/a.md").exists(), "a refused move must leave the source");
+    assert!(room.dir.join("notes").is_dir(), "a refused rename must leave the folder");
+
+    // Names that only look like it are ordinary room files.
+    for dir in [".k2so-old", "docs/.k2so", ".k5x"] {
+        std::fs::create_dir_all(room.dir.join(dir)).expect("look-alike dir");
+    }
+    for path in ["k2so-notes.md", ".k2so-old/x.md", "docs/.k2so/x.md", ".k5x/x.md"] {
+        let r = handle_write_file_gated(&write_body(&room, path, "ok"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{path}: {}", r.body);
+    }
+    // With the opt-in a guest writes the leftover folder as it writes `.k2`.
+    let opted = writer(&room, true);
+    let r = handle_write_file_gated(&write_body(&room, ".k2so/agent/note.md", "ok"), Some(opted));
+    assert_eq!(r.status, "200 OK", "opt-in write under .k2so: {}", r.body);
+}
+
 /// `files:write` alone doesn't reach the files the agent's CLI loads as standing
 /// orders; `files:agentconfig` does. Only at the room's root, and only writes.
 #[test]

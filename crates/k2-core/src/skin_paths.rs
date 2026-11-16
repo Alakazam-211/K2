@@ -278,11 +278,12 @@ pub fn is_root_instruction_file(name: &str) -> bool {
     ROOT_INSTRUCTION_FILES.iter().any(|f| f.eq_ignore_ascii_case(name))
 }
 
-/// `true` when a folder names the agent's config folder `.k2` or sits
-/// inside it: its first segment, ASCII case-folded, trailing dots and
-/// spaces ignored (the daemon's `is_agent_config_segment` rule).
+/// `true` when a folder names the agent's config folder or sits inside
+/// it: its first segment is `.k2`, the older `.k2so` or the coming `.k5`,
+/// ASCII case-folded, trailing dots and spaces ignored (the daemon's
+/// `is_agent_config_segment` rule; `crate::paths::is_workspace_dot_dir`).
 pub fn folder_in_agent_config(folder: &str) -> bool {
-    folder_segments(folder).first().is_some_and(|s| s.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".k2"))
+    folder_segments(folder).first().is_some_and(|s| crate::paths::is_workspace_dot_dir(s))
 }
 
 /// Normalize, dedupe and check one room line's folders.
@@ -677,6 +678,12 @@ mod tests {
         for bad in [".k2", ".K2/config.toml", ".k2./x"] {
             assert!(dl(&[], &[bad]).unwrap_err().contains(".k2"), "{bad:?}");
         }
+        for bad in [".k2so", ".K2so/skills/x/SKILL.md", ".k2so./x", ".k5", ".K5/config.toml"] {
+            assert!(dl(&[], &[bad]).is_err(), "{bad:?} is the agent's folder under another name");
+        }
+        assert!(folder_in_agent_config(".k2so/skills"));
+        assert!(folder_in_agent_config(".K5"));
+        assert!(!folder_in_agent_config("docs/.k2so"));
         assert!(dl(&[], &["../x"]).is_err());
         assert!(parse_room_paths(Some(r#"{"r1":{"download":["a/b.pdf"]}}"#)).unwrap()["r1"].download == ["a/b.pdf"]);
     }
@@ -754,6 +761,13 @@ mod tests {
             assert!(err.contains(".k2"), "{bad:?}: {err}");
         }
         assert!(drop_scope(&[], &[], &["docs/.k2"], None).is_ok(), "only the room's own .k2 is the agent's");
+        // The folder's other names: the leftover `.k2so` and the coming `.k5`.
+        for bad in [".k2so", ".K2SO", ".k2so/inbox", ".k2so.", ".k5", ".K5/x", ".k5 /x"] {
+            assert!(drop_scope(&[], &[], &[bad], None).is_err(), "{bad:?} is the agent's folder under another name");
+        }
+        for fine in ["docs/.k2so", ".k2so-old", "k2so", ".k5x"] {
+            assert!(drop_scope(&[], &[], &[fine], None).is_ok(), "{fine:?}");
+        }
         // A drop folder that is also a write folder is dropped (write covers it).
         let s = drop_scope(&[], &["Inbox"], &["Inbox", "Drop", "Drop/"], None).unwrap();
         assert_eq!(s.upload, ["Drop"]);

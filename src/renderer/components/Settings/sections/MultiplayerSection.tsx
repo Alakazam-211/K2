@@ -29,7 +29,7 @@ import {
 import { BetaTag, Button, Callout, Spinner, Toggle } from '@/components/ui'
 import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SettingSwitchRow } from '../controls/SettingControls'
 import { ActionNote, readFailure, useActionNote } from './ActionNote'
-import { LiveWorkbookPreviewGroup } from '@/components/LiveView/LiveWorkbookPreviewRow'
+import { LivePreviewSwitches } from '@/components/LiveView/LivePreviewSwitches'
 
 export const MULTIPLAYER_INTRO =
   "People and agents work in the same file at the same time, with presence, history and everyone's own undo. " +
@@ -215,7 +215,7 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
           <PreviewRow on={data.boardFilePreview} canChange={data.canChange} busy={busy === 'board-file-preview'} onFlip={flipPreview} />
         </SettingsGroup>
       ) : null}
-      {data?.canChange ? <LiveWorkbookPreviewGroup /> : null}
+      {data?.canChange ? <LivePreviewSwitches /> : null}
       {data && later.length > 0 ? (
         <p className={SETTING_ROW_HINT} data-testid="multiplayer-later">
           Coming later: {later.join(', ')}.

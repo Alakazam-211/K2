@@ -1,0 +1,38 @@
+// The live 3D scene tab on the shared shell. Phase 1: the header, the side
+// panel (Activity, then People and holds: the scene's order), the notices
+// and the say row while following; the picture's place is a placeholder.
+// Later phases (build-live-scene.md S2–S8) fill the hero.
+
+import { personById } from '@/lib/live-view/shared/people'
+import { CubeGlyph } from '../shell/glyphs'
+import type { ShellConfig, ShellHeroProps } from '../shell/shell-config'
+import { StagePlaceholder } from '../shell/StagePlaceholder'
+
+function SceneHero(p: ShellHeroProps): React.JSX.Element {
+  const line = p.state === 'loading' ? 'Opening the scene. The list of objects comes first, then the picture.' : 'The scene’s picture shows here: who’s looking where, and each change as it lands.'
+  return <StagePlaceholder kind="scene" line={line} p={p} />
+}
+
+export const SCENE_SHELL: ShellConfig = {
+  kind: 'scene',
+  kindLabel: '3D scene',
+  fileGlyph: <CubeGlyph size={15} />,
+  bannerLine: 'Played from K2’s sample scene; nothing here comes from the file you opened.',
+  panel: [
+    { id: 'changes', title: 'Activity' },
+    { id: 'messages', title: 'Messages' },
+    { id: 'watching', title: 'People and holds' },
+  ],
+  narrowBelow: 1000,
+  sentenceRowWhenNarrow: false,
+  backInHeader: true,
+  sayAlways: false,
+  kept: 'who’s here, the changes and your view',
+  sayAddress: (snap, to) => {
+    const p = personById(snap.people, to)
+    if (!p) return null
+    const label = p.place ? (p.self ? p.place : `${p.name}’s view`) : 'the scene'
+    return { label, title: p.place ?? 'the whole scene', address: p.viewAddress ?? '@scene' }
+  },
+  Hero: SceneHero,
+}

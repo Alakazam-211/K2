@@ -62,7 +62,7 @@ import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { useLiveDocCore } from '@/lib/live-doc-core'
 import { Button } from '@/components/ui'
 import { AnyFileDocPanel } from './AnyFileDocPanel'
-import { LiveWorkbookEntry } from '@/components/LiveView/LiveWorkbookEntry'
+import { LivePreviewEntry } from '@/components/LiveView/LivePreviewEntry'
 import { DeckPreviewPane } from './DeckPreviewPane'
 import { DocConflictNotice } from './DocConflictNotice'
 
@@ -332,6 +332,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // The "Any other file" core: the usual view, with the panel beside it.
   const anyFile = liveCore.status === 'any-file'
   const [anyFilePanelOpen, setAnyFilePanelOpen] = useState(true)
+  const [watchingLive, setWatchingLive] = useState(false) // a live view's own panel replaces the any-file one
   // Opening a live file shows the Live editor (not a Markdown preview).
   // An HTML document keeps its page preview: the Live editor is its Edit.
   useEffect(() => {
@@ -1052,8 +1053,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       {/* Content, with the any-file panel beside it */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-      {/* An owner's preview key: .xlsx tabs offer "Watch live (preview)" (sample data). Off: just the content. */}
-      <LiveWorkbookEntry filePath={filePath}>
+      {/* Owner's preview keys: workbook, scene and timeline tabs offer "Watch live (preview)" (sample data). Off: just the content. */}
+      <LivePreviewEntry filePath={filePath} onLiveChange={setWatchingLive}>
       {category === 'pdf' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading PDF…</div>}>
@@ -1238,14 +1239,14 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           </div>
         </>
       )}
-      </LiveWorkbookEntry>
+      </LivePreviewEntry>
       </div>
       {anyFile && (
         <AnyFileDocPanel
           key={`${room.scope.id}|${filePath}`}
           scope={room.scope}
           filePath={filePath}
-          hidden={!anyFilePanelOpen}
+          hidden={!anyFilePanelOpen || watchingLive}
           onCoreOff={() => setLiveEpoch((e) => e + 1)}
         />
       )}

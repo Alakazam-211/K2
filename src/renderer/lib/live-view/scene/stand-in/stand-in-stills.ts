@@ -2,13 +2,15 @@
 // stand-in rasteriser, in K2 Render's shape (pixels with alpha, the camera
 // as view and projection matrices, the id image and its table), so the tab
 // reads them exactly as it will read real ones (S7's
-// DocsPreviewPictureSource). Loaded on demand with the sample. Cached by
-// the doc's content and the view, so stepping back and forth redraws
+// DocsPreviewPictureSource). Loaded on demand with the sample. The last few
+// stills are kept (still-cache.ts), keyed by the doc's content (so revs that
+// look the same share one) and the view, so stepping back and forth redraws
 // nothing. Retirement ledger: goes when real stills are proven.
 
 import { UNITS } from '../fold'
 import { stillCamera } from '../project'
 import { stillHeight, type PictureSource, type Still, type StillRequest } from '../picture-source'
+import { StillCache } from '../still-cache'
 import type { Doc } from '../types'
 import { standInCamera } from './camera'
 import { rasterise } from './raster'
@@ -16,7 +18,6 @@ import { sampleBounds } from './shapes'
 
 /** About 1920 × 1080: a tall still keeps the same pixel count (the stand-in draws on the main thread). */
 const MAX_PIXELS = 1920 * 1080
-const CACHE = 48
 
 /** A short signature of what the still shows (objects, places, shapes). */
 export function docSignature(D: Doc): string {
@@ -32,7 +33,7 @@ export function docSignature(D: Doc): string {
 
 export class StandInStills implements PictureSource {
   readonly kind = 'sample' as const
-  private readonly cache = new Map<string, Still>()
+  private readonly cache = new StillCache()
   private closed = false
 
   /** `docOf` finds the doc at a rev (the sample keeps one per rev it has seen). */
@@ -65,7 +66,6 @@ export class StandInStills implements PictureSource {
       meta: { base_values: false, hidden_left_out: false, objects_hidden: 0, objects_not_evaluated: 0 },
     }
     this.cache.set(key, still)
-    if (this.cache.size > CACHE) this.cache.delete(this.cache.keys().next().value as string)
     return still
   }
 
@@ -74,6 +74,11 @@ export class StandInStills implements PictureSource {
       // Let the tab paint first: a 1920 px still with AO takes a moment.
       setTimeout(() => resolve(this.closed || signal?.aborted ? null : this.draw(req)), 0)
     })
+  }
+
+  /** How many stills are kept now. */
+  get cached(): number {
+    return this.cache.size
   }
 
   bounds(D: Doc, a: string) {

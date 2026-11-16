@@ -41,6 +41,11 @@
 //! A current image's id table names the objects as the doc does now
 //! ([`service::with_current_ids`]).
 //!
+//! **An agent's view.** An agent asking for a still of the head (a
+//! `container`) is looking there: its connection's presence `view_address`
+//! becomes that address ([`agent_viewing`]), so the roster says where it is
+//! and people can Follow it. A person's view is their tab's own.
+//!
 //! The docs routes speak JSON (every transport, Connect included), so the
 //! image rides as base64 with its metadata, as Thread attachments do; a
 //! client turns it into an object URL. No token ever goes in an `<img src>`.
@@ -144,8 +149,45 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
     };
     match (c.input.str("container"), width) {
         (None, _) => listing(&blobs, &snap, want, look),
-        (Some(container), Some(w)) => image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w, look, ids),
+        (Some(container), Some(w)) => {
+            // An agent asking for a still of the head is looking there: its
+            // view address follows, so people can Follow it.
+            if version.is_none() && snap.container(&container).is_some() {
+                agent_viewing(&session, joined.conn, c.caller, &container);
+            }
+            image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w, look, ids)
+        }
         (Some(_), None) => routes::bad("width is required with a container: thumb, thumb2x or full"),
+    }
+}
+
+/// An agent asked for a still of `container` (an address the doc lists now):
+/// its connection's view address (kit v0.18.0, `Session::set_view_address`:
+/// "a host sets one for any connection, an agent's when it renders a still
+/// for it") becomes that address, so the roster's `view_address` says where
+/// it is looking and a person can Follow it. The connection is the agent's
+/// shared one (`join_shared`, as every `k2 doc` verb), so the view goes when
+/// the agent leaves (`k2 doc leave`) or its connection idles out: the kit
+/// drops a connection's presence with it.
+///
+/// A person's view is never moved here: their tab sets its own (a still the
+/// app fetches for them says nothing about where they look). An address the
+/// kit's grammar doesn't read as one (`@scene`, an index form like `@cam#2`)
+/// can't be followed, so the agent's view is cleared rather than left on its
+/// last still.
+pub(crate) fn agent_viewing(session: &k2_mpc_base::session::Session, conn: k2_mpc_base::session::ConnId, caller: &crate::docs::caller::DocCaller, container: &str) {
+    if caller.is_person() {
+        return;
+    }
+    let set = match session.set_view_address(conn, Some(container)) {
+        Err(SessionError::BadPosition(why)) => {
+            k2_core::log_debug!("[docs/preview] {container} isn't an address presence takes ({why}); the agent's view is cleared");
+            session.set_view_address(conn, None).map(drop)
+        }
+        r => r.map(drop),
+    };
+    if let Err(e) = set {
+        k2_core::log_debug!("[docs/preview] the agent's view address wasn't set: {e}");
     }
 }
 
@@ -320,4 +362,81 @@ fn rendering_body(snap: &Snapshot, container: &str, hash: &str, w: Width) -> Val
         "page": page_json(snap),
         "state": "rendering",
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use k2_mpc_base::session::{ConnId, Participant, ParticipantKind, RosterEvent, Session, SessionManager, Stay, TextFilePack};
+    use k2_mpc_base::store::{DocKey, DocStore};
+
+    use super::agent_viewing;
+    use crate::docs::caller::DocCaller;
+    use crate::docs::host::K2Host;
+    use crate::test_support::Scratch;
+
+    /// A live doc in workspace `p1` (K2's own host: the agent `agent:p1`
+    /// has every right in its own workspace, the owner everywhere).
+    fn doc(s: &Scratch) -> (SessionManager, Arc<Session>) {
+        let store = Arc::new(DocStore::open(s.path().join("docs.redb")).expect("store"));
+        let mgr = SessionManager::new(store, Arc::new(K2Host::default()), k2_mpc_base::session::Config::default());
+        let key = DocKey { space: "p1".into(), path: "scene.md".into() };
+        let session = mgr.open(Arc::new(TextFilePack::new("markdown", 4 << 20)), &key, Some(b"# scene\n")).expect("open");
+        (mgr, session)
+    }
+
+    /// `pid`'s view address as a fresh roster snapshot shows it (after a
+    /// flush), or `None` when they aren't on the roster.
+    fn view_of(mgr: &SessionManager, s: &Session, observer: ConnId, pid: &str) -> Option<Option<String>> {
+        mgr.flush_rosters();
+        let rx = s.subscribe_roster(observer).expect("roster");
+        match rx.try_recv().expect("a snapshot first") {
+            RosterEvent::Snapshot { members, .. } => {
+                members.iter().find(|m| m.entry.participant.pid == pid).map(|m| m.entry.view_address.clone())
+            }
+            other => panic!("not a snapshot: {other:?}"),
+        }
+    }
+
+    /// An agent's still sets its view address (Follow can follow it); a
+    /// person's never moves; an address presence can't take clears it
+    /// rather than leaving the last one; and it goes when the agent leaves.
+    #[test]
+    fn an_agents_still_is_where_it_is_looking_until_it_leaves() {
+        let s = Scratch::new();
+        let (mgr, session) = doc(&s);
+        let owner = DocCaller::Person { key: "owner".into(), via: crate::docs::caller::VIA_CLI };
+        let agent = DocCaller::Agent { project_id: "p1".into(), session: None };
+        // Participants as K2 stamps them (pid, kind, via), named here so the
+        // test reads no people list or workspace record.
+        let person = Participant::new("person:owner", "Ada", "#2f9e8f", ParticipantKind::Person, "tab");
+        let bot = || Participant::new("agent:p1", "Atlas", "#6d5bd0", ParticipantKind::Agent, crate::docs::caller::VIA_CLI);
+        let me = session.join(person, Stay::Held).expect("the owner's tab").conn;
+        // The route's join: the agent's shared connection, as every k2 doc verb.
+        let a = session.join_shared(bot(), Stay::UntilIdle).expect("the agent").conn;
+        assert_eq!(view_of(&mgr, &session, me, "agent:p1"), Some(None), "no view before a still");
+
+        agent_viewing(&session, a, &agent, "@cam:c1");
+        assert_eq!(view_of(&mgr, &session, me, "agent:p1"), Some(Some("@cam:c1".into())));
+        agent_viewing(&session, a, &agent, "@turntable:3");
+        assert_eq!(view_of(&mgr, &session, me, "agent:p1"), Some(Some("@turntable:3".into())), "the latest still");
+        // The same connection as the agent's next verb (k2 doc), not a new one.
+        let again = session.join_shared(bot(), Stay::UntilIdle).expect("again").conn;
+        assert_eq!(again, a, "one shared connection a participant");
+
+        // A person's still (the app fetching for its tab) never moves their view.
+        agent_viewing(&session, me, &owner, "@cam:c2");
+        assert_eq!(view_of(&mgr, &session, me, "person:owner"), Some(None), "a person's view is their tab's");
+
+        // `@scene` isn't an address the kit's presence takes: cleared, never stale.
+        agent_viewing(&session, a, &agent, "@scene");
+        assert_eq!(view_of(&mgr, &session, me, "agent:p1"), Some(None), "not left on @turntable:3");
+        agent_viewing(&session, a, &agent, "@obj:Lamp");
+        assert_eq!(view_of(&mgr, &session, me, "agent:p1"), Some(Some("@obj:Lamp".into())));
+
+        // The agent leaves (k2 doc leave, or its connection idles out): its view goes with it.
+        session.leave(a).expect("leave");
+        assert_eq!(view_of(&mgr, &session, me, "agent:p1"), None, "gone with its connection");
+    }
 }

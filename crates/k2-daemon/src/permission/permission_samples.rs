@@ -659,7 +659,10 @@ fn frames(out: &mut Out, w: &World, card: &str, state: &str) {
 fn confirm_samples(out: &mut Out) {
     for state in ["pending", "approved"] {
         let w = shopdev();
-        let req = row(&w, REQ_CONFIRM, "apps.approve", json!({ "request": HELD }), Some(HELD), None);
+        // Stored at the owner's floor (a card may sit above its catalog floor,
+        // which is Admin since 0.46.13): the sample of an Owner-floor confirm
+        // card an Admin waits on.
+        let req = PermissionRequest { floor: "owner".into(), ..row(&w, REQ_CONFIRM, "apps.approve", json!({ "request": HELD }), Some(HELD), None) };
         let card = ask(&w, &req);
         if state == "pending" {
             let (s, v) = answer_as(ROSSON, &w, &card, json!({ "answer": "Allow", "client": "phone" }));
@@ -683,7 +686,8 @@ fn batch_samples(out: &mut Out) {
         let w = billing();
         let r1 = row(&w, REQ_B1, "apps.build", json!({}), None, None);
         let r2 = row(&w, REQ_B2, "apps.core", json!({ "core": "db" }), None, None);
-        let r3 = row(&w, REQ_B3, "apps.approve", json!({ "request": HELD_B3 }), Some(HELD_B3), None);
+        // At the owner's floor, like the two above, so it joins their batch.
+        let r3 = PermissionRequest { floor: "owner".into(), ..row(&w, REQ_B3, "apps.approve", json!({ "request": HELD_B3 }), Some(HELD_B3), None) };
         let card = ask(&w, &r1);
         assert_eq!(ask(&w, &r2), card, "the second ask joins the first card (a batch)");
         assert_eq!(ask(&w, &r3), card, "the third ask joins the batch");

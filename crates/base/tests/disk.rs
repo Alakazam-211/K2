@@ -1857,58 +1857,6 @@ fn a_stale_replica_after_a_restart_is_reported_and_repaired() {
     assert_eq!(drift, vec![], "the sync audit with the fix");
 }
 
-/// The sync audit's cost on a realistic doc (5,000 lines, ~340 KB, 1,000 changes since the
-/// import), and a re-sync's (one full encode and load). Ignored; run it in release:
-/// `cargo test -p k2-mpc-base --release --test disk -- --ignored --nocapture audit_cost`.
-#[test]
-#[ignore]
-fn audit_cost() {
-    use std::time::Instant;
-    let f = fx("audit-cost");
-    let seed: String = (0..5_000)
-        .map(|i| format!("{i:05} Some prose in a markdown file, a line of a realistic length.\n"))
-        .collect();
-    f.write("a.md", seed.as_bytes());
-    let s = f.open("a.md");
-    let a = f.join(&s, "agent");
-    let mut rng = Rng(7);
-    for k in 0..1_000 {
-        let line = rng.below(5_000);
-        let _ = s.edit_with(a, ROOT, |t| {
-            let at = t.find(&format!("{line:05} ")).map_or(0, |i| i + 6);
-            Ok::<_, ()>(format!("{}edit {k} {}", &t[..at], &t[at..]))
-        });
-    }
-    assert!(s.flush(a).unwrap().written);
-    let bytes = text(&s, a).len();
-    let n = 20;
-    let t0 = Instant::now();
-    for _ in 0..n {
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![]);
-    }
-    let audit = t0.elapsed() / n;
-    // a change that moves no byte, then the write-back that re-syncs the replica
-    let mut resync = std::time::Duration::ZERO;
-    let mut noop = std::time::Duration::ZERO;
-    for _ in 0..n {
-        replace(&s, a, "edit 999 ", "");
-        s.undo(a, 1).unwrap();
-        let t0 = Instant::now();
-        assert!(!s.flush(a).unwrap().written);
-        resync += t0.elapsed();
-        let t0 = Instant::now();
-        assert!(!s.flush(a).unwrap().written);
-        noop += t0.elapsed();
-    }
-    println!(
-        "audit_cost: {bytes} bytes, 1,001 changes: audit {audit:?} per call; \
-         write-back with nothing to write: {:?} after a change that moved no byte \
-         (re-sync), {:?} with nothing changed",
-        resync / n,
-        noop / n
-    );
-}
-
 /// A person edits the file in a plain editor (rewriting it in place or by
 /// rename, sometimes telling the kit, sometimes leaving it to the stat backup) while three
 /// agents edit through the session, on the host's clock with write-backs in between. Every

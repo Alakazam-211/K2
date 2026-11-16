@@ -136,7 +136,7 @@ fn ms(d: Duration) -> String {
 }
 
 #[test]
-#[ignore = "a published figure, not a pass or fail: run in a release build on a build node"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn a_history_only_chunk_against_a_brand_new_one_wall_time() {
     let n: usize = std::env::var("MPC_TIMING_WRITES")
         .ok()

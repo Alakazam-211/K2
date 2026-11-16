@@ -168,6 +168,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::AgentWriteRefused
         | SessionError::BadAnnotation(_)
         | SessionError::AnnotationCap { .. }
+        | SessionError::WritersFull { .. }
         | SessionError::KeyNotOwn { .. }
         | SessionError::KeySpaceFull { .. }
         | SessionError::Doc(_) => exit::USAGE,
@@ -178,7 +179,9 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::NodesClaimed(_) => exit::LEASED,
         SessionError::IndexRead(r) => r.exit(),
         SessionError::Store(e) | SessionError::Blob(BlobError::Store(e)) => store_exit(e),
-        SessionError::EngineMismatch { .. } => exit::STORE,
+        SessionError::EngineMismatch { .. } | SessionError::NativeEngineMissing { .. } => {
+            exit::STORE
+        }
         SessionError::RevertTooOld { .. } | SessionError::BaseExpired { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
         | SessionError::IndexPending { .. }
@@ -218,6 +221,7 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         | S::NativeWithoutEngine
         | S::RewriteNewer { .. }
         | S::ForeignEngine { .. }
+        | S::NativeEngineMissing { .. }
         | S::NewerData { .. }
         | S::Corrupt(_)
         | S::ClockOverflow(_)
@@ -380,6 +384,10 @@ mod tests {
             S::RewriteNewer { found: 8 },
             S::ForeignEngine {
                 stored: "mpce-0.1".into(),
+                stored_format: 1,
+            },
+            S::NativeEngineMissing {
+                stored: "mpce".into(),
                 stored_format: 1,
             },
             S::Corrupt("log entry"),

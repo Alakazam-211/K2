@@ -103,6 +103,10 @@ pub(super) const ERASED: &[&str] = &[
     "version_carriers",
     "carrier_pairings",
     "doc_blob_refs",
+    // a native doc's engine store (no demotion reaches a native doc today; its engine state
+    // goes with the rest)
+    "native_records",
+    "native_gens",
 ];
 
 /// One change of a demoted doc's live log ([`DocStore::demoted_changes`]): its summary as the

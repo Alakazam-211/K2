@@ -4,9 +4,12 @@
 //! the native engine (feature `native`), and every text row's store log is replayed through the
 //! client admission with a check that no entry reuses a clock of its writer:
 //! - `r1_two_tabs` (R1), `r2_reconnect_half_open` (R2), `r3_crash_with_pending_edits` (R3),
-//!   `r4_offline_device_after_reload` (R4), `r5_stale_lease_after_expiry` and
-//!   `r5_returning_tab_after_expiry_lands_its_hunks_once` (R5), `r6_*` (R6), `r7_*` (the
-//!   in-crate N−1 view; the cross-kit run is `tools/n1`), `r8_long_history` (R8),
+//!   `r4_offline_device_after_reload` (R4), `r5_stale_lease_after_expiry`,
+//!   `r5_returning_tab_after_expiry_lands_its_hunks_once` and
+//!   `r5_stale_reclaim_never_takes_its_writer_back_unkept` (R5),
+//!   `r4_ended_process_then_expiry_tells_the_loaded_end` (R4 with an expiry), `r6_*` (R6),
+//!   `r7_*` (the in-crate N−1 view; the cross-kit run is `tools/n1`), `r8_long_history` and
+//!   `r8_long_history_with_expiry` (R8), `defaults_reuse_person_writers_with_a_days_park`,
 //!   `r10_one_store_one_session` (R10), `r12_tag_keys_across_hand_over` (R12).
 //!
 //! Planted faults (`MPC_STRUCT_MUTANT`, the setting echoed), each caught by name:
@@ -15,7 +18,28 @@
 //! - `reuse-parked` (R11, `ClientMutant::ReuseParked`): `r3_crash_with_pending_edits` fails at
 //!   "a parked writer never goes to another connection";
 //! - `handover-without-close` (R13, `ClientMutant::HandoverWithoutClose`):
-//!   `r2_reconnect_half_open` fails at "the old connection is closed by the hand-over".
+//!   `r2_reconnect_half_open` fails at "the old connection is closed by the hand-over";
+//! - `stale-reclaim-takes-own` (`ClientMutant::StaleReclaimTakesOwn`):
+//!   `r5_stale_reclaim_never_takes_its_writer_back_unkept` fails at its row assert;
+//! - `expiry-without-cap` (`ClientMutant::ExpiryWithoutCap`): `r5_stale_lease_after_expiry`,
+//!   `r5_stale_reclaim_never_takes_its_writer_back_unkept` and
+//!   `r4_ended_process_then_expiry_tells_the_loaded_end` fail at the assert that the stale
+//!   lease is told when it ended;
+//! - `no-load-end` (`ClientMutant::NoLoadEnd`):
+//!   `r4_ended_process_then_expiry_tells_the_loaded_end` fails at its first row assert;
+//! - `expiry-ignored` (`ClientMutant::ExpiryIgnored`): every row with an expiry fails at its
+//!   row assert that the expired writer is let go (`r5_*`, `r4_ended_process_then_expiry_*`,
+//!   `r8_long_history_with_expiry`, `r12_tag_keys_across_hand_over`).
+//!   The soak fails too, at its row assert that the park expiry bounds the writers.
+//! - `cap-unchecked` (`ClientMutant::CapUnchecked`): `soak_reconnects_one_person_ids_bounded`
+//!   fails at its row assert that the cap holds the doc's writers;
+//! - `reclaim-never-keeps` (`ClientMutant::ReclaimNeverKeeps`): every row whose reclaim takes its
+//!   writer back fails at its row assert that it does (`r2_reconnect_half_open`, R3,
+//!   `r4_offline_device_after_reload`, `r12_tag_keys_across_hand_over`, the soak), and both
+//!   `r8_*` rows at their bound.
+//!
+//! The soak, `soak_reconnects_one_person_ids_bounded`: one person reconnects 200 times with an
+//! edit each time, five ways, and the doc's writers are counted.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,6 +61,12 @@ fn under_mutant<R>(f: impl FnOnce() -> R) -> R {
         Ok("reuse-person-held") => with_client_mutant(ClientMutant::ReusePersonHeld, f),
         Ok("reuse-parked") => with_client_mutant(ClientMutant::ReuseParked, f),
         Ok("handover-without-close") => with_client_mutant(ClientMutant::HandoverWithoutClose, f),
+        Ok("stale-reclaim-takes-own") => with_client_mutant(ClientMutant::StaleReclaimTakesOwn, f),
+        Ok("expiry-without-cap") => with_client_mutant(ClientMutant::ExpiryWithoutCap, f),
+        Ok("no-load-end") => with_client_mutant(ClientMutant::NoLoadEnd, f),
+        Ok("expiry-ignored") => with_client_mutant(ClientMutant::ExpiryIgnored, f),
+        Ok("cap-unchecked") => with_client_mutant(ClientMutant::CapUnchecked, f),
+        Ok("reclaim-never-keeps") => with_client_mutant(ClientMutant::ReclaimNeverKeeps, f),
         Ok(other) => panic!("MPC_STRUCT_MUTANT={other}: not a mutant this suite plants"),
         Err(_) => f(),
     }
@@ -72,11 +102,14 @@ fn config(park_ms: u64) -> Config {
     c
 }
 
-/// The defaults, without the edit rate limit (the rows edit fast, on a clock of their own).
+/// The defaults, without the edit rate limit (the rows edit fast, on a clock of their own), and
+/// without person-writer reuse (the rows that compare with it off).
 fn unlimited() -> Config {
     let mut c = Config::default();
     c.edit_rate_per_s = 1 << 30;
     c.edit_burst = 1 << 30;
+    c.reuse_person_writers = false;
+    c.person_writer_park_ms = 0;
     c
 }
 
@@ -153,6 +186,20 @@ impl Fx {
         self.mgr.take().unwrap().release().unwrap();
         self.st = None;
         self.start();
+    }
+
+    /// The process ends without closing anything, right after `snap` was the store file: a new
+    /// process opens the store as `snap` holds it (every lease's end unwritten).
+    fn restart_from(&mut self, snap: Vec<u8>) {
+        self.mgr.take().unwrap().release().unwrap();
+        self.st = None;
+        std::fs::write(self.dir.join("d.redb"), snap).unwrap();
+        self.start();
+    }
+
+    /// The store file's bytes now (after a commit: as a process that ended here leaves it).
+    fn snapshot(&self) -> Vec<u8> {
+        std::fs::read(self.dir.join("d.redb")).unwrap()
     }
 
     fn store(&self) -> Arc<DocStore> {
@@ -424,7 +471,7 @@ fn r2_reconnect_half_open() {
         let t1 = tab(&s, "ada", "laptop");
         let v = f.type_at_end(&s, t1.conn, t1.client, "before ");
         let t1b = reclaim(&s, "ada", "laptop", t1.lease.unwrap());
-        assert!(t1b.kept, "the reclaim keeps its writer");
+        assert!(t1b.kept, "row: the reclaim keeps its writer");
         assert_eq!(t1b.client, t1.client);
         assert_eq!(t1b.replaced, Some(t1.conn));
         assert_ne!(
@@ -485,7 +532,7 @@ fn r3_crash_with_pending_edits() {
         let t1b = reclaim(&s, "ada", "laptop", t1.lease.unwrap());
         assert!(
             t1b.kept && t1b.client == t1.client,
-            "the tab takes its writer back"
+            "row: the tab takes its writer back"
         );
         assert_eq!(t1b.replaced, None, "nothing to close: it had left");
         // its queued edit, made at the version it had: lands once, under its own writer
@@ -529,7 +576,10 @@ fn r4_offline_device_after_reload() {
         assert_ne!(x.client, other.client, "a parked writer stays parked");
         assert_eq!(x.replaced, None);
         let t1b = reclaim(&s, "ada", "laptop", t1.lease.unwrap());
-        assert!(t1b.kept && t1b.client == t1.client);
+        assert!(
+            t1b.kept && t1b.client == t1.client,
+            "row: the offline device takes its writer back"
+        );
         // its hunk made offline, at its old base: lands, or asks for a reload
         match s.edit_at_base(
             t1b.conn,
@@ -574,7 +624,7 @@ fn r5_stale_lease_after_expiry() {
             t2
         } else {
             let t3 = tab(&s, "ada", "laptop");
-            assert_eq!(t3.client, t1.client, "the expired writer is free");
+            assert_eq!(t3.client, t1.client, "row: the expired writer is free");
             t3
         };
         f.type_at_end(&s, t2b.conn, t2b.client, "sibling ");
@@ -582,7 +632,11 @@ fn r5_stale_lease_after_expiry() {
         assert!(!back.kept, "a stale lease keeps nothing");
         assert_ne!(back.client, t1.client);
         assert_eq!(back.replaced, None, "the sibling is untouched");
-        assert_eq!(back.prev_ended, Some(ended), "told when its lease ended");
+        assert_eq!(
+            back.prev_ended,
+            Some(ended),
+            "row: a stale lease is told when it ended"
+        );
         assert!(s.read(t2b.conn).is_ok(), "the sibling is still present");
         let bare = s
             .join_with(
@@ -609,7 +663,7 @@ fn r5_returning_tab_after_expiry_lands_its_hunks_once() {
         assert!(s.leave(t1.conn).unwrap());
         f.clock_skip(2_000);
         let t2 = tab(&s, "ada", "laptop");
-        assert_eq!(t2.client, t1.client, "re-let after the expiry");
+        assert_eq!(t2.client, t1.client, "row: re-let after the expiry");
         f.type_at_end(&s, t2.conn, t2.client, "two ");
         let back = reclaim(&s, "ada", "laptop", t1.lease.unwrap());
         assert!(!back.kept);
@@ -630,6 +684,73 @@ fn r5_returning_tab_after_expiry_lands_its_hunks_once() {
             .collect();
         assert_eq!(with.len(), 1, "one change of the returning tab: {with:?}");
         engines(&f, &s, back.conn);
+    });
+}
+
+/// R5 (a stale reclaim never gets its own writer back unkept): after the expiry a sibling tab
+/// took the writer, made the same change the returning tab had in flight, and released it, so
+/// the writer is free again. The returning tab's reclaim keeps nothing, and gets another
+/// writer: its client still watches its old changes under that writer, and would read the
+/// sibling's change as its own.
+#[test]
+fn r5_stale_reclaim_never_takes_its_writer_back_unkept() {
+    under_mutant(|| {
+        let mut f = fx("r5c", config(1_000));
+        let s = f.s();
+        let t1 = tab(&s, "ada", "laptop");
+        f.type_at_end(&s, t1.conn, t1.client, "one ");
+        let ended = s.read(t1.conn).unwrap().version;
+        assert!(s.leave(t1.conn).unwrap());
+        f.clock_skip(2_000);
+        let t2 = tab(&s, "ada", "laptop");
+        assert_eq!(t2.client, t1.client, "row: re-let after the expiry");
+        f.type_at_end(&s, t2.conn, t2.client, "one ");
+        assert!(s.release(t2.conn).unwrap());
+        let back = reclaim(&s, "ada", "laptop", t1.lease.unwrap());
+        assert!(!back.kept, "a stale lease keeps nothing");
+        assert_eq!(
+            back.prev_ended,
+            Some(ended),
+            "row: a stale lease is told when it ended"
+        );
+        assert_ne!(
+            back.client, t1.client,
+            "row: a stale reclaim never gets its old writer back unkept"
+        );
+        engines(&f, &s, back.conn);
+    });
+}
+
+/// R4 with a park expiry: the process ends with a lease held and its end never written; the
+/// next load ends it at the loaded version, so after the expiry another tab of the device takes
+/// the writer, and the tab's late reclaim is told that version.
+#[test]
+fn r4_ended_process_then_expiry_tells_the_loaded_end() {
+    under_mutant(|| {
+        let mut f = fx("r4e", config(1_000));
+        let s = f.s();
+        let t1 = tab(&s, "ada", "laptop");
+        f.type_at_end(&s, t1.conn, t1.client, "one ");
+        let at = s.read(t1.conn).unwrap().version;
+        let snap = f.snapshot();
+        drop(s);
+        f.restart_from(snap);
+        let s = f.s();
+        f.clock_skip(2_000);
+        let t2 = tab(&s, "ada", "laptop");
+        assert_eq!(
+            t2.client, t1.client,
+            "row: the writer the ended process left leased goes after the expiry"
+        );
+        f.type_at_end(&s, t2.conn, t2.client, "two ");
+        let back = reclaim(&s, "ada", "laptop", t1.lease.unwrap());
+        assert!(!back.kept && back.client != t1.client);
+        assert_eq!(
+            back.prev_ended,
+            Some(at),
+            "row: the late reclaim is told the loaded version"
+        );
+        engines(&f, &s, t2.conn);
     });
 }
 
@@ -751,14 +872,14 @@ fn r8_long_history() {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(120);
-        let (off, _) = simulate("r8off", unlimited(), sessions);
-        let (on, bound) = simulate("r8on", config(0), sessions);
+        let (off, _) = simulate("r8off", unlimited(), sessions, 0);
+        let (on, bound) = simulate("r8on", config(0), sessions, 0);
         println!(
             "MEASURE r8 sessions={sessions} writers_off={off} writers_on={on} bound_on={bound}"
         );
         assert!(
             on <= bound,
-            "writers with reuse {on} over the bound {bound}"
+            "row: writers with reuse {on} over the bound {bound}"
         );
         assert!(
             on * 5 <= off,
@@ -767,8 +888,48 @@ fn r8_long_history() {
     });
 }
 
+/// R8 with a park expiry (a day, the clock moving a quarter of it per session): the parked
+/// writers that were never taken back go to the device's next tabs, so the doc holds fewer
+/// writers than without the expiry, and never more than the bound.
+#[test]
+fn r8_long_history_with_expiry() {
+    under_mutant(|| {
+        let sessions: u64 = 120;
+        let day = 86_400_000;
+        let (never, bound) = simulate("r8never", config(0), sessions, day / 4);
+        let (expiring, _) = simulate("r8day", config(day), sessions, day / 4);
+        println!(
+            "MEASURE r8e sessions={sessions} writers_park_never={never} \
+             writers_park_day={expiring} bound={bound}"
+        );
+        assert!(
+            expiring <= bound,
+            "row: over the bound: {expiring} of {bound}"
+        );
+        assert!(
+            expiring < never,
+            "row: the expiry lets parked writers go: {expiring} with it, {never} without"
+        );
+    });
+}
+
+/// The defaults: person-writer reuse is on, with a day's park. A host that sends no device key
+/// sees nothing of it (a fresh writer per connection, as `r6_no_device_key_is_as_before`).
+#[test]
+fn defaults_reuse_person_writers_with_a_days_park() {
+    let c = Config::default();
+    assert!(
+        c.reuse_person_writers,
+        "row: person-writer reuse is on by default"
+    );
+    assert_eq!(
+        c.person_writer_park_ms, 86_400_000,
+        "row: a parked writer goes after a day by default"
+    );
+}
+
 /// One seeded history; returns (writers in the log, the reuse bound).
-fn simulate(name: &str, c: Config, sessions: u64) -> (usize, usize) {
+fn simulate(name: &str, c: Config, sessions: u64, skip_ms: u64) -> (usize, usize) {
     let mut f = fx(name, c);
     let mut rng = 0x7077_5f72_3830_3031u64;
     let mut next = move |n: u64| {
@@ -815,6 +976,7 @@ fn simulate(name: &str, c: Config, sessions: u64) -> (usize, usize) {
         if round % 25 == 24 {
             f.close();
         }
+        f.clock_skip(skip_ms);
     }
     let n = log_writers(&f.store(), f.doc_id()).len() - 1; // the import's
     (n, max_open.values().sum::<usize>() + leaked)
@@ -927,7 +1089,7 @@ fn r12_tag_keys_across_hand_over() {
         let t1b = ana(JoinOptions::new()
             .device("tablet")
             .reclaim(t1.lease.unwrap()));
-        assert!(t1b.kept);
+        assert!(t1b.kept, "row: the hand-over keeps the writer");
         s.edit_ops(t1b.conn, insert(&k1), &EditOptions::new())
             .expect("a kept writer's minted key is its own");
         // (b) let go after the expiry: a sibling mints the same next key and inserts it
@@ -937,7 +1099,7 @@ fn r12_tag_keys_across_hand_over() {
         let sib = ana(JoinOptions::new().device("tablet"));
         assert_eq!(
             sib.client, t1.client,
-            "the expired writer goes to the sibling"
+            "row: the expired writer goes to the sibling"
         );
         let k2s = s.mint_key(sib.conn, "items", "i").unwrap();
         assert_eq!(k2s, k2, "the same tag mints the same next key");
@@ -958,5 +1120,116 @@ fn r12_tag_keys_across_hand_over() {
             1,
             "{live:?}"
         );
+    });
+}
+
+/// Rounds of the soak.
+const SOAK: usize = 200;
+
+/// Replace the root's text with itself and `more` as `conn`: the refusal's id on an error.
+fn try_type(s: &Session, conn: ConnId, more: &str) -> Result<u64, String> {
+    let t = text(s, conn);
+    s.replace_text(conn, ROOT, &format!("{t}{more}"))
+        .map(|r| r.version)
+        .map_err(|e| e.report().id().to_owned())
+}
+
+/// The soak: one person reconnects `SOAK` times with an edit each time. The doc's writers:
+/// (a) no device key (a reconnect closes the old connection): one per connection; (b) a device
+/// key and a reclaim each time, a release at the end: one; (c) every end unclean, then a
+/// reclaim: one; (d) every end unclean and no reclaim, with a park expiry passed each time: at
+/// most two; (e) as (a) with a cap of 64: the cap, every later round read-only.
+#[test]
+fn soak_reconnects_one_person_ids_bounded() {
+    under_mutant(|| {
+        // the writers past the import's
+        let writers = |f: &Fx| log_writers(&f.store(), f.doc_id()).len() - 1;
+        // (a)
+        let f = fx("soak-a", config(0));
+        let s = f.s();
+        let mut j = s.join(person("ada"), Stay::Held).unwrap();
+        try_type(&s, j.conn, "a").unwrap();
+        for _ in 1..SOAK {
+            j = s
+                .join_replacing(person("ada"), Stay::Held, j.client)
+                .unwrap();
+            try_type(&s, j.conn, "a").unwrap();
+        }
+        let a = writers(&f);
+        drop((s, f));
+        // (b)
+        let f = fx("soak-b", config(0));
+        let s = f.s();
+        let mut j = tab(&s, "ada", "laptop");
+        try_type(&s, j.conn, "b").unwrap();
+        for _ in 1..SOAK {
+            j = reclaim(&s, "ada", "laptop", j.lease.unwrap());
+            try_type(&s, j.conn, "b").unwrap();
+        }
+        assert!(s.release(j.conn).unwrap());
+        let b = writers(&f);
+        drop((s, f));
+        // (c)
+        let f = fx("soak-c", config(0));
+        let s = f.s();
+        let mut j = tab(&s, "ada", "laptop");
+        try_type(&s, j.conn, "c").unwrap();
+        for _ in 1..SOAK {
+            assert!(s.leave(j.conn).unwrap());
+            j = reclaim(&s, "ada", "laptop", j.lease.unwrap());
+            try_type(&s, j.conn, "c").unwrap();
+        }
+        let c = writers(&f);
+        drop((s, f));
+        // (d)
+        let f = fx("soak-d", config(1_000));
+        let s = f.s();
+        let mut j = tab(&s, "ada", "laptop");
+        try_type(&s, j.conn, "d").unwrap();
+        for _ in 1..SOAK {
+            assert!(s.leave(j.conn).unwrap());
+            f.clock_skip(2_000);
+            j = tab(&s, "ada", "laptop");
+            try_type(&s, j.conn, "d").unwrap();
+        }
+        let d = writers(&f);
+        drop((s, f));
+        // (e)
+        let mut cfg = config(0);
+        cfg.writers_max = 64;
+        let f = fx("soak-e", cfg);
+        let s = f.s();
+        let mut j = s.join(person("ada"), Stay::Held).unwrap();
+        let mut refused = usize::from(try_type(&s, j.conn, "e").is_err());
+        for _ in 1..SOAK {
+            j = s
+                .join_replacing(person("ada"), Stay::Held, j.client)
+                .unwrap();
+            match try_type(&s, j.conn, "e") {
+                Ok(_) => {}
+                Err(id) => {
+                    assert_eq!(id, "MPC-E908", "row: past the cap, refused MPC-E908");
+                    refused += 1;
+                }
+            }
+        }
+        let e = writers(&f);
+        drop((s, f));
+        println!(
+            "MEASURE soak rounds={SOAK} writers_no_key={a} writers_reclaim={b} \
+             writers_unclean_reclaim={c} writers_expiry={d} writers_cap64={e} refused_cap64={refused}"
+        );
+        assert_eq!(
+            a, SOAK,
+            "row: without a device key, one writer per connection"
+        );
+        assert_eq!(b, 1, "row: reclaims keep one writer");
+        assert_eq!(c, 1, "row: a reclaim after an unclean end keeps one writer");
+        assert!(d <= 2, "row: the park expiry bounds the writers: {d}");
+        assert_eq!(
+            e, 63,
+            "row: the cap holds the doc's writers (the import's is one)"
+        );
+        assert_eq!(refused, SOAK - 63, "row: every later round is read-only");
     });
 }

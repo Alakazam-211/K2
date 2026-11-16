@@ -17,8 +17,7 @@
 //! Each row is a function returning `Err("<row name>: ...")`. Public API only.
 
 use k2_mpc_base::differential::{
-    profile_take, set_view_checks, take_engine_visits, with_list_plan_fast, with_list_plan_mutant,
-    ListPlanMutant,
+    take_engine_visits, with_list_plan_fast, with_list_plan_mutant, ListPlanMutant,
 };
 use k2_mpc_base::doc::Doc;
 use k2_mpc_base::elem::{Anchor, Applied, Edited, Key, ListOp, Value};
@@ -280,93 +279,4 @@ fn a_single_insert_or_delete_plans_what_it_touches() {
             "op {i} ({ops:?}) read {v} engine entries on a list of {N} (at most {MAX})"
         );
     }
-}
-
-/// The plan's time per single insert and delete at 1,000 and 10,000 elements (the kit's
-/// profile scope `engine.plan`), the index's and the full read's, and the ratio. Ignored: a
-/// measurement, run on a build node with `--release --ignored --nocapture`, with the test-build
-/// checks off (as a host runs).
-#[test]
-#[ignore]
-fn measure_the_plan_of_a_single_insert_and_delete() {
-    const OPS: u64 = 200;
-    // as a host build runs: no test-build checks (the change number's check of the deleted
-    // units recounts the delete set on every change)
-    let checks = set_view_checks(false);
-    let mut per: Vec<(u64, bool, f64, f64)> = Vec::new();
-    for n in [1_000u64, 10_000] {
-        for fast_on in [true, false] {
-            with_list_plan_fast(fast_on, || {
-                let mut d = doc_of(n);
-                // the first single op builds the index
-                d.edit_applied(CLIENT, &list(vec![ListOp::Delete { key: k(0) }]))
-                    .unwrap();
-                let mut rng = Rng(7 + n);
-                let mut next = n;
-                let mut times = [0.0f64; 2];
-                let mut scopes: std::collections::BTreeMap<&str, f64> =
-                    std::collections::BTreeMap::new();
-                for i in 0..2 * OPS {
-                    let insert = i % 2 == 0;
-                    let ops = if insert {
-                        next += 1;
-                        vec![ListOp::Insert {
-                            key: k(next),
-                            at: Anchor::After(k(1 + rng.below(n - 1))),
-                            value: Value::Null,
-                        }]
-                    } else {
-                        vec![ListOp::Delete {
-                            key: k(1 + rng.below(n - 1)),
-                        }]
-                    };
-                    profile_take();
-                    d.edit_applied(CLIENT, &list(ops)).unwrap();
-                    let prof = profile_take();
-                    let plan: f64 = prof
-                        .iter()
-                        .filter(|(name, _, _)| *name == "engine.plan")
-                        .map(|(_, _, s)| s)
-                        .sum();
-                    times[usize::from(!insert)] += plan;
-                    for (name, _, s) in prof {
-                        *scopes.entry(name).or_default() += s;
-                    }
-                }
-                let us = |s: f64| s * 1e6 / OPS as f64;
-                for (name, s) in &scopes {
-                    if name.starts_with("engine.") {
-                        println!(
-                            "  scope n {n} {}: {name} {:.1} us per op",
-                            if fast_on { "index" } else { "full read" },
-                            s * 1e6 / (2 * OPS) as f64
-                        );
-                    }
-                }
-                println!(
-                    "plan n {n} {}: insert {:.1} us, delete {:.1} us (per op, {OPS} each)",
-                    if fast_on { "index" } else { "full read" },
-                    us(times[0]),
-                    us(times[1])
-                );
-                per.push((n, fast_on, us(times[0]), us(times[1])));
-            });
-        }
-    }
-    for fast_on in [true, false] {
-        let at = |n: u64| {
-            per.iter()
-                .find(|(m, f, _, _)| *m == n && *f == fast_on)
-                .copied()
-                .unwrap()
-        };
-        let (a, b) = (at(1_000), at(10_000));
-        println!(
-            "ratio 10,000 / 1,000 {}: insert {:.2}, delete {:.2}",
-            if fast_on { "index" } else { "full read" },
-            b.2 / a.2,
-            b.3 / a.3
-        );
-    }
-    set_view_checks(checks);
 }

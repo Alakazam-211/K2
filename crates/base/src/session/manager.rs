@@ -1327,7 +1327,9 @@ fn planted_leaves_segments() -> bool {
 }
 
 /// A store's refusal of another engine's doc ([`StoreError::ForeignEngine`]) as the
-/// session's, the error opening it gives ([`SessionError::EngineMismatch`], `MPC-E520`).
+/// session's, the error opening it gives ([`SessionError::EngineMismatch`], `MPC-E520`); a
+/// native doc's on a build without the native engine as its own variant
+/// ([`SessionError::NativeEngineMissing`], `MPC-E169`).
 fn engine_refusal(e: crate::store::StoreError) -> SessionError {
     match e {
         crate::store::StoreError::ForeignEngine {
@@ -1339,6 +1341,6 @@ fn engine_refusal(e: crate::store::StoreError) -> SessionError {
             engine: crate::engine::ENGINE_NAME.to_owned(),
             engine_format: crate::engine::ENGINE_FORMAT,
         },
-        e => SessionError::Store(e),
+        e => e.into(),
     }
 }

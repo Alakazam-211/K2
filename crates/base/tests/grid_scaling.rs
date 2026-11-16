@@ -2,26 +2,17 @@
 //! property is that each is linear in the grid's stored cells, rows and columns (a blank row
 //! costs O(1) on every path), not in live rows × live columns.
 //!
-//! `probe_grid_scaling` (ignored; minutes in release: run it on a compute node) builds grids
-//! in code, of three shapes:
+//! The grids are built in code, of three shapes:
 //! - `wide_blank`: header on, `rect`, C named columns, R rows with no present cell;
 //! - `ragged_wide`: header off, `ragged`, the first row holds a cell in every column, the
 //!   other rows none;
 //! - `dense`: header on, `rect`, every cell present (the honest grid).
 //!
-//! and measures, per path, a **timing-free** cost (heap allocations on the calling thread,
-//! counted by this binary's allocator) and the wall time of one call: `Table::render`,
-//! `Table::line_map`, the aligner (`table::reconcile`, given the table's own rendering and
-//! one with a cell set), the structured pack's default reconcile
-//! (`session::default_reconcile`), the three-way merges (`merge3`, `merge3_text`,
-//! `merge3_outside_text`), and (`probe_grid_blame_scaling`) a session's grid blame. Each
-//! series varies one size: `rows` (C fixed), `cols` (R fixed) and `diag` (both, R = 16 C);
-//! `SLOPE` lines give the least-squares exponent of the allocations in the varied size and in
-//! the stored size (cells + rows + columns + names).
-//!
-//! ```sh
-//! cargo test -p k2-mpc-base --release --test grid_scaling -- --ignored --nocapture --test-threads 1
-//! ```
+//! A path's cost is **timing-free**: heap allocations on the calling thread, counted by this
+//! binary's allocator. The paths: `Table::render`, `Table::line_map`, the aligner
+//! (`table::reconcile`, given the table's own rendering and one with a cell set), the
+//! structured pack's default reconcile (`session::default_reconcile`), the three-way merges
+//! (`merge3`, `merge3_text`, `merge3_outside_text`), and a session's grid blame.
 //!
 //! **The regression** (not ignored): `grid_paths_are_linear_in_stored_size` and
 //! `grid_blame_is_linear_in_stored_size` hold each path's allocations, on a 1,024-column grid
@@ -30,10 +21,6 @@
 //! A walk over every live column of every row costs thousands per stored element there.
 //! Planted fault (`MPC_GRID_COST_MUTANT=per-column`, the setting echoed): the per-column walk
 //! (`k2_mpc_base::differential::GridCostMutant::PerColumn`), which both tests catch.
-//!
-//! `PROBE_BUDGET_S` (default 30): a series stops growing for a path once one call took longer.
-//! `PROBE_WORST=1` also runs `Table::render` and `Table::line_map` once at the largest grid a
-//! 2 MiB CSV file can hold under the kit's default limits (1,024 columns, 2,095,104 blank rows).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -239,55 +226,6 @@ impl Pack for Fixed {
 
 // ---- series ----
 
-/// One measurement: (rows, columns, stored elements, allocations, seconds).
-type Point = (usize, usize, usize, u64, f64);
-
-type Series = (&'static str, Vec<(usize, usize)>);
-
-fn series(g: Grid) -> Vec<Series> {
-    match g {
-        Grid::Dense => vec![
-            ("rows", vec![(1_000, 10), (10_000, 10), (100_000, 10)]),
-            ("cols", vec![(1_000, 10), (1_000, 100), (1_000, 1_000)]),
-            ("diag", vec![(250, 16), (1_000, 64), (4_000, 256)]),
-        ],
-        _ => vec![
-            (
-                "rows",
-                vec![(1_000, 64), (10_000, 64), (100_000, 64), (1_000_000, 64)],
-            ),
-            ("cols", vec![(10_000, 64), (10_000, 256), (10_000, 1_024)]),
-            ("diag", vec![(1_000, 64), (4_000, 256), (16_000, 1_024)]),
-        ],
-    }
-}
-
-/// Least-squares slope of ln y over ln x.
-fn slope(pts: &[(f64, f64)]) -> f64 {
-    let pts: Vec<(f64, f64)> = pts
-        .iter()
-        .filter(|(x, y)| *x > 0.0 && *y > 0.0)
-        .map(|(x, y)| (x.ln(), y.ln()))
-        .collect();
-    let n = pts.len() as f64;
-    if pts.len() < 2 {
-        return f64::NAN;
-    }
-    let (sx, sy) = pts.iter().fold((0.0, 0.0), |(a, b), (x, y)| (a + x, b + y));
-    let (mx, my) = (sx / n, sy / n);
-    let (num, den) = pts.iter().fold((0.0, 0.0), |(a, b), (x, y)| {
-        (a + (x - mx) * (y - my), b + (x - mx) * (x - mx))
-    });
-    num / den
-}
-
-fn budget() -> f64 {
-    std::env::var("PROBE_BUDGET_S")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30.0)
-}
-
 const PATHS: &[&str] = &[
     "render",
     "line_map",
@@ -333,79 +271,6 @@ fn run(path: &str, t: &Table, rows: usize, cols: usize) -> (u64, f64) {
             }
         }
         _ => unreachable!(),
-    }
-}
-
-fn report(tag: &str, path: &str, g: Grid, s: &str, pts: &[Point], var_rows: bool) {
-    let var: Vec<(f64, f64)> = pts
-        .iter()
-        .map(|&(r, c, _, a, _)| ((if var_rows { r } else { c }) as f64, a as f64))
-        .collect();
-    let st: Vec<(f64, f64)> = pts
-        .iter()
-        .map(|&(_, _, n, a, _)| (n as f64, a as f64))
-        .collect();
-    let tm: Vec<(f64, f64)> = pts.iter().map(|&(_, _, n, _, t)| (n as f64, t)).collect();
-    let per = pts
-        .last()
-        .map_or(f64::NAN, |&(_, _, n, a, _)| a as f64 / n as f64);
-    println!(
-        "SLOPE {tag} {path} {} {s}: allocs exp in {} {:.2}, in stored {:.2}; time exp in stored {:.2}; allocs/stored at largest {per:.1}",
-        g.name(),
-        if var_rows { "rows" } else { "cols" },
-        slope(&var),
-        slope(&st),
-        slope(&tm),
-    );
-}
-
-#[test]
-#[ignore]
-fn probe_grid_scaling() {
-    let budget = budget();
-    for g in [Grid::WideBlank, Grid::RaggedWide, Grid::Dense] {
-        for (s, sizes) in series(g) {
-            let mut pts: BTreeMap<&str, Vec<Point>> = BTreeMap::new();
-            let mut stopped: HashSet<&str> = HashSet::new();
-            for &(rows, cols) in &sizes {
-                let t = build(g, rows, cols);
-                let n = stored(&t);
-                for &p in PATHS {
-                    if stopped.contains(p) {
-                        println!(
-                            "SKIP kit {p} {} {s} R={rows} C={cols} (a smaller size took over {budget}s)",
-                            g.name()
-                        );
-                        continue;
-                    }
-                    let (a, secs) = run(p, &t, rows, cols);
-                    println!(
-                        "PROBE kit {p} {} {s} R={rows} C={cols} stored={n} allocs={a} secs={secs:.4}",
-                        g.name()
-                    );
-                    pts.entry(p).or_default().push((rows, cols, n, a, secs));
-                    if secs > budget {
-                        stopped.insert(p);
-                    }
-                }
-            }
-            for (p, v) in &pts {
-                report("kit", p, g, s, v, s == "rows");
-            }
-        }
-    }
-    if std::env::var("PROBE_WORST").as_deref() == Ok("1") {
-        // a 2 MiB CSV file: a header of 1,024 one-letter names (2,048 bytes with its line
-        // break), then one line break per blank row
-        let (rows, cols) = (2 * 1024 * 1024 - 2_048, 1_024);
-        let t = build(Grid::WideBlank, rows, cols);
-        let n = stored(&t);
-        for p in ["render", "line_map"] {
-            let (a, secs) = run(p, &t, rows, cols);
-            println!(
-                "WORST kit {p} wide_blank R={rows} C={cols} stored={n} allocs={a} secs={secs:.2}"
-            );
-        }
     }
 }
 
@@ -499,74 +364,6 @@ impl Host for H {
 /// `grid-lite`'s file for a grid: the header line, then one line per row.
 fn file_of(t: &Table) -> Vec<u8> {
     grid_pack::render(t).into_bytes()
-}
-
-#[test]
-#[ignore]
-fn probe_grid_blame_scaling() {
-    let budget = budget();
-    let dir = std::env::temp_dir().join(format!("k2mb-gridscale-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut n_doc = 0;
-    for g in [Grid::WideBlank, Grid::Dense] {
-        let all = match g {
-            Grid::Dense => vec![
-                ("rows", vec![(250, 10), (1_000, 10), (2_500, 10)]),
-                ("cols", vec![(100, 10), (100, 40), (100, 160)]),
-            ],
-            _ => vec![
-                ("rows", vec![(1_000, 64), (10_000, 64), (100_000, 64)]),
-                ("cols", vec![(10_000, 64), (10_000, 256), (10_000, 1_024)]),
-                ("diag", vec![(1_000, 64), (4_000, 256), (16_000, 1_024)]),
-            ],
-        };
-        for (s, sizes) in all {
-            let mut pts = Vec::new();
-            for &(rows, cols) in &sizes {
-                let t = build(g, rows, cols);
-                let n = stored(&t);
-                n_doc += 1;
-                let store = Arc::new(DocStore::open(dir.join(format!("d{n_doc}.redb"))).unwrap());
-                let mut c = Config::default();
-                c.edit_burst = 1_000_000;
-                c.edit_rate_per_s = 1_000_000;
-                let mgr = SessionManager::new(store, Arc::new(H(AtomicU64::new(1))), c);
-                let key = DocKey {
-                    space: "ws".into(),
-                    path: format!("g{n_doc}.csv"),
-                };
-                let bytes = file_of(&t);
-                let s0 = Instant::now();
-                let sess = mgr
-                    .open(Arc::new(grid_pack::GridLite), &key, Some(bytes.as_slice()))
-                    .unwrap();
-                let open_s = s0.elapsed().as_secs_f64();
-                let p = sess
-                    .join(
-                        Participant::new("p1", "p1", "#111111", ParticipantKind::Person, "cli"),
-                        Stay::Held,
-                    )
-                    .unwrap()
-                    .conn;
-                // the first blame warms the session's caches; the second is measured
-                let _ = sess.blame(p, table::ROWS, None).unwrap();
-                let (a, secs) = measure(|| sess.blame(p, table::ROWS, None).unwrap());
-                println!(
-                    "PROBE kit grid_blame {} {s} R={rows} C={cols} stored={n} allocs={a} secs={secs:.4} (open {open_s:.1}s)",
-                    g.name()
-                );
-                pts.push((rows, cols, n, a, secs));
-                drop(sess);
-                drop(mgr);
-                if secs > budget {
-                    break;
-                }
-            }
-            report("kit", "grid_blame", g, s, &pts, s == "rows");
-        }
-    }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---- the second sweep: an axis's places, a merge's conflict listing, `row list` ----
@@ -815,73 +612,6 @@ fn row_list_is_linear() {
     });
 }
 
-#[test]
-#[ignore]
-fn probe_grid_scaling_2() {
-    let budget = budget();
-    let all: [(&str, Vec<Series>); 5] = [
-        (
-            "axis_insert",
-            vec![(
-                "rows",
-                vec![(1_000, 4), (4_000, 4), (16_000, 4), (64_000, 4)],
-            )],
-        ),
-        (
-            "axis_move",
-            vec![(
-                "rows",
-                vec![(1_000, 4), (4_000, 4), (16_000, 4), (64_000, 4)],
-            )],
-        ),
-        (
-            "table_reconcile_insert",
-            vec![(
-                "rows",
-                vec![(1_000, 4), (4_000, 4), (16_000, 4), (64_000, 4)],
-            )],
-        ),
-        (
-            "row_list",
-            vec![
-                (
-                    "rows",
-                    vec![(1_000, 64), (4_000, 64), (16_000, 64), (64_000, 64)],
-                ),
-                ("diag", vec![(1_000, 64), (4_000, 256), (16_000, 1_024)]),
-            ],
-        ),
-        (
-            "conflict_listing",
-            vec![("rows", vec![(250, 4), (1_000, 4), (4_000, 4), (16_000, 4)])],
-        ),
-    ];
-    for (p, series) in all {
-        for (s, sizes) in series {
-            let mut pts: Vec<(f64, f64, f64)> = Vec::new();
-            for (rows, cols) in sizes {
-                let (a, v, secs, n) = run_2(p, rows, cols);
-                println!(
-                    "PROBE2 kit {p} {s} R={rows} C={cols} stored={n} visits={v} allocs={a} secs={secs:.4}"
-                );
-                pts.push((n as f64, v as f64, a as f64));
-                if secs > budget {
-                    println!("SKIP2 kit {p} {s}: past R={rows} (over {budget}s)");
-                    break;
-                }
-            }
-            let ex = |f: &dyn Fn(&(f64, f64, f64)) -> f64| {
-                slope(&pts.iter().map(|x| (x.0, f(x))).collect::<Vec<_>>())
-            };
-            println!(
-                "SLOPE2 kit {p} {s}: visits exp in stored {:.2}, allocs exp in stored {:.2}",
-                ex(&|x| x.1),
-                ex(&|x| x.2)
-            );
-        }
-    }
-}
-
 // ---- the rekey of elements the live side dropped ----
 
 /// The owner, on a host that gives every participant owner rights.
@@ -971,30 +701,4 @@ fn rekey_of_dropped_rows_is_linear() {
             "rekey_after_drop: {v} visits for {n} stored elements (bound {VISIT_BOUND} each)"
         );
     });
-}
-
-#[test]
-#[ignore]
-fn probe_rekey_scaling() {
-    let budget = budget();
-    let mut pts: Vec<(f64, f64, f64)> = Vec::new();
-    for rows in [250, 1_000, 4_000, 16_000] {
-        let (a, v, secs, n) = rekey_after_drop(rows, 4);
-        println!(
-            "PROBE3 kit rekey_after_drop rows R={rows} C=4 stored={n} visits={v} allocs={a} secs={secs:.4}"
-        );
-        pts.push((n as f64, v as f64, a as f64));
-        if secs > budget {
-            println!("SKIP3 kit rekey_after_drop: past R={rows} (over {budget}s)");
-            break;
-        }
-    }
-    let ex = |f: &dyn Fn(&(f64, f64, f64)) -> f64| {
-        slope(&pts.iter().map(|x| (x.0, f(x))).collect::<Vec<_>>())
-    };
-    println!(
-        "SLOPE3 kit rekey_after_drop rows: visits exp in stored {:.2}, allocs exp in stored {:.2}",
-        ex(&|x| x.1),
-        ex(&|x| x.2)
-    );
 }

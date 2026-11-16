@@ -1,13 +1,6 @@
 //! What a structured call costs on a live keyed doc that isn't a table (a deck, a board): it
 //! should cost what it touches, not the whole doc.
 //!
-//! **The measurement** (`keyed_cost_measure`, ignored): a live doc of 20,000, 40,000 and 81,000
-//! elements and fields (`KEYED_COST_ENTRIES=a,b,...` for others), an agent's one-entry read
-//! and one-entry verb in a loop, their p50 and p99, the open's time and renders, and where the
-//! time goes: the kit's test-only phase timers (`prof!`, `differential::profile_take`), mean
-//! per call. A measurement, not a row: run it on a node, in a release build:
-//! `cargo test --release -p k2-mpc-base --test keyed_cost -- --ignored --nocapture`.
-//!
 //! The test pack, `deck-cost`: a MovableList `shapes` and a Map `fields` keyed
 //! `<shape>:<field>`; the file is one line per shape (its key, then `\t<field>=<value>` per
 //! field). It keeps a carrier: `encode_from` keeps a shape's line when its fields are what
@@ -20,7 +13,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 use k2_mpc_base::differential;
 use k2_mpc_base::doc::{Edit, Neutral};
@@ -537,152 +529,6 @@ fn run(s: &Session, c: ConnId, argv: &[&str]) -> ToolOutput {
         String::from_utf8_lossy(&o.stdout)
     );
     o
-}
-
-fn pct(v: &mut [f64], p: f64) -> f64 {
-    v.sort_by(f64::total_cmp);
-    let i = ((v.len() as f64 - 1.0) * p).round() as usize;
-    v[i]
-}
-
-/// The phase timers since the last take, mean µs per call, largest total first.
-fn print_profile(entries: usize, what: &str) {
-    let mut p = differential::profile_take();
-    p.sort_by(|a, b| b.2.total_cmp(&a.2));
-    for (name, n, secs) in p {
-        println!(
-            "KC {entries} {what} phase {name}: calls {n}, mean {:.1} us, total {:.1} ms",
-            secs * 1e6 / n.max(1) as f64,
-            secs * 1e3
-        );
-    }
-}
-
-#[test]
-#[ignore = "a measurement: run on a node, release build"]
-fn keyed_cost_measure() {
-    // what a host build does: the live view's test-only checks off
-    let _off = NoChecks::new();
-    let sizes: Vec<usize> = std::env::var("KEYED_COST_ENTRIES")
-        .unwrap_or_else(|_| "20000,40000,81000".into())
-        .split(',')
-        .map(|n| n.trim().parse().expect("a count"))
-        .collect();
-    let calls: usize = std::env::var("KEYED_COST_CALLS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(300);
-    for entries in sizes {
-        let shapes = entries / (PER_SHAPE + 1);
-        let entries = shapes * (PER_SHAPE + 1);
-        let mut f = fx("measure");
-        fs::write(f.path(), deck(shapes)).unwrap();
-        let _ = differential::profile_take();
-        let r0 = f.pack.renders();
-        let t = Instant::now();
-        let s = f.open();
-        let open_ms = t.elapsed().as_secs_f64() * 1e3;
-        println!(
-            "KC {entries} open (first, import): {open_ms:.1} ms, renders {}",
-            f.pack.renders() - r0
-        );
-        print_profile(entries, "open");
-        let a = f.agent(&s);
-        for i in 0..20 {
-            let v = run(&s, a, &["shape", "get", &format!("s{i}")]).version;
-            let base = v.to_string();
-            run(
-                &s,
-                a,
-                &[
-                    "shape",
-                    "set",
-                    &format!("s{i}"),
-                    "f0",
-                    "warm",
-                    "--base",
-                    &base,
-                ],
-            );
-        }
-        let _ = differential::profile_take();
-        let (mut read, mut verb) = (Vec::new(), Vec::new());
-        for i in 0..calls {
-            let shape = format!("s{}", (i * 7919) % shapes);
-            let t = Instant::now();
-            let v = run(&s, a, &["shape", "get", &shape]).version;
-            read.push(t.elapsed().as_secs_f64() * 1e3);
-            let (val, base) = (format!("v{i}"), v.to_string());
-            let t = Instant::now();
-            run(
-                &s,
-                a,
-                &["shape", "set", &shape, "f1", &val, "--base", &base],
-            );
-            verb.push(t.elapsed().as_secs_f64() * 1e3);
-        }
-        println!(
-            "KC {entries} read (shape get, one shape), {calls} calls: p50 {:.3} ms, p99 {:.3} ms",
-            pct(&mut read, 0.5),
-            pct(&mut read, 0.99)
-        );
-        println!(
-            "KC {entries} verb (shape set, one field, --base), {calls} calls: p50 {:.3} ms, p99 {:.3} ms",
-            pct(&mut verb, 0.5),
-            pct(&mut verb, 0.99)
-        );
-        print_profile(entries, "loop");
-        // one-element list changes: an insert, a move, a delete, each after a read, each with its
-        // own phase timers
-        let list_ops: [(&str, &str); 3] = [
-            ("add", "shape add, one element"),
-            ("move", "shape move, one element"),
-            ("drop", "shape drop, one element"),
-        ];
-        for (verb, what) in list_ops {
-            let _ = differential::profile_take();
-            let mut times = Vec::new();
-            for i in 0..50 {
-                let v = run(&s, a, &["shape", "get", "s0"]).version.to_string();
-                let args: Vec<String> = match verb {
-                    "add" => vec![format!("n{i}"), format!("s{}", (i * 31) % shapes)],
-                    "move" => vec![
-                        format!("s{}", (i * 37 + 5) % shapes),
-                        format!("s{}", (i * 53 + 11) % shapes),
-                    ],
-                    _ => vec![format!("s{}", (i * 41 + 3) % shapes)],
-                };
-                let mut argv = vec!["shape", verb];
-                argv.extend(args.iter().map(String::as_str));
-                argv.extend(["--base", v.as_str()]);
-                let t = Instant::now();
-                run(&s, a, &argv);
-                times.push(t.elapsed().as_secs_f64() * 1e3);
-            }
-            println!(
-                "KC {entries} verb ({what}, --base), 50 calls: p50 {:.3} ms, p99 {:.3} ms",
-                pct(&mut times, 0.5),
-                pct(&mut times, 0.99)
-            );
-            print_profile(entries, verb);
-        }
-        // the write-back, then a reopen after a restart of an untouched file
-        s.flush(a).expect("the write-back");
-        drop(s);
-        f.mgr.close(&key(), "measure").ok();
-        f.restart();
-        let _ = differential::profile_take();
-        let r0 = f.pack.renders();
-        let t = Instant::now();
-        let s = f.open();
-        let open_ms = t.elapsed().as_secs_f64() * 1e3;
-        println!(
-            "KC {entries} open (reopen after a restart, file untouched): {open_ms:.1} ms, renders {}",
-            f.pack.renders() - r0
-        );
-        print_profile(entries, "reopen");
-        drop(s);
-    }
 }
 
 // ---------- the rows: test-only counts, not timing ----------

@@ -2,13 +2,15 @@
 // device sends `lease` in `welcome`, gives a reconnecting client its writer back when its lease
 // is still its (`kept`), and otherwise says when that lease ended (`prevEnded`). The client must
 // then never read another connection's changes under its old writer as its own lost change
-// (R11, the false landing), settles its edit in flight for good on a kept reconnect, and says
-// `bye` only when it holds nothing unsent.
+// (R11, the false landing), even when the host gives it that same writer back without keeping
+// it (plant caught by name: `SameWriterUncapped`, `withSameWriterUncapped`), settles its edit in
+// flight for good on a kept reconnect, and says `bye` only when it holds nothing unsent.
 
 import { describe, expect, it } from "vitest";
 import type { Hunk } from "../src/hunk";
 import { LiveText, type Landed, type Rejection } from "../src/live";
 import type { ChangeEvent, ClientFrame, ServerFrame, Transport } from "../src/wire";
+import { withSameWriterUncapped } from "./plants";
 
 /** A transport the test drives by hand. */
 function wire() {
@@ -77,6 +79,30 @@ describe("writer leases (kit v0.14.0)", () => {
     w.deliver({ type: "change", event: ev(2, 7, [h(2, 2, "s")]) });
     expect(landed).toHaveLength(0);
     expect(l.presence(rejected[0].id)).toBe("absent");
+  });
+
+  it("not kept, the same writer again: a later lease's change under it is not this client's edit (lease_unkept_same_writer)", () => {
+    const { w, l, rejected, landed } = lostEdit();
+    // a host that gives the old writer back without keeping it: its lease ended at version 1
+    l.reconnected({ client: 7, lease: "21", kept: false, prevEnded: 1 });
+    // the `since` reply lists a sibling's change under writer 7, after that lease ended, with
+    // the same hunks as the edit in flight
+    w.deliver({ type: "events", op: lastSince(w.sent).op, events: [ev(2, 7, [h(2, 2, "s")])] });
+    expect(rejected, "row: a later lease's change is not this client's edit").toHaveLength(1);
+    expect(rejected[0].asOf).toMatchObject({ client: 7, until: 1 });
+    expect(landed).toHaveLength(0);
+    expect(l.presence(rejected[0].id)).not.toBe("present");
+  });
+
+  it("plant caught: with the cap planted out for a writer given back unkept, the later lease's change is read as the edit (lease_unkept_same_writer)", () => {
+    const run = () => {
+      const { w, l, rejected } = lostEdit();
+      l.reconnected({ client: 7, lease: "21", kept: false, prevEnded: 1 });
+      w.deliver({ type: "events", op: lastSince(w.sent).op, events: [ev(2, 7, [h(2, 2, "s")])] });
+      return rejected.length;
+    };
+    expect(run()).toBe(1);
+    expect(withSameWriterUncapped(run)).toBe(0);
   });
 
   it("not kept, the end unknown: the watch concludes nothing (lease_cap_unknown)", () => {

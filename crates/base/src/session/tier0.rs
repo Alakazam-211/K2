@@ -1232,6 +1232,7 @@ impl BlobSession {
                     lease: None,
                     kept: false,
                     prev_ended: None,
+                    writers_full: false,
                 });
             }
         }
@@ -1256,6 +1257,7 @@ impl BlobSession {
             lease: None,
             kept: false,
             prev_ended: None,
+            writers_full: false,
         })
     }
 

@@ -15,9 +15,12 @@
 //! Planted faults (`MPC_STRUCT_MUTANT`, the setting echoed): `reuse-across-reload`
 //! (`ClientMutant::ReuseAcrossReload`: the recorded kinds ignored) fails
 //! the own-replica and N−1 tests; `no-reuse-after-reload` (`ClientMutant::NoReuseAfterReload`:
-//! no ID from before the load reused) fails the plain-agent test.
+//! no ID from before the load reused) fails the plain-agent test; `no-agent-row-on-gain`
+//! (`ClientMutant::NoAgentRowOnGain`: no kind row when an agent gains edit rights after a
+//! read-only join) fails `an_agent_gaining_edit_after_a_read_only_join_reuses_its_id` at its
+//! row assert, as `soak_agent_runs_ids_bounded` does at its read-only arm's.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use k2_mpc_base::session::{
@@ -37,6 +40,10 @@ fn under_mutant<R>(f: impl FnOnce() -> R) -> R {
         Ok("no-reuse-after-reload") => {
             use k2_mpc_base::differential::{with_client_mutant, ClientMutant};
             with_client_mutant(ClientMutant::NoReuseAfterReload, f)
+        }
+        Ok("no-agent-row-on-gain") => {
+            use k2_mpc_base::differential::{with_client_mutant, ClientMutant};
+            with_client_mutant(ClientMutant::NoAgentRowOnGain, f)
         }
         Ok(other) => panic!("MPC_STRUCT_MUTANT={other}: not a mutant this suite plants"),
         Err(_) => f(),
@@ -83,6 +90,23 @@ fn manager(d: &Dir) -> SessionManager {
 
 fn manager_on(store: Arc<DocStore>) -> SessionManager {
     SessionManager::new(store, Arc::new(H(AtomicU64::new(1))), Config::default())
+}
+
+/// A host that grants edit only while its gate is open (as a host that grants edit after an
+/// approval, inside the connection).
+struct Gate(AtomicBool, AtomicU64);
+impl Host for Gate {
+    fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+        if self.0.load(Ordering::SeqCst) {
+            Rights::full()
+        } else {
+            Rights::read_only()
+        }
+    }
+    fn now_ms(&self) -> u64 {
+        self.1.fetch_add(1, Ordering::SeqCst)
+    }
+    fn on_event(&self, _: &AuditEvent) {}
 }
 
 fn agent(pid: &str) -> Participant {
@@ -223,5 +247,103 @@ fn an_older_kits_client_ids_are_never_reused() {
             !older.contains(&second) && second != fresh,
             "a second connection got client ID {second} (older: {older:?}, held: {fresh})"
         );
+    });
+}
+
+/// An agent whose every join is read-only, and which gains edit rights inside each connection
+/// (a host that grants edit after an approval), takes one client ID and reuses it, within the
+/// load and after a reload: its ID's kind is recorded when it first gains edit rights, not only
+/// at a join that has them.
+#[test]
+fn an_agent_gaining_edit_after_a_read_only_join_reuses_its_id() {
+    under_mutant(|| {
+        let d = dir("gain");
+        let gate = Arc::new(Gate(AtomicBool::new(false), AtomicU64::new(1)));
+        let store = Arc::new(DocStore::open(d.0.join("d.redb")).unwrap());
+        let mgr = SessionManager::new(store, gate.clone(), Config::default());
+        let s = mgr.open(Arc::new(MD), &key(), Some(b"x\n")).unwrap();
+        let mut ids = std::collections::BTreeSet::new();
+        for k in 0..5 {
+            gate.0.store(false, Ordering::SeqCst);
+            let j = s.join(agent("bot"), Stay::UntilIdle).unwrap();
+            gate.0.store(true, Ordering::SeqCst);
+            let t = s.read(j.conn).unwrap().text_by_root.remove(0).1;
+            s.replace_text(j.conn, TextFilePack::ROOT, &format!("{t}a{k}\n"))
+                .unwrap();
+            ids.insert(j.client);
+            assert!(s.leave(j.conn).unwrap());
+        }
+        println!("MEASURE agent_gain ids={}", ids.len());
+        assert_eq!(
+            ids.len(),
+            1,
+            "row: an agent that gains edit after a read-only join reuses its ID: {ids:?}"
+        );
+        assert!(mgr.close(&key(), "test").unwrap());
+        drop(s);
+        gate.0.store(false, Ordering::SeqCst);
+        let s = mgr.open(Arc::new(MD), &key(), None).unwrap();
+        let (_, again) = join(&s, agent("bot"));
+        assert!(
+            ids.contains(&again),
+            "row: the agent's ID is reused after a reload too"
+        );
+    });
+}
+
+/// The agent soak: `SOAK` runs of an agent, each a join, one edit and a leave. The doc's
+/// writers: (a) one pid, edit rights at the join: one; (b) one pid, a read-only join granted
+/// edit inside the connection: one; (c) a new pid per run (a host that stamps a run id as the
+/// pid): one per run, which is the host's to change (a stable pid per agent).
+#[test]
+fn soak_agent_runs_ids_bounded() {
+    const SOAK: usize = 200;
+    under_mutant(|| {
+        let run = |name: &str, gated: bool, pid_per_run: bool| {
+            let d = dir(name);
+            let gate = Arc::new(Gate(AtomicBool::new(true), AtomicU64::new(1)));
+            let store = Arc::new(DocStore::open(d.0.join("d.redb")).unwrap());
+            let mut c = Config::default();
+            c.edit_rate_per_s = 1 << 30;
+            c.edit_burst = 1 << 30;
+            let mgr = SessionManager::new(store.clone(), gate.clone(), c);
+            let s = mgr.open(Arc::new(MD), &key(), Some(b"x\n")).unwrap();
+            for k in 0..SOAK {
+                gate.0.store(!gated, Ordering::SeqCst);
+                let pid = if pid_per_run {
+                    format!("run-{k}")
+                } else {
+                    "bot".to_owned()
+                };
+                let j = s.join(agent(&pid), Stay::UntilIdle).unwrap();
+                gate.0.store(true, Ordering::SeqCst);
+                let t = s.read(j.conn).unwrap().text_by_root.remove(0).1;
+                s.replace_text(j.conn, TextFilePack::ROOT, &format!("{t}{k}\n"))
+                    .unwrap();
+                assert!(s.leave(j.conn).unwrap());
+            }
+            let id = store.find(&key()).unwrap().expect("the doc");
+            let writers: std::collections::BTreeSet<_> = store
+                .load(id)
+                .unwrap()
+                .updates
+                .iter()
+                .map(|(_, e)| e.client)
+                .collect();
+            writers.len() - 1 // the import's
+        };
+        let a = run("soak-a", false, false);
+        let b = run("soak-b", true, false);
+        let c = run("soak-c", false, true);
+        println!("MEASURE agent_soak runs={SOAK} writers_edit_at_join={a} writers_gain={b} writers_pid_per_run={c}");
+        assert_eq!(
+            a, 1,
+            "row: an agent with edit rights at its joins keeps one writer"
+        );
+        assert_eq!(
+            b, 1,
+            "row: an agent granted edit inside each connection keeps one writer"
+        );
+        assert_eq!(c, SOAK, "row: a new pid per run takes a writer per run");
     });
 }

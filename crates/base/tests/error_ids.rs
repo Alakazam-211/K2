@@ -1073,6 +1073,12 @@ fn walk() -> Seen {
     f.agent(&s, "x", Rights::editor());
     let w = f.agent(&s, "w", Rights::editor());
     seen.res(s.replace_text(w, ROOT, "2\n")); // E305
+                                              // a join past writers_max (the import fills a
+                                              // one-writer cap) reads only
+    let f = fx("writerscap", |c| c.writers_max = 1);
+    let s = f.open("wc.md", b"1\n");
+    let x = f.agent(&s, "x", Rights::editor());
+    seen.res(s.replace_text(x, ROOT, "2\n")); // E908
                                               // the rate limit
     let f = fx("rate", |c| {
         c.edit_rate_per_s = 1;

@@ -42,6 +42,10 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
             stored: "mpce-0.1".into(),
             stored_format: 1,
         },
+        S::NativeEngineMissing {
+            stored: "mpce".into(),
+            stored_format: 1,
+        },
         S::NewerData {
             table: "later_kit".into(),
         },
@@ -160,6 +164,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             conn: ConnId::fresh(),
         },
         S::Watching { max: 32 },
+        S::WritersFull { count: 8, max: 8 },
         S::Stale {
             expected: 12,
             actual: 14,
@@ -176,6 +181,10 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             stored_format: 1,
             engine: "yrs-0.28".into(),
             engine_format: 2,
+        },
+        S::NativeEngineMissing {
+            stored: "mpce".into(),
+            stored_format: 1,
         },
         S::BadParticipant(x.into()),
         S::BadPosition(x.into()),

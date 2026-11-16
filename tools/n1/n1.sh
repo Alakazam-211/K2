@@ -169,8 +169,13 @@
 #                                                build's `n1_format_producer` makes three stores
 #                                                and stamps them format 8 by hand (the word naming
 #                                                chunked, native, and both); the previous release
-#                                                (it reads up to format 7) refuses each at open
-#                                                with one line, its bytes unchanged, and writes a
+#                                                checks them by its read range: one that reads up
+#                                                to format 7 refuses each at open with one line;
+#                                                one that reads format 8 opens the chunked store
+#                                                and reads its doc as written (versions and text)
+#                                                and refuses native and both; a refused file's
+#                                                bytes unchanged, the opened one's format and
+#                                                versions kept; then it writes a
 #                                                store of its own; this build's `n1_format_after`
 #                                                opens that store as before (its format kept, a
 #                                                write, a rewrite), opens the chunked one and
@@ -459,7 +464,7 @@ PY
     echo "== this build stamps three stores format 8"
     K2MB_N1_OUT="$OUT/format" cargo test -p k2-mpc-base --test engine_stamp n1_format_producer -- --ignored --nocapture
     PREV=$(kit_version "$OUT/old")
-    echo "== the previous release ($PREV) refuses each"
+    echo "== the previous release ($PREV) reads or refuses each, by its read range"
     (cd "$OUT/format" && cargo run -q -- read "$OUT/format")
     echo "== the previous release ($PREV) writes a store of its own"
     (cd "$OUT/format" && cargo run -q -- produce "$OUT/format")

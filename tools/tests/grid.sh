@@ -7,7 +7,9 @@
 #                   their mutants at 200 traces per class
 #   grid-m          every grid mutant over every class, 300 traces per class
 #   pt              the table properties (tests/table.rs) at 10^4 cases each
-#   measure         the grid's measurements: a cell set at the size cap, grid_cost
+#   measure         the grid's measurements: memory per row and cell, a sort and a block move,
+#                   a cell set at the size cap, grid_cost (every
+#                   #[ignore]d test in it: grid_costs_at_the_cell_limit, grid_roster_flush_cost)
 #   nobyte          the no-byte twin (tests/grid_store.rs, no_byte) at 10^4 cases
 #   gridident       the re-identification property and the outside-merge property at 10^3
 #   gerasure        tests/grid_erasure.rs at 10^3 histories
@@ -25,6 +27,8 @@ case ${PART:?PART: grid-a, grid-b, grid-m, pt, measure, nobyte, gridident or ger
       timed table_pt_10k ran env PROPTEST_CASES=10000 cargo test --release -p k2-mpc-base --test table -- --nocapture ;;
   measure) timed build cargo test --release -p k2-mpc-base --test structured_mem --test grid_cost --no-run
         timed cell_set_at_cap ran cargo test --release -p k2-mpc-base --test structured_mem measure_cell_set_latency_at_the_cap -- --ignored --nocapture --test-threads 1
+        timed memory_per_row_and_cell ran cargo test --release -p k2-mpc-base --test structured_mem measure_memory_per_row_and_cell -- --ignored --nocapture --test-threads 1
+        timed sort_and_block_move ran cargo test --release -p k2-mpc-base --test structured_mem measure_sort_and_block_move -- --ignored --nocapture --test-threads 1
         timed grid_cost ran cargo test --release -p k2-mpc-base --test grid_cost -- --ignored --nocapture ;;
   nobyte) timed build cargo test --release -p k2-mpc-base --test grid_store --no-run
         timed nobyte_grid ran env NO_BYTE_CASES=10000 cargo test --release -p k2-mpc-base --test grid_store no_byte -- --nocapture ;;

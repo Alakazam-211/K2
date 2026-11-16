@@ -881,7 +881,7 @@ fn trace_equivalence() {
 /// `concurrent_restore_o4a` (and its `restore_part:o4a`), every other class above 10^4.
 /// Not run here.
 #[test]
-#[ignore]
+#[ignore = "run by tools/undo/traces-large.sh (release)"]
 fn trace_equivalence_large() {
     let (name, seeds, min) = large_part("trace_equivalence_large", 1_000_000..1_400_000, 1);
     run_many(&name, seeds, min, &LARGE_MAIN);
@@ -892,7 +892,7 @@ fn trace_equivalence_large() {
 /// its measured rate (`LARGE_D1`, job 841f1cba). One job (tools/undo/traces-large.sh
 /// PART=d1). Not run here.
 #[test]
-#[ignore]
+#[ignore = "run by tools/undo/traces-large.sh (release)"]
 fn d1_traces_large() {
     let (name, seeds, min) = large_part("d1_traces_large", 2_000_000..2_050_000, 1);
     run_many_with(&name, seeds, trace::CLASSES, min, trace::run, &LARGE_D1);
@@ -987,7 +987,7 @@ fn group_trace_equivalence() {
 /// rarest grouping class, `group_redone`, at about 610). One job (tools/undo/traces-large.sh
 /// PART=group). Not run here.
 #[test]
-#[ignore]
+#[ignore = "run by tools/undo/traces-large.sh (release)"]
 fn group_trace_equivalence_large() {
     let (name, seeds, min) = large_part("group_traces_large", 3_000_000..3_010_000, 100);
     run_many_with(
@@ -1052,7 +1052,7 @@ fn group_mutants_are_caught() {
 /// rate (`LARGE_D1`, job 841f1cba: the same generator and seeds as `d1_traces_large`). One
 /// job (tools/undo/traces-large.sh PART=endbreak). Not run here.
 #[test]
-#[ignore]
+#[ignore = "run by tools/undo/traces-large.sh (release)"]
 fn end_break_trace_class_large() {
     let (name, seeds, min) = large_part(
         "end_break_traces_large",
@@ -1117,15 +1117,15 @@ fn end_break_mutants_are_caught() {
 }
 
 /// Replay one trace with its whole log: `SPEC_UNDO_SEED=<n> cargo test -p k2-mpc-spec-undo
-/// --test traces replay_one -- --nocapture`. Does nothing without the variable.
+/// --test traces replay_one -- --ignored --nocapture` (tools/README.md, "One trace, by name").
+/// Without the variable it fails: there is no trace to replay.
 #[test]
+#[ignore = "run by name: tools/README.md"]
 fn replay_one() {
-    let Some(seed) = std::env::var("SPEC_UNDO_SEED")
-        .ok()
-        .and_then(|s| s.parse().ok())
-    else {
-        return;
-    };
+    let seed: u64 = std::env::var("SPEC_UNDO_SEED")
+        .expect("SPEC_UNDO_SEED=<n>: the trace to replay")
+        .parse()
+        .expect("SPEC_UNDO_SEED: a seed (u64)");
     // SPEC_UNDO_GROUP=1: a grouping trace
     let r = if std::env::var("SPEC_UNDO_GROUP").is_ok() {
         trace::run_group(seed, true)

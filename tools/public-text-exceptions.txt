@@ -2,3 +2,7 @@
 # line: PATH: TEXT, TEXT being the whole added line with its leading and trailing whitespace
 # trimmed. A changed line, or another line in the same file, is not covered. Cleared whenever
 # tools/public-text-base moves: an entry matching no added line blocks the tag.
+tools/check-targets.sh: if all(x in ("rust", "should_panic", "no_run", "compile_fail") or x.startswith("edition") for x in toks):
+tools/targets.txt: k2-mpc-base|test|overflow||base-a2,base-c
+tools/tests/plants.sh: PL_FAIL_RX="thread '[^']*' ([(][0-9]+[)] )?panicked at "
+crates/base/tests/agents_cap.rs: //! Public API only, on `Config::default()`. The persons-only rows are in `overflow.rs`.

@@ -9,17 +9,19 @@
 //! - **At open, before anything else reads or writes the store**, a kit refuses a word naming a
 //!   bit it doesn't know, by name ([`StoreError::UnknownFeatures`]); a format-8 store without
 //!   its word, or a word in a store below format 8, is damage ([`StoreError::Corrupt`]).
-//! - **The native bit**: this kit stores no engine records yet, so no store it opens holds an
-//!   engine store, and a store that sets the bit is refused
-//!   ([`StoreError::NativeWithoutEngine`]). The check against the engine's record 0 (its magic
-//!   and engine name), both ways, replaces this one with the change that first stores engine
-//!   records.
+//! - **The native bit** and the store's engine stores are one fact, checked at open both ways
+//!   by their rows (this kit doesn't read the engine's records): a store with the bit and no
+//!   engine store is refused ([`StoreError::NativeWithoutEngine`]), and engine records in a
+//!   store without the bit are damage. **A build without the native engine opens a store
+//!   holding native docs**: it refuses those docs one by one
+//!   ([`StoreError::NativeEngineMissing`], `MPC-E169`), never the store, so the store's other
+//!   docs work, and a rewrite copies the engine store's tables through (`native.rs`).
 //! - **Format 7 was never written** (it was declared for the native engine's stores, and no
 //!   shipped host turned that engine on): a format-7 store is refused at open, before anything
 //!   reads it ([`StoreError::NeverWritten`]).
 //!
 //! A store's first chunked version stamps format 8 with [`FEATURE_CHUNKED`], lazily, in its own
-//! transaction (`chunks.rs`), and the stamp is never lowered. Kits v0.14.0 to v0.17.0 read up to
+//! transaction (`chunks.rs`), and the stamp is never lowered. Kits v0.14.0 to v0.18.0 read up to
 //! format 7 and refuse a format-8 store at open ([`StoreError::Newer`]), its bytes unchanged.
 
 use redb::Database;
@@ -100,7 +102,7 @@ pub(super) fn check_stamp(db: &Database) -> Result<Option<u64>, StoreError> {
     if f > STORE_FORMAT_READ {
         return Err(StoreError::Newer { found: f });
     }
-    match (f >= STORE_FORMAT_FEATURES, word) {
+    let checked = match (f >= STORE_FORMAT_FEATURES, word) {
         (false, None) => Ok(Some(f)),
         (false, Some(_)) => Err(StoreError::Corrupt("a features word below format 8")),
         (true, None) => Err(StoreError::Corrupt("format 8 without its features word")),
@@ -109,13 +111,35 @@ pub(super) fn check_stamp(db: &Database) -> Result<Option<u64>, StoreError> {
             if unknown != 0 && !planted(plant::FormatPlant::UnknownFeatureIgnored) {
                 return Err(StoreError::UnknownFeatures { found: f, unknown });
             }
-            // this kit stores no engine records, so no store it opens holds an engine store
-            if w & FEATURE_NATIVE != 0 && !planted(plant::FormatPlant::NativeUnchecked) {
-                return Err(StoreError::NativeWithoutEngine);
-            }
+            // the bit against the engine stores, by their rows: without the native engine its
+            // native docs are refused one by one, later
+            super::native::check_held(&r, w & FEATURE_NATIVE != 0)?;
             Ok(Some(f))
         }
+    }?;
+    // below format 8 there is no bit: a store holding engine records is damage
+    if f < STORE_FORMAT_FEATURES {
+        super::native::check_held(&r, false)?;
     }
+    Ok(checked)
+}
+
+/// The plant `native-unchecked`: the open doesn't check the native bit (test builds only).
+pub(super) fn native_bit_unchecked() -> bool {
+    planted(plant::FormatPlant::NativeUnchecked)
+}
+
+/// The plant `native-store-refused-whole` (test builds only): without the native engine, a
+/// store with the native bit is refused whole at open, as before its native docs were refused
+/// one by one.
+pub(super) fn native_store_refused_whole() -> bool {
+    planted(plant::FormatPlant::NativeStoreRefusedWhole)
+}
+
+/// The plant `native-tables-dropped` (test builds only): a rewrite leaves out the engine
+/// store's tables, as one that drops the tables it doesn't know would.
+pub(super) fn native_tables_dropped() -> bool {
+    planted(plant::FormatPlant::NativeTablesDropped)
 }
 
 impl DocStore {
@@ -149,12 +173,17 @@ pub(crate) mod plant {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum FormatPlant {
         /// A format-7 store opens as a format this build reads but doesn't write, as kits
-        /// v0.10.1 to v0.17.0 opened it (`format-7-read-only`).
+        /// v0.10.1 to v0.18.0 opened it (`format-7-read-only`).
         Format7ReadOnly,
         /// A features word's unknown bits are ignored (`unknown-feature-ignored`).
         UnknownFeatureIgnored,
         /// The native bit is not checked (`native-unchecked`).
         NativeUnchecked,
+        /// Without the native engine, a store with the native bit is refused whole at open
+        /// (`native-store-refused-whole`).
+        NativeStoreRefusedWhole,
+        /// A rewrite leaves out the engine store's tables (`native-tables-dropped`).
+        NativeTablesDropped,
     }
 
     #[cfg(test)]
@@ -171,6 +200,8 @@ pub(crate) mod plant {
                     "format-7-read-only" => FormatPlant::Format7ReadOnly,
                     "unknown-feature-ignored" => FormatPlant::UnknownFeatureIgnored,
                     "native-unchecked" => FormatPlant::NativeUnchecked,
+                    "native-store-refused-whole" => FormatPlant::NativeStoreRefusedWhole,
+                    "native-tables-dropped" => FormatPlant::NativeTablesDropped,
                     _ => return None,
                 })
             }

@@ -113,7 +113,7 @@ fn refused(t: &TmpDir, want: &StoreError, what: &str) -> StoreError {
 /// Format 7 was never written: a store stamped 7 is refused at open as a format no kit writes
 /// (`MPC-E503`, exit 6), its bytes unchanged, with a pending rewrite too (refused before the
 /// rewrite is looked at). `MPC_FORMAT_PLANT=format-7-read-only` (format 7 opens read-only, as
-/// kits v0.10.1 to v0.17.0 opened it) fails at the row's first step.
+/// kits v0.10.1 to v0.18.0 opened it) fails at the row's first step.
 #[test]
 fn format_7_is_refused_as_never_written() {
     under(FormatPlant::Format7ReadOnly, || {

@@ -1,0 +1,27 @@
+MPC-E908 writers_doc_cap (limits)
+exit:     2
+message:  read-only: this doc has {count} writers (the most is {max})
+next:     This doc already holds as many writers as it allows, and writers stay in the doc for good, so this connection can read but not edit. Nothing changed. Don't retry in a loop: a reconnect from a device that has edited this doc before may edit again.
+step:     cat; why: The doc holds all the writers it allows, so this connection is read-only; read it, and don't retry in a loop.
+rule:     writers (writers_max)
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E908",
+  "name": "writers_doc_cap",
+  "area": "limits",
+  "exit": 2,
+  "message": "read-only: this doc has {count} writers (the most is {max})",
+  "next": "This doc already holds as many writers as it allows, and writers stay in the doc for good, so this connection can read but not edit. Nothing changed. Don't retry in a loop: a reconnect from a device that has edited this doc before may edit again.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "The doc holds all the writers it allows, so this connection is read-only; read it, and don't retry in a loop."
+  },
+  "rule": "writers (writers_max)",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

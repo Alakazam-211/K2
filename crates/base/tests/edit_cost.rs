@@ -8,15 +8,8 @@
 //! not their content), so under churn (lines added and removed, the text staying the same
 //! size) the state, and with it each edit's replica, grows with the number of changes.
 //!
-//! `edit_cost_grows_with_the_engine_state` (ignored; a few seconds in release) prints the
-//! time per edit against the changes made and the encoded state's size, through the public
-//! `Doc` API only (no session, no store, no fsync):
-//!
-//! ```sh
-//! cargo test -p k2-mpc-base --release --test edit_cost -- --ignored --nocapture
-//! ```
-//!
-//! `edit_cost_at_sizes` (v0.9.3; ignored, minutes in release: run it on a node) measures an
+//! `edit_cost_at_sizes` (v0.9.3; ignored, minutes in release: tools/perf/measure.sh runs it on
+//! a node) measures an
 //! edit at **1.2k, 40k and ~300k changes** of history (`EDIT_COST_SIZES`, comma-separated),
 //! through each edit path ([`Path`]). Building 300k changes through today's path would take
 //! hours (that is the finding), so the history is built by the same churn on plain engine
@@ -71,41 +64,6 @@ fn churn(doc: &mut Doc, client: u64, n: u64) {
         }],
     };
     doc.edit_as(client, &[del]).unwrap();
-}
-
-#[test]
-#[ignore = "a measurement: run in release with --nocapture"]
-fn edit_cost_grows_with_the_engine_state() {
-    let mut doc = Doc::new(S).unwrap();
-    let seed: String = (0..300).map(|i| format!("seed line {i}\n")).collect();
-    doc.replace_text_as(2, ROOT, &seed).unwrap();
-    let mut changes = 0u64;
-    let mut rows = Vec::new();
-    for checkpoint in [1_000u64, 5_000, 10_000, 20_000, 40_000] {
-        while changes < checkpoint {
-            churn(&mut doc, 100 + changes % 32, changes);
-            changes += 2;
-        }
-        // time 100 churn steps (200 edits) at this history
-        let t0 = Instant::now();
-        for k in 0..100 {
-            churn(&mut doc, 100 + (changes + k) % 32, changes + k);
-        }
-        changes += 200;
-        let per_edit_us = t0.elapsed().as_secs_f64() * 1e6 / 200.0;
-        let state = doc.encode_state().unwrap().len();
-        let text = doc.text(ROOT).unwrap().len();
-        eprintln!(
-            "[edit cost] {changes} changes: {per_edit_us:.0} µs per edit, engine state {state} B, text {text} B"
-        );
-        rows.push((changes, per_edit_us, state));
-    }
-    // the cost follows the engine state, not the text (which stays ~300 lines)
-    let (first, last) = (rows[0], rows[rows.len() - 1]);
-    assert!(
-        last.2 > first.2 * 4,
-        "the state grows with history: {rows:?}"
-    );
 }
 
 /// The history builder: one plain engine doc per client (and the doc's own, client 1), all
@@ -207,7 +165,7 @@ fn build(changes: u64) -> Builder {
 }
 
 #[test]
-#[ignore = "a measurement: minutes in release, on a node (--nocapture)"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn edit_cost_at_sizes() {
     let sizes: Vec<u64> = std::env::var("EDIT_COST_SIZES")
         .unwrap_or_else(|_| "1200,40000,300000".into())

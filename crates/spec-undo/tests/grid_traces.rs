@@ -1968,12 +1968,12 @@ fn grid_mutants_each_fail() {
     }
 }
 
-/// One trace, printed (`GRID_ONE=<class>:<seed>`, `GRID_ONE_MUTANT=<name>`): for debugging.
+/// One trace, printed (`GRID_ONE=<class>:<seed>`, `GRID_ONE_MUTANT=<name>`): for debugging
+/// (tools/README.md, "One trace, by name"). Without `GRID_ONE` it fails: there is no trace.
 #[test]
+#[ignore = "run by name: tools/README.md"]
 fn grid_trace_one() {
-    let Ok(one) = std::env::var("GRID_ONE") else {
-        return;
-    };
+    let one = std::env::var("GRID_ONE").expect("GRID_ONE=<class>:<seed>: the trace to print");
     let (c, s) = one.split_once(':').expect("class:seed");
     let class = CLASSES.iter().find(|x| **x == c).expect("a class");
     // `GRID_ONE_MUTANT=<name>`: the trace under that mutant

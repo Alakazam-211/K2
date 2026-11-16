@@ -32,6 +32,7 @@ mod features;
 mod history;
 mod live_carrier;
 mod live_copies;
+mod native;
 mod promote;
 mod purge;
 mod rewrite;
@@ -177,7 +178,7 @@ use enc::{R, W};
 ///   honours them. An older kit's own writes take none (`docs/SESSIONS.md`, "Blob references").
 /// - 7: **retired, never written.** Declared (v0.10.1) for the native engine's stores; no
 ///   shipped host turned that engine on, so no format-7 store exists in the field. Kits
-///   v0.10.1 to v0.17.0 read it; this build refuses it at open, before anything reads it, as a
+///   v0.10.1 to v0.18.0 read it; this build refuses it at open, before anything reads it, as a
 ///   format no kit writes ([`StoreError::NeverWritten`], `MPC-E503`), its bytes unchanged.
 /// - 8: **the required-features word** (`features.rs`; `docs/design/version-storage-r2.md`,
 ///   section 10). The store's `meta` holds a word of required features ([`FEATURE_CHUNKED`],
@@ -189,9 +190,9 @@ use enc::{R, W};
 ///   chunk tables (`doc_chunk_keys`, `doc_chunks`, `doc_manifests`, `doc_segments`). Never
 ///   lowered: a structured doc's upgrade keeps a format-8 store at 8. A format-8 store opens,
 ///   is swept and is rewritten (with its meta, so its word) as any store this build writes.
-///   Kits v0.14.0 to v0.17.0 refuse a format-8 store at open ([`StoreError::Newer`]: "store is
+///   Kits v0.14.0 to v0.18.0 refuse a format-8 store at open ([`StoreError::Newer`]: "store is
 ///   format 8; this build reads up to 7"), its bytes unchanged, so a host turns chunked
-///   versions on only once the release it would roll back to reads format 8.
+///   versions on only once the release it would roll back to reads format 8 (v0.19.0 on).
 ///
 /// The format a store with no opt-in feature is stamped: 6, the highest a store reaches with
 /// text and structured docs ([`STORE_FORMAT_STRUCTURED`]; a store of text docs only stays at
@@ -586,6 +587,9 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Pair(live_carrier::VERSION_CARRIERS), Erase::Blob),
     (DocRows::Pair(live_carrier::CARRIER_PAIRINGS), Erase::Range),
     (DocRows::Pair(demoted::DEMOTED_CHANGES), Erase::Range),
+    // a native doc's engine store (`native.rs`): written only by a build with the native engine
+    (DocRows::Clock(native::NATIVE_RECORDS), Erase::Range),
+    (DocRows::One(native::NATIVE_GENS), Erase::Range),
     // format 8's chunked versions (`chunks.rs`): erased by `blob::delete_rows`, after it has
     // told the doc's chunked versions from its whole-file ones
     (chunks::CHUNK_TABLES[0], Erase::Blob),
@@ -600,6 +604,8 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
 /// blobs (per space). A rewrite copies them; a doc delete leaves them (but `paths`) alone.
 pub(super) const SHARED_TABLES: &[&str] = &[
     "meta",
+    // every store nonce of the store's engine stores (`native.rs`), kept after a doc's delete
+    "native_nonces",
     "paths",
     "host",
     "blob_spaces",
@@ -776,10 +782,11 @@ pub enum StoreError {
     /// `MPC-E502` `store_newer`. Exit 6.
     #[error("{}", features::unknown_features_message(*found, *unknown))]
     UnknownFeatures { found: u64, unknown: u64 },
-    /// A format-8 store sets the native feature but holds no engine store (this kit stores
-    /// no engine records yet): refused at open, before anything reads it. A kit a host rolled
-    /// back to is the likely reader, so it is `MPC-E502` `store_newer` (details.features names
-    /// `native`). Exit 6.
+    /// A format-8 store sets the native feature but holds no engine store: refused at open,
+    /// before anything reads it, by every build (the delete of a store's last engine store
+    /// clears the bit, so no kit leaves one). It is `MPC-E502` `store_newer` (details.features
+    /// names `native`), the code a kit before per-doc refusal gives any store with the bit.
+    /// Exit 6.
     #[error("store sets the native feature but holds no engine store: use the newer build")]
     NativeWithoutEngine,
     /// A store of a format this build reads but doesn't write can't be rewritten here: a
@@ -803,6 +810,15 @@ pub enum StoreError {
         crate::engine::ENGINE_FORMAT
     )]
     ForeignEngine { stored: String, stored_format: u32 },
+    /// A native doc, in a build without the native engine: that doc alone is refused (its
+    /// load, delete and purge), nothing of it read or changed, while the store and its other
+    /// docs work. A session gives it as [`crate::session::SessionError::NativeEngineMissing`].
+    /// `MPC-E169` `native_engine_missing`. Exit 6.
+    #[error(
+        "this doc is on the native engine (format {stored_format}), which this build \
+         doesn't have"
+    )]
+    NativeEngineMissing { stored: String, stored_format: u32 },
     /// A structured doc's row marks can't be read (`row_marks` is missing): a base can't be
     /// vouched for, so a keyed write naming one is refused as expired (fail closed).
     #[error("doc {0}: the row marks are missing; read the doc again and retry")]
@@ -1901,9 +1917,17 @@ impl DocStore {
     /// [`StoreError::ForeignEngine`] unless this build may change doc `meta`'s rows: a
     /// tier-0 doc or one its engine reads ([`crate::engine::owns_stamp`]). Delete and purge
     /// check it in their own transaction (v0.10.1).
+    /// Without the native engine, a native doc is [`StoreError::NativeEngineMissing`]: that
+    /// doc alone is refused.
     pub(crate) fn check_owned(meta: &DocMeta) -> Result<(), StoreError> {
         if crate::engine::owns_stamp(&meta.engine, meta.engine_format) {
             return Ok(());
+        }
+        if crate::engine::native_stamp(&meta.engine) {
+            return Err(StoreError::NativeEngineMissing {
+                stored: meta.engine.clone(),
+                stored_format: meta.engine_format,
+            });
         }
         Err(StoreError::ForeignEngine {
             stored: meta.engine.clone(),
@@ -2881,5 +2905,7 @@ pub(crate) mod plant {
 
 #[cfg(test)]
 mod features_tests;
+#[cfg(test)]
+mod native_absent_tests;
 #[cfg(test)]
 mod tests;

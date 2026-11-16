@@ -2,8 +2,8 @@
 //! design of record; this file served its first revision): how much storing blob
 //! versions as content-defined chunks would store, against today's whole file per version, and
 //! how fast a version reads back. No store change: the chunker, the chunk files and the reads
-//! are this test's own. Every test here is ignored; a build node runs them with
-//! `--release --ignored --nocapture`.
+//! are this test's own. Every test here is ignored; tools/perf/measure.sh runs each on a build
+//! node, in release (`vs-dir`, `vs-samples` and `zip-shape`), printing counts and sizes only.
 //!
 //! - `measure_version_dir`: the versions in `VS_DIR` (every regular file of at least
 //!   `VS_MIN_FILE` bytes, default 1 MiB, under it, oldest first by modification time, then
@@ -317,15 +317,12 @@ fn version_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn measure_version_dir() {
     let dir = PathBuf::from(std::env::var("VS_DIR").expect("VS_DIR: a folder of versions"));
     let files = version_files(&dir);
-    assert!(
-        !files.is_empty(),
-        "no version files under {}",
-        dir.display()
-    );
+    // counts and sizes only: never a path, a file's name or its content
+    assert!(!files.is_empty(), "no version files under VS_DIR");
     let cdc = Cdc::from_env();
     let label = std::env::var("VS_LABEL").unwrap_or_else(|_| "dir".into());
     measure(
@@ -361,7 +358,7 @@ fn edit(b: &mut Vec<u8>, r: &mut Rng) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn measure_edited_samples() {
     let dir = PathBuf::from(std::env::var("VS_SAMPLES").expect("VS_SAMPLES: a folder of samples"));
     let edits: usize = std::env::var("VS_EDITS")
@@ -375,9 +372,10 @@ fn measure_edited_samples() {
         .filter(|p| p.is_file())
         .collect();
     files.sort();
-    for f in files {
-        let name = f.file_name().unwrap().to_string_lossy().into_owned();
-        let mut cur = std::fs::read(&f).unwrap();
+    // counts and sizes only: never a path, a file's name or its content
+    for (k, f) in files.iter().enumerate() {
+        let mut cur = std::fs::read(f).unwrap();
+        let name = format!("sample{}-{}b", k + 1, cur.len());
         let mut r = Rng(0x5eed ^ cur.len() as u64);
         let mut versions = vec![cur.clone()];
         for _ in 0..edits {
@@ -428,7 +426,7 @@ fn zip_of(members: &[(String, Vec<u8>)]) -> Zip {
 }
 
 #[test]
-#[ignore]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn measure_zip_shape() {
     let saves: usize = std::env::var("VS_EDITS")
         .ok()

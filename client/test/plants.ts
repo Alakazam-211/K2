@@ -160,6 +160,21 @@ export function withPresenceSentAnyway<T>(f: () => T): T {
   }
 }
 
+/** Run `f` with the lease cap planted out for a writer given back unkept (`SameWriterUncapped`):
+ * a reconnect that gets its old writer again, not kept, caps nothing, so a later lease's change
+ * under that writer can be read as this client's own. */
+export function withSameWriterUncapped<T>(f: () => T): T {
+  type C = { capsOldWriter(old: number, client: number, lease: string | undefined): boolean };
+  const spy = vi
+    .spyOn(LiveText.prototype as unknown as C, "capsOldWriter")
+    .mockImplementation((old, client, lease) => lease !== undefined && old !== client);
+  try {
+    return f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 /** Run `f` with the keyed watch's gap check planted out (`GapNotDetected`): a `KeyedWatch` takes
  * a frame after a skipped `seq` as the next one, and asks for no snapshot. */
 export function withGapUndetected<T>(f: () => T): T {

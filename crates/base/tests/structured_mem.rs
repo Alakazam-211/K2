@@ -176,7 +176,7 @@ fn per_element(n_small: usize, n_big: usize, len: usize) -> (f64, f64, f64) {
 }
 
 #[test]
-#[ignore = "measurement: run on a compute node (release, --ignored --nocapture)"]
+#[ignore = "measurement: run by tools/tests/grid.sh (release, --ignored --nocapture)"]
 fn measure_memory_per_row_and_cell() {
     let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     for len in [8usize, 20, 64] {
@@ -278,7 +278,7 @@ fn cell_set_latency(rows: usize, n: usize) -> (Doc, Duration) {
 }
 
 #[test]
-#[ignore = "measurement: run on a compute node (release, --ignored --nocapture)"]
+#[ignore = "measurement: run by tools/tests/grid.sh (release, --ignored --nocapture)"]
 fn measure_cell_set_latency_at_the_cap() {
     let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     // below the cap, to find where p99 <= 50 ms holds on this machine
@@ -302,7 +302,7 @@ fn measure_cell_set_latency_at_the_cap() {
 }
 
 #[test]
-#[ignore = "measurement: run on a compute node (release, --ignored --nocapture)"]
+#[ignore = "measurement: run by tools/tests/grid.sh (release, --ignored --nocapture)"]
 fn measure_sort_and_block_move() {
     let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     for rows in [1_000usize, 10_000] {

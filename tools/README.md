@@ -81,6 +81,28 @@ k2 compute run <node> --repo <repo> [--sha REV] --needs rust@stable,cargo-nextes
   minimal profile, under the job dir; about 15 s) for those steps only, and says so; test
   steps keep the node's.
 
+### What each part runs: the target scan
+
+`tools/targets.txt` lists every test target of the workspace and the fuzz crate (lib unit
+tests, doc examples, bins, integration tests, examples, fuzz targets), every feature of their
+manifests, and each `#[ignore]` still waiting on a runner: `PACKAGE|KIND|NAME|FEATURES|PARTS`,
+the parts of `tests/full.sh` that run each target with those features, or why none does
+(`built-only:PART: ...`, `excluded: ...`). `tools/check-targets.sh` (text only: no cargo, no
+build) reads the manifests, the sources and `full.sh`'s commands and fails on a target or
+feature with no row, a row with no target, a part that doesn't run (or build) what its row
+says, a test-only feature no named part turns on, and an `#[ignore]` whose reason names no
+runner: a script (`tools/.../x.sh`) that names the test, or `run by name: PATH`, a file that
+names it and says how. A row holding `pending ruling` is allowed while its ruling is
+outstanding and counted; `CHECK_TARGETS_LANDING=1` makes each one a finding, for the commit
+that lands a change. The `evidence` part runs the check and its self-test
+(`tools/test-check-targets.sh`: one planted case per finding kind, each refused alone, and a
+pending row refused in landing mode only).
+
+The `plants` part runs each test-only plant alone over the suite whose rows must catch it,
+after a control of that suite with no plant (`tests/plants.sh`): a plant is CAUGHT only when
+exactly its named rows fail, each at its own assertion (where and with what message); anything
+else, a plant no named row catches included, is a finding.
+
 ### The fallback: env-chunk bundles
 
 Only for a runner that can't ship a checkout. `test-bundle.sh` writes a self-contained job
@@ -148,7 +170,7 @@ gate.
 | `n1/n1.sh layout-index <tag> <dir>`, then `node-index <dir>` | `old` (the tag's kit) and `index-consumer` (`n1/consumer-index`) + the stores this build and the previous release write | < 3 min | the structure index's row format 2 (the view items), both ways: the previous release reads this build's format-1 rows, finds a doc indexed only under a pack's bumped format pending (it never reads that format-2 row), indexes it under its own and writes a store of its own; this build reads both stores, every format-1 row with its view items absent, and indexes them again (`N-1 INDEX OK`) |
 | `n1/n1.sh layout-carrier <tag> <dir>`, then `node-carrier <dir>` | `old` (the tag's kit) and `carrier` (`n1/consumer-carrier` + a store this build wrote) | < 3 min | the carrier's N−1 check both ways: the previous release's gc keeps every carrier (`HELD`), it writes a doc with its own encode, refuses a rewrite, leaves the row and count on a delete and writes a store of its own; this build then drops the stale carrier and takes the file, reads the untouched one from the store, gives the deleted doc's count back, and opens the older store with the file as the carrier (`N-1 CARRIER OK`) |
 | `n1/n1.sh layout-pairing <tag> <dir>`, then `node-pairing <dir>` | `old` (the tag's kit) and `pairing` (`n1/consumer-pairing` + a store this build wrote) | < 3 min | the carrier's pairing N−1 check both ways: the previous release ignores `carrier_pairings` (writes a doc with its own encode, deletes one), refuses a rewrite naming it and writes a store of its own; this build then opens the untouched doc on its stored pairing, makes the written doc's again, finds the deleted doc's rows swept after its rewrite, and opens the older store with the pairing made from its synced state, each with a verb spliced exactly (`N-1 PAIRING OK`) |
-| `n1/n1.sh layout-format <tag> <dir>`, then `node-format <dir>` | `old` (the tag's kit) and `format` (`n1/consumer-format` + the stores both builds write) | < 3 min | store format 8's N−1 check both ways: the previous release refuses each format-8 store this build stamped by hand (the word naming chunked, native, both) at open with one line, its bytes unchanged, and writes a store of its own; this build opens that store as before, the chunked one, and refuses the two that set native (`N-1 FORMAT OK`) |
+| `n1/n1.sh layout-format <tag> <dir>`, then `node-format <dir>` | `old` (the tag's kit) and `format` (`n1/consumer-format` + the stores both builds write) | < 3 min | store format 8's N−1 check both ways, by the previous release's read range: one that reads up to format 7 (v0.14.0 to v0.18.0) refuses each format-8 store this build stamped by hand (the word naming chunked, native, both) at open with one line; one that reads format 8 (v0.19.0 on) opens the chunked store and reads its doc as this build wrote it (its versions and text), and refuses the two that set native with one line; a refused file's bytes are unchanged, and the opened one keeps its format, word and versions (an open commits a write transaction, so its bytes change); then it writes a store of its own; this build opens that store as before, the chunked one, and refuses the two that set native (`N-1 FORMAT OK`) |
 | `n1/n1.sh layout-demote <tag> <dir>`, then `node-demote <dir>` | `old` (the tag's kit) and `demote` (`n1/consumer-demote` + the stores both builds write) | < 3 min | the text → tier 0 demotion's N−1 check both ways: the previous release reads this build's demoted docs at tier 0 (every version exactly), is refused a text open (`PackMismatch`), a purge and an erasure (`NewerData`), writes a version and deletes a doc; this build sweeps the deleted doc's live log, reads the other's and purges; then the previous release writes a text doc with a change the file never got and an outside save, and this build demotes it, keeping both (`N-1 DEMOTE OK`) |
 
 A run, **always with an explicit `--mem`**. Run cargo with the host's `K2_*`/`K2SO_*`
@@ -221,7 +243,7 @@ merged into main:** main merges the pre-cut commit (`tag^`), which keeps everyth
 
 | Script | What it does |
 |---|---|
-| `public-cut.sh [--no-commit] [--lock FILE] [--hold FILE] [--trailer TEXT]...` | Run at the root of a clean checkout of the release branch (never main): removes every `vendor/mpce*` but the allowlist's, the crates the allowlist drops (the conformance suite), the engine-only features (`native`, and every feature derived from removed ones, to a fixed point), engine dependencies from every dependency table, the trees in `DROPPED_TREES` (tooling no host builds or runs, and the evidence run records, `docs/evidence/runs`: main keeps and checks them; the conformance matrix document, which main keeps with its suite, and the person-writer reuse plan in `docs/design/`, which main keeps), the code under cfgs on removed features, the tooling's parts for them, what `public-cut: drop` marker lines enclose in a Markdown file or a `Cargo.toml`, and the lockfile's removed packages (removals only); then runs `check-public-cut.sh` and commits. Idempotent: on a cut tree it changes nothing and commits nothing. `--no-commit` is a dry run (allowed detached and on a dirty tree). `--hold FILE` (or `PUBLIC_CUT_HOLD`) reads an external hold list, kept outside the tree: paths named in it are taken from the given ref, and a patch after them is applied, before the cut's own steps; without one nothing of it runs. The cut's gate makes the cut again from the pre-cut commit with the same list in its environment. Its header has the rules; a case it can't decide (a feature mixing engine parts with an optional dependency, an unknown cfg form) stops it, to decide by hand |
+| `public-cut.sh [--no-commit] [--lock FILE] [--hold FILE] [--trailer TEXT]...` | Run at the root of a clean checkout of the release branch (never main): removes every `vendor/mpce*` but the allowlist's, the crates the allowlist drops (the conformance suite), the engine-only features (`native`, and every feature derived from removed ones, to a fixed point), engine dependencies from every dependency table, the trees in `DROPPED_TREES` (tooling no host builds or runs, and the evidence run records, `docs/evidence/runs`: main keeps and checks them; the conformance matrix document, which main keeps with its suite, and the person-writer reuse plan in `docs/design/`, which main keeps), the code under cfgs on removed features, the tooling's parts for them, what `public-cut: drop` marker lines enclose in a Markdown file or a `Cargo.toml`, and the lockfile's removed packages (removals only); then runs `check-public-cut.sh` and commits. Idempotent: on a cut tree it changes nothing and commits nothing. `--no-commit` is a dry run (allowed detached and on a dirty tree). `--hold FILE` (or `PUBLIC_CUT_HOLD`) reads an external hold list, kept outside the tree: paths named in it are taken from the given ref, and a patch after them is applied, before the cut's own steps; without one nothing of it runs. The guarded paths (`HOLD_GUARDED` in the script: `vendor/README.md`, the text about the vendored engine trees) must be taken: every line of each must be a line of its taken ref's copy or a line the hold patch adds to it, else the cut stops, naming line numbers only. The cut's gate makes the cut again from the pre-cut commit with the same list in its environment. Its header has the rules; a case it can't decide (a feature mixing engine parts with an optional dependency, an unknown cfg form) stops it, to decide by hand |
 | `check-public-cut.sh [ROOT]` | Fails closed (exit 1, naming every offending path or entry) unless the tree may be a public cut: both licence files; no engine path, manifest entry, lock entry or engine identifier outside `PUBLIC_ENGINE_CRATES`; no engine-only feature declared, requested or left enabled; every cfg names a declared feature; no dropped crate or engine feature in the tooling; every pinned regression present; no file under `DROPPED_TREES` and no reference to one (`DROPPED_REFS`, in any kept text file but a CHANGELOG, `vendor/` or the two cut scripts); no line added since the previous host release uses a term in `TEXT_TERMS`, unless reviewed (below; a file renamed with at least 75% of its text the same counts only its changed lines); no kept text file holds an internal label (`LABEL_PATTERNS`: a requirement id outside the error registry's rule column, an ask label, a plan slice, a numbered contract gap, a `KC` item, a pointer to an unpublished requirements document; in prose, `LABEL_PROSE_PATTERNS`: a release-line name, an amendment label, an unnumbered plan slice, an engine-answer label, a plan stage, a parity-row or plan-item label (a table row's first cell may hold a parity row's id), a finding label, a run label; the rule column holds no release-line or amendment label; anywhere, a branch name and an engine code with no entry in the public registry; `LABEL_EXEMPT` names the files read as data); `check-private.sh` clean. The allowlist (`PUBLIC_ENGINE_CRATES`, `NATIVE_FEATURES`, `DROPPED_CRATES`, `DROPPED_FILES`, `LICENCE_FILES`, `DROPPED_TREES`, `DROPPED_REFS`, `TEXT_TERMS`, `LABEL_PATTERNS`, `LABEL_PROSE_PATTERNS`, `LABEL_EXEMPT`) is at its top, the one place to change it; `--print-config` prints it |
 | `public-text-base` | The text rule's base: the previous host release's pre-cut commit (`tag^`), one full sha. Missing, not tracked or not an ancestor of HEAD blocks the tag. A job's checkout has the history and no tags, so a sha it is |
 | `public-text-exceptions.txt` | The lines the text rule found and a person reviewed and kept, one `PATH: TEXT` each (the whole added line, trimmed). An entry covers that exact text in that file, so a changed line or another line of the file still blocks, and a moved one needs no update. Line numbers would go stale with each edit above them, and a hash would hide what was reviewed. An entry matching no added line blocks too, so none outlives its base |
@@ -489,8 +511,26 @@ kit's own code, byte for byte; the job skips the kit's other dependencies.
 In a `--repo` job the whole tree travels and the real kit is built: the same `text` module,
 with the kit's other dependencies.
 
+### One trace, by name
+
+Two `#[ignore]`d tests replay a single trace for debugging; no job runs them, and each fails
+without its variable (there is nothing to replay):
+
+```sh
+# a trace of crates/spec-undo/tests/traces.rs with its whole log (SPEC_UNDO_GROUP=1: a grouping trace)
+SPEC_UNDO_SEED=<n> cargo test -p k2-mpc-spec-undo --test traces replay_one -- --ignored --nocapture
+# a grid trace of crates/spec-undo/tests/grid_traces.rs, printed (GRID_ONE_MUTANT=<name>: under a mutant)
+GRID_ONE=<class>:<seed> cargo test -p k2-mpc-spec-undo --test grid_traces grid_trace_one -- --ignored --nocapture
+```
+
 
 ## Performance harness
+
+**The measurements** (`tools/perf/measure.sh`, a commands file for `tools/job.sh`): the
+`#[ignore]`d tests whose figures a design or evidence note cites, one cell per job (`--env
+CELL=...`, the list in its header), in release on a node; each cell prints its command and
+fails if its filter runs no test. The folder cells (`vs-dir`, `vs-samples`) run only where
+their files are and print counts and sizes only.
 
 `tools/perf/` (crate `k2-mpc-perf`, its own workspace, never a member of the kit's): the kit's
 paths timed at 10k, 100k and 1M versions, p50/p95/p99 per path, two builds paired in one job.

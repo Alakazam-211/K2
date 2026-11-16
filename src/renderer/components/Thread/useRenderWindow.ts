@@ -83,6 +83,9 @@ export interface RenderWindow extends WindowRange {
   growTop: () => boolean
   /** The scroller scrolled (call from its scroll handler). */
   onScroll: () => void
+  /** The caller wrote the scroller's scrollTop itself (holding a row while
+   *  a page lands above): its scroll event is not the reader moving. */
+  wrote: () => void
   /** Draw the row `key` (a search's match). True once it is or will be
    *  drawn on the next commit; false when it isn't in memory. The caller
    *  scrolls it into view (and stops following the newest first). */
@@ -140,6 +143,20 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
       // 0: not laid out (hidden); it counts as never measured.
       if (key && px[i] > 0) heights.current.px.set(key, px[i])
     })
+  }
+
+  /** The window (or its caller) wrote the scroller's scrollTop: holding a
+   *  row still, the stick, a page landing above. The scroll event that
+   *  write fires is not the reader moving, so the direction is measured
+   *  from here. Counted as the reader, a write that holds a row as the
+   *  window leaves the first row in memory ("Earlier messages" goes, the
+   *  rows move up) read as the reader turning back; the window grew at the
+   *  other end, the button came back, the opposite write read as another
+   *  turn: a window change and a scroll write every frame, forever, and in
+   *  WebKit each programmatic scroll stops the reader's own (Rosson,
+   *  0.46.12: "it gets stuck and then I can't scroll down or up"). */
+  function movedByWindow(el: HTMLElement): void {
+    lastTop.current = el.scrollTop
   }
 
   /** Draw another window. `hold`: keep the row under the reader's eye
@@ -310,6 +327,7 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
       const dy = a.el.offsetTop - a.top
       if (Math.abs(dy) >= 1) {
         el.scrollTop += dy
+        movedByWindow(el)
         onScrollWrite?.(el.scrollTop)
       }
     }
@@ -317,6 +335,7 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
       stickNext.current = false
       if (el && following()) {
         stick(el)
+        movedByWindow(el)
         onScrollWrite?.(el.scrollTop)
       }
     }
@@ -358,6 +377,12 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
     scheduleIdle.current()
   }, [])
 
+  const wrote = useCallback((): void => {
+    const el = opts.current.scroller()
+    if (el) movedByWindow(el)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const show = useCallback((key: string): boolean => {
     const k = opts.current.keys
     const at = k.indexOf(key)
@@ -391,6 +416,7 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
     toNewest,
     growTop,
     onScroll,
+    wrote,
     show,
     holdOldest,
   }

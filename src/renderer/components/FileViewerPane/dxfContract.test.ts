@@ -93,6 +93,15 @@ describe('O4 #5: rational spline weights (group 41)', () => {
   })
 })
 
+describe('TEXT "Middle" (72 = 4)', () => {
+  it('is centred both ways on the second point: half the cap height below its baseline', () => {
+    const [t] = of(buildDrawing(fixture('dxf-text-middle.dxf')).nodes, 'text')
+    expect([t.x, t.y, t.anchor]).toEqual([50, 0, 'middle'])
+    // y0 is the baseline, down from the anchor: the caps span +5 to -5 about the point.
+    expect(t.y0).toBe(5)
+  })
+})
+
 describe('O4 #4: a DXF text height is the cap height', () => {
   const text = fixture('dxf-cap-height.dxf')
 

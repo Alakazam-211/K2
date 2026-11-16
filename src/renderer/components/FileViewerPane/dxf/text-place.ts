@@ -4,7 +4,8 @@
 //   - aligned (72 = 3) and fit (72 = 5): from the first point to the second
 //     (11), along that line, stretched to its length. Fit keeps its height;
 //     aligned scales its height with its width;
-//   - every other alignment: at the second point.
+//   - every other alignment: at the second point. "Middle" (72 = 4) is
+//     centred both ways there, vertically on the cap height.
 
 import type { ITextEntity } from 'dxf-parser'
 import type { TextMetrics } from './text-metrics'
@@ -43,6 +44,7 @@ export function placeText(t: ITextEntity, line: string, m: TextMetrics): TextPla
   }
   const at = (t.halign || t.valign) && t.endPoint ? { x: num(t.endPoint.x), y: num(t.endPoint.y) } : p1
   const anchor = t.halign === 1 || t.halign === 4 ? 'middle' : t.halign === 2 ? 'end' : 'start'
-  const y0 = t.valign === 3 ? h : t.valign === 2 ? h / 2 : t.valign === 1 ? -0.2 * h : 0
+  // "Middle" (72 = 4) centres on the cap height, as middle (73 = 2) does.
+  const y0 = t.valign === 3 ? h : t.valign === 2 || t.halign === 4 ? h / 2 : t.valign === 1 ? -0.2 * h : 0
   return { ...at, h, rot: num(t.rotation), anchor, y0 }
 }

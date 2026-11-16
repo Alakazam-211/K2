@@ -23,7 +23,7 @@ export const OVERLAY_CSS = `
 .lv-scene-hero .lv-dir[data-fading] { animation: lv-fadeout var(--motion-duration-slow) var(--motion-ease-standard) .15s forwards; }
 
 /* Labels: placed in the stage's pixels by labels.ts */
-.lv-scene-hero .lv-callout { position: absolute; display: flex; align-items: center; gap: 8px; width: max-content; max-width: min(46%, 440px); padding: 6px 6px 6px 12px; font-size: var(--type-md); line-height: 1.35; color: var(--color-text-primary); background: var(--lv-plate); border: 1px solid var(--lv-c); box-shadow: var(--shadow-2); pointer-events: auto; cursor: help; z-index: 1; }
+.lv-scene-hero .lv-callout { position: absolute; display: flex; align-items: center; gap: 8px; width: max-content; max-width: min(520px, calc(100% - 48px)); padding: 6px 6px 6px 12px; font-size: var(--type-md); line-height: 1.35; color: var(--color-text-primary); background: var(--lv-plate); border: 1px solid var(--lv-c); box-shadow: var(--shadow-2); pointer-events: auto; cursor: help; z-index: 1; }
 [data-style="glass"] .lv-scene-hero .lv-callout { border-radius: var(--radius-box); }
 .lv-scene-hero .lv-callout b { font-weight: 650; }
 .lv-scene-hero .lv-callout .lv-lk { display: grid; flex: none; color: var(--lv-c); }

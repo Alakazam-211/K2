@@ -18,6 +18,7 @@ import { loadHostBinary } from '@/lib/load-host-binary'
 import { useDocVersion } from './useDocVersion'
 import { ViewerNote } from './ViewerNote'
 import type { Bounds, DxfDrawing, DxfNode } from './dxfModel'
+import { pageTextMetrics } from './dxf/text-metrics'
 
 type Box = { x: number; y: number; w: number; h: number }
 
@@ -70,7 +71,7 @@ function renderNode(node: DxfNode, key: number): ReactNode {
         <text
           key={key}
           transform={`translate(${node.x} ${node.y}) scale(1 -1)${node.rot ? ` rotate(${-node.rot})` : ''}`}
-          fontSize={node.h}
+          fontSize={node.fs}
           textAnchor={node.anchor}
           fill={node.c}
           stroke="none"
@@ -100,7 +101,7 @@ function renderNode(node: DxfNode, key: number): ReactNode {
 /** The drawing itself; memoised so pan/zoom never re-renders it. */
 const DxfShapes = memo(function DxfShapes({ nodes }: { nodes: DxfNode[] }) {
   return (
-    <g transform="scale(1 -1)" fill="none" strokeWidth={1} data-testid="dxf-shapes">
+    <g transform="scale(1 -1)" fill="none" strokeWidth={1} style={{ fontFamily: 'var(--font-ui)' }} data-testid="dxf-shapes">
       {nodes.map(renderNode)}
     </g>
   )
@@ -118,9 +119,10 @@ export function DxfViewer({ text }: { text: string }): React.JSX.Element {
     let cancelled = false
     setDrawing(null)
     setError(null)
-    import('./dxfModel')
-      .then((m) => {
-        const d = m.buildDrawing(text)
+    // Text is sized by the UI font's measured capitals (a DXF height is the cap height).
+    Promise.all([import('./dxfModel'), pageTextMetrics()])
+      .then(([m, metrics]) => {
+        const d = m.buildDrawing(text, metrics)
         if (!cancelled) setDrawing(d)
       })
       .catch((e: unknown) => {

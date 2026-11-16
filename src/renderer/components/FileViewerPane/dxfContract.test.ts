@@ -29,3 +29,21 @@ describe('O4 #2: a layer frozen only in new viewports', () => {
     expect(d.drawn).toBe(3)
   })
 })
+
+describe('O4 #4: a DXF text height is the cap height', () => {
+  const text = fixture('dxf-cap-height.dxf')
+
+  it('the font is scaled so capitals measure h (0.7 cap ratio until the page measures its font)', () => {
+    const t = of(buildDrawing(text).nodes, 'text')
+    expect(t).toHaveLength(2)
+    for (const n of t) {
+      expect(n.h).toBe(10)
+      expect(n.fs).toBeCloseTo(10 / 0.7, 9)
+    }
+  })
+
+  it('uses the measured cap ratio of the font the page draws in', () => {
+    const t = of(buildDrawing(text, { cap: 0.75, advance: (s) => s.length * 0.6 }).nodes, 'text')
+    expect(t.map((n) => n.fs)).toEqual([10 / 0.75, 10 / 0.75])
+  })
+})

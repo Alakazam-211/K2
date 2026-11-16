@@ -113,6 +113,14 @@ describe('DxfViewer', () => {
     expect(screen.queryByTestId('dxf-skipped')).toBeNull()
   })
 
+  it('a DXF text height is the cap height: the font size is h over the cap ratio, in the UI font', async () => {
+    renderInPrimaryRoom(<DxfViewer text={DXF_FIXTURE} />)
+    const svg = await screen.findByTestId('dxf-svg')
+    // TEXT height 5; jsdom paints nothing, so the 0.7 estimate stands in.
+    expect(Number(svg.querySelector('text')!.getAttribute('font-size'))).toBeCloseTo(5 / 0.7, 9)
+    expect(screen.getByTestId('dxf-shapes').style.fontFamily).toBe('var(--font-ui)')
+  })
+
   it('wheel zooms around the cursor; Fit and double-click restore the fitted view', async () => {
     renderInPrimaryRoom(<DxfViewer text={DXF_FIXTURE} />)
     const svg = await screen.findByTestId('dxf-svg')

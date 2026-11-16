@@ -26,6 +26,7 @@ import type {
 import { entityColor, FG, hex } from './dxf/color'
 import { layerFlags, layerHidden } from './dxf/layers'
 import { readExtras } from './dxf/parse-extras'
+import { ESTIMATED_METRICS, fontSizeFor, type TextMetrics } from './dxf/text-metrics'
 
 /** Affine 2D: x' = a·x + c·y + e, y' = b·x + d·y + f (SVG `matrix()`). */
 export type Mat = [number, number, number, number, number, number]
@@ -38,8 +39,10 @@ export type DxfNode =
       k: 'text'
       x: number
       y: number
-      /** Cap height (font-size), DXF units. */
+      /** Cap height, DXF units: a DXF text height. */
       h: number
+      /** Font size that gives capitals of height `h`, DXF units. */
+      fs: number
       /** Degrees, counter-clockwise. */
       rot: number
       lines: string[]
@@ -234,7 +237,7 @@ type Ctx = {
   insertLayer: string | null
 }
 
-export function buildDrawing(text: string): DxfDrawing {
+export function buildDrawing(text: string, metrics: TextMetrics = ESTIMATED_METRICS): DxfDrawing {
   if (isBinaryDxf(text)) throw new Error('Binary DXF is not supported. Save it as ASCII DXF.')
   const parser = new DxfParser()
   readExtras(parser)
@@ -245,13 +248,14 @@ export function buildDrawing(text: string): DxfDrawing {
     throw new Error(`This DXF could not be read: ${e instanceof Error ? e.message : String(e)}`)
   }
   if (!dxf) throw new Error('This DXF could not be read.')
-  return drawingFromDxf(dxf, censusEntities(text), layerFlags(text))
+  return drawingFromDxf(dxf, censusEntities(text), layerFlags(text), metrics)
 }
 
 export function drawingFromDxf(
   dxf: IDxf,
   census: Record<string, number> = {},
   flags: Map<string, number> = new Map(),
+  metrics: TextMetrics = ESTIMATED_METRICS,
 ): DxfDrawing {
   const layers = new Map<string, LayerInfo>()
   for (const [name, l] of Object.entries(dxf.tables?.layer?.layers ?? {})) {
@@ -358,7 +362,7 @@ export function drawingFromDxf(
     ]) {
       add(ctx.m, x + px * Math.cos(r) - py * Math.sin(r), y + px * Math.sin(r) + py * Math.cos(r))
     }
-    return { k: 'text', x, y, h, rot, lines, anchor, y0, lh, c }
+    return { k: 'text', x, y, h, fs: fontSizeFor(h, metrics), rot, lines, anchor, y0, lh, c }
   }
 
   function entity(e: IEntity, ctx: Ctx, top: boolean): DxfNode | null {

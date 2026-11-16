@@ -1,0 +1,72 @@
+    {
+      "name": "api-key",
+      "usage": "k2 api-key <create|list|hire-ceiling|revoke|disable|enable> ...",
+      "description": "API keys for the public /v1 API. Owner only (every route is owner-gated). Capabilities gate which /v1 doors a key may open: host-sessions (default on for new keys), canonical-message, sandboxes, db (default off), and hire with --hire. Not k2 workspace api-key (a workspace's Anthropic key). No --help: a bare or unknown verb prints the usage and exits 1.",
+      "args": [{"name": "verb", "required": true, "description": "create | list | hire-ceiling | revoke | disable | enable"}],
+      "flags": []
+    },
+    {
+      "name": "api-key create",
+      "usage": "k2 api-key create [--label L] [--key-stdin] [--provider anthropic|openai|google|xai] [--base-url U] [--workspaces '*'|ws1,ws2] [--allow caps] [--deny caps] [--hire [--max-per-day N] [--max-live N] [--max-per-team N] [--hire-db off|read|write] [--link] [--link-targets ws1,ws2] [--retire] [--reach none|message|host-sessions] [--folder SUB] [--app-login APP[:ROOMS[:ROLES]]]...] | k2 api-key create --status [--label L]",
+      "description": "Mint a key; the raw key is printed once, store it then. Without --workspaces the key authorizes no workspace (every /v1/w/<ws>/* call 404s). A hire key asks for the owner confirm (Touch ID, login password or the vault password) even with the owner token; afterwards only its App access limit can change (hire-ceiling).",
+      "args": [],
+      "flags": [
+        {"name": "--label", "arg": "L", "description": "A label."},
+        {"name": "--status", "arg": null, "description": "A read-only status key (fleet monitor): reads this server's full /boot-status and opens nothing else. Takes --label only."},
+        {"name": "--key-stdin", "arg": null, "description": "Read the LLM credential staged into /v1 sessions from stdin (hidden prompt on a terminal). Never an argument."},
+        {"name": "--provider", "arg": "anthropic|openai|google|xai", "description": "Which env var the credential stages into (default anthropic)."},
+        {"name": "--base-url", "arg": "U", "description": "A base URL for the provider (openai)."},
+        {"name": "--workspaces", "arg": "'*'|ws1,ws2", "description": "The workspace grant: '*' for every workspace, or a list of names."},
+        {"name": "--allow", "arg": "caps", "description": "Comma list of host-sessions, canonical-message, sandboxes, db: replaces the default set."},
+        {"name": "--deny", "arg": "caps", "description": "Comma list: turns these doors off on top of the result."},
+        {"name": "--hire", "arg": null, "description": "The key may hire agents (/v1/agents/*, /v1/agent-teams/*); hire-only unless --allow names other doors. Defaults 20/day, 100 live, 12 per team, db off, no link, retire or reach."},
+        {"name": "--max-per-day", "arg": "N", "description": "With --hire."},
+        {"name": "--max-live", "arg": "N", "description": "With --hire."},
+        {"name": "--max-per-team", "arg": "N", "description": "With --hire."},
+        {"name": "--hire-db", "arg": "off|read|write", "description": "With --hire."},
+        {"name": "--link", "arg": null, "description": "With --hire."},
+        {"name": "--link-targets", "arg": "ws1,ws2", "description": "With --hire."},
+        {"name": "--retire", "arg": null, "description": "With --hire."},
+        {"name": "--reach", "arg": "none|message|host-sessions", "description": "With --hire."},
+        {"name": "--folder", "arg": "SUB", "description": "With --hire."},
+        {"name": "--app-login", "arg": "APP[:ROOMS[:ROLES]]", "description": "With --hire (repeatable): an App hired agents may get a login on, its rooms (self = the hired agent's own) and highest role."}
+      ]
+    },
+    {
+      "name": "api-key list",
+      "usage": "k2 api-key list",
+      "description": "Every key: id, state (active, disabled, revoked), label, LLM credential, scope and capabilities, and a hire key's App access. Never the key.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "api-key hire-ceiling",
+      "usage": "k2 api-key hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)",
+      "description": "A hire key's App access limit: the App, rooms (self = the hired agent's own) and highest role its agents may get. Replaces the whole limit. Widening asks for the owner confirm; lowering doesn't. Also app-access.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--app-login", "arg": "APP[:ROOMS[:ROLE]]", "description": "Repeatable."},
+        {"name": "--none", "arg": null, "description": "No App access. Not with --app-login."}
+      ]
+    },
+    {
+      "name": "api-key revoke",
+      "usage": "k2 api-key revoke <id>",
+      "description": "Permanent: the same secret can't be enabled again.",
+      "args": [{"name": "id", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "api-key disable",
+      "usage": "k2 api-key disable <id>",
+      "description": "Soft emergency kill (k2 api-key enable undoes it).",
+      "args": [{"name": "id", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "api-key enable",
+      "usage": "k2 api-key enable <id>",
+      "description": "Clear a soft disable.",
+      "args": [{"name": "id", "required": true}],
+      "flags": []
+    },

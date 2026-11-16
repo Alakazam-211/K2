@@ -2557,6 +2557,7 @@ except Exception as e:
             echo "  hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)" >&2
             echo "                 A hire key's App access limit: the App, rooms (self = the hired agent's own)" >&2
             echo "                 and highest role its agents may get. Widening asks for the owner confirm." >&2
+            echo "                 Also app-access." >&2
             echo "  disable <id>   Soft emergency kill (re-enableable)" >&2
             echo "  enable  <id>   Clear soft-disable" >&2
             echo "  revoke  <id>   Permanent (cannot re-enable same secret)" >&2

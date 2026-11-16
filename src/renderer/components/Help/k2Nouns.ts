@@ -260,6 +260,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'setup', blurb: 'Your setup list on this server: what is done, what is left.', example: 'k2 setup' },
       { noun: 'push', blurb: "The phones that get this server's pushes, and encrypted pushes.", example: 'k2 push devices' },
       { noun: 'notifications', blurb: "The senders K2's notification mail leaves from, and your notice address.", example: 'k2 notifications email' },
+      { noun: 'api-key', blurb: 'Keys for the public /v1 API (owner only): which workspaces and doors each opens.', example: 'k2 api-key list' },
       { noun: 'vault', blurb: 'Secrets: fetch by name, never paste.', example: 'k2 vault list' },
       { noun: 'job', blurb: 'Scripts on a schedule, run by the daemon with their own secrets.', example: 'k2 job list' },
       { noun: 'update', blurb: 'Update the K2 app (the CLI updates with it).', example: 'k2 update --app' },

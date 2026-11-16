@@ -10,6 +10,8 @@
 //! | a comment op (`AuditEvent::Annotation`) | `roster_event {kind: "comment_event", thread, comment, op, author, at_ms, anchor}` | sockets on that doc, readers only |
 //! | an anchor's state moved (`AuditEvent::AnchorState`) | `roster_event {kind: "anchor_state", thread, rev, was, now}` | the same |
 //!
+//! | an outside save of a **text** doc's file (`AuditEvent::ExternalEdit`, `FileMissing`, `FileDeclined`) | `outside_save {at_ms, doc, outcome, rev? / code, message}`, the keyed watch's frame (`ingested`, `missing`, `declined`) | that text doc's sockets, readers only |
+//! | an agent's verb on a **text** doc refused (`POST /cli/docs/tool`) | `verb_refused {at_ms, actor, client, turn, verb, unit: null, code, holder, claim}`, the keyed watch's frame | the same |
 //! | someone said something in the doc's live room (`POST /cli/docs/say`, [`super::say`]) | `say {id, from, to, text, at, time, reply_to, at_ms}` (`from`/`to` actor records; `to`, `at`, `time`, `reply_to` null when absent) | sockets on that doc, readers only |
 //!
 //! **Never content.** A preview names a hash, a turn its id and actor, a
@@ -67,6 +69,24 @@ pub enum HostEvent {
     Comment { key: DocKey, thread: String, comment: Option<u32>, op: String, author: String, at_ms: u64, anchor: Option<String> },
     /// A thread's anchor changed state at `version`.
     AnchorState { key: DocKey, thread: String, version: u64, was: Option<String>, now: String },
+    /// What came of an outside save of a **text** doc's file, as the keyed
+    /// watch's `outside_save` frame: `ingested` (`rev`), `missing`, or
+    /// `declined` (`code`). A keyed doc's watch gets the kit's own.
+    OutsideSave { key: DocKey, at_ms: u64, outcome: &'static str, rev: Option<u64>, code: Option<&'static str> },
+    /// An agent's verb on a **text** doc was refused (the tool route saw
+    /// it), as the keyed watch's `verb_refused`: `actor` and `holder` pids,
+    /// `claim` the refusing claim's id.
+    VerbRefused {
+        key: DocKey,
+        at_ms: u64,
+        actor: String,
+        client: u64,
+        turn: Option<String>,
+        verb: String,
+        code: String,
+        holder: Option<String>,
+        claim: Option<String>,
+    },
     /// Someone watching the doc said something in its live room
     /// ([`super::say`]): to one participant (`to`, a pid) or the room.
     Say {
@@ -90,6 +110,8 @@ impl HostEvent {
             | HostEvent::PreviewRendering { key, .. }
             | HostEvent::Comment { key, .. }
             | HostEvent::AnchorState { key, .. }
+            | HostEvent::OutsideSave { key, .. }
+            | HostEvent::VerbRefused { key, .. }
             | HostEvent::Say { key, .. } => Some(key),
             HostEvent::TurnEnd { .. } => None,
         }
@@ -148,6 +170,37 @@ impl HostEvent {
                 ("was", was.as_deref().map_or(Value::Null, Value::from)),
                 ("now", Value::from(now.as_str())),
             ])),
+            // The kit's `outside_save` (client/WIRE.md "Outside saves"),
+            // field for field.
+            HostEvent::OutsideSave { key, at_ms, outcome, rev, code } => {
+                let mut f: Vec<(String, Value)> = vec![
+                    ("type".into(), Value::from("outside_save")),
+                    ("at_ms".into(), Value::from(*at_ms)),
+                    ("doc".into(), Value::from(key.path.as_str())),
+                    ("outcome".into(), Value::from(*outcome)),
+                ];
+                if let Some(r) = rev {
+                    f.push(("rev".into(), Value::from(*r)));
+                }
+                if let Some(c) = code {
+                    f.push(("code".into(), Value::from(*c)));
+                    f.push(("message".into(), Value::from(declined_message(c))));
+                }
+                Value::Obj(f)
+            }
+            // The kit's `verb_refused` (no unit: a text verb names lines).
+            HostEvent::VerbRefused { at_ms, actor, client, turn, verb, code, holder, claim, .. } => Value::obj([
+                ("type", Value::from("verb_refused")),
+                ("at_ms", Value::from(*at_ms)),
+                ("actor", author(actor)),
+                ("client", Value::from(*client)),
+                ("turn", turn.as_deref().map_or(Value::Null, Value::from)),
+                ("verb", Value::from(verb.as_str())),
+                ("unit", Value::Null),
+                ("code", Value::from(code.as_str())),
+                ("holder", holder.as_deref().map_or(Value::Null, &author)),
+                ("claim", claim.as_deref().map_or(Value::Null, Value::from)),
+            ]),
             HostEvent::Say { id, from, to, text, at, time, reply_to, at_ms, .. } => Value::obj([
                 ("type", Value::from("say")),
                 ("id", Value::from(id.as_str())),
@@ -160,6 +213,27 @@ impl HostEvent {
                 ("at_ms", Value::from(*at_ms)),
             ]),
         }
+    }
+}
+
+/// A declined file in plain words (the kit's audit event has the code only).
+pub fn declined_message(code: &str) -> String {
+    format!("the file can't be a live doc any more ({code}); the last live version is in its saved versions")
+}
+
+/// Whether `key` is a text doc (Markdown or the text pack): the docs whose
+/// sockets get K2's own `outside_save` and `verb_refused` (a keyed doc's
+/// watch gets the kit's).
+pub fn is_text_doc(key: &DocKey) -> bool {
+    matches!(super::target::Tier::of(&key.path), super::target::Tier::Markdown | super::target::Tier::Text(_))
+}
+
+/// An outside save of a text doc's file, to its sockets (called by the
+/// host's audit hook, under the session lock: a queue push only). Nothing
+/// for a keyed or any-file doc.
+pub fn outside_save_on_text(key: &DocKey, outcome: &'static str, rev: Option<u64>, code: Option<&'static str>, at_ms: u64) {
+    if is_text_doc(key) {
+        publish(HostEvent::OutsideSave { key: key.clone(), at_ms, outcome, rev, code });
     }
 }
 
@@ -327,6 +401,48 @@ mod tests {
         assert_eq!(
             st.frame(who).to_json(),
             r#"{"type":"roster_event","event":{"kind":"anchor_state","thread":"ann-3","rev":12,"was":"attached","now":"orphaned"}}"#
+        );
+    }
+
+    /// A text doc's outside save and refused verb go out as the keyed
+    /// watch's frames, field for field (client/WIRE.md "Outside saves",
+    /// `verb_refused`); a deck's aren't published (its watch has the kit's).
+    #[test]
+    fn a_text_docs_outside_save_and_refused_verb_take_the_keyed_watchs_shape() {
+        let md = key("host-events-text", "notes/plan.md");
+        let deck = key("host-events-text", "talk.pptx");
+        let (on_md, on_deck) = (subscribe(&md), subscribe(&deck));
+        assert!(is_text_doc(&md) && is_text_doc(&key("w", "src/main.rs")) && !is_text_doc(&deck) && !is_text_doc(&key("w", "a.png")));
+        outside_save_on_text(&md, "ingested", Some(12), None, 1_700_000_000_000);
+        outside_save_on_text(&deck, "ingested", Some(3), None, 1_700_000_000_000);
+        let ev = on_md.rx.try_recv().expect("the text doc's socket");
+        let name = |pid: &str| Value::obj([("id", Value::from(pid))]);
+        assert_eq!(ev.frame(name).to_json(), r#"{"type":"outside_save","at_ms":1700000000000,"doc":"notes/plan.md","outcome":"ingested","rev":12}"#);
+        assert!(on_deck.rx.try_recv().is_err(), "a keyed doc's watch has the kit's own frame");
+        outside_save_on_text(&md, "missing", None, None, 5);
+        assert_eq!(on_md.rx.try_recv().expect("missing").frame(name).to_json(), r#"{"type":"outside_save","at_ms":5,"doc":"notes/plan.md","outcome":"missing"}"#);
+        outside_save_on_text(&md, "declined", None, Some("too_large"), 6);
+        let f = on_md.rx.try_recv().expect("declined").frame(name).to_json();
+        assert!(
+            f.starts_with(r#"{"type":"outside_save","at_ms":6,"doc":"notes/plan.md","outcome":"declined","code":"too_large","message":"the file can't be a live doc any more (too_large)"#),
+            "{f}"
+        );
+
+        let refused = HostEvent::VerbRefused {
+            key: md.clone(),
+            at_ms: 9,
+            actor: "agent:atlas".into(),
+            client: 4,
+            turn: Some("t:ab.1".into()),
+            verb: "replace-section".into(),
+            code: "MPC-E301".into(),
+            holder: Some("agent:brook".into()),
+            claim: Some("claim-7".into()),
+        };
+        assert_eq!(refused.key(), Some(&md));
+        assert_eq!(
+            refused.frame(name).to_json(),
+            r#"{"type":"verb_refused","at_ms":9,"actor":{"id":"agent:atlas"},"client":4,"turn":"t:ab.1","verb":"replace-section","unit":null,"code":"MPC-E301","holder":{"id":"agent:brook"},"claim":"claim-7"}"#
         );
     }
 }

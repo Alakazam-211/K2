@@ -743,8 +743,16 @@ async fn the_live_socket_end_to_end() {
     assert!(msg.starts_with("An outside save may have removed your text"), "{msg}");
     assert!(msg.contains("typed by A"), "the note carries A's own text: {msg}");
     assert!(ev["version"].as_u64().is_some(), "the owner can open the version holding it: {ev}");
-    let (_, mut b_frames) = b.until("B sees the save", |f| ty(f) == "change" && f["event"]["pid"] == "kit:external").await;
+    let (save_change, mut b_frames) = b.until("B sees the save", |f| ty(f) == "change" && f["event"]["pid"] == "kit:external").await;
     b_frames.extend(b.drain(600).await);
+    // A text doc's sockets get the keyed watch's `outside_save` too (K2's,
+    // from the kit's audit event): ingested, at the save's change.
+    let saves: Vec<&J> = b_frames.iter().filter(|f| ty(f) == "outside_save").collect();
+    assert_eq!(saves.len(), 1, "one outside_save for one save: {b_frames:?}");
+    let os = saves[0];
+    assert_eq!((&os["outcome"], &os["doc"]), (&json!("ingested"), &json!("notes.md")), "{os}");
+    assert_eq!(os["rev"], save_change["event"]["version"], "the save's change: {os} {save_change}");
+    assert!(os["at_ms"].as_u64().is_some_and(|ms| ms > 0), "{os}");
     assert!(
         !b_frames.iter().any(|f| f["event"]["kind"] == "overwritten"),
         "B didn't write the line, so B isn't told: {b_frames:?}"

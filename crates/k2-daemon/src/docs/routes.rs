@@ -1734,8 +1734,16 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     let out = match s.run_tool_with(j.conn, ROOT, &argv, &stdin, &opts) {
         Ok(o) => o,
         Err(k2_mpc_base::tools::ToolRunError::Tool(e)) => return Ok(ok(tool_refused(c.target, &argv[0], &e))),
-        Err(k2_mpc_base::tools::ToolRunError::Session(e)) => return Err(VerbError::Session(e)),
+        Err(k2_mpc_base::tools::ToolRunError::Session(e)) => {
+            if is_edit {
+                text_verb_refused(c, j.client, &argv[0], &e.report().id().to_string(), holder_of(&e));
+            }
+            return Err(VerbError::Session(e));
+        }
     };
+    if let (true, Some(r)) = (is_edit, out.refusal.as_ref()) {
+        text_verb_refused(c, j.client, &argv[0], &r.id().to_string(), None);
+    }
     if !is_edit || out.changed.is_some() {
         super::claims::record_read(c.caller, &key, out.version);
     }
@@ -1780,6 +1788,38 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         }
     }
     Ok(ok(v))
+}
+
+/// Who holds what refused an edit (a claim on lines or elements: its id;
+/// a lease: none), for `verb_refused`'s `holder` and `claim`.
+pub(super) fn holder_of(e: &SessionError) -> Option<(String, Option<String>)> {
+    match e {
+        SessionError::Claimed { id, by, .. } => Some((by.clone(), Some(id.to_string()))),
+        SessionError::ElemsClaimed(c) => Some((c.by.clone(), Some(c.id.to_string()))),
+        SessionError::Leased { holder, .. } => Some((holder.clone(), None)),
+        _ => None,
+    }
+}
+
+/// An agent's edit verb on a **text** doc was refused: the doc's sockets
+/// get it as the keyed watch's `verb_refused` (the kit sends that frame to
+/// keyed watches only, which get their own). Nothing for any other doc.
+pub(super) fn text_verb_refused(c: &Call<'_>, client: u64, verb: &str, code: &str, holder: Option<(String, Option<String>)>) {
+    if !matches!(c.target.tier, target::Tier::Markdown | target::Tier::Text(_)) {
+        return;
+    }
+    let (holder, claim) = holder.map_or((None, None), |(h, cl)| (Some(h), cl));
+    super::host_events::publish(super::host_events::HostEvent::VerbRefused {
+        key: c.target.key(),
+        at_ms: host::now_ms(),
+        actor: c.caller.pid(),
+        client,
+        turn: c.turn.as_ref().map(|t| t.to_string()),
+        verb: verb.to_string(),
+        code: code.to_string(),
+        holder,
+        claim,
+    });
 }
 
 /// How a pid reads in a fence's contributors line: `Sam (person)`,

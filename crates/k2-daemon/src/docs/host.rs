@@ -307,14 +307,20 @@ impl Host for K2Host {
                 format!("{} change={seq} state={state:?}", key_label(key)),
             ),
             // Disk sync (kit C4): what happened to the file, metadata only.
+            // A text doc's sockets also get the outside save as the keyed
+            // watch's `outside_save` frame (the kit sends that frame to keyed
+            // watches only): [`super::host_events::outside_save_on_text`].
             AuditEvent::ExternalEdit { key, seq } => {
-                audit(AUDIT_FILE, EXTERNAL, format!("{} external_edit change={seq}", key_label(key)))
+                audit(AUDIT_FILE, EXTERNAL, format!("{} external_edit change={seq}", key_label(key)));
+                super::host_events::outside_save_on_text(key, "ingested", Some(*seq), None, now_ms());
             }
             AuditEvent::FileMissing { key, unflushed } => {
-                audit(AUDIT_FILE, EXTERNAL, format!("{} missing unflushed={unflushed}", key_label(key)))
+                audit(AUDIT_FILE, EXTERNAL, format!("{} missing unflushed={unflushed}", key_label(key)));
+                super::host_events::outside_save_on_text(key, "missing", None, None, now_ms());
             }
             AuditEvent::FileDeclined { key, code } => {
-                audit(AUDIT_FILE, EXTERNAL, format!("{} declined code={code}", key_label(key)))
+                audit(AUDIT_FILE, EXTERNAL, format!("{} declined code={code}", key_label(key)));
+                super::host_events::outside_save_on_text(key, "declined", None, Some(*code), now_ms());
             }
             AuditEvent::FileRestored { key } => audit(AUDIT_FILE, EXTERNAL, format!("{} restored", key_label(key))),
             // Kit v0.9.5: the file came back holding one of the kit's own

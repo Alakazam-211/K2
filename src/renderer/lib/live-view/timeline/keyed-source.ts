@@ -34,6 +34,8 @@ export interface KeyedSourceOptions {
   post: (body: { text: string; to: string; at?: string; time?: SayTime }) => Promise<unknown>
   /** The host clock now (ms); presence and changes read against it. */
   now?: () => number
+  /** Live but never changed here, and why (a format the pack reads but doesn't write back: live-map `readOnlyWhy`). */
+  readOnly?: string | null
 }
 
 const EMPTY_BOOK: Book = { rev: 0, lists: {}, hidden: {}, maps: {}, derived: { containers: {} } }
@@ -278,6 +280,7 @@ export class KeyedWatchTimelineSource implements LiveSource {
     const f = this.welcome?.features ?? []
     snap.features = { viewAddress: f.includes('view_address'), timePosition: f.includes('time_position'), say: true }
     snap.timeline.sequence = sequenceOf(M)
+    if (this.o.readOnly) snap.readOnly = this.o.readOnly
     if (this.extra.length) snap.messages = [...snap.messages, ...this.extra].sort((a, b) => a.at_ms - b.at_ms)
     return snap
   }

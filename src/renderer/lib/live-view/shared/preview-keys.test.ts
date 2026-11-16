@@ -38,6 +38,10 @@ describe('a file’s type', () => {
     expect(previewTypeFor('/ws/Budget.XLSX')).toBe('workbook')
     expect(previewTypeFor('/ws/scenes/living-room.blend')).toBe('scene')
     expect(previewTypeFor('/ws/edits/rough-cut.otio')).toBe('timeline')
+    // Every format the timeline pack reads (v0.1.0): Final Cut Pro XML and Premiere projects too.
+    expect(previewTypeFor('/ws/edits/rough-cut.fcpxml')).toBe('timeline')
+    expect(previewTypeFor('/ws/edits/Rough Cut.PRPROJ')).toBe('timeline')
+    expect(previewTypeFor('/ws/edits/rough-cut.fcpxmld')).toBeNull()
     expect(previewTypeFor('/ws/notes.csv')).toBeNull()
     expect(previewTypeFor('/ws/living-room.blend1')).toBeNull()
   })

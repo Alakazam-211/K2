@@ -57,12 +57,13 @@ export const LIVE_PREVIEW_SWITCHES: readonly LivePreviewSwitch[] = [
   },
 ]
 
-/** Which files each type is for, by name. A timeline is the timeline pack's
- *  own file; other formats wait on K2 Cores (which ones the pack reads). */
+/** Which files each type is for, by name. A timeline is every format the
+ *  timeline pack reads (v0.1.0: OTIO, Final Cut Pro XML and Premiere
+ *  projects); it writes back .otio only, so the others are read only live. */
 const MATCH: Record<LivePreviewType, RegExp> = {
   workbook: /\.xlsx$/i,
   scene: /\.blend$/i,
-  timeline: /\.otio$/i,
+  timeline: /\.(otio|fcpxml|prproj)$/i,
 }
 
 export function previewTypeFor(path: string): LivePreviewType | null {

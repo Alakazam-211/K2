@@ -85,6 +85,7 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
               fileGlyph={config.fileGlyph}
               kindLabel={narrow ? undefined : config.kindLabel}
               state={tabState}
+              stateWhy={tabState === 'read-only-file' ? snap.readOnly : null}
               sentence={live ? s.sentence : null}
               sentenceRow={narrow && config.sentenceRowWhenNarrow}
               panelOpen={s.panelOpen}

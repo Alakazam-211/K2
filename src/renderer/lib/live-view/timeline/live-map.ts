@@ -83,3 +83,8 @@ export function sequenceOf(M: TimelineModel): string {
   const uid = (M.B.maps.timeline?.uid ?? {})['']
   return typeof uid === 'string' && uid ? `@uid:${uid}` : FIRST_SEQUENCE
 }
+
+/** Why a timeline file is read only live: the pack reads OTIO, Final Cut Pro XML and Premiere projects but writes back .otio only (its verbs refuse the others with a typed reason). Null for .otio. */
+export function readOnlyWhy(path: string): string | null {
+  return /\.otio$/i.test(path) ? null : 'K2 writes back .otio only'
+}

@@ -34,12 +34,15 @@ export function liveTabState({
   connection,
   outsideSave,
   behind = false,
+  readOnly = false,
 }: {
   tier: LiveTier
   connection: ConnectionState | null
   outsideSave: OutsideSave | null
   /** The picture (a scene still, a timeline frame) lags the live file. */
   behind?: boolean
+  /** Live, but the file can't be changed here (a format K2 reads but doesn't write back). */
+  readOnly?: boolean
 }): LiveTabState {
   if (tier === 'loading') return 'loading'
   if (tier === 'saved-only') return 'read-only'
@@ -48,6 +51,7 @@ export function liveTabState({
   if (connection === 'offline') return 'offline'
   if (outsideSave?.outcome === 'declined') return 'paused'
   if (outsideSave?.outcome === 'missing') return 'missing'
+  if (readOnly) return 'read-only-file'
   return behind ? 'live-behind' : 'live'
 }
 

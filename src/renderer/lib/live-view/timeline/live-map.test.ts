@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { modelOf } from './fold'
-import { declineWords, FIRST_SEQUENCE, realPreview, sequenceOf } from './live-map'
+import { declineWords, FIRST_SEQUENCE, readOnlyWhy, realPreview, sequenceOf } from './live-map'
 import type { Book } from './schema'
 
 const book = (timeline: Record<string, Record<string, string>>): Book => ({
@@ -36,5 +36,13 @@ describe('live-map', () => {
   it('a refusal’s words end on what you can still do; an unknown code keeps the kit’s message', () => {
     for (const c of ['live_many_timelines', 'live_time_off_tick', 'live_too_large', 'live_time_range', 'live_structure', 'unreadable']) expect(declineWords(c).text).toMatch(/You can still open the saved file\.$/)
     expect(declineWords('live_new_thing', 'Something new.')).toMatchObject({ title: 'This file can’t be watched live', text: 'Something new. You can still open the saved file.' })
+  })
+})
+
+describe('readOnlyWhy', () => {
+  it('only .otio is written back: Final Cut Pro XML and Premiere projects are read only live', () => {
+    expect(readOnlyWhy('/w/cut.otio')).toBeNull()
+    expect(readOnlyWhy('/w/cut.fcpxml')).toBe('K2 writes back .otio only')
+    expect(readOnlyWhy('/w/Cut.PRPROJ')).toBe('K2 writes back .otio only')
   })
 })

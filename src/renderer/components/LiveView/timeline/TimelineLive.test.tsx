@@ -51,8 +51,8 @@ function scripted(upto: string, refuse?: LiveClose): () => LiveTransport {
 const SENT: Record<string, unknown>[] = []
 const SCOPE = { id: 'local' } as unknown as ServerScope
 
-async function mount(createTransport: () => LiveTransport): Promise<void> {
-  render(<TimelineLive scope={SCOPE} filePath="/w/edits/cut.otio" width={1440} createTransport={createTransport} />)
+async function mount(createTransport: () => LiveTransport, filePath = '/w/edits/cut.otio'): Promise<void> {
+  render(<TimelineLive scope={SCOPE} filePath={filePath} width={1440} createTransport={createTransport} />)
   await act(async () => {})
   await act(async () => {})
 }
@@ -85,6 +85,20 @@ describe('the live timeline tab on a real file', () => {
     await mount(scripted('watch'))
     expect(SENT).toContainEqual(expect.objectContaining({ type: 'view_address', address: expect.stringMatching(/^@/) }))
     expect(SENT).toContainEqual(expect.objectContaining({ type: 'time_position', time_position: expect.objectContaining({ at: '0', state: 'paused' }) }))
+  })
+
+  it.each(['/w/edits/cut.fcpxml', '/w/edits/cut.prproj'])('%s is live but read only: the header says K2 writes back .otio only', async (path) => {
+    await mount(scripted('trim'), path)
+    const chip = screen.getByTestId('lv-state')
+    expect(chip.getAttribute('data-state')).toBe('read-only-file')
+    expect(chip.textContent).toBe('Read only: K2 writes back .otio only')
+    expect(screen.queryByTestId('lv-sample-banner')).toBeNull()
+    expect(screen.getByTestId('lv-lane-V1')).toBeTruthy()
+  })
+
+  it('an .otio file is plain Live', async () => {
+    await mount(scripted('watch'))
+    expect(screen.getByTestId('lv-state').getAttribute('data-state')).toBe('live')
   })
 
   it('a file the pack won’t watch live opens on the can’t-be-live card, in its words', async () => {

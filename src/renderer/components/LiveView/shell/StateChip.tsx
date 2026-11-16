@@ -10,12 +10,14 @@ import { stateChip, type LiveTabState } from '@/lib/live-view/shared/state'
 
 const PULSE: ReadonlySet<LiveTabState> = new Set(['loading', 'reconnecting'])
 
-export function StateChip({ state }: { state: LiveTabState }): React.JSX.Element {
+/** `why`: the state's reason, after its word ("Read only: K2 writes back .otio only"); `short` keeps just the word (the title keeps the rest). */
+export function StateChip({ state, why, short = false }: { state: LiveTabState; why?: string | null; short?: boolean }): React.JSX.Element {
   const { word, tone } = stateChip(state)
+  const full = why ? `${word}: ${why}` : word
   return (
-    <Tag tone={tone} data-case="as-written" data-testid="lv-state" data-state={state} className="lv-state inline-flex flex-none items-center gap-1.5 whitespace-nowrap" title={word}>
+    <Tag tone={tone} data-case="as-written" data-testid="lv-state" data-state={state} className="lv-state inline-flex flex-none items-center gap-1.5 whitespace-nowrap" title={full}>
       <span data-lv-dot="" data-pulse={PULSE.has(state) ? '' : undefined} aria-hidden="true" className="lv-dot" />
-      {word}
+      {short ? word : full}
     </Tag>
   )
 }

@@ -102,6 +102,8 @@ export interface LiveShellSnapshot {
   } | null
   /** The picture lags the live file ("Live · picture behind"). */
   behind?: boolean
+  /** Live, but nothing here can change the file, and why in a few words (the chip says "Read only: <why>"). */
+  readOnly?: string | null
   features: LiveFeatures
   /** The time this snapshot's times read against ("2 min ago"); absent: now. */
   clock?: number

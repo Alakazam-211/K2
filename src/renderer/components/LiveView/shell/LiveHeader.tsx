@@ -103,6 +103,7 @@ export function LiveHeader({
   fileGlyph,
   kindLabel,
   state,
+  stateWhy,
   sentence,
   sentenceEnd,
   fitKey,
@@ -121,6 +122,8 @@ export function LiveHeader({
   kindLabel?: string
   /** None: no chip (a plain file). */
   state?: LiveTabState
+  /** The state's reason, after its word (Read only: K2 writes back .otio only); the word alone once the row gives up its short words. */
+  stateWhy?: string | null
   sentence: HeaderSentence | null
   /** Right after the sentence (the editors' "Back to my place"); a function gets how much the row gave up. */
   sentenceEnd?: React.ReactNode | ((tight: number) => React.ReactNode)
@@ -140,7 +143,7 @@ export function LiveHeader({
 }): React.JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const row = useRef<HTMLDivElement>(null)
-  const tight = useGiveUp(row, box, !sentenceRow, `${fitKey ?? ''}|${state ?? ''}|${!!sentenceEnd}|${sentenceRow}|${sentence?.who?.id ?? ''} ${sentence?.text ?? ''}`)
+  const tight = useGiveUp(row, box, !sentenceRow, `${fitKey ?? ''}|${state ?? ''}${stateWhy ?? ''}|${!!sentenceEnd}|${sentenceRow}|${sentence?.who?.id ?? ''} ${sentence?.text ?? ''}`)
   const words = sentence ? (tight >= GIVE_UP.sentence && sentence.short ? sentence.short : sentence.text) : ''
   const text = sentence ? `${sentence.who?.name ?? ''} ${words}` : ''
   const fits = useFitsWhole(box, `${text}|${sentenceRow}`)
@@ -159,7 +162,7 @@ export function LiveHeader({
         </span>
         {kindLabel ? <span className="type-hint whitespace-nowrap text-[var(--color-text-secondary)]">{kindLabel}</span> : null}
       </div>
-      {state && !(state === 'live' && tight >= GIVE_UP.liveChip) ? <StateChip state={state} /> : null}
+      {state && !(state === 'live' && tight >= GIVE_UP.liveChip) ? <StateChip state={state} why={stateWhy} short={tight >= GIVE_UP.shortWords} /> : null}
       <div ref={box} aria-live="polite" className={cx('lv-sentence-box flex min-w-0 items-center overflow-hidden', sentenceRow ? 'order-last basis-full' : sentenceEnd ? 'flex-initial' : 'flex-1')}>
         {sentence ? (
           <span className={cx('type-row inline-flex items-center gap-1.5 whitespace-nowrap text-[var(--color-text-primary)]', fits ? '' : 'invisible')} aria-hidden={fits ? undefined : true}>

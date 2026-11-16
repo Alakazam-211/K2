@@ -127,7 +127,7 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
   const heroRefusal = refused && config.refusalOnPicture && !isDisconnected(snap.connection) && !dismissed.has(noticeKey(refused)) ? { notice: refused, view: noticeView(refused, { fileName: '' }), onAction: (id: NoticeActionId) => onNotice(id, refused) } : null
 
   const offline = isDisconnected(snap.connection)
-  const tabState = liveTabState({ tier: snap.tier, connection: snap.connection, outsideSave: snap.outsideSave, behind: snap.behind })
+  const tabState = liveTabState({ tier: snap.tier, connection: snap.connection, outsideSave: snap.outsideSave, behind: snap.behind, readOnly: !!snap.readOnly })
   const live = snap.tier === 'live'
   const clock = snap.clock ?? Date.now()
   // Changes doesn't repeat the outside save its notice is saying.

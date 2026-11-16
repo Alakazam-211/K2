@@ -429,16 +429,18 @@ fn objects_cameras_and_turntable_frames_ask_for_clay_and_occlusion_on_their_own_
 #[test]
 fn clay_occlusion_and_the_scene_views_framing_are_in_the_cache_key() {
     let build = scene::SCENE.build();
-    assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay.ao.ids.shape"));
+    assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay.ao2.ids.shape"));
     let plain = format!("scenerender-p{PROTO}-{VERSION}");
     let clay_only = format!("{plain}.clay");
+    let full_size_occlusion = format!("{plain}.clay.ao.ids.shape");
     for look in Look::ALL {
         let name = |b: &str| cache::entry_name("@scene", "ab12", Width::Thumb, &look.cache_build(b));
         assert_ne!(name(&build), name(&plain), "{look:?}: never an image drawn without clay");
         assert_ne!(name(&build), name(&clay_only), "{look:?}: never an image drawn in clay without occlusion");
+        assert_ne!(name(&build), name(&full_size_occlusion), "{look:?}: never an image drawn with the earlier occlusion");
     }
-    assert_eq!(Look::Opaque.cache_build(&build), format!("{plain}.clay.ao.ids.shape"));
-    assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.ao.ids.shape.rgba"));
+    assert_eq!(Look::Opaque.cache_build(&build), format!("{plain}.clay.ao2.ids.shape"));
+    assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.ao2.ids.shape.rgba"));
     assert_ne!(Look::Transparent.cache_build(&build), Look::Transparent.cache_build(&clay_only));
 
     // A scene of one object: the renderer's digest of `@scene` and of that
@@ -584,13 +586,13 @@ fn the_scene_objects_and_cameras_ask_for_ids_and_the_turntable_frames_dont() {
     assert!(l.containers.iter().all(|c| !deck::DECK.draws_ids(c)), "a deck draws none");
 }
 
-/// Ids are keyed in the build (`.ids` after `.clay.ao`): no image cached
+/// Ids are keyed in the build (`.ids` after `.clay.ao2`): no image cached
 /// before the views asked for them is served. The id image is an entry of
 /// its own beside the image, never found as an image.
 #[test]
 fn ids_are_in_the_cache_key_and_the_id_image_has_an_entry_of_its_own() {
     let build = scene::SCENE.build();
-    let before = format!("scenerender-p{PROTO}-{VERSION}.clay.ao");
+    let before = format!("scenerender-p{PROTO}-{VERSION}.clay.ao2");
     assert_eq!(build, format!("{before}.ids.shape"));
     for look in Look::ALL {
         let name = |b: &str| cache::entry_name("@scene", "ab12", Width::Thumb, b);
@@ -1121,7 +1123,7 @@ fn only_the_scene_and_object_views_are_keyed_by_shape() {
             }
         }
         let build = scene::SCENE.build();
-        assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay.ao.ids.shape"), "no 4:3 image from before is served as wide");
+        assert_eq!(build, format!("scenerender-p{PROTO}-{VERSION}.clay.ao2.ids.shape"), "no 4:3 image from before is served as wide");
         assert_eq!(cache_build(&build, Look::Transparent, Shape::Tall), format!("{build}.rgba.tall"));
         assert!(s.containers.iter().all(|k| !deck::DECK.shapes(&k.c)), "a deck shapes nothing");
     });

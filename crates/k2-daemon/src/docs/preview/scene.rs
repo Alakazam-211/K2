@@ -293,15 +293,16 @@ impl PreviewRenderer for SceneRenderer {
         "scene"
     }
 
-    /// The worker's protocol and version, then `.clay.ao.ids.shape`: every
-    /// view is drawn in clay with ambient occlusion, every view that is
-    /// picked in comes with its id image ([`wants_ids`]), and the views
-    /// that are shaped are drawn in the shape asked for, wide by default
-    /// ([`shapes_view`]), so no image drawn in base colours, without
+    /// The worker's protocol and version, then `.clay.ao2.ids.shape`: every
+    /// view is drawn in clay with ambient occlusion (`ao2`: above thumbnail
+    /// widths worked out on a half grid), every view that is picked in comes
+    /// with its id image ([`wants_ids`]), and the views that are shaped are
+    /// drawn in the shape asked for, wide by default ([`shapes_view`]), so no
+    /// image drawn in base colours, without occlusion, with the earlier
     /// occlusion, without its id image or at the old 4:3 default is ever
     /// served.
     fn build(&self) -> String {
-        format!("scenerender-p{PROTO}-{VERSION}.clay.ao.ids.shape")
+        format!("scenerender-p{PROTO}-{VERSION}.clay.ao2.ids.shape")
     }
 
     /// No doc yet: a live BLEND doc needs the pack's mesh read and its tier

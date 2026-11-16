@@ -24,7 +24,8 @@ use k2_scenerender::testgen;
 /// matched on aarch64 macOS (k2n1-m4, job ffe2988a). The 15 ambient occlusion ones: made on
 /// k2n10-vin (job ac55097d), all 96 matched on aarch64 macOS (k2n1-m4, job e76bf3a5). The 15
 /// object id ones (stills and id images): made on k2n10-vin (job feb4c66f), the 96 above unchanged
-/// there.
+/// there. The 2 stills with ambient occlusion above 640 px, redrawn when it moved to a half grid
+/// there: made on k2n10-vin (job 2c3e0bec), the other 109 unchanged there.
 const WANT: &[(&str, &str)] = &[
     ("cube-webp-320/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
     ("cube-webp-320/0", "5a8e7a89bef92a33281af63a775f1c297cd8dc99090f88b80d190b43eb91c9bc"),
@@ -113,7 +114,7 @@ const WANT: &[(&str, &str)] = &[
     ("interior-ao/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
     ("interior-ao/0", "a9bb7ffb1f4b79b197fa05e8c7c8bb5ab2dcf42531f1adf60e716023a3e279de"),
     ("interior-ao/1", "d7e313f7429abad3dcdf1955581e0fd870a5adff442db01b4230c8aa3f8b14d4"),
-    ("interior-ao/2", "764c58410764e866b1680a5a16bb4efb89bc2cdc9472139da62d2daf94889928"),
+    ("interior-ao/2", "e373f0dd3501cf19f541d8fe758767a8c9f117c20d5e565403ea710289772289"),
     ("interior-clay-ao/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
     ("interior-clay-ao/0", "4e7d22dbb3efd5ac5f79ba54d7144999898b71a013e40da42209800b8f0c86bf"),
     ("interior-clay-ao/1", "47b0ef31e1e59fc05d8a189c83a685b716315a1716210542c7424e1b75d0da46"),
@@ -139,7 +140,7 @@ const WANT: &[(&str, &str)] = &[
     ("interior-clay-ao-ids-alpha/0", "b7821a95db8fa64689e7fceb4476845844468404f955accb248494e359bc6104"),
     ("interior-clay-ao-ids-alpha/0/ids", "2251c9ac83286ce4d2e0951dc33150a65e09c29c653447e310babb59a3fdb329"),
     ("interior-clay-ao-ids-1920/k2scene1", "b485a4d405aec8ff19e4258b4697b96fb3f74d5e9e402f70925223586302e2f2"),
-    ("interior-clay-ao-ids-1920/0", "f1b67dc5de403a0a5992dc67e10eb9747a517b61542509c2e1601b9b1fcab120"),
+    ("interior-clay-ao-ids-1920/0", "c13419402aa64886a6c5551772bf957082adf673bf1e9c42b162c0ee37b2f756"),
     ("interior-clay-ao-ids-1920/0/ids", "480a871d5e95e86757e7e5b994c2afc3193dca0449c01c27d32363cd5cf73416"),
 ];
 

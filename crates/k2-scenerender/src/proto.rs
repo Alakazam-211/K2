@@ -87,8 +87,9 @@ pub const DEFAULT_BACKGROUND: [u8; 3] = [240, 240, 240];
 
 // Changing either default clay tone changes images the host has already
 // cached under the same renderer build: bump this crate's version in the
-// same commit (or change the host's ".clay.ao.ids" cache tag). The same goes
-// for the default ambient occlusion strength and radius below.
+// same commit (or change the host's ".clay.ao2.ids.shape" cache tag). The
+// same goes for the default ambient occlusion strength and radius below,
+// and for how the occlusion is drawn (raster::occlusion).
 
 /// Clay shading's shell tone (floor, walls, ceiling) when the request names
 /// none: sRGB 138, 134, 128, a warm mid grey. Lit by the same lights, it

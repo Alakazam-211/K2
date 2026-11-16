@@ -41,14 +41,15 @@
 //! one of two tones, by whether it is shell; nothing else changes (the lights, the coverage
 //! alpha, the order of every operation).
 //!
-//! **Ambient occlusion** ([`render_shaded`] and an [`Ao`]), off unless asked for: before the
-//! colour pass, a depth pass draws the same bands depth only and keeps one sample of each pixel
-//! (1/w at a fixed place in it; 0 where nothing is drawn there) for the whole frame. Each covered
-//! pixel then gets a factor in [0, 1] from that depth image ([`occlusion`]), and the colour pass
-//! multiplies every covered sample's linear colour by its pixel's factor before the box filter:
-//! the whole light (ambient, key and fill) is darkened, the background and the coverage alpha are
-//! not. A factor of exactly 1 leaves the sample's bits as they were, so where nothing occludes,
-//! the pixels are the plain image's.
+//! **Ambient occlusion** ([`render_shaded`] and an [`Ao`]), off unless asked for: before the colour
+//! pass, a depth pass draws the same bands depth only and keeps one sample of each pixel (1/w at a
+//! fixed place in it; 0 where nothing is drawn there) for the whole frame. Each covered pixel then
+//! gets a factor in [0, 1] from that depth image ([`occlusion`]: above thumbnail widths worked out
+//! on a half grid, every other pixel of every other row, and brought back to every pixel without
+//! crossing a depth edge), and the colour pass multiplies every covered sample's linear colour by
+//! its pixel's factor before the box filter: the whole light (ambient, key and fill) is darkened,
+//! the background and the coverage alpha are not. A factor of exactly 1 leaves the sample's bits as
+//! they were, so where nothing occludes, the pixels are the plain image's.
 //!
 //! **Object ids** ([`render_with_ids`]), off unless asked for: the colour pass also writes, into
 //! each sample it fills, the drawn object's index in the scene's objects plus 1, under the same
@@ -1149,6 +1150,11 @@ pub const AO_MAX_REACH: f32 = 0.25;
 /// pixel's: the same surface, or one touching it; never the floor seen past a table's edge.
 pub const AO_BLUR_DEPTH: f32 = 0.25;
 
+/// The widest image whose occlusion is worked out at every pixel; wider, on the half grid. At
+/// thumbnail widths the half grid's blur is too wide next to the creases, and every pixel costs
+/// little there.
+pub const AO_FULL_GRID_MAX_WIDTH: usize = 640;
+
 /// Round half away from zero, without libm (NaN gives 0).
 #[inline]
 fn round_px(v: f32) -> i64 {
@@ -1163,25 +1169,36 @@ fn round_px(v: f32) -> i64 {
 /// each pixel's 1/w at the same place in it (0: nothing drawn there). An uncovered pixel gets 1,
 /// and so does a covered one nothing occludes; full occlusion gets `1 - strength`.
 ///
-/// For a covered pixel P (view-space point p at depth z = 1/w), the kernel reaches `radius`
-/// world units: `radius * fx * width / 2 / z` pixels (so the same fraction of the image at any
-/// width), at most [`AO_MAX_REACH`] of the image's longer side. It takes [`AO_PAIRS`] pairs of
-/// pixels A and B at whole-pixel offsets `+d` and `-d` from P (fixed directions and distances,
-/// [`AO_AXES`], varied by P's cell of [`AO_PATTERN`]), so P is exactly their midpoint on screen.
-/// On screen, 1/w is affine over a plane, so for A, B and P on one plane P's 1/w is the mean of
-/// theirs: the pair's gap `z - 2 / (1/w_A + 1/w_B)` (how far the chord AB passes in front of P,
-/// along P's ray) is 0 on any plane, at any angle, and positive only where the surface bends
-/// towards the eye: a crease, a corner, an object standing on the floor. The pair's occlusion is
-/// its gap over half the chord's length (1 for a right-angle corner), less [`AO_BIAS`], at most
-/// 1; it counts fully while A and B are both within `radius` of p, fading to nothing at twice
-/// it, so an object far in front of P casts no halo. A pair with an end off the image or on an
-/// uncovered pixel counts 0: the empty background never occludes. P's raw occlusion is the sum of
-/// its pairs over [`AO_PAIRS`].
+/// The occlusion is worked out on a grid: every pixel up to [`AO_FULL_GRID_MAX_WIDTH`] wide, else
+/// a half grid, `ceil(w / 2)` x `ceil(h / 2)`, whose point (i, j) is pixel (2i, 2j), its depth
+/// and its place on screen exactly (no averaging, so a plane is still a plane on the grid); then
+/// brought back to every pixel.
 ///
-/// Then a blur: P's occlusion is the mean of the raw occlusion over the 4 x 4 pixels from
-/// (x - 2, y - 2) to (x + 1, y + 1) that are covered and within [`AO_BLUR_DEPTH`] of the radius
-/// of P's depth (P is always one). The factor is `1 - strength * occlusion`; where every raw
-/// value is 0 (a plane, the empty background) it is exactly 1.
+/// For a covered grid point P (view-space point p at depth z = 1/w), the kernel reaches `radius`
+/// world units: `radius * fx * width / 2 / z` pixels, half as many steps on the half grid (so the
+/// same fraction of the image at any width), at most [`AO_MAX_REACH`] of the image's longer side.
+/// It takes [`AO_PAIRS`] pairs of grid points A and B at whole-step offsets `+d` and `-d` from P
+/// (fixed directions and distances, [`AO_AXES`], varied by P's cell of [`AO_PATTERN`]), so P is
+/// exactly their midpoint on screen. On screen, 1/w is affine over a plane, so for A, B and P on
+/// one plane P's 1/w is the mean of theirs: the pair's gap `z - 2 / (1/w_A + 1/w_B)` (how far the
+/// chord AB passes in front of P, along P's ray) is 0 on any plane, at any angle, and positive only
+/// where the surface bends towards the eye: a crease, a corner, an object standing on the floor.
+/// The pair's occlusion is its gap over half the chord's length (1 for a right-angle corner), less
+/// [`AO_BIAS`], at most 1; it counts fully while A and B are both within `radius` of p, fading to
+/// nothing at twice it, so an object far in front of P casts no halo. A pair with an end off the
+/// grid or on an uncovered point counts 0: the empty background never occludes. P's raw occlusion
+/// is the sum of its pairs over [`AO_PAIRS`].
+///
+/// Then a blur on the grid: P's occlusion is the mean of the raw occlusion over the 4 x 4 grid
+/// points from (i - 2, j - 2) to (i + 1, j + 1) that are covered and within [`AO_BLUR_DEPTH`] of
+/// the radius of P's depth (P is always one).
+///
+/// Then each covered pixel takes the mean occlusion of the grid points around it (bilinear: a
+/// pixel on the grid, as every pixel is on the full one, its own point; one between two points
+/// both, one between four all four, each weighing the same) that are covered and within
+/// [`AO_BLUR_DEPTH`] of the radius of its own depth, so occlusion never crosses a depth edge;
+/// with none, it has none. The factor is `1 - strength * occlusion`; where every raw value is 0
+/// (a plane, the empty background) it is exactly 1.
 ///
 /// Only `+ - * / sqrt` in a fixed order, and integer offsets: the same bits on every machine and
 /// for any thread count (rows are split by fixed bands, each pass reading only the one before).
@@ -1190,9 +1207,14 @@ pub fn occlusion(depth: &[f32], w: usize, h: usize, lens: &Lens, ao: &Ao, thread
     if depth.len() != w * h || w == 0 || h == 0 {
         return out;
     }
-    // View-space x / z and y / z of each column's and row's depth sample.
-    let ax: Vec<f32> = (0..w).map(|i| ((i as f32 + lens.at) * 2.0 / w as f32 - 1.0 - lens.shift[0]) / lens.fx).collect();
-    let ay: Vec<f32> = (0..h).map(|j| (1.0 - (j as f32 + lens.at) * 2.0 / h as f32 - lens.shift[1]) / lens.fy).collect();
+    // The grid: every pixel up to AO_FULL_GRID_MAX_WIDTH, else every other pixel of every other
+    // row; its depth and its place.
+    let step = if w <= AO_FULL_GRID_MAX_WIDTH { 1 } else { 2 };
+    let (gw, gh) = (w.div_ceil(step), h.div_ceil(step));
+    let grid: Vec<f32> = if step == 1 { depth.to_vec() } else { (0..gw * gh).map(|g| depth[(g / gw) * step * w + (g % gw) * step]).collect() };
+    // View-space x / z and y / z of each grid column's and row's depth sample.
+    let ax: Vec<f32> = (0..gw).map(|i| (((step * i) as f32 + lens.at) * 2.0 / w as f32 - 1.0 - lens.shift[0]) / lens.fx).collect();
+    let ay: Vec<f32> = (0..gh).map(|j| (1.0 - ((step * j) as f32 + lens.at) * 2.0 / h as f32 - lens.shift[1]) / lens.fy).collect();
     let mut steps = [[[0f32; 2]; AO_PAIRS]; 16];
     for (c, cell) in steps.iter_mut().enumerate() {
         let turn = AO_TURNS[c % 4];
@@ -1206,26 +1228,27 @@ pub fn occlusion(depth: &[f32], w: usize, h: usize, lens: &Lens, ao: &Ao, thread
         }
     }
     let kernel = Kernel {
-        depth,
-        w: w as i64,
-        h: h as i64,
+        depth: &grid,
+        w: gw as i64,
+        h: gh as i64,
         ax: &ax,
         ay: &ay,
         steps: &steps,
-        reach: 0.5 * lens.fx * w as f32 * ao.radius,
-        max_reach: w.max(h) as f32 * AO_MAX_REACH,
+        // In grid steps: on the half grid, half the pixels.
+        reach: 0.5 * lens.fx * w as f32 * ao.radius / step as f32,
+        max_reach: w.max(h) as f32 * AO_MAX_REACH / step as f32,
         inv_radius: 1.0 / ao.radius,
     };
-    let rows = BAND_PX as usize * w;
-    let mut raw = vec![0f32; w * h];
+    let grid_rows = BAND_PX as usize * gw;
+    let mut raw = vec![0f32; gw * gh];
     {
-        let items: Vec<(usize, &mut [f32])> = raw.chunks_mut(rows).enumerate().collect();
+        let items: Vec<(usize, &mut [f32])> = raw.chunks_mut(grid_rows).enumerate().collect();
         par_each(
             threads,
             items,
             || (),
             |_, (b, band)| {
-                for (r, row) in band.chunks_mut(w).enumerate() {
+                for (r, row) in band.chunks_mut(gw).enumerate() {
                     let y = (b * BAND_PX as usize + r) as i64;
                     for (x, o) in row.iter_mut().enumerate() {
                         *o = kernel.raw(x as i64, y);
@@ -1235,6 +1258,45 @@ pub fn occlusion(depth: &[f32], w: usize, h: usize, lens: &Lens, ao: &Ao, thread
         );
     }
     let near = AO_BLUR_DEPTH * ao.radius;
+    // |1/q - 1/iw| <= near, without a division: q (covered) is on iw's surface or one touching it.
+    let close = |q: f32, iw: f32| {
+        let d = if q > iw { q - iw } else { iw - q };
+        q > 0.0 && d <= near * q * iw
+    };
+    let mut blurred = vec![0f32; gw * gh];
+    {
+        let items: Vec<(usize, &mut [f32])> = blurred.chunks_mut(grid_rows).enumerate().collect();
+        par_each(
+            threads,
+            items,
+            || (),
+            |_, (b, band)| {
+                for (r, row) in band.chunks_mut(gw).enumerate() {
+                    let y = b * BAND_PX as usize + r;
+                    for (x, o) in row.iter_mut().enumerate() {
+                        let iw = grid[y * gw + x];
+                        let covered = iw > 0.0;
+                        if !covered {
+                            continue;
+                        }
+                        let (mut sum, mut n) = (0f32, 0u32);
+                        for qy in y.saturating_sub(2)..(y + 2).min(gh) {
+                            for qx in x.saturating_sub(2)..(x + 2).min(gw) {
+                                if close(grid[qy * gw + qx], iw) {
+                                    sum += raw[qy * gw + qx];
+                                    n += 1;
+                                }
+                            }
+                        }
+                        if n > 0 {
+                            *o = sum / n as f32;
+                        }
+                    }
+                }
+            },
+        );
+    }
+    let rows = BAND_PX as usize * w;
     let items: Vec<(usize, &mut [f32])> = out.chunks_mut(rows).enumerate().collect();
     par_each(
         threads,
@@ -1243,19 +1305,22 @@ pub fn occlusion(depth: &[f32], w: usize, h: usize, lens: &Lens, ao: &Ao, thread
         |_, (b, band)| {
             for (r, row) in band.chunks_mut(w).enumerate() {
                 let y = b * BAND_PX as usize + r;
+                // The grid rows around this row: its own on the full grid or an even row of the
+                // half grid, the two either side on an odd one (the second off the grid on the
+                // last row of an even height).
+                let gy = [y / step, if y % step == 1 && y / step + 1 < gh { y / step + 1 } else { usize::MAX }];
                 for (x, f) in row.iter_mut().enumerate() {
                     let iw = depth[y * w + x];
-                    if !(iw > 0.0) {
+                    let covered = iw > 0.0;
+                    if !covered {
                         continue;
                     }
+                    let gx = [x / step, if x % step == 1 && x / step + 1 < gw { x / step + 1 } else { usize::MAX }];
                     let (mut sum, mut n) = (0f32, 0u32);
-                    for qy in y.saturating_sub(2)..(y + 2).min(h) {
-                        for qx in x.saturating_sub(2)..(x + 2).min(w) {
-                            let q = depth[qy * w + qx];
-                            // |1/q - 1/iw| <= near, without a division.
-                            let d = if q > iw { q - iw } else { iw - q };
-                            if q > 0.0 && d <= near * q * iw {
-                                sum += raw[qy * w + qx];
+                    for &qy in gy.iter().filter(|&&v| v != usize::MAX) {
+                        for &qx in gx.iter().filter(|&&v| v != usize::MAX) {
+                            if close(grid[qy * gw + qx], iw) {
+                                sum += blurred[qy * gw + qx];
                                 n += 1;
                             }
                         }
@@ -1777,6 +1842,28 @@ mod tests {
             let (depth, k, _) = ao_factors(&s, ViewSpec::Auto, 200, 150, 2, 0.3, 1);
             assert!(depth.iter().filter(|&&d| d > 0.0).count() > 2000);
             assert!(k.iter().all(|&f| f == 1.0));
+        }
+    }
+
+    #[test]
+    fn occlusion_never_crosses_a_depth_edge() {
+        // A box floating well in front of a wall (more than twice the radius): the wall around
+        // its outline and the box's own faces stay untouched, though the half grid's points on
+        // the box sit next to pixels of the wall and the other way round (both widths are above
+        // AO_FULL_GRID_MAX_WIDTH, one odd).
+        let s = Scene {
+            up: UpAxis::Y,
+            meshes: vec![testgen::boxes(&[([-8.0, -6.0, -3.0], [8.0, 6.0, -2.9])]), testgen::boxes(&[([-0.37, -0.41, -1.0], [0.43, 0.39, -0.2])])],
+            objects: vec![
+                testgen::object("wall", 0, [0.8, 0.8, 0.8], testgen::identity(), Some(false)),
+                testgen::object("box", 1, [0.8, 0.8, 0.8], testgen::identity(), Some(false)),
+            ],
+            cameras: vec![looking([0.6, 0.5, 3.0], [0.0, 0.0, -2.9], 0.9)],
+        };
+        for (w, h) in [(961u32, 721u32), (1280, 960)] {
+            let (depth, k, _) = ao_factors(&s, ViewSpec::Camera(0), w, h, 2, 0.3, 3);
+            assert!(depth.iter().filter(|&&d| d > 0.0).count() == (w * h) as usize, "{w} x {h}: the wall fills the frame");
+            assert!(k.iter().all(|&f| f == 1.0), "{w} x {h}: nothing occluded");
         }
     }
 

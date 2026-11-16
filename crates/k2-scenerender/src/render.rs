@@ -204,8 +204,8 @@ pub fn estimate_bytes(data_bytes: u64, header_bytes: u64, plans: &[Plan], thread
     data_bytes + 4 * header_bytes + peak + out.min(max_output) + tables + (16 << 20)
 }
 
-/// Ambient occlusion's own buffers, per pixel: the depth image, the raw occlusion and the
-/// factors (an f32 each).
+/// Ambient occlusion's own buffers, per pixel, at most: the depth image and the factors (an f32
+/// each), and on the half grid its depth, raw and blurred occlusion (an f32 each per 4 pixels).
 pub const AO_BYTES_PER_PX: u64 = 12;
 
 /// The id image's own buffers, per pixel: the image (a u32), its RGB copy and the encoder's

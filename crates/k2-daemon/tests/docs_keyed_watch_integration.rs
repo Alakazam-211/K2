@@ -13,8 +13,12 @@
 //!      socket gets no bare `change` frame for it.
 //!   4. A socket that never sends `watch` keeps the old path: a `change`
 //!      frame for the same edit, no watch frames.
+//!   4b. The deck's welcome lists `view_address` and `time_position` (kit
+//!      v0.18.0); one socket's view and playhead reach the other as roster
+//!      events (`at_ms` stamped by the kit), a bad playhead is
+//!      `presence_refused {req}` with `MPC-E114`, and a cleared view is null.
 //!   5. A Markdown doc's welcome lists no `keyed_watch`, and its `watch` is
-//!      refused (`MPC-E113`).
+//!      refused (`MPC-E113`); nor `view_address`, refused the same way.
 //!
 //! The preview worker isn't built here: a slide's re-render may fail
 //! (`preview_ready` with a failure), which this test ignores.
@@ -185,12 +189,12 @@ async fn a_live_deck_is_watched_by_key_headless() {
     assert_eq!(welcome["type"], "welcome", "{welcome}");
     assert_eq!(welcome["wire"], 3, "the wire stays 3: {welcome}");
     assert_eq!(welcome["mode"], "deck", "{welcome}");
-    assert_eq!(welcome["features"], json!(["keyed_watch"]), "{welcome}");
+    assert_eq!(welcome["features"], json!(["keyed_watch", "view_address", "time_position"]), "{welcome}");
     assert!(welcome.get("previews").is_some(), "the previews stay for clients that never watch: {welcome}");
     // A second socket on the deck that never sends `watch` (an older client).
     let (mut old, _) = tokio_tungstenite::connect_async(&url(&talk)).await.expect("a second socket");
     let w_old = next_frame(&mut old, "the old client's welcome").await;
-    assert_eq!(w_old["features"], json!(["keyed_watch"]), "{w_old}");
+    assert_eq!(w_old["features"], json!(["keyed_watch", "view_address", "time_position"]), "{w_old}");
 
     // ── 2. watch: the snapshot head, then its pages ──
     watcher.send(Message::Text(json!({"type": "watch"}).to_string())).await.expect("send watch");
@@ -254,6 +258,63 @@ async fn a_live_deck_is_watched_by_key_headless() {
     let change = change.expect("change");
     assert_eq!(change["event"]["verb"], "shape text", "{change}");
     assert_eq!(change["event"]["version"], rev, "{change}");
+
+    // ── 4b. Presence: a view and a playhead reach the other socket ──
+    let me = welcome["self"].as_str().expect("self").to_string();
+    let my_client = welcome["client"].as_u64().expect("client");
+    watcher.send(Message::Text(json!({"type": "view_address", "req": 1, "address": "@sld:257"}).to_string())).await.expect("send view");
+    watcher
+        .send(Message::Text(
+            json!({"type": "time_position", "req": 2, "time_position": {"at": "48000", "state": "playing", "in": "@sld:257", "rate": "1/2"}})
+                .to_string(),
+        ))
+        .await
+        .expect("send time");
+    let (mut view, mut time) = (None, None);
+    while view.is_none() || time.is_none() {
+        let f = next_frame(&mut old, "the roster's view and time").await;
+        if f["type"] == "roster_event" && f["event"]["client"] == my_client {
+            match f["event"]["kind"].as_str() {
+                Some("view_address") => view = Some(f["event"].clone()),
+                Some("time_position") => time = Some(f["event"].clone()),
+                _ => {}
+            }
+        }
+    }
+    let (view, time) = (view.expect("view"), time.expect("time"));
+    assert_eq!(view, json!({"kind": "view_address", "who": me, "view_address": "@sld:257", "client": my_client}), "{view}");
+    assert_eq!(time["who"], me.as_str(), "{time}");
+    assert_eq!(
+        (&time["time_position"]["at"], &time["time_position"]["state"], &time["time_position"]["in"], &time["time_position"]["rate"]),
+        (&json!("48000"), &json!("playing"), &json!("@sld:257"), &json!("1/2")),
+        "{time}"
+    );
+    assert!(time["time_position"]["at_ms"].as_u64().is_some_and(|ms| ms > 0), "the kit stamps at_ms: {time}");
+    // A value the kit won't take: `presence_refused` with the frame's req, nothing changes.
+    watcher
+        .send(Message::Text(json!({"type": "time_position", "req": 3, "time_position": {"at": "1.5", "state": "paused"}}).to_string()))
+        .await
+        .expect("send a bad time");
+    let mut refused = None;
+    while refused.is_none() {
+        let f = next_frame(&mut watcher, "presence_refused").await;
+        if f["type"] == "presence_refused" {
+            refused = Some(f);
+        }
+    }
+    let refused = refused.expect("refused");
+    assert_eq!(refused["req"], 3, "{refused}");
+    assert_eq!(refused["error"]["id"], "MPC-E114", "{refused}");
+    // Clearing the view goes out as null.
+    watcher.send(Message::Text(json!({"type": "view_address", "req": 4, "address": null}).to_string())).await.expect("send clear");
+    let mut cleared = None;
+    while cleared.is_none() {
+        let f = next_frame(&mut old, "the cleared view").await;
+        if f["type"] == "roster_event" && f["event"]["kind"] == "view_address" && f["event"]["client"] == my_client {
+            cleared = Some(f["event"].clone());
+        }
+    }
+    assert_eq!(cleared.expect("cleared")["view_address"], J::Null);
     drop(old);
     drop(watcher);
 
@@ -262,8 +323,22 @@ async fn a_live_deck_is_watched_by_key_headless() {
     let w = next_frame(&mut md, "the Markdown welcome").await;
     assert_eq!(w["type"], "welcome", "{w}");
     assert_eq!(w["root"], "source", "{w}");
-    let listed = w["features"].as_array().map(|a| a.iter().any(|f| f == "keyed_watch"));
-    assert_ne!(listed, Some(true), "a text doc never lists the keyed watch: {w}");
+    for name in ["keyed_watch", "view_address", "time_position"] {
+        let listed = w["features"].as_array().map(|a| a.iter().any(|f| f == name));
+        assert_ne!(listed, Some(true), "a text doc never lists {name}: {w}");
+    }
+    // A presence frame it doesn't list is refused as unreadable (no op: `error`).
+    md.send(Message::Text(json!({"type": "view_address", "req": 1, "address": "@sld:256"}).to_string())).await.expect("send view");
+    let mut err = None;
+    while err.is_none() {
+        let f = next_frame(&mut md, "the view refusal").await;
+        if f["type"] == "error" {
+            err = Some(f);
+        }
+    }
+    let err = err.expect("error");
+    assert_eq!(err["error"]["id"], "MPC-E113", "{err}");
+    assert!(err["error"]["message"].as_str().is_some_and(|m| m.contains("view_address")), "{err}");
     md.send(Message::Text(json!({"type": "watch"}).to_string())).await.expect("send watch");
     let mut err = None;
     while err.is_none() {

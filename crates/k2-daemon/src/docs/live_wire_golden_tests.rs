@@ -922,3 +922,110 @@ fn k2s_element_presence_events_are_the_kits() {
         "every element presence kind was checked against a golden"
     );
 }
+
+const ROSTER_VIEW_TIME: &str = kit_golden!("roster_events_view_time.json");
+
+/// The kit's keyed test pack, as `wire_golden.rs`'s `keyed_fx` opens it: one
+/// MovableList `items`, a key a line.
+struct KeyedLines;
+
+impl k2_mpc_base::session::Pack for KeyedLines {
+    fn schema(&self) -> k2_mpc_base::Schema {
+        k2_mpc_base::Schema { name: "keyed-lines-k2", roots: &[("items", k2_mpc_base::Kind::MovableList)] }
+    }
+    fn decode(&self, b: &[u8]) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        let bad = |m: String| k2_mpc_base::session::Declined { code: "malformed", message: m };
+        let s = std::str::from_utf8(b).map_err(|e| bad(e.to_string()))?;
+        let mut items = Vec::new();
+        for line in s.lines().filter(|l| !l.is_empty()) {
+            items.push((k2_mpc_base::Key::new(line).map_err(|e| bad(e.to_string()))?, k2_mpc_base::Value::str(line)));
+        }
+        Ok(k2_mpc_base::session::PackContent { roots: vec![("items".into(), k2_mpc_base::doc::Neutral::List(items))], codec: vec![1] })
+    }
+    fn encode(&self, c: &[(String, k2_mpc_base::doc::Neutral)], _: &[u8]) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        let mut out = String::new();
+        for (_, n) in c {
+            if let k2_mpc_base::doc::Neutral::List(l) = n {
+                for (k, _) in l {
+                    out.push_str(&format!("{k}\n"));
+                }
+            }
+        }
+        Ok(out.into_bytes())
+    }
+}
+
+/// The kit's `view_address_and_time_position_are_golden` (kit v0.18.0),
+/// replayed on the vendored kit and encoded by K2: a person on two
+/// connections, an agent whose view the host sets (as K2 does when it draws
+/// a still for it) and another person each set a view address and a time
+/// position; one connection leaves with its values; a time is cleared. The
+/// events and a later subscription's snapshot (rows and devices) are
+/// `roster_events_view_time.json`, byte for byte.
+#[test]
+fn k2s_live_encoder_writes_the_kits_view_and_time_golden() {
+    use k2_mpc_base::session::{PlayState, TimePosition};
+    let dir = std::env::temp_dir().join(format!("k2-live-wire-view-time-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let _cleanup = Cleanup(dir.clone());
+    let host = Arc::new(TestHost { now: AtomicU64::new(1_700_000_000_000), rights: Mutex::new(HashMap::new()) });
+    let mut config = Config::default();
+    config.edit_rate_per_s = 1_000_000;
+    config.edit_burst = 1_000_000;
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("store"));
+    let mgr = SessionManager::new(store, host.clone(), config);
+    let s = mgr
+        .open(Arc::new(KeyedLines), &DocKey { space: "ws".into(), path: "doc.keyed".into() }, Some(b"i1\ni2\ni3\ni4\ni5\ni6\n"))
+        .expect("open");
+    let tick = || {
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let join = |pid: &str, name: &str, colour: &str, kind: ParticipantKind| {
+        s.join(Participant::new(pid, name, colour, kind, "tab"), Stay::Held).expect("join")
+    };
+    let a1 = join("ada", "Ada", "#7c3aed", ParticipantKind::Person);
+    let a2 = join("ada", "Ada", "#7c3aed", ParticipantKind::Person);
+    let bot = join("atlas", "Atlas", "#6d5bd0", ParticipantKind::Agent);
+    let b = join("bob", "Bob", "#16a34a", ParticipantKind::Person);
+    let mut st = Stable::default();
+    for (j, n) in [(&a1, 4u64), (&a2, 5), (&bot, 6), (&b, 7)] {
+        st.clients.insert(j.client, n);
+    }
+    let roster = s.subscribe_roster(a1.conn).expect("roster");
+    tick();
+
+    s.set_view_address(a1.conn, Some("@seq:main")).expect("view");
+    let t = TimePosition::new("254016000000", PlayState::Playing).expect("at").within("@seq:main").expect("in");
+    s.set_time_position(a1.conn, Some(t)).expect("time");
+    tick();
+    s.set_view_address(a2.conn, Some("i3")).expect("a bare key is an address");
+    s.set_view_address(bot.conn, Some("@seq:main/clip:7")).expect("the host sets the agent's");
+    let t = TimePosition::new("-1270080000", PlayState::Paused).expect("at").rate("1001/1000").expect("rate");
+    s.set_time_position(bot.conn, Some(t)).expect("time");
+    s.set_time_position(b.conn, Some(TimePosition::new("0", PlayState::Paused).expect("at"))).expect("time");
+    tick();
+    s.leave(a2.conn).expect("leave");
+    tick();
+    s.set_time_position(a1.conn, None).expect("cleared");
+    tick();
+
+    let ros = drain(&roster);
+    let late = drain(&s.subscribe_roster(a1.conn).expect("late roster"));
+    let me = self_in(&late[0], "Ada");
+    let got = file(Value::obj([
+        ("self", me.clone()),
+        ("client", Value::from(4u64)),
+        ("events", encoded(&ros, &me, &mut st)),
+        ("final", encoded_one(&late[0], &me, &mut st)),
+    ]));
+    same("roster_events_view_time.json", &members_by_handle(ROSTER_VIEW_TIME), &members_by_handle(&got));
+}
+
+struct Cleanup(PathBuf);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

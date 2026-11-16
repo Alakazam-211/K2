@@ -42,6 +42,30 @@ pub fn features(session: &Session) -> Vec<&'static str> {
     }
 }
 
+/// The view this connection looks at, by address (kit v0.18.0, WIRE.md
+/// "Feature names"): the client frame `view_address`.
+pub const VIEW_ADDRESS_FEATURE: &str = "view_address";
+
+/// This connection's playhead (kit v0.18.0): the client frame
+/// `time_position`.
+pub const TIME_POSITION_FEATURE: &str = "time_position";
+
+/// The presence families a keyed doc's socket takes besides the keyed
+/// watch, for readers and editors alike (the kit refuses only a watcher, and
+/// K2 joins none): [`VIEW_ADDRESS_FEATURE`] and [`TIME_POSITION_FEATURE`].
+/// Follow uses the view address (a scene's `@cam:<id>`, a deck's slide) and
+/// the timeline's playheads the time position. A text doc lists neither: its
+/// Live view has carets and lines (`cursor`, `view`) instead.
+pub const PRESENCE_FEATURES: [&str; 2] = [VIEW_ADDRESS_FEATURE, TIME_POSITION_FEATURE];
+
+/// Everything a keyed doc's socket lists in `welcome.features`: the keyed
+/// watch when the doc has it ([`features`]), then [`PRESENCE_FEATURES`].
+pub fn keyed_socket_features(session: &Session) -> Vec<&'static str> {
+    let mut f = features(session);
+    f.extend(PRESENCE_FEATURES);
+    f
+}
+
 /// `welcome.features` as the welcome carries it.
 pub fn features_value(features: &[&str]) -> Value {
     Value::List(features.iter().map(|f| Value::from(*f)).collect())

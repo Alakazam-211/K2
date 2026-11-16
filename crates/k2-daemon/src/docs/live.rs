@@ -56,6 +56,10 @@
 //!   kit's keyed watch ([`super::live_watch`]): a snapshot in pages, then
 //!   one `ops_change` per change in place of the bare `change` frames.
 //!   Anywhere else, `error` with `MPC-E113`.
+//! - `view_address` / `time_position` (a keyed doc's socket: its welcome
+//!   lists both, kit v0.18.0) → `set_view_address` / `set_time_position`;
+//!   no reply, a refusal is `presence_refused {req, error}`. On a text doc's
+//!   socket (not listed), `error` with `MPC-E113`.
 //!
 //! The kit's `tick` (every 250 ms, `docs/mod.rs`) also flushes rosters, so
 //! carets arrive without a timer of our own.
@@ -536,8 +540,9 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
             &t.rel,
         );
         // The keyed watch (kit v0.16): listed only for a doc the kit can
-        // watch by key, never a text doc or a table.
-        let features = super::live_watch::features(&session);
+        // watch by key, never a text doc or a table. Then the view address
+        // and the time position (kit v0.18.0), for every person here.
+        let features = super::live_watch::keyed_socket_features(&session);
         if let Value::Obj(o) = &mut welcome {
             o.extend(super::live_deck::welcome_extras(&t, &session, conn));
             if !features.is_empty() {
@@ -954,6 +959,9 @@ struct Worker {
     turns: super::live_deck::Turns,
     /// The keyed watch, once the client sends `watch` ([`super::live_watch`]).
     watch: super::live_watch::SocketWatch,
+    /// What the welcome listed (`view_address` and `time_position` are
+    /// taken only when listed).
+    features: Vec<&'static str>,
 }
 
 /// However the worker ends (a spawn that failed included), its connection
@@ -996,6 +1004,7 @@ impl Worker {
             events: o.events,
             turns: super::live_deck::Turns::default(),
             watch: super::live_watch::SocketWatch::new(&o.features),
+            features: o.features,
         }
     }
 
@@ -1399,6 +1408,21 @@ impl Worker {
                 Err(n) => self.send(wire::error_frame(&wire::report("MPC-E113", n.0))),
             },
             ClientFrame::Hello => Ok(()),
+            // Kit v0.18.0 presence (WIRE.md "Presence frames"): the view
+            // this person looks at and their playhead, on the roster as
+            // `view_address` / `time_position`. No reply unless refused
+            // (`presence_refused {req}`); not listed here: `MPC-E113`.
+            ClientFrame::ViewAddress { req, address } => {
+                self.presence(req, super::live_watch::VIEW_ADDRESS_FEATURE, |s, c| {
+                    s.set_view_address(c, address.as_deref()).map(drop)
+                })
+            }
+            ClientFrame::TimePosition { req, time } => {
+                self.presence(req, super::live_watch::TIME_POSITION_FEATURE, |s, c| {
+                    let time = time.as_ref().map(wire::TimeSet::position).transpose()?;
+                    s.set_time_position(c, time).map(drop)
+                })
+            }
             // The app showed the removed-text notes: delivered, so no later
             // snapshot repeats them. No reply; a refusal (no read right) is
             // nothing to tell.
@@ -1413,6 +1437,20 @@ impl Worker {
                 let _ = self.session.set_view(self.conn, LineRange { root, first, last });
                 Ok(())
             }
+        }
+    }
+
+    /// A presence frame of the family `feature`: taken only when the welcome
+    /// listed it (else `error`, `MPC-E113`, as an unknown frame); the kit's
+    /// refusal is `presence_refused {req, error}` and nothing changes.
+    fn presence(&mut self, req: u64, feature: &'static str, set: impl FnOnce(&Session, ConnId) -> Result<(), SessionError>) -> Result<(), Stop> {
+        if !self.features.contains(&feature) {
+            let e = wire::report("MPC-E113", format!("`{feature}` isn't taken here: this doc's socket doesn't list it in welcome.features"));
+            return self.send(wire::error_frame(&e));
+        }
+        match set(&*self.session, self.conn) {
+            Ok(()) => Ok(()),
+            Err(e) => self.send(wire::presence_refused_frame(req, &e.report())),
         }
     }
 

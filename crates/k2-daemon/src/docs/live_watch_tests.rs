@@ -148,6 +148,33 @@ fn only_a_keyed_doc_that_isnt_a_table_lists_the_keyed_watch() {
     assert_eq!(features_value(&[]).to_json(), "[]");
 }
 
+/// Kit v0.18.0: a keyed doc's socket lists `view_address` and
+/// `time_position` after the keyed watch (the names the client's
+/// `PresenceChannel` checks), and the kit takes both from anyone joined on
+/// it (it refuses only a watcher, which K2 never joins).
+#[test]
+fn a_keyed_socket_lists_the_view_address_and_the_time_position_and_both_are_taken() {
+    let f = Fx::new();
+    let s = f.board(START);
+    let listed = keyed_socket_features(&s);
+    assert_eq!(listed, vec!["keyed_watch", "view_address", "time_position"]);
+    assert_eq!(features_value(&listed).to_json(), r#"["keyed_watch","view_address","time_position"]"#);
+    assert_eq!((VIEW_ADDRESS_FEATURE, TIME_POSITION_FEATURE), ("view_address", "time_position"), "the kit client's names");
+    let table = f.open(Arc::new(Table), "sheet.csv", b"");
+    assert_eq!(keyed_socket_features(&table), vec!["view_address", "time_position"], "presence, without the keyed watch");
+    let w = SocketWatch::new(&keyed_socket_features(&s));
+    assert!(w.listed(), "the presence names don't hide the keyed watch");
+
+    let me = join(&s, "person:owner");
+    let ada = join(&s, "person:ada");
+    assert_eq!(s.set_view_address(me, Some("@cam:c1")).expect("a view by address"), Some("@cam:c1".into()));
+    assert_eq!(s.set_view_address(ada, Some("a2")).expect("a bare key is an address"), Some("a2".into()));
+    let t = k2_mpc_base::session::TimePosition::new("48", k2_mpc_base::session::PlayState::Paused).expect("at");
+    assert!(s.set_time_position(ada, Some(t)).expect("a playhead").is_some_and(|t| t.at_ms() > 0), "the kit stamps at_ms");
+    let e = s.set_view_address(me, Some("")).expect_err("not an address");
+    assert_eq!(e.report().id(), "MPC-E114", "{e}");
+}
+
 #[test]
 fn a_watch_sends_a_snapshot_in_pages_then_one_numbered_ops_change_per_change() {
     let f = Fx::new();

@@ -21,7 +21,8 @@ use serde_json::Value as Json;
 use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
     ChangeEvent, ClaimActor, ClaimSpan, CursorAt, ElemFocus, ElemRange, ElemSelection, LeaveReason, LineRange, Overwrite,
-    ParticipantKind, Point, Rect, Rights, Role, RosterEvent, RosterMember, SessionError, UndoOutcome, Who,
+    ParticipantKind, PlayState, Point, Rect, Rights, Role, RosterEvent, RosterMember, SessionError, TimePosition, UndoOutcome,
+    Who,
 };
 
 /// The wire this host speaks (`welcome.wire`): the vendored kit's.
@@ -369,6 +370,30 @@ fn elem_fields(
     }
 }
 
+/// A time position (WIRE.md "JSON encodings", kit v0.18.0): `{at, state,
+/// at_ms}`, then `in` and `rate` only when it has them.
+fn time_position(t: &TimePosition) -> Value {
+    let mut fields = vec![("at", Value::from(t.at())), ("state", Value::from(t.state().as_str())), ("at_ms", Value::from(t.at_ms()))];
+    if let Some(a) = t.in_address() {
+        fields.push(("in", Value::from(a)));
+    }
+    if let Some(r) = t.rate_text() {
+        fields.push(("rate", Value::from(r)));
+    }
+    Value::obj(fields)
+}
+
+/// An entry's or a device's `view_address` and `time_position` (kit
+/// v0.18.0), each left out when `None`, after the element presence.
+fn view_time_fields(fields: &mut Vec<(&'static str, Value)>, view: &Option<String>, time: &Option<TimePosition>) {
+    if let Some(v) = view {
+        fields.push(("view_address", Value::from(v.as_str())));
+    }
+    if let Some(t) = time {
+        fields.push(("time_position", time_position(t)));
+    }
+}
+
 /// A `selection`, `pointer`, `viewport`, `focus` or `range` event: `client`
 /// only when the event names one.
 fn elem_event(kind: &'static str, w: &Who, value: Value, client: &Option<u64>) -> Value {
@@ -409,6 +434,7 @@ fn member(m: &RosterMember, version: Seq) -> Value {
             }
             let mut more = Vec::new();
             elem_fields(&mut more, &d.selection, &d.pointer, &d.viewport, &d.focus, &d.range);
+            view_time_fields(&mut more, &d.view_address, &d.time);
             o.extend(more);
             Value::obj(o)
         });
@@ -416,6 +442,7 @@ fn member(m: &RosterMember, version: Seq) -> Value {
     }
     let e = &m.entry;
     elem_fields(&mut fields, &e.selection, &e.pointer, &e.viewport, &e.focus, &e.range);
+    view_time_fields(&mut fields, &e.view_address, &e.time);
     let elem_claims: Vec<Value> = e
         .claims
         .iter()
@@ -614,6 +641,14 @@ pub fn roster_event_for(e: &RosterEvent, me: Value) -> Option<Value> {
         RosterEvent::Viewport { who: w, viewport: r, client, .. } => elem_event("viewport", w, r.as_ref().map_or(Value::Null, rect), client),
         RosterEvent::Focus { who: w, focus: f, client, .. } => elem_event("focus", w, f.as_ref().map_or(Value::Null, focus), client),
         RosterEvent::Range { who: w, range: g, client, .. } => elem_event("range", w, g.as_ref().map_or(Value::Null, range), client),
+        // Kit v0.18.0: the view a connection looks at, by address, and its
+        // playhead (`at_ms` stamped by the kit when it took it).
+        RosterEvent::ViewAddress { who: w, address, client, .. } => {
+            elem_event("view_address", w, address.as_deref().map_or(Value::Null, Value::from), client)
+        }
+        RosterEvent::TimePosition { who: w, time, client, .. } => {
+            elem_event("time_position", w, time.as_ref().map_or(Value::Null, time_position), client)
+        }
         RosterEvent::Note { to, from, kind: k, lines: l, claim, .. } => Value::obj([
             ("kind", Value::from("note")),
             ("to", who(to)),
@@ -651,6 +686,13 @@ pub fn events_frame(op: u64, evs: &[ChangeEvent]) -> Value {
 
 pub fn snapshot_frame(op: u64, text: &str, version: Seq) -> Value {
     Value::obj([("type", Value::from("snapshot")), ("op", Value::from(op)), ("text", Value::from(text)), ("version", Value::from(version))])
+}
+
+/// `presence_refused {req, error}` (WIRE.md "Presence frames"): a
+/// presence frame the kit refused; nothing changed. Numbered by the
+/// channel's own `req`, never an `op`.
+pub fn presence_refused_frame(req: u64, e: &ErrorReport) -> Value {
+    Value::obj([("type", Value::from("presence_refused")), ("req", Value::from(req)), ("error", e.to_value())])
 }
 
 pub fn roster_frame(event: Value) -> Value {
@@ -751,6 +793,41 @@ pub enum ClientFrame {
     /// `report {seq}`: the last watch frame the client applied (taken,
     /// unused on this engine).
     Report { seq: u64 },
+    /// `view_address {req, address}` (feature `view_address`, kit
+    /// v0.18.0): the view this connection looks at, or `None` to clear it.
+    ViewAddress { req: u64, address: Option<String> },
+    /// `time_position {req, time_position}` (feature `time_position`):
+    /// this connection's playhead, or `None` to clear it. Read as sent;
+    /// the kit checks the values ([`TimeSet::position`]).
+    TimePosition { req: u64, time: Option<TimeSet> },
+}
+
+/// A `time_position` frame's value as the client sent it: `{at, state,
+/// in?, rate?}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeSet {
+    pub at: String,
+    pub state: String,
+    pub within: Option<String>,
+    pub rate: Option<String>,
+}
+
+impl TimeSet {
+    /// The kit's value (`TimePosition::new`, then `.within` and `.rate`
+    /// when given). A value the kit won't take is `MPC-E114`
+    /// (`BadPosition`), as the kit's own setters say.
+    pub fn position(&self) -> Result<TimePosition, SessionError> {
+        let state = PlayState::parse(&self.state)
+            .ok_or_else(|| SessionError::BadPosition(format!("the state {:?} is not playing or paused", self.state)))?;
+        let mut t = TimePosition::new(&self.at, state)?;
+        if let Some(a) = &self.within {
+            t = t.within(a)?;
+        }
+        if let Some(r) = &self.rate {
+            t = t.rate(r)?;
+        }
+        Ok(t)
+    }
 }
 
 /// Why a client frame was refused: its `op` when it had one (the reply is
@@ -842,6 +919,36 @@ pub fn parse(text: &str) -> Result<ClientFrame, BadFrame> {
         "take_notes" => ClientFrame::TakeNotes,
         "watch" => ClientFrame::Watch,
         "report" => ClientFrame::Report { seq: u64_field(o, "seq").map_err(bad)? },
+        "view_address" => ClientFrame::ViewAddress {
+            req: u64_field(o, "req").map_err(bad)?,
+            address: match o.get("address") {
+                Some(Json::Null) => None,
+                Some(Json::String(a)) => Some(a.clone()),
+                _ => return Err(bad("`address` must be a string or null".into())),
+            },
+        },
+        "time_position" => ClientFrame::TimePosition {
+            req: u64_field(o, "req").map_err(bad)?,
+            time: match o.get("time_position") {
+                Some(Json::Null) => None,
+                Some(Json::Object(t)) => {
+                    let opt = |k: &str| -> Result<Option<String>, String> {
+                        match t.get(k) {
+                            None | Some(Json::Null) => Ok(None),
+                            Some(Json::String(s)) => Ok(Some(s.clone())),
+                            Some(_) => Err(format!("`time_position.{k}` must be a string")),
+                        }
+                    };
+                    Some(TimeSet {
+                        at: str_field(t, "at").map_err(|m| bad(format!("time_position: {m} (a decimal integer string)")))?,
+                        state: str_field(t, "state").map_err(|m| bad(format!("time_position: {m}")))?,
+                        within: opt("in").map_err(bad)?,
+                        rate: opt("rate").map_err(bad)?,
+                    })
+                }
+                _ => return Err(bad("`time_position` must be an object {at, state, in?, rate?} or null".into())),
+            },
+        },
         other => return Err(bad(format!("unknown frame type `{other}`"))),
     })
 }
@@ -903,6 +1010,36 @@ mod tests {
         assert_eq!(parse(r#"{"type":"watch"}"#), Ok(ClientFrame::Watch));
         assert_eq!(parse(r#"{"type":"report","seq":64}"#), Ok(ClientFrame::Report { seq: 64 }));
         assert!(parse(r#"{"type":"report"}"#).is_err(), "a report names its seq");
+        // Kit v0.18.0 presence: numbered by `req` (never `op`), a value or null.
+        assert_eq!(
+            parse(r#"{"type":"view_address","req":2,"address":"@cam:c1"}"#),
+            Ok(ClientFrame::ViewAddress { req: 2, address: Some("@cam:c1".into()) })
+        );
+        assert_eq!(parse(r#"{"type":"view_address","req":3,"address":null}"#), Ok(ClientFrame::ViewAddress { req: 3, address: None }));
+        assert_eq!(
+            parse(r#"{"type":"time_position","req":4,"time_position":{"at":"-1270080000","state":"paused","in":"@seq:main","rate":"1001/1000"}}"#),
+            Ok(ClientFrame::TimePosition {
+                req: 4,
+                time: Some(TimeSet {
+                    at: "-1270080000".into(),
+                    state: "paused".into(),
+                    within: Some("@seq:main".into()),
+                    rate: Some("1001/1000".into())
+                })
+            })
+        );
+        assert_eq!(parse(r#"{"type":"time_position","req":5,"time_position":null}"#), Ok(ClientFrame::TimePosition { req: 5, time: None }));
+        for junk in [
+            r#"{"type":"view_address","req":6}"#,
+            r#"{"type":"view_address","address":"@cam:c1"}"#,
+            r#"{"type":"view_address","req":6,"address":7}"#,
+            r#"{"type":"time_position","req":7,"time_position":{"at":12,"state":"paused"}}"#,
+            r#"{"type":"time_position","req":7,"time_position":{"at":"12"}}"#,
+            r#"{"type":"time_position","req":7}"#,
+        ] {
+            let b = parse(junk).expect_err(junk);
+            assert_eq!(b.op, None, "a presence frame has no op, so its junk is an `error` frame: {junk}");
+        }
 
         let b = parse(r#"{"type":"edit","op":8,"root":"source","base":1,"hunks":[[0,0,"x"]]}"#).expect_err("array hunk");
         assert_eq!(b.op, Some(8), "refused with its op");
@@ -915,6 +1052,28 @@ mod tests {
         assert!(b.message.contains("teleport"), "{}", b.message);
         assert!(parse(r#"{"type":"edit","op":-1,"root":"source","base":1,"hunks":[]}"#).is_err(), "negative op");
         assert_eq!(type_and_op(r#"{"type":"edit","op":12}"#), (Some("edit".into()), Some(12)));
+    }
+
+    /// A value the kit won't take is the kit's `MPC-E114` (`BadPosition`),
+    /// answered `presence_refused {req, error}`, never `refused {op}`.
+    #[test]
+    fn a_time_position_is_the_kits_value_or_its_bad_position() {
+        let t = TimeSet { at: "254016000000".into(), state: "playing".into(), within: Some("@seq:main".into()), rate: None };
+        let p = t.position().expect("a good playhead");
+        assert_eq!((p.at(), p.state(), p.in_address(), p.rate_text()), ("254016000000", PlayState::Playing, Some("@seq:main"), None));
+        assert_eq!(time_position(&p).to_json(), r#"{"at":"254016000000","state":"playing","at_ms":0,"in":"@seq:main"}"#);
+        for bad in [
+            TimeSet { at: "1.5".into(), state: "paused".into(), within: None, rate: None },
+            TimeSet { at: "007".into(), state: "paused".into(), within: None, rate: None },
+            TimeSet { at: "1".into(), state: "rewinding".into(), within: None, rate: None },
+            TimeSet { at: "1".into(), state: "paused".into(), within: None, rate: Some("1/0".into()) },
+            TimeSet { at: "1".into(), state: "paused".into(), within: Some(String::new()), rate: None },
+        ] {
+            let e = bad.position().expect_err("refused");
+            assert_eq!(e.report().id(), "MPC-E114", "{bad:?}: {e}");
+            let f = presence_refused_frame(9, &e.report()).to_json();
+            assert!(f.starts_with(r#"{"type":"presence_refused","req":9,"error":{"id":"MPC-E114""#), "{f}");
+        }
     }
 
     #[test]

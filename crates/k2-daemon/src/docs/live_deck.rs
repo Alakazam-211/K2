@@ -20,8 +20,10 @@
 //!   (only for a turn this doc's changes carried), comment and anchor
 //!   events.
 //!
-//! **What it takes:** `since`, `visible`, `hello`, and the keyed watch's
-//! `watch` and `report`. Every frame that writes or reads text (`edit`,
+//! **What it takes:** `since`, `visible`, `hello`, the keyed watch's
+//! `watch` and `report`, and the presence frames `view_address` and
+//! `time_position` (kit v0.18.0: the welcome's `features` lists both, for
+//! every person on the socket, so Follow can follow a view and a playhead). Every frame that writes or reads text (`edit`,
 //! `undo`, `redo`, `snapshot`, `cursor`, `view`, `take_notes`) is refused,
 //! `MPC-E113`, with its `op` when it has one.
 //!
@@ -123,9 +125,13 @@ pub fn refuse(f: &ClientFrame) -> Option<Value> {
         ClientFrame::Cursor { .. } => (None, "cursor"),
         ClientFrame::View { .. } => (None, "view"),
         ClientFrame::TakeNotes => (None, "take_notes"),
-        ClientFrame::Since { .. } | ClientFrame::Visible(_) | ClientFrame::Hello | ClientFrame::Watch | ClientFrame::Report { .. } => {
-            return None
-        }
+        ClientFrame::Since { .. }
+        | ClientFrame::Visible(_)
+        | ClientFrame::Hello
+        | ClientFrame::Watch
+        | ClientFrame::Report { .. }
+        | ClientFrame::ViewAddress { .. }
+        | ClientFrame::TimePosition { .. } => return None,
     };
     let e = wire::unreadable(&format!("`{what}` isn't taken on a deck: people watch a live deck, agents change it with k2 doc"));
     Some(match op {
@@ -224,7 +230,15 @@ mod tests {
         assert!(r.contains("k2 doc"), "{r}");
         let r = refuse(&ClientFrame::Cursor { root: "source".into(), version: 1, anchor: 0, head: 0 }).expect("refused").to_json();
         assert!(r.starts_with(r#"{"type":"error","error":{"id":"MPC-E113""#), "{r}");
-        for ok in [ClientFrame::Since { op: 1, version: 2 }, ClientFrame::Visible(true), ClientFrame::Hello, ClientFrame::Watch, ClientFrame::Report { seq: 3 }] {
+        for ok in [
+            ClientFrame::Since { op: 1, version: 2 },
+            ClientFrame::Visible(true),
+            ClientFrame::Hello,
+            ClientFrame::Watch,
+            ClientFrame::Report { seq: 3 },
+            ClientFrame::ViewAddress { req: 1, address: Some("@sld:256".into()) },
+            ClientFrame::TimePosition { req: 2, time: None },
+        ] {
             assert!(refuse(&ok).is_none(), "{ok:?}");
         }
         assert!(root_ok(None) && root_ok(Some("slides")) && !root_ok(Some("source")));

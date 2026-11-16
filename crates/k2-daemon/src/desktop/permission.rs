@@ -638,7 +638,7 @@ impl Host for DeskdHost {
         if !cfg!(target_os = "macos") {
             return Err("System Settings is on a Mac only".into());
         }
-        let st = std::process::Command::new("/usr/bin/open")
+        let st = k2_core::bg_proc::command("/usr/bin/open")
             .arg(pane.url())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

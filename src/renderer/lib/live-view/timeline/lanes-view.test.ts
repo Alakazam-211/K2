@@ -18,7 +18,11 @@ import {
   laneHeight,
   lanesHeight,
   loadPrefs,
+  MAX_PPF,
+  MIN_PPF,
   offscreenOf,
+  openFitPpf,
+  refitDue,
   playheadsOf,
   savePrefs,
   timeWidth,
@@ -163,5 +167,22 @@ describe('the View menu’s choices, saved per tab', () => {
     savePrefs('tab-a', { lanes: 'L', pic: 'off', scroll: 'centre' })
     expect(loadPrefs('tab-a', M)).toEqual({ lanes: 'L', pic: 'off', scroll: 'centre' })
     expect(loadPrefs('tab-b', M)).toEqual(defaultPrefs(M))
+  })
+})
+
+describe('a real file opens fitted', () => {
+  it('fits the whole edit across the lanes with a small margin, clamped to the zoom range', () => {
+    // 8 s at 24 fps across 1000 px: 970 px for 192 frames.
+    expect(openFitPpf(192, 1000)).toBeCloseTo(970 / 192, 6)
+    expect(192 * openFitPpf(192, 1000)).toBeLessThan(1000)
+    expect(openFitPpf(1, 1000)).toBeLessThanOrEqual(MAX_PPF)
+    expect(openFitPpf(10_000_000, 1000)).toBe(MIN_PPF)
+  })
+
+  it('re-fits only when the length changes a lot (a quarter, at least 2 s)', () => {
+    expect(refitDue(192, 200)).toBe(false)
+    expect(refitDue(192, 260)).toBe(true)
+    expect(refitDue(2400, 2500)).toBe(false)
+    expect(refitDue(2400, 3200)).toBe(true)
   })
 })

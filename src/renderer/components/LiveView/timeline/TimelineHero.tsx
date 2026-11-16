@@ -15,7 +15,7 @@ import { DEFAULT_SEQUENCE, finishedWords, sayAtOf, scriptedLoop } from '@/lib/li
 import { stageCard } from '@/lib/live-view/timeline/stage-card'
 import { actorOf } from '@/lib/live-view/timeline/actors'
 import { agentOf } from '@/lib/live-view/timeline/snapshot'
-import { bracketsOf, type Bracket, defaultPpf, fitPpf, isBig, lanesHeight, loadPrefs, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
+import { bracketsOf, type Bracket, defaultPpf, fitPpf, isBig, lanesHeight, loadPrefs, openFitPpf, refitDue, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
 import { detailRows } from '@/lib/live-view/timeline/monitor-details'
 import { monitorView, type LocalPlay } from '@/lib/live-view/timeline/monitor-view'
 import { loopRange } from '@/lib/live-view/timeline/picture'
@@ -95,11 +95,23 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
   // A new edit (another file or sample): its own choices and zoom.
   const key = `${tab}|${view.scenario}`
   const [seen, setSeen] = useState(key)
+  // A real file opens fitted (the whole edit across the lanes) and re-fits when its length changes a lot, until you zoom or scroll.
+  const [fitTo, setFitTo] = useState<number | null>(null)
+  const [touched, setTouched] = useState(false)
   if (seen !== key) {
     setSeen(key)
     setPrefs(loadPrefs(tab, M))
     setPpf(null)
+    setFitTo(null)
+    setTouched(false)
   }
+  const real = view.sample === false
+  if (real && !touched && ppf === null && !S.loading && M.endF > 0 && (fitTo === null || refitDue(fitTo, M.endF))) {
+    // A fit starts the lanes at the edit's start (as the Fit button does), not at the old middle scaled.
+    setFitTick((n) => n + 1)
+    setFitTo(M.endF)
+  }
+  const lanesPpf = ppf === null && real && fitTo !== null ? { fitTo } : ppf
   // A step that zooms (the sample's "fit", "zoom in" on a long edit): the lanes follow it.
   const z = S.zoom
   const cue = z && z.at === view.step ? `${key}|${view.step}` : null
@@ -140,8 +152,12 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
   const onMeasure = useCallback((w: number) => {
     tw.current = w
   }, [])
-  const zoom = (dir: 1 | -1): void => setPpf((v) => zoomStep(v === 'fit' ? fitPpf(M, tw.current) : (v ?? defaultPpf(M, tw.current)), dir, M, tw.current))
+  const zoom = (dir: 1 | -1): void => {
+    setTouched(true)
+    setPpf((v) => zoomStep(v === 'fit' ? fitPpf(M, tw.current) : (v ?? (real && fitTo !== null ? openFitPpf(fitTo, tw.current) : defaultPpf(M, tw.current))), dir, M, tw.current))
+  }
   const fit = (): void => {
+    setTouched(true)
     setPpf('fit')
     setFitTick((n) => n + 1)
   }
@@ -297,7 +313,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
         people={p.snap.people}
         narrow={p.narrow}
         prefs={prefs}
-        ppf={ppf}
+        ppf={lanesPpf}
         fitTick={fitTick}
         centre={centre}
         maxFrame={maxFrame}
@@ -307,6 +323,7 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
         monitor={{ f: mv.head.f, colour: mv.head.self ? 'var(--color-accent)' : mv.head.colour, name: mv.head.self ? 'your playhead' : `${mv.head.name}’s playhead` }}
         follow={{ playing: mv.playing, following: !!whose, scroll: prefs.scroll }}
         onUserScroll={() => {
+          setTouched(true)
           if (whose) take({ f: mv.head.f, rate: 0 })
         }}
         loop={local?.loop ?? null}

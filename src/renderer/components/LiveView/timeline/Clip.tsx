@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, type CSSProperties } from 'react'
 import { personInk } from '@/components/HomeChat/HomeChatGlyphs'
+import { isPresenceToken } from '@/lib/live-view/timeline/live-map'
 import { drawScene, tileCanvas, waveAmp } from '@/lib/live-view/timeline/footage'
 import type { Item, TimelineModel } from '@/lib/live-view/timeline/fold'
 import { kindGlyphOf, labelForRoom } from '@/lib/live-view/timeline/labels'
@@ -19,7 +20,8 @@ import type { Box } from './box'
 import { PAINTS } from './measure'
 
 const HEX = /^#[0-9a-f]{6}$/i
-const inkOn = (c: string): string => (HEX.test(c) ? personInk(c) : 'var(--color-on-accent)')
+// A presence token (a real file's people) takes the page's background as ink, as the avatars do.
+const inkOn = (c: string): string => (HEX.test(c) ? personInk(c) : isPresenceToken(c) ? 'var(--color-bg)' : 'var(--color-on-accent)')
 
 export interface ClipProps {
   /** The model, boxed (box.ts). */

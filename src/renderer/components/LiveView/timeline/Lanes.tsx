@@ -15,7 +15,7 @@ import {
   bracketsOf,
   clipMarks,
   defaultPpf,
-  fitPpf,
+  fitPpf, openFitPpf,
   drawWindow,
   ghostsOf,
   HEAD_W,
@@ -52,7 +52,8 @@ export interface LanesProps {
   narrow: boolean
   prefs: ViewPrefs
   /** Pixels a frame; null: the edit's default for this width; 'fit': the whole edit. */
-  ppf: number | 'fit' | null
+  /** Pixels a frame; 'fit' the whole edit now; `fitTo` the edit as long as it was when fitted (a real file's open, lanes-view openFitPpf); null the default. */
+  ppf: number | 'fit' | { fitTo: number } | null
   /** Bring this frame to the middle (a step that zooms in somewhere). */
   centre?: { f: number; key: string } | null
   /** Bumped to fit the whole edit (scrolls to its start). */
@@ -115,7 +116,7 @@ export function Lanes(p: LanesProps): React.JSX.Element {
 
   const tw = Math.max(200, box.w - HW)
   useEffect(() => onMeasure(tw), [tw, onMeasure])
-  const ppf = p.ppf === 'fit' ? fitPpf(M, tw) : (p.ppf ?? defaultPpf(M, tw))
+  const ppf = p.ppf === 'fit' ? fitPpf(M, tw) : p.ppf && typeof p.ppf === 'object' ? openFitPpf(p.ppf.fitTo, tw) : (p.ppf ?? defaultPpf(M, tw))
   const timeW = timeWidth(M, ppf, tw)
   const now = nowOf(S)
   const heads = playheadsOf(S, M, now)
@@ -178,6 +179,8 @@ export function Lanes(p: LanesProps): React.JSX.Element {
       tabIndex={0}
       data-k2-focus=""
       data-testid="lv-lanes"
+      data-ppf={ppf.toFixed(4)}
+      data-tw={tw}
       data-size={prefs.lanes}
       data-pic={prefs.pic}
       data-paused={S.paused ? '' : undefined}

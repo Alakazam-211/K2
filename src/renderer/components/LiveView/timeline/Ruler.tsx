@@ -8,6 +8,7 @@
 
 import type { CSSProperties } from 'react'
 import { personInk } from '@/components/HomeChat/HomeChatGlyphs'
+import { isPresenceToken } from '@/lib/live-view/timeline/live-map'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import type { TimelineModel } from '@/lib/live-view/timeline/fold'
 import type { Bracket, Readiness } from '@/lib/live-view/timeline/lanes-view'
@@ -132,7 +133,7 @@ export function Ruler(p: RulerProps): React.JSX.Element {
               data-k2-chamfer="chip"
               data-testid="lv-ruler-tag"
               title={`${t.head.name}’s playhead · ${M.tcF(t.head.f)}`}
-              style={{ left: t.x0, width: t.w, '--lv-c': t.head.colour, '--lv-ink': HEX.test(t.head.colour) ? personInk(t.head.colour) : 'var(--color-on-accent)' } as CSSProperties}
+              style={{ left: t.x0, width: t.w, '--lv-c': t.head.colour, '--lv-ink': HEX.test(t.head.colour) ? personInk(t.head.colour) : isPresenceToken(t.head.colour) ? 'var(--color-bg)' : 'var(--color-on-accent)' } as CSSProperties}
             >
               {t.head.name}
             </span>

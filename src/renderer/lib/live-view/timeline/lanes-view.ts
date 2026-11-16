@@ -54,6 +54,12 @@ export const defaultPpf = (M: TimelineModel, tw: number): number => (isBig(M) ? 
 /** The whole edit in the lanes' width. */
 export const fitPpf = (M: TimelineModel, tw: number): number => Math.max(MIN_PPF, (tw - 30) / Math.max(48, M.endF))
 
+/** A real file as it opens: the edit's length (`endF` frames) across the lanes with a small margin, clamped to the zoom range. */
+export const openFitPpf = (endF: number, tw: number): number => Math.min(MAX_PPF, Math.max(MIN_PPF, (tw - Math.max(24, tw * 0.03)) / Math.max(48, endF)))
+
+/** The edit's length has changed a lot (a quarter, or 2 s at 24 fps) since the lanes were fitted to it. */
+export const refitDue = (fittedF: number, endF: number): boolean => Math.abs(endF - fittedF) > Math.max(48, fittedF * 0.25)
+
 /** One zoom step: half again in (to 64 px a frame), or back out (to fit). */
 export function zoomStep(ppf: number, dir: 1 | -1, M: TimelineModel, tw: number): number {
   if (dir > 0) return Math.min(MAX_PPF, ppf * 1.5)

@@ -4,11 +4,14 @@
 // or chip, and a monitor that says Preparing video and draws nothing (never
 // sample footage, no waveforms); a refusal at open is the can't-be-live card.
 
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ServerScope } from '@/kessel/server-scope'
 import { LiveConnectError, type LiveClose, type LiveTransport, type LiveWelcome } from '@/lib/docs-live-transport'
 import golden from '@/lib/live-view/timeline/samples/pack-trim_held_outside_save.json'
+import type { TimelineModel } from '@/lib/live-view/timeline/fold'
+import { KeyedWatchTimelineSource } from '@/lib/live-view/timeline/keyed-source'
+import { defaultPpf, openFitPpf } from '@/lib/live-view/timeline/lanes-view'
 import TimelineLive from './TimelineLive'
 
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliPost: vi.fn(async () => ({ ok: true })) }))
@@ -19,11 +22,15 @@ type Step = { step: string; roster: Record<string, unknown>[]; watch?: Record<st
 const STEPS = (golden as unknown as { steps: Step[] }).steps
 const WELCOME = { type: 'welcome', root: '', version: 0, client: 1, self: 'ada', rights: 'edit', features: ['keyed_watch', 'view_address', 'time_position'] } as unknown as LiveWelcome
 
+/** The live socket's push, for a frame after the golden's (the latest scripted socket). */
+let pushLive: (f: unknown) => void = () => {}
+
 /** K2's docs socket, scripted: the welcome, then on `watch` the golden's frames up to `upto`. */
 function scripted(upto: string, refuse?: LiveClose): () => LiveTransport {
   return () => {
     const frames = new Set<(f: unknown) => void>()
     const push = (f: unknown): void => [...frames].forEach((cb) => cb(f))
+    pushLive = push
     return {
       open: true,
       connect: async () => {
@@ -49,6 +56,29 @@ function scripted(upto: string, refuse?: LiveClose): () => LiveTransport {
 }
 
 const SENT: Record<string, unknown>[] = []
+
+/** The golden's edit as the real source folds it. */
+function modelOfGolden(): TimelineModel {
+  const subs = new Set<(f: unknown) => void>()
+  const t = { send: () => {}, onFrame: (cb: (f: unknown) => void) => (subs.add(cb), () => subs.delete(cb)) }
+  const src = new KeyedWatchTimelineSource(t as never, { post: async () => undefined })
+  src.attach(WELCOME as never)
+  for (const f of STEPS[0].watch!) [...subs].forEach((cb) => cb(f))
+  return src.timeline().model
+}
+const endOf = (): number => modelOfGolden().endF
+
+/** An outside save that makes Music on A1 \`times\` as long: the edit's length changes a lot. */
+function longer(seq: number, rev: number, times: number): unknown {
+  const before = seq === 13 ? '0,508032000000' : '0,5080320000000'
+  const after = `0,${508032000000 * times}`
+  return {
+    type: 'ops_change', seq, rev, at_ms: 1793111402600 + seq, change_kind: 'external', actor: { id: 'kit:external', name: 'kit:external', kind: 'file', colour: null }, client: 4, via: 'disk', on_behalf_of: null, turn: null, verb: null, claim: null,
+    ops: [{ root: 'item_props', kind: 'map', op: 'set', key: '@item:6', field: 'geom', before, after }],
+    units: [{ key: '@item:6', container: '@trk:2', ops: ['move_resize'], geom_before: before, geom_after: after, fields: ['geom'], hidden_after: null, placeholder_type: null }],
+    containers_changed: [], containers: ['@trk:2'], derived: null, render_hashes: null,
+  }
+}
 const SCOPE = { id: 'local' } as unknown as ServerScope
 
 async function mount(createTransport: () => LiveTransport, filePath = '/w/edits/cut.otio'): Promise<void> {
@@ -99,6 +129,45 @@ describe('the live timeline tab on a real file', () => {
   it('an .otio file is plain Live', async () => {
     await mount(scripted('watch'))
     expect(screen.getByTestId('lv-state').getAttribute('data-state')).toBe('live')
+  })
+
+  it('opens fitted: the whole edit across the lanes, not the default zoom', async () => {
+    await mount(scripted('watch'))
+    const lanes = screen.getByTestId('lv-lanes')
+    const ppf = Number(lanes.getAttribute('data-ppf'))
+    const tw = Number(lanes.getAttribute('data-tw'))
+    expect(ppf).toBeCloseTo(openFitPpf(endOf(), tw), 3)
+    expect(ppf).not.toBeCloseTo(defaultPpf(modelOfGolden(), tw), 3)
+    // The whole edit shows, with a margin.
+    expect(endOf() * ppf).toBeLessThan(tw)
+    expect(endOf() * ppf).toBeGreaterThan(tw * 0.9)
+  })
+
+  it('re-fits when the edit grows a lot before you touch the lanes, never after you scroll', async () => {
+    await mount(scripted('watch'))
+    const lanes = screen.getByTestId('lv-lanes')
+    const before = Number(lanes.getAttribute('data-ppf'))
+    await act(async () => pushLive(longer(13, 2, 10)))
+    const after = Number(lanes.getAttribute('data-ppf'))
+    expect(after).toBeLessThan(before * 0.5)
+    // You scroll: the lanes stay as they are, however long the edit gets.
+    const scroller = lanes.querySelector('[data-scroll-edges-list]') as HTMLElement
+    await act(async () => void scroller.dispatchEvent(new Event('pointerdown')))
+    await act(async () => pushLive(longer(14, 3, 40)))
+    expect(Number(lanes.getAttribute('data-ppf'))).toBeCloseTo(after, 6)
+  })
+
+  it('Atlas, Nova and You are three different colours: others take presence slots, never the blue that reads as yours', async () => {
+    await mount(scripted('trim'))
+    const avatars = within(screen.getByTestId('lv-stack')).getAllByTestId('lv-avatar').map((a) => (a as HTMLElement).style.backgroundColor)
+    expect(avatars).toContain('var(--color-presence-1)')
+    expect(avatars).toContain('var(--color-presence-3)')
+    expect(avatars).not.toContain('var(--color-presence-2)')
+    expect(new Set(avatars).size).toBe(avatars.length)
+    // Atlas's playhead tag and hold read in the same slot.
+    const tags = screen.queryAllByTestId('lv-ruler-tag').map((t) => t.getAttribute('style') ?? '')
+    expect(tags.some((s) => s.includes('--color-presence-1'))).toBe(true)
+    expect(tags.join(' ')).not.toContain('#0ea5e9')
   })
 
   it('a file the pack won’t watch live opens on the can’t-be-live card, in its words', async () => {

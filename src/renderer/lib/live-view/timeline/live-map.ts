@@ -88,3 +88,30 @@ export function sequenceOf(M: TimelineModel): string {
 export function readOnlyWhy(path: string): string | null {
   return /\.otio$/i.test(path) ? null : 'K2 writes back .otio only'
 }
+
+/** A presence slot (`--color-presence-1..4`). */
+export type PresenceSlot = 1 | 2 | 3 | 4
+
+/** The order others take slots: 2 (the blue) last, as it reads close to your own accent (You are always the accent). */
+const SLOT_ORDER: readonly PresenceSlot[] = [1, 3, 4, 2]
+
+/** Each slot's token, spelled out (the Styles shield reads every variable by name). */
+export const PRESENCE_TOKEN: Record<PresenceSlot, string> = { 1: 'var(--color-presence-1)', 2: 'var(--color-presence-2)', 3: 'var(--color-presence-3)', 4: 'var(--color-presence-4)' }
+
+/** A colour that is one of the presence tokens (inked on the background, as the avatars are). */
+export const isPresenceToken = (c: string): boolean => (Object.values(PRESENCE_TOKEN) as string[]).includes(c)
+
+/** Everyone else's presence slot on a real timeline, the editors' rule (presence-slots.ts): the first seen gets the first free slot and keeps it while here; one who leaves frees theirs; past four they repeat. Slots go in SLOT_ORDER so nobody's colour reads as yours. Pure. */
+export function timelineSlots(prev: ReadonlyMap<string, PresenceSlot>, others: readonly string[]): Map<string, PresenceSlot> {
+  const next = new Map<string, PresenceSlot>()
+  for (const id of others) {
+    const s = prev.get(id)
+    if (s !== undefined && ![...next.values()].includes(s)) next.set(id, s)
+  }
+  others.forEach((id, i) => {
+    if (next.has(id)) return
+    const used = new Set(next.values())
+    next.set(id, SLOT_ORDER.find((s) => !used.has(s)) ?? SLOT_ORDER[i % 4])
+  })
+  return next
+}

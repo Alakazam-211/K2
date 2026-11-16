@@ -18,10 +18,10 @@ import { KeyedWatch, PresenceChannel, type ClaimEnded, type ErrorReport, type Op
 import type { LiveMessage, LiveShellSnapshot, LiveSource, SayResult } from '../shared/source'
 import type { SayTime } from '../shared/say-time'
 import { readSayTime } from '../shared/say-time'
-import { putActor } from './actors'
+import { actorOf, putActor } from './actors'
 import { bookFromKeyedState } from './adapter'
 import { modelOf } from './fold'
-import { claimOf, declineWords, peerOf, realFacts, realPreview, sequenceOf } from './live-map'
+import { claimOf, declineWords, peerOf, PRESENCE_TOKEN, realFacts, realPreview, sequenceOf, timelineSlots, type PresenceSlot } from './live-map'
 import { KEYED_ROOTS, type Book, type OutsideSaveEvent, type Refusal, type TimelineFrame } from './schema'
 import { applyGroup, blankState, finish, type SimEvent, type SimState } from './sim'
 import { timelineSnapshot, type TimelineSnapshot } from './snapshot'
@@ -57,6 +57,8 @@ export class KeyedWatchTimelineSource implements LiveSource {
   private seq = 0
   private onRetry: (() => void) | null = null
   private mine: { view: string | null; time: TimePositionSet | null } = { view: null, time: null }
+  /** Everyone else's presence slot (live-map timelineSlots): their avatar, playhead, holds and marks take it. */
+  private slots = new Map<string, PresenceSlot>()
 
   constructor(
     private readonly t: Transport,
@@ -165,6 +167,11 @@ export class KeyedWatchTimelineSource implements LiveSource {
     this.subs.clear()
   }
 
+  private slotColour(id: string): string | null {
+    const s = this.slots.get(id)
+    return s ? PRESENCE_TOKEN[s] : null
+  }
+
   private now(): number {
     return (this.o.now ?? Date.now)()
   }
@@ -192,7 +199,7 @@ export class KeyedWatchTimelineSource implements LiveSource {
   }
 
   private onChange(c: OpsChangeFrame): void {
-    putActor({ ...c.actor, colour: c.actor.colour ?? null })
+    putActor({ ...c.actor, colour: this.slotColour(c.actor.id) ?? c.actor.colour ?? null })
     // The sim folds the frame for its log (the change's words, the agent's playhead); the kit's state stays the truth.
     this.group([{ kind: 'frame', frame: c as unknown as TimelineFrame }])
     this.S.B = this.book()
@@ -200,8 +207,8 @@ export class KeyedWatchTimelineSource implements LiveSource {
   }
 
   private onVerbRefused(r: VerbRefusedFrame): void {
-    putActor({ ...r.actor, colour: r.actor.colour ?? null })
-    if (r.holder) putActor({ ...r.holder, colour: r.holder.colour ?? null })
+    putActor({ ...r.actor, colour: this.slotColour(r.actor.id) ?? r.actor.colour ?? null })
+    if (r.holder) putActor({ ...r.holder, colour: this.slotColour(r.holder.id) ?? r.holder.colour ?? null })
     const ref: Refusal = { at_ms: r.at_ms, actor: { ...r.actor, colour: r.actor.colour ?? null }, client: r.client, turn: r.turn, verb: r.verb, unit: r.unit ?? '', code: r.code, holder: r.holder ? { ...r.holder, colour: r.holder.colour ?? null } : null, claim: r.claim }
     this.group([{ kind: 'refused', r: ref }])
   }
@@ -257,6 +264,28 @@ export class KeyedWatchTimelineSource implements LiveSource {
     for (const cb of this.subs) cb(this.snap)
   }
 
+  /** Real actors take presence slots that differ from yours (the accent): their peer colour, holds and actor all read as the slot's token. */
+  private tint(S: SimState): void {
+    const ids: string[] = []
+    const see = (id: string | null | undefined, kind?: string): void => {
+      if (id && id !== S.self && kind !== 'file' && !ids.includes(id)) ids.push(id)
+    }
+    for (const p of Object.values(S.peers)) see(p.handle, p.isSelf ? 'file' : undefined)
+    for (const c of S.claims) see(c.actor.id, c.actor.kind)
+    this.slots = timelineSlots(this.slots, ids)
+    for (const [id, slot] of this.slots) {
+      const colour = PRESENCE_TOKEN[slot]
+      const p = S.peers[id]
+      if (p) p.colour = colour
+      const a = actorOf(id)
+      if (a.kind !== 'file') putActor({ ...a, colour })
+    }
+    for (const c of S.claims) {
+      const slot = this.slots.get(c.actor.id)
+      if (slot) c.actor = { ...c.actor, colour: PRESENCE_TOKEN[slot] }
+    }
+  }
+
   private build(): TimelineSnapshot {
     const S = this.S
     S.at = this.now()
@@ -268,12 +297,13 @@ export class KeyedWatchTimelineSource implements LiveSource {
         const had = peers[pp.handle]
         const later = (pp.timePosition?.at_ms ?? -1) > (had?.timePosition?.at_ms ?? -1)
         if (!had || pp.isSelf || (!had.isSelf && later)) peers[pp.handle] = peerOf(pp)
-        if (!pp.isSelf) putActor({ id: pp.handle, name: pp.name, kind: pp.kind, colour: pp.colour || null })
+        if (!pp.isSelf) putActor({ id: pp.handle, name: pp.name, kind: pp.kind, colour: this.slotColour(pp.handle) ?? (pp.colour || null) })
       }
       if (S.self && !peers[S.self]) peers[S.self] = { ...peerOf({ handle: S.self, name: 'You', colour: '', kind: 'person', rawKind: 'person', isSelf: true, sameUser: true, selection: null, pointer: null, viewport: null, focus: null, range: null, cells: null, viewAddress: null, timePosition: null, away: false } as never) }
       S.peers = peers
     }
     finish(S)
+    this.tint(S)
     const M = modelOf(S.B)
     S.pv = realPreview(M, this.host)
     const snap = timelineSnapshot(S, { facts: realFacts(M), sample: false, scenario: 'live' })
@@ -281,6 +311,10 @@ export class KeyedWatchTimelineSource implements LiveSource {
     snap.features = { viewAddress: f.includes('view_address'), timePosition: f.includes('time_position'), say: true }
     snap.timeline.sequence = sequenceOf(M)
     if (this.o.readOnly) snap.readOnly = this.o.readOnly
+    for (const p of snap.people) {
+      const slot = p.self ? undefined : this.slots.get(p.id)
+      if (slot) p.presence = slot
+    }
     if (this.extra.length) snap.messages = [...snap.messages, ...this.extra].sort((a, b) => a.at_ms - b.at_ms)
     return snap
   }

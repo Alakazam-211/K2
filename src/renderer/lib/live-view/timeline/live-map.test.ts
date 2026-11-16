@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { modelOf } from './fold'
-import { declineWords, FIRST_SEQUENCE, readOnlyWhy, realPreview, sequenceOf } from './live-map'
+import { declineWords, FIRST_SEQUENCE, readOnlyWhy, realPreview, sequenceOf, timelineSlots } from './live-map'
 import type { Book } from './schema'
 
 const book = (timeline: Record<string, Record<string, string>>): Book => ({
@@ -44,5 +44,18 @@ describe('readOnlyWhy', () => {
     expect(readOnlyWhy('/w/cut.otio')).toBeNull()
     expect(readOnlyWhy('/w/cut.fcpxml')).toBe('K2 writes back .otio only')
     expect(readOnlyWhy('/w/Cut.PRPROJ')).toBe('K2 writes back .otio only')
+  })
+})
+
+describe('timelineSlots', () => {
+  it('others take presence slots in order 1, 3, 4 and the blue 2 last (You are the blue accent); each keeps theirs; a leaver frees theirs', () => {
+    const a = timelineSlots(new Map(), ['atlas', 'nova'])
+    expect([...a]).toEqual([['atlas', 1], ['nova', 3]])
+    const b = timelineSlots(a, ['nova', 'kai', 'atlas'])
+    expect([...b].sort()).toEqual([['atlas', 1], ['kai', 4], ['nova', 3]])
+    const c = timelineSlots(b, ['kai', 'sam'])
+    expect(c.get('kai')).toBe(4)
+    expect(c.get('sam')).toBe(1)
+    expect(timelineSlots(new Map(), ['a', 'b', 'c', 'd']).get('d')).toBe(2)
   })
 })

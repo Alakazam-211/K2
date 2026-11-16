@@ -91,7 +91,7 @@ function setup(over: { script?: FakeEngineScript; join?: VoiceDeps['api']['join'
     toast: (t) => toasts.push(t),
     loadReported: () => new Set(),
     saveReported: () => {},
-    loadPrefs: () => ({ inputDeviceId: null, outputDeviceId: null, joinMuted: false }),
+    loadPrefs: () => ({ inputDeviceId: null, outputDeviceId: null, joinMuted: false, noiseRemoval: true }),
     savePrefs: () => {},
     now: () => clock.now,
   })

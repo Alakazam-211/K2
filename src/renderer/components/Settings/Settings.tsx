@@ -53,6 +53,7 @@ import { OrgChartSection, ORG_CHART_MANIFEST } from './sections/OrgChartSection'
 import { multiplayerCoresAvailable } from './sections/multiplayer-cores-api'
 import { SewSection, SEW_MANIFEST } from './sections/SewSection'
 import { VoiceRoomsSection, VOICE_ROOMS_MANIFEST } from './sections/VoiceRoomsSection'
+import { VoiceSection, VOICE_MANIFEST } from './sections/VoiceSection'
 import { RemoteDesktopSection, REMOTE_DESKTOP_MANIFEST, remoteDesktopAvailable } from './sections/RemoteDesktopSection'
 import { voice } from '@/stores/voice'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
@@ -224,6 +225,8 @@ export function settingsNav({
     // night. Below Context Catalog: Gardens stays directly beneath Tickets.
     { kind: 'item', id: 'org-chart', label: 'Org Chart', beta: true },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
+    // Sew 0.10.2: this computer's microphone in calls (noise removal).
+    { kind: 'item', id: 'voice', label: 'Voice' },
     ...(webFeatures.permissions
       ? ([{ kind: 'item', id: 'permissions' as const, label: 'Accessibility' }] satisfies NavBlock[])
       : []),
@@ -395,6 +398,7 @@ export default function Settings(): React.JSX.Element {
       ...EMAIL_NOTIFICATIONS_MANIFEST,
       ...MAIL_READER_LOG_MANIFEST,
       ...SEW_MANIFEST,
+      ...VOICE_MANIFEST,
       ...(voiceRoomsShown() ? VOICE_ROOMS_MANIFEST : []),
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
@@ -821,6 +825,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'sew' && (
           <SectionErrorBoundary>
             <SewSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'voice' && (
+          <SectionErrorBoundary>
+            <VoiceSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'voice-rooms' && (

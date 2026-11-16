@@ -190,6 +190,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'email-reader-log': 'Email Reader Log',
   sew: 'Chat / Voice',
   'voice-rooms': 'Voice Rooms',
+  voice: 'Voice',
   'email-link': 'Email Link',
   data: 'Database',
   'skin-access': 'Apps',

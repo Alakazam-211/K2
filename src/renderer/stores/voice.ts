@@ -28,7 +28,7 @@ import { hostIsVoiceChatOnly, isVoiceChatOnly } from '@/lib/voice-chat-only'
 const REPORTED_KEY = 'k2.voice.reportedServers.v1'
 const PREFS_KEY = 'k2.voice.prefs.v1'
 
-const DEFAULT_PREFS: VoicePrefs = { inputDeviceId: null, outputDeviceId: null, joinMuted: false }
+const DEFAULT_PREFS: VoicePrefs = { inputDeviceId: null, outputDeviceId: null, joinMuted: false, noiseRemoval: true }
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -138,7 +138,12 @@ export const voice = createVoiceController({
   toast: (text, kind) => useToastStore.getState().addToast(text, kind === 'error' ? 'error' : 'info'),
   loadReported: () => new Set(readJson<string[]>(REPORTED_KEY, [])),
   saveReported: (keys) => writeJson(REPORTED_KEY, [...keys]),
-  loadPrefs: () => ({ ...DEFAULT_PREFS, ...readJson<Partial<VoicePrefs>>(PREFS_KEY, {}) }),
+  loadPrefs: () => {
+    const saved = readJson<Partial<VoicePrefs>>(PREFS_KEY, {})
+    // Noise removal is on unless the person turned it off (Sew 0.10.2): prefs
+    // saved before it existed have no field, and anything but `false` is on.
+    return { ...DEFAULT_PREFS, ...saved, noiseRemoval: saved.noiseRemoval !== false }
+  },
   savePrefs: (p) => writeJson(PREFS_KEY, p),
   now: () => Date.now(),
   openMicSettings: () => invoke<boolean>('permissions_open_microphone_settings'),

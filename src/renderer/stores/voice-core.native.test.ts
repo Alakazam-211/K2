@@ -55,6 +55,7 @@ interface Plugin {
   joinResult: unknown
   joinError: unknown
   devices: unknown
+  noiseError?: unknown
 }
 
 function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
@@ -81,6 +82,9 @@ function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
           return plugin.joinResult as T
         case `${P}devices`:
           return plugin.devices as T
+        case `${P}set_noise_removal`:
+          if (plugin.noiseError) throw plugin.noiseError
+          return { mode: args?.mode, active: args?.mode } as T
         default:
           return null as T
       }
@@ -132,7 +136,7 @@ function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
     toast: (t) => toasts.push(t),
     loadReported: () => new Set(),
     saveReported: () => {},
-    loadPrefs: () => ({ inputDeviceId: null, outputDeviceId: null, joinMuted: false }),
+    loadPrefs: () => ({ inputDeviceId: null, outputDeviceId: null, joinMuted: false, noiseRemoval: true }),
     savePrefs: () => {},
     now: () => 5_000,
     openMicSettings,
@@ -533,6 +537,49 @@ describe('devices', () => {
     s.ctl.setPrefs({ outputDeviceId: null })
     await settle()
     expect(s.calls).toContainEqual([`${P}set_device`, { output: 'default' }])
+  })
+})
+
+describe('noise removal (Sew 0.10.2)', () => {
+  const noise = (s: { calls: Array<[string, Record<string, unknown> | undefined]> }) =>
+    s.calls.filter(([c]) => c === `${P}set_noise_removal`).map(([, a]) => a)
+
+  it('is on by default: the engine gets standard when it attaches, before the join', async () => {
+    const s = await inCall()
+    expect(noise(s)).toEqual([{ mode: 'standard' }])
+    const order = s.calls.map(([c]) => c)
+    expect(order.indexOf(`${P}set_noise_removal`)).toBeLessThan(order.indexOf(`${P}join`))
+  })
+
+  it("a person who turned it off keeps it off: off goes in before the call", async () => {
+    const s = setup({ loadPrefs: () => ({ inputDeviceId: null, outputDeviceId: null, joinMuted: false, noiseRemoval: false }) })
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x' }
+    await s.ctl.join(SEW, room1)
+    expect(noise(s)).toEqual([{ mode: 'off' }])
+  })
+
+  it('the switch reaches a live call and is saved', async () => {
+    const saved: unknown[] = []
+    const s = setup({ savePrefs: (p) => saved.push(p) })
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x' }
+    await s.ctl.join(SEW, room1)
+    s.ctl.setPrefs({ noiseRemoval: false })
+    await settle()
+    expect(noise(s)).toEqual([{ mode: 'standard' }, { mode: 'off' }])
+    expect(saved.at(-1)).toMatchObject({ noiseRemoval: false })
+    expect(s.ctl.store.getState().prefs.noiseRemoval).toBe(false)
+  })
+
+  it("a refusal never stops the call (an engine that can't)", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = setup({ plugin: { noiseError: { code: 'noise_mode_unavailable', detail: 'standard' } } })
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x' }
+    await s.ctl.join(SEW, room1)
+    expect(s.joins()).toHaveLength(1)
+    expect(s.ctl.store.getState().call?.phase).toBe('connected')
+    expect(s.toasts).toEqual([])
+    expect(warn.mock.calls.some(([m]) => String(m).includes('noise removal not set'))).toBe(true)
+    warn.mockRestore()
   })
 })
 

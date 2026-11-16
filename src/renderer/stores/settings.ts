@@ -155,6 +155,9 @@ export type SettingsSection =
   /** Settings → Cores → Voice Rooms (prd-k2-voice-rooms-v1 §3.3; shown while
    *  the window's server reports `voice-rooms-v1`). */
   | 'voice-rooms'
+  /** Settings → Voice: this computer's microphone in calls (noise removal,
+   *  Sew 0.10.2). */
+  | 'voice'
   /** Settings → Compute (K2 compute nodes preview: this server's nodes + this computer as a node). */
   | 'compute'
   /** Settings → Cores → Multiplayer (Beta, prd-multiplayer-cores-settings-v1

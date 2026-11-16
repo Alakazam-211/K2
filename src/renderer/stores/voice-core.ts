@@ -130,6 +130,10 @@ export interface VoicePrefs {
   outputDeviceId: string | null
   /** Join with the mic muted. */
   joinMuted: boolean
+  /** Settings → Voice → Noise removal (Sew 0.10.2), on unless the person
+   *  turned it off: Sew's `standard` (DeepFilterNet3 where the app bundles its
+   *  weights, RNNoise otherwise); off is the full audio. Native engine only. */
+  noiseRemoval: boolean
 }
 
 export interface VoiceState {
@@ -837,6 +841,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       const n = (await deps.loadNative?.()) ?? null
       if (!n) return null
       await n.start(nativeEvents)
+      // The plugin keeps nothing between runs: the person's choice goes in
+      // before any call this window starts or adopts.
+      await applyNoiseRemoval(n, store.getState().prefs.noiseRemoval)
       native = n
       nativeAttached = true
       store.setState({ engineKind: 'native' })
@@ -1127,6 +1134,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     const prefs = { ...store.getState().prefs, ...patch }
     store.setState({ prefs })
     deps.savePrefs(prefs)
+    if (native && patch.noiseRemoval !== undefined) void applyNoiseRemoval(native, patch.noiseRemoval)
     if (native) {
       void applyNativeDevice(native, patch).catch((err: unknown) => {
         console.warn('[voice] switching audio device failed:', err)
@@ -1136,6 +1144,18 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     }
     if (patch.inputDeviceId !== undefined) void engine?.setInputDevice(patch.inputDeviceId)
     if (patch.outputDeviceId !== undefined) void engine?.setOutputDevice(patch.outputDeviceId)
+  }
+
+  /** On is Sew's `standard`, off is `off`; a call takes it from its next
+   *  block. A refusal (an older plugin, a platform that can't) is reported,
+   *  never a reason to stop the engine or the call. */
+  async function applyNoiseRemoval(n: NativeVoiceEngine, on: boolean): Promise<void> {
+    try {
+      const st = await n.setNoiseRemoval(on)
+      if (st.reason) console.warn(`[voice] noise removal asked ${st.mode}, runs ${st.active} (${st.reason})`)
+    } catch (err) {
+      console.warn('[voice] noise removal not set:', err)
+    }
   }
 
   /** "System default" (`null`) follows the OS's default from then on. */

@@ -383,4 +383,29 @@ export class NativeVoiceEngine {
   async stopRecording(): Promise<void> {
     await this.command<null>('stop_recording')
   }
+
+  /** Plugin 0.8.0 (Sew 0.10.2, permission set `sew-voice:noise-removal`): the
+   *  microphone's noise removal, before or during a call (in a call from the
+   *  next 10 ms block). On is Sew's `standard` (DeepFilterNet3 where the app
+   *  bundles its weights, RNNoise otherwise); off is the full audio, echo
+   *  cancellation and gain control kept. The plugin stores nothing: K2 keeps
+   *  the person's choice and sets it each time the engine attaches. */
+  async setNoiseRemoval(on: boolean): Promise<NoiseRemovalState> {
+    return parseNoiseRemoval(await this.command<unknown>('set_noise_removal', { mode: on ? 'standard' : 'off' }))
+  }
+}
+
+/** `{mode, active, reason?}`: `mode` is what was asked, `active` what runs, and
+ *  `reason` (absent when they match) why less runs: `budget`, `fault` or
+ *  `unavailable`. */
+export interface NoiseRemovalState {
+  mode: string
+  active: string
+  reason: string | null
+}
+
+export function parseNoiseRemoval(raw: unknown): NoiseRemovalState {
+  const r = record(raw)
+  if (!r || typeof r.mode !== 'string' || typeof r.active !== 'string') throw badShape('noise removal', raw)
+  return { mode: r.mode, active: r.active, reason: typeof r.reason === 'string' ? r.reason : null }
 }

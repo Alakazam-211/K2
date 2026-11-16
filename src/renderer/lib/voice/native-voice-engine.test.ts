@@ -10,6 +10,7 @@ import {
   parseCallState,
   parseDevices,
   parseEngineError,
+  parseNoiseRemoval,
   parseParticipants,
   parseRecording,
   parseRecordingControls,
@@ -179,6 +180,31 @@ describe("Sew's 0.7.2 additions", () => {
   it('reads target and room on a state, and a move', () => {
     expect(parseCallState(sew.moved.payload)).toEqual({ state: 'connected', target: 'k2:acme', room: '48831765147549710' })
     expect(parseCallState(sew.ended.sew_reasons[0].payload)).toEqual({ state: 'ended', reason: 'perms_lost', target: 'k2:acme', room: '48831765147549698' })
+  })
+})
+
+describe("Sew 0.10.2's noise removal", () => {
+  const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
+  const nr = sew.noise_removal
+
+  it("sends set_noise_removal {mode} as Sew's contract has it, and reads the answer", async () => {
+    const [off, standard] = nr.set as Array<{ command: string; args: { mode: string }; answer: unknown }>
+    const f = fakeBridge({ [`${PLUGIN_COMMAND_PREFIX}set_noise_removal`]: off.answer })
+    const e = new NativeVoiceEngine(f.bridge)
+    expect(await e.setNoiseRemoval(false)).toEqual({ mode: 'off', active: 'off', reason: null })
+    expect(f.calls).toEqual([{ command: `${PLUGIN_COMMAND_PREFIX}${off.command}`, args: off.args }])
+    const g = fakeBridge({ [`${PLUGIN_COMMAND_PREFIX}set_noise_removal`]: standard.answer })
+    expect(await new NativeVoiceEngine(g.bridge).setNoiseRemoval(true)).toEqual({ mode: 'standard', active: 'standard', reason: null })
+    expect(g.calls[0].args).toEqual(standard.args)
+    expect(nr.permission).toBe('sew-voice:noise-removal')
+  })
+
+  it('reads a stepped-down state, and refuses a bad shape loudly', () => {
+    for (const s of nr.stepped_down as Array<{ mode: string; active: string; reason: string }>) {
+      expect(parseNoiseRemoval(s)).toEqual({ mode: s.mode, active: s.active, reason: s.reason })
+    }
+    expect(() => parseNoiseRemoval(null)).toThrow()
+    expect(() => parseNoiseRemoval({ mode: 'standard' })).toThrow()
   })
 })
 

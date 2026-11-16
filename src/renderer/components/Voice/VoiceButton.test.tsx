@@ -74,7 +74,7 @@ vi.mock('@/stores/voice', async () => {
     toast: () => {},
     loadReported: () => new Set(['alpha.k2.dev']),
     saveReported: () => {},
-    loadPrefs: () => ({ inputDeviceId: null, outputDeviceId: null, joinMuted: false }),
+    loadPrefs: () => ({ inputDeviceId: null, outputDeviceId: null, joinMuted: false, noiseRemoval: true }),
     savePrefs: () => {},
     now: () => Date.now(),
   })

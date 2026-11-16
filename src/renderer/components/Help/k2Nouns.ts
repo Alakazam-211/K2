@@ -238,6 +238,8 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'dns', blurb: 'DNS records (Connect, gated).', example: 'k2 dns access' },
       { noun: 'domain', blurb: 'Custom domains this server answers for.', example: 'k2 domain list' },
       { noun: 'cert', blurb: 'TLS certificates for attached hostnames.', example: 'k2 cert list' },
+      { noun: 'firewall', blurb: 'The ports this server serves publicly, who applies the list, and the App guard.', example: 'k2 firewall' },
+      { noun: 'front', blurb: "K2's front on this box's port 443: passes each name, still encrypted, to its server (Linux).", example: 'k2 front status' },
       { noun: 'tunnel', blurb: 'The tunnel to your *.k2.dev address.', example: 'k2 tunnel status' },
       { noun: 'connect', blurb: 'Pair a k2.dev subdomain to this device (headless login).', example: 'k2 connect status' },
       { noun: 'remote-session', blurb: 'Owner/admin remote shells behind grants.', example: 'k2 remote-session status' },

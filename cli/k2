@@ -26622,15 +26622,16 @@ _root_helper_usage() {
 k2 root-helper — K2's one root door on Linux (/usr/local/libexec/k2-root-helper)
 
   k2 root-helper status [--events] [--json]   state, version, protocol, auto-heal, legacy helpers
-  k2 root-helper update [--from <dir>] [--version <x.y.z> | --match-installed]
+  k2 root-helper update [--from <dir>] [--version <x.y.z> | --match-installed] [--json]
                                               install the signed helper for this daemon's version now
                                               (--from: a dir holding k2-root-helper-linux-<arch> + .sig; air-gap)
                                               (--version: that release's helper instead; --match-installed: the
                                                version of the daemon binary on disk, e.g. after a binary swap
                                                before the restart. It warns when a newer daemon is installed
                                                or staged than the helper it fetches.)
-  k2 root-helper rollback                     one step back to the previous helper
-  k2 root-helper install-command              the one root command for a box without it
+  k2 root-helper rollback [--json]            one step back to the previous helper
+  k2 root-helper install-command [--json]     the one root command for a box without it
+                                              (--json: the status JSON, installCommand in it)
 
 Agents: if hosted mail, the db sidecar or the vault says `helper_needed`,
 ask your human (k2 tickets ask). Never install Stalwart or Postgres by hand.
@@ -26863,8 +26864,9 @@ closed.
                                     certificates answer there too). On by default:
                                     k2 front enable installs :80 when it is free. On takes
                                     :80 (the daemon restarts once); off frees it.
-  k2 front passthrough [--json]     names passed through to your own web server
-  k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>]
+  k2 front passthrough [list] [--json]
+                                    names passed through to your own web server
+  k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>] [--json]
                                     pass <host> (or '*': every name K2 doesn't serve),
                                     still encrypted, to a web server you run on this
                                     box; K2's own names always win. Works before
@@ -26874,7 +26876,7 @@ closed.
                                     visitors' real IPs (without it, every visitor is
                                     127.0.0.1). A server that doesn't read it breaks.
                                     Give every name on one port the same choice.
-  k2 front passthrough rm <host>|'*'
+  k2 front passthrough rm <host>|'*' [--json]
 
 Who (every verb above): the owner (a terminal outside K2, e.g. over
 SSH), an Admin login, or a person typing in a K2 shell tab. An agent may
@@ -27287,7 +27289,7 @@ _firewall_usage() {
     cat <<'EOF'
 k2 firewall — the ports this server serves publicly, and your options
 
-  k2 firewall [--json]                    the public list, who applies it, the App guard
+  k2 firewall [status] [--json]           the public list, who applies it, the App guard
   k2 firewall ports [--json]              the view (K2 Web's collector reads --json):
                                           public + knownNotPublic, hash, box, upstream
   k2 firewall rules [--format nft|ufw]    a complete default-deny rule set (SSH first) for
@@ -27315,6 +27317,8 @@ k2 firewall — the ports this server serves publicly, and your options
                                           owner  nobody does: apply k2 firewall rules yourself
                                           auto   k2 once an apply was recorded, else owner
                                                  (the default; a new box is owner)
+
+  --json works with every verb but rules: the daemon's JSON.
 
 K2 never changes this box's own firewall (nft, ufw). The list takes
 effect where it is applied: at your provider when K2 applies it
@@ -28235,7 +28239,7 @@ cmd_front() {
             _front_render "$as_json" "$raw"
             ;;
         *)
-            echo "usage: unknown front verb '$sub' (status|enable|disable)" >&2
+            echo "usage: unknown front verb '$sub' (status|enable|disable|http|passthrough)" >&2
             exit 2
             ;;
     esac
@@ -54092,6 +54096,221 @@ cmd_schema() {
         {"name": "--workspace", "arg": "ws", "description": "The workspace (also --project). An agent reaches only its own."},
         {"name": "--json", "arg": null, "description": "The daemon's JSON."}
       ]
+    },
+    {
+      "name": "firewall",
+      "usage": "k2 firewall [status] [--json] | ports | rules | ssh any|allow|port | open | close | guard | upstream",
+      "description": "The ports this server serves publicly, who applies the list, and the App guard. K2 never changes this box's own firewall (nft, ufw): the list takes effect where it is applied (at your provider when K2 applies it, else once you load k2 firewall rules). SSH is always public (narrow it, never close it); a port K2 opened for a feature is read-only here. Reads: owner, Admin, any agent. Changes: the owner, an Admin login or a K2 shell tab; an agent gets owner_only (exit 3) and can't request it, except tightening its own App's guard.",
+      "args": [{"name": "verb", "required": false, "description": "status (default) | ports | rules | ssh | open | close | guard | upstream"}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (every verb but rules)."}
+      ]
+    },
+    {
+      "name": "firewall ports",
+      "usage": "k2 firewall ports [--json]",
+      "description": "The view: public and knownNotPublic ports, its hash, box and upstream (K2 Web's collector reads --json).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "firewall rules",
+      "usage": "k2 firewall rules [--format nft|ufw]",
+      "description": "A complete default-deny rule set (SSH first) for the whole list, for a server nobody applies it for. Review it and load it yourself; K2 doesn't.",
+      "args": [],
+      "flags": [{"name": "--format", "arg": "nft|ufw", "description": "Default nft (nftables also accepted)."}]
+    },
+    {
+      "name": "firewall ssh any",
+      "usage": "k2 firewall ssh any [--json]",
+      "description": "SSH from anywhere (the default).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "firewall ssh allow",
+      "usage": "k2 firewall ssh allow <cidr>... [--json]",
+      "description": "SSH only from these (never an empty list; SSH is never closed).",
+      "args": [{"name": "cidr", "required": true, "description": "One or more."}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "firewall ssh port",
+      "usage": "k2 firewall ssh port <n> [--json]",
+      "description": "Record where sshd listens (K2 doesn't move sshd).",
+      "args": [{"name": "n", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "firewall open",
+      "usage": "k2 firewall open <port>/<tcp|udp> --label \"<why>\" [--from <cidr>]... [--json]",
+      "description": "Add a port for something you run to the public list. It opens where the list is applied (k2 firewall says who; nobody means k2 firewall rules). A firewall already on this box (ufw, nft) needs the port opened there too.",
+      "args": [{"name": "port", "required": true, "description": "<port>/<tcp|udp>"}],
+      "flags": [
+        {"name": "--label", "arg": "why", "description": "Required. Why it is open."},
+        {"name": "--from", "arg": "cidr", "description": "Only from this source (repeatable)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "firewall close",
+      "usage": "k2 firewall close <port>/<tcp|udp> [--json]",
+      "description": "Remove one of your ports from the list (never SSH, never K2's).",
+      "args": [{"name": "port", "required": true, "description": "<port>/<tcp|udp>"}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "firewall guard",
+      "usage": "k2 firewall guard [on|off] [--conns-per-ip N] [--writes-per-min N] [--reset] [--json] | k2 firewall guard <app> [on|off] [--writes-per-min N] [--reset] [--json]",
+      "description": "The App guard's box defaults (on, 64 connections per visitor, 120 writes per visitor per App a minute), or one App's write limit (its own agent may tighten it).",
+      "args": [{"name": "app", "required": false, "description": "One App; none means the box defaults."}, {"name": "state", "required": false, "description": "on | off"}],
+      "flags": [
+        {"name": "--conns-per-ip", "arg": "N", "description": "Box default: connections per visitor."},
+        {"name": "--writes-per-min", "arg": "N", "description": "Writes per visitor per App a minute."},
+        {"name": "--reset", "arg": null, "description": "Back to the defaults."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "firewall upstream",
+      "usage": "k2 firewall upstream --hash <sha256:...> --provider <name> [--applied-at <unix>] [--managed-by k2|owner|auto] [--json] | k2 firewall upstream --managed-by k2|owner|auto",
+      "description": "Record that the list was applied at the provider (owner; K2 Web runs it after each apply; the hash is k2 firewall ports --json's), or set who applies the list.",
+      "args": [],
+      "flags": [
+        {"name": "--hash", "arg": "sha256:...", "description": "The view hash that was applied."},
+        {"name": "--provider", "arg": "name", "description": "Where it was applied."},
+        {"name": "--applied-at", "arg": "unix", "description": "When (unix seconds)."},
+        {"name": "--managed-by", "arg": "k2|owner|auto", "description": "k2: K2 applies it at your provider's firewall; owner: nobody does (apply k2 firewall rules yourself); auto (default): k2 once an apply was recorded, else owner."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "front",
+      "usage": "k2 front [status|enable|disable|http|passthrough] ...",
+      "description": "K2's front on this box's port 443 (Linux, systemd, k2-root-helper protocol 8; the :80 front needs protocol 12). It reads the name each visitor asked for and passes the connection, still encrypted, to the server for that name: custom App names, K2's own Caddy, hosted mail's web pages, Chat / Voice Hosting calls, and names you pass through to your own web server. Every verb is the owner's (a terminal outside K2), an Admin login's or a K2 shell tab's; an agent may only list the passthrough names, anything else is owner_only (exit 3).",
+      "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | http | passthrough"}],
+      "flags": []
+    },
+    {
+      "name": "front status",
+      "usage": "k2 front status [--json]",
+      "description": "Who holds :443, the routes and counters. A helper line means the root helper is too old for the front (k2 root-helper update).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "front enable",
+      "usage": "k2 front enable [--mail] [--json]",
+      "description": "Take :443 (the daemon restarts once: a few seconds). Voice calls move onto :443 (calls in progress drop once) and K2's Caddy moves to 127.0.0.1:38473 behind it. Refused while another web server holds :443 (port_443_taken; also helper_needed, not_systemd, user_scope, unsupported).",
+      "args": [],
+      "flags": [
+        {"name": "--mail", "arg": null, "description": "Also put hosted mail's web pages behind the front (they move to 127.0.0.1:8443, PROXY v2; the mail server restarts once)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "front disable",
+      "usage": "k2 front disable [--json]",
+      "description": "Give :443 back (voice to TCP 5349, mail to :443).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "front http",
+      "usage": "k2 front http on|off [--json]",
+      "description": "The https redirect for people who type http://: on K2's relays for names through K2 Connect, and on this box's :80 where K2's front runs. On by default; on takes :80 (the daemon restarts once), off frees it.",
+      "args": [{"name": "state", "required": true, "description": "on | off"}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "front passthrough",
+      "usage": "k2 front passthrough [list] [--json]",
+      "description": "Names passed through to your own web server. Also ls. Agents may run this one.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "front passthrough add",
+      "usage": "k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>] [--json]",
+      "description": "Pass <host> (or '*': every name K2 doesn't serve), still encrypted, to a web server you run on this box; K2's own names always win. Works before enable: saved now, routed once the front is on.",
+      "args": [{"name": "host", "required": true, "description": "A host name, or '*'."}],
+      "flags": [
+        {"name": "--to", "arg": "127.0.0.1:<port>", "description": "Required. Where that server listens."},
+        {"name": "--proxy-v2", "arg": null, "description": "Only if that server reads the PROXY protocol (it then sees visitors' real IPs); a server that doesn't read it breaks. Give every name on one port the same choice."},
+        {"name": "--label", "arg": "why", "description": "A note shown in the list."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "front passthrough rm",
+      "usage": "k2 front passthrough rm <host>|'*' [--json]",
+      "description": "Stop passing a name through. Also remove.",
+      "args": [{"name": "host", "required": true, "description": "A host name, or '*'."}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "root-helper",
+      "usage": "k2 root-helper [status|update|rollback|install-command] ...",
+      "description": "K2's one root door on Linux (/usr/local/libexec/k2-root-helper). status is anyone's (agents too); update and rollback are owner or Admin steps the daemon refuses for any passport: run them outside a K2 terminal. Agents: if hosted mail, the db sidecar or the vault says helper_needed, ask your human (k2 tickets ask); never install Stalwart or Postgres by hand.",
+      "args": [{"name": "verb", "required": false, "description": "status (default) | update | rollback | install-command"}],
+      "flags": []
+    },
+    {
+      "name": "root-helper status",
+      "usage": "k2 root-helper status [--events] [--json]",
+      "description": "State, version, protocol, auto-heal and legacy helpers.",
+      "args": [],
+      "flags": [
+        {"name": "--events", "arg": null, "description": "Also the helper's last events."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "root-helper update",
+      "usage": "k2 root-helper update [--from <dir>] [--version <x.y.z> | --match-installed] [--json]",
+      "description": "Install the signed helper for this daemon's version now. It warns when a newer daemon is installed or staged than the helper it fetches. Owner or Admin, outside a K2 terminal.",
+      "args": [],
+      "flags": [
+        {"name": "--from", "arg": "dir", "description": "A dir holding k2-root-helper-linux-<arch> and its .sig (air-gap)."},
+        {"name": "--version", "arg": "x.y.z", "description": "That release's helper instead."},
+        {"name": "--match-installed", "arg": null, "description": "The version of the daemon binary on disk (e.g. after a binary swap, before the restart). Not with --version."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "root-helper rollback",
+      "usage": "k2 root-helper rollback [--json]",
+      "description": "One step back to the previous helper. Owner or Admin, outside a K2 terminal.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "root-helper install-command",
+      "usage": "k2 root-helper install-command [--json]",
+      "description": "Print the one root command for a box without the helper, for an admin to paste in an SSH session.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's status JSON (installCommand in it)."}]
+    },
+    {
+      "name": "git-tools",
+      "usage": "k2 git-tools [status] [--json]",
+      "description": "Is git usable here (Apple's command line tools on macOS): git found or not, install state, how to install, and the workspaces waiting for it. Over SSH (no screen for Apple's dialog) status prints the softwareupdate steps; they need an admin password, so run them yourself.",
+      "args": [{"name": "verb", "required": false, "description": "status (default) | install | recheck"}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "git-tools install",
+      "usage": "k2 git-tools install [--json]",
+      "description": "macOS: open Apple's installer for the command line tools (a dialog on this Mac's screen; no sudo). The owner's: an agent is refused (owner_only, exit 3).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "git-tools recheck",
+      "usage": "k2 git-tools recheck [--json]",
+      "description": "Look for git again now and do the waiting workspaces' git steps.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
     },
     {
       "name": "skills",

@@ -8,7 +8,7 @@ _firewall_usage() {
     cat <<'EOF'
 k2 firewall — the ports this server serves publicly, and your options
 
-  k2 firewall [--json]                    the public list, who applies it, the App guard
+  k2 firewall [status] [--json]           the public list, who applies it, the App guard
   k2 firewall ports [--json]              the view (K2 Web's collector reads --json):
                                           public + knownNotPublic, hash, box, upstream
   k2 firewall rules [--format nft|ufw]    a complete default-deny rule set (SSH first) for
@@ -36,6 +36,8 @@ k2 firewall — the ports this server serves publicly, and your options
                                           owner  nobody does: apply k2 firewall rules yourself
                                           auto   k2 once an apply was recorded, else owner
                                                  (the default; a new box is owner)
+
+  --json works with every verb but rules: the daemon's JSON.
 
 K2 never changes this box's own firewall (nft, ufw). The list takes
 effect where it is applied: at your provider when K2 applies it

@@ -711,7 +711,7 @@ cmd_front() {
             _front_render "$as_json" "$raw"
             ;;
         *)
-            echo "usage: unknown front verb '$sub' (status|enable|disable)" >&2
+            echo "usage: unknown front verb '$sub' (status|enable|disable|http|passthrough)" >&2
             exit 2
             ;;
     esac

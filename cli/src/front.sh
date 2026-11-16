@@ -30,8 +30,9 @@ closed.
                                     certificates answer there too). On by default:
                                     k2 front enable installs :80 when it is free. On takes
                                     :80 (the daemon restarts once); off frees it.
-  k2 front passthrough [--json]     names passed through to your own web server
-  k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>]
+  k2 front passthrough [list] [--json]
+                                    names passed through to your own web server
+  k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>] [--json]
                                     pass <host> (or '*': every name K2 doesn't serve),
                                     still encrypted, to a web server you run on this
                                     box; K2's own names always win. Works before
@@ -41,7 +42,7 @@ closed.
                                     visitors' real IPs (without it, every visitor is
                                     127.0.0.1). A server that doesn't read it breaks.
                                     Give every name on one port the same choice.
-  k2 front passthrough rm <host>|'*'
+  k2 front passthrough rm <host>|'*' [--json]
 
 Who (every verb above): the owner (a terminal outside K2, e.g. over
 SSH), an Admin login, or a person typing in a K2 shell tab. An agent may

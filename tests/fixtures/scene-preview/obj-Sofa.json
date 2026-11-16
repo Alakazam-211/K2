@@ -1,0 +1,76 @@
+{
+  "camera": {
+    "fx": 1.125,
+    "fy": 2.0,
+    "near": 0.65656424,
+    "proj": [
+      1.125,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -1.0,
+      -1.0,
+      0.0,
+      0.0,
+      -1.3131285,
+      0.0
+    ],
+    "shift_x": 0.0,
+    "shift_y": 0.0,
+    "view": [
+      0.70710677,
+      -0.35355338,
+      0.61237246,
+      0.0,
+      0.70710677,
+      0.35355338,
+      -0.61237246,
+      0.0,
+      -0.0,
+      0.8660254,
+      0.5,
+      0.0,
+      2.1920311,
+      -0.61554813,
+      -2.105552,
+      1.0
+    ]
+  },
+  "container": "@obj:Sofa",
+  "fonts_substituted": [],
+  "format": "webp-lossless",
+  "ids": {
+    "count": 1,
+    "image_len": 2606,
+    "layer": "ids",
+    "objects": [
+      {
+        "id": "Sofa",
+        "index": 10
+      }
+    ]
+  },
+  "kind": "scene",
+  "look": "transparent",
+  "mime": "image/webp",
+  "ok": true,
+  "page": null,
+  "render_hash": "e56bb26c85620e365dd8193069fa7899",
+  "render_ms": 0,
+  "rendered_at_ms": 0,
+  "rev": 1,
+  "shape": "wide",
+  "size": {
+    "h": 360,
+    "w": 640
+  },
+  "state": "ready",
+  "width": "thumb2x",
+  "without_modifiers": true
+}

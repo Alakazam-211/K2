@@ -1,0 +1,135 @@
+{
+  "camera": {
+    "fx": 2.7777526,
+    "fy": 4.938227,
+    "near": 0.1,
+    "proj": [
+      2.7777526,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.938227,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -1.0,
+      -1.0,
+      0.0,
+      0.0,
+      -0.2,
+      0.0
+    ],
+    "shift_x": 0.0,
+    "shift_y": 0.0,
+    "view": [
+      0.809017,
+      0.09194987,
+      -0.58054864,
+      0.0,
+      -0.58778524,
+      0.12655814,
+      -0.79905665,
+      0.0,
+      -6.266534e-10,
+      0.98768836,
+      0.15643446,
+      0.0,
+      0.10497417,
+      -0.66401196,
+      -4.4374056,
+      1.0
+    ]
+  },
+  "container": "@cam:Camera",
+  "fonts_substituted": [],
+  "format": "webp-lossless",
+  "ids": {
+    "count": 16,
+    "image_len": 3727,
+    "layer": "ids",
+    "objects": [
+      {
+        "id": "Floor",
+        "index": 0
+      },
+      {
+        "id": "Wall.Back",
+        "index": 1
+      },
+      {
+        "id": "Window",
+        "index": 2
+      },
+      {
+        "id": "Rug",
+        "index": 3
+      },
+      {
+        "id": "Table",
+        "index": 5
+      },
+      {
+        "id": "Chair.001",
+        "index": 6
+      },
+      {
+        "id": "Chair.002",
+        "index": 7
+      },
+      {
+        "id": "Chair.003",
+        "index": 8
+      },
+      {
+        "id": "Chair.004",
+        "index": 9
+      },
+      {
+        "id": "Sofa",
+        "index": 10
+      },
+      {
+        "id": "Shelf",
+        "index": 11
+      },
+      {
+        "id": "Book.001",
+        "index": 12
+      },
+      {
+        "id": "Book.002",
+        "index": 13
+      },
+      {
+        "id": "Vase",
+        "index": 15
+      },
+      {
+        "id": "Mug",
+        "index": 16
+      },
+      {
+        "id": "Clock hand",
+        "index": 17
+      }
+    ]
+  },
+  "kind": "scene",
+  "look": "transparent",
+  "mime": "image/webp",
+  "ok": true,
+  "page": null,
+  "render_hash": "47dcf309a967eaf6fbe721a31da6fa5a",
+  "render_ms": 0,
+  "rendered_at_ms": 0,
+  "rev": 1,
+  "size": {
+    "h": 360,
+    "w": 640
+  },
+  "state": "ready",
+  "width": "thumb2x",
+  "without_modifiers": true
+}

@@ -1,0 +1,144 @@
+{
+  "camera": {
+    "fx": 1.125,
+    "fy": 2.0,
+    "near": 1.7651392,
+    "proj": [
+      1.125,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0,
+      0.0,
+      0.0,
+      0.040965427,
+      -0.31967092,
+      -1.0,
+      -1.0,
+      0.0,
+      0.0,
+      -3.5302784,
+      0.0
+    ],
+    "shift_x": -0.040965427,
+    "shift_y": 0.31967092,
+    "view": [
+      0.70710677,
+      -0.35355338,
+      0.61237246,
+      0.0,
+      0.70710677,
+      0.35355338,
+      -0.61237246,
+      0.0,
+      -0.0,
+      0.8660254,
+      0.5,
+      0.0,
+      -0.19445433,
+      -1.3609099,
+      -8.214615,
+      1.0
+    ]
+  },
+  "container": "@scene",
+  "fonts_substituted": [],
+  "format": "webp-lossless",
+  "ids": {
+    "count": 18,
+    "image_len": 5029,
+    "layer": "ids",
+    "objects": [
+      {
+        "id": "Floor",
+        "index": 0
+      },
+      {
+        "id": "Wall.Back",
+        "index": 1
+      },
+      {
+        "id": "Window",
+        "index": 2
+      },
+      {
+        "id": "Rug",
+        "index": 3
+      },
+      {
+        "id": "Ceiling fan",
+        "index": 4
+      },
+      {
+        "id": "Table",
+        "index": 5
+      },
+      {
+        "id": "Chair.001",
+        "index": 6
+      },
+      {
+        "id": "Chair.002",
+        "index": 7
+      },
+      {
+        "id": "Chair.003",
+        "index": 8
+      },
+      {
+        "id": "Chair.004",
+        "index": 9
+      },
+      {
+        "id": "Sofa",
+        "index": 10
+      },
+      {
+        "id": "Shelf",
+        "index": 11
+      },
+      {
+        "id": "Book.001",
+        "index": 12
+      },
+      {
+        "id": "Book.002",
+        "index": 13
+      },
+      {
+        "id": "Floor lamp",
+        "index": 14
+      },
+      {
+        "id": "Vase",
+        "index": 15
+      },
+      {
+        "id": "Mug",
+        "index": 16
+      },
+      {
+        "id": "Clock hand",
+        "index": 17
+      }
+    ]
+  },
+  "kind": "scene",
+  "look": "transparent",
+  "mime": "image/webp",
+  "ok": true,
+  "page": null,
+  "render_hash": "275582be114d57bc3358a456a639b156",
+  "render_ms": 0,
+  "rendered_at_ms": 0,
+  "rev": 1,
+  "shape": "wide",
+  "size": {
+    "h": 360,
+    "w": 640
+  },
+  "state": "ready",
+  "width": "thumb2x",
+  "without_modifiers": true
+}

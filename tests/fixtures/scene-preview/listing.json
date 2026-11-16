@@ -1,0 +1,585 @@
+{
+  "containers": [
+    {
+      "hidden": false,
+      "key": "@scene",
+      "position": 1,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "275582be114d57bc3358a456a639b156",
+      "title": "Scene"
+    },
+    {
+      "camera": {
+        "active": true,
+        "lens_mm": 50.0,
+        "sensor_fit": "auto",
+        "sensor_mm": [
+          36.0,
+          24.0
+        ]
+      },
+      "hidden": false,
+      "key": "@cam:Camera",
+      "position": 2,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "47dcf309a967eaf6fbe721a31da6fa5a",
+      "title": "Camera"
+    },
+    {
+      "camera": {
+        "active": false,
+        "lens_mm": 50.0,
+        "sensor_fit": "auto",
+        "sensor_mm": [
+          36.0,
+          24.0
+        ]
+      },
+      "hidden": false,
+      "key": "@cam:Camera.001",
+      "position": 3,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "bfb4d30e3a8404e8ee31eb22674d160f",
+      "title": "Camera.001"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          1.0,
+          1.0,
+          0.0
+        ],
+        "min": [
+          -1.0,
+          -1.0,
+          -0.02
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Floor",
+      "position": 4,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "9f20cb36e60171bc48131728e0b02d25",
+      "title": "Floor"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          1.0,
+          1.0,
+          0.0
+        ],
+        "min": [
+          -1.0,
+          -1.0,
+          -0.05
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Wall.Back",
+      "position": 5,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "23e3ae15ecd7b2d1c310c38be21e7433",
+      "title": "Wall.Back"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          1.0,
+          1.0,
+          0.02
+        ],
+        "min": [
+          -1.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Window",
+      "position": 6,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "a5cf49614b5f1e31316bd8c35fdfe203",
+      "title": "Window"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          1.0,
+          1.0,
+          0.01
+        ],
+        "min": [
+          -1.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Rug",
+      "position": 7,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "e9d24df5cc26e438e9b96a077c2cdb27",
+      "title": "Rug"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.65,
+          0.65,
+          0.25
+        ],
+        "min": [
+          -0.65,
+          -0.65,
+          -0.1
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Ceiling fan",
+      "position": 8,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "5956c214e21a74f1a78979f7199013f8",
+      "title": "Ceiling fan"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.5,
+          0.35,
+          0.76
+        ],
+        "min": [
+          -0.5,
+          -0.35,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Table",
+      "position": 9,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "12ba87244dccc146b31187acf7c712e0",
+      "title": "Table"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.22,
+          0.22,
+          0.92
+        ],
+        "min": [
+          -0.22,
+          -0.22,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Chair.001",
+      "position": 10,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "73e8b990470decd63050c9512712c156",
+      "title": "Chair.001"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.22,
+          0.22,
+          0.92
+        ],
+        "min": [
+          -0.22,
+          -0.22,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Chair.002",
+      "position": 11,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "e25b7202eb8eebd27a1ac7c1ac9edc4c",
+      "title": "Chair.002"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.22,
+          0.22,
+          0.92
+        ],
+        "min": [
+          -0.22,
+          -0.22,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Chair.003",
+      "position": 12,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "29ee5f6c3811d7b07d2cf39b29f5f008",
+      "title": "Chair.003"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.22,
+          0.22,
+          0.92
+        ],
+        "min": [
+          -0.22,
+          -0.22,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Chair.004",
+      "position": 13,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "028dd021d8c0eeeab8f931256081b97d",
+      "title": "Chair.004"
+    },
+    {
+      "bounds": {
+        "approx": true,
+        "max": [
+          0.9,
+          0.4,
+          0.85
+        ],
+        "min": [
+          -0.9,
+          -0.4,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Sofa",
+      "position": 14,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "e56bb26c85620e365dd8193069fa7899",
+      "title": "Sofa"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.5,
+          0.15,
+          1.12
+        ],
+        "min": [
+          -0.5,
+          -0.15,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Shelf",
+      "position": 15,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "0c8bb13785639852dec1c550e511b8e2",
+      "title": "Shelf"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.02,
+          0.1,
+          0.24
+        ],
+        "min": [
+          -0.02,
+          -0.1,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Book.001",
+      "position": 16,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "bd69056446a2444ff8235175496a063d",
+      "title": "Book.001"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.02,
+          0.1,
+          0.24
+        ],
+        "min": [
+          -0.02,
+          -0.1,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Book.002",
+      "position": 17,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "120191f325bffe00911e93fa6dcb8ee3",
+      "title": "Book.002"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.2,
+          0.2,
+          1.75
+        ],
+        "min": [
+          -0.2,
+          -0.2,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Floor lamp",
+      "position": 18,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "9affb8cf1fabad3cbdc40234a4dc7175",
+      "title": "Floor lamp"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.07,
+          0.07,
+          0.28
+        ],
+        "min": [
+          -0.07,
+          -0.07,
+          0.0
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Vase",
+      "position": 19,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "419d09d9ca7521a61b482c794b40c6e7",
+      "title": "Vase"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.04,
+          0.04,
+          0.08
+        ],
+        "min": [
+          -0.04,
+          -0.04,
+          -0.02
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Mug",
+      "position": 20,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "1e6da151169dcc1f125317491ead30c5",
+      "title": "Mug"
+    },
+    {
+      "bounds": {
+        "approx": false,
+        "max": [
+          0.01,
+          0.15,
+          0.005
+        ],
+        "min": [
+          -0.01,
+          0.0,
+          -0.005
+        ]
+      },
+      "hidden": false,
+      "key": "@obj:Clock hand",
+      "position": 21,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "b1bd8d1fcda9b4501004f8ee38def326",
+      "title": "Clock hand"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:0",
+      "position": 22,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "45e3c5f65042b172f63e90e7204d254a",
+      "title": "Turntable 1"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:1",
+      "position": 23,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "c8c045114aad551bce866a8c2033f790",
+      "title": "Turntable 2"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:2",
+      "position": 24,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "c97ea5162144fef8f08e1bb01f38372e",
+      "title": "Turntable 3"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:3",
+      "position": 25,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "07c5bea4dc480b9ed96d258351df15fc",
+      "title": "Turntable 4"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:4",
+      "position": 26,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "bc01fe269d80b80b818a4f3eab607320",
+      "title": "Turntable 5"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:5",
+      "position": 27,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "296672d310ed9dcdb99bed4a1de8c909",
+      "title": "Turntable 6"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:6",
+      "position": 28,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "e12a3618508eb62e912e716ec08b3084",
+      "title": "Turntable 7"
+    },
+    {
+      "hidden": false,
+      "key": "@turntable:7",
+      "position": 29,
+      "previews": {
+        "full": "none",
+        "thumb": "none"
+      },
+      "render_hash": "ad3cb47605207cee631ff3b131736587",
+      "title": "Turntable 8"
+    }
+  ],
+  "kind": "scene",
+  "look": "transparent",
+  "ok": true,
+  "page": null,
+  "renderer": {
+    "build": "scenerender-p1-0.1.0.clay.ao.ids.shape"
+  },
+  "rev": 1,
+  "shape": "wide",
+  "version": null
+}

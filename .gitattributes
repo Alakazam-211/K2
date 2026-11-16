@@ -7,6 +7,10 @@
 # files there mix CRLF and LF).
 src/renderer/zen-lib/** -text
 
+# The scene preview fixture is checked byte for byte: its K2SCENE1 is a JSON
+# header then floats, never text to normalise.
+tests/fixtures/scene-preview/*.k2scene binary
+
 # Generated files (scripts/regen.sh writes them): GitHub folds them in
 # diffs. On a merge conflict take either side, then run scripts/regen.sh.
 crates/k2-core/src/app_surface.rs linguist-generated

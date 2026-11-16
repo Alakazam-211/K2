@@ -48,6 +48,8 @@ pub mod service;
 pub mod timeline;
 
 #[cfg(test)]
+mod scene_fixture_tests;
+#[cfg(test)]
 mod scene_tab_tests;
 
 use super::target::Target;

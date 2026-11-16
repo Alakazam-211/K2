@@ -1743,10 +1743,10 @@ mod tests {
         assert_eq!(before_full.iter().filter(|v| v["kind"] == "home").count(), 2);
 
         // 0.46.13 puts people and channels in both groups (one pinned, one
-        // ordered first, one deleted again).
-        let mut p = chat_row("person", "h1", "k2:owner::s", "0", NOW + 1);
+        // ordered before the agent row, one deleted again).
+        let mut p = chat_row("person", "h1", "k2:owner::s", "U", NOW + 1);
         p["pinOrder"] = json!("V");
-        let rows = [p, chat_row("channel", "h1", "42::s", "1", NOW + 1), chat_row("person", "h2", "k2:connect:ab12::s", "z", NOW + 1)];
+        let rows = [p, chat_row("channel", "h1", "42::s", "W", NOW + 1), chat_row("person", "h2", "k2:connect:ab12::s", "z", NOW + 1)];
         assert!(push(&c, "owner", "phone", &rows, NOW).expect("chat rows").rejected.is_empty());
         let gone = tomb(chat_row("channel", "h2", "43::s", "2", NOW + 2));
         assert!(push(&c, "owner", "phone", &[chat_row("channel", "h2", "43::s", "2", NOW + 1)], NOW).expect("ch").rejected.is_empty());
@@ -1823,7 +1823,7 @@ mod tests {
         ins("home", "h1", "", Some("Work"), None, "V", 0, 1, None);
         ins("home", "h2", "", Some("Family"), None, "l", 0, 1, None);
         ins("row", "h1", "atlas::s", None, Some("Atlas"), "V", 0, 1, Some("V"));
-        ins("person", "h1", "k2:owner::s", None, Some("Owner"), "0", 0, 2, Some("a"));
+        ins("person", "h1", "k2:owner::s", None, Some("Owner"), "U", 0, 2, Some("a"));
         ins("channel", "h1", "42::s", None, Some("general"), "1", 0, 2, None);
         ins("channel", "h2", "43::s", None, Some("old"), "2", 1, 3, None);
         conn.execute("INSERT INTO homes_people (person, seq, floor) VALUES ('owner', 3, 0)", []).expect("cursor");

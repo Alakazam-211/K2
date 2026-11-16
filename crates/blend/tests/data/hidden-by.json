@@ -1,0 +1,193 @@
+{
+  "about": "Hidden by: the rule in docs/WIRE.md. Each case: the scene's master collection, its collections (own viewport flag, children in the file's order), its objects (own viewport flag, the collections holding each), optionally `moves` (a collection moved live: taken out from under every parent and put under `to`, after its other children, in order), and each object's expected value: \"self\", \"collection:<address>\", or null (absent).",
+  "cases": [
+    {
+      "name": "shown, in a collection and in the master collection",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2"]},
+        {"key": "@coll:2", "hidden": false, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:2"]},
+        {"key": "@obj:2", "hidden": false, "in": ["@coll:1"]}
+      ],
+      "expect": {"@obj:1": null, "@obj:2": null}
+    },
+    {
+      "name": "its own flag wins, in a shown or a hidden collection",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2", "@coll:3"]},
+        {"key": "@coll:2", "hidden": false, "children": []},
+        {"key": "@coll:3", "hidden": true, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": true, "in": ["@coll:2"]},
+        {"key": "@obj:2", "hidden": true, "in": ["@coll:3"]},
+        {"key": "@obj:3", "hidden": false, "in": ["@coll:3"]}
+      ],
+      "expect": {"@obj:1": "self", "@obj:2": "self", "@obj:3": "collection:@coll:3"}
+    },
+    {
+      "name": "a hidden collection hides everything below it",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2"]},
+        {"key": "@coll:2", "hidden": true, "children": ["@coll:3"]},
+        {"key": "@coll:3", "hidden": false, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:3"]},
+        {"key": "@obj:2", "hidden": false, "in": ["@coll:2"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:2", "@obj:2": "collection:@coll:2"}
+    },
+    {
+      "name": "the outermost hidden collection is named",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2"]},
+        {"key": "@coll:2", "hidden": false, "children": ["@coll:3"]},
+        {"key": "@coll:3", "hidden": true, "children": ["@coll:4"]},
+        {"key": "@coll:4", "hidden": true, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:4"]},
+        {"key": "@obj:2", "hidden": false, "in": ["@coll:2"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:3", "@obj:2": null}
+    },
+    {
+      "name": "one shown path is enough",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2", "@coll:3"]},
+        {"key": "@coll:2", "hidden": true, "children": []},
+        {"key": "@coll:3", "hidden": false, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:2", "@coll:3"]}
+      ],
+      "expect": {"@obj:1": null}
+    },
+    {
+      "name": "every path hidden: the first path in the children's order names it",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:3", "@coll:2"]},
+        {"key": "@coll:2", "hidden": true, "children": []},
+        {"key": "@coll:3", "hidden": true, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:2", "@coll:3"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:3"}
+    },
+    {
+      "name": "a collection under two parents, one of them shown",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2", "@coll:3"]},
+        {"key": "@coll:2", "hidden": true, "children": ["@coll:4"]},
+        {"key": "@coll:3", "hidden": false, "children": ["@coll:4"]},
+        {"key": "@coll:4", "hidden": false, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:4"]}
+      ],
+      "expect": {"@obj:1": null}
+    },
+    {
+      "name": "a collection under two parents, both hidden",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2", "@coll:3"]},
+        {"key": "@coll:2", "hidden": true, "children": ["@coll:4"]},
+        {"key": "@coll:3", "hidden": true, "children": ["@coll:4"]},
+        {"key": "@coll:4", "hidden": false, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:4"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:2"}
+    },
+    {
+      "name": "not in the scene drawn",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": []},
+        {"key": "@coll:9", "hidden": true, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:9"]},
+        {"key": "@obj:2", "hidden": false, "in": []},
+        {"key": "@obj:3", "hidden": true, "in": []}
+      ],
+      "expect": {"@obj:1": null, "@obj:2": null, "@obj:3": "self"}
+    },
+    {
+      "name": "a cycle is walked once",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2"]},
+        {"key": "@coll:2", "hidden": true, "children": ["@coll:3"]},
+        {"key": "@coll:3", "hidden": false, "children": ["@coll:2"]}
+      ],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:3"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:2"}
+    },
+    {
+      "name": "the living room: a hidden wall, a hidden props collection",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2", "@coll:3"]},
+        {"key": "@coll:2", "hidden": false, "children": []},
+        {"key": "@coll:3", "hidden": false, "children": ["@coll:4"]},
+        {"key": "@coll:4", "hidden": true, "children": []}
+      ],
+      "objects": [
+        {"key": "@obj:5", "hidden": false, "in": ["@coll:2"]},
+        {"key": "@obj:6", "hidden": true, "in": ["@coll:2"]},
+        {"key": "@obj:19", "hidden": false, "in": ["@coll:3", "@coll:2"]},
+        {"key": "@obj:20", "hidden": false, "in": ["@coll:4"]},
+        {"key": "@obj:25", "hidden": false, "in": []}
+      ],
+      "expect": {"@obj:5": null, "@obj:6": "self", "@obj:19": null, "@obj:20": "collection:@coll:4", "@obj:25": null}
+    },
+    {
+      "name": "a collection moved live under a hidden parent",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:2", "@coll:3"]},
+        {"key": "@coll:2", "hidden": true, "children": []},
+        {"key": "@coll:3", "hidden": false, "children": ["@coll:4"]},
+        {"key": "@coll:4", "hidden": false, "children": []}
+      ],
+      "moves": [{"collection": "@coll:4", "to": "@coll:2"}],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:4"]},
+        {"key": "@obj:2", "hidden": false, "in": ["@coll:3"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:2", "@obj:2": null}
+    },
+    {
+      "name": "a collection moved live comes after its new parent's other children",
+      "master": "@coll:1",
+      "collections": [
+        {"key": "@coll:1", "hidden": false, "children": ["@coll:3", "@coll:2"]},
+        {"key": "@coll:2", "hidden": false, "children": ["@coll:4"]},
+        {"key": "@coll:3", "hidden": false, "children": ["@coll:5"]},
+        {"key": "@coll:4", "hidden": true, "children": []},
+        {"key": "@coll:5", "hidden": true, "children": []}
+      ],
+      "moves": [{"collection": "@coll:4", "to": "@coll:3"}],
+      "objects": [
+        {"key": "@obj:1", "hidden": false, "in": ["@coll:4", "@coll:5"]}
+      ],
+      "expect": {"@obj:1": "collection:@coll:5"}
+    }
+  ]
+}

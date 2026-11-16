@@ -1,0 +1,20 @@
+{
+  "verb": "object place",
+  "exit": 2,
+  "error": {
+    "id": "BLEND-E003",
+    "exit": 2,
+    "message": "the object rotates by quaternion, not by Euler angles",
+    "next": "The object rotates by quaternion or by axis and angle, and a rotation given here is Euler angles. Nothing was applied. Place it without a rotation (its location and scale are written), or change its rotation mode in the app.",
+    "next_step": {
+      "verb": "object show",
+      "args": ["{address}"],
+      "why": "Read the object's rotation mode and transform."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_rotation_mode",
+      "verb": "object place"
+    }
+  }
+}

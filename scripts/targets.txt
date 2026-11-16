@@ -1,0 +1,51 @@
+# Every test target, test-only feature and pending #[ignore] of the pack and its fuzz crate
+# (fuzz/, its own workspace, left out of a release cut); scripts/check-targets.sh reads this file
+# and checks it. One row per line: PACKAGE|KIND|NAME|FEATURES|PARTS, the format and the rules in
+# scripts/check-targets.sh's header. The parts are `check` (scripts/check.sh) and `roundtrip`
+# (scripts/roundtrip.sh: the program's headless round trip, on the build node that holds its
+# folder; scripts/check.sh runs it when a change lands). A row whose PARTS holds "pending ruling"
+# waits on a decision; none may be left when a change lands (CHECK_TARGETS_LANDING=1).
+
+# ---- k2-mpc-blend -------------------------------------------------------------------------------
+k2-mpc-blend|lib|k2_mpc_blend||check
+k2-mpc-blend|doctest|k2_mpc_blend||excluded: the crate's docs hold no runnable example
+k2-mpc-blend|example|blend_patch||built-only:check: test tooling for the headless round trip (PROVENANCE.md)
+k2-mpc-blend|example|blend_scenes||built-only:check: writes the test scenes to a folder
+k2-mpc-blend|example|fuzz_seeds||built-only:check: writes the fuzz targets' seed files
+k2-mpc-blend|feature|fuzzing||check
+k2-mpc-blend|feature|mutants||check
+k2-mpc-blend|feature|testgen||check
+k2-mpc-blend|test|corpus||check
+k2-mpc-blend|test|corpus_mesh||check
+k2-mpc-blend|test|corpus_place||check
+k2-mpc-blend|test|fuzz_seeds||check
+k2-mpc-blend|test|kit_view||check
+k2-mpc-blend|test|live||check
+k2-mpc-blend|test|live_scale||check
+k2-mpc-blend|test|live_storage||check
+k2-mpc-blend|test|matrix||check
+k2-mpc-blend|test|merge||check
+k2-mpc-blend|test|meshread||check
+k2-mpc-blend|test|meshread_scale||check
+k2-mpc-blend|test|outside_save||check
+k2-mpc-blend|test|pack||check
+k2-mpc-blend|test|pack_session||check
+k2-mpc-blend|test|reader||check
+k2-mpc-blend|test|reader_memory||check
+k2-mpc-blend|test|results||check
+k2-mpc-blend|test|roundtrip||check,roundtrip
+k2-mpc-blend|test|saved||check
+k2-mpc-blend|test|scene||check
+k2-mpc-blend|test|scenes||check
+k2-mpc-blend|test|verbs||check
+k2-mpc-blend|test|watch_turn||check
+k2-mpc-blend|test|write||check
+k2-mpc-blend|test|zstd_bomb||check
+k2-mpc-blend|test|mutants|mutants|check
+
+# ---- k2-mpc-blend-fuzz (fuzz/, its own workspace; cargo fuzz runs the targets) ------------------
+k2-mpc-blend-fuzz|fuzz-bin|blend_index||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+k2-mpc-blend-fuzz|fuzz-bin|blend_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+k2-mpc-blend-fuzz|fuzz-bin|blend_triangulate||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+k2-mpc-blend-fuzz|fuzz-bin|blend_write||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+

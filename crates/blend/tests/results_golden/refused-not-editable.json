@@ -1,0 +1,41 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object place",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: blend_not_editable: nothing writes this object live (linked from a library, or a field the writer can't find)\nnext: object show @obj:10\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "BLEND-E001",
+    "exit": 2,
+    "message": "nothing writes this object live (linked from a library, or a field the writer can't find)",
+    "next": "The object is linked from a library (its data belongs to another file), or the file's schema has no field the writer can find for it, so no verb writes it. Nothing was applied. Change it in the file it comes from, or in the app that saved this one.",
+    "next_step": {
+      "verb": "object show",
+      "args": ["{address}"],
+      "why": "Read the object's fields: its key says where it comes from, `edit` what is written."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_not_editable",
+      "next": "object show @obj:10",
+      "verb": "object place",
+      "address": "@obj:10"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

@@ -1,0 +1,21 @@
+{
+  "verb": "object place",
+  "exit": 2,
+  "error": {
+    "id": "BLEND-E001",
+    "exit": 2,
+    "message": "@li:lib/ma:Shared is linked from a library",
+    "next": "The object is linked from a library (its data belongs to another file), or the file's schema has no field the writer can find for it, so no verb writes it. Nothing was applied. Change it in the file it comes from, or in the app that saved this one.",
+    "next_step": {
+      "verb": "object show",
+      "args": ["{address}"],
+      "why": "Read the object's fields: its key says where it comes from, `edit` what is written."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_not_editable",
+      "verb": "object place",
+      "address": "@li:lib/ma:Shared"
+    }
+  }
+}

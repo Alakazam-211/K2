@@ -1,0 +1,25 @@
+# A K2SCENE1 written by hand from the layout: two meshes (a triangle, a quad as two
+# triangles), three objects (two sharing the first mesh), one camera.
+# Lines: "# ..." comments, "text ..." the rest of the line as UTF-8, else hex bytes.
+# magic
+4b 32 53 43 45 4e 45 31
+# header length: 962
+c2 03 00 00
+# the header; each mesh's hash is SHA-256 of its vertex and triangle counts (u32 LE) and
+# its data below; keys @obj:1 to @obj:3, the camera @cam:4
+text {"version":1,"up":"z","meshes":[{"vertices":3,"triangles":1,"normals":false,"hash":"bbc936ee25acb1d4a2179a40a31529fccec1c4d84513c1307474c435cb64ea42"},{"vertices":4,"triangles":2,"normals":false,"hash":"c47435195bbfae53a90b5d21f1369f9a39e3e3707ceec49eca810ae0102502bc"}],"objects":[{"id":"Tri","key":"@obj:1","mesh":0,"base_color":[0.8,0.8,0.8,1],"transform":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]},{"id":"Tri.001","key":"@obj:2","mesh":0,"base_color":[0.8,0.8,0.8,1],"transform":[1,0,0,0,0,1,0,0,0,0,1,0,2,0,0,1]},{"id":"Quad \"q\"\\é\u0001","key":"@obj:3","mesh":1,"base_color":[0.8,0.8,0.8,1],"double_sided":false,"transform":[0.5,0,0,0,0,0.5,0,0,0,0,0.5,0,0,0,-1,1],"modifiers":["Subsurf","Mirror"],"modifiers_not_applied":true,"transform_not_evaluated":true}],"cameras":[{"id":"Camera","key":"@cam:4","position":[0,-10,5],"forward":[0,1,-0.5],"up":[0,0,1],"yfov":0.5,"aspect":1.5,"znear":0.1,"active":true,"lens_mm":50,"sensor_mm":[36,24],"sensor_fit":"auto"}]}
+# padding: 2 zero bytes
+00 00
+# mesh 0 positions
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 3f
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 3f
+00 00 00 00
+# mesh 0 triangles
+00 00 00 00 01 00 00 00 02 00 00 00
+# mesh 1 positions
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 40
+00 00 00 00 00 00 00 00 00 00 00 40 00 00 00 40
+00 00 00 00 00 00 00 00 00 00 00 40 00 00 00 00
+# mesh 1 triangles
+00 00 00 00 01 00 00 00 02 00 00 00 00 00 00 00
+02 00 00 00 03 00 00 00

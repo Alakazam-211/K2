@@ -1,0 +1,49 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object show",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "object": {
+      "address": "@obj:2",
+      "kind": "mesh",
+      "name": "Cube",
+      "transform": {
+        "location": [0, 0, 0.25],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1]
+      },
+      "visibility": {
+        "viewport": true,
+        "select": true,
+        "render": true
+      },
+      "edit": "full"
+    },
+    "fields": {
+      "also": "@coll:4",
+      "coll": "@coll:2",
+      "data": "mesh @me:Cube",
+      "edit": "1",
+      "hidden": "0",
+      "name": "Cube",
+      "nid": "@ob:Cube",
+      "norender": "0",
+      "noselect": "0",
+      "rotmode": "xyz",
+      "xform": "0,0,0.25,0,0,0,1,1,1"
+    }
+  },
+  "data_schema": "typed",
+  "data_spec": "blend.object-show/1",
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

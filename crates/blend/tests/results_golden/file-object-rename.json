@@ -1,0 +1,8 @@
+{
+  "verb": "object rename",
+  "data_spec": "blend.file.object-rename/1",
+  "data": {
+    "object": "@ob:Light",
+    "name": "Key Light"
+  }
+}

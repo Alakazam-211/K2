@@ -1,0 +1,40 @@
+[package]
+name = "k2-mpc-blend"
+version = "0.1.0"
+description = "Reads BLEND scene files: a type pack for the multiplayer kit."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Test-only: builds small BLEND files from a schema we write ourselves (`k2_mpc_blend::testgen`),
+# for the tests, the fuzz seeds and the memory rows. No host enables it.
+testgen = []
+# Test-only: the properties the reader, the model and the index keep on any input
+# (`k2_mpc_blend::fuzzing`), for the fuzz target in `fuzz/` and the seed tests.
+fuzzing = []
+# Test-only: planted bugs (`k2_mpc_blend::mutant`), for `tests/mutants.rs`. No host enables it.
+mutants = []
+
+[dependencies]
+# The kit (k2-mpc-base), by path: its checkout sits beside this repo's (a host vendors both side
+# by side: vendor/k2-mpc-base beside vendor/k2-mpc-blend), at the kit release CHANGELOG.md
+# names (v0.21.0: results as data, their shape named, and a pack's registered refusals). Run
+# `cargo update -p k2-mpc-base` and commit the lock when it moves.
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+# The same major as the kit's, so a host gets one copy. MIT OR Apache-2.0.
+thiserror = "2"
+# gzip, for files saved compressed before zstd: the pure-Rust backend. MIT OR Apache-2.0.
+flate2 = "1"
+# zstd, for files saved compressed since: a pure-Rust decoder. MIT. 0.9.1 or later: it bounds
+# each block's output to the format's maximum before the reader's own limits can act.
+ruzstd = "0.9.1"
+
+[dev-dependencies]
+# The tests build their files with this crate's own test-only features.
+k2-mpc-blend = { path = ".", features = ["testgen", "fuzzing"] }
+# The kit's test helpers: the carrier pack's byte-exact row (`test_support::carrier_judge`);
+# and its test-build checks (`differential`): the view index kept through changes against a
+# whole build, a placement's numbers against the slot's precision, a chain cycle.
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base", features = ["test-support", "differential"] }

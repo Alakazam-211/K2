@@ -1,0 +1,12 @@
+# Public test files, fetched by reference: file, url, licence, sha256 of what the url serves, the
+# zip member to take (or -), and that member's sha256 (or -). Never committed here. Each is a
+# demo file its publisher lists as CC0 (PROVENANCE.md has the titles, authors and listing).
+# The versions span both header forms and all three ways a file is stored: 2.73 (gzip), 3.06
+# (plain and zstd), 4.03 (zstd), 5.00 and 5.01 (the newer header, zstd).
+fishy_cat.blend	https://download.blender.org/demo/test/splash_fishy_cat_2.zip	CC0-1.0	22769b4b003330eccd13de3450555bb50f2500827c4cf1997eefa365acfec275	blender_splash_fishy_cat/fishy_cat.blend	4b5a97bed6361f1a1f888e02eda8ebda338276ff0afe46c5a170dac55bba36d5
+mesh_fracturing.blend	https://download.blender.org/demo/geometry-nodes/simulation/mesh_fracturing.blend	CC0-1.0	2bd3bcbad59ce61481d5c5ed3879d6f7f9ed7bf564858584d01e19bffb51485a	-	-
+jiggly_pudding.blend	https://download.blender.org/demo/geometry-nodes/jiggly_pudding.blend	CC0-1.0	1338daffaf54d521fe851514be2ba10c2ec93769393e4dd2c79419a68cf9727d	-	-
+gizmo_array.blend	https://download.blender.org/demo/geometry-nodes/gizmo_array.blend	CC0-1.0	4262fd55588aa9c03fc09b6726917371c71173446545ad8e945ab3d72960e0d4	-	-
+repeat_zone_fractal_raymarch.blend	https://download.blender.org/demo/rendering/repeat_zone_fractal_raymarch.blend	CC0-1.0	5178cd88e6518fcacc27984282ade0d988794e15d11a8dda0321ddd01708a376	-	-
+mandelbrot_grow.blend	https://download.blender.org/demo/eevee/mandelbrot_grow.blend	CC0-1.0	08b1928c3b8c6c2ed120a470cdc08277a706e624c8133e72bc2f0e0c6c4255f9	-	-
+skeleton-arm-xray.blend	https://download.blender.org/demo/eevee/skeleton-arm-xray.blend	CC0-1.0	6556cf6ee4e2cbcd9376fd15136601eb8ed8553a3f53ffaa94dbb3f08ffffba5	-	-

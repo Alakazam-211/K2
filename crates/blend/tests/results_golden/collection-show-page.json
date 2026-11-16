@@ -1,0 +1,67 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "collection show",
+  "kind": "read",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "collection": {
+      "address": "@coll:2",
+      "kind": "collection",
+      "name": "Set",
+      "parent": "@coll:1",
+      "objects": 5,
+      "hidden": false
+    },
+    "objects": [
+      {
+        "address": "@obj:2",
+        "kind": "mesh",
+        "name": "Cube",
+        "transform": {
+          "location": [0, 0, 0.25],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "visibility": {
+          "viewport": true,
+          "select": true,
+          "render": true
+        },
+        "edit": "full"
+      },
+      {
+        "address": "@obj:4",
+        "kind": "light",
+        "name": "Lamp",
+        "transform": {
+          "location": [4, -1, 6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "visibility": {
+          "viewport": true,
+          "select": true,
+          "render": true
+        },
+        "edit": "full"
+      }
+    ]
+  },
+  "data_schema": "typed",
+  "data_spec": "blend.collection-show/1",
+  "page": {
+    "next": {
+      "verb": "collection show",
+      "args": ["@coll:2", "--limit", "2", "--after", "@obj:4"]
+    }
+  },
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

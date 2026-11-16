@@ -1,0 +1,21 @@
+{
+  "verb": "object place",
+  "exit": 2,
+  "error": {
+    "id": "BLEND-E016",
+    "exit": 2,
+    "message": "Nothing was applied: this file was saved by a newer (or older) release of the program that wrote it (format 2.80) than this pack has checked (3.06 to 5.01).",
+    "next": "Its saves are being checked; until then, read it read-only as a file, or save a copy with a release from 3.06 to 5.01 if you have one.",
+    "next_step": {
+      "verb": "scene list",
+      "args": [],
+      "why": "Read the scene's collections, objects and cameras, read-only."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_version",
+      "verb": "object place",
+      "format": "2.80"
+    }
+  }
+}

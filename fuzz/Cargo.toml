@@ -1,0 +1,50 @@
+[package]
+name = "k2-mpc-blend-fuzz"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for the BLEND reader, scene model and index: a violated property is a finding, like a panic."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repo's, so a normal build doesn't pull libFuzzer.
+[workspace]
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped.
+# scripts/check-licences.sh allows NCSA for this one crate in this one lock.
+libfuzzer-sys = "0.4"
+k2-mpc-blend = { path = "../crates/blend", features = ["fuzzing"] }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "blend_read"
+path = "fuzz_targets/blend_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "blend_write"
+path = "fuzz_targets/blend_write.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "blend_index"
+path = "fuzz_targets/blend_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "blend_triangulate"
+path = "fuzz_targets/blend_triangulate.rs"
+test = false
+doc = false
+bench = false

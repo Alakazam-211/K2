@@ -1,0 +1,2852 @@
+{
+  "index": {
+    "tier": "live",
+    "rev": 1,
+    "version": null,
+    "page": null,
+    "fonts": [],
+    "layouts": [],
+    "containers": [
+      {
+        "key": "@coll:1",
+        "position": 1,
+        "title": "Scene",
+        "hidden": false,
+        "layout": null,
+        "render_hash": null,
+        "fonts": [],
+        "has_fields": [],
+        "unit_count": 0,
+        "derived": {
+          "current_scene": "true"
+        }
+      },
+      {
+        "key": "@coll:2",
+        "position": 2,
+        "title": "Rig",
+        "hidden": false,
+        "layout": null,
+        "render_hash": null,
+        "fonts": [],
+        "has_fields": [],
+        "unit_count": 2,
+        "parent": "@coll:1"
+      },
+      {
+        "key": "@coll:3",
+        "position": 3,
+        "title": "Crowd",
+        "hidden": false,
+        "layout": null,
+        "render_hash": null,
+        "fonts": [],
+        "has_fields": [],
+        "unit_count": 64,
+        "parent": "@coll:1"
+      }
+    ],
+    "space": {
+      "length_unit": "scene-unit",
+      "metres_per_unit": 1,
+      "up": "z",
+      "handed": "right"
+    },
+    "units": [
+      {
+        "key": "@obj:1",
+        "container": "@coll:2",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Base",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 0,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 0, 1],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,0,1 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:2",
+        "container": "@coll:2",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Arm",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 1,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": "@obj:1",
+          "steps": [
+            {
+              "matrix": [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0.5, -2, 0, 1]
+            },
+            {
+              "trs": {
+                "loc": [0, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:3",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.00",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 0,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:4",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.01",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 1,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:5",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.02",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 2,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:6",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.03",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 3,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:7",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.04",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 4,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:8",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.05",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 5,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:9",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.06",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 6,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:10",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.07",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 7,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,0,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:11",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.08",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 8,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:12",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.09",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 9,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:13",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.10",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 10,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:14",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.11",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 11,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:15",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.12",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 12,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:16",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.13",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 13,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:17",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.14",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 14,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:18",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.15",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 15,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 1, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,1,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:19",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.16",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 16,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:20",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.17",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 17,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:21",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.18",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 18,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:22",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.19",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 19,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:23",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.20",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 20,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:24",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.21",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 21,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:25",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.22",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 22,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:26",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.23",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 23,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 2, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,2,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:27",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.24",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 24,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:28",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.25",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 25,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:29",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.26",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 26,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:30",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.27",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 27,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:31",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.28",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 28,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:32",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.29",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 29,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:33",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.30",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 30,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:34",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.31",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 31,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 3, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,3,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:35",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.32",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 32,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:36",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.33",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 33,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:37",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.34",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 34,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:38",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.35",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 35,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:39",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.36",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 36,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:40",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.37",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 37,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:41",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.38",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 38,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:42",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.39",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 39,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 4, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,4,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:43",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.40",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 40,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:44",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.41",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 41,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:45",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.42",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 42,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:46",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.43",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 43,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:47",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.44",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 44,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:48",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.45",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 45,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:49",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.46",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 46,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:50",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.47",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 47,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 5, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,5,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:51",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.48",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 48,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:52",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.49",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 49,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:53",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.50",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 50,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:54",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.51",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 51,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:55",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.52",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 52,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:56",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.53",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 53,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:57",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.54",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 54,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:58",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.55",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 55,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 6, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,6,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:59",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.56",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 56,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 0,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:60",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.57",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 57,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 1,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:61",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.58",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 58,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 2,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:62",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.59",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 59,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 3,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:63",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.60",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 60,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 4,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:64",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.61",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 61,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 5,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:65",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.62",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 62,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [6, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 6,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      },
+      {
+        "key": "@obj:66",
+        "container": "@coll:3",
+        "parent": null,
+        "live": true,
+        "kind": "empty",
+        "name": "Crowd.63",
+        "name_is_generic": null,
+        "alt": null,
+        "z": 63,
+        "bbox": null,
+        "bbox_inherited": false,
+        "rot": 0,
+        "flip": {
+          "h": false,
+          "v": false
+        },
+        "approx_box": false,
+        "text": null,
+        "fields": [],
+        "hidden": false,
+        "placeholder": null,
+        "editable_text": null,
+        "placement": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [7, 7, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "derived": {
+          "transform": "loc 7,7,0 rot 0,0,0 scale 1,1,1"
+        }
+      }
+    ]
+  },
+  "crowd_pages": {
+    "budget": 16640,
+    "pages": [
+      {
+        "container": "@coll:3",
+        "from": 0,
+        "next": 33,
+        "total": 64,
+        "units": ["@obj:3", "@obj:4", "@obj:5", "@obj:6", "@obj:7", "@obj:8", "@obj:9", "@obj:10", "@obj:11", "@obj:12", "@obj:13", "@obj:14", "@obj:15", "@obj:16", "@obj:17", "@obj:18", "@obj:19", "@obj:20", "@obj:21", "@obj:22", "@obj:23", "@obj:24", "@obj:25", "@obj:26", "@obj:27", "@obj:28", "@obj:29", "@obj:30", "@obj:31", "@obj:32", "@obj:33", "@obj:34", "@obj:35"]
+      },
+      {
+        "container": "@coll:3",
+        "from": 33,
+        "next": null,
+        "total": 64,
+        "units": ["@obj:36", "@obj:37", "@obj:38", "@obj:39", "@obj:40", "@obj:41", "@obj:42", "@obj:43", "@obj:44", "@obj:45", "@obj:46", "@obj:47", "@obj:48", "@obj:49", "@obj:50", "@obj:51", "@obj:52", "@obj:53", "@obj:54", "@obj:55", "@obj:56", "@obj:57", "@obj:58", "@obj:59", "@obj:60", "@obj:61", "@obj:62", "@obj:63", "@obj:64", "@obj:65", "@obj:66"]
+      }
+    ]
+  }
+}

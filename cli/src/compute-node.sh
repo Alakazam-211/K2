@@ -678,7 +678,7 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
         deny) cmd_compute_node_admin deny "$@" ;;
         limits)
             local server="${1:-}" reason="" forv="" prio="" pairs=()
-            [ -n "$server" ] && [ "${server#-}" = "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> [--weight N] key=value…" >&2; exit 2; }
+            [ -n "$server" ] && [ "${server#-}" = "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> [--weight N] [--reason TEXT] key=value…" >&2; exit 2; }
             shift
             while [ $# -gt 0 ]; do
                 case "$1" in

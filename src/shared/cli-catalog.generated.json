@@ -2605,7 +2605,7 @@
    },
    {
     "name": "compute node servers add",
-    "usage": "k2 compute node servers <node> add --url URL --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]",
+    "usage": "k2 compute node servers <node> add --url URL --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive] [--reason TEXT]",
     "description": "Add another K2 server to a node you own. Held for your approval (Touch ID or vault password); the new server's owner then confirms the SAS. Needs the node's remote-admin level full."
    },
    {
@@ -2620,7 +2620,7 @@
    },
    {
     "name": "compute node servers limits",
-    "usage": "k2 compute node servers <node> limits <server> [--weight N] key=value…",
+    "usage": "k2 compute node servers <node> limits <server> [--weight N] [--reason TEXT] key=value…",
     "description": "Change a server's share on the node. Narrowing applies at once; widening (a higher weight too) waits for approval. Keys: max_running, max_queued, cpu_hours_day, max_job_secs, max_cpus, max_mem_gb, disk_gb, weight, network, top_class, gate, exclusive, for=7d|none, priority=true|false. <server> may be slot:0 (this server)."
    },
    {

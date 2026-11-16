@@ -16,6 +16,7 @@
 #                    hash; only with --shards above 1); another value: exit 2
 #   node admin list --limit N, node servers list --refresh: in the query
 #   local status --json   prints the daemon's answer as it came
+#   node servers add / limits --reason   the note reaches the request
 #   k2 --schema lists each of them on its verb
 
 set -euo pipefail
@@ -197,6 +198,16 @@ expect_eq "servers list --refresh" "$(field "$ref" 'v["path"], v["query"].get("n
 plain="$(k2_sent compute node servers k2n12)"
 expect_eq "no --refresh: no refresh key" "$(field "$plain" 'v["query"].get("node"), v["query"].get("refresh")')" '["k2n12", null]'
 
+echo "== node servers add / limits --reason: the note reaches the request =="
+add="$(k2_sent compute node servers k2n12 add --url https://globex.example --code ABC123.FP --reason "CI for the build lane")"
+expect_eq "servers add --reason" "$(field "$add" 'v["path"], v["body"].get("node"), v["body"].get("reason")')" '["/cli/compute/nodes/servers/add", "k2n12", "CI for the build lane"]'
+add0="$(k2_sent compute node servers k2n12 add --url https://globex.example --code ABC123.FP)"
+expect_eq "servers add without --reason: no note" "$(field "$add0" 'v["body"].get("reason")')" 'null'
+lim="$(k2_sent compute node servers k2n12 limits slot:2 max_running=3 --reason "nightly soak needs a third slot")"
+expect_eq "servers limits --reason" "$(field "$lim" 'v["path"], v["body"].get("server"), v["body"].get("reason")')" '["/cli/compute/nodes/servers/limits", "slot:2", "nightly soak needs a third slot"]'
+lim0="$(k2_sent compute node servers k2n12 limits slot:2 max_running=3)"
+expect_eq "servers limits without --reason: no note" "$(field "$lim0" 'v["body"].get("reason")')" 'null'
+
 echo "== local status --json =="
 out="$("$K2" compute local status --json)"
 expect_eq "local status --json prints the daemon's answer" "$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]); print(v["stub"], v["installed"])' "$out")" "local-status False"
@@ -222,6 +233,8 @@ has_flag "schema: test --partition" "$(schema_flags 'compute test')" "--partitio
 has_flag "schema: node admin list --limit" "$(schema_flags 'compute node admin list')" "--limit"
 has_flag "schema: node servers --refresh" "$(schema_flags 'compute node servers')" "--refresh"
 has_flag "schema: local status --json" "$(schema_flags 'compute local status')" "--json"
+has_flag "schema: node servers add --reason" "$(schema_flags 'compute node servers add')" "--reason"
+has_flag "schema: node servers limits --reason" "$(schema_flags 'compute node servers limits')" "--reason"
 
 echo
 echo "compute_flag_aliases_body: $pass passed, $fail failed"

@@ -459,6 +459,7 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    [--for 7d|none] [--weight N] [--max-running N] [--max-queued N]
                    [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G]
                    [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
+                   [--reason TEXT]   (--reason: a note for whoever approves it)
                    no-lan on a Mac: the internet over HTTPS through a per-job
                    proxy, never the local network (k2 study compute: IN THE JOB)
                    CODE.FP is what `k2 compute node add <node>` printed on the
@@ -469,7 +470,7 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    sudo k2-node servers add --url URL --code - < code-file
                    (--code - here too: the code on stdin, never in argv)
   k2 compute node servers <node> approve|deny <request>   (= node admin approve/deny)
-  k2 compute node servers <node> limits <server> [--weight N] key=value…
+  k2 compute node servers <node> limits <server> [--weight N] [--reason TEXT] key=value…
                    narrowing at once, widening (a higher weight too) waits
                    for approval (max_running, max_queued, cpu_hours_day,
                    max_job_secs, max_cpus, max_mem_gb, disk_gb, weight,

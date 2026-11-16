@@ -29106,6 +29106,7 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    [--for 7d|none] [--weight N] [--max-running N] [--max-queued N]
                    [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G]
                    [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
+                   [--reason TEXT]   (--reason: a note for whoever approves it)
                    no-lan on a Mac: the internet over HTTPS through a per-job
                    proxy, never the local network (k2 study compute: IN THE JOB)
                    CODE.FP is what `k2 compute node add <node>` printed on the
@@ -29116,7 +29117,7 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    sudo k2-node servers add --url URL --code - < code-file
                    (--code - here too: the code on stdin, never in argv)
   k2 compute node servers <node> approve|deny <request>   (= node admin approve/deny)
-  k2 compute node servers <node> limits <server> [--weight N] key=value…
+  k2 compute node servers <node> limits <server> [--weight N] [--reason TEXT] key=value…
                    narrowing at once, widening (a higher weight too) waits
                    for approval (max_running, max_queued, cpu_hours_day,
                    max_job_secs, max_cpus, max_mem_gb, disk_gb, weight,
@@ -32417,7 +32418,7 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
         deny) cmd_compute_node_admin deny "$@" ;;
         limits)
             local server="${1:-}" reason="" forv="" prio="" pairs=()
-            [ -n "$server" ] && [ "${server#-}" = "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> [--weight N] key=value…" >&2; exit 2; }
+            [ -n "$server" ] && [ "${server#-}" = "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> [--weight N] [--reason TEXT] key=value…" >&2; exit 2; }
             shift
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -54453,7 +54454,7 @@ cmd_schema() {
     },
     {
       "name": "compute node servers add",
-      "usage": "k2 compute node servers <node> add --url URL --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]",
+      "usage": "k2 compute node servers <node> add --url URL --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive] [--reason TEXT]",
       "description": "Add another K2 server to a node you own. Held for your approval (Touch ID or vault password); the new server's owner then confirms the SAS. Needs the node's remote-admin level full.",
       "args": [{"name": "node", "required": true}],
       "flags": [
@@ -54471,7 +54472,8 @@ cmd_schema() {
         {"name": "--disk", "arg": "40G", "description": "Its disk."},
         {"name": "--network", "arg": "on|no-lan|none", "description": "The jobs' network (no-lan on a Mac: the internet over HTTPS through a per-job proxy, never the local network)."},
         {"name": "--gate", "arg": null, "description": "It may send CI gate jobs."},
-        {"name": "--exclusive", "arg": null, "description": "It may send --exclusive jobs."}
+        {"name": "--exclusive", "arg": null, "description": "It may send --exclusive jobs."},
+        {"name": "--reason", "arg": "TEXT", "description": "A note for the person who approves the held request: why this server should share the node."}
       ]
     },
     {
@@ -54490,11 +54492,12 @@ cmd_schema() {
     },
     {
       "name": "compute node servers limits",
-      "usage": "k2 compute node servers <node> limits <server> [--weight N] key=value…",
+      "usage": "k2 compute node servers <node> limits <server> [--weight N] [--reason TEXT] key=value…",
       "description": "Change a server's share on the node. Narrowing applies at once; widening (a higher weight too) waits for approval. Keys: max_running, max_queued, cpu_hours_day, max_job_secs, max_cpus, max_mem_gb, disk_gb, weight, network, top_class, gate, exclusive, for=7d|none, priority=true|false. <server> may be slot:0 (this server).",
       "args": [{"name": "node", "required": true}, {"name": "server", "required": true}, {"name": "key=value", "required": false}],
       "flags": [
-        {"name": "--weight", "arg": "N", "description": "Its share weight."}
+        {"name": "--weight", "arg": "N", "description": "Its share weight."},
+        {"name": "--reason", "arg": "TEXT", "description": "A note for the person who approves a held widening: why the server needs it."}
       ]
     },
     {

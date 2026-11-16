@@ -444,6 +444,23 @@ pub fn publish_moved(mv: &k2_core::overlay::ConversationMove) {
     }
 }
 
+/// The workspace's address now reads another conversation's Thread (a
+/// person made another conversation the main chat and kept its Thread,
+/// `adopt_sidecar`): nothing moved, so only the views on the old main
+/// Thread's key are told. The same `moved` frame as a move, sent on
+/// `from` only: a main Thread view re-subscribes on `to` and re-reads.
+pub fn publish_repointed(from: &str, to: &str) {
+    publish(OverlayFrame {
+        rev: 0,
+        collection: MOVED_COLLECTION.to_string(),
+        seq: 0,
+        id: to.to_string(),
+        doc: None,
+        activity: Some(serde_json::json!({ "from": from, "to": to, "repointed": true })),
+        conversation_id: Some(from.to_string()),
+    });
+}
+
 /// Wire collection of the "this Thread's address changed" frame.
 pub const ADDRESS_COLLECTION: &str = "address";
 

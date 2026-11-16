@@ -13,7 +13,9 @@
 //! - `POST /cli/sessions/main/set` — choose the pinned main chat. A person's
 //!   move (owner, Connect login, a shell tab), never an agent's: its own
 //!   main chat is the thing that would change, and when it is missing the
-//!   agent isn't running to ask.
+//!   agent isn't running to ask. `thread: keep_main | adopt_sidecar`
+//!   says which Thread the main chat shows afterwards (absent: the pin
+//!   alone moves, as before the choice existed).
 //! - [`msg_session`]: `POST /cli/workspace/msg` with `session=` (`k2 msg
 //!   --session <id>`): deliver to whoever holds it, or reopen a past-only
 //!   one with the message as its first turn (WS-M2).
@@ -495,6 +497,7 @@ fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError>
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err("bad_request", 400, "name a conversation: an id from k2 sessions --past"))?;
+    let thread = parse_main_thread(body.get("thread").and_then(Value::as_str))?;
     let previous = k2_core::workspace::resume_chat::main_chat_status(&ws.path).conversation_id;
     let row = resolve(&ws, id)?.row;
     if let Some(tree) = row.worktree.as_deref() {
@@ -504,16 +507,67 @@ fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError>
             format!("{} ran in the worktree {tree}, but the main chat runs in the workspace folder; reopen it with k2 sessions open {id} instead", row.conversation_id),
         ));
     }
-    k2_core::workspace::resume_chat::set_main_chat(&ws.id, &ws.path, &row.conversation_id, &row.cli)
-        .map_err(|e| err("conversation_not_on_disk", 409, e))?;
+    let Some(choice) = thread else {
+        k2_core::workspace::resume_chat::set_main_chat(&ws.id, &ws.path, &row.conversation_id, &row.cli)
+            .map_err(|e| err("conversation_not_on_disk", 409, e))?;
+        return Ok(json!({
+            "ok": true,
+            "workspace": ws.handle,
+            "previous": previous,
+            "main": main_json(&ws),
+            "title": row.custom_name.clone().unwrap_or(row.title),
+            "restartWith": format!("k2 agent restart {}", ws.handle),
+        }));
+    };
+    let switch = k2_core::workspace::resume_chat::set_main_chat_with_thread(
+        &ws.id,
+        &ws.path,
+        &row.conversation_id,
+        &row.cli,
+        choice,
+    )
+    .map_err(|e| err("conversation_not_on_disk", 409, e))?;
+    announce_main_thread_switch(&switch);
     Ok(json!({
         "ok": true,
         "workspace": ws.handle,
         "previous": previous,
         "main": main_json(&ws),
+        "thread": main_thread_json(&switch),
         "title": row.custom_name.clone().unwrap_or(row.title),
         "restartWith": format!("k2 agent restart {}", ws.handle),
     }))
+}
+
+/// `thread` on a main-chat pick: absent = the pin alone moves (as before
+/// the choice existed); `keep_main` / `adopt_sidecar` otherwise.
+pub(crate) fn parse_main_thread(raw: Option<&str>) -> Result<Option<k2_core::workspace::resume_chat::MainThread>, SidecarError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(v) => k2_core::workspace::resume_chat::MainThread::parse(v).map(Some).ok_or_else(|| {
+            err("bad_request", 400, format!("thread is keep_main or adopt_sidecar, not '{v}'"))
+        }),
+    }
+}
+
+/// What happened to the two Threads, for a main-chat pick's answer.
+pub(crate) fn main_thread_json(s: &k2_core::workspace::resume_chat::MainThreadSwitch) -> Value {
+    json!({
+        "choice": s.choice.as_str(),
+        "conversationId": s.main,
+        "other": s.other_thread.as_ref().map(|key| json!({
+            "conversationId": key,
+            "address": s.other_address,
+        })),
+    })
+}
+
+/// Tell the views on the old main Thread that the workspace's address
+/// reads another Thread now (moves already told theirs).
+pub(crate) fn announce_main_thread_switch(s: &k2_core::workspace::resume_chat::MainThreadSwitch) {
+    if let Some(from) = s.repointed_from.as_deref() {
+        crate::overlay_ws::publish_repointed(from, &s.main);
+    }
 }
 
 // ── show ──────────────────────────────────────────────────────────────

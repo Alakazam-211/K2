@@ -45,6 +45,25 @@
       ]
     },
     {
+      "name": "sessions main",
+      "usage": "k2 sessions main [--json]",
+      "description": "Which chat is pinned as this workspace's main chat, and whether K2 can find its conversation (state found, missing, unstarted, none or custom).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON (GET /cli/sessions/main)."}
+      ]
+    },
+    {
+      "name": "sessions main set",
+      "usage": "k2 sessions main set <id> [--thread keep-main|adopt-sidecar] [--json]",
+      "description": "Choose the main chat: a conversation from k2 sessions --past, such as a sidecar's. People only (agents get main_chat_needs_person). Takes effect the next time the chat starts. Nothing is deleted: the Thread that is not the main one stays at an address of its own (<ws>/<n>), printed after the switch.",
+      "args": [{"name": "id", "required": true, "description": "Short id from --past (6+ characters), full id, or an address."}],
+      "flags": [
+        {"name": "--thread", "arg": "keep-main|adopt-sidecar", "description": "keep-main (default): the main chat keeps its Thread. adopt-sidecar: the chosen chat's Thread becomes the main Thread."},
+        {"name": "--json", "arg": null, "description": "JSON (POST /cli/sessions/main/set)."}
+      ]
+    },
+    {
       "name": "sessions new",
       "usage": "k2 sessions new <name> [--cli <cli>] [--brief <file>|-] [--brief-text \"...\"] [--json]",
       "description": "Start a new sidecar (k2 sidecar new); default CLI: your own. Prints its address.",

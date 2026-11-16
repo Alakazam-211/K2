@@ -810,6 +810,212 @@ pub fn set_main_chat(
     Ok(())
 }
 
+/// Which Thread the main chat shows after a person makes another
+/// conversation (a sidecar, a past chat) the main chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainThread {
+    /// The main chat's Thread stays the workspace's Thread: it moves onto
+    /// the new main conversation. The other conversation's own Thread, if
+    /// it had one, is kept under a Thread key of its own with an address.
+    KeepMain,
+    /// The other conversation's Thread becomes the workspace's Thread. The
+    /// old main Thread stays with the old main conversation, which gets an
+    /// address (`<ws>/<n>`) so it can still be read and reopened.
+    AdoptSidecar,
+}
+
+impl MainThread {
+    /// `keep_main` / `adopt_sidecar` (the CLI's `keep-main` / `adopt-sidecar` too).
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().replace('-', "_").as_str() {
+            "keep_main" => Some(Self::KeepMain),
+            "adopt_sidecar" => Some(Self::AdoptSidecar),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::KeepMain => "keep_main",
+            Self::AdoptSidecar => "adopt_sidecar",
+        }
+    }
+}
+
+/// What [`repin_main_chat`] did with the two Threads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainThreadSwitch {
+    pub choice: MainThread,
+    /// The pin before (`None`: nothing was pinned).
+    pub previous: Option<String>,
+    /// The new pin: the workspace's address reads this conversation's
+    /// Thread from now on.
+    pub main: String,
+    /// The Thread that is no longer the main one, when there was one: its
+    /// Thread key and the address it answers at (`<ws>/<n>`).
+    pub other_thread: Option<String>,
+    pub other_address: Option<String>,
+    /// The Thread views that were on this key show the main Thread now
+    /// (adopt: the old main Thread's key). The daemon tells them.
+    pub repointed_from: Option<String>,
+}
+
+/// Pin `new_sid` as `project_id`'s main chat and settle the two Threads by
+/// `choice`, under the one DB lock (`conn`), so no Thread post resolves
+/// in between. Never deletes a Thread. Moves are the same moves a refresh
+/// makes ([`crate::overlay::move_conversation`]: live views follow); a
+/// failure part-way puts the pin and the moved Thread back.
+///
+/// The old main Thread is the one a refresh still holds for its new chat,
+/// else the pinned conversation's.
+pub fn repin_main_chat(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    new_sid: &str,
+    harness: Option<&str>,
+    choice: MainThread,
+) -> Result<MainThreadSwitch, String> {
+    let new_sid = new_sid.trim();
+    if new_sid.is_empty() {
+        return Err("name the conversation to make the main chat".into());
+    }
+    let row = crate::db::schema::WorkspaceSession::get(conn, project_id)
+        .map_err(|e| format!("read the pinned chat: {e}"))?;
+    let previous_harness = row.as_ref().map(|r| r.harness.clone());
+    let previous: Option<String> = row
+        .and_then(|r| r.session_id)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let held = pending_custom_moves().lock().get(project_id).cloned();
+    let old_thread = held.clone().or_else(|| previous.clone()).filter(|k| k != new_sid);
+    let has_thread = |key: &str| -> Result<bool, String> {
+        Ok(crate::overlay::catalog::get(conn, key)?.is_some_and(|(owner, _, _)| owner == project_id))
+    };
+    let old_has_thread = match old_thread.as_deref() {
+        Some(old) => has_thread(old)?,
+        None => false,
+    };
+    let ws = crate::workspace_session_handles::workspace_address_name(conn, project_id)?;
+    let address_for = |key: &str| -> Result<String, String> {
+        let h = crate::workspace_session_handles::handle_for_session(conn, project_id, key, None)?;
+        Ok(crate::workspace_session_handles::format_address(&ws, Some(&h)))
+    };
+    let write_pin = |sid: &str, harness: &str| -> Result<(), String> {
+        conn.execute(
+            "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+             VALUES (?1, ?2, ?3, ?4, 'user', 'running', unixepoch()) \
+             ON CONFLICT(project_id) DO UPDATE SET session_id = ?3, harness = ?4, last_activity_at = unixepoch()",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), project_id, sid, harness],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("pin the main chat: {e}"))
+    };
+    let new_harness = harness
+        .map(str::to_string)
+        .or_else(|| previous_harness.clone())
+        .unwrap_or_else(|| "claude".to_string());
+    let mut out = MainThreadSwitch {
+        choice,
+        previous: previous.clone(),
+        main: new_sid.to_string(),
+        other_thread: None,
+        other_address: None,
+        repointed_from: None,
+    };
+
+    match choice {
+        MainThread::KeepMain => {
+            // 1. The new main conversation's own Thread goes to a key of its
+            //    own first, with an address: the main Thread then moves onto
+            //    an empty key (a move merges with what is there).
+            let mut parked: Option<String> = None;
+            if old_has_thread && has_thread(new_sid)? {
+                let key = uuid::Uuid::new_v4().to_string();
+                crate::overlay::move_conversation(conn, new_sid, &key)?;
+                match address_for(&key) {
+                    Ok(addr) => {
+                        out.other_thread = Some(key.clone());
+                        out.other_address = Some(addr);
+                        parked = Some(key);
+                    }
+                    Err(e) => {
+                        crate::overlay::move_conversation(conn, &key, new_sid)?;
+                        return Err(e);
+                    }
+                }
+            }
+            let undo_park = |why: String| -> String {
+                if let Some(key) = parked.as_deref() {
+                    if let Err(e) = crate::overlay::move_conversation(conn, key, new_sid) {
+                        return format!("{why}; putting the other Thread back failed too: {e} (it is under {key})");
+                    }
+                }
+                why
+            };
+            // 2. The pin.
+            write_pin(new_sid, &new_harness).map_err(&undo_park)?;
+            // 3. The main Thread follows the pin.
+            if let Some(old) = old_thread.as_deref().filter(|_| old_has_thread) {
+                if let Err(e) = crate::overlay::move_conversation(conn, old, new_sid) {
+                    let restore = match (previous.as_deref(), previous_harness.as_deref()) {
+                        (Some(p), Some(h)) => write_pin(p, h),
+                        _ => Ok(()),
+                    };
+                    let why = match restore {
+                        Ok(()) => format!("move the main Thread: {e}"),
+                        Err(r) => format!("move the main Thread: {e}; the old pin was not restored: {r}"),
+                    };
+                    return Err(undo_park(why));
+                }
+            }
+        }
+        MainThread::AdoptSidecar => {
+            // The old main Thread stays under its key; it gets an address
+            // before the pin moves, so a failure changes nothing.
+            if let Some(old) = old_thread.as_deref().filter(|_| old_has_thread) {
+                out.other_address = Some(address_for(old)?);
+                out.other_thread = Some(old.to_string());
+                out.repointed_from = Some(old.to_string());
+            }
+            write_pin(new_sid, &new_harness)?;
+        }
+    }
+    // A refresh's hold is settled: the old Thread went where the choice says.
+    if held.is_some() {
+        pending_custom_moves().lock().remove(project_id);
+    }
+    if let Err(e) = crate::overlay::transfer::settle_pending(conn, project_id) {
+        crate::log_debug!("[clone/threads] settle on main chat pick {new_sid} for {project_id}: {e}");
+    }
+    Ok(out)
+}
+
+/// [`set_main_chat`] with a Thread choice: the same on-disk check, then
+/// [`repin_main_chat`] under the shared DB lock.
+pub fn set_main_chat_with_thread(
+    project_id: &str,
+    project_path: &str,
+    session_id: &str,
+    provider: &str,
+    choice: MainThread,
+) -> Result<MainThreadSwitch, String> {
+    let Some(adapter) = provider_resume_for_provider(provider) else {
+        return Err(format!("this conversation's CLI ({provider:?}) can't be resumed as a main chat"));
+    };
+    if !adapter.session_file_exists(session_id, project_path) {
+        return Err(format!(
+            "{session_id} ({provider}) has no conversation on disk for this workspace, so it can't be the main chat"
+        ));
+    }
+    let out = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        repin_main_chat(&conn, project_id, session_id, Some(adapter.provider), choice)?
+    };
+    note_pin_seen_on_disk(project_id);
+    Ok(out)
+}
+
 /// May a saved pin whose conversation is not on disk be handed to the
 /// provider as its premint id? Only when it is a UUID (the premint flags
 /// take nothing else), no OTHER workspace pins it, and its Thread (if it

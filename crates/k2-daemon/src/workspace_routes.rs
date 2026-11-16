@@ -132,6 +132,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     return Some(CliResponse::bad_request("Missing session_id parameter"));
                 }
                 let provider = opt_param(params, "provider");
+                // 0.46.14: which Thread the main chat shows after the pick
+                // (`keep_main` / `adopt_sidecar`); absent = the pin alone.
+                let thread = match crate::workspace_sessions_routes::parse_main_thread(
+                    params.get("thread").map(String::as_str),
+                ) {
+                    Ok(t) => t,
+                    Err(e) => return Some(CliResponse::bad_request(e.hint)),
+                };
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 let project_id = match k2_core::workspace::agent_identity::resolve_project_id(&conn, &p) {
@@ -140,6 +148,33 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         format!("project not registered: {p}"),
                     )),
                 };
+                if let Some(choice) = thread {
+                    let switch = k2_core::workspace::resume_chat::repin_main_chat(
+                        &conn,
+                        &project_id,
+                        &session_id,
+                        provider.as_deref(),
+                        choice,
+                    );
+                    drop(conn);
+                    return Some(match switch {
+                        Ok(s) => {
+                            crate::workspace_sessions_routes::announce_main_thread_switch(&s);
+                            CliResponse::ok_json(
+                                serde_json::json!({
+                                    "success": true,
+                                    "projectId": project_id,
+                                    "sessionId": session_id,
+                                    "provider": provider,
+                                    "rowsUpdated": 1,
+                                    "thread": crate::workspace_sessions_routes::main_thread_json(&s),
+                                })
+                                .to_string(),
+                            )
+                        }
+                        Err(e) => CliResponse::bad_request(format!("update failed: {e}")),
+                    });
+                }
                 let update = match provider.as_deref() {
                     Some(prov) => k2_core::db::schema::WorkspaceSession::update_session_id_and_harness(
                         &conn, &project_id, &session_id, prov,

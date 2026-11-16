@@ -20,7 +20,11 @@ k2 sessions — who is working in this workspace, and past conversations to reop
                                                start a helper (a sidecar); prints its address <ws>/<name>
   k2 sessions stop <name|address> [--force]    stop is sleep: its history stays (open or msg wakes it)
   k2 sessions main [--json]                    which chat is pinned as this workspace's main chat, and whether K2 can find it
-  k2 sessions main set <id> [--json]           choose the main chat, an <id> from --past (people only); takes effect the next time it starts
+  k2 sessions main set <id> [--thread keep-main|adopt-sidecar] [--json]
+                                               choose the main chat, an <id> from --past (people only); takes effect the next time it starts.
+                                               --thread keep-main (default): the main chat keeps its Thread; the other chat's
+                                               Thread stays at an address of its own. adopt-sidecar: the other chat's Thread
+                                               becomes the main Thread; the old one stays at an address. Nothing is deleted.
 
 Talk to any of them: k2 msg <address> "…"      (a sleeping one wakes)
                      k2 msg --session <id> "…" (delivers to whoever holds it; a past one is reopened first)
@@ -183,6 +187,16 @@ elif verb == "main_set":
     print("%s main chat is now %s (%s) \"%s\"" % (v.get("workspace"), m.get("conversationId"), m.get("cli"), cut(v.get("title"), 60)))
     if v.get("previous") and v.get("previous") != m.get("conversationId"):
         print("Was: %s (its history stays; k2 sessions open %s)" % (v["previous"], v["previous"][:8]))
+    t = v.get("thread") or {}
+    other = t.get("other") or {}
+    if t.get("choice") == "keep_main":
+        print("Thread: the main chat kept its Thread.")
+        if other.get("address"):
+            print("The other chat’s Thread is kept at %s (read it: k2 thread %s)" % (other["address"], other["address"]))
+    elif t.get("choice") == "adopt_sidecar":
+        print("Thread: the main chat now shows this chat’s Thread.")
+        if other.get("address"):
+            print("The old main Thread is kept at %s (read it: k2 thread %s)" % (other["address"], other["address"]))
     print("It takes effect the next time the chat starts. Restart it now: %s" % v.get("restartWith"))
 '
     exit $?
@@ -225,11 +239,18 @@ cmd_sessions_roster() {
 
 # Which chat is the workspace's pinned main chat, and choosing it.
 cmd_sessions_main() {
-    local action="" id="" workspace="" as_json=0
+    local action="" id="" workspace="" as_json=0 thread="keep-main"
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) workspace="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
+            --thread)
+                thread="${2:-}"
+                case "$thread" in
+                    keep-main|keep_main|adopt-sidecar|adopt_sidecar) ;;
+                    *) echo "usage: --thread keep-main|adopt-sidecar (which Thread the main chat shows afterwards)" >&2; exit 2 ;;
+                esac
+                shift 2 ;;
             set)
                 if [ -z "$action" ]; then action="set"; shift; continue; fi
                 id="$1"; shift ;;
@@ -247,7 +268,7 @@ cmd_sessions_main() {
             echo "usage: k2 sessions main set <id>  (ids: k2 sessions --past)" >&2; exit 2
         fi
         local body
-        body="$(K2_SS_ID="$id" K2_SS_WS="$workspace" python3 -c 'import json, os; print(json.dumps({"workspace": os.environ["K2_SS_WS"], "id": os.environ["K2_SS_ID"]}))')"
+        body="$(K2_SS_ID="$id" K2_SS_WS="$workspace" K2_SS_THREAD="${thread//-/_}" python3 -c 'import json, os; print(json.dumps({"workspace": os.environ["K2_SS_WS"], "id": os.environ["K2_SS_ID"], "thread": os.environ["K2_SS_THREAD"]}))')"
         raw="$(_sidecar_send POST /cli/sessions/main/set "$body")" || true
         _sessions_render main_set "$as_json" "$raw"
     fi

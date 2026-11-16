@@ -60,6 +60,11 @@ THE MAIN CHAT
                                  main_chat_needs_person; ask your human with
                                  k2 thread). Takes effect the next time the chat
                                  starts: k2 agent restart <ws>, or the next k2 msg.
+    --thread keep-main           (default) the main chat keeps its Thread; the
+                                 chosen chat's own Thread stays at <ws>/<n>
+    --thread adopt-sidecar       the chosen chat's Thread becomes the main
+                                 Thread; the old main Thread stays at <ws>/<n>
+                                 (nothing is deleted; the answer prints <ws>/<n>)
   If the pinned chat cannot be found anywhere, K2 keeps the pin, starts nothing
   and says so (main_chat_missing) instead of picking another chat. Fix it with
   main set. To give up on it and start over: k2 agent refresh <ws>.

@@ -11,7 +11,9 @@ import { describe, expect, it } from 'vitest'
 import { EditorSelection, EditorState, type Transaction } from '@codemirror/state'
 import { history, undo } from '@codemirror/commands'
 import { holdField, holdsIn, setHolds } from '@/lib/editor/live/hold-field'
-import { countWords, findCount, findStep, replaceAllSpec, replaceOneSpec, type FindSpec } from './find'
+import { search, setSearchQuery } from '@codemirror/search'
+import { countWords, findCount, findStep, replaceAllSpec, replaceOneSpec, toQuery, type FindSpec } from './find'
+import { findMarks, matchMarks, showMatchesEffect } from './find-view'
 
 const DOC = ['# Harbor', '', 'A draft, then a draft, then the Draft.', '', 'drafts and redraft', 'draft'].join('\n')
 const spec = (search: string, o: Partial<FindSpec> = {}): FindSpec => ({ search, caseSensitive: false, wholeWord: false, regexp: false, replace: '', ...o })
@@ -144,5 +146,23 @@ describe('Replace', () => {
     expect(tr.state.doc.lineAt(h.from).number).toBe(3)
     expect(tr.state.doc.lineAt(h.to).number).toBe(6)
     expect(tr.state.sliceDoc(h.from, h.to)).toContain('2. Open the sketch.')
+  })
+})
+
+describe('the marks', () => {
+  it('Write splits the view into several ranges: each match is marked once, in order (the builder never throws)', () => {
+    let s = EditorState.create({ doc: DOC, extensions: [findMarks, search()] })
+    s = s.update({ effects: [setSearchQuery.of(toQuery(spec('draft'))), showMatchesEffect(true)] }).state
+    const set = matchMarks(s, [{ from: 0, to: 12 }, { from: 14, to: 30 }, { from: 31, to: DOC.length }])
+    const seen: number[] = []
+    set.between(0, DOC.length, (from) => void seen.push(from))
+    expect(seen).toHaveLength(6)
+    expect([...seen].sort((a, b) => a - b)).toEqual(seen)
+  })
+
+  it('no marks while the bar is closed', () => {
+    let s = EditorState.create({ doc: DOC, extensions: [findMarks, search()] })
+    s = s.update({ effects: setSearchQuery.of(toQuery(spec('draft'))) }).state
+    expect(matchMarks(s, [{ from: 0, to: DOC.length }]).size).toBe(0)
   })
 })

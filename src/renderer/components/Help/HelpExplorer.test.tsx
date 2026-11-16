@@ -158,9 +158,9 @@ describe('the rail lists the CLI tools and the pages', () => {
     fireEvent.click(within(vault).getByRole('button', { expanded: false }))
     expect(within(vault).getByText(/secrets for agents, without showing them the value/)).toBeTruthy()
     expect(within(vault).queryByText('k2 help vault')).toBeNull()
-    // whoami's --help is not captured (it does not print without a daemon): point at k2 help.
-    const whoami = screen.getByTestId('help-noun-k2:whoami')
-    expect(within(whoami).getByText('k2 help whoami')).toBeTruthy()
+    // hooks's --help is not captured (it does not print without a daemon): point at k2 help.
+    const hooks = screen.getByTestId('help-noun-k2:hooks')
+    expect(within(hooks).getByText('k2 help hooks')).toBeTruthy()
   })
 
   it('k2 study lists the pages and opens one', () => {

@@ -77,6 +77,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         example: 'k2 done --blocked "waiting on review"',
       },
       {
+        noun: 'respond',
+        blurb: 'In a session the API started: send a line back to the API caller (`--final` for the last).',
+        example: 'k2 respond --final "report written to out/report.md"',
+      },
+      {
         noun: 'feedback',
         also: ['tickets'],
         blurb: 'Durable question for the human (Tickets page), with an HTML brief.',

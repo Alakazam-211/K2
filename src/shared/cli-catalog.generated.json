@@ -2524,6 +2524,21 @@
     "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, phone, themes, sync, examples, undo, safe-mode, api, services, libs), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2."
    },
    {
+    "name": "whoami",
+    "usage": "k2 whoami [--json]",
+    "description": "This cell's identity: workspace, role (canonical or sidecar), address (sales, sales/1 or sales/reviewer), primary and session, plus how many other sessions are live here. Sidecar means this chat is an extra session of the workspace, not the primary. Run it inside a workspace session. Exit 0 ok; 1 when the identity can't be determined, the daemon answers an error, or a flag is unknown."
+   },
+   {
+    "name": "done",
+    "usage": "k2 done [--blocked \"reason\"] [--agent <name>] | k2 done [--reason <text>] (API-launched session)",
+    "description": "Mark your task done, or blocked with a reason (POST /cli/done). In an API-launched session (K2_API_CELL=1) it instead completes the session: the session enters its grace period before it is reaped, and no message goes to the API caller (use it instead of an empty k2 respond --final). Other words are ignored."
+   },
+   {
+    "name": "respond",
+    "usage": "k2 respond [--final] <message>",
+    "description": "From inside an API-launched session: send a response line to the API caller (it reads them from the session's messages route). Call it as often as you like while you work; --final marks the last. Nothing to say: k2 done. Outside such a session it fails (exit 1); no message is a usage error (exit 1)."
+   },
+   {
     "name": "skills",
     "usage": "k2 skills <list|create|remove|profile|...> [...]",
     "description": "Manage skill profiles (SKILL.md) for workspaces/agents."

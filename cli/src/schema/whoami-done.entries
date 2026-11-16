@@ -1,0 +1,29 @@
+    {
+      "name": "whoami",
+      "usage": "k2 whoami [--json]",
+      "description": "This cell's identity: workspace, role (canonical or sidecar), address (sales, sales/1 or sales/reviewer), primary and session, plus how many other sessions are live here. Sidecar means this chat is an extra session of the workspace, not the primary. Run it inside a workspace session. Exit 0 ok; 1 when the identity can't be determined, the daemon answers an error, or a flag is unknown.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's object as is (exit 1 when it has no role)."}
+      ]
+    },
+    {
+      "name": "done",
+      "usage": "k2 done [--blocked \"reason\"] [--agent <name>] | k2 done [--reason <text>] (API-launched session)",
+      "description": "Mark your task done, or blocked with a reason (POST /cli/done). In an API-launched session (K2_API_CELL=1) it instead completes the session: the session enters its grace period before it is reaped, and no message goes to the API caller (use it instead of an empty k2 respond --final). Other words are ignored.",
+      "args": [],
+      "flags": [
+        {"name": "--blocked", "arg": "reason", "description": "Report the task as blocked, with why."},
+        {"name": "--agent", "arg": "name", "description": "The agent name. Default: K2_AGENT_NAME (exit 1 when neither is set)."},
+        {"name": "--reason", "arg": "text", "description": "API-launched session only: logged, never shown to the API caller."}
+      ]
+    },
+    {
+      "name": "respond",
+      "usage": "k2 respond [--final] <message>",
+      "description": "From inside an API-launched session: send a response line to the API caller (it reads them from the session's messages route). Call it as often as you like while you work; --final marks the last. Nothing to say: k2 done. Outside such a session it fails (exit 1); no message is a usage error (exit 1).",
+      "args": [{"name": "message", "required": true, "description": "The rest of the line, joined."}],
+      "flags": [
+        {"name": "--final", "arg": null, "description": "This is the last line for this piece of work."}
+      ]
+    },

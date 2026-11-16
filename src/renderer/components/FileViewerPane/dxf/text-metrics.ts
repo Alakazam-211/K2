@@ -1,8 +1,8 @@
-// A DXF text height is the cap height (K2DRAW1 §9.7), not the font size.
+// A DXF text height is the height of its capitals, not the font size.
 // The viewer draws text in the page's own font, so it measures that font's
 // capitals once and scales the font size by it. Where nothing paints (jsdom
-// in tests) the contract's estimates stand in: a cap ratio of 0.7 and 0.6·h
-// per character.
+// in tests) estimates stand in: a cap ratio of 0.7 and 0.6·h per
+// character.
 
 /** Per unit of font size. */
 export type TextMetrics = {
@@ -14,7 +14,7 @@ export type TextMetrics = {
 
 export const CAP_RATIO = 0.7
 
-/** 0.6·h per character, h being the cap height: the contract's fit estimate. */
+/** 0.6·h per character, h being the cap height: the same estimate the fit uses. */
 export const ESTIMATED_METRICS: TextMetrics = { cap: CAP_RATIO, advance: (s) => s.length * 0.6 * CAP_RATIO }
 
 /** Font size for a cap height `h`. */

@@ -1,8 +1,8 @@
 // SPLINE → polyline. Rational splines (group 41 weights, flag 4) are
 // evaluated as NURBS, in homogeneous coordinates; without weights, or with
-// all weights equal, that is the plain B-spline. Flattened as K2DRAW1 §4
-// asks: each chord within 2.5e-4 of the spline's box diagonal, at most
-// 4,096 points. With no usable knots, the fit points (else the control
+// all weights equal, that is the plain B-spline. Flattened so each chord
+// stays within 2.5e-4 of the spline's box diagonal, with at most 4,096
+// points. With no usable knots, the fit points (else the control
 // points) are joined.
 
 import type { ISplineEntity } from 'dxf-parser'

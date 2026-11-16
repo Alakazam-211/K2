@@ -1,5 +1,6 @@
-// Entity colours, in K2DRAW1's order (K2 Render's draw contract, §3):
-//   1. a true colour (group 420) wins when present;
+// Entity colours. True colour (group 420) wins over the ACI index (62),
+// which wins over BYLAYER:
+//   1. a true colour (420), when present;
 //   2. ACI 1–255 as it is;
 //   3. ACI 0 (BYBLOCK): the enclosing INSERT's colour (the foreground at top level);
 //   4. ACI 256 (BYLAYER) or none: the layer's colour, else the foreground.

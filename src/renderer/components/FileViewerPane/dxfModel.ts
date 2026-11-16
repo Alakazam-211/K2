@@ -325,7 +325,7 @@ export function drawingFromDxf(
   ): DxfNode | null {
     const visible = lines.filter((l) => l.length > 0)
     if (!visible.length) return null
-    // Rough extent for the fit: 0.6·h per character (K2DRAW1 §7).
+    // Rough extent for the fit: 0.6·h per character, h being the cap height.
     const w = len ?? Math.max(...lines.map((l) => l.length)) * h * 0.6 * wf
     const r = (rot * Math.PI) / 180
     const dx = anchor === 'start' ? 0 : anchor === 'middle' ? -w / 2 : -w

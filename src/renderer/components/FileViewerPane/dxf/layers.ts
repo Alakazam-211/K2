@@ -1,5 +1,5 @@
-// Layer visibility in model space, by K2DRAW1 §3 and §7. A layer is hidden
-// when it is off (a negative colour) or frozen (flag 1). Flag 2, "frozen in
+// Layer visibility in model space. A layer is hidden when it is off (a
+// negative colour) or frozen (flag 1). Flag 2, "frozen in
 // new viewports", only governs viewports made later, so model space draws it.
 // dxf-parser folds flags 1 and 2 into one `frozen`, so the flags are read
 // from the LAYER table's group codes here.

@@ -1,6 +1,5 @@
-// The five client fixes K2 Render's draw contract asks for (K2DRAW1 r0,
-// §9.9 O4), one fixture each under __fixtures__/dxf-*.dxf, so the viewer
-// and the server's 2D stills follow one rule set.
+// How the DXF viewer resolves colour, layer visibility, TEXT placement and
+// size, and splines: one small fixture per rule under __fixtures__/dxf-*.dxf.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -12,7 +11,7 @@ const flat = (nodes: DxfNode[]): DxfNode[] => nodes.flatMap((n) => (n.k === 'gro
 const of = <K extends DxfNode['k']>(nodes: DxfNode[], k: K) =>
   flat(nodes).filter((n): n is Extract<DxfNode, { k: K }> => n.k === k)
 
-describe('O4 #1: true colour (group 420)', () => {
+describe('true colour (group 420)', () => {
   const d = buildDrawing(fixture('dxf-true-color.dxf'))
 
   it('wins when present, then ACI, then BYLAYER', () => {
@@ -20,7 +19,7 @@ describe('O4 #1: true colour (group 420)', () => {
   })
 })
 
-describe('O4 #2: a layer frozen only in new viewports', () => {
+describe('a layer frozen only in new viewports', () => {
   const d = buildDrawing(fixture('dxf-frozen-new-vp.dxf'))
 
   it('is drawn in model space; frozen (flag 1) and off layers are not', () => {
@@ -30,7 +29,7 @@ describe('O4 #2: a layer frozen only in new viewports', () => {
   })
 })
 
-describe('O4 #3: aligned (72 = 3) and fit (72 = 5) TEXT', () => {
+describe('aligned (72 = 3) and fit (72 = 5) TEXT', () => {
   const text = fixture('dxf-aligned-fit-text.dxf')
   const [aligned, fit, tilted] = of(buildDrawing(text).nodes, 'text')
 
@@ -59,19 +58,19 @@ describe('O4 #3: aligned (72 = 3) and fit (72 = 5) TEXT', () => {
   })
 })
 
-describe('O4 #5: rational spline weights (group 41)', () => {
+describe('rational spline weights (group 41)', () => {
   const text = fixture('dxf-rational-spline.dxf')
   const spline = (src: string) => of(buildDrawing(src).nodes, 'path')[1]
   const points = (d: string): [number, number][] =>
     d.split(/\s*[ML]\s*/).filter(Boolean).map((p) => p.split(' ').map(Number) as [number, number])
 
-  it('weights 1, √2/2, 1 draw the exact quarter circle r = 50, within the contract tolerance', () => {
+  it('weights 1, √2/2, 1 draw the exact quarter circle r = 50, each chord within 2.5e-4 of the box diagonal', () => {
     const pts = points(spline(text).d)
     expect(pts[0]).toEqual([50, 0])
     expect(pts[pts.length - 1]).toEqual([0, 50])
     // Every vertex on the circle (to the path's 1e-4 rounding)…
     for (const [x, y] of pts) expect(Math.abs(Math.hypot(x, y) - 50)).toBeLessThan(2e-4)
-    // …and every chord within 2.5e-4 of the spline's box diagonal (K2DRAW1 §4).
+    // …and every chord within 2.5e-4 of the spline's box diagonal.
     const tol = 2.5e-4 * Math.hypot(50, 50)
     for (let i = 1; i < pts.length; i++) {
       const [ax, ay] = pts[i - 1]
@@ -122,7 +121,7 @@ describe('TEXT width factor (41)', () => {
   })
 })
 
-describe('O4 #4: a DXF text height is the cap height', () => {
+describe('a DXF text height is the cap height', () => {
   const text = fixture('dxf-cap-height.dxf')
 
   it('the font is scaled so capitals measure h (0.7 cap ratio until the page measures its font)', () => {

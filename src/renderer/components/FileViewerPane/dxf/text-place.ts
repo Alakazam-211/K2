@@ -1,5 +1,5 @@
 // Where a TEXT entity sits, from its alignment (groups 72 and 73) and its
-// two points (K2DRAW1 §4):
+// two points:
 //   - left on the baseline (72 = 0, 73 = 0): at the first point (10);
 //   - aligned (72 = 3) and fit (72 = 5): from the first point to the second
 //     (11), along that line, stretched to its length. Fit keeps its height;

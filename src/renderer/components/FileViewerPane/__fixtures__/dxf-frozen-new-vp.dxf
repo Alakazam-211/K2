@@ -1,5 +1,5 @@
 999
-K2DRAW1 O4 #2: flag 2 (frozen in new viewports) is not frozen in model space
+layer frozen only in new viewports still draws in model space
 0
 SECTION
 2

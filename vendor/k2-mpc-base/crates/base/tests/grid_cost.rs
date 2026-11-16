@@ -118,7 +118,7 @@ fn set(r: usize, c: usize, v: &str) -> Vec<Edit> {
 }
 
 #[test]
-#[ignore]
+#[ignore = "a measurement: run by tools/tests/grid.sh (release, --nocapture)"]
 fn grid_costs_at_the_cell_limit() {
     let dir = std::env::temp_dir().join(format!("k2mb-gridcost-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -271,7 +271,7 @@ fn grid_costs_at_the_cell_limit() {
 /// the carets' places; `roster_flush_caret` is that flush's cost. `roster_flush_edit` is a
 /// flush right after a cell edit (the grid changed since the last flush). Ignored, release.
 #[test]
-#[ignore]
+#[ignore = "a measurement: run by tools/tests/grid.sh (release, --nocapture)"]
 fn grid_roster_flush_cost() {
     let dir = std::env::temp_dir().join(format!("k2mb-gridroster-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

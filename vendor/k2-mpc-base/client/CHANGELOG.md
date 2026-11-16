@@ -3,6 +3,20 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.20.0 (kit tag v0.20.0)
+
+Still wire 3, with no new frame or field: with a kit that never gives a writer back unkept the
+client behaves as 0.19.0.
+
+- **A writer given back without being kept** (WIRE.md, "Writer leases"):
+  when a reconnect's welcome names the client's old writer again with `kept: false` (a host
+  with leases), the client caps its watches on that writer at `prevEnded` as it does for a new
+  writer, and no change under it after `prevEnded` settles an edit sent before the reconnect.
+  Before this, such a change with the same hunks settled the edit in flight as applied. Edits
+  sent on the new connection under that writer are its own, as before. The kit never gives a
+  stale reclaim its old writer back. Tests: `test/writer-lease.test.ts`
+  (`lease_unkept_same_writer`, and its plant `SameWriterUncapped`, `withSameWriterUncapped`).
+
 ## 0.19.0 (kit tag v0.19.0)
 
 Still wire 3: every addition is optional, and with a kit that sends none the client behaves as

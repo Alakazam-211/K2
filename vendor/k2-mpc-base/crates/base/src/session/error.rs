@@ -50,6 +50,11 @@ pub enum SessionError {
     /// ([`super::Session::promote_watcher`]). Nothing was applied. Exit 3.
     #[error("watching: the doc has its {max} participants; read-only until the host lets you in")]
     Watching { max: usize },
+    /// The doc holds all the writers it allows ([`super::Config::writers_max`]) and this
+    /// connection holds a writer it doesn't count ([`super::Joined::writers_full`]): it reads,
+    /// but never edits. Nothing was applied. `MPC-E908`, exit 2.
+    #[error("read-only: this doc has {count} writers (the most is {max})")]
+    WritersFull { count: u64, max: u64 },
     /// `edit(.., if_version: Some(expected))` (or an edit verb's `--if-version`, or a tier 0
     /// write from an old base) but the doc is at `actual`. Nothing applied. One line, no doc
     /// text: `doc changed since 12 (now 14)`. Exit 1.
@@ -86,6 +91,15 @@ pub enum SessionError {
         engine: String,
         engine_format: u32,
     },
+    /// The stored doc is on the native engine, and this build doesn't have it: that doc alone
+    /// is refused (opening, deleting or purging it), nothing of it read or changed, while the
+    /// store and its other docs work. Every session call that meets such a doc gives this
+    /// variant, never a store error. `MPC-E169` `native_engine_missing`. Exit 6.
+    #[error(
+        "this doc is on the native engine (format {stored_format}), which this build \
+         doesn't have"
+    )]
+    NativeEngineMissing { stored: String, stored_format: u32 },
     #[error("bad participant: {0}")]
     BadParticipant(String),
     #[error("bad position: {0}")]
@@ -282,8 +296,11 @@ pub enum SessionError {
     },
     #[error(transparent)]
     Doc(#[from] DocError),
+    /// A store error. A native doc's refusal on a build without the native engine
+    /// ([`StoreError::NativeEngineMissing`]) is never this: it converts to
+    /// [`SessionError::NativeEngineMissing`], so a host matches it as its own.
     #[error(transparent)]
-    Store(#[from] StoreError),
+    Store(StoreError),
     #[error(transparent)]
     Pack(#[from] PackError),
     /// A grid change would take the table past a size limit: nothing applied,
@@ -444,6 +461,23 @@ impl SessionError {
                 SessionError::Blob(BlobError::Store(store(e)))
             }
             other => other,
+        }
+    }
+}
+
+impl From<StoreError> for SessionError {
+    /// A store error as a session's: a native doc's refusal on a build without the native
+    /// engine as its own variant, any other as [`SessionError::Store`].
+    fn from(e: StoreError) -> Self {
+        match e {
+            StoreError::NativeEngineMissing {
+                stored,
+                stored_format,
+            } => SessionError::NativeEngineMissing {
+                stored,
+                stored_format,
+            },
+            e => SessionError::Store(e),
         }
     }
 }

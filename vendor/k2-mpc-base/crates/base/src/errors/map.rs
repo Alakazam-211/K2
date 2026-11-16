@@ -53,6 +53,9 @@ impl Refusal for SessionError {
             .with("need", need_word(*need)),
             S::NotJoined { conn } => rep(&r::NOT_JOINED, msg).with("conn", conn.to_string()),
             S::Watching { max } => rep(&r::WATCHING, msg).with("max", *max as u64),
+            S::WritersFull { count, max } => rep(&r::WRITERS_DOC_CAP, msg)
+                .with("count", *count)
+                .with("max", *max),
             S::BaseExpired { base } => rep(&r::BASE_EXPIRED, msg).with("base", *base),
             S::Stale { expected, actual } => rep(&r::STALE, msg)
                 .with("expected", *expected)
@@ -81,6 +84,12 @@ impl Refusal for SessionError {
                 .with("stored_format", *stored_format)
                 .with("engine", engine)
                 .with("engine_format", *engine_format),
+            S::NativeEngineMissing {
+                stored,
+                stored_format,
+            } => rep(&r::NATIVE_ENGINE_MISSING, msg)
+                .with("stored", stored)
+                .with("stored_format", *stored_format),
             S::BadParticipant(_) => rep(&r::BAD_PARTICIPANT, msg),
             S::BadPosition(_) => rep(&r::BAD_POSITION, msg),
             S::BadEdit(_) => rep(&r::BAD_EDIT, msg),
@@ -368,6 +377,12 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
             .with("stored_format", *stored_format)
             .with("engine", crate::engine::ENGINE_NAME)
             .with("engine_format", crate::engine::ENGINE_FORMAT),
+        S::NativeEngineMissing {
+            stored,
+            stored_format,
+        } => rep(&r::NATIVE_ENGINE_MISSING, msg)
+            .with("stored", stored)
+            .with("stored_format", *stored_format),
         S::NewerData { table } => rep(&r::STORE_NEWER, msg).with("table", table.as_str()),
         S::MarksLost(d) => rep(&r::BASE_EXPIRED, msg).with("doc", *d),
         S::Corrupt(what) => rep(&r::STORE_CORRUPT, msg).with("what", *what),

@@ -79,7 +79,7 @@ pub use awareness::{
 };
 pub use config::{
     Config, KeyedLimit, LimitSource, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,
-    DEFAULT_BLAME_CHECK_LARGE_AT,
+    DEFAULT_BLAME_CHECK_LARGE_AT, WRITERS_NOTICE_MAX,
 };
 pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
 pub use error::{DroppedBy, EditWithError, ElemsClaim, NodesClaim, SessionError};
@@ -141,8 +141,6 @@ mod one_writer_tests;
 mod promote_crash_tests;
 #[cfg(test)]
 mod tier0_crash_tests;
-#[cfg(test)]
-mod writeback_cost_tests;
 #[cfg(test)]
 mod writeback_diff_tests;
 

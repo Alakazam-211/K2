@@ -279,7 +279,7 @@ fn n1_open(
 
 /// A store whose docs hold references, for the previous release (tools/n1/consumer-refs).
 #[test]
-#[ignore = "tools/n1: writes the store for the previous release's consumer"]
+#[ignore = "tools/n1/n1.sh: writes the store for the previous release's consumer"]
 fn n1_refs_producer() {
     let dir = n1_dir();
     let (_store, blobs, mgr, _) = n1_open(&dir, 1_000_000);
@@ -321,7 +321,7 @@ fn n1_refs_producer() {
 /// After the previous release's run: this build's open gives back what its delete left, and a
 /// load takes a hold on the name it wrote that's still there, and reports the one it collected.
 #[test]
-#[ignore = "tools/n1: reads the store the previous release's consumer left"]
+#[ignore = "tools/n1/n1.sh: reads the store the previous release's consumer left"]
 fn n1_refs_after() {
     let dir = n1_dir();
     let ids = fs::read_to_string(dir.join("ids.txt")).unwrap();

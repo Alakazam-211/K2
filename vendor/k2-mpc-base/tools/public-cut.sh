@@ -15,9 +15,14 @@
 #                 environment): paths named in it are taken from the given ref. Its lines, run
 #                 before the cut's own steps: `take PATH REF` puts PATH (a file or a directory)
 #                 as it is at commit REF in place of the tree's; a line `patch` ends them, and a
-#                 unified diff after it (git apply) is applied next, or skipped when it is
-#                 applied already. `#` lines and blank lines before it are comments. The script
-#                 prints counts only, never the list. Without a hold list none of this runs.
+#                 unified diff after it (git apply) is applied next, file by file, each
+#                 skipped when it is applied already. `#` lines and blank lines before it are
+#                 comments. The script prints counts only, never the list. Without a hold list
+#                 none of this runs.
+#                 The guarded paths (HOLD_GUARDED, below: vendor/README.md, which describes the
+#                 vendored engine trees) must be taken: every line of each must be a line of
+#                 its taken ref's copy or a line the hold patch adds to it, or the cut stops
+#                 (naming the line numbers only). A guarded path the list doesn't take stops it.
 #   --trailer T   a trailer for the commit message (git commit --trailer), repeatable.
 #
 # Run at the root of a clean checkout of the release branch (never main). Deterministic and
@@ -53,8 +58,9 @@
 #     with its continuation lines, `${PART:?...}`'s), `-p <dropped crate>` arguments, and
 #     everything between `# public-cut: drop-begin` and `# public-cut: drop-end` lines
 #     (markers included; unbalanced markers stop the script);
-#   - in every .md and Cargo.toml outside vendor/: everything between `public-cut: drop-begin`
-#     and `public-cut: drop-end` lines (`# ...` in TOML, `<!-- ... -->` in Markdown; the same);
+#   - in every .md and Cargo.toml outside vendor/, and in tools/targets.txt: everything between
+#     `public-cut: drop-begin` and `public-cut: drop-end` lines (`# ...` in TOML and the targets
+#     list, `<!-- ... -->` in Markdown; the same);
 #   - from Cargo.lock: see below.
 # Docs, CHANGELOGs and vendor/README.md may still NAME the engine and its tags: only source
 # goes. The root README.md gets one fixed paragraph saying what the cut leaves out.
@@ -99,6 +105,9 @@ if [ -n "$HOLD" ]; then
 fi
 
 die() { echo "public-cut: $*" >&2; exit 1; }
+# Paths a hold list must take (see --hold): text about the vendored engine trees reaches a public
+# tag only from a ref the list names, plus the hold patch's own added lines.
+HOLD_GUARDED="vendor/README.md"
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not in a git checkout"
 cd "$TOP"
 [ -f tools/check-public-cut.sh ] || die "no tools/check-public-cut.sh"
@@ -142,17 +151,43 @@ if [ -n "$HOLD" ]; then
     git checkout -q "$hr" -- "$hp"
     HTAKEN=$((HTAKEN + 1))
   done < "$WORK/hold-take"
+  # the patch, file by file: a taken path is put back as its ref has it on every run, so a hunk
+  # on it applies again on a tree already cut while the others are applied already
   HPATCH=none
   if [ -s "$WORK/hold-patch" ]; then
-    if git apply --index --check "$WORK/hold-patch" 2>/dev/null; then
-      git apply --index "$WORK/hold-patch"; HPATCH=applied
-    elif git apply --index -R --check "$WORK/hold-patch" 2>/dev/null; then
-      HPATCH="applied already"
-    else
-      die "the hold list: its patch applies neither way"
-    fi
+    awk -v d="$WORK/hp." '/^diff --git / { n++ } n { print > (d n) }' "$WORK/hold-patch"
+    HPA=0; HPS=0
+    for f in "$WORK"/hp.*; do
+      [ -f "$f" ] || die "the hold list: its patch names no file (no 'diff --git' line)"
+      if git apply --index --check "$f" 2>/dev/null; then
+        git apply --index "$f"; HPA=$((HPA + 1))
+      elif git apply --index -R --check "$f" 2>/dev/null; then
+        HPS=$((HPS + 1))
+      else
+        die "the hold list: its patch applies neither way"
+      fi
+    done
+    if [ "$HPS" = 0 ]; then HPATCH=applied
+    elif [ "$HPA" = 0 ]; then HPATCH="applied already"
+    else HPATCH="$HPA file(s) applied, $HPS applied already"; fi
   fi
   echo "  hold list: $HTAKEN path(s) taken from their refs; patch: $HPATCH"
+  HGUARD=0
+  for g in $HOLD_GUARDED; do
+    [ -f "$g" ] || continue
+    gref=$(awk -v p="$g" '$1 == "take" && $2 == p { r = $3 } END { print r }' "$WORK/hold-take")
+    [ -n "$gref" ] || die "the hold list: $g is guarded (HOLD_GUARDED) and not taken"
+    git show "$gref:$g" > "$WORK/guard-ok"
+    awk -v f="$g" '
+      /^diff --git / { cur = "" }
+      /^\+\+\+ / { cur = substr($2, 3); next }
+      cur == f && /^\+/ { print substr($0, 2) }' "$WORK/hold-patch" >> "$WORK/guard-ok"
+    gbad=$(awk 'NR == FNR { ok[$0] = 1; next } !($0 in ok) { printf "%s%d", (n++ ? " " : ""), FNR }' \
+      "$WORK/guard-ok" "$g")
+    [ -z "$gbad" ] || die "the hold list: $g has lines from neither its taken ref nor the hold patch (lines $gbad)"
+    HGUARD=$((HGUARD + 1))
+  done
+  echo "  hold list: $HGUARD guarded path(s) checked: every line from its taken ref or the patch"
 fi
 
 # ---- 1. paths -------------------------------------------------------------------------------
@@ -547,8 +582,8 @@ for f in $(git ls-files 'tools/*.sh' 'scripts/*.sh' 'tools/**/*.sh' 'scripts/**/
   replace "$f" "$WORK/t"
 done
 
-# the marker blocks of Markdown files and manifests
-for f in $(git ls-files '*.md' '*Cargo.toml' | grep -v '^vendor/'); do
+# the marker blocks of Markdown files, manifests and the targets list (tools/check-targets.sh's)
+for f in $(git ls-files '*.md' '*Cargo.toml' tools/targets.txt | grep -v '^vendor/'); do
   [ -f "$f" ] || continue
   grep -qE '^[[:space:]]*(#|<!--) public-cut: drop-' "$f" || continue
   awk -v f="$f" '

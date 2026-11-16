@@ -532,7 +532,10 @@ this spec, no socket.
     connection lands after the welcome, so the `since` reply settles the edit in flight for good.
   - Otherwise the kit closes nothing (`replaced: null`) and joins as without it; `prevEnded`
     says the version the previous lease ended at, when known: changes under the old writer after
-    it are another connection's (the client caps its lost-change watches there).
+    it are another connection's (the client caps its lost-change watches there). The kit never
+    gives such a reconnect its old writer back (`client` is always another one); a client still
+    caps its watches when a host does, and reads no change under that writer after `prevEnded`
+    as an edit it sent before the reconnect.
   - **With a device key, `prev` alone closes nothing**, in the kit and in the host: the writer
     may be a sibling tab's by now. A host that retires a previous connection itself matches the
     lease too (client and token), never the client ID alone.

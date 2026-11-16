@@ -99,14 +99,23 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
     }
     let w = new.begin_write()?;
     let mut n = 0;
+    // the plant `native-tables-dropped`: the engine store's tables left out (test builds only)
+    let drop_native = super::features::native_tables_dropped();
+    let dropped = |name: &str| drop_native && name.starts_with("native_");
     // the shared tables (SHARED_TABLES), then every per-doc one
     n += copy(&r, &w, META)?;
     n += copy(&r, &w, PATHS)?;
     n += copy(&r, &w, HOST)?;
     n += copy(&r, &w, BLOB_SPACES)?;
     n += copy(&r, &w, BLOBS)?;
+    if !drop_native {
+        n += copy(&r, &w, super::native::NATIVE_NONCES)?;
+    }
     n += super::blob_struct::copy_live_rows(&r, &w)?;
     for (t, _) in DOC_TABLES {
+        if dropped(t.name()) {
+            continue;
+        }
         n += match *t {
             DocRows::One(d) => copy(&r, &w, d)?,
             DocRows::Pair(d) => copy(&r, &w, d)?,
@@ -122,7 +131,7 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
     // stops the rewrite instead of dropping its rows
     let copied: Vec<String> = w.list_tables()?.map(|t| t.name().to_owned()).collect();
     for t in r.list_tables()? {
-        if !copied.iter().any(|c| c == t.name()) {
+        if !copied.iter().any(|c| c == t.name()) && !dropped(t.name()) {
             return Err(StoreError::Db(format!(
                 "rewrite: table {:?} not copied",
                 t.name()

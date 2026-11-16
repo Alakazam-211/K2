@@ -84,9 +84,8 @@ dev-dependency) for the planted tracker mutants. Nothing else depends on them.
   `LICENSE-APACHE`), outside the three crate directories so those stay byte-identical to the
   tag. They cover the three crates (and are the engine repo's licence; `mpce-model`, vendored
   earlier at `mpce-model-v0.4.1`, has no `license` field yet).
-- mpce-sync is 0.1.1 at this tag (first tagged `mpce-sync-v0.1.1`): the per-client re-base
-  epoch (`Participant::ep`, `Tracker::on_rebase`, the fence in `Tracker::route_op`) and
-  standalone manifests.
+- mpce-sync is 0.1.1 at this tag (first tagged `mpce-sync-v0.1.1`): the native engine's
+  per-client re-base epoch and its fence, and standalone manifests.
 - Earlier: `mpce-g2a-m2.2` (hardening; commit
   `76cdaa70154059bd58cac84f886b12f88ffc6925`; splits mpce-sync `756464f`, mpce-core `5fde064`,
   mpce-codec `9d1349e`; it added `MPCE-E196`), on main at kit

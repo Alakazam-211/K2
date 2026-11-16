@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -274,7 +274,7 @@
       "source": "kit",
       "run_tool": true,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902", "MPC-E908"]
     },
     {
       "name": "replace",
@@ -287,7 +287,7 @@
       "source": "kit",
       "run_tool": true,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E125", "MPC-E126", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E125", "MPC-E126", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902", "MPC-E908"]
     },
     {
       "name": "delete",
@@ -300,7 +300,7 @@
       "source": "kit",
       "run_tool": true,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902", "MPC-E908"]
     },
     {
       "name": "sed -i",
@@ -313,7 +313,7 @@
       "source": "kit",
       "run_tool": true,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902", "MPC-E908"]
     },
     {
       "name": "patch",
@@ -326,7 +326,7 @@
       "source": "kit",
       "run_tool": true,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E123", "MPC-E124", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E123", "MPC-E124", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902", "MPC-E908"]
     },
     {
       "name": "apply",
@@ -339,7 +339,7 @@
       "source": "kit",
       "run_tool": true,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E123", "MPC-E124", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E123", "MPC-E124", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902", "MPC-E908"]
     },
     {
       "name": "append",
@@ -352,7 +352,7 @@
       "source": "kit",
       "run_tool": true,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E120", "MPC-E121", "MPC-E122", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E902", "MPC-E908"]
     },
     {
       "name": "write",
@@ -365,7 +365,7 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E111", "MPC-E112", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E701", "MPC-E703", "MPC-E715", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E111", "MPC-E112", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E701", "MPC-E703", "MPC-E715", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E908"]
     },
     {
       "name": "undo",
@@ -378,7 +378,7 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E201", "MPC-E206", "MPC-E207", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E201", "MPC-E206", "MPC-E207", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E908"]
     },
     {
       "name": "redo",
@@ -391,7 +391,7 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E201", "MPC-E206", "MPC-E207", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E201", "MPC-E206", "MPC-E207", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E908"]
     },
     {
       "name": "undo --drop",
@@ -417,7 +417,7 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E202", "MPC-E203", "MPC-E206", "MPC-E207", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E202", "MPC-E203", "MPC-E206", "MPC-E207", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E908"]
     },
     {
       "name": "status",
@@ -573,7 +573,7 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E205", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E511", "MPC-E602", "MPC-E701", "MPC-E704", "MPC-E705", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E205", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E511", "MPC-E602", "MPC-E701", "MPC-E704", "MPC-E705", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E908"]
     },
     {
       "name": "version --name",
@@ -664,7 +664,7 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E105", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E201", "MPC-E202", "MPC-E203", "MPC-E204", "MPC-E205", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901"]
+      "errors": ["MPC-E102", "MPC-E105", "MPC-E110", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E201", "MPC-E202", "MPC-E203", "MPC-E204", "MPC-E205", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E901", "MPC-E908"]
     },
     {
       "name": "lease",
@@ -719,7 +719,7 @@
       "errors": ["MPC-E106"]
     }
   ],
-  "errors_any_verb": ["MPC-E101", "MPC-E107", "MPC-E108", "MPC-E109", "MPC-E146", "MPC-E154", "MPC-E401", "MPC-E402", "MPC-E403", "MPC-E404", "MPC-E407", "MPC-E415", "MPC-E501", "MPC-E502", "MPC-E503", "MPC-E505", "MPC-E508", "MPC-E509", "MPC-E510", "MPC-E513", "MPC-E514", "MPC-E515", "MPC-E516", "MPC-E517", "MPC-E518", "MPC-E519", "MPC-E520", "MPC-E521", "MPC-E706", "MPC-E707", "MPC-E709", "MPC-E710"],
+  "errors_any_verb": ["MPC-E101", "MPC-E107", "MPC-E108", "MPC-E109", "MPC-E146", "MPC-E154", "MPC-E169", "MPC-E401", "MPC-E402", "MPC-E403", "MPC-E404", "MPC-E407", "MPC-E415", "MPC-E501", "MPC-E502", "MPC-E503", "MPC-E505", "MPC-E508", "MPC-E509", "MPC-E510", "MPC-E513", "MPC-E514", "MPC-E515", "MPC-E516", "MPC-E517", "MPC-E518", "MPC-E519", "MPC-E520", "MPC-E521", "MPC-E706", "MPC-E707", "MPC-E709", "MPC-E710"],
   "meta_verbs": [
     {
       "name": "explain",
@@ -1046,8 +1046,9 @@
     "position_check_every": 1000,
     "writeback_check_every": 100,
     "reuse_agent_clients": 1,
-    "reuse_person_writers": 0,
-    "person_writer_park_ms": 0,
+    "reuse_person_writers": 1,
+    "person_writer_park_ms": 86400000,
+    "writers_max": 0,
     "blame_check_every": 100,
     "blame_check_large_at": 20000,
     "blame_check_every_large": 1000,
@@ -1853,6 +1854,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E169",
+      "name": "native_engine_missing",
+      "exit": 6,
+      "status": "live"
+    },
+    {
       "id": "MPC-E170",
       "name": "ambiguous_address",
       "exit": 2,
@@ -2599,6 +2606,12 @@
     {
       "id": "MPC-E907",
       "name": "annotation_cap",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E908",
+      "name": "writers_doc_cap",
       "exit": 2,
       "status": "live"
     },

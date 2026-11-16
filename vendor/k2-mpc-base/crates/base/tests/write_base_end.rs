@@ -331,17 +331,3 @@ fn crlf_document() {
     assert_eq!(f.text(), "a\nZ\n");
     assert_eq!(f.s.read(f.agent).unwrap().bytes, b"a\r\nZ\r\n");
 }
-
-/// r2's `--partial` clause: the separator goes in only if the landing change is applied.
-#[test]
-#[ignore = "write --base --partial isn't implemented yet"]
-fn partial_with_the_landing_change_applied_gets_the_separator() {
-    unimplemented!("write --base --partial: the landing change applied → the separator");
-}
-
-/// r2's `--partial` clause: the landing change skipped (it conflicts), so no separator.
-#[test]
-#[ignore = "write --base --partial isn't implemented yet"]
-fn partial_with_the_landing_change_skipped_gets_no_separator() {
-    unimplemented!("write --base --partial: the landing change skipped → no separator");
-}

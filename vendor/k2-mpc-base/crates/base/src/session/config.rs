@@ -221,16 +221,31 @@ pub struct Config {
     /// holds nothing unsent and is done with it) or, for a connection without client state
     /// ([`super::JoinOptions::device_stateless`]), after any end; every other end parks it for its
     /// own lease. Every op is made by the session itself, so a reused writer's line continues from
-    /// the doc's own state. Without a device key, or off: a fresh writer per connection, as before.
-    /// Default false.
+    /// the doc's own state. Without a device key, or off: a fresh writer per connection, as before,
+    /// so a host that sends no device key sees nothing of it. Default true.
     pub reuse_person_writers: bool,
 
     /// How long a parked person writer (one whose connection ended without a release) stays
     /// reserved for its own lease before another connection of the same person and device
-    /// may take it, in ms. 0: never (the default; a parked writer goes back only to its own
-    /// reclaim). A connection whose reclaim comes after that is told the version its lease
-    /// ended at ([`super::Joined::prev_ended`]).
+    /// may take it, in ms. 0: never (a parked writer goes back only to its own reclaim). A
+    /// connection whose reclaim comes after that is told the version its lease ended at
+    /// ([`super::Joined::prev_ended`]), and never gets that writer back: its client counts no
+    /// change under it after that version as its own. Default a day (86,400,000): an early
+    /// let-go costs one more writer, and a writer never let go stays in the doc for good.
     pub person_writer_park_ms: u64,
+
+    /// The most writers a doc holds (`docs/SESSIONS.md`, "The writers cap"). 0: no cap. A
+    /// writer is a client ID the doc's state holds or may come to hold: every ID with an owner
+    /// row, every person writer a connection that could write has held, and every present
+    /// connection that could write. Every writer stays in the doc for good. At the cap, a
+    /// connection that could write takes a writer it may reuse (an agent's own, a person's
+    /// free writer of that device, then that person's free writer of another device, then
+    /// that person's oldest parked writer, let go early), or else joins read-only
+    /// ([`super::Joined::writers_full`]): its edits are refused `MPC-E908`. The outside
+    /// participant, the import and a tier-0 promotion's authors are never refused, and count.
+    /// [`super::AuditEvent::WritersNearCap`] tells the host once per load when the doc holds
+    /// 80% of the cap, or of [`WRITERS_NOTICE_MAX`] when there is none. Default 0.
+    pub writers_max: usize,
 
     /// The file write-back's sampled check (v0.9.7): the disk replica is kept in step by
     /// applying the changes since the last write-back; every sync compares its state vector
@@ -526,6 +541,7 @@ impl Config {
             reuse_agent_clients,
             reuse_person_writers,
             person_writer_park_ms,
+            writers_max,
             blame_check_every,
             blame_check_large_at,
             blame_check_every_large,
@@ -615,6 +631,7 @@ impl Config {
             ("reuse_agent_clients", u64::from(*reuse_agent_clients)),
             ("reuse_person_writers", u64::from(*reuse_person_writers)),
             ("person_writer_park_ms", *person_writer_park_ms),
+            ("writers_max", *writers_max as u64),
             ("blame_check_every", u64::from(*blame_check_every)),
             ("blame_check_large_at", *blame_check_large_at),
             (
@@ -656,6 +673,10 @@ impl Config {
 }
 
 const DAY: u64 = 24 * 60 * 60_000;
+
+/// The count [`Config::writers_max`]'s near-cap notice is computed against when there is no
+/// cap: [`super::AuditEvent::WritersNearCap`] comes at 80% of it (6,554 writers).
+pub const WRITERS_NOTICE_MAX: usize = 8_192;
 
 /// The default of [`Config::blame_check_every`]: one blame in 100 is checked against a
 /// rebuild of the provenance map.
@@ -718,8 +739,9 @@ impl Default for Config {
             edit_check_scale_units: crate::doc::DEFAULT_EDIT_CHECK_SCALE_UNITS,
             position_check_every: crate::doc::DEFAULT_POSITION_CHECK_EVERY,
             reuse_agent_clients: true,
-            reuse_person_writers: false,
-            person_writer_park_ms: 0,
+            reuse_person_writers: true,
+            person_writer_park_ms: 86_400_000,
+            writers_max: 0,
             writeback_check_every: 100,
             blame_check_every: DEFAULT_BLAME_CHECK_EVERY,
             blame_check_large_at: DEFAULT_BLAME_CHECK_LARGE_AT,

@@ -157,6 +157,39 @@ tp_exception_stale() {
   tp_new exception-stale && tp_line "$TEXT_EXCEPTIONS" "docs/POSITIONS.md: a line nobody added" && tp_commit plant \
     && expect_text exception-stale "$D" 1 "$FIND $TEXT_EXCEPTIONS:$L: no added line with a term matches this entry"
 }
+# each reviewed line of the checkout's exception list is covered exactly: in its own copy, the
+# line is taken out of the base and added back, its entry listed (clean); then the line is
+# changed at its end, so the entry blocks as stale and the changed line is found (both, alone)
+tp_exceptions_exact() {
+  tx_n=0
+  while IFS= read -r tx_ent; do
+    case $tx_ent in ''|'#'*) continue ;; esac
+    tx_n=$((tx_n + 1)); tx_f=${tx_ent%%: *}; tx_t=${tx_ent#*: }
+    tp_new "exception-exact-$tx_n" || return 1
+    [ -f "$D/$tx_f" ] || { echo "PLANT exception-exact-$tx_n: $tx_f not in the cut"; return 1; }
+    tx_l=$(awk -v t="$tx_t" '{ s = $0; sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s) } s == t { print NR; exit }' "$D/$tx_f")
+    [ -n "$tx_l" ] || { echo "PLANT exception-exact-$tx_n: no line of $tx_f is the entry's text"; return 1; }
+    sed -n "${tx_l}p" "$D/$tx_f" > "$GATE_TMP/tx-line"
+    awk -v n="$tx_l" 'NR != n' "$D/$tx_f" > "$GATE_TMP/tx-file" && cat "$GATE_TMP/tx-file" > "$D/$tx_f"
+    tp_commit "without the reviewed line" && tp_rebase && tp_commit "base without it" || return 1
+    awk -v n="$tx_l" -v f="$GATE_TMP/tx-line" 'NR == n { while ((getline x < f) > 0) print x } { print } END { if (NR < n) while ((getline x < f) > 0) print x }' \
+      "$D/$tx_f" > "$GATE_TMP/tx-file" && cat "$GATE_TMP/tx-file" > "$D/$tx_f"
+    printf '%s\n' "$tx_ent" >> "$D/$TEXT_EXCEPTIONS"; tx_e=$(wc -l < "$D/$TEXT_EXCEPTIONS" | tr -d ' ')
+    tp_commit "the reviewed line back" && expect_text "exception-exact-$tx_n-covered" "$D" 0 || return 1
+    sed "${tx_l}s/\$/ x/" "$D/$tx_f" > "$GATE_TMP/tx-file" && cat "$GATE_TMP/tx-file" > "$D/$tx_f" && tp_commit "the line changed" || return 1
+    tx_out=$(sh "$D/tools/check-public-cut.sh" "$D" 2>&1); tx_r=$?
+    tx_k=$(printf '%s\n' "$tx_out" | grep '^check-public-cut: ' | grep -vc '^check-public-cut: \(BLOCKED\|clean\)')
+    if [ "$tx_r" -eq 1 ] && [ "$tx_k" -eq 2 ] \
+      && printf '%s\n' "$tx_out" | grep -q "^$FIND $tx_f:$tx_l: " \
+      && printf '%s\n' "$tx_out" | grep -qxF "$FIND $TEXT_EXCEPTIONS:$tx_e: no added line with a term matches this entry"; then
+      echo "PLANT exception-exact-$tx_n-changed: $tx_f:$tx_l changed, blocked twice (the line, the stale entry)"
+    else
+      printf '%s\n' "$tx_out" | sed "s|^|  [exception-exact-$tx_n-changed] |"
+      echo "PLANT exception-exact-$tx_n-changed: exit $tx_r, $tx_k finding(s); expected exit 1, the line and the stale entry"; return 1
+    fi
+  done < "$REPO/$TEXT_EXCEPTIONS"
+  [ "$tx_n" -gt 0 ] || echo "PLANT exceptions-exact: no reviewed line listed (nothing to check)"
+}
 tp_own_script() { tp_new own-script && tp_line tools/check-public-cut.sh "# a planted comment: $TA" && tp_commit plant && expect_text own-script "$D" 1 "$FIND tools/check-public-cut.sh:$L: $TA"; }
 tp_base_missing() { tp_new base-missing && rm -f "$D/$TEXT_BASE" && tp_commit plant && expect_text base-missing "$D" 1 "$FIND $TEXT_BASE: missing or not tracked: $RECORD"; }
 tp_base_short() { tp_new base-short && printf '%s\n' abc123 > "$D/$TEXT_BASE" && tp_commit plant && expect_text base-short "$D" 1 "$FIND $TEXT_BASE: not one full commit sha: $RECORD"; }
@@ -219,7 +252,7 @@ text_plants() {
   "$1" plant_text_md tp_md; "$1" plant_text_comment tp_comment; "$1" plant_text_test_name tp_test_name; "$1" plant_text_wrap tp_wrap
   "$1" plant_text_not_added tp_not_added; "$1" plant_text_exception tp_exception; "$1" plant_text_exception_stale tp_exception_stale
   "$1" plant_text_own_script tp_own_script; "$1" plant_text_base_missing tp_base_missing; "$1" plant_text_base_short tp_base_short
-  "$1" plant_text_base_foreign tp_base_foreign
+  "$1" plant_text_base_foreign tp_base_foreign; "$1" plant_text_exceptions_exact tp_exceptions_exact
   "$1" plant_dropped_file tp_dropped_file; "$1" plant_dropped_file2 tp_dropped_file2; "$1" plant_dropped_untracked tp_dropped_untracked
   "$1" plant_dropped_ref_doc tp_dropped_ref_doc; "$1" plant_dropped_ref_script tp_dropped_ref_script; "$1" plant_dropped_ref_manifest tp_dropped_ref_manifest
   "$1" plant_dropped_ref_changelog tp_dropped_ref_changelog; "$1" plant_marker_left tp_marker_left

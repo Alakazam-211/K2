@@ -1446,7 +1446,7 @@ fn a_note_is_kind_overwritten_with_a_stable_name() {
 /// The cost under the session's lock on a whole-document delete. Two shapes: many lines from a
 /// few changes, and many changes (a store lookup per run).
 #[test]
-#[ignore = "a measurement; run in release"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn removal_cost_on_a_whole_document_delete() {
     for (lines, edits) in [
         (10_000usize, 4usize),

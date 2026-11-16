@@ -1569,7 +1569,7 @@ fn n1_written(name: &str) -> String {
 /// Three live docs with a carrier each, for the previous release's consumer
 /// (tools/n1/consumer-carrier): `a.deck` it writes, `b.deck` it leaves, `c.deck` it deletes.
 #[test]
-#[ignore = "tools/n1: writes the store for the previous release's consumer"]
+#[ignore = "tools/n1/n1.sh: writes the store for the previous release's consumer"]
 fn n1_carrier_producer() {
     let dir = n1_dir();
     let (blobs, mgr, ws) = n1_open(&dir, N1_T0);
@@ -1602,7 +1602,7 @@ fn n1_carrier_producer() {
 /// (`K2MB_N1_PREV` v0.15.0 and later) gave the deleted doc's count back itself, and its GC took
 /// the blob: a plain round trip.
 #[test]
-#[ignore = "tools/n1: reads the store the previous release's consumer left"]
+#[ignore = "tools/n1/n1.sh: reads the store the previous release's consumer left"]
 fn n1_carrier_after() {
     let prev_knows = std::env::var("K2MB_N1_PREV").is_ok_and(|v| {
         let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();

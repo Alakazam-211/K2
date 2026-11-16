@@ -119,7 +119,7 @@ fn per_writer(
 }
 
 #[test]
-#[ignore = "a measurement: run on a compute node, release, --ignored --nocapture"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn measure_bytes_per_writer() {
     let _g = LOCK.lock().unwrap();
     for (appends, reused) in [(1_000u64, 10u64), (10_000, 10), (10_000, 100)] {
@@ -219,7 +219,7 @@ fn latency(mode: &str, on: bool, n: usize) {
 }
 
 #[test]
-#[ignore = "a measurement: run on a compute node, release, --ignored --nocapture"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn measure_join_leave_latency() {
     let _g = LOCK.lock().unwrap();
     let n: usize = std::env::var("MPC_PW_LAT_N")

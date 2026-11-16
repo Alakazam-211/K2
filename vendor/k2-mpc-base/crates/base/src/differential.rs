@@ -1364,6 +1364,68 @@ pub enum ClientMutant {
     /// A reclaim of a writer a present connection holds hands it over without closing that
     /// connection (caught by `tests/person_writers.rs`'s `r2_reconnect_half_open`, R13).
     HandoverWithoutClose,
+    /// A reclaim whose lease is stale may get its own old writer back, not kept, when that
+    /// writer is free again (caught by `tests/person_writers.rs`'s
+    /// `r5_stale_reclaim_never_takes_its_writer_back_unkept`).
+    StaleReclaimTakesOwn,
+    /// An agent that gains edit rights after a read-only join gets no kind row, so its ID is
+    /// never reused (caught by `tests/client_reuse.rs`'s
+    /// `an_agent_gaining_edit_after_a_read_only_join_reuses_its_id`).
+    NoAgentRowOnGain,
+    /// A stale reclaim after the park expiry isn't told the version its lease ended at
+    /// (caught by `tests/person_writers.rs`'s `r5_stale_lease_after_expiry` and
+    /// `r5_stale_reclaim_never_takes_its_writer_back_unkept`).
+    ExpiryWithoutCap,
+    /// A load leaves a lease whose end was never written (the process ended) as it was, so its
+    /// writer never expires and its reclaim isn't told when it ended (caught by
+    /// `tests/person_writers.rs`'s `r4_ended_process_then_expiry_tells_the_loaded_end`).
+    NoLoadEnd,
+    /// A parked writer is never let go, whatever `Config::person_writer_park_ms` says. Caught by
+    /// `tests/person_writers.rs`, each at its row assert:
+    /// - `r5_stale_lease_after_expiry`, `r5_returning_tab_after_expiry_lands_its_hunks_once`,
+    ///   `r5_stale_reclaim_never_takes_its_writer_back_unkept`: the expired writer is never free
+    ///   for the device's next tab;
+    /// - `r4_ended_process_then_expiry_tells_the_loaded_end`: the writer a process left leased
+    ///   never goes to the next tab;
+    /// - `r8_long_history_with_expiry`: the history holds as many writers as with no expiry;
+    /// - `r12_tag_keys_across_hand_over`: the expired writer never goes to the sibling;
+    /// - `soak_reconnects_one_person_ids_bounded`: its expiry arm (every end unclean, no
+    ///   reclaim) takes a new writer each round.
+    ExpiryIgnored,
+    /// A join never checks `Config::writers_max`: a connection that could write takes a new
+    /// writer past the cap (caught by `tests/writers_cap.rs`'s join rows and
+    /// `tests/person_writers.rs`'s `soak_reconnects_one_person_ids_bounded`).
+    CapUnchecked,
+    /// At the cap, a person's join takes that person's newest parked writer, not the oldest
+    /// (caught by `tests/writers_cap.rs`'s `cap_takes_the_persons_free_then_oldest_parked`).
+    CapTakesNewestParked,
+    /// The outside participant's first writer is refused at the cap, so an outside save is
+    /// refused (caught by `tests/writers_cap.rs`'s `cap_exempts_the_outside_save_and_the_import`).
+    CapOnExternal,
+    /// The cap is checked only at a join: a connection that gains edit rights later edits as a
+    /// writer the doc didn't count (caught by `tests/writers_cap.rs`'s `cap_counts_a_rights_gain`).
+    CapJoinOnly,
+    /// A tier-0 promotion whose history has more authors than the cap is refused (caught by
+    /// `tests/writers_cap.rs`'s `cap_promotion_past_it_is_allowed_and_counted`).
+    CapOnPromotion,
+    /// The near-cap notice comes only with a cap, never against `WRITERS_NOTICE_MAX` (caught by
+    /// `tests/writers_cap.rs`'s `near_cap_notice_counts_against_8192_without_a_cap`).
+    NoNearCapNotice,
+    /// A connection watching past `Config::participants_max` with edit rights takes and counts
+    /// a writer at its join, as one that could write (caught by `tests/writers_cap.rs`'s
+    /// `cap_a_watcher_holds_no_counted_writer`).
+    WatcherCountsWriter,
+    /// A reclaim never takes its own writer back. Caught by `tests/person_writers.rs`, each at
+    /// its row assert:
+    /// - `r2_reconnect_half_open`: the reconnect's reclaim of its held writer isn't kept;
+    /// - R3, a tab whose connection dropped with edits unsent: its reclaim of its parked writer
+    ///   isn't kept;
+    /// - `r4_offline_device_after_reload`: the offline device's reclaim after a reload isn't kept;
+    /// - `r12_tag_keys_across_hand_over`: the hand-over to another tab isn't kept;
+    /// - `r8_long_history`, `r8_long_history_with_expiry`: every reconnect takes a new writer, so
+    ///   the history passes the reuse bound;
+    /// - `soak_reconnects_one_person_ids_bounded`: its reclaim arms take a new writer each round.
+    ReclaimNeverKeeps,
 }
 
 thread_local! {

@@ -39,6 +39,20 @@ pub(crate) const ENGINE_FORMAT: u32 = 2;
 /// The engine's family: a stamp's name up to its first `-` (`yrs` of `yrs-0.28`).
 pub(crate) const ENGINE_FAMILY: &str = "yrs";
 
+/// A native doc's stamp name: the native engine's family alone, with no version, so a
+/// re-vendor of the engine reads the docs the previous one wrote. It is the name the engine
+/// stamps in its own records (its codec's engine name; a row holds the two equal). A
+/// doc stamped so is read only by a build with the native engine; a build without it knows the
+/// stamp (every build does) and refuses that doc alone with `MPC-E169`, while the store and its
+/// other docs work.
+pub(crate) const NATIVE_ENGINE_NAME: &str = "mpce";
+
+/// Whether a doc stamped `engine` is a native doc, on every build: the stamp's family (the
+/// name up to its first `-`) is [`NATIVE_ENGINE_NAME`].
+pub(crate) fn native_stamp(engine: &str) -> bool {
+    engine.split_once('-').map_or(engine, |(f, _)| f) == NATIVE_ENGINE_NAME
+}
+
 /// Whether this build's engine reads a doc stamped `engine` / `format` (v0.10.1): the stamp
 /// names this engine's family (the name up to its first `-`) and this stored-state format.
 /// The rest of the name is the library version that wrote the doc, for the record only: a

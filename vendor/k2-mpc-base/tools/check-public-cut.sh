@@ -21,7 +21,8 @@
 #                `mpce_x::`, `extern crate mpce_x`, or the names mpce-core / -sync / -codec /
 #                -licences in any form), none has a cfg on a NATIVE_FEATURES feature, and
 #                every cfg on a feature names one its crate's Cargo.toml declares.
-#   tooling      no shell, Python, TOML, JSON or YAML file outside vendor/ names a crate in
+#   tooling      no shell, Python, TOML, JSON or YAML file outside vendor/ (nor tools/targets.txt,
+#                the targets list) names a crate in
 #                DROPPED_CRATES (its path or package) or requests a NATIVE_FEATURES feature
 #                (`--features F`, `features = [... "F" ...]`), and no `public-cut: drop-begin`
 #                marker is left.
@@ -281,7 +282,7 @@ files '\.rs$' | grep -v '^vendor/' | awk -v cr="$CR" '
 rm -f "$CR"
 
 # ---- tooling --------------------------------------------------------------------------------
-for f in $(files '\.(sh|py|toml|json|ya?ml)$' | grep -v '^vendor/'); do
+for f in $(files '(\.(sh|py|toml|json|ya?ml)|^tools/targets\.txt)$' | grep -v '^vendor/'); do
   [ "$f" = tools/check-public-cut.sh ] && continue
   [ "$f" = tools/public-cut.sh ] && continue
   # comment lines may name them (docs may); code may not

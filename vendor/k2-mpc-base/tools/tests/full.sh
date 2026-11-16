@@ -12,7 +12,9 @@
 #                check not in a public cut, which has no run records),
 #                tools/check-private.sh (with its self-test), tools/check-windows-names.sh (with its self-test), the
 #                engine-features check (cargo tree, no build; not in a public cut) on what the
-#                part ships, and tools/oss-check.sh with its
+#                part ships, tools/check-targets.sh (every test target, test-only feature and
+#                #[ignore] accounted for in tools/targets.txt, each part named there checked to
+#                run it; text only) with its self-test, and tools/oss-check.sh with its
 #                self-test (both licence files, "MIT OR Apache-2.0" on our crates and
 #                package.json files), and the self-test of the pack template's carrier-row
 #                check (scripts/pack-checks/carrier-row.sh)
@@ -25,6 +27,9 @@
 #   wire-guard   the untrusted-wire build guard (tools/tests/wire-guard.sh), and the native
 #                engine's absence without its feature
 #   lint         fmt --check and clippy -D warnings of the kit's crates (scripts/check.sh's)
+#   plants       each test-only plant alone over the suite whose rows must catch it, after a
+#                control of that suite with no plant (tools/tests/plants.sh): CAUGHT only when
+#                exactly the named rows fail, each at its own assertion
 # Tests run under cargo-nextest when the node has it (`--needs cargo-nextest`; its settings in
 # .config/nextest.toml: no retries, every failure reported), else under cargo test; NEXTEST=0
 # forces cargo test. nextest runs no doctests, so base-a1 runs them with cargo test. The build
@@ -37,7 +42,7 @@ else
   echo "tests: cargo test"; NEXTEST=0
   tests() { cargo test "$@"; }
 fi
-case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wire-guard, lint or evidence} in
+case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wire-guard, plants, lint or evidence} in
   base-a1) timed build cargo test -p k2-mpc-base --lib --no-run
           timed base_a1 tests -p k2-mpc-base --lib
           timed doctests cargo test -p k2-mpc-base --doc ;;
@@ -51,6 +56,9 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           timed private sh tools/check-private.sh .
           timed windows_names_selftest sh tools/test-windows-names.sh
           timed windows_names sh tools/check-windows-names.sh .
+          # every test target, test-only feature and #[ignore] accounted for (tools/targets.txt)
+          timed targets sh tools/check-targets.sh .
+          timed targets_selftest sh tools/test-check-targets.sh
           timed oss_selftest sh tools/test-oss-check.sh
           timed oss sh tools/oss-check.sh .
           # the pack template's carrier-row check (scripts/pack-checks/carrier-row.sh), self-test
@@ -70,9 +78,10 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
   # rule, the oracle passes at each mutant's bound, and the harness's own checks
   spec-undo) timed build cargo test -p k2-mpc-spec-undo --no-run
           timed spec_undo tests -p k2-mpc-spec-undo
-          # the skipped set is exactly the four #[ignore]d large trace runs, by name
+          # the skipped set is exactly the four #[ignore]d large trace runs and the two one-trace
+          # replays run by name (tools/README.md, "One trace, by name"), by name
           timed spec_undo_ignored ignored_exactly "trace_equivalence_large d1_traces_large group_trace_equivalence_large
-            end_break_trace_class_large" cargo test -p k2-mpc-spec-undo --tests -- --list --ignored
+            end_break_trace_class_large replay_one grid_trace_one" cargo test -p k2-mpc-spec-undo --tests -- --list --ignored
           M="the_oracle_passes_at_the_tiny_bound the_oracle_passes_at_the_restart_bound the_oracle_passes_at_the_provenance_bound
             the_oracle_passes_at_the_no_o4a_bound the_oracle_passes_at_the_revert_bound the_oracle_passes_at_the_restorations_bound
             no_taint_fails_u9 partial_hides_taint_fails_u15 redo_retries_skipped_fails_u17
@@ -85,6 +94,19 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           if [ "$NEXTEST" = 0 ]; then timed mutants passed "$M" tests -p k2-mpc-spec-undo --features mutants --test mutants
           else timed mutants passed "$M" cargo nextest run --profile mutants -p k2-mpc-spec-undo --features mutants --test mutants; fi ;;
   wire-guard) . tools/tests/wire-guard.sh ;;
+  # each plant alone, after a control of its suite (tools/tests/plants.sh): ROWS are the rows
+  # the plant must fail, AT and MSG where and how each fails (its own assertion)
+  plants) . tools/tests/plants.sh
+          # planted-device-bugs: every connection of a person shows the most active one's caret
+          # ("first connection only"), so the rows of tests/roster.rs that read each device's
+          # caret fail (a consumer ignoring `client` reads the person's caret, which the plant
+          # leaves as it is)
+          timed control_roster control roster -- tests -p k2-mpc-base --test roster
+          timed plant_device_first_connection plant device-first-connection \
+            'k2-mpc-base::roster/two_connections_of_one_pid_each_get_their_own_device_caret
+             k2-mpc-base::roster/a_caret_move_on_connection_2_emits_its_client' \
+            crates/base/tests/roster.rs '' -- tests -p k2-mpc-base --features planted-device-bugs --test roster
+          plants_summary ;;
   # scripts/check.sh's fmt and clippy, on a node (--needs rust@stable+clippy+rustfmt on k2-node
   # 0.46.7, else tools/job.sh's job-local toolchain); a --repo job only (the whole workspace)
   lint) timed fmt lint cargo fmt -p k2-mpc-base -p k2-mpc-spec-undo -- --check

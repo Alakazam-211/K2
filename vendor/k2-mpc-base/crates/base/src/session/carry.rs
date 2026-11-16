@@ -780,7 +780,7 @@ mod tests {
     /// R = 10^5, the spec's size: run on a compute node with
     /// `cargo test --release -p k2-mpc-base --lib -- --ignored revert_carry_per_apply_r1e5`.
     #[test]
-    #[ignore = "BM size; release build on a compute node"]
+    #[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
     fn revert_carry_per_apply_r1e5() {
         let (avg, max, p95) = per_apply(100_000, 10_000);
         eprintln!("R=10^5: {avg:.0} nodes/apply (max {max}), p95 {p95:?}");

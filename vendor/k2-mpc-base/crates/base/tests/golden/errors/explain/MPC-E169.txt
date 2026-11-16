@@ -1,0 +1,21 @@
+MPC-E169 native_engine_missing (sessions and edits)
+exit:     6
+message:  this doc is on the native engine (format {stored_format}), which this build doesn't have
+next:     The doc was made on the native engine, and this build doesn't include that engine, so the doc was not opened. Nothing in it changed. The store and its other docs work as usual. Open this doc with a build that has the native engine; don't retry here.
+rule:     the native engine: a build without it refuses its docs one by one
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E169",
+  "name": "native_engine_missing",
+  "area": "sessions and edits",
+  "exit": 6,
+  "message": "this doc is on the native engine (format {stored_format}), which this build doesn't have",
+  "next": "The doc was made on the native engine, and this build doesn't include that engine, so the doc was not opened. Nothing in it changed. The store and its other docs work as usual. Open this doc with a build that has the native engine; don't retry here.",
+  "rule": "the native engine: a build without it refuses its docs one by one",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

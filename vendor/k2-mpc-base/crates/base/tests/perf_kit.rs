@@ -741,7 +741,7 @@ fn measure(w: &mut World, size: u64, rounds: u64) {
 }
 
 #[test]
-#[ignore = "a measurement: run in release on a node with --nocapture"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn perf_kit_at_sizes() {
     let sizes: Vec<u64> = std::env::var("PERF_SIZES")
         .unwrap_or_else(|_| "10000,50000,100000".to_owned())

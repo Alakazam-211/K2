@@ -32,7 +32,8 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
     # run reads them (docs/evidence/v0.9.7-live.md), and they put the part over a job's limit
     # the JS client's shared vectors, which client_vectors.rs checks (v0.9.7)
     echo "$KIT_LIB" $T client/test/vectors ;;
-  # the evidence notes and their run records, checked (Python only; no cargo)
+  # the evidence notes and their run records, checked (Python only; no cargo); the target
+  # scan's inputs: the crates' sources, the parts and the runners an #[ignore] names
   # oss-check reads the licence files, NOTICE.md and every manifest of ours (not the
   # lockfiles, which are large: in a bundle it checks package.json files without them)
   evidence) EF=
@@ -40,6 +41,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
       "tools/check-windows-names.sh tools/test-windows-names.sh" $EF \
       "tools/oss-check.sh tools/test-oss-check.sh LICENSE-MIT LICENSE-APACHE NOTICE.md" \
       "scripts/pack-checks/carrier-row.sh tools/test-carrier-row.sh" \
+      "tools/check-targets.sh tools/test-check-targets.sh tools/targets.txt tools/tests tools/n1/n1.sh tools/undo/traces-large.sh tools/README.md crates" \
       "client/LICENSE-MIT client/LICENSE-APACHE" \
       $(git ls-files '*Cargo.toml' '*package.json' | grep -v '^vendor/' | tr '\n' ' ') ;;
   # bundled with STRIP_DOCS=1 since v0.9.7 (the App viewer's run_tool test put it 600 characters

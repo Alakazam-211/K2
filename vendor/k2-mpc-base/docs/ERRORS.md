@@ -156,6 +156,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E163` | `replica_lagging` | 2 | the MPCE seam (stable codes): one host, one engine version | `(sync)` | live |
 | `MPC-E164` | `vector_needs_parts` | 2 | the MPCE seam (stable codes): a vector is never sent smaller or empty | `(sync)` | live |
 | `MPC-E165` | `needs_state_transfer` | 2 | the MPCE seam (stable codes): a replica behind a cut | `(sync)` | live |
+| `MPC-E169` | `native_engine_missing` | 6 | the native engine: a build without it refuses its docs one by one | `*` | live |
 | `MPC-E170` | `ambiguous_address` | 2 | K-ADDR-2, K-EXIT-1 | `@pack` | live |
 | `MPC-E171` | `positional_needs_version` | 2 | K-ADDR-3 | `@change` | live |
 | `MPC-E172` | `address_not_found` | 4 | K-READ-1, K-READ-3 | `@pack`, `@index` | live |
@@ -547,6 +548,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** the MPCE seam (stable codes): a replica behind a cut
 - **Exit:** 2
 - **Reached by:** a native replica behind a peer's cut (feature native)
+
+### MPC-E169 `native_engine_missing`
+
+- **Message:** `this doc is on the native engine (format {stored_format}), which this build doesn't have`
+- **Next:** The doc was made on the native engine, and this build doesn't include that engine, so the doc was not opened. Nothing in it changed. The store and its other docs work as usual. Open this doc with a build that has the native engine; don't retry here.
+- **Rule:** the native engine: a build without it refuses its docs one by one
+- **Exit:** 6
+- **Reached by:** a native doc in a store opened by a build without the native engine
 
 ### MPC-E170 `ambiguous_address`
 
@@ -1654,6 +1663,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 | `MPC-E904` | `claims_participant_cap` | 2 | claims (claims_per_participant) | `claim` | live |
 | `MPC-E905` | `claim_waiters_cap` | 2 | claims (claim_waiters_max) | `(host)` | live |
 | `MPC-E907` | `annotation_cap` | 2 | K-ANN-1 (annot_* limits) | `comment`, `reply`, `resolve`, `resolve --reopen`, `reanchor` | live |
+| `MPC-E908` | `writers_doc_cap` | 2 | writers (writers_max) | `@change` | live |
 
 ### MPC-E901 `rate_limited`
 
@@ -1699,6 +1709,14 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `annotation limit: at most {limit} {what}`
 - **Next:** The call would pass a limit (details.what: body bytes, threads in the doc, comments in the thread, or history rows of the thread, past which only replies, deletes and purges still fit; capabilities lists the annot_* limits). Nothing changed. Write a shorter comment, or go on in a new thread.
 - **Rule:** K-ANN-1 (annot_* limits)
+- **Exit:** 2
+
+### MPC-E908 `writers_doc_cap`
+
+- **Message:** `read-only: this doc has {count} writers (the most is {max})`
+- **Next:** This doc already holds as many writers as it allows, and writers stay in the doc for good, so this connection can read but not edit. Nothing changed. Don't retry in a loop: a reconnect from a device that has edited this doc before may edit again.
+- **Next step:** `cat`. The doc holds all the writers it allows, so this connection is read-only; read it, and don't retry in a loop.
+- **Rule:** writers (writers_max)
 - **Exit:** 2
 
 ## Engine ids (MPCE-Ennn)

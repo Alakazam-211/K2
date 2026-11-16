@@ -470,6 +470,11 @@ pub enum AuditEvent {
         was: Option<crate::anchor::AnchorState>,
         now: crate::anchor::AnchorState,
     },
+    /// The doc at `key` holds `count` writers, 80% or more of `max`: [`crate::session::Config::writers_max`],
+    /// or [`crate::session::WRITERS_NOTICE_MAX`] when there is no cap. Said once per load, when
+    /// a connection that could write joins or gains edit rights. Every writer stays in the doc
+    /// for good; at the cap, connections that would need a new writer join read-only.
+    WritersNearCap { key: DocKey, count: u64, max: u64 },
     /// [`crate::session::SessionManager::recheck_rights`]: re-checking this loaded doc
     /// failed (it was skipped; the others were re-checked). `error` is the session error's
     /// message.

@@ -121,6 +121,10 @@ pub struct Joined {
     /// ended, when the kit knows it (no change of that lease lands after it; changes under that
     /// writer after it are a later lease's). `None` when kept, unknown, or not a reclaim.
     pub prev_ended: Option<Seq>,
+    /// The doc holds all the writers it allows ([`Config::writers_max`]) and this connection
+    /// would need a new one: it reads, but every edit is refused `MPC-E908` for as long as it
+    /// stays. Presence is kept. `false` for every other join.
+    pub writers_full: bool,
 }
 
 /// A connection's writer lease (person-writer reuse, [`Config::reuse_person_writers`]): its
@@ -817,12 +821,28 @@ struct Member {
     /// The host's label for this connection ([`JoinOptions::label`](field@JoinOptions::label)),
     /// cleaned.
     label: Option<String>,
-    /// Its client ID's owner and kind rows are in the store. Read for an own replica only: one
-    /// that can write keeps them whether or not it has landed a change
-    /// ([`Session::keep_own_replica_rows`]).
+    /// Its client ID's owner and kind rows are in the store. Read for an own replica or an
+    /// agent: one that can write keeps them whether or not it has landed a change
+    /// ([`Session::keep_writer_rows`]).
     rows_kept: bool,
     /// Its person-writer lease (person-writer reuse, `live/writers.rs`), if it has one.
     lease: Option<writers::MemberLease>,
+    /// It joined (or gained edit rights) with the doc at its writers cap
+    /// ([`Config::writers_max`]) and holds a writer the doc doesn't count: it reads, and every
+    /// edit is refused `MPC-E908`.
+    writers_full: bool,
+    /// Its writer is in the doc's writer count (`live/writers.rs`): it could write when it
+    /// joined, or it gained edit rights since (or was let in from watching), with room under
+    /// the cap.
+    counted: bool,
+}
+
+impl Member {
+    /// It could write with edit rights: not watching past [`Config::participants_max`] (a
+    /// watcher's writer is counted and recorded only once it is let in).
+    fn may_write(&self) -> bool {
+        !self.watcher || writers::planted_watcher_counts_writer()
+    }
 }
 
 impl std::ops::Deref for Member {
@@ -919,6 +939,8 @@ struct State {
     /// The person-device writers the session knows ([`Config::reuse_person_writers`]): read
     /// from the store at load (when on), kept as leases come and go (`live/writers.rs`).
     writers: writers::Writers,
+    /// The near-cap notice ([`AuditEvent::WritersNearCap`]) was given in this load.
+    writers_told: bool,
     hist: HashMap<String, History>,
     /// The version the session loaded (or reloaded) at: undo history before it was lost.
     loaded_seq: Seq,
@@ -1335,16 +1357,43 @@ fn planted_reusable_at_load(
             Some(store.clients_of(id)?.into_iter().map(|(c, _)| c).collect())
         }
         Some(ClientMutant::NoReuseAfterReload) => Some(Default::default()),
-        // a store fault, planted in `DocStore::open`; person-writer faults, planted in
-        // `live/writers.rs`
+        // a store fault, planted in `DocStore::open`; person-writer and writers-cap faults,
+        // planted in `live/writers.rs` and `tier0/promote.rs`
         Some(
             ClientMutant::NoOrphanSweep
             | ClientMutant::ReusePersonHeld
             | ClientMutant::ReuseParked
-            | ClientMutant::HandoverWithoutClose,
+            | ClientMutant::HandoverWithoutClose
+            | ClientMutant::StaleReclaimTakesOwn
+            | ClientMutant::NoAgentRowOnGain
+            | ClientMutant::ExpiryWithoutCap
+            | ClientMutant::NoLoadEnd
+            | ClientMutant::ExpiryIgnored
+            | ClientMutant::ReclaimNeverKeeps
+            | ClientMutant::CapUnchecked
+            | ClientMutant::CapTakesNewestParked
+            | ClientMutant::CapOnExternal
+            | ClientMutant::CapJoinOnly
+            | ClientMutant::CapOnPromotion
+            | ClientMutant::NoNearCapNotice
+            | ClientMutant::WatcherCountsWriter,
         )
         | None => None,
     })
+}
+
+/// The planted fault [`crate::differential::ClientMutant::NoAgentRowOnGain`]: an agent that
+/// gains edit rights after a read-only join gets no kind row. Without the `differential`
+/// feature there is no hook: `false`.
+#[cfg(any(test, feature = "differential"))]
+fn planted_no_agent_row_on_gain() -> bool {
+    use crate::differential::{client_mutant, ClientMutant};
+    client_mutant() == Some(ClientMutant::NoAgentRowOnGain)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_no_agent_row_on_gain() -> bool {
+    false
 }
 
 #[cfg(not(any(test, feature = "differential")))]
@@ -1439,10 +1488,17 @@ fn take_d1_extra() -> Vec<(usize, usize)> {
 
 /// Refuse a stored doc another engine wrote, before any of its state is read (v0.10.1):
 /// [`SessionError::EngineMismatch`] unless its stamp is this engine's
-/// ([`crate::engine::reads_stamp`]; an unstamped doc is).
+/// ([`crate::engine::reads_stamp`]; an unstamped doc is). Without the native engine, a native
+/// doc is [`SessionError::NativeEngineMissing`] (`MPC-E169`): that doc alone is refused.
 fn check_engine(meta: &DocMeta) -> Result<()> {
     if reads_stamp(&meta.engine, meta.engine_format) {
         return Ok(());
+    }
+    if crate::engine::native_stamp(&meta.engine) {
+        return Err(SessionError::NativeEngineMissing {
+            stored: meta.engine.clone(),
+            stored_format: meta.engine_format,
+        });
     }
     Err(SessionError::EngineMismatch {
         stored: meta.engine.clone(),
@@ -1574,6 +1630,7 @@ impl Session {
                 owners: None,
                 reusable_clients,
                 writers,
+                writers_told: false,
                 hist: HashMap::new(),
                 loaded_seq: loaded_version,
                 last_version_seq,
@@ -1977,28 +2034,49 @@ impl Session {
     }
 
     /// `pid` has `granted` from the host: when that includes edit, write the owner and kind rows
-    /// of its own replicas that don't have them yet (it joined read-only). Such a replica can
-    /// write offline from now on, and a host may check the store for its owner when it comes
-    /// back, before it has landed anything.
-    fn keep_own_replica_rows(&self, st: &mut State, pid: &str, granted: Rights) -> Result<()> {
+    /// of its own replicas and agent connections that don't have them yet (they joined
+    /// read-only), except those watching past [`Config::participants_max`], which can't write
+    /// until they are let in ([`Session::promote_watcher`]). Such a replica can write offline
+    /// from now on, and a host may check the store for its owner when it comes back, before it
+    /// has landed anything. An agent's ID recorded so is reused by its later connections
+    /// ([`Config::reuse_agent_clients`]), as one recorded at a join with edit rights is; without
+    /// the row, an agent whose every join is read-only would take a new ID per connection.
+    fn keep_writer_rows(&self, st: &mut State, pid: &str, granted: Rights) -> Result<()> {
         if !granted.edit {
             return Ok(());
         }
+        // the writers cap: a connection gaining edit rights needs room for its writer
+        self.count_gains(st, pid)?;
         // a person-writer lease's row is written once its connection can write
         let leased: Vec<ClientId> = st
             .members
             .iter()
             .filter(|m| m.p.pid == pid && m.lease.is_some())
+            .filter(|m| !m.writers_full && m.may_write())
             .map(|m| m.client)
             .collect();
         for c in leased {
             st.writers.writable(c);
         }
+        let agents = !planted_no_agent_row_on_gain();
         for k in 0..st.members.len() {
             let m = &st.members[k];
-            if m.p.own_replica && !m.rows_kept && m.p.pid == pid {
+            let agent = agents && m.p.kind == ParticipantKind::Agent;
+            if (m.p.own_replica || agent)
+                && !m.rows_kept
+                && !m.writers_full
+                && m.may_write()
+                && m.p.pid == pid
+            {
+                let (client, own_replica) = (m.client, m.p.own_replica);
                 self.store(st)?
-                    .set_client_kind(self.doc_id, m.client, pid, true)?;
+                    .set_client_kind(self.doc_id, client, pid, own_replica)?;
+                if !own_replica {
+                    st.reusable_clients.insert(client);
+                }
+                if let Some(o) = st.owners.as_mut() {
+                    o.insert(client, pid.to_owned());
+                }
                 st.members[k].rows_kept = true;
             }
         }
@@ -2024,7 +2102,20 @@ impl Session {
         for m in st.members.iter_mut().filter(|m| m.p.pid == pid) {
             m.rights = rights;
         }
-        self.keep_own_replica_rows(st, &pid, granted)?;
+        self.keep_writer_rows(st, &pid, granted)?;
+        if need == Need::Edit
+            && st.members[i].writers_full
+            && presence::refusal(rights, need).is_none()
+        {
+            // the doc is at its writers cap and this connection's writer isn't counted
+            self.emit(AuditEvent::Refused {
+                key: st.key.clone(),
+                pid: pid.clone(),
+                action,
+                need,
+            });
+            return Err(self.writers_full_error(st)?);
+        }
         if let Some(n) = presence::refusal(rights, need) {
             if watcher && n != Need::Read {
                 // past participants_max: read-only until the host promotes it
@@ -2155,7 +2246,7 @@ impl Session {
         for m in st.members.iter_mut().filter(|m| m.p.pid == p.pid) {
             m.rights = watched(rights, m.watcher);
         }
-        self.keep_own_replica_rows(st, &p.pid, rights)?;
+        self.keep_writer_rows(st, &p.pid, rights)?;
         if shared {
             if let Some(m) = st.members.iter_mut().find(|m| m.shares_with(&p)) {
                 m.p = p;
@@ -2177,9 +2268,30 @@ impl Session {
                     }),
                     kept: false,
                     prev_ended: None,
+                    writers_full: m.writers_full,
                 });
             }
         }
+        // A new pid past participants_max watches (read-only, no presence detail); a pid
+        // already here keeps what it is
+        let here = |w: bool| {
+            st.members
+                .iter()
+                .any(|m| m.p.pid == p.pid && m.watcher == w)
+        };
+        let watcher = here(true)
+            || (!here(false) && Self::participant_count(st) >= self.config.participants_max);
+        // a watcher can't write: its writer is neither counted nor recorded until it is let in
+        // (`promote_watcher`), where the cap applies as to any rights gain
+        let can_write = rights.edit && (!watcher || writers::planted_watcher_counts_writer());
+        // the writers cap (`live/writers.rs`): a connection that could write needs room for a
+        // writer the doc doesn't count yet
+        let room = if can_write {
+            self.writer_room(st)?
+        } else {
+            writers::Room::OPEN
+        };
+        let mut writers_full = false;
         // person-writer reuse (v0.14.0, `live/writers.rs`): a person's writer per device
         let person = person.filter(|_| writers::takes_part(&p));
         let mut prev = prev;
@@ -2192,7 +2304,8 @@ impl Session {
                 // sibling holding that writer now (a reclaim names its lease)
                 prev = None;
                 let tag = writers::device_tag(&st.hash_key, pj.key);
-                let pick = self.pick_person_writer(st, &p, tag, pj.reclaim, now)?;
+                let pick = self.pick_person_writer(st, &p, tag, pj.reclaim, now, room)?;
+                writers_full = pick.full;
                 if let Some(j) = pick.from {
                     // the hand-over: the holder goes first, under this lock, so no point has
                     // two connections on one writer, and nothing of its lease lands after
@@ -2205,7 +2318,8 @@ impl Session {
                     }
                 }
                 let token = writers::new_token();
-                self.lease_writer(st, pick.client, &p.pid, tag, token, rights.edit);
+                let writable = can_write && !pick.full;
+                self.lease_writer(st, pick.client, &p.pid, tag, token, writable);
                 lease = Some(writers::MemberLease {
                     token,
                     device: tag,
@@ -2224,6 +2338,9 @@ impl Session {
         let (client, rows_kept) = match reused {
             Some(c) => (c, picked.is_none()),
             None => {
+                // no writer to reuse: a new one, unless the doc is at its cap (the connection
+                // then reads only, under a writer the doc never holds)
+                writers_full = room.full;
                 let store = self.store(st)?;
                 let c = fresh_client(store, self.doc_id, |c| {
                     st.members.iter().any(|m| m.client == c) || st.writers.contains(c)
@@ -2233,7 +2350,9 @@ impl Session {
                 // replica's never (its replica may still write as it). Only for a participant
                 // that can write: any other ID gets its owner row with its first change
                 // (`DocStore::commit_changes`), so a join that never writes leaves no row
-                let keep = rights.edit && (p.own_replica || p.kind == ParticipantKind::Agent);
+                let keep = can_write
+                    && !writers_full
+                    && (p.own_replica || p.kind == ParticipantKind::Agent);
                 if keep {
                     store.set_client_kind(self.doc_id, c, &p.pid, p.own_replica)?;
                     if !p.own_replica {
@@ -2247,15 +2366,6 @@ impl Session {
             }
         };
         st.joins += 1;
-        // A new pid past participants_max watches (read-only, no presence detail); a pid
-        // already here keeps what it is
-        let here = |w: bool| {
-            st.members
-                .iter()
-                .any(|m| m.p.pid == p.pid && m.watcher == w)
-        };
-        let watcher = here(true)
-            || (!here(false) && Self::participant_count(st) >= self.config.participants_max);
         let mut pres = Presence::new(p, shared, watched(rights, watcher), stay, st.joins, now);
         pres.watcher = watcher;
         let conn = pres.conn;
@@ -2291,7 +2401,12 @@ impl Session {
             label,
             rows_kept,
             lease,
+            writers_full,
+            counted: can_write && !writers_full,
         });
+        if can_write {
+            self.note_writers(st);
+        }
         // join_replacing: the pid's connection holding `prev` closes as `leave` closes it,
         // after the new one is in (the pid stays present: no participant Left)
         let pid = &st.members.last().expect("pushed above").p.pid;
@@ -2323,6 +2438,7 @@ impl Session {
             }),
             kept,
             prev_ended,
+            writers_full,
         })
     }
 
@@ -2716,7 +2832,7 @@ impl Session {
             m.watcher = false;
             m.rights = rights;
         }
-        self.keep_own_replica_rows(st, &pid, rights)?;
+        self.keep_writer_rows(st, &pid, rights)?;
         st.roster.record(
             RosterEvent::Joined {
                 who: Who::of(&pid),
@@ -2806,7 +2922,7 @@ impl Session {
             for m in st.members.iter_mut().filter(|m| m.p.pid == pid) {
                 m.rights = r;
             }
-            self.keep_own_replica_rows(st, &pid, r)?;
+            self.keep_writer_rows(st, &pid, r)?;
             if !r.read {
                 self.remove_pid(st, &pid, LeaveReason::RightsLost);
             } else {
@@ -6355,6 +6471,11 @@ impl Session {
         let c = match store.client_owned_by(self.doc_id, EXTERNAL_PID)? {
             Some(c) => c,
             None => {
+                // exempt from the writers cap (an outside save already happened on disk), and
+                // counted: its owner row is written now
+                if writers::planted_cap_on_external() && self.writer_room(st)?.full {
+                    return Err(self.writers_full_error(st)?);
+                }
                 let c = fresh_client(&store, self.doc_id, |c| {
                     st.members.iter().any(|m| m.client == c) || st.writers.contains(c)
                 })?;

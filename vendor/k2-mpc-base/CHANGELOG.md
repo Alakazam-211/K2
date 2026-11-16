@@ -1,5 +1,175 @@
 # Changelog
 
+## v0.20.0
+
+A host release on v0.19.0. The crate version is `0.20.0`; the client's is `0.20.0`. The live
+wire stays version 3 (every addition optional). No store needs a migration: `STORE_FORMAT` stays
+6, `STORE_FORMAT_BASE` 5 and `STORE_FORMAT_READ` 8. Pairs with the markdown, text, board, csv,
+psd and pptx pack tags of this release.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.19.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The native engine stays off.
+
+### What changes for K2
+
+- **A rollback refuses native docs one by one, not the whole store.** This build opens a store
+  holding docs the native engine wrote and refuses only those docs, each on its own:
+  `SessionError::NativeEngineMissing` (`MPC-E169`, `native_engine_missing`, exit 6) on open and
+  delete, `StoreError::NativeEngineMissing` from the store. Every other doc opens, edits and
+  saves as usual, and a purge or compaction copies the native docs' rows through unchanged.
+  Before this, the whole store was refused (`MPC-E502`). **So a K2 release that vendors 0.20.0
+  is what lets the next release turn the native engine's Beta on:** rolling that release back
+  to this one refuses its native docs one by one, never the store. Both enums are
+  `non_exhaustive`; a host that maps session errors adds the new variant.
+- **Person-writer reuse is on by default, with a day's park** (`Config::reuse_person_writers`
+  true, `Config::person_writer_park_ms` 86,400,000). **A host that sends no device key sees no
+  change:** a fresh writer per connection, as before. A host that sends one
+  (`JoinOptions::device`, with `JoinOptions::reclaim` on a reconnect and `Session::release` on
+  the client's `bye`) gets one writer per person per device. To keep the old behaviour, set the
+  flag false. A stale reclaim never gets its own writer back unkept.
+- **An agent that gains edit rights after a read-only join reuses its ID**
+  (`Config::reuse_agent_clients`), where it took a new one per connection.
+- **A writers cap per doc, off by default** (`Config::writers_max`, default 0: no cap). With a
+  cap, a connection that would need a new writer past it joins read-only
+  (`Joined::writers_full`), keeps presence and reads, and every edit is refused `MPC-E908`
+  (`writers_doc_cap`, exit 2). A watcher's writer isn't counted until the host lets it in.
+- **A new audit notice, on by default:** `AuditEvent::WritersNearCap`, once per load, when a doc
+  holds 80% of `writers_max` (or of 8,192 with no cap). `AuditEvent` is `non_exhaustive`; a host
+  that logs audit events logs it.
+- **Agents count toward `Config::participants_max` exactly as persons do** (a test pins it; the
+  session already counted them). An agent past the cap joins read-only and its edits are refused
+  `MPC-E305`, as a person's are.
+- **Client 0.20.0:** when a reconnect's welcome names the client's old writer with
+  `kept: false`, the client caps its watches on that writer as it does for a new one.
+- **No store migration, wire still 3.** N−1 is checked both ways against v0.19.0 in every mode.
+
+### Overview
+
+Native docs refused one by one, so a store holding them opens on a build without the native
+engine (the last step before a host may turn the native engine's Beta on); writer IDs that
+follow people, devices and agents (person-writer reuse on by default, a writers cap off by
+default, a near-cap notice); otherwise tests and tooling (every test target accounted for, the
+plants and native-tests parts).
+
+### Native docs, one by one: a store holding them opens on a build without the native engine
+
+`docs/SESSIONS.md`, "The engine stamp" and "Store format 8". No format change.
+
+- **This build opens a store holding native docs** (a store a later kit wrote with the native
+  engine: format 8 with the `native` bit) and refuses only those docs, each on its own, with a
+  new typed error: `MPC-E169` `native_engine_missing` (exit 6). A session gives it as its own
+  variant, `SessionError::NativeEngineMissing { stored, stored_format }`, on open and on
+  delete, never as `SessionError::Store(_)`; the store gives `StoreError::NativeEngineMissing`
+  (load, delete). A native doc is known by its engine stamp. Its rows are never read or
+  changed. The store's other docs open, edit and save as usual. Before this, the whole store
+  was refused at open (`NativeWithoutEngine`, `MPC-E502`).
+- **A rewrite copies the engine store's tables through** byte for byte (`native_records`,
+  `native_gens`, `native_nonces`), so a purge or a compaction of another doc keeps every native
+  doc as it was. Before this, a rewrite of such a store was refused as holding tables this
+  build doesn't know (`NewerData`); a table it doesn't know is still refused, never dropped.
+- **The open still checks the native bit against the engine stores both ways**, by their rows:
+  the bit with no engine store is `MPC-E502`, engine records without the bit are damage
+  (`MPC-E503`).
+- **For hosts:** match `SessionError::NativeEngineMissing` (non-exhaustive enum, additive). A
+  release that turns native docs on should follow a release with this kit, so that a rollback
+  of one release refuses those docs, not the store.
+- **Tests:** `store/native_absent_tests.rs` (a store holding a native doc and a Yrs doc: the
+  store opens, the Yrs doc edits and keeps its edit, the native doc is refused on open, delete
+  and load with `MPC-E169` as the session's own variant, its rows unchanged, plant
+  `MPC_FORMAT_PLANT=native-store-refused-whole`; a purge of the Yrs doc and a whole-store
+  rewrite copy the native tables through, plant `MPC_FORMAT_PLANT=native-tables-dropped`); the
+  `open_file` row of `tests/engine_stamp.rs` asserts per build. Opening a store the native
+  engine itself wrote is checked with the native engine's own N−1 run, outside this tree.
+
+### Writer ids per doc
+
+Every writer (a connection's client ID) stays in a doc's state for good, so these changes keep a
+doc's writers following people, devices and agents rather than connections.
+
+- **A stale reclaim never gets its own writer back unkept** (person-writer reuse with
+  `Config::person_writer_park_ms` set): when a parked writer was let go after the park, taken by
+  another tab of the device and released, the returning tab's reclaim (`JoinOptions::reclaim`)
+  takes another writer, never that one with `kept: false`. Its client still watches its old
+  changes under that writer, and could read the other tab's changes as its own. The client
+  (`client/CHANGELOG.md`) also caps its watches when a host gives a writer back unkept.
+- **An agent that gains edit rights after a read-only join reuses its ID**
+  (`Config::reuse_agent_clients`): its ID's owner and kind rows are written by the first call
+  that sees the edit rights, as an own replica's are, not only at a join that has them. Before
+  this, an agent whose every join was read-only (a host that grants edit inside the
+  connection, after an approval) took a new ID per connection, each of unknown kind and never
+  reused. A read-only agent that never gains edit rights still leaves no row. IDs such an agent
+  took before this release stay of unknown kind (never reused); it takes one more, reused from
+  then on.
+- **Person-writer reuse is on by default, with a day's park** (`Config::reuse_person_writers`
+  true, `Config::person_writer_park_ms` 86,400,000): **a host that sends no device key sees
+  nothing of it**, a fresh writer per connection as before. A host that sends one
+  (`JoinOptions::device`, with `JoinOptions::reclaim` on a reconnect and `Session::release` on
+  the client's `bye`) gets one writer per person per device; a writer whose connection ended
+  without a release goes to that device's next connection after a day, and the late reclaim is
+  told when its lease ended. A host that wants the earlier behaviour sets the flag false, or
+  the park 0 (a parked writer only ever goes back to its own reclaim).
+- **A writers cap per doc** (`Config::writers_max`, **default 0: no cap**). With a cap, a
+  connection that would need a new writer past it reads only (`Joined::writers_full`): it keeps
+  presence and reads, and every edit is refused `MPC-E908` (`writers_doc_cap`, exit 2). At the
+  cap a person's join with a device key first takes a writer the doc already holds: that
+  person's free writer of the device, then of another device, then that person's oldest parked
+  writer, let go early (its late reclaim keeps nothing and is told when its lease ended). The
+  outside participant, the import and a tier-0 promotion's authors are never refused, and count;
+  a promotion with more authors than the cap lands. **With no cap nothing changes**, except the
+  notice below.
+- **A watcher's writer isn't counted:** a connection watching past `Config::participants_max`
+  can't write, so its writer isn't counted toward `writers_max` and gets no owner row, whatever
+  its rights; it counts once the host lets it in (`Session::promote_watcher`), and past the cap
+  its edits are then refused `MPC-E908` (`tests/writers_cap.rs`, planted fault
+  `ClientMutant::WatcherCountsWriter`).
+- **`AuditEvent::WritersNearCap`** (on by default): once per load, when a doc holds 80% of
+  `writers_max`, or of `WRITERS_NOTICE_MAX` (8,192) when there is no cap, so a host sees a doc's
+  writers grow before it sets a cap.
+- **Tests:** `tests/writers_cap.rs` (planted faults `ClientMutant::CapUnchecked`,
+  `CapTakesNewestParked`, `CapOnExternal`, `CapJoinOnly`, `CapOnPromotion`, `NoNearCapNotice`,
+  each caught at its rows); `tests/person_writers.rs`, `soak_reconnects_one_person_ids_bounded`
+  (one person reconnecting 200 times, five ways; planted faults `ClientMutant::CapUnchecked` and
+  `ReclaimNeverKeeps`).
+- **Tests:** `tests/person_writers.rs`, `r4_ended_process_then_expiry_tells_the_loaded_end`,
+  `r8_long_history_with_expiry`, `defaults_reuse_person_writers_with_a_days_park` (planted faults
+  `ClientMutant::ExpiryWithoutCap`, `NoLoadEnd`, `ExpiryIgnored`, each caught by the expiry
+  rows); `r5_stale_reclaim_never_takes_its_writer_back_unkept`
+  (planted fault `ClientMutant::StaleReclaimTakesOwn`, caught by that row);
+  `client/test/writer-lease.test.ts`, `lease_unkept_same_writer`; `tests/client_reuse.rs`,
+  `an_agent_gaining_edit_after_a_read_only_join_reuses_its_id` (planted fault
+  `ClientMutant::NoAgentRowOnGain`, caught by that row).
+
+### Tests: every test target accounted for (tooling; no library change)
+
+- **The target scan:** `tools/targets.txt` lists every test target of the workspace and the
+  fuzz crate, every feature of their manifests, and the parts of `tools/tests/full.sh` that run
+  each (or why none does). `tools/check-targets.sh` reads the manifests, the sources and the
+  parts' commands, with no build, and fails on a target or feature with no row, a row with no
+  target, a part that doesn't run what its row says, a test-only feature no named part turns
+  on, and an `#[ignore]` whose reason names no runner. The `evidence` part runs it and its
+  self-test (`tools/test-check-targets.sh`). A row marked `pending ruling` waits on a decision;
+  `CHECK_TARGETS_LANDING=1` refuses any, and none is left (tools/README.md, "What each part
+  runs: the target scan").
+- **The `plants` part:** each test-only plant alone over the suite whose rows must catch it,
+  after a control of that suite: `planted-device-bugs` over `tests/roster.rs`, and the native
+  engine's planted causal shortcuts (`planted-shortcuts`, `planted-shortcuts-checked`) over
+  the kit's native unit tests and the conformance suite. A plant is caught only when exactly
+  its named rows fail, each at its own assertion (a checked plant at the engine's cross-check,
+  found by its file and its message, not a line, so a newer vendored engine keeps it).
+  New row: an op whose past reaches another agent's insert only through one agent's line is
+  now admitted on the native engine. The conformance suite's sync between kit docs is a named
+  row assertion.
+- **The fuzz crate's unit tests run** in the `fuzz-build` part.
+- **The `native-tests` part:** every integration test of the kit with the native engine
+  (feature `native`), so the native legs in them run.
+- **`#[ignore]` reasons name their runner** (`tools/n1/n1.sh`, `tools/tests/grid.sh`,
+  `tools/undo/traces-large.sh`, and the new `tools/perf/measure.sh`, which runs each
+  measurement a note cites, one cell per job, in release). The measurements no note cites are
+  removed, as are write --base --partial's two rows, which waited on a feature not built. The
+  two one-trace replays of `crates/spec-undo` (`replay_one`, `grid_trace_one`) are `#[ignore]`d,
+  run by name (tools/README.md, "One trace, by name"), and fail without their variable instead
+  of passing with nothing checked.
+
 ## v0.19.0
 
 A host release on v0.18.0. The crate version is `0.19.0`; the client's is `0.19.0`. The live
@@ -3019,8 +3189,9 @@ For a host, in short (details in the sections below):
 - **Negatives**: the no-fence negative is now the native engine's own planted
   no-epoch-fence mutant (the host's `NoEpochFence` is gone); `EpochPerConnection` is a
   host that makes each connection a new participant; `NoEpochBump` a host that appends a
-  re-base without `on_rebase`; new `TrustClaimedBase` (the base taken as claimed, not through
-  the send log). `IntegrateInline`, `NoDepMap`, `ForgetOnAck` and `ReadmitBelowS` as before.
+  re-base without telling the native engine's tracker; new `TrustClaimedBase` (the base taken
+  as claimed, not through the send log). `IntegrateInline`, `NoDepMap`, `ForgetOnAck` and
+  `ReadmitBelowS` as before.
 
 ### The native engine behind a feature (a step of the engine migration, in progress)
 

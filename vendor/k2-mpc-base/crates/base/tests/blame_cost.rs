@@ -269,7 +269,7 @@ fn build(fx: &Fx, n: u64) {
 }
 
 #[test]
-#[ignore = "a measurement: run in release with --nocapture, on a node"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn blame_cost_at_sizes() {
     let label = label();
     for n in sizes() {
@@ -322,7 +322,7 @@ fn blame_cost_at_sizes() {
 /// and each call that starts while a sampled blame runs is timed. The longest such wait,
 /// per blame, is the lock hold the blame imposed.
 #[test]
-#[ignore = "a measurement: run in release with --nocapture, on a node"]
+#[ignore = "a measurement: run by tools/perf/measure.sh (release, on a node)"]
 fn blame_check_cost() {
     use std::sync::atomic::AtomicBool;
     let label = label();

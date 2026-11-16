@@ -439,6 +439,16 @@ impl BlobSession {
         }
         outcome.sort_by_key(|(vid, _)| *vid);
 
+        // the writers cap (`Config::writers_max`) never refuses a promotion: its authors are
+        // the doc's history, and count once it is live (a planted fault refuses it)
+        let cap = self.config.writers_max;
+        if planted_cap_on_promotion() && cap > 0 && clients.len() > cap {
+            return Err(SessionError::WritersFull {
+                count: clients.len() as u64,
+                max: cap as u64,
+            });
+        }
+
         // the switch: one transaction
         doc.check_storable()?;
         let old = store.meta(self.doc_id)?;
@@ -510,4 +520,17 @@ impl BlobSession {
         st.lease = None;
         Ok(out)
     }
+}
+
+/// The planted fault `ClientMutant::CapOnPromotion`: a promotion with more authors than the
+/// writers cap is refused.
+#[cfg(any(test, feature = "differential"))]
+fn planted_cap_on_promotion() -> bool {
+    use crate::differential::{client_mutant, ClientMutant};
+    client_mutant() == Some(ClientMutant::CapOnPromotion)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_cap_on_promotion() -> bool {
+    false
 }

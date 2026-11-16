@@ -47,6 +47,10 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
      doc's engine stamp names another engine, or another stored-state format, than this
      build runs. Nothing of it is read and nothing changes (`MPC-E520`, exit 6). See
      [The engine stamp](#the-engine-stamp-v099).
+   - `NativeEngineMissing { stored, stored_format }`: the stored doc is on the native engine,
+     and this build doesn't include it. That doc alone is refused, nothing of it read or
+     changed; the store and its other docs work (`MPC-E169`, exit 6). It is its own variant,
+     never `Store(_)`, on every session call that meets such a doc (open, delete).
 
    `open_file(pack, &key, path, root)` is the same for a doc that lives in a file, which
    the session then keeps in sync ([Disk sync](#disk-sync)). `open` stays for docs without a
@@ -127,6 +131,10 @@ opened by a text pack is still `PackMismatch`.
   from the store itself checks `DocMeta` first. `DocStore::load` refuses another engine's doc
   whole itself (`ForeignEngine`, `MPC-E520`), before decoding any of its log, and refuses a
   log whose entries aren't all of its doc's engine (`Corrupt("log entry engine")`).
+- **A native doc in a build without the native engine** is refused on its own: opening,
+  deleting or loading it gives `NativeEngineMissing` (`MPC-E169`, exit 6; the store's
+  `StoreError::NativeEngineMissing`, a session's `SessionError::NativeEngineMissing`), its rows
+  never read or changed. The store opens, and its other docs open, edit and save as usual.
 
 ### Native documents: keys
 
@@ -164,8 +172,9 @@ store; pass it on every open. Never make a new secret for a store that has nativ
   or 1, and never one this doc has used before (the store's client table is checked).
   - The client ID is recorded durably as the pid's with its first change, in the change's own
     transaction, so a join that never writes leaves no row. An agent or an own replica with
-    edit rights has its owner and kind rows from its join; an own replica that joined read-only
-    has them from the first call that sees its edit rights.
+    edit rights has its owner and kind rows from its join; one that joined read-only has them
+    from the first call that sees its edit rights, so an agent whose every join is read-only
+    still reuses one ID once it can edit.
   - Two tabs never share a client ID, which a Yjs doc requires.
 - Every change is logged with `author = pid`, the connection's client ID, `at_ms`, `via` and
   `on_behalf_of`. Blame reads the client ID→pid mapping, so all of a pid's connections
@@ -173,10 +182,11 @@ store; pass it on every open. Never make a new secret for a store that has nativ
 
 ### Person-writer reuse (v0.14.0)
 
-Off by default (`Config::reuse_person_writers`). Every client ID stays in the doc's state for
-good, so a fresh one per connection grows a long-lived doc with every tab and reconnect. With
-the flag on, a person's (or App guest's) join with a **device key**
-(`JoinOptions::device(key)`) takes one of that person's writers on that device instead:
+On by default (`Config::reuse_person_writers`); it takes effect only for a join with a device
+key, so a host that sends none sees nothing of it. Every client ID stays in the doc's state for
+good, so a fresh one per connection grows a long-lived doc with every tab and reconnect. A
+person's (or App guest's) join with a **device key** (`JoinOptions::device(key)`) takes one of
+that person's writers on that device instead:
 
 - **Never two live holders.** A writer held by a present connection is never handed out; a
   second tab of the device takes another free one, or a fresh one.
@@ -184,8 +194,9 @@ the flag on, a person's (or App guest's) join with a **device key**
   unsent and is done with the writer), or after any end of a `JoinOptions::device_stateless`
   connection (a command-line verb). **Any other end parks it** (a dropped socket, idle, a kick,
   lost rights, a host close, an unload, a crash): only the client's own reclaim takes it back,
-  or, with `Config::person_writer_park_ms` (0, never, by default), any join of that device
-  after that long.
+  or, after `Config::person_writer_park_ms` (a day by default; 0: never), any join of that
+  device. A reclaim after that is told when its lease ended (`Joined::prev_ended`) and never gets
+  that writer back.
 - **Reconnect:** `Joined::lease` goes to the client; its reconnect names it
   (`JoinOptions::reclaim`). When the lease is still the writer's, the join takes it back
   (`Joined::kept`), closing a connection that still holds it first, under the session lock
@@ -206,6 +217,34 @@ the flag on, a person's (or App guest's) join with a **device key**
   transactions the session opens anyway (a change's commit, the session's close); a join and a
   leave open none. An older kit (v0.10.2 on) never reuses or hands out such an ID and copies the
   rows on a rewrite (`tools/n1` `node-both`).
+
+### The writers cap
+
+Every writer stays in a doc's state for good, and each costs memory in every loaded copy of the
+doc. `Config::writers_max` (default 0: no cap) bounds them. The doc's writers are every client ID
+with an owner row, every person writer whose row is written, and every present connection that
+could write when it joined or since. A connection watching past `participants_max` can't write
+whatever its rights, so its writer counts only once the host lets it in (`promote_watcher`).
+
+- **Only a new writer is checked:** a join with edit rights, or a connection gaining them (a
+  read-only join granted edit later, a promoted watcher). Reuse mints nothing and is never
+  refused.
+- **At the cap**, a person's join with a device key takes, in order: a free writer of that
+  person and device; that person's free writer of another device (re-tagged to this one); that
+  person's oldest parked writer, let go early exactly as the park expiry lets it go (its late
+  reclaim keeps nothing and is told when its lease ended). An agent takes its own writer back as
+  always.
+- **Otherwise the connection reads only** (`Joined::writers_full`): it keeps presence, reads and
+  follows changes, and every edit is refused `MPC-E908` (`writers_doc_cap`, exit 2), not
+  `MPC-E102`, for as long as it stays: its writer can't change mid-connection. A reconnect from a
+  device that has edited the doc before may take its writer back.
+- **Never refused, always counted:** the outside participant (an outside save already happened
+  on disk), the import, and a tier-0 promotion's authors (the doc's history). A promotion whose
+  history has more authors than the cap lands, and the doc starts over the cap. Docs already
+  over it load as they are.
+- **The notice:** `AuditEvent::WritersNearCap { key, count, max }`, once per load, when the doc
+  holds 80% of `writers_max`, or of `WRITERS_NOTICE_MAX` (8,192) when there is no cap, so a
+  host sees the growth before any cap is set.
 
 ### On-behalf edits and approvals
 
@@ -2152,6 +2191,7 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `roster_interval_ms` | 250 ms | the roster push's coalescing interval (at most one delivery per doc per interval) |
 | `roster_queue` | 256 | roster events per subscriber, and recorded between two deliveries; past it, a fresh `Snapshot` |
 | `participants_max` | 32 | distinct participants with presence per doc; a new pid past it watches (read-only, counted, `MPC-E305` on edit) until the host promotes it |
+| `writers_max` | 0 (no cap) | writers per doc ([The writers cap](#the-writers-cap)); a connection that would need a new writer past it reads only (`MPC-E908` on edit); the near-cap notice comes at 80% of it, or of 8,192 without a cap |
 | `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append: from `compact_entries` entries once the log's bytes are at least a quarter of the snapshot's (v0.9.8: its cost per change stays constant as the state grows), always at 8 × `compact_entries` entries or at `compact_bytes` bytes |
 | `unload_compact_entries` | 100 | compact on unload |
 | `memory_budget_bytes` / `memory_factor` / `idle_unload_ms` | 256 MiB / 20 / 10 min | the pool |
@@ -2189,6 +2229,7 @@ Every error below, and every refusal outcome, has a stable id (`MPC-Ennn`; amend
 | `NotFound` | no doc and no bytes | 4 |
 | `PackMismatch` | stored doc belongs to another pack | 4 |
 | `EngineMismatch { stored, stored_format, engine, engine_format }` | the stored doc was written by another engine, or another stored-state format, than this build runs; not loaded, nothing changed (v0.10.1). Error id `MPC-E520` `engine_mismatch` | 6 |
+| `NativeEngineMissing { stored, stored_format }` | the stored doc is on the native engine, which this build doesn't include: that doc alone is refused (open, delete), nothing of it read or changed; the store and its other docs work. Error id `MPC-E169` `native_engine_missing` | 6 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
 | `Doc(DocError::Unaccepted)` | hardening: a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id `MPC-E152` `unaccepted` (`doc::RESERVED_ERROR_ID_UNACCEPTED`) | 3 |
 | `Doc(DocError::Quarantined)` | hardening: a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id `MPC-E518` `quarantined` (`doc::RESERVED_ERROR_ID_QUARANTINED`) | 3 |
@@ -2555,7 +2596,7 @@ first version of an import. A live doc's carrier stays a whole-file blob.
   its segment folder; a **space delete** (`SessionManager::delete_space`) removes each of its
   docs' segment folders in the same step, once its transaction commits.
 - **The stamp.** The transaction that writes a store's first chunked version stamps it
-  **format 8** with the `chunked` feature, never lowered. Kits up to v0.17.0 refuse a
+  **format 8** with the `chunked` feature, never lowered. Kits up to v0.18.0 refuse a
   format-8 store at open, so **turn chunked versions on only once the release a host would
   roll back to reads format 8**: one chunked version and the older release can't open the
   store at all.
@@ -3601,17 +3642,23 @@ one line: `store is format 6; this build reads up to 5`.
 features, `chunked` (bit 0: the store holds chunked versions) and `native` (bit 1: it holds
 engine stores). At open, before anything reads or writes the store, a word naming a bit this
 build doesn't know is refused by name (`UnknownFeatures`, `MPC-E502`), a format-8 store
-without its word or a word below format 8 is damage (`MPC-E503`), and a store that sets
-`native` is refused (`NativeWithoutEngine`, `MPC-E502`): this build stores no engine records,
-so it holds no engine store. **Format 7 is retired, never written**: a store stamped 7 is
+without its word or a word below format 8 is damage (`MPC-E503`), and the `native` bit is
+checked against the store's engine stores both ways, by their rows: the bit with no engine
+store is refused (`NativeWithoutEngine`, `MPC-E502`), engine records without the bit are
+damage (`MPC-E503`). **A store holding native docs opens on a build without the native
+engine**: it refuses those docs one by one (`MPC-E169`, above) and serves the rest, and a
+rewrite (a purge's, a compaction's, a host's) copies the engine store's tables
+(`native_records`, `native_gens`, `native_nonces`) through byte for byte. A table it doesn't
+know is still refused, never dropped (`NewerData`). **Format 7 is retired, never written**: a store stamped 7 is
 refused at open (`NeverWritten`, `MPC-E503`), its bytes unchanged. This build writes format 8
 (`STORE_FORMAT_CHUNKED`): a store's first chunked version stamps it, in its own transaction
 ([Chunked versions](#chunked-versions)); a structured doc still stamps 6
 (`STORE_FORMAT_STRUCTURED`), and a format-8 store keeps 8. `STORE_FORMAT` stays 6, the format
 a store with no opt-in feature is stamped; `STORE_FORMAT_READ` (8) is the highest this build
 reads, and the one a host's "reads up to" message names. A format-8 store opens, is swept
-and is rewritten (its word with it) as any store this build writes. Kits v0.14.0 to v0.17.0
-refuse a format-8 store at open with one line: `store is format 8; this build reads up to 7`.
+and is rewritten (its word with it) as any store this build writes. Kits v0.14.0 to v0.18.0
+refuse a format-8 store at open with one line: `store is format 8; this build reads up to 7`;
+v0.19.0 and later read it.
 
 ### Outside saves on a keyed doc that isn't a table: keep both over a kit write
 

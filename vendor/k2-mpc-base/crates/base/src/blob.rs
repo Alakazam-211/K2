@@ -179,7 +179,7 @@ pub struct BlobConfig {
     pub gc_grace_ms: u64,
     /// Store a tier-0 version of [`BlobConfig::chunk_min_bytes`] or more as chunks
     /// (`docs/SESSIONS.md`, "Chunked versions"). Default off. **The first chunked version
-    /// stamps the store format 8**, which kits up to v0.17.0 refuse to open: turn it on only
+    /// stamps the store format 8**, which kits up to v0.18.0 refuse to open: turn it on only
     /// once the release a host would roll back to reads format 8.
     pub chunked_versions: bool,
     /// The smallest version stored chunked when [`BlobConfig::chunked_versions`] is on;

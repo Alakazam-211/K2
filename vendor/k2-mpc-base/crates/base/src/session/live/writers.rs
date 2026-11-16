@@ -29,10 +29,23 @@
 //! lost to a crash leaves its writer as the row had it (free or parked): nothing of it is in
 //! the doc. At load, a row still leased whose end wasn't recorded (a crash) ends at the loaded
 //! version: every change of that lease is in the store by then.
+//!
+//! **The writers cap** ([`Config::writers_max`]). The doc's writers are the IDs its state holds
+//! or may come to hold: every ID with an owner row, every person writer whose row is written
+//! (a connection that could write has held it), and every present connection counted when it
+//! could write. A connection that could write, joining or gaining edit rights, needs room for
+//! a writer the count doesn't hold yet. At the cap a person's join takes, in order: a free
+//! writer of that person and device (reuse mints nothing); that person's free writer of
+//! another device (re-tagged to this one); that person's oldest parked writer, let go early
+//! as the park expiry lets it go (its reclaim keeps nothing and is told when its lease ended).
+//! Otherwise, and for any other join that would need a new writer, the connection reads only
+//! (`Joined::writers_full`) and every edit is refused `MPC-E908`. The outside participant, the
+//! import and a tier-0 promotion's authors are never refused, and count.
 
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::session::WRITERS_NOTICE_MAX;
 use crate::store::PersonWriterRow;
 
 /// How a member's lease ends when the member leaves.
@@ -80,7 +93,7 @@ impl Writers {
         let mut map = BTreeMap::new();
         for (client, owner, stored) in store.person_writers(id)? {
             let mut row = stored;
-            if row.leased && row.ended_token != row.token {
+            if row.leased && row.ended_token != row.token && !planted(Plant::NoLoadEnd) {
                 // its lease's end wasn't recorded (a crash): no change of it lands after this
                 // load's version, every one of them is in the store
                 row.ended_token = row.token;
@@ -153,6 +166,18 @@ impl<'a> PersonJoin<'a> {
     }
 }
 
+/// Whether the doc has room for one more writer ([`Session::writer_room`]).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Room {
+    /// The doc holds `writers_max` writers or more: only a writer it counts already is taken.
+    pub(super) full: bool,
+}
+
+impl Room {
+    /// Room, without counting (no connection that could write).
+    pub(super) const OPEN: Room = Room { full: false };
+}
+
 /// The writer a person-writer join takes.
 pub(super) struct Pick {
     pub(super) client: ClientId,
@@ -161,6 +186,9 @@ pub(super) struct Pick {
     /// The present member holding it, to close first (a hand-over).
     pub(super) from: Option<usize>,
     pub(super) prev_ended: Option<Seq>,
+    /// The doc is at its writers cap and `client` isn't a writer it counts: the connection
+    /// reads only.
+    pub(super) full: bool,
 }
 
 /// Whether `p` takes part in person-writer reuse: a person or an App guest editing through
@@ -201,7 +229,9 @@ impl Session {
     /// The writer a join of `p` on device `tag` takes ([`Config::reuse_person_writers`]):
     /// the reclaimed lease's own (held by this person's connection with that lease: a
     /// hand-over; or parked with that lease), else the lowest free writer of this person and
-    /// device (a parked one whose park expired too), else a fresh one.
+    /// device (a parked one whose park expired too), else a fresh one. At the writers cap
+    /// (`room.full`), a writer the doc counts: that person's free writer of another device, else
+    /// that person's oldest parked writer; else the connection reads only (`Pick::full`).
     pub(super) fn pick_person_writer(
         &self,
         st: &State,
@@ -209,6 +239,7 @@ impl Session {
         tag: [u8; 16],
         reclaim: Option<WriterLease>,
         now: u64,
+        room: Room,
     ) -> Result<Pick> {
         let held = |c: ClientId| st.members.iter().any(|m| m.client == c);
         let mut prev_ended = None;
@@ -219,12 +250,13 @@ impl Session {
                     && m.lease
                         .is_some_and(|ml| ml.token == l.token && ml.device == tag)
             });
-            if let Some(j) = holder {
+            if let Some(j) = holder.filter(|_| !planted(Plant::ReclaimNeverKeeps)) {
                 return Ok(Pick {
                     client: l.client,
                     kept: true,
                     from: Some(j),
                     prev_ended: None,
+                    full: room.full && !counted(st, l.client),
                 });
             }
             if let Some(w) = st.writers.map.get(&l.client) {
@@ -234,37 +266,94 @@ impl Session {
                     && w.row.leased
                     && w.row.token == l.token
                     && !held(l.client)
+                    && !planted(Plant::ReclaimNeverKeeps)
                 {
                     return Ok(Pick {
                         client: l.client,
                         kept: true,
                         from: None,
                         prev_ended: None,
+                        full: room.full && !counted(st, l.client),
                     });
                 }
-                if own && l.token != 0 && w.row.ended_token == l.token {
+                if own
+                    && l.token != 0
+                    && w.row.ended_token == l.token
+                    && !planted(Plant::ExpiryWithoutCap)
+                {
                     prev_ended = Some(w.row.ended_seq);
                 }
             }
         }
         let park = self.config.person_writer_park_ms;
+        // a reclaim that didn't take its writer back never gets that writer here either: its
+        // client still watches its old changes under it, and would read a later lease's
+        // changes under it as its own
+        let stale = reclaim
+            .map(|l| l.client)
+            .filter(|_| !planted(Plant::StaleReclaimTakesOwn));
+        let parked_out = |w: &Writer| {
+            w.row.ended_token == w.row.token
+                && park > 0
+                && !planted(Plant::ExpiryIgnored)
+                && now.saturating_sub(w.row.ended_ms) >= park
+        };
         let free = st
             .writers
             .map
             .iter()
             .find(|(c, w)| {
-                let parked_out = w.row.ended_token == w.row.token
-                    && park > 0
-                    && now.saturating_sub(w.row.ended_ms) >= park;
                 let takeable = if held(**c) {
                     // held: never (a planted fault takes it anyway)
                     planted(Plant::ReusePersonHeld)
                 } else {
-                    !w.row.leased || parked_out || planted(Plant::ReuseParked)
+                    !w.row.leased || parked_out(w) || planted(Plant::ReuseParked)
                 };
-                w.owner == p.pid && w.row.device == tag && takeable
+                w.owner == p.pid && w.row.device == tag && takeable && Some(**c) != stale
             })
             .map(|(c, _)| *c);
+        // at the cap, only a writer the doc counts already
+        let fits = |c: ClientId| !room.full || counted(st, c);
+        if let Some(c) = free.filter(|c| fits(*c)) {
+            return Ok(Pick {
+                client: c,
+                kept: false,
+                from: None,
+                prev_ended,
+                full: false,
+            });
+        }
+        if room.full {
+            // the person's writers the doc counts, none held, none the stale reclaim's own
+            let mine = || {
+                st.writers.map.iter().filter(|(c, w)| {
+                    w.owner == p.pid && !held(**c) && Some(**c) != stale && counted(st, **c)
+                })
+            };
+            // a free writer of another device (re-tagged to this one by its lease)
+            let other = mine()
+                .find(|(_, w)| !w.row.leased || parked_out(w))
+                .map(|(c, _)| *c);
+            // else the oldest parked writer, let go early: as the park expiry does, so its
+            // reclaim keeps nothing and is told when its lease ended
+            let parked =
+                || mine().filter(|(_, w)| w.row.leased && w.row.ended_token == w.row.token);
+            let oldest = if planted(Plant::CapTakesNewestParked) {
+                parked().max_by_key(|(c, w)| (w.row.ended_ms, **c))
+            } else {
+                parked().min_by_key(|(c, w)| (w.row.ended_ms, **c))
+            };
+            if let Some(c) = other.or(oldest.map(|(c, _)| *c)) {
+                return Ok(Pick {
+                    client: c,
+                    kept: false,
+                    from: None,
+                    prev_ended,
+                    full: false,
+                });
+            }
+        }
+        // a free writer the doc doesn't count, or a new one: past the cap it reads only
         let client = match free {
             Some(c) => c,
             None => fresh_client(self.store(st)?, self.doc_id, |c| {
@@ -276,6 +365,76 @@ impl Session {
             kept: false,
             from: None,
             prev_ended,
+            full: room.full,
+        })
+    }
+
+    /// Whether the doc has room for one more writer ([`Config::writers_max`]); counts nothing
+    /// when there is no cap and the near-cap notice was given.
+    pub(super) fn writer_room(&self, st: &mut State) -> Result<Room> {
+        let max = self.config.writers_max;
+        if max == 0 && st.writers_told {
+            return Ok(Room::OPEN);
+        }
+        self.owners(st)?;
+        let full = max > 0 && count_writers(st) >= max && !planted(Plant::CapUnchecked);
+        Ok(Room { full })
+    }
+
+    /// `pid`'s connections that could not write so far and can now: each is counted when the
+    /// doc has room for its writer (or counts it already), else it reads only from now on (its
+    /// writer can't change mid-connection). A watcher is skipped until it is let in.
+    pub(super) fn count_gains(&self, st: &mut State, pid: &str) -> Result<()> {
+        let gaining: Vec<usize> = (0..st.members.len())
+            .filter(|&k| {
+                let m = &st.members[k];
+                m.p.pid == pid && !m.counted && !m.writers_full && m.may_write()
+            })
+            .collect();
+        if gaining.is_empty() {
+            return Ok(());
+        }
+        for k in gaining {
+            let room = self.writer_room(st)?;
+            let c = st.members[k].client;
+            if room.full && !counted(st, c) && !planted(Plant::CapJoinOnly) {
+                st.members[k].writers_full = true;
+            } else {
+                st.members[k].counted = true;
+            }
+        }
+        self.note_writers(st);
+        Ok(())
+    }
+
+    /// The near-cap notice ([`AuditEvent::WritersNearCap`]), once per load: the doc holds 80%
+    /// or more of `writers_max`, or of [`WRITERS_NOTICE_MAX`] when there is no cap.
+    pub(super) fn note_writers(&self, st: &mut State) {
+        if st.writers_told || st.owners.is_none() {
+            return;
+        }
+        let max = match self.config.writers_max {
+            0 if planted(Plant::NoNearCapNotice) => return,
+            0 => WRITERS_NOTICE_MAX,
+            m => m,
+        };
+        let count = count_writers(st);
+        if count >= near_cap(max) {
+            st.writers_told = true;
+            self.emit(AuditEvent::WritersNearCap {
+                key: st.key.clone(),
+                count: count as u64,
+                max: max as u64,
+            });
+        }
+    }
+
+    /// `MPC-E908` for this doc now.
+    pub(super) fn writers_full_error(&self, st: &mut State) -> Result<SessionError> {
+        self.owners(st)?;
+        Ok(SessionError::WritersFull {
+            count: count_writers(st) as u64,
+            max: self.config.writers_max as u64,
         })
     }
 
@@ -418,6 +577,40 @@ impl Session {
     }
 }
 
+/// The writers the doc's count holds ([`Config::writers_max`]): the owner rows (built), the
+/// person writers whose rows are written, and the counted present connections, each once.
+fn count_writers(st: &State) -> usize {
+    let owners = st.owners.as_ref().expect("built by the caller");
+    let rows = st
+        .writers
+        .map
+        .iter()
+        .filter(|(c, w)| w.writable && !owners.contains_key(*c))
+        .count();
+    let present = st
+        .members
+        .iter()
+        .filter(|m| {
+            m.counted
+                && !owners.contains_key(&m.client)
+                && !st.writers.map.get(&m.client).is_some_and(|w| w.writable)
+        })
+        .count();
+    owners.len() + rows + present
+}
+
+/// Whether the doc's count holds `c` (the owners built).
+fn counted(st: &State, c: ClientId) -> bool {
+    st.owners.as_ref().is_some_and(|o| o.contains_key(&c))
+        || st.writers.map.get(&c).is_some_and(|w| w.writable)
+        || st.members.iter().any(|m| m.client == c && m.counted)
+}
+
+/// 80% of `max`, rounded up: where the near-cap notice comes.
+pub(super) fn near_cap(max: usize) -> usize {
+    (max * 4).div_ceil(5)
+}
+
 /// No two present connections hold one writer (checked after every join; a planted fault
 /// that breaks it is left for the rows to catch at their own assertions).
 pub(super) fn one_holder_each(st: &State) -> bool {
@@ -435,6 +628,17 @@ enum Plant {
     ReusePersonHeld,
     ReuseParked,
     HandoverWithoutClose,
+    StaleReclaimTakesOwn,
+    ExpiryWithoutCap,
+    NoLoadEnd,
+    ExpiryIgnored,
+    ReclaimNeverKeeps,
+    CapUnchecked,
+    CapTakesNewestParked,
+    CapOnExternal,
+    CapJoinOnly,
+    NoNearCapNotice,
+    WatcherCountsWriter,
 }
 
 #[cfg(any(test, feature = "differential"))]
@@ -444,6 +648,17 @@ fn planted(p: Plant) -> bool {
         Plant::ReusePersonHeld => ClientMutant::ReusePersonHeld,
         Plant::ReuseParked => ClientMutant::ReuseParked,
         Plant::HandoverWithoutClose => ClientMutant::HandoverWithoutClose,
+        Plant::StaleReclaimTakesOwn => ClientMutant::StaleReclaimTakesOwn,
+        Plant::ExpiryWithoutCap => ClientMutant::ExpiryWithoutCap,
+        Plant::NoLoadEnd => ClientMutant::NoLoadEnd,
+        Plant::ExpiryIgnored => ClientMutant::ExpiryIgnored,
+        Plant::ReclaimNeverKeeps => ClientMutant::ReclaimNeverKeeps,
+        Plant::CapUnchecked => ClientMutant::CapUnchecked,
+        Plant::CapTakesNewestParked => ClientMutant::CapTakesNewestParked,
+        Plant::CapOnExternal => ClientMutant::CapOnExternal,
+        Plant::CapJoinOnly => ClientMutant::CapJoinOnly,
+        Plant::NoNearCapNotice => ClientMutant::NoNearCapNotice,
+        Plant::WatcherCountsWriter => ClientMutant::WatcherCountsWriter,
     };
     client_mutant() == Some(m)
 }
@@ -462,4 +677,16 @@ fn any_planted() -> bool {
 /// The planted fault `ClientMutant::HandoverWithoutClose`: a hand-over keeps the holder.
 pub(super) fn planted_handover_keeps_holder() -> bool {
     planted(Plant::HandoverWithoutClose)
+}
+
+/// The planted fault `ClientMutant::WatcherCountsWriter`: a connection watching past
+/// `participants_max` with edit rights takes and counts a writer as one that could write.
+pub(super) fn planted_watcher_counts_writer() -> bool {
+    planted(Plant::WatcherCountsWriter)
+}
+
+/// The planted fault `ClientMutant::CapOnExternal`: the outside participant's first writer is
+/// refused at the cap.
+pub(super) fn planted_cap_on_external() -> bool {
+    planted(Plant::CapOnExternal)
 }

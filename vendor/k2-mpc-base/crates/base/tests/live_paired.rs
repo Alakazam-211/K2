@@ -1557,7 +1557,7 @@ fn n1_doc(mgr: &SessionManager, ws: &Path, name: &str) -> (u64, Arc<Session>, Co
 /// for the previous release's consumer (tools/n1/consumer-pairing): `a.rows` it writes, `b.rows`
 /// it leaves, `c.rows` it deletes.
 #[test]
-#[ignore = "tools/n1: writes the store for the previous release's consumer"]
+#[ignore = "tools/n1/n1.sh: writes the store for the previous release's consumer"]
 fn n1_pairing_producer() {
     let dir = n1_dir();
     let (store, mgr, ws) = n1_open(&dir, N1_T0);
@@ -1584,7 +1584,7 @@ fn n1_pairing_producer() {
 /// rewrite a byte scan of the store finds none. Its own store (`old/`, a carrier and no pairing)
 /// opens with the pairing made from the synced state, and a verb splices exactly.
 #[test]
-#[ignore = "tools/n1: reads the store the previous release's consumer left"]
+#[ignore = "tools/n1/n1.sh: reads the store the previous release's consumer left"]
 fn n1_pairing_after() {
     let dir = n1_dir();
     let (store, mgr, ws) = n1_open(&dir, N1_T0 + 6 * HOUR);

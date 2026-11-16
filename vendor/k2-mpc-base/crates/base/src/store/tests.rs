@@ -1458,6 +1458,10 @@ fn every_table_is_listed_once() {
         "doc_segments".to_owned(),
         // the removal list, with a store's first compaction
         "doc_removals".to_owned(),
+        // a native doc's engine store, with a store's first (format 8, the native bit)
+        "native_nonces".to_owned(),
+        "native_records".to_owned(),
+        "native_gens".to_owned(),
     ];
     let eager: Vec<String> = listed
         .iter()
@@ -2368,6 +2372,8 @@ fn a_mixed_log_is_refused() {
 
 /// A doc another engine stamped is refused whole at load (`MPC-E520`), before any of its
 /// entries is decoded: a row this build can't read doesn't turn the refusal into damage.
+/// Without the native engine, a native doc is refused the same way, as that doc's own
+/// (`MPC-E169`).
 #[test]
 fn a_doc_of_another_engine_is_refused_whole_at_load() {
     let t = TmpDir::new("foreign-load");
@@ -2382,8 +2388,9 @@ fn a_doc_of_another_engine_is_refused_whole_at_load() {
             .unwrap();
         w.commit().unwrap();
     }
+    // a family no build of this kit reads
     let foreign = DocMeta {
-        engine: "mpce-0.1".into(),
+        engine: "other-0.1".into(),
         engine_format: 1,
         ..s.meta(id).unwrap()
     };
@@ -2392,11 +2399,28 @@ fn a_doc_of_another_engine_is_refused_whole_at_load() {
     assert_eq!(
         e,
         StoreError::ForeignEngine {
-            stored: "mpce-0.1".into(),
+            stored: "other-0.1".into(),
             stored_format: 1
         }
     );
     assert_eq!(crate::errors::Refusal::report(&e).id(), "MPC-E520");
+    // the native engine's, in a build without it
+    {
+        let native = DocMeta {
+            engine: "mpce-0.1".into(),
+            ..foreign
+        };
+        s.put_meta(id, &native).unwrap();
+        let e = s.load(id).unwrap_err();
+        assert_eq!(
+            e,
+            StoreError::NativeEngineMissing {
+                stored: "mpce-0.1".into(),
+                stored_format: 1
+            }
+        );
+        assert_eq!(crate::errors::Refusal::report(&e).id(), "MPC-E169");
+    }
 }
 
 /// A native entry never reaches the Yrs replay: [`Loaded::yrs_updates`] is all or nothing, so

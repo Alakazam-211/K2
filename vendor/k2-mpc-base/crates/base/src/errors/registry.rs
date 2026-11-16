@@ -665,6 +665,15 @@ NEEDS_STATE_TRANSFER = e("MPC-E165", "needs_state_transfer", Session, 2,
      the catch-up and don't close the peer: it isn't at fault.")
     .indirect("a native replica behind a peer's cut (feature native)");
 
+NATIVE_ENGINE_MISSING = e("MPC-E169", "native_engine_missing", Session, 6,
+    "the native engine: a build without it refuses its docs one by one", ANY,
+    "this doc is on the native engine (format {stored_format}), which this build \
+     doesn't have",
+    "The doc was made on the native engine, and this build doesn't include that engine, so the \
+     doc was not opened. Nothing in it changed. The store and its other docs work as usual. \
+     Open this doc with a build that has the native engine; don't retry here.")
+    .indirect("a native doc in a store opened by a build without the native engine");
+
 // 170–179: addresses and cursors (src/addr.rs)
 
 AMBIGUOUS_ADDRESS = e("MPC-E170", "ambiguous_address", Session, 2, "K-ADDR-2, K-EXIT-1",
@@ -1738,6 +1747,15 @@ ANNOTATION_CAP = e("MPC-E907", "annotation_cap", Limits, 2, "K-ANN-1 (annot_* li
      the thread, or history rows of the thread, past which only replies, deletes and purges \
      still fit; capabilities lists the annot_* limits). Nothing changed. Write a shorter \
      comment, or go on in a new thread.");
+
+WRITERS_DOC_CAP = e("MPC-E908", "writers_doc_cap", Limits, 2, "writers (writers_max)", CHANGE,
+    "read-only: this doc has {count} writers (the most is {max})",
+    "This doc already holds as many writers as it allows, and writers stay in the doc for \
+     good, so this connection can read but not edit. Nothing changed. Don't retry in a loop: \
+     a reconnect from a device that has edited this doc before may edit again.")
+    .step("cat", &[],
+        "The doc holds all the writers it allows, so this connection is read-only; read it, and \
+         don't retry in a loop.");
 }
 
 registry! { ENGINE:

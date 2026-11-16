@@ -1250,7 +1250,7 @@ fn text_reconcile_pairs_whole_lines() {
 /// format 5 and open, read and write on the previous release) and `grid.redb` (with a grid
 /// doc: format 6, which the previous release must refuse with one line).
 #[test]
-#[ignore]
+#[ignore = "tools/n1/n1.sh: writes the stores for the other build's consumer"]
 fn n1_producer() {
     let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
     std::fs::create_dir_all(&out).unwrap();
@@ -1461,7 +1461,7 @@ fn raw_kinds(store: &std::path::Path) -> (KindRows, KindRows) {
 /// `K2MB_N1_OUT`: this build reads the file as that delete left it, then opens the store. No
 /// row of a deleted doc may be left after this build's open, and no other doc's row taken.
 #[test]
-#[ignore = "tools/n1: reads the stores another build's consumer left"]
+#[ignore = "tools/n1/n1.sh: reads the stores another build's consumer left"]
 fn n1_kinds_after_delete() {
     let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
     for name in ["text.redb", "grid.redb"] {
@@ -1494,7 +1494,7 @@ fn n1_kinds_after_delete() {
 /// lease, the free one to the device's next join. Nothing to check when the producer predates
 /// person writers (no `persons-<store>`).
 #[test]
-#[ignore = "tools/n1: reads the stores another build's consumer left"]
+#[ignore = "tools/n1/n1.sh: reads the stores another build's consumer left"]
 fn n1_persons_after() {
     let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
     for name in ["text.redb", "grid.redb"] {
@@ -1627,7 +1627,7 @@ fn raw_verbs(store: &std::path::Path) -> (KindRows, KindRows) {
 /// pack verb outlived the other build, its row is the store's only one, and the log reads it
 /// back. A producer before verbs wrote none: then nothing is checked.
 #[test]
-#[ignore = "tools/n1: reads the stores another build's consumer left"]
+#[ignore = "tools/n1/n1.sh: reads the stores another build's consumer left"]
 fn n1_verbs_after() {
     let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
     for name in ["text.redb", "grid.redb"] {
@@ -1702,7 +1702,7 @@ fn n1_version_at_least(var: &str, min: (u64, u64, u64)) -> bool {
 /// the doc (a plain round trip: none left as it left the file). A producer before turns wrote
 /// none: then nothing is checked.
 #[test]
-#[ignore = "tools/n1: reads the stores another build's consumer left"]
+#[ignore = "tools/n1/n1.sh: reads the stores another build's consumer left"]
 fn n1_turns_after() {
     let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
     for name in ["text.redb", "grid.redb"] {

@@ -181,7 +181,9 @@ fn a_doc_stamped_by_another_engine_refuses_to_load() {
 }
 
 /// The same through `open_file` (a doc that lives in a file): refused before the file is
-/// attached or read.
+/// attached or read. A native doc's stamp: without the native engine, refused as that doc's
+/// own (`MPC-E169`, its own variant); with it, sessions don't take native docs yet
+/// (`MPC-E520`).
 #[test]
 fn open_file_refuses_another_engines_doc() {
     let f = fx("file");
@@ -194,7 +196,19 @@ fn open_file_refuses_another_engines_doc() {
         .open_file(Arc::new(MD), &key("b.md"), &ws.join("b.md"), &ws)
         .err()
         .expect("a doc stamped by another engine must not load");
-    assert_engine_mismatch(&e, "mpce-0.1", 1);
+    {
+        assert_eq!(
+            e,
+            SessionError::NativeEngineMissing {
+                stored: "mpce-0.1".into(),
+                stored_format: 1,
+            }
+        );
+        assert_eq!(
+            (e.report().id(), session_exit(&e)),
+            ("MPC-E169", exit::STORE)
+        );
+    }
     assert!(mgr.get(&key("b.md")).is_none());
     assert_eq!(std::fs::read_to_string(ws.join("b.md")).unwrap(), TEXT);
     mgr.release().unwrap();
@@ -413,8 +427,11 @@ const N1_WORDS: [(&str, u64); 3] = [
 
 /// N−1 of store format 8, this build's half before the previous release's
 /// (`tools/n1/n1.sh node-format`): `chunked.redb`, `native.redb` and `both.redb` in
-/// `K2MB_N1_OUT`, for the previous release to refuse at open, each with one line, the bytes
-/// unchanged (`tools/n1/consumer-format`).
+/// `K2MB_N1_OUT`, and `chunked.versions`, the chunked store's doc's versions as this build
+/// reads them (`{:?}`), for the previous release to check by its read range
+/// (`tools/n1/consumer-format`): a release that reads up to format 7 refuses each at open; one
+/// that reads format 8 opens the chunked store and reads the doc as written, and refuses the
+/// two that set native.
 #[test]
 #[ignore = "N-1: tools/n1/n1.sh node-format"]
 fn n1_format_producer() {
@@ -423,6 +440,15 @@ fn n1_format_producer() {
     for (name, word) in N1_WORDS {
         let (dir, path, _host) = stamped_store(&format!("n1-{name}"), 8, Some(word));
         std::fs::copy(&path, out.join(format!("{name}.redb"))).unwrap();
+        if word == FEATURE_CHUNKED {
+            let store = DocStore::open(&path).unwrap();
+            let id = store.find(&key("y.md")).unwrap().expect("y.md");
+            let versions = store.versions(id).unwrap();
+            let file = out.join(format!("{name}.versions"));
+            std::fs::write(file, format!("{versions:?}")).unwrap();
+            let n = versions.len();
+            println!("N-1 FORMAT produced {name}.versions: {n} version(s)");
+        }
         let _ = std::fs::remove_dir_all(&dir);
         println!("N-1 FORMAT produced {name}.redb: format 8, features word {word}");
     }
@@ -431,9 +457,9 @@ fn n1_format_producer() {
 /// N−1 of store format 8, this build's half after the previous release's: the store the
 /// previous release wrote (`prev.redb`, a text doc) opens here as before, keeps its format
 /// (only a chunked version stamps 8) with no features word, reads, takes a write and rewrites;
-/// the format-8 stores the previous release refused are as this build made them: `chunked`
-/// opens at format 8 with its word, `native` and `both` are refused (no engine store) with
-/// their bytes unchanged.
+/// the format-8 stores the previous release read or refused are as this build made them:
+/// `chunked` opens at format 8 with its word and its versions as `chunked.versions` holds them,
+/// `native` and `both` are refused (no engine store) with their bytes unchanged.
 #[test]
 #[ignore = "N-1: tools/n1/n1.sh node-format"]
 fn n1_format_after() {
@@ -489,7 +515,16 @@ fn n1_format_after() {
                 assert_eq!(word, FEATURE_CHUNKED, "{name} opened");
                 assert_eq!(s.format().unwrap(), 8);
                 assert_eq!(s.required_features().unwrap(), word);
-                println!("N-1 FORMAT AFTER {name}.redb: opens at format 8");
+                let id = s.find(&key("y.md")).unwrap().expect("y.md");
+                let versions = format!("{:?}", s.versions(id).unwrap());
+                let want = std::fs::read_to_string(out.join(format!("{name}.versions"))).unwrap();
+                assert_eq!(
+                    versions, want,
+                    "{name}: the versions as this build wrote them"
+                );
+                println!(
+                    "N-1 FORMAT AFTER {name}.redb: opens at format 8, its versions as written"
+                );
             }
             Err(e) => {
                 assert_ne!(word, FEATURE_CHUNKED, "{name}: {e}");

@@ -223,6 +223,8 @@ interface Entry {
   sent?: { hunks: Hunk[]; base: number };
   /** The connection's client ID when it was sent: a change applied from it carries this one. */
   sentClient?: number;
+  /** The connection it was sent on, counted by `reconnected` (`LiveText.conns`). */
+  sentConn?: number;
   /** In flight, but the server will refuse it (it met competing text): not in the text. */
   doomed?: Rejection;
 }
@@ -297,8 +299,12 @@ export class LiveText {
    * reply settles it for good (the host closed the old connection before the welcome). */
   private keptFor: number | null = null;
   /** Writers this client lost to a later lease (a reconnect that didn't keep its writer, on a
-   * host with leases): the version its own lease ended at, or `null` when unknown. */
-  private capOf = new Map<number, number | null>();
+   * host with leases): the version its own lease ended at (`null` when unknown), and the
+   * connection from which on the cap doesn't apply (an edit sent on a later connection under
+   * the same writer is that connection's own). */
+  private capOf = new Map<number, { until: number | null; from: number }>();
+  /** Connections so far: `reconnected` counts one more. */
+  private conns = 0;
   private readonly selfHandle: Handle | undefined;
   /** The server's changes, with the client ID each came from (own acks included) and its
    * `kind` when the host sent one (kit v0.10.1; own acks have none). */
@@ -567,9 +573,11 @@ export class LiveText {
       // an undo or redo unanswered on the old connection may still land under its ID
       if (this.undoOps.size > 0 && old !== undefined) this.undoLostOn.add(old);
       // a host with leases may give that writer to a later lease: only its changes up to the
-      // version this client's own lease ended at can be this client's (unknown: nothing)
-      if (w.lease !== undefined && old !== undefined && old !== w.client) this.capWatches(old, w.prevEnded ?? null);
+      // version this client's own lease ended at can be this client's (unknown: nothing). That
+      // holds when the host gives this client the same writer back without keeping it, too
+      if (old !== undefined && this.capsOldWriter(old, w.client, w.lease)) this.capWatches(old, w.prevEnded ?? null);
     }
+    this.conns += 1;
     this.leaseId = w.lease;
     this.clientId = w.client;
     this.cursorSent = null;
@@ -601,15 +609,29 @@ export class LiveText {
     this.offline = true;
   }
 
+  /** Whether a reconnect that didn't keep this client's writer `old` (now `client`) caps the
+   * watches on `old`: on a host with leases, always (whether or not `client` is `old` again). */
+  private capsOldWriter(_old: number, _client: number, lease: string | undefined): boolean {
+    return lease !== undefined;
+  }
+
   /** Changes under `client` after `until` are a later lease's (`null`: from when is unknown):
-   * this client's watches on it count none of them. */
+   * this client's watches on it count none of them, for edits sent before this reconnect. */
   private capWatches(client: number, until: number | null): void {
-    this.capOf.set(client, until);
+    this.capOf.set(client, { until, from: this.conns + 1 });
     for (const l of this.lost.values()) {
       const a = l.rejection.asOf;
       if (a && a.client === client) a.until = until;
     }
     for (const r of this._rejected) if (r.asOf && r.asOf.client === client) r.asOf.until = until;
+  }
+
+  /** The cap on the writer edit `e` went out on, when it was sent before that writer was lost to
+   * a later lease. */
+  private capFor(e: Entry): { until: number | null } | undefined {
+    if (e.sentClient === undefined) return undefined;
+    const c = this.capOf.get(e.sentClient);
+    return c !== undefined && (e.sentConn ?? 0) < c.from ? c : undefined;
   }
 
   /**
@@ -1285,7 +1307,8 @@ export class LiveText {
       if (error.id === ERR.NOT_APPLIED && !definitive) {
         const client = e.sentClient;
         rej.asOf = { version: this._version, client, undoInFlight: client !== undefined && this.undoLostOn.has(client) };
-        if (client !== undefined && this.capOf.has(client)) rej.asOf.until = this.capOf.get(client);
+        const capped = this.capFor(e);
+        if (capped) rej.asOf.until = capped.until;
         if (client !== undefined) {
           this.lost.set(client, { rejection: rej, state: "open" });
           if (this.lost.size > WATCH_MAX) this.lost.delete(this.lost.keys().next().value!);
@@ -1340,8 +1363,11 @@ export class LiveText {
     if (k !== "edit" && k !== "none") return false;
     // the ID it went out on counts only up to the end of its lease, when a later one took it
     const sent = e.sentClient;
-    const cap = sent === undefined ? undefined : this.capOf.get(sent);
-    const sentCounts = sent !== undefined && (!this.capOf.has(sent) || (cap !== null && cap !== undefined && ev.version <= cap));
+    const capped = this.capFor(e);
+    const sentCounts = sent !== undefined && (!capped || (capped.until !== null && ev.version <= capped.until));
+    // a later lease's change under the writer it went out on (given back to this client
+    // without being kept, or to another connection): never this edit
+    if (capped && !sentCounts && ev.client === sent) return false;
     const ids = [sentCounts ? sent : undefined, this.clientId].filter((c): c is number => c !== undefined);
     if (ids.length > 0 && !ids.includes(ev.client)) return false;
     const hs = coalesce(ev.hunks);
@@ -1584,6 +1610,7 @@ export class LiveText {
       e.sent = { hunks: e.hunks, base: this._version };
       e.carried = Carried.of(e.hunks); // the server carries exactly what's sent
       e.sentClient = this.clientId;
+      e.sentConn = this.conns;
       this.inflight = e;
       const frame: ClientFrame = {
         type: "edit",

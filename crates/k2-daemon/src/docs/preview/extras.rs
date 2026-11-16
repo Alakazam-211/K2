@@ -15,6 +15,13 @@
 //!   a camera's display values (`camera {active, lens_mm, sensor_mm,
 //!   sensor_fit}`, each left out when the file has none), and the titles
 //!   the view shows ([`scene_title`]: "Scene", "Turntable 1" to "Turntable 8").
+//! - **A scene listing's top level** ([`scene_listing`]): `cameras_left_out:
+//!   [{name, key?, reason}]`, the cameras the file has that the mesh read
+//!   couldn't express, passed through as the read sent them (the first
+//!   1,000 good ones), `cameras_left_out_more: n` (good ones past those) and
+//!   `cameras_left_out_dropped: n` (malformed ones, or 1 for a value that
+//!   isn't a list); each left out when empty or 0. Informational: it never
+//!   refuses the scene, and it is in no digest.
 //! - **A scene view's image** ([`scene_view`]): the camera that drew it
 //!   (`camera {view, proj, fx, fy, near, shift_x, shift_y}`: column-major
 //!   world-to-view and an OpenGL projection with an infinite far plane), so
@@ -25,7 +32,7 @@
 //!   file the view left out (the scene, a camera, a turntable frame); each
 //!   left out when there is nothing to say.
 //! - **Its id table** ([`ids_meta`], the scene, object and camera views
-//!   only): `ids {layer, image_len, count, objects: [{index, id}]}`. The id
+//!   only): `ids {layer, image_len, count, objects: [{index, id, key}]}`. The id
 //!   image itself is binary and cached beside the image: the client asks
 //!   the image route for it with the same container, width, hash and look
 //!   plus `layer=ids` (`layer` names that value). It is a PNG at the still's
@@ -33,12 +40,19 @@
 //!   drawn, else the index + 1 of the object under it, which `objects` names
 //!   (only the objects in the image, ascending by index; fewer than `count`
 //!   when cut short). Ids are passed through as the file has them and may
-//!   repeat across indexes. The pixels hold indexes, so a rename changes
-//!   only the table: the host gives a current image's table the ids the
-//!   listing has now ([`current_ids`]), and when an object is renamed in
+//!   repeat across indexes. `key` is the object's live key from the read
+//!   (`@obj:15`, what the multiplayer kit names it by), left out when the
+//!   read doesn't key the object. The pixels hold indexes, so a rename
+//!   changes only the table: the host gives a current image's table the ids
+//!   the listing has now ([`current_ids`]), and when an object is renamed in
 //!   place, the scene and camera views' current images, and the object's
 //!   own view when the read keys it (its address stays), are pushed again
-//!   with their tables named anew (`service`'s head move). A push lists the
+//!   with their tables named anew (`service`'s head move). Keys are in no
+//!   digest either, so two docs of the same geometry share an image: the
+//!   cached table has no keys, and the host adds them from the doc's
+//!   listing now wherever a current image's table is answered or pushed
+//!   ([`current_keys`]); an image at another render hash (a stale one, or
+//!   one asked for by an old hash) is answered without them. A push lists the
 //!   objects only up to [`PUSH_IDS_MAX`] bytes of JSON ([`ids_for_push`]);
 //!   the route always has the whole table.
 //!
@@ -53,7 +67,7 @@ use std::collections::HashMap;
 use k2_mpc_base::errors::Value;
 use k2_scenerender::digest::{Item, LocalBounds, Target};
 use k2_scenerender::proto::{CameraMeta, IdsMeta, ViewMeta};
-use k2_scenerender::scene::CameraDisplay;
+use k2_scenerender::scene::{CameraDisplay, CamerasLeftOut};
 use serde_json::{json, Map, Value as J};
 
 use super::Container;
@@ -127,7 +141,9 @@ pub fn camera_meta(c: &CameraMeta) -> J {
     })
 }
 
-/// A view's id table, as the client gets it.
+/// A view's id table as drawn and cached: each entry its `index` and `id`
+/// (the client gets each entry's `key` too, added where the table is
+/// answered, [`current_keys`]).
 pub fn ids_meta(m: &IdsMeta) -> J {
     json!({
         "layer": IDS_LAYER,
@@ -149,6 +165,36 @@ pub fn ids_for_push(ids: &J) -> J {
     v
 }
 
+/// The objects an id table of a view's current image names now, by index:
+/// an object view shows only its object, so every entry is the view
+/// itself; any other view draws all the objects in order, so an entry is
+/// the listed object at its index.
+enum Named<'a> {
+    Own(&'a Container),
+    ByIndex(HashMap<u32, &'a Container>),
+}
+
+impl<'a> Named<'a> {
+    /// `None` for a container that isn't a scene view.
+    fn of(view: &'a Container, listing: impl IntoIterator<Item = &'a Container>) -> Option<Self> {
+        match Target::from_locator(&view.locator)? {
+            Target::Object(_) => Some(Named::Own(view)),
+            _ => Some(Named::ByIndex(listed_objects(listing))),
+        }
+    }
+
+    /// The object an entry names now, from its `index`.
+    fn at(&self, entry: &J) -> Option<&'a Container> {
+        match self {
+            Named::Own(c) => Some(*c),
+            Named::ByIndex(m) => {
+                let index = entry.get("index").and_then(J::as_u64).and_then(|i| u32::try_from(i).ok())?;
+                m.get(&index).copied()
+            }
+        }
+    }
+}
+
 /// Give an id table (`ids`, of the image drawn for `view`) the ids the
 /// objects have in `listing` now. An object view shows only its object, so
 /// each entry is named as `view` is now (its index stays: the pixels hold
@@ -157,35 +203,78 @@ pub fn ids_for_push(ids: &J) -> J {
 /// render hash covers that order, so for its current image an index is
 /// still the same object: each entry takes the listed id of the object at
 /// its index. Only for an image at the view's current render hash.
-pub fn current_ids<'a>(ids: &mut J, view: &Container, listing: impl IntoIterator<Item = &'a Container>) {
+pub fn current_ids<'a>(ids: &mut J, view: &'a Container, listing: impl IntoIterator<Item = &'a Container>) {
     let Some(objects) = ids.get_mut("objects").and_then(J::as_array_mut) else { return };
-    let own = match Target::from_locator(&view.locator) {
-        Some(Target::Object(_)) => Some(view.title.as_str()),
-        Some(_) => None,
-        None => return,
-    };
-    let by_index = match own {
-        Some(_) => HashMap::new(),
-        None => object_ids(listing),
-    };
+    let Some(named) = Named::of(view, listing) else { return };
     for e in objects {
-        let index = e.get("index").and_then(J::as_u64).and_then(|i| u32::try_from(i).ok());
-        if let Some(id) = own.or_else(|| index.and_then(|i| by_index.get(&i).copied())) {
-            e["id"] = json!(id);
+        if let Some(c) = named.at(e) {
+            e["id"] = json!(c.title);
         }
     }
 }
 
-/// The listed id of each object of a scene, by its index (empty for a
-/// listing without objects, a deck's).
-pub fn object_ids<'a>(listing: impl IntoIterator<Item = &'a Container>) -> HashMap<u32, &'a str> {
+/// Give each entry of an id table (`ids`, of the image drawn for `view`)
+/// the live key its object has in `listing` now (`key`, `@obj:15`), the
+/// same way [`current_ids`] names them, and leave `key` out of an entry
+/// whose object the read doesn't key. Keys are in no digest, so two docs
+/// of the same geometry share an image, and a key may change with no
+/// render hash moving: the cache never keeps them, and a table gets them
+/// only where it is answered. Only for an image at the view's current
+/// render hash.
+pub fn current_keys<'a>(ids: &mut J, view: &'a Container, listing: impl IntoIterator<Item = &'a Container>) {
+    let Some(objects) = ids.get_mut("objects").and_then(J::as_array_mut) else { return };
+    let Some(named) = Named::of(view, listing) else { return };
+    for e in objects {
+        let key = named.at(e).and_then(|c| c.live_key.as_deref());
+        let Some(o) = e.as_object_mut() else { continue };
+        match key {
+            Some(k) => {
+                o.insert("key".into(), json!(k));
+            }
+            None => {
+                o.remove("key");
+            }
+        }
+    }
+}
+
+/// Each object of a scene, by its index (empty for a listing without
+/// objects, a deck's).
+fn listed_objects<'a>(listing: impl IntoIterator<Item = &'a Container>) -> HashMap<u32, &'a Container> {
     listing
         .into_iter()
         .filter_map(|c| match Target::from_locator(&c.locator) {
-            Some(Target::Object(i)) => Some((i, c.title.as_str())),
+            Some(Target::Object(i)) => Some((i, c)),
             _ => None,
         })
         .collect()
+}
+
+/// The listed id and live key of each object of a scene, by its index
+/// (empty for a listing without objects, a deck's): what an id table names
+/// them by.
+pub fn object_names<'a>(listing: impl IntoIterator<Item = &'a Container>) -> HashMap<u32, (&'a str, Option<&'a str>)> {
+    listed_objects(listing).into_iter().map(|(i, c)| (i, (c.title.as_str(), c.live_key.as_deref()))).collect()
+}
+
+/// A scene listing's top-level extras: `cameras_left_out`, the cameras the
+/// file has that the read couldn't express, each `{name, key, reason}` as
+/// the read sent it (`key` left out when it had none), then
+/// `cameras_left_out_more` (good ones past the cap) and
+/// `cameras_left_out_dropped` (malformed ones); each left out when empty
+/// or 0.
+pub fn scene_listing(left_out: &CamerasLeftOut) -> Map<String, J> {
+    let mut o = Map::new();
+    if !left_out.list.is_empty() {
+        o.insert("cameras_left_out".into(), serde_json::to_value(&left_out.list).expect("cameras left out are JSON"));
+    }
+    if left_out.more > 0 {
+        o.insert("cameras_left_out_more".into(), json!(left_out.more));
+    }
+    if left_out.dropped > 0 {
+        o.insert("cameras_left_out_dropped".into(), json!(left_out.dropped));
+    }
+    o
 }
 
 /// A scene listing item's extras: `bounds` for an object with a box and

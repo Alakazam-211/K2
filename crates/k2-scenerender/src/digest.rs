@@ -66,13 +66,17 @@
 //! **Cameras:** each camera item carries the camera's display values
 //! ([`CameraDisplay`]: `active`, `lens_mm`, `sensor_mm`, `sensor_fit`, each
 //! left out when the file has none). They draw nothing and are in no digest.
+//! The cameras the producer left out (`cameras_left_out`, [`listed`]) come
+//! with the listing as read (kept, with counts of those past the cap and
+//! those dropped as malformed; never a refusal), and are in no digest
+//! either.
 
 use serde::Serialize;
 
 use crate::addr;
 use crate::camera::{mesh_bounds, ViewSpec, TURNTABLE_FRAMES};
 use crate::sha256::Sha256;
-use crate::scene::{self, Camera, CameraDisplay, Header, Hidden, InputError, InputLimits, MeshInfo, Object, UpAxis};
+use crate::scene::{self, Camera, CameraDisplay, CamerasLeftOut, Header, Hidden, InputError, InputLimits, MeshInfo, Object, UpAxis};
 
 /// Longest encoded name put in an address (bytes); a longer one gets the
 /// index form.
@@ -160,6 +164,10 @@ pub struct Item {
     /// An object whose placement is driven and not evaluated: drawn, and its
     /// box placed, at its base transform (`false` for every other item).
     pub not_evaluated: bool,
+    /// A camera or object the read keys: `key` is its own key from the read
+    /// (its live key), not its name or index form (`false` for every other
+    /// item). Never in a digest.
+    pub keyed: bool,
 }
 
 /// The addresses of one list's views (`kind` `obj` or `cam`), from each
@@ -299,7 +307,22 @@ fn view_digest(up: UpAxis, through: Through<'_>, objects: &[&Object], hidden: &[
 /// and checks the header ([`scene::layout`]); hashes each mesh's data once,
 /// without decoding it.
 pub fn list(bytes: &[u8], lim: &InputLimits) -> Result<Vec<Item>, InputError> {
-    let (h, ranges) = scene::layout(bytes, lim)?;
+    listed(bytes, lim).map(|l| l.items)
+}
+
+/// A scene's listing: its containers ([`list`]) and what the header says
+/// beside them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub items: Vec<Item>,
+    /// The cameras the producer couldn't express, as read from the header
+    /// (kept, past the cap, dropped; empty when it has none). In no digest.
+    pub cameras_left_out: CamerasLeftOut,
+}
+
+/// [`list`], with the cameras left out.
+pub fn listed(bytes: &[u8], lim: &InputLimits) -> Result<Listed, InputError> {
+    let (mut h, ranges) = scene::layout(bytes, lim)?;
     let mesh: Vec<[u8; 32]> = h.meshes.iter().zip(&ranges).map(|(m, r)| mesh_digest(m, &bytes[r.clone()])).collect();
     // A mesh's box once, only for the meshes an object uses.
     let mut boxes: Vec<Option<Option<([f32; 3], [f32; 3])>>> = vec![None; h.meshes.len()];
@@ -310,7 +333,8 @@ pub fn list(bytes: &[u8], lim: &InputLimits) -> Result<Vec<Item>, InputError> {
         }
     }
     let boxes: Vec<Option<([f32; 3], [f32; 3])>> = boxes.into_iter().map(Option::flatten).collect();
-    Ok(list_header(&h, &mesh, &boxes))
+    let cameras_left_out = std::mem::take(&mut h.cameras_left_out);
+    Ok(Listed { items: list_header(&h, &mesh, &boxes), cameras_left_out })
 }
 
 /// The box of a mesh's positions (the first `12 * vertices` of its data);
@@ -333,20 +357,20 @@ fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<([f32; 3], [f32; 3
     let all: Vec<&Object> = h.objects.iter().filter(|o| o.hidden.is_none()).collect();
     let hidden: Vec<u32> = h.objects.iter().enumerate().filter(|(_, o)| o.hidden.is_some()).map(|(i, _)| i as u32).collect();
     let mut items = Vec::with_capacity(1 + h.cameras.len() + h.objects.len() + TURNTABLE_FRAMES as usize);
-    items.push(Item { key: addr::SCENE.into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, &hidden, mesh), bounds: None, camera: None, hidden: None, not_evaluated: false });
+    items.push(Item { key: addr::SCENE.into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, &hidden, mesh), bounds: None, camera: None, hidden: None, not_evaluated: false, keyed: false });
     // Every object gets its address from its key or its name, hidden in the file or not.
     let cams = addresses("cam", h.cameras.iter().map(|c| (c.key.as_deref(), c.id.as_str())));
     let objs = addresses("obj", h.objects.iter().map(|o| (o.key.as_deref(), o.id.as_str())));
     for ((i, c), key) in h.cameras.iter().enumerate().zip(cams) {
-        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, &hidden, mesh), bounds: None, camera: Some(c.display()), hidden: None, not_evaluated: false });
+        items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, &hidden, mesh), bounds: None, camera: Some(c.display()), hidden: None, not_evaluated: false, keyed: c.key.is_some() });
     }
     for ((i, o), key) in h.objects.iter().enumerate().zip(objs) {
         let bounds = boxes[o.mesh as usize].map(|(min, max)| LocalBounds { min, max, approx: o.modifiers_not_applied });
-        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], &[], mesh), bounds, camera: None, hidden: o.hidden, not_evaluated: o.transform_not_evaluated });
+        items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], &[], mesh), bounds, camera: None, hidden: o.hidden, not_evaluated: o.transform_not_evaluated, keyed: o.key.is_some() });
     }
     for k in 0..TURNTABLE_FRAMES {
         let key = format!("@turntable:{k}");
-        items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, &hidden, mesh), bounds: None, camera: None, hidden: None, not_evaluated: false });
+        items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, &hidden, mesh), bounds: None, camera: None, hidden: None, not_evaluated: false, keyed: false });
     }
     items
 }
@@ -665,6 +689,9 @@ mod tests {
         for k in &keys {
             assert!(addr::is_native(k), "{k}");
         }
+        // Only an address that is the read's own key says so.
+        let keyed: Vec<String> = list(&encode(&s), &InputLimits::default()).expect("list").into_iter().filter(|i| i.keyed).map(|i| i.key).collect();
+        assert_eq!(keyed, ["@cam:3", "@obj:3", "@obj:17"]);
         // A name form decodes back to the name exactly.
         for (k, o) in keys[3..11].iter().zip(&s.objects) {
             if let Some(e) = k.strip_prefix("@obj:").filter(|_| o.key.is_none()) {
@@ -776,6 +803,102 @@ mod tests {
         // A good one is read back as given.
         let back = crate::scene::decode(&encode(&s), &InputLimits::default()).expect("read");
         assert_eq!((back.objects[6].key.as_deref(), back.cameras[0].key.as_deref()), (Some("@obj:3"), Some("@cam:3")));
+    }
+
+    /// `bytes` with its header's `cameras_left_out` set to `v` as raw JSON
+    /// (any shape), the data moved to the new padding.
+    fn with_left_out(bytes: &[u8], v: serde_json::Value) -> Vec<u8> {
+        let hlen = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+        let mut h: serde_json::Value = serde_json::from_slice(&bytes[12..12 + hlen]).expect("a header");
+        h["cameras_left_out"] = v;
+        let data = &bytes[(12 + hlen + 3) & !3..];
+        let json = serde_json::to_vec(&h).expect("json");
+        let mut out = crate::scene::MAGIC.to_vec();
+        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        out.extend_from_slice(&json);
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        out.extend_from_slice(data);
+        out
+    }
+
+    #[test]
+    fn cameras_left_out_are_listed_as_sent_never_refuse_and_are_in_no_digest() {
+        use crate::scene::{decode, CameraLeftOut, MAX_LEFT_OUT_BYTES};
+        use serde_json::json;
+        let lim = InputLimits::default();
+        let s = addressed_scene();
+        let plain = encode(&s);
+        let digests = |b: &[u8]| list(b, &lim).expect("listed").into_iter().map(|i| (i.key, i.digest)).collect::<Vec<_>>();
+        let left_out = |b: &[u8]| {
+            let l = listed(b, &lim).expect("never refused");
+            assert_eq!(decode(b, &lim).expect("never refused").cameras_left_out, l.cameras_left_out, "the renderer reads the same");
+            assert_eq!(digests(b), digests(&plain), "in no digest");
+            l.cameras_left_out
+        };
+        let counts = |l: &CamerasLeftOut| (l.list.len(), l.more, l.dropped);
+        // Absent: none, and no field written.
+        assert!(!String::from_utf8_lossy(&plain).contains("cameras_left_out"));
+        assert!(left_out(&plain).is_empty());
+        // Empty: as absent.
+        assert!(left_out(&with_left_out(&plain, json!([]))).is_empty());
+        // One with a key and one without: read back as sent.
+        let two = vec![
+            CameraLeftOut { name: "Ortho top".into(), key: Some("@cam:7".into()), reason: "orthographic".into() },
+            CameraLeftOut { name: "Pano".into(), key: None, reason: "panoramic".into() },
+        ];
+        let mut t = s.clone();
+        t.cameras_left_out = CamerasLeftOut { list: two.clone(), ..Default::default() };
+        let with = encode(&t);
+        assert_eq!(left_out(&with), CamerasLeftOut { list: two.clone(), more: 0, dropped: 0 });
+        let sent = with_left_out(&plain, json!([{ "name": "Ortho top", "key": "@cam:7", "reason": "orthographic" }, { "name": "Pano", "reason": "panoramic", "key": null }]));
+        assert_eq!(left_out(&sent).list, two, "a null key is no key");
+        // Each string up to the cap is kept.
+        let at_cap = "x".repeat(MAX_LEFT_OUT_BYTES);
+        let key_at_cap = format!("@cam:{}", "7".repeat(MAX_LEFT_OUT_BYTES - 5));
+        assert_eq!(counts(&left_out(&with_left_out(&plain, json!([{ "name": at_cap.as_str(), "key": key_at_cap, "reason": at_cap.as_str() }])))), (1, 0, 0));
+        // A bad entry is dropped and counted; the good ones around it kept in order.
+        let good = |n: &str| json!({ "name": n, "reason": "r" });
+        let over = "x".repeat(MAX_LEFT_OUT_BYTES + 1);
+        let bad_keys = ["@obj:7", "cam:7", "@cam:", "@cam:a b", "@cam:1/x:2", "@k:7", "@Cam:7", ""];
+        let mut bad: Vec<serde_json::Value> = bad_keys.iter().map(|k| json!({ "name": "A", "key": k, "reason": "r" })).collect();
+        bad.extend([
+            json!({ "name": "A", "key": format!("@cam:{}", "7".repeat(MAX_LEFT_OUT_BYTES - 4)), "reason": "r" }),
+            json!({ "name": over.as_str(), "reason": "r" }),
+            json!({ "name": "A", "reason": over.as_str() }),
+            json!({ "name": "A" }),
+            json!({ "reason": "r" }),
+            json!({ "name": 1, "reason": "r" }),
+            json!({ "name": "A", "reason": ["r"] }),
+            json!({ "name": "A", "key": 7, "reason": "r" }),
+            json!("Ortho"),
+            json!(null),
+            json!(["A", "r"]),
+            json!(3),
+        ]);
+        for b in &bad {
+            let l = left_out(&with_left_out(&plain, json!([good("before"), b, good("after")])));
+            assert_eq!(l.list.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["before", "after"], "{b}");
+            assert_eq!((l.more, l.dropped), (0, 1), "{b}");
+        }
+        assert_eq!(counts(&left_out(&with_left_out(&plain, serde_json::Value::Array(bad.clone())))), (0, 0, bad.len() as u64));
+        // Not a list: as absent, dropped 1.
+        for b in [json!(null), json!({}), json!({ "name": "A", "reason": "r" }), json!("Ortho"), json!(7), json!(true)] {
+            assert_eq!(counts(&left_out(&with_left_out(&plain, b.clone()))), (0, 0, 1), "{b}");
+        }
+        // Past the cap: the first ones kept in order, the rest counted; a
+        // dropped entry takes no slot.
+        let small = InputLimits { max_cameras: 2, ..InputLimits::default() };
+        let many = with_left_out(&plain, json!([good("A"), json!({ "name": "bad" }), good("B"), good("C"), json!(5), good("D")]));
+        let l = listed(&many, &small).expect("never refused").cameras_left_out;
+        assert_eq!((l.list.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), l.more, l.dropped), (vec!["A", "B"], 2, 2));
+        assert_eq!(decode(&many, &small).expect("never refused").cameras_left_out, l);
+        let cap = lim.max_cameras as usize;
+        let thousands = with_left_out(&plain, serde_json::Value::Array((0..cap + 3).map(|i| good(&format!("C{i}"))).collect()));
+        let l = left_out(&thousands);
+        assert_eq!(counts(&l), (cap, 3, 0));
+        assert_eq!((l.list[0].name.as_str(), l.list[cap - 1].name.clone()), ("C0", format!("C{}", cap - 1)));
     }
 
     #[test]

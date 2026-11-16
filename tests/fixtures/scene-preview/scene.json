@@ -52,75 +52,93 @@
     "objects": [
       {
         "id": "Floor",
-        "index": 0
+        "index": 0,
+        "key": "@obj:4"
       },
       {
         "id": "Wall.Back",
-        "index": 1
+        "index": 1,
+        "key": "@obj:5"
       },
       {
         "id": "Window",
-        "index": 2
+        "index": 2,
+        "key": "@obj:7"
       },
       {
         "id": "Rug",
-        "index": 3
+        "index": 3,
+        "key": "@obj:8"
       },
       {
         "id": "Ceiling fan",
-        "index": 4
+        "index": 4,
+        "key": "@obj:9"
       },
       {
         "id": "Table",
-        "index": 5
+        "index": 5,
+        "key": "@obj:10"
       },
       {
         "id": "Chair.001",
-        "index": 6
+        "index": 6,
+        "key": "@obj:11"
       },
       {
         "id": "Chair.002",
-        "index": 7
+        "index": 7,
+        "key": "@obj:12"
       },
       {
         "id": "Chair.003",
-        "index": 8
+        "index": 8,
+        "key": "@obj:13"
       },
       {
         "id": "Chair.004",
-        "index": 9
+        "index": 9,
+        "key": "@obj:14"
       },
       {
         "id": "Sofa",
-        "index": 10
+        "index": 10,
+        "key": "@obj:15"
       },
       {
         "id": "Shelf",
-        "index": 11
+        "index": 11,
+        "key": "@obj:16"
       },
       {
         "id": "Book.001",
-        "index": 12
+        "index": 12,
+        "key": "@obj:17"
       },
       {
         "id": "Book.002",
-        "index": 13
+        "index": 13,
+        "key": "@obj:18"
       },
       {
         "id": "Floor lamp",
-        "index": 14
+        "index": 14,
+        "key": "@obj:19"
       },
       {
         "id": "Vase",
-        "index": 15
+        "index": 15,
+        "key": "@obj:20"
       },
       {
         "id": "Mug",
-        "index": 16
+        "index": 16,
+        "key": "@obj:21"
       },
       {
         "id": "Clock hand",
-        "index": 17
+        "index": 17,
+        "key": "@obj:23"
       }
     ]
   },

@@ -260,7 +260,7 @@ fn sculpture_room(segments: u32) -> Scene {
 
 /// `room` repeated `nx` x `nz` times, 6.5 m apart in x and 5.5 m in z, as one scene.
 fn side_by_side(room: &Scene, nx: u32, nz: u32) -> Scene {
-    let mut s = Scene { up: room.up, meshes: Vec::new(), objects: Vec::new(), cameras: Vec::new() };
+    let mut s = Scene { up: room.up, meshes: Vec::new(), objects: Vec::new(), cameras: Vec::new(), cameras_left_out: Default::default() };
     for k in 0..nx * nz {
         let (dx, dz) = ((k % nx) as f32 * 6.5, (k / nx) as f32 * 5.5);
         let base = s.meshes.len() as u32;

@@ -20,7 +20,8 @@
 //!               "hidden": "collection", "transform_not_evaluated": true}],
 //!  "cameras": [{"id": "Camera", "key": "@cam:3", "position": [7.4, -6.5, 5.3], "target": [0, 0, 0],
 //!               "up": [0, 0, 1], "yfov": 0.69, "aspect": 1.7778, "znear": 0.1,
-//!               "active": true, "lens_mm": 50, "sensor_mm": [36, 24], "sensor_fit": "auto"}]}
+//!               "active": true, "lens_mm": 50, "sensor_mm": [36, 24], "sensor_fit": "auto"}],
+//!  "cameras_left_out": [{"name": "Ortho", "key": "@cam:7", "reason": "orthographic"}]}
 //! ```
 //!
 //! - **Meshes** (K2 Cores' v1 read): BASE meshes, triangulated by the pack,
@@ -68,6 +69,21 @@
 //!   `@obj:N` among the objects and `@cam:N` among the cameras. A key draws
 //!   nothing and is in no digest: with or without one, every digest is the
 //!   same.
+//! - **Cameras left out** (optional, top level; [`CamerasLeftOut`]): the
+//!   cameras the producer couldn't express here, each `{name, key?,
+//!   reason}`: `name` as the file has it, `key` its live address when the
+//!   reader gives one, `reason` a short word or phrase saying why. It is
+//!   informational and never refuses the input: an entry that isn't an
+//!   object with a string `name` and `reason` (each at most
+//!   [`MAX_LEFT_OUT_BYTES`]) and, when it has a `key`, a native address of
+//!   one part of kind `cam` (checked as a camera's key is) is dropped and
+//!   counted (`dropped`); of the rest, the first [`InputLimits::max_cameras`]
+//!   are kept in order and the others counted (`more`), so a dropped entry
+//!   never takes a slot. A value that isn't a list is read as absent, with
+//!   `dropped` 1. Nothing draws them and they are in no digest: the host's
+//!   listing passes them through, so the view can say which cameras it
+//!   doesn't show. Absent (or empty), the bytes are as before the field
+//!   existed. The header's own limits (its size first) apply as to any field.
 //!
 //! **Bounds first.** The worker reads the 12-byte prefix and the header before
 //! any mesh data, and checks every count against [`InputLimits`] before it
@@ -96,6 +112,8 @@ pub const MAX_ID_BYTES: usize = 1024;
 /// Most modifier names on one object, and the longest one in bytes.
 pub const MAX_MODIFIERS: usize = 256;
 pub const MAX_MODIFIER_BYTES: usize = 128;
+/// The longest string of a camera left out (its name, key or reason), in bytes.
+pub const MAX_LEFT_OUT_BYTES: usize = 512;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -194,6 +212,122 @@ impl Camera {
     }
 }
 
+/// A camera the producer couldn't express in K2SCENE1 (see the module
+/// docs): listed with the scene as sent, never drawn, in no digest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CameraLeftOut {
+    /// Its name as the file has it.
+    pub name: String,
+    /// Its live element address (`@cam:N`), when the reader gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Why it was left out, in a few words.
+    pub reason: String,
+}
+
+/// The header's `cameras_left_out` as read: the entries kept, in order, and
+/// how many were past the cap (`more`) or dropped as malformed (`dropped`).
+/// Never refuses the input (see the module docs). Written back as the list
+/// alone.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CamerasLeftOut {
+    pub list: Vec<CameraLeftOut>,
+    /// Good entries past the cap ([`InputLimits::max_cameras`]), not kept.
+    pub more: u64,
+    /// Entries dropped as malformed (1 when the value isn't a list).
+    pub dropped: u64,
+}
+
+impl CamerasLeftOut {
+    /// Nothing kept and nothing counted.
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty() && self.more == 0 && self.dropped == 0
+    }
+
+    fn not_a_list() -> Self {
+        CamerasLeftOut { dropped: 1, ..Default::default() }
+    }
+
+    fn no_list(&self) -> bool {
+        self.list.is_empty()
+    }
+}
+
+impl Serialize for CamerasLeftOut {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.list.serialize(s)
+    }
+}
+
+/// One entry of `cameras_left_out`, or `None` to drop it.
+fn left_out_entry(v: serde_json::Value) -> Option<CameraLeftOut> {
+    use serde_json::Value as J;
+    let J::Object(mut o) = v else { return None };
+    let text = |x: Option<J>| match x {
+        Some(J::String(s)) if s.len() <= MAX_LEFT_OUT_BYTES => Some(s),
+        _ => None,
+    };
+    let name = text(o.remove("name"))?;
+    let reason = text(o.remove("reason"))?;
+    let key = match o.remove("key") {
+        None | Some(J::Null) => None,
+        Some(J::String(k)) if k.len() <= MAX_LEFT_OUT_BYTES && crate::addr::single(&k).is_some_and(|(kind, _)| kind == "cam") => Some(k),
+        Some(_) => return None,
+    };
+    Some(CameraLeftOut { name, key, reason })
+}
+
+impl<'de> Deserialize<'de> for CamerasLeftOut {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> de::Visitor<'de> for V {
+            type Value = CamerasLeftOut;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a list of cameras left out")
+            }
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<CamerasLeftOut, A::Error> {
+                let cap = CAPS.with(|c| c.get()[LIST_CAMERAS_LEFT_OUT]);
+                let mut out = CamerasLeftOut::default();
+                // One entry in memory at a time; the header's size bounds each.
+                while let Some(v) = seq.next_element::<serde_json::Value>()? {
+                    match left_out_entry(v) {
+                        None => out.dropped += 1,
+                        Some(e) if (out.list.len() as u64) < cap => out.list.push(e),
+                        Some(_) => out.more += 1,
+                    }
+                }
+                Ok(out)
+            }
+            fn visit_map<A: de::MapAccess<'de>>(self, mut m: A) -> Result<CamerasLeftOut, A::Error> {
+                while m.next_entry::<de::IgnoredAny, de::IgnoredAny>()?.is_some() {}
+                Ok(CamerasLeftOut::not_a_list())
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<CamerasLeftOut, E> {
+                Ok(CamerasLeftOut::not_a_list())
+            }
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<CamerasLeftOut, E> {
+                Ok(CamerasLeftOut::not_a_list())
+            }
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<CamerasLeftOut, E> {
+                Ok(CamerasLeftOut::not_a_list())
+            }
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<CamerasLeftOut, E> {
+                Ok(CamerasLeftOut::not_a_list())
+            }
+            fn visit_str<E: de::Error>(self, _: &str) -> Result<CamerasLeftOut, E> {
+                Ok(CamerasLeftOut::not_a_list())
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<CamerasLeftOut, E> {
+                Ok(CamerasLeftOut::not_a_list())
+            }
+            fn visit_none<E: de::Error>(self) -> Result<CamerasLeftOut, E> {
+                Ok(CamerasLeftOut::not_a_list())
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MeshInfo {
     pub vertices: u32,
@@ -251,6 +385,10 @@ pub struct Header {
     pub objects: Vec<Object>,
     #[serde(default, deserialize_with = "de_cameras")]
     pub cameras: Vec<Camera>,
+    /// The cameras the producer couldn't express (absent: none). Never
+    /// refuses the input ([`CamerasLeftOut`]).
+    #[serde(default, skip_serializing_if = "CamerasLeftOut::no_list")]
+    pub cameras_left_out: CamerasLeftOut,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -267,6 +405,8 @@ pub struct Scene {
     pub meshes: Vec<Mesh>,
     pub objects: Vec<Object>,
     pub cameras: Vec<Camera>,
+    /// Passed through from the header; nothing reads it to draw.
+    pub cameras_left_out: CamerasLeftOut,
 }
 
 /// What a reader accepts. "Drawn" counts expand instancing (a mesh used by
@@ -365,11 +505,13 @@ const LIST_MESHES: usize = 0;
 const LIST_OBJECTS: usize = 1;
 const LIST_CAMERAS: usize = 2;
 const LIST_MODIFIERS: usize = 3;
-const LIST_NAMES: [&str; 4] = ["meshes", "objects", "cameras", "modifiers of an object"];
+/// Not refused past its cap: the cameras left out keep that many and count the rest.
+const LIST_CAMERAS_LEFT_OUT: usize = 4;
+const LIST_NAMES: [&str; 5] = ["meshes", "objects", "cameras", "modifiers of an object", "cameras left out"];
 
 thread_local! {
     /// The caps of the header being parsed on this thread (unbounded outside [`parse_header`]).
-    static CAPS: Cell<[u64; 4]> = const { Cell::new([u64::MAX; 4]) };
+    static CAPS: Cell<[u64; 5]> = const { Cell::new([u64::MAX; 5]) };
     /// The first list that passed its cap.
     static OVER: Cell<Option<usize>> = const { Cell::new(None) };
 }
@@ -417,13 +559,14 @@ fn de_modifiers<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error
     capped(d, LIST_MODIFIERS)
 }
 
+
 /// Parse a header's JSON with its lists capped by `lim`.
 pub fn parse_header(json: &[u8], lim: &InputLimits) -> Result<Header, InputError> {
-    let caps = [lim.max_meshes as u64, lim.max_objects as u64, lim.max_cameras as u64, MAX_MODIFIERS as u64];
+    let caps = [lim.max_meshes as u64, lim.max_objects as u64, lim.max_cameras as u64, MAX_MODIFIERS as u64, lim.max_cameras as u64];
     CAPS.with(|c| c.set(caps));
     OVER.with(|o| o.set(None));
     let parsed = serde_json::from_slice::<Header>(json);
-    CAPS.with(|c| c.set([u64::MAX; 4]));
+    CAPS.with(|c| c.set([u64::MAX; 5]));
     let over = OVER.with(|o| o.take());
     match (parsed, over) {
         (_, Some(which)) => Err(InputError::TooMany { what: LIST_NAMES[which], max: caps[which] }),
@@ -669,7 +812,7 @@ impl<R: Read> Decoder<R> {
         for (i, c) in h.cameras.iter().enumerate() {
             check_camera(c).map_err(|why| InputError::BadCamera { camera: i as u32, why })?;
         }
-        Ok(Scene { up: h.up, meshes, objects, cameras: h.cameras })
+        Ok(Scene { up: h.up, meshes, objects, cameras: h.cameras, cameras_left_out: h.cameras_left_out })
     }
 }
 
@@ -758,6 +901,7 @@ pub fn header_of(scene: &Scene) -> Header {
             .collect(),
         objects: scene.objects.clone(),
         cameras: scene.cameras.clone(),
+        cameras_left_out: scene.cameras_left_out.clone(),
     }
 }
 

@@ -12,7 +12,9 @@
 //! once: no worker runs. An image's id image comes along with it (without
 //! it the container is drawn), and its id table is named as the listing is
 //! now ([`service::with_current_ids`]): the pixels hold object indexes, so
-//! they stay right; only the ids in the table change.
+//! they stay right; only the ids in the table change. The cached table has
+//! no keys; the push and the route add each object's live key from the
+//! listing now ([`service::with_served_ids`]).
 //!
 //! The render hash names the bytes drawn (the contract: a digest covers
 //! everything a drawing reads), so two addresses with one hash draw the same
@@ -90,6 +92,9 @@ pub fn try_reuse(blobs: &Arc<BlobStore>, snap: &Snapshot, k: &Keyed, width: Widt
     };
     let mut meta = follow(entry.meta);
     service::with_current_ids(snap, k, &mut meta);
+    // Cached named as now but without keys (they are in no digest); pushed with them.
+    let mut served = meta.clone();
+    service::with_served_ids(snap, k, &mut served);
     let put = || -> Result<(), String> {
         if let Some(ids) = ids {
             cache::put(blobs, &snap.key, &k.c.key, &k.hash, width, &cache::ids_build(&build), &follow(ids.meta), &ids.image)?;
@@ -109,7 +114,7 @@ pub fn try_reuse(blobs: &Arc<BlobStore>, snap: &Snapshot, k: &Keyed, width: Widt
         failed: None,
         rev: snap.rev,
         rendered_at_ms: now,
-        extras: service::ready_fields(&meta),
+        extras: service::ready_fields(&served),
     });
     Some(from)
 }

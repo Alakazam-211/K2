@@ -176,7 +176,7 @@ pub fn terrain(n: u32) -> Mesh {
 }
 
 fn scene(meshes: Vec<Mesh>, objects: Vec<Object>) -> Scene {
-    Scene { up: UpAxis::Y, meshes, objects, cameras: Vec::new() }
+    Scene { up: UpAxis::Y, meshes, objects, cameras: Vec::new(), cameras_left_out: Default::default() }
 }
 
 /// One cube, back faces culled, terracotta.

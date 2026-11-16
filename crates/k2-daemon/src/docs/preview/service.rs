@@ -33,7 +33,8 @@
 //!   or camera: a scene's digest leaves ids out) is answered from that
 //!   image at once, `preview_ready` with `reused_from`, no worker run; its
 //!   id image comes along, its table named as the listing is now
-//!   ([`with_current_ids`]). The scene and camera views keep their address
+//!   ([`with_current_ids`]; answered and pushed with the objects' live keys
+//!   too, [`with_served_ids`]). The scene and camera views keep their address
 //!   and hash when an object is renamed: their current images are pushed
 //!   `ready` again with the new ids ([`push_renamed_ids`]), nothing drawn,
 //!   and a draw that lands after the rename pushes its table named as the
@@ -104,6 +105,8 @@ pub struct Snapshot {
     pub page: Option<Page>,
     pub containers: Vec<Keyed>,
     pub bytes: Arc<Vec<u8>>,
+    /// The listing's top-level extras ([`super::Listing::extras`]).
+    pub extras: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Snapshot {
@@ -186,6 +189,7 @@ pub fn list(
         page: listing.page,
         containers,
         bytes: Arc::new(bytes),
+        extras: listing.extras,
     })
 }
 
@@ -241,16 +245,18 @@ pub fn head_moved(blobs: &Arc<BlobStore>, prev: &Snapshot, snap: &Arc<Snapshot>)
 /// that draw every object (the scene and the cameras) keep their address
 /// and render hash, and so does a renamed object's own view when the read
 /// keys it (its address is its live key): nothing is drawn, and a client
-/// holding one of their id tables would keep the old ids. Each of their images cached at the view's
-/// current hash whose table names an object differently from `prev`'s
-/// listing is pushed `ready` again, at once: the same container, render
+/// holding one of their id tables would keep the old ids. So too when an
+/// object's live key comes, goes or changes (keys are in no digest either).
+/// Each of their images cached at the view's current hash whose table, as
+/// answered, names an object differently from `prev`'s listing (its id or
+/// its key) is pushed `ready` again, at once: the same container, render
 /// hash, width, look, shape and fields (its `rendered_at_ms` is when it was
 /// drawn), at `snap`'s rev, its `ids` named as the listing is now. The same
 /// render hash says the pixels are the ones the client has. The cache keeps
-/// the ids it was drawn with: the listing names a current image wherever it
-/// is answered ([`with_current_ids`]).
+/// the ids it was drawn with and no keys: the listing names a current image
+/// wherever it is answered ([`with_served_ids`]).
 fn push_renamed_ids(blobs: &BlobStore, prev: &Snapshot, snap: &Snapshot) {
-    if extras::object_ids(prev.containers.iter().map(|k| &k.c)) == extras::object_ids(snap.containers.iter().map(|k| &k.c)) {
+    if extras::object_names(prev.containers.iter().map(|k| &k.c)) == extras::object_names(snap.containers.iter().map(|k| &k.c)) {
         return;
     }
     for k in &snap.containers {
@@ -263,8 +269,8 @@ fn push_renamed_ids(blobs: &BlobStore, prev: &Snapshot, snap: &Snapshot) {
             for w in Width::ALL {
                 let cache::Got::Hit(e) = cache::get(blobs, &snap.key, &k.c.key, &k.hash, w, &build) else { continue };
                 let (mut was, mut now) = (e.meta.clone(), e.meta);
-                with_current_ids(prev, p, &mut was);
-                with_current_ids(snap, k, &mut now);
+                with_served_ids(prev, p, &mut was);
+                with_served_ids(snap, k, &mut now);
                 if now.get("ids").is_none() || was.get("ids") == now.get("ids") {
                     continue;
                 }
@@ -534,12 +540,14 @@ fn draw(job: &Job) -> Result<(), FailCode> {
         Ok(img) => match store(&job.blobs, &job.snap, &job.container.key, hash, w, look, shape, &img, rendered_at_ms) {
             Ok(mut meta) => {
                 // An object renamed while this was drawn keeps the view's
-                // hash: the push names the table as the head lists it now
-                // (the cache keeps the drawn names, as for every image).
-                if let Some(head) = head_now(key) {
-                    if let Some(k) = head.container(&job.container.key) {
-                        with_current_ids(&head, k, &mut meta);
-                    }
+                // hash: the push names the table as the head lists it now,
+                // with the objects' live keys; with no head at this hash,
+                // as the listing it was drawn for does (the cache keeps the
+                // drawn names and no keys, as for every image).
+                let head = head_now(key);
+                let at_head = head.as_deref().and_then(|h| h.container(&job.container.key).filter(|k| k.hash == *hash).map(|k| (h, k)));
+                if let Some((h, k)) = at_head.or_else(|| job.snap.container(&job.container.key).map(|k| (&*job.snap, k))) {
+                    with_served_ids(h, k, &mut meta);
                 }
                 ready = ready_fields(&meta);
                 Ok(())
@@ -644,13 +652,31 @@ pub fn ids_entry_meta(meta: &serde_json::Value) -> serde_json::Value {
 /// `meta` (an image of `k`'s) with its id table named as `snap` lists the
 /// objects now, when it is `k`'s current image: a rename changes no render
 /// hash, so a cached image may carry ids from before it. An image at
-/// another hash keeps the ids it was drawn with.
+/// another hash keeps the ids it was drawn with. Ids only: what the cache
+/// keeps for a reused image ([`super::reuse`]).
 pub fn with_current_ids(snap: &Snapshot, k: &Keyed, meta: &mut serde_json::Value) {
     if meta.get("render_hash").and_then(serde_json::Value::as_str) != Some(k.hash.as_str()) {
         return;
     }
     if let Some(ids) = meta.get_mut("ids") {
         extras::current_ids(ids, &k.c, snap.containers.iter().map(|x| &x.c));
+    }
+}
+
+/// [`with_current_ids`], and each entry given its object's live key as
+/// `snap` lists it now ([`extras::current_keys`]): the table as the route
+/// answers it and a push carries it. Keys are in no digest, so the image
+/// may have been drawn for another doc of the same geometry, or before a
+/// key changed: they come from the listing, never the cache. An image at
+/// another hash is answered as drawn, without keys.
+pub fn with_served_ids(snap: &Snapshot, k: &Keyed, meta: &mut serde_json::Value) {
+    if meta.get("render_hash").and_then(serde_json::Value::as_str) != Some(k.hash.as_str()) {
+        return;
+    }
+    if let Some(ids) = meta.get_mut("ids") {
+        let listing = || snap.containers.iter().map(|x| &x.c);
+        extras::current_ids(ids, &k.c, listing());
+        extras::current_keys(ids, &k.c, listing());
     }
 }
 
@@ -831,7 +857,7 @@ mod tests {
     #[test]
     fn dirty_is_the_containers_whose_hash_moved_or_that_are_new() {
         let c = |key: &str, hash: &str| Keyed {
-            c: Container { key: key.into(), position: 1, title: String::new(), hidden: false, digest: [0; 32], locator: "1".into(), extras: Default::default() },
+            c: Container { key: key.into(), position: 1, title: String::new(), hidden: false, digest: [0; 32], locator: "1".into(), extras: Default::default(), live_key: None },
             hash: hash.into(),
         };
         let snap = |cs: Vec<Keyed>| Snapshot {
@@ -843,6 +869,7 @@ mod tests {
             page: None,
             containers: cs,
             bytes: Arc::new(Vec::new()),
+            extras: Default::default(),
         };
         let a = snap(vec![c("@sld:1", "x"), c("@sld:2", "y"), c("@sld:3", "z")]);
         let b = snap(vec![c("@sld:1", "x"), c("@sld:2", "Y"), c("@sld:4", "w")]);

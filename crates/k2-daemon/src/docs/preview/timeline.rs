@@ -106,10 +106,11 @@ pub fn listing(clips: &[Tile]) -> Listing {
                 digest: tile_digest(&c.media_hash, at),
                 locator: format!("{}@{at}", c.media_key),
                 extras: serde_json::Map::new(),
+                live_key: None,
             });
         }
     }
-    Listing { page: None, containers }
+    Listing { page: None, containers, extras: serde_json::Map::new() }
 }
 
 /// Whether this host can decode video for tiles.

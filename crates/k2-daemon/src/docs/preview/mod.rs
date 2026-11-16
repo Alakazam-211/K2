@@ -272,6 +272,12 @@ pub struct Container {
     /// object's local box, a camera's display values; empty for a slide).
     /// Never a digest.
     pub extras: serde_json::Map<String, serde_json::Value>,
+    /// A scene object's or camera's own key from the read (its live key,
+    /// `@obj:15`), when the read keys it: then it is also `key`. An id
+    /// table names the objects with it (`key` in each entry, added where
+    /// the table is answered, [`extras::current_keys`]). `None` for every
+    /// other container. Never a digest, not in the listing.
+    pub live_key: Option<String>,
 }
 
 /// A file's containers, as a renderer lists them.
@@ -280,6 +286,10 @@ pub struct Listing {
     /// The page every container is drawn on; `None` for a type without one.
     pub page: Option<Page>,
     pub containers: Vec<Container>,
+    /// What the type says about the whole file, at the listing's top level
+    /// as the route sends it (a scene's `cameras_left_out` and its counts,
+    /// only when there are some; empty for a deck). Never a digest.
+    pub extras: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A drawn container.

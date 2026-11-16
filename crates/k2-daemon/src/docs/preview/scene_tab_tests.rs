@@ -50,7 +50,8 @@ fn hex(b: &[u8]) -> String {
 /// Lists one container per line, `<address> <digest byte>`, optionally
 /// with a scene locator after them (`scene`, `o<i>`, `t<k>`: then an
 /// `@obj:` address's title is its id) and a title after that (an object
-/// keyed by its live address, `@obj:7 5 o0 Chair`); draws every address ending `:fail`
+/// keyed by its live address, `@obj:7 5 o0 Chair`: an object or camera with
+/// a title is keyed, its address its live key); draws every address ending `:fail`
 /// as a timeout, the rest as the same small image. A container with a
 /// locator the scene renderer gives ids to also gets [`FAKE_IDS`] and a
 /// table of the listed objects it shows (an object view: itself; any other:
@@ -142,9 +143,13 @@ impl PreviewRenderer for Fake {
                 digest: [d; 32],
                 locator: locator.unwrap_or(key).into(),
                 extras: Default::default(),
+                live_key: title
+                    .and(locator.and_then(SceneTarget::from_locator))
+                    .filter(|t| matches!(t, SceneTarget::Object(_) | SceneTarget::Camera(_)))
+                    .map(|_| key.to_string()),
             })
             .collect();
-        Ok(Listing { page: None, containers })
+        Ok(Listing { page: None, containers, extras: Default::default() })
     }
     fn render(&self, src: &Source<'_>, c: &Container, width: Width, look: Look, shape: Shape, _wall: Duration) -> Result<Image, Failed> {
         let gate = {
@@ -263,6 +268,7 @@ fn the_route_and_the_welcome_carry_the_extras_with_keyed_hashes_only() {
             page: l.page,
             containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
             bytes: Arc::new(Vec::new()),
+            extras: Default::default(),
         };
         let listed: Vec<serde_json::Value> = snap.containers.iter().map(|k| route::container_json(&snap, k, Look::Transparent, Shape::Wide)).collect();
         let welcome = crate::docs::live_deck::previews_value(&snap).to_json();
@@ -644,6 +650,75 @@ fn an_id_table_rides_after_the_camera_and_a_push_lists_it_within_its_bound() {
     assert_eq!(pushed, json!({ "layer": "ids", "image_len": 9, "count": 5_000, "objects": [] }));
 }
 
+/// The cameras the read couldn't express ride at the listing's top level as
+/// sent (`cameras_left_out`), with counts of the good ones past the cap and
+/// the malformed ones dropped, each only when there is something to say.
+/// They never refuse the scene, and change no digest.
+#[test]
+fn a_scene_listing_passes_its_cameras_left_out_through_at_top_level() {
+    use k2_scenerender::scene::{CameraLeftOut, CamerasLeftOut, InputLimits};
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("left-out.blend");
+        let secret = *blobs.host_cache_key(&key.space, service::HASH_LABEL).expect("the cache key").secret_bytes();
+        let route_listing = |s: &k2_scenerender::scene::Scene| {
+            let bytes = encode(s);
+            let l = scene::list_k2scene(&bytes).expect("never refused");
+            let snap = Arc::new(Snapshot {
+                key: key.clone(),
+                rev: 1,
+                version: None,
+                renderer: &scene::SCENE,
+                build: scene::SCENE.build(),
+                page: l.page,
+                containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
+                bytes: Arc::new(bytes),
+                extras: l.extras.clone(),
+            });
+            (l, body(route::listing(&blobs, &snap, None, Look::Transparent, Shape::Wide)))
+        };
+        let fields = ["cameras_left_out", "cameras_left_out_more", "cameras_left_out_dropped"];
+        let ours = |v: &serde_json::Value| fields.iter().filter_map(|f| v.get(*f).map(|x| (f.to_string(), x.clone()))).collect::<serde_json::Map<_, _>>();
+        let digests = |l: &Listing| l.containers.iter().map(|c| (c.key.clone(), c.digest)).collect::<Vec<_>>();
+        let left = |name: &str, key: Option<&str>| CameraLeftOut { name: name.into(), key: key.map(str::to_string), reason: "orthographic".into() };
+        // None sent, or an empty list: no field.
+        let plain = scene_with_display_fields();
+        let (lp, vp) = route_listing(&plain);
+        assert!(lp.extras.is_empty() && ours(&vp).is_empty(), "{vp}");
+        assert!(extras::scene_listing(&CamerasLeftOut::default()).is_empty(), "an empty list is left out");
+        // One with a key and one without, as sent.
+        let mut with = plain.clone();
+        with.cameras_left_out.list = vec![left("Ortho top", Some("@cam:7")), left("Pano 360", None)];
+        let (lw, vw) = route_listing(&with);
+        assert_eq!(
+            serde_json::Value::Object(ours(&vw)),
+            json!({ "cameras_left_out": [{ "name": "Ortho top", "key": "@cam:7", "reason": "orthographic" }, { "name": "Pano 360", "reason": "orthographic" }] }),
+            "{vw}"
+        );
+        assert_eq!(digests(&lw), digests(&lp), "in no digest");
+        assert_eq!(vw["containers"], vp["containers"]);
+        // A bad one is dropped and counted, never a refusal; past the cap the
+        // rest are counted (a dropped one takes no slot).
+        let cap = InputLimits::default().max_cameras as usize;
+        let mut many = plain.clone();
+        many.cameras_left_out.list = vec![left("Bad", Some("@obj:7"))];
+        many.cameras_left_out.list.extend((0..cap + 2).map(|i| left(&format!("C{i}"), None)));
+        let (lm, vm) = route_listing(&many);
+        let o = ours(&vm);
+        assert_eq!((o["cameras_left_out"].as_array().map(Vec::len), o["cameras_left_out_more"].clone(), o["cameras_left_out_dropped"].clone()), (Some(cap), json!(2), json!(1)));
+        assert_eq!((o["cameras_left_out"][0]["name"].clone(), o["cameras_left_out"][cap - 1]["name"].clone()), (json!("C0"), json!(format!("C{}", cap - 1))));
+        assert_eq!(digests(&lm), digests(&lp), "in no digest");
+        // Only bad ones: no list, the count alone.
+        let mut bad = plain.clone();
+        bad.cameras_left_out.list = vec![left("Bad", Some("cam:7")), left(&"x".repeat(513), None)];
+        let (_, vb) = route_listing(&bad);
+        assert_eq!(serde_json::Value::Object(ours(&vb)), json!({ "cameras_left_out_dropped": 2 }), "{vb}");
+        // The counts alone, as the listing sends them.
+        let counted = extras::scene_listing(&CamerasLeftOut { list: Vec::new(), more: 3, dropped: 0 });
+        assert_eq!(serde_json::Value::Object(counted), json!({ "cameras_left_out_more": 3 }));
+    });
+}
+
 /// An object hidden in the file is listed with its box: its container is
 /// `hidden` and `hidden_by` says how (the route keeps `hidden` a bool). A
 /// driven object's box is approximate for that reason, the modifiers'
@@ -701,6 +776,7 @@ fn a_hidden_object_is_listed_with_its_box_and_a_driven_ones_box_is_approx() {
             page: l.page,
             containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
             bytes: Arc::new(Vec::new()),
+            extras: Default::default(),
         };
         let listed: Vec<serde_json::Value> = snap.containers.iter().map(|k| route::container_json(&snap, k, Look::Transparent, Shape::Wide)).collect();
         let obj = listed.iter().find(|v| v["key"] == "@obj:Item.000").expect("the hidden object");
@@ -1005,13 +1081,124 @@ fn a_keyed_rename_keeps_the_address_and_pushes_the_objects_own_table() {
         let frames: Vec<serde_json::Value> = evs.iter().map(|e| serde_json::from_str(&frame(e)).expect("json")).collect();
         let own: Vec<&serde_json::Value> = frames.iter().filter(|f| f["container"] == "@obj:8").collect();
         assert_eq!(own.len(), 1, "{frames:?}");
-        assert_eq!((own[0]["ids"]["objects"].clone(), own[0].get("reused_from")), (json!([{ "index": 1, "id": "Light" }]), None));
+        assert_eq!((own[0]["ids"]["objects"].clone(), own[0].get("reused_from")), (json!([{ "index": 1, "id": "Light", "key": "@obj:8" }]), None));
         let scene: Vec<&serde_json::Value> = frames.iter().filter(|f| f["container"] == "@scene:main").collect();
         assert_eq!(scene.len(), 1, "{frames:?}");
-        assert_eq!(scene[0]["ids"]["objects"], json!([{ "index": 0, "id": "Chair" }, { "index": 1, "id": "Light" }]));
+        assert_eq!(scene[0]["ids"]["objects"], json!([{ "index": 0, "id": "Chair", "key": "@obj:7" }, { "index": 1, "id": "Light", "key": "@obj:8" }]));
         assert_eq!(frames.len(), 2, "{frames:?}");
-        assert_eq!(body(route::image(&blobs, &b, "@obj:8", None, Width::Thumb, Look::Transparent, Shape::Wide, false))["ids"]["objects"], json!([{ "index": 1, "id": "Light" }]));
+        assert_eq!(body(route::image(&blobs, &b, "@obj:8", None, Width::Thumb, Look::Transparent, Shape::Wide, false))["ids"]["objects"], json!([{ "index": 1, "id": "Light", "key": "@obj:8" }]));
         assert!(pushed_now(&sub).is_empty(), "the route drew nothing");
+    });
+}
+
+/// The join itself: each entry of a current image's id table gets the live
+/// key of the object it names now (by index; in an object's own view, that
+/// object's), and an entry whose object the read doesn't key has none, even
+/// when the table came with one. Only scene views are touched.
+#[test]
+fn an_id_tables_keys_are_joined_from_the_listing_by_index() {
+    let mut s = scene_with_display_fields();
+    s.objects[0].key = Some("@obj:40".into());
+    s.objects[2].key = Some("@obj:42".into());
+    s.cameras[0].key = Some("@cam:9".into());
+    let l = scene::list_k2scene(&encode(&s)).expect("a listing");
+    let live: Vec<(&str, Option<&str>)> = l.containers.iter().map(|c| (c.key.as_str(), c.live_key.as_deref())).collect();
+    assert_eq!(
+        live[..6],
+        [("@scene:main", None), ("@cam:9", Some("@cam:9")), ("@obj:40", Some("@obj:40")), ("@obj:Item.001", None), ("@obj:42", Some("@obj:42")), ("@obj:Item.003", None)],
+        "only an address that is the read's own key"
+    );
+    assert!(l.containers.iter().all(|c| !c.extras.contains_key("key") && !c.extras.contains_key("live_key")), "not in the listing's extras");
+    let by = |key: &str| l.containers.iter().find(|c| c.key == key).unwrap_or_else(|| panic!("no {key}"));
+    let table = || {
+        json!({ "layer": "ids", "objects": [
+            { "index": 0, "id": "Item.000" }, { "index": 1, "id": "Item.001", "key": "@obj:stale" }, { "index": 2, "id": "Item.002" }, { "index": 3, "id": "Item.003" }, { "index": 9, "id": "Gone" }
+        ] })
+    };
+    let mut t = table();
+    extras::current_keys(&mut t, by("@scene:main"), &l.containers);
+    assert_eq!(
+        t["objects"],
+        json!([
+            { "index": 0, "id": "Item.000", "key": "@obj:40" }, { "index": 1, "id": "Item.001" }, { "index": 2, "id": "Item.002", "key": "@obj:42" }, { "index": 3, "id": "Item.003" }, { "index": 9, "id": "Gone" }
+        ]),
+        "by index; none for an unkeyed object or one not listed, whatever the table had"
+    );
+    let mut t = table();
+    extras::current_keys(&mut t, by("@cam:9"), &l.containers);
+    assert_eq!(t["objects"][0]["key"], json!("@obj:40"), "a camera view by index too");
+    let mut own = json!({ "objects": [{ "index": 7, "id": "Item.002" }] });
+    extras::current_keys(&mut own, by("@obj:42"), &l.containers);
+    assert_eq!(own["objects"], json!([{ "index": 7, "id": "Item.002", "key": "@obj:42" }]), "an object's view names itself, whatever its index");
+    let mut own = json!({ "objects": [{ "index": 1, "id": "Item.001", "key": "@obj:stale" }] });
+    extras::current_keys(&mut own, by("@obj:Item.001"), &l.containers);
+    assert_eq!(own["objects"], json!([{ "index": 1, "id": "Item.001" }]));
+    let slide = Container { key: "@sld:256".into(), position: 1, title: "Intro".into(), hidden: false, digest: [0; 32], locator: "1".into(), extras: Default::default(), live_key: None };
+    let mut t = table();
+    extras::current_keys(&mut t, &slide, &l.containers);
+    assert_eq!(t, table(), "not a scene view: untouched");
+}
+
+/// Keys are in no digest, so the cache never keeps them: an image cached
+/// under another listing at the same render hash (another doc of the same
+/// geometry, or the same doc before its keys changed) is answered and
+/// pushed with the keys the doc lists now.
+#[test]
+fn an_id_tables_keys_come_from_the_listing_now_never_the_cache() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("keys.blend");
+        let a = snap(&blobs, &key, 1, "@scene:main 9 scene\n@obj:7 5 o0 Chair\n@obj:Lamp 6 o1");
+        let sub = host_events::subscribe(&key);
+        let drawn = json!([{ "index": 0, "id": "Chair", "key": "@obj:7" }, { "index": 1, "id": "Lamp" }]);
+        let f = draw_now(&blobs, &a, &sub, "@scene:main", Width::Thumb, Look::Transparent);
+        assert_eq!(f["ids"]["objects"], drawn, "pushed with the keys: {f}");
+        let o = draw_now(&blobs, &a, &sub, "@obj:7", Width::Thumb, Look::Transparent);
+        assert_eq!(o["ids"]["objects"], json!([{ "index": 0, "id": "Chair", "key": "@obj:7" }]), "{o}");
+        let hash = a.container("@scene:main").expect("scene").hash.clone();
+        let build = Look::Transparent.cache_build("fake-1");
+        let Got::Hit(e) = cache::get(&blobs, &key, "@scene:main", &hash, Width::Thumb, &build) else { panic!("cached") };
+        let as_cached = json!([{ "index": 0, "id": "Chair" }, { "index": 1, "id": "Lamp" }]);
+        assert_eq!(e.meta["ids"]["objects"], as_cached, "the cache keeps no keys");
+        assert_eq!(body(route::image(&blobs, &a, "@scene:main", None, Width::Thumb, Look::Transparent, Shape::Wide, false))["ids"]["objects"], drawn);
+
+        // The same geometry under other keys: the scene view's render hash
+        // is the same, so its image is the cached one, keyed as listed now.
+        let b = snap(&blobs, &key, 2, "@scene:main 9 scene\n@obj:21 5 o0 Chair\n@obj:22 6 o1 Lamp");
+        assert_eq!(b.container("@scene:main").expect("scene").hash, hash, "keys are in no digest");
+        let rekeyed = json!([{ "index": 0, "id": "Chair", "key": "@obj:21" }, { "index": 1, "id": "Lamp", "key": "@obj:22" }]);
+        assert_eq!(body(route::image(&blobs, &b, "@scene:main", None, Width::Thumb, Look::Transparent, Shape::Wide, false))["ids"]["objects"], rekeyed);
+        // At the head, the scene view's table is pushed again with the new
+        // keys, nothing drawn, and the object's view is reused under its new key.
+        service::head_moved(&blobs, &a, &b);
+        let frames: Vec<serde_json::Value> = pushed_now(&sub).iter().map(|e| serde_json::from_str(&frame(e)).expect("json")).collect();
+        assert_eq!(frames.len(), 2, "{frames:?}");
+        let scene = frames.iter().find(|f| f["container"] == "@scene:main").expect("the scene pushed again");
+        assert_eq!((scene["ids"]["objects"].clone(), scene["render_hash"].clone(), scene.get("reused_from")), (rekeyed.clone(), json!(hash), None), "{scene}");
+        let obj = frames.iter().find(|f| f["container"] == "@obj:21").expect("the object reused");
+        assert_eq!((obj["ids"]["objects"].clone(), obj["reused_from"].clone()), (json!([{ "index": 0, "id": "Chair", "key": "@obj:21" }]), json!("@obj:7")), "{obj}");
+        let obj_hash = b.container("@obj:21").expect("listed").hash.clone();
+        let Got::Hit(r) = cache::get(&blobs, &key, "@obj:21", &obj_hash, Width::Thumb, &build) else { panic!("reused into the cache") };
+        assert_eq!(r.meta["ids"]["objects"], json!([{ "index": 0, "id": "Chair" }]), "a reused image's table is cached without keys");
+        assert!(renders_of("@obj:21").is_empty(), "no worker ran");
+
+        // A key in the cached table is never served: the listing's wins, and
+        // an unkeyed object has none.
+        let mut planted = e.meta.clone();
+        planted["ids"]["objects"][0]["key"] = json!("@obj:old");
+        planted["ids"]["objects"][1]["key"] = json!("@obj:old2");
+        cache::put(&blobs, &key, "@scene:main", &hash, Width::Thumb, &build, &planted, &e.image).expect("planted");
+        assert_eq!(body(route::image(&blobs, &b, "@scene:main", None, Width::Thumb, Look::Transparent, Shape::Wide, false))["ids"]["objects"], rekeyed);
+        let c = snap(&blobs, &key, 3, "@scene:main 9 scene\n@obj:Chair 5 o0\n@obj:Lamp 6 o1");
+        assert_eq!(body(route::image(&blobs, &c, "@scene:main", None, Width::Thumb, Look::Transparent, Shape::Wide, false))["ids"]["objects"], as_cached);
+
+        // An image at another render hash than the view's now is answered as
+        // drawn: its indexes may not be the objects listed now, so no keys.
+        cache::put(&blobs, &key, "@scene:main", &hash, Width::Thumb, &build, &e.meta, &e.image).expect("as drawn");
+        let d = snap(&blobs, &key, 4, "@scene:main 8 scene\n@obj:21 5 o0 Chair\n@obj:22 6 o1 Lamp");
+        assert_ne!(d.container("@scene:main").expect("scene").hash, hash);
+        let old = body(route::image(&blobs, &d, "@scene:main", Some(&hash), Width::Thumb, Look::Transparent, Shape::Wide, false));
+        assert_eq!(old["ids"]["objects"], as_cached, "{old}");
     });
 }
 
@@ -1157,11 +1344,12 @@ fn a_deck_never_gets_an_id_table_push() {
                     .iter()
                     .enumerate()
                     .map(|(i, t)| Keyed {
-                        c: Container { key: format!("@sld:{}", 256 + i), position: i as u32 + 1, title: t.to_string(), hidden: false, digest: [i as u8; 32], locator: (i + 1).to_string(), extras: Default::default() },
+                        c: Container { key: format!("@sld:{}", 256 + i), position: i as u32 + 1, title: t.to_string(), hidden: false, digest: [i as u8; 32], locator: (i + 1).to_string(), extras: Default::default(), live_key: None },
                         hash: format!("h{i}"),
                     })
                     .collect(),
                 bytes: Arc::new(Vec::new()),
+                extras: Default::default(),
             })
         };
         let (a, b) = (slides(["Intro", "Plan"]), slides(["Overview", "Plan"]));
@@ -1203,6 +1391,7 @@ fn the_workers_id_image_round_trips_through_the_cache_when_it_is_built() {
             page: l.page,
             containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
             bytes: Arc::new(bytes.clone()),
+            extras: Default::default(),
         });
         let titles: Vec<&str> = l.containers.iter().filter(|c| c.key.starts_with("@obj:")).map(|c| c.title.as_str()).collect();
         for (c, w) in [("@scene:main", Width::Thumb), ("@obj:Item.002", Width::Thumb), ("@cam:Camera", Width::Thumb2x)] {
@@ -1351,10 +1540,11 @@ fn a_deck_listing_names_no_shape() {
             build: deck::DECK.build(),
             page: None,
             containers: vec![Keyed {
-                c: Container { key: "@sld:256".into(), position: 1, title: "Intro".into(), hidden: false, digest: [1; 32], locator: "1".into(), extras: Default::default() },
+                c: Container { key: "@sld:256".into(), position: 1, title: "Intro".into(), hidden: false, digest: [1; 32], locator: "1".into(), extras: Default::default(), live_key: None },
                 hash: "h0".into(),
             }],
             bytes: Arc::new(Vec::new()),
+            extras: Default::default(),
         });
         let v = body(route::listing(&blobs, &s, None, Look::Opaque, Shape::Tall));
         assert!(v.get("shape").is_none(), "{v}");

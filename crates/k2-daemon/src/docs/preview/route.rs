@@ -13,7 +13,11 @@
 //!   position, title, hidden, render_hash, previews: {thumb, full}}]}`, each
 //!   width's state `ready` (cached at this hash), `rendering`, `failed`, or
 //!   `none` (not asked yet). With `want=thumb|full` the missing ones are
-//!   queued.
+//!   queued. A type may add top-level fields of its own (a scene's
+//!   `cameras_left_out: [{name, key?, reason}]`, the cameras the read
+//!   couldn't express, with `cameras_left_out_more` and
+//!   `cameras_left_out_dropped` counts, each only when there is something
+//!   to say: [`super::extras`]).
 //! - `container` (an address) and `width` (`thumb`, `thumb2x`, `full`),
 //!   optionally `hash`: the image. `ready` with the image as base64 and its
 //!   metadata (the contract's `Preview` table); else `202 {state:
@@ -46,7 +50,8 @@
 //! container (a scene object's `bounds`, a camera's `camera` display values)
 //! and in an image's metadata (a scene view's `camera` and `ids`):
 //! [`super::extras`]. A current image's id table names the objects as the
-//! doc does now ([`service::with_current_ids`]).
+//! doc does now, each entry with its object's live key (`key`, from the
+//! listing now, never the cache: [`service::with_served_ids`]).
 //!
 //! **Not on this host.** A container the host can't draw at all (a
 //! timeline's tile where there is no video decoder:
@@ -309,6 +314,11 @@ pub(super) fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snap
     if snap.containers.iter().any(|k| snap.renderer.shapes(&k.c)) {
         v["shape"] = json!(shape.as_str());
     }
+    if let Some(o) = v.as_object_mut() {
+        for (k, x) in &snap.extras {
+            o.entry(k.clone()).or_insert_with(|| x.clone());
+        }
+    }
     routes::ok(v)
 }
 
@@ -322,10 +332,10 @@ fn with_image(state: &str, e: cache::Entry) -> Value {
 }
 
 /// A cached image (or with `ids`, its id image) as answered: a current
-/// image's id table named as the doc is now.
+/// image's id table named as the doc is now, with the objects' live keys.
 fn answer(snap: &Snapshot, current: &Keyed, mut e: cache::Entry, ids: bool) -> Value {
     if !ids {
-        service::with_current_ids(snap, current, &mut e.meta);
+        service::with_served_ids(snap, current, &mut e.meta);
     }
     with_image("ready", e)
 }

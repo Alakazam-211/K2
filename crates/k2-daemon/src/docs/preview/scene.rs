@@ -51,11 +51,14 @@
 //!   client can pick and hover in a still); the turntable frames don't
 //!   (nothing is picked there). The id image is cached beside its image
 //!   and the route serves it with `layer=ids`; its table rides with the
-//!   image. The build carries `.ids` for every view, turntable frames
-//!   included: which views ask follows from the view alone, and the views
-//!   that can share a render hash (an object and its renamed or identical
-//!   twin) all ask, so unlike the framing it needs no per-view key; the
-//!   turntable frames are only drawn once more under the new build.
+//!   image, each entry naming its object's live key (`key`) when the read
+//!   keys it, from the listing when it is answered (keys are in no digest,
+//!   so never from the cache; the cache tag stays). The build carries
+//!   `.ids` for every view, turntable frames included: which views ask
+//!   follows from the view alone, and the views that can share a render
+//!   hash (an object and its renamed or identical twin) all ask, so unlike
+//!   the framing it needs no per-view key; the turntable frames are only
+//!   drawn once more under the new build.
 //! - **Shaped stills.** The scene view and an object's view are drawn in
 //!   the shape the request asks for ([`Shape`]: `wide` 16:9 by default, or
 //!   `tall` 4:3; 1,920 × 1,080 or 1,920 × 1,440 at full width), so the
@@ -192,13 +195,15 @@ pub fn keyed_digest(target: Target, raw: [u8; 32]) -> [u8; 32] {
 /// its framing, [`keyed_digest`]). Reads the header only (every bound
 /// checked) and hashes each mesh's data once.
 pub fn list_k2scene(k2scene: &[u8]) -> Result<Listing, Failed> {
-    let items = digest::list(k2scene, &InputLimits::default()).map_err(|e| Failed::new(FailCode::UnsupportedPart, format!("the scene: {e}")))?;
-    let containers = items
+    let listed = digest::listed(k2scene, &InputLimits::default()).map_err(|e| Failed::new(FailCode::UnsupportedPart, format!("the scene: {e}")))?;
+    let containers = listed
+        .items
         .into_iter()
         .enumerate()
         .map(|(i, it)| Container {
             title: extras::scene_title(it.target, &it.title),
             extras: extras::scene_item(&it),
+            live_key: it.keyed.then(|| it.key.clone()),
             key: it.key,
             position: i as u32 + 1,
             // An object hidden in the file (listed all the same: only its own view draws it).
@@ -207,7 +212,7 @@ pub fn list_k2scene(k2scene: &[u8]) -> Result<Listing, Failed> {
             locator: it.target.locator(),
         })
         .collect();
-    Ok(Listing { page: None, containers })
+    Ok(Listing { page: None, containers, extras: extras::scene_listing(&listed.cameras_left_out) })
 }
 
 /// The limits for a render at `width`, within the host's `wall`.

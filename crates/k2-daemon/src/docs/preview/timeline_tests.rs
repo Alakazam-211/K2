@@ -50,6 +50,7 @@ fn snapshot(blobs: &BlobStore, key: &DocKey, clips: &[Tile]) -> Arc<Snapshot> {
         page: l.page,
         containers: l.containers.into_iter().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
         bytes: Arc::new(Vec::new()),
+        extras: Default::default(),
     })
 }
 
@@ -173,6 +174,7 @@ fn a_renderer_that_decodes_lists_as_before() {
             page: None,
             containers: base.containers.clone(),
             bytes: Arc::new(Vec::new()),
+            extras: Default::default(),
         };
         let v = route::container_json(&deck, &deck.containers[0], Look::Opaque, Shape::Wide);
         assert_eq!(v["previews"], json!({ "thumb": "none", "full": "none" }), "{v}");

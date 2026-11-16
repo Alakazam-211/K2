@@ -23,7 +23,9 @@ and the listing, the route and the image answers name each view by it
 (`@obj:15` is the sofa, `@cam:1` the active camera); the scene view is
 `@scene:main`. Every address is a native address in the multiplayer kit's
 grammar, so it is also a presence view address. An object's name is its
-container's `title` and in the image's `ids` table.
+container's `title` and its entry's `id` in the image's `ids` table, and
+its live key is that entry's `key` (left out for an object the read doesn't
+key; every object here is keyed).
 
 Each view is drawn at the `thumb2x` width (640 px), transparent, wide
 (`shape=wide`), with its id image, through the daemon's own path: the
@@ -33,18 +35,32 @@ answers.
 | File | What |
 |---|---|
 | `living-room.k2scene` | the scene as K2SCENE1 (the header is JSON after the 8-byte magic and a little-endian u32 length: each object's `id`, `key` and world `transform`, column-major) |
-| `listing.json` | the route's listing (`look=transparent`, `shape=wide`): each container's `key`, `render_hash`, and an object's local `bounds` |
+| `listing.json` | the route's listing (`look=transparent`, `shape=wide`): each container's `key`, `render_hash`, and an object's local `bounds` (no `cameras_left_out`: the room's read expressed every camera) |
 | `scene.webp`, `scene.ids.png`, `scene.json` | `@scene:main`, the auto view fitted to the contents: the still, its id image, and the route's answer for the still |
 | `cam-Camera.webp`, `cam-Camera.ids.png`, `cam-Camera.json` | `@cam:1`, the file's active camera, `Camera` (its own 16:9) |
 | `obj-Sofa.webp`, `obj-Sofa.ids.png`, `obj-Sofa.json` | `@obj:15`, the sofa on its own |
+
+A K2SCENE1 may also carry a top-level `cameras_left_out`, `[{name, key?,
+reason}]`: the cameras the producer couldn't express (`key` a `@cam:N` live
+address when it has one). It is informational and never refuses the scene:
+an entry that isn't an object with a string `name` and `reason` (each at
+most 512 bytes) and, when it has one, a one-part `@cam` native `key` is
+dropped and counted; of the rest, the first 1,000 are kept in order and the
+others counted; a value that isn't a list counts as one dropped. It draws
+nothing and is in no render hash. The listing passes it through at its top
+level as `cameras_left_out`, with `cameras_left_out_more` (past the cap) and
+`cameras_left_out_dropped`, each left out when empty or 0.
 
 The JSON files are the route's answers pretty-printed, values unchanged; an
 image's answer leaves out its `base64` (the still is its own file). Each
 names the image's `size`, `shape`, the `camera` that drew it (`view`, `proj`
 and the mapping to pixels in `k2_scenerender::proto::CameraMeta`) and its
-`ids` table. An id image is an 8-bit RGB PNG at the still's size: each pixel
-`r << 16 | g << 8 | b` is 0 where nothing is drawn, else the index + 1 of the
-object under it, which `ids.objects` names.
+`ids` table, each entry `{index, id, key}`. An id image is an 8-bit RGB PNG
+at the still's size: each pixel `r << 16 | g << 8 | b` is 0 where nothing is
+drawn, else the index + 1 of the object under it, which `ids.objects` names.
+Keys are in no render hash, so the host doesn't cache them: it adds each
+entry's `key` from the doc's listing when it answers an image at the view's
+current render hash (an image asked for by an older hash comes without).
 
 Fixed so the files never drift: the render hashes are keyed with a fixed
 test key (a host keys them with the space's own), and `render_ms` and

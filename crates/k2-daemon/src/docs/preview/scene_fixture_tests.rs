@@ -316,7 +316,7 @@ fn room() -> Scene {
         camera("Camera", [-2.6, -3.4, 1.35], [1.4137167, 0.0, -0.62831855], true),
         camera("Camera.001", [1.75, -0.75, 1.3], [1.2915436, 0.0, 0.7679449], false),
     ];
-    Scene { up: UpAxis::Z, meshes, objects, cameras }
+    Scene { up: UpAxis::Z, meshes, objects, cameras, cameras_left_out: Default::default() }
 }
 
 // ── Drawing it through the host ──────────────────────────────────────
@@ -357,6 +357,7 @@ fn make() -> BTreeMap<String, Vec<u8>> {
             page: l.page,
             containers: l.containers.into_iter().map(|c| Keyed { hash: service::keyed_hash(&HASH_KEY, &c.digest), c }).collect(),
             bytes: Arc::new(bytes.clone()),
+            extras: l.extras,
         });
         files.insert("living-room.k2scene".to_string(), bytes.clone());
         files.insert("listing.json".to_string(), pretty(&body(route::listing(&blobs, &snap, None, Look::Transparent, Shape::Wide))));
@@ -478,6 +479,7 @@ fn the_fixture_boxes_line_up_with_the_id_images() {
             let (index, id) = (e["index"].as_u64().expect("index") as usize, e["id"].as_str().expect("id"));
             let o = &scene.objects[index];
             assert_eq!(o.id, id, "{c}: the table names the scene's object");
+            assert_eq!(e["key"].as_str(), o.key.as_deref(), "{c}: and its live key");
             let t: [f64; 16] = std::array::from_fn(|i| o.transform[i] as f64);
             let (lo, hi) = bounds(id);
             let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);

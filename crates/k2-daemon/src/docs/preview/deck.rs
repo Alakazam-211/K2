@@ -95,10 +95,11 @@ impl PreviewRenderer for Deck {
                     hidden: c.hidden,
                     digest: *c.render_hash.as_bytes(),
                     extras: serde_json::Map::new(),
+                    live_key: None,
                 })
             })
             .collect();
-        Ok(Listing { page: Some(Page { w: ix.page.0, h: ix.page.1, unit: "emu" }), containers })
+        Ok(Listing { page: Some(Page { w: ix.page.0, h: ix.page.1, unit: "emu" }), containers, extras: serde_json::Map::new() })
     }
 
     /// Always opaque (the route refuses a transparent deck preview), on the

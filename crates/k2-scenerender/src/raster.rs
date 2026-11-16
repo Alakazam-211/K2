@@ -1615,6 +1615,7 @@ mod tests {
             meshes: vec![tri.clone()],
             objects: vec![testgen::object("t", 0, [0.8, 0.3, 0.2], t, ds)],
             cameras: vec![],
+            cameras_left_out: Default::default(),
         };
         assert_eq!(draw(&one(Some(false), testgen::identity()), 32, 32, 2, 1, ViewSpec::Auto).1.covered_px, 0);
         assert!(draw(&one(None, testgen::identity()), 32, 32, 2, 1, ViewSpec::Auto).1.covered_px > 50);
@@ -1689,6 +1690,7 @@ mod tests {
                 meshes: vec![quad(0.5), quad(-0.5)],
                 objects: order.iter().map(|&m| obj(m, if m == 0 { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 1.0] })).collect(),
                 cameras: vec![cam.clone()],
+                cameras_left_out: Default::default(),
             };
             let (img, _, _) = draw(&s, 40, 40, 1, 1, ViewSpec::Camera(0));
             let c = px(&img, 20, 20);
@@ -1729,6 +1731,7 @@ mod tests {
                 meshes: vec![quad(0.5), quad(-0.5)],
                 objects: order.iter().map(|&m| testgen::object(&format!("q{m}"), m, [0.5; 3], testgen::identity(), None)).collect(),
                 cameras: vec![looking([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], 0.8)],
+                cameras_left_out: Default::default(),
             };
             for ssaa in [1, 2, 3, 4] {
                 let p = Params { width: 40, height: 40, ssaa, threads: 1, background_srgb: BG, transparent: false };
@@ -1939,6 +1942,7 @@ mod tests {
             meshes: vec![flat_grid(16, 20.0)],
             objects: vec![testgen::object("plane", 0, [0.8, 0.8, 0.8], testgen::identity(), None)],
             cameras: vec![looking([3.0, 2.0, 7.0], [-1.0, 0.0, -2.0], 0.9)],
+            cameras_left_out: Default::default(),
         };
         for (w, h, ssaa) in [(160u32, 120u32, 4u32), (640, 480, 2)] {
             let (depth, k, _) = ao_factors(&s, ViewSpec::Camera(0), w, h, ssaa, 1.0, 2);
@@ -1961,6 +1965,7 @@ mod tests {
                 testgen::object("wall", 1, [0.8, 0.8, 0.8], testgen::identity(), Some(false)),
             ],
             cameras: vec![looking([1.0, 2.0, 5.0], [0.0, 0.5, -3.0], 0.9)],
+            cameras_left_out: Default::default(),
         };
         let (w, h) = (320u32, 240u32);
         let (_, k, f) = ao_factors(&s, ViewSpec::Camera(0), w, h, 2, 0.4, 3);
@@ -2006,6 +2011,7 @@ mod tests {
                 testgen::object("box", 1, [0.8, 0.8, 0.8], testgen::identity(), Some(false)),
             ],
             cameras: vec![looking([0.6, 0.5, 3.0], [0.0, 0.0, -2.9], 0.9)],
+            cameras_left_out: Default::default(),
         };
         for (w, h) in [(961u32, 721u32), (1280, 960)] {
             let (depth, k, _) = ao_factors(&s, ViewSpec::Camera(0), w, h, 2, 0.3, 3);

@@ -140,7 +140,7 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
     })
     // The picture as seen: a still that covers its pane is cropped at the pane's edges.
     const frame = { x0: Math.max(0, lb.left), y0: Math.max(0, lb.top), x1: Math.min(pane.width, lb.left + lb.width), y1: Math.min(pane.height, lb.top + lb.height) }
-    const placed = placeLabels(reqs, { frame })
+    const placed = placeLabels(reqs, { frame, obstacles })
     const next = Object.fromEntries(placed.map((p) => [p.id, p]))
     setPos((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `sig` is everything the placement reads

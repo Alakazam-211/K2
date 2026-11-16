@@ -79,6 +79,28 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('labels and the stage’s chrome', () => {
+  it('a label keeps 6 px clear of the stage’s own plates (the view picker here)', async () => {
+    mount('turn', 2)
+    await settle()
+    const t0 = tags('hold')[0]
+    const at = { x: parseFloat(t0.style.left), y: parseFloat(t0.style.top) }
+    cleanup()
+    // The view picker laid right where that label went.
+    const zero = new DOMRect(0, 0, 0, 0)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.matches('.lv-vbtn') ? new DOMRect(at.x, at.y, 120, 30) : zero
+    })
+    mount('turn', 2)
+    await settle()
+    const t1 = tags('hold')[0]
+    const r = { x0: parseFloat(t1.style.left), y0: parseFloat(t1.style.top) }
+    const w = 22 + (t1.textContent ?? '').length * 7
+    const clear = r.x0 + w + 6 <= at.x || r.x0 >= at.x + 120 + 6 || r.y0 + 22 + 6 <= at.y || r.y0 >= at.y + 30 + 6
+    expect(clear, JSON.stringify({ at, r })).toBe(true)
+  })
+})
+
 describe('holds on the picture', () => {
   it('a thin box per held object and one label per hold: lock, “Atlas · dining set”, the full note on hover', async () => {
     mount('turn', 2)

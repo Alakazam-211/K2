@@ -4956,7 +4956,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-markdown"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "k2-mpc-base",
 ]

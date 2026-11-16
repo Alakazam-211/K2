@@ -116,6 +116,7 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
               fileName={name}
               refusal={s.heroRefusal}
               ask={s.ask}
+              {...(source.kind === 'live' ? { publish: source } : {})}
               {...(placed ? { say, panel: placedPanel } : {})}
             />
           }

@@ -9,7 +9,7 @@ import type { FollowAction, FollowState } from '@/lib/live-view/shared/follow'
 import type { LiveNotice, NoticeActionId, NoticeView } from '@/lib/live-view/shared/notices'
 import type { SayTime } from '@/lib/live-view/shared/say-time'
 import type { LivePerson } from '@/lib/live-view/shared/people'
-import type { LiveShellSnapshot } from '@/lib/live-view/shared/source'
+import type { LiveShellSnapshot, LiveSource } from '@/lib/live-view/shared/source'
 import type { LiveTabState } from '@/lib/live-view/shared/state'
 import type { Edge } from './EdgeStack'
 
@@ -52,6 +52,8 @@ export interface ShellHeroProps {
   refusal?: HeroRefusal | null
   /** Ask someone: opens the say row to them, about `address` when given. */
   ask?: (id: string, address?: SayAt | null) => void
+  /** Where you are, for everyone else (a real source's presence): the view address and the playhead. Absent on a sample. */
+  publish?: Pick<LiveSource, 'setViewAddress' | 'setTimePosition'>
 }
 
 /** What a message points at: the chip's words and tooltip, the address it carries, and a time (the playhead's time position) where the view has one. */

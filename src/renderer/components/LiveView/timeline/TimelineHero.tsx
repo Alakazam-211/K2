@@ -187,6 +187,18 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
     setSayAt?.(sayAt)
   }, [setSayAt, sayAt.address, sayAt.label, mv.playing ? 'playing' : sayAt.time.at]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => setSayAt?.(null), [setSayAt])
+  // Where you are, for everyone else (a real file): what the monitor shows, and your own playhead (not one you follow). Playing sends where it started and the rate; the others run it on.
+  const publish = p.publish
+  const mine = mv.head.self
+  const rate = mv.head.rate
+  useEffect(() => {
+    publish?.setViewAddress?.(sayAt.address)
+  }, [publish, sayAt.address])
+  useEffect(() => {
+    if (!publish?.setTimePosition || !mine) return
+    const r = mv.playing && Number.isInteger(rate) && rate > 1 ? { rate: String(rate) } : {}
+    publish.setTimePosition({ at: sayAt.time.at, state: mv.playing ? 'playing' : 'paused', ...(sayAt.time.in ? { in: sayAt.time.in } : {}), ...r })
+  }, [publish, mine, rate, mv.playing, mv.playing ? null : sayAt.time.at]) // eslint-disable-line react-hooks/exhaustive-deps
   const fw = fl.finished ? finishedWords(fl.finished) : null
   const finished = fw
     ? {

@@ -12,6 +12,15 @@ import { LivePreviewEntry } from './LivePreviewEntry'
 import { LiveHeader } from './shell/LiveHeader'
 import { LivePreviewSwitches } from './LivePreviewSwitches'
 
+// A real timeline's socket that never answers: the tab waits on its spinner (TimelineLive's own tests script one).
+const dialled: string[] = []
+vi.mock('@/lib/docs-live-daemon', () => ({
+  createDaemonLiveTransport: (_scope: unknown, doc: { path: string }) => {
+    dialled.push(doc.path)
+    return { open: false, connect: () => new Promise(() => {}), send: () => {}, onFrame: () => () => {}, onClose: () => () => {}, close: () => {} }
+  },
+}))
+
 const content = <div data-testid="file-content">the file</div>
 
 beforeEach(() => window.localStorage.clear())
@@ -60,6 +69,32 @@ describe('LivePreviewEntry', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'File' }))
     expect(screen.getByTestId('file-content')).toBeTruthy()
     expect(onLive).toHaveBeenLastCalledWith(false)
+  })
+
+  it('a timeline the daemon serves watches the file itself: the switch shows with the preview key off, and Live has no Sample data banner', async () => {
+    const scope = { id: 'local' } as never
+    dialled.length = 0
+    render(
+      <LivePreviewEntry filePath="/ws/edits/cut.otio" real={scope}>
+        {content}
+      </LivePreviewEntry>,
+    )
+    expect(screen.getByText('Watches this file live: changes, playheads and who’s here.')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('live-timeline-watch'))
+    expect(await screen.findByTestId('lv-tab', {}, { timeout: 5000 })).toBeTruthy()
+    expect(screen.getByTestId('live-timeline-entry').getAttribute('data-source')).toBe('real')
+    expect(screen.queryByTestId('lv-sample-banner')).toBeNull()
+    expect(dialled).toEqual(['/ws/edits/cut.otio'])
+  })
+
+  it('served or not, a type with no real view yet plays its sample (a scene), and a timeline not served plays the sample', async () => {
+    const scope = { id: 'local' } as never
+    setLivePreview('scene', true)
+    const s = render(<LivePreviewEntry filePath="/ws/living-room.blend" real={scope}>{content}</LivePreviewEntry>)
+    expect(screen.getByTestId('live-scene-entry').getAttribute('data-source')).toBe('sample')
+    s.unmount()
+    render(<LivePreviewEntry filePath="/ws/edits/cut.otio" real={null}>{content}</LivePreviewEntry>)
+    expect(screen.queryByTestId('live-timeline-entry')).toBeNull()
   })
 
   it.each([

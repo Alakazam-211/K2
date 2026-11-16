@@ -75,7 +75,8 @@ export function Clip(p: ClipProps): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null)
   const tailCanvas = useRef<HTMLCanvasElement>(null)
   const waveCanvas = useRef<HTMLCanvasElement>(null)
-  const showWave = !tiny && p.wave && trackKind === 'audio' && it.kind === 'clip' && !!mi && w > 6
+  // A waveform only from a known audio source (the sample's; K2 Render's later): a real file's audio before then draws none.
+  const showWave = !tiny && p.wave && trackKind === 'audio' && it.kind === 'clip' && !!mi && mi.kind === 'audio' && w > 6
   const visW = Math.max(0, b - a)
 
   useEffect(() => {

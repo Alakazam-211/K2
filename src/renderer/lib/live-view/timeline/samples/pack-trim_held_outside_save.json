@@ -1,0 +1,1322 @@
+{
+  "doc": "cut.otio",
+  "steps": [
+    {
+      "step": "watch",
+      "by": "ada",
+      "argv": null,
+      "exit": null,
+      "watch": [
+        {
+          "type": "keyed_snapshot",
+          "seq": 1,
+          "upto": 1,
+          "schema": {
+            "name": "timeline-otio",
+            "roots": [
+              {
+                "name": "tracks",
+                "kind": "list"
+              },
+              {
+                "name": "items",
+                "kind": "list"
+              },
+              {
+                "name": "markers",
+                "kind": "list"
+              },
+              {
+                "name": "media",
+                "kind": "list"
+              },
+              {
+                "name": "track_props",
+                "kind": "map"
+              },
+              {
+                "name": "item_props",
+                "kind": "map"
+              },
+              {
+                "name": "marker_props",
+                "kind": "map"
+              },
+              {
+                "name": "media_props",
+                "kind": "map"
+              },
+              {
+                "name": "timeline",
+                "kind": "map"
+              }
+            ],
+            "composite": [
+              {
+                "map": "track_props",
+                "list": "tracks"
+              },
+              {
+                "map": "item_props",
+                "list": "items"
+              },
+              {
+                "map": "marker_props",
+                "list": "markers"
+              },
+              {
+                "map": "media_props",
+                "list": "media"
+              }
+            ]
+          },
+          "view": {
+            "schema": {
+              "containers": "tracks",
+              "units": "items",
+              "unit_container_field": "track",
+              "container_id_field": null,
+              "native_unit": "tick",
+              "page": null,
+              "container_fields": {
+                "title": "name",
+                "hidden": null,
+                "layout": null
+              },
+              "unit_fields": {
+                "kind": {
+                  "list_value": true
+                },
+                "name": "name",
+                "alt": null,
+                "text": null,
+                "hidden": "off",
+                "editable_text": {
+                  "field": "edit",
+                  "values": {
+                    "1": "plain",
+                    "0": "never"
+                  }
+                },
+                "placeholder": null
+              },
+              "geometry": {
+                "field": "geom",
+                "parts": ["x", "w"],
+                "rot_unit": ""
+              },
+              "field_class": {
+                "geom": "geometry",
+                "src": "geometry",
+                "name": "text",
+                "off": "visibility",
+                "muted": "visibility",
+                "enabled": "visibility",
+                "track": "meta",
+                "media": "meta",
+                "tr": "meta",
+                "rate": "meta",
+                "nid": "meta",
+                "edit": "meta",
+                "retimed": "meta",
+                "locked": "meta"
+              },
+              "derived": {
+                "containers": [],
+                "units": ["tc"]
+              },
+              "unit_derived": ["tc"],
+              "container_derived": ["kind_label", "kind"],
+              "time_unit": "tick"
+            },
+            "tier": "live",
+            "rev": 1,
+            "version": null,
+            "page": null,
+            "fonts": [],
+            "layouts": [],
+            "containers": [
+              {
+                "key": "@trk:1",
+                "position": 1,
+                "title": "V1",
+                "hidden": false,
+                "layout": null,
+                "render_hash": null,
+                "fonts": [],
+                "has_fields": [],
+                "unit_count": 5,
+                "derived": {
+                  "kind_label": "V1",
+                  "kind": "video"
+                }
+              },
+              {
+                "key": "@trk:2",
+                "position": 2,
+                "title": "A1",
+                "hidden": false,
+                "layout": null,
+                "render_hash": null,
+                "fonts": [],
+                "has_fields": [],
+                "unit_count": 1,
+                "derived": {
+                  "kind_label": "A1",
+                  "kind": "audio"
+                }
+              },
+              {
+                "key": "@trk:3",
+                "position": 3,
+                "title": "V2",
+                "hidden": false,
+                "layout": null,
+                "render_hash": null,
+                "fonts": [],
+                "has_fields": [],
+                "unit_count": 0,
+                "derived": {
+                  "kind_label": "V2",
+                  "kind": "video"
+                }
+              }
+            ]
+          },
+          "pages": 11
+        },
+        {
+          "type": "keyed_page",
+          "seq": 2,
+          "upto": 1,
+          "page": 1,
+          "pages": 11,
+          "root": "tracks",
+          "live": [
+            ["@trk:1", "video"],
+            ["@trk:2", "audio"],
+            ["@trk:3", "video"]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 3,
+          "upto": 1,
+          "page": 2,
+          "pages": 11,
+          "root": "items",
+          "live": [
+            ["@item:1", "clip"],
+            ["@item:2", "clip"],
+            ["@item:3", "transition"],
+            ["@item:4", "clip"],
+            ["@item:5", "clip"],
+            ["@item:6", "clip"]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 4,
+          "upto": 1,
+          "page": 3,
+          "pages": 11,
+          "root": "markers",
+          "live": [
+            ["@mk:1", "marker"],
+            ["@mk:2", "marker"],
+            ["@mk:3", "marker"]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 5,
+          "upto": 1,
+          "page": 4,
+          "pages": 11,
+          "root": "media",
+          "live": [
+            ["@med:1", "file"],
+            ["@med:2", "file"],
+            ["@med:3", "file"],
+            ["@med:4", "file"]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 6,
+          "upto": 1,
+          "page": 5,
+          "pages": 11,
+          "root": "track_props",
+          "entries": [
+            ["@trk:1", "edit", "1"],
+            ["@trk:1", "enabled", "1"],
+            ["@trk:1", "locked", "0"],
+            ["@trk:1", "muted", "0"],
+            ["@trk:1", "name", "V1"],
+            ["@trk:1", "nid", "V1"],
+            ["@trk:2", "edit", "1"],
+            ["@trk:2", "enabled", "1"],
+            ["@trk:2", "locked", "0"],
+            ["@trk:2", "muted", "0"],
+            ["@trk:2", "name", "A1"],
+            ["@trk:2", "nid", "A1"],
+            ["@trk:3", "edit", "1"],
+            ["@trk:3", "enabled", "1"],
+            ["@trk:3", "locked", "0"],
+            ["@trk:3", "muted", "0"],
+            ["@trk:3", "name", "V2"],
+            ["@trk:3", "nid", "V2"]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 7,
+          "upto": 1,
+          "page": 6,
+          "pages": 11,
+          "root": "item_props",
+          "entries": [
+            ["@item:1", "edit", "1"],
+            ["@item:1", "geom", "254016000000,508032000000"],
+            ["@item:1", "media", "m1"],
+            ["@item:1", "name", "Shot A"],
+            ["@item:1", "off", "0"],
+            ["@item:1", "rate", "24/1"],
+            ["@item:1", "retimed", "0"],
+            ["@item:1", "src", "1058400000000"],
+            ["@item:1", "track", "t1"],
+            ["@item:2", "edit", "1"],
+            ["@item:2", "geom", "762048000000,254016000000"],
+            ["@item:2", "media", "m2"],
+            ["@item:2", "name", "Shot B"],
+            ["@item:2", "off", "0"],
+            ["@item:2", "rate", "24/1"],
+            ["@item:2", "retimed", "0"],
+            ["@item:2", "src", "0"],
+            ["@item:2", "track", "t1"],
+            ["@item:3", "edit", "0"],
+            ["@item:3", "geom", "952560000000,127008000000"],
+            ["@item:3", "name", "dissolve"],
+            ["@item:3", "off", "0"],
+            ["@item:3", "retimed", "0"],
+            ["@item:3", "tr", "63504000000,63504000000"],
+            ["@item:3", "track", "t1"],
+            ["@item:4", "edit", "1"],
+            ["@item:4", "geom", "1016064000000,381024000000"],
+            ["@item:4", "media", "m3"],
+            ["@item:4", "name", "Shot C"],
+            ["@item:4", "off", "0"],
+            ["@item:4", "rate", "24/1"],
+            ["@item:4", "retimed", "0"],
+            ["@item:4", "src", "105840000000"],
+            ["@item:4", "track", "t1"],
+            ["@item:5", "edit", "1"],
+            ["@item:5", "geom", "1524096000000,254016000000"],
+            ["@item:5", "media", "m1"],
+            ["@item:5", "name", "Shot A again"],
+            ["@item:5", "off", "0"],
+            ["@item:5", "rate", "24/1"],
+            ["@item:5", "retimed", "0"],
+            ["@item:5", "src", "2116800000000"],
+            ["@item:5", "track", "t1"],
+            ["@item:6", "edit", "1"],
+            ["@item:6", "geom", "0,508032000000"],
+            ["@item:6", "media", "m4"],
+            ["@item:6", "name", "Music"],
+            ["@item:6", "off", "0"],
+            ["@item:6", "rate", "48000/1"],
+            ["@item:6", "retimed", "0"],
+            ["@item:6", "src", "0"],
+            ["@item:6", "track", "t2"]
+          ],
+          "derived": {
+            "tc": {
+              "@item:1": {
+                "geom": "01:00:01:00-01:00:03:00"
+              },
+              "@item:2": {
+                "geom": "01:00:03:00-01:00:04:00"
+              },
+              "@item:3": {
+                "geom": "01:00:03:18-01:00:04:06"
+              },
+              "@item:4": {
+                "geom": "01:00:04:00-01:00:05:12"
+              },
+              "@item:5": {
+                "geom": "01:00:06:00-01:00:07:00"
+              },
+              "@item:6": {
+                "geom": "01:00:00:00-01:00:02:00"
+              }
+            }
+          }
+        },
+        {
+          "type": "keyed_page",
+          "seq": 8,
+          "upto": 1,
+          "page": 7,
+          "pages": 11,
+          "root": "marker_props",
+          "entries": [
+            ["@mk:1", "at", "1164240000000"],
+            ["@mk:1", "color", "RED"],
+            ["@mk:1", "dur", "0"],
+            ["@mk:1", "name", "beat"],
+            ["@mk:1", "note", "on the downbeat"],
+            ["@mk:1", "owner", "i1"],
+            ["@mk:2", "at", "1270080000000"],
+            ["@mk:2", "color", "BLUE"],
+            ["@mk:2", "dur", "0"],
+            ["@mk:2", "name", "act two"],
+            ["@mk:2", "note", ""],
+            ["@mk:2", "owner", "t1"],
+            ["@mk:3", "at", "508032000000"],
+            ["@mk:3", "color", "GREEN"],
+            ["@mk:3", "dur", "0"],
+            ["@mk:3", "name", "chapter"],
+            ["@mk:3", "note", ""],
+            ["@mk:3", "owner", ""]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 9,
+          "upto": 1,
+          "page": 8,
+          "pages": 11,
+          "root": "media_props",
+          "entries": [
+            ["@med:1", "dur", "1058400000000000"],
+            ["@med:1", "file", "shot_a.mov"],
+            ["@med:1", "name", "shot_a.mov"],
+            ["@med:1", "nid", "m:de094da5e6b84c49"],
+            ["@med:1", "origin", "range"],
+            ["@med:1", "rate", "24/1"],
+            ["@med:1", "start", "0"],
+            ["@med:2", "dur", "1058400000000000"],
+            ["@med:2", "file", "shot_b.mov"],
+            ["@med:2", "name", "shot_b.mov"],
+            ["@med:2", "nid", "m:51d83a68df340328"],
+            ["@med:2", "origin", "range"],
+            ["@med:2", "rate", "24/1"],
+            ["@med:2", "start", "0"],
+            ["@med:3", "dur", "1058400000000000"],
+            ["@med:3", "file", "shot_c.mov"],
+            ["@med:3", "name", "shot_c.mov"],
+            ["@med:3", "nid", "m:0b34eb32ec3f11fe"],
+            ["@med:3", "origin", "range"],
+            ["@med:3", "rate", "24/1"],
+            ["@med:3", "start", "0"],
+            ["@med:4", "dur", "25401600000000"],
+            ["@med:4", "file", "music.wav"],
+            ["@med:4", "name", "music.wav"],
+            ["@med:4", "nid", "m:4533525f16f07ba6"],
+            ["@med:4", "origin", "range"],
+            ["@med:4", "rate", "48000/1"],
+            ["@med:4", "start", "0"]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 10,
+          "upto": 1,
+          "page": 9,
+          "pages": 11,
+          "root": "timeline",
+          "entries": [
+            ["doc", null, "98170437566bc54f"],
+            ["drop_frame", null, "0"],
+            ["end_from", null, "items"],
+            ["format", null, "otio"],
+            ["mark/i", null, "6"],
+            ["mark/k", null, "3"],
+            ["mark/m", null, "4"],
+            ["mark/t", null, "3"],
+            ["name", null, "Cut"],
+            ["rate", null, "24/1"],
+            ["stacking", null, "last_on_top"],
+            ["tc", null, "914457600000000"],
+            ["version", null, "Timeline.1"]
+          ]
+        },
+        {
+          "type": "keyed_page",
+          "seq": 11,
+          "upto": 1,
+          "page": 10,
+          "pages": 11,
+          "root": "items",
+          "units": {
+            "container": "@trk:1",
+            "from": 0,
+            "units": [
+              {
+                "key": "@item:1",
+                "container": "@trk:1",
+                "parent": null,
+                "live": true,
+                "kind": "clip",
+                "name": "Shot A",
+                "name_is_generic": null,
+                "alt": null,
+                "z": 0,
+                "bbox": {
+                  "x": 254016000000,
+                  "y": 0,
+                  "w": 508032000000,
+                  "h": 0
+                },
+                "bbox_inherited": false,
+                "rot": 0,
+                "flip": {
+                  "h": false,
+                  "v": false
+                },
+                "approx_box": false,
+                "text": null,
+                "fields": [],
+                "hidden": false,
+                "placeholder": null,
+                "editable_text": "plain",
+                "derived": {
+                  "tc": "01:00:01:00"
+                }
+              },
+              {
+                "key": "@item:2",
+                "container": "@trk:1",
+                "parent": null,
+                "live": true,
+                "kind": "clip",
+                "name": "Shot B",
+                "name_is_generic": null,
+                "alt": null,
+                "z": 1,
+                "bbox": {
+                  "x": 762048000000,
+                  "y": 0,
+                  "w": 254016000000,
+                  "h": 0
+                },
+                "bbox_inherited": false,
+                "rot": 0,
+                "flip": {
+                  "h": false,
+                  "v": false
+                },
+                "approx_box": false,
+                "text": null,
+                "fields": [],
+                "hidden": false,
+                "placeholder": null,
+                "editable_text": "plain",
+                "derived": {
+                  "tc": "01:00:03:00"
+                }
+              },
+              {
+                "key": "@item:3",
+                "container": "@trk:1",
+                "parent": null,
+                "live": true,
+                "kind": "transition",
+                "name": "dissolve",
+                "name_is_generic": null,
+                "alt": null,
+                "z": 2,
+                "bbox": {
+                  "x": 952560000000,
+                  "y": 0,
+                  "w": 127008000000,
+                  "h": 0
+                },
+                "bbox_inherited": false,
+                "rot": 0,
+                "flip": {
+                  "h": false,
+                  "v": false
+                },
+                "approx_box": false,
+                "text": null,
+                "fields": [],
+                "hidden": false,
+                "placeholder": null,
+                "editable_text": "never",
+                "derived": {
+                  "tc": "01:00:03:18"
+                }
+              },
+              {
+                "key": "@item:4",
+                "container": "@trk:1",
+                "parent": null,
+                "live": true,
+                "kind": "clip",
+                "name": "Shot C",
+                "name_is_generic": null,
+                "alt": null,
+                "z": 3,
+                "bbox": {
+                  "x": 1016064000000,
+                  "y": 0,
+                  "w": 381024000000,
+                  "h": 0
+                },
+                "bbox_inherited": false,
+                "rot": 0,
+                "flip": {
+                  "h": false,
+                  "v": false
+                },
+                "approx_box": false,
+                "text": null,
+                "fields": [],
+                "hidden": false,
+                "placeholder": null,
+                "editable_text": "plain",
+                "derived": {
+                  "tc": "01:00:04:00"
+                }
+              },
+              {
+                "key": "@item:5",
+                "container": "@trk:1",
+                "parent": null,
+                "live": true,
+                "kind": "clip",
+                "name": "Shot A again",
+                "name_is_generic": null,
+                "alt": null,
+                "z": 4,
+                "bbox": {
+                  "x": 1524096000000,
+                  "y": 0,
+                  "w": 254016000000,
+                  "h": 0
+                },
+                "bbox_inherited": false,
+                "rot": 0,
+                "flip": {
+                  "h": false,
+                  "v": false
+                },
+                "approx_box": false,
+                "text": null,
+                "fields": [],
+                "hidden": false,
+                "placeholder": null,
+                "editable_text": "plain",
+                "derived": {
+                  "tc": "01:00:06:00"
+                }
+              }
+            ],
+            "next": null,
+            "total": 5
+          }
+        },
+        {
+          "type": "keyed_page",
+          "seq": 12,
+          "upto": 1,
+          "page": 11,
+          "pages": 11,
+          "root": "items",
+          "units": {
+            "container": "@trk:2",
+            "from": 0,
+            "units": [
+              {
+                "key": "@item:6",
+                "container": "@trk:2",
+                "parent": null,
+                "live": true,
+                "kind": "clip",
+                "name": "Music",
+                "name_is_generic": null,
+                "alt": null,
+                "z": 0,
+                "bbox": {
+                  "x": 0,
+                  "y": 0,
+                  "w": 508032000000,
+                  "h": 0
+                },
+                "bbox_inherited": false,
+                "rot": 0,
+                "flip": {
+                  "h": false,
+                  "v": false
+                },
+                "approx_box": false,
+                "text": null,
+                "fields": [],
+                "hidden": false,
+                "placeholder": null,
+                "editable_text": "plain",
+                "derived": {
+                  "tc": "01:00:00:00"
+                }
+              }
+            ],
+            "next": null,
+            "total": 1
+          }
+        }
+      ],
+      "roster": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "ada",
+              "name": "Ada",
+              "colour": "#7c3aed",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 1,
+                  "cursor": null
+                }
+              ]
+            },
+            {
+              "handle": "atlas",
+              "name": "Atlas",
+              "colour": "#0ea5e9",
+              "kind": "agent",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 2,
+                  "cursor": null
+                }
+              ]
+            },
+            {
+              "handle": "nova",
+              "name": "Nova",
+              "colour": "#c2410c",
+              "kind": "agent",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 3,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        }
+      ]
+    },
+    {
+      "step": "claim",
+      "by": "atlas",
+      "argv": null,
+      "exit": null,
+      "watch": [],
+      "roster": [
+        {
+          "kind": "claim_started_elems",
+          "who": "atlas",
+          "claim": "claim-1",
+          "root": "items",
+          "keys": ["@item:1"],
+          "note": "trimming the head",
+          "hold": true,
+          "expires_ms": 1793112001300,
+          "version": 1,
+          "actor": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "started_ms": 1793111401300
+        },
+        {
+          "kind": "focus",
+          "who": "atlas",
+          "focus": {
+            "root": "tracks",
+            "key": "@trk:1"
+          },
+          "client": 2
+        },
+        {
+          "kind": "selection",
+          "who": "atlas",
+          "selection": {
+            "root": "items",
+            "keys": ["@item:1"]
+          },
+          "client": 2
+        }
+      ]
+    },
+    {
+      "step": "outside_save",
+      "by": "app",
+      "argv": null,
+      "exit": null,
+      "watch": [
+        {
+          "type": "ops_change",
+          "seq": 13,
+          "rev": 2,
+          "at_ms": 1793111402600,
+          "change_kind": "external",
+          "actor": {
+            "id": "kit:external",
+            "name": "kit:external",
+            "kind": "file",
+            "colour": null
+          },
+          "client": 4,
+          "via": "disk",
+          "on_behalf_of": null,
+          "turn": null,
+          "verb": null,
+          "claim": null,
+          "ops": [
+            {
+              "root": "item_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@item:4",
+              "field": "name",
+              "before": "Shot C",
+              "after": "Shot C graded"
+            }
+          ],
+          "units": [
+            {
+              "key": "@item:4",
+              "container": "@trk:1",
+              "ops": ["text"],
+              "geom_before": null,
+              "geom_after": null,
+              "fields": ["name"],
+              "hidden_after": null,
+              "placeholder_type": null
+            }
+          ],
+          "containers_changed": [],
+          "containers": ["@trk:1"],
+          "derived": null,
+          "render_hashes": null
+        },
+        {
+          "type": "outside_save",
+          "at_ms": 1793111402600,
+          "doc": "cut.otio",
+          "outcome": "ingested",
+          "rev": 2
+        }
+      ],
+      "roster": []
+    },
+    {
+      "step": "trim",
+      "by": "atlas",
+      "argv": ["clip", "trim", "@item:1", "--in", "+6f", "--base", "2"],
+      "exit": 0,
+      "watch": [
+        {
+          "type": "ops_change",
+          "seq": 14,
+          "rev": 3,
+          "at_ms": 1793111403900,
+          "change_kind": "edit",
+          "actor": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "client": 2,
+          "via": "cli",
+          "on_behalf_of": null,
+          "turn": "turn-1",
+          "verb": "clip trim",
+          "claim": "claim-1",
+          "ops": [
+            {
+              "root": "item_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@item:1",
+              "field": "geom",
+              "before": "254016000000,508032000000",
+              "after": "317520000000,444528000000"
+            },
+            {
+              "root": "item_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@item:1",
+              "field": "src",
+              "before": "1058400000000",
+              "after": "1121904000000"
+            }
+          ],
+          "units": [
+            {
+              "key": "@item:1",
+              "container": "@trk:1",
+              "ops": ["move_resize"],
+              "geom_before": "254016000000,508032000000",
+              "geom_after": "317520000000,444528000000",
+              "fields": ["geom", "src"],
+              "hidden_after": null,
+              "placeholder_type": null
+            }
+          ],
+          "containers_changed": [],
+          "containers": ["@trk:1"],
+          "derived": {
+            "units": {
+              "@item:1": {
+                "tc": "01:00:01:06"
+              }
+            }
+          },
+          "render_hashes": null
+        }
+      ],
+      "roster": [
+        {
+          "kind": "role",
+          "who": "atlas",
+          "role": "editor"
+        },
+        {
+          "kind": "time_position",
+          "who": "atlas",
+          "time_position": {
+            "at": "317520000000",
+            "state": "paused",
+            "at_ms": 1793111403900,
+            "in": "@trk:1"
+          },
+          "client": 2
+        }
+      ]
+    },
+    {
+      "step": "move",
+      "by": "atlas",
+      "argv": ["clip", "move", "@item:1", "--to", "-6f", "--base", "3"],
+      "exit": 0,
+      "watch": [
+        {
+          "type": "ops_change",
+          "seq": 15,
+          "rev": 4,
+          "at_ms": 1793111405200,
+          "change_kind": "edit",
+          "actor": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "client": 2,
+          "via": "cli",
+          "on_behalf_of": null,
+          "turn": "turn-1",
+          "verb": "clip move",
+          "claim": "claim-1",
+          "ops": [
+            {
+              "root": "item_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@item:1",
+              "field": "geom",
+              "before": "317520000000,444528000000",
+              "after": "254016000000,444528000000"
+            }
+          ],
+          "units": [
+            {
+              "key": "@item:1",
+              "container": "@trk:1",
+              "ops": ["move_resize"],
+              "geom_before": "317520000000,444528000000",
+              "geom_after": "254016000000,444528000000",
+              "fields": ["geom"],
+              "hidden_after": null,
+              "placeholder_type": null
+            }
+          ],
+          "containers_changed": [],
+          "containers": ["@trk:1"],
+          "derived": {
+            "units": {
+              "@item:1": {
+                "tc": "01:00:01:00"
+              }
+            }
+          },
+          "render_hashes": null
+        }
+      ],
+      "roster": [
+        {
+          "kind": "time_position",
+          "who": "atlas",
+          "time_position": {
+            "at": "254016000000",
+            "state": "paused",
+            "at_ms": 1793111405200,
+            "in": "@trk:1"
+          },
+          "client": 2
+        }
+      ]
+    },
+    {
+      "step": "rename",
+      "by": "atlas",
+      "argv": ["clip", "rename", "@item:1", "Shot A tight", "--base", "4"],
+      "exit": 0,
+      "watch": [
+        {
+          "type": "ops_change",
+          "seq": 16,
+          "rev": 5,
+          "at_ms": 1793111406500,
+          "change_kind": "edit",
+          "actor": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "client": 2,
+          "via": "cli",
+          "on_behalf_of": null,
+          "turn": "turn-1",
+          "verb": "clip rename",
+          "claim": "claim-1",
+          "ops": [
+            {
+              "root": "item_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@item:1",
+              "field": "name",
+              "before": "Shot A",
+              "after": "Shot A tight"
+            }
+          ],
+          "units": [
+            {
+              "key": "@item:1",
+              "container": "@trk:1",
+              "ops": ["text"],
+              "geom_before": null,
+              "geom_after": null,
+              "fields": ["name"],
+              "hidden_after": null,
+              "placeholder_type": null
+            }
+          ],
+          "containers_changed": [],
+          "containers": ["@trk:1"],
+          "derived": null,
+          "render_hashes": null
+        }
+      ],
+      "roster": [
+        {
+          "kind": "time_position",
+          "who": "atlas",
+          "time_position": {
+            "at": "254016000000",
+            "state": "paused",
+            "at_ms": 1793111406500,
+            "in": "@trk:1"
+          },
+          "client": 2
+        }
+      ]
+    },
+    {
+      "step": "off",
+      "by": "atlas",
+      "argv": ["clip", "enable", "@item:1", "--off", "--base", "5"],
+      "exit": 0,
+      "watch": [
+        {
+          "type": "ops_change",
+          "seq": 17,
+          "rev": 6,
+          "at_ms": 1793111407800,
+          "change_kind": "edit",
+          "actor": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "client": 2,
+          "via": "cli",
+          "on_behalf_of": null,
+          "turn": "turn-1",
+          "verb": "clip enable",
+          "claim": "claim-1",
+          "ops": [
+            {
+              "root": "item_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@item:1",
+              "field": "off",
+              "before": "0",
+              "after": "1"
+            }
+          ],
+          "units": [
+            {
+              "key": "@item:1",
+              "container": "@trk:1",
+              "ops": ["hide_show"],
+              "geom_before": null,
+              "geom_after": null,
+              "fields": ["off"],
+              "hidden_after": true,
+              "placeholder_type": null
+            }
+          ],
+          "containers_changed": [],
+          "containers": ["@trk:1"],
+          "derived": null,
+          "render_hashes": null
+        }
+      ],
+      "roster": [
+        {
+          "kind": "time_position",
+          "who": "atlas",
+          "time_position": {
+            "at": "254016000000",
+            "state": "paused",
+            "at_ms": 1793111407800,
+            "in": "@trk:1"
+          },
+          "client": 2
+        }
+      ]
+    },
+    {
+      "step": "marker",
+      "by": "atlas",
+      "argv": ["marker", "add", "--on", "@item:1", "--at", "01:00:01:12", "--name", "cue", "--base", "6"],
+      "exit": 0,
+      "watch": [
+        {
+          "type": "ops_change",
+          "seq": 18,
+          "rev": 7,
+          "at_ms": 1793111409100,
+          "change_kind": "edit",
+          "actor": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "client": 2,
+          "via": "cli",
+          "on_behalf_of": null,
+          "turn": "turn-1",
+          "verb": "marker add",
+          "claim": null,
+          "ops": [
+            {
+              "root": "markers",
+              "kind": "list",
+              "op": "insert",
+              "key": "@mk:4",
+              "index_before": null,
+              "index_after": 3,
+              "after": "marker",
+              "effect": "visible"
+            },
+            {
+              "root": "marker_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@mk:4",
+              "field": "owner",
+              "after": "i1"
+            },
+            {
+              "root": "marker_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@mk:4",
+              "field": "at",
+              "after": "1248912000000"
+            },
+            {
+              "root": "marker_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@mk:4",
+              "field": "dur",
+              "after": "0"
+            },
+            {
+              "root": "marker_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@mk:4",
+              "field": "name",
+              "after": "cue"
+            },
+            {
+              "root": "marker_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@mk:4",
+              "field": "note",
+              "after": ""
+            },
+            {
+              "root": "marker_props",
+              "kind": "map",
+              "op": "set",
+              "key": "@mk:4",
+              "field": "color",
+              "after": ""
+            },
+            {
+              "root": "timeline",
+              "kind": "map",
+              "op": "set",
+              "key": "mark/k",
+              "field": null,
+              "before": "3",
+              "after": "4"
+            }
+          ],
+          "units": [],
+          "containers_changed": [],
+          "containers": [],
+          "derived": null,
+          "render_hashes": null
+        }
+      ],
+      "roster": [
+        {
+          "kind": "selection",
+          "who": "atlas",
+          "selection": {
+            "root": "markers",
+            "keys": ["@mk:4"]
+          },
+          "client": 2
+        },
+        {
+          "kind": "time_position",
+          "who": "atlas",
+          "time_position": {
+            "at": "381024000000",
+            "state": "paused",
+            "at_ms": 1793111409100,
+            "in": "@trk:1"
+          },
+          "client": 2
+        }
+      ]
+    },
+    {
+      "step": "refused_trim",
+      "by": "nova",
+      "argv": ["clip", "trim", "@item:1", "--out", "-2f", "--base", "7"],
+      "exit": 5,
+      "watch": [
+        {
+          "type": "verb_refused",
+          "at_ms": 1793111410400,
+          "actor": {
+            "id": "nova",
+            "name": "Nova",
+            "kind": "agent",
+            "colour": "#c2410c"
+          },
+          "client": 3,
+          "turn": "turn-2",
+          "verb": "clip trim",
+          "unit": "@item:1",
+          "code": "MPC-E301",
+          "holder": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "claim": "claim-1"
+        }
+      ],
+      "roster": []
+    },
+    {
+      "step": "write_back",
+      "by": "atlas",
+      "argv": null,
+      "exit": null,
+      "watch": [],
+      "roster": []
+    },
+    {
+      "step": "release",
+      "by": "atlas",
+      "argv": null,
+      "exit": null,
+      "watch": [],
+      "roster": [
+        {
+          "kind": "claim_ended",
+          "who": "atlas",
+          "claim": "claim-1",
+          "how": "released",
+          "lines": {
+            "root": "items",
+            "first": 1,
+            "last": 1
+          },
+          "version": 7,
+          "actor": {
+            "id": "atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#0ea5e9"
+          },
+          "at_ms": 1793111413000,
+          "at_rev": null,
+          "keys": ["@item:1"]
+        }
+      ]
+    }
+  ]
+}

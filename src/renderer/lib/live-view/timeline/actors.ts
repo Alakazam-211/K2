@@ -24,6 +24,11 @@ export function addActor(a: Actor | null | undefined): void {
   if (a && a.id && !ACTORS.has(a.id)) ACTORS.set(a.id, shaped(a))
 }
 
+/** A real doc's actor, as the wire names it now (the real source: it wins over the sample's). */
+export function putActor(a: Actor | null | undefined): void {
+  if (a && a.id) ACTORS.set(a.id, shaped(a))
+}
+
 /** An actor by handle or as a frame names it; one never seen keeps its own fields. */
 export function actorOf(a: string | Actor | null | undefined): Actor {
   const id = typeof a === 'string' ? a : a?.id

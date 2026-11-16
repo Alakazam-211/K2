@@ -96,6 +96,18 @@ describe('useLiveDocCore', () => {
     await waitFor(() => expect(result.current).toEqual({ status: 'off' }))
   })
 
+  it('gives a timeline its live view only while the daemon serves it (the timeline core on), else today’s view', async () => {
+    h.file = { core: 'timeline', on: true, liveView: false }
+    const scope = scopeWith(['docs-cores-v1'])
+    const { result } = renderHook(() => useLiveDocCore(scope, '/w/cut.otio'))
+    await waitFor(() => expect(result.current).toEqual({ status: 'timeline' }))
+    h.file = { core: 'timeline', on: false, liveView: false }
+    await act(async () => {
+      for (const fn of events.handlers) fn({ kind: 'doc_cores_changed', core: 'timeline', on: false })
+    })
+    await waitFor(() => expect(result.current).toEqual({ status: 'off' }))
+  })
+
   it('keeps today’s view for a core with no live editor, an error, or an older server', async () => {
     // A scope is one object for a server's life (a new one every render
     // would be a new server every render).

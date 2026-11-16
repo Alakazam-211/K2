@@ -122,5 +122,7 @@ export interface LiveSource {
   say(msg: { to: string; text: string; address: string | null; time?: SayTime | null }): Promise<SayResult>
   /** Tell the others what you're looking at (when `features.viewAddress`). */
   setViewAddress?(address: string | null): void
+  /** Tell the others where your playhead is (when `features.timePosition`): `at` in the view's time unit, `in` an address. */
+  setTimePosition?(t: { at: string; state: 'playing' | 'paused'; in?: string; rate?: string } | null): void
   close(): void
 }

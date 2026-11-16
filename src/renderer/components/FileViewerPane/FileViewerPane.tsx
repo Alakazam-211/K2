@@ -1037,7 +1037,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
       {/* Owner's preview keys: workbook, scene and timeline tabs offer "Watch live (preview)" (sample data). Off: just the content. */}
-      <LivePreviewEntry filePath={filePath} onLiveChange={setWatchingLive}>
+      <LivePreviewEntry filePath={filePath} onLiveChange={setWatchingLive} real={liveCore.status === 'timeline' ? room.scope : null}>
       {category === 'pdf' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading PDF…</div>}>

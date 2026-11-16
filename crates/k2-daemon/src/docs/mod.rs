@@ -242,6 +242,9 @@ fn config() -> Config {
 /// The kit's settings K2 runs with. K2 sets no live size limit per file
 /// type (`keyed_max_entries_by_pack`): every keyed type (a deck) takes the
 /// host-wide `keyed_max_entries` unless its pack recommends a lower one.
+/// Kit v0.20.0's writer settings stay at the kit's defaults: no writers cap
+/// (`writers_max` 0), and person-writer reuse on, which changes nothing
+/// while K2 sends no device key (`JoinOptions::device`; it sends none).
 fn kit_config(memory_budget_bytes: u64) -> Config {
     let mut c = Config::default();
     c.memory_budget_bytes = memory_budget_bytes;
@@ -314,9 +317,11 @@ pub fn start() {
 /// "Reads up to" names the highest format the kit reads
 /// (`STORE_FORMAT_READ`: 8 since kit v0.19.0), not the one it stamps.
 /// A format-8 store whose required features this K2 doesn't know, or that
-/// sets the native feature (native-engine documents, a Beta) this kit has no
-/// engine store for, is also a newer K2's: the kit refuses it before
-/// reading anything, so the store and the files on disk are untouched.
+/// sets the native feature but holds no engine store, is also a newer K2's:
+/// the kit refuses it before reading anything, so the store and the files
+/// on disk are untouched. Since kit v0.20.0 a store holding native-engine
+/// documents (a Beta) opens here, and only those documents are refused,
+/// each on its own (`MPC-E169`, `routes::session_error`).
 pub fn store_open_error(e: &k2_mpc_base::store::StoreError) -> String {
     use k2_mpc_base::store::StoreError;
     match e {
@@ -824,6 +829,19 @@ mod tests {
         assert_eq!(c.keyed_limit(&deck), KeyedLimit::new(25_000, LimitSource::HostWide));
     }
 
+    /// Kit v0.20.0's writer ids: K2 leaves the writers cap off and sends no
+    /// device key, so person-writer reuse (on by default) changes nothing.
+    /// Agents count toward the participant cap as persons do; K2 keeps the
+    /// kit's cap. A watcher past it takes no writer slot until promoted.
+    #[test]
+    fn k2_keeps_the_kits_writer_defaults_with_no_writers_cap() {
+        let c = kit_config(256 << 20);
+        assert_eq!(c.writers_max, 0, "no writers cap");
+        assert_eq!(c.participants_max, Config::default().participants_max, "the kit's participant cap");
+        assert!(c.reuse_person_writers, "the kit's default; nothing changes without a device key");
+        assert_eq!(k2_mpc_base::session::WRITERS_NOTICE_MAX, 8_192, "the near-cap notice's ceiling with no cap");
+    }
+
     #[test]
     fn a_too_new_store_says_there_is_no_way_back() {
         // Kit v0.19.0 reads up to format 8 (the required-features word):
@@ -841,8 +859,10 @@ mod tests {
         assert_eq!(k2_mpc_base::store::STORE_FORMAT_BASE, 5, "0.46.7 writes store format 5");
     }
 
-    /// A store a newer K2 wrote with native-engine documents (a Beta): the
-    /// kit refuses it at open, before reading anything. K2 says so plainly,
+    /// A store the kit refuses at open, before reading anything, as a newer
+    /// K2's: unknown required features, or the native feature with no engine
+    /// store (since kit v0.20.0 a store holding native-engine documents
+    /// opens, and only those documents are refused). K2 says so plainly,
     /// in one line people can act on, not the kit's own words and not
     /// wrapped in "the docs store failed to open (…)": that is the line the
     /// CLI's 503 `docs_unavailable` and the Live view's closed frame carry.

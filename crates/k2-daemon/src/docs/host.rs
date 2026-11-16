@@ -562,6 +562,10 @@ impl Host for K2Host {
             // file was right either way. Should never fire: a kit bug to
             // report (K2 Cores, 11-01). Metadata only.
             AuditEvent::DiskReplicaMismatch { key, version } => log_disk_replica_mismatch(key, *version),
+            // Kit v0.20.0: a doc holds 80% or more of its writers' room
+            // (K2 sets no writers cap, so of the kit's 8,192). Every writer
+            // stays in a doc for good; said once per load. Counts only.
+            AuditEvent::WritersNearCap { key, count, max } => log_writers_near_cap(key, *count, *max),
             // `AuditEvent` is `#[non_exhaustive]` (the kit adds events in
             // patch releases), so a catch-all is required; it logs the event
             // rather than dropping it.
@@ -591,9 +595,22 @@ pub fn disk_replica_mismatch_line(key: &DocKey, version: u64) -> String {
     )
 }
 
+/// The warn line for [`AuditEvent::WritersNearCap`]. Stable prefix
+/// `[docs] WARN: writers near cap` (grep for it). `key` as in
+/// [`disk_replica_repaired_line`]; `writers` is how many writers the doc
+/// holds, `max` the cap it is near (the kit's notice ceiling when K2 sets
+/// no cap); never content.
+pub fn writers_near_cap_line(key: &DocKey, count: u64, max: u64) -> String {
+    format!(
+        "[docs] WARN: writers near cap key={} writers={count} max={max} (each writer stays in the doc for good)",
+        key_label(key)
+    )
+}
+
 #[cfg(test)]
 thread_local! {
-    /// Tests: the disk-replica-repaired and -mismatch lines logged on this thread.
+    /// Tests: the disk-replica-repaired and -mismatch lines (and the
+    /// writers-near-cap line) logged on this thread.
     static REPAIRED_LINES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -606,6 +623,13 @@ fn log_disk_replica_repaired(key: &DocKey, doc_len: u64, replica_len: u64) {
 
 fn log_disk_replica_mismatch(key: &DocKey, version: u64) {
     let line = disk_replica_mismatch_line(key, version);
+    log_debug!("{line}");
+    #[cfg(test)]
+    REPAIRED_LINES.with(|v| v.borrow_mut().push(line));
+}
+
+fn log_writers_near_cap(key: &DocKey, count: u64, max: u64) {
+    let line = writers_near_cap_line(key, count, max);
     log_debug!("{line}");
     #[cfg(test)]
     REPAIRED_LINES.with(|v| v.borrow_mut().push(line));
@@ -843,6 +867,25 @@ mod tests {
             got,
             vec![
                 "[docs] WARN: disk replica mismatch key=proj-123:notes/a.md version=42 (kit bug: report it to K2 Cores)"
+                    .to_string()
+            ],
+            "the event must reach its own arm (not the catch-all) and log exactly one line"
+        );
+    }
+
+    /// Kit v0.20.0's `AuditEvent::WritersNearCap`: its own warn line,
+    /// counts and the doc's key only.
+    #[test]
+    fn writers_near_the_cap_are_logged_as_a_warn_line_with_counts_only() {
+        REPAIRED_LINES.with(|v| v.borrow_mut().clear());
+        let key = DocKey { space: "proj-123".into(), path: "notes/a.md".into() };
+        let ev = AuditEvent::WritersNearCap { key, count: 6_554, max: 8_192 };
+        K2Host::default().on_event(&ev);
+        let got = REPAIRED_LINES.with(|v| v.borrow().clone());
+        assert_eq!(
+            got,
+            vec![
+                "[docs] WARN: writers near cap key=proj-123:notes/a.md writers=6554 max=8192 (each writer stays in the doc for good)"
                     .to_string()
             ],
             "the event must reach its own arm (not the catch-all) and log exactly one line"

@@ -819,6 +819,16 @@ fn engine_mismatch_hint(e: &dyn std::fmt::Display) -> String {
     )
 }
 
+/// What `MPC-E169` tells the caller: the kit's line (the doc is on the
+/// native engine, which this build doesn't have), then that only this doc
+/// is refused, nothing changed, and what to do.
+pub(super) fn native_engine_missing_hint(e: &dyn std::fmt::Display) -> String {
+    format!(
+        "{e}. Only this doc is refused: nothing of it was read or changed, the file itself is as it was, \
+         and every other doc works as usual. A newer K2 opened it live; update K2 to open it live again"
+    )
+}
+
 /// `4m 10s`, `35s`.
 fn human_ms(ms: u64) -> String {
     let s = ms.div_ceil(1000);
@@ -925,6 +935,19 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::Store(err @ StoreError::ForeignEngine { .. })
         | SessionError::Blob(BlobError::Store(err @ StoreError::ForeignEngine { .. })) => {
             kit_refusal("engine_mismatch", "MPC-E520", engine_mismatch_hint(err))
+        }
+        // Kit v0.20.0 (MPC-E169): a doc the native engine wrote (a newer
+        // K2's Beta), on this build, which doesn't have it (K2 keeps the
+        // native engine off). Only that doc is refused, on open and delete;
+        // the store and every other doc work. The kit gives it as its own
+        // variant; the store's form is matched too, in case one reaches K2
+        // unconverted. Exit 6.
+        SessionError::NativeEngineMissing { .. } => {
+            kit_refusal("native_engine_missing", "MPC-E169", native_engine_missing_hint(e))
+        }
+        SessionError::Store(err @ StoreError::NativeEngineMissing { .. })
+        | SessionError::Blob(BlobError::Store(err @ StoreError::NativeEngineMissing { .. })) => {
+            kit_refusal("native_engine_missing", "MPC-E169", native_engine_missing_hint(err))
         }
         // Kit v0.10.2 (MPC-E112): a positional edit whose `--base` version
         // the kit no longer holds. Exit 8; the same request never works again.
@@ -2835,6 +2858,37 @@ mod tests {
             assert_eq!(e["id"], json!(id), "{err:?}");
             assert_eq!(e["exit"], json!(exit), "{err:?}");
             assert!(e["hint"].as_str().expect("a hint").len() > 20, "{err:?}: {e:?}");
+        }
+    }
+
+    /// Kit v0.20.0 (MPC-E169): a doc the native engine wrote is refused on
+    /// its own, never as the catch-all's 500 or a `store_error`: K2's code
+    /// beside the kit's id, exit 6, and the kit's line naming only the
+    /// native engine and the format (the stamp stays in the error's field),
+    /// then that nothing else is touched. The session's own variant and the
+    /// store's form answer the same.
+    #[test]
+    fn a_native_doc_is_refused_on_its_own_with_the_kits_e169() {
+        let native = SessionError::NativeEngineMissing { stored: "native-stamp-1".into(), stored_format: 1 };
+        let store = StoreError::NativeEngineMissing { stored: "native-stamp-1".into(), stored_format: 1 };
+        let r = native.report();
+        assert_eq!((r.id(), r.entry().name, r.exit()), ("MPC-E169", "native_engine_missing", 6), "the kit's registry");
+        for err in [native, SessionError::Store(store.clone()), SessionError::Blob(BlobError::Store(store))] {
+            let r = session_error(&err);
+            assert_eq!(r.status, "409 Conflict", "{err:?}");
+            let e = error_of(&r);
+            assert_eq!(e["code"], json!("native_engine_missing"), "{err:?}");
+            assert_eq!(e["id"], json!("MPC-E169"), "{err:?}");
+            assert_eq!(e["exit"], json!(6), "{err:?}");
+            let hint = e["hint"].as_str().expect("a hint");
+            assert!(
+                hint.starts_with(
+                    "this doc is on the native engine (format 1), which this build doesn't have. Only this doc is refused"
+                ),
+                "{err:?}: {hint}"
+            );
+            assert!(hint.contains("every other doc works as usual"), "{hint}");
+            assert!(!hint.contains("native-stamp-1"), "the stamp stays out of the text: {hint}");
         }
     }
 

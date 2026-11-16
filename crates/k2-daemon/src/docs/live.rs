@@ -421,7 +421,15 @@ fn open_error(e: &SessionError) -> Closed {
             message: Some(e.to_string()),
             ..Closed::kit(CloseReason::Declined, e)
         },
-        SessionError::NotFound(_) => Closed::kit(CloseReason::NotFound, e),
+        // Kit v0.20.0 (MPC-E169): a newer K2 opened this doc on the native
+        // engine, which this build doesn't have. Only this doc is refused;
+        // the kit's line, then K2's next step.
+        SessionError::NativeEngineMissing { .. } => Closed {
+            code: Some("native_engine_missing".into()),
+            message: Some(super::routes::native_engine_missing_hint(e)),
+            ..Closed::kit(CloseReason::Declined, e)
+        },
+        SessionError::NotFound(_) =>Closed::kit(CloseReason::NotFound, e),
         SessionError::Forbidden { .. } => Closed::kit(CloseReason::Auth, e),
         SessionError::Released => restart(),
         SessionError::Deleted => Closed::kit(CloseReason::Deleted, e),
@@ -1548,6 +1556,20 @@ mod tests {
         assert_eq!(core_of(Tier::of("notes.md")), "markdown");
         assert_eq!(core_of(Tier::of("main.rs")), "text");
         assert_eq!(core_of(Tier::of("photo.png")), "any-file");
+    }
+
+    /// Kit v0.20.0 (MPC-E169): a tab opening a doc a newer K2 put on the
+    /// native engine gets one `closed` frame, declined (no retry), with
+    /// K2's code, the kit's line and the next step, and the kit's report.
+    #[test]
+    fn a_native_doc_closes_the_tab_declined_with_its_own_code() {
+        let c = open_error(&SessionError::NativeEngineMissing { stored: "native-stamp-1".into(), stored_format: 1 });
+        assert_eq!(c.reason.as_str(), "declined");
+        assert_eq!(c.code.as_deref(), Some("native_engine_missing"));
+        let m = c.message.as_deref().expect("a message");
+        assert!(m.starts_with("this doc is on the native engine (format 1), which this build doesn't have. "), "{m}");
+        assert!(m.contains("update K2 to open it live again"), "{m}");
+        assert_eq!(c.error.as_ref().expect("the kit's report").id(), "MPC-E169");
     }
 
     #[test]

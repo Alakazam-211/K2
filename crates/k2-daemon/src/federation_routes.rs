@@ -848,6 +848,23 @@ pub(crate) fn resolve_project_path_by_id(workspace_id: &str) -> Option<String> {
 // P4 — outbound send
 // ─────────────────────────────────────────────────────────────────────
 
+/// The sender namespace of a federation send (the passport's workspace, else
+/// the owner-or-admin token the dispatcher let in).
+fn send_sender() -> String {
+    match crate::caller_workspace::request_principal() {
+        Some(p) => crate::client_msg_id::agent_ns(&p.workspace_uuid),
+        None => "c:owner".to_string(),
+    }
+}
+
+/// `POST /cli/federation/send` as the TCP dispatcher and the cell socket
+/// serve it: [`handle_send`] once per `idempotency_key` (0.46.15,
+/// [`crate::send_once`]).
+pub fn handle_send_route(body: &[u8]) -> CliResponse {
+    let key = crate::send_once::key_in_json(body);
+    crate::send_once::once_keyed("/cli/federation/send", &send_sender(), key.as_deref(), || handle_send(body))
+}
+
 /// `POST /cli/federation/send` — dual-auth (dispatcher enforces owner-or-admin
 /// OR scoped passport). Body: `{"to":"<peer>::<workspace>::<agent>","text":"..."}`
 /// or the same `to` plus `tray` (cover + small attachments for
@@ -883,6 +900,13 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         /// live `Msg` text. Mutually preferred over `text`.
         #[serde(default)]
         tray: Option<federation::TraySpec>,
+        /// 0.46.15: the CLI's per-invocation key. The envelope's
+        /// `msg_uuid` is derived from it, so a repeat after this daemon
+        /// forgot the key still reaches the peer with the uuid it already
+        /// dedupes on (`federation::seen`). An older peer dedupes on that
+        /// uuid too; it never sees the key itself.
+        #[serde(default)]
+        idempotency_key: Option<String>,
     }
     let req: Req = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -1068,7 +1092,13 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Err(e) => return json_err("403 Forbidden", e),
     };
 
-    let bytes = match federation::seal(&signal, &key, &peer.subdomain, OUTBOUND_TTL) {
+    let stable_uuid = req
+        .idempotency_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| crate::send_once::is_valid(k))
+        .map(|k| crate::send_once::federation_msg_uuid(&send_sender(), if req.tray.is_some() { "tray" } else { "msg" }, k));
+    let bytes = match federation::seal_with_msg_uuid(&signal, &key, &peer.subdomain, OUTBOUND_TTL, stable_uuid.as_deref()) {
         Ok(b) => b,
         Err(e) => return json_err("500 Internal Server Error", format!("seal envelope: {e}")),
     };
@@ -1180,6 +1210,7 @@ pub fn handle_send_user_tray(
     host: &str,
     spec: federation::TraySpec,
     from_workspace: Option<String>,
+    idempotency_key: Option<String>,
 ) -> CliResponse {
     if !federation::enabled() {
         return CliResponse::bad_request(
@@ -1235,6 +1266,9 @@ pub fn handle_send_user_tray(
     if let Some(obj) = body.as_object_mut() {
         if let Some(ws) = from_workspace.filter(|s| !s.trim().is_empty()) {
             obj.insert("from_workspace".into(), serde_json::json!(ws));
+        }
+        if let Some(k) = idempotency_key.filter(|s| !s.trim().is_empty()) {
+            obj.insert(crate::send_once::PARAM.into(), serde_json::json!(k));
         }
     }
     let resp = handle_send(&body.to_string().into_bytes());

@@ -19,7 +19,8 @@
         {"name": "--why", "arg": "text", "description": "withdraw/dismiss: one-line reason (at most 200 characters) shown on the closed card and told to the agent."},
         {"name": "--name", "arg": "NAME", "description": "Required for secret. Vault key. Never printed."},
         {"name": "--prompt", "arg": "text", "description": "Optional secret field prompt."},
-        {"name": "--dest", "arg": "vault", "description": "Secret destination. vault only."}
+        {"name": "--dest", "arg": "vault", "description": "Secret destination. vault only."},
+        {"name": "--idempotency-key", "arg": "key", "description": "Post or ask: K2 posts one key once. After a 'may have been delivered' line, rerun the same command with the key it printed."}
       ]
     },
     {
@@ -79,7 +80,8 @@
         {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Accepts multiple paths as one package. Preferred tray mode."},
         {"name": "--inbox", "arg": null, "description": "Hard error — use --inbox-silent or --inbox-wake."},
         {"name": "--title", "arg": "text", "description": "Title override for tray package (with --inbox-silent|--inbox-wake)."},
-        {"name": "--body", "arg": "text", "description": "Cover brief. With files, prepended to the tray package (not XOR). Without files, legacy compose body."}
+        {"name": "--body", "arg": "text", "description": "Cover brief. With files, prepended to the tray package (not XOR). Without files, legacy compose body."},
+        {"name": "--idempotency-key", "arg": "key", "description": "K2 delivers one key once. Each send has its own; after a 'may have been delivered' line, rerun the same command with the key it printed to try again without a duplicate."}
       ]
     },
     {

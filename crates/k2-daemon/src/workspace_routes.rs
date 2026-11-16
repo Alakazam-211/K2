@@ -362,113 +362,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // never silently writes to inbox now. Callers that want queued
         // delivery use `k2 msg --inbox-wake|--inbox-silent`
         // (separate endpoint, /cli/inbox/deliver).
-        "/cli/workspace/msg" => {
-            let workspace = str_param(params, "workspace");
-            // H14 (prd-agent-secret-handoff-v1) backstop: a known vault
-            // value (8+ characters) pasted into `k2 msg` never reaches the
-            // recipient's PTY, transcript or Chatter. `k2 vault send` is the
-            // way to hand a secret over.
-            let text = k2_core::redaction::redact(&str_param(params, "text"));
-            // C2: display `from` may be free-text for humans, but PEER
-            // IDENTITY is the stamped principal (or owner bypass) — never
-            // free-text `--from` as the gate subject.
-            let from = opt_param(params, "from").unwrap_or_default();
-            // 0.39.25: optional slash-command prepended at the very front
-            // of the delivered payload (before the `[from <name>]`
-            // prefix). Empty/absent → unchanged delivery. An older CLI
-            // simply never sends this param.
-            let command = opt_param(params, "command").unwrap_or_default();
-            // 0.46.3: the sender's one-line summary (`k2 msg --summary`).
-            // Kept on the Chatter line for people; never injected.
-            let summary = opt_param(params, "summary")
-                .and_then(|s| k2_core::overlay::summary::clean_sender_summary(&s));
-            let via = opt_param(params, "via").unwrap_or_else(|| "msg".to_string());
-            let via = match via.as_str() {
-                "talk" | "inbox" | "v1" | "msg" => via,
-                _ => "msg".to_string(),
-            };
-            // Issue #9 — wake gating. `wake=true` auto-wakes a dormant
-            // canonical session (resume/spawn → wait READY → deliver).
-            // DEFAULT ON: this preserves the LEGACY wake-on-message UX
-            // (PRD D7 — bare `k2 msg`, party→agent companion sends, and
-            // agent→agent pings all wake a sleeping canonical session) and
-            // matches Rosson's directive that "msg should wake." Callers
-            // opt OUT explicitly with `wake=false` (`k2 msg --no-wake`).
-            // The state machine still distinguishes no-agent (never spawns)
-            // from dormant (wakes) — the #9 fix is the disambiguation, not
-            // the removal of auto-wake.
-            let wake = opt_param(params, "wake")
-                .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-                .unwrap_or(true);
-            // Optional per-call ceiling for the post-wake readiness wait.
-            let wake_timeout = opt_param(params, "wake_timeout")
-                .and_then(|v| v.parse::<u64>().ok())
-                .filter(|s| *s > 0)
-                .map(std::time::Duration::from_secs)
-                .unwrap_or(crate::workspace_msg::DEFAULT_WAKE_TIMEOUT);
-            // prd-workspace-sessions-cli-v1 WS-M2: `k2 msg --session <id>`
-            // names a conversation by id (a unique prefix, or an address).
-            // Whoever holds it gets the message as today; a past-only one is
-            // reopened with the message as its first turn.
-            let session = opt_param(params, "session").filter(|s| !s.trim().is_empty());
-            if workspace.is_empty() && session.is_none() {
-                return Some(CliResponse::bad_request("Missing workspace"));
-            }
-            if text.is_empty() {
-                return Some(CliResponse::bad_request("Missing text"));
-            }
-            let workspace = match session.as_deref() {
-                Some(token) => match crate::workspace_sessions_routes::msg_session(
-                    params, token, &text, &from, &command, wake,
-                ) {
-                    crate::workspace_sessions_routes::SessionTarget::Deliver(addr) => addr,
-                    crate::workspace_sessions_routes::SessionTarget::Done(r) => return Some(r),
-                },
-                None => workspace,
-            };
-            // WS-M5: a session never messages itself.
-            if let Some(r) = crate::workspace_sessions_routes::self_message_refusal(params, &workspace) {
-                return Some(r);
-            }
-            // C2: scoped principal → require local connection to target.
-            // Owner ambient (no principal) bypasses (Phase 2 residual).
-            let principal = crate::caller_workspace::principal_from_params(params);
-            match crate::comms::gate_cross_workspace(principal.as_ref(), &workspace) {
-                Ok(()) => {}
-                Err(Some(resp)) => return Some(resp),
-                Err(None) => {
-                    // Unknown target — fall through to deliver_live's
-                    // workspace_not_found reason/hint (stable shape).
-                }
-            }
-            // S7 (HT15): every live delivery is recorded with the
-            // credential-derived sender and carries its id in the prefix
-            // (`[from x · m_…]`); `k2 msg who <id>` reads it back.
-            let sender = match principal.as_ref() {
-                Some(p) => crate::hire_routes::Sender {
-                    workspace_id: Some(p.workspace_uuid.clone()),
-                    via: "passport",
-                    actor: crate::routes::http::agent_actor_label(p),
-                    on_behalf_of: None,
-                },
-                None => crate::hire_routes::Sender {
-                    workspace_id: None,
-                    via: "owner",
-                    actor: "owner-token".into(),
-                    on_behalf_of: None,
-                },
-            };
-            let (resp, delivery) = crate::hire_routes::deliver_recorded_with_summary(
-                &workspace, &text, &from, &command, wake, wake_timeout, &via, &sender,
-                summary.as_deref(),
-            );
-            let mut body = serde_json::to_value(&resp)
-                .unwrap_or_else(|_| serde_json::json!({ "success": false }));
-            if let Some(id) = delivery {
-                body["deliveryId"] = serde_json::json!(id);
-            }
-            CliResponse::ok_json(body.to_string())
-        }
+        // 0.46.15: one delivery per `idempotency_key` (crate::send_once).
+        "/cli/workspace/msg" => crate::send_once::once("/cli/workspace/msg", params, "owner", || handle_workspace_msg(params)),
         "/cli/workspace/remove" => {
             // Teardown modes (keep_current / restore_original) still
             // live in src-tauri because they depend on
@@ -533,6 +428,116 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         _ => return None,
     };
     Some(resp)
+}
+
+/// `POST /cli/workspace/msg` (`k2 msg <workspace> "text"`), behind
+/// [`crate::send_once::once`] in [`dispatch`].
+fn handle_workspace_msg(params: &HashMap<String, String>) -> CliResponse {
+    let workspace = str_param(params, "workspace");
+    // H14 (prd-agent-secret-handoff-v1) backstop: a known vault
+    // value (8+ characters) pasted into `k2 msg` never reaches the
+    // recipient's PTY, transcript or Chatter. `k2 vault send` is the
+    // way to hand a secret over.
+    let text = k2_core::redaction::redact(&str_param(params, "text"));
+    // C2: display `from` may be free-text for humans, but PEER
+    // IDENTITY is the stamped principal (or owner bypass) — never
+    // free-text `--from` as the gate subject.
+    let from = opt_param(params, "from").unwrap_or_default();
+    // 0.39.25: optional slash-command prepended at the very front
+    // of the delivered payload (before the `[from <name>]`
+    // prefix). Empty/absent → unchanged delivery. An older CLI
+    // simply never sends this param.
+    let command = opt_param(params, "command").unwrap_or_default();
+    // 0.46.3: the sender's one-line summary (`k2 msg --summary`).
+    // Kept on the Chatter line for people; never injected.
+    let summary = opt_param(params, "summary")
+        .and_then(|s| k2_core::overlay::summary::clean_sender_summary(&s));
+    let via = opt_param(params, "via").unwrap_or_else(|| "msg".to_string());
+    let via = match via.as_str() {
+        "talk" | "inbox" | "v1" | "msg" => via,
+        _ => "msg".to_string(),
+    };
+    // Issue #9 — wake gating. `wake=true` auto-wakes a dormant
+    // canonical session (resume/spawn → wait READY → deliver).
+    // DEFAULT ON: this preserves the LEGACY wake-on-message UX
+    // (PRD D7 — bare `k2 msg`, party→agent companion sends, and
+    // agent→agent pings all wake a sleeping canonical session) and
+    // matches Rosson's directive that "msg should wake." Callers
+    // opt OUT explicitly with `wake=false` (`k2 msg --no-wake`).
+    // The state machine still distinguishes no-agent (never spawns)
+    // from dormant (wakes) — the #9 fix is the disambiguation, not
+    // the removal of auto-wake.
+    let wake = opt_param(params, "wake")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(true);
+    // Optional per-call ceiling for the post-wake readiness wait.
+    let wake_timeout = opt_param(params, "wake_timeout")
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(crate::workspace_msg::DEFAULT_WAKE_TIMEOUT);
+    // prd-workspace-sessions-cli-v1 WS-M2: `k2 msg --session <id>`
+    // names a conversation by id (a unique prefix, or an address).
+    // Whoever holds it gets the message as today; a past-only one is
+    // reopened with the message as its first turn.
+    let session = opt_param(params, "session").filter(|s| !s.trim().is_empty());
+    if workspace.is_empty() && session.is_none() {
+        return CliResponse::bad_request("Missing workspace");
+    }
+    if text.is_empty() {
+        return CliResponse::bad_request("Missing text");
+    }
+    let workspace = match session.as_deref() {
+        Some(token) => match crate::workspace_sessions_routes::msg_session(
+            params, token, &text, &from, &command, wake,
+        ) {
+            crate::workspace_sessions_routes::SessionTarget::Deliver(addr) => addr,
+            crate::workspace_sessions_routes::SessionTarget::Done(r) => return r,
+        },
+        None => workspace,
+    };
+    // WS-M5: a session never messages itself.
+    if let Some(r) = crate::workspace_sessions_routes::self_message_refusal(params, &workspace) {
+        return r;
+    }
+    // C2: scoped principal → require local connection to target.
+    // Owner ambient (no principal) bypasses (Phase 2 residual).
+    let principal = crate::caller_workspace::principal_from_params(params);
+    match crate::comms::gate_cross_workspace(principal.as_ref(), &workspace) {
+        Ok(()) => {}
+        Err(Some(resp)) => return resp,
+        Err(None) => {
+            // Unknown target — fall through to deliver_live's
+            // workspace_not_found reason/hint (stable shape).
+        }
+    }
+    // S7 (HT15): every live delivery is recorded with the
+    // credential-derived sender and carries its id in the prefix
+    // (`[from x · m_…]`); `k2 msg who <id>` reads it back.
+    let sender = match principal.as_ref() {
+        Some(p) => crate::hire_routes::Sender {
+            workspace_id: Some(p.workspace_uuid.clone()),
+            via: "passport",
+            actor: crate::routes::http::agent_actor_label(p),
+            on_behalf_of: None,
+        },
+        None => crate::hire_routes::Sender {
+            workspace_id: None,
+            via: "owner",
+            actor: "owner-token".into(),
+            on_behalf_of: None,
+        },
+    };
+    let (resp, delivery) = crate::hire_routes::deliver_recorded_with_summary(
+        &workspace, &text, &from, &command, wake, wake_timeout, &via, &sender,
+        summary.as_deref(),
+    );
+    let mut body = serde_json::to_value(&resp)
+        .unwrap_or_else(|_| serde_json::json!({ "success": false }));
+    if let Some(id) = delivery {
+        body["deliveryId"] = serde_json::json!(id);
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 // ── 0.40.24 S2 — the settings plane's write door ─────────────────────

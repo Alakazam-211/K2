@@ -46,7 +46,7 @@ cli_post_form_uds() {
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     _k2_cfg_add data-raw "$body"
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.
@@ -65,7 +65,7 @@ cli_post_json_uds() {
     _k2_cfg_add data-raw "$body"
     # 0.46.6: the permission note, as cli_post_json.
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.
@@ -281,6 +281,9 @@ _permission_note() {
     if [ -n "${SCOPED_TOKEN:-}" ]; then
         case "${1:-}" in *"Invalid or missing auth token"*) : >"${_K2_PERMISSION_NOTE}.passport" 2>/dev/null ;; esac
     fi
+    # A lookup on the way to the command's own request (the sender's name)
+    # is no refusal of the command: never its closing line (0.46.15).
+    [ "${_K2_PERMISSION_QUIET:-0}" = 1 ] && return 0
     case "${1:-}" in *'"permission"'*) ;; *) return 0 ;; esac
     local lines
     lines="$(_permission_closing_lines "$1")" || return 0
@@ -347,7 +350,86 @@ _org_bulletin_flush() {
     fi
     return 0
 }
+# The closing line belongs to the request whose answer the command reports.
+# A send calls this right before it goes out, so a refusal a lookup met on
+# the way (the sender's own name: `/cli/workspace/handle` refuses a
+# passport over TCP) never closes the send's output. 0.46.15 field report:
+# `k2 msg` and `k2 thread ask` ended with "It can't be requested." under a
+# delivery that waited on folder trust, a timeout and a not_found address.
+_permission_note_reset() {
+    rm -f "$_K2_PERMISSION_NOTE" 2>/dev/null || true
+}
 # END_CLI_PERMISSION_NOTE
+
+# BEGIN_CLI_SEND_ONCE
+# Idempotent sends (0.46.15). `k2 msg` (live, --inbox-*, agent::host),
+# `k2 thread "text"` and `k2 thread ask` send one key per invocation: a
+# random UUID, or the one `--idempotency-key` names. The daemon answers a
+# repeat of a key with the first answer (same deliveryId / card / package)
+# and delivers nothing again (`idempotency_key`; a Thread post's own
+# `clientMsgId`). So a send that got no answer is asked again with the
+# SAME key, a few times; then the command says it may have landed and how
+# to ask once more without a duplicate.
+_K2_IDEM_KEY=""
+_k2_idem_valid() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9_-]{8,64}$ ]]
+}
+# _k2_idem_init [KEY]: this invocation's key (KEY when given, else a new one).
+_k2_idem_init() {
+    if [ -n "${1:-}" ]; then
+        if ! _k2_idem_valid "$1"; then
+            echo "Error: --idempotency-key takes 8-64 characters of A-Z, a-z, 0-9, '-' or '_' (the key a 'may have been delivered' line printed)" >&2
+            exit 2
+        fi
+        _K2_IDEM_KEY="$1"
+        return 0
+    fi
+    [ -n "$_K2_IDEM_KEY" ] && return 0
+    _K2_IDEM_KEY="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)" || _K2_IDEM_KEY=""
+    if ! _k2_idem_valid "$_K2_IDEM_KEY"; then
+        echo "Error: k2 could not make a send key (python3 failed or is missing); nothing was sent." >&2
+        exit 1
+    fi
+}
+# True when a send got no answer: curl timed out (28) or the connection
+# closed empty (52), nothing came back, or the daemon says the first try
+# with this key still runs (409 in_progress).
+_k2_idem_unanswered() {
+    local rc="$1" out="$2"
+    case "$rc" in 28|52) return 0 ;; esac
+    [ "$rc" = 0 ] && [ -z "$out" ] && return 0
+    [[ "$out" == *'"code":"in_progress"'* ]] && return 0
+    return 1
+}
+# _k2_idem_send <transport> <endpoint> [args…]: cli_send, asked again with
+# the same key while unanswered ($_K2_IDEM_TRIES tries, default 3), then the
+# "may have been delivered" line and exit 1. The caller put the key in args.
+_k2_idem_send() {
+    local endpoint="$2" tries="${_K2_IDEM_TRIES:-3}" n=1 out rc t0="$SECONDS"
+    case "$tries" in ''|*[!0-9]*|0) tries=3 ;; esac
+    while :; do
+        rc=0
+        out="$(_K2_NOANSWER_SOFT=1 cli_send "$@")" || rc=$?
+        if ! _k2_idem_unanswered "$rc" "$out"; then
+            printf '%s' "$out"
+            return "$rc"
+        fi
+        [ "$n" -ge "$tries" ] && break
+        n=$((n + 1))
+        sleep 1
+    done
+    echo "Error: K2's server didn't answer ${endpoint} (${n} tries, $((SECONDS - t0)) s); it may have been delivered. It is safe to run the same command again with --idempotency-key ${_K2_IDEM_KEY}: K2 delivers one key once." >&2
+    _k2_end_command 1
+}
+# A repeat the daemon answered from its first try: say so on stderr.
+_k2_idem_replay_note() {
+    case "${1:-}" in
+        *'"replayed":true'*|*'"duplicate":true'*)
+            echo "note: K2 already had this send (same idempotency key); it was not delivered again." >&2 ;;
+    esac
+    return 0
+}
+# END_CLI_SEND_ONCE
 
 # BEGIN_CLI_PASSPORT_PROJECT
 # 0.46.3 (agent CLI audit A2): `k2 tickets list`, `k2 feedback list` and

@@ -293,9 +293,14 @@ sys.stderr.write(json.dumps({"error":{"code":"forbidden","hint":hint}},
         wire_agent="${agent}/${sidecar}"
         shown="${agent}/${sidecar}"
     fi
-    body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' \
-        "${fp}::${wsid}::${wire_agent}" "$text" "$from_project")
-    resp=$(cli_send cli_post_json "/cli/federation/send" "$body")
+    # 0.46.15: the invocation's key (cmd_msg set it); the daemon sends once
+    # per key and seals a msg_uuid from it the peer dedupes on.
+    [ -n "${_K2_IDEM_KEY:-}" ] || _k2_idem_init ""
+    body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3],"idempotency_key":sys.argv[4]}))' \
+        "${fp}::${wsid}::${wire_agent}" "$text" "$from_project" "$_K2_IDEM_KEY")
+    _permission_note_reset
+    resp=$(_k2_idem_send cli_post_json "/cli/federation/send" "$body")
+    _k2_idem_replay_note "$resp"
 
     # 4. Surface the response.
     # not_connected / forbidden → exit 3 + teaching (mail/C2 parity).

@@ -4266,3 +4266,7 @@ mod secret_card_no_site;
 // 0.46.13: Thread authorship (a person is always a person; agents say so).
 #[path = "thread_author_tests.rs"]
 mod thread_author;
+
+// 0.46.15: one card per `k2 thread ask` idempotency key (send_once).
+#[path = "ask_once_tests.rs"]
+mod ask_once;

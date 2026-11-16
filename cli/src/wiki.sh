@@ -1960,6 +1960,13 @@ OPTIONS
                  attribute the latency.
   --wake-timeout <secs>
                  Ceiling for the post-wake readiness wait (default 20).
+  --idempotency-key <key>
+                 Every send carries one key; K2 delivers a key once. When
+                 K2 doesn't answer, msg asks again with the same key, then
+                 says the message may have been delivered and prints the
+                 key: run the same command with --idempotency-key <key> to
+                 try once more without a duplicate (the answer then says
+                 "replayed": true if it had landed).
 
 RESPONSE (JSON)
   {

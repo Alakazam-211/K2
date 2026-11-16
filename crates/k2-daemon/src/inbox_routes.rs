@@ -160,6 +160,7 @@ fn deliver_federated_files(
         host,
         spec,
         caller_from_workspace(params),
+        opt_param(params, crate::send_once::PARAM),
     )
 }
 
@@ -881,10 +882,11 @@ pub fn handle_glossary_get(params: &HashMap<String, String>) -> CliResponse {
 // ── POST dispatcher ────────────────────────────────────────────────────
 
 pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliResponse {
+    // 0.46.15: a package lands once per `idempotency_key` (crate::send_once).
     match path {
-        "/cli/inbox/compose" => handle_compose_post(params),
-        "/cli/inbox/deliver" => handle_deliver_post(params),
-        "/cli/inbox/deliver-bundle" => handle_deliver_bundle_post(params),
+        "/cli/inbox/compose" => crate::send_once::once(path, params, "owner", || handle_compose_post(params)),
+        "/cli/inbox/deliver" => crate::send_once::once(path, params, "owner", || handle_deliver_post(params)),
+        "/cli/inbox/deliver-bundle" => crate::send_once::once(path, params, "owner", || handle_deliver_bundle_post(params)),
         "/cli/inbox/move" => handle_move_post(params),
         "/cli/inbox/archive" => handle_archive_post(params),
         "/cli/inbox/delete" => handle_delete_post(params),
@@ -1068,6 +1070,60 @@ mod tests {
         .expect("cover readable");
         assert!(content.contains("Hello tray."), "{content}");
         let _ = cover;
+        let _ = std::fs::remove_dir_all(&ws_path);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]);
+    }
+
+    /// 0.46.15 (send_once): `k2 msg --inbox-wake` that timed out asks again
+    /// with the same `idempotency_key`; the package lands once and the
+    /// repeat answers the first package's id. A new key is a new package.
+    #[test]
+    fn deliver_with_a_repeat_key_lands_once() {
+        let _ = k2_core::db::init_for_tests();
+        let ws_path = std::env::temp_dir().join(format!(
+            "k2-once-deliver-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, "once-deliver", ws_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        }
+        let src = ws_path.join("brief.md");
+        std::fs::write(&src, b"# Once\n\nOne package.\n").unwrap();
+        let params_with = |key: &str| {
+            let mut params = HashMap::new();
+            params.insert("workspace".into(), ws_path.display().to_string());
+            params.insert("path".into(), src.display().to_string());
+            params.insert("wake".into(), "false".into());
+            params.insert(crate::send_once::PARAM.into(), key.to_string());
+            params
+        };
+        let key = uuid::Uuid::new_v4().to_string();
+        let first = dispatch_post("/cli/inbox/deliver", &params_with(&key));
+        assert_eq!(first.status, "200 OK", "{}", first.body);
+        let again = dispatch_post("/cli/inbox/deliver", &params_with(&key));
+        assert_eq!(again.status, "200 OK", "{}", again.body);
+        let (first_v, again_v): (serde_json::Value, serde_json::Value) =
+            (serde_json::from_str(&first.body).unwrap(), serde_json::from_str(&again.body).unwrap());
+        assert!(first_v["id"].is_string(), "{first_v}");
+        assert_eq!(again_v["id"], first_v["id"], "the repeat names the first package: {again_v}");
+        assert_eq!(again_v["replayed"], true, "{again_v}");
+        assert_eq!(k2_core::inbox::list_root(&ws_path).len(), 1, "one package for one key");
+
+        let other = dispatch_post("/cli/inbox/deliver", &params_with(&uuid::Uuid::new_v4().to_string()));
+        assert_eq!(other.status, "200 OK", "{}", other.body);
+        assert_eq!(k2_core::inbox::list_root(&ws_path).len(), 2, "a new key is a new package");
+
         let _ = std::fs::remove_dir_all(&ws_path);
         let db = k2_core::db::shared();
         let conn = db.lock();

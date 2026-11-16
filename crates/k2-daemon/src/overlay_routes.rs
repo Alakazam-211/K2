@@ -21,6 +21,7 @@ use crate::workspace_msg::{self, MsgTarget};
 /// `POST /cli/thread/catchup` (inbox-catchup-v1, 0.46.3).
 pub(crate) mod catchup;
 pub(crate) mod message_delete;
+mod ask_once;
 mod closed_cards;
 mod secret_delivery;
 use closed_cards::expired_or_not_pending;
@@ -5558,7 +5559,7 @@ pub fn dispatch_post_as(
     }
     match path {
         "/cli/thread/post" => handle_post(&params, session_author),
-        "/cli/thread/ask" => handle_ask(&params, session_author),
+        "/cli/thread/ask" => ask_once::handle(path, &params, stamped, session_author),
         "/cli/thread/secret" => handle_secret(&params, session_author),
         "/cli/thread/answer" => handle_answer(&params, session_author),
         "/cli/thread/void" => handle_void(&params, session_author),

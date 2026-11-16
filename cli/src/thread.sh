@@ -12,7 +12,8 @@ _thread_sender_from() {
     local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
     if [[ -n "$sender_path" ]]; then
         local sender_name
-        sender_name=$(cli_request "/cli/workspace/handle" \
+        # A lookup, not the command's request: never its closing line.
+        sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/handle" \
             "project=$(urlencode "$sender_path")" 2>/dev/null \
             | python3 -c 'import json,sys
 try:

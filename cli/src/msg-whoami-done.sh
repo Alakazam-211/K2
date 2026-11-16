@@ -148,8 +148,14 @@ cmd_msg() {
     local secret_name=""
     local summary=""
     local session_id=""
+    local idem_key=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --idempotency-key)
+                # 0.46.15: ask again for a send that may have landed (the
+                # key its "may have been delivered" line printed).
+                [[ -n "${2:-}" ]] || { echo "usage: --idempotency-key <key>  (the key a 'may have been delivered' line printed)" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --session)
                 # prd-workspace-sessions-cli-v1 WS-M2: a conversation by id
                 # (k2 sessions --past shows the short ids). Whoever holds it
@@ -231,6 +237,8 @@ cmd_msg() {
         _vault_handoff send "$secret_name" --to "$target" --note "$text" --via msg
         return $?
     fi
+    # 0.46.15: one key for this send (BEGIN_CLI_SEND_ONCE).
+    _k2_idem_init "$idem_key"
 
     # Cross-server peer: `k2 msg <agent>::<host> "text"` (or legacy @)
     # routes a CONNECTED remote peer over federation (same verb as a local
@@ -275,7 +283,7 @@ cmd_msg() {
         local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
         if [[ -n "$sender_path" ]]; then
             local sender_name
-            sender_name=$(cli_request "/cli/workspace/handle" \
+            sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/handle" \
                 "project=$(urlencode "$sender_path")" 2>/dev/null \
                 | python3 -c 'import json,sys
 try:
@@ -286,7 +294,7 @@ try:
 except Exception:
     pass' 2>/dev/null)
             if [[ -z "$sender_name" ]]; then
-                sender_name=$(cli_request "/cli/workspace/agent-display-name" \
+                sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/agent-display-name" \
                     "project=$(urlencode "$sender_path")" 2>/dev/null \
                     | python3 -c 'import json,sys
 try:
@@ -298,7 +306,7 @@ except Exception:
     pass' 2>/dev/null)
             fi
             if [[ -z "$sender_name" ]]; then
-                sender_name=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
+                sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
                     | python3 -c 'import json,sys,os
 try:
     data = json.load(sys.stdin)
@@ -336,16 +344,21 @@ except Exception:
     [[ -n "$explicit_via" ]] && params="${params}&via=$(urlencode "$explicit_via")"
     [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
     [[ -n "$session_id" ]] && params="${params}&session=$(urlencode "$session_id")"
+    params="${params}&idempotency_key=$(urlencode "$_K2_IDEM_KEY")"
 
     local response
     # #58 Phase-1 close: prefer the scoped per-cell UDS for msg (the daemon
     # stamps `from` server-side); falls back to TCP+owner transparently.
-    response=$(cli_send cli_post_form "/cli/workspace/msg" "$params")
+    # 0.46.15: the socket-then-TCP fallback and a retry after no answer
+    # carry the same key, so the daemon delivers once.
+    _permission_note_reset
+    response=$(_k2_idem_send cli_post_form "/cli/workspace/msg" "$params")
     local rc=$?
     # 0.44.4: the legacy GET retry for pre-0.39.45 daemons is gone — the
     # daemon refuses GET on this route (it changes state).
     echo "$response"
     _k2_moved_from_note "$response"
+    _k2_idem_replay_note "$response"
 
     # Issue #9 — if the daemon WOKE a dormant canonical session to deliver,
     # surface it on stderr so the caller attributes the latency rather than

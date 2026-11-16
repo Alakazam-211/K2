@@ -1512,7 +1512,7 @@ mod unix_impl {
                 }
                 match p {
                     "/cli/federation/send" if is_post => {
-                        from_cli(crate::federation_routes::handle_send(body))
+                        from_cli(crate::federation_routes::handle_send_route(body))
                     }
                     "/cli/federation/peers" if !is_post => {
                         from_cli(crate::federation_routes::handle_peers())

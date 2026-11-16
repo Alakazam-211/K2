@@ -1456,7 +1456,7 @@ cli_post_json() {
     # 0.46.6 (client papercut 12): note the refusal's (or hold's) `permission`
     # object, so a held `k2 publish run` ends with its Ask-with line.
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.
@@ -1582,7 +1582,7 @@ cli_post_form() {
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}&project=$(urlencode "$PROJECT")"
     _k2_cfg_add data-raw "$body"
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.
@@ -1640,7 +1640,7 @@ cli_post_form_uds() {
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     _k2_cfg_add data-raw "$body"
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.
@@ -1659,7 +1659,7 @@ cli_post_json_uds() {
     _k2_cfg_add data-raw "$body"
     # 0.46.6: the permission note, as cli_post_json.
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.
@@ -1875,6 +1875,9 @@ _permission_note() {
     if [ -n "${SCOPED_TOKEN:-}" ]; then
         case "${1:-}" in *"Invalid or missing auth token"*) : >"${_K2_PERMISSION_NOTE}.passport" 2>/dev/null ;; esac
     fi
+    # A lookup on the way to the command's own request (the sender's name)
+    # is no refusal of the command: never its closing line (0.46.15).
+    [ "${_K2_PERMISSION_QUIET:-0}" = 1 ] && return 0
     case "${1:-}" in *'"permission"'*) ;; *) return 0 ;; esac
     local lines
     lines="$(_permission_closing_lines "$1")" || return 0
@@ -1941,7 +1944,86 @@ _org_bulletin_flush() {
     fi
     return 0
 }
+# The closing line belongs to the request whose answer the command reports.
+# A send calls this right before it goes out, so a refusal a lookup met on
+# the way (the sender's own name: `/cli/workspace/handle` refuses a
+# passport over TCP) never closes the send's output. 0.46.15 field report:
+# `k2 msg` and `k2 thread ask` ended with "It can't be requested." under a
+# delivery that waited on folder trust, a timeout and a not_found address.
+_permission_note_reset() {
+    rm -f "$_K2_PERMISSION_NOTE" 2>/dev/null || true
+}
 # END_CLI_PERMISSION_NOTE
+
+# BEGIN_CLI_SEND_ONCE
+# Idempotent sends (0.46.15). `k2 msg` (live, --inbox-*, agent::host),
+# `k2 thread "text"` and `k2 thread ask` send one key per invocation: a
+# random UUID, or the one `--idempotency-key` names. The daemon answers a
+# repeat of a key with the first answer (same deliveryId / card / package)
+# and delivers nothing again (`idempotency_key`; a Thread post's own
+# `clientMsgId`). So a send that got no answer is asked again with the
+# SAME key, a few times; then the command says it may have landed and how
+# to ask once more without a duplicate.
+_K2_IDEM_KEY=""
+_k2_idem_valid() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9_-]{8,64}$ ]]
+}
+# _k2_idem_init [KEY]: this invocation's key (KEY when given, else a new one).
+_k2_idem_init() {
+    if [ -n "${1:-}" ]; then
+        if ! _k2_idem_valid "$1"; then
+            echo "Error: --idempotency-key takes 8-64 characters of A-Z, a-z, 0-9, '-' or '_' (the key a 'may have been delivered' line printed)" >&2
+            exit 2
+        fi
+        _K2_IDEM_KEY="$1"
+        return 0
+    fi
+    [ -n "$_K2_IDEM_KEY" ] && return 0
+    _K2_IDEM_KEY="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)" || _K2_IDEM_KEY=""
+    if ! _k2_idem_valid "$_K2_IDEM_KEY"; then
+        echo "Error: k2 could not make a send key (python3 failed or is missing); nothing was sent." >&2
+        exit 1
+    fi
+}
+# True when a send got no answer: curl timed out (28) or the connection
+# closed empty (52), nothing came back, or the daemon says the first try
+# with this key still runs (409 in_progress).
+_k2_idem_unanswered() {
+    local rc="$1" out="$2"
+    case "$rc" in 28|52) return 0 ;; esac
+    [ "$rc" = 0 ] && [ -z "$out" ] && return 0
+    [[ "$out" == *'"code":"in_progress"'* ]] && return 0
+    return 1
+}
+# _k2_idem_send <transport> <endpoint> [args…]: cli_send, asked again with
+# the same key while unanswered ($_K2_IDEM_TRIES tries, default 3), then the
+# "may have been delivered" line and exit 1. The caller put the key in args.
+_k2_idem_send() {
+    local endpoint="$2" tries="${_K2_IDEM_TRIES:-3}" n=1 out rc t0="$SECONDS"
+    case "$tries" in ''|*[!0-9]*|0) tries=3 ;; esac
+    while :; do
+        rc=0
+        out="$(_K2_NOANSWER_SOFT=1 cli_send "$@")" || rc=$?
+        if ! _k2_idem_unanswered "$rc" "$out"; then
+            printf '%s' "$out"
+            return "$rc"
+        fi
+        [ "$n" -ge "$tries" ] && break
+        n=$((n + 1))
+        sleep 1
+    done
+    echo "Error: K2's server didn't answer ${endpoint} (${n} tries, $((SECONDS - t0)) s); it may have been delivered. It is safe to run the same command again with --idempotency-key ${_K2_IDEM_KEY}: K2 delivers one key once." >&2
+    _k2_end_command 1
+}
+# A repeat the daemon answered from its first try: say so on stderr.
+_k2_idem_replay_note() {
+    case "${1:-}" in
+        *'"replayed":true'*|*'"duplicate":true'*)
+            echo "note: K2 already had this send (same idempotency key); it was not delivered again." >&2 ;;
+    esac
+    return 0
+}
+# END_CLI_SEND_ONCE
 
 # BEGIN_CLI_PASSPORT_PROJECT
 # 0.46.3 (agent CLI audit A2): `k2 tickets list`, `k2 feedback list` and
@@ -2472,9 +2554,14 @@ sys.stderr.write(json.dumps({"error":{"code":"forbidden","hint":hint}},
         wire_agent="${agent}/${sidecar}"
         shown="${agent}/${sidecar}"
     fi
-    body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' \
-        "${fp}::${wsid}::${wire_agent}" "$text" "$from_project")
-    resp=$(cli_send cli_post_json "/cli/federation/send" "$body")
+    # 0.46.15: the invocation's key (cmd_msg set it); the daemon sends once
+    # per key and seals a msg_uuid from it the peer dedupes on.
+    [ -n "${_K2_IDEM_KEY:-}" ] || _k2_idem_init ""
+    body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3],"idempotency_key":sys.argv[4]}))' \
+        "${fp}::${wsid}::${wire_agent}" "$text" "$from_project" "$_K2_IDEM_KEY")
+    _permission_note_reset
+    resp=$(_k2_idem_send cli_post_json "/cli/federation/send" "$body")
+    _k2_idem_replay_note "$resp"
 
     # 4. Surface the response.
     # not_connected / forbidden → exit 3 + teaching (mail/C2 parity).
@@ -23405,8 +23492,14 @@ cmd_msg() {
     local secret_name=""
     local summary=""
     local session_id=""
+    local idem_key=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --idempotency-key)
+                # 0.46.15: ask again for a send that may have landed (the
+                # key its "may have been delivered" line printed).
+                [[ -n "${2:-}" ]] || { echo "usage: --idempotency-key <key>  (the key a 'may have been delivered' line printed)" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --session)
                 # prd-workspace-sessions-cli-v1 WS-M2: a conversation by id
                 # (k2 sessions --past shows the short ids). Whoever holds it
@@ -23488,6 +23581,8 @@ cmd_msg() {
         _vault_handoff send "$secret_name" --to "$target" --note "$text" --via msg
         return $?
     fi
+    # 0.46.15: one key for this send (BEGIN_CLI_SEND_ONCE).
+    _k2_idem_init "$idem_key"
 
     # Cross-server peer: `k2 msg <agent>::<host> "text"` (or legacy @)
     # routes a CONNECTED remote peer over federation (same verb as a local
@@ -23532,7 +23627,7 @@ cmd_msg() {
         local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
         if [[ -n "$sender_path" ]]; then
             local sender_name
-            sender_name=$(cli_request "/cli/workspace/handle" \
+            sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/handle" \
                 "project=$(urlencode "$sender_path")" 2>/dev/null \
                 | python3 -c 'import json,sys
 try:
@@ -23543,7 +23638,7 @@ try:
 except Exception:
     pass' 2>/dev/null)
             if [[ -z "$sender_name" ]]; then
-                sender_name=$(cli_request "/cli/workspace/agent-display-name" \
+                sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/agent-display-name" \
                     "project=$(urlencode "$sender_path")" 2>/dev/null \
                     | python3 -c 'import json,sys
 try:
@@ -23555,7 +23650,7 @@ except Exception:
     pass' 2>/dev/null)
             fi
             if [[ -z "$sender_name" ]]; then
-                sender_name=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
+                sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
                     | python3 -c 'import json,sys,os
 try:
     data = json.load(sys.stdin)
@@ -23593,16 +23688,21 @@ except Exception:
     [[ -n "$explicit_via" ]] && params="${params}&via=$(urlencode "$explicit_via")"
     [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
     [[ -n "$session_id" ]] && params="${params}&session=$(urlencode "$session_id")"
+    params="${params}&idempotency_key=$(urlencode "$_K2_IDEM_KEY")"
 
     local response
     # #58 Phase-1 close: prefer the scoped per-cell UDS for msg (the daemon
     # stamps `from` server-side); falls back to TCP+owner transparently.
-    response=$(cli_send cli_post_form "/cli/workspace/msg" "$params")
+    # 0.46.15: the socket-then-TCP fallback and a retry after no answer
+    # carry the same key, so the daemon delivers once.
+    _permission_note_reset
+    response=$(_k2_idem_send cli_post_form "/cli/workspace/msg" "$params")
     local rc=$?
     # 0.44.4: the legacy GET retry for pre-0.39.45 daemons is gone — the
     # daemon refuses GET on this route (it changes state).
     echo "$response"
     _k2_moved_from_note "$response"
+    _k2_idem_replay_note "$response"
 
     # Issue #9 — if the daemon WOKE a dormant canonical session to deliver,
     # surface it on stderr so the caller attributes the latency rather than
@@ -23667,7 +23767,8 @@ _thread_sender_from() {
     local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
     if [[ -n "$sender_path" ]]; then
         local sender_name
-        sender_name=$(cli_request "/cli/workspace/handle" \
+        # A lookup, not the command's request: never its closing line.
+        sender_name=$(_K2_PERMISSION_QUIET=1 cli_request "/cli/workspace/handle" \
             "project=$(urlencode "$sender_path")" 2>/dev/null \
             | python3 -c 'import json,sys
 try:
@@ -24120,7 +24221,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key)
                 skip_next=1
                 continue
                 ;;
@@ -24149,10 +24250,14 @@ cmd_thread() {
     local all="false"
     local before_seq=""
     local one_seq=""
+    local idem_key=""
     local -a files=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --json) json="true"; shift ;;
+            --idempotency-key)
+                [[ -n "${2:-}" ]] || { echo "Error: --idempotency-key needs the key a 'may have been delivered' line printed" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --from) explicit_from="$2"; shift 2 ;;
             --limit) limit="$2"; shift 2 ;;
             --all) all="true"; shift ;;
@@ -24210,19 +24315,25 @@ cmd_thread() {
         exit 1
     fi
     if [[ -n "$text" || ${#files[@]} -gt 0 ]]; then
+        # 0.46.15: one key per post, as the Thread's own clientMsgId
+        # (post-idempotency-v1): a retry after no answer posts once.
+        _k2_idem_init "$idem_key"
         local params="addr=$(urlencode "$target")"
         params="${params}&text=$(urlencode "$text")"
         params="${params}&from=$(urlencode "$from")"
         params="${params}&via=thread"
+        params="${params}&clientMsgId=$(urlencode "$_K2_IDEM_KEY")"
         if [[ ${#files[@]} -gt 0 ]]; then
             local attachments_json
             attachments_json="$(_thread_attachments_json "${files[@]}")" || exit 1
             params="${params}&attachments=$(urlencode "$attachments_json")"
         fi
         local response
-        response=$(cli_send cli_post_form "/cli/thread/post" "$params")
+        _permission_note_reset
+        response=$(_k2_idem_send cli_post_form "/cli/thread/post" "$params")
         local rc=$?
         _k2_moved_from_note "$response"
+        _k2_idem_replay_note "$response"
         if [[ "$json" == "true" ]]; then
             echo "$response"
         else
@@ -24361,12 +24472,15 @@ for it in items:
 
 cmd_thread_ask() {
     local target="" prompt="" json="false" explicit_from=""
-    local options_csv="" allow_custom="false" expires="" no_expiry="false"
+    local options_csv="" allow_custom="false" expires="" no_expiry="false" idem_key=""
     local option_list=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             ask) shift ;;
             --json) json="true"; shift ;;
+            --idempotency-key)
+                [[ -n "${2:-}" ]] || { echo "Error: --idempotency-key needs the key a 'may have been delivered' line printed" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --from)
                 [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
                 explicit_from="$2"; shift 2 ;;
@@ -24423,10 +24537,13 @@ cmd_thread_ask() {
     if [[ ${#option_list[@]} -gt 0 ]]; then
         option_json=$(printf '%s\n' "${option_list[@]}" | python3 -c 'import json,sys; print(json.dumps([ln.rstrip("\n") for ln in sys.stdin]))')
     fi
+    # 0.46.15: one card per invocation (BEGIN_CLI_SEND_ONCE).
+    _k2_idem_init "$idem_key"
     local body
     body=$(ADDR="$target" PROMPT="$prompt" FROM="$from" OPTIONS_CSV="$options_csv" \
-        OPTIONS_JSON="$option_json" ALLOW="$allow_custom" EXPIRES="$expires" NO_EXPIRY="$no_expiry" python3 -c 'import json,os
-obj={"addr":os.environ["ADDR"],"prompt":os.environ["PROMPT"],"from":os.environ.get("FROM","k2")}
+        OPTIONS_JSON="$option_json" ALLOW="$allow_custom" EXPIRES="$expires" NO_EXPIRY="$no_expiry" \
+        IDEM_KEY="$_K2_IDEM_KEY" python3 -c 'import json,os
+obj={"addr":os.environ["ADDR"],"prompt":os.environ["PROMPT"],"from":os.environ.get("FROM","k2"),"idempotency_key":os.environ["IDEM_KEY"]}
 csv=os.environ.get("OPTIONS_CSV") or ""
 optj=os.environ.get("OPTIONS_JSON") or ""
 if csv:
@@ -24442,9 +24559,11 @@ if os.environ.get("NO_EXPIRY")=="true":
 print(json.dumps(obj))
 ')
     local response
-    response=$(cli_send cli_post_json "/cli/thread/ask" "$body")
+    _permission_note_reset
+    response=$(_k2_idem_send cli_post_json "/cli/thread/ask" "$body")
     local rc=$?
     _k2_moved_from_note "$response"
+    _k2_idem_replay_note "$response"
     if [[ "$json" == "true" ]]; then
         echo "$response"
         return $rc
@@ -24940,6 +25059,11 @@ tokens, credentials in the text) are refused: secrets go through k2 vault.
 path:12 or path:12-40 opens at that line.
 
 --json on any verb. Ask --option repeatable; --allow-custom; mix with --options is 400.
+
+A post or an ask that got no answer is asked again with the same key (K2 posts one
+key once). If K2 still doesn't answer, the error says it may have been delivered
+and prints the key: run the same command with --idempotency-key <key> to try once
+more without a duplicate.
 EOF
 }
 
@@ -49285,6 +49409,13 @@ OPTIONS
                  attribute the latency.
   --wake-timeout <secs>
                  Ceiling for the post-wake readiness wait (default 20).
+  --idempotency-key <key>
+                 Every send carries one key; K2 delivers a key once. When
+                 K2 doesn't answer, msg asks again with the same key, then
+                 says the message may have been delivered and prints the
+                 key: run the same command with --idempotency-key <key> to
+                 try once more without a duplicate (the answer then says
+                 "replayed": true if it had landed).
 
 RESPONSE (JSON)
   {
@@ -49625,7 +49756,8 @@ cmd_schema() {
         {"name": "--why", "arg": "text", "description": "withdraw/dismiss: one-line reason (at most 200 characters) shown on the closed card and told to the agent."},
         {"name": "--name", "arg": "NAME", "description": "Required for secret. Vault key. Never printed."},
         {"name": "--prompt", "arg": "text", "description": "Optional secret field prompt."},
-        {"name": "--dest", "arg": "vault", "description": "Secret destination. vault only."}
+        {"name": "--dest", "arg": "vault", "description": "Secret destination. vault only."},
+        {"name": "--idempotency-key", "arg": "key", "description": "Post or ask: K2 posts one key once. After a 'may have been delivered' line, rerun the same command with the key it printed."}
       ]
     },
     {
@@ -49685,7 +49817,8 @@ cmd_schema() {
         {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Accepts multiple paths as one package. Preferred tray mode."},
         {"name": "--inbox", "arg": null, "description": "Hard error — use --inbox-silent or --inbox-wake."},
         {"name": "--title", "arg": "text", "description": "Title override for tray package (with --inbox-silent|--inbox-wake)."},
-        {"name": "--body", "arg": "text", "description": "Cover brief. With files, prepended to the tray package (not XOR). Without files, legacy compose body."}
+        {"name": "--body", "arg": "text", "description": "Cover brief. With files, prepended to the tray package (not XOR). Without files, legacy compose body."},
+        {"name": "--idempotency-key", "arg": "key", "description": "K2 delivers one key once. Each send has its own; after a 'may have been delivered' line, rerun the same command with the key it printed to try again without a duplicate."}
       ]
     },
     {
@@ -71903,6 +72036,7 @@ _msg_inbox_delete_staged() {
 _msg_inbox_map_response() {
     local response="$1"
     local wake_mode="${2:-false}"
+    _k2_idem_replay_note "$response"
     if ! command -v python3 >/dev/null 2>&1; then
         echo "$response"
         return 0
@@ -72124,10 +72258,13 @@ _cmd_msg_inbox_form_inner() {
     # box while staging on the peer (Bug A) and blocked federation-only
     # peers (Bug B).
 
-    local title="" body="" priority="" from="" path="" summary=""
+    local title="" body="" priority="" from="" path="" summary="" idem_key=""
     local positional=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --idempotency-key)
+                [[ -n "${2:-}" ]] || { echo "usage: --idempotency-key <key>  (the key a 'may have been delivered' line printed)" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --summary)  summary="$2"; shift 2 ;;
             --title)    title="$2"; shift 2 ;;
             --body)     body="$2"; shift 2 ;;
@@ -72172,6 +72309,11 @@ _cmd_msg_inbox_form_inner() {
 
     local wake_flag="false"
     [[ "$mode" == "wake" ]] && wake_flag="true"
+    # 0.46.15: one key for this send; every deliver / compose below carries
+    # it (BEGIN_CLI_SEND_ONCE), so a retry never lands a second package.
+    _k2_idem_init "$idem_key"
+    local idem_param
+    idem_param="idempotency_key=$(urlencode "$_K2_IDEM_KEY")"
 
     # ── File package path (primary; single or multi) ─────────────────
     if [[ ${#file_paths[@]} -gt 0 ]]; then
@@ -72199,7 +72341,9 @@ _cmd_msg_inbox_form_inner() {
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-            cli_send cli_post_form "/cli/inbox/deliver" "$params"
+            params="${params}&${idem_param}"
+            _permission_note_reset
+            _k2_idem_send cli_post_form "/cli/inbox/deliver" "$params"
         }
 
         _msg_inbox_post_deliver_multi() {
@@ -72214,7 +72358,9 @@ _cmd_msg_inbox_form_inner() {
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-            cli_send cli_post_form "/cli/inbox/deliver" "$params"
+            params="${params}&${idem_param}"
+            _permission_note_reset
+            _k2_idem_send cli_post_form "/cli/inbox/deliver" "$params"
         }
 
         _msg_inbox_post_deliver_bundle() {
@@ -72224,7 +72370,9 @@ _cmd_msg_inbox_form_inner() {
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-            cli_send cli_post_form "/cli/inbox/deliver-bundle" "$params"
+            params="${params}&${idem_param}"
+            _permission_note_reset
+            _k2_idem_send cli_post_form "/cli/inbox/deliver-bundle" "$params"
         }
 
         local response staged_path=""
@@ -72308,7 +72456,9 @@ _cmd_msg_inbox_form_inner() {
     [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
     [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
     [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+    params="${params}&${idem_param}"
     local response
+    _permission_note_reset
 
     # Federated agent::host (or legacy agent@host): the wake rides the
     # tray and the PEER wakes its own workspace, answering with `wake`.
@@ -72318,12 +72468,12 @@ _cmd_msg_inbox_form_inner() {
     _split_remote_target "$target"
     if [[ -n "${_REMOTE_HOST:-}" ]]; then
         params="${params}&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")"
-        response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+        response=$(_k2_idem_send cli_post_form "/cli/inbox/compose" "$params")
         _msg_inbox_map_response "$response" "$wake_flag"
         return $?
     fi
 
-    response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+    response=$(_k2_idem_send cli_post_form "/cli/inbox/compose" "$params")
 
     # Compose-only for silent. For wake: after compose success, deliver_live
     # with the inbox pointer (package ok is primary).
@@ -72331,6 +72481,7 @@ _cmd_msg_inbox_form_inner() {
         _msg_inbox_map_response "$response" "false"
         return $?
     fi
+    _k2_idem_replay_note "$response"
 
     # Parse compose result; on error, map and exit. On success, wake.
     local compose_id="" compose_title="$title"
@@ -72387,9 +72538,9 @@ print("OK\t" + (d.get("id") or "") + "\t" + (d.get("title") or ""))
     # Wake knock with pointer payload.
     local from_tag="${from:-external}"
     local pointer="[inbox:${compose_id}] ${compose_title}"$'\n'"Open: k2 inbox read ${compose_id}"
-    local wake_params="workspace=$(urlencode "$target")&text=$(urlencode "$pointer")&from=$(urlencode "$from_tag")&wake=true"
+    local wake_params="workspace=$(urlencode "$target")&text=$(urlencode "$pointer")&from=$(urlencode "$from_tag")&wake=true&${idem_param}"
     local wake_resp
-    wake_resp=$(cli_send cli_post_form "/cli/workspace/msg" "$wake_params")
+    wake_resp=$(_k2_idem_send cli_post_form "/cli/workspace/msg" "$wake_params")
     # Merge package + wake into one JSON line for the agent.
     if command -v python3 >/dev/null 2>&1; then
         python3 -c '

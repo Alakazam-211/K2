@@ -435,7 +435,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key)
                 skip_next=1
                 continue
                 ;;
@@ -464,10 +464,14 @@ cmd_thread() {
     local all="false"
     local before_seq=""
     local one_seq=""
+    local idem_key=""
     local -a files=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --json) json="true"; shift ;;
+            --idempotency-key)
+                [[ -n "${2:-}" ]] || { echo "Error: --idempotency-key needs the key a 'may have been delivered' line printed" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --from) explicit_from="$2"; shift 2 ;;
             --limit) limit="$2"; shift 2 ;;
             --all) all="true"; shift ;;
@@ -525,19 +529,25 @@ cmd_thread() {
         exit 1
     fi
     if [[ -n "$text" || ${#files[@]} -gt 0 ]]; then
+        # 0.46.15: one key per post, as the Thread's own clientMsgId
+        # (post-idempotency-v1): a retry after no answer posts once.
+        _k2_idem_init "$idem_key"
         local params="addr=$(urlencode "$target")"
         params="${params}&text=$(urlencode "$text")"
         params="${params}&from=$(urlencode "$from")"
         params="${params}&via=thread"
+        params="${params}&clientMsgId=$(urlencode "$_K2_IDEM_KEY")"
         if [[ ${#files[@]} -gt 0 ]]; then
             local attachments_json
             attachments_json="$(_thread_attachments_json "${files[@]}")" || exit 1
             params="${params}&attachments=$(urlencode "$attachments_json")"
         fi
         local response
-        response=$(cli_send cli_post_form "/cli/thread/post" "$params")
+        _permission_note_reset
+        response=$(_k2_idem_send cli_post_form "/cli/thread/post" "$params")
         local rc=$?
         _k2_moved_from_note "$response"
+        _k2_idem_replay_note "$response"
         if [[ "$json" == "true" ]]; then
             echo "$response"
         else
@@ -676,12 +686,15 @@ for it in items:
 
 cmd_thread_ask() {
     local target="" prompt="" json="false" explicit_from=""
-    local options_csv="" allow_custom="false" expires="" no_expiry="false"
+    local options_csv="" allow_custom="false" expires="" no_expiry="false" idem_key=""
     local option_list=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             ask) shift ;;
             --json) json="true"; shift ;;
+            --idempotency-key)
+                [[ -n "${2:-}" ]] || { echo "Error: --idempotency-key needs the key a 'may have been delivered' line printed" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --from)
                 [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
                 explicit_from="$2"; shift 2 ;;
@@ -738,10 +751,13 @@ cmd_thread_ask() {
     if [[ ${#option_list[@]} -gt 0 ]]; then
         option_json=$(printf '%s\n' "${option_list[@]}" | python3 -c 'import json,sys; print(json.dumps([ln.rstrip("\n") for ln in sys.stdin]))')
     fi
+    # 0.46.15: one card per invocation (BEGIN_CLI_SEND_ONCE).
+    _k2_idem_init "$idem_key"
     local body
     body=$(ADDR="$target" PROMPT="$prompt" FROM="$from" OPTIONS_CSV="$options_csv" \
-        OPTIONS_JSON="$option_json" ALLOW="$allow_custom" EXPIRES="$expires" NO_EXPIRY="$no_expiry" python3 -c 'import json,os
-obj={"addr":os.environ["ADDR"],"prompt":os.environ["PROMPT"],"from":os.environ.get("FROM","k2")}
+        OPTIONS_JSON="$option_json" ALLOW="$allow_custom" EXPIRES="$expires" NO_EXPIRY="$no_expiry" \
+        IDEM_KEY="$_K2_IDEM_KEY" python3 -c 'import json,os
+obj={"addr":os.environ["ADDR"],"prompt":os.environ["PROMPT"],"from":os.environ.get("FROM","k2"),"idempotency_key":os.environ["IDEM_KEY"]}
 csv=os.environ.get("OPTIONS_CSV") or ""
 optj=os.environ.get("OPTIONS_JSON") or ""
 if csv:
@@ -757,9 +773,11 @@ if os.environ.get("NO_EXPIRY")=="true":
 print(json.dumps(obj))
 ')
     local response
-    response=$(cli_send cli_post_json "/cli/thread/ask" "$body")
+    _permission_note_reset
+    response=$(_k2_idem_send cli_post_json "/cli/thread/ask" "$body")
     local rc=$?
     _k2_moved_from_note "$response"
+    _k2_idem_replay_note "$response"
     if [[ "$json" == "true" ]]; then
         echo "$response"
         return $rc
@@ -1255,6 +1273,11 @@ tokens, credentials in the text) are refused: secrets go through k2 vault.
 path:12 or path:12-40 opens at that line.
 
 --json on any verb. Ask --option repeatable; --allow-custom; mix with --options is 400.
+
+A post or an ask that got no answer is asked again with the same key (K2 posts one
+key once). If K2 still doesn't answer, the error says it may have been delivered
+and prints the key: run the same command with --idempotency-key <key> to try once
+more without a duplicate.
 EOF
 }
 

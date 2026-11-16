@@ -1076,7 +1076,7 @@ cli_post_json() {
     # 0.46.6 (client papercut 12): note the refusal's (or hold's) `permission`
     # object, so a held `k2 publish run` ends with its Ask-with line.
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.
@@ -1202,7 +1202,7 @@ cli_post_form() {
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}&project=$(urlencode "$PROJECT")"
     _k2_cfg_add data-raw "$body"
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
-        --connect-timeout 5 --max-time 30 \
+        --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
     # No status is read here: a 5xx from an earlier request must not count.

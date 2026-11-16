@@ -411,6 +411,7 @@ _msg_inbox_delete_staged() {
 _msg_inbox_map_response() {
     local response="$1"
     local wake_mode="${2:-false}"
+    _k2_idem_replay_note "$response"
     if ! command -v python3 >/dev/null 2>&1; then
         echo "$response"
         return 0
@@ -632,10 +633,13 @@ _cmd_msg_inbox_form_inner() {
     # box while staging on the peer (Bug A) and blocked federation-only
     # peers (Bug B).
 
-    local title="" body="" priority="" from="" path="" summary=""
+    local title="" body="" priority="" from="" path="" summary="" idem_key=""
     local positional=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --idempotency-key)
+                [[ -n "${2:-}" ]] || { echo "usage: --idempotency-key <key>  (the key a 'may have been delivered' line printed)" >&2; exit 2; }
+                idem_key="$2"; shift 2 ;;
             --summary)  summary="$2"; shift 2 ;;
             --title)    title="$2"; shift 2 ;;
             --body)     body="$2"; shift 2 ;;
@@ -680,6 +684,11 @@ _cmd_msg_inbox_form_inner() {
 
     local wake_flag="false"
     [[ "$mode" == "wake" ]] && wake_flag="true"
+    # 0.46.15: one key for this send; every deliver / compose below carries
+    # it (BEGIN_CLI_SEND_ONCE), so a retry never lands a second package.
+    _k2_idem_init "$idem_key"
+    local idem_param
+    idem_param="idempotency_key=$(urlencode "$_K2_IDEM_KEY")"
 
     # ── File package path (primary; single or multi) ─────────────────
     if [[ ${#file_paths[@]} -gt 0 ]]; then
@@ -707,7 +716,9 @@ _cmd_msg_inbox_form_inner() {
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-            cli_send cli_post_form "/cli/inbox/deliver" "$params"
+            params="${params}&${idem_param}"
+            _permission_note_reset
+            _k2_idem_send cli_post_form "/cli/inbox/deliver" "$params"
         }
 
         _msg_inbox_post_deliver_multi() {
@@ -722,7 +733,9 @@ _cmd_msg_inbox_form_inner() {
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-            cli_send cli_post_form "/cli/inbox/deliver" "$params"
+            params="${params}&${idem_param}"
+            _permission_note_reset
+            _k2_idem_send cli_post_form "/cli/inbox/deliver" "$params"
         }
 
         _msg_inbox_post_deliver_bundle() {
@@ -732,7 +745,9 @@ _cmd_msg_inbox_form_inner() {
             [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-            cli_send cli_post_form "/cli/inbox/deliver-bundle" "$params"
+            params="${params}&${idem_param}"
+            _permission_note_reset
+            _k2_idem_send cli_post_form "/cli/inbox/deliver-bundle" "$params"
         }
 
         local response staged_path=""
@@ -816,7 +831,9 @@ _cmd_msg_inbox_form_inner() {
     [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
     [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
     [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+    params="${params}&${idem_param}"
     local response
+    _permission_note_reset
 
     # Federated agent::host (or legacy agent@host): the wake rides the
     # tray and the PEER wakes its own workspace, answering with `wake`.
@@ -826,12 +843,12 @@ _cmd_msg_inbox_form_inner() {
     _split_remote_target "$target"
     if [[ -n "${_REMOTE_HOST:-}" ]]; then
         params="${params}&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")"
-        response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+        response=$(_k2_idem_send cli_post_form "/cli/inbox/compose" "$params")
         _msg_inbox_map_response "$response" "$wake_flag"
         return $?
     fi
 
-    response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+    response=$(_k2_idem_send cli_post_form "/cli/inbox/compose" "$params")
 
     # Compose-only for silent. For wake: after compose success, deliver_live
     # with the inbox pointer (package ok is primary).
@@ -839,6 +856,7 @@ _cmd_msg_inbox_form_inner() {
         _msg_inbox_map_response "$response" "false"
         return $?
     fi
+    _k2_idem_replay_note "$response"
 
     # Parse compose result; on error, map and exit. On success, wake.
     local compose_id="" compose_title="$title"
@@ -895,9 +913,9 @@ print("OK\t" + (d.get("id") or "") + "\t" + (d.get("title") or ""))
     # Wake knock with pointer payload.
     local from_tag="${from:-external}"
     local pointer="[inbox:${compose_id}] ${compose_title}"$'\n'"Open: k2 inbox read ${compose_id}"
-    local wake_params="workspace=$(urlencode "$target")&text=$(urlencode "$pointer")&from=$(urlencode "$from_tag")&wake=true"
+    local wake_params="workspace=$(urlencode "$target")&text=$(urlencode "$pointer")&from=$(urlencode "$from_tag")&wake=true&${idem_param}"
     local wake_resp
-    wake_resp=$(cli_send cli_post_form "/cli/workspace/msg" "$wake_params")
+    wake_resp=$(_k2_idem_send cli_post_form "/cli/workspace/msg" "$wake_params")
     # Merge package + wake into one JSON line for the agent.
     if command -v python3 >/dev/null 2>&1; then
         python3 -c '

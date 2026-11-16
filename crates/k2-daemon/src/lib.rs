@@ -236,6 +236,9 @@ pub mod first_run_routes;
 pub(crate) mod first_run_grants;
 /// post-idempotency-v1 (0.46.8): `clientMsgId` on Thread and project chat posts.
 pub mod client_msg_id;
+/// Idempotent sends (0.46.15): `idempotency_key` on `k2 msg`, tray
+/// deliveries, `k2 thread ask` and federated sends; a repeat answers the first.
+pub mod send_once;
 /// Send-delay fix 2 (0.46.8): Thread and project chat posts answer before
 /// the agent inject, which runs on a per-agent, in-order delivery lane.
 pub(crate) mod delivery_queue;

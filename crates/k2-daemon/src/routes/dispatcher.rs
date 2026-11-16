@@ -11213,12 +11213,27 @@ async fn handle_one_request(
                 .or_else(|| params.get("project_path"))
                 .cloned()
                 .filter(|s| !s.trim().is_empty());
+            // 0.46.15 (send_once): who called, from the token only, so a
+            // person's idempotency key never answers another caller's.
+            params.remove(crate::workspace_sessions_routes::CALLER_KIND_KEY);
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
                 if let Some(t) = compose_target {
                     params.insert("project".to_string(), t.clone());
                     params.insert("project_path".to_string(), t);
                 }
+            } else {
+                let kind = match crate::sidecar_routes::caller_from_tcp(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                ) {
+                    crate::sidecar_routes::Caller::Login { username } => format!("login:{username}"),
+                    crate::sidecar_routes::Caller::Owner => "owner".to_string(),
+                    _ => "other".to_string(),
+                };
+                params.insert(crate::workspace_sessions_routes::CALLER_KIND_KEY.to_string(), kind);
             }
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
@@ -14638,7 +14653,7 @@ async fn handle_one_request(
                     // Blocking: seal + durable enqueue + network dial.
                     tokio::task::spawn_blocking(move || {
                         crate::caller_workspace::with_request_principal(scoped_principal, || {
-                            crate::federation_routes::handle_send(&body)
+                            crate::federation_routes::handle_send_route(&body)
                         })
                     })
                     .await

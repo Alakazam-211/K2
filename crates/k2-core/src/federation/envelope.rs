@@ -123,12 +123,25 @@ pub fn seal(
     to_subdomain: &str,
     ttl: u8,
 ) -> Result<Vec<u8>, FederationError> {
+    seal_with_msg_uuid(signal, my_key, to_subdomain, ttl, None)
+}
+
+/// [`seal`] with a caller-chosen `msg_uuid` (0.46.15: a send that carries an
+/// idempotency key derives a stable one, so a repeat reaches the peer with
+/// the uuid its durable seen-store already holds). `None` = a fresh v4.
+pub fn seal_with_msg_uuid(
+    signal: &AgentSignal,
+    my_key: &KeyPair,
+    to_subdomain: &str,
+    ttl: u8,
+    msg_uuid: Option<&str>,
+) -> Result<Vec<u8>, FederationError> {
     let from_fingerprint = super::peers::fingerprint_of_spki_der(&my_key.public_key_der());
 
     let payload = SignedPayload {
         from_fingerprint: from_fingerprint.clone(),
         to_subdomain: to_subdomain.to_string(),
-        msg_uuid: Uuid::new_v4().to_string(),
+        msg_uuid: msg_uuid.map(str::to_string).unwrap_or_else(|| Uuid::new_v4().to_string()),
         ttl,
         trace: vec![from_fingerprint],
         nonce: Uuid::new_v4().to_string(),
@@ -295,6 +308,28 @@ mod tests {
             // And the re-signed envelope verifies against the same key.
             let opened = open(&second, &my_pem).expect("resealed envelope must open");
             assert_eq!(opened, signal);
+        });
+    }
+
+    #[test]
+    fn seal_with_msg_uuid_keeps_the_given_uuid_and_a_fresh_nonce() {
+        with_temp_home(|| {
+            let my_key = load_or_create().expect("keypair");
+            let my_pem = my_key.public_key_pem();
+            let signal = sample_signal();
+            let uuid = "0f8fad5b-d9cb-569f-a165-70867728950e";
+            let a = seal_with_msg_uuid(&signal, &my_key, "rosson", 8, Some(uuid)).expect("seal a");
+            let b = seal_with_msg_uuid(&signal, &my_key, "rosson", 8, Some(uuid)).expect("seal b");
+            let (a, b): (FederationEnvelope, FederationEnvelope) =
+                (serde_json::from_slice(&a).unwrap(), serde_json::from_slice(&b).unwrap());
+            assert_eq!(a.payload.msg_uuid, uuid);
+            assert_eq!(b.payload.msg_uuid, uuid, "the same key seals the same msg_uuid");
+            assert_ne!(a.payload.nonce, b.payload.nonce, "each seal still gets its own nonce");
+            let opened = open(&serde_json::to_vec(&a).unwrap(), &my_pem).expect("opens");
+            assert_eq!(opened, signal);
+            let fresh = seal_with_msg_uuid(&signal, &my_key, "rosson", 8, None).expect("seal fresh");
+            let fresh: FederationEnvelope = serde_json::from_slice(&fresh).unwrap();
+            assert_ne!(fresh.payload.msg_uuid, uuid, "None mints a new uuid");
         });
     }
 

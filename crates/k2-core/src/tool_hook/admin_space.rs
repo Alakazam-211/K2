@@ -636,11 +636,19 @@ fn plan_members(
                 external_ids: vec![ExternalId::parse(ext)?],
             };
             out.push(op(Op::AdminMemberAdd, subject.clone(), serde_json::to_value(body).map_err(|e| e.to_string())?, Some(ext.clone())));
-            out.push(level_op(conn, home, space, ext, level)?);
+            // The level sync waits while a private channel they are in is
+            // still being made (see `admin_channels::level_waits`); the
+            // next sweep sends it (the row's level stays unset).
+            if !admin_channels::level_waits(conn, home, ext, now)? {
+                out.push(level_op(conn, home, space, ext, level)?);
+                s.levels += 1;
+            }
             put_member(conn, ext, PENDING_ADD, None, Some(level), now)?;
             s.adds += 1;
-            s.levels += 1;
         } else if row.and_then(|r| r.level.as_deref()) != Some(*level) {
+            if admin_channels::level_waits(conn, home, ext, now)? {
+                continue;
+            }
             out.push(level_op(conn, home, space, ext, level)?);
             conn.execute(
                 "UPDATE tool_admin_members SET want_level = ?2, updated_at = ?3 WHERE external_id = ?1",

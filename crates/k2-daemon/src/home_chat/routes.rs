@@ -338,7 +338,13 @@ fn messages(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
     if let Some(a) = param(p, "after") {
         path.push_str(&format!("&after={}", sew_id(a, "after")?));
     }
-    let page = ok_or_refuse(as_person(c, "GET", &path, None)?)?;
+    let a = as_person(c, "GET", &path, None)?;
+    if a.status == 404 {
+        if let Some(gone) = dm_gone(c, &conv)? {
+            return Err(gone);
+        }
+    }
+    let page = ok_or_refuse(a)?;
     Ok(json!({"ok": true, "conv": conv, "page": page}))
 }
 
@@ -469,15 +475,33 @@ fn send(c: &Caller, b: SendBody) -> R<Value> {
     let idem = key.idempotency_key();
     sends::once(key, || {
         let a = sew_as_keyed(&c.ext, "POST", &format!("/api/v1/channels/{conv}/messages"), Some(&body), Some(&idem))?;
-        if a.status == 404 && skin(|conn| ledger::dm_target(conn, &c.ext, &conv))?.is_some() {
-            // A DM K2 kept that Sew no longer has (its data was rolled
-            // back or restored): forget it, so opening the DM makes it again.
-            skin(|conn| ledger::forget_dm_channel(conn, &conv))?;
-            return Err(Refusal::new(404, "conversation_gone", "this DM is gone from chat on this server: open it again (POST /cli/home-chat/dm) and resend"));
+        if a.status == 404 {
+            if let Some(gone) = dm_gone(c, &conv)? {
+                return Err(gone);
+            }
         }
         let m = ok_or_refuse(a)?;
         Ok(json!({"ok": true, "message": m}))
     })
+}
+
+/// Sew answered 404 for `conv`: when it is a DM of the caller's that K2
+/// kept (forgotten now, so opening the DM makes it again) or already forgot
+/// after a reset of Sew's data, the answer is 404 `conversation_gone`, not
+/// Sew's bare `not_found`.
+fn dm_gone(c: &Caller, conv: &str) -> R<Option<Refusal>> {
+    let kept = skin(|conn| ledger::dm_target(conn, &c.ext, conv))?.is_some();
+    if kept {
+        skin(|conn| ledger::forget_dm_channel(conn, conv))?;
+    }
+    if kept || skin(|conn| ledger::dm_gone(conn, &c.ext, conv))? {
+        return Ok(Some(Refusal::new(
+            404,
+            "conversation_gone",
+            "this DM is gone from chat on this server: open it again (POST /cli/home-chat/dm) and resend",
+        )));
+    }
+    Ok(None)
 }
 
 /// A Home channel K2's ledger holds as archived (or on its way there) takes

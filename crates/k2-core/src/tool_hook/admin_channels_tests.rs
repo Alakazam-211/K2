@@ -83,6 +83,13 @@ fn owner_level_change() -> Vec<NewOp> {
     with(|c| admin_space::plan(c, &facts(), &HashSet::new(), 10).map(|(ops, _)| ops))
 }
 
+/// [`level_waits`] with the flags as recorded now (read first: skin.db's
+/// connection is not reentrant).
+fn level_waits_now(ext: &str, now: i64) -> bool {
+    let f = flags();
+    with(|c| level_waits(c, &f, ext, now))
+}
+
 fn level_ops(ops: &[NewOp], ext: &str) -> Vec<Value> {
     ops.iter()
         .filter(|o| o.op == Op::AdminMemberLevel && o.subject_key == member_subject(SPACE, ext))
@@ -330,4 +337,51 @@ fn members_can_leave_is_set_once_with_update_when_the_flag_shows() {
         "added": [{"external_id": ALEX, "member_id": "41"}]}).to_string());
     assert!(with(|c| channel_by_slug(c, &row.slug)).unwrap().can_leave);
     assert!(plan_home(&HashSet::new(), &levels(&[ALEX])).is_empty());
+}
+
+/// The box re-test after `k2 hostchat rollback --accept-data-loss` (Sew
+/// 0.10.3 -> 0.9.3: no `member_channels_level_only`): K2 makes its
+/// invite-only channel again by slug, and the Space's full check re-adds
+/// every member with a level sync. A sync carrying the list K2 had then
+/// (`[]`: the channel has no id yet) and delivered after the create (they
+/// ride different queues) took everyone back out of it: Sew answered 404 to
+/// all, the creator too. The sync now waits for the create, and carries the
+/// new id once it lands; the open channel never held anything up.
+#[test]
+fn a_level_sync_waits_for_the_invite_only_channels_being_made_again() {
+    let _e = setup(&[]);
+    live_channel("c-aaaaaaaaaa", "9001", false, &[OWNER, ALEX]);
+    live_channel("c-cccccccccc", "9003", true, &[OWNER]);
+    // The reset (Sew's data went back) and the full check's member re-add
+    // (no tool_admin_members row: the owner is added again).
+    with(|c| forget_sew_ids(c, 10));
+    let ops = with(|c| admin_space::plan(c, &facts(), &HashSet::new(), 10).map(|(ops, _)| ops));
+    let create = ops
+        .iter()
+        .find(|o| o.op == Op::AdminChannelCreate && o.subject_key == channel_subject("c-aaaaaaaaaa"))
+        .unwrap_or_else(|| panic!("the invite-only channel is made again: {ops:?}"));
+    assert_eq!(create.payload["members"], json!([ALEX, OWNER]), "with its people");
+    assert!(ops.iter().any(|o| o.op == Op::AdminMemberAdd && o.subject_key == member_subject(SPACE, OWNER)), "{ops:?}");
+    assert_eq!(level_ops(&ops, OWNER), Vec::<Value>::new(), "no level sync with a list that lacks the channel being made");
+    assert!(level_waits_now(OWNER, 10));
+    assert!(!level_waits_now(SAM, 10), "someone not in it never waits");
+
+    // The create and the Space add land; the next sweep sends the sync
+    // with the new id.
+    deliver(create, &json!({"channel_id": "9101", "space_id": SPACE, "slug": "c-aaaaaaaaaa", "name": "c-aaaaaaaaaa", "private": true,
+        "created": true, "added": [{"external_id": ALEX, "member_id": "41"}, {"external_id": OWNER, "member_id": "40"}]}).to_string());
+    let add = ops.iter().find(|o| o.op == Op::AdminMemberAdd && o.subject_key == member_subject(SPACE, OWNER)).expect("the add");
+    deliver(add, &json!({"already": [{"external_id": OWNER, "member_id": "40"}]}).to_string());
+    assert!(!level_waits_now(OWNER, 11));
+    let ops = with(|c| admin_space::plan(c, &facts(), &HashSet::new(), 11).map(|(ops, _)| ops));
+    assert_eq!(level_ops(&ops, OWNER), vec![json!({"channel_ids": ["9101"], "level": "moderator"})]);
+
+    // A create Sew holds longer than the bound holds no one's level.
+    live_channel("c-dddddddddd", "9004", false, &[SAM]);
+    with(|c| forget_sew_ids(c, 20));
+    assert!(level_waits_now(SAM, 20 + CREATE_HOLDS_LEVEL_SECS - 1));
+    assert!(!level_waits_now(SAM, 20 + CREATE_HOLDS_LEVEL_SECS));
+    // Once Sew takes a level alone, nothing waits.
+    hook::note_features_for_tests(&[features::SERVER_GOVERNED_SPACE, features::MEMBER_CHANNELS_LEVEL_ONLY]).unwrap();
+    assert!(!level_waits_now(SAM, 20));
 }

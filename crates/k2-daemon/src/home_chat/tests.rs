@@ -661,6 +661,38 @@ fn a_sew_data_reset_drops_k2s_sew_ids_and_starts_over() {
     done();
 }
 
+/// The box re-test: after a reset of Sew's data forgot a DM, a client still
+/// holding the old id gets 404 `conversation_gone` (open it again), on a
+/// send and on a read, not Sew's bare 404; someone else's 404 for that id
+/// stays Sew's. Opening the DM again clears it.
+#[test]
+fn a_dm_forgotten_by_a_sew_reset_answers_conversation_gone() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::admin_channels::set_dm_channel(conn, ALEX, "k2:owner", "920", 1))
+        .expect("K2 kept the DM");
+    super::sew_data_reset("a test rollback");
+    api.answer("/api/v1/channels/920/messages", 404, json!({"error": {"code": "not_found", "hint": "channel not found"}}));
+    api.answer("/api/v1/channels/920/messages?limit=50", 404, json!({"error": {"code": "not_found", "hint": "channel not found"}}));
+    let e = call("/cli/home-chat/send", json!({"conv": "920", "text": "hi", "nonce": "z1"})).unwrap_err();
+    assert_eq!((e.status, e.code.as_str()), (404, "conversation_gone"), "a send");
+    let q: HashMap<String, String> = [("conv".to_string(), "920".to_string())].into();
+    let e = routes::route("/cli/home-chat/messages", &alex(), &q, b"").unwrap_err();
+    assert_eq!((e.status, e.code.as_str()), (404, "conversation_gone"), "a read");
+    // Not a DM of theirs: Sew's own answer.
+    api.answer("/api/v1/channels/921/messages", 404, json!({"error": {"code": "not_found", "hint": "channel not found"}}));
+    let e = call("/cli/home-chat/send", json!({"conv": "921", "text": "hi", "nonce": "z2"})).unwrap_err();
+    assert_eq!((e.status, e.code.as_str()), (404, "not_found"));
+    // Sew answers the same id again on an open: it isn't gone.
+    k2_core::tool_hook::with_home_chat_db(|conn| {
+        k2_core::tool_hook::admin_channels::set_dm_channel(conn, ALEX, "k2:owner", "920", 2)?;
+        k2_core::tool_hook::admin_channels::dm_gone(conn, ALEX, "920")
+    })
+    .map(|gone| assert!(!gone, "cleared"))
+    .expect("ledger");
+    done();
+}
+
 /// After a reset of Sew's data the follower connects again at once, with a
 /// fresh sign-in and IDENTIFY, whatever backoff the restart's drops built.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

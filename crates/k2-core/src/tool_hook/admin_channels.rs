@@ -106,6 +106,12 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             channel_id    TEXT NOT NULL,
             updated_at    INTEGER NOT NULL,
             PRIMARY KEY (person_ext, target_ext)
+         );
+         CREATE TABLE IF NOT EXISTS tool_home_chat_dms_gone (
+            channel_id    TEXT PRIMARY KEY NOT NULL,
+            person_ext    TEXT NOT NULL,
+            target_ext    TEXT NOT NULL,
+            gone_at       INTEGER NOT NULL
          );",
     )
     .map_err(|e| format!("skin.db home channels schema: {e}"))?;
@@ -268,6 +274,34 @@ fn note_want(conn: &Connection, ext: &str, list: &[String], now: i64) -> Result<
     .map_err(|e| format!("home want list write: {e}"))
 }
 
+/// How long a private channel waiting for its create holds its people's
+/// level syncs back ([`level_waits`]); a create Sew held longer than this
+/// (blocked, `why` noted) no longer holds anyone's level.
+pub const CREATE_HOLDS_LEVEL_SECS: i64 = 15 * 60;
+
+/// Must `ext`'s level sync wait? Yes while Sew takes the sync with a list
+/// (no `member_channels_level_only`) and an invite-only channel they are in
+/// (or on their way into) is still being made: the list K2 can send now
+/// lacks its id, and Sew's sync sets the WHOLE private list, so a sync
+/// delivered after the create (they ride different queues) takes everyone
+/// back out of the channel just made, the creator too (the box re-test
+/// after a data-loss rollback: two invite-only channels made again, then
+/// emptied by the full check's level syncs; 404 to all). Once the create
+/// lands the list has the id, and the next sweep sends the sync.
+pub fn level_waits(conn: &Connection, flags: &HomeChatFeatures, ext: &str, now: i64) -> Result<bool, String> {
+    if flags.member_channels_level_only {
+        return Ok(false);
+    }
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tool_admin_chat_members m JOIN tool_admin_chat_channels c ON c.slug = m.slug
+          WHERE m.external_id = ?1 AND m.state IN ('in','pending_add') AND c.open = 0 AND c.state = 'pending'
+            AND c.channel_id IS NULL AND c.want_archive = 0 AND c.updated_at > ?2)",
+        params![ext, now - CREATE_HOLDS_LEVEL_SECS],
+        |r| r.get(0),
+    )
+    .map_err(|e| format!("home level wait: {e}"))
+}
+
 /// The level sync's body for `ext` at `level` (HP-3): the whole ledger list,
 /// or, once Sew reports `member_channels_level_only`, no list at all.
 pub fn level_body(conn: &Connection, flags: &HomeChatFeatures, ext: &str, level: &str) -> Result<ServerMemberChannelsRequest, String> {
@@ -416,6 +450,9 @@ pub fn dm_channel(conn: &Connection, person: &str, target: &str) -> Result<Optio
 
 /// Keep the DM channel Sew's `POST /api/v1/dms` answered.
 pub fn set_dm_channel(conn: &Connection, person: &str, target: &str, channel_id: &str, now: i64) -> Result<(), String> {
+    // Sew answered this id (again): it is not gone.
+    conn.execute("DELETE FROM tool_home_chat_dms_gone WHERE channel_id = ?1", params![channel_id])
+        .map_err(|e| format!("home dm gone clear: {e}"))?;
     conn.execute(
         "INSERT INTO tool_home_chat_dms (person_ext, target_ext, channel_id, updated_at) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(person_ext, target_ext) DO UPDATE SET channel_id = excluded.channel_id, updated_at = excluded.updated_at",
@@ -428,7 +465,38 @@ pub fn set_dm_channel(conn: &Connection, person: &str, target: &str, channel_id:
 /// Forget DM channel `channel_id` for both people (Sew no longer has it):
 /// the next open makes it again.
 pub fn forget_dm_channel(conn: &Connection, channel_id: &str) -> Result<usize, String> {
+    note_dms_gone(conn, Some(channel_id))?;
     conn.execute("DELETE FROM tool_home_chat_dms WHERE channel_id = ?1", params![channel_id]).map_err(|e| format!("home dm forget: {e}"))
+}
+
+/// How long a forgotten DM id is remembered as gone ([`dm_gone`]).
+pub const DM_GONE_KEEP_SECS: i64 = 30 * 24 * 3600;
+
+/// Remember the DM ids about to be forgotten (`None`: every one) as gone,
+/// for each of their two people, so a client still holding one hears that
+/// its DM is gone (and opens it again), not Sew's bare 404.
+fn note_dms_gone(conn: &Connection, channel_id: Option<&str>) -> Result<(), String> {
+    let now = super::outbox::now_secs();
+    conn.execute("DELETE FROM tool_home_chat_dms_gone WHERE gone_at < ?1", params![now - DM_GONE_KEEP_SECS])
+        .map_err(|e| format!("home dm gone prune: {e}"))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO tool_home_chat_dms_gone (channel_id, person_ext, target_ext, gone_at)
+         SELECT channel_id, person_ext, target_ext, ?2 FROM tool_home_chat_dms WHERE ?1 IS NULL OR channel_id = ?1",
+        params![channel_id, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("home dm gone: {e}"))
+}
+
+/// Was `channel_id` a DM of `person`'s that K2 forgot because Sew no longer
+/// has it (a data reset, a 404)?
+pub fn dm_gone(conn: &Connection, person: &str, channel_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tool_home_chat_dms_gone WHERE channel_id = ?1 AND (person_ext = ?2 OR target_ext = ?2))",
+        params![channel_id, person],
+        |r| r.get(0),
+    )
+    .map_err(|e| format!("home dm gone read: {e}"))
 }
 
 /// What [`forget_sew_ids`] dropped or sent again.
@@ -459,6 +527,7 @@ pub struct SewReset {
 pub fn forget_sew_ids(conn: &Connection, now: i64) -> Result<SewReset, String> {
     let tx = conn.unchecked_transaction().map_err(|e| format!("home sew reset begin: {e}"))?;
     let e = |what: &'static str| move |err: rusqlite::Error| format!("home sew reset ({what}): {err}");
+    note_dms_gone(&tx, None)?;
     let dms = tx.execute("DELETE FROM tool_home_chat_dms", []).map_err(e("dms"))?;
     // A channel on its way to being archived is archived: K2 never makes
     // it again only to archive it.
@@ -699,7 +768,7 @@ fn plan_members(
         if full_list {
             let subject = member_subject(space, &ext);
             let Some(level) = levels.get(&ext) else { continue };
-            if busy.contains(&subject) || planned.contains(&subject) {
+            if busy.contains(&subject) || planned.contains(&subject) || level_waits(conn, flags, &ext, now)? {
                 continue;
             }
             // A membership change goes as the whole list even when Sew

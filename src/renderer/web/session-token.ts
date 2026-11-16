@@ -9,7 +9,8 @@
  *   - pragmatic WebSocket query auth (browsers send cookies on same-origin
  *     WS upgrades too, but in-memory token covers edge proxies / reload
  *     races while the cookie is settling)
- *   - boot restore before the first cookie-authenticated request
+ *   - a reload of the same tab before the first cookie-authenticated request
+ * Nothing secret is kept in localStorage (see {@link purgeStoredWebSecrets}).
  *
  * Desktop (`!VITE_WEB`) never uses these cookies or headers.
  */
@@ -25,11 +26,40 @@ export const K2_WEB_CLIENT_HEADER = 'X-K2-Client'
 export const K2_WEB_CLIENT_VALUE = 'web'
 
 /**
- * localStorage key used by the web `k2_secret_*` shim (and boot restore)
- * for the same-origin host token when "remember" is on.
+ * Key prefix older web builds used for `k2_secret_*` values in
+ * localStorage. Nothing writes it any more; {@link purgeStoredWebSecrets}
+ * removes whatever is left on load.
  */
-export function webSecretStorageKey(service: string, account: string): string {
-  return `k2_secret:${service}:${account}`
+export const WEB_SECRET_STORAGE_PREFIX = 'k2_secret:'
+
+/**
+ * Hosted web rule: no long-lived secret lives in persistent browser
+ * storage. Session bearers are kept in memory and, for a reload of the
+ * same tab, in `sessionStorage`; the HttpOnly `k2_session` cookie is the
+ * server's own copy. Passwords and refresh tokens are never kept.
+ *
+ * Cleanup on load: delete every `k2_secret:*` localStorage key and the
+ * old localStorage copy of the session token. Returns the removed keys.
+ * Desktop never calls this (its secrets are in the OS keychain).
+ */
+export function purgeStoredWebSecrets(
+  storage: Storage | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined,
+): string[] {
+  if (!storage) return []
+  const doomed: string[] = []
+  try {
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i)
+      if (key === null) continue
+      if (key.startsWith(WEB_SECRET_STORAGE_PREFIX) || key === WEB_SESSION_TOKEN_KEY) {
+        doomed.push(key)
+      }
+    }
+    for (const key of doomed) storage.removeItem(key)
+  } catch {
+    /* storage disabled — nothing readable to remove */
+  }
+  return doomed
 }
 
 /** Persist (or clear) the tab-session token used on reload / WS. */
@@ -44,19 +74,12 @@ export function persistWebSessionToken(token: string): void {
   }
 }
 
+/** This tab's session token (sessionStorage only), or ''. */
 export function readWebSessionToken(): string {
   try {
     if (typeof sessionStorage !== 'undefined') {
       const s = sessionStorage.getItem(WEB_SESSION_TOKEN_KEY)
       if (s && s.length > 0) return s
-    }
-  } catch {
-    /* ignore */
-  }
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const legacy = localStorage.getItem(WEB_SESSION_TOKEN_KEY)
-      if (legacy && legacy.length > 0) return legacy
     }
   } catch {
     /* ignore */

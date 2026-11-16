@@ -1,14 +1,35 @@
 /**
  * Web shim for `@tauri-apps/api/core`.
- * Known no-ops resolve; secret / host-list commands use localStorage stubs;
- * unknown commands warn and resolve null softly.
+ * Known no-ops resolve; the host list uses localStorage (it holds no
+ * secrets); unknown commands warn and resolve null softly.
+ *
+ * Secrets: the browser has no keychain, and no long-lived secret may sit
+ * in persistent browser storage. `k2_secret_*` keeps a Connect session
+ * token in memory for this page only (the store mirrors the live one into
+ * sessionStorage for a reload of the same tab); passwords, the account
+ * session and any other secret are dropped. Desktop never loads this file.
  */
 
 import {
   readConnectHostsStorage,
   writeConnectHostsStorage,
 } from '../lib/connect-hosts-storage'
-import { webSecretStorageKey } from '../web/session-token'
+import { WEB_SECRET_STORAGE_PREFIX } from '../web/session-token'
+
+/**
+ * The one keychain service the web build keeps (in memory): Connect
+ * session tokens. Equal to `K2_CONNECT_KEYCHAIN_SERVICE` in
+ * stores/connect-host.ts (not imported: that store imports this shim).
+ */
+export const WEB_MEMORY_SECRET_SERVICE = 'dev.k2.connect.host-token'
+
+/** Page-lifetime secrets, keyed `<service>:<account>`. */
+const memorySecrets = new Map<string, string>()
+
+/** Test-only: forget every in-memory secret (a page reload). */
+export function __clearWebMemorySecretsForTests(): void {
+  memorySecrets.clear()
+}
 
 const KNOWN_NOOPS = new Set([
   'renderer_heartbeat',
@@ -25,24 +46,6 @@ const KNOWN_NOOPS = new Set([
   // No in-browser app updates: null = no update.
   'app_update_check',
 ])
-
-function storageGet(key: string): string | null {
-  try {
-    if (typeof localStorage === 'undefined') return null
-    return localStorage.getItem(key)
-  } catch {
-    return null
-  }
-}
-
-function storageSet(key: string, value: string): void {
-  try {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(key, value)
-  } catch {
-    /* quota / private mode */
-  }
-}
 
 function storageRemove(key: string): void {
   try {
@@ -150,28 +153,35 @@ export async function invoke<T = unknown>(
   cmd: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  // Web storage stubs for keychain + durable host list (Stage B token auth).
+  // Keychain stand-in: a session token in memory only; nothing else kept.
   if (cmd === 'k2_secret_set') {
     const service = String(args?.service ?? '')
     const account = String(args?.account ?? '')
     const secret = String(args?.secret ?? args?.value ?? '')
-    if (service && account) {
-      storageSet(webSecretStorageKey(service, account), secret)
+    if (service === WEB_MEMORY_SECRET_SERVICE && account && secret) {
+      memorySecrets.set(`${service}:${account}`, secret)
     }
     return undefined as T
   }
   if (cmd === 'k2_secret_get') {
     const service = String(args?.service ?? '')
     const account = String(args?.account ?? '')
-    if (!service || !account) return null as T
-    return (storageGet(webSecretStorageKey(service, account)) ?? null) as T
+    if (service !== WEB_MEMORY_SECRET_SERVICE || !account) return null as T
+    return (memorySecrets.get(`${service}:${account}`) ?? null) as T
   }
   if (cmd === 'k2_secret_delete') {
     const service = String(args?.service ?? '')
     const account = String(args?.account ?? '')
     if (service && account) {
-      storageRemove(webSecretStorageKey(service, account))
+      memorySecrets.delete(`${service}:${account}`)
+      // Belt: a copy an older build stored (boot also sweeps them all).
+      storageRemove(`${WEB_SECRET_STORAGE_PREFIX}${service}:${account}`)
     }
+    return undefined as T
+  }
+  // The k2.dev account session (a refresh token) is never kept on the web.
+  if (cmd === 'k2_account_session_get') return null as T
+  if (cmd === 'k2_account_session_set' || cmd === 'k2_account_session_clear') {
     return undefined as T
   }
   if (cmd === 'connect_hosts_write') {

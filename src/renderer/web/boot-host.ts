@@ -4,42 +4,26 @@
  * The browser SPA is served (and the data plane proxied) from the same
  * origin. There is no local Tauri daemon_ws_url path: activeHost must
  * never be `'local'`. Seed the connect-host store from `window.location`
- * (+ any session/local token) before ConnectionGate polls /boot-status.
+ * (+ this tab's session token) before ConnectionGate polls /boot-status.
  *
  * Phase 2b: HTTP uses cookie auth (`k2_session` + X-K2-Client); the
- * optional sessionStorage token is kept for pragmatic WS `?token=` and
- * boot restore.
+ * optional sessionStorage token is kept for pragmatic WS `?token=` and a
+ * reload of the same tab. Nothing secret is read from localStorage, and
+ * boot deletes what older builds left there.
  */
 
-import {
-  useConnectHostStore,
-  type ConnectHost,
-  K2_CONNECT_KEYCHAIN_SERVICE,
-} from '@/stores/connect-host'
+import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
-import {
-  readWebSessionToken,
-  webSecretStorageKey,
-} from '@/web/session-token'
+import { purgeStoredWebSecrets, readWebSessionToken } from '@/web/session-token'
 import { applyWebPageTitle } from '@/web/page-title'
 
 /** Stable id for the forced same-origin host (not user-editable). */
 export const WEB_ORIGIN_HOST_ID = 'web-same-origin'
 
+/** This tab's session token (sessionStorage), or ''. Never a persistent
+ *  browser copy: a new tab signs in again. */
 function readStoredToken(): string {
-  const session = readWebSessionToken()
-  if (session.length > 0) return session
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const secret = localStorage.getItem(
-        webSecretStorageKey(K2_CONNECT_KEYCHAIN_SERVICE, WEB_ORIGIN_HOST_ID),
-      )
-      if (secret && secret.length > 0) return secret
-    }
-  } catch {
-    /* ignore */
-  }
-  return ''
+  return readWebSessionToken()
 }
 
 /**
@@ -64,7 +48,8 @@ export function buildSameOriginHost(token = ''): ConnectHost {
     port = secure ? 443 : 80
   }
 
-  // Preserve username / remember from a prior seed in the address book.
+  // Preserve username from a prior seed in the address book. The web
+  // client never remembers a password, so `remember` is always false.
   const prev = useConnectHostStore
     .getState()
     .hosts.find((h) => h.id === WEB_ORIGIN_HOST_ID)
@@ -77,7 +62,7 @@ export function buildSameOriginHost(token = ''): ConnectHost {
     secure,
     token,
     username: prev?.username,
-    remember: prev?.remember ?? true,
+    remember: false,
     lastConnectedAt: prev?.lastConnectedAt ?? null,
   }
 }
@@ -111,6 +96,7 @@ export function forceSameOriginHost(): ConnectHost {
  */
 export function bootWebHostIfNeeded(): void {
   if (!isWebClient()) return
+  purgeStoredWebSecrets()
   applyWebPageTitle()
   forceSameOriginHost()
 }

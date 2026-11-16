@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.15
+
+- **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.
+
 ## 0.46.14 — Choose which Thread the main chat keeps
 
 - **Choose which Thread the main chat keeps.** When you make a sidecar (or another past chat) the main chat from the chat menu and both have a Thread, K2 asks: keep the main chat's Thread, or use the other chat's. The Thread you don't pick isn't deleted; it stays at an address of its own (`<agent>/<n>`). From a terminal: `k2 sessions main set <id> --thread keep-main|adopt-sidecar`.

@@ -652,6 +652,8 @@ export async function forgetToken(hostId: string): Promise<void> {
  *  as "remembered" with nothing in the keychain). Sign-in paths should use
  *  {@link saveRememberedPassword}, which also un-marks the host. */
 export async function rememberPassword(hostId: string, password: string): Promise<void> {
+  // Hosted web: a password is never kept; the person signs in again.
+  if (isWebClient()) return
   await invoke('k2_secret_set', {
     service: K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE,
     account: hostId,
@@ -683,6 +685,14 @@ export async function saveRememberedPassword(
   hostId: string,
   password: string,
 ): Promise<string | null> {
+  if (isWebClient()) {
+    // Hosted web never remembers a password: make sure the host doesn't
+    // claim one. Nothing failed, so nothing to show.
+    const store = useConnectHostStore.getState()
+    const saved = store.hosts.find((h) => h.id === hostId)
+    if (saved && saved.remember) store.addHost({ ...saved, remember: false })
+    return null
+  }
   try {
     await rememberPassword(hostId, password)
     return null
@@ -696,6 +706,7 @@ export async function saveRememberedPassword(
 
 /** Resolve a host's remembered login password from the keychain, or null. */
 export async function resolvePassword(hostId: string): Promise<string | null> {
+  if (isWebClient()) return null
   try {
     const secret = await invoke<string | null>('k2_secret_get', {
       service: K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE,

@@ -71,18 +71,20 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
   // (boot seeds hostname only). Always allow editing; pre-fill when known.
   const [username, setUsername] = useState(host.username ?? '')
   const [password, setPassword] = useState('')
-  // Default the remember toggle to the host's saved intent.
-  const [remember, setRemember] = useState(host.remember)
+  const web = isWebClient()
+  // Default the remember toggle to the host's saved intent. The hosted web
+  // client never remembers a password (no toggle; sign in again).
+  const hostRemember = !web && host.remember
+  const [remember, setRemember] = useState(hostRemember)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [rotation, setRotation] = useState<RotationState | null>(() =>
     openOnRotate && host.token
-      ? { host, tempPassword: '', rememberPw: host.remember }
+      ? { host, tempPassword: '', rememberPw: hostRemember }
       : null,
   )
   const usernameRef = useRef<HTMLInputElement | null>(null)
   const passwordRef = useRef<HTMLInputElement | null>(null)
-  const web = isWebClient()
   // Username is locked only when a non-empty value was already configured
   // on a desktop saved host (classic flow). Web / empty always editable.
   const usernameLocked = !web && Boolean(host.username?.trim())
@@ -182,14 +184,14 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     let cancelled = false
     void (async () => {
       if (openOnRotate && host.token) {
-        if (host.remember && host.username?.trim()) {
+        if (hostRemember && host.username?.trim()) {
           const pw = await resolvePassword(host.id)
           if (cancelled || !pw) return
           setRotation((r) => (r && !r.tempPassword ? { ...r, tempPassword: pw } : r))
         }
         return
       }
-      if (host.remember && host.username?.trim()) {
+      if (hostRemember && host.username?.trim()) {
         const pw = await resolvePassword(host.id)
         if (cancelled) return
         if (pw) {
@@ -325,16 +327,16 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
           />
         </label>
 
-        <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)] cursor-pointer select-none">
-          <Checkbox
-            checked={remember}
-            disabled={busy}
-            onChange={(e) => setRemember(e.target.checked)}
-          />
-          {web
-            ? 'Remember password (this browser)'
-            : 'Remember password (stored in your OS keychain)'}
-        </label>
+        {!web && (
+          <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)] cursor-pointer select-none">
+            <Checkbox
+              checked={remember}
+              disabled={busy}
+              onChange={(e) => setRemember(e.target.checked)}
+            />
+            Remember password (stored in your OS keychain)
+          </label>
+        )}
 
         {error && (
           <div className="text-[12px] text-[var(--color-status-error-soft)]" role="alert">

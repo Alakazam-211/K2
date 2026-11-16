@@ -44,7 +44,14 @@ pub enum HomeMigration {
 }
 
 /// Run the one-time migration against the real `$HOME`. See module docs.
+///
+/// With the home override set (`paths::home_override`) the K2 home is not
+/// under `$HOME`, so there is nothing of `$HOME`'s to move: this touches
+/// nothing and answers `AlreadyDone`.
 pub fn migrate_home_dir() -> Result<HomeMigration, String> {
+    if crate::paths::home_override().is_some() {
+        return Ok(HomeMigration::AlreadyDone);
+    }
     let home = crate::paths::home_dir().ok_or("no home dir")?;
     migrate_home_dir_at(&home)
 }
@@ -52,7 +59,7 @@ pub fn migrate_home_dir() -> Result<HomeMigration, String> {
 /// Testable core — operates on an explicit home root.
 pub fn migrate_home_dir_at(home: &Path) -> Result<HomeMigration, String> {
     let old = home.join(".k2so");
-    let new = home.join(".k2");
+    let new = crate::paths::k2_home_in(home);
 
     let old_is_symlink = old.symlink_metadata()
         .map(|m| m.file_type().is_symlink())
@@ -174,15 +181,15 @@ mod tests {
         assert_eq!(out, HomeMigration::Migrated);
 
         // Contents moved.
-        assert_eq!(std::fs::read(home.join(".k2/k2so.db")).unwrap(), b"dbdb");
-        assert_eq!(std::fs::read(home.join(".k2/daemon.port")).unwrap(), b"12345");
-        assert!(home.join(".k2/hooks").is_dir());
+        assert_eq!(std::fs::read(crate::paths::k2_home_in(&home).join("k2so.db")).unwrap(), b"dbdb");
+        assert_eq!(std::fs::read(crate::paths::k2_home_in(&home).join("daemon.port")).unwrap(), b"12345");
+        assert!(crate::paths::k2_home_in(&home).join("hooks").is_dir());
         // Compat symlink resolves to the same files.
         assert!(home.join(".k2so").symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read(home.join(".k2so/daemon.port")).unwrap(), b"12345");
         // Writing through the OLD path lands in the new dir (old CLIs).
         std::fs::write(home.join(".k2so/probe"), b"x").unwrap();
-        assert!(home.join(".k2/probe").exists());
+        assert!(crate::paths::k2_home_in(&home).join("probe").exists());
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -193,7 +200,7 @@ mod tests {
         std::fs::write(home.join(".k2so/t"), b"1").unwrap();
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::Migrated);
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::AlreadyDone);
-        assert_eq!(std::fs::read(home.join(".k2/t")).unwrap(), b"1");
+        assert_eq!(std::fs::read(crate::paths::k2_home_in(&home).join("t")).unwrap(), b"1");
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -205,8 +212,8 @@ mod tests {
         // The regression state: `~/.k2` exists, no `~/.k2so` at all. Next
         // 0.40.35 launch must CREATE the compat symlink so pairing works.
         let home = tmp_home("heal");
-        std::fs::create_dir_all(home.join(".k2")).unwrap();
-        std::fs::write(home.join(".k2/daemon.port"), b"5000").unwrap();
+        std::fs::create_dir_all(crate::paths::k2_home_in(&home)).unwrap();
+        std::fs::write(crate::paths::k2_home_in(&home).join("daemon.port"), b"5000").unwrap();
         assert!(home.join(".k2so").symlink_metadata().is_err(), "precondition");
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::AlreadyDone);
         let link = home.join(".k2so");
@@ -226,7 +233,7 @@ mod tests {
     fn windows_creates_or_moves_to_dot_k2_without_a_compat_link() {
         let home = tmp_home("fresh-win");
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::FreshInit);
-        assert!(home.join(".k2").is_dir());
+        assert!(crate::paths::k2_home_in(&home).is_dir());
         assert!(home.join(".k2so").symlink_metadata().is_err(), "no ~/.k2so on Windows");
         std::fs::remove_dir_all(&home).unwrap();
 
@@ -234,7 +241,7 @@ mod tests {
         std::fs::create_dir_all(home.join(".k2so")).unwrap();
         std::fs::write(home.join(".k2so/daemon.port"), b"12345").unwrap();
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::Migrated);
-        assert_eq!(std::fs::read(home.join(".k2/daemon.port")).unwrap(), b"12345");
+        assert_eq!(std::fs::read(crate::paths::k2_home_in(&home).join("daemon.port")).unwrap(), b"12345");
         assert!(home.join(".k2so").symlink_metadata().is_err());
         std::fs::remove_dir_all(&home).unwrap();
     }
@@ -250,7 +257,7 @@ mod tests {
         // broke first-launch pairing on every fresh Mac.
         let home = tmp_home("fresh");
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::FreshInit);
-        assert!(home.join(".k2").is_dir());
+        assert!(crate::paths::k2_home_in(&home).is_dir());
         let link = home.join(".k2so");
         assert!(
             link.symlink_metadata().unwrap().file_type().is_symlink(),
@@ -258,7 +265,7 @@ mod tests {
         );
         // And it must resolve to ~/.k2 (writing through it lands in ~/.k2).
         std::fs::write(link.join("probe"), b"x").unwrap();
-        assert!(home.join(".k2/probe").exists());
+        assert!(crate::paths::k2_home_in(&home).join("probe").exists());
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -267,15 +274,15 @@ mod tests {
         let home = tmp_home("conflict");
         std::fs::create_dir_all(home.join(".k2so")).unwrap();
         std::fs::write(home.join(".k2so/old"), b"o").unwrap();
-        std::fs::create_dir_all(home.join(".k2")).unwrap();
-        std::fs::write(home.join(".k2/new"), b"n").unwrap();
+        std::fs::create_dir_all(crate::paths::k2_home_in(&home)).unwrap();
+        std::fs::write(crate::paths::k2_home_in(&home).join("new"), b"n").unwrap();
         match migrate_home_dir_at(&home).unwrap() {
             HomeMigration::Conflict(..) => {}
             other => panic!("expected Conflict, got {other:?}"),
         }
         // Both intact, no symlink games.
         assert!(home.join(".k2so/old").exists());
-        assert!(home.join(".k2/new").exists());
+        assert!(crate::paths::k2_home_in(&home).join("new").exists());
         assert!(!home.join(".k2so").symlink_metadata().unwrap().file_type().is_symlink());
         std::fs::remove_dir_all(&home).unwrap();
     }

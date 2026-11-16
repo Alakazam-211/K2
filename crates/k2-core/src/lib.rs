@@ -528,6 +528,9 @@ pub fn connection_cap(floor: usize, ceiling: usize) -> usize {
 }
 
 #[cfg(test)]
+mod home_override_tests;
+
+#[cfg(test)]
 mod connection_cap_tests {
     use super::connection_cap_for;
 

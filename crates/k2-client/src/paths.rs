@@ -80,14 +80,61 @@ pub fn is_workspace_dot_dir(segment: &str) -> bool {
     WORKSPACE_DOT_DIR_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n))
 }
 
-/// The K2 home directory: `$HOME/.k2`.
+/// The K2 home folder's name under the user's home: `.k2`. Spell it only
+/// here; a path into the home comes from [`k2_home`] (or [`k2_home_in`]
+/// for a given user home).
+pub const HOME_DIR_NAME: &str = ".k2";
+
+/// The K2 home directory: `$HOME/.k2`, unless the home override names
+/// another folder (see [`home_override`]).
 ///
 /// Falls back to a relative `.k2` when no home directory can be resolved
 /// — the same degrade `db::db_dir` has always used, so a pathological
 /// environment behaves identically across subsystems instead of panicking
 /// in some and degrading in others.
 pub fn k2_home() -> PathBuf {
-    home_dir().unwrap_or_default().join(".k2")
+    k2_home_opt().unwrap_or_else(|| PathBuf::from(HOME_DIR_NAME))
+}
+
+/// [`k2_home`], or `None` when there is no override and no user home: for
+/// a caller with its own fallback (an error, a temp folder).
+pub fn k2_home_opt() -> Option<PathBuf> {
+    home_override().or_else(|| home_dir().map(|h| k2_home_in(&h)))
+}
+
+/// The K2 home inside the user home `home`: `<home>/.k2`. For code that is
+/// handed a home (another user's, a test's, a guest's); never follows the
+/// override, because the caller chose the home.
+pub fn k2_home_in(home: impl AsRef<std::path::Path>) -> PathBuf {
+    home.as_ref().join(HOME_DIR_NAME)
+}
+
+/// The home override: the K2 home folder itself (what `~/.k2` is
+/// otherwise), for rigs and tests. Read as `K5_HOME_OVERRIDE`, then
+/// `K2_HOME_OVERRIDE` (`env_names::HOME_OVERRIDE`). Unset means no
+/// override.
+///
+/// A value that is set must be an absolute path: an empty or relative one
+/// panics with the variable's name, because a home that silently moves
+/// with the working directory would scatter a database, a vault and keys.
+pub fn home_override() -> Option<PathBuf> {
+    home_override_from(crate::env_names::first_set_os(crate::env_names::HOME_OVERRIDE)).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The rule of [`home_override`] over a value already read.
+pub fn home_override_from(
+    read: Option<(&'static str, std::ffi::OsString)>,
+) -> Result<Option<PathBuf>, crate::env_names::Malformed> {
+    let Some((name, value)) = read else { return Ok(None) };
+    let path = PathBuf::from(&value);
+    if path.is_absolute() {
+        return Ok(Some(path));
+    }
+    Err(crate::env_names::Malformed {
+        name,
+        value: value.to_string_lossy().into_owned(),
+        why: "the K2 home override must be an absolute path".to_string(),
+    })
 }
 
 /// `~/.k2/bin` — staged sidecar binaries (frpc, k2-open, xdg-open).
@@ -103,6 +150,36 @@ pub fn k2_hooks() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Neither override name set: the home is `<user home>/.k2`, as always.
+    #[test]
+    fn with_no_override_the_home_is_dot_k2_under_the_user_home() {
+        assert_eq!(home_override_from(None), Ok(None));
+        let home = PathBuf::from("/Users/someone");
+        assert_eq!(k2_home_in(&home), PathBuf::from("/Users/someone/.k2"));
+        assert_eq!(HOME_DIR_NAME, ".k2");
+    }
+
+    #[test]
+    fn an_absolute_override_is_the_home_itself() {
+        let abs = if cfg!(windows) { r"D:\rig\k2-home" } else { "/rig/k2-home" };
+        assert_eq!(home_override_from(Some(("K5_HOME_OVERRIDE", abs.into()))), Ok(Some(PathBuf::from(abs))));
+        assert_eq!(home_override_from(Some(("K2_HOME_OVERRIDE", abs.into()))), Ok(Some(PathBuf::from(abs))));
+    }
+
+    #[test]
+    fn an_empty_or_relative_override_fails_loudly() {
+        for bad in ["", "rel/home", ".k2"] {
+            let err = home_override_from(Some(("K2_HOME_OVERRIDE", bad.into()))).expect_err(bad);
+            assert_eq!(err.name, "K2_HOME_OVERRIDE");
+            assert!(err.to_string().contains("absolute path"), "{err}");
+        }
+    }
+
+    #[test]
+    fn the_override_is_read_k5_name_first() {
+        assert_eq!(crate::env_names::HOME_OVERRIDE, &["K5_HOME_OVERRIDE", "K2_HOME_OVERRIDE"]);
+    }
 
     #[test]
     fn k2_home_ends_with_dot_k2_never_k2so() {

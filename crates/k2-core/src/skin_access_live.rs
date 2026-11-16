@@ -303,6 +303,7 @@ mod tests {
         ("tool_admin_space", "toward Sew"),
         ("tool_app_chat_facts", "toward Sew"),
         ("tool_home_chat_dms", "toward Sew: the DM channel id each person opened with another"),
+        ("tool_home_chat_dms_gone", "a forgotten DM id, kept a while so it answers conversation_gone; grants nothing"),
         ("tool_app_member_lists", "toward Sew"),
         ("tool_app_service_retire", "toward Sew"),
         ("tool_app_space_channels", "toward Sew"),

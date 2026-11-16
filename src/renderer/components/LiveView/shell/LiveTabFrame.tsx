@@ -6,10 +6,12 @@
 // squeezes; or, in 'reflow' (the editor's), beside it, narrowing the text
 // with no scrim. The panel scrolls with soft ends (ScrollEdgeFrame). A view
 // that lays out its own rows (the timeline: the lanes run full width under
-// the panel) places LivePanel itself and leaves `panelOpen` off here.
+// the panel) places LivePanel itself and leaves `panelOpen` off here. The
+// panel slides open and closed like the app's drawers (PanelMotion).
 
 import { ScrollEdgeFrame, cx } from '@/components/ui'
 import { CloseGlyph } from './glyphs'
+import { PANEL_MOTION_CSS, SlidingPanel } from './PanelMotion'
 import { LIVE_SHELL_CSS } from './shellCss'
 
 export function LiveTabFrame({
@@ -50,7 +52,7 @@ export function LiveTabFrame({
 }): React.JSX.Element {
   return (
     <div data-testid="lv-tab" data-sample={sample ? '' : undefined} data-narrow={narrow ? '' : undefined} className="lv-shell flex h-full min-h-0 flex-col overflow-hidden">
-      <style>{LIVE_SHELL_CSS}</style>
+      <style>{LIVE_SHELL_CSS + PANEL_MOTION_CSS}</style>
       {header}
       {banner}
       {notice}
@@ -61,8 +63,8 @@ export function LiveTabFrame({
           {foot}
           {status}
         </div>
-        {panelOpen ? (
-          <LivePanel narrow={narrow} mode={panelMode} label={panelLabel} onClose={onClosePanel}>
+        {panel !== null && panel !== undefined && panel !== false ? (
+          <LivePanel open={panelOpen} narrow={narrow} mode={panelMode} label={panelLabel} onClose={onClosePanel}>
             {panel}
           </LivePanel>
         ) : null}
@@ -71,14 +73,17 @@ export function LiveTabFrame({
   )
 }
 
-/** The closable side panel: beside the hero, or a sheet over it when narrow (the nearest positioned box holds it). */
+/** The closable side panel: beside the hero, or a sheet over it when narrow (the nearest positioned box holds it).
+ *  It slides like the app's drawers: keep it rendered and flip `open`, so it can slide out. */
 export function LivePanel({
+  open = true,
   narrow,
   mode = 'sheet',
   label = 'Who’s watching and the changes',
   onClose,
   children,
 }: {
+  open?: boolean
   narrow: boolean
   mode?: 'sheet' | 'reflow'
   label?: string
@@ -87,7 +92,8 @@ export function LivePanel({
 }): React.JSX.Element {
   const sheet = narrow && mode === 'sheet'
   return (
-    <aside
+    <SlidingPanel open={open} sheet={sheet}>
+      <aside
       data-testid="lv-panel"
       data-sheet={sheet ? '' : undefined}
       aria-label={label}
@@ -109,6 +115,7 @@ export function LivePanel({
       <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto" testId="lv-panel-scroll">
         {children}
       </ScrollEdgeFrame>
-    </aside>
+      </aside>
+    </SlidingPanel>
   )
 }

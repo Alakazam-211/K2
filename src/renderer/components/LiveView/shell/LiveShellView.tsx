@@ -60,8 +60,8 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
   // A view that places the say row and the panel itself gets them as nodes; the frame then holds neither.
   const placed = !!config.placesSayAndPanel
   const placedPanel =
-    placed && s.panelOpen ? (
-      <LivePanel narrow={narrow} onClose={() => s.setPanelOpen(false)}>
+    placed ? (
+      <LivePanel open={s.panelOpen} narrow={narrow} onClose={() => s.setPanelOpen(false)}>
         {panel}
       </LivePanel>
     ) : null

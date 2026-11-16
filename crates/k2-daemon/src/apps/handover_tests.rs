@@ -1522,6 +1522,15 @@ fn copy_source_lands_in_b_without_env_or_k2_files() {
     std::fs::write(src.join("lib/app.js"), b"console.log('hi')").unwrap();
     std::fs::write(src.join(".env.k2"), b"TOKEN=k2v://ws/a/TOKEN").unwrap();
     std::fs::write(src.join(".k2/notes.md"), b"private").unwrap();
+    // K2's folder under its other names: a leftover `.k2so/` and `.k5/`,
+    // and one nested in a sub-folder. A name that only looks like it goes.
+    for dir in [".k2so/inbox", ".k5", "lib/.k2so", ".k2so-notes"] {
+        std::fs::create_dir_all(src.join(dir)).unwrap();
+    }
+    std::fs::write(src.join(".k2so/inbox/old.md"), b"old private").unwrap();
+    std::fs::write(src.join(".k5/notes.md"), b"new private").unwrap();
+    std::fs::write(src.join("lib/.k2so/x.md"), b"nested private").unwrap();
+    std::fs::write(src.join(".k2so-notes/a.md"), b"ordinary").unwrap();
     let b_dir = f._home.path().join("b-ws-s7");
     std::fs::create_dir_all(&b_dir).unwrap();
     {
@@ -1539,5 +1548,9 @@ fn copy_source_lands_in_b_without_env_or_k2_files() {
     assert_eq!(std::fs::read(dest.join("lib/app.js")).unwrap(), b"console.log('hi')");
     assert!(!dest.join(".env.k2").exists(), "env files stay behind");
     assert!(!dest.join(".k2").exists(), "K2's folder stays behind");
+    assert!(!dest.join(".k2so").exists(), "a leftover .k2so folder stays behind");
+    assert!(!dest.join(".k5").exists(), "K2's folder under its coming name stays behind");
+    assert!(!dest.join("lib/.k2so").exists(), "and so does one inside a sub-folder");
+    assert_eq!(std::fs::read(dest.join(".k2so-notes/a.md")).unwrap(), b"ordinary", "a name that only looks like it is copied");
     assert_eq!(app_row(&f.app).folder_path.as_deref(), Some(dest.to_string_lossy().as_ref()));
 }

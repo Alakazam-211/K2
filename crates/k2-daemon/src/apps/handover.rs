@@ -1843,7 +1843,14 @@ fn context_layers(to: &str, from: &str) {
 /// What a source copy leaves out: K2's own folder, env files and anything
 /// that could hold a secret value.
 fn copy_skips(name: &str) -> bool {
-    name == ".k2" || name == ".git" || name == "node_modules" || name.starts_with(".env") || name.ends_with(".pem") || name.ends_with(".key")
+    // K2's folder under each of its names: a leftover `.k2so/` (old inbox,
+    // role and notes) must not leave the box with the App either.
+    k2_core::paths::is_workspace_dot_dir(name)
+        || name == ".git"
+        || name == "node_modules"
+        || name.starts_with(".env")
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
 }
 
 fn copy_tree(from: &std::path::Path, to: &std::path::Path, budget: &mut u64) -> std::io::Result<u64> {

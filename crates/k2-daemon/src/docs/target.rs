@@ -235,9 +235,30 @@ fn segment_match(pattern: &str, seg: &str) -> bool {
     }
 }
 
+/// `rel` lower-cased, with a first segment that names the workspace's
+/// private folder under any of its names (`.k2so`, `.k5`, `.K2`, `.k2.`:
+/// `k2_core::paths::is_workspace_dot_dir`) written as `.k2`. The lists
+/// below say `.k2/…`; a leftover `.k2so/` beside it holds the same kinds
+/// of files, and root links may still point into it, so the same rules
+/// apply there.
+fn with_k2_dot_dir(rel: &str) -> String {
+    let lower = rel.to_ascii_lowercase();
+    let (first, rest) = match lower.split_once('/') {
+        Some((first, rest)) => (first, Some(rest)),
+        None => (lower.as_str(), None),
+    };
+    if !k2_core::paths::is_workspace_dot_dir(first) {
+        return lower;
+    }
+    match rest {
+        Some(rest) => format!(".k2/{rest}"),
+        None => ".k2".to_string(),
+    }
+}
+
 /// True for a path K2 generates (lowercase compare; `*` = one segment).
 pub fn is_generated(rel: &str) -> bool {
-    let lower = rel.to_ascii_lowercase();
+    let lower = with_k2_dot_dir(rel);
     let segs: Vec<&str> = lower.split('/').collect();
     GENERATED.iter().any(|g| {
         let gs: Vec<&str> = g.split('/').collect();
@@ -245,9 +266,9 @@ pub fn is_generated(rel: &str) -> bool {
     })
 }
 
-/// True under `.k2/vault/`.
+/// True under `.k2/vault/` (or the same folder under `.k2so/`, `.k5/`).
 pub fn is_vault(rel: &str) -> bool {
-    let lower = rel.to_ascii_lowercase();
+    let lower = with_k2_dot_dir(rel);
     lower == ".k2/vault" || lower.starts_with(".k2/vault/")
 }
 
@@ -268,9 +289,10 @@ pub fn is_git_internal(rel: &str) -> bool {
 /// through a doc.
 const K2_DOC_DIRS: &[&str] = &[".k2/wiki/", ".k2/prds/", ".k2/docs/", ".k2/conflicts/"];
 
-/// True for a path under `.k2/` outside [`K2_DOC_DIRS`].
+/// True for a path under `.k2/` (or `.k2so/`, `.k5/`) outside
+/// [`K2_DOC_DIRS`].
 pub fn is_k2_config(rel: &str) -> bool {
-    let lower = rel.to_ascii_lowercase();
+    let lower = with_k2_dot_dir(rel);
     lower.starts_with(".k2/") && !K2_DOC_DIRS.iter().any(|d| lower.starts_with(d))
 }
 
@@ -654,6 +676,49 @@ mod tests {
         assert!(!is_vault(".k2/vaulted.md"));
     }
 
+    /// The private folder has had three names; a leftover `.k2so/` can sit
+    /// beside `.k2/` with root links still pointing into it. Each rule
+    /// that says `.k2/…` holds under every name and spelling.
+    #[test]
+    fn the_k2_rules_hold_under_each_name_of_the_folder() {
+        for dir in [".k2", ".k2so", ".k5", ".K2", ".K2SO", ".K5", ".k2so.", ".k5 "] {
+            assert!(is_vault(&format!("{dir}/vault")), "{dir}");
+            assert!(is_vault(&format!("{dir}/vault/vault.db")), "{dir}");
+            assert!(is_vault(&format!("{dir}/VAULT/x.md")), "{dir}");
+            assert!(!is_vault(&format!("{dir}/vaulted.md")), "{dir}");
+
+            for p in ["settings.json", "heartbeats/digest/WAKEUP.md", "agent/ROLE.md", "hooks/notify.sh", "inbox/a.txt"] {
+                assert!(is_k2_config(&format!("{dir}/{p}")), "{dir}/{p}");
+            }
+            for p in ["wiki/Home.md", "wiki/img/a.png", "prds/plan.md", "docs/a.pdf", "conflicts/a.md"] {
+                assert!(!is_k2_config(&format!("{dir}/{p}")), "{dir}/{p} is a doc folder");
+            }
+
+            for p in ["AGENTS.md", "skills/k2-cli/SKILL.md", "skills/k2-zen/SKILL.md", "context/catalog/team-roster.md"] {
+                assert!(is_generated(&format!("{dir}/{p}")), "{dir}/{p}");
+            }
+            for p in ["wiki/Home.md", "skills/my-own/SKILL.md", "context/catalog/notes.md"] {
+                assert!(!is_generated(&format!("{dir}/{p}")), "{dir}/{p}");
+            }
+        }
+        // Only the workspace's own folder, and only that name.
+        for p in [
+            "docs/.k2so/vault/x",
+            ".k2so-old/vault/x",
+            ".k5x/vault/x",
+            "k2so/vault/x",
+            "notes/.k5/settings.json",
+        ] {
+            assert!(!is_vault(p), "{p}");
+            assert!(!is_k2_config(p), "{p}");
+            assert!(!is_generated(p), "{p}");
+        }
+        assert_eq!(with_k2_dot_dir(".K2SO/Wiki/Home.md"), ".k2/wiki/home.md");
+        assert_eq!(with_k2_dot_dir(".k5"), ".k2");
+        assert_eq!(with_k2_dot_dir("Notes/.k2so/x"), "notes/.k2so/x");
+        assert_eq!(with_k2_dot_dir(""), "");
+    }
+
     #[test]
     fn a_board_file_is_blob_by_any_spelling_and_nothing_else_is() {
         for name in ["plan.k5board", "a/b/plan.k5board", "X.K5BOARD", "Makefile.k5board", ".env.k5board", ".k5board", "a.md.k5board"] {
@@ -742,6 +807,16 @@ mod tests {
         assert_eq!(deny(".k2/heartbeats.json", &cfg, &cfg).expect_err("k2 config").code, "protected");
         let att = w(".k2/wiki/assets/map.png", &[1, 2, 3]);
         assert_eq!(deny(".k2/wiki/assets/map.png", &att, &att), Ok(()));
+        // The same under a leftover `.k2so/` and the coming `.k5/`. The
+        // generated skill under `.k2so/` is what a stale root link
+        // (CLAUDE.md) may still point at.
+        for dir in [".k2so", ".K2SO", ".k5"] {
+            assert_eq!(deny(&format!("{dir}/vault/k.md"), &v, &v).expect_err("vault").code, "protected", "{dir}");
+            assert_eq!(deny(&format!("{dir}/heartbeats.json"), &cfg, &cfg).expect_err("config").code, "protected", "{dir}");
+            assert_eq!(deny(&format!("{dir}/skills/k2-cli/SKILL.md"), &g, &g).expect_err("gen").code, "generated", "{dir}");
+            assert_eq!(deny(&format!("{dir}/AGENTS.md"), &g, &g).expect_err("gen").code, "generated", "{dir}");
+            assert_eq!(deny(&format!("{dir}/wiki/assets/map.png"), &att, &att), Ok(()), "{dir}: a doc folder");
+        }
         let prd = w(".k2/PROJECT.md", b"# p\n");
         assert_eq!(deny(".k2/PROJECT.md", &prd, &prd), Ok(()), "Markdown under .k2/ stays a doc");
         std::fs::remove_dir_all(&d).expect("cleanup");

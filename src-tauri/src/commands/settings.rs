@@ -288,8 +288,8 @@ fn windows_cli_install(cli_script: &Path, legacy_shim: &Option<PathBuf>) -> Resu
             .map_err(|e| format!("copy the widget-shot runner to {}: {e}", cli_dir.display()))?;
     }
     // The `k2so` alias only where an earlier install left one.
-    let had_alias = k2_client::cli_install::legacy_alias_present(&cli_dir.join("k2so"))
-        || k2_client::cli_install::legacy_alias_present(&bin_dir.join("k2so.cmd"));
+    let had_alias = k2_client::cli_alias::legacy_alias_present(&cli_dir.join("k2so"))
+        || k2_client::cli_alias::legacy_alias_present(&bin_dir.join("k2so.cmd"));
     if let (Some(shim), true) = (legacy_shim, had_alias) {
         let _ = fs::copy(shim, cli_dir.join("k2so"));
     }

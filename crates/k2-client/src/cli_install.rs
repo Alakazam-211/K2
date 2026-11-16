@@ -58,13 +58,8 @@ pub const OPT_OUT_FILE: &str = "cli-path-line-removed";
 /// The fish startup file K2 owns (the whole file is K2's block).
 const FISH_CONF: &str = "k2-cli.fish";
 
-/// The `k2so` alias at `path` is there (a file, or a link, even a broken
-/// one). Installs put `k2` alone on a machine that has no alias, and
-/// refresh one an earlier install made, so scripts that call `k2so` keep
-/// working.
-pub fn legacy_alias_present(path: &Path) -> bool {
-    path.exists() || path.is_symlink()
-}
+/// The `k2so` alias check, shared with the Windows install (every OS).
+pub use crate::cli_alias::legacy_alias_present;
 
 /// `~/.local/bin`, where K2 puts `k2` without admin.
 pub fn user_bin_dir(home: &Path) -> PathBuf {

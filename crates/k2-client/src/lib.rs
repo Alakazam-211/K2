@@ -40,6 +40,8 @@ pub mod airgap;
 pub mod app_settings_view;
 pub mod bg_proc;
 pub mod browser_notes;
+/// The retired `k2so` CLI alias check, on every OS (Windows Install CLI too).
+pub mod cli_alias;
 /// `k2` on the person's PATH with no admin prompt (0.46.11).
 #[cfg(unix)]
 pub mod cli_install;

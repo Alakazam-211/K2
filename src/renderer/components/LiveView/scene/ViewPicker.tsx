@@ -61,7 +61,7 @@ export interface ViewPickerProps {
 function LeftOutLine({ words }: { words: { line: string; details: string[] } }): React.JSX.Element {
   return (
     <div role="none">
-      <div role="note" className="lv-vleft" data-testid="lv-cameras-left-out" title={words.details.join('\n')} aria-label={[words.line, ...words.details].join('. ')}>
+      <div role="note" className="lv-vleft" data-testid="lv-cameras-left-out" title={words.details.length ? words.details.join('\n') : undefined} aria-label={[words.line, ...words.details].join('. ')}>
         {words.line}
       </div>
     </div>

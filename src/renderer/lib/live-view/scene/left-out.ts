@@ -29,12 +29,15 @@ export const LEFT_OUT_WHY: Record<string, string> = {
   parent_unlisted: 'its parent isn’t in the scene',
 }
 
-/** The quiet line under the cameras and each camera's why; null when none was left out. */
-export function camerasLeftOutWords(list: readonly CameraLeftOut[]): { line: string; details: string[] } | null {
-  if (!list.length) return null
+/** The quiet line under the cameras (every one left out, the unnamed `more` too) and each named camera's why,
+ *  then "…and N more"; null when none was left out. */
+export function camerasLeftOutWords(list: readonly CameraLeftOut[], more = 0): { line: string; details: string[] } | null {
+  const n = list.length + more
+  if (!n) return null
+  const named = list.map((c) => `${c.name}: ${LEFT_OUT_WHY[c.reason] ?? 'K2 can’t place it'}`)
   return {
-    line: list.length === 1 ? '1 camera can’t be shown here' : `${list.length} cameras can’t be shown here`,
-    details: list.map((c) => `${c.name}: ${LEFT_OUT_WHY[c.reason] ?? 'K2 can’t place it'}`),
+    line: n === 1 ? '1 camera can’t be shown here' : `${n} cameras can’t be shown here`,
+    details: named.length && more ? [...named, `…and ${more} more`] : named,
   }
 }
 

@@ -65,6 +65,17 @@ export interface SceneListing {
   containers: SceneContainer[]
   /** The cameras the mesh read left out (`cameras_left_out`, passed through by the route); none when it says nothing. */
   camerasLeftOut: CameraLeftOut[]
+  /** More left out than are named: past the route's cap (`cameras_left_out_more`), and entries dropped as bad (`cameras_left_out_dropped`, plus any this reader can't read). Counted, never named. */
+  camerasLeftOutMore: number
+}
+
+const count = (v: unknown): number => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : 0)
+
+/** The cameras left out: those named, and how many more (past the cap, dropped by the route, or unreadable here). */
+function leftOut(b: Raw): { camerasLeftOut: CameraLeftOut[]; camerasLeftOutMore: number } {
+  const raw = Array.isArray(b.cameras_left_out) ? b.cameras_left_out : []
+  const named = raw.flatMap((c): CameraLeftOut[] => (isObj(c) && typeof c.name === 'string' && typeof c.reason === 'string' ? [{ name: c.name, key: str(c.key), reason: c.reason }] : []))
+  return { camerasLeftOut: named, camerasLeftOutMore: count(b.cameras_left_out_more) + count(b.cameras_left_out_dropped) + (raw.length - named.length) }
 }
 
 export function parseSceneListing(body: unknown): SceneListing {
@@ -75,9 +86,7 @@ export function parseSceneListing(body: unknown): SceneListing {
     rev: int(b.rev) ?? 0,
     look: str(b.look),
     shape: str(b.shape),
-    camerasLeftOut: Array.isArray(b.cameras_left_out)
-      ? b.cameras_left_out.flatMap((c): CameraLeftOut[] => (isObj(c) && typeof c.name === 'string' && typeof c.reason === 'string' ? [{ name: c.name, key: str(c.key), reason: c.reason }] : []))
-      : [],
+    ...leftOut(b),
     containers: b.containers.map((c, i) => {
       const o = obj(c, `containers[${i}]`)
       const key = str(o.key)

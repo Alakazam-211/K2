@@ -108,6 +108,11 @@ export class DocsPreviewPictureSource implements PictureSource {
     return this.listing?.camerasLeftOut ?? []
   }
 
+  /** How many more were left out than are named (past the cap, or dropped). */
+  camerasLeftOutMore(): number {
+    return this.listing?.camerasLeftOutMore ?? 0
+  }
+
   bounds(_D: Doc, a: string): ObjectBounds | null {
     return this.boundsBy.get(a) ?? null
   }

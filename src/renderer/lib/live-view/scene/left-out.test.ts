@@ -38,6 +38,33 @@ describe('cameras left out', () => {
     expect(w.details).toEqual(['Camera.003: it isn’t a perspective camera', 'Camera.004: its sensor fit isn’t known', 'Odd: K2 can’t place it'])
   })
 
+  it('past the cap: the count takes the more, the tooltip ends “…and N more”', () => {
+    const L = parseSceneListing({ ...listing(), cameras_left_out: [{ name: 'Camera.003', reason: 'camera_not_perspective' }], cameras_left_out_more: 12 })
+    expect(L.camerasLeftOutMore).toBe(12)
+    expect(camerasLeftOutWords(L.camerasLeftOut, L.camerasLeftOutMore)).toEqual({ line: '13 cameras can’t be shown here', details: ['Camera.003: it isn’t a perspective camera', '…and 12 more'] })
+  })
+
+  it('dropped entries (the route’s, and any this reader can’t read) count, and go in the “more”, never named', () => {
+    const L = parseSceneListing({ ...listing(), cameras_left_out: [{ name: 'Camera.003', reason: 'camera_not_perspective' }, { reason: 'camera_no_aspect' }], cameras_left_out_dropped: 2 })
+    expect(L.camerasLeftOut).toHaveLength(1)
+    expect(L.camerasLeftOutMore).toBe(3)
+    expect(camerasLeftOutWords(L.camerasLeftOut, L.camerasLeftOutMore)).toEqual({ line: '4 cameras can’t be shown here', details: ['Camera.003: it isn’t a perspective camera', '…and 3 more'] })
+  })
+
+  it('more and dropped together; nothing listed: the count alone, no names', () => {
+    const L = parseSceneListing({ ...listing(), cameras_left_out_more: 5, cameras_left_out_dropped: 1 })
+    expect(L.camerasLeftOut).toEqual([])
+    expect(camerasLeftOutWords(L.camerasLeftOut, L.camerasLeftOutMore)).toEqual({ line: '6 cameras can’t be shown here', details: [] })
+    // one, unnamed
+    expect(camerasLeftOutWords([], 1)).toEqual({ line: '1 camera can’t be shown here', details: [] })
+  })
+
+  it('zero, absent or malformed counts add nothing', () => {
+    expect(parseSceneListing({ ...listing(), cameras_left_out_more: 0, cameras_left_out_dropped: -1 }).camerasLeftOutMore).toBe(0)
+    expect(parseSceneListing({ ...listing(), cameras_left_out_more: 'x' }).camerasLeftOutMore).toBe(0)
+    expect(camerasLeftOutWords([], 0)).toBeNull()
+  })
+
   it('every reason the wire names has its words', () => {
     for (const r of ['camera_not_perspective', 'camera_sensor_fit_unknown', 'camera_no_data', 'camera_no_lens', 'camera_no_clip', 'camera_no_aspect', 'camera_degenerate', 'camera_bad_fov', 'linked_object', 'transform_unplaced', 'transform_not_finite', 'delta_transform', 'parent_not_object', 'parent_unlisted'])
       expect(LEFT_OUT_WHY[r], r).toMatch(/^(it|its|it’s|the) /)

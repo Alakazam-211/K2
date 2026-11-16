@@ -101,7 +101,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const retryPicture = feed.status ? feed.retry : control.retryPicture
   // The cameras the real picture can't show (the listing's; a new one moves the epoch).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const leftOut = useMemo(() => (source instanceof DocsPreviewPictureSource ? camerasLeftOutWords(source.camerasLeftOut()) : null), [source, feed.epoch])
+  const leftOut = useMemo(() => (source instanceof DocsPreviewPictureSource ? camerasLeftOutWords(source.camerasLeftOut(), source.camerasLeftOutMore()) : null), [source, feed.epoch])
   const ctx = pictureContext(S, L.pick)
   // Ask is offered only where the shell can open the say row.
   const words = pictureWords(status, { ...ctx, askAgent: ask ? ctx.askAgent : null })

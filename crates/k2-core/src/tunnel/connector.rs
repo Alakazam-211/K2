@@ -19,6 +19,8 @@
 //! `frpc` via PATH or common install dirs.
 
 use std::path::{Path, PathBuf};
+// Only the unix pkill / pgrep paths silence a child (Windows uses frpc_proc).
+#[cfg(unix)]
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};

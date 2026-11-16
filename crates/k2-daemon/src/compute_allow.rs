@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use k2_core::compute::allow::{self, Change};
 use k2_core::compute::proto::frames::JobState;
 use k2_core::compute::{self as compute, store};
+use k2_core::brand::PRODUCT_NAME;
 
 use crate::compute_routes::{audit, b, json_body, need_credential, no, owner_only, resolve_node_for, s, target_ws, Who, Ws, R};
 
@@ -82,7 +83,7 @@ pub(crate) fn not_allowed(ws: &Ws, node_name: &str, names: &[String], what: &str
         format!(
             "{what} '{node_name}' is not on workspace {}'s compute node list, so its jobs (and the source they sync) never go there. \
              Its list: {}. Name one of those, or no node (K2 picks one on the list). Only a person adds a node: \
-             k2 compute allow-nodes --add {node_name} --workspace {} (the owner or an Admin, from a terminal outside K2), \
+             k2 compute allow-nodes --add {node_name} --workspace {} (the owner or an Admin, from a terminal outside {PRODUCT_NAME}), \
              or they approve the card {}'s agent asks with: k2 permission request compute.allow-nodes nodes={node_name}",
             ws.handle,
             list_words(names),
@@ -325,7 +326,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
                         403,
                         format!(
                             "{} {} not granted to workspace {}, so a node list entry would never let its jobs in. A person grants {} first \
-                             (Settings → Compute, or k2 compute grant <node> --workspace {} from a terminal outside K2); then ask to add {}",
+                             (Settings → Compute, or k2 compute grant <node> --workspace {} from a terminal outside {PRODUCT_NAME}); then ask to add {}",
                             ungranted.join(", "),
                             if ungranted.len() == 1 { "is" } else { "are" },
                             ws.handle,
@@ -345,14 +346,14 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let hint = if clear {
             format!(
                 "clearing workspace {}'s compute node list opens every node granted to it at once (more than adding the ones it needs), \
-                 so only a person does it: the owner or an Admin, from a terminal outside K2 (k2 compute allow-nodes --clear --workspace {}). \
+                 so only a person does it: the owner or an Admin, from a terminal outside {PRODUCT_NAME} (k2 compute allow-nodes --clear --workspace {}). \
                  To reach one more node, ask for just that node: k2 compute allow-nodes --add <node>. An agent may only narrow its list",
                 ws.handle, ws.handle
             )
         } else {
             format!(
                 "{words} workspace {}'s compute node list lets its jobs (and the source they sync) reach more machines, so a person decides: \
-                 the owner or an Admin, from a terminal outside K2 (k2 compute allow-nodes --add {} --workspace {}), or on the card \
+                 the owner or an Admin, from a terminal outside {PRODUCT_NAME} (k2 compute allow-nodes --add {} --workspace {}), or on the card \
                  this agent asks for (k2 permission request compute.allow-nodes nodes={}). An agent may only narrow its list",
                 ws.handle,
                 added.join(","),
@@ -414,7 +415,7 @@ fn other_workspace(who: &Who, requested: Option<&str>, r: crate::compute_routes:
         format!(
             "an agent changes only its own workspace's compute node list, never {handle}'s. {handle}'s own agent asks for a node on a card \
              (k2 permission request compute.allow-nodes nodes=<node>, from its terminal), or a person runs \
-             k2 compute allow-nodes --add <node> --workspace {handle} from a terminal outside K2"
+             k2 compute allow-nodes --add <node> --workspace {handle} from a terminal outside {PRODUCT_NAME}"
         ),
     )
     .with("workspace", handle)

@@ -34,6 +34,7 @@
 //! sign-in, as any password an agent sets.
 
 use k2_core::app_grace::requests as reqs;
+use k2_core::brand::PRODUCT_NAME;
 use k2_core::deploy::{codes, store};
 use k2_core::skin;
 use serde_json::{json, Value as J};
@@ -275,7 +276,7 @@ pub fn reset(ws: &str, session: Option<&str>, body: &[u8], actor: &str, is_post:
             body,
             format!("mail {what} a one-time link to choose a new password"),
             vec![
-                "K2 mails the App's reset link to the email on the login, from the App's address: nobody else sees the link, and no password is on this card".to_string(),
+                format!("{PRODUCT_NAME} mails the App's reset link to the email on the login, from the App's address: nobody else sees the link, and no password is on this card"),
                 "their current password keeps working until they use the link".to_string(),
             ],
             (l.p.username.as_str(), l.outside.as_slice()),
@@ -766,7 +767,7 @@ pub(crate) fn box_login_hint(ws: Option<&str>, username: &str) -> String {
 pub(crate) fn box_login_grant_by_owner(username: &str) -> String {
     format!(
         "To give {username} access to your App, ask your human to do it: Settings → Apps → <your App> → Add a person (the server's logins are listed there too), or k2 app grant add \
-         --subject-kind principal --subject <{username}'s principal id> --kind app --target <your app> --role <role> from a terminal outside K2. \
+         --subject-kind principal --subject <{username}'s principal id> --kind app --target <your app> --role <role> from a terminal outside {PRODUCT_NAME}. \
          Or they turn on permission cards ({PERMISSION_CARDS_ON_PATH}) and you ask on a card."
     )
 }

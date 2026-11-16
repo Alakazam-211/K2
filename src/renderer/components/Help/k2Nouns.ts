@@ -9,6 +9,8 @@
 // `also` or `leftover`); k2Nouns.test.ts fails on a new noun so it gets a
 // family and a blurb.
 
+import { PRODUCT_NAME } from '@/lib/brand'
+
 /** `sidecar` = extra chat in this workspace; `linux-sidecar` = Linux process the daemon loads. */
 export type K2NounNote = 'sidecar' | 'linux-sidecar'
 
@@ -250,11 +252,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'domain', blurb: 'Custom domains this server answers for.', example: 'k2 domain list' },
       { noun: 'cert', blurb: 'TLS certificates for attached hostnames.', example: 'k2 cert list' },
       { noun: 'firewall', blurb: 'The ports this server serves publicly, who applies the list, and the App guard.', example: 'k2 firewall' },
-      { noun: 'front', blurb: "K2's front on this box's port 443: passes each name, still encrypted, to its server (Linux).", example: 'k2 front status' },
+      { noun: 'front', blurb: `${PRODUCT_NAME}'s front on this box's port 443: passes each name, still encrypted, to its server (Linux).`, example: 'k2 front status' },
       { noun: 'tunnel', blurb: 'The tunnel to your *.k2.dev address.', example: 'k2 tunnel status' },
       { noun: 'connect', blurb: 'Pair a k2.dev subdomain to this device (headless login).', example: 'k2 connect status' },
       { noun: 'remote-session', blurb: 'Owner/admin remote shells behind grants.', example: 'k2 remote-session status' },
-      { noun: 'fed', blurb: 'Federation: pair with another K2 server so agents can message across.', example: 'k2 fed peers' },
+      { noun: 'fed', blurb: `Federation: pair with another ${PRODUCT_NAME} server so agents can message across.`, example: 'k2 fed peers' },
     ],
   },
   {
@@ -265,7 +267,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'settings', blurb: 'Read/update daemon and workspace settings.', example: 'k2 settings' },
       { noun: 'setup', blurb: 'Your setup list on this server: what is done, what is left.', example: 'k2 setup' },
       { noun: 'push', blurb: "The phones that get this server's pushes, and encrypted pushes.", example: 'k2 push devices' },
-      { noun: 'notifications', blurb: "The senders K2's notification mail leaves from, and your notice address.", example: 'k2 notifications email' },
+      { noun: 'notifications', blurb: `The senders ${PRODUCT_NAME}'s notification mail leaves from, and your notice address.`, example: 'k2 notifications email' },
       { noun: 'api-key', blurb: 'Keys for the public /v1 API (owner only): which workspaces and doors each opens.', example: 'k2 api-key list' },
       { noun: 'migrate', blurb: "Move this box's vault to new hardware as one encrypted file.", example: 'k2 migrate status' },
       { noun: 'vault', blurb: 'Secrets: fetch by name, never paste.', example: 'k2 vault list' },

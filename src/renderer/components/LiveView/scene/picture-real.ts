@@ -4,6 +4,7 @@
 // and the scene's sample tab words its banner by it (LiveShellSample).
 
 import { createContext } from 'react'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Told whether the picture is the file's own (true) or the sample's stand-in (false). */
 export const PictureRealContext = createContext<((real: boolean) => void) | null>(null)
@@ -11,5 +12,5 @@ export const PictureRealContext = createContext<((real: boolean) => void) | null
 /** The banner while the picture is the file's: the same banner and player, honest words. */
 export const REAL_PICTURE_BANNER = {
   title: 'Picture from this file',
-  line: 'People, holds and changes are K2’s sample until live editing arrives.',
+  line: `People, holds and changes are ${PRODUCT_NAME}’s sample until live editing arrives.`,
 } as const

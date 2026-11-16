@@ -4,6 +4,8 @@
 // couldn't be drawn (the mesh read's refusal codes and the preview route's
 // failure codes). No code ever shows; the words say what it means.
 
+import { PRODUCT_NAME } from '@/lib/brand'
+
 /** A camera the mesh read left out: its name, its address when it has a live key, and why. */
 export interface CameraLeftOut {
   name: string
@@ -24,7 +26,7 @@ export const LEFT_OUT_WHY: Record<string, string> = {
   linked_object: 'it’s linked from another file',
   transform_unplaced: 'it isn’t placed',
   transform_not_finite: 'its placement can’t be read',
-  delta_transform: 'it has a delta transform K2 can’t place',
+  delta_transform: `it has a delta transform ${PRODUCT_NAME} can’t place`,
   parent_not_object: 'its parent isn’t an object',
   parent_unlisted: 'its parent isn’t in the scene',
 }
@@ -34,7 +36,7 @@ export const LEFT_OUT_WHY: Record<string, string> = {
 export function camerasLeftOutWords(list: readonly CameraLeftOut[], more = 0): { line: string; details: string[] } | null {
   const n = list.length + more
   if (!n) return null
-  const named = list.map((c) => `${c.name}: ${LEFT_OUT_WHY[c.reason] ?? 'K2 can’t place it'}`)
+  const named = list.map((c) => `${c.name}: ${LEFT_OUT_WHY[c.reason] ?? `${PRODUCT_NAME} can’t place it`}`)
   return {
     line: n === 1 ? '1 camera can’t be shown here' : `${n} cameras can’t be shown here`,
     details: named.length && more ? [...named, `…and ${more} more`] : named,
@@ -46,17 +48,17 @@ const DIDNT_FINISH = 'The picture didn’t finish.'
 /** Why a view couldn't be drawn: the mesh read's refusals and the route's failures. */
 const FAILURE: Record<string, string> = {
   too_large: 'This scene is too large to draw here.',
-  not_blend: 'K2 couldn’t read this file as a 3D scene.',
-  unknown_form: 'K2 couldn’t read this file as a 3D scene.',
-  unreadable: 'K2 couldn’t read this file as a 3D scene.',
-  live_version: 'This file was saved by a version K2 can’t read yet.',
-  live_ambiguous: 'Part of this file points somewhere K2 can’t follow.',
+  not_blend: `${PRODUCT_NAME} couldn’t read this file as a 3D scene.`,
+  unknown_form: `${PRODUCT_NAME} couldn’t read this file as a 3D scene.`,
+  unreadable: `${PRODUCT_NAME} couldn’t read this file as a 3D scene.`,
+  live_version: `This file was saved by a version ${PRODUCT_NAME} can’t read yet.`,
+  live_ambiguous: `Part of this file points somewhere ${PRODUCT_NAME} can’t follow.`,
   pairing_mismatch: 'This view doesn’t match the file’s saved version.',
-  invalid: 'K2 couldn’t read this part of the file.',
+  invalid: `${PRODUCT_NAME} couldn’t read this part of the file.`,
   timeout: 'The picture took too long to draw.',
   renderer_error: DIDNT_FINISH,
   render_error: DIDNT_FINISH,
-  unsupported_part: 'K2 can’t draw this part of the file yet.',
+  unsupported_part: `${PRODUCT_NAME} can’t draw this part of the file yet.`,
   not_on_this_host: 'This computer can’t draw this picture.',
 }
 

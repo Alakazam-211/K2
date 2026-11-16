@@ -26,6 +26,7 @@
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
 import { CATALOG_ERROR_CODES } from '../contract/catalog-types'
 import { httpDetailsOf } from '../daemon-http-error'
+import { PRODUCT_NAME } from '../brand'
 
 /** Every verb this file answers (the catalog's `garden-local` rows). */
 export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
@@ -256,7 +257,7 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
       const timer = deps.setTimer(() => {
         if (done) return
         done = true
-        reject(new ZenStoreError('unreachable', `no answer from K2 in ${Math.round(ZEN_STORE_READ_DEADLINE_MS / 1000)} s`))
+        reject(new ZenStoreError('unreachable', `no answer from ${PRODUCT_NAME} in ${Math.round(ZEN_STORE_READ_DEADLINE_MS / 1000)} s`))
       }, ZEN_STORE_READ_DEADLINE_MS)
       raw(verb, args, { timeoutMs: ZEN_STORE_READ_DEADLINE_MS }).then(
         (v) => {

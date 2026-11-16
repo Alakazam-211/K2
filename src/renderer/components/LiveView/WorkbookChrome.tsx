@@ -1,4 +1,5 @@
-// The workbook's chrome: the header (file, live state, who's here, follow),
+// The workbook's chrome: the header (file, live state, who's here, follow,
+// and the file tab's "File | Watch live" switch while watching),
 // the formula bar, and the sheet tabs at the bottom (with the hidden-sheets
 // menu).
 
@@ -8,6 +9,7 @@ import { modeOf, others, type LiveWorkbookState } from '@/lib/live-view/reducer'
 import { colLetters } from '@k2/mpc-client'
 import { cellShown, formatNumber, gridOf, sheetsOf, styleOf, titleOf, type Book } from '@/lib/live-view/workbook'
 import { actorFrom, type Actor } from '@/lib/live-view/wording'
+import { LiveEntrySwitch } from './LiveEntrySwitch'
 import { Avatar, EyeOffGlyph, FollowGlyph, InfoGlyph, SheetGlyph } from './parts'
 
 export function WorkbookHeader({
@@ -89,6 +91,7 @@ export function WorkbookHeader({
           {following ? `Following ${agent.name}` : `Follow ${agent.name}`}
         </Button>
       ) : null}
+      <LiveEntrySwitch />
     </div>
   )
 }

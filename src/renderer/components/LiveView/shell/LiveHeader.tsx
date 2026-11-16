@@ -1,8 +1,11 @@
 // The live tab's header, one row: the file once (glyph, name, what kind),
 // the state chip, one activity sentence, then the right-hand slots (the
-// avatar stack, Follow, the view's own controls), the mode control and the
+// avatar stack, Follow, the view's own controls), the mode area and the
 // side-panel toggle. A plain file (the editor, not live) shows no chip; the
-// mode control shows live or not; a view with no panel has no toggle.
+// mode control shows live or not; a view with no panel has no toggle. The
+// mode area also holds the file tab's "File | Live" switch when the view
+// sits in a file tab (LiveEntrySwitch; nothing anywhere else), so the
+// header has one place for modes.
 // The sentence never shows cut: when it doesn't fit it gives up whole (and
 // takes its own row when the tab asks, as the timeline does at 800 px).
 
@@ -10,6 +13,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { cx } from '@/components/ui'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import type { LiveTabState } from '@/lib/live-view/shared/state'
+import { LiveEntrySwitch } from '../LiveEntrySwitch'
 import { PanelGlyph } from './glyphs'
 import { LiveAvatar } from './LiveAvatar'
 import { StateChip } from './StateChip'
@@ -109,6 +113,7 @@ export function LiveHeader({
       <div className="flex flex-none items-center gap-2">
         {right}
         {mode}
+        <LiveEntrySwitch />
         {onTogglePanel ? (
           <button
             type="button"

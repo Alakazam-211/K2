@@ -6,7 +6,7 @@
 
 import '../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 
 const h = vi.hoisted(() => ({ on: true, core: 'any-file', liveView: false, gets: [] as string[], statusRefusal: null as unknown }))
 const events = vi.hoisted(() => ({ handlers: new Set<(e: unknown) => void>() }))
@@ -54,6 +54,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { setLivePreview } from '@/lib/live-view/shared/preview-keys'
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { FileViewerPane } from './FileViewerPane'
 
@@ -121,5 +122,28 @@ describe('file tab: any-file panel', () => {
     await waitFor(() => expect(h.gets).toContain('docs/cores'))
     await waitFor(() => expect(document.body.textContent).toContain('part.step'))
     expect(q('any-file-panel')).toBeNull()
+  })
+})
+
+describe('file tab: watching live (preview)', () => {
+  afterEach(() => window.localStorage.clear())
+
+  it('the live header replaces the file toolbar: the file is named once, and File brings the toolbar back', async () => {
+    setLivePreview('scene', true)
+    renderInPrimaryRoom(<FileViewerPane filePath="/ws/living-room.blend" paneId="p" tabId="t" />)
+    await waitFor(() => expect(q('live-scene-watch')).not.toBeNull())
+    expect(document.querySelector('[title="Search (Cmd+F)"]')).not.toBeNull()
+    fireEvent.click(q('live-scene-watch') as HTMLElement)
+    await waitFor(() => expect(q('lv-shell-header')).not.toBeNull(), { timeout: 5000 })
+    // No toolbar row: no search, refresh or close, and no second file name.
+    expect(document.querySelector('[title="Search (Cmd+F)"]')).toBeNull()
+    expect(document.querySelector('[title="Refresh"]')).toBeNull()
+    expect(screen.queryByText('living-room.blend')).toBeNull()
+    expect(screen.queryByText('/ws/living-room.blend')).toBeNull() // nor the path bar at the foot
+    expect(screen.getAllByRole('radiogroup', { name: 'Scene view' })).toHaveLength(1)
+    fireEvent.click(within(q('lv-shell-header') as HTMLElement).getByRole('radio', { name: 'File' }))
+    await waitFor(() => expect(document.querySelector('[title="Search (Cmd+F)"]')).not.toBeNull())
+    expect(screen.getByText('living-room.blend')).toBeTruthy()
+    expect(screen.getByText('/ws/living-room.blend')).toBeTruthy()
   })
 })

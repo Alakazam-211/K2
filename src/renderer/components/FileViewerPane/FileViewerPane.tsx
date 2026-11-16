@@ -837,8 +837,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
   return (
     <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
+      {/* Toolbar. While a live view shows, its header is the tab's only header. */}
+      {!watchingLive && <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
         {/* File info */}
         <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate">
           {fileName}
@@ -998,11 +998,11 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             </svg>
           </button>
         )}
-      </div>
+      </div>}
 
       {/* Search bar (legacy 'edit' mode exclusion removed — ViewMode is
           'rendered' | 'raw', so the guard was always true) */}
-      {searchVisible && (
+      {searchVisible && !watchingLive && (
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
           <svg className="w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8" />
@@ -1220,13 +1220,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       )}
       </div>
 
-      {/* Filepath bar (always shown — the legacy 'edit' mode guard was
-          provably dead: ViewMode is 'rendered' | 'raw') */}
-      <div className="flex items-center border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-0.5 flex-shrink-0">
+      {/* Filepath bar (the legacy 'edit' mode guard was provably dead:
+          ViewMode is 'rendered' | 'raw'). A live view names the file once, in its header. */}
+      {!watchingLive && <div className="flex items-center border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-0.5 flex-shrink-0">
         <span className="text-[10px] text-[var(--color-text-muted)] font-mono truncate" title={filePath}>
           {filePath}
         </span>
-      </div>
+      </div>}
     </div>
   )
 }

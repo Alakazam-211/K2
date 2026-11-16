@@ -37,16 +37,17 @@ export function SampleBannerView<T extends string>({
   onRestart: () => void
 }): React.JSX.Element {
   return (
-    <div className="flex flex-none flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[color-mix(in_srgb,var(--color-status-warn)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-status-warn)_8%,var(--color-bg))] px-3 py-1.5" role="note" aria-label={SAMPLE_BANNER_TITLE} data-testid="lv-sample-banner">
-      <div className="flex min-w-[260px] flex-1 items-start gap-2">
-      <span aria-hidden="true" className="mt-0.5 inline-flex flex-none text-[var(--color-status-warn-text)]">
+    <div className="flex flex-none items-center gap-3 border-b border-[color-mix(in_srgb,var(--color-status-warn)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-status-warn)_8%,var(--color-bg))] px-3 py-1" role="note" aria-label={SAMPLE_BANNER_TITLE} data-testid="lv-sample-banner" data-one-row="">
+      <div className="flex min-w-0 flex-1 items-center gap-2" title={`${SAMPLE_BANNER_TITLE}. ${line}`}>
+      <span aria-hidden="true" className="inline-flex flex-none text-[var(--color-status-warn-text)]">
         <InfoGlyph size={15} />
       </span>
-      <div className="min-w-0 flex-1">
+      {/* One row, as the mock's chip and banner: the line gives way (its whole text is the tooltip). */}
+      <div className="min-w-0 flex-1 truncate whitespace-nowrap">
         <span className="type-hint font-semibold text-[var(--color-text-primary)]">{SAMPLE_BANNER_TITLE}.</span> <span className="type-hint text-[var(--color-text-secondary)]">{line}</span>
       </div>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <div className="flex min-w-0 flex-none items-center gap-2">
       <Segmented<T> aria-label="Sample" value={scenario} onChange={onScenario} options={scenarios.map((s) => ({ value: s.value, label: s.label, buttonProps: { 'data-testid': `lv-sample-scenario-${s.value}` } }))} />
       <div className="flex items-center gap-1" role="group" aria-label="Sample player">
         <Button size="sm" variant="ghost" aria-label={status.playing ? 'Pause the sample' : 'Play the sample'} onClick={status.playing ? onPause : onPlay} data-testid="lv-sample-play">

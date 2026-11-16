@@ -436,6 +436,8 @@ impl TempDir {
         for _ in 0..16 {
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let p = base.join(format!("k2-deckrender-{}-{n}-{nanos:08x}", std::process::id()));
+            // Only unix sets a mode (0700); Windows keeps the default ACL.
+            #[cfg_attr(not(unix), allow(unused_mut))]
             let mut b = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {

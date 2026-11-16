@@ -497,6 +497,122 @@ mod fire_disabled_gate_tests {
     }
 }
 
+#[cfg(test)]
+mod schedule_tz_route_tests {
+    //! 0.46.15 — `heartbeat/add` and `heartbeat/edit` take `tz`: stored on
+    //! the row (the `tz` the list shows), cleared by `local` or an empty
+    //! value, left alone when absent, and a bad zone is refused naming the
+    //! flag with nothing written.
+
+    use super::*;
+
+    fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    fn seed_project(label: &str) -> String {
+        k2_core::db::init_for_tests();
+        let path = std::env::temp_dir()
+            .join(format!("k2-hb-tz-route-{label}-{}-{}", std::process::id(), uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::create_dir_all(&path).expect("mkdir project");
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, 'hb-tz-route', ?2)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), path],
+        )
+        .expect("insert project");
+        path
+    }
+
+    fn listed_tz(path: &str, name: &str) -> serde_json::Value {
+        let body = dispatch_get("/cli/heartbeat/list", path, &params(&[])).expect("list");
+        let rows: serde_json::Value = serde_json::from_str(&body).expect("list is JSON");
+        rows.as_array()
+            .expect("list is an array")
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap_or_else(|| panic!("{name} listed: {rows}"))["tz"]
+            .clone()
+    }
+
+    #[test]
+    fn add_and_edit_set_clear_and_refuse_the_zone() {
+        let path = seed_project("crud");
+        let spec = r#"{"time":"14:15"}"#;
+        let added = dispatch_get(
+            "/cli/heartbeat/add",
+            &path,
+            &params(&[("name", "close"), ("frequency", "daily"), ("spec", spec), ("tz", "America/New_York")]),
+        )
+        .expect("add with tz");
+        let added: serde_json::Value = serde_json::from_str(&added).expect("add reply is JSON");
+        assert_eq!(added["tz"], "America/New_York", "add reply: {added}");
+        assert_eq!(listed_tz(&path, "close"), "America/New_York");
+
+        // A bad zone on add: refused, naming the flag, and no row.
+        let err = dispatch_get(
+            "/cli/heartbeat/add",
+            &path,
+            &params(&[("name", "bad"), ("frequency", "daily"), ("spec", spec), ("tz", "Mars/Olympus")]),
+        )
+        .expect_err("a bad zone is refused");
+        assert!(err.contains("--tz 'Mars/Olympus' is not an IANA time zone"), "{err}");
+        let body = dispatch_get("/cli/heartbeat/list", &path, &params(&[])).expect("list");
+        assert!(!body.contains("\"bad\""), "no row for a refused add: {body}");
+
+        // Edit: --tz alone is a whole edit; the reply names the zone and
+        // the next fire it gives.
+        let reply =
+            dispatch_get("/cli/heartbeat/edit", &path, &params(&[("name", "close"), ("tz", "Europe/London")]))
+                .expect("edit tz alone");
+        let reply: serde_json::Value = serde_json::from_str(&reply).expect("edit reply is JSON");
+        assert_eq!(reply["success"], true, "{reply}");
+        assert_eq!(reply["tz"], "Europe/London", "{reply}");
+        let next = reply["nextFireAt"].as_str().unwrap_or_else(|| panic!("nextFireAt: {reply}"));
+        let next = chrono::DateTime::parse_from_rfc3339(next)
+            .expect("rfc3339")
+            .with_timezone(&chrono_tz::Europe::London);
+        assert_eq!(next.format("%H:%M").to_string(), "14:15", "14:15 London: {reply}");
+        assert_eq!(listed_tz(&path, "close"), "Europe/London");
+
+        // A schedule edit without tz keeps the zone.
+        dispatch_get(
+            "/cli/heartbeat/edit",
+            &path,
+            &params(&[("name", "close"), ("frequency", "daily"), ("spec", r#"{"time":"16:00"}"#)]),
+        )
+        .expect("schedule edit");
+        assert_eq!(listed_tz(&path, "close"), "Europe/London");
+
+        // A bad zone on edit: refused before the schedule moves.
+        let err = dispatch_get(
+            "/cli/heartbeat/edit",
+            &path,
+            &params(&[("name", "close"), ("frequency", "daily"), ("spec", r#"{"time":"08:00"}"#), ("tz", "Nowhere")]),
+        )
+        .expect_err("bad zone on edit");
+        assert!(err.contains("--tz 'Nowhere'"), "{err}");
+        let shown = dispatch_get("/cli/heartbeat/show", &path, &params(&[("name", "close")])).expect("show");
+        let shown: serde_json::Value = serde_json::from_str(&shown).expect("show is JSON");
+        assert_eq!(shown["specJson"], r#"{"time":"16:00"}"#, "schedule unchanged: {shown}");
+        assert_eq!(shown["tz"], "Europe/London");
+
+        // `local` and an empty value both clear it.
+        dispatch_get("/cli/heartbeat/edit", &path, &params(&[("name", "close"), ("tz", "local")]))
+            .expect("tz local");
+        assert_eq!(listed_tz(&path, "close"), serde_json::Value::Null);
+        dispatch_get("/cli/heartbeat/edit", &path, &params(&[("name", "close"), ("tz", "Asia/Tokyo")]))
+            .expect("tz again");
+        assert_eq!(listed_tz(&path, "close"), "Asia/Tokyo");
+        dispatch_get("/cli/heartbeat/edit", &path, &params(&[("name", "close"), ("tz", "")]))
+            .expect("tz empty");
+        assert_eq!(listed_tz(&path, "close"), serde_json::Value::Null);
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // GET: heartbeat CRUD / fires / active-session
 // ──────────────────────────────────────────────────────────────────────
@@ -609,6 +725,38 @@ pub fn apply_edit(
         (true, true) => "schedule and instructions edited",
         (true, false) => "schedule edited",
         _ => "instructions edited",
+    })
+}
+
+/// 0.46.15 — [`apply_edit`] plus `--tz`: `Some(zone)` sets the zone the
+/// schedule's times are read in, `Some("local")` / `Some("")` clears it
+/// (this machine's clock), `None` leaves it as it is. `--tz` alone is a
+/// whole edit. A bad zone is refused before anything changes.
+pub fn apply_edit_with_tz(
+    project_path: &str,
+    name: &str,
+    frequency: Option<String>,
+    spec_json: Option<String>,
+    instructions: Option<String>,
+    tz: Option<String>,
+) -> Result<String, String> {
+    let Some(raw) = tz else {
+        return apply_edit(project_path, name, frequency, spec_json, instructions).map(str::to_string);
+    };
+    k2_core::heartbeats::when::schedule_zone(&raw)?;
+    let other = frequency.as_deref().is_some_and(|f| !f.trim().is_empty()) || instructions.is_some();
+    let first = if other {
+        Some(apply_edit(project_path, name, frequency, spec_json, instructions)?)
+    } else {
+        None
+    };
+    let zone = match hb::k2_heartbeat_set_tz(project_path.to_string(), name.to_string(), &raw)? {
+        Some(z) => format!("time zone set to {z}"),
+        None => "time zone cleared (this computer's clock)".to_string(),
+    };
+    Ok(match first {
+        Some(r) => format!("{r}; {zone}"),
+        None => zone,
     })
 }
 
@@ -796,16 +944,19 @@ pub fn dispatch_get(
             // disk before it answers. Absent/blank = the row waits with
             // `waitReason: wakeup_empty` until instructions are written.
             let instructions = params.get("instructions").cloned();
+            // 0.46.15: `--tz <IANA zone>` reads the schedule's times in
+            // that zone; absent, `local` or empty follows this machine.
             with_change(
                 project_path,
                 &name,
                 "added",
-                hb::k2_heartbeat_add_with_instructions(
+                hb::k2_heartbeat_add_with_tz(
                     project_path.to_string(),
                     name.clone(),
                     frequency,
                     spec_json,
                     instructions,
+                    params.get("tz").map(String::as_str),
                 )
                 .map(|v| v.to_string()),
             )
@@ -1008,19 +1159,31 @@ pub fn dispatch_get(
             if name.is_empty() {
                 return Err("Missing 'name' parameter".to_string());
             }
-            let reason = apply_edit(
+            let reason = apply_edit_with_tz(
                 project_path,
                 &name,
                 params.get("frequency").cloned(),
                 params.get("spec").cloned(),
                 params.get("instructions").cloned(),
+                params.get("tz").cloned(),
             )?;
-            with_change(
-                project_path,
-                &name,
-                reason,
-                Ok(r#"{"success":true}"#.to_string()),
-            )
+            // 0.46.15: with `tz`, the reply says the zone stored and the
+            // next fire it gives (the CLI shows both, no schedule math).
+            let reply = if params.contains_key("tz") {
+                let row = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+                        .and_then(|pid| {
+                            k2_core::db::schema::AgentHeartbeat::get_by_name(&conn, &pid, &name).ok().flatten()
+                        })
+                        .ok_or_else(|| hb::no_such_heartbeat(&name))?
+                };
+                serde_json::json!({"success": true, "tz": row.tz, "nextFireAt": row.next_fire_at}).to_string()
+            } else {
+                r#"{"success":true}"#.to_string()
+            };
+            with_change(project_path, &name, &reason, Ok(reply))
         }
         "/cli/heartbeat/rename" => {
             let old_name = params.get("from").cloned().unwrap_or_default();

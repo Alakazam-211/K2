@@ -2442,10 +2442,11 @@ exit: 0
     {
       "name": "heartbeat schedule",
       "usage": "k2 heartbeat schedule <add|list|remove|unarchive|edit|rename|enable|disable> [...]",
-      "description": "CRUD on named heartbeats. add/edit take --name <n> plus a spec: --daily|--weekly|--monthly|--yearly|--hourly with --time HH:MM / --days / --months / --every N --unit minutes|hours / --start / --end. Values are validated: weekly --days = mon..sun, monthly/yearly --days = 1-31, --months = jan..dec (3-letter). Unknown sub-verbs, spec flags, or bad values are usage errors (exit 2), never writes. edit may pass only --instructions/--instructions-file to rewrite the WAKEUP.md without touching the schedule.",
+      "description": "CRUD on named heartbeats. add/edit take --name <n> plus a spec: --daily|--weekly|--monthly|--yearly|--hourly with --time HH:MM / --days / --months / --every N --unit minutes|hours / --start / --end. Values are validated: weekly --days = mon..sun, monthly/yearly --days = 1-31, --months = jan..dec (3-letter). Unknown sub-verbs, spec flags, or bad values are usage errors (exit 2), never writes. edit may pass only --instructions/--instructions-file to rewrite the WAKEUP.md without touching the schedule, or only --tz to change the zone.",
       "args": [{"name": "subcommand", "required": true}],
       "flags": [
         {"name": "--name", "arg": "n", "description": "Heartbeat name (add/edit)."},
+        {"name": "--tz", "arg": "zone", "description": "With add/edit: the IANA zone the times are read in (America/New_York fires at New York time wherever this computer is). local or '' = this computer's clock (the default). A spring-forward time fires at the first minute after the jump; a fall-back time fires once. A bad zone is refused."},
         {"name": "--instructions", "arg": "text", "description": "With add/edit: write the WAKEUP.md (the job that runs on fire)."},
         {"name": "--instructions-file", "arg": "path", "description": "With add/edit: read the WAKEUP.md content from a file."},
         {"name": "--archived", "arg": null, "description": "With list: show archived heartbeats instead of active."},

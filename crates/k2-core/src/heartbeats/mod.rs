@@ -64,6 +64,9 @@ mod change_tests;
 // A missing or unreadable WAKEUP.md never turns a heartbeat off.
 #[cfg(test)]
 mod wakeup_wait_tests;
+// 0.46.15: a repeating heartbeat read in its own zone (`--tz`).
+#[cfg(test)]
+mod schedule_tz_tests;
 
 /// AH13 — error prefix for a heartbeat name that is not in the workspace.
 /// Routes map an error starting with this to `404 no_such_heartbeat`.
@@ -170,12 +173,31 @@ pub fn k2_heartbeat_add_with_instructions(
     spec_json: String,
     instructions: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    k2_heartbeat_add_with_tz(project_path, name, frequency, spec_json, instructions, None)
+}
+
+/// 0.46.15 — [`k2_heartbeat_add_with_instructions`] with `--tz`: the IANA
+/// zone the schedule's times are read in (`tz` on the row). `None`, `""` or
+/// `"local"` = this machine's clock. A bad zone is refused before anything
+/// is written.
+pub fn k2_heartbeat_add_with_tz(
+    project_path: String,
+    name: String,
+    frequency: String,
+    spec_json: String,
+    instructions: Option<String>,
+    tz: Option<&str>,
+) -> Result<serde_json::Value, String> {
     AgentHeartbeat::validate_name(&name).map_err(|e| e.to_string())?;
     // GH#27: server-side spec validation. The CLI validates too, but
     // stale CLIs exist — same defense-in-depth as the rest of the add
     // gate. Rejects garbage weekdays/months/days-of-month HERE instead
     // of storing a row that later evaluates `schedule_invalid`.
     validate_spec_json(&frequency, &spec_json)?;
+    let tz = match tz {
+        Some(raw) => when::schedule_zone(raw)?,
+        None => None,
+    };
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
@@ -229,6 +251,17 @@ pub fn k2_heartbeat_add_with_instructions(
         true,
     )
     .map_err(|e| friendly_heartbeat_insert_error(&name, &e.to_string()))?;
+    if let Some(zone) = tz.as_deref() {
+        // Same lock as the insert, before the first wait refresh, so the
+        // row's first next_fire_at is already read in its zone.
+        if let Err(e) = conn.execute(
+            "UPDATE workspace_heartbeats SET tz = ?1 WHERE project_id = ?2 AND name = ?3",
+            rusqlite::params![zone, project_id, name],
+        ) {
+            let _ = AgentHeartbeat::delete(&conn, &project_id, &name);
+            return Err(format!("Failed to store the heartbeat's time zone: {e}"));
+        }
+    }
 
     let instructions = instructions.filter(|t| !t.trim().is_empty());
     // 0.46.3: a WAKEUP.md that already has a body (a clone brought it, or
@@ -293,6 +326,8 @@ pub fn k2_heartbeat_add_with_instructions(
         "waitReason": stored.wait_reason,
         "waitDetail": stored.wait_detail,
         "nextFireAt": stored.next_fire_at,
+        // 0.46.15: the zone its times are read in; null = this machine's.
+        "tz": stored.tz,
     }))
 }
 
@@ -881,6 +916,29 @@ pub fn k2_heartbeat_edit(
     refresh_wait_after_write(&project_path); // S3 (HB19)
     refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
+}
+
+/// 0.46.15 — `k2 heartbeat schedule edit <n> --tz <zone>`: read the
+/// schedule's times in `raw` (an IANA zone), or follow this machine's clock
+/// again (`local` or empty). The schedule counts from now, like any
+/// schedule edit (D4). Reminders and the mail digest keep their own zone
+/// rules. Returns the zone stored (`None` = this machine's clock).
+pub fn k2_heartbeat_set_tz(project_path: String, name: String, raw: &str) -> Result<Option<String>, String> {
+    let tz = when::schedule_zone(raw)?;
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let project_id = resolve_project_id(&conn, &project_path)
+        .ok_or_else(|| format!("Project not found: {}", project_path))?;
+    let row = AgentHeartbeat::get_by_name(&conn, &project_id, &name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| no_such_heartbeat(&name))?;
+    if row.is_reminder() || row.is_mail_digest() {
+        return Err(format!("'{name}' is not a repeating heartbeat; --tz is for k2 heartbeat schedule rows"));
+    }
+    AgentHeartbeat::update_tz(&conn, &project_id, &name, tz.as_deref()).map_err(|e| e.to_string())?;
+    drop(conn);
+    refresh_wait_after_write(&project_path); // S3 (HB19)
+    Ok(tz)
 }
 
 /// AH12 — replace a heartbeat's WAKEUP.md instructions. The one writer for

@@ -68,6 +68,25 @@ fn pick_zone(tz: Option<&str>, owner_tz: Option<&str>) -> Result<Zone, String> {
         .map_or(Zone::Box, Zone::Named))
 }
 
+/// `--tz` for a repeating heartbeat (`k2 heartbeat schedule add|edit`): the
+/// IANA zone its wall-clock times are read in, as stored on the row.
+/// `Ok(None)` for `local` or an empty value: follow this machine's clock,
+/// which is what every row without a zone does. A name that isn't an IANA
+/// zone is refused, never guessed. The same names `k2 heartbeat remind
+/// --tz` takes.
+pub fn schedule_zone(raw: &str) -> Result<Option<String>, String> {
+    let t = raw.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("local") {
+        return Ok(None);
+    }
+    t.parse::<chrono_tz::Tz>().map(|z| Some(z.name().to_string())).map_err(|_| {
+        format!(
+            "--tz '{t}' is not an IANA time zone (for example America/New_York); \
+             --tz local follows this computer's clock"
+        )
+    })
+}
+
 /// `Some(instant)` for a local time, applying the DST rules above.
 fn instant_in<Z: TimeZone>(zone: &Z, local: NaiveDateTime) -> Option<DateTime<Utc>> {
     // A spring-forward gap is at most a few hours; step a minute at a time.

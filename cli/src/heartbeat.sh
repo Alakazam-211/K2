@@ -31,6 +31,51 @@ sys.exit(1)
 '
 }
 
+# 0.46.15: the Python that shows a heartbeat's next fire in its own zone
+# and in this computer's (`hb_when(nextFireAt, tz)`). Only formatting: the
+# daemon owns the zone and the schedule math.
+_HB_WHEN_PY='
+def hb_when(s, tz):
+    from datetime import datetime
+    if not s:
+        return "-"
+    try:
+        t = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s
+    here = t.astimezone()
+    if not tz:
+        return here.strftime("%Y-%m-%d %H:%M %Z").strip()
+    try:
+        from zoneinfo import ZoneInfo
+        there = t.astimezone(ZoneInfo(tz))
+    except Exception:
+        return here.strftime("%Y-%m-%d %H:%M %Z").strip() + " here"
+    if there.utcoffset() == here.utcoffset():
+        return there.strftime("%Y-%m-%d %H:%M %Z")
+    return there.strftime("%Y-%m-%d %H:%M %Z") + " (" + here.strftime("%Y-%m-%d %H:%M %Z").strip() + " here)"
+'
+
+# After `schedule add|edit --tz`: the zone the daemon stored and the next
+# fire in it and here. stdin: the daemon's reply (a row or an add/edit
+# reply with tz + nextFireAt). Exit 1 when the reply has no tz at all: a
+# daemon older than --tz kept the computer clock.
+_hb_tz_report() {
+    python3 -c "$_HB_WHEN_PY"'
+import json, sys
+d = json.loads(sys.stdin.read())
+if not isinstance(d, dict) or "tz" not in d:
+    print("Error: this daemon is older than --tz: the schedule still follows the computer clock. Update the host.", file=sys.stderr)
+    sys.exit(1)
+tz = d.get("tz")
+if tz:
+    print("Time zone: " + tz + " (its times are read there, wherever this computer is)")
+else:
+    print("Time zone: this computer'"'"'s clock")
+print("Next fire: " + hb_when(d.get("nextFireAt"), tz))
+'
+}
+
 # Parse frequency/day/time flags into spec JSON that matches the scheduler
 # logic in should_project_fire.
 #   --daily --time 07:00

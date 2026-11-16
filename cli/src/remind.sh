@@ -325,17 +325,22 @@ cmd_heartbeat_add() {
     # then separately edit a file — and `signal wakeup --edit` opens
     # $EDITOR, which is useless headless. A schedule could therefore
     # fire with no defined job.
-    local name="" instructions="" instructions_file=""
+    local name="" instructions="" instructions_file="" tz="" have_tz=0
     local spec_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --name) name="$2"; shift 2 ;;
             --instructions) instructions="$2"; shift 2 ;;
             --instructions-file) instructions_file="$2"; shift 2 ;;
+            # 0.46.15: the IANA zone the times are read in (the daemon
+            # validates it); local or '' = this computer's clock.
+            --tz)
+                [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or local" >&2; exit 2; }
+                tz="$2"; have_tz=1; shift 2 ;;
             *) spec_args+=("$1"); shift ;;
         esac
     done
-    [ -z "$name" ] && { echo "Usage: k2 heartbeat schedule add --name <name> --daily|--weekly|... [--time HH:MM] [--days ...] [--instructions \"...\"|--instructions-file <path>]" >&2; exit 1; }
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat schedule add --name <name> --daily|--weekly|... [--time HH:MM] [--days ...] [--tz Area/City] [--instructions \"...\"|--instructions-file <path>]" >&2; exit 1; }
     if [ -n "$instructions_file" ]; then
         [ -f "$instructions_file" ] || { echo "Error: --instructions-file not found: $instructions_file" >&2; exit 1; }
         instructions="$(cat "$instructions_file")"
@@ -353,6 +358,7 @@ cmd_heartbeat_add() {
     if [ -n "$instructions" ]; then
         params="${params}&instructions=$(urlencode "$instructions")"
     fi
+    [ "$have_tz" = 1 ] && params="${params}&tz=$(urlencode "$tz")"
     local resp
     resp=$(cli_send cli_request_post "/cli/heartbeat/add" "$params")
     local wakeup_abs written
@@ -393,6 +399,9 @@ import json, sys
 print('true' if json.loads(sys.stdin.read()).get('instructionsKeptExisting') else 'false')
 ")
     echo "Created heartbeat: $name"
+    if [ "$have_tz" = 1 ]; then
+        printf '%s' "$resp" | _hb_tz_report || return 1
+    fi
     [ -n "$wakeup_abs" ] && echo "Wakeup file (on the daemon's machine): $wakeup_abs"
     echo
     echo "NOTE: this schedule lands in the workspace PINNED chat." >&2
@@ -481,7 +490,7 @@ cmd_heartbeat_list() {
         cli_send cli_request "/cli/heartbeat/list" ${hb_ws[@]+"${hb_ws[@]}"}
         return
     fi
-    cli_send cli_request "/cli/heartbeat/list" ${hb_ws[@]+"${hb_ws[@]}"} | python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" ${hb_ws[@]+"${hb_ws[@]}"} | python3 -c "$_HB_WHEN_PY
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -548,6 +557,10 @@ try:
         # A schedule K2 turned off reads auto-off, not a person's no.
         en = 'yes' if r.get('enabled') else ('auto-off' if r.get('disabledReason') else 'no')
         print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {last:<22} {en:<8} {hb_next(r):<17} {hb_waiting(r)}')
+        # 0.46.15: a schedule read in its own zone says so, with the next
+        # fire there and here (Next above is this computer's clock).
+        if r.get('tz'):
+            print(f\"    time zone {r['tz']}: next {hb_when(r.get('nextFireAt'), r['tz'])}\")
         # S5: the two creation-trap reasons get a line that says what to do.
         wr = r.get('waitReason')
         if wr == 'wakeup_empty':
@@ -990,6 +1003,7 @@ except Exception as e:
 # schedule-edit call is skipped entirely and just the file is rewritten.
 cmd_heartbeat_edit() {
     local name="" instructions="" instructions_file="" have_instructions=0 have_spec=0
+    local tz="" have_tz=0
     # Support both `edit <name>` and `edit --name <name>` to stay
     # consistent with add/remove/rename argument styles.
     if [[ $# -gt 0 && "$1" != --* ]]; then
@@ -1001,12 +1015,17 @@ cmd_heartbeat_edit() {
             --name) name="$2"; shift 2 ;;
             --instructions) instructions="$2"; have_instructions=1; shift 2 ;;
             --instructions-file) instructions_file="$2"; have_instructions=1; shift 2 ;;
+            # 0.46.15: alone or with a spec; local or '' clears it.
+            --tz)
+                [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or local" >&2; exit 2; }
+                tz="$2"; have_tz=1; shift 2 ;;
             *) spec_args+=("$1"); have_spec=1; shift ;;
         esac
     done
-    [ -z "$name" ] && { echo "Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--instructions \"...\"|--instructions-file <path>]" >&2; exit 1; }
-    if [ "$have_spec" != "1" ] && [ "$have_instructions" != "1" ]; then
-        echo "Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--instructions \"...\"|--instructions-file <path>]" >&2
+    local edit_usage="Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--tz Area/City|local] [--instructions \"...\"|--instructions-file <path>]"
+    [ -z "$name" ] && { echo "$edit_usage" >&2; exit 1; }
+    if [ "$have_spec" != "1" ] && [ "$have_instructions" != "1" ] && [ "$have_tz" != "1" ]; then
+        echo "$edit_usage" >&2
         exit 1
     fi
     if [ -n "$instructions_file" ]; then
@@ -1032,7 +1051,11 @@ cmd_heartbeat_edit() {
         fi
         params="${params}&instructions=$(urlencode "$instructions")"
     fi
-    cli_send cli_request_post "/cli/heartbeat/edit" "$params" | NAME="$name" FREQ="$freq" HAVE_INSTR="$have_instructions" python3 -c "
+    # 0.46.15: sent even when empty (`--tz ''` clears, like `--tz local`).
+    [ "$have_tz" = 1 ] && params="${params}&tz=$(urlencode "$tz")"
+    local resp
+    resp="$(cli_send cli_request_post "/cli/heartbeat/edit" "$params")"
+    printf '%s' "$resp" | NAME="$name" FREQ="$freq" HAVE_INSTR="$have_instructions" HAVE_TZ="$have_tz" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1040,7 +1063,9 @@ except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 if not d.get('success'):
     err = d.get('error', 'unknown')
-    if 'frequency' in str(err) and os.environ['FREQ'] == '':
+    if 'frequency' in str(err) and os.environ['FREQ'] == '' and os.environ['HAVE_INSTR'] != '1':
+        print('Error: this daemon is older than heartbeat edit --tz. Update the host.', file=sys.stderr)
+    elif 'frequency' in str(err) and os.environ['FREQ'] == '':
         print('Error: this daemon is older than heartbeat edit --instructions without a schedule.', file=sys.stderr)
         print('       Update the host, or pass the schedule flags too.', file=sys.stderr)
     else:
@@ -1049,9 +1074,14 @@ if not d.get('success'):
 name = os.environ['NAME']
 if os.environ['FREQ']:
     print(f'Updated heartbeat: {name} ({os.environ[\"FREQ\"]})')
+elif os.environ['HAVE_TZ'] == '1':
+    print(f'Updated heartbeat: {name}')
 if os.environ['HAVE_INSTR'] == '1':
     print(f'Wake instructions written by the daemon: {name}')
-"
+" || return $?
+    if [ "$have_tz" = 1 ]; then
+        printf '%s' "$resp" | _hb_tz_report || return 1
+    fi
 }
 
 # Print a single heartbeat's full details plus its WAKEUP.md instructions,
@@ -1082,7 +1112,7 @@ cmd_heartbeat_show() {
         if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; PROJECT="$ws"; fi
         extra=("workspace=$(urlencode "$ws")")
     fi
-    cli_send cli_request "/cli/heartbeat/show" "name=$(urlencode "$name")" ${extra[@]+"${extra[@]}"} | NAME="$name" AS_JSON="$as_json" WS="$ws" python3 -c "
+    cli_send cli_request "/cli/heartbeat/show" "name=$(urlencode "$name")" ${extra[@]+"${extra[@]}"} | NAME="$name" AS_JSON="$as_json" WS="$ws" python3 -c "$_HB_WHEN_PY
 import json, os, sys
 name = os.environ['NAME']
 as_json = os.environ['AS_JSON'] == '1'
@@ -1124,6 +1154,11 @@ print(f'Pinned chat:    {pinned}')
 print(f'Last fired:     {last}')
 # Heartbeat S3 (HB24): daemon-owned next fire + wait reason.
 print(f'Next fire:      {row.get(\"nextFireAt\") or \"-\"}')
+# 0.46.15: the zone the schedule's times are read in.
+tz = row.get('tz')
+print(f'Time zone:      {tz or \"this computer clock\"}')
+if tz:
+    print(f'Next in zone:   {hb_when(row.get(\"nextFireAt\"), tz)}')
 waiting = row.get('waitReason') or '-'
 if row.get('waitDetail'): waiting += f' ({row.get(\"waitDetail\")})'
 if row.get('waitSince'): waiting += f' since {row.get(\"waitSince\")}'

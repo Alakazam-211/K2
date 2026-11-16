@@ -934,13 +934,20 @@ DEFAULT (no args)
 THREE FAMILIES:
 
 SCHEDULE (CRUD on heartbeat definitions)
-  heartbeat schedule add --name <n> <spec> [--instructions "..."]
+  heartbeat schedule add --name <n> <spec> [--tz Area/City] [--instructions "..."]
        <spec> is one of:
          --daily --time HH:MM
          --weekly --days mon,wed,fri --time HH:MM
          --monthly --days 1,15 --time HH:MM
          --yearly --months jan,jul --time HH:MM
          --hourly --start 09:00 --end 17:00 --every 30 --unit minutes
+       --tz America/New_York
+         read the times in that IANA zone: 14:15 fires at 14:15 New York
+         time wherever this computer is (a laptop that travels keeps the
+         market's clock). Without it the times follow this computer's
+         clock. On a DST day a time that doesn't exist (spring forward)
+         fires at the first minute after the jump; a time that happens
+         twice (fall back) fires once, the first time
        --instructions "text" | --instructions-file <path>
          write the WAKEUP.md (the job that runs on fire) at create time;
          the daemon writes it on its own machine. Without it the
@@ -950,14 +957,18 @@ SCHEDULE (CRUD on heartbeat definitions)
        a sidecar: k2 heartbeat session <n> --set sales/reviewer
        (UUID form still works: --set <session-id> --provider <p>)
   heartbeat schedule list [--archived] [--json]  (--json: raw array)
+       Next is this computer's clock; a heartbeat with a zone also shows
+       its next fire in that zone. --json: tz (null = this computer's)
   heartbeat schedule list --workspace <ws>       Another workspace's (people only)
   heartbeat schedule remove <n> [--purge]
        Default archives (restorable). --purge hard-deletes and is
        owner-only: agents archive instead.
   heartbeat schedule unarchive <n>
-  heartbeat schedule edit <n> [<new-spec>] [--instructions "..."]
-       spec flags change the schedule; --instructions/--instructions-file
-       have the daemon rewrite the WAKEUP.md (either or both)
+  heartbeat schedule edit <n> [<new-spec>] [--tz Area/City|local] [--instructions "..."]
+       spec flags change the schedule; --tz sets its zone (alone is fine;
+       --tz local or --tz '' follows this computer's clock again; a spec
+       edit without --tz keeps the zone); --instructions/--instructions-file
+       have the daemon rewrite the WAKEUP.md (any or all)
   heartbeat schedule rename <old> <new>
   heartbeat schedule enable <n> [--workspace <ws>]   Resume scheduling
   heartbeat schedule disable <n> [--workspace <ws>]  Pause scheduling
@@ -1041,6 +1052,7 @@ EXAMPLES
   k2 heartbeat schedule add --name deploy-check --daily --time 09:00 \
       --instructions "Check the deploy dashboard and report anomalies to the workspace chat."
   k2 heartbeat schedule add --name roundup --hourly --every 1 --unit hours
+  k2 heartbeat schedule edit after-close --daily --time 14:15 --tz America/New_York
   k2 heartbeat schedule list
   k2 heartbeat schedule disable deploy-check
   k2 heartbeat schedule disable triage --workspace companion

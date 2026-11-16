@@ -485,6 +485,8 @@ HEARTBEATS REPEAT
   Each one is a WAKEUP.md under .k2/heartbeats/<name>/. It fires into your
   pinned chat by default. A missed slot catches up once within 12 hours;
   older than that it is skipped and the schedule carries on.
+  Times follow this computer's clock, or a zone you give it:
+    k2 heartbeat schedule edit n --tz America/New_York   (--tz local undoes)
   k2 heartbeat --help has every verb.
 
 REMINDERS FIRE ONCE

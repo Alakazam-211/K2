@@ -10,7 +10,7 @@ HEARTBEATS (workspace-scoped scheduled wakes)
   heartbeat schedule list [--archived]          Active or archived
   heartbeat schedule remove <n> [--purge]       Soft-archive (default) or hard-delete
   heartbeat schedule unarchive <n>              Restore from archive
-  heartbeat schedule edit <n> <spec>            Change schedule
+  heartbeat schedule edit <n> <spec>            Change schedule (--tz Area/City: its zone)
   heartbeat schedule rename <old> <new>         Rename folder + DB row
   heartbeat schedule enable <n>                 Resume scheduling
   heartbeat schedule disable <n>                Pause scheduling

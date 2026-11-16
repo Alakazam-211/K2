@@ -263,11 +263,119 @@ pub fn evaluate_with_now(hb: &AgentHeartbeat, now: DateTime<Local>) -> DueStatus
     match hb.frequency.as_str() {
         "hourly" => evaluate_interval(&spec, reference, now, window),
         "daily" | "weekly" | "monthly" | "yearly" => {
-            evaluate_cron(&spec, &hb.frequency, reference, now, window)
+            let zone = match schedule_zone(hb) {
+                Ok(z) => z,
+                Err(reason) => return DueStatus::Invalid { reason },
+            };
+            evaluate_cron(&spec, &hb.frequency, reference, now, window, zone)
         }
         other => DueStatus::Invalid {
             reason: format!("unknown frequency '{other}'"),
         },
+    }
+}
+
+/// 0.46.15: the zone a repeating schedule's wall-clock times (`time`,
+/// `days`, …) are read in: the row's `tz` (`k2 heartbeat schedule add|edit
+/// --tz`), else this machine's clock. A 14:15 America/New_York heartbeat
+/// fires at 14:15 in New York wherever the laptop is. Writes validate the
+/// zone; a stored one that doesn't parse is a loud `Invalid`, never a
+/// silent fall back to the machine's zone.
+fn schedule_zone(hb: &AgentHeartbeat) -> Result<Option<chrono_tz::Tz>, String> {
+    match hb.tz.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        None => Ok(None),
+        Some(t) => t
+            .parse::<chrono_tz::Tz>()
+            .map(Some)
+            .map_err(|_| format!("schedule zone '{t}' is not an IANA time zone")),
+    }
+}
+
+/// A cron schedule read in its zone. Occurrences come back as instants in
+/// this machine's `Local` (what the evaluator compares), but are found on
+/// the schedule zone's calendar, so the machine's own zone never moves them.
+///
+/// DST, in the schedule zone (croner's fixed-time rules): a slot inside a
+/// spring-forward gap fires at the first instant after the gap; a slot in a
+/// fall-back overlap fires once, at the earlier of the two instants.
+struct ZonedCron {
+    cron: Cron,
+    tz: Option<chrono_tz::Tz>,
+}
+
+impl ZonedCron {
+    /// The first occurrence after `t` (at or after it with `inclusive`).
+    ///
+    /// croner searches wall-clock time, so from inside a fall-back overlap
+    /// (the repeated hour) it can answer the EARLIER instant of a slot that
+    /// already went by before `t`. That slot had its one fire; the next is
+    /// the following one.
+    fn next(&self, t: &DateTime<Local>, inclusive: bool) -> Result<DateTime<Local>, String> {
+        let found = self.raw_next(t, inclusive)?;
+        if found < *t {
+            return self.raw_next(&found, false);
+        }
+        Ok(found)
+    }
+
+    fn raw_next(&self, t: &DateTime<Local>, inclusive: bool) -> Result<DateTime<Local>, String> {
+        match self.tz {
+            Some(z) => self
+                .cron
+                .find_next_occurrence(&t.with_timezone(&z), inclusive)
+                .map(|o| o.with_timezone(&Local)),
+            None => self.cron.find_next_occurrence(t, inclusive),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    fn raw_prev(&self, t: &DateTime<Local>, inclusive: bool) -> Result<DateTime<Local>, String> {
+        match self.tz {
+            Some(z) => self
+                .cron
+                .find_previous_occurrence(&t.with_timezone(&z), inclusive)
+                .map(|o| o.with_timezone(&Local)),
+            None => self.cron.find_previous_occurrence(t, inclusive),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// The latest occurrence before `t` (at or before it with `inclusive`).
+    ///
+    /// croner's backward search lands a slot that falls in a spring-forward
+    /// gap on the last second BEFORE the gap, while its forward search, and
+    /// so the real fire, puts it at the first instant AFTER. Report the
+    /// instant the slot really has, so a gap day's fire is stamped with when
+    /// it fired and counted once. A real slot is on a whole minute, so it is
+    /// never the last second before a gap.
+    fn prev(&self, t: &DateTime<Local>, inclusive: bool) -> Result<DateTime<Local>, String> {
+        let mut p = self.raw_prev(t, inclusive)?;
+        for _ in 0..2 {
+            if !self.just_before_gap(&p) {
+                return Ok(p);
+            }
+            match self.next(&p, false) {
+                Ok(n) if n < *t || (inclusive && n == *t) => return Ok(n),
+                // That gap slot IS `t` (a cursor already moved to it): the
+                // answer is the occurrence before it.
+                Ok(n) if n == *t => p = self.raw_prev(&p, false)?,
+                _ => return Ok(p),
+            }
+        }
+        Ok(p)
+    }
+
+    /// True when the wall-clock second after `t` doesn't exist in the
+    /// schedule zone (`t` is the last second before a spring-forward gap).
+    fn just_before_gap(&self, t: &DateTime<Local>) -> bool {
+        let one = Duration::seconds(1);
+        match self.tz {
+            Some(z) => {
+                let after = t.with_timezone(&z).naive_local() + one;
+                matches!(z.from_local_datetime(&after), chrono::LocalResult::None)
+            }
+            None => matches!(Local.from_local_datetime(&(t.naive_local() + one)), chrono::LocalResult::None),
+        }
     }
 }
 
@@ -409,13 +517,14 @@ fn evaluate_cron(
     reference: DateTime<Local>,
     now: DateTime<Local>,
     window: Option<FiringWindow>,
+    zone: Option<chrono_tz::Tz>,
 ) -> DueStatus {
     let expr = match build_cron_expression(spec, frequency) {
         Ok(e) => e,
         Err(reason) => return DueStatus::Invalid { reason },
     };
     let cron = match Cron::from_str(expr.as_str()) {
-        Ok(c) => c,
+        Ok(c) => ZonedCron { cron: c, tz: zone },
         Err(e) => {
             return DueStatus::Invalid {
                 reason: format!("cron expression '{expr}' rejected: {e}"),
@@ -426,7 +535,7 @@ fn evaluate_cron(
     // First occurrence strictly after the reference point. A croner
     // error here (search horizon exhausted — e.g. day 30 in February
     // only) means the schedule can never fire: say so loudly.
-    let first = match cron.find_next_occurrence(&reference, false) {
+    let first = match cron.next(&reference, false) {
         Ok(t) => t,
         Err(e) => {
             return DueStatus::Invalid {
@@ -438,7 +547,7 @@ fn evaluate_cron(
         return DueStatus::NotYet {
             next: next_in_window(
                 first,
-                |t| cron.find_next_occurrence(&t, false).unwrap_or(t + Duration::days(400)),
+                |t| cron.next(&t, false).unwrap_or(t + Duration::days(400)),
                 window,
             ),
         };
@@ -448,7 +557,7 @@ fn evaluate_cron(
     // from now. Multiple misses coalesce to this single occurrence;
     // we walk one in-window hit further to know whether more than one
     // is pending (a coalesced catch-up vs a single on-time fire).
-    let mut cursor = match cron.find_previous_occurrence(&now, true) {
+    let mut cursor = match cron.prev(&now, true) {
         Ok(t) => t,
         Err(e) => {
             return DueStatus::Invalid {
@@ -468,7 +577,7 @@ fn evaluate_cron(
                 break;
             }
         }
-        cursor = match cron.find_previous_occurrence(&cursor, false) {
+        cursor = match cron.prev(&cursor, false) {
             Ok(t) => t,
             Err(_) => break,
         };
@@ -483,8 +592,8 @@ fn evaluate_cron(
     // don't fire and don't count as missed).
     DueStatus::NotYet {
         next: next_in_window(
-            cron.find_next_occurrence(&now, false).unwrap_or(now + Duration::days(400)),
-            |t| cron.find_next_occurrence(&t, false).unwrap_or(t + Duration::days(400)),
+            cron.next(&now, false).unwrap_or(now + Duration::days(400)),
+            |t| cron.next(&t, false).unwrap_or(t + Duration::days(400)),
             window,
         ),
     }
@@ -647,8 +756,8 @@ pub fn next_fire_time_after(
         }
         "daily" | "weekly" | "monthly" | "yearly" => {
             let expr = build_cron_expression(&spec, &hb.frequency).ok()?;
-            let cron = Cron::from_str(expr.as_str()).ok()?;
-            cron.find_next_occurrence(&after, false).ok()
+            let cron = ZonedCron { cron: Cron::from_str(expr.as_str()).ok()?, tz: schedule_zone(hb).ok()? };
+            cron.next(&after, false).ok()
         }
         _ => None,
     }

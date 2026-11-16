@@ -2626,6 +2626,19 @@ impl AgentHeartbeat {
         )
     }
 
+    /// 0.46.15 — the zone a repeating heartbeat's times are read in (IANA
+    /// name, already validated), or NULL to follow this machine's clock.
+    /// Like a schedule edit it counts from now (D4): moving the zone never
+    /// fires a catch-up for a slot the new zone puts in the past.
+    pub fn update_tz(conn: &Connection, project_id: &str, name: &str, tz: Option<&str>) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_heartbeats \
+             SET tz = ?1, schedule_error = NULL, schedule_anchor_at = ?4 \
+             WHERE project_id = ?2 AND name = ?3",
+            params![tz, project_id, name, chrono::Utc::now().to_rfc3339()],
+        )
+    }
+
     pub fn update_wakeup_path(
         conn: &Connection,
         project_id: &str,

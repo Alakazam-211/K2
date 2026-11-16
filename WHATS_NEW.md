@@ -6,6 +6,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.46.15
 
 - **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.
+### Heartbeats
+- **A heartbeat can keep its own time zone.** `k2 heartbeat schedule add` and `edit` take `--tz America/New_York`: a 14:15 heartbeat then fires at 14:15 New York time even when the computer is in another zone, so a laptop that travels keeps the schedule's clock. `k2 heartbeat schedule list` shows its next fire in that zone and here; `--tz local` follows the computer's clock again. A time that doesn't exist on a spring-forward day fires at the first minute after the jump, and one that happens twice on a fall-back day fires once.
 
 ## 0.46.14 — Choose which Thread the main chat keeps
 

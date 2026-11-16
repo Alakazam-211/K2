@@ -6617,8 +6617,11 @@ cmd_heartbeat_wake() {
     has_work=$(python3 -c "
 import json, sys, subprocess, os
 
-port = os.environ.get('K2SO_PORT', '')
-token = os.environ.get('K2SO_HOOK_TOKEN', '')
+# The session's port and passport under their current names first, then
+# the older ones; a name that is set but empty counts as unset. Reading
+# only the K2SO_ names sent an agent's wake check with the owner token.
+port = os.environ.get('K2_PORT') or os.environ.get('K2SO_PORT') or ''
+token = os.environ.get('K2_HOOK_TOKEN') or os.environ.get('K2SO_HOOK_TOKEN') or ''
 if not port:
     try: port = open(os.path.expanduser('$K2_HOME/heartbeat.port')).read().strip()
     except: pass

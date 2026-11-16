@@ -84,6 +84,7 @@ part_web() {
     step "generated files are fresh (regen.sh)";   bash scripts/regen.sh --check --no-cargo
     step "k2 knows the name it was called by";     bash tests/cli/called_as.sh
     step "k2 picks a workspace's dot-dir as the daemon does"; bash tests/cli/ws_dot_dir.sh
+    step "k2 heartbeat wake sends the session passport"; bash tests/cli/heartbeat_wake_passport.sh
     step "the CLI name rewrite, on a copy";        bash tests/garden/cli-name-flip.sh
     step "the dispatcher arm reader";              bash tests/garden/dispatcher-arms.sh
     step "k2 zen widget CLI (no daemon)";          bash tests/cli/zen_widget_offline.sh

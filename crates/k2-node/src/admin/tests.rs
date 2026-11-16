@@ -1033,6 +1033,8 @@ fn no_unit_reaches_the_cache_generations() {
         restrict_userns: false,
         runtime_max_secs: None,
         gpu: None,
+        netns: None,
+        allow_ips: vec![],
     };
     let argv = systemd_run_argv(&plan);
     let line = argv.iter().find(|a| a.starts_with("InaccessiblePaths=")).expect("an InaccessiblePaths property");

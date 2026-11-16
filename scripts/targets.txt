@@ -1,0 +1,25 @@
+# Every test target, test-only feature and pending #[ignore] of the pack and its fuzz crate
+# (fuzz/, its own workspace); scripts/check-targets.sh reads this file and checks it. One row per
+# line: PACKAGE|KIND|NAME|FEATURES|PARTS, the format and the rules in scripts/check-targets.sh's
+# header. The part is `check`: scripts/check.sh. A row whose PARTS holds "pending ruling" waits
+# on a decision; none may be left when a change lands (CHECK_TARGETS_LANDING=1).
+
+# ---- k2-mpc-fab ---------------------------------------------------------------------------------
+k2-mpc-fab|lib|k2_mpc_fab||check
+k2-mpc-fab|doctest|k2_mpc_fab||excluded: the crate's docs hold no runnable example
+k2-mpc-fab|feature|fuzzing||check
+k2-mpc-fab|feature|mutants||check
+k2-mpc-fab|test|corpus||check
+k2-mpc-fab|test|drill||check
+k2-mpc-fab|test|drill_common||check
+k2-mpc-fab|test|fuzz_seeds||check
+k2-mpc-fab|test|outside_saves||check
+k2-mpc-fab|test|pack||check
+k2-mpc-fab|test|pack_session||check
+k2-mpc-fab|test|photoplot||check
+k2-mpc-fab|test|mutants|mutants|check
+
+# ---- k2-mpc-fab-fuzz (fuzz/, its own workspace; cargo fuzz runs the targets) --------------------
+k2-mpc-fab-fuzz|fuzz-bin|drill_common_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+k2-mpc-fab-fuzz|fuzz-bin|drill_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it
+k2-mpc-fab-fuzz|fuzz-bin|photoplot_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it

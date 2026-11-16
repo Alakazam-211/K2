@@ -1,0 +1,24 @@
+; written by hand for this repo's tests: a common drill export
+%
+M48
+FMAT,2
+ICI,OFF
+METRIC,TZ,000.000
+T1C0.8
+T100F00S00C1.2
+%
+G90
+M71
+G93X0Y0
+T1
+X25679Y9449
+Y12000
+T100
+G00X1000Y1000
+M15
+G01X2000
+G01Y2000
+M16
+T00
+M17
+M30

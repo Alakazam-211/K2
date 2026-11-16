@@ -1,8 +1,8 @@
-//! The pack's half of an anchor's state, as spec rows: each PSD-specific judgement (kind
-//! families, the identity rule within one, `placed_id` as a weak ID only, candidates by family)
-//! on layers indexed by the kit from a hand-built file, then every node of the public corpus
-//! (fetched by reference, `PSD_PUBLIC_CORPUS`; prints counts only), then through a session's
-//! comment threads, where the kit calls the pack's hooks itself.
+//! The pack's half of an anchor's state, as spec rows: each PSD-specific judgement (kind families,
+//! the identity rule within one, `placed_id` as a weak ID only, candidates by family) on layers
+//! indexed by the kit from a hand-built file, then every node of the public corpus (fetched by
+//! reference, `PSD_PUBLIC_CORPUS`, which it fails without; prints counts only), then through a
+//! session's comment threads, where the kit calls the pack's hooks itself.
 
 mod support;
 
@@ -694,11 +694,10 @@ fn corpus_rows(file: &str, v: &IndexView, t: &mut Tally) {
 }
 
 #[test]
+#[ignore = "the public corpus: scripts/public-corpus.sh runs it"]
 fn every_public_corpus_node_follows_the_packs_rules() {
-    let Some(dir) = std::env::var_os("PSD_PUBLIC_CORPUS") else {
-        eprintln!("public corpus: skipped (PSD_PUBLIC_CORPUS is not set)");
-        return;
-    };
+    let dir = std::env::var_os("PSD_PUBLIC_CORPUS")
+        .expect("PSD_PUBLIC_CORPUS: the public corpus's folder (scripts/fetch-corpus.sh)");
     let dir = Path::new(&dir);
     let manifest = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),

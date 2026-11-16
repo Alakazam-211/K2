@@ -1,0 +1,49 @@
+# Every test target, test-only feature and pending #[ignore] of the pack, the vendored reader
+# (vendor/photocraft-psd, a workspace member) and the fuzz crate (fuzz/, its own workspace, left
+# out of a release cut); scripts/check-targets.sh reads this file and checks it. One row per
+# line: PACKAGE|KIND|NAME|FEATURES|PARTS, the format and the rules in scripts/check-targets.sh's
+# header. The part is `check`: scripts/check.sh. A row whose PARTS holds "pending ruling" waits
+# on a decision; none may be left when a change lands (CHECK_TARGETS_LANDING=1).
+
+# ---- k2-mpc-psd ---------------------------------------------------------------------------------
+k2-mpc-psd|lib|k2_mpc_psd||check
+k2-mpc-psd|doctest|k2_mpc_psd||check
+k2-mpc-psd|feature|differential||check
+k2-mpc-psd|example|fuzz_seeds||built-only:check: writes the fuzz seed corpus
+k2-mpc-psd|example|layers||built-only:check: lists a file's layers as the pack indexes them, run by hand
+k2-mpc-psd|test|pack||check
+k2-mpc-psd|test|corpus_counts||check
+k2-mpc-psd|test|pack_anchor||check
+k2-mpc-psd|test|pack_corpus||check
+k2-mpc-psd|test|pack_memory||check
+k2-mpc-psd|test|pack_session||check
+k2-mpc-psd|test|records||check
+k2-mpc-psd|test|records_corpus||check
+k2-mpc-psd|test|records_memory||check
+
+# ---- photocraft-psd (vendor/photocraft-psd, VENDORED.md) ------------------------------------------
+photocraft-psd|lib|photocraft_psd||check
+photocraft-psd|doctest|photocraft_psd||check
+photocraft-psd|feature|default||product: the default set, empty
+photocraft-psd|feature|serde||product: upstream's optional serde derives; no host here turns it on
+photocraft-psd|feature|testgen||check
+photocraft-psd|feature|corpus||excluded: upstream's real-file corpus test, replaced by the pack's counts-only corpus row (Steward: no names in logs)
+photocraft-psd|test|corpus|corpus|excluded: replaced by the pack's counts-only corpus row (Steward: no names in logs)
+photocraft-psd|example|atn_dump||built-only:check: upstream's dump tool, run by hand
+photocraft-psd|example|bench_layer_block||built-only:check: upstream's measurement, run by hand
+photocraft-psd|example|big_psb||built-only:check: writes multi-gigabyte files for large-file tests, run by hand
+photocraft-psd|test|builder||check
+photocraft-psd|test|layer_block_order||check
+photocraft-psd|test|malformed||check
+photocraft-psd|test|proptests||check
+photocraft-psd|test|roundtrip||check
+photocraft-psd|test|swatch_malformed||check
+photocraft-psd|test|tree||check
+
+# ---- k2-mpc-psd-fuzz (fuzz/, its own workspace; cargo fuzz runs the targets) --------------------
+k2-mpc-psd-fuzz|lib|k2_mpc_psd_fuzz||built-only:check: the fuzz targets' shared code, with no tests; checked under the fuzzing cfg
+k2-mpc-psd-fuzz|doctest|k2_mpc_psd_fuzz||excluded: the crate's docs hold no runnable example
+k2-mpc-psd-fuzz|fuzz-bin|index_draft||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-psd-fuzz|fuzz-bin|records_diff||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-psd-fuzz|fuzz-bin|records_limits||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it
+k2-mpc-psd-fuzz|fuzz-bin|records_walk||built-only:check: checked under the fuzzing cfg; cargo fuzz builds and runs it

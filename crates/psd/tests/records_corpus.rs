@@ -1,7 +1,6 @@
-//! The walker on the public test corpus (fetched by reference, `scripts/fetch-corpus.sh`):
-//! streamed from a file with its heap measured, then compared with the full reader.
-//! Prints counts only. Skips, loudly, when `PSD_PUBLIC_CORPUS` is not set; a file that
-//! is listed but missing fails.
+//! The walker on the public test corpus (fetched by reference, `scripts/fetch-corpus.sh`): streamed
+//! from a file with its heap measured, then compared with the full reader. Prints counts only.
+//! Fails when `PSD_PUBLIC_CORPUS` is not set; a file that is listed but missing fails.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fs::File;
@@ -33,11 +32,10 @@ unsafe impl GlobalAlloc for Counting {
 static ALLOC: Counting = Counting;
 
 #[test]
+#[ignore = "the public corpus: scripts/public-corpus.sh runs it"]
 fn every_public_corpus_file_matches_the_full_reader() {
-    let Some(dir) = std::env::var_os("PSD_PUBLIC_CORPUS") else {
-        eprintln!("public corpus: skipped (PSD_PUBLIC_CORPUS is not set)");
-        return;
-    };
+    let dir = std::env::var_os("PSD_PUBLIC_CORPUS")
+        .expect("PSD_PUBLIC_CORPUS: the public corpus's folder (scripts/fetch-corpus.sh)");
     let dir = Path::new(&dir);
     let manifest = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),

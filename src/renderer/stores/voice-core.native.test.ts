@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { HostEntry } from '@/lib/host-pool'
 import type { ServerScope } from '@/kessel/server-scope'
-import { NativeVoiceEngine, PLUGIN_COMMAND_PREFIX, type NativeVoiceBridge } from '@/lib/voice/native-voice-engine'
+import { NativeVoiceEngine, PLUGIN_COMMAND_PREFIX, SESSION_LEAVE_COMMAND, type NativeVoiceBridge } from '@/lib/voice/native-voice-engine'
 import { SeatOnlyEngine } from '@/lib/voice/voice-engine'
 import type { VoiceRoom, VoiceRoomsList } from '@/lib/voice/voice-wire'
 import { createVoiceController, type VoiceDeps } from './voice-core'
@@ -75,6 +75,8 @@ function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
       switch (command) {
         case 'voice_native_status':
           return { available: true } as T
+        case SESSION_LEAVE_COMMAND:
+          return { posted: true, status: 200 } as T
         case `${P}state`:
           return (plugin.call ? { ...(plugin.state as object), ...plugin.call } : plugin.state) as T
         case `${P}join`:
@@ -467,11 +469,66 @@ describe('the call', () => {
     expect(s.toasts).toEqual(['You left Standup.'])
   })
 
+  it("after the plugin's leave, K2's own call record goes too: the app's session leave, for the call's target", async () => {
+    const s = await inCall()
+    await s.ctl.leave()
+    await settle()
+    const names = s.calls.map(([c]) => c)
+    const left = names.indexOf(`${P}leave`)
+    const k2 = names.indexOf(SESSION_LEAVE_COMMAND)
+    expect(left).toBeGreaterThanOrEqual(0)
+    expect(k2).toBeGreaterThan(left)
+    expect(s.calls.filter(([c]) => c === SESSION_LEAVE_COMMAND)).toEqual([[SESSION_LEAVE_COMMAND, { target: 'host-1' }]])
+    // The engine's own `ended` after it: this window has no call left, so no second ask.
+    s.fire('state', { state: 'ended', reason: 'left' })
+    await settle()
+    expect(s.calls.filter(([c]) => c === SESSION_LEAVE_COMMAND)).toHaveLength(1)
+    expect(s.api.leave).not.toHaveBeenCalled()
+  })
+
+  it("the engine ending the call (a kick, a drop) ends K2's record too", async () => {
+    const s = await inCall()
+    s.fire('state', { state: 'ended', reason: 'removed_by_moderator' })
+    await settle()
+    expect(s.calls.filter(([c]) => c === SESSION_LEAVE_COMMAND)).toEqual([[SESSION_LEAVE_COMMAND, { target: 'host-1' }]])
+  })
+
+  it("a call that ended as it was joined ends K2's record too", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = setup({ plugin: { state: { state: 'ended', reason: 'left', participants: [], call_id: null } } })
+    await s.ctl.join(SEW, room1)
+    await settle()
+    expect(s.calls.filter(([c]) => c === SESSION_LEAVE_COMMAND)).toEqual([[SESSION_LEAVE_COMMAND, { target: 'host-1' }]])
+    warn.mockRestore()
+  })
+
+  it("an engine that failed after the join (no mic) ends K2's record too", async () => {
+    const s = setup({ plugin: { joinError: { code: 'mic_denied', detail: null } } })
+    await s.ctl.join(SEW, room1)
+    await settle()
+    expect(s.calls.filter(([c]) => c === SESSION_LEAVE_COMMAND)).toEqual([[SESSION_LEAVE_COMMAND, { target: 'host-1' }]])
+  })
+
+  it("a failed ask to end K2's record is reported, never thrown", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = await inCall()
+    const spy = vi.spyOn(NativeVoiceEngine.prototype, 'sessionLeave').mockRejectedValueOnce(new Error('the server answered 502'))
+    await s.ctl.leave()
+    await settle()
+    expect(spy).toHaveBeenCalledWith('host-1')
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(warn).toHaveBeenCalledWith('[voice] ending the K2 call record failed:', expect.any(Error))
+    spy.mockRestore()
+    warn.mockRestore()
+  })
+
   it("signed out on the call's server: the plugin leaves", async () => {
     const s = await inCall()
     s.authFns[0](SEW, 'signin-required')
     await settle()
     expect(s.calls).toContainEqual([`${P}leave`, undefined])
+    // Signed out: no K2 leave (the login is gone).
+    expect(s.calls.map(([c]) => c)).not.toContain(SESSION_LEAVE_COMMAND)
     expect(s.ctl.store.getState().call).toBeNull()
     expect(s.ctl.store.getState().notice?.text).toBe('You were signed out of sewlab.')
   })

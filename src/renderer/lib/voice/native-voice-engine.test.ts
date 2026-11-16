@@ -7,6 +7,7 @@ import {
   NativeVoiceError,
   PLUGIN_COMMAND_PREFIX,
   RECORDING_CONTROLS_EVENT,
+  SESSION_LEAVE_COMMAND,
   parseCallState,
   parseDevices,
   parseEngineError,
@@ -300,5 +301,22 @@ describe('rejections', () => {
   it('a join answer with no call id fails loudly', async () => {
     const f = fakeBridge({ [`${PLUGIN_COMMAND_PREFIX}join`]: {} })
     await expect(new NativeVoiceEngine(f.bridge).join({ target: 't', room: 'r', muted: false })).rejects.toThrow(/join answer/)
+  })
+})
+
+describe("K2's own leave after the engine's", () => {
+  it('asks the app (not the plugin) with the target, and reads what it did', async () => {
+    const f = fakeBridge({ [SESSION_LEAVE_COMMAND]: { posted: true, status: 200 } })
+    const left = await new NativeVoiceEngine(f.bridge).sessionLeave('host-1')
+    expect(f.calls).toEqual([{ command: 'voice_native_session_leave', args: { target: 'host-1' } }])
+    expect(SESSION_LEAVE_COMMAND.startsWith(PLUGIN_COMMAND_PREFIX)).toBe(false)
+    expect(left).toEqual({ posted: true, status: 200 })
+    const none = fakeBridge({ [SESSION_LEAVE_COMMAND]: { posted: false, status: null } })
+    expect(await new NativeVoiceEngine(none.bridge).sessionLeave('host-1')).toEqual({ posted: false, status: null })
+  })
+
+  it('an answer of the wrong shape fails loudly', async () => {
+    const f = fakeBridge({ [SESSION_LEAVE_COMMAND]: null })
+    await expect(new NativeVoiceEngine(f.bridge).sessionLeave('host-1')).rejects.toThrow(/session leave/)
   })
 })

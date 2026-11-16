@@ -21,6 +21,8 @@ export interface NativeVoiceBridge {
 }
 
 export const PLUGIN_COMMAND_PREFIX = 'plugin:sew-voice|'
+/** The app's own command (not the plugin's): K2's leave after the engine's. */
+export const SESSION_LEAVE_COMMAND = 'voice_native_session_leave'
 export const EVENT_PREFIX = 'sew-voice://'
 
 /** What `set_device` takes for the OS default: it follows later changes too. */
@@ -347,6 +349,16 @@ export class NativeVoiceEngine {
 
   async leave(): Promise<void> {
     await this.command<null>('leave')
+  }
+
+  /** After `leave`: end K2's own record of the call on `target` (the app's
+   *  `voice_native_session_leave`, which posts `/cli/voice/session/leave`
+   *  with K2's call id from that target's join; nothing without one). The
+   *  plugin's `callId` is Sew's, so the renderer can't post it itself. */
+  async sessionLeave(target: string): Promise<{ posted: boolean; status: number | null }> {
+    const r = record(await this.bridge.invoke<unknown>(SESSION_LEAVE_COMMAND, { target }))
+    if (!r || typeof r.posted !== 'boolean') throw badShape('session leave', r)
+    return { posted: r.posted, status: typeof r.status === 'number' ? r.status : null }
   }
 
   async mute(change: { muted?: boolean; deafened?: boolean }): Promise<void> {

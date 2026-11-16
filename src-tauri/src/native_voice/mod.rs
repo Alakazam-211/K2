@@ -37,16 +37,23 @@ fn device_keys_dir() -> PathBuf {
     k2_dir().join("voice-device-keys")
 }
 
-/// The plugin. Nothing runs until someone uses it: Sew's engine lists no audio
-/// devices at launch (the first `devices`, `set_device` or `join` does).
-pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
+/// The app's copy of the plugin's provider: the leave of K2's own call record
+/// ([`K2Provider::session_leave`]), managed as app state.
+pub type AppProvider = K2Provider<SavedLogins>;
+
+/// The plugin, and the app's copy of its provider. Nothing runs until someone
+/// uses it: Sew's engine lists no audio devices at launch (the first
+/// `devices`, `set_device` or `join` does).
+pub fn plugin<R: Runtime>() -> (TauriPlugin<R>, AppProvider) {
     // reqwest's client only fails to build when TLS can't initialise, which
     // already stops every other request this app makes.
     let provider = K2Provider::new(SavedLogins).expect("native voice: HTTP client");
-    Builder::new(provider)
+    let app_copy = provider.clone();
+    let plugin = Builder::new(provider)
         .data_dir(device_dir())
         .device_key_store(Arc::new(device_keys::K2DeviceKeys::for_app(device_keys_dir())))
-        .build()
+        .build();
+    (plugin, app_copy)
 }
 
 /// Quit: tell Sew now, so the seat frees at once, but never hold the app up.

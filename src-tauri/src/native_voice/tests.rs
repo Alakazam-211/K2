@@ -20,7 +20,7 @@ use tauri_plugin_sew_voice::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use super::provider::{answer_from, api_base, find_host, host_base_url, join_body, K2Provider, Login, LoginSource, LOCAL_TARGET};
+use super::provider::{answer_from, api_base, find_host, host_base_url, join_body, K2Provider, Login, LoginSource, SessionLeave, LOCAL_TARGET};
 
 const LOGIN_TOKEN: &str = "k2-login-token-for-tests";
 const MEDIA_TOKEN: &str = "media-token-for-tests";
@@ -634,6 +634,45 @@ async fn a_rejoin_for_each_reason_uses_the_login_and_says_what_went_wrong() {
             other => panic!("{reason:?}: {other:?}"),
         }
     }
+}
+
+/// After the engine leaves, K2's own call record goes too:
+/// `POST /cli/voice/session/leave {callId}` with K2's id from that target's
+/// join (the plugin never sees it) and the same login. Once per join; never
+/// without the id.
+#[tokio::test]
+async fn the_session_leave_posts_k2s_call_id_from_the_join_once() {
+    let (base, mut seen) = fake_daemon(vec![
+        (200, daemon_answer()),
+        (200, json!({"ok": true, "left": true, "already": false})),
+        (200, json!({"ok": true, "callId": "vc_2", "join": daemon_answer()["join"].clone()})),
+        (200, json!({"ok": true, "left": true, "already": true, "why": "sew_dropped"})),
+    ])
+    .await;
+    let p = provider_for(&base);
+    // The plugin holds the provider; the app holds a copy. They share the ids.
+    let app = p.clone();
+    // Nothing joined yet: nothing posted.
+    assert_eq!(app.session_leave("host-1").await, Ok(SessionLeave { posted: false, status: None }));
+    p.join(request(None)).await.unwrap_or_else(|e| panic!("{e}"));
+    seen.recv().await.expect("the join");
+    assert_eq!(app.session_leave("host-1").await, Ok(SessionLeave { posted: true, status: Some(200) }));
+    let got = seen.recv().await.expect("the leave");
+    assert!(got.starts_with("POST /cli/voice/session/leave HTTP/1.1\r\n"), "{got}");
+    assert!(got.contains(&format!("authorization: Bearer {LOGIN_TOKEN}")), "the join's login: {got}");
+    let body: Value = serde_json::from_str(got.split("\r\n\r\n").nth(1).expect("body")).expect("json");
+    assert_eq!(body, json!({"callId": "vc_1"}), "K2's id, not Sew's room");
+    // Taken: a second leave posts nothing; another target never had one.
+    assert_eq!(app.session_leave("host-1").await, Ok(SessionLeave { posted: false, status: None }));
+    assert_eq!(app.session_leave("host-2").await, Ok(SessionLeave { posted: false, status: None }));
+    // The engine's re-join gets a new K2 id: the leave sends that one.
+    p.join(request(Some(RejoinReason::AdmitLost))).await.unwrap_or_else(|e| panic!("{e}"));
+    seen.recv().await.expect("the re-join");
+    assert_eq!(app.session_leave("host-1").await, Ok(SessionLeave { posted: true, status: Some(200) }));
+    let got = seen.recv().await.expect("the second leave");
+    let body: Value = serde_json::from_str(got.split("\r\n\r\n").nth(1).expect("body")).expect("json");
+    assert_eq!(body, json!({"callId": "vc_2"}));
+    assert!(seen.try_recv().is_err(), "nothing else was sent");
 }
 
 #[tokio::test]

@@ -441,6 +441,17 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     deps.toast(text, kind)
   }
 
+  /** After the native engine left Sew (with the call credential): end K2's own
+   *  record of that call too, `/cli/voice/session/leave` with K2's call id,
+   *  which the app took from the join (the plugin's `callId` is Sew's). Fire
+   *  and forget: the daemon's leave is idempotent, and the app posts once per
+   *  join, never without the id. */
+  const leaveK2Record = (n: NativeVoiceEngine, hostKey: string): void => {
+    const target = deps.targetFor?.(hostKey) ?? null
+    if (!target) return
+    void n.sessionLeave(target).catch((err: unknown) => console.warn('[voice] ending the K2 call record failed:', err))
+  }
+
   const endCall = async (gen: number, reason: string, opts: { tellServer: boolean; toast: boolean }): Promise<void> => {
     const call = store.getState().call
     if (!call || gen !== callGen) return
@@ -461,16 +472,22 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         console.warn('[voice] loading the native engine to leave failed:', err)
         return null
       })
-      if (n) await n.leave().catch((err: unknown) => console.warn('[voice] leave failed:', err))
+      if (n) {
+        await n.leave().catch((err: unknown) => console.warn('[voice] leave failed:', err))
+        if (opts.tellServer) leaveK2Record(n, call.hostKey)
+      }
       void refreshRooms(call.hostKey)
       return
     }
     if (native) {
-      // The engine tells Sew itself, with the call credential.
+      // The engine tells Sew itself, with the call credential; then K2's own
+      // record of the call goes.
+      const n = native
       clearNativeCall()
-      await native.leave().catch((err: unknown) => {
+      await n.leave().catch((err: unknown) => {
         console.warn('[voice] leave failed:', err)
       })
+      if (opts.tellServer) leaveK2Record(n, call.hostKey)
       void refreshRooms(call.hostKey)
       return
     }
@@ -642,6 +659,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       engine = null
       clearNativeCall()
       store.setState({ call: null })
+      // The engine's call is over: K2's record of it goes too (once, whichever
+      // window asks first).
+      if (native) leaveK2Record(native, c.hostKey)
       // Not answering K2's recording notice in time (Sew drops the person): a plain end, not an error.
       if (s.reason !== 'left') notice(callEndedText(s.reason, c.roomName, c.serverLabel, true), s.reason === 'recording_consent_timeout' ? 'info' : 'error')
       void refreshRooms(c.hostKey)
@@ -905,6 +925,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     }
     const detail = e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null
     const hint = typeof detail?.hint === 'string' ? detail.hint : ''
+    // A join K2 answered but the engine then failed (the mic, the media):
+    // K2's record of it goes too. Nothing is posted when K2 refused the join.
+    if (native) leaveK2Record(native, hostKey)
     failJoin(gen, nativeJoinErrorCode(e.code, detail), room, label, hint)
     void refreshRooms(hostKey)
   }
@@ -967,6 +990,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         store.setState({ call: null })
         callGen += 1
         clearNativeCall()
+        leaveK2Record(n, hostKey)
         if (after.reason !== 'left') notice(callEndedText(after.reason, c.roomName, c.serverLabel, true), 'error')
         void refreshRooms(hostKey)
         return

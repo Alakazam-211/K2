@@ -7,7 +7,10 @@
 //! No product logic: no room state, no logging in (a refused login answers
 //! `signin_required`, and the renderer's login coordinator signs in again), no
 //! session routes (since sew-57 the engine does leave, mute, stats and renewal
-//! itself with the call credential). The daemon owns the rooms and every check.
+//! itself with the call credential), except one: after the engine leaves, the
+//! renderer asks for `POST /cli/voice/session/leave {callId}` with K2's own
+//! call id, which only this provider saw ([`K2Provider::session_leave`]). The
+//! daemon owns the rooms and every check.
 //!
 //! **Secrets.** The login token and the join answer stay in Rust memory. Nothing
 //! here logs them, and no error or refusal carries them: errors are fixed text
@@ -49,15 +52,77 @@ pub trait LoginSource: Send + Sync + 'static {
     fn login(&self, target: &str) -> Result<Login, ProviderError>;
 }
 
+/// K2's own id (`callId`, `vc_…`) of each target's last join, from the
+/// daemon's join answer. The plugin only ever sees Sew's half of that answer,
+/// so this is the one place that knows which K2 call record a native call is.
+#[derive(Default)]
+pub struct K2Calls(std::sync::Mutex<std::collections::HashMap<String, String>>);
+
+impl K2Calls {
+    fn map(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, String>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A join (or the engine's re-join) on `target` answered `call_id`.
+    pub fn note(&self, target: &str, call_id: Option<&str>) {
+        match call_id.filter(|id| !id.is_empty()) {
+            Some(id) => self.map().insert(target.to_string(), id.to_string()),
+            None => self.map().remove(target),
+        };
+    }
+
+    /// The call id of `target`'s last join, once: the leave takes it.
+    pub fn take(&self, target: &str) -> Option<String> {
+        self.map().remove(target)
+    }
+}
+
+/// What [`K2Provider::session_leave`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionLeave {
+    /// The route was posted (there was a K2 call id for the target).
+    pub posted: bool,
+    /// The daemon's status, when posted.
+    pub status: Option<u16>,
+}
+
+/// The daemon's leave for one login session's call (`voice/bff.rs` `leave`).
+pub const SESSION_LEAVE_ROUTE: &str = "session/leave";
+
 pub struct K2Provider<L: LoginSource> {
     logins: std::sync::Arc<L>,
     http: reqwest::Client,
+    calls: std::sync::Arc<K2Calls>,
+}
+
+/// The plugin holds one; the app keeps another for the leave
+/// ([`Self::session_leave`]). They share the logins, the client and the
+/// call ids.
+impl<L: LoginSource> Clone for K2Provider<L> {
+    fn clone(&self) -> Self {
+        Self { logins: std::sync::Arc::clone(&self.logins), http: self.http.clone(), calls: std::sync::Arc::clone(&self.calls) }
+    }
 }
 
 impl<L: LoginSource> K2Provider<L> {
     pub fn new(logins: L) -> Result<Self, reqwest::Error> {
         let http = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).timeout(JOIN_TIMEOUT).build()?;
-        Ok(Self { logins: std::sync::Arc::new(logins), http })
+        Ok(Self { logins: std::sync::Arc::new(logins), http, calls: Default::default() })
+    }
+
+    /// After the engine left Sew (with the call credential): end K2's own
+    /// record of that call too, `POST /cli/voice/session/leave {callId}` with
+    /// the same login the join used. Without it the daemon keeps a stale
+    /// "live" call for this login session until the next join. Never posted
+    /// without K2's call id (a leave without one leaves whatever call the
+    /// person is in, maybe on another device). Idempotent on the daemon's
+    /// side (`already: true`); a second leave here posts nothing.
+    pub async fn session_leave(&self, target: &str) -> Result<SessionLeave, ProviderError> {
+        let Some(call_id) = self.calls.take(target) else {
+            return Ok(SessionLeave { posted: false, status: None });
+        };
+        let (status, _, _, _) = self.post_person(target, SESSION_LEAVE_ROUTE, json!({ "callId": call_id })).await?;
+        Ok(SessionLeave { posted: true, status: Some(status) })
     }
 
     async fn join_inner(&self, req: JoinRequest) -> Result<JoinAnswer, ProviderError> {
@@ -85,7 +150,9 @@ impl<L: LoginSource> K2Provider<L> {
             Err(e) if e.is_timeout() => return Err(refused("join_timeout", "the server didn't answer in time")),
             Err(_) => return Err(ProviderError::Unavailable { retry_after_ms: None }),
         };
-        answer_from(status, retry_after, &bytes, &login)
+        let answer = answer_from(status, retry_after, &bytes, &login)?;
+        self.calls.note(&req.target, k2_call_id(&bytes).as_deref());
+        Ok(answer)
     }
 
     /// `POST <base>/cli/voice/<route>` with this person's login, for the
@@ -226,6 +293,13 @@ pub const CALL_CLIENT_TAKES_CALL_ANSWER: bool = true;
 /// The door the engine uses for this login's server.
 pub fn api_base(base_url: &str) -> Result<url::Url, ProviderError> {
     url::Url::parse(&format!("{base_url}{API_BASE_PATH}")).map_err(|_| ProviderError::Other("the saved server address isn't a URL".into()))
+}
+
+/// K2's own call id in the daemon's join answer (`callId`, beside Sew's
+/// `join`). `None` when the answer has none.
+pub fn k2_call_id(body: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(body).ok()?;
+    v.get("callId").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_string)
 }
 
 /// What the daemon answered, as the plugin's types.

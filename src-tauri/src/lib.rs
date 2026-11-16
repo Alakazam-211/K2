@@ -971,8 +971,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init());
+    // The plugin, and the app's copy of its provider for the leave of K2's
+    // own call record (`voice_native_session_leave`).
     #[cfg(feature = "native-voice")]
-    let builder = builder.plugin(native_voice::plugin());
+    let builder = {
+        let (plugin, leaver) = native_voice::plugin();
+        builder.plugin(plugin).manage(leaver)
+    };
 
     // App menu bar is macOS-only. Win/Linux use the in-app "Menu" button
     // (frameless chrome). Tray menu is installed separately and stays.
@@ -1530,6 +1535,7 @@ pub fn run() {
             commands::permissions::permissions_open_camera_settings,
             commands::permissions::permissions_open_screen_settings,
             commands::native_voice::voice_native_status,
+            commands::native_voice::voice_native_session_leave,
             commands::permissions::permissions_request_apple_events,
             commands::permissions::permissions_request_local_network,
             // Phase 2 Unit 6 — `commands::whats_new::*` shims

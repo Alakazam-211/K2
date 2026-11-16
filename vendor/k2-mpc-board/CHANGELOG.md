@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.15
+
+Pairs with kit v0.21.0 (`9e6f6419`, the public cut). The bridge's lock and kit pin text move to it;
+the pack's code doesn't change. The kit's pack API additions have defaults (`Pack::errors`,
+`Pack::check_merged_view`, `BlobPack::merge3_known`, `BlobPack::save_lineage`), and its other
+changes are the host's (the version an app opened, a call's result as data, kept pairs and claim
+bytes on events); the bridge uses none of them.
+
+- The board crate and the bridge 0.1.15 (`Cargo.lock`, `bridge/Cargo.lock`, `fuzz/Cargo.lock`);
+  `bridge/Cargo.lock`: k2-mpc-base 0.21.0 (only the kit's crate version moves).
+  `bridge/Cargo.toml`'s pin comment and `bridge/README.md`'s kit line name v0.21.0 and its cut
+  `9e6f6419`.
+
 ## v0.1.14
 
 Pairs with kit v0.20.0 (`475a1755`, the public cut). The bridge's lock and kit pin text move to it;

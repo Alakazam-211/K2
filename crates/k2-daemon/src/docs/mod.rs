@@ -558,6 +558,7 @@ impl Runtime {
         preview::service::doc_moved(old, new);
         // An outside save kept for "Use their version" was the old file's.
         theirs::forget(old);
+        host_events::forget_saves(old);
         let mut set = self.opened.lock().expect("docs opened set");
         if let Some(p) = set.remove(old) {
             if old.path.starts_with(".k2/") {

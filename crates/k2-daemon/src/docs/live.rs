@@ -26,7 +26,10 @@
 //! `join(Stay::Held)` (a new connection and client id, also on every
 //! reconnect), `subscribe` and `subscribe_roster` **before** the read, then
 //! `welcome {root, version, text?, client, self, rights}`, the first frame.
-//! `text` is left out on a resume the window still covers. Anything refused
+//! `text` is left out on a resume the window still covers. A text doc's
+//! last outside save, when recent, follows the welcome (its `outside_save`,
+//! `before_version` included: a tab that joined after the save can still
+//! compare or undo it; [`super::host_events::subscribe_replaying`]). Anything refused
 //! before the join is one `closed` frame and a close: no presence, no
 //! session.
 //!
@@ -524,7 +527,9 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         let _ = s.leave(conn);
         open_error(&e)
     };
-    let events = super::host_events::subscribe(&key);
+    // A text doc's last outside save, when recent, comes first (a tab that
+    // joined after it still gets its `outside_save` and `before_version`).
+    let events = super::host_events::subscribe_replaying(&key, resume, host::now_ms());
     let changes = session.subscribe(conn).map_err(|e| fail(&session, e))?;
     let roster = session.subscribe_roster(conn).map_err(|e| fail(&session, e))?;
     if deck {

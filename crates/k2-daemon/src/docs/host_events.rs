@@ -10,7 +10,7 @@
 //! | a comment op (`AuditEvent::Annotation`) | `roster_event {kind: "comment_event", thread, comment, op, author, at_ms, anchor}` | sockets on that doc, readers only |
 //! | an anchor's state moved (`AuditEvent::AnchorState`) | `roster_event {kind: "anchor_state", thread, rev, was, now}` | the same |
 //!
-//! | an outside save of a **text** doc's file (`AuditEvent::ExternalEdit`, `FileMissing`, `FileDeclined`) | `outside_save {at_ms, doc, outcome, rev? / code, message}`, the keyed watch's frame (`ingested`, `missing`, `declined`) | that text doc's sockets, readers only |
+//! | an outside save of a **text** doc's file (`AuditEvent::ExternalEdit`, `FileMissing`, `FileDeclined`) | `outside_save {at_ms, doc, outcome, rev? / code, message, before_version}`, the keyed watch's frame (`ingested`, `missing`, `declined`) plus K2's `before_version` ([`version_at`]) | that text doc's sockets, readers only; a socket opened later gets the doc's last one ([`subscribe_replaying`], [`REPLAY_MS`]) |
 //! | an agent's verb on a **text** doc refused (`POST /cli/docs/tool`) | `verb_refused {at_ms, actor, client, turn, verb, unit: null, code, holder, claim}`, the keyed watch's frame | the same |
 //! | someone said something in the doc's live room (`POST /cli/docs/say`, [`super::say`]) | `say {id, from, to, text, at, time, reply_to, at_ms}` (`from`/`to` actor records; `to`, `at`, `time`, `reply_to` null when absent) | sockets on that doc, readers only |
 //!
@@ -32,7 +32,7 @@
 //! `preview_ready` leaves the old image `stale` until the view asks, a
 //! missed `turn_end` is covered by `turn_idle_ms`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 
@@ -74,7 +74,12 @@ pub enum HostEvent {
     /// What came of an outside save of a **text** doc's file, as the keyed
     /// watch's `outside_save` frame: `ingested` (`rev`), `missing`, or
     /// `declined` (`code`). A keyed doc's watch gets the kit's own.
-    OutsideSave { key: DocKey, at_ms: u64, outcome: &'static str, rev: Option<u64>, code: Option<&'static str> },
+    /// `before_version`: the stored version holding the doc as it was just
+    /// before the save ([`version_at`]), the id `GET /cli/docs/show`,
+    /// `docs/diff` (`fromVersion`) and `POST /cli/docs/restore` take; `None`
+    /// when there is none (a missing or declined file changes nothing, so
+    /// the kit cuts no version for it).
+    OutsideSave { key: DocKey, at_ms: u64, outcome: &'static str, rev: Option<u64>, code: Option<&'static str>, before_version: Option<u64> },
     /// An agent's verb on a **text** doc was refused (the tool route saw
     /// it), as the keyed watch's `verb_refused`: `actor` and `holder` pids,
     /// `claim` the refusing claim's id.
@@ -176,8 +181,9 @@ impl HostEvent {
                 ("now", Value::from(now.as_str())),
             ])),
             // The kit's `outside_save` (client/WIRE.md "Outside saves"),
-            // field for field.
-            HostEvent::OutsideSave { key, at_ms, outcome, rev, code } => {
+            // field for field, then K2's `before_version` (always there,
+            // `null` when unknown: an older client ignores it).
+            HostEvent::OutsideSave { key, at_ms, outcome, rev, code, before_version } => {
                 let mut f: Vec<(String, Value)> = vec![
                     ("type".into(), Value::from("outside_save")),
                     ("at_ms".into(), Value::from(*at_ms)),
@@ -191,6 +197,7 @@ impl HostEvent {
                     f.push(("code".into(), Value::from(*c)));
                     f.push(("message".into(), Value::from(declined_message(c))));
                 }
+                f.push(("before_version".into(), before_version.map_or(Value::Null, Value::from)));
                 Value::Obj(f)
             }
             // The kit's `verb_refused` (no unit: a text verb names lines).
@@ -234,12 +241,88 @@ pub fn is_text_doc(key: &DocKey) -> bool {
 }
 
 /// An outside save of a text doc's file, to its sockets (called by the
-/// host's audit hook, under the session lock: a queue push only). Nothing
+/// host's audit hook, under the session lock: a queue push only), and kept
+/// as the doc's last one for a socket opened later ([`subscribe_replaying`]). Nothing
 /// for a keyed or any-file doc.
-pub fn outside_save_on_text(key: &DocKey, outcome: &'static str, rev: Option<u64>, code: Option<&'static str>, at_ms: u64) {
-    if is_text_doc(key) {
-        publish(HostEvent::OutsideSave { key: key.clone(), at_ms, outcome, rev, code });
+pub fn outside_save_on_text(
+    key: &DocKey,
+    outcome: &'static str,
+    rev: Option<u64>,
+    code: Option<&'static str>,
+    before_version: Option<u64>,
+    at_ms: u64,
+) {
+    if !is_text_doc(key) {
+        return;
     }
+    let ev = HostEvent::OutsideSave { key: key.clone(), at_ms, outcome, rev, code, before_version };
+    // Kept, then published, under the kept list's lock: a socket subscribing
+    // meanwhile gets this save once, live or replayed (never both).
+    let mut k = last_saves().lock().unwrap_or_else(|p| p.into_inner());
+    k.retain(|e| e.key() != Some(key));
+    if k.len() >= KEPT_SAVES {
+        k.pop_front();
+    }
+    k.push_back(ev.clone());
+    publish(ev);
+}
+
+/// The stored version holding `key`'s doc exactly as it was at change `at`
+/// (the newest one there), when the store has one. An outside save of a
+/// text doc is change `seq` = the doc's version + 1, and the kit cuts a
+/// version at the doc's version first (`VersionReason::BeforeExternal`,
+/// unless one is already there) in the same commit, before its audit event
+/// (kit `Session::file_changed`): `version_at(seq - 1)` is that version.
+/// Reads the store only (a redb read never waits behind the session lock).
+pub fn version_at(store: &k2_mpc_base::store::DocStore, key: &DocKey, at: u64) -> Option<u64> {
+    let id = store.find(key).ok()??;
+    store.version_infos(id).ok()?.into_iter().filter(|v| v.seq == at).map(|v| v.id).max()
+}
+
+/// Text docs whose last outside save is kept for sockets opened later.
+pub const KEPT_SAVES: usize = 32;
+
+/// How long a doc's last outside save is replayed to a socket opened after
+/// it (the merged notice's Compare and Undo their save, in a tab that joined
+/// late). Older ones aren't: the tab opens on the doc as it is.
+pub const REPLAY_MS: u64 = 30 * 60_000;
+
+/// Each text doc's last `OutsideSave` (oldest doc first), in memory: a
+/// restart forgets them.
+fn last_saves() -> &'static Mutex<VecDeque<HostEvent>> {
+    static K: OnceLock<Mutex<VecDeque<HostEvent>>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+/// The file is back (`AuditEvent::FileRestored`): a kept `missing` or
+/// `declined` no longer says how the doc is, so a later socket isn't told.
+pub fn file_restored(key: &DocKey) {
+    last_saves()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .retain(|e| !(e.key() == Some(key) && matches!(e, HostEvent::OutsideSave { outcome: "missing" | "declined", .. })));
+}
+
+/// The doc was renamed or purged: its kept outside save goes.
+pub fn forget_saves(key: &DocKey) {
+    last_saves().lock().unwrap_or_else(|p| p.into_inner()).retain(|e| e.key() != Some(key));
+}
+
+/// `key`'s last outside save, for a socket opening now: kept, at most
+/// [`REPLAY_MS`] old, and not one a resuming client already has (an
+/// `ingested` save at or before its `resume` version).
+fn replay_for(kept: &VecDeque<HostEvent>, key: &DocKey, resume: Option<u64>, now_ms: u64) -> Option<HostEvent> {
+    let ev = kept.iter().rev().find(|e| e.key() == Some(key))?;
+    let HostEvent::OutsideSave { at_ms, rev, .. } = ev else { return None };
+    if now_ms.saturating_sub(*at_ms) > REPLAY_MS {
+        return None;
+    }
+    if let (Some(v), Some(r)) = (resume, *rev) {
+        if r <= v {
+            return None;
+        }
+    }
+    Some(ev.clone())
 }
 
 fn roster(event: Value) -> Value {
@@ -280,6 +363,26 @@ pub fn subscribe(key: &DocKey) -> Subscription {
     let (tx, rx) = sync_channel(QUEUE);
     let id = next_id();
     subs().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Sub { key: key.clone(), tx });
+    Subscription { id, rx }
+}
+
+/// [`subscribe`] for a live socket opening now: a text doc's last outside
+/// save, when it is recent ([`REPLAY_MS`]), is queued first, so a tab
+/// opened after the save still gets its `outside_save` (with
+/// `before_version`), after the welcome like any host event. `resume`: the
+/// client's version on a reconnect (a save it already has isn't sent
+/// again); `now_ms` the host clock.
+pub fn subscribe_replaying(key: &DocKey, resume: Option<u64>, now_ms: u64) -> Subscription {
+    let (tx, rx) = sync_channel(QUEUE);
+    let id = next_id();
+    // The kept list's lock first, as `outside_save_on_text` takes them: a
+    // save made meanwhile reaches this socket once, replayed or live.
+    let kept = last_saves().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(ev) = replay_for(&kept, key, resume, now_ms) {
+        let _ = tx.try_send(ev);
+    }
+    subs().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Sub { key: key.clone(), tx });
+    drop(kept);
     Subscription { id, rx }
 }
 
@@ -418,20 +521,27 @@ mod tests {
         let deck = key("host-events-text", "talk.pptx");
         let (on_md, on_deck) = (subscribe(&md), subscribe(&deck));
         assert!(is_text_doc(&md) && is_text_doc(&key("w", "src/main.rs")) && !is_text_doc(&deck) && !is_text_doc(&key("w", "a.png")));
-        outside_save_on_text(&md, "ingested", Some(12), None, 1_700_000_000_000);
-        outside_save_on_text(&deck, "ingested", Some(3), None, 1_700_000_000_000);
+        outside_save_on_text(&md, "ingested", Some(12), None, Some(4), 1_700_000_000_000);
+        outside_save_on_text(&deck, "ingested", Some(3), None, None, 1_700_000_000_000);
         let ev = on_md.rx.try_recv().expect("the text doc's socket");
         let name = |pid: &str| Value::obj([("id", Value::from(pid))]);
-        assert_eq!(ev.frame(name).to_json(), r#"{"type":"outside_save","at_ms":1700000000000,"doc":"notes/plan.md","outcome":"ingested","rev":12}"#);
+        assert_eq!(
+            ev.frame(name).to_json(),
+            r#"{"type":"outside_save","at_ms":1700000000000,"doc":"notes/plan.md","outcome":"ingested","rev":12,"before_version":4}"#
+        );
         assert!(on_deck.rx.try_recv().is_err(), "a keyed doc's watch has the kit's own frame");
-        outside_save_on_text(&md, "missing", None, None, 5);
-        assert_eq!(on_md.rx.try_recv().expect("missing").frame(name).to_json(), r#"{"type":"outside_save","at_ms":5,"doc":"notes/plan.md","outcome":"missing"}"#);
-        outside_save_on_text(&md, "declined", None, Some("too_large"), 6);
+        outside_save_on_text(&md, "missing", None, None, None, 5);
+        assert_eq!(
+            on_md.rx.try_recv().expect("missing").frame(name).to_json(),
+            r#"{"type":"outside_save","at_ms":5,"doc":"notes/plan.md","outcome":"missing","before_version":null}"#
+        );
+        outside_save_on_text(&md, "declined", None, Some("too_large"), None, 6);
         let f = on_md.rx.try_recv().expect("declined").frame(name).to_json();
         assert!(
             f.starts_with(r#"{"type":"outside_save","at_ms":6,"doc":"notes/plan.md","outcome":"declined","code":"too_large","message":"the file can't be a live doc any more (too_large)"#),
             "{f}"
         );
+        assert!(f.ends_with(r#","before_version":null}"#), "{f}");
 
         let refused = HostEvent::VerbRefused {
             key: md.clone(),
@@ -450,4 +560,64 @@ mod tests {
             r#"{"type":"verb_refused","at_ms":9,"actor":{"id":"agent:atlas"},"client":4,"turn":"t:ab.1","verb":"replace-section","unit":null,"code":"MPC-E301","holder":{"id":"agent:brook"},"claim":"claim-7"}"#
         );
     }
+
+    /// A socket opened after an outside save gets the doc's last one first
+    /// (with `before_version`) while it is recent; never a deck's, never one
+    /// a resuming client already has, never after the file came back
+    /// (missing) or the doc moved.
+    #[test]
+    fn a_socket_opened_after_an_outside_save_gets_the_last_one() {
+        let md = key("host-events-late", "notes/late.md");
+        let deck = key("host-events-late", "talk.pptx");
+        let t = 1_700_000_000_000;
+        assert!(subscribe_replaying(&md, None, t).rx.try_recv().is_err(), "no save yet");
+        outside_save_on_text(&md, "ingested", Some(8), None, Some(3), t);
+        outside_save_on_text(&md, "ingested", Some(12), None, Some(5), t + 10);
+        outside_save_on_text(&deck, "ingested", Some(2), None, None, t);
+        let late = subscribe_replaying(&md, None, t + 1_000);
+        let ev = late.rx.try_recv().expect("the last save, replayed");
+        let name = |pid: &str| Value::obj([("id", Value::from(pid))]);
+        assert_eq!(
+            ev.frame(name).to_json(),
+            r#"{"type":"outside_save","at_ms":1700000000010,"doc":"notes/late.md","outcome":"ingested","rev":12,"before_version":5}"#,
+            "the newest save only, as it was sent"
+        );
+        assert!(late.rx.try_recv().is_err(), "once");
+        assert!(subscribe(&md).rx.try_recv().is_err(), "a plain subscription replays nothing");
+        assert!(subscribe_replaying(&deck, None, t).rx.try_recv().is_err(), "a deck's watch has the kit's own");
+        assert!(subscribe_replaying(&md, Some(12), t + 1_000).rx.try_recv().is_err(), "a resume at the save has it");
+        assert!(subscribe_replaying(&md, Some(11), t + 1_000).rx.try_recv().is_ok(), "a resume before the save gets it");
+        assert!(subscribe_replaying(&md, None, t + 10 + REPLAY_MS + 1).rx.try_recv().is_err(), "too old");
+
+        // A newer save after the subscription arrives live, after the replay.
+        let both = subscribe_replaying(&md, None, t + 1_000);
+        outside_save_on_text(&md, "missing", None, None, None, t + 2_000);
+        let got: Vec<&'static str> = both
+            .rx
+            .try_iter()
+            .map(|e| match e {
+                HostEvent::OutsideSave { outcome, .. } => outcome,
+                other => panic!("not an outside save: {other:?}"),
+            })
+            .collect();
+        assert_eq!(got, ["ingested", "missing"]);
+        assert!(matches!(
+            subscribe_replaying(&md, None, t + 3_000).rx.try_recv(),
+            Ok(HostEvent::OutsideSave { outcome: "missing", before_version: None, .. })
+        ));
+        file_restored(&md);
+        assert!(subscribe_replaying(&md, None, t + 3_000).rx.try_recv().is_err(), "the file is back");
+
+        outside_save_on_text(&md, "ingested", Some(20), None, Some(9), t + 4_000);
+        file_restored(&md);
+        assert!(subscribe_replaying(&md, None, t + 5_000).rx.try_recv().is_ok(), "a merged save stays after a restore");
+        forget_saves(&md);
+        assert!(subscribe_replaying(&md, None, t + 5_000).rx.try_recv().is_err(), "moved or purged");
+    }
 }
+
+/// The version id through the kit itself: K2's audit hook on a real outside
+/// save, a socket subscribing after it, and that version read back.
+#[cfg(test)]
+#[path = "outside_save_tests.rs"]
+mod outside_save_tests;

@@ -310,21 +310,34 @@ impl Host for K2Host {
             // A text doc's sockets also get the outside save as the keyed
             // watch's `outside_save` frame (the kit sends that frame to keyed
             // watches only): [`super::host_events::outside_save_on_text`].
+            // `before_version`: the version the kit cut at the doc's version
+            // just before the save (change `seq - 1`), in the commit it
+            // made before this event ([`super::host_events::version_at`]).
             AuditEvent::ExternalEdit { key, seq } => {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} external_edit change={seq}", key_label(key)));
-                super::host_events::outside_save_on_text(key, "ingested", Some(*seq), None, now_ms());
+                let before = if super::host_events::is_text_doc(key) {
+                    self.store
+                        .upgrade()
+                        .and_then(|st| super::host_events::version_at(&st, key, seq.saturating_sub(1)))
+                } else {
+                    None
+                };
+                super::host_events::outside_save_on_text(key, "ingested", Some(*seq), None, before, now_ms());
                 // "Use their version": the save as the file holds it now.
                 super::theirs::on_external_edit(key, *seq);
             }
             AuditEvent::FileMissing { key, unflushed } => {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} missing unflushed={unflushed}", key_label(key)));
-                super::host_events::outside_save_on_text(key, "missing", None, None, now_ms());
+                super::host_events::outside_save_on_text(key, "missing", None, None, None, now_ms());
             }
             AuditEvent::FileDeclined { key, code } => {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} declined code={code}", key_label(key)));
-                super::host_events::outside_save_on_text(key, "declined", None, Some(*code), now_ms());
+                super::host_events::outside_save_on_text(key, "declined", None, Some(*code), None, now_ms());
             }
-            AuditEvent::FileRestored { key } => audit(AUDIT_FILE, EXTERNAL, format!("{} restored", key_label(key))),
+            AuditEvent::FileRestored { key } => {
+                audit(AUDIT_FILE, EXTERNAL, format!("{} restored", key_label(key)));
+                super::host_events::file_restored(key);
+            }
             // Kit v0.9.5: the file came back holding one of the kit's own
             // recent writes (a stale editor buffer), so it wasn't an edit.
             AuditEvent::EchoSuppressed { key } => {
@@ -367,6 +380,8 @@ impl Host for K2Host {
                 // Previews (contract Item 8, hook 1): every scope drops the
                 // doc's previews (purged text is in the pixels), off the lock.
                 previews_purged(key, "purged");
+                // A kept outside save may name a version the purge reached.
+                super::host_events::forget_saves(key);
             }
             // Tier 0 (kit amendment 3): leases are presence (debug log);
             // a break and a conflicting save are audited, metadata only.

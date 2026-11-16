@@ -753,6 +753,16 @@ async fn the_live_socket_end_to_end() {
     assert_eq!((&os["outcome"], &os["doc"]), (&json!("ingested"), &json!("notes.md")), "{os}");
     assert_eq!(os["rev"], save_change["event"]["version"], "the save's change: {os} {save_change}");
     assert!(os["at_ms"].as_u64().is_some_and(|ms| ms > 0), "{os}");
+    // `before_version`: the stored version from just before the save, which
+    // `docs/show` reads as the doc was then (A's written-back line, no stale line).
+    let before_version = os["before_version"].as_u64().unwrap_or_else(|| panic!("before_version: {os}"));
+    let show_before = |token: &str| {
+        let r = http(port, "GET", &format!("/cli/docs/show?token={token}&path={}&version={before_version}", enc(&doc)), None);
+        assert_eq!(r.status, 200, "show the version before the save: {}", r.body);
+        json_of(&r)["text"].as_str().expect("text").to_string()
+    };
+    let text_before_save = format!("{to}{typed}");
+    assert_eq!(show_before(OWNER), text_before_save, "the doc as it was just before their save");
     // Use their version (`POST /cli/docs/use-theirs`, the save's rev): the doc
     // is the file as that save wrote it; an older rev is 409 theirs_gone.
     let use_theirs = |rev: &J| {
@@ -783,8 +793,25 @@ async fn the_live_socket_end_to_end() {
     };
     let mut n1 = open(&live_url(port, OWNER, &doc, "")).await;
     assert_eq!(ty(&n1.next("n1 welcome").await), "welcome");
-    let (snap1, _) = n1.until("n1 snapshot", |f| ty(f) == "roster_event" && f["event"]["kind"] == "snapshot").await;
+    let (snap1, mut n1_frames) = n1.until("n1 snapshot", |f| ty(f) == "roster_event" && f["event"]["kind"] == "snapshot").await;
     assert_eq!(snapshot_notes(&[snap1.clone()]), Some(1), "waiting before take_notes: {snap1}");
+    // A tab that joined after the save still gets its outside_save (K2
+    // replays the doc's last one, recent), with the same before_version,
+    // so it can offer Compare and Undo their save; and it reads that version.
+    n1_frames.push(snap1.clone());
+    n1_frames.extend(n1.drain(600).await);
+    let late: Vec<&J> = n1_frames.iter().filter(|f| ty(f) == "outside_save").collect();
+    assert_eq!(late.len(), 1, "one replayed outside_save: {n1_frames:?}");
+    assert_eq!(late[0], os, "the frame the open tab got, field for field");
+    assert_eq!(show_before(OWNER), text_before_save);
+    // A reconnect that resumes past the save already has it: not sent again.
+    let rev = os["rev"].as_u64().expect("rev");
+    let mut n_resume = open(&live_url(port, OWNER, &doc, &format!("&resume={rev}"))).await;
+    assert_eq!(ty(&n_resume.next("resume welcome").await), "welcome");
+    let resumed = n_resume.drain(600).await;
+    assert!(!resumed.iter().any(|f| ty(f) == "outside_save"), "{resumed:?}");
+    let _ = n_resume.sink.send(Message::Close(None)).await;
+    drop(n_resume);
     let _ = n1.sink.send(Message::Close(None)).await;
     drop(n1);
     a.send(json!({"type":"take_notes"})).await;

@@ -11,9 +11,11 @@
 //!   (Settings → Providers / Models), else to what it was. Then a K2 note on
 //!   the Thread: "Model: … for this chat; your default stays …".
 //!   Only at the agent's prompt: mid-turn (or waiting on a person) is
-//!   refused, nothing sent. A person's move: the owner, a Connect Owner or
-//!   Admin (the route floor), or a person typing in a K2 shell tab; agents
-//!   and App guests are refused.
+//!   refused, nothing sent. A person's move: the owner token, or a Connect
+//!   Owner or Admin login (the route floor). Any passport is refused,
+//!   whatever its harness or tab kind: an agent whose harness is a plain
+//!   shell holds a passport that looks like a K2 shell tab's. App guests
+//!   are refused too.
 //! - `GET /cli/sessions/model/options?session_id=`: the session's harness,
 //!   whether it can switch, the model it is on (when K2 knows), and the
 //!   server and workspace defaults, for the Thread's `/model` menu.
@@ -84,12 +86,15 @@ fn claude_home(session_id: &SessionId, map_key: Option<&str>) -> PathBuf {
     live()
 }
 
-/// Who may switch an agent's model: a person (owner token, a Connect login
-/// past the route's Admin floor, a K2 shell tab). Agents and App guests no.
+/// Who may switch an agent's model: a person with no passport (the owner
+/// token, a Connect login past the route's Admin floor). Every passport is
+/// refused, a shell tab's too: an agent whose harness is a plain shell
+/// (bash) holds one that classifies as [`Caller::Shell`], and must not
+/// switch another agent's model (0.46.13 rollback test). App guests no.
 pub(crate) fn gate(caller: &Caller) -> Result<(), SidecarError> {
     match caller {
-        Caller::Owner | Caller::Login { .. } | Caller::Shell { .. } => Ok(()),
-        Caller::Agent(_) => Err(err(
+        Caller::Owner | Caller::Login { .. } => Ok(()),
+        Caller::Agent(_) | Caller::Shell { .. } => Err(err(
             "model_switch_needs_person",
             403,
             "only a person switches an agent's model: from the Thread's / menu (/model), or the owner from a terminal",
@@ -403,7 +408,8 @@ mod tests {
     fn only_people_may_switch() {
         assert!(gate(&Caller::Owner).is_ok());
         assert!(gate(&Caller::Login { username: "anna".into() }).is_ok());
-        assert!(gate(&Caller::Shell { project_id: "p".into() }).is_ok());
+        // A shell tab's passport is a passport: refused like an agent's.
+        assert_eq!(gate(&Caller::Shell { project_id: "p".into() }).unwrap_err().code, "model_switch_needs_person");
         let agent = Caller::Agent(crate::sidecar_routes::AgentCaller {
             project_id: "p".into(),
             map_key: None,
@@ -416,6 +422,53 @@ mod tests {
         // The agent is refused before anything is looked up or sent.
         let e = handle_switch(&agent, &json!({"session_id": "x", "model": "opus"})).unwrap_err();
         assert_eq!(e.code, "model_switch_needs_person");
+    }
+
+    /// The passport of a live session whose harness is bash (an agent on a
+    /// plain shell harness, or a K2 shell tab: the daemon can't tell them
+    /// apart) can't switch another session's model, nor read its menu.
+    #[cfg(unix)]
+    #[test]
+    fn a_bash_harness_agents_passport_is_refused() {
+        use k2_core::terminal::{DaemonPtyConfig, LabelSource};
+        let _db = k2_core::db::scoped_for_test();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
+        let _enter = rt.enter();
+        let session = k2_core::test_env::spawn_plain_pty(DaemonPtyConfig {
+            session_id: SessionId::new(),
+            cols: 80,
+            rows: 24,
+            cwd: Some(PathBuf::from("/tmp")),
+            program: Some("bash".to_string()),
+            args: vec!["--norc".to_string(), "--noprofile".to_string()],
+            durable_args: None,
+            env: Default::default(),
+            drain_on_exit: true,
+            label: String::new(),
+            label_source: LabelSource::Pty,
+            sandbox: k2_core::terminal::SandboxSpec::Passthrough,
+            cell_uid: None,
+            overlay: None,
+            survive: false,
+            ptyd_meta: None,
+        })
+        .expect("spawn bash");
+        let key = format!("tab-bash-{}", uuid::Uuid::new_v4().simple());
+        crate::v2_session_map::register(key.clone(), session.clone());
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: "w-bash".into(),
+            agent_address: "bash-agent".into(),
+        };
+        let caller = crate::sidecar_routes::caller_from_session(&session.session_id.to_string(), &principal);
+        let other = SessionId::new().to_string();
+        let switched = handle_switch(&caller, &json!({"session_id": other, "model": "opus"}));
+        let menu = handle_options(&caller, &HashMap::from([("session_id".to_string(), other.clone())]));
+        crate::v2_session_map::unregister(&key);
+        session.kill();
+        assert_eq!(caller, Caller::Shell { project_id: "w-bash".into() }, "a bash session's passport classes as a shell");
+        let e = switched.expect_err("a passport never switches a model");
+        assert_eq!((e.code, e.status), ("model_switch_needs_person", 403));
+        assert_eq!(menu.expect_err("nor reads the menu").code, "model_switch_needs_person");
     }
 
     #[test]

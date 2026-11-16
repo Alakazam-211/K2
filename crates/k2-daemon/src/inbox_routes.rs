@@ -839,11 +839,6 @@ const GLOSSARY: &[GlossaryEntry] = &[
         summary: "Git worktree — a working directory linked to a different branch",
         definition: "A git worktree — a working directory linked to a separate branch from your main checkout. K2 uses worktrees so a sub-agent or pull request can work on a feature branch in isolation, then merge back.\n\nModern harnesses (Claude Code, Cursor) create worktrees natively when you spawn a sub-agent. K2 tracks the resulting worktrees in `reviews` (pending merges) and the daemon owns cleanup on merge or reject.\n\nSee also: `k2 reviews`, `k2 review approve|reject|feedback`.",
     },
-    GlossaryEntry {
-        term: "reservation",
-        summary: "Short-term file path lock between agents",
-        definition: "A short-term lock on a file path so two agents don't edit the same file concurrently. Acquire with `k2 reserve`, release with `k2 release`.",
-    },
 ];
 
 /// GET /cli/glossary/list

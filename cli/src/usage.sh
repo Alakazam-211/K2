@@ -278,34 +278,43 @@ cmd_llm() {
     esac
 }
 
-cmd_reserve() {
-    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
-    local paths=()
+# `k2 reserve` / `k2 release` are retiring: nothing reads reservations any
+# more. They are hidden (no help, study or schema entry) and take paths and
+# --agent <name> only. Any other argument starting with `-` is a usage
+# error that sends nothing: before, `k2 reserve --help` reserved a path
+# named `--help`. A later release removes both verbs.
+# _reserve_args <verb> <args...> sets _RS_AGENT and _RS_PATHS.
+_reserve_args() {
+    local verb="$1"; shift
+    _RS_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    _RS_PATHS=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            *) paths+=("$1"); shift ;;
+            --agent)
+                [[ $# -ge 2 && "$2" != -* ]] || { echo "k2 $verb: '--agent' needs a name." >&2; exit 2; }
+                _RS_AGENT="$2"; shift 2 ;;
+            -*)
+                echo "k2 $verb: '$1' is not a path. k2 $verb takes paths and --agent <name> only, and is being retired." >&2
+                exit 2 ;;
+            *) _RS_PATHS+=("$1"); shift ;;
         esac
     done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
-    [[ ${#paths[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
-    local joined=$(IFS=,; echo "${paths[*]}")
-    cli_request_post "/cli/reserve" "agent=$agent&paths=$(urlencode "$joined")"
+}
+
+cmd_reserve() {
+    _reserve_args reserve "$@"
+    [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
+    [[ ${#_RS_PATHS[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
+    local joined=$(IFS=,; echo "${_RS_PATHS[*]}")
+    cli_request_post "/cli/reserve" "agent=$_RS_AGENT&paths=$(urlencode "$joined")"
 }
 
 cmd_release() {
-    local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
-    local paths=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            *) paths+=("$1"); shift ;;
-        esac
-    done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
-    local params="agent=$agent"
-    if [[ ${#paths[@]} -gt 0 ]]; then
-        local joined=$(IFS=,; echo "${paths[*]}")
+    _reserve_args release "$@"
+    [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
+    local params="agent=$_RS_AGENT"
+    if [[ ${#_RS_PATHS[@]} -gt 0 ]]; then
+        local joined=$(IFS=,; echo "${_RS_PATHS[*]}")
         params="$params&paths=$(urlencode "$joined")"
     fi
     cli_request_post "/cli/release" "$params"

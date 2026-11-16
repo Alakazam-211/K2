@@ -472,7 +472,7 @@ Run `k2 glossary <term>` for definitions of K2-specific terms (workspace, skill,
 
 /// Generate the skill protocol for custom agents.
 /// Has inbox, organization bulletin / update, done, msg (to connected
-/// workspaces), reserve/release.
+/// workspaces).
 /// No delegation — custom agents send work to workspace inboxes.
 pub fn generate_custom_agent_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(

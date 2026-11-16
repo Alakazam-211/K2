@@ -2032,8 +2032,10 @@ impl Session {
         opts: &EditOptions,
         f: impl FnOnce(&View) -> std::result::Result<Vec<Edit>, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_ops_impl(conn, opts, None, false, |v, _, _| f(v).map(|e| (e, None)))
-            .map(|(r, _)| r)
+        self.edit_ops_impl(conn, opts, None, false, None, |v, _, _| {
+            f(v).map(|e| (e, None))
+        })
+        .map(|(r, _)| r)
     }
 
     /// [`Session::edit_ops_with`] for a pack's structured verb (through `run_tool`): the
@@ -2043,16 +2045,19 @@ impl Session {
     /// `f` also gets that version's doc when it isn't the live one (the live doc, a
     /// recent read or a stored version; none of them: [`SessionError::BaseExpired`]). `f` also
     /// returns what a grid verb wrote ([`crate::grid::CellsReport`]): the acting agent's cells
-    /// move to it once the change applied.
+    /// move to it once the change applied. `capture`: for the call's result
+    /// ([`crate::tools::ToolOutput::result`]), the version the verb computed on and the units
+    /// its edits write, by address and field.
     pub(crate) fn edit_ops_verb<E>(
         &self,
         conn: ConnId,
         opts: &EditOptions,
         verb: &str,
         at_base: bool,
+        capture: Option<&mut crate::tools::Capture>,
         f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<VerbEdits, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
-        self.edit_ops_impl(conn, opts, Some(verb), at_base, f)
+        self.edit_ops_impl(conn, opts, Some(verb), at_base, capture, f)
     }
 
     fn edit_ops_impl<E>(
@@ -2061,6 +2066,7 @@ impl Session {
         opts: &EditOptions,
         verb: Option<&str>,
         at_base: bool,
+        mut capture: Option<&mut crate::tools::Capture>,
         f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<VerbEdits, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         let now = self.now();
@@ -2098,14 +2104,26 @@ impl Session {
             st.handles = h;
         }
         // the views share the live view's state: let it go before the change keeps the live
-        // view in step, which would otherwise copy it
-        drop(view);
+        // view in step, which would otherwise copy it (kept to here only for a result's units)
         drop(at);
+        let view = match capture.as_deref_mut() {
+            Some(c) => {
+                c.base = Some(st.version);
+                Some(view)
+            }
+            None => {
+                drop(view);
+                None
+            }
+        };
         let (edits, cells) = edits.map_err(EditWithError::Compute)?;
         let edits = {
             prof!("edit.normalize");
             self.normalize(edits)?
         };
+        if let (Some(c), Some(view)) = (capture, view) {
+            (c.units, c.more) = crate::tools::result_units(self.pack.as_ref(), &view, &edits);
+        }
         if edits.is_empty() {
             return Ok((None, Notes::default()));
         }
@@ -3667,6 +3685,9 @@ impl Session {
         // when the doc renders the synced bytes, the replica is the doc (counter marker)
         self.resync_if_synced(st)?;
         let bad = |e: table::TableError| SessionError::BadEdit(e.to_string());
+        // a save merges from the version the app opened, when noted (`note_opened`): a table's
+        // through its merge's base, a keyed doc's field by field (`field_merge`)
+        let pinned = self.pinned_view(st)?;
         if is_table {
             // the live doc may have re-identified rows the file shows (a header switch, with
             // edits pending since): the replica takes the live keys for them first
@@ -3724,7 +3745,14 @@ impl Session {
             true => None,
             false => Some(self.synced_with(st, &file_edits)?),
         };
+        // a keyed doc with a pin: the save's changes since the version the app opened, merged
+        // field by field onto the live doc, and checked by the pack; `None` keeps both as below
+        let field_merge = match (&pinned, is_table) {
+            (Some(p), false) if !file_edits.is_empty() => self.field_merge(st, p, bytes)?,
+            _ => None,
+        };
         let dirty_save = !is_table
+            && field_merge.is_none()
             && !file_edits.is_empty()
             && st.disk.as_ref().is_some_and(|d| d.synced_seq != st.version)
             && !dirty_save_merged_by_key();
@@ -3739,11 +3767,31 @@ impl Session {
                 // what the file changed of an element the live doc dropped since comes back
                 // under a fresh key (a dropped key is never reused, and can't be restored)
                 let ours_t = rekey_dropped_in_file(&base_t, ours_t, live_t);
-                let exact = rec.exact_rows.iter().cloned().collect();
+                // the rows the save left as they were: against the version the app opened when
+                // noted (a row the kit changed since and the app didn't touch is the app's
+                // unchanged line, not a line it rewrote), else against the file's last content
+                let exact: std::collections::HashSet<Key> = match &pinned {
+                    Some(p) => match self.pack.reconcile(p, bytes, &st.codec) {
+                        Ok(r) => r.exact_rows.iter().cloned().collect(),
+                        Err(_) => rec.exact_rows.iter().cloned().collect(),
+                    },
+                    None => rec.exact_rows.iter().cloned().collect(),
+                };
                 row_marks = kept_not_exact(&base_t, &ours_t, &rec.exact_rows, rec.cols_exact);
                 col_remap = !rec.cols_exact;
-                let m =
-                    table::merge3_outside_text(&base_t, &ours_t, live_t, &exact).map_err(bad)?;
+                // the merge's base: the version the app opened, with the synced table's key
+                // counters (they cover the live doc's), else the synced table
+                let merge_base = match &pinned {
+                    Some(p) => {
+                        let mut p = p.table().map_err(bad)?;
+                        p.next_row = p.next_row.max(base_t.next_row);
+                        p.next_col = p.next_col.max(base_t.next_col);
+                        p
+                    }
+                    None => base_t.clone(),
+                };
+                let m = table::merge3_outside_text(&merge_base, &ours_t, live_t, &exact)
+                    .map_err(bad)?;
                 moved_then_deleted = m.moved_then_deleted;
                 debug_assert!(
                     m.rekeyed.is_empty(),
@@ -3751,6 +3799,8 @@ impl Session {
                 );
                 (self.normalize(m.edits)?, m.conflicts)
             }
+            // merged field by field from the version the app opened
+            _ if field_merge.is_some() => (field_merge.clone().unwrap_or_default(), Vec::new()),
             // on unwritten changes the save becomes the live doc exactly, by identity (the
             // kit's version is kept below): never merged with them
             _ if dirty_save => {
@@ -3892,6 +3942,7 @@ impl Session {
         // the save lands on changes the file doesn't have: one rule, so a save is never
         // merged by key with unwritten changes
         let over_kit = !is_table
+            && field_merge.is_none()
             && !keyed_save_applied_silently()
             && (dirty_save || self.kit_wrote_file(st)?);
         let kept_copy = match over_kit {
@@ -4056,6 +4107,7 @@ impl Session {
                     kind: change.info.kind,
                     turn: None,
                     verb: None,
+                    kept_pairs: Vec::new(),
                 },
             );
         }
@@ -4324,6 +4376,20 @@ impl Session {
             return self.content_of(replica);
         }
         let mut copy = Doc::load(self.schema, &replica.encode_state()?)?;
+        let own = loop {
+            let c = mint_client_id();
+            if copy.clock_of(c) == 0 {
+                break c;
+            }
+        };
+        copy.edit_applied(own, edits)?;
+        self.content_of(&copy)
+    }
+
+    /// The live doc's content with `edits` applied, on a throwaway copy (nothing changes): a
+    /// field merge's result, for the pack's check.
+    pub(super) fn live_with(&self, st: &State, edits: &[Edit]) -> Result<Vec<(String, Neutral)>> {
+        let mut copy = Doc::load(self.schema, &st.doc.encode_state()?)?;
         let own = loop {
             let c = mint_client_id();
             if copy.clock_of(c) == 0 {

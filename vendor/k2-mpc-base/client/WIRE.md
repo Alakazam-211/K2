@@ -672,7 +672,7 @@ a frame over it, and the host refuses one cleanly:
   viewport, client?}`, `focus {who, focus, client?}` and `range {who, range, client?}` (wire 3)
   ([below](#selection-pointer-and-viewport-in-the-roster)),
   `cells {who, cells, client?}` (a live grid, [below](#the-live-grid)),
-  `claim_started {who, claim, lines, note, hold, for_edit, expires_ms, version, actor,
+  `claim_started {who, claim, lines, bytes?, note, hold, for_edit, expires_ms, version, actor,
   started_ms}`, `claim_started_elems {who, claim, root, keys, note, hold, expires_ms, version,
   actor, started_ms}`, `claim_started_cells {who, claim, container, ranges, note, hold,
   expires_ms, version, actor, started_ms}` (a live grid), `claim_ended {who, claim, how, lines,
@@ -718,6 +718,11 @@ even after the claimant left:
   stamped it on the participant).
 - **`started_ms`** on `claim_started` and `claim_started_elems`: when it was taken (host clock);
   also on a snapshot's `elem_claims`.
+- **`bytes`** `{start, end}` on `claim_started` (kit after v0.20.0; additive): the claim's span
+  when it was taken, in UTF-8 bytes of its root's text at the event's `version`, half-open: the
+  doc text as hunks count it (`\n` line breaks, no BOM; a CRLF file's `\r` not in it). It is
+  the take's, and doesn't move with later changes. Absent for a grid's line claim (its lines
+  are the rendered file's) and from an older host.
 - **`at_ms`** on `claim_ended`: when it ended; **`at_rev`**: the change (the doc's version) that
   ended it when one did (`how: "edited"`, `"deleted"` or `"gone_outside_save"`), else `null`.
 - **An agent's claim on elements moves its presence:** at the same flush, after the claim's
@@ -763,7 +768,7 @@ the kit's own final roster.
 
 | Value | Encoding |
 |---|---|
-| `ChangeEvent` | `{version, pid, client, via, kind, root, hunks: [{start, end, insert}], at_ms, on_behalf_of, turn, verb}`; `on_behalf_of` is `null` when absent, never left out; `kind` (kit v0.10.1) = `ChangeKind::as_str()`: `"edit"` \| `"undo"` \| `"redo"` \| `"revert"` \| `"restore"` \| `"external"` \| `"import"`, always present (a host on an older kit sends none); `turn` (wire 3) = `ChangeEvent::turn` as its string, the host-given turn of the agent step that made it (at most 64 bytes, printable ASCII), or `null`: a person's change, an outside save, a call the host gave none, and always for an App viewer; never left out (a host before wire 3 sends none); `verb` (wire 3, kit after v0.14.0) = `ChangeEvent::verb`, the id of the pack verb that made it as the pack names it (`shape move`, `replace-section`; at most 64 bytes), or `null`: a raw write, a kit tool, an outside save, an undo, a redo, a revert, a restore and the import; shown to an App viewer too (it names a verb, not a person); never left out (an older host sends none). `via` stays the participant's client, never the verb |
+| `ChangeEvent` | `{version, pid, client, via, kind, root, hunks: [{start, end, insert}], at_ms, on_behalf_of, turn, verb}`; `on_behalf_of` is `null` when absent, never left out; `kind` (kit v0.10.1) = `ChangeKind::as_str()`: `"edit"` \| `"undo"` \| `"redo"` \| `"revert"` \| `"restore"` \| `"external"` \| `"import"`, always present (a host on an older kit sends none); `turn` (wire 3) = `ChangeEvent::turn` as its string, the host-given turn of the agent step that made it (at most 64 bytes, printable ASCII), or `null`: a person's change, an outside save, a call the host gave none, and always for an App viewer; never left out (a host before wire 3 sends none); `verb` (wire 3, kit after v0.14.0) = `ChangeEvent::verb`, the id of the pack verb that made it as the pack names it (`shape move`, `replace-section`; at most 64 bytes), or `null`: a raw write, a kit tool, an outside save, an undo, a redo, a revert, a restore and the import; shown to an App viewer too (it names a verb, not a person); never left out (an older host sends none). `via` stays the participant's client, never the verb; `kept_pairs` (kit after v0.20.0; additive) = `ChangeEvent::kept_pairs`, only on an outside save's change (`kind: "external"`) whose merge kept both sides, else left out: `[{live: {first, last}, file: {first, last}}]`, one per overlap region in order, each side's lines (1-based, inclusive) in the root's text after the change. The merged text holds only the two sides' own lines there (no marker or separator), in the merge's order (the live side first at one point, but each side's text where its own change starts, so the file's lines can come first, and one side's range can enclose the other's): a client uses the ranges, never an order of its own |
 | `client` | the 53-bit client ID as a JSON number (`MAX_CLIENT_ID` = 2^53 − 1 = `Number.MAX_SAFE_INTEGER`, exact in JS) |
 | strings | JSON escapes: `"` `\` and control characters escaped (`\n`, `\t`, `\r`, else `\u00XX`); everything else as UTF-8 |
 | `who`, `pid`, `handle`, `on_behalf_of` | `Who`'s `Display`: the pid for a person's or agent's connection; for an App viewer's (`ParticipantKind::App`), the opaque per-doc handle (`p1`, `p2`...), its own included. One lens per connection, as the kit applies it; the client treats them as opaque and compares them with `welcome.self` |

@@ -28,9 +28,22 @@ function wire() {
 const isInt = (x: unknown) => typeof x === "number" && Number.isSafeInteger(x) && x >= 0;
 const keys = (o: object) => Object.keys(o).sort();
 
-/** Exactly the fields `ChangeEvent` names, with their types. */
+/** Exactly the fields `ChangeEvent` names, with their types (`kept_pairs` only on an outside
+ * save's change that kept both sides). */
 function checkChange(e: ChangeEvent) {
-  expect(keys(e)).toEqual(["at_ms", "client", "hunks", "kind", "on_behalf_of", "pid", "root", "turn", "verb", "version", "via"]);
+  const always = ["at_ms", "client", "hunks", "kind", "on_behalf_of", "pid", "root", "turn", "verb", "version", "via"];
+  expect(keys(e)).toEqual(e.kept_pairs === undefined ? always : [...always, "kept_pairs"].sort());
+  if (e.kept_pairs !== undefined) {
+    expect(e.kind).toBe("external");
+    expect(e.kept_pairs.length).toBeGreaterThan(0);
+    for (const p of e.kept_pairs) {
+      expect(keys(p)).toEqual(["file", "live"]);
+      for (const s of [p.live, p.file]) {
+        expect(keys(s)).toEqual(["first", "last"]);
+        expect(isInt(s.first) && isInt(s.last) && s.first >= 1 && s.first <= s.last).toBe(true);
+      }
+    }
+  }
   expect(["edit", "undo", "redo", "revert", "restore", "external", "import"]).toContain(e.kind);
   expect(isInt(e.version) && isInt(e.client) && isInt(e.at_ms)).toBe(true);
   expect(typeof e.pid).toBe("string");
@@ -311,6 +324,8 @@ function checkRoster(e: RosterEvent) {
     case "claim_started":
       expect(e.claim).toMatch(/^claim-\d+$/);
       expect(isInt(e.lines.first) && isInt(e.lines.last) && isInt(e.version)).toBe(true);
+      // a text claim's span at `version` (kit after v0.20.0)
+      if (e.bytes !== undefined) expect(isInt(e.bytes.start) && isInt(e.bytes.end) && e.bytes.start <= e.bytes.end).toBe(true);
       checkActor(e.actor, e.who);
       expect(isInt(e.started_ms)).toBe(true);
       return;
@@ -348,7 +363,7 @@ function checkRoster(e: RosterEvent) {
 }
 
 describe("golden wire JSON written by the Rust kit", () => {
-  for (const name of ["change_events.json", "change_events_app.json", "change_events_verb.json"]) {
+  for (const name of ["change_events.json", "change_events_app.json", "change_events_verb.json", "change_events_kept.json"]) {
     it(`${name}: change events parse and replay to the kit's text`, () => {
       const g = load(name);
       const events = g.events as ChangeEvent[];
@@ -372,6 +387,31 @@ describe("golden wire JSON written by the Rust kit", () => {
     // the other wire goldens have no pack verb: every change there names none
     for (const name of ["change_events.json", "change_events_app.json"]) {
       for (const e of load(name).events as ChangeEvent[]) expect(e.verb).toBeNull();
+    }
+  });
+
+  it("change_events_kept.json: an outside save that kept both says where; a clean one says nothing", () => {
+    const g = load("change_events_kept.json");
+    const events = g.events as ChangeEvent[];
+    expect(events.map((e) => e.kind)).toEqual(["edit", "external", "external"]);
+    expect(events[1].kept_pairs).toEqual([{ live: { first: 4, last: 4 }, file: { first: 5, last: 5 } }]);
+    expect(events[0].kept_pairs).toBeUndefined();
+    expect(events[2].kept_pairs).toBeUndefined();
+    // the ranges name each side's own lines in the text after the save
+    const lines = (g.final_text as string).split("\n");
+    expect(lines[3]).toBe("two (ada)");
+    expect(lines[4]).toBe("two (editor)");
+    // no other golden's change has any
+    for (const name of ["change_events.json", "change_events_app.json", "change_events_verb.json"]) {
+      for (const e of load(name).events as ChangeEvent[]) expect(e.kept_pairs).toBeUndefined();
+    }
+  });
+
+  it("roster_events.json: the claim's start carries its bytes, the claim's lines in the text at its version", () => {
+    for (const name of ["roster_events.json", "roster_events_app.json"]) {
+      const started = (load(name).events as RosterEvent[]).filter((e) => e.kind === "claim_started");
+      expect(started.length).toBeGreaterThan(0);
+      for (const e of started) if (e.kind === "claim_started") expect(e.bytes).toBeDefined();
     }
   });
 

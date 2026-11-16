@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -1023,6 +1023,24 @@
       "status": "live"
     },
     {
+      "id": "MPC-E180",
+      "name": "opened_version_unknown",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E181",
+      "name": "opened_version_gone",
+      "exit": 8,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E182",
+      "name": "opened_no_file",
+      "exit": 2,
+      "status": "live"
+    },
+    {
       "id": "MPC-E201",
       "name": "undo_conflict",
       "exit": 1,
@@ -1505,6 +1523,12 @@
     {
       "id": "MPC-E822",
       "name": "keyed_at_limit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E823",
+      "name": "pack_refused",
       "exit": 2,
       "status": "live"
     },

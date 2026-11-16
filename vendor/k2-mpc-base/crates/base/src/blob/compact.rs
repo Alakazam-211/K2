@@ -40,7 +40,7 @@ pub(crate) type Purged = (Vec<(u64, BlobId, u64, u64)>, u64, u64);
 /// How many times a purge plans again when the doc changed between its plan and its commit.
 const PLAN_TRIES: usize = 3;
 
-/// The planted faults this module reads ([`crate::differential::ChunkPlant`]).
+/// The planted faults this module reads (`crate::differential::ChunkPlant`).
 #[derive(Clone, Copy)]
 enum Plant {
     PurgeSkipsCompaction,

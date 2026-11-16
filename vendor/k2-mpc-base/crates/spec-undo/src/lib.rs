@@ -16,7 +16,7 @@ pub mod itf;
 pub mod model;
 
 /// The run record's `job` field (`tools/evidence/`): the job id K2 Compute's nodes set in
-/// `K2_COMPUTE_JOB`, as a JSON string, or `null` off a node (then `collect.py` fills it in).
+/// `K2_COMPUTE_JOB`, as a JSON string, or `null` off a node (then the evidence collector fills it in).
 /// Only `[A-Za-z0-9_-]` is taken, so the record stays valid JSON.
 pub fn runrec_job() -> String {
     match std::env::var("K2_COMPUTE_JOB") {

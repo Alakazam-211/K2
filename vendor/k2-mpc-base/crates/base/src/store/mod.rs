@@ -33,6 +33,7 @@ mod history;
 mod live_carrier;
 mod live_copies;
 mod native;
+mod opened;
 mod promote;
 mod purge;
 mod rewrite;
@@ -67,6 +68,7 @@ pub use history::{ChangeInfo, ChangeKind, RootHunks, VersionInfo};
 pub(crate) use history::{CommitInterrupt, INTERRUPT_COMMIT};
 pub(crate) use live_carrier::{Released, LIVE_SLOT};
 pub use live_copies::LiveCopyRow;
+pub(crate) use opened::OpenedRec;
 pub(crate) use promote::PromoteRows;
 #[cfg(test)]
 pub(crate) use promote::FAIL_BEFORE_COMMIT as FAIL_PROMOTE_BEFORE_COMMIT;

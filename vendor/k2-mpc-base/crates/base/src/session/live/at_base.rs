@@ -215,6 +215,7 @@ impl Session {
                         kind: info.kind,
                         turn: info.turn,
                         verb: info.verb.clone(),
+                        kept_pairs: Vec::new(),
                     },
                     elems,
                     deleted,

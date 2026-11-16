@@ -1,4 +1,4 @@
-k2-mpc-base 0.20.0
+k2-mpc-base 0.21.0
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -13,12 +13,12 @@ Exit codes (never change):
   8  too_old           too old (revert, an expired base); never retry the same request
 
 Verbs (after the doc path):
-  open  [read; text+blob+grid; needs read]
+  open  [read; text+blob+grid+keyed; needs read]
     usage:  open (stays until leave)
     exits:  0
     serves: P1
     errors: (only the ones any verb can return)
-  leave  [read; text+blob+grid; needs read]
+  leave  [read; text+blob+grid+keyed; needs read]
     usage:  leave
     exits:  0
     serves: P2
@@ -58,7 +58,7 @@ Verbs (after the doc path):
     exits:  0 1
     serves: P5
     errors: MPC-E120 MPC-E121 MPC-E122 MPC-E902
-  who  [read; text+blob+grid; needs read]
+  who  [read; text+blob+grid+keyed; needs read]
     usage:  who
     exits:  0
     serves: P6
@@ -153,12 +153,12 @@ Verbs (after the doc path):
     exits:  0 1
     serves: P26
     errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E202 MPC-E203 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E822 MPC-E901 MPC-E908
-  status  [read; text+blob+grid; needs read]
+  status  [read; text+blob+grid+keyed; needs read]
     usage:  status
     exits:  0
     serves: P17 P25
     errors: (only the ones any verb can return)
-  flush  [read; text+blob+grid; needs read]
+  flush  [read; text+blob+grid+keyed; needs read]
     usage:  flush
     exits:  0
     serves: P17
@@ -173,7 +173,7 @@ Verbs (after the doc path):
     exits:  0
     serves: P18
     errors: (only the ones any verb can return)
-  log  [history; text+blob+grid; needs read+history]
+  log  [history; text+blob+grid+keyed; needs read+history]
     usage:  log [--by P] [-n N]
     exits:  0
     serves: P19
@@ -213,7 +213,7 @@ Verbs (after the doc path):
     exits:  0
     serves: P20
     errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E511 MPC-E602 MPC-E701 MPC-E704 MPC-E705 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E822 MPC-E901 MPC-E908
-  version --name  [edit; text+blob+grid; needs read+edit]
+  version --name  [edit; text+blob+grid+keyed; needs read+edit]
     usage:  version --name NAME [--version V]
     exits:  0
     serves: P20
@@ -223,22 +223,22 @@ Verbs (after the doc path):
     exits:  0
     serves: P21
     errors: MPC-E410 MPC-E411 MPC-E504
-  approve  [edit; text+blob+grid; needs read+approver]
+  approve  [edit; text+blob+grid+keyed; needs read+approver]
     usage:  approve <change> (a blob doc: <version>)
     exits:  0
     serves: P29
     errors: MPC-E104 MPC-E131 MPC-E132 MPC-E512
-  decline  [edit; text+blob+grid; needs read+approver]
+  decline  [edit; text+blob+grid+keyed; needs read+approver]
     usage:  decline <change> (a blob doc: <version>; then restore --version to reverse it)
     exits:  0
     serves: P29
     errors: MPC-E104 MPC-E131 MPC-E132 MPC-E512
-  log --pending  [history; text+blob+grid; needs read+history]
+  log --pending  [history; text+blob+grid+keyed; needs read+history]
     usage:  log --pending [--all] [--on-behalf-of me|P] (--all: settled ones too, newest first)
     exits:  0
     serves: P30
     errors: MPC-E103
-  approvals  [history; text+blob+grid; needs read+history]
+  approvals  [history; text+blob+grid+keyed; needs read+history]
     usage:  approvals [--all] [--on-behalf-of me|P] (the same as log --pending)
     exits:  0
     serves: P30
@@ -274,13 +274,15 @@ Verbs with no doc:
   explain [ID] [--json] (an error id: what happened, what to do next, the rule; no id: every id)
   capabilities [--json] (verbs, flags, parity rows, the error ids each verb can return, limits, the kit version)
 
+A call's result as data (mpc.result/1; a pack verb's --json, or the host's option): schema verb kind ok exit version changed data data_schema data_spec page error conflicts notes warnings
+
 Parity (each thing a person can do, and the verbs that do it):
-  P1   Open the file (join; appear in presence) [text+blob+grid]: open
-  P2   Close it (leave) [text+blob+grid]: leave
+  P1   Open the file (join; appear in presence) [text+blob+grid+keyed]: open
+  P2   Close it (leave) [text+blob+grid+keyed]: leave
   P3   Read the whole doc [text+blob+grid]: cat, wc
   P4   Look at a range (viewing highlight) [text+blob+grid]: head, tail, sed, view
   P5   Find [text+grid]: grep
-  P6   See who's here [text+blob+grid]: who, activity
+  P6   See who's here [text+blob+grid+keyed]: who, activity
   P7   Follow someone [text+grid]: follow
   P8   Place the caret / select; say what I'm working on [text+grid]: claim, claim --renew, claim --release, cursor
   P9   Type at a position [text+grid]: insert
@@ -291,20 +293,20 @@ Parity (each thing a person can do, and the verbs that do it):
   P14  Rewrite from what I last saw [text+blob+grid]: write
   P15  Format (bold, heading, list) [text]: insert, replace, sed -i
   P16  Undo / redo my own edits [text+grid]: undo, redo, undo --drop
-  P17  See that it saved [text+blob+grid]: status, flush
+  P17  See that it saved [text+blob+grid+keyed]: status, flush
   P18  Watch others edit live [text+blob+grid]: watch, tail -f
-  P19  History, diff, show a version [text+blob+grid]: log, diff --version, show --version, diff
-  P20  Restore / name a version [text+blob+grid]: restore, version --name
+  P19  History, diff, show a version [text+blob+grid+keyed]: log, diff --version, show --version, diff
+  P20  Restore / name a version [text+blob+grid+keyed]: restore, version --name
   P21  Rename / move [text+blob+grid]: mv
   P22  Blame [text+blob+grid]: blame
   P23  Comment, reply, resolve; suggest; accept / reject [text+grid]: (no verb yet)
   P24  Export [text+blob+grid]: export, export --version
-  P25  See why live editing is off [text+blob+grid]: status
+  P25  See why live editing is off [text+blob+grid+keyed]: status
   P26  Undo the regions of my change nobody touched; report the rest [text+grid]: undo --partial
   P27  Mention someone [text+grid]: (no verb yet)
   P28  Purge a pasted secret or personal data [text+blob+grid]: (no verb yet)
-  P29  Approve or decline an assistant's edit made on my behalf [text+blob+grid]: approve, decline
-  P30  See which edits are waiting for my approval [text+blob+grid]: log --pending, approvals
+  P29  Approve or decline an assistant's edit made on my behalf [text+blob+grid+keyed]: approve, decline
+  P30  See which edits are waiting for my approval [text+blob+grid+keyed]: log --pending, approvals
   P31  Reverse one specific change [text+grid]: revert
   P32  Take the lease (lock the file while I change it), or extend it [blob]: lease, lease --renew
   P33  Release my lease [blob]: lease --release
@@ -388,6 +390,7 @@ Limits in effect:
   disk_poll_ms = 3000
   disk_read_max_bytes = 67108864
   own_write_ttl_ms = 60000
+  opened_hold_ms = 10000
   lease_default_ms = 300000
   lease_max_ms = 3600000
   lease_auto_ms = 120000

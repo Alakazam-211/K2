@@ -1,0 +1,21 @@
+MPC-E182 opened_no_file (sessions and edits)
+exit:     2
+message:  this doc has no file
+next:     Only a doc with a file sees an app's saves, so there is nothing to note. Nothing changed.
+rule:     outside saves: the version the app opened
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E182",
+  "name": "opened_no_file",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "this doc has no file",
+  "next": "Only a doc with a file sees an app's saves, so there is nothing to note. Nothing changed.",
+  "rule": "outside saves: the version the app opened",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

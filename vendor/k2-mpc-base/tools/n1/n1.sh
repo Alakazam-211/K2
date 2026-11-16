@@ -63,6 +63,20 @@
 #                                                reads this kit's goldens, this client the
 #                                                previous goldens (client/test/n1-wire.test.ts)
 #
+# The version an app opened (after v0.20.0): its pin is slot 3 of a doc's sync rows, which a
+# kit that doesn't know it carries:
+#
+#   tools/n1/n1.sh layout-opened <previous tag> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/opened the consumer
+#                                                (tools/n1/consumer-opened)
+#   tools/n1/n1.sh node-opened <dir>             on a build node, from the repo root: this
+#                                                build's `n1_opened_producer` pins a blob doc and
+#                                                two live docs; the previous release opens both
+#                                                kinds, writes one, rewrites the store and
+#                                                deletes a doc; this build's `n1_opened_after`
+#                                                reads the two pins left and finds the deleted
+#                                                doc's gone. The last line is `N-1 OPENED OK`.
+#
 # The blob references (after v0.10.2), both the case that holds and the documented limit:
 #
 #   tools/n1/n1.sh layout-refs <previous tag> <dir>   no cargo: <dir>/old is the previous
@@ -197,8 +211,9 @@
 # N1_PREV_ARCHIVE=<file> (a gzipped `git archive` of the tag, made where the tag is: a job's
 # checkout has no tags off its history), that file unpacked; `HEAD` is always this checkout's.
 #
-# A previous release older than v0.10.1 has no K2MB_N1_RESTORE: `layout-both` adds the
-# revert of the revert to its copy of the producer (python3), and stops if it can't. Ship the
+# A previous release older than v0.10.1 has no K2MB_N1_RESTORE: `node-both` adds the
+# revert of the revert to its copy of the producer (mpc-tools edit replace-once), and stops if
+# it can't. Ship the
 # laid-out dir with the job (an untracked dir in the checkout: `--dirty`). The job prints
 # `N-1 OK` once per direction, then `N-1 BOTH OK`.
 set -eu
@@ -213,7 +228,7 @@ tree_of() {
     git -C "$1" archive "$2" | tar -x -C "$3"
   fi
 }
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir> | layout-opened <tag> <dir> | node-opened <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -252,25 +267,6 @@ case $MODE in
       sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/$side/kit/Cargo.toml"
       rm "$OUT/$side/kit/Cargo.toml.bak"
     done
-    P="$OUT/prev/kit/crates/base/tests/grid_store.rs"
-    if ! grep -q K2MB_N1_RESTORE "$P"; then
-      python3 - "$P" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-a = "        s.revert(c, 2, false).unwrap();\n        if grid {"
-if s.count(a) != 1:
-    sys.exit("n1.sh: the previous release's n1_producer has no revert to add the restore after")
-b = ("        s.revert(c, 2, false).unwrap();\n"
-     "        if std::env::var(\"K2MB_N1_RESTORE\").is_ok() {\n"
-     "            let last = s.read(c).unwrap().version;\n"
-     "            s.revert(c, last, false).unwrap();\n"
-     "        }\n"
-     "        if grid {")
-open(p, "w").write(s.replace(a, b))
-PY
-      echo "added K2MB_N1_RESTORE to $TAG's n1_producer (layout copy only)"
-    fi
     for pair in "fwd prev" "rev head"; do
       set -- $pair
       mkdir -p "$OUT/$1"
@@ -284,6 +280,23 @@ PY
   node-both)
     OUT=${2:?dir}
     OUT=$(cd "$OUT" && pwd)
+    # a previous release older than v0.10.1: its producer gets the revert of its revert here,
+    # on the node (the layout copy only; `mpc-tools edit replace-once` refuses unless the
+    # revert it follows is there exactly once)
+    P="$OUT/prev/kit/crates/base/tests/grid_store.rs"
+    if ! grep -q K2MB_N1_RESTORE "$P"; then
+      KIT=$(cd "$(dirname "$0")/../.." && pwd)
+      A=$(printf '%s\n' '        s.revert(c, 2, false).unwrap();' '        if grid {')
+      B=$(printf '%s\n' '        s.revert(c, 2, false).unwrap();' \
+        '        if std::env::var("K2MB_N1_RESTORE").is_ok() {' \
+        '            let last = s.read(c).unwrap().version;' \
+        '            s.revert(c, last, false).unwrap();' \
+        '        }' \
+        '        if grid {')
+      sh "$KIT/tools/mpc-tools.sh" edit replace-once "$P" "$A" "$B" \
+        || { echo "n1.sh: the previous release's n1_producer has no revert to add the restore after" >&2; exit 1; }
+      echo "added K2MB_N1_RESTORE to the previous release's n1_producer (layout copy only)"
+    fi
     for pair in "fwd head prev" "rev prev head"; do
       set -- $pair
       READER=$(kit_version "$OUT/$3/kit")
@@ -471,6 +484,28 @@ PY
     echo "== this build opens it as before"
     K2MB_N1_OUT="$OUT/format" cargo test -p k2-mpc-base --test engine_stamp n1_format_after -- --ignored --nocapture
     echo "N-1 FORMAT OK"
+    ;;
+  layout-opened)
+    TAG=${2:?previous release tag}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/opened"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-opened/." "$OUT/opened/"
+    cp "$OUT/old/Cargo.lock" "$OUT/opened/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-opened)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build writes the pins"
+    K2MB_N1_OUT="$OUT/opened" cargo test -p k2-mpc-base --test opened n1_opened_producer -- --ignored --nocapture
+    echo "== the previous release ($(kit_version "$OUT/old"))"
+    (cd "$OUT/opened" && cargo run -q)
+    echo "== this build again"
+    K2MB_N1_OUT="$OUT/opened" cargo test -p k2-mpc-base --test opened n1_opened_after -- --ignored --nocapture
+    echo "N-1 OPENED OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;
 esac

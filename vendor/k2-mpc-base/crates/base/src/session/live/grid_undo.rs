@@ -1032,7 +1032,7 @@ fn row_known(w: &World<'_>, k: &Key) -> bool {
     Table::from_keyed(&w.keyed).is_ok_and(|t| t.rows.knows(k))
 }
 
-/// The S13 faults planted for the tests ([`crate::differential::MergeMutant`]): (xxxv) a
+/// The S13 faults planted for the tests (`crate::differential::MergeMutant`): (xxxv) a
 /// whole-row revert restores a dropped row; (xxxvi) an undo or redo calls an op on a dropped row
 /// `rewritten_row`. Without the `differential` feature there is no hook: both are `false`.
 #[cfg(any(test, feature = "differential"))]

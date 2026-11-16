@@ -1,0 +1,78 @@
+{
+  "root": "source",
+  "text": "# Notes\n\none\ntwo\nthree\n",
+  "version": 1,
+  "events": [
+    {
+      "version": 2,
+      "pid": "ada",
+      "client": 9007199254740991,
+      "via": "tab",
+      "kind": "edit",
+      "root": "source",
+      "hunks": [
+        {
+          "start": 13,
+          "end": 17,
+          "insert": "two (ada)\n"
+        }
+      ],
+      "at_ms": 1700000000000,
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null
+    },
+    {
+      "version": 3,
+      "pid": "kit:external",
+      "client": 9,
+      "via": "disk",
+      "kind": "external",
+      "root": "source",
+      "hunks": [
+        {
+          "start": 23,
+          "end": 23,
+          "insert": "two (editor)\n"
+        }
+      ],
+      "at_ms": 1700000010000,
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "kept_pairs": [
+        {
+          "live": {
+            "first": 4,
+            "last": 4
+          },
+          "file": {
+            "first": 5,
+            "last": 5
+          }
+        }
+      ]
+    },
+    {
+      "version": 4,
+      "pid": "kit:external",
+      "client": 9,
+      "via": "disk",
+      "kind": "external",
+      "root": "source",
+      "hunks": [
+        {
+          "start": 12,
+          "end": 12,
+          "insert": " (editor)"
+        }
+      ],
+      "at_ms": 1700000020000,
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null
+    }
+  ],
+  "final_text": "# Notes\n\none (editor)\ntwo (ada)\ntwo (editor)\nthree\n",
+  "final_version": 4
+}

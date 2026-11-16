@@ -909,7 +909,7 @@ impl Table {
     }
 
     /// [`Table::render`] by the per-column walk: every live column of every row, both keys
-    /// cloned for each lookup. The planted fault [`crate::differential::GridCostMutant`]
+    /// cloned for each lookup. The planted fault `crate::differential::GridCostMutant`
     /// only.
     fn render_per_column(&self) -> Vec<Record> {
         let cols = self.live_cols();
@@ -1267,7 +1267,7 @@ pub(crate) fn row_list_walk() -> bool {
     )
 }
 
-/// Count `n` elements visited ([`crate::differential::visits`]); nothing outside the kit's
+/// Count `n` elements visited (`crate::differential::visits`); nothing outside the kit's
 /// tests and the `differential` feature.
 #[inline]
 pub(crate) fn visited(n: usize) {

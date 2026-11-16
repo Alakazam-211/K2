@@ -1534,6 +1534,19 @@ the size, mtime or inode changed (a rename-save changes the inode):
     save is never refused: only the pack can turn the merge down (below). Two sides' lines
     are never spliced into one (a text diff of a multi-line change, merged at the
     character, could: `p12:63ed:95`).
+  - **Where both were kept** (`ChangeEvent::kept_pairs`; `text::merge::merge3_keep_both_kept`):
+    one `KeptPair` per overlap region in which both sides' written lines are in the result,
+    in order, each with `live` and `file`: the first and last line (1-based, inclusive) of
+    that side's lines in the root's text after the save. Empty for every other change, for a
+    clean save, for a region where one side only deleted (nothing of it is kept), and for a
+    save the pack took whole. **What the merged text holds there:** only the two sides' own
+    lines: no marker, separator or blank line is added, and every kept line is one side
+    wrote, whole. **Their order is the merge's rule, not "live first":** at one point the
+    live side's lines come first, but each side's text lands where its own change starts, so
+    when the file replaced lines inside which the live side inserted a line, the file's lines
+    come first; and when the live side wrote both before and after the file's lines, its
+    range encloses the file's. **A host uses the ranges** (to mark, compare or pick a side),
+    never an order of its own.
   - **A merge the pack refuses** (`Pack::check_merged`): some formats' lines depend on each
     other (JSON's commas and brackets), so two valid texts can merge, clean or kept-both, into
     one that isn't. A pack can check a merged text; the kit asks it of every outside save's
@@ -1822,6 +1835,71 @@ one version, so an **agent's** edit that uses one names that version:
   `POSITIONAL_DEFAULT` to `Refuse`.** `append`, `--line $`, `--after $`, `--after 0`, exact
   `replace`, `patch` and pattern-addressed `sed -i` are not positions. People's edits are never
   checked: they act on what they see.
+
+### A pack's refusals, by id
+
+A pack's verb that refuses (nothing applied) reaches the host as data: `ToolOutput::refusal`
+holds an `ErrorReport` with an id, and stderr's summary ends with it.
+
+- **Registered ids.** A pack lists its refusals with `Pack::errors`: each an
+  `ErrorEntry::pack(id, name, exit, message, next)`, the id `<PACK>-Ennn` (the pack's name
+  upper-cased: `DECK-E001`), stable forever as the kit's ids are, the name the snake_case code
+  its verbs print. `.step(verb, args, why)` adds what to run next, as data.
+  `Registry::for_pack` checks them: the id's form, no id or name twice, snake_case names, an
+  exit from the kit's refusals (1 to 8). A verb refuses with `StructOutput::refused(&entry,
+  why, next)`, plus `.detail(key, value)`: stdout is the text form packs already print,
+  `refused: <name>: <why>` then `next: <next>`, the exit is the entry's, and the report has the
+  entry's id, `why` as its message, and the details `code`, `next`, `verb` and the pack's own.
+- **The text form, before a pack registers.** A verb that prints `refused: <code>: <why>` itself
+  with exit 2 is reported under the pack's entry named `<code>` (with that exit), or else as
+  `MPC-E823 pack_refused`, with `code` and the `next:` line as details. The text and the exit are
+  unchanged either way.
+- `explain <PACK>-Ennn` and `capabilities` (given the pack's registry) show a pack's entries; a
+  pack's verbs list them among the ids they can return. Its refusals also make a refusal frame
+  on the keyed watch, as the kit's do.
+
+### A call's result as data (`mpc.result/1`)
+
+A call can return its result as one JSON object instead of text: `ToolOptions::result_json(true)`
+(the host's choice, any verb `run_tool` runs), or `--json` on a pack verb's command line (the kit
+takes it out of the verb's arguments, before any `--`). `ToolOutput::result()` holds it and
+`stdout` is its JSON, one line; stderr's summary is as in text. **Text stays the default**:
+without it, stdout, the summary and the exit are what they were. A verb that already takes
+`--json` itself keeps it (`PackVerb::takes_json`; the kit's grid `cell get --json`, the tier-0
+index verbs): its JSON is unchanged, and the result shape is the host's option, which holds that
+output as the result's `data.text`. The next kit release makes the result shape what `--json`
+gives on those verbs too.
+
+The object (`tools::RESULT_SCHEMA` is `mpc.result/1`; its fields in `tools::RESULT_FIELDS`
+order):
+
+| Field | What |
+|---|---|
+| `schema`, `verb`, `kind` | `mpc.result/1`; the verb's registry name; `read` or `edit` (null when the call named no verb) |
+| `ok`, `exit` | the exit is 0; the exit, as in text |
+| `version` | a read's `{read}`; an edit's `{base, after, if_version, base_given}`: the version the verb computed on, the version it made (null when it made none), the call's `--if-version` and `--base` |
+| `changed` | null when nothing changed; else `{counts, units, units_more, lines}`: counts per structured root; each unit the change wrote (at most `tools::UNITS_MAX`, the rest counted); a text edit's line ranges and counts |
+| `data`, `data_schema`, `data_spec` | the verb's payload (`StructOutput::data`; `data_schema` is `typed`), else its stdout as `{"text": ...}` (`text`); `data_spec` names the typed data's shape and its version, `<name>/<version>` (`StructOutput::data_spec`), or is null |
+| `page` | `{next: {verb, args}}`, the call that reads the next page (`StructOutput::next_page`), or null |
+| `error` | the refusal as `explain --json` has it (`ErrorReport::to_value`), or null |
+| `conflicts` | a `--base` conflict's units: `{address, root, key, field, facet, by, change}` |
+| `notes`, `warnings` | each heads-up note as data (its line in `text`); the call's warnings |
+
+- **A changed unit** (`tools::ChangedUnit`, also `ToolOutput::changed_units`) is `{address,
+  root, key, field, op, before, after}`: a list element by its address (`Pack::address_of`); a
+  field of a composite map (`Pack::composite`: the key `<element>\x1f<field>`) split into its
+  element's address and the field; any other map key as it is. `before` is the value the doc
+  held, `after` the value written (null for none).
+- **Every outcome is one object.** With the result asked for, a refusal the call would return
+  as an error (a stale `--if-version`, a `--base` conflict, a usage error) is `Ok`: the result's
+  `error` with its exit, and `ToolOutput::refusal` holds the same report.
+- `StructOutput::data(value)` and `VerbCtx::json()` let a verb return typed rows; its stdout is
+  unchanged. `StructOutput::data_spec(name, version)` names their shape, as `timeline.clip-list/1`:
+  the version changes when a field of the shape is renamed, removed or given another type, never
+  for a new field. A name is 1 to 64 bytes of `[a-z0-9._-]`, starting with a letter or digit. `StructOutput::next_page(verb, args)` gives the next page as data; the verb still
+  prints its own `next:` line.
+- **Versioning.** A new field never changes `mpc.result/1`; a field renamed, removed or given
+  another type does. `capabilities` names it (`result_schema`).
 
 ## Status and the pool
 
@@ -2289,8 +2367,13 @@ editor, an agent can do through a verb, with the same effect.
   `blame`, `claim` / `claim --renew` / `claim --release` (the caret row), `activity` (the
   who's-here row), and tier 0's lease verbs).
   `Registry::for_tier(tier)` is the kit's verbs of one tier; `Registry::kit()` is the text
-  tier, and `Registry::for_pack(&pack)` adds the pack's `verbs()` to it (refusing a name
-  any kit verb has).
+  tier, and `Registry::for_pack(&pack)` adds the pack's `verbs()` to its tier's (refusing a name
+  any kit verb has). The tier is `Tier::of_pack(&pack)`: `Grid` for a table pack, **`Keyed`**
+  for a pack whose roots are all lists or maps (a deck, a timeline, a scene: its structured
+  verbs, listed with the kit's verbs on a doc's presence and records: `open`, `leave`, `who`,
+  `status`, `flush`, `log`, `version --name`, `approve`, `decline`, `log --pending`,
+  `approvals`; `capabilities` names the tier `keyed`), else `Text`. A pack's registry also holds its own refusals
+  (`Registry::errors`, [above](#a-packs-refusals-by-id)).
   A verb's **name is its CLI form**: `verb_form(argv)` gives it (`sed -i`, `undo --partial`,
   `log --pending`...), so a host's command table can be checked against the registry.
 - **A pack's list as data**: `ParityRow::live(action, verbs)`, `live_but(action, verbs,
@@ -3659,6 +3742,63 @@ reads, and the one a host's "reads up to" message names. A format-8 store opens,
 and is rewritten (its word with it) as any store this build writes. Kits v0.14.0 to v0.18.0
 refuse a format-8 store at open with one line: `store is format 8; this build reads up to 7`;
 v0.19.0 and later read it.
+
+### The version an app opened (`note_opened`)
+
+An outside save is merged from what the file last held. After the kit has written the file (an
+agent's change), an app that never re-read it saves a buffer made **before** that write, and a
+merge from the file's content would read the save as the person undoing the kit's change; so
+the kit keeps both (blob and keyed docs) or the change goes (text and grid docs). A host that
+knows what the app opened says so, and the save then merges from that version.
+
+- **`note_opened(conn, at) -> Opened`**, on `Session` and `BlobSession`, needs edit:
+  - `OpenedAt::FileNow`, the usual call, right before the app reads the file: the kit checks the
+    file first (an outside save it hasn't seen is taken in), writes back what the file doesn't
+    hold yet, and pins the version the file holds. It then **holds its write-backs** to the file
+    for `Config::opened_hold_ms` (default 10 s; 0: no hold), until the first outside save at
+    most, so the app reads the pinned version; edits stay live meanwhile, and a purge doesn't
+    wait.
+  - `OpenedAt::Version(v)`: a version the host handed the app (a live doc's change seq, a blob
+    doc's version id).
+  - Refused, nothing noted: a doc with no file, or whose file is missing (`MPC-E182
+    opened_no_file`, exit 2); a version the doc never had (`MPC-E180 opened_version_unknown`,
+    exit 4); one the kit doesn't hold, purged or not kept (`MPC-E181 opened_version_gone`, exit 8).
+- **One pin per doc**; a later call replaces it. **An outside save taken in moves it** to the
+  save's version (`OpenedVia::OutsideSave`): the app's buffer is its own save now.
+  `clear_opened(conn)` drops it (the app was closed). `opened()` reads it.
+  Events: `AuditEvent::OpenedNoted`, `AuditEvent::OpenedDropped` (`cleared`, `replaced`,
+  `not_held`).
+- **Kept with the doc's sync state** (slot 3 of the doc's sync rows), so a restart and a store
+  rewrite keep it. A kit that doesn't know it carries it through a rewrite, erases it with the
+  doc and drops it on a tier change. A live doc keeps a stored version at the pinned seq.
+  **Checked at every use**: the version must still be held (not purged; a blob doc's, the same
+  blob), or the pin is dropped and the save is merged as with none.
+- **What a pin changes:**
+  - a blob doc: a save is a conflict only when the doc moved past the pinned version, and the
+    pack merges it from that version (`BlobPack::merge3_known`, `SaveBase::Opened`; its default
+    is `merge3_bytes` on that base), even where the kit wrote the file since the last outside
+    save and keeps both with no pin;
+  - a text doc: the line merge's base is the pinned version's text;
+  - a grid: `table::merge3_outside_text`'s base is the pinned version's table;
+  - a keyed doc that isn't a table: the save is reconciled against the pinned version, and
+    each of its changes is **merged field by field** onto the live doc: kept where the live doc
+    still holds the opened value, skipped where it already holds the save's, and a **clash**
+    otherwise (a field both changed differently; an insert under a key the live doc already
+    holds; an element deleted or moved that the kit changed or moved since; a restore or a
+    drop). The kept changes apply by key once the pack accepts the merged doc
+    (`Pack::check_merged_view`, whose **default refuses**: a keyed pack opts in by checking its
+    own rules). A clash or a refusal keeps both, as with no pin.
+  - **With no pin, nothing changes**, on any kind of doc.
+- **A save's own stamp comes first.** A blob pack whose format stamps its saves
+  (`BlobPack::save_lineage` -> `Lineage { this, made_on }`, default none) lets the kit find the
+  version a save was made on among the doc's latest `LINEAGE_VERSIONS_READ` (32): that version
+  is the save's base (`SaveBase::Stamped`), ahead of a pin. A stamp naming none of them is
+  another writer's line, and the save keeps both, pin or not.
+- **One writer at a time.** A pin says what one app opened. With two writers outside the kit
+  (two machines, a sync client bringing back an older copy, two apps open on one file), a save
+  from the other, made on another version, merges from the pinned one: as if that person undid
+  the other's changes. That is what a plain folder does too (the older save wins). With no pin
+  the kit never merges on such an assumption.
 
 ### Outside saves on a keyed doc that isn't a table: keep both over a kit write
 

@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -58,7 +58,7 @@
     {
       "name": "open",
       "kind": "read",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read"],
       "usage": "open (stays until leave)",
       "exits": [0],
@@ -71,7 +71,7 @@
     {
       "name": "leave",
       "kind": "read",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read"],
       "usage": "leave",
       "exits": [0],
@@ -175,7 +175,7 @@
     {
       "name": "who",
       "kind": "read",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read"],
       "usage": "who",
       "exits": [0],
@@ -422,7 +422,7 @@
     {
       "name": "status",
       "kind": "read",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read"],
       "usage": "status",
       "exits": [0],
@@ -435,7 +435,7 @@
     {
       "name": "flush",
       "kind": "read",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read"],
       "usage": "flush",
       "exits": [0],
@@ -474,7 +474,7 @@
     {
       "name": "log",
       "kind": "history",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read", "history"],
       "usage": "log [--by P] [-n N]",
       "exits": [0],
@@ -578,7 +578,7 @@
     {
       "name": "version --name",
       "kind": "edit",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read", "edit"],
       "usage": "version --name NAME [--version V]",
       "exits": [0],
@@ -604,7 +604,7 @@
     {
       "name": "approve",
       "kind": "edit",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read", "approver"],
       "usage": "approve <change> (a blob doc: <version>)",
       "exits": [0],
@@ -617,7 +617,7 @@
     {
       "name": "decline",
       "kind": "edit",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read", "approver"],
       "usage": "decline <change> (a blob doc: <version>; then restore --version to reverse it)",
       "exits": [0],
@@ -630,7 +630,7 @@
     {
       "name": "log --pending",
       "kind": "history",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read", "history"],
       "usage": "log --pending [--all] [--on-behalf-of me|P] (--all: settled ones too, newest first)",
       "exits": [0],
@@ -643,7 +643,7 @@
     {
       "name": "approvals",
       "kind": "history",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "needs": ["read", "history"],
       "usage": "approvals [--all] [--on-behalf-of me|P] (the same as log --pending)",
       "exits": [0],
@@ -734,13 +734,13 @@
     {
       "row": "P1",
       "action": "Open the file (join; appear in presence)",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["open"]
     },
     {
       "row": "P2",
       "action": "Close it (leave)",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["leave"]
     },
     {
@@ -764,7 +764,7 @@
     {
       "row": "P6",
       "action": "See who's here",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["who", "activity"]
     },
     {
@@ -830,7 +830,7 @@
     {
       "row": "P17",
       "action": "See that it saved",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["status", "flush"]
     },
     {
@@ -842,13 +842,13 @@
     {
       "row": "P19",
       "action": "History, diff, show a version",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["log", "diff --version", "show --version", "diff"]
     },
     {
       "row": "P20",
       "action": "Restore / name a version",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["restore", "version --name"]
     },
     {
@@ -878,7 +878,7 @@
     {
       "row": "P25",
       "action": "See why live editing is off",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["status"]
     },
     {
@@ -902,13 +902,13 @@
     {
       "row": "P29",
       "action": "Approve or decline an assistant's edit made on my behalf",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["approve", "decline"]
     },
     {
       "row": "P30",
       "action": "See which edits are waiting for my approval",
-      "tiers": ["text", "blob", "grid"],
+      "tiers": ["text", "blob", "grid", "keyed"],
       "verbs": ["log --pending", "approvals"]
     },
     {
@@ -996,6 +996,12 @@
       "verbs": []
     }
   ],
+  "result_schema": {
+    "name": "mpc.result",
+    "version": 1,
+    "schema": "mpc.result/1",
+    "fields": ["schema", "verb", "kind", "ok", "exit", "version", "changed", "data", "data_schema", "data_spec", "page", "error", "conflicts", "notes", "warnings"]
+  },
   "limits": {
     "editor_window_ms": 30000,
     "idle_leave_ms": 60000,
@@ -1064,6 +1070,7 @@
     "disk_poll_ms": 3000,
     "disk_read_max_bytes": 67108864,
     "own_write_ttl_ms": 60000,
+    "opened_hold_ms": 10000,
     "lease_default_ms": 300000,
     "lease_max_ms": 3600000,
     "lease_auto_ms": 120000,
@@ -1908,6 +1915,24 @@
       "status": "live"
     },
     {
+      "id": "MPC-E180",
+      "name": "opened_version_unknown",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E181",
+      "name": "opened_version_gone",
+      "exit": 8,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E182",
+      "name": "opened_no_file",
+      "exit": 2,
+      "status": "live"
+    },
+    {
       "id": "MPC-E201",
       "name": "undo_conflict",
       "exit": 1,
@@ -2390,6 +2415,12 @@
     {
       "id": "MPC-E822",
       "name": "keyed_at_limit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E823",
+      "name": "pack_refused",
       "exit": 2,
       "status": "live"
     },

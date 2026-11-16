@@ -655,7 +655,8 @@ impl SessionManager {
     /// - the text session closes ([`AuditEvent::Demoted`] names its connections, reason
     ///   [`super::DEMOTED`]), and the blob session opens on the file. Later opens are tier 0.
     ///
-    /// A doc already tier 0 is a no-op ([`Demotion::already`]). Errors (nothing changed):
+    /// A doc already tier 0 is a no-op (the returned `Demotion`'s `already`). Errors (nothing
+    /// changed):
     /// [`SessionError::NotFound`]; [`SessionError::PackMismatch`] when the doc's pack isn't
     /// `pack`; [`SessionError::Declined`] `not_text` for a structured doc or a pack with a
     /// carrier, `too_large` for a file over the blob limit; [`SessionError::NoBlobStore`]; a

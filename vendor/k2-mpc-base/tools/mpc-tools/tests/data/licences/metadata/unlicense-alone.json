@@ -1,0 +1,19 @@
+{
+ "packages": [
+  {
+   "license": "MIT OR Apache-2.0",
+   "manifest_path": "/r/serde-1.0.0/Cargo.toml",
+   "name": "serde",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  },
+  {
+   "license": "Unlicense",
+   "manifest_path": "/r/tiny-0.1.0/Cargo.toml",
+   "name": "tiny",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "0.1.0"
+  }
+ ],
+ "version": 1
+}

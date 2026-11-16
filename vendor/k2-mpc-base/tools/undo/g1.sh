@@ -19,13 +19,14 @@
 # The full bound (3 pids x 3 events, 2 undos, 1 revert) is far beyond exhaustive reach
 # (>= 1e13 states even with pid symmetry and per-seed dedup), hence the walks.
 # Exhaustive runs use pid symmetry and per-seed fingerprint sets, and write a checkpoint line
-# per finished seed (also logged as "ckpt seed K states N max_depth D"). Resume: rebuild
-# ck-<name>.txt from the log (the run's header line, then each ckpt line rewritten as
-# "seed K states N max_depth D viol -"; `k2 compute logs JOB > j.log; python3
-# tools/undo/ck-from-log.py j.log` does it and prints each file's sha256), put it at the repo
-# root (untracked) and ship it with the commit: k2 compute run ... --dirty -- sh
-# tools/undo/job.sh enum tools/undo/g1.sh
-# (the fallback bundle: tools/undo-enum-job.sh tools/undo/g1.sh <out dir> ck-<name>.txt)
+# per finished seed (also logged as "ckpt seed K states N max_depth D"). Resume: save the
+# stopped job's log as ck-from.log at the repo root (untracked; `k2 compute logs JOB >
+# ck-from.log`) and ship it with the commit: k2 compute run ... --dirty -- sh
+# tools/undo/job.sh enum tools/undo/g1.sh. The job first rebuilds each run's ck-<name>.txt
+# from it (`mpc-tools undo ck-from-log`: the run's header line, then each ckpt line rewritten
+# as "seed K states N max_depth D viol -"; it prints each file's seed count and sha256).
+# (the fallback bundle: tools/undo-enum-job.sh tools/undo/g1.sh <out dir> ck-<name>.txt, files
+# a --repo job rebuilt)
 T=${THREADS:-$(nproc)}
 # The audit's mutants (2026-11-04; their least depths are counts.sh PART=m's): U13, own_only
 # through redo, and through revert, each caught on these walks at its own rule. NOT
@@ -38,6 +39,10 @@ T=${THREADS:-$(nproc)}
 AUDIT_MUTANTS="u13-refused-revert-applies r3-redo-rewrites-window r3-revert-rewrites-window"
 case ${PART:-exhaustive} in walks-bias) BRST=1000 ;; *) BRST=1000000 ;; esac   # WALKS_BIAS_RST's default by PART
 settings PART=exhaustive THREADS=$T WALKS=5000000 WALKS_RST=1000000 WALKS_BIAS=200000 WALKS_BIAS_RST=$BRST
+# a resume: the checkpoint files from the stopped job's log, before any run reads them
+if [ -f "$ROOT/ck-from.log" ]; then
+  timed ck_from_log sh "$ROOT/tools/mpc-tools.sh" undo ck-from-log "$ROOT/ck-from.log" --out "$ROOT"
+fi
 # the rows each PART must end with, each with its verdict (tools/undo/expect.sh)
 W=enum:walk_3x3_u2_r1; BI=_bias-redo-after-partial; NW='-i1-per-request'    # (NW: not on walks here; AUDIT_MUTANTS above says why)
 case ${PART:-exhaustive} in

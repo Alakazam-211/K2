@@ -1,0 +1,21 @@
+MPC-E823 pack_refused (structured and CSV)
+exit:     2
+message:  {code}: the pack refused the call
+next:     The file type's own verb refused the call: details.code is its reason, details.next its own way forward. Nothing was applied. Do what details.next says. (The pack has no id of its own for this code yet.)
+rule:     a pack's refusal by code (its own ids: Pack::errors)
+verbs:    a pack's own verbs
+status:   live
+--- json
+{
+  "id": "MPC-E823",
+  "name": "pack_refused",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "{code}: the pack refused the call",
+  "next": "The file type's own verb refused the call: details.code is its reason, details.next its own way forward. Nothing was applied. Do what details.next says. (The pack has no id of its own for this code yet.)",
+  "rule": "a pack's refusal by code (its own ids: Pack::errors)",
+  "verbs": ["@pack"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -432,7 +432,7 @@ pub fn merge3_outside_text(
     merge3_with(base, ours, theirs, true, Some(exact))
 }
 
-/// The planted merge faults ([`crate::differential::MergeMutant`]): (the outside save's
+/// The planted merge faults (`crate::differential::MergeMutant`): (the outside save's
 /// whole-row loop over the live side's columns, the both-changed test by cell over the live
 /// side's columns, `write --base` conflicting on a byte-neutral live switch, the keyed merge
 /// taking ours' value over one, the keyed outside save not reporting its override of one).

@@ -43,7 +43,7 @@ fn boundary(c: char) -> bool {
             | '\u{ff01}'..='\u{ff0f}')
 }
 
-/// The planted faults ([`crate::differential::GroupMutant`]): (never closes on a foreign
+/// The planted faults (`crate::differential::GroupMutant`): (never closes on a foreign
 /// change, never closes on idle, never closes on a word boundary).
 #[cfg(any(test, feature = "differential"))]
 fn planted() -> (bool, bool, bool) {

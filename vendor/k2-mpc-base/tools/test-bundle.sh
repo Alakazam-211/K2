@@ -74,15 +74,11 @@ if [ -d "$EXPORT/vendor/yrs/src" ]; then
   YRS=1
   rm -rf "$EXPORT/vendor/yrs/src" "$EXPORT/vendor/yrs/tests" "$EXPORT/vendor/yrs/benches" "$EXPORT/vendor/yrs/README.md"
 fi
-# STRIP_DOCS=1 (v0.9.7, for a part that runs no doctests): every crate's sources travel with
-# their doc-comment lines (`///`, `//!`) blanked, not deleted, so every line number (a panic's,
-# a test's) is the repository's. The code is the same; only documentation stays behind.
-# tools/strip-comments.py refuses (and the bundle with it) when such a line sits inside a
-# string literal.
+# STRIP_DOCS (doc comments blanked to fit) is gone with its Python stripper: sources travel
+# whole. A part over a job's limit runs as a --repo job (the default), not as a bundle.
 if [ "${STRIP_DOCS:-0}" = 1 ]; then
-  for d in "$EXPORT"/crates/*/src "$EXPORT"/crates/*/tests; do
-    if [ -d "$d" ]; then python3 -I "$ROOT/tools/strip-comments.py" --docs "$d"; fi
-  done
+  echo "test-bundle: STRIP_DOCS is gone (sources travel whole); run the part as a --repo job (tools/README.md, \"Test jobs\")" >&2
+  exit 2
 fi
 # the workspace members that travel (when the workspace manifest does)
 MEMBERS=""

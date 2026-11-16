@@ -6,6 +6,11 @@
 #   PATH IDENT   the word IDENT in the file PATH
 # A line's `#` starts a comment.
 
+# v0.21.0: the cut's own trap: a drop marker in a Cargo.toml [features] table
+# goes with the feature the cut removes and stops the cut (tools/mpc-tools/tests/cut_markers.rs)
+a_cut_marker_in_a_features_table_is_found
+cargo_features_carry_no_cut_markers
+
 # v0.13.0: no kit type holding key material prints it in Debug (crates/base/src/key_debug_tests.rs;
 # the rows a public cut keeps)
 the_key_byte_search_finds_every_spelling

@@ -61,6 +61,11 @@ struct Fx {
 }
 
 fn fx_with(tag: &str, config: Config) -> Fx {
+    fx_doc(tag, config, DOC.as_bytes())
+}
+
+/// A session on a doc of `bytes` (the pack decodes them: a BOM and CRLF are the file's).
+fn fx_doc(tag: &str, config: Config, bytes: &[u8]) -> Fx {
     static N: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
         "k2mb-roster-{tag}-{}-{}",
@@ -82,7 +87,7 @@ fn fx_with(tag: &str, config: Config) -> Fx {
                 space: "ws".into(),
                 path: "notes.md".into(),
             },
-            Some(DOC.as_bytes()),
+            Some(bytes),
         )
         .unwrap();
     Fx {
@@ -431,6 +436,60 @@ fn claims_and_joins_inside_one_interval_are_all_delivered() {
 }
 
 /// Many claims inside one interval: every one is delivered (up to the queue's bound).
+/// `claim_started` carries the claim's span in UTF-8 bytes of the doc text at the version it
+/// was taken: lines 2 and 3, from line 2's first byte to line 3's last (its `\n` not in it), in an
+/// ASCII doc, a doc with multi-byte characters before and inside the span, and a CRLF file
+/// (whose doc text has no `\r`). An edit above the claim before the roster flushes moves the
+/// claim, never the event's span: it is the take's.
+#[test]
+fn a_claim_started_carries_its_bytes_at_the_takes_version() {
+    for (tag, bytes, span) in [
+        ("ascii", "one\ntwo\nthree\nfour\n".as_bytes(), "two\nthree"),
+        (
+            "utf8",
+            "é😀\nzwei ü\ndrei 😀\nvier\n".as_bytes(),
+            "zwei ü\ndrei 😀",
+        ),
+        (
+            "crlf",
+            b"one\r\ntwo\r\nthree\r\nfour\r\n".as_slice(),
+            "two\nthree",
+        ),
+    ] {
+        let f = fx_doc(&format!("bytes-{tag}"), Config::default(), bytes);
+        let w = f.person("w");
+        let a = f.agent("a");
+        let rx = f.s.subscribe_roster(w).unwrap();
+        drain(&rx);
+        let (v, text) = read_text(&f, a);
+        assert!(!text.contains('\r'), "{tag}: the doc text has no CR");
+        // by hand: line starts, then line 2's first byte to line 3's "\n"
+        let starts: Vec<usize> = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        let want = starts[1]..starts[3] - 1;
+        assert_eq!(&text[want.clone()], span, "{tag}");
+        let c = f.s.claim(a, lines(2, 3), None, None, false).unwrap().id;
+        // before the flush: a line above the claim
+        let v2 = type_at(&f, w, 0, "zero\n");
+        assert!(v2 > v);
+        f.tick();
+        let got = drain(&rx)
+            .into_iter()
+            .find_map(|e| match e {
+                RosterEvent::ClaimStarted {
+                    claim,
+                    version,
+                    bytes,
+                    ..
+                } if claim == c => Some((version, bytes)),
+                _ => None,
+            })
+            .expect("a claim_started");
+        assert_eq!(got, (v, Some(want)), "{tag}");
+    }
+}
+
 #[test]
 fn a_burst_of_claims_is_never_coalesced() {
     let f = fx("burst");

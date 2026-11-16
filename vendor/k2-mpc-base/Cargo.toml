@@ -4,7 +4,6 @@ members = ["crates/base", "crates/spec-undo"]
 # vendor/: copies of other repos by git subtree (vendor/README.md). Excluded so they never
 # become members (no lints, fmt or tests of ours run on them).
 exclude = [
-  "spike",
   "vendor",
 ]
 

@@ -63,7 +63,7 @@
 
 /// A profile scope (v0.9.7, test-only): with the `differential` feature (or in the kit's
 /// tests) it times the rest of the enclosing block under `$name`
-/// ([`differential::profile_take`]); otherwise it is nothing.
+/// (`differential::profile_take`); otherwise it is nothing.
 macro_rules! prof {
     ($name:literal) => {
         #[cfg(any(test, feature = "differential"))]
@@ -73,7 +73,7 @@ macro_rules! prof {
 
 /// A visit count (test-only): with the `differential` feature (or in the kit's tests) it adds
 /// `$n` entries read or copied in bulk to this thread's count
-/// ([`differential::take_entry_visits`]); otherwise it is nothing, and `$n` isn't evaluated.
+/// (`differential::take_entry_visits`); otherwise it is nothing, and `$n` isn't evaluated.
 macro_rules! entry_visits {
     ($n:expr) => {
         #[cfg(any(test, feature = "differential"))]
@@ -83,7 +83,7 @@ macro_rules! entry_visits {
 
 /// A chunked write's work count (test-only): with the `differential` feature (or in the kit's
 /// tests) it adds `$n` (a `u64`; 1 when left out) to `$field` of this thread's
-/// [`differential::ChunkWork`] ([`differential::take_chunk_work`]), when `$c` holds if given;
+/// `differential::ChunkWork` (`differential::take_chunk_work`), when `$c` holds if given;
 /// otherwise it is nothing, and neither `$n` nor `$c` is evaluated.
 macro_rules! chunk_work {
     ($field:ident) => {
@@ -102,7 +102,7 @@ macro_rules! chunk_work {
 }
 
 /// An engine visit count (test-only): as [`entry_visits`], for the engine adapter's bulk reads
-/// ([`differential::take_engine_visits`]).
+/// (`differential::take_engine_visits`).
 macro_rules! engine_visits {
     ($n:expr) => {
         #[cfg(any(test, feature = "differential"))]

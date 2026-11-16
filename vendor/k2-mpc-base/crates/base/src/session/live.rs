@@ -29,6 +29,7 @@ mod keyed_view;
 mod mint;
 #[cfg(test)]
 mod next_change_tests;
+mod opened;
 mod purge;
 mod removed;
 mod tier0_history;
@@ -727,6 +728,12 @@ pub struct ChangeEvent {
     /// write, a kit tool, an outside save, an undo, a redo, a revert, a restore and the import.
     /// [`ChangeEvent::via`] stays the participant's client (`cli`), never the verb.
     pub verb: Option<String>,
+    /// For an outside save's change ([`ChangeKind::External`]) to a text root: where its
+    /// merge kept both sides ([`merge::merge3_keep_both_kept`]), each pair's live and file
+    /// lines in this root's text after the change (1-based, inclusive), in order. Empty for
+    /// every other change, for a save that merged cleanly, and for one the pack had taken
+    /// whole ([`super::Pack::check_merged`]).
+    pub kept_pairs: Vec<merge::KeptPair>,
 }
 
 /// An outside save that changed only the file's codec settings (a re-save with a BOM, CRLF or
@@ -1065,6 +1072,8 @@ struct State {
     outside_without_identity: bool,
     /// The undo group token of the edit being committed ([`EditOptions::group`]).
     group_hint: Option<u64>,
+    /// The pin when the plant `OpenedInMemory` keeps it in memory only (test-only use).
+    opened_mem: Option<crate::store::OpenedRec>,
 }
 
 /// [`State::grid_now`]: the version and codec a grid reading was made at, and the reading.
@@ -1162,6 +1171,9 @@ struct Disk {
     /// `catch_up` was claimed from the store at a reopen, not tracked in memory: the first
     /// sync since compares the replica's texts with the doc's before trusting it (v0.10.0.3).
     step_from_store: bool,
+    /// Write-backs wait until then (host clock): after a `FileNow` pin, so the app reads the
+    /// pinned version ([`Config::opened_hold_ms`]); cleared by an outside save. In memory only.
+    hold_until: Option<u64>,
 }
 
 /// The disk replica, decoded on first need (v0.9.8). Opening a doc with a file decoded the
@@ -1342,7 +1354,7 @@ fn client_draw() -> ClientId {
     h.finish() & MAX_CLIENT_ID
 }
 
-/// The planted faults [`crate::differential::ClientMutant`]: the agent client IDs a load
+/// The planted faults `crate::differential::ClientMutant`: the agent client IDs a load
 /// starts with as reusable. `ReuseAcrossReload`: every ID the store records (the kinds
 /// ignored); `NoReuseAfterReload`: none. Without the `differential`
 /// feature there is no hook: `None` (the recorded kinds).
@@ -1681,6 +1693,7 @@ impl Session {
                 #[cfg(feature = "conformance")]
                 outside_without_identity: false,
                 group_hint: None,
+                opened_mem: None,
             }),
         })
     }
@@ -3311,7 +3324,7 @@ impl Session {
         policy: ClaimPolicy,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_with_impl(conn, root, policy, None, None, None, None, None, f)
+        self.edit_with_impl(conn, root, policy, None, None, None, None, None, None, f)
             .map(|(r, _)| r)
     }
 
@@ -3342,6 +3355,7 @@ impl Session {
             opts.group,
             opts.turn,
             opts.verb,
+            None,
             f,
         )
         .map(|(r, _)| r)
@@ -3365,6 +3379,7 @@ impl Session {
     /// 14: `run_tool`'s `--if-version`), the verb for the activity ring, a person's undo
     /// group token ([`EditOptions::group`]), the host-given turn, the pack verb's id (a pack's
     /// own text verb: [`ChangeInfo::verb`]), and the heads-up notes on the lines it changed.
+    /// `base`: set to the version `f` computes on (for a call's result).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn edit_with_impl<E>(
         &self,
@@ -3376,6 +3391,7 @@ impl Session {
         group: Option<u64>,
         turn: Option<Turn>,
         pack_verb: Option<&'static str>,
+        base: Option<&mut Option<Seq>>,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         prof!("session.edit_with");
@@ -3392,6 +3408,10 @@ impl Session {
         {
             prof!("session.backlog");
             self.check_backlog(&st, i)?;
+        }
+        // the version `f` computes on, for a call's result
+        if let Some(b) = base {
+            *b = Some(st.version);
         }
         let hunks = {
             prof!("session.compute_diff");
@@ -4400,6 +4420,7 @@ impl Session {
                     kind: a.kind,
                     turn,
                     verb: pack_verb.map(str::to_owned),
+                    kept_pairs: Vec::new(),
                 };
                 Self::broadcast(st, &ev);
             }
@@ -4422,6 +4443,7 @@ impl Session {
                     kind: a.kind,
                     turn,
                     verb: pack_verb.map(str::to_owned),
+                    kept_pairs: Vec::new(),
                 };
                 Self::broadcast(st, &ev);
             }
@@ -5494,6 +5516,11 @@ impl Session {
             .copied()
     }
 
+    /// The doc's pack.
+    pub(crate) fn pack(&self) -> &dyn Pack {
+        self.pack.as_ref()
+    }
+
     /// The pack and the doc's codec settings now: what a structured verb's
     /// [`crate::tools::VerbCtx`] decodes a block and maps lines with.
     pub(crate) fn pack_and_codec(&self) -> Result<(Arc<dyn Pack>, Vec<u8>)> {
@@ -6110,6 +6137,7 @@ impl Session {
             writebacks: 0,
             caught_up: 0,
             step_from_store: in_step,
+            hold_until: None,
         };
         // does `stored` (keyed, or a format-2 plain hash) name the file's bytes?
         let names_file = |stored: &[u8]| {
@@ -6407,7 +6435,19 @@ impl Session {
         // the save taken in is the sync point, and its bytes the carrier with their
         // pairing, kept by `settle_saved` before anything renders the doc that took it; a
         // declined save is neither
-        self.ingest(st, &bytes, h, now)
+        // the app saved: it has read the file, so the hold for it ends (a merge is written now)
+        if let Some(d) = st.disk.as_mut() {
+            d.hold_until = None;
+        }
+        let out = self.ingest(st, &bytes, h, now);
+        // the app's buffer is its own save now: the pin follows it
+        if matches!(
+            out,
+            Ok(DiskCheck::Ingested { .. } | DiskCheck::Conflict { .. } | DiskCheck::Merged { .. })
+        ) {
+            self.pin_follows_save(st, now)?;
+        }
+        out
     }
 
     fn set_missing(&self, st: &mut State) -> DiskCheck {
@@ -6552,12 +6592,17 @@ impl Session {
         meta.declined = None;
         meta.synced_hash = Some(h.clone());
         let was_declined = st.declined.is_some();
+        // the merge's base: the version the app opened, when noted (`note_opened`), else the
+        // text the file last held
+        let pinned = self.pinned_view(st)?;
         // per root: the save on the synced text (for the replica), and the merge on the live
         // text (for the doc)
         let mut file_edits = Vec::new();
         let mut edits = Vec::new();
         // the merge's own hunks, whole lines (for the notes: `live/removed.rs`)
         let mut merge_sides: Vec<(String, Vec<Hunk>)> = Vec::new();
+        // per root, where the merge kept both sides (for the change event)
+        let mut kept_of: Vec<(String, Vec<merge::KeptPair>)> = Vec::new();
         for (root, n) in &roots {
             let Some(t) = n.as_text() else {
                 unreachable!("`ordered_roots` takes text roots only")
@@ -6577,17 +6622,27 @@ impl Session {
                 continue;
             }
             let live = &st.texts.iter().find(|(r, _)| r == root).expect("a root").1;
-            let mut merged = {
+            let opened_text = pinned
+                .as_ref()
+                .and_then(|v| v.text(root))
+                .filter(|_| !crate::session::opened::planted_text_base_synced());
+            let base = opened_text.unwrap_or(synced.as_str());
+            let (mut merged, mut kept) = {
                 timed!(IngestMerge);
-                merge::merge3_keep_both(&synced, t, live)
+                merge::merge3_keep_both_kept(base, t, live)
             };
+            if opened_text.is_some() && crate::session::opened::planted_kept_pairs_dropped() {
+                kept.clear();
+            }
             if self.merge_refused(root, &merged.text, t, live) {
                 // the pack refuses the merge (`Pack::check_merged`): the save is taken whole, as
                 // a merge onto the live text with no change of its own. The live text it
                 // replaces is in the version cut before the save; the notes name it
                 merged = merge::merge3_keep_both(live, t, live);
+                kept = Vec::new();
                 debug_assert_eq!(merged.text, *t, "a merge with one side is that side");
             }
+            kept_of.push((root.clone(), kept));
             merge_sides.push((root.clone(), merged.hunks.clone()));
             // trimmed to the characters that change (v0.9.7): the merge's sides are whole
             // lines (Option B), a guarantee about the merged text; the change applied to the
@@ -6999,6 +7054,11 @@ impl Session {
                     kind: change.info.kind,
                     turn: None,
                     verb: None,
+                    kept_pairs: kept_of
+                        .iter()
+                        .find(|(r, _)| r.as_str() == root)
+                        .map(|(_, k)| k.clone())
+                        .unwrap_or_default(),
                 },
             );
         }
@@ -7258,6 +7318,10 @@ impl Session {
     /// written between that read and the rename). Atomic; keeps the file's mode.
     fn write_back(&self, st: &mut State, now: u64) -> Result<bool> {
         if st.disk.is_none() || st.declined.is_some() {
+            return Ok(false);
+        }
+        // an app is reading the version pinned for it (`note_opened`, `FileNow`): wait
+        if Self::held(st, now) {
             return Ok(false);
         }
         timed!(WriteBack);

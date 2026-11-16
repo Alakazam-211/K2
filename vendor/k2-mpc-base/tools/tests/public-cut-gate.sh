@@ -321,6 +321,13 @@ case ${PART:-none} in
       DF=$(eval "$(sh "$P/tools/check-public-cut.sh" --print-config)"; printf '%s' "${DROPPED_FILES%% *}")
       cp -R "$P" "$P-dfl"; mkdir -p "$P-dfl/$(dirname "$DF")"; printf '#!/bin/sh\n' > "$P-dfl/$DF"
       timed plant_dropped_file_left expect_block dropped-file-left "$P-dfl" "dropped: $DF exists (a file the cut removes)"
+      # an unreleased repo's name, built here so this file names none; a hash in test data's prose
+      RN="k2-mpc"; RN="$RN-plantedrepo"
+      cp -R "$P" "$P-rep"; printf 'see %s\n' "$RN" >> "$P-rep/docs/SESSIONS.md"
+      timed plant_repo_name expect_block repo-name "$P-rep" "repos: docs/SESSIONS.md:$(wc -l < "$P-rep/docs/SESSIONS.md" | tr -d ' '): $RN"
+      TDF=tools/mpc-tools/tests/data/replace-once/replace-once.tsv
+      cp -R "$P" "$P-tdh"; printf '# generated from 1a2b3c4d5e\n' >> "$P-tdh/$TDF"
+      timed plant_testdata_hash expect_block testdata-hash "$P-tdh" "testdata: $TDF:$(wc -l < "$P-tdh/$TDF" | tr -d ' '): a commit-like hash"
     else
       RC=1
     fi

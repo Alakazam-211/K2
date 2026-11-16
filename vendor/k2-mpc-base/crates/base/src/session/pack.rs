@@ -178,7 +178,7 @@ pub fn elem_of_map_key<'a>(
 
 /// A pack's verb state ([`Pack::verb_state_build`]): any type that is `Send + Sync`, `Debug`
 /// and `PartialEq` is one (a blanket impl), so a pack returns `Box::new(its_index)` and reads
-/// it back with [`crate::tools::VerbCtx::verb_state`] or [`VerbState::downcast_mut`]. Equality
+/// it back with [`crate::tools::VerbCtx::verb_state`] or `downcast_mut` on a `dyn VerbState`. Equality
 /// is what test builds compare a kept state with a fresh build by. Hold no interior
 /// mutability (no `Cell`, `RefCell` or locks): the kit hands it out as a shared borrow under
 /// the session's lock and changes it only through [`Pack::verb_state_change`].
@@ -338,6 +338,20 @@ pub trait Pack: Send + Sync {
         Ok(())
     }
 
+    /// Whether `view` may be a keyed doc's content after the kit merged an outside save into
+    /// it field by field, from the version the app opened ([`super::Session::note_opened`]):
+    /// two changes that were each valid can make a state the format's rules forbid (two clips
+    /// over one place, two objects of one name). `Err`: the save keeps both, as with no pin.
+    /// Bounded, no I/O. **Default: refused**, so a keyed doc's saves merge only for a pack
+    /// that checks its own rules here.
+    fn check_merged_view(&self, view: &super::View) -> Result<(), Declined> {
+        let _ = view;
+        Err(Declined {
+            code: "merge_unchecked",
+            message: "this file type doesn't check a merged doc".into(),
+        })
+    }
+
     /// How this pack's text splits into tokens for D1 (undo spec v1.10): a fresh change
     /// rewrites the tokens it touches wherever someone else wrote them, so it is never built
     /// from someone else's text. Words by default; a code pack would use
@@ -414,6 +428,17 @@ pub trait Pack: Send + Sync {
     /// the kit already uses is never routed (the kit's verb wins) and the registry refuses
     /// it. Default: none.
     fn verbs(&self) -> &'static [crate::tools::PackVerb] {
+        &[]
+    }
+
+    /// **The pack's own refusals, by stable id** (each [`crate::errors::ErrorEntry::pack`]): what
+    /// its verbs refuse with ([`crate::tools::StructOutput::refused`]), so a refusal reaches the
+    /// host as data (`refusal`, `--json`'s `error`) and `explain` and `capabilities` list it.
+    /// [`crate::parity::Registry::for_pack`] checks them (ids `<PACK>-Ennn`, the pack's name
+    /// upper-cased; no id or name twice; an exit from the kit's table, never 0). A verb that
+    /// still prints `refused: <code>: <why>` itself is reported under the entry whose name is
+    /// `<code>`. Ids are stable forever, as the kit's are. Default: none.
+    fn errors(&self) -> &'static [crate::errors::ErrorEntry] {
         &[]
     }
 

@@ -145,6 +145,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::NoClaim(_)
         | SessionError::UnknownElem { .. }
         | SessionError::BlobRefUnknown { .. }
+        | SessionError::OpenedUnknown { .. }
         | SessionError::Blob(BlobError::CacheKeyDestroyed { .. })
         | SessionError::Blob(BlobError::NotFound(_) | BlobError::TooLarge { .. }) => {
             exit::NOT_FOUND
@@ -171,6 +172,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::WritersFull { .. }
         | SessionError::KeyNotOwn { .. }
         | SessionError::KeySpaceFull { .. }
+        | SessionError::OpenedNoFile
         | SessionError::Doc(_) => exit::USAGE,
         SessionError::Held { .. } | SessionError::ClaimContended { .. } => exit::HELD,
         SessionError::Leased { .. }
@@ -182,7 +184,9 @@ pub fn session_exit(e: &SessionError) -> u8 {
         SessionError::EngineMismatch { .. } | SessionError::NativeEngineMissing { .. } => {
             exit::STORE
         }
-        SessionError::RevertTooOld { .. } | SessionError::BaseExpired { .. } => exit::TOO_OLD,
+        SessionError::RevertTooOld { .. }
+        | SessionError::BaseExpired { .. }
+        | SessionError::OpenedGone { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
         | SessionError::IndexPending { .. }
         | SessionError::FacetConflict(_)

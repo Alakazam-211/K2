@@ -348,8 +348,9 @@ fn board_rows_name_the_boards_verbs() {
         host_only, BOARD_HOST_ONLY,
         "the rows only a host call returns"
     );
-    // the reserved and free ids hold nothing yet (822 is a keyed doc's size limit)
-    for n in (823..=829).chain(860..=869) {
+    // the reserved and free ids hold nothing yet (822 is a keyed doc's size limit, 823 a
+    // pack's refusal in text)
+    for n in (824..=829).chain(860..=869) {
         assert!(
             errors::lookup(&n.to_string()).is_none(),
             "MPC-E{n} is taken"

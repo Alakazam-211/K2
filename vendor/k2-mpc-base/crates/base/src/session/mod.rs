@@ -33,6 +33,7 @@ mod handles;
 mod host;
 mod live;
 mod manager;
+mod opened;
 mod pack;
 mod participant;
 pub mod position;
@@ -105,6 +106,7 @@ pub use live::{
 };
 pub(crate) use live::{Shown, VerbRefused};
 pub use manager::{PoolStats, SessionManager, TickReport};
+pub use opened::{Opened, OpenedAt, OpenedVia};
 pub use pack::{
     default_reconcile, elem_of_map_key, list_pairing, Declined, Pack, PackContent, PackError,
     Pairing, Reconciled, SpliceError, TextFilePack, VerbState,
@@ -120,9 +122,9 @@ pub use roster::{ClaimActor, RosterEvent, RosterMember, Who};
 pub use tier0::{
     conflict_copy_name, AgentWrites, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry,
     BlobLogKind, BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteOptions,
-    BlobWriteResult, ConflictCopy, IndexInput, IndexJob, LeaseInfo, NotRecorded, Promoted,
-    Promotion, SaveTicket, INDEX_ADDRS_MAX, MERGE_PID, NODE_CLAIM_ROOT, REGION_MAX_BYTES,
-    SAVE_TICKETS_KEPT,
+    BlobWriteResult, ConflictCopy, IndexInput, IndexJob, LeaseInfo, Lineage, NotRecorded, Promoted,
+    Promotion, SaveBase, SaveMerge, SaveTicket, INDEX_ADDRS_MAX, LINEAGE_VERSIONS_READ, MERGE_PID,
+    NODE_CLAIM_ROOT, REGION_MAX_BYTES, SAVE_TICKETS_KEPT,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 pub use view::View;

@@ -46,6 +46,9 @@ pub struct ToolOutput {
     /// `stdout`: an agent's edit by position with no version, applied in
     /// [`PositionalMode::Warn`] ([`positional_note`]). Empty for most calls.
     pub warnings: Warnings,
+    /// The call's result as data and its parts ([`ToolOutput::result`]). Boxed: only with a
+    /// result asked for.
+    pub(crate) result: Option<Box<super::ResultData>>,
 }
 
 /// What a structured edit verb named and touched, kept for a refusal's frame on the keyed
@@ -172,6 +175,10 @@ pub struct ToolOptions {
     /// The host-given turn of this call ([`crate::turn`]; default `None`): stored on the
     /// change an edit verb makes and carried on its events. Read verbs ignore it.
     pub turn: Option<crate::turn::Turn>,
+    /// The call's result as data ([`super::RESULT_SCHEMA`], [`ToolOutput::result`]): `stdout`
+    /// is then that result's JSON, one line, with the verb's own output inside it. Default
+    /// off: text. A pack verb's `--json` turns it on for its call.
+    pub result_json: bool,
 }
 
 impl Default for ToolOptions {
@@ -182,6 +189,7 @@ impl Default for ToolOptions {
             read_budget: crate::index::READ_BUDGET,
             json: false,
             turn: None,
+            result_json: false,
         }
     }
 }
@@ -222,6 +230,62 @@ impl ToolOptions {
         self.turn = Some(turn);
         self
     }
+
+    /// Return the call's result as data ([`ToolOptions::result_json`]).
+    pub fn result_json(mut self, on: bool) -> Self {
+        self.result_json = on;
+        self
+    }
+}
+
+impl ToolOutput {
+    /// **The call's result as data** (schema [`super::RESULT_SCHEMA`]) when the call asked for
+    /// it ([`ToolOptions::result_json`], or a pack verb's `--json`); `stdout` is then its JSON.
+    /// `None` for a call in text.
+    pub fn result(&self) -> Option<&crate::errors::Value> {
+        self.result.as_deref().and_then(|r| r.value.as_ref())
+    }
+
+    /// The units the call's change wrote, by address and field, when the call asked for its
+    /// result (at most [`super::UNITS_MAX`]); empty otherwise.
+    pub fn changed_units(&self) -> &[super::ChangedUnit] {
+        self.result
+            .as_deref()
+            .map_or(&[], |r| r.capture.units.as_slice())
+    }
+}
+
+/// Whether the result is planted as written though the call didn't ask for it (test-only).
+fn planted_json_leaks() -> bool {
+    plant_on!(
+        crate::differential::ergo_mutant()
+            == Some(crate::differential::ErgoMutant::JsonLeaksToText)
+    )
+}
+
+/// `argv` without the kit's `--json` when its verb is a pack verb that doesn't take `--json`
+/// itself ([`super::PackVerb::takes_json`]; options end at `--`), and whether it was there.
+fn take_result_flag(verb: Option<super::PackVerb>, argv: &[String]) -> (Vec<String>, bool) {
+    let Some(v) = verb.filter(|v| !v.json_is_its_own()) else {
+        return (argv.to_vec(), false);
+    };
+    let words = v.words().min(argv.len());
+    let mut out: Vec<String> = argv[..words].to_vec();
+    let mut found = false;
+    let mut it = argv[words..].iter();
+    while let Some(a) = it.next() {
+        if a == "--" {
+            out.push(a.clone());
+            out.extend(it.cloned());
+            break;
+        }
+        if a == "--json" {
+            found = true;
+        } else {
+            out.push(a.clone());
+        }
+    }
+    (out, found)
 }
 
 /// What an edit verb is checked against under the session lock: the host's claim policy and
@@ -234,6 +298,8 @@ struct Guard {
     /// The pack verb's id when a pack's own verb runs ([`crate::store::ChangeInfo::verb`]);
     /// `None` for the kit's tools.
     verb: Option<&'static str>,
+    /// The call asked for its result ([`ToolOptions::result_json`]).
+    result: bool,
 }
 
 enum Stop {
@@ -281,6 +347,12 @@ impl Session {
     /// hidden-cell writes' deleters, a refusal naming someone, and the attributions a grid verb
     /// prints (`cell get --json`'s author, a deleted element's "by" line). Notes are lensed
     /// where they are made.
+    ///
+    /// **The call's result as data** ([`ToolOptions::result_json`], or `--json` on a pack verb
+    /// that doesn't take it itself, [`super::PackVerb::takes_json`]): `stdout` is the result's
+    /// JSON ([`ToolOutput::result`], [`super::RESULT_SCHEMA`]) and every outcome is `Ok`: a
+    /// refusal the call would return as an error is the result's `error`, with its exit, and
+    /// [`ToolOutput::refusal`].
     pub fn run_tool_with(
         &self,
         conn: ConnId,
@@ -290,9 +362,40 @@ impl Session {
         opts: &ToolOptions,
     ) -> Result<ToolOutput, ToolRunError> {
         prof!("tools.run_tool");
-        let out = self.run_tool_inner(conn, root, argv, stdin, opts);
+        let verb = self.pack_verb_for(argv);
+        let (argv, flag) = take_result_flag(verb, argv);
+        let opts = &ToolOptions {
+            result_json: opts.result_json || flag,
+            ..*opts
+        };
+        let out = self.run_tool_inner(conn, root, &argv, stdin, opts);
         prof!("tools.as_seen");
-        self.tool_output_as_seen(conn, out)
+        let out = self.tool_output_as_seen(conn, out);
+        if !opts.result_json && !planted_json_leaks() {
+            return out;
+        }
+        // the call's result: every outcome is one object, a refusal's with its exit
+        let (name, kind, args) = match verb {
+            Some(v) => (
+                v.name().to_owned(),
+                Some(kind_word(v.kind())),
+                argv.get(v.words()..).unwrap_or(&[]),
+            ),
+            None => (
+                crate::parity::verb_form(&argv),
+                super::Tool::parse(&argv).ok().map(|t| kind_word(t.kind())),
+                argv.get(1..).unwrap_or(&[]),
+            ),
+        };
+        let call = super::result::Call {
+            verb: name,
+            kind,
+            args,
+            pack: Some(self.pack()),
+        };
+        Ok(with_result(&call, out, || {
+            self.status().map(|s| s.version).unwrap_or_default()
+        }))
     }
 
     fn run_tool_inner(
@@ -323,6 +426,7 @@ impl Session {
                 turn: opts.turn,
                 verb: Some(v.name()),
                 if_version,
+                result: opts.result_json,
             };
             let mut out = self.run_edit(conn, root, &name, guard, &verb, move |live| {
                 edit(&doc, live, stdin)
@@ -399,6 +503,7 @@ impl Session {
                     for_edit: for_edit.map(Box::new),
                     refusal: None,
                     warnings: Warnings::default(),
+                    result: None,
                 })
             }
             Kind::Edit => {
@@ -413,6 +518,7 @@ impl Session {
                     turn: opts.turn,
                     verb: None,
                     if_version: tool.if_version(),
+                    result: opts.result_json,
                 };
                 let mut out = self.run_edit(conn, root, &name, guard, &verb, |live| {
                     tool.edit(&name, live, stdin)
@@ -450,8 +556,9 @@ impl Session {
             };
             let (read, out, notes, for_edit) =
                 self.read_view_with(conn, verb, for_edit, |view, hist| {
-                    let ctx =
-                        super::VerbCtx::new(view, stdin, pack.as_ref(), &codec).with_history(hist);
+                    let ctx = super::VerbCtx::new(view, stdin, pack.as_ref(), &codec)
+                        .with_history(hist)
+                        .with_json(opts.result_json);
                     let out = f(&ctx);
                     let shown = out.as_ref().ok().and_then(|o| o.shown.clone());
                     let refused = out.is_err();
@@ -470,7 +577,8 @@ impl Session {
                 read.contributors_since_last_read,
                 &out.stdout,
             );
-            let refusal = structured_refusal(verb, out.exit, &out.stdout);
+            let refusal = pack_refusal(out.pack_refusal.as_deref(), verb)
+                .or_else(|| structured_refusal(pack.as_ref(), verb, out.exit, &out.stdout));
             let mut summary = format!("{name} v{}", read.version);
             if let Some(r) = &refusal {
                 summary = format!("{summary} ({})", r.id());
@@ -489,6 +597,7 @@ impl Session {
                 for_edit: for_edit.map(Box::new),
                 refusal,
                 warnings: Warnings::default(),
+                result: out.result.filter(|_| opts.result_json),
             });
         }
         let mut seen = Addressed::default();
@@ -539,8 +648,14 @@ impl Session {
         eo.verb = Some(v.name());
         let mut report: Option<(Vec<u8>, u8)> = None;
         let mut own: Option<&'static crate::errors::ErrorEntry> = None;
-        let res = self.edit_ops_verb(conn, &eo, verb, at_base, |view, at, hist| {
-            let ctx = super::VerbCtx::new(view, stdin, pack.as_ref(), &codec).with_history(hist);
+        let mut packs: Option<Box<super::PackRefusal>> = None;
+        let mut parts: Option<Box<super::ResultData>> = None;
+        let mut capture = super::Capture::default();
+        let want = opts.result_json.then_some(&mut capture);
+        let res = self.edit_ops_verb(conn, &eo, verb, at_base, want, |view, at, hist| {
+            let ctx = super::VerbCtx::new(view, stdin, pack.as_ref(), &codec)
+                .with_history(hist)
+                .with_json(opts.result_json);
             let ctx = match at {
                 Some(at) => ctx.with_positions_at(at),
                 None => ctx,
@@ -552,6 +667,8 @@ impl Session {
             seen.touched = VerbRefused::touched_of(pack.as_ref(), &o.edits);
             report = Some((o.stdout, o.exit));
             own = o.refusal;
+            packs = o.pack_refusal;
+            parts = o.result;
             Ok::<_, ToolError>((o.edits, o.cells))
         });
         let (changed, notes) = match res {
@@ -578,7 +695,9 @@ impl Session {
                 let line = String::from_utf8_lossy(&stdout).trim_end().to_owned();
                 Some(ErrorReport::new(entry, line).with("verb", verb))
             }
-            (None, None) => structured_refusal(verb, exit, &stdout),
+            // a pack's, by its registered id; else as its exit and text say
+            (None, None) => pack_refusal(packs.as_deref(), verb)
+                .or_else(|| structured_refusal(pack.as_ref(), verb, exit, &stdout)),
         };
         if let Some(r) = &refusal {
             summary = format!("{summary} ({})", r.id());
@@ -586,6 +705,11 @@ impl Session {
         if refusal.is_none() && exit == exit::OK {
             self.verb_view_time(conn, seen.viewing.as_deref(), seen.time.as_ref());
         }
+        let result = opts.result_json.then(|| {
+            let mut r = parts.unwrap_or_default();
+            r.capture = capture;
+            r
+        });
         Ok(ToolOutput {
             stdout,
             stderr_summary: summary,
@@ -597,6 +721,7 @@ impl Session {
             for_edit: None,
             refusal,
             warnings: Warnings::default(),
+            result,
         })
     }
 
@@ -621,7 +746,9 @@ impl Session {
         eo.turn = opts.turn;
         let mut report: Option<EditOutput> = None;
         let mut applied = true;
-        let res = self.edit_ops_verb(conn, &eo, verb, false, |view, _, _| {
+        let mut capture = super::Capture::default();
+        let want = opts.result_json.then_some(&mut capture);
+        let res = self.edit_ops_verb(conn, &eo, verb, false, want, |view, _, _| {
             let bytes = pack
                 .encode(&view.content(), &codec)
                 .map_err(|e| ToolError::usage(format!("the doc can't be rendered: {}", e.0)))?;
@@ -681,6 +808,12 @@ impl Session {
             Some(r) => format!("{summary} ({})", r.id()),
             None => summary,
         };
+        let result = opts.result_json.then(|| {
+            Box::new(super::ResultData {
+                capture,
+                ..Default::default()
+            })
+        });
         Ok(ToolOutput {
             stdout: report.stdout,
             stderr_summary: summary,
@@ -692,6 +825,7 @@ impl Session {
             for_edit: None,
             refusal,
             warnings: Warnings::default(),
+            result,
         })
     }
 
@@ -707,6 +841,7 @@ impl Session {
         f: impl FnOnce(&str) -> Result<EditOutput, ToolError>,
     ) -> Result<ToolOutput, ToolRunError> {
         let mut report: Option<EditOutput> = None;
+        let mut base: Option<Seq> = None;
         let res = self.edit_with_impl(
             conn,
             root,
@@ -716,6 +851,7 @@ impl Session {
             None,
             guard.turn,
             guard.verb,
+            guard.result.then_some(&mut base),
             |live| {
                 let mut o = f(live).map_err(Stop::Tool)?;
                 let text = o.text.take();
@@ -751,6 +887,15 @@ impl Session {
         if let Some(r) = &refusal {
             summary = format!("{summary} ({})", r.id());
         }
+        let result = guard.result.then(|| {
+            Box::new(super::ResultData {
+                capture: super::Capture {
+                    base,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        });
         Ok(ToolOutput {
             stdout: report.stdout,
             stderr_summary: summary,
@@ -762,6 +907,7 @@ impl Session {
             for_edit: None,
             refusal,
             warnings: Warnings::default(),
+            result,
         })
     }
 
@@ -787,14 +933,82 @@ impl Session {
     }
 }
 
+/// `read` or `edit`.
+fn kind_word(k: Kind) -> &'static str {
+    match k {
+        Kind::Read => "read",
+        Kind::Edit => "edit",
+    }
+}
+
+/// `out` with its result built and written as its stdout (one line of JSON): an error becomes
+/// an output with its exit, its report as the refusal, and `version` (the doc's version now).
+pub(crate) fn with_result(
+    call: &super::result::Call<'_>,
+    out: Result<ToolOutput, ToolRunError>,
+    version: impl FnOnce() -> Seq,
+) -> ToolOutput {
+    let (mut o, err) = match out {
+        Ok(o) => (o, false),
+        Err(e) => {
+            let r = crate::errors::Refusal::report(&e);
+            (
+                ToolOutput {
+                    stdout: Vec::new(),
+                    stderr_summary: r.plain(),
+                    exit: e.exit(),
+                    version: version(),
+                    changed: None,
+                    fence: None,
+                    notes: Notes::default(),
+                    for_edit: None,
+                    refusal: Some(r),
+                    warnings: Warnings::default(),
+                    result: None,
+                },
+                true,
+            )
+        }
+    };
+    let v = super::result::value(call, &o, err);
+    o.stdout = format!("{}\n", v.to_json()).into_bytes();
+    // the fence wraps text a host prints; the result is data
+    o.fence = None;
+    o.result.get_or_insert_with(Box::default).value = Some(v);
+    o
+}
+
+/// Whether a pack's refusals are planted as dropped (test-only): neither its registered entry
+/// nor the text form makes a report.
+fn planted_refusal_dropped() -> bool {
+    plant_on!(
+        crate::differential::ergo_mutant() == Some(crate::differential::ErgoMutant::RefusalDropped)
+    )
+}
+
+/// The report of a pack's refusal by its registered id ([`super::StructOutput::refused`]).
+fn pack_refusal(r: Option<&super::PackRefusal>, verb: &str) -> Option<ErrorReport> {
+    if planted_refusal_dropped() {
+        return None;
+    }
+    r.map(|r| r.report(verb))
+}
+
 /// The refusal a structured verb's "no" is (the grid verbs' exits, CSV contract §3.3):
 /// exit 4 (an unknown or deleted row, column or cell) is `MPC-E805 no_element`, exit 1 the
-/// pack verb's "no" (`MPC-E127`); its first stdout line is the message. Exit 0 and 2 (a
-/// usage error, already a [`ToolError`]) are none.
-fn structured_refusal(verb: &str, code: u8, stdout: &[u8]) -> Option<ErrorReport> {
+/// pack verb's "no" (`MPC-E127`); its first stdout line is the message. Exit 2 is a pack's
+/// refusal when stdout says so in the text form ([`text_refusal`]); otherwise it, and exit 0,
+/// are none (a usage error is already a [`ToolError`]).
+fn structured_refusal(
+    pack: &dyn crate::session::Pack,
+    verb: &str,
+    code: u8,
+    stdout: &[u8],
+) -> Option<ErrorReport> {
     let entry = match code {
         exit::NOT_FOUND => &ids::NO_ELEMENT,
         exit::NO => &ids::PACK_VERB_NO,
+        exit::USAGE => return text_refusal(pack, verb, code, stdout),
         _ => return None,
     };
     let first = String::from_utf8_lossy(stdout)
@@ -807,6 +1021,43 @@ fn structured_refusal(verb: &str, code: u8, stdout: &[u8]) -> Option<ErrorReport
             .with("verb", verb)
             .with("line", first),
     )
+}
+
+/// **The stop-gap for a pack's refusal in text**: stdout's first line is
+/// `refused: <code>: <why>` (a code of lowercase letters, digits and `_`), its next line may be
+/// `next: <next>`. The report is the pack's entry named `<code>` when it registers one with this
+/// exit ([`crate::session::Pack::errors`]), else `MPC-E823 pack_refused`; the message is
+/// `<why>`, the details `code`, `next` (when there is one) and `verb`. Anything else is none.
+fn text_refusal(
+    pack: &dyn crate::session::Pack,
+    verb: &str,
+    code: u8,
+    stdout: &[u8],
+) -> Option<ErrorReport> {
+    if planted_refusal_dropped() {
+        return None;
+    }
+    let text = std::str::from_utf8(stdout).ok()?;
+    let mut lines = text.lines();
+    let (name, why) = lines.next()?.strip_prefix("refused: ")?.split_once(": ")?;
+    let ok = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if !ok {
+        return None;
+    }
+    let next = lines.next().and_then(|l| l.strip_prefix("next: "));
+    let entry = pack
+        .errors()
+        .iter()
+        .find(|e| e.name == name && e.exit == code)
+        .unwrap_or(&ids::PACK_REFUSED);
+    let mut r = ErrorReport::new(entry, why).with("code", name);
+    if let Some(n) = next {
+        r = r.with("next", n);
+    }
+    Some(r.with("verb", verb))
 }
 
 /// A structured change's counts, one clause per root: `rows +1 −0 ~2, cells set 3`.

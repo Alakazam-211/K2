@@ -1,0 +1,19 @@
+{
+ "packages": [
+  {
+   "license": "Apache-2.0 WITH LLVM-exception",
+   "manifest_path": "/r/wasmtime-x-1.0.0/Cargo.toml",
+   "name": "wasmtime-x",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  },
+  {
+   "license": "Apache-2.0 WITH LLVM-exception",
+   "manifest_path": "/r/target-lexicon-0.12.0/Cargo.toml",
+   "name": "target-lexicon",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "0.12.0"
+  }
+ ],
+ "version": 1
+}

@@ -57,6 +57,9 @@ impl Refusal for SessionError {
                 .with("count", *count)
                 .with("max", *max),
             S::BaseExpired { base } => rep(&r::BASE_EXPIRED, msg).with("base", *base),
+            S::OpenedUnknown { version } => rep(&r::OPENED_UNKNOWN, msg).with("version", *version),
+            S::OpenedGone { version } => rep(&r::OPENED_GONE, msg).with("version", *version),
+            S::OpenedNoFile => rep(&r::OPENED_NO_FILE, msg),
             S::Stale { expected, actual } => rep(&r::STALE, msg)
                 .with("expected", *expected)
                 .with("actual", *actual),

@@ -1,0 +1,19 @@
+{
+ "packages": [
+  {
+   "license": "Unlicense OR MIT",
+   "manifest_path": "/r/memchr-2.7.0/Cargo.toml",
+   "name": "memchr",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "2.7.0"
+  },
+  {
+   "license": "Unlicense/MIT",
+   "manifest_path": "/r/aho-corasick-1.1.0/Cargo.toml",
+   "name": "aho-corasick",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.1.0"
+  }
+ ],
+ "version": 1
+}

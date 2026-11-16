@@ -1,0 +1,36 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "shape get",
+  "kind": "read",
+  "ok": false,
+  "exit": 4,
+  "version": {
+    "read": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "not found: @s:s9\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "MPC-E805",
+    "exit": 4,
+    "message": "not found: @s:s9",
+    "next": "The row, column or cell the verb names is unknown or deleted (stdout says which, and who deleted it when you may read history). A raw keyed cell write naming a row or column the table doesn't know (dropped, or never in it) is refused the same way, whole. Nothing was applied. List the live ones (row list, col list), or restore a deleted one first (row restore, col restore).",
+    "next_step": {
+      "verb": "row list",
+      "args": [],
+      "why": "The row, column or cell is unknown or deleted; list the live ones, or restore a deleted one first."
+    },
+    "rule": "CSV contract §3.3",
+    "details": {
+      "verb": "shape get",
+      "line": "not found: @s:s9"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

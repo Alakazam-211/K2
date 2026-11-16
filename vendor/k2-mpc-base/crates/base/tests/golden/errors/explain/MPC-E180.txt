@@ -1,0 +1,21 @@
+MPC-E180 opened_version_unknown (sessions and edits)
+exit:     4
+message:  no version {version} of this doc
+next:     The host named a version this doc never had. Nothing was noted: a save still merges as before. Note the file as it is now (FileNow), or name a version a read printed.
+rule:     outside saves: the version the app opened
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E180",
+  "name": "opened_version_unknown",
+  "area": "sessions and edits",
+  "exit": 4,
+  "message": "no version {version} of this doc",
+  "next": "The host named a version this doc never had. Nothing was noted: a save still merges as before. Note the file as it is now (FileNow), or name a version a read printed.",
+  "rule": "outside saves: the version the app opened",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

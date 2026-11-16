@@ -241,6 +241,12 @@ pub enum RosterEvent {
         actor: ClaimActor,
         /// When it was taken, on the host's clock (wire 3).
         started_ms: u64,
+        /// The claim's span when it was taken, in UTF-8 bytes of its root's text at
+        /// `version`, half-open: the doc text as hunks count it (`\n` line breaks, no BOM; a
+        /// CRLF file's `\r` is not in it). Taken with `version`, at the take; it doesn't move
+        /// with later changes. `None` for a grid's line claim (its lines are the rendered
+        /// file's, not a text root's).
+        bytes: Option<std::ops::Range<usize>>,
     },
     /// A claim on elements of a list root was taken ([`super::Session::claim_elems`]). Its own
     /// kind, because it has no lines. Never coalesced. It ends with [`RosterEvent::ClaimEnded`].

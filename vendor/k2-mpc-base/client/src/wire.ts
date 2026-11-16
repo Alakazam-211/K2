@@ -8,6 +8,33 @@ import type { Hunk } from "./hunk";
 /** Who made a change or appears in the roster: the host's participant id or opaque handle. */
 export type Handle = string;
 
+/** The kit's change kinds (`ChangeKind::as_str`), as `ChangeEvent.kind` sends them. */
+export type ChangeKind = "edit" | "undo" | "redo" | "revert" | "restore" | "external" | "import";
+
+/** UTF-8 byte offsets in a root's text, half-open: `start..end`. */
+export interface ByteSpan {
+  start: number;
+  end: number;
+}
+
+/** Lines `first..=last` (1-based). */
+export interface LinePair {
+  first: number;
+  last: number;
+}
+
+/** Where an outside save's merge kept both sides (the kit's `KeptPair`): each side's lines in
+ * the root's text after the change. The merged text holds only the two sides' own lines there
+ * (no marker or separator), in the merge's order: the live side first at one point, but each
+ * side's text where its own change starts, so the file's lines can come first and one side's
+ * range can enclose the other's. Use the ranges; never assume an order. */
+export interface KeptPair {
+  /** The live side's lines (what the doc's participants had). */
+  live: LinePair;
+  /** The outside save's lines (the file's). */
+  file: LinePair;
+}
+
 /** One applied change to one text root (the kit's `ChangeEvent`). */
 export interface ChangeEvent {
   /** The doc's version after the change. Consecutive; one change touching several roots is
@@ -23,7 +50,7 @@ export interface ChangeEvent {
   on_behalf_of?: string | null;
   /** What kind of change it is (the kit's `ChangeKind`, kit v0.10.1; absent from an older
    * host). An undo and a redo say so here. */
-  kind?: "edit" | "undo" | "redo" | "revert" | "restore" | "external" | "import";
+  kind?: ChangeKind;
   /** The host-given turn of the agent step that made it:
    * opaque, at most 64 bytes, compared only for equality, to group one agent run's changes.
    * `null` for a person's change, an outside save, and any call the host gave none; absent
@@ -35,6 +62,10 @@ export interface ChangeEvent {
    * absent from a host before it (wire 3, kit after v0.14.0). `via` stays the client (`cli`),
    * never the verb. */
   verb?: string | null;
+  /** On an outside save's change (`kind: "external"`) whose merge kept both sides: where, one
+   * pair per region, in order. Absent from every other change, from a clean save, and from a
+   * host before it (kit after v0.20.0). */
+  kept_pairs?: KeptPair[];
 }
 
 /** What to run next, as data (the kit's `NextStep`): a kit verb by its registry
@@ -250,7 +281,10 @@ export type RosterEvent =
   | { kind: "view_address"; who: Handle; view_address: string | null; client?: number }
   | { kind: "time_position"; who: Handle; time_position: TimePositionJson | null; client?: number }
   /** `actor` and `started_ms`: wire 3, absent from an older host. */
-  | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; version: number; actor?: ClaimActor; started_ms?: number; [k: string]: unknown }
+  /** `bytes` (kit after v0.20.0): the claim's span when it was taken, in UTF-8 bytes of its
+   * root's text at `version` (the doc text as hunks count it: `\n` line breaks, no BOM, a CRLF
+   * file's `\r` not in it). Absent from an older host and for a grid's line claim. */
+  | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; bytes?: ByteSpan; version: number; actor?: ClaimActor; started_ms?: number; [k: string]: unknown }
   /** A claim on elements of a list root: it has no lines, so it has its own kind. It ends with
    * `claim_ended` (`how: "deleted"` when none of its elements is live after a live change,
    * `"gone_outside_save"` when an outside save removed the last of them). */

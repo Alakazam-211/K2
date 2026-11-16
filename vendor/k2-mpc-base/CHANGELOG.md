@@ -1,5 +1,194 @@
 # Changelog
 
+## v0.21.0
+
+A host release on v0.20.0. The crate version is `0.21.0`; the client's is `0.21.0`. The live
+wire stays version 3 (every addition optional). No store needs a migration: `STORE_FORMAT` stays
+6, `STORE_FORMAT_BASE` 5 and `STORE_FORMAT_READ` 8. Pairs with the markdown, text, board, csv,
+psd and pptx pack tags of this release.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.20.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The native engine stays off.
+
+### What changes for K2
+
+- **The version an app opened (additive).** A host that opens a file in an outside app calls
+  `note_opened(conn, OpenedAt::FileNow | OpenedAt::Version(v))` on `Session` or `BlobSession`
+  (with `clear_opened` and `opened`), and that app's next save merges from the version it opened
+  rather than from the doc's latest. `OpenedAt::FileNow` takes in an unseen save, writes back,
+  pins the version the file holds and holds write-backs for `Config::opened_hold_ms` (default
+  10 s). The pin is kept with the doc's sync state, through a restart and a store rewrite.
+  **A host that never calls it sees no change.** New errors: `MPC-E180`
+  (`opened_version_unknown`, exit 4, `SessionError::OpenedUnknown`), `MPC-E181`
+  (`opened_version_gone`, exit 8, `SessionError::OpenedGone`) and `MPC-E182` (`opened_no_file`,
+  exit 2, `SessionError::OpenedNoFile`). New `AuditEvent::OpenedNoted` and `OpenedDropped`, and
+  `Action::Opened`. All three enums are `non_exhaustive`; a host that maps them adds the new
+  variants.
+- **A call's result as data, `mpc.result/1` (additive).** `ToolOptions::result_json(true)`, or
+  `--json` on a pack verb, makes a call return one JSON object (`ToolOutput::result`, written as
+  stdout) with the verb, the exit, the versions, the units the change wrote, the payload, the
+  error as `explain --json` has it, and notes. **Text stays the default.** A host that offers
+  `--json` to agents passes it through, or sets `result_json` itself. `capabilities` names the
+  schema (`result_schema`). Typed data is `data_schema: "typed"` with its shape in
+  `data_spec` (`<name>/<version>`); a verb's text is `data_schema: "text"`.
+- **A pack's refusals carry ids.** A pack lists them with `Pack::errors` (`<PACK>-Ennn`); a
+  structured verb that prints `refused: <code>: <why>` on its own is reported under the pack's
+  entry of that name, or as the new `MPC-E823` (`pack_refused`, exit 2). Exits and text are
+  unchanged.
+- **A keyed pack's verbs are in its registry**, under the new `Tier::Keyed` (`keyed` in
+  `capabilities`), with the kit's verbs on a doc's presence and records.
+- **Notice:** a grid's `cell get --json` and the tier-0 index verbs' `--json` print what they
+  print in v0.20.0 for this release; the result shape is the host's option for them. **The next
+  kit release makes `--json` on these verbs give the result shape.**
+- **Change and claim events say more (additive).** `ChangeEvent::kept_pairs` says where an
+  outside save's merge kept both sides (wire `kept_pairs`, left out when empty);
+  `RosterEvent::ClaimStarted::bytes` gives a claim's span in UTF-8 bytes (wire `bytes`, left out
+  when `None`). A host that matches `ClaimStarted` without `..` adds the field.
+- **Client 0.21.0:** `ChangeInfo` (`onChange`) gains `version`, `kind`, `turn`, `verb` and
+  `atMs`; `ChangeEvent.kept_pairs` and `claim_started.bytes` are typed.
+- **No store migration, wire still 3.** N−1 is checked both ways against v0.20.0 in every mode,
+  including a store holding an opened version's pin.
+
+### Overview
+
+The version an app opened, so an outside app's save merges from what it opened; results and
+refusals as data for agents (`mpc.result/1`, pack refusal ids, keyed packs' verbs in the
+registry); change and claim events that say more (kept pairs, claim bytes, the client's
+`ChangeInfo`); otherwise tooling (the kit's checks in one Rust tools binary).
+
+### The version an app opened: an outside save merges from it (additive)
+
+- **`note_opened(conn, OpenedAt::FileNow | OpenedAt::Version(v))`**, `clear_opened` and
+  `opened`, on `Session` and `BlobSession`: a host says which version an app opened the file
+  at, and a save from that app then merges from it (`docs/SESSIONS.md`, "The version an app
+  opened"). `FileNow` takes in an unseen save, writes back, pins the version the file holds and
+  holds write-backs for the new `Config::opened_hold_ms` (default 10 s).
+- **The pin is kept with the doc's sync state** (slot 3 of its sync rows): a restart and a store
+  rewrite keep it, and kits since v0.18.0 carry it through a rewrite. It is checked at every
+  use and dropped when its version is gone. An outside save moves it to the save's version.
+- **With a pin**, a blob doc's save merges from the pinned version through the new
+  `BlobPack::merge3_known` (`SaveMerge`, `SaveBase::Opened`; default: `merge3_bytes` on that
+  base), even over the kit's own write; a text doc's line merge and a grid's table merge take
+  the pinned version as their base. A text save merged from the pin reports where it kept both
+  sides in `ChangeEvent::kept_pairs`, as any outside save does. **With no pin nothing changes.**
+- **A keyed doc's save with a pin merges field by field**: each change kept where the live doc
+  still holds the opened value, a clash (keep both) where the kit changed it differently, an
+  insert under a key the live doc holds is a clash too; the result is checked by the new
+  `Pack::check_merged_view`, which **refuses by default** (a keyed pack opts in by checking its
+  own rules).
+- **A save's own stamp names its base**: the new `BlobPack::save_lineage` (`Lineage`, default
+  none) lets the kit take the version a save names as its base (`SaveBase::Stamped`), ahead of a
+  pin, among the doc's latest `LINEAGE_VERSIONS_READ`; a stamp naming none of them keeps both.
+- N−1: `tools/n1/n1.sh layout-opened` / `node-opened` (the previous release carries the pin
+  through a rewrite and a doc delete).
+- New ids: `MPC-E180 opened_version_unknown` (exit 4), `MPC-E181 opened_version_gone` (exit 8),
+  `MPC-E182 opened_no_file` (exit 2), with `SessionError::OpenedUnknown`, `OpenedGone`,
+  `OpenedNoFile`. New `AuditEvent::OpenedNoted` and `OpenedDropped`, and `Action::Opened` (all
+  `#[non_exhaustive]` enums).
+- Test-only: the plant switch `differential::OpenedMutant` (`MPC_OPENED_MUTANT`), its plants in
+  the `plants` part (`tests/opened.rs`).
+
+### Change and claim events say more (additive)
+
+- **The client's `ChangeInfo`** (`onChange`) gains `version`, `kind`, `turn`, `verb` and `atMs`,
+  from the change event the host relays; `null` for a change that isn't one server change (the
+  client's own edit, a refused change leaving, a reload's diff). `ChangeKind` is a named type.
+- **`RosterEvent::ClaimStarted::bytes`**: the claim's span in UTF-8 bytes of its root's text at
+  the event's `version` (the doc text: `\n` line breaks, no BOM; a CRLF file's `\r` not in it),
+  taken with `version` at the take; `None` for a grid's line claim. On the wire, `bytes:
+  {start, end}`, left out when `None` (WIRE.md). A host that matches the variant without `..`
+  adds the field.
+
+### An outside save's kept pairs (additive)
+
+- **Where an outside save kept both sides.** When an outside save of a text doc overlaps live
+  edits, the merge keeps both, in the merge's order (below). Its change event says where:
+  `ChangeEvent::kept_pairs`, one `text::merge::KeptPair` per conflict region in which both
+  sides' lines are kept, each with `live` and `file`, 1-based inclusive line ranges in the root's
+  text after the change. Empty for every other change, for a save that merged cleanly, for a
+  region where one side only deleted, and for a save the pack took whole (`check_merged`).
+  `text::merge::merge3_keep_both_kept` returns the merge and its pairs; `merge3_keep_both` is
+  unchanged. Both types are `#[non_exhaustive]`. On the wire the change carries them as
+  `kept_pairs: [{live: {first, last}, file: {first, last}}]`, left out when there are none
+  (WIRE.md; the client's `ChangeEvent.kept_pairs`).
+- **What the merged text holds there**: only the two sides' own lines, no marker or separator,
+  in the merge's order: the live side first at one point, but each side's text where its own
+  change starts, so the file's lines can come first and one side's range can enclose the
+  other's (docs/SESSIONS.md). A host uses the ranges, never an order of its own.
+
+### What an agent gets back, as data (additive)
+
+The first pieces of agent-facing results for every pack's verbs. Nothing changes for a host that
+asks for none of it, except the notice below.
+
+- **A keyed pack's verbs are in its registry.** `Registry::for_pack` takes the structured verbs
+  of a pack whose roots are all lists or maps and isn't a table (a deck, a timeline, a scene),
+  under a new tier, `Tier::Keyed` (`keyed` in `capabilities`), with the kit's verbs on a doc's
+  presence and records (`open`, `leave`, `who`, `status`, `flush`, `log`, `version --name`,
+  `approve`, `decline`, `log --pending`, `approvals`), so such a pack lists its verbs in
+  `capabilities` (v0.20.0 refuses them). A text verb on a keyed pack is refused by name.
+  `Tier::of_pack` says which tier a pack's docs are. `Tier` is `#[non_exhaustive]`, as in
+  v0.20.0.
+- **A pack's refusals carry ids.** A pack lists its refusals with `Pack::errors` (default none):
+  each `ErrorEntry::pack(id, name, exit, message, next)`, the id `<PACK>-Ennn`, stable forever;
+  `ErrorEntry::step` is public for them. A verb refuses with `StructOutput::refused(&entry,
+  why, next)` (and `.detail(key, value)`): its stdout is the same two lines packs print in
+  v0.20.0, `refused: <code>: <why>` and `next: <next>`, byte for byte, and `ToolOutput::refusal`
+  holds the report, with the entry's id, the message and the details `code`, `next`, `verb`.
+  `Registry::for_pack` checks the entries; `explain` and `capabilities` show them.
+- **Until a pack registers, its text refusals are read.** A structured verb that prints
+  `refused: <code>: <why>` itself, exit 2, is reported under the pack's entry of that name, or as
+  the new **`MPC-E823 pack_refused`** (exit 2) with the code and the `next:` line as details,
+  where v0.20.0 gives the host no report for it. Exits and text are unchanged.
+- **A call's result as data, `mpc.result/1`.** `ToolOptions::result_json(true)`, or `--json` on a
+  pack verb, makes the call return one JSON object (`ToolOutput::result`, written as stdout): the
+  verb and its kind, the exit, the versions before and after (and the guards given), the units
+  the change wrote by address and field with their values before and after
+  (`tools::ChangedUnit`, also `ToolOutput::changed_units`), the verb's payload or its text, the
+  next page, the error as `explain --json` has it, a `--base` conflict's units by field, notes
+  and warnings. With it asked for, a refusal that a text call returns as an error comes back as
+  the result's `error` with its exit. `capabilities` names the schema (`result_schema`).
+  `docs/SESSIONS.md`, "A call's result as data", has the fields. Packs can fill typed data with
+  `StructOutput::data` (and `VerbCtx::json`) and give the next page with
+  `StructOutput::next_page`. **Typed data says so:** `data_schema` is `typed` (or `text` for a
+  verb's stdout), and `data_spec` names the data's shape and its version, `<name>/<version>`, as
+  a verb gives it with `StructOutput::data_spec(name, version)` (null when it names none).
+- **Notice: verbs that print JSON in v0.20.0 keep it for this release.** A grid's `cell get
+  --json` (`PackVerb::takes_json`) and the tier-0 index verbs' `--json` print what they print in
+  v0.20.0; the result shape is the host's option for them (`ToolOptions::result_json`), holding
+  their output as `data.text`. **The next kit release makes `--json` on these verbs give the
+  result shape.**
+- **Also changed**: a pack's refusal makes a refusal frame on the keyed watch, as the kit's own
+  refusals do; `capabilities` gains `result_schema` and a keyed pack's rows; those kit verbs
+  list `keyed` among their tiers, and so do the person actions they serve (open, close, who's
+  here, saved, why live editing is off, history, restore, approve, pending).
+- Test-only: the plant switch `differential::ErgoMutant` (`MPC_ERGO_MUTANT`), and its plants in
+  the `plants` part (`tests/agent_results.rs`).
+
+### Tools in Rust
+
+Tooling only: no host builds or runs any of it.
+
+- **`tools/mpc-tools`**, one tools binary with subcommands, in its own workspace, runs the kit's
+  checks in Rust (tools/README.md, "mpc-tools"): `licences`, `pack-check`, `evidence check` and
+  `evidence collect`, `unzip`, `edit replace-once` and `undo ck-from-log`.
+- **The licence check covers every tracked lock** (`scripts/check-licences.sh`, which runs
+  `mpc-tools licences`), each with all features. The allow-list takes `Unlicense` only beside an
+  allowed licence in an OR, and parses expressions strictly (unbalanced parentheses refuse);
+  NCSA passes only in a fuzz lock. The `--expr` mode checks single licence expressions by the
+  same rule.
+- **The evidence tools are `mpc-tools evidence check` and `evidence collect`**, with the same
+  problems and the same records, byte for byte, as the Python tools they replace. They run in
+  jobs (tools/evidence/README.md).
+- **The pack template's checks** (`scripts/pack-checks/engine-free.sh`, `carrier-row.sh`)
+  run `mpc-tools pack-check`; a missing pack folder is exit 4.
+- **The test jobs' helpers run in the job or in shell:** `tools/n1/n1.sh`'s `node-both` restores
+  the producer with `mpc-tools edit replace-once`, `tools/undo/g1.sh` rebuilds its checkpoint
+  files from a stopped job's log with `mpc-tools undo ck-from-log`, and the fallback bundles
+  ship sources whole (a part over a job's limit runs as a `--repo` job).
+- **The tree holds no early engine spike** (`spike/`; git history keeps it): nothing reads its
+  traces or calls its tools, and its Rust half's lock held MPL-2.0 and BSL-1.0 crates.
+
 ## v0.20.0
 
 A host release on v0.19.0. The crate version is `0.20.0`; the client's is `0.20.0`. The live

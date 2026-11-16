@@ -479,6 +479,7 @@ impl Lens<'_> {
                 version,
                 actor,
                 started_ms,
+                bytes,
             } => RosterEvent::ClaimStarted {
                 who: self.who(who),
                 claim,
@@ -490,6 +491,7 @@ impl Lens<'_> {
                 version,
                 actor,
                 started_ms,
+                bytes,
             },
             RosterEvent::ClaimStartedElems {
                 who,

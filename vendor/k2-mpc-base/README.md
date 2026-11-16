@@ -28,7 +28,7 @@ Layout:
   nothing depends on it.
 - `vendor/`: other repos copied in by git subtree, test-only (`vendor/README.md`).
 
-Status: early. `spike/` holds the D0 engine-choice spike (Yrs vs Loro). Licence: MIT OR Apache-2.0 (below). See `docs/ARCHITECTURE.md` and `docs/PRIMITIVES.md`; how each surface counts positions is `docs/POSITIONS.md`.
+Status: early. Licence: MIT OR Apache-2.0 (below). See `docs/ARCHITECTURE.md` and `docs/PRIMITIVES.md`; how each surface counts positions is `docs/POSITIONS.md`.
 
 ## Licence
 

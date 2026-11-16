@@ -1,0 +1,19 @@
+{
+ "packages": [
+  {
+   "license": "MIT OR Apache-2.0",
+   "manifest_path": "/r/serde-1.0.0/Cargo.toml",
+   "name": "serde",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  },
+  {
+   "license": "GPL-3.0",
+   "manifest_path": "/r/readline-0.1.0/Cargo.toml",
+   "name": "readline",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "0.1.0"
+  }
+ ],
+ "version": 1
+}

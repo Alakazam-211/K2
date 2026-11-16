@@ -831,7 +831,7 @@ impl Prov {
     }
 }
 
-/// The planted faults ([`crate::differential::ProvMutant`]): never compiled into a host.
+/// The planted faults (`crate::differential::ProvMutant`): never compiled into a host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mutant {
     MissDeletion,

@@ -524,8 +524,8 @@ impl BlobSession {
     }
 
     /// **Start a comment thread** on the whole doc or a node (`docs/SESSIONS.md`,
-    /// "Annotations"). Needs [`Rights::comment`] (edit implies it); a node in an older version
-    /// needs history too. The node must exist in that version's index
+    /// "Annotations"). Needs [`crate::session::Rights::comment`] (edit implies it); a node in an
+    /// older version needs history too. The node must exist in that version's index
     /// ([`SessionError::IndexPending`] until it is recorded; [`SessionError::IndexUnsupported`]
     /// on a type with none, where only [`NewAnchor::Doc`] works), and the version must still
     /// be live when the thread commits (`MPC-E712` if a purge won the race). Makes no version

@@ -1,0 +1,19 @@
+{
+ "packages": [
+  {
+   "license": "MIT",
+   "manifest_path": "/w/vendor/yrs/Cargo.toml",
+   "name": "yrs",
+   "source": null,
+   "version": "0.21.0"
+  },
+  {
+   "license": "MIT OR Apache-2.0",
+   "manifest_path": "/r/serde-1.0.0/Cargo.toml",
+   "name": "serde",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "version": "1.0.0"
+  }
+ ],
+ "version": 1
+}

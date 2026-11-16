@@ -297,6 +297,11 @@ pub struct Config {
     /// only, keyed per doc). A file holding an older write of ours
     /// is then an outside edit. Default 60 s.
     pub own_write_ttl_ms: u64,
+    /// After a host notes that an app is reading the file as it is now
+    /// (`note_opened(conn, OpenedAt::FileNow)`), the kit holds its write-backs to that file
+    /// this long, so the app reads the version the kit pinned; the hold ends early at the
+    /// first outside save. Edits stay live meanwhile. 0: no hold. Default 10 s.
+    pub opened_hold_ms: u64,
 
     // --- tier 0 (blob docs) ---
     /// A lease lasts this long unless the caller asks otherwise; renew to keep it.
@@ -557,6 +562,7 @@ impl Config {
             disk_poll_ms,
             disk_read_max_bytes,
             own_write_ttl_ms,
+            opened_hold_ms,
             lease_default_ms,
             lease_max_ms,
             lease_auto_ms,
@@ -650,6 +656,7 @@ impl Config {
             ("disk_poll_ms", *disk_poll_ms),
             ("disk_read_max_bytes", *disk_read_max_bytes),
             ("own_write_ttl_ms", *own_write_ttl_ms),
+            ("opened_hold_ms", *opened_hold_ms),
             ("lease_default_ms", *lease_default_ms),
             ("lease_max_ms", *lease_max_ms),
             ("lease_auto_ms", *lease_auto_ms),
@@ -758,6 +765,7 @@ impl Default for Config {
             disk_poll_ms: 3_000,
             disk_read_max_bytes: 64 << 20,
             own_write_ttl_ms: 60_000,
+            opened_hold_ms: 10_000,
             lease_default_ms: 5 * 60_000,
             lease_max_ms: 60 * 60_000,
             lease_auto_ms: 2 * 60_000,

@@ -5,7 +5,7 @@
 //! lines** (v0.9.7.1): the texts closed (a final "\n" added when one has text and lacks
 //! it), each side `diff::whole_line_hunks(closed base, closed side)` ([`sides`]), so two
 //! changes touching one line always overlap; the final "\n" of a clean merge follows the
-//! side that wrote its last line ([`ends_open`], this module's own); the clean result's
+//! side that wrote its last line (`ends_open`, this module's own); the clean result's
 //! edits are the verb edits' diff from the live text (`lines::edit_hunks`). (The mutant that
 //! re-diffs undo's windows keeps `diff::hunks`.) Classifying pairs of hunks (O1–O5) and
 //! placing ours into theirs' coordinates are this module's own.
@@ -74,7 +74,7 @@ pub struct Rules {
     /// line and crosses a line break).
     pub shared_start: bool,
     /// ... and v0.9.7's character-trimmed sides conflict there (a false conflict).
-    /// Clean writes only: [`classes`] sets it after its `if !clean { return; }`.
+    /// Clean writes only: `classes` sets it after its `if !clean { return; }`.
     pub shared_start_was_conflict: bool,
     /// A `write --base` refused where each side turned one base line into a different single
     /// line (different words of one line too: whole lines, v0.9.7.1).

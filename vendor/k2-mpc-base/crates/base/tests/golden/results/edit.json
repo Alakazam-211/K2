@@ -1,0 +1,49 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "shape set",
+  "kind": "edit",
+  "ok": true,
+  "exit": 0,
+  "version": {
+    "base": 1,
+    "after": 2,
+    "if_version": 1,
+    "base_given": null
+  },
+  "changed": {
+    "counts": [
+      {
+        "root": "fields",
+        "inserted": 0,
+        "deleted": 0,
+        "moved": 0,
+        "restored": 0,
+        "set": 1,
+        "dropped": 0
+      }
+    ],
+    "units": [
+      {
+        "address": "@s:s1",
+        "root": "fields",
+        "key": "s1",
+        "field": "color",
+        "op": "set",
+        "before": "blue",
+        "after": "red"
+      }
+    ],
+    "units_more": 0,
+    "lines": null
+  },
+  "data": {
+    "text": "set @s:s1 color\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": null,
+  "conflicts": [],
+  "notes": [],
+  "warnings": []
+}

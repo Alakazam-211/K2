@@ -42,7 +42,8 @@ pub const VERBS: &[PackVerb] = &[
         &[P::ReadAll],
         READ_EXITS,
         cell_get,
-    ),
+    )
+    .takes_json(),
     PackVerb::structured_edit(
         "cell set",
         "cell set --row R --col C (--value V | stdin)",

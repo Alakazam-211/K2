@@ -33,6 +33,7 @@ mod index_page;
 mod index_read;
 mod index_tool;
 mod node_claims;
+mod opened;
 mod promote;
 mod struct_index;
 use crate::anchor::{AnchorJudgment, AnchorRules, CandidateWhy};
@@ -66,6 +67,50 @@ pub enum BlobMerge {
     Unsupported,
 }
 
+/// What the kit knows a save was made on ([`SaveMerge::base_is`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SaveBase {
+    /// The host said the app opened this version ([`BlobSession::note_opened`]), and the pin
+    /// checked out.
+    Opened,
+    /// The save's own stamp names this version as the one it was made on
+    /// ([`BlobPack::save_lineage`]).
+    Stamped,
+}
+
+/// What a save's own stamp says ([`BlobPack::save_lineage`]): its id, and the id of the save it
+/// was made on, as the format writes them (opaque to the kit, compared byte for byte).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Lineage {
+    pub this: Vec<u8>,
+    pub made_on: Option<Vec<u8>>,
+}
+
+impl Lineage {
+    pub fn new(this: Vec<u8>, made_on: Option<Vec<u8>>) -> Self {
+        Lineage { this, made_on }
+    }
+}
+
+/// How many of a doc's latest versions the kit reads to find the one a save's stamp names
+/// ([`BlobPack::save_lineage`]); a stamp naming none of them is another writer's line.
+pub const LINEAGE_VERSIONS_READ: usize = 32;
+
+/// An outside save to merge from a base the kit knows ([`BlobPack::merge3_known`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SaveMerge<'a> {
+    /// The version the save was made on: what the app opened.
+    pub base: &'a [u8],
+    /// The doc's current version.
+    pub ours: &'a [u8],
+    /// The save.
+    pub theirs: &'a [u8],
+    pub base_is: SaveBase,
+}
+
 /// What a file type adds to tier 0. Every method has a default, so tier 0 for any file is
 /// [`AnyFile`]; a later pack (tier 0.5) supplies [`BlobPack::merge3_bytes`] to turn
 /// conflicting saves into merges.
@@ -82,6 +127,27 @@ pub trait BlobPack: Send + Sync {
     fn merge3_bytes(&self, base: &[u8], ours: &[u8], theirs: &[u8]) -> BlobMerge {
         let _ = (base, ours, theirs);
         BlobMerge::Unsupported
+    }
+
+    /// Merge a save whose base the kit knows ([`SaveMerge::base_is`]): the version the app
+    /// opened ([`BlobSession::note_opened`]). The kit asks it even after it wrote the file
+    /// since the last outside save, where it keeps both without asking
+    /// [`BlobPack::merge3_bytes`]: the base predates its write. Called with the session locked:
+    /// bounded, no I/O. Default: [`BlobPack::merge3_bytes`] on the known base.
+    fn merge3_known(&self, m: &SaveMerge<'_>) -> BlobMerge {
+        self.merge3_bytes(m.base, m.ours, m.theirs)
+    }
+
+    /// **What a save says it was made on**, from the format's own save stamp (an XMP
+    /// `InstanceID` and the history entry naming the save before it, say): `None` when the
+    /// bytes carry none. The kit asks it of an outside save (for a pack that can merge) and of
+    /// the doc's latest versions ([`LINEAGE_VERSIONS_READ`]): when the save's `made_on` is a
+    /// version's `this`, that version is the save's base ([`SaveBase::Stamped`]), ahead of a
+    /// pin; when it is none of them, the save was made on another writer's line, and it keeps
+    /// both. Bounded, no I/O. Default: `None`.
+    fn save_lineage(&self, bytes: &[u8]) -> Option<Lineage> {
+        let _ = bytes;
+        None
     }
 
     /// The conflict copy's file name (in the conflict-copy folder: the file's own, or
@@ -251,6 +317,42 @@ fn kit_wrote(v: &BlobVersion) -> bool {
         BlobReason::Import => v.via != "disk",
         BlobReason::Write | BlobReason::Restore | BlobReason::Merged => v.author != EXTERNAL_PID,
     }
+}
+
+/// What an outside save's own stamp says of its base ([`BlobPack::save_lineage`]).
+enum Stamp {
+    /// No stamp, or one naming no earlier save: as with none.
+    None,
+    /// The version (its blob) the stamp names.
+    Base(BlobId),
+    /// A stamp naming no version of the latest [`LINEAGE_VERSIONS_READ`]: another writer's.
+    Unknown,
+}
+
+/// The planted fault [`crate::differential::OpenedMutant::StampIgnored`].
+fn stamp_ignored() -> bool {
+    plant_on!(
+        crate::differential::opened_mutant()
+            == Some(crate::differential::OpenedMutant::StampIgnored)
+    )
+}
+
+/// The planted fault [`crate::differential::OpenedMutant::OpenedIgnored`]: a save merges as if
+/// there were no pin.
+fn opened_ignored() -> bool {
+    plant_on!(
+        crate::differential::opened_mutant()
+            == Some(crate::differential::OpenedMutant::OpenedIgnored)
+    )
+}
+
+/// The planted fault [`crate::differential::OpenedMutant::BaseIsAlwaysKnown`]: with no pin, a
+/// save over the kit's write merges from the synced version as if it were known.
+fn base_always_known() -> bool {
+    plant_on!(
+        crate::differential::opened_mutant()
+            == Some(crate::differential::OpenedMutant::BaseIsAlwaysKnown)
+    )
 }
 
 /// The planted fault [`crate::differential::Tier0Mutant::StaleAfterKitWriteIgnored`].
@@ -635,6 +737,10 @@ struct BDisk {
     declined: Option<String>,
     dirty_since: Option<u64>,
     last_check_ms: u64,
+    /// Write-backs wait until then (host clock): after a `FileNow` pin, so the app reads the
+    /// pinned version ([`crate::session::Config::opened_hold_ms`]); cleared by an outside save.
+    /// In memory only.
+    hold_until: Option<u64>,
 }
 
 struct BState {
@@ -668,6 +774,8 @@ struct BState {
     ended: VecDeque<(u64, ConnId, Ended)>,
     /// Live claims on index nodes ([`BlobSession::claim_nodes`]), oldest first; memory only.
     node_claims: Vec<node_claims::NodeClaim>,
+    /// The pin when the plant `OpenedInMemory` keeps it in memory only (test-only use).
+    opened_mem: Option<crate::store::OpenedRec>,
 }
 
 const OWN_WRITES_KEPT: usize = 8;
@@ -941,6 +1049,7 @@ impl BlobSession {
                 ended: VecDeque::new(),
                 ticket_put: None,
                 node_claims: Vec::new(),
+                opened_mem: None,
             }),
             index_flight: Arc::default(),
             annot_gate: std::sync::RwLock::new(()),
@@ -2631,7 +2740,11 @@ impl BlobSession {
                 .collect(),
         };
         let mut not_reached = Vec::new();
-        // the file holds the current content first (an outside save is recorded, not lost)
+        // the file holds the current content first (an outside save is recorded, not lost);
+        // a purge doesn't wait for an app reading a pinned version
+        if let Some(d) = st.disk.as_mut() {
+            d.hold_until = None;
+        }
         if st.disk.is_some() {
             let ok = self.write_back(st, now).is_ok()
                 && matches!(Self::disk_state(st), Some(DiskState::Clean));
@@ -3131,6 +3244,7 @@ impl BlobSession {
             declined: None,
             dirty_since: None,
             last_check_ms: now,
+            hold_until: None,
         };
         // a write-back a crash interrupted: did it land?
         if let Some(p) = pending {
@@ -3346,9 +3460,18 @@ impl BlobSession {
             Err(e) => return Err(self.disk_error(st, &real.display().to_string(), e)),
         };
         let space = st.key.space.clone();
+        let saved = put.info().id;
+        // the app saved: it has read the file, so the hold for it ends (a merge is written now)
+        if let Some(d) = st.disk.as_mut() {
+            d.hold_until = None;
+        }
         let out = self.ingest_stored(st, real, &put, stat, now);
         // the put no longer waits: referenced by the save's version, or given up
         self.blobs.finish(&space, put);
+        // the app's buffer is its own save now: the pin follows it, and the hold ends
+        if out.is_ok() {
+            self.pin_follows_save(st, saved, now)?;
+        }
         out
     }
 
@@ -3378,11 +3501,44 @@ impl BlobSession {
         // which. Its save keeps both, never replaces the kit's write silently. Decided from
         // the current version's persisted reason and via (`kit_wrote`), so a restart between
         // the write and the save changes nothing
-        let stale_over_kit = holder.is_none()
+        //
+        // The version the app opened (`note_opened`), when noted and still held, is the save's
+        // base: what the app had, whatever the kit wrote since. Then a save is a conflict only
+        // when the doc moved past that version, and it merges from it (`merge3_known`); with
+        // no pin, everything is as before
+        //
+        // The save's own stamp, when its format has one (`save_lineage`), comes first: the
+        // version it names is its base; a stamp naming no version the kit holds is another
+        // writer's line, and keeps both
+        let stamp = match stamp_ignored() {
+            true => Stamp::None,
+            false => self.stamp_of(st, real, put),
+        };
+        let (pinned, base_is) = match stamp {
+            Stamp::Base(b) => (Some(b), Some(SaveBase::Stamped)),
+            _ if opened_ignored() => (None, None),
+            _ => match self.pin_checked(st)?.and_then(|p| p.blob) {
+                Some(b) => (Some(b), Some(SaveBase::Opened)),
+                None => (None, None),
+            },
+        };
+        let base_is = match (base_is, base_always_known()) {
+            (None, true) => Some(SaveBase::Opened),
+            (b, _) => b,
+        };
+        let unknown_stamp = matches!(stamp, Stamp::Unknown);
+        let stale_over_kit = pinned.is_none()
+            && !base_always_known()
+            && holder.is_none()
             && st.cur.blob == base
             && kit_wrote(&st.cur)
             && !stale_after_kit_write_ignored();
-        let conflict = holder.is_some() || st.cur.blob != base || stale_over_kit;
+        let conflict = holder.is_some()
+            || unknown_stamp
+            || match pinned {
+                Some(p) => st.cur.blob != p,
+                None => st.cur.blob != base || stale_over_kit,
+            };
         let mut theirs = BlobVersion::new(
             info.id,
             info.size,
@@ -3422,14 +3578,14 @@ impl BlobSession {
         let (kept, ours) = (st.vid, st.cur.clone());
         // no merge over a kit write: the base would be the kit's own version, and a merge from
         // it takes the save whole (what the app started from is unknown)
-        let merged = if stale_over_kit {
+        let merged = if stale_over_kit || unknown_stamp {
             None
         } else {
             self.try_merge(
                 st,
                 &store,
                 real,
-                base,
+                (pinned.unwrap_or(base), base_is),
                 &ours,
                 (&theirs, put),
                 &sync,
@@ -3490,6 +3646,53 @@ impl BlobSession {
         })
     }
 
+    /// What the save at `real` (stored as `put`) says of its base, from its own stamp
+    /// ([`BlobPack::save_lineage`]), for a pack that can merge: the version among the latest
+    /// [`LINEAGE_VERSIONS_READ`] whose stamp is the save's `made_on`. Bytes are read within
+    /// `blob_merge_max_bytes`; what can't be read is [`Stamp::None`].
+    fn stamp_of(&self, st: &BState, real: &Path, put: &VersionPut) -> Stamp {
+        if !self.pack.can_merge() {
+            return Stamp::None;
+        }
+        let space = st.key.space.clone();
+        let max = self.config.blob_merge_max_bytes;
+        let info = put.info();
+        let theirs = match put.chunked() {
+            None => self
+                .blobs
+                .read_to_vec_of(&space, self.doc_id, &info.id, max)
+                .ok(),
+            Some(_) if info.size <= max => fs::read(real).ok(),
+            Some(_) => None,
+        };
+        let Some(made_on) = theirs
+            .and_then(|b| self.pack.save_lineage(&b))
+            .and_then(|l| l.made_on)
+        else {
+            return Stamp::None;
+        };
+        let Ok(store) = Self::store(st) else {
+            return Stamp::None;
+        };
+        let Ok(versions) = store.blob_versions(self.doc_id) else {
+            return Stamp::None;
+        };
+        for (_, v) in versions
+            .iter()
+            .rev()
+            .filter(|(_, v)| !v.redacted)
+            .take(LINEAGE_VERSIONS_READ)
+        {
+            let Ok(b) = self.blobs.read_to_vec_of(&space, self.doc_id, &v.blob, max) else {
+                continue;
+            };
+            if self.pack.save_lineage(&b).map(|l| l.this) == Some(made_on.clone()) {
+                return Stamp::Base(v.blob);
+            }
+        }
+        Stamp::Unknown
+    }
+
     /// Tier 0.5: let the pack merge a conflicting save. `None`: no merge (tier 0, too big,
     /// or the pack reported a conflict).
     #[allow(clippy::too_many_arguments)]
@@ -3498,7 +3701,7 @@ impl BlobSession {
         st: &mut BState,
         store: &DocStore,
         real: &Path,
-        base: BlobId,
+        (base, base_is): (BlobId, Option<SaveBase>),
         ours: &BlobVersion,
         (theirs, theirs_put): (&BlobVersion, &VersionPut),
         sync: &BlobSync,
@@ -3529,7 +3732,16 @@ impl BlobSession {
         let (Ok(b), Ok(o), Ok(t)) = (read(&base), read(&ours.blob), read_theirs()) else {
             return Ok(None);
         };
-        let BlobMerge::Merged(m) = self.pack.merge3_bytes(&b, &o, &t) else {
+        let merged = match base_is {
+            Some(base_is) => self.pack.merge3_known(&SaveMerge {
+                base: &b,
+                ours: &o,
+                theirs: &t,
+                base_is,
+            }),
+            None => self.pack.merge3_bytes(&b, &o, &t),
+        };
+        let BlobMerge::Merged(m) = merged else {
             return Ok(None);
         };
         // a merge is the kit's, for no connection: the current version's chunks only
@@ -3646,6 +3858,10 @@ impl BlobSession {
     /// the write in flight before the rename so a crash is recognised on the next open.
     fn write_back(&self, st: &mut BState, now: u64) -> Result<bool> {
         if st.disk.as_ref().map_or(true, |d| d.declined.is_some()) {
+            return Ok(false);
+        }
+        // an app is reading the version pinned for it (`note_opened`, `FileNow`): wait
+        if Self::held(st, now) {
             return Ok(false);
         }
         // the host is writing the file itself: never write over its save (retried on tick)

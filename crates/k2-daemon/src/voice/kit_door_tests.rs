@@ -699,7 +699,10 @@ async fn an_app_session_reaches_every_kit_route_and_sew_decides() {
 async fn k2s_rate_limit_and_sews_own_429_both_reach_the_kit() {
     let (addr, fake) = fake_sew().await;
     let kit = box_ctx();
+    // The route reads this login's clock at `now` too: a slow run can't
+    // refill the bucket between the empty and the request.
     let now = Instant::now();
+    crate::voice::hold_rate_clock("alice-rate", now);
     while take_token("alice-rate", now) {}
     let out = through(&addr, &kit, &req("GET", "/api/v1/me/devices", "login:alice-rate", None)).await;
     assert_eq!(status(&out), 429, "{out}");

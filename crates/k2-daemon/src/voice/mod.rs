@@ -45,6 +45,31 @@ use k2_core::voice_rooms::Hosting as Tier;
 
 use lane::{LaneKind, LaneState};
 
+/// The clock the doors' rate limits (`kit_door`, `sew_lane`) read for one
+/// credential's request. Real time; a test can hold one credential's
+/// clock still ([`hold_rate_clock`]) so a slow run can't refill a bucket
+/// the test emptied between the empty and the request.
+pub(crate) fn rate_now(key: &str) -> std::time::Instant {
+    #[cfg(test)]
+    if let Some(at) = held_rate_clocks().lock().unwrap_or_else(|e| e.into_inner()).get(key) {
+        return *at;
+    }
+    let _ = key;
+    std::time::Instant::now()
+}
+
+#[cfg(test)]
+fn held_rate_clocks() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static H: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    H.get_or_init(Default::default)
+}
+
+/// Tests: from now on [`rate_now`] for `key` answers `at`.
+#[cfg(test)]
+pub(crate) fn hold_rate_clock(key: &str, at: std::time::Instant) {
+    held_rate_clocks().lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), at);
+}
+
 /// The hosting state that hosts rooms.
 pub const HOSTING_OK: &str = "ok";
 /// `voice_off`'s detail while Sew lacks the 0.7.0 voice-rooms features.

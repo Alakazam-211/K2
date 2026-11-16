@@ -221,7 +221,10 @@ fn the_rate_limit_is_per_credential_and_refills() {
 #[tokio::test]
 async fn past_the_rate_limit_answers_429_and_nothing_crosses() {
     let (addr, mut seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    // The lane reads this credential's clock at `now` too: a slow run
+    // can't refill the bucket between the empty and the request.
     let now = Instant::now();
+    crate::voice::hold_rate_clock("rate-http", now);
     while take_token("rate-http", now) {}
     let out = through(&addr, true, &post("/api/v1/me/voice/state", "Authorization: Bearer sewcc_rate-http.secret\r\n", "{}")).await;
     assert!(out.starts_with("HTTP/1.1 429") && out.contains("Retry-After: 2"), "{out}");

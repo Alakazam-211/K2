@@ -758,7 +758,7 @@ pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
         Ok(p) => p,
         Err(r) => return refuse(client, &r).await,
     };
-    if !take_token(&person.sid, Instant::now()) {
+    if !take_token(&person.sid, super::rate_now(&person.sid)) {
         return refuse(client, &Refusal::new(429, "rate_limited", "too many requests from this login").retry(RETRY_SECS)).await;
     }
     // Security review L8: a Voice & Chat only login joins, talks and

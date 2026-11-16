@@ -339,7 +339,7 @@ async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(
         return answer(client, "401 Unauthorized", "call_credential_required", "this door takes a call credential", None).await;
     };
     let sel = selector(bearer);
-    if !take_token(sel, Instant::now()) {
+    if !take_token(sel, super::rate_now(sel)) {
         return answer(client, "429 Too Many Requests", "rate_limited", "too many requests for this call", Some(2)).await;
     }
     let Some(_slot) = RelaySlot::take() else {

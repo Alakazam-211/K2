@@ -367,21 +367,61 @@ export interface ComposeInsertDetail {
   refusal?: string
 }
 
-/** Insert path text into the compose draft (TerminalComposeBar listens). */
+/** The message box `el` was, or the one now standing in its place: a remote
+ *  drop uploads first, and the box hit at the drop can be redrawn (a new
+ *  element for the same session) before the upload answers. */
+export function liveComposeBar(el: HTMLElement, doc: Document = document): HTMLElement | null {
+  // (A node that cannot say whether it is attached is taken as it is.)
+  if (el.isConnected !== false) return el
+  const sid = el.dataset.sessionId
+  if (!sid) return null
+  const bars = doc.querySelectorAll<HTMLElement>(COMPOSE_BAR_SELECTOR)
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i]
+    if (bar.dataset.sessionId === sid && bar.dataset.composeDestination === el.dataset.composeDestination) return bar
+  }
+  return null
+}
+
+/** Said when no message box took a drop routed to it: never a silent drop.
+ *  `uploaded`: the files already went to the agent's server. */
+export function composeDropNotTakenMessage(paths: string[] | null | undefined, uploaded: boolean): string {
+  const names = (paths ?? []).map((p) => p.split(/[/\\]/).pop() || p)
+  const what = names.length === 1 ? names[0] : names.length > 1 ? `${names.length} files` : 'The drop'
+  return uploaded
+    ? `${what} reached the agent's server, but the message box didn't take it. Drop it again.`
+    : `The message box didn't take ${names.length === 1 ? names[0] : 'the dropped files'}. Drop it again.`
+}
+
+/** Hand the drop to the message box (TerminalComposeBar and the ticket box
+ *  listen, and take it with preventDefault). A box that was redrawn while
+ *  a remote upload ran gets it in its new element; one that is gone, or
+ *  that didn't take it, says so in a toast. Returns whether a box took it. */
 function injectIntoCompose(
+  doc: Document,
   target: Extract<ExternalDropTarget, { kind: 'compose' }>,
   payload: string,
   paths?: string[] | null,
   uploaded?: boolean,
   refusal?: string,
-): void {
+): boolean {
   const detail: ComposeInsertDetail = { data: payload }
   if (paths && paths.length > 0) {
     detail.paths = [...paths]
     detail.uploaded = uploaded === true
   }
   if (refusal) detail.refusal = refusal
-  target.element.dispatchEvent(new CustomEvent('k2:compose-insert', { detail }))
+  const bar = liveComposeBar(target.element, doc)
+  const taken = bar !== null && !bar.dispatchEvent(new CustomEvent('k2:compose-insert', { detail, cancelable: true }))
+  if (!taken) {
+    console.warn('[external-drop-router] no message box took the drop', {
+      sessionId: target.sessionId,
+      connected: target.element.isConnected,
+      found: bar !== null,
+    })
+    useToastStore.getState().addToast(composeDropNotTakenMessage(paths, uploaded === true), 'warning')
+  }
+  return taken
 }
 
 /** A compose payload builder that also keeps the server paths it built
@@ -521,10 +561,10 @@ export async function routeExternalDrop(
           { workspacePath: target.workspacePath || undefined, attachesFiles: true },
           cap.build,
         )
-        if (payload !== null) injectIntoCompose(target, payload, cap.paths(), true, cap.refusal())
+        if (payload !== null) injectIntoCompose(doc, target, payload, cap.paths(), true, cap.refusal())
       } else {
         const r = buildComposeDropPayload(paths)
-        injectIntoCompose(target, r.ok ? r.text : '', paths, false, r.ok ? undefined : r.refusal)
+        injectIntoCompose(doc, target, r.ok ? r.text : '', paths, false, r.ok ? undefined : r.refusal)
       }
       return
     }
@@ -668,7 +708,7 @@ export async function routeBrowserFileDrop(
         { workspacePath: target.workspacePath || undefined, attachesFiles: true },
         cap.build,
       )
-      if (payload !== null) injectIntoCompose(target, payload, cap.paths(), true, cap.refusal())
+      if (payload !== null) injectIntoCompose(doc, target, payload, cap.paths(), true, cap.refusal())
       return
     }
     case 'folder': {

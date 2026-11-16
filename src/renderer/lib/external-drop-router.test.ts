@@ -484,7 +484,8 @@ function surfaceNode(dataset: Record<string, string>, children: SurfaceFake[] = 
     },
     dispatchEvent(ev) {
       el._events.push(ev)
-      return true
+      // A message box takes its insert (preventDefault), unless told not to.
+      return !(ev.type === 'k2:compose-insert' && el.dataset.composeBar !== undefined && el.dataset.refuses === undefined)
     },
     getBoundingClientRect() {
       return { left: 0, right: 20, top: 0, bottom: 20 }
@@ -679,6 +680,13 @@ describe('routeExternalDrop — the text a terminal or draft gets', () => {
     // bar's own tests cover both). The router itself says nothing.
     expect(ev.detail).toEqual({ data: '', paths: ['/tmp/a\rb.txt'], uploaded: false, refusal: CONTROL_CHAR_REFUSAL })
     expect(toasts()).toEqual([])
+  })
+
+  it('a message box that does not take the drop: a toast says so, never a silent drop', async () => {
+    const bar = surfaceNode({ composeBar: '', sessionId: 's-1', workspacePath: '/ws', refuses: '' })
+    await routeExternalDrop(primaryScope(), ['/tmp/shot.png'], { x: 3, y: 3 }, surfaceDoc(bar))
+    expect(bar._events).toHaveLength(1)
+    expect(toasts()).toEqual([["The message box didn't take shot.png. Drop it again.", 'warning']])
   })
 
   it('Windows paths: a v2 terminal (PowerShell) gets single quotes', async () => {

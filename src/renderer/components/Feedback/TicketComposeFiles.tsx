@@ -211,7 +211,10 @@ export function useTicketComposeFiles({
     if (!root || !on) return
     const onInsert = (e: Event): void => {
       const detail = (e as CustomEvent<ComposeInsertDetail>).detail
-      if (detail?.paths && detail.paths.length > 0) void add({ paths: detail.paths, onServer: detail.uploaded === true })
+      if (!detail?.paths || detail.paths.length === 0) return
+      // Taken: the drop router says so when no box takes a drop.
+      e.preventDefault()
+      void add({ paths: detail.paths, onServer: detail.uploaded === true })
     }
     root.addEventListener('k2:compose-insert', onInsert)
     return () => root.removeEventListener('k2:compose-insert', onInsert)

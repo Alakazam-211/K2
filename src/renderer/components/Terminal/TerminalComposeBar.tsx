@@ -306,6 +306,12 @@ export function TerminalComposeBar({
   const historyDraftRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
+  // The box's root as state too: the drop listener follows a redrawn root.
+  const [barEl, setBarEl] = useState<HTMLDivElement | null>(null)
+  const setBar = useCallback((el: HTMLDivElement | null) => {
+    barRef.current = el
+    setBarEl(el)
+  }, [])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const slashBtnRef = useRef<HTMLButtonElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
@@ -669,26 +675,34 @@ export function TerminalComposeBar({
   }, [])
 
   // Window-level external-drop-router / internal file-drag → insert event.
+  // Bound to the box's root as it is now (`barEl`), so a redrawn root still
+  // listens. Taking it is `preventDefault`: the router says so when no box
+  // took a drop, never a silent one.
   useEffect(() => {
-    const el = barRef.current
+    const el = barEl
     if (!el) return
     const onInsert = (e: Event) => {
       const detail = (e as CustomEvent<ComposeInsertDetail>).detail
       if (threadFilesOn && detail?.paths && detail.paths.length > 0) {
+        e.preventDefault()
         void addThreadFiles({ paths: detail.paths, onServer: detail.uploaded === true })
         return
       }
       // Attached files take any name; typed text can't take every one.
       if (detail?.refusal) {
+        e.preventDefault()
         useToastStore.getState().addToast(detail.refusal, 'warning')
         return
       }
       const data = detail?.data
-      if (data) insertPathsText(data)
+      if (data) {
+        e.preventDefault()
+        insertPathsText(data)
+      }
     }
     el.addEventListener('k2:compose-insert', onInsert)
     return () => el.removeEventListener('k2:compose-insert', onInsert)
-  }, [insertPathsText, addThreadFiles, threadFilesOn])
+  }, [barEl, insertPathsText, addThreadFiles, threadFilesOn])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -1682,7 +1696,7 @@ export function TerminalComposeBar({
     const tool = { width: 'auto', minWidth: 0, height: COMPOSE_TOOL.height, padding: `0 ${COMPOSE_TOOL.pad}px` }
     return (
       <div
-        ref={barRef}
+        ref={setBar}
         className="flex min-w-0 w-full flex-shrink-0 flex-col"
         style={{ padding: '8px var(--zen-gap, 12px) var(--zen-gap, 12px)' }}
         data-compose-bar=""
@@ -1815,7 +1829,7 @@ export function TerminalComposeBar({
 
   return (
     <div
-      ref={barRef}
+      ref={setBar}
       className="flex min-w-0 w-full flex-shrink-0 flex-col gap-1.5 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-2 py-2"
       data-compose-bar=""
       data-session-id={sessionId}

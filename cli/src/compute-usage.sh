@@ -277,9 +277,11 @@ Agents:
                  a cargo-nextest suite split across nodes (nextest --partition),
                  JUnit kept and parsed, one combined result; --profile P to use
                  the repo's own nextest profile, --runner to replace cargo nextest run
-                 (--preset NAME is the .k2/compute.toml preset, as for run)
-  k2 compute prewarm [--preset NAME | --needs …] [--os …] [--distro …] [--arch …] [--node N]...
-                 [--plan] [--wait] [--json]
+                 (--preset NAME is the .k2/compute.toml preset, as for run).
+                 Run flags except --wait, --failures, --max-wait, --quiet and
+                 --priority (exit 2; --critical and --tier priority work)
+  k2 compute prewarm [--preset NAME | --needs …] [--os …] [--distro …] [--arch …] [--label k=v]
+                 [--node N]... [--tag T] [--plan] [--wait] [--json]
                  install the tools ahead of time: one idle-time (Batch) job on
                  each node granted to you that matches (--os/--arch/--node, or
                  the preset's os/arch; none: every granted node) and lacks one
@@ -362,12 +364,12 @@ Agents:
                  (preview: k2 settings set ciPreview true)
   k2 compute stats <job> [--json]   one job's CPU, memory, IO and load over its run (every 5 s),
                  held time at its --cpus, OOM kills (k2 study compute: STATS; preview: ciPreview)
-  k2 compute cancel <job> [--force]
+  k2 compute cancel <job> [--force] [--json]
                  a queued job is cancelled at once; one that already started
                  (or was just assigned) needs --force (else job_started, exit 3).
                  On a shared node, a job in the node's queue is asked to cancel
                  only if it hasn't started: it ends cancelled, or job_started
-  k2 compute cancel <job> --if-queued
+  k2 compute cancel <job> --if-queued [--json]
                  cancel only if it is still queued; if it already started (or
                  ended), say so, leave it alone and exit 0 (for scripts)
   k2 compute events [--follow] [--mine] [--tag T] [--since CURSOR] [--limit N] [--max-wait D] [--json]
@@ -379,7 +381,7 @@ Agents:
                  its own unless --max-wait passes (then exit 0 and the line to
                  continue). --json: one JSON object per line (NDJSON), each
                  with its cursor. (The audit log moved to events --audit.)
-  k2 compute cancel --all-mine [--tag T] [--state queued|running|any] [--node N] [--force]
+  k2 compute cancel --all-mine [--tag T] [--state queued|running|any] [--node N] [--force] [--json]
                  every job THIS session sent (this terminal's passport; an
                  earlier session's jobs need --workspace-all) that matches:
                  queued ones by default; started ones only with --force
@@ -423,10 +425,10 @@ Agents:
                  matches; e.g. move --all-mine --node k2n12 --auto.
                  A started job is never moved (job_started, exit 3)
   k2 compute retry <job>
-  k2 compute receipt <job>                     what the node signed it ran and made
-  k2 compute provenance <job> [--out FILE]     the node's signed build statement
+  k2 compute receipt <job> [--json]            what the node signed it ran and made
+  k2 compute provenance <job> [--out FILE] [--json]   the node's signed build statement
                  (in-toto/SLSA, one .intoto.jsonl line); CI preview
-  k2 compute verify <job | FILE.intoto.jsonl> [--file PATH] [--owner-key FP]
+  k2 compute verify <job | FILE.intoto.jsonl> [--file PATH] [--owner-key FP] [--json]
                  check a statement against this server's records; says
                  what it checked (k2 study provenance)
 Owner / admin (refused for agents and inside K2 terminals, except where

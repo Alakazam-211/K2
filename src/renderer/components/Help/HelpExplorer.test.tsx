@@ -150,9 +150,11 @@ describe('the rail lists the CLI tools and the pages', () => {
 
   it('a noun --schema does not list shows its captured --help, or points at k2 help', () => {
     render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
+    // compute is in --schema now: its card lists the commands, not the captured --help.
     const compute = screen.getByTestId('help-noun-k2:compute')
     fireEvent.click(within(compute).getByRole('button', { expanded: false }))
-    expect(within(compute).getByText(/run commands on your own machines/)).toBeTruthy()
+    expect(within(compute).getAllByTestId('help-verb').map((v) => v.getAttribute('data-verb'))).toContain('k2 compute run')
+    expect(within(compute).queryByText(/run commands on your own machines/)).toBeNull()
     // vault's --help prints without a daemon (per-verb help), so it is captured too.
     const vault = screen.getByTestId('help-noun-k2:vault')
     fireEvent.click(within(vault).getByRole('button', { expanded: false }))

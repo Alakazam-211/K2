@@ -31,6 +31,9 @@ describe('cli-catalog.generated.json', () => {
     }
     expect(catalog.k2Node.commands.map((c) => c.noun)).toContain('enroll')
     expect(catalog.k2Node.footer).toContain('k2 compute')
-    expect(Object.keys(catalog.k2.help)).toContain('compute')
+    // compute is in --schema, so its --help isn't captured; sidecar still is.
+    expect(catalog.k2.commands.map((c) => c.name)).toContain('compute run')
+    expect(Object.keys(catalog.k2.help)).not.toContain('compute')
+    expect(Object.keys(catalog.k2.help)).toContain('sidecar')
   })
 })

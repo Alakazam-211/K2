@@ -70,7 +70,7 @@ cmd_compute() {
                         esac
                         shift 2 ;;
                     --json) shift ;;
-                    *) echo "usage: k2 compute jobs [--node N] [--mine] [--state S] [--tier T] [--tag T] [--limit N]" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute jobs [--node N] [--mine] [--state S] [--tier T] [--tag T] [--limit N] [--workspace WS] [--json]" >&2; exit 2 ;;
                 esac
             done
             n="${q#&}"
@@ -103,7 +103,7 @@ cmd_compute() {
                     *) job="$1"; shift ;;
                 esac
             done
-            [ -n "$job" ] || { echo "usage: k2 compute attach <job> [--since SEQ]" >&2; exit 2; }
+            [ -n "$job" ] || { echo "usage: k2 compute attach <job> [--since SEQ] [--raw]" >&2; exit 2; }
             _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$job")"
             job="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
             _compute_follow "$job" "$raw" "seq:${since:-0}"

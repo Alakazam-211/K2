@@ -2644,6 +2644,31 @@
     "description": "\"Not now\" on the Meet Kessel offer (yours only)."
    },
    {
+    "name": "remind",
+    "usage": "k2 remind \"<text>\" (--in 45m | --at 13:00 | --on 2026-10-30 [--at 09:00]) [--tz Area/City] [--name n] [--file path] [--session pinned|own] [--workspace <ws>] [--json]",
+    "description": "Set a one-time heartbeat (a reminder): it fires once, then goes away. Short form of k2 heartbeat remind; k2 reminders is k2 remind list. Times in the past are refused; text is at most 2000 characters (put more in a file and use --file). At its time the agent gets one line in its session; a reminder a person set also posts to the Thread. Exit 0 ok, 1 error, 2 bad input, 3 gated."
+   },
+   {
+    "name": "remind list",
+    "usage": "k2 remind list [--all] [--workspace <ws>] [--json]",
+    "description": "Pending reminders. Same as k2 reminders."
+   },
+   {
+    "name": "remind show",
+    "usage": "k2 remind show <name> [--workspace <ws>] [--json]",
+    "description": "One reminder, with its fire history."
+   },
+   {
+    "name": "remind snooze",
+    "usage": "k2 remind snooze <name> <10m> | k2 remind snooze <name> (--in 10m | --at 13:00 | --on 2026-10-30) [--tz Area/City] [--workspace <ws>] [--json]",
+    "description": "Fire again that long from now, or at a set time. Also re-arms one that already fired."
+   },
+   {
+    "name": "remind cancel",
+    "usage": "k2 remind cancel <name> [--workspace <ws>] [--json]",
+    "description": "Stop a pending reminder; its history is kept."
+   },
+   {
     "name": "skills",
     "usage": "k2 skills <list|create|remove|profile|...> [...]",
     "description": "Manage skill profiles (SKILL.md) for workspaces/agents."

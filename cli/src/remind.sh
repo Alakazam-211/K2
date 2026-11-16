@@ -31,11 +31,14 @@ SET ONE
 MANAGE
   k2 heartbeat remind list [--all] [--json]   pending; --all adds finished (90 days)
   k2 heartbeat remind show <name> [--json]    one, with its fire history
-  k2 heartbeat remind snooze <name> <10m>     fires again that long FROM NOW (or
+  k2 heartbeat remind snooze <name> <10m> [--json]
+                                              fires again that long FROM NOW (or
                                               --in/--at/--on [--tz] for a set time);
                                               also re-arms one that already fired
-  k2 heartbeat remind cancel <name>           stops a pending one, keeps the history
+  k2 heartbeat remind cancel <name> [--json]  stops a pending one, keeps the history
   k2 reminders                                = k2 heartbeat remind list
+  Each of these also takes --workspace <ws> (or --project), as setting one
+  does; an agent reaches only its own workspace.
 
 WHAT HAPPENS
   At its time the agent gets one line in its session:
@@ -180,7 +183,7 @@ _remind_list() {
             --workspace|--project)
                 [ $# -ge 2 ] || { echo "Error: $1 needs a value" >&2; exit 2; }
                 ws_param="$(_remind_workspace_param "$2")"; shift 2 ;;
-            *) echo "Error: unknown argument: $1" >&2; echo "Usage: k2 heartbeat remind list [--all] [--json]" >&2; exit 2 ;;
+            *) echo "Error: unknown argument: $1" >&2; echo "Usage: k2 heartbeat remind list [--all] [--workspace <ws>] [--json]" >&2; exit 2 ;;
         esac
     done
     local args=()

@@ -142,6 +142,12 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
     title: 'Always-on & more',
     items: [
       { noun: 'heartbeat', blurb: 'Scheduled wakeups.', example: 'k2 heartbeat schedule list' },
+      {
+        noun: 'remind',
+        also: ['reminders'],
+        blurb: 'A one-time wake: it fires once, then goes away.',
+        example: 'k2 remind "call Jane back" --in 45m',
+      },
       { noun: 'activity', blurb: 'Audit log.', example: 'k2 activity --limit 20' },
       { noun: 'compute', blurb: 'Run builds and tests on your own machines (compute nodes).', example: 'k2 compute nodes' },
       { noun: 'ci', blurb: 'CI on compute: check every push, post GitHub statuses.', example: 'k2 ci status' },

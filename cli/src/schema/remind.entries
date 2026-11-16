@@ -1,0 +1,62 @@
+    {
+      "name": "remind",
+      "usage": "k2 remind \"<text>\" (--in 45m | --at 13:00 | --on 2026-10-30 [--at 09:00]) [--tz Area/City] [--name n] [--file path] [--session pinned|own] [--workspace <ws>] [--json]",
+      "description": "Set a one-time heartbeat (a reminder): it fires once, then goes away. Short form of k2 heartbeat remind; k2 reminders is k2 remind list. Times in the past are refused; text is at most 2000 characters (put more in a file and use --file). At its time the agent gets one line in its session; a reminder a person set also posts to the Thread. Exit 0 ok, 1 error, 2 bad input, 3 gated.",
+      "args": [{"name": "text", "required": true, "description": "The reminder (or give --file). With --in/--at/--on, a first word like list, show or cancel is text, not a verb (snooze is always the verb)."}],
+      "flags": [
+        {"name": "--in", "arg": "45m", "description": "s m h d w, combined (1h30m). At least 1 minute, at most 365 days."},
+        {"name": "--at", "arg": "time", "description": "13:00 (the next one), 2026-10-30T09:00, or an exact instant with offset (then --tz is ignored)."},
+        {"name": "--on", "arg": "date", "description": "That date at 09:00, or at --at's time."},
+        {"name": "--tz", "arg": "Area/City", "description": "IANA zone. Default: the owner's timezone, else this computer's clock."},
+        {"name": "--name", "arg": "n", "description": "Lowercase letters, digits, hyphens. Default r-<6 chars>; a finished reminder's name can be used again."},
+        {"name": "--file", "arg": "path", "description": "A file in this workspace the reminder points the agent to."},
+        {"name": "--session", "arg": "pinned|own", "description": "pinned (default): the pinned chat; own: a session of its own for this fire."},
+        {"name": "--workspace", "arg": "ws", "description": "The workspace (also --project). An agent reaches only its own."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "remind list",
+      "usage": "k2 remind list [--all] [--workspace <ws>] [--json]",
+      "description": "Pending reminders. Same as k2 reminders.",
+      "args": [],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Add finished ones (90 days)."},
+        {"name": "--workspace", "arg": "ws", "description": "The workspace (also --project). An agent reaches only its own."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "remind show",
+      "usage": "k2 remind show <name> [--workspace <ws>] [--json]",
+      "description": "One reminder, with its fire history.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "The workspace (also --project). An agent reaches only its own."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "remind snooze",
+      "usage": "k2 remind snooze <name> <10m> | k2 remind snooze <name> (--in 10m | --at 13:00 | --on 2026-10-30) [--tz Area/City] [--workspace <ws>] [--json]",
+      "description": "Fire again that long from now, or at a set time. Also re-arms one that already fired.",
+      "args": [{"name": "name", "required": true}, {"name": "when", "required": false, "description": "A duration from now (same as --in)."}],
+      "flags": [
+        {"name": "--in", "arg": "10m", "description": "That long from now."},
+        {"name": "--at", "arg": "time", "description": "A set time (as for k2 remind)."},
+        {"name": "--on", "arg": "date", "description": "A set date (as for k2 remind)."},
+        {"name": "--tz", "arg": "Area/City", "description": "IANA zone for --at/--on."},
+        {"name": "--workspace", "arg": "ws", "description": "The workspace (also --project). An agent reaches only its own."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "remind cancel",
+      "usage": "k2 remind cancel <name> [--workspace <ws>] [--json]",
+      "description": "Stop a pending reminder; its history is kept.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "The workspace (also --project). An agent reaches only its own."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },

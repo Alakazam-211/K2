@@ -121,6 +121,8 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-find-match': mix('needs-you', 24),
   '--color-find-match-current': mix('needs-you', 36),
   '--color-selection': mix('accent', 25),
+  // The live 3D picture's stage: a Garden's own inset surface.
+  '--color-stage': zen('surface'),
   // Washes, overlays, scrollbars
   '--color-wash-1': mix('text', 5),
   '--color-wash-2': mix('text', 10),

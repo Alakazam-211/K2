@@ -1,5 +1,5 @@
 // The scene's stage and everything on it, scoped under `.lv-scene-hero`:
-// the dark stage (it carries the look's dark palette as data attributes, so
+// the dark stage (`--color-stage`; it carries the look's dark palette as data attributes, so
 // every token below resolves dark in the light looks too), the letterboxed
 // still with its 16 px faded margin, the view picker and its menu, the
 // compass, the state chips, the key hint, ⓘ and its details, the card and
@@ -11,8 +11,8 @@ export const STAGE_CSS = `
 .lv-scene-hero { display: flex; min-height: 0; flex: 1; flex-direction: column; }
 [data-style="glass"] .lv-scene-hero { padding: 10px; }
 .lv-scene-hero .lv-sstage { position: relative; flex: 1; min-height: 0; overflow: hidden; color: var(--color-text-primary); background: var(--lv-stage); outline: none; }
-.lv-scene-hero .lv-sstage[data-style="glass"] { --lv-stage: color-mix(in srgb, var(--color-bg-surface) 50%, var(--color-bg-elevated)); --lv-plate: var(--color-bg-elevated); --lv-plate-edge: var(--color-ring-edge); --lv-pop: color-mix(in srgb, var(--color-bg-surface) 82%, transparent); border-radius: var(--radius-box); box-shadow: inset 0 0 0 1px var(--tile-edge); }
-.lv-scene-hero .lv-sstage[data-style="terminal"] { --lv-stage: var(--color-bg-inset); --lv-plate: var(--color-bg-surface); --lv-plate-edge: var(--color-border); --lv-pop: var(--color-bg); }
+.lv-scene-hero .lv-sstage[data-style="glass"] { --lv-stage: var(--color-stage); --lv-plate: var(--color-bg-elevated); --lv-plate-edge: var(--color-ring-edge); --lv-pop: color-mix(in srgb, var(--color-bg-surface) 82%, transparent); border-radius: var(--radius-box); box-shadow: inset 0 0 0 1px var(--tile-edge); }
+.lv-scene-hero .lv-sstage[data-style="terminal"] { --lv-stage: var(--color-stage); --lv-plate: var(--color-bg-surface); --lv-plate-edge: var(--color-border); --lv-pop: var(--color-bg); }
 .lv-scene-hero .lv-sstage:focus-visible::after { content: ''; position: absolute; inset: 0; z-index: 50; pointer-events: none; border-radius: var(--radius-box); box-shadow: inset 0 0 0 2px var(--color-accent-text); }
 
 /* The still: letterboxed in the pane, its edges fading into the stage */

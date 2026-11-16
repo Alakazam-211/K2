@@ -142,6 +142,7 @@
   --color-find-match: rgba(253, 199, 0, 0.22);
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
+  --color-stage: #1a1a1a;
   --color-control-hover: #333333;
   --color-control-hover-quiet: #333333;
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
@@ -314,6 +315,7 @@
   --color-find-match: rgba(253, 199, 0, 0.22);
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
+  --color-stage: #1a1a1a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge: rgba(255, 255, 255, 0.06);
@@ -420,6 +422,7 @@
   --color-find-match: rgba(214, 160, 0, 0.28);
   --color-find-match-current: rgba(214, 150, 0, 0.40);
   --color-selection: rgba(37, 90, 146, 0.20);
+  --color-stage: #1a1a1a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge: rgba(255, 255, 255, 0);
@@ -594,6 +597,7 @@
   --color-find-match: rgba(255, 195, 92, 0.24);
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
+  --color-stage: #24252a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
@@ -709,6 +713,7 @@
   --color-find-match: rgba(255, 195, 0, 0.30);
   --color-find-match-current: rgba(255, 170, 0, 0.42);
   --color-selection: rgba(8, 106, 204, 0.20);
+  --color-stage: #24252a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 78%, black);
@@ -824,6 +829,7 @@
   --color-find-match: rgba(255, 195, 92, 0.24);
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
+  --color-stage: #24252a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-chart-1: #3987e5;
@@ -1891,6 +1897,7 @@
   --color-find-match: rgba(255, 195, 92, 0.24);
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
+  --color-stage: #24252a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
@@ -1993,6 +2000,7 @@
   --color-find-match: rgba(255, 195, 0, 0.30);
   --color-find-match-current: rgba(255, 170, 0, 0.42);
   --color-selection: rgba(8, 106, 204, 0.20);
+  --color-stage: #24252a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.9);
@@ -2095,6 +2103,7 @@
   --color-find-match: rgba(255, 195, 92, 0.24);
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
+  --color-stage: #24252a;
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
@@ -2335,6 +2344,7 @@
   --color-find-match: rgba(253, 199, 0, 0.22);
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
+  --color-stage: #1a1a1a;
   --color-control-hover: #333333;
   --color-control-hover-quiet: #333333;
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
@@ -2439,6 +2449,7 @@
   --color-find-match: rgba(214, 160, 0, 0.28);
   --color-find-match-current: rgba(214, 150, 0, 0.40);
   --color-selection: rgba(37, 90, 146, 0.20);
+  --color-stage: #1a1a1a;
   --color-control-hover: #cfc7b6;
   --color-control-hover-quiet: #cfc7b6;
   --color-accent-fill: var(--color-accent);
@@ -2543,6 +2554,7 @@
   --color-find-match: rgba(253, 199, 0, 0.22);
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
+  --color-stage: #1a1a1a;
   --color-control-hover: #3a3732;
   --color-control-hover-quiet: #3a3732;
   --color-chart-1: #3987e5;

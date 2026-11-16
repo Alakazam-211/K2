@@ -340,7 +340,8 @@
     "presence-4": { "$value": "#9a520f", "$type": "color", "$description": "Live editing: the fourth." },
     "find-match": { "$value": "rgba(255, 195, 0, 0.30)", "$type": "color", "$description": "Find: every match, a wash over the editor. text-primary keeps 4.5:1 on it." },
     "find-match-current": { "$value": "rgba(255, 170, 0, 0.42)", "$type": "color", "$description": "Find: the current match, stronger than the others." },
-    "selection": { "$value": "rgba(8, 106, 204, 0.20)", "$type": "color", "$description": "Selected text in editors. text-primary keeps 4.5:1 on it." }
+    "selection": { "$value": "rgba(8, 106, 204, 0.20)", "$type": "color", "$description": "Selected text in editors. text-primary keeps 4.5:1 on it." },
+    "stage": { "$value": "#24252a", "$type": "color", "$description": "The live 3D picture’s stage: dark in every look, the light ones too: the clay reads about 6:1 on it and 1.3:1 on a light surface. What sits on the stage takes the look’s dark palette." }
   },
   "terminal": {
     "fg": {

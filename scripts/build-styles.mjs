@@ -68,6 +68,8 @@ const REQUIRED_COLOR_SLOTS = [
   'syntax-function', 'syntax-type', 'syntax-property', 'syntax-punctuation',
   'presence-1', 'presence-2', 'presence-3', 'presence-4',
   'find-match', 'find-match-current', 'selection',
+  // The live 3D picture's stage (build-live-scene.md): dark in every look.
+  'stage',
 ]
 
 const REQUIRED_TERMINAL_SLOTS = ['fg', 'bg', 'cursor', 'selection', 'ansi']

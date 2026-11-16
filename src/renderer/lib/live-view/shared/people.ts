@@ -25,6 +25,8 @@ export interface LivePerson {
   timePosition?: TimePositionJson | null
   /** An agent working right now (its avatar may pulse). */
   editing?: boolean
+  /** The view's presence slot for them (`--color-presence-1..4`): the colour their marks take on the file, so their avatar matches. None: the data colour. */
+  presence?: 1 | 2 | 3 | 4
 }
 
 export interface Watching {

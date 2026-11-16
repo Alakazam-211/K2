@@ -18,6 +18,7 @@ import { simulate, type Scenario } from './turn'
 import { SCENARIOS } from './scenarios-more'
 import { agentDone, peerView, peopleRows, viewShort } from './panel'
 import { fromMockView } from './sample-views'
+import { presenceSlots } from './overlay'
 
 export const SCENE_SAMPLE_FILE = 'living-room'
 export const SCENE_SAMPLE_REPLY = 'On it.'
@@ -41,6 +42,11 @@ const CONN: Record<string, LiveShellSnapshot['connection']> = { lost: 'reconnect
 export function sceneSnapshot(S: SimState, sc: Scenario, step: number, control: SceneControl = NO_CONTROL): SceneSnapshot {
   const live = S.tier === 'live' || S.tier === 'paused'
   const rows = peopleRows(S)
+  const slots = presenceSlots(S)
+  const slotOf = (id: string): 1 | 2 | 3 | undefined => {
+    const s = slots[id]
+    return s === 1 || s === 2 || s === 3 ? s : undefined
+  }
   const people: LivePerson[] = rows.map((r) => ({
     id: r.id,
     name: r.self ? 'You' : r.name,
@@ -52,6 +58,7 @@ export function sceneSnapshot(S: SimState, sc: Scenario, step: number, control: 
     place: r.view,
     viewAddress: peerView(S, r.id),
     editing: r.mode === 'editing',
+    ...(!r.self && slotOf(r.id) ? { presence: slotOf(r.id) } : {}),
   }))
   const agent = agentId(S)
   const agentHere = agent && S.peers[agent] ? agent : null

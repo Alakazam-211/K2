@@ -10,6 +10,7 @@ import type { LiveSource } from '@/lib/live-view/shared/source'
 import { AvatarStack } from './AvatarStack'
 import { ChangesList } from './ChangesList'
 import { BackButton, FollowControl } from './FollowControl'
+import { PresenceColours } from './LiveAvatar'
 import { LiveHeader } from './LiveHeader'
 import { LivePanel, LiveTabFrame } from './LiveTabFrame'
 import { MessagesList } from './MessagesList'
@@ -67,54 +68,58 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
     ) : null
 
   const Hero = config.Hero
+  // Avatars the view draws from its own data (the scene's outliner, its activity) take the same presence colours as the stack.
+  const presence = new Map(people.flatMap((p) => (p.presence && !p.self ? [[p.colour.toLowerCase(), p.presence] as const] : [])))
   return (
-    <div ref={s.root} className="flex h-full min-h-0 flex-col">
-      <LiveTabFrame
-        sample={source.kind === 'sample'}
-        narrow={narrow}
-        panelOpen={placed ? false : s.panelOpen}
-        onClosePanel={() => s.setPanelOpen(false)}
-        header={
-          <LiveHeader
-            fileName={name}
-            fileGlyph={config.fileGlyph}
-            kindLabel={narrow ? undefined : config.kindLabel}
-            state={tabState}
-            sentence={live ? s.sentence : null}
-            sentenceRow={narrow && config.sentenceRowWhenNarrow}
-            panelOpen={s.panelOpen}
-            onTogglePanel={() => s.setPanelOpen((o) => !o)}
-            right={
-              live ? (
-                <>
-                  <AvatarStack people={people} followingId={followingId} grey={offline} onFollow={(id) => dispatchFollow({ type: 'follow', who: id })} />
-                  <FollowControl view={s.follow} backHere={config.backInHeader} disabled={offline} onFollow={(id) => dispatchFollow({ type: 'follow', who: id })} onStop={() => dispatchFollow({ type: 'stop' })} onBack={() => dispatchFollow({ type: 'back' })} />
-                </>
-              ) : null
-            }
-          />
-        }
-        banner={sample ? <ShellSampleBanner player={sample.player} line={config.bannerLine} /> : null}
-        notice={live ? <NoticeBar notice={s.notice} ctx={{ fileName: name, kept: config.kept }} onAction={s.onNotice} /> : null}
-        hero={
-          <Hero
-            snap={snap}
-            state={tabState}
-            offscreen={s.offscreen}
-            onJump={s.onJump}
-            jumped={s.jumped}
-            back={back}
-            narrow={narrow}
-            follow={{ id: followingId, state: s.followState, dispatch: dispatchFollow }}
-            setSayAt={s.setSayAt}
-            onAction={(id) => s.onNotice(id, null)}
-            fileName={name}
-            {...(placed ? { say, panel: placedPanel } : {})}
-          />
-        }
-        foot={placed ? null : say}
-        panel={panel}
-      />
-    </div>
+    <PresenceColours.Provider value={presence}>
+      <div ref={s.root} className="flex h-full min-h-0 flex-col">
+        <LiveTabFrame
+          sample={source.kind === 'sample'}
+          narrow={narrow}
+          panelOpen={placed ? false : s.panelOpen}
+          onClosePanel={() => s.setPanelOpen(false)}
+          header={
+            <LiveHeader
+              fileName={name}
+              fileGlyph={config.fileGlyph}
+              kindLabel={narrow ? undefined : config.kindLabel}
+              state={tabState}
+              sentence={live ? s.sentence : null}
+              sentenceRow={narrow && config.sentenceRowWhenNarrow}
+              panelOpen={s.panelOpen}
+              onTogglePanel={() => s.setPanelOpen((o) => !o)}
+              right={
+                live ? (
+                  <>
+                    <AvatarStack people={people} followingId={followingId} grey={offline} onFollow={(id) => dispatchFollow({ type: 'follow', who: id })} />
+                    <FollowControl view={s.follow} backHere={config.backInHeader} disabled={offline} onFollow={(id) => dispatchFollow({ type: 'follow', who: id })} onStop={() => dispatchFollow({ type: 'stop' })} onBack={() => dispatchFollow({ type: 'back' })} />
+                  </>
+                ) : null
+              }
+            />
+          }
+          banner={sample ? <ShellSampleBanner player={sample.player} line={config.bannerLine} /> : null}
+          notice={live ? <NoticeBar notice={s.notice} ctx={{ fileName: name, kept: config.kept }} onAction={s.onNotice} /> : null}
+          hero={
+            <Hero
+              snap={snap}
+              state={tabState}
+              offscreen={s.offscreen}
+              onJump={s.onJump}
+              jumped={s.jumped}
+              back={back}
+              narrow={narrow}
+              follow={{ id: followingId, state: s.followState, dispatch: dispatchFollow }}
+              setSayAt={s.setSayAt}
+              onAction={(id) => s.onNotice(id, null)}
+              fileName={name}
+              {...(placed ? { say, panel: placedPanel } : {})}
+            />
+          }
+          foot={placed ? null : say}
+          panel={panel}
+        />
+      </div>
+    </PresenceColours.Provider>
   )
 }

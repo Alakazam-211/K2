@@ -561,7 +561,8 @@ export class LiveDocSource implements LiveSource {
             : agent
               ? 'in the file, not editing'
               : 'viewing'
-    return { id: e.handle, name: e.name, kind: kindOf(e.kind), colour: e.colour, away: e.away, self, place, doing, editing: !!run && !self, viewAddress: e.view_address ?? null }
+    const presence = self ? undefined : this.slots.get(e.handle)
+    return { id: e.handle, name: e.name, kind: kindOf(e.kind), colour: e.colour, away: e.away, self, place, doing, editing: !!run && !self, viewAddress: e.view_address ?? null, ...(presence ? { presence } : {}) }
   }
 
   private emit(patch: Partial<LiveDocSnapshot>): void {

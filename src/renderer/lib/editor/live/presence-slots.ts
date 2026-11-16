@@ -5,7 +5,7 @@
 // theirs while they're in the file, and a slot frees when they leave. Past
 // four people the slots repeat. The carets, selections, name flags and holds
 // all use the slot, so one person reads as one colour everywhere on the text.
-// The avatars keep the roster's own colour (the shell's).
+// The avatars take the same slot (LivePerson.presence), so a person's avatar matches their caret.
 
 export type Slot = 1 | 2 | 3 | 4
 

@@ -450,6 +450,11 @@ pub fn mail_argv(
         ["chown", p] if *p != STALWART_DROPIN_DIR => {
             (sv(&["mail", "chown", mail_target(p, &dirs)?]), None)
         }
+        // Protocol 17: Stalwart's tree for Stalwart alone (no drop-in dir).
+        ["tighten", p] if *p != STALWART_DROPIN_DIR => {
+            (sv(&["mail", "tighten", mail_target(p, &dirs)?]), None)
+        }
+        ["store-state"] => (sv(&["mail", "store-state"]), None),
         ["remove", p] => (sv(&["mail", "remove", mail_target(p, &removes)?]), None),
         ["write", p] if *p == STALWART_UNIT_PATH => {
             let pw = recovery_pw_from_unit(stdin.unwrap_or_default())?;

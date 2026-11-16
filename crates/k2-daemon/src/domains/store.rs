@@ -102,14 +102,17 @@ pub fn key_mode_is_0600(hostname: &str) -> bool {
 /// is JMAP `x:Certificate/set`; only the primary mail host also becomes
 /// `defaultCertificateId` ([`plant_for_host`]). Copying into
 /// `/var/lib/stalwart/certs` (or `/etc/stalwart/certs`) is extra when
-/// those dirs exist — missing dirs must not look like success.
+/// those dirs exist and this user may write there — missing dirs must not
+/// look like success. Stalwart's tree is Stalwart's alone (0750), so on a
+/// box where the daemon user can't write there the copy is skipped, not
+/// tried.
 pub fn plant_mail_pem(hostname: &str, chain_pem: &str, key_pem: &str) -> Result<(), String> {
     if chain_pem.trim().is_empty() || key_pem.trim().is_empty() {
         return Err("plant mail PEM: empty chain or private key".into());
     }
     for dir in ["/var/lib/stalwart/certs", "/etc/stalwart/certs"] {
         let p = Path::new(dir);
-        if !p.is_dir() {
+        if !p.is_dir() || !dir_writable(p) {
             continue;
         }
         let crt = p.join(format!("{hostname}.crt"));
@@ -118,6 +121,25 @@ pub fn plant_mail_pem(hostname: &str, chain_pem: &str, key_pem: &str) -> Result<
             .and_then(|_| write_tmp_rename(&key, key_pem.as_bytes(), 0o600));
     }
     jmap_plant_certificate(hostname, chain_pem, key_pem)
+}
+
+/// May this user create files in `dir` (write + search, as `access(2)`
+/// sees it for the real uid)?
+fn dir_writable(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: NUL-terminated path; access only reads it.
+        unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        false
+    }
 }
 
 fn jmap_plant_certificate(hostname: &str, chain_pem: &str, key_pem: &str) -> Result<(), String> {
@@ -1042,6 +1064,27 @@ mod tests {
         install("mail.example.com", chain, key).expect("install");
         assert!(key_mode_is_0600("mail.example.com"));
         assert!(load("mail.example.com").is_some());
+    }
+
+    /// The extra certs-dir copy is tried only where this user may write;
+    /// Stalwart's own 0750 tree is skipped, not tried.
+    #[cfg(unix)]
+    #[test]
+    fn certs_copy_only_into_a_dir_this_user_may_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("k2-certs-writable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let certs = dir.join("certs");
+        std::fs::create_dir_all(&certs).unwrap();
+        std::fs::set_permissions(&certs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(dir_writable(&certs));
+        assert!(!dir_writable(&dir.join("missing")));
+        std::fs::set_permissions(&certs, std::fs::Permissions::from_mode(0o500)).unwrap();
+        // SAFETY: getuid has no preconditions.
+        let root = unsafe { libc::getuid() } == 0;
+        assert_eq!(dir_writable(&certs), root, "root may write anywhere; others not into r-x");
+        std::fs::set_permissions(&certs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

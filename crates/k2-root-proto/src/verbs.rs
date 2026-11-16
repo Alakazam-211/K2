@@ -72,6 +72,21 @@ pub enum MkdirTarget {
     DropinDir,
 }
 
+impl MkdirTarget {
+    /// The mode `mail mkdir` gives the target, new or existing (protocol
+    /// 17): Stalwart's config, data and log dirs
+    /// [`crate::paths::STALWART_TREE_MASK`] (`0750`, Stalwart's alone); the
+    /// systemd drop-in dir `0755` (systemd reads it, it holds no secret).
+    pub fn mode(self) -> u32 {
+        match self {
+            MkdirTarget::Config | MkdirTarget::Data | MkdirTarget::Log => {
+                crate::paths::STALWART_TREE_MASK
+            }
+            MkdirTarget::DropinDir => 0o755,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChownTarget {
     Config,
@@ -639,6 +654,17 @@ pub enum Verb {
     MailEnsureUser,
     MailMkdir(MkdirTarget),
     MailChown(ChownTarget),
+    /// `mail tighten config|data|log` (protocol 17, `namespaces.mailmodes`):
+    /// Stalwart's tree readable by Stalwart alone. Every directory ends at
+    /// most `0750` and every regular file at most `0640`-style (`mode &
+    /// 0o750`: no group write, nothing for others, no setuid/setgid/sticky).
+    /// It only ever clears bits, never through a link, never on a
+    /// hard-linked file another user owns. No argv beyond the target.
+    MailTighten(ChownTarget),
+    /// `mail store-state` (protocol 17, `namespaces.mailmodes`): whether
+    /// `/etc/stalwart/config.json` and `/var/lib/stalwart/data` exist, read
+    /// as root (the daemon user cannot see into the 0750 tree). Read-only.
+    MailStoreState,
     MailRenderUnit,
     MailRenderDropin,
     MailInstallBin,
@@ -1157,6 +1183,8 @@ impl Verb {
             ["mail", "ensure-user"] => Verb::MailEnsureUser,
             ["mail", "mkdir", t] => Verb::MailMkdir(mkdir_target(t).ok_or(REFUSED)?),
             ["mail", "chown", t] => Verb::MailChown(chown_target(t).ok_or(REFUSED)?),
+            ["mail", "tighten", t] => Verb::MailTighten(chown_target(t).ok_or(REFUSED)?),
+            ["mail", "store-state"] => Verb::MailStoreState,
             ["mail", "render-unit"] => Verb::MailRenderUnit,
             ["mail", "render-dropin"] => Verb::MailRenderDropin,
             ["mail", "install-bin"] => Verb::MailInstallBin,
@@ -1462,6 +1490,16 @@ impl Verb {
                     ChownTarget::Log => "log",
                 },
             ]),
+            Verb::MailTighten(t) => s(&[
+                "mail",
+                "tighten",
+                match t {
+                    ChownTarget::Config => "config",
+                    ChownTarget::Data => "data",
+                    ChownTarget::Log => "log",
+                },
+            ]),
+            Verb::MailStoreState => s(&["mail", "store-state"]),
             Verb::MailRenderUnit => s(&["mail", "render-unit"]),
             Verb::MailRenderDropin => s(&["mail", "render-dropin"]),
             Verb::MailInstallBin => s(&["mail", "install-bin"]),
@@ -1693,6 +1731,9 @@ impl Verb {
             Verb::MailEnsureUser
             | Verb::MailMkdir(_)
             | Verb::MailChown(_)
+            // Only ever clears permission bits on Stalwart's own tree.
+            | Verb::MailTighten(_)
+            | Verb::MailStoreState
             | Verb::MailRenderDropin
             | Verb::MailInstallBin
             | Verb::MailUsage => Open,
@@ -1882,6 +1923,7 @@ impl Verb {
             Verb::HelperVersion
                 | Verb::HelperAuditTail
                 | Verb::MailUsage
+                | Verb::MailStoreState
                 | Verb::PgPsql { .. }
                 | Verb::PgClusters
                 | Verb::PgAddMajor { dry_run: true, .. }
@@ -1989,6 +2031,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::MailRenderDropin,
         Verb::MailInstallBin,
         Verb::MailUsage,
+        Verb::MailStoreState,
         Verb::MailSnapshotData,
         Verb::MailRestoreData,
         Verb::PgDaemonReload,
@@ -2179,6 +2222,7 @@ pub fn catalog() -> Vec<Verb> {
     }
     for t in [ChownTarget::Config, ChownTarget::Data, ChownTarget::Log] {
         v.push(Verb::MailChown(t));
+        v.push(Verb::MailTighten(t));
     }
     for t in [
         RemoveTarget::Unit,

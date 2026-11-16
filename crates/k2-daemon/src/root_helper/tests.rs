@@ -274,6 +274,11 @@ fn every_legacy_mail_vector_translates() {
         ),
         (vec!["version"], None, vec!["helper", "version"], None),
         (vec!["usage"], None, vec!["mail", "usage"], None),
+        // Protocol 17: Stalwart's tree for Stalwart alone.
+        (vec!["tighten", "/etc/stalwart"], None, vec!["mail", "tighten", "config"], None),
+        (vec!["tighten", "/var/lib/stalwart"], None, vec!["mail", "tighten", "data"], None),
+        (vec!["tighten", "/var/log/stalwart"], None, vec!["mail", "tighten", "log"], None),
+        (vec!["store-state"], None, vec!["mail", "store-state"], None),
         (
             vec!["snapshot-data"],
             None,
@@ -319,6 +324,8 @@ fn unit_and_dropin_bytes_must_be_canned() {
     )
     .is_err());
     assert!(mail_argv(&["chown", STALWART_DROPIN_DIR], None).is_err());
+    assert!(mail_argv(&["tighten", STALWART_DROPIN_DIR], None).is_err());
+    assert!(mail_argv(&["tighten", "/etc"], None).is_err());
     assert!(mail_argv(&["systemctl", "restart", "k2-daemon"], None).is_err());
 }
 

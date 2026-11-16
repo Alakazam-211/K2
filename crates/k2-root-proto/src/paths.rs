@@ -105,6 +105,13 @@ pub const STALWART_BIN_STAGING: &str = "/usr/local/bin/.stalwart.k2-new";
 /// RocksDB's lock file inside the store (`{data}/data/LOCK`); a process
 /// that still has it locked still has the store open.
 pub const STALWART_STORE_LOCK: &str = "/var/lib/stalwart/data/LOCK";
+/// The most any directory or file under Stalwart's config, data and log
+/// dirs keeps (protocol 17): everything for Stalwart, read for its group,
+/// nothing for others, no setuid / setgid / sticky bit. Dirs are made
+/// `0750`; `mail tighten` clears every bit outside it.
+pub const STALWART_TREE_MASK: u32 = 0o750;
+/// The RocksDB store guided setup points Stalwart at (`{data}/data`).
+pub const STALWART_DATA_STORE: &str = "/var/lib/stalwart/data";
 
 // ── The daemon's own unit (runtime stage H) ─────────────────────────────
 

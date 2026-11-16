@@ -19,12 +19,13 @@
 //! is kept (`mail_backup_inventory`) to diff against. Migration 0136.
 //!
 //! **Permissions.** The observer reads the store as the daemon user, with
-//! no helper and no sudo: the helper creates `/var/lib/stalwart` 0755
-//! (`helper::forced_mode`), RocksDB creates `data/` 0755 and its files 0644
-//! under systemd's default `UMask=0022` (the unit and drop-in set no
-//! `UMask=`), and listing + `stat` need only `r-x` on the directories. A box
-//! where that is not true reports `permission_denied` with the exact error
-//! in `lastError` (status + doctor) — never a sudo fallback.
+//! no helper and no sudo. From 0.46.14 Stalwart's store is Stalwart's alone
+//! (`/var/lib/stalwart` and everything in it `0750` / `0640`, the drop-in's
+//! `UMask=0027`), so the daemon user cannot list it: the observer reports
+//! `permission_denied` with the exact error in `lastError`, and status and
+//! doctor say churn is not measured (info, not a warning) until the
+//! observer reads through the root helper (backup B2). Never a sudo
+//! fallback.
 //!
 //! **Gate.** `GET /cli/mail/backup` (status) is a plain read, like
 //! `/cli/mail/status`. `GET /cli/mail/backup/plan` and `POST
@@ -173,9 +174,9 @@ impl ScanError {
         match self {
             ScanError::Missing(m) | ScanError::Other(m) => m.clone(),
             ScanError::PermissionDenied(m) => format!(
-                "{m} — the daemon user cannot list the Stalwart store (expected 0755 dirs); \
-                 the observer never uses sudo. Check the mode of /var/lib/stalwart and \
-                 /var/lib/stalwart/data"
+                "{m} — the Stalwart store is readable by Stalwart alone (0750), and the \
+                 observer reads as the daemon user and never uses sudo; churn is measured \
+                 through the root helper from backup B2"
             ),
         }
     }
@@ -1301,8 +1302,9 @@ pub fn doctor_check_from(
     }
     match state.status.as_deref() {
         Some("ok") | None => {}
-        Some("permission_denied") => warns.push(format!(
-            "churn observer cannot read the store: {}",
+        // Expected since the store is Stalwart's alone (0750): info.
+        Some("permission_denied") => infos.push(format!(
+            "churn not measured: the observer cannot read the store: {}",
             state.last_error.as_deref().unwrap_or("permission denied")
         )),
         Some(_) => warns.push(format!(
@@ -1819,6 +1821,7 @@ mod tests {
         std::fs::set_permissions(root.join("data"), std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(err.status(), "permission_denied", "{err:?}");
         assert!(err.message().contains("never uses sudo"), "{}", err.message());
+        assert!(err.message().contains("Stalwart alone (0750)"), "{}", err.message());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -2337,8 +2340,10 @@ mod tests {
             last_error: Some("list /var/lib/stalwart/data: Permission denied".into()),
             ..Default::default()
         };
+        // The store is Stalwart's alone (0750): not a warning.
         let c = doctor_check_from(&Ok(Some(local.clone())), &denied);
-        assert_eq!(c.status, ST_WARN);
+        assert_eq!(c.status, ST_INFO);
+        assert!(c.detail.contains("churn not measured"), "{}", c.detail);
         assert!(c.detail.contains("cannot read the store"), "{}", c.detail);
 
         let failing = ObserverState { status: Some("missing".into()), last_error: Some("stat /var/lib/stalwart: gone".into()), ..Default::default() };

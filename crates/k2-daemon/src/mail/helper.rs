@@ -92,6 +92,13 @@ pub enum HelperCommand {
     /// Replaces the data + config dirs with the complete snapshot. No
     /// argument. Refuses unless Stalwart is stopped.
     RestoreData,
+    /// `tighten <config|data|log dir>`: the root helper's `mail tighten`
+    /// (protocol 17): dirs `0750`, files `mode & 0750`. Root helper only.
+    Tighten(&'static str),
+    /// `store-state`: the root helper's `mail store-state` (protocol 17):
+    /// whether `config.json` and the store exist. Read-only, root helper
+    /// only.
+    StoreState,
 }
 
 impl HelperCommand {
@@ -117,6 +124,8 @@ impl HelperCommand {
             Self::Usage => vec!["usage"],
             Self::SnapshotData => vec!["snapshot-data"],
             Self::RestoreData => vec!["restore-data"],
+            Self::Tighten(p) => vec!["tighten", p],
+            Self::StoreState => vec!["store-state"],
         }
     }
 }
@@ -180,6 +189,10 @@ pub fn parse_argv(args: &[&str]) -> Result<HelperCommand, String> {
         ["usage"] => Ok(HelperCommand::Usage),
         ["snapshot-data"] => Ok(HelperCommand::SnapshotData),
         ["restore-data"] => Ok(HelperCommand::RestoreData),
+        ["store-state"] => Ok(HelperCommand::StoreState),
+        ["tighten", path] => static_path(CHOWN_PATHS, path)
+            .map(HelperCommand::Tighten)
+            .ok_or_else(|| "mail helper: refused arguments".into()),
         ["mkdir", path] => static_path(MKDIR_PATHS, path)
             .map(HelperCommand::Mkdir)
             .ok_or_else(|| "mail helper: refused arguments".into()),
@@ -465,7 +478,9 @@ pub fn decide_effect(cmd: HelperCommand, kind: NodeKind) -> Result<FsEffect, Str
         | HelperCommand::Version
         | HelperCommand::Usage
         | HelperCommand::SnapshotData
-        | HelperCommand::RestoreData => Err("mail helper: no filesystem effect".into()),
+        | HelperCommand::RestoreData
+        | HelperCommand::Tighten(_)
+        | HelperCommand::StoreState => Err("mail helper: no filesystem effect".into()),
     }
 }
 
@@ -605,6 +620,7 @@ pub fn mark_step_on_ok(result: &Result<(), String>, marked: &mut bool) {
 pub fn is_privileged_recording(line: &str) -> bool {
     line.starts_with("mkdir ")
         || line.starts_with("chown ")
+        || line.starts_with("tighten ")
         || line.starts_with("write ")
         || line.starts_with("rm ")
         || line.starts_with("systemctl ")
@@ -648,6 +664,12 @@ pub fn recorded_line_allowlisted(line: &str) -> Result<(), String> {
         }
         require_stalwart_user(user)?;
         return parse_argv(&["chown", path]).map(|_| ());
+    }
+    if let Some(path) = line.strip_prefix("tighten ") {
+        if path.contains(' ') {
+            return Err("tighten recording has extra fields".into());
+        }
+        return parse_argv(&["tighten", path]).map(|_| ());
     }
     if let Some(rest) = line.strip_prefix("write ") {
         let Some((path, meta)) = rest.split_once(" (") else {
@@ -765,6 +787,9 @@ mod unix_io {
                 )?;
                 println!("{v}");
                 Ok(())
+            }
+            HelperCommand::Tighten(_) | HelperCommand::StoreState => {
+                Err("mail helper: only the root helper (protocol 17) serves this verb".into())
             }
         }
     }
@@ -2231,6 +2256,13 @@ mod tests {
         assert!(recorded_line_allowlisted("mkdir /etc/stalwart").is_ok());
         assert!(recorded_line_allowlisted("chown stalwart /var/lib/stalwart").is_ok());
         assert!(recorded_line_allowlisted("chown root /etc/stalwart").is_err());
+        for dir in [STALWART_CONFIG_DIR, STALWART_DATA_DIR, STALWART_LOG_DIR] {
+            assert!(recorded_line_allowlisted(&format!("tighten {dir}")).is_ok(), "{dir}");
+        }
+        assert!(recorded_line_allowlisted(&format!("tighten {STALWART_DROPIN_DIR}")).is_err());
+        assert!(recorded_line_allowlisted("tighten /etc").is_err());
+        assert!(recorded_line_allowlisted("tighten /etc/stalwart extra").is_err());
+        assert_eq!(parse_argv(&["store-state"]), Ok(HelperCommand::StoreState));
         let unit = systemd_unit(None);
         let line = format!(
             "write {STALWART_UNIT_PATH} ({} bytes, mode 600)",

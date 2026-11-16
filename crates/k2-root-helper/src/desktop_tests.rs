@@ -224,7 +224,7 @@ fn helper_version_says_it_speaks_the_desktop_namespace() {
     let o = t.call(&["helper", "version"]);
     ok(&o);
     let v = json(&o);
-    assert_eq!(v["protocol"], 16);
+    assert_eq!(v["protocol"], 17, "desktop came in 16 (additive)");
     assert_eq!(v["namespaces"]["desktop"], true);
     assert_eq!(k2_root_proto::version::DESKTOP_MIN_PROTOCOL, 16);
 }

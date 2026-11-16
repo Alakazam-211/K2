@@ -53,14 +53,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=16 arch=x86_64;"
+    " proto=17 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=16 arch=aarch64;"
+    " proto=17 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -181,6 +181,8 @@ fn dispatch(
         Verb::MailEnsureUser => mail::ensure_user(ctx).map(|_| None)?,
         Verb::MailMkdir(t) => mail::mkdir(ctx, *t).map(|_| None)?,
         Verb::MailChown(t) => mail::chown(ctx, *t).map(|_| None)?,
+        Verb::MailTighten(t) => Some(mail::tighten(ctx, *t)?),
+        Verb::MailStoreState => Some(mail::store_state(ctx)?),
         Verb::MailRenderUnit => mail::render_unit(ctx, stdin).map(|_| None)?,
         Verb::MailRenderDropin => mail::render_dropin(ctx).map(|_| None)?,
         Verb::MailInstallBin => Some(mail::install_bin(ctx, stdin)?),
@@ -334,6 +336,12 @@ fn audit(
         // upgrade / rollback: what `systemctl reset-failed` did first.
         if let Some(r) = x.pointer("/resetFailed/result") {
             line["resetFailed"] = r.clone();
+        }
+    }
+    // Stalwart's tree tightened: how many modes changed (0 = already so).
+    if let (Some(Verb::MailTighten(_)), Some(x)) = (verb, extra) {
+        if let Some(c) = x.get("changed") {
+            line["changed"] = c.clone();
         }
     }
     // The virtual desktop's packages: which fixed names were asked for.

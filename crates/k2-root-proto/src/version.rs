@@ -137,6 +137,19 @@
 //!   ([`crate::desktop::manual_command`]) instead. Another 0.46.12 lane
 //!   that needs a helper change joins 16 here with its own namespace flag;
 //!   never 17 before 16 ships.
+//! - 17 = every root-helper change 0.46.14 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it; 16 shipped in 0.46.12 and
+//!   0.46.13 shipped it unchanged): Stalwart's tree readable by Stalwart
+//!   alone. `mail mkdir config|data|log` makes (and leaves) those dirs
+//!   `0750`, the canned hardening drop-in carries `UMask=0027`, `mail
+//!   tighten config|data|log` clears group write and every bit for others
+//!   on an existing tree (dirs `0750`, files `mode & 0o750`), and `mail
+//!   store-state` answers whether `config.json` and the store exist (the
+//!   daemon user can no longer see into the tree). Under
+//!   `namespaces.mailmodes`, [`MAIL_MODES_MIN_PROTOCOL`]; a 16 helper
+//!   refuses both verbs, so the daemon leaves the tree as it is until the
+//!   helper updates. Another 0.46.14 lane that needs a helper change joins
+//!   17 here with its own namespace flag; never 18 before 17 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -145,7 +158,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 16;
+pub const PROTOCOL: u32 = 17;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -193,6 +206,10 @@ pub const PGNAMED_MIN_PROTOCOL: u32 = 15;
 /// this AND `namespaces.desktop == true`: below it the daemon prints
 /// [`crate::desktop::manual_command`] and installs nothing.
 pub const DESKTOP_MIN_PROTOCOL: u32 = 16;
+/// Stalwart's tree readable by Stalwart alone (0.46.14): `mail tighten`,
+/// `mail store-state`, `0750` from `mail mkdir` and `UMask=0027` in the
+/// drop-in. Gated on this AND `namespaces.mailmodes == true`.
+pub const MAIL_MODES_MIN_PROTOCOL: u32 = 17;
 /// Sew's recorder install (`engine sew recording …`, 0.46.11 K-a). Gated on
 /// this AND `namespaces.sewrecording == true`: a 14 helper refuses the argv.
 pub const SEW_RECORDING_MIN_PROTOCOL: u32 = 15;
@@ -382,7 +399,14 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 16, "protocol 16 = 0.46.12's one bump (the virtual desktop's packages); 15 = 0.46.11's (named clusters, per-App db ports)");
+        assert_eq!(PROTOCOL, 17, "protocol 17 = 0.46.14's one bump (Stalwart's tree for Stalwart alone); 16 = 0.46.12's (the virtual desktop's packages)");
+        assert_eq!(MAIL_MODES_MIN_PROTOCOL, 17, "mail tighten / store-state join 0.46.14's one bump");
+        for argv in [&["mail", "tighten", "data"][..], &["mail", "store-state"][..]] {
+            assert!(
+                crate::verbs::catalog().iter().any(|v| v.argv() == argv),
+                "protocol 17 carries {argv:?}"
+            );
+        }
         assert_eq!(DESKTOP_MIN_PROTOCOL, 16, "the desktop packages join 0.46.12's one bump");
         assert!(
             crate::verbs::catalog().iter().any(|v| v.argv() == ["desktop", "packages", "install"]),

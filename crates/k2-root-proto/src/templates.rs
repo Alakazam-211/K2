@@ -45,16 +45,19 @@ pub fn systemd_unit(recovery_admin_password: Option<&str>) -> String {
 /// that path AS THE stalwart USER (the first live attempt failed with
 /// `Permission denied (os error 13)` until the dir was writable).
 ///
-/// No `UMask=` yet. The root-helper PRD lists `UMask=0027` here, but the
-/// backup B1 churn observer (shipped, `mail/backup.rs`) reads the store as
-/// the daemon user and relies on RocksDB's 0644/0755 under the default
-/// umask. `UMask=0027` lands with backup B2, together with the helper's
-/// `backup store-inventory` verb that replaces that read.
+/// `UMask=0027` (protocol 17, 0.46.14): what Stalwart creates (RocksDB
+/// files, logs, `config.json`) is `0640` / `0750`, readable by Stalwart
+/// alone, matching the `0750` dirs `mail mkdir` makes. It applies from
+/// Stalwart's next start; `mail tighten` brings an existing tree down to
+/// the same modes without a restart. The backup churn observer, which
+/// listed the store as the daemon user, reports the store as Stalwart's
+/// alone until it reads through the helper.
 pub fn hardening_dropin() -> &'static str {
     "[Service]\n\
      ProtectSystem=strict\n\
      ProtectHome=yes\n\
      ReadWritePaths=/var/lib/stalwart /var/log/stalwart /etc/stalwart\n\
+     UMask=0027\n\
      NoNewPrivileges=yes\n\
      PrivateTmp=yes\n\
      CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n\

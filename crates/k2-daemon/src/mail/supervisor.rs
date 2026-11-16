@@ -605,6 +605,8 @@ pub fn stored_port_plan() -> Option<String> {
 
 /// True when guided setup has written config.json (normal mode).
 /// Bootstrap's ephemeral `{STALWART_DATA_DIR}/data` is not enough.
+/// `/etc/stalwart` is Stalwart's alone (0750), so when the daemon user may
+/// not look, root answers (`mail store-state`, protocol 17).
 pub fn is_store_initialized() -> bool {
     #[cfg(test)]
     {
@@ -612,7 +614,63 @@ pub fn is_store_initialized() -> bool {
             return v;
         }
     }
-    std::path::Path::new(STALWART_CONFIG).is_file()
+    match std::fs::metadata(STALWART_CONFIG) {
+        Ok(m) => m.is_file(),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            super::sysops::exists_as_root(STALWART_CONFIG).unwrap_or(false)
+        }
+        Err(_) => false,
+    }
+}
+
+/// The step mark for "Stalwart's tree is Stalwart's alone": its config,
+/// data and log dirs `0750`, files without group write or any bit for
+/// others, and `UMask=0027` in the hardening drop-in (0.46.14).
+pub const STORE_MODES_STEP: &str = "store-modes";
+
+/// Stalwart's config, data and log dirs, in the order they are tightened.
+pub const STALWART_TREE_DIRS: [&str; 3] = [STALWART_CONFIG_DIR, STALWART_DATA_DIR, STALWART_LOG_DIR];
+
+/// Existing installs (made before 0.46.14, or while the root helper was
+/// older): bring Stalwart's tree to the [`STORE_MODES_STEP`] modes, once.
+///
+/// Runs only on a completed install and only with a helper that serves
+/// `mail tighten` (protocol 17); otherwise it waits for a later pass.
+/// `mail tighten` on each dir (only clears bits; a second run changes
+/// nothing), then the hardening drop-in is rewritten (now with
+/// `UMask=0027`) and systemd reloaded. **Stalwart is not restarted**: the
+/// 0750 dirs already keep everyone else out, and the umask applies from
+/// Stalwart's next start (an upgrade, a certificate reload, a reboot).
+/// `Ok(true)` = it ran now; `Ok(false)` = done before, or not yet possible.
+pub fn ensure_store_modes_with(ops: &dyn SystemOps) -> Result<bool, String> {
+    if step_is_done(STORE_MODES_STEP) || !enable_completed() || !ops.store_modes_supported() {
+        return Ok(false);
+    }
+    for dir in STALWART_TREE_DIRS {
+        ops.tighten_store(dir)?;
+    }
+    ops.write_file(STALWART_DROPIN_PATH, hardening_dropin().as_bytes(), 0o644)?;
+    ops.systemctl(&["daemon-reload"])?;
+    mark_step(STORE_MODES_STEP);
+    Ok(true)
+}
+
+/// [`ensure_store_modes_with`] on this box, from the health loop. Holds
+/// the enable latch (an enable or upgrade running means "later").
+fn ensure_store_modes_live() {
+    if upgrade_running().load(Ordering::SeqCst) || !try_begin_enable() {
+        return;
+    }
+    let r = ensure_store_modes_with(&RealSystemOps);
+    end_enable();
+    match r {
+        Ok(true) => k2_core::log_debug!(
+            "[mail/supervisor] Stalwart's config, data and log dirs are now Stalwart's alone \
+             (0750, UMask=0027 from its next start)"
+        ),
+        Ok(false) => {}
+        Err(e) => k2_core::log_debug!("[mail/supervisor] tightening Stalwart's dirs: {e}"),
+    }
 }
 
 /// C29: stamp a fresh lastNoopAt so later enables aren't frozen unix `at`s.
@@ -1349,7 +1407,18 @@ pub fn run_enable(
             // this).
             ops.chown_recursive(STALWART_CONFIG_DIR, STALWART_USER)?;
             ops.chown_recursive(STALWART_DATA_DIR, STALWART_USER)?;
-            ops.chown_recursive(STALWART_LOG_DIR, STALWART_USER)
+            ops.chown_recursive(STALWART_LOG_DIR, STALWART_USER)?;
+            // Stalwart's alone: a protocol-17 helper made the dirs 0750
+            // and its drop-in (the unit step) carries UMask=0027; tighten
+            // whatever an earlier install left inside. An older helper
+            // leaves this to the health loop once it updates.
+            if ops.store_modes_supported() {
+                for dir in STALWART_TREE_DIRS {
+                    ops.tighten_store(dir)?;
+                }
+                mark_step(STORE_MODES_STEP);
+            }
+            Ok(())
         })()
         .map_err(|e| fail("dirs", e))?;
         mark_step("dirs");
@@ -2012,6 +2081,9 @@ pub fn spawn_health_loop() {
                 continue; // not installed
             }
             let _ = std::panic::catch_unwind(|| {
+                // Existing installs: Stalwart's tree for Stalwart alone,
+                // once the root helper serves it (no restart).
+                ensure_store_modes_live();
                 let _ = refresh_health();
                 // Auth-ban migrate window auto-restore (prd-hostmail-bans-v1 B26).
                 super::bans::tick_bans_migrate_restore();
@@ -2058,6 +2130,7 @@ pub fn uninstall_with(
         ops.remove_path(STALWART_DATA_DIR)?;
         ops.remove_path(STALWART_LOG_DIR)?;
         ops.remove_path(STALWART_CONFIG_DIR)?;
+        super::sysops::forget_store_state();
     }
     for col in ["admin_secret_ref", "api_key_ref"] {
         if let Some(sref) = row_field(col) {
@@ -2238,6 +2311,8 @@ mod tests {
             // /etc/stalwart is live-verified load-bearing: Bootstrap/set
             // writes config.json as the stalwart user.
             "ReadWritePaths=/var/lib/stalwart /var/log/stalwart /etc/stalwart",
+            // What Stalwart writes is its own: files 0640, dirs 0750.
+            "UMask=0027",
             "NoNewPrivileges=yes",
             "PrivateTmp=yes",
             "CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
@@ -2454,6 +2529,11 @@ mod tests {
                 "chown stalwart /etc/stalwart".to_string(),
                 "chown stalwart /var/lib/stalwart".to_string(),
                 "chown stalwart /var/log/stalwart".to_string(),
+                // Stalwart's alone (protocol-17 helper): 0750 dirs, no
+                // group write or other bits on anything inside.
+                "tighten /etc/stalwart".to_string(),
+                "tighten /var/lib/stalwart".to_string(),
+                "tighten /var/log/stalwart".to_string(),
                 format!(
                     "write /etc/systemd/system/stalwart.service ({} bytes, mode 600)",
                     systemd_unit(Some(&secrets_stored_secret(&secrets, "recovery-admin"))).len()
@@ -2554,6 +2634,146 @@ mod tests {
         for step in ENABLE_STEPS {
             assert!(step_is_done(step), "step {step} not marked done");
         }
+        // A new install on a protocol-17 helper is already Stalwart's
+        // alone: the health pass has nothing left to do.
+        assert!(step_is_done(STORE_MODES_STEP));
+        let before = ops.recorded().len();
+        assert_eq!(ensure_store_modes_with(&ops), Ok(false));
+        assert_eq!(ops.recorded().len(), before, "no second tighten");
+        clean_row();
+    }
+
+    /// New installs: the helper makes Stalwart's config, data and log dirs
+    /// 0750 (the drop-in dir stays 0755), and the canned drop-in carries
+    /// UMask=0027, so what Stalwart writes is 0640 / 0750.
+    #[test]
+    fn new_install_modes_are_0750_dirs_and_umask_0027() {
+        use k2_root_proto::verbs::MkdirTarget;
+        assert_eq!(k2_root_proto::paths::STALWART_TREE_MASK, 0o750);
+        for t in [MkdirTarget::Config, MkdirTarget::Data, MkdirTarget::Log] {
+            assert_eq!(t.mode(), 0o750, "{t:?}");
+        }
+        assert_eq!(MkdirTarget::DropinDir.mode(), 0o755);
+        assert_eq!(STALWART_TREE_DIRS, [STALWART_CONFIG_DIR, STALWART_DATA_DIR, STALWART_LOG_DIR]);
+        assert!(hardening_dropin().lines().any(|l| l == "UMask=0027"));
+        // The unit itself sets no umask (one place for it: the drop-in).
+        assert!(!systemd_unit(None).contains("UMask"));
+    }
+
+    /// A helper older than protocol 17 cannot tighten: enable leaves the
+    /// tree as that helper made it and the step unmarked, so the health
+    /// pass does it once the helper updates.
+    #[test]
+    fn enable_on_an_older_helper_leaves_tightening_to_the_health_pass() {
+        let _g = db_guard();
+        clean_row();
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            store_modes: false,
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi::default();
+        let secrets = FakeSecrets::default();
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+            .expect("full enable succeeds");
+        assert!(
+            !ops.recorded().iter().any(|l| l.starts_with("tighten ")),
+            "{:?}",
+            ops.recorded()
+        );
+        assert!(!step_is_done(STORE_MODES_STEP));
+        clean_row();
+    }
+
+    /// Existing installs: the health pass tightens Stalwart's config, data
+    /// and log dirs, rewrites the drop-in (UMask=0027) and reloads systemd
+    /// once. It never restarts or stops Stalwart, and a second pass records
+    /// nothing.
+    #[test]
+    fn existing_install_is_tightened_once_without_a_restart() {
+        let _g = db_guard();
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, updated_at) \
+                 VALUES (1, 'running', ?1, 1)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
+        set_test_store_ready(Some(true));
+        for s in ENABLE_STEPS {
+            mark_step(s);
+        }
+
+        // An older helper: nothing yet, nothing marked.
+        let old = FakeSystemOps {
+            store_modes: false,
+            ..FakeSystemOps::default()
+        };
+        assert_eq!(ensure_store_modes_with(&old), Ok(false));
+        assert!(old.recorded().is_empty(), "{:?}", old.recorded());
+        assert!(!step_is_done(STORE_MODES_STEP));
+
+        let ops = FakeSystemOps::default();
+        assert_eq!(ensure_store_modes_with(&ops), Ok(true));
+        assert_eq!(
+            ops.recorded(),
+            vec![
+                "tighten /etc/stalwart".to_string(),
+                "tighten /var/lib/stalwart".to_string(),
+                "tighten /var/log/stalwart".to_string(),
+                format!(
+                    "write /etc/systemd/system/stalwart.service.d/k2-hardening.conf ({} bytes, mode 644)",
+                    hardening_dropin().len()
+                ),
+                "systemctl daemon-reload".to_string(),
+            ]
+        );
+        assert!(
+            !ops.recorded().iter().any(|l| l.contains("restart") || l.contains("stop")),
+            "never a Stalwart restart: {:?}",
+            ops.recorded()
+        );
+        let written = ops.written.lock().unwrap().get(STALWART_DROPIN_PATH).cloned();
+        assert_eq!(written.as_deref(), Some(hardening_dropin().as_bytes()));
+        for line in ops.recorded() {
+            helper::recorded_line_allowlisted(&line).unwrap_or_else(|e| panic!("{line}: {e}"));
+        }
+        assert!(step_is_done(STORE_MODES_STEP));
+
+        // Idempotent: the second pass records nothing.
+        assert_eq!(ensure_store_modes_with(&ops), Ok(false));
+        assert_eq!(ops.recorded().len(), 5, "{:?}", ops.recorded());
+
+        // A failed tighten leaves the step unmarked for the next pass.
+        unmark_steps(&[STORE_MODES_STEP]);
+        let failing = FakeSystemOps::default();
+        failing.fail("tighten /var/lib/stalwart");
+        assert!(ensure_store_modes_with(&failing).is_err());
+        assert!(!step_is_done(STORE_MODES_STEP));
+        assert_eq!(ensure_store_modes_with(&failing), Ok(true));
+        assert!(step_is_done(STORE_MODES_STEP));
+
+        set_test_store_ready(None);
+        clean_row();
+    }
+
+    /// Not installed (or an enable that never finished): nothing to tighten.
+    #[test]
+    fn store_modes_wait_for_a_completed_install() {
+        let _g = db_guard();
+        clean_row();
+        let ops = FakeSystemOps::default();
+        set_test_store_ready(Some(false));
+        assert_eq!(ensure_store_modes_with(&ops), Ok(false));
+        set_test_store_ready(Some(true));
+        assert_eq!(ensure_store_modes_with(&ops), Ok(false), "restart step not done");
+        assert!(ops.recorded().is_empty(), "{:?}", ops.recorded());
+        set_test_store_ready(None);
         clean_row();
     }
 

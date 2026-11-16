@@ -774,8 +774,8 @@ fn mkdir_chown_remove_follow_no_links() {
         .unwrap()
         .permissions()
         .mode()
-        & 0o777;
-    assert_eq!(mode, 0o755);
+        & 0o7777;
+    assert_eq!(mode, 0o750, "Stalwart's data dir is Stalwart's alone");
     std::fs::write(t.p("/var/lib/stalwart/f"), b"x").unwrap();
     ok(&t.call(&["mail", "chown", "data"]));
 
@@ -795,6 +795,177 @@ fn mkdir_chown_remove_follow_no_links() {
     ok(&t.call(&["mail", "remove", "data"]));
     assert!(!t.p(STALWART_DATA_DIR).exists());
     ok(&t.call(&["mail", "remove", "data"])); // missing is fine
+}
+
+fn mode_of(p: &Path) -> u32 {
+    std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777
+}
+
+/// Set `mode` exactly and check it took, so a fixture that could not be
+/// built fails here, not as a weaker test. (Fixtures carry no setgid bit:
+/// sandboxed test runners refuse to set one, `RestrictSUIDSGID`. The
+/// setgid cases are [`tightened_mode_clears_setgid_group_write_and_others`].)
+fn set_mode(p: &Path, mode: u32) {
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+    assert_eq!(mode_of(p), mode, "fixture mode for {p:?}");
+}
+
+fn json_of(o: &crate::Outcome) -> serde_json::Value {
+    ok(o);
+    serde_json::from_slice(&o.stdout).unwrap()
+}
+
+/// The rule `mail tighten` applies to every dir and file: `mode & 0750`.
+/// A 2775 dir (setgid, group-writable) ends at 0750 and a 664 file at 0640;
+/// what already fits is left alone.
+#[test]
+fn tightened_mode_clears_setgid_group_write_and_others() {
+    use crate::mail::tightened_mode;
+    for (from, to) in [
+        (0o2775, Some(0o750)),
+        (0o2770, Some(0o750)),
+        (0o4755, Some(0o750)),
+        (0o1777, Some(0o750)),
+        (0o775, Some(0o750)),
+        (0o755, Some(0o750)),
+        (0o664, Some(0o640)),
+        (0o644, Some(0o640)),
+        (0o666, Some(0o640)),
+        (0o750, None),
+        (0o640, None),
+        (0o600, None),
+        (0o700, None),
+    ] {
+        assert_eq!(tightened_mode(from), to, "{from:o}");
+    }
+    // The file-type bits of a stat's mode never leak into the answer.
+    assert_eq!(tightened_mode(0o040000 | 0o2775), Some(0o750));
+    assert_eq!(tightened_mode(0o100000 | 0o664), Some(0o640));
+}
+
+/// Protocol 17: Stalwart's config, data and log dirs are made (and left)
+/// 0750; the systemd drop-in dir stays 0755. An existing group-writable dir
+/// comes back at exactly 0750 (an exact `fchmod`: a setgid bit goes too).
+#[test]
+fn mkdir_makes_stalwart_dirs_0750_and_the_dropin_dir_0755() {
+    let t = box_root();
+    for (target, path, want) in [
+        ("config", STALWART_CONFIG_DIR, 0o750),
+        ("data", STALWART_DATA_DIR, 0o750),
+        ("log", STALWART_LOG_DIR, 0o750),
+        ("dropin-dir", STALWART_DROPIN_DIR, 0o755),
+    ] {
+        ok(&t.call(&["mail", "mkdir", target]));
+        assert_eq!(mode_of(&t.p(path)), want, "{target}");
+    }
+    set_mode(&t.p(STALWART_CONFIG_DIR), 0o775);
+    ok(&t.call(&["mail", "mkdir", "config"]));
+    assert_eq!(mode_of(&t.p(STALWART_CONFIG_DIR)), 0o750);
+}
+
+/// Protocol 17: `mail tighten` brings a tree like the fleet's (775 / 755
+/// dirs, 664 / 644 files) to dirs 0750 and files 0640, keeps a 0600 key at
+/// 0600, never follows a link, and changes nothing on a second run.
+#[test]
+fn tighten_clears_group_write_and_others_and_is_idempotent() {
+    let t = box_root();
+    for target in ["config", "data", "log"] {
+        ok(&t.call(&["mail", "mkdir", target]));
+    }
+    let data = t.p(STALWART_DATA_DIR);
+    let config = t.p(STALWART_CONFIG_DIR);
+    let log = t.p(STALWART_LOG_DIR);
+    std::fs::create_dir_all(data.join("data")).unwrap();
+    std::fs::create_dir_all(data.join("certs")).unwrap();
+    std::fs::write(data.join("data/000001.sst"), b"sst").unwrap();
+    std::fs::write(data.join("data/CURRENT"), b"MANIFEST-000001\n").unwrap();
+    std::fs::write(data.join("certs/host.key"), b"key").unwrap();
+    std::fs::write(config.join("config.json"), b"{}").unwrap();
+    std::fs::write(log.join("stalwart.log"), b"log").unwrap();
+    std::fs::create_dir_all(t.p("/srv")).unwrap();
+    std::fs::write(t.p("/srv/outside"), b"not stalwart's").unwrap();
+    set_mode(&t.p("/srv/outside"), 0o644);
+    symlink(t.p("/srv/outside"), data.join("data/link")).unwrap();
+
+    set_mode(&data, 0o775);
+    set_mode(&data.join("data"), 0o755);
+    set_mode(&data.join("certs"), 0o775);
+    set_mode(&data.join("data/000001.sst"), 0o644);
+    set_mode(&data.join("data/CURRENT"), 0o664);
+    set_mode(&data.join("certs/host.key"), 0o600);
+    set_mode(&config, 0o775);
+    set_mode(&config.join("config.json"), 0o664);
+    set_mode(&log, 0o755);
+    set_mode(&log.join("stalwart.log"), 0o644);
+
+    let v = json_of(&t.call(&["mail", "tighten", "data"]));
+    assert_eq!(v["changed"], 5, "{v}");
+    assert_eq!(v["skippedLinks"], 1, "{v}");
+    assert_eq!(v["skippedHardLinks"], 0, "{v}");
+    let v = json_of(&t.call(&["mail", "tighten", "config"]));
+    assert_eq!(v["changed"], 2, "{v}");
+    let v = json_of(&t.call(&["mail", "tighten", "log"]));
+    assert_eq!(v["changed"], 2, "{v}");
+
+    let want = [
+        (data.clone(), 0o750),
+        (data.join("data"), 0o750),
+        (data.join("certs"), 0o750),
+        (data.join("data/000001.sst"), 0o640),
+        (data.join("data/CURRENT"), 0o640),
+        (data.join("certs/host.key"), 0o600),
+        (config.clone(), 0o750),
+        (config.join("config.json"), 0o640),
+        (log.clone(), 0o750),
+        (log.join("stalwart.log"), 0o640),
+    ];
+    for (p, m) in &want {
+        assert_eq!(mode_of(p), *m, "{p:?}");
+    }
+    // The link was not followed.
+    assert_eq!(mode_of(&t.p("/srv/outside")), 0o644);
+
+    // Idempotent: nothing left to change.
+    for target in ["config", "data", "log"] {
+        let v = json_of(&t.call(&["mail", "tighten", target]));
+        assert_eq!(v["changed"], 0, "{target}: {v}");
+    }
+    for (p, m) in &want {
+        assert_eq!(mode_of(p), *m, "{p:?}");
+    }
+
+    // A missing target is nothing to tighten; a link AT the target refuses.
+    ok(&t.call(&["mail", "remove", "log"]));
+    let v = json_of(&t.call(&["mail", "tighten", "log"]));
+    assert_eq!(v["missing"], true, "{v}");
+    std::fs::create_dir_all(t.p("/srv/elsewhere")).unwrap();
+    symlink(t.p("/srv/elsewhere"), &log).unwrap();
+    assert_eq!(t.call(&["mail", "tighten", "log"]).code, exit::STATE);
+    // Off-catalog targets never reach the walk.
+    assert_eq!(t.call(&["mail", "tighten", "dropin-dir"]).code, exit::ARGV);
+    assert_eq!(t.call(&["mail", "tighten", "/etc"]).code, exit::ARGV);
+}
+
+/// Protocol 17: `mail store-state` answers, as root, what the daemon user
+/// can no longer see inside the 0750 tree.
+#[test]
+fn store_state_reports_config_json_and_the_store() {
+    let t = box_root();
+    let v = json_of(&t.call(&["mail", "store-state"]));
+    assert_eq!((v["configJson"].clone(), v["dataStore"].clone()), (false.into(), false.into()), "{v}");
+    for target in ["config", "data"] {
+        ok(&t.call(&["mail", "mkdir", target]));
+    }
+    let v = json_of(&t.call(&["mail", "store-state"]));
+    assert_eq!((v["configJson"].clone(), v["dataStore"].clone()), (false.into(), false.into()), "{v}");
+    std::fs::write(t.p(STALWART_CONFIG), b"{}").unwrap();
+    std::fs::create_dir_all(t.p(STALWART_DATA_STORE)).unwrap();
+    let v = json_of(&t.call(&["mail", "store-state"]));
+    assert_eq!((v["configJson"].clone(), v["dataStore"].clone()), (true.into(), true.into()), "{v}");
+    // The daemon gates both verbs on this.
+    let v = json_of(&t.call(&["helper", "version"]));
+    assert_eq!(v["namespaces"]["mailmodes"], true, "{v}");
+    assert_eq!(v["protocol"], k2_root_proto::version::MAIL_MODES_MIN_PROTOCOL);
 }
 
 #[test]

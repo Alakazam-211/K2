@@ -108,7 +108,7 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     let v = json(&o);
     // 7 brought `engine sew`; 8 is 0.46.1's helper changes (protocols are
     // additive, so the Sew namespace is still here).
-    assert_eq!(v["protocol"], 16, "15 was 0.46.11's one bump; 16 is 0.46.12's (additive)");
+    assert_eq!(v["protocol"], 17, "16 was 0.46.12's one bump; 17 is 0.46.14's (additive)");
     assert_eq!(v["namespaces"]["sewrecording"], true, "the recorder install (0.46.11)");
     assert_eq!(v["namespaces"]["sewtunnelclear"], true, "the tunnel move's clears (0.46.10)");
     assert_eq!(v["namespaces"]["sewboxbackup"], true, "box-backup (0.46.9)");
@@ -2558,7 +2558,7 @@ fn recording_argv_is_enum_names_only() {
 fn a_protocol_14_daemons_calls_are_served_unchanged() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 16, "16 is 0.46.12's one bump (additive)");
+    assert_eq!(v["protocol"], 17, "17 is 0.46.14's one bump (additive)");
     // 0.46.11 shared protocol 15 between two lanes; 16 adds desktop: every flag is on.
     for ns in ["sew", "sewreconf", "sewtunnel", "sewmirror", "sewboxbackup", "sewtunnelclear", "pgnamed", "sewrecording", "desktop"] {
         assert_eq!(v["namespaces"][ns], true, "{ns}");

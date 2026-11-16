@@ -12,9 +12,76 @@
 //! `systemctl_query` (`is-active`) stays a direct non-root `systemctl`.
 //! It is only ever invoked behind [`super::supervisor::mail_supported`].
 
-use std::path::Path;
 
 use super::helper;
+use k2_root_proto::paths::{STALWART_CONFIG, STALWART_DATA_STORE};
+use k2_root_proto::version::MAIL_MODES_MIN_PROTOCOL;
+
+/// Protocol 17 AND `namespaces.mailmodes` in `helper version`.
+pub fn mail_modes_supported_by(st: &crate::root_helper::RootHelperState) -> bool {
+    st.usable(MAIL_MODES_MIN_PROTOCOL)
+        && st
+            .version_json
+            .as_ref()
+            .and_then(|v| v.pointer("/namespaces/mailmodes"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+}
+
+/// `path` exists, as the daemon user sees it; inside Stalwart's `0750`
+/// tree (permission denied) `config.json` and the store are asked of root
+/// ([`exists_as_root`]). Anything else unreadable reads as absent.
+pub fn exists_seen_or_asked(path: &str) -> bool {
+    match std::fs::metadata(path) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            exists_as_root(path).unwrap_or(false)
+        }
+        Err(_) => false,
+    }
+}
+
+/// How long a "yes, it exists" from `mail store-state` is reused (status
+/// polls call this often; one sudo per poll is too many). A "no" is never
+/// reused: enable asks again right after guided setup writes the file.
+const STORE_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+static STORE_STATE_CACHE: std::sync::Mutex<Option<(std::time::Instant, serde_json::Value)>> =
+    std::sync::Mutex::new(None);
+
+/// Drop the cached `mail store-state` answer (uninstall removes the tree).
+pub fn forget_store_state() {
+    *STORE_STATE_CACHE.lock().unwrap_or_else(|p| p.into_inner()) = None;
+}
+
+/// Whether `config.json` / the store exist, from the root helper's `mail
+/// store-state` (protocol 17). `None` for any other path, a helper without
+/// the verb, or a failed call. Never in unit tests (no sudo).
+pub fn exists_as_root(path: &str) -> Option<bool> {
+    let key = match path {
+        STALWART_CONFIG => "configJson",
+        STALWART_DATA_STORE => "dataStore",
+        _ => return None,
+    };
+    if cfg!(test) {
+        return None;
+    }
+    let mut cache = STORE_STATE_CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((at, v)) = cache.as_ref() {
+        if at.elapsed() < STORE_STATE_TTL && v.get(key) == Some(&serde_json::Value::Bool(true)) {
+            return Some(true);
+        }
+    }
+    if !mail_modes_supported_by(&crate::root_helper::state()) {
+        return None;
+    }
+    let argv = helper_argv(&["store-state"]).ok()?;
+    let out = RealSystemOps::run_mail_helper(&argv, None).ok()?;
+    let v: serde_json::Value = serde_json::from_str(out.trim()).ok()?;
+    let answer = v.get(key).and_then(serde_json::Value::as_bool);
+    *cache = Some((std::time::Instant::now(), v));
+    answer
+}
 
 pub trait SystemOps: Send + Sync {
     /// Download `url` fully into memory (the pinned tarball is ~40 MB;
@@ -44,6 +111,16 @@ pub trait SystemOps: Send + Sync {
     fn ensure_system_user(&self, user: &str) -> Result<(), String>;
     /// `chown -R user:user path`.
     fn chown_recursive(&self, path: &str, user: &str) -> Result<(), String>;
+    /// The root helper's `mail tighten` (protocol 17) on one of Stalwart's
+    /// config / data / log dirs: dirs `0750`, files `mode & 0750` (no group
+    /// write, nothing for others, setgid gone). Only clears bits;
+    /// idempotent.
+    fn tighten_store(&self, path: &str) -> Result<(), String>;
+    /// Does the root helper serve `mail tighten` / `mail store-state` and
+    /// the `0750` / `UMask=0027` templates (protocol 17 AND
+    /// `namespaces.mailmodes`)? Read-only probe; below it the tree is left
+    /// as it is until the helper updates.
+    fn store_modes_supported(&self) -> bool;
     /// `systemctl <args…>`; returns trimmed stdout. An exit-failure is
     /// an `Err` carrying stderr EXCEPT for state-query verbs
     /// (`is-active` etc.) — callers use [`Self::systemctl_query`] for
@@ -155,7 +232,7 @@ impl SystemOps for RealSystemOps {
     }
 
     fn path_exists(&self, path: &str) -> bool {
-        Path::new(path).exists()
+        exists_seen_or_asked(path)
     }
 
     fn extract_tar_gz_member(
@@ -182,6 +259,15 @@ impl SystemOps for RealSystemOps {
         helper::require_stalwart_user(user)?;
         let argv = helper_argv(&["chown", path])?;
         Self::run_mail_helper(&argv, None).map(|_| ())
+    }
+
+    fn tighten_store(&self, path: &str) -> Result<(), String> {
+        let argv = helper_argv(&["tighten", path])?;
+        Self::run_mail_helper(&argv, None).map(|_| ())
+    }
+
+    fn store_modes_supported(&self) -> bool {
+        mail_modes_supported_by(&crate::root_helper::state())
     }
 
     fn systemctl(&self, args: &[&str]) -> Result<String, String> {
@@ -267,6 +353,9 @@ pub(crate) mod fake {
         pub unit_active: Mutex<Option<bool>>,
         /// Tarball bytes passed to `extract_tar_gz_member`, in order.
         pub extracted: Mutex<Vec<Vec<u8>>>,
+        /// `store_modes_supported` answer (default: a protocol-17 helper).
+        /// Not recorded in `ops` (a read).
+        pub store_modes: bool,
     }
 
     impl Default for FakeSystemOps {
@@ -284,6 +373,7 @@ pub(crate) mod fake {
                 fail_on: Mutex::new(Vec::new()),
                 unit_active: Mutex::new(None),
                 extracted: Mutex::new(Vec::new()),
+                store_modes: true,
             }
         }
     }
@@ -378,6 +468,12 @@ pub(crate) mod fake {
         fn chown_recursive(&self, path: &str, user: &str) -> Result<(), String> {
             self.effect(format!("chown {user} {path}"))
         }
+        fn tighten_store(&self, path: &str) -> Result<(), String> {
+            self.effect(format!("tighten {path}"))
+        }
+        fn store_modes_supported(&self) -> bool {
+            self.store_modes
+        }
         fn systemctl(&self, args: &[&str]) -> Result<String, String> {
             self.effect(format!("systemctl {}", args.join(" ")))?;
             let mut unit = self.unit_active.lock().unwrap_or_else(|p| p.into_inner());
@@ -452,5 +548,31 @@ mod root_door_tests {
         let msg = helper::unavailable_message(helper::HelperState::NotAllowed).unwrap();
         assert!(msg.contains(k2_root_proto::paths::HELPER_PATH), "{msg}");
         assert!(!msg.contains("k2-mail-helper"), "{msg}");
+    }
+
+    /// `mail tighten` / `mail store-state` need protocol 17 AND the
+    /// `mailmodes` flag; a 16 helper leaves Stalwart's tree as it is.
+    #[test]
+    fn store_modes_need_protocol_17_and_the_mailmodes_flag() {
+        let helper_at = |protocol: u32, flag: Option<bool>| {
+            let mut ns = serde_json::json!({ "mail": true });
+            if let Some(f) = flag {
+                ns["mailmodes"] = serde_json::json!(f);
+            }
+            RootHelperState {
+                kind: Kind::Root,
+                protocol,
+                version_json: Some(serde_json::json!({ "protocol": protocol, "namespaces": ns })),
+                ..RootHelperState::missing()
+            }
+        };
+        assert!(mail_modes_supported_by(&helper_at(17, Some(true))));
+        assert!(!mail_modes_supported_by(&helper_at(16, Some(true))));
+        assert!(!mail_modes_supported_by(&helper_at(17, None)));
+        assert!(!mail_modes_supported_by(&helper_at(17, Some(false))));
+        assert!(!mail_modes_supported_by(&RootHelperState::missing()));
+        // Unit tests never ask root.
+        assert_eq!(exists_as_root(STALWART_CONFIG), None);
+        assert_eq!(exists_as_root("/etc/passwd"), None);
     }
 }

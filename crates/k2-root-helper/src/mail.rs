@@ -87,11 +87,15 @@ pub fn ensure_user(ctx: &Ctx) -> HResult<()> {
     Ok(())
 }
 
-/// 0755 root; a symlink (or a file) at the path is a refusal.
+/// [`MkdirTarget::mode`] (Stalwart's dirs `0750`, the drop-in dir `0755`),
+/// root's; a symlink (or a file) at the path is a refusal. An existing
+/// directory is set to the same mode (an exact `fchmod`, so a setgid bit
+/// goes too).
 pub fn mkdir(ctx: &Ctx, t: MkdirTarget) -> HResult<()> {
+    let mode = t.mode();
     let (d, name) = parent_dir(ctx, mkdir_path(t))?;
     let created = match d.kind(name).map_err(|e| Fail::io_err("stat", e))? {
-        Kind::Missing => match d.mkdir(name, 0o755) {
+        Kind::Missing => match d.mkdir(name, mode) {
             Ok(()) => true,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
             Err(e) => return Err(Fail::io_err("mkdir", e)),
@@ -109,7 +113,137 @@ pub fn mkdir(ctx: &Ctx, t: MkdirTarget) -> HResult<()> {
             sub.fchown(u, g).map_err(|e| Fail::io_err("chown", e))?;
         }
     }
-    sub.fchmod(0o755).map_err(|e| Fail::io_err("chmod", e))
+    sub.fchmod(mode).map_err(|e| Fail::io_err("chmod", e))
+}
+
+/// What one `mail tighten` did.
+#[derive(Default)]
+struct Tightened {
+    changed: u64,
+    links: u64,
+    hard_links: u64,
+    other: u64,
+}
+
+/// `mode & STALWART_TREE_MASK` when that differs from `mode` (permission
+/// and special bits only).
+pub fn tightened_mode(mode: u32) -> Option<u32> {
+    let m = mode & 0o7777;
+    let want = m & STALWART_TREE_MASK;
+    (want != m).then_some(want)
+}
+
+/// The directory itself, then every entry below it. Only ever clears bits.
+/// Links are never followed or changed; a file is changed through an fd
+/// opened without following links, so a name swapped for a link between
+/// the listing and the change changes nothing outside the tree. A
+/// hard-linked file another user owns is left alone (it may be a file
+/// elsewhere on the box). Entries that vanish mid-walk (RocksDB compaction)
+/// are skipped.
+fn tighten_tree(dir: &Dir, uid: u32, n: &mut Tightened) -> HResult<()> {
+    let st = dir.stat_self().map_err(|e| Fail::io_err("stat", e))?;
+    if let Some(want) = tightened_mode(crate::fsx::mode(&st)) {
+        dir.fchmod(want).map_err(|e| Fail::io_err("chmod", e))?;
+        n.changed += 1;
+    }
+    for name in dir.entries().map_err(|e| Fail::io_err("read dir", e))? {
+        match dir.kind(&name).map_err(|e| Fail::io_err("stat", e))? {
+            Kind::Missing => {}
+            Kind::Symlink => n.links += 1,
+            Kind::Other => n.other += 1,
+            Kind::Dir => match dir.sub(&name) {
+                Ok(sub) => tighten_tree(&sub, uid, n)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                // Swapped for a link or a file since the listing.
+                Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)) => {
+                    n.links += 1
+                }
+                Err(e) => return Err(Fail::io_err("open dir", e)),
+            },
+            Kind::File => match dir.open_regular(&name) {
+                Ok(None) => {}
+                Ok(Some((f, st))) => {
+                    if st.st_nlink > 1 && st.st_uid != uid {
+                        n.hard_links += 1;
+                        continue;
+                    }
+                    if let Some(want) = tightened_mode(crate::fsx::mode(&st)) {
+                        use std::os::fd::AsRawFd;
+                        // SAFETY: open fd owned by `f`.
+                        if unsafe { libc::fchmod(f.as_raw_fd(), want as libc::mode_t) } != 0 {
+                            return Err(Fail::io_err("chmod", std::io::Error::last_os_error()));
+                        }
+                        n.changed += 1;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => n.other += 1,
+                Err(e) if e.raw_os_error() == Some(libc::ELOOP) => n.links += 1,
+                Err(e) => return Err(Fail::io_err("open", e)),
+            },
+        }
+    }
+    Ok(())
+}
+
+/// `mail tighten config|data|log` (protocol 17): Stalwart's tree readable
+/// by Stalwart alone: every directory and file ends at `mode & 0750`
+/// (dirs `0750`, `0644` / `0664` files `0640`, setgid gone). Idempotent: a
+/// second run changes nothing and answers `changed: 0`. A missing target
+/// is not an error (nothing to tighten). Owners are not changed.
+pub fn tighten(ctx: &Ctx, t: ChownTarget) -> HResult<serde_json::Value> {
+    let path = chown_path(t);
+    let (d, name) = parent_dir(ctx, path)?;
+    match d.kind(name).map_err(|e| Fail::io_err("stat", e))? {
+        Kind::Dir => {}
+        Kind::Missing => {
+            return Ok(serde_json::json!({ "path": path, "missing": true, "changed": 0 }))
+        }
+        Kind::Symlink => return Err(Fail::state("tighten refused: symlink")),
+        _ => return Err(Fail::state("tighten refused")),
+    }
+    let uid = if ctx.real_owners {
+        let (u, _) = crate::sys::ids_of_user(STALWART_USER)
+            .ok_or_else(|| Fail::state("tighten refused: user stalwart missing"))?;
+        u
+    } else {
+        // Tests: files the test user owns stand for Stalwart's.
+        // SAFETY: no preconditions.
+        unsafe { libc::getuid() }
+    };
+    let sub = d.sub(name).map_err(|e| Fail::io_err("tighten refused", e))?;
+    let mut n = Tightened::default();
+    tighten_tree(&sub, uid, &mut n)?;
+    Ok(serde_json::json!({
+        "path": path,
+        "changed": n.changed,
+        "skippedLinks": n.links,
+        "skippedHardLinks": n.hard_links,
+        "skippedOther": n.other,
+    }))
+}
+
+/// Whether `abs` exists (any kind, a link not followed). A missing parent
+/// is `false`.
+fn exists_nofollow(ctx: &Ctx, abs: &'static str) -> HResult<bool> {
+    let (parent, name) = split(abs);
+    let d = match ctx.dir(parent) {
+        Ok(d) => d,
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ENOENT) | Some(libc::ENOTDIR)) => {
+            return Ok(false)
+        }
+        Err(e) => return Err(Fail::io_err("open parent", e)),
+    };
+    Ok(d.kind(OsStr::new(name)).map_err(|e| Fail::io_err("stat", e))? != Kind::Missing)
+}
+
+/// `mail store-state` (protocol 17, read-only): whether guided setup wrote
+/// `config.json` and whether the RocksDB store exists. The daemon user
+/// cannot see into the `0750` tree, so it asks root.
+pub fn store_state(ctx: &Ctx) -> HResult<serde_json::Value> {
+    Ok(serde_json::json!({
+        "configJson": exists_nofollow(ctx, STALWART_CONFIG)?,
+        "dataStore": exists_nofollow(ctx, STALWART_DATA_STORE)?,
+    }))
 }
 
 fn chown_tree(dir: &Dir, uid: u32, gid: u32) -> HResult<()> {

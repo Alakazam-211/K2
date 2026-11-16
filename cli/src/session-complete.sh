@@ -15,7 +15,9 @@ cmd_session_complete() {
     local reason=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --reason) reason="$2"; shift 2 ;;
+            --reason)
+                [ $# -ge 2 ] || { echo "k2 done: '--reason' needs text." >&2; exit 2; }
+                reason="$2"; shift 2 ;;
             --help|-h)
                 echo "Usage: k2 done [--reason <text>]"
                 echo "  Mark this API-launched session complete (enter grace for reap)."
@@ -24,6 +26,7 @@ cmd_session_complete() {
                 echo "  Optional --reason is logged only (not shown to the API caller)."
                 return 0 ;;
             --) shift; break ;;
+            -*) echo "k2 done: unknown flag '$1'. Here k2 done takes --reason <text> (k2 done --help)." >&2; exit 2 ;;
             *) break ;;
         esac
     done

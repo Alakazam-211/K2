@@ -10,7 +10,7 @@
     {
       "name": "done",
       "usage": "k2 done [--blocked \"reason\"] [--agent <name>] | k2 done [--reason <text>] (API-launched session)",
-      "description": "Mark your task done, or blocked with a reason (POST /cli/done). In an API-launched session (K2_API_CELL=1) it instead completes the session: the session enters its grace period before it is reaped, and no message goes to the API caller (use it instead of an empty k2 respond --final). Other words are ignored.",
+      "description": "Mark your task done, or blocked with a reason (POST /cli/done). In an API-launched session (K2_API_CELL=1) it instead completes the session: the session enters its grace period before it is reaped, and no message goes to the API caller (use it instead of an empty k2 respond --final). Other words are ignored; --help prints the usage, and any other flag is a usage error (exit 2) that sends nothing.",
       "args": [],
       "flags": [
         {"name": "--blocked", "arg": "reason", "description": "Report the task as blocked, with why."},

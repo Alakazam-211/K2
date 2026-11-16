@@ -1,12 +1,31 @@
 # ── Agent Skill Surface ─────────────────────────────────────────────
 
+_done_usage() {
+    cat <<'EOF'
+k2 done [--blocked "reason"] [--agent <name>]
+  Mark your task done, or blocked with a reason (POST /cli/done).
+  --agent defaults to K2_AGENT_NAME. Other words are ignored; any other
+  flag is a usage error (exit 2) and nothing is sent.
+In a session the API started (K2_API_CELL=1): k2 done [--reason <text>]
+  completes that session instead (k2 done --help there says more).
+EOF
+}
+
 cmd_done() {
     local agent="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     local blocked=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            --blocked) blocked="$2"; shift 2 ;;
+            --agent)
+                [[ $# -ge 2 && "$2" != -* ]] || { echo "k2 done: '--agent' needs a name." >&2; exit 2; }
+                agent="$2"; shift 2 ;;
+            --blocked)
+                [[ $# -ge 2 ]] || { echo "k2 done: '--blocked' needs a reason." >&2; exit 2; }
+                blocked="$2"; shift 2 ;;
+            -h|--help) _done_usage; return 0 ;;
+            # Before, every unknown word was skipped, so `k2 done --help`
+            # marked the task done. A flag done doesn't take sends nothing.
+            -*) echo "k2 done: unknown flag '$1'. k2 done takes --blocked \"reason\" and --agent <name> (k2 done --help)." >&2; exit 2 ;;
             *) shift ;;
         esac
     done

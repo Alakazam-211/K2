@@ -27,7 +27,7 @@ use k2_mpc_base::store::DocKey;
 
 use super::cache::{self, Entry, Got};
 use super::service::{self, Keyed, Snapshot};
-use super::{Look, Width};
+use super::{Look, Shape, Width};
 use crate::docs::host;
 use crate::docs::host_events::{self, HostEvent};
 
@@ -60,12 +60,13 @@ pub fn same_hash_entry(blobs: &BlobStore, key: &DocKey, except: &str, hash: &str
     None
 }
 
-/// Answer `k` at `width` and `look` from another address's image, if the
-/// doc has one at its render hash and its own isn't cached: cache it under
-/// `k`'s address with `reused_from`, push `preview_ready`, and return the
-/// address it came from.
-pub fn try_reuse(blobs: &Arc<BlobStore>, snap: &Snapshot, k: &Keyed, width: Width, look: Look) -> Option<String> {
-    let build = look.cache_build(&snap.build);
+/// Answer `k` at `width`, `look` and `shape` from another address's image,
+/// if the doc has one at its render hash and its own isn't cached: cache it
+/// under `k`'s address with `reused_from`, push `preview_ready`, and return
+/// the address it came from. Two addresses at one render hash draw the same
+/// view (a renamed object), so both are shaped or neither.
+pub fn try_reuse(blobs: &Arc<BlobStore>, snap: &Snapshot, k: &Keyed, width: Width, look: Look, shape: Shape) -> Option<String> {
+    let build = snap.cache_build(&k.c.key, look, shape);
     if cache::entry_exists(&snap.key, &k.c.key, &k.hash, width, &build) {
         return None;
     }

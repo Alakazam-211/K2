@@ -101,8 +101,9 @@ impl PreviewRenderer for Deck {
         Ok(Listing { page: Some(Page { w: ix.page.0, h: ix.page.1, unit: "emu" }), containers })
     }
 
-    /// Always opaque (the route refuses a transparent deck preview).
-    fn render(&self, src: &Source<'_>, container: &Container, width: Width, _look: super::Look, wall: Duration) -> Result<Image, Failed> {
+    /// Always opaque (the route refuses a transparent deck preview), on the
+    /// slide's own page (a slide isn't shaped: the shape asked is ignored).
+    fn render(&self, src: &Source<'_>, container: &Container, width: Width, _look: super::Look, _shape: super::Shape, wall: Duration) -> Result<Image, Failed> {
         let Some(bin) = binary() else {
             return Err(Failed::new(FailCode::RendererError, format!("{BINARY_NAME} isn't installed beside the daemon")));
         };

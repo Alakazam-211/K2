@@ -132,6 +132,77 @@ impl Look {
     }
 }
 
+/// A still's shape: the width to height of the views a renderer shapes (a
+/// scene's auto view and an object's view, [`PreviewRenderer::shapes`]).
+/// Every other view keeps its own aspect (a camera's view its camera's, a
+/// turntable frame the renderer's) and ignores the shape asked for, as does
+/// a slide: it is drawn and cached once, whatever shape is asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Shape {
+    /// 16:9, the default: the stage.
+    Wide,
+    /// 4:3.
+    Tall,
+}
+
+impl Shape {
+    pub const ALL: [Shape; 2] = [Shape::Wide, Shape::Tall];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Shape::Wide => "wide",
+            Shape::Tall => "tall",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Shape> {
+        Shape::ALL.into_iter().find(|x| x.as_str() == s.trim())
+    }
+
+    /// Width / height.
+    pub fn aspect(self) -> f32 {
+        match self {
+            Shape::Wide => 16.0 / 9.0,
+            Shape::Tall => 4.0 / 3.0,
+        }
+    }
+
+    /// The build an image of this shape is cached under, after its look's
+    /// ([`Look::cache_build`]): that build for wide (the default, and the
+    /// shape every view that isn't shaped is keyed as), `<build>.tall` for
+    /// tall.
+    pub fn cache_build(self, build: &str) -> String {
+        match self {
+            Shape::Wide => build.to_string(),
+            Shape::Tall => format!("{build}.tall"),
+        }
+    }
+}
+
+/// The build an image in `look` and `shape` is cached under: the look's,
+/// then the shape's ([`Shape::cache_build`]). `shape` is the one the image
+/// is drawn in ([`drawn_shape`]).
+pub fn cache_build(build: &str, look: Look, shape: Shape) -> String {
+    shape.cache_build(&look.cache_build(build))
+}
+
+/// The shape `container` is drawn and cached in when `asked` is: `asked`
+/// when `renderer` shapes it, else [`Shape::Wide`], so asking a camera's
+/// view or a turntable frame for `tall` finds the image it already has.
+pub fn drawn_shape(renderer: &dyn PreviewRenderer, container: &Container, asked: Shape) -> Shape {
+    if renderer.shapes(container) {
+        asked
+    } else {
+        Shape::Wide
+    }
+}
+
+/// A shape as answers and pushes name it: only for a container `renderer`
+/// shapes (always then, wide included); left out for every other.
+pub fn shape_field(renderer: &dyn PreviewRenderer, container: &Container, shape: Shape) -> Option<&'static str> {
+    renderer.shapes(container).then_some(shape.as_str())
+}
+
 /// Why a render failed (contract Item 8, typed; never file content).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FailCode {
@@ -276,6 +347,12 @@ pub trait PreviewRenderer: Send + Sync {
     fn draws(&self, look: Look) -> bool {
         look == Look::Opaque
     }
+    /// Whether `container` is drawn in the [`Shape`] asked for (a scene's
+    /// auto view and an object's view). One that isn't keeps its own aspect,
+    /// and the shape asked for is ignored for it.
+    fn shapes(&self, _container: &Container) -> bool {
+        false
+    }
     /// Whether `container`'s images come with an id image ([`Image::ids`]).
     fn draws_ids(&self, _container: &Container) -> bool {
         false
@@ -293,9 +370,10 @@ pub trait PreviewRenderer: Send + Sync {
     /// limits); never draws.
     fn list(&self, bytes: &[u8]) -> Result<Listing, Failed>;
     /// Draw `container` of `src` at `width` px in `look` (one it
-    /// [`draws`](PreviewRenderer::draws)), out of process, within `wall`.
-    /// Blocking.
-    fn render(&self, src: &Source<'_>, container: &Container, width: Width, look: Look, wall: std::time::Duration) -> Result<Image, Failed>;
+    /// [`draws`](PreviewRenderer::draws)) and, when it
+    /// [`shapes`](PreviewRenderer::shapes) it, in `shape`, out of process,
+    /// within `wall`. Blocking.
+    fn render(&self, src: &Source<'_>, container: &Container, width: Width, look: Look, shape: Shape, wall: std::time::Duration) -> Result<Image, Failed>;
 }
 
 /// Every renderer, in the order they are asked.
@@ -321,6 +399,23 @@ mod tests {
         }
         assert_eq!(Width::parse("huge"), None);
         assert!(Width::Full.max_bytes() <= super::super::live_wire::FRAME_MAX as u64, "a full image fits the docs socket's frame");
+    }
+
+    #[test]
+    fn shapes_parse_wide_and_tall_and_key_only_tall() {
+        assert_eq!(Shape::ALL.map(Shape::as_str), ["wide", "tall"]);
+        for s in Shape::ALL {
+            assert_eq!(Shape::parse(s.as_str()), Some(s));
+        }
+        assert_eq!(Shape::parse(" tall "), Some(Shape::Tall));
+        for junk in ["", "square", "WIDE", "16:9"] {
+            assert_eq!(Shape::parse(junk), None, "{junk:?}");
+        }
+        assert_eq!((Shape::Wide.aspect(), Shape::Tall.aspect()), (16.0 / 9.0, 4.0 / 3.0));
+        assert_eq!(cache_build("b1", Look::Opaque, Shape::Wide), "b1", "wide keeps the name an image always had");
+        assert_eq!(cache_build("b1", Look::Opaque, Shape::Tall), "b1.tall");
+        assert_eq!(cache_build("b1", Look::Transparent, Shape::Tall), "b1.rgba.tall");
+        assert_eq!(cache_build("b1", Look::Transparent, Shape::Wide), "b1.rgba");
     }
 
     #[test]

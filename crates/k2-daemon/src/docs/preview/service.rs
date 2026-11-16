@@ -39,6 +39,12 @@
 //!   head lists the objects then.
 //! - **Looks** ([`super::Look`]): a job is per look as well as per width;
 //!   a transparent image is cached under its own name.
+//! - **Shapes** ([`super::Shape`]): for a view its renderer shapes (a
+//!   scene's auto view and an object's), a job is per shape too, a tall
+//!   image cached under its own name, and its metadata and pushes name the
+//!   shape (`shape`, wide included). Every other view is drawn once in its
+//!   own aspect: the shape asked is ignored for it and it is keyed as wide
+//!   ([`Snapshot::drawn_shape`]), with no `shape` in what it answers.
 //! - **Purge.** [`doc_purged`], [`space_removed`], [`doc_moved`] and
 //!   [`upkeep`] are the hooks' service side (memo, failures, audit), with
 //!   [`super::cache`] doing the files.
@@ -55,7 +61,7 @@ use k2_mpc_base::blob::BlobStore;
 use k2_mpc_base::session::{ConnId, Session};
 use k2_mpc_base::store::DocKey;
 
-use super::{cache, extras, reuse, Container, FailCode, Failed, Look, NoSideFiles, Page, PreviewRenderer, Source, Width};
+use super::{cache, extras, reuse, Container, FailCode, Failed, Look, NoSideFiles, Page, PreviewRenderer, Shape, Source, Width};
 use crate::docs::host;
 use crate::docs::host_events::{self, HostEvent};
 
@@ -102,6 +108,35 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn container(&self, address: &str) -> Option<&Keyed> {
         self.containers.iter().find(|k| k.c.key == address)
+    }
+
+    /// The shape `container` is drawn and keyed in when `asked` is: `asked`
+    /// for a view the renderer shapes, else wide ([`super::drawn_shape`]);
+    /// wide for an address not listed.
+    pub fn drawn_shape(&self, container: &str, asked: Shape) -> Shape {
+        self.container(container).map_or(Shape::Wide, |k| super::drawn_shape(self.renderer, &k.c, asked))
+    }
+
+    /// The build `container`'s image in `look` is cached under when `asked`
+    /// is the shape asked for ([`super::cache_build`] in its drawn shape).
+    pub fn cache_build(&self, container: &str, look: Look, asked: Shape) -> String {
+        super::cache_build(&self.build, look, self.drawn_shape(container, asked))
+    }
+
+    /// `shape` as `container`'s answers and pushes name it: only for a view
+    /// the renderer shapes.
+    pub fn shape_field(&self, container: &str, shape: Shape) -> Option<&'static str> {
+        self.container(container).and_then(|k| super::shape_field(self.renderer, &k.c, shape))
+    }
+
+    /// The shapes `c` may be cached in: both for a view the renderer
+    /// shapes, else wide alone.
+    pub fn shapes_of(&self, c: &Container) -> &'static [Shape] {
+        if self.renderer.shapes(c) {
+            &Shape::ALL
+        } else {
+            &[Shape::Wide]
+        }
     }
 }
 
@@ -191,8 +226,10 @@ pub fn head_moved(blobs: &Arc<BlobStore>, prev: &Snapshot, snap: &Arc<Snapshot>)
     remember(snap.clone());
     for k in dirty(prev, snap) {
         for look in Look::ALL.into_iter().filter(|l| snap.renderer.draws(*l)) {
-            for w in reuse::widths_to_redraw(prev, k, &look.cache_build(&snap.build)) {
-                request(blobs, snap, &k.c.key, w, look);
+            for &shape in snap.shapes_of(&k.c) {
+                for w in reuse::widths_to_redraw(prev, k, &super::cache_build(&snap.build, look, shape)) {
+                    request(blobs, snap, &k.c.key, w, look, shape);
+                }
             }
         }
     }
@@ -205,7 +242,7 @@ pub fn head_moved(blobs: &Arc<BlobStore>, prev: &Snapshot, snap: &Arc<Snapshot>)
 /// tables would keep the old ids. Each of their images cached at the view's
 /// current hash whose table names an object differently from `prev`'s
 /// listing is pushed `ready` again, at once: the same container, render
-/// hash, width, look and fields (its `rendered_at_ms` is when it was
+/// hash, width, look, shape and fields (its `rendered_at_ms` is when it was
 /// drawn), at `snap`'s rev, its `ids` named as the listing is now. The same
 /// render hash says the pixels are the ones the client has. The cache keeps
 /// the ids it was drawn with: the listing names a current image wherever it
@@ -219,8 +256,8 @@ fn push_renamed_ids(blobs: &BlobStore, prev: &Snapshot, snap: &Snapshot) {
         if !snap.renderer.draws_ids(&k.c) || !extras::named_by_listing(&k.c) {
             continue;
         }
-        for look in Look::ALL.into_iter().filter(|l| snap.renderer.draws(*l)) {
-            let build = look.cache_build(&snap.build);
+        for (look, &shape) in Look::ALL.into_iter().filter(|l| snap.renderer.draws(*l)).flat_map(|l| snap.shapes_of(&k.c).iter().map(move |s| (l, s))) {
+            let build = super::cache_build(&snap.build, look, shape);
             for w in Width::ALL {
                 let cache::Got::Hit(e) = cache::get(blobs, &snap.key, &k.c.key, &k.hash, w, &build) else { continue };
                 let (mut was, mut now) = (e.meta.clone(), e.meta);
@@ -323,7 +360,7 @@ pub fn dirty<'a>(prev: &Snapshot, next: &'a Snapshot) -> Vec<&'a Keyed> {
 
 // ── The queue ────────────────────────────────────────────────────────
 
-type JobId = (DocKey, String, String, Width, Look);
+type JobId = (DocKey, String, String, Width, Look, Shape);
 
 struct Job {
     id: JobId,
@@ -365,16 +402,19 @@ pub enum Requested {
     NoContainer,
 }
 
-/// Queue a render of `container` at `width` in `look` from `snap`, unless
-/// the doc already has its image under another address ([`reuse`]).
-pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, width: Width, look: Look) -> Requested {
+/// Queue a render of `container` at `width` in `look` and `shape` (for a
+/// view its renderer shapes; ignored for any other, which is one job
+/// whatever shape is asked) from `snap`, unless the doc already has its
+/// image under another address ([`reuse`]).
+pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, width: Width, look: Look, shape: Shape) -> Requested {
     let Some(k) = snap.container(container) else { return Requested::NoContainer };
     // A host that can't draw it at all (no decoder for it here) says so at
     // once: nothing queued, nothing pushed, no failure kept.
     if !snap.renderer.decodes_here(&k.c) {
         return Requested::Failed(FailCode::NotOnThisHost);
     }
-    let id: JobId = (snap.key.clone(), k.c.key.clone(), k.hash.clone(), width, look);
+    let shape = snap.drawn_shape(container, shape);
+    let id: JobId = (snap.key.clone(), k.c.key.clone(), k.hash.clone(), width, look, shape);
     {
         let q = queue().0.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(code) = q.failed.get(&id) {
@@ -384,7 +424,7 @@ pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, wi
             return Requested::Rendering;
         }
     }
-    if let Some(from) = reuse::try_reuse(blobs, snap, k, width, look) {
+    if let Some(from) = reuse::try_reuse(blobs, snap, k, width, look, shape) {
         return Requested::Reused { from };
     }
     let (lock, cv) = queue();
@@ -411,9 +451,10 @@ pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, wi
     Requested::Rendering
 }
 
-/// Whether a render of exactly this is waiting or drawing.
-pub fn rendering(key: &DocKey, container: &str, hash: &str, width: Width, look: Look) -> bool {
-    let id: JobId = (key.clone(), container.to_string(), hash.to_string(), width, look);
+/// Whether a render of exactly this is waiting or drawing (`shape` the one
+/// it is drawn in, [`Snapshot::drawn_shape`]).
+pub fn rendering(key: &DocKey, container: &str, hash: &str, width: Width, look: Look, shape: Shape) -> bool {
+    let id: JobId = (key.clone(), container.to_string(), hash.to_string(), width, look, shape);
     let q = queue().0.lock().unwrap_or_else(|p| p.into_inner());
     q.running.contains(&id) || q.waiting.iter().any(|j| j.id == id)
 }
@@ -459,22 +500,24 @@ fn worker() {
 /// Draw one job under the host cap, cache it, and push `preview_rendering`
 /// before and `preview_ready` after.
 fn draw(job: &Job) -> Result<(), FailCode> {
-    let (key, _, hash, width, look) = &job.id;
+    let (key, _, hash, width, look, shape) = &job.id;
     let snap = job.snap.clone();
     let container = job.container.clone();
-    let (w, look) = (*width, *look);
+    let (w, look, shape) = (*width, *look, *shape);
+    let shape_named = super::shape_field(job.snap.renderer, &job.container, shape);
     host_events::publish(HostEvent::PreviewRendering {
         key: key.clone(),
         container: job.container.key.clone(),
         render_hash: hash.clone(),
         width: w.as_str(),
         look: look_field(look),
+        shape: shape_named,
         rev: job.snap.rev,
     });
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("k2-docs-preview-render".into()).spawn(move || {
         let src = Source { doc: &snap.bytes, side: &NoSideFiles };
-        let _ = tx.send(snap.renderer.render(&src, &container, w, look, WALL));
+        let _ = tx.send(snap.renderer.render(&src, &container, w, look, shape, WALL));
     });
     let result = match spawned {
         Ok(_) => match rx.recv_timeout(HOST_CAP) {
@@ -486,7 +529,7 @@ fn draw(job: &Job) -> Result<(), FailCode> {
     let rendered_at_ms = host::now_ms();
     let mut ready = Vec::new();
     let outcome = match result {
-        Ok(img) => match store(&job.blobs, &job.snap, &job.container.key, hash, w, look, &img, rendered_at_ms) {
+        Ok(img) => match store(&job.blobs, &job.snap, &job.container.key, hash, w, look, shape, &img, rendered_at_ms) {
             Ok(mut meta) => {
                 // An object renamed while this was drawn keeps the view's
                 // hash: the push names the table as the head lists it now
@@ -518,18 +561,20 @@ fn draw(job: &Job) -> Result<(), FailCode> {
         failed: outcome.err().map(FailCode::as_str),
         rev: job.snap.rev,
         rendered_at_ms,
-        extras: if outcome.is_ok() { ready } else { look_fields(look) },
+        extras: if outcome.is_ok() { ready } else { ask_fields(look, shape_named) },
     });
     outcome
 }
 
-/// Cache an image drawn of `container` at `width` in `look` from `snap`,
-/// its id image first (beside it, [`cache::ids_build`]), so a cached image
-/// always has its id image written. Returns the image's metadata.
+/// Cache an image drawn of `container` at `width` in `look` and `shape`
+/// (as [`request`] takes it) from `snap`, its id image first (beside it,
+/// [`cache::ids_build`]), so a cached image always has its id image
+/// written. Returns the image's metadata.
 #[allow(clippy::too_many_arguments)]
-pub fn store(blobs: &BlobStore, snap: &Snapshot, container: &str, hash: &str, width: Width, look: Look, img: &super::Image, rendered_at_ms: u64) -> Result<serde_json::Value, String> {
-    let meta = meta_json(snap, container, hash, width, look, img, rendered_at_ms);
-    let build = look.cache_build(&snap.build);
+pub fn store(blobs: &BlobStore, snap: &Snapshot, container: &str, hash: &str, width: Width, look: Look, shape: Shape, img: &super::Image, rendered_at_ms: u64) -> Result<serde_json::Value, String> {
+    let shape = snap.drawn_shape(container, shape);
+    let meta = meta_json(snap, container, hash, width, look, shape, img, rendered_at_ms);
+    let build = super::cache_build(&snap.build, look, shape);
     if let Some(ids) = &img.ids {
         cache::put(blobs, &snap.key, container, hash, width, &cache::ids_build(&build), &ids_entry_meta(&meta), ids)?;
     }
@@ -543,13 +588,22 @@ pub fn look_field(look: Look) -> Option<&'static str> {
     (look != Look::Opaque).then_some(look.as_str())
 }
 
-fn look_fields(look: Look) -> Vec<(String, k2_mpc_base::errors::Value)> {
-    look_field(look).map(|l| vec![("look".to_string(), k2_mpc_base::errors::Value::from(l))]).unwrap_or_default()
+/// What a failed push names of what was asked: `look` (left out for
+/// opaque), then `shape` (for a view its renderer shapes).
+fn ask_fields(look: Look, shape: Option<&'static str>) -> Vec<(String, k2_mpc_base::errors::Value)> {
+    let mut f = Vec::new();
+    if let Some(l) = look_field(look) {
+        f.push(("look".to_string(), k2_mpc_base::errors::Value::from(l)));
+    }
+    if let Some(s) = shape {
+        f.push(("shape".to_string(), k2_mpc_base::errors::Value::from(s)));
+    }
+    f
 }
 
 /// The fields a `ready` push carries after the old ones, from the image's
 /// metadata: `render_ms`, `without_modifiers`, then what is there of
-/// `look`, `reused_from`, `camera` and `ids` (its objects listed only up to
+/// `look`, `shape`, `reused_from`, `camera` and `ids` (its objects listed only up to
 /// [`extras::PUSH_IDS_MAX`]).
 pub fn ready_fields(meta: &serde_json::Value) -> Vec<(String, k2_mpc_base::errors::Value)> {
     use k2_mpc_base::errors::Value;
@@ -557,7 +611,7 @@ pub fn ready_fields(meta: &serde_json::Value) -> Vec<(String, k2_mpc_base::error
         ("render_ms".to_string(), Value::from(meta["render_ms"].as_u64().unwrap_or(0))),
         ("without_modifiers".to_string(), Value::from(meta["without_modifiers"].as_bool().unwrap_or(false))),
     ];
-    for k in ["look", "reused_from", "camera"] {
+    for k in ["look", "shape", "reused_from", "camera"] {
         if let Some(v) = meta.get(k) {
             f.push((k.to_string(), extras::to_wire(v)));
         }
@@ -569,12 +623,12 @@ pub fn ready_fields(meta: &serde_json::Value) -> Vec<(String, k2_mpc_base::error
 }
 
 /// The metadata of an image's id image entry, from the image's: what names
-/// it (kind, container, render hash, width, look, rev, size, when it was
+/// it (kind, container, render hash, width, look, shape, rev, size, when it was
 /// drawn, `reused_from`), `layer: "ids"`, and its format. Its table stays in
 /// the image's metadata only.
 pub fn ids_entry_meta(meta: &serde_json::Value) -> serde_json::Value {
     let mut v = serde_json::Map::new();
-    for k in ["kind", "container", "render_hash", "width", "look", "rev", "size", "render_ms", "rendered_at_ms", "reused_from"] {
+    for k in ["kind", "container", "render_hash", "width", "look", "shape", "rev", "size", "render_ms", "rendered_at_ms", "reused_from"] {
         if let Some(x) = meta.get(k) {
             v.insert(k.to_string(), x.clone());
         }
@@ -599,9 +653,9 @@ pub fn with_current_ids(snap: &Snapshot, k: &Keyed, meta: &mut serde_json::Value
 }
 
 /// The metadata kept with an image and answered with it (contract Item 8's
-/// `Preview` table).
+/// `Preview` table), `shape` the one it was drawn in.
 #[allow(clippy::too_many_arguments)]
-pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, look: Look, img: &super::Image, rendered_at_ms: u64) -> serde_json::Value {
+pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, look: Look, shape: Shape, img: &super::Image, rendered_at_ms: u64) -> serde_json::Value {
     let mut v = serde_json::json!({
         "kind": snap.renderer.kind(),
         "container": container,
@@ -622,6 +676,9 @@ pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, loo
     }
     if let Some(l) = look_field(look) {
         v["look"] = serde_json::json!(l);
+    }
+    if let Some(s) = snap.shape_field(container, shape) {
+        v["shape"] = serde_json::json!(s);
     }
     for (k, x) in &img.extras {
         v[k.as_str()] = x.clone();

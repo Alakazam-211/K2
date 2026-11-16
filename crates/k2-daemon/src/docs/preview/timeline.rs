@@ -32,7 +32,7 @@
 
 use sha2::{Digest as _, Sha256};
 
-use super::{Container, FailCode, Failed, Image, Listing, Look, PreviewRenderer, Source, Width};
+use super::{Container, FailCode, Failed, Image, Listing, Look, PreviewRenderer, Shape, Source, Width};
 use crate::docs::target::Target as DocTarget;
 
 /// The digest's domain label: a tile's digest is never another type's.
@@ -151,7 +151,7 @@ impl PreviewRenderer for TimelineRenderer {
 
     /// Never reached while [`decoder_here`] is false (the host answers
     /// first); the same answer if it were.
-    fn render(&self, _src: &Source<'_>, container: &Container, _width: Width, _look: Look, _wall: std::time::Duration) -> Result<Image, Failed> {
+    fn render(&self, _src: &Source<'_>, container: &Container, _width: Width, _look: Look, _shape: Shape, _wall: std::time::Duration) -> Result<Image, Failed> {
         Err(Failed::new(FailCode::NotOnThisHost, format!("no video decoder for {} on this host", container.key)))
     }
 }

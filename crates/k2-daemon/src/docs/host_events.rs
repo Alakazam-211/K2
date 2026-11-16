@@ -57,12 +57,13 @@ pub enum HostEvent {
         rev: u64,
         rendered_at_ms: u64,
         /// Fields after the old ones (`render_ms`, `without_modifiers`,
-        /// `look`, `reused_from`, `camera`, `ids`), in order.
+        /// `look`, `shape`, `reused_from`, `camera`, `ids`), in order.
         extras: Vec<(String, Value)>,
     },
-    /// A preview of `container` at `render_hash`, `width` and `look` (left
-    /// out: opaque) started drawing.
-    PreviewRendering { key: DocKey, container: String, render_hash: String, width: &'static str, look: Option<&'static str>, rev: u64 },
+    /// A preview of `container` at `render_hash`, `width`, `look` (left
+    /// out: opaque) and `shape` (left out for a view that isn't shaped)
+    /// started drawing.
+    PreviewRendering { key: DocKey, container: String, render_hash: String, width: &'static str, look: Option<&'static str>, shape: Option<&'static str>, rev: u64 },
     /// An agent's turn ended (`actor`: its pid).
     TurnEnd { turn: String, actor: Option<String>, at_ms: u64 },
     /// A comment op on `key`'s doc: ids, op and author only.
@@ -135,7 +136,7 @@ impl HostEvent {
                 f.extend(extras.iter().cloned());
                 Value::Obj(f)
             }
-            HostEvent::PreviewRendering { container, render_hash, width, look, rev, .. } => {
+            HostEvent::PreviewRendering { container, render_hash, width, look, shape, rev, .. } => {
                 let mut f: Vec<(String, Value)> = vec![
                     ("type".into(), Value::from("preview_rendering")),
                     ("container".into(), Value::from(container.as_str())),
@@ -144,6 +145,9 @@ impl HostEvent {
                 ];
                 if let Some(l) = look {
                     f.push(("look".into(), Value::from(*l)));
+                }
+                if let Some(s) = shape {
+                    f.push(("shape".into(), Value::from(*s)));
                 }
                 f.push(("rev".into(), Value::from(*rev)));
                 Value::Obj(f)

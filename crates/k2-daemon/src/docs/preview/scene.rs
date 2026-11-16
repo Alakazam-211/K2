@@ -50,6 +50,17 @@
 //!   that can share a render hash (an object and its renamed or identical
 //!   twin) all ask, so unlike the framing it needs no per-view key; the
 //!   turntable frames are only drawn once more under the new build.
+//! - **Shaped stills.** The scene view and an object's view are drawn in
+//!   the shape the request asks for ([`Shape`]: `wide` 16:9 by default, or
+//!   `tall` 4:3; 1,920 × 1,080 or 1,920 × 1,440 at full width), so the
+//!   stage gets a still of its own shape ([`shapes_view`]). A camera's view
+//!   keeps its camera's aspect and a turntable frame the renderer's (4:3):
+//!   the shape is ignored for them, and they are keyed without it, so
+//!   asking a camera for `tall` finds the image it has. Like the look, the
+//!   shape is the request's, not the scene's: the host keys it in the cache
+//!   build ([`super::cache_build`]), and the renderer's build carries
+//!   `.shape`, so no image drawn before the default became wide (4:3) is
+//!   served as one.
 //! - **What rides along** ([`super::extras`]): each object's local box,
 //!   each camera's display values, the turntable frames' titles, and with
 //!   each image the camera that drew it and its id table.
@@ -69,7 +80,7 @@ use k2_scenerender::proto::{Ao, Clay, FailureCode, ImageFormat, BINARY_NAME, PRO
 use k2_scenerender::scene::InputLimits;
 use sha2::{Digest as _, Sha256};
 
-use super::{extras, Container, FailCode, Failed, Image, Listing, Look, PreviewRenderer, Source, Width};
+use super::{extras, Container, FailCode, Failed, Image, Listing, Look, PreviewRenderer, Shape, Source, Width};
 use crate::docs::target::Target as DocTarget;
 
 /// Debug builds only: the worker binary.
@@ -130,6 +141,16 @@ pub fn wants_ids(target: Target) -> bool {
     match target {
         Target::Scene | Target::Camera(_) | Target::Object(_) => true,
         Target::Turntable(_) => false,
+    }
+}
+
+/// Whether `target`'s still is drawn in the shape asked for ([`Shape`]):
+/// the scene view and an object's view. A camera's view keeps its camera's
+/// aspect, a turntable frame the renderer's.
+pub fn shapes_view(target: Target) -> bool {
+    match target {
+        Target::Scene | Target::Object(_) => true,
+        Target::Camera(_) | Target::Turntable(_) => false,
     }
 }
 
@@ -194,10 +215,14 @@ pub fn limits_for_request(req: &SceneRequest<'_>, width: Width, wall: Duration) 
 /// The worker's request for one view in `look`: WebP; transparent with no
 /// background, or opaque on the renderer's own neutral; in clay with the
 /// default tones and with ambient occlusion on its default settings, framed
-/// as [`framing_for`] says, with its id image when [`wants_ids`].
-pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> SceneRequest<'_> {
+/// as [`framing_for`] says, with its id image when [`wants_ids`], and in
+/// `shape` when [`shapes_view`] (else in its own aspect; `shape` ignored).
+pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look, shape: Shape) -> SceneRequest<'_> {
     let mut view = target.view(width.px());
     view.framing = framing_for(target);
+    if shapes_view(target) {
+        view.aspect = Some(shape.aspect());
+    }
     let mut req = SceneRequest::new(k2scene, vec![view]);
     req.format = ImageFormat::Webp;
     req.background = None;
@@ -208,20 +233,21 @@ pub fn request_for(k2scene: &[u8], target: Target, width: Width, look: Look) -> 
     req
 }
 
-/// Draw `container` of a K2SCENE1 at `width` in `look`, out of process, within `wall`.
-pub fn render_k2scene(k2scene: &[u8], container: &Container, width: Width, look: Look, wall: Duration) -> Result<Image, Failed> {
+/// Draw `container` of a K2SCENE1 at `width` in `look` (and `shape`, for a
+/// view it shapes), out of process, within `wall`.
+pub fn render_k2scene(k2scene: &[u8], container: &Container, width: Width, look: Look, shape: Shape, wall: Duration) -> Result<Image, Failed> {
     let Some(bin) = binary() else {
         return Err(Failed::new(FailCode::RendererError, format!("{BINARY_NAME} isn't installed beside the daemon")));
     };
-    render_k2scene_with(&bin, k2scene, container, width, look, wall)
+    render_k2scene_with(&bin, k2scene, container, width, look, shape, wall)
 }
 
 /// [`render_k2scene`] with the worker at `bin`.
-pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, width: Width, look: Look, wall: Duration) -> Result<Image, Failed> {
+pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, width: Width, look: Look, shape: Shape, wall: Duration) -> Result<Image, Failed> {
     let Some(target) = Target::from_locator(&container.locator) else {
         return Err(Failed::new(FailCode::RendererError, format!("not a scene locator: {:?}", container.locator)));
     };
-    let req = request_for(k2scene, target, width, look);
+    let req = request_for(k2scene, target, width, look, shape);
     let started = std::time::Instant::now();
     match host::render(bin, &req, &limits_for_request(&req, width, wall)) {
         Ok(mut r) => {
@@ -267,13 +293,15 @@ impl PreviewRenderer for SceneRenderer {
         "scene"
     }
 
-    /// The worker's protocol and version, then `.clay.ao.ids`: every view
-    /// is drawn in clay with ambient occlusion, and every view that is
-    /// picked in comes with its id image ([`wants_ids`]), so no image drawn
-    /// in base colours, without occlusion or without its id image is ever
+    /// The worker's protocol and version, then `.clay.ao.ids.shape`: every
+    /// view is drawn in clay with ambient occlusion, every view that is
+    /// picked in comes with its id image ([`wants_ids`]), and the views
+    /// that are shaped are drawn in the shape asked for, wide by default
+    /// ([`shapes_view`]), so no image drawn in base colours, without
+    /// occlusion, without its id image or at the old 4:3 default is ever
     /// served.
     fn build(&self) -> String {
-        format!("scenerender-p{PROTO}-{VERSION}.clay.ao.ids")
+        format!("scenerender-p{PROTO}-{VERSION}.clay.ao.ids.shape")
     }
 
     /// No doc yet: a live BLEND doc needs the pack's mesh read and its tier
@@ -291,6 +319,10 @@ impl PreviewRenderer for SceneRenderer {
         true
     }
 
+    fn shapes(&self, container: &Container) -> bool {
+        Target::from_locator(&container.locator).is_some_and(shapes_view)
+    }
+
     fn draws_ids(&self, container: &Container) -> bool {
         Target::from_locator(&container.locator).is_some_and(wants_ids)
     }
@@ -299,8 +331,8 @@ impl PreviewRenderer for SceneRenderer {
         list_k2scene(&mesh_read(bytes)?)
     }
 
-    fn render(&self, src: &Source<'_>, container: &Container, width: Width, look: Look, wall: Duration) -> Result<Image, Failed> {
-        render_k2scene(&mesh_read(src.doc)?, container, width, look, wall)
+    fn render(&self, src: &Source<'_>, container: &Container, width: Width, look: Look, shape: Shape, wall: Duration) -> Result<Image, Failed> {
+        render_k2scene(&mesh_read(src.doc)?, container, width, look, shape, wall)
     }
 }
 
@@ -386,8 +418,8 @@ mod tests {
         // With an id image the worker's cap has room for both (each is held to the width's cap after).
         let bytes = encode(&scene_with_camera());
         for w in Width::ALL {
-            let with = request_for(&bytes, Target::Scene, w, Look::Transparent);
-            let without = request_for(&bytes, Target::Turntable(0), w, Look::Transparent);
+            let with = request_for(&bytes, Target::Scene, w, Look::Transparent, Shape::Wide);
+            let without = request_for(&bytes, Target::Turntable(0), w, Look::Transparent, Shape::Wide);
             assert_eq!(limits_for_request(&with, w, Duration::from_secs(20)).max_output_bytes, 2 * w.max_bytes(), "{w:?}");
             assert_eq!(limits_for_request(&without, w, Duration::from_secs(20)), limits_for(w, Duration::from_secs(20)), "{w:?}");
         }
@@ -403,8 +435,9 @@ mod tests {
         s.objects[1].modifiers_not_applied = true;
         let bytes = encode(&s);
         let l = list_k2scene(&bytes).expect("listing");
-        for (c, without, height) in [(&l.containers[0], true, 240), (&l.containers[1], true, 180), (&l.containers[2], false, 240), (&l.containers[3], true, 240), (&l.containers[6], true, 240)] {
-            let img = render_k2scene_with(&bin, &bytes, c, Width::Thumb, Look::Opaque, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{}: {:?}", c.key, f));
+        // Wide by default: the scene and an object 16:9; the camera keeps its own (16:9), a turntable frame 4:3.
+        for (c, without, height) in [(&l.containers[0], true, 180), (&l.containers[1], true, 180), (&l.containers[2], false, 180), (&l.containers[3], true, 180), (&l.containers[6], true, 240)] {
+            let img = render_k2scene_with(&bin, &bytes, c, Width::Thumb, Look::Opaque, Shape::Wide, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{}: {:?}", c.key, f));
             assert_eq!((img.mime, img.format, img.width, img.height), ("image/webp", "webp-lossless", 320, height), "{}", c.key);
             assert_eq!(&img.bytes[..4], b"RIFF");
             assert_eq!(img.without_modifiers, without, "{}", c.key);
@@ -421,13 +454,73 @@ mod tests {
             }
         }
         // An object's view shows that object alone, named as the file names it.
-        let o = render_k2scene_with(&bin, &bytes, &l.containers[2], Width::Thumb, Look::Opaque, Duration::from_secs(60)).expect("object");
+        let o = render_k2scene_with(&bin, &bytes, &l.containers[2], Width::Thumb, Look::Opaque, Shape::Wide, Duration::from_secs(60)).expect("object");
         assert_eq!(o.extras["ids"]["objects"], serde_json::json!([{ "index": 0, "id": "Item.000" }]));
         // Transparent: a lossless WebP whose header says it has alpha.
-        let t = render_k2scene_with(&bin, &bytes, &l.containers[0], Width::Thumb, Look::Transparent, Duration::from_secs(60)).expect("transparent");
+        let t = render_k2scene_with(&bin, &bytes, &l.containers[0], Width::Thumb, Look::Transparent, Shape::Wide, Duration::from_secs(60)).expect("transparent");
         assert_eq!(&t.bytes[12..16], b"VP8L");
         assert_ne!(t.bytes[24] & 0x10, 0, "the VP8L header's alpha bit");
         let bad = Container { locator: "x9".into(), ..l.containers[0].clone() };
-        assert_eq!(render_k2scene_with(&bin, &bytes, &bad, Width::Thumb, Look::Opaque, Duration::from_secs(60)).expect_err("locator").code, FailCode::RendererError);
+        assert_eq!(render_k2scene_with(&bin, &bytes, &bad, Width::Thumb, Look::Opaque, Shape::Wide, Duration::from_secs(60)).expect_err("locator").code, FailCode::RendererError);
+    }
+
+    /// The scene and an object are drawn in the shape asked for (wide 16:9,
+    /// tall 4:3); a camera keeps its own aspect and a turntable frame 4:3,
+    /// whatever is asked.
+    #[test]
+    fn the_scene_and_objects_are_drawn_in_the_shape_asked_and_the_rest_in_their_own() {
+        let bin = k2_core::test_env::workspace_bin(ENV_BIN, "k2-scenerender", BINARY_NAME);
+        let bytes = encode(&scene_with_camera());
+        let l = list_k2scene(&bytes).expect("listing");
+        let by = |key: &str| l.containers.iter().find(|c| c.key == key).unwrap_or_else(|| panic!("no {key}"));
+        let cases = [
+            ("@scene", Width::Full, Shape::Wide, (1920, 1080)),
+            ("@scene", Width::Full, Shape::Tall, (1920, 1440)),
+            ("@scene", Width::Thumb, Shape::Wide, (320, 180)),
+            ("@scene", Width::Thumb, Shape::Tall, (320, 240)),
+            ("@obj:Item.001", Width::Full, Shape::Wide, (1920, 1080)),
+            ("@obj:Item.001", Width::Full, Shape::Tall, (1920, 1440)),
+            ("@obj:Item.001", Width::Thumb, Shape::Wide, (320, 180)),
+            ("@obj:Item.001", Width::Thumb, Shape::Tall, (320, 240)),
+            ("@cam:Camera", Width::Thumb, Shape::Wide, (320, 180)),
+            ("@cam:Camera", Width::Thumb, Shape::Tall, (320, 180)),
+            ("@turntable:2", Width::Thumb, Shape::Wide, (320, 240)),
+            ("@turntable:2", Width::Thumb, Shape::Tall, (320, 240)),
+        ];
+        for (key, w, shape, size) in cases {
+            let c = by(key);
+            assert_eq!(SCENE.shapes(c), key == "@scene" || key.starts_with("@obj:"), "{key}");
+            let img = render_k2scene_with(&bin, &bytes, c, w, Look::Transparent, shape, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{key} {shape:?}: {f:?}"));
+            assert_eq!((img.width, img.height), size, "{key} {w:?} {shape:?}");
+            assert!(img.bytes.len() as u64 <= w.max_bytes(), "{key} {w:?} {shape:?}: within the width's cap");
+            if let Some(ids) = &img.ids {
+                assert_eq!((u32::from_be_bytes(ids[16..20].try_into().expect("4")), u32::from_be_bytes(ids[20..24].try_into().expect("4"))), size, "{key} {shape:?}: the id image at the still's size");
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_scene_and_object_views_take_the_shape_asked() {
+        let bytes = encode(&scene_with_camera());
+        let mut targets = vec![(Target::Scene, true), (Target::Object(0), true), (Target::Camera(0), false)];
+        targets.extend((0..8).map(|k| (Target::Turntable(k), false)));
+        for (t, shaped) in targets {
+            assert_eq!(shapes_view(t), shaped, "{t:?}");
+            for w in Width::ALL {
+                let wide = request_for(&bytes, t, w, Look::Transparent, Shape::Wide);
+                let tall = request_for(&bytes, t, w, Look::Transparent, Shape::Tall);
+                if shaped {
+                    assert_eq!((wide.views[0].aspect, tall.views[0].aspect), (Some(16.0 / 9.0), Some(4.0 / 3.0)), "{t:?}");
+                } else {
+                    assert_eq!((wide.views[0].aspect, tall.views[0].aspect), (None, None), "{t:?}: its own aspect");
+                }
+                // Byte caps: the largest still (1,920 x 1,440, transparent, with ids) is today's size, so the caps hold.
+                assert_eq!(limits_for_request(&tall, w, Duration::from_secs(20)), limits_for_request(&wide, w, Duration::from_secs(20)), "{t:?} {w:?}");
+            }
+        }
+        let l = list_k2scene(&bytes).expect("listing");
+        for c in &l.containers {
+            assert_eq!(SCENE.shapes(c), c.key == "@scene" || c.key.starts_with("@obj:"), "{}", c.key);
+        }
     }
 }

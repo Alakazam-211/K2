@@ -13,7 +13,7 @@ use serde_json::json;
 use super::*;
 use crate::docs::host_events;
 use crate::docs::preview::service::{self, Keyed, Requested, Snapshot};
-use crate::docs::preview::{renderers, route, FailCode, Look, PreviewRenderer, Width};
+use crate::docs::preview::{renderers, route, FailCode, Look, PreviewRenderer, Shape, Width};
 use crate::test_support::{with_temp_home, Scratch};
 
 fn store() -> (Scratch, Arc<BlobStore>) {
@@ -105,6 +105,7 @@ fn the_timeline_renderer_is_registered_and_serves_no_doc_yet() {
     assert_eq!(TIMELINE.list(b"{}").expect_err("no pack").code, FailCode::UnsupportedPart);
     assert_eq!(TIMELINE.default_look(), Look::Opaque);
     assert!(!TIMELINE.draws_ids(c));
+    assert!(!TIMELINE.shapes(c), "a tile keeps its own aspect: the shape asked is ignored");
 }
 
 /// A host with no video decoder: the image answers `failed` with
@@ -119,7 +120,7 @@ fn a_host_without_a_decoder_answers_not_on_this_host_at_once() {
         let snap = snapshot(&blobs, &key, &[clip(7, "Interview A", 1, 48_000, 96_000)]);
         let sub = host_events::subscribe(&key);
 
-        let r = route::image(&blobs, &snap, "@trk:1/clip:7/tile:head", None, Width::Thumb, Look::Opaque, false);
+        let r = route::image(&blobs, &snap, "@trk:1/clip:7/tile:head", None, Width::Thumb, Look::Opaque, Shape::Wide, false);
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["state"], "failed", "{v}");
@@ -127,22 +128,24 @@ fn a_host_without_a_decoder_answers_not_on_this_host_at_once() {
         assert_eq!(v["kind"], "timeline", "{v}");
         assert_eq!(v["container"], "@trk:1/clip:7/tile:head", "{v}");
         assert!(v.get("base64").is_none() && v.get("stale").is_none(), "no picture: {v}");
+        assert!(v.get("shape").is_none(), "a tile isn't shaped: {v}");
 
         for w in Width::ALL {
-            assert_eq!(service::request(&blobs, &snap, "@trk:1/clip:7/tile:tail", w, Look::Opaque), Requested::Failed(FailCode::NotOnThisHost));
+            assert_eq!(service::request(&blobs, &snap, "@trk:1/clip:7/tile:tail", w, Look::Opaque, Shape::Wide), Requested::Failed(FailCode::NotOnThisHost));
             let k = snap.container("@trk:1/clip:7/tile:tail").expect("tail");
-            assert!(!service::rendering(&key, &k.c.key, &k.hash, w, Look::Opaque), "nothing queued");
+            assert!(!service::rendering(&key, &k.c.key, &k.hash, w, Look::Opaque, Shape::Wide), "nothing queued");
         }
-        // Asked again: the same answer, decided again (nothing kept to clear).
-        assert_eq!(service::request(&blobs, &snap, "@trk:1/clip:7/tile:head", Width::Full, Look::Opaque), Requested::Failed(FailCode::NotOnThisHost));
+        // Asked again (tall, which a tile ignores): the same answer, decided again (nothing kept to clear).
+        assert_eq!(service::request(&blobs, &snap, "@trk:1/clip:7/tile:head", Width::Full, Look::Opaque, Shape::Tall), Requested::Failed(FailCode::NotOnThisHost));
         assert_eq!(pushed(&sub), 0, "no preview_rendering or preview_ready is pushed");
 
         // The listing (with want=thumb too): every tile says why, and nothing is queued.
-        let r = route::listing(&blobs, &snap, Some(Width::Thumb), Look::Opaque);
+        let r = route::listing(&blobs, &snap, Some(Width::Thumb), Look::Opaque, Shape::Tall);
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["kind"], "timeline");
         assert_eq!(v["page"], serde_json::Value::Null);
+        assert!(v.get("shape").is_none(), "no tile is shaped, so the listing names no shape: {v}");
         let tiles = v["containers"].as_array().expect("containers");
         assert_eq!(tiles.len(), 2);
         for t in tiles {
@@ -171,7 +174,7 @@ fn a_renderer_that_decodes_lists_as_before() {
             containers: base.containers.clone(),
             bytes: Arc::new(Vec::new()),
         };
-        let v = route::container_json(&deck, &deck.containers[0], Look::Opaque);
+        let v = route::container_json(&deck, &deck.containers[0], Look::Opaque, Shape::Wide);
         assert_eq!(v["previews"], json!({ "thumb": "none", "full": "none" }), "{v}");
         assert!(v.get("failed").is_none(), "{v}");
     });

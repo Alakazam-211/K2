@@ -35,11 +35,18 @@
 //! **`look`** (`opaque` or `transparent`; each type has its default: a deck
 //! opaque, a scene transparent, the 3D tab's one still for all its looks).
 //! A deck refuses `transparent`. Answers name `look` only when it is
-//! `transparent`. **Per-type extras** ride in each listed container (a
-//! scene object's `bounds`, a camera's `camera` display values) and in an
-//! image's metadata (a scene view's `camera` and `ids`): [`super::extras`].
-//! A current image's id table names the objects as the doc does now
-//! ([`service::with_current_ids`]).
+//! `transparent`. **`shape`** (`wide`, the default, 16:9; or `tall`, 4:3):
+//! the shape of a still a type shapes (a scene's `@scene` and `@obj:`
+//! views). It is ignored for every other container (a scene's `@cam:` view
+//! keeps its camera's aspect and a `@turntable:` frame the renderer's; a
+//! slide its page; a timeline's tile its clip's), never refused: they are
+//! drawn and cached once, and asking them for `tall` answers the image they
+//! have. Answers about a shaped view name `shape` (wide included); a listing
+//! names it when the doc has one. **Per-type extras** ride in each listed
+//! container (a scene object's `bounds`, a camera's `camera` display values)
+//! and in an image's metadata (a scene view's `camera` and `ids`):
+//! [`super::extras`]. A current image's id table names the objects as the
+//! doc does now ([`service::with_current_ids`]).
 //!
 //! **Not on this host.** A container the host can't draw at all (a
 //! timeline's tile where there is no video decoder:
@@ -66,7 +73,7 @@ use k2_mpc_base::session::{SessionError, Stay};
 
 use super::cache::{self, Got};
 use super::service::{self, Keyed, Requested, SnapError, Snapshot};
-use super::{extras, FailCode, Look, Width};
+use super::{extras, FailCode, Look, Shape, Width};
 use crate::cli_response::CliResponse;
 use crate::docs::caller::refusal;
 use crate::docs::routes::{self, Call, OpenError};
@@ -120,6 +127,10 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
             None => return routes::bad(format!("look must be opaque or transparent (got {l})")),
         },
     };
+    let shape = match shape_param(c.input.str("shape").as_deref()) {
+        Ok(s) => s,
+        Err(e) => return routes::bad(e),
+    };
     let Some(blobs) = rt.blobs() else {
         return refusal(
             "503 Service Unavailable",
@@ -155,14 +166,14 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
         Err(SnapError::NoKey(e)) => return refusal("503 Service Unavailable", "previews_unavailable", format!("no cache key: {e}")),
     };
     match (c.input.str("container"), width) {
-        (None, _) => listing(&blobs, &snap, want, look),
+        (None, _) => listing(&blobs, &snap, want, look, shape),
         (Some(container), Some(w)) => {
             // An agent asking for a still of the head is looking there: its
             // view address follows, so people can Follow it.
             if version.is_none() && snap.container(&container).is_some() {
                 agent_viewing(&session, joined.conn, c.caller, &container);
             }
-            image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w, look, ids)
+            image(&blobs, &snap, &container, c.input.str("hash").as_deref(), w, look, shape, ids)
         }
         (Some(_), None) => routes::bad("width is required with a container: thumb, thumb2x or full"),
     }
@@ -198,27 +209,37 @@ pub(crate) fn agent_viewing(session: &k2_mpc_base::session::Session, conn: k2_mp
     }
 }
 
-fn state_of(snap: &Snapshot, container: &str, hash: &str, w: Width, look: Look) -> &'static str {
-    if cache::entry_exists(&snap.key, container, hash, w, &look.cache_build(&snap.build)) {
+/// The `shape` parameter: `wide` when it is left out. Taken for every
+/// container and type (ignored where it doesn't apply), so only a word that
+/// isn't a shape is refused.
+pub(super) fn shape_param(v: Option<&str>) -> Result<Shape, String> {
+    match v {
+        None => Ok(Shape::Wide),
+        Some(s) => Shape::parse(s).ok_or_else(|| format!("shape must be wide or tall (got {s})")),
+    }
+}
+
+fn state_of(snap: &Snapshot, container: &str, hash: &str, w: Width, look: Look, shape: Shape) -> &'static str {
+    if cache::entry_exists(&snap.key, container, hash, w, &snap.cache_build(container, look, shape)) {
         return "ready";
     }
-    if service::rendering(&snap.key, container, hash, w, look) {
+    if service::rendering(&snap.key, container, hash, w, look, snap.drawn_shape(container, shape)) {
         return "rendering";
     }
     "none"
 }
 
 /// One listed container: its address, place, title, keyed `render_hash`
-/// (never the raw digest), the state of each width in `look`, then the
-/// type's extras.
-pub fn container_json(snap: &Snapshot, k: &Keyed, look: Look) -> Value {
+/// (never the raw digest), the state of each width in `look` (and `shape`,
+/// when its renderer shapes it), then the type's extras.
+pub fn container_json(snap: &Snapshot, k: &Keyed, look: Look, shape: Shape) -> Value {
     // A container this host can't draw at all: every width `failed`, and
     // why (`failed.code: not_on_this_host`), so the view shows its "no
     // preview" card without asking.
     let here = snap.renderer.decodes_here(&k.c);
     let mut previews = serde_json::Map::new();
     for w in [Width::Thumb, Width::Full] {
-        let state = if here { state_of(snap, &k.c.key, &k.hash, w, look) } else { "failed" };
+        let state = if here { state_of(snap, &k.c.key, &k.hash, w, look, shape) } else { "failed" };
         previews.insert(w.as_str().into(), json!(state));
     }
     let mut v = json!({
@@ -246,24 +267,35 @@ fn with_look(mut v: Value, look: Look) -> Value {
     v
 }
 
+/// `look`, then `shape` in an answer about `container`: the shape only when
+/// its renderer shapes it.
+fn with_ask(v: Value, snap: &Snapshot, container: &str, look: Look, shape: Shape) -> Value {
+    let mut v = with_look(v, look);
+    if let Some(s) = snap.shape_field(container, shape) {
+        v["shape"] = json!(s);
+    }
+    v
+}
+
 fn page_json(snap: &Snapshot) -> Value {
     snap.page.map_or(Value::Null, |p| json!({ "w": p.w, "h": p.h, "unit": p.unit }))
 }
 
-pub(super) fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, want: Option<Width>, look: Look) -> CliResponse {
+/// The listing: `shape` named when the doc has a view its renderer shapes.
+pub(super) fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snapshot>, want: Option<Width>, look: Look, shape: Shape) -> CliResponse {
     let containers: Vec<Value> = snap
         .containers
         .iter()
         .map(|k| {
             if let Some(w) = want {
-                if !cache::entry_exists(&snap.key, &k.c.key, &k.hash, w, &look.cache_build(&snap.build)) {
-                    service::request(blobs, snap, &k.c.key, w, look);
+                if !cache::entry_exists(&snap.key, &k.c.key, &k.hash, w, &snap.cache_build(&k.c.key, look, shape)) {
+                    service::request(blobs, snap, &k.c.key, w, look, shape);
                 }
             }
-            container_json(snap, k, look)
+            container_json(snap, k, look, shape)
         })
         .collect();
-    routes::ok(with_look(
+    let mut v = with_look(
         json!({
             "kind": snap.renderer.kind(),
             "rev": snap.rev,
@@ -273,7 +305,11 @@ pub(super) fn listing(blobs: &Arc<k2_mpc_base::blob::BlobStore>, snap: &Arc<Snap
             "containers": containers,
         }),
         look,
-    ))
+    );
+    if snap.containers.iter().any(|k| snap.renderer.shapes(&k.c)) {
+        v["shape"] = json!(shape.as_str());
+    }
+    routes::ok(v)
 }
 
 fn with_image(state: &str, e: cache::Entry) -> Value {
@@ -294,8 +330,10 @@ fn answer(snap: &Snapshot, current: &Keyed, mut e: cache::Entry, ids: bool) -> V
     with_image("ready", e)
 }
 
-/// The image of `container` at `w` in `look` (with `ids`, its id image):
-/// the route's second answer.
+/// The image of `container` at `w` in `look` and `shape` (ignored for a
+/// container its renderer doesn't shape; with `ids`, its id image): the
+/// route's second answer.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn image(
     blobs: &Arc<k2_mpc_base::blob::BlobStore>,
     snap: &Arc<Snapshot>,
@@ -303,6 +341,7 @@ pub(super) fn image(
     hash: Option<&str>,
     w: Width,
     look: Look,
+    shape: Shape,
     ids: bool,
 ) -> CliResponse {
     let Some(current) = snap.container(container) else {
@@ -318,7 +357,8 @@ pub(super) fn image(
         );
     }
     let hash = hash.map(str::trim).filter(|h| !h.is_empty()).unwrap_or(&current.hash);
-    let build = if ids { cache::ids_build(&look.cache_build(&snap.build)) } else { look.cache_build(&snap.build) };
+    let image_build = snap.cache_build(container, look, shape);
+    let build = if ids { cache::ids_build(&image_build) } else { image_build };
     match cache::get(blobs, &snap.key, container, hash, w, &build) {
         Got::Hit(e) => return routes::ok(answer(snap, current, e, ids)),
         Got::KeyDestroyed | Got::Miss => {}
@@ -329,17 +369,17 @@ pub(super) fn image(
             k2_mpc_base::tools::exit::NOT_FOUND,
         );
     }
-    match service::request(blobs, snap, container, w, look) {
+    match service::request(blobs, snap, container, w, look, shape) {
         Requested::Reused { from } => match cache::get(blobs, &snap.key, container, hash, w, &build) {
             Got::Hit(e) => routes::ok(answer(snap, current, e, ids)),
             Got::KeyDestroyed | Got::Miss => {
                 k2_core::log_debug!("[docs/preview] the image reused from {from} went before it was read");
-                let mut r = routes::ok(with_look(rendering_body(snap, container, hash, w), look));
+                let mut r = routes::ok(with_ask(rendering_body(snap, container, hash, w), snap, container, look, shape));
                 r.status = "202 Accepted";
                 r
             }
         },
-        Requested::Failed(code) => routes::ok(with_look(json!({
+        Requested::Failed(code) => routes::ok(with_ask(json!({
             "kind": snap.renderer.kind(),
             "container": container,
             "render_hash": hash,
@@ -348,7 +388,7 @@ pub(super) fn image(
             "page": page_json(snap),
             "state": "failed",
             "failed": { "code": code.as_str() },
-        }), look)),
+        }), snap, container, look, shape)),
         Requested::NoContainer => routes::bad(format!("no {container} in this doc")),
         Requested::Rendering | Requested::Busy => {
             let stale = if ids { None } else { cache::newest_other(blobs, &snap.key, container, hash, w, &build) };
@@ -358,7 +398,7 @@ pub(super) fn image(
                     v["current_hash"] = json!(hash);
                     v
                 }
-                None => with_look(rendering_body(snap, container, hash, w), look),
+                None => with_ask(rendering_body(snap, container, hash, w), snap, container, look, shape),
             };
             let mut r = routes::ok(body);
             r.status = "202 Accepted";

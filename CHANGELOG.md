@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.27: pairs with kit v0.21.0
+
+**Requires `k2-mpc-base` v0.21.0**. This pack's behaviour is unchanged from v0.2.26.
+
+- Pairs with kit v0.21.0. Its pack API additions have defaults this pack keeps (`Pack::errors`,
+  `Pack::check_merged_view`, `BlobPack::merge3_known`, `BlobPack::save_lineage`); its other
+  changes are the host's (the version an app opened, a call's result as data, kept pairs and
+  claim bytes on events). So this pack behaves as in v0.2.26.
+- `Cargo.lock`: k2-mpc-base 0.21.0 (only the kit's crate version moves); the crate version.
+
 ## v0.2.26: pairs with kit v0.20.0
 
 **Requires `k2-mpc-base` v0.20.0**. This pack's behaviour is unchanged from v0.2.25.

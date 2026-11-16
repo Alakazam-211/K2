@@ -16,7 +16,8 @@
 // as in the panel; the others take the free one nearest their own hue.
 // Pure; geometry in overlay-geom.ts, label placement in labels.ts.
 
-import { UNITS, collOf, nameOf, objOf, worldOf } from './fold'
+import { CONT, UNITS, collOf, nameOf, objOf, worldOf } from './fold'
+import { hiddenBy } from './hidden-by'
 import { agentDone, isLive, myPick, shortHold } from './panel'
 import { actorOf, changesOf, phraseOne } from './wording'
 import { arrowsFor, edgeAnchor, geomOf, lerpBox, offPicture, worldBox, type ArrowKind, type BoundsOf, type StillView } from './overlay-geom'
@@ -79,16 +80,20 @@ export function presenceSlots(S: SimState): Record<string, Slot> {
 // ── What is drawn ──
 
 export type Hidden = 'self' | 'collection' | 'none'
-/** Hidden in the file (K2 Cores' mesh read flags it `hidden: self | collection | none`). */
+/** Hidden in the file, by K2 Cores' rule (hidden-by.ts, the mesh read's `hidden: self | collection`): its own flag, else no shown path from the scene's master collection to a collection holding it. */
 export function hiddenOf(D: Doc, a: string): Hidden {
   const o = objOf(D, a)
   if (o.hidden) return 'self'
-  const seen = new Set<string>()
-  for (let c: string | null = o.container; c && !seen.has(c); c = collOf(D, c).parent) {
-    seen.add(c)
-    if (collOf(D, c).hidden) return 'collection'
-  }
-  return 'none'
+  const keys = D.lists[CONT] ?? []
+  const colls = keys.map((k) => collOf(D, k))
+  const master = colls.find((c) => c.kind === 'scene' && !c.parent)?.addr ?? keys[0]
+  if (!master) return 'none'
+  const by = hiddenBy({
+    master,
+    collections: colls.map((c) => ({ key: c.addr, hidden: c.hidden, children: colls.filter((x) => x.parent === c.addr).map((x) => x.addr) })),
+    objects: [{ key: a, hidden: false, in: [o.container, ...o.also].filter(Boolean) }],
+  })[a]
+  return by ? 'collection' : 'none'
 }
 
 export interface LiveChange {

@@ -56,14 +56,15 @@ export function stillCameraFrom(raw: unknown): StillCamera | null {
 export interface ListingCamera {
   active: boolean
   lensMm: number | null
-  sensorMm: number | null
+  /** The sensor's size, [width, height] in mm, as the file stores it. */
+  sensorMm: number[] | null
   sensorFit: string | null
 }
 
 /** A camera's display values in the listing (the fixture's keys). */
 export function listingCameraFrom(raw: unknown): ListingCamera {
   const c = obj(raw) ?? {}
-  return { active: c.active === true, lensMm: num(c.lens_mm), sensorMm: num(c.sensor_mm), sensorFit: typeof c.sensor_fit === 'string' ? c.sensor_fit : null }
+  return { active: c.active === true, lensMm: num(c.lens_mm), sensorMm: nums(c.sensor_mm, 2), sensorFit: typeof c.sensor_fit === 'string' ? c.sensor_fit : null }
 }
 
 /** A still's response meta: what was left out of it. */

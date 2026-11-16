@@ -36,7 +36,9 @@ describe('cameras (the fixture’s keys, read only here)', () => {
   })
 
   it('a camera in the listing: active, lens and sensor', () => {
-    expect(listingCameraFrom({ active: true, lens_mm: 35, sensor_mm: 36, sensor_fit: 'auto' })).toEqual({ active: true, lensMm: 35, sensorMm: 36, sensorFit: 'auto' })
+    expect(listingCameraFrom({ active: true, lens_mm: 35, sensor_mm: [36, 24], sensor_fit: 'auto' })).toEqual({ active: true, lensMm: 35, sensorMm: [36, 24], sensorFit: 'auto' })
+    // the wire's sensor is [width, height] (extras.rs camera_display; k2-mpc-blend WIRE.md): a bare number isn't it
+    expect(listingCameraFrom({ sensor_mm: 36 }).sensorMm).toBeNull()
     expect(listingCameraFrom({})).toEqual({ active: false, lensMm: null, sensorMm: null, sensorFit: null })
   })
 })

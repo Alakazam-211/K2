@@ -56,7 +56,7 @@ describe('the scene listing', () => {
 
   it('a camera’s display values; a view has no bounds', () => {
     const cam = L.containers.find((c) => c.key === '@cam:1')!
-    expect(cam.camera).toMatchObject({ active: true, lensMm: 50 })
+    expect(cam.camera).toMatchObject({ active: true, lensMm: 50, sensorMm: [36, 24], sensorFit: 'auto' })
     expect(cam.bounds).toBeNull()
     expect(L.containers.find((c) => c.key === '@cam:26')!.camera?.active).toBe(false)
   })

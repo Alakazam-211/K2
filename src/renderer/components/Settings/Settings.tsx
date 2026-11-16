@@ -49,6 +49,7 @@ import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSecti
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
 import { MultiplayerSection, MULTIPLAYER_MANIFEST } from './sections/MultiplayerSection'
+import { EDITOR_PREVIEW_MANIFEST } from '@/components/Editor/EditorPreviewSwitch'
 import { OrgChartSection, ORG_CHART_MANIFEST } from './sections/OrgChartSection'
 import { multiplayerCoresAvailable } from './sections/multiplayer-cores-api'
 import { SewSection, SEW_MANIFEST } from './sections/SewSection'
@@ -153,9 +154,9 @@ function remoteDesktopShown(): boolean {
   }
 }
 
-/** Settings → Cores → Multiplayer shows only for a server that reports
+/** Settings → Multiplayer's cores show only for a server that reports
  *  `docs-cores-v1` (prd-multiplayer-cores-settings-v1 §1.1); an older server
- *  has no switches. */
+ *  has no core switches (the page still has the new editors' switches). */
 function multiplayerShown(): boolean {
   try {
     return multiplayerCoresAvailable(settingsPrimaryScope())
@@ -311,8 +312,9 @@ export function settingsNav({
         { id: 'compute', label: 'Compute', beta: true },
         { id: 'data', label: 'Database' },
         // prd-multiplayer-cores-settings-v1 §1.1: one switch per multiplayer
-        // core, between Database and Apps; only with `docs-cores-v1`.
-        { id: 'multiplayer', label: 'Multiplayer', beta: true, hide: !multiplayerShown() },
+        // core (with `docs-cores-v1`), between Database and Apps. Always shown:
+        // the new editors' per-computer switches live here on every server.
+        { id: 'multiplayer', label: 'Multiplayer', beta: true },
         { id: 'skin-access', label: 'Apps', beta: true },
         // 0.46.1 door: held App requests, right under Apps (Settings → Apps → Approvals).
         { id: 'app-approvals', label: 'App Approvals' },
@@ -346,8 +348,6 @@ export default function Settings(): React.JSX.Element {
   const zenGardensShown = useZenGardensSettingsShown()
   // Thread push (0.45.5): only on a server that reports `thread-push-v1`.
   const notificationsShown = threadPushAvailable()
-  // Multiplayer cores: only on a server that reports `docs-cores-v1`.
-  const multiplayerPageShown = multiplayerShown()
   // Remote desktop: only on a server that reports `remote-desktop-v1`.
   const remoteDesktopPageShown = remoteDesktopShown()
   // Garden access (always on from 0.46.3): pages read the daemon's answer
@@ -404,6 +404,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
       ...(multiplayerShown() ? MULTIPLAYER_MANIFEST : []),
+      ...EDITOR_PREVIEW_MANIFEST,
       ...(remoteDesktopShown() ? REMOTE_DESKTOP_MANIFEST : []),
       ...APPS_SERVER_MANIFEST,
       ...APPS_RESOURCES_MANIFEST,
@@ -437,10 +438,6 @@ export default function Settings(): React.JSX.Element {
     if (!notificationsShown && activeSection === 'notifications') {
       setSection('general')
     }
-    // A server without multiplayer cores has no Multiplayer page.
-    if (!multiplayerPageShown && activeSection === 'multiplayer') {
-      setSection('general')
-    }
     // A server without the desktop routes has no Remote Desktop page.
     if (!remoteDesktopPageShown && activeSection === 'remote-desktop') {
       setSection('general')
@@ -453,7 +450,7 @@ export default function Settings(): React.JSX.Element {
       if (landing && !useGardensLandingStore.getState().landing) requestGardensLanding(landing)
       setSection(section)
     }
-  }, [activeSection, setSection, notificationsShown, multiplayerPageShown, remoteDesktopPageShown, zenGardensShown])
+  }, [activeSection, setSection, notificationsShown, remoteDesktopPageShown, zenGardensShown])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -865,7 +862,7 @@ export default function Settings(): React.JSX.Element {
             <OrgChartSection />
           </SectionErrorBoundary>
         )}
-        {multiplayerPageShown && activeSection === 'multiplayer' && (
+        {activeSection === 'multiplayer' && (
           <SectionErrorBoundary>
             <MultiplayerSection />
           </SectionErrorBoundary>

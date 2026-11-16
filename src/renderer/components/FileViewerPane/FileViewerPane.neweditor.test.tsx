@@ -25,9 +25,8 @@ vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), li
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { setEditorPreview } from '@/lib/editor/preview-switch'
 import { FileViewerPane } from './FileViewerPane'
-import { EditorPreviewSwitch } from '@/components/Editor/EditorPreviewSwitch'
+import { EDITOR_PREVIEW_MANIFEST, EditorPreviewSwitch } from '@/components/Editor/EditorPreviewSwitch'
 import { CODE_EDITOR_MANIFEST } from '@/components/Settings/sections/CodeEditorSettingsSection'
-import { MULTIPLAYER_MANIFEST } from '@/components/Settings/sections/MultiplayerSection'
 
 const FILES: Record<string, string> = {
   '/ws/notes.md': '# Notes\n\nOne two three.\n',
@@ -132,7 +131,7 @@ describe('the switches gate the new editors', () => {
 describe('Settings → Multiplayer', () => {
   it('has the two switches, off by default, per computer; Code has none', () => {
     expect(CODE_EDITOR_MANIFEST.some((e) => /new editor|new-editor/.test(e.id))).toBe(false)
-    expect(MULTIPLAYER_MANIFEST.filter((e) => e.group === 'New editors (preview)').map((e) => e.label)).toEqual(['New markdown editor', 'New code editor'])
+    expect(EDITOR_PREVIEW_MANIFEST.map((e) => e.label)).toEqual(['New markdown editor', 'New code editor'])
     renderInPrimaryRoom(<EditorPreviewSwitch />)
     const md = screen.getByRole('switch', { name: /New markdown editor/ })
     const code = screen.getByRole('switch', { name: /New code editor/ })

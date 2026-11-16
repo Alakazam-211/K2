@@ -86,6 +86,25 @@ describe('Settings search palette', () => {
     expect(useSettingsStore.getState().settingsOpen).toBe(true)
   })
 
+  it('finds the new editors’ switches on a server without multiplayer cores, and opens their page', async () => {
+    const { primaryScope } = await import('@/kessel/server-scope')
+    const spy = vi.spyOn(primaryScope(), 'serverSupports').mockImplementation((f: unknown) => String(f) !== 'docs-cores-v1')
+    try {
+      for (const q of ['New markdown editor', 'New code editor']) {
+        await openSettingsOn('timer')
+        fireEvent.keyDown(window, { key: 'f', metaKey: true })
+        fireEvent.change(palette()!, { target: { value: q } })
+        fireEvent.keyDown(palette()!, { key: 'Enter' })
+        expect(useSettingsStore.getState().activeSection).toBe('multiplayer')
+        expect(await screen.findByRole('switch', { name: `${q} (Beta)` })).toBeTruthy()
+        expect(screen.queryByTestId('multiplayer-error')).toBeNull()
+        cleanup()
+      }
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('Escape in the palette closes the palette, not Settings; the next Escape closes Settings', async () => {
     await openSettingsOn('timer')
     fireEvent.keyDown(window, { key: 'f', metaKey: true })

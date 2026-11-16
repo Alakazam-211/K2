@@ -173,7 +173,7 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     expect(settingsSrc).not.toContain('>\n                          soon\n')
   })
 
-  it('Multiplayer (Beta) sits between Database and Apps in Cores, only for a server with docs-cores-v1', () => {
+  it('Multiplayer (Beta) sits between Database and Apps in Cores, on every server (its cores need docs-cores-v1)', () => {
     let supported = new Set<string>(['docs-cores-v1'])
     const spy = vi
       .spyOn(primaryScope(), 'serverSupports')
@@ -181,20 +181,20 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     for (const zenGardens of [true, false]) {
       const items = group(settingsNav({ zenGardens }), 'Cores').items
       const data = items.findIndex((i) => i.id === 'data')
-      expect(items[data + 1]).toEqual({ id: 'multiplayer', label: 'Multiplayer', beta: true, hide: false })
+      expect(items[data + 1]).toEqual({ id: 'multiplayer', label: 'Multiplayer', beta: true })
       expect(items[data + 2]?.id).toBe('skin-access')
       expect(leafIds(settingsNav({ zenGardens })).filter((x) => x === 'multiplayer').length).toBe(1)
     }
-    // An older server without the key: the leaf is hidden.
+    // An older server without the key: the page stays (the new editors' switches are this computer's).
     supported = new Set()
-    const hidden = group(settingsNav({ zenGardens: true }), 'Cores').items.find((i) => i.id === 'multiplayer')
-    expect(hidden).toEqual({ id: 'multiplayer', label: 'Multiplayer', beta: true, hide: true })
+    const shown = group(settingsNav({ zenGardens: true }), 'Cores').items.find((i) => i.id === 'multiplayer')
+    expect(shown).toEqual({ id: 'multiplayer', label: 'Multiplayer', beta: true })
     spy.mockRestore()
     expect(SECTION_LABELS.multiplayer).toBe('Multiplayer')
     const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
-    expect(settingsSrc).toContain("multiplayerPageShown && activeSection === 'multiplayer'")
+    expect(settingsSrc).toContain("{activeSection === 'multiplayer' && (")
     expect(settingsSrc).toContain('<MultiplayerSection />')
-    expect(settingsSrc).toContain('...(multiplayerShown() ? MULTIPLAYER_MANIFEST : []),')
+    expect(settingsSrc).toContain('...(multiplayerShown() ? MULTIPLAYER_MANIFEST : []),\n      ...EDITOR_PREVIEW_MANIFEST,')
   })
 
   it('Key Bindings is under Editors / Fonts and Compute is under Cores; neither is top-level', () => {

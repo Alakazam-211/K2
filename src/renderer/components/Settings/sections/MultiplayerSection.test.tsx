@@ -60,7 +60,9 @@ vi.mock('@/stores/session-events', async (orig) => ({
 
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
-import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE } from './MultiplayerSection'
+import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_EDITORS_ONLY_INTRO, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE } from './MultiplayerSection'
+import { EDITOR_PREVIEW_MANIFEST } from '@/components/Editor/EditorPreviewSwitch'
+import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
 import { failedWriteBackLine, openNowLine, parseDocCores, plainCore, turnOffMessage, turnOffTitle } from './multiplayer-cores-api'
 import { searchManifest, SECTION_LABELS } from '../searchManifest'
@@ -332,11 +334,7 @@ describe('Settings → Cores → Multiplayer', () => {
 
   it('search finds "Multiplayer" by name and keywords', () => {
     expect(SECTION_LABELS.multiplayer).toBe('Multiplayer')
-    expect(MULTIPLAYER_MANIFEST.map((e) => [e.id, e.section, e.label])).toEqual([
-      ['multiplayer.cores', 'multiplayer', 'Multiplayer'],
-      ['multiplayer.new-markdown-editor', 'multiplayer', 'New markdown editor'],
-      ['multiplayer.new-code-editor', 'multiplayer', 'New code editor'],
-    ])
+    expect(MULTIPLAYER_MANIFEST.map((e) => [e.id, e.section, e.label])).toEqual([['multiplayer.cores', 'multiplayer', 'Multiplayer']])
     expect(MULTIPLAYER_MANIFEST[0].keywords).toEqual(['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard', 'PSD', 'CAD', '3D', 'blend', 'DWG', 'STEP', 'STL', 'any other file', 'file lock', 'versions'])
     // Search finds the any-file core by file type, and names no product.
     for (const kind of ['PSD', 'CAD', '3D', 'blend', 'DWG']) {
@@ -348,7 +346,7 @@ describe('Settings → Cores → Multiplayer', () => {
       expect(searchManifest(MULTIPLAYER_MANIFEST, q).map((e) => e.id)).toEqual(['multiplayer.cores'])
     }
     // "markdown" also finds the new markdown editor's switch, which lives here too.
-    expect(searchManifest(MULTIPLAYER_MANIFEST, 'markdown').map((e) => e.id).sort()).toEqual(['multiplayer.cores', 'multiplayer.new-markdown-editor'])
+    expect(searchManifest([...MULTIPLAYER_MANIFEST, ...EDITOR_PREVIEW_MANIFEST], 'markdown').map((e) => e.id).sort()).toEqual(['multiplayer.cores', 'multiplayer.new-markdown-editor'])
   })
 })
 
@@ -430,5 +428,44 @@ describe('Settings → Cores → Multiplayer: Board files in a tab', () => {
     const e = MULTIPLAYER_MANIFEST[0]
     expect(e.description).toContain('Board')
     expect(e.keywords).toContain('Board')
+  })
+})
+
+describe('Settings → Multiplayer on a server without multiplayer cores', () => {
+  it('shows only the new editors’ switches: no cores, no read, no error', async () => {
+    const spy = vi.spyOn(primaryScope(), 'serverSupports').mockImplementation((f: unknown) => String(f) !== 'docs-cores-v1')
+    try {
+      render(<MultiplayerSection />)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      expect(screen.getByTestId('multiplayer-section').getAttribute('data-cores')).toBe('none')
+      expect(screen.getByText(MULTIPLAYER_EDITORS_ONLY_INTRO)).toBeTruthy()
+      expect(screen.getByTestId('editor-preview-switches')).toBeTruthy()
+      expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual(['New markdown editor (Beta)', 'New code editor (Beta)'])
+      expect(screen.queryByTestId('multiplayer-cores')).toBeNull()
+      expect(screen.queryByTestId('multiplayer-error')).toBeNull()
+      expect(screen.queryByTestId('multiplayer-loading')).toBeNull()
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(h.gets).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('search finds both switches with or without the cores; the cores only with them', () => {
+    // Settings indexes the cores only with them, and the switches always (Settings.groups.test).
+    for (const entries of [[...MULTIPLAYER_MANIFEST, ...EDITOR_PREVIEW_MANIFEST], EDITOR_PREVIEW_MANIFEST]) {
+      for (const [q, id] of [['New markdown editor', 'multiplayer.new-markdown-editor'], ['New code editor', 'multiplayer.new-code-editor']]) {
+        expect(searchManifest(entries, q).map((e) => e.id)).toContain(id)
+      }
+    }
+    expect(EDITOR_PREVIEW_MANIFEST.every((e) => e.section === 'multiplayer')).toBe(true)
+  })
+
+  it('the cores page keeps the switches card too', async () => {
+    render(<MultiplayerSection />)
+    await screen.findByTestId('multiplayer-cores')
+    expect(screen.getByTestId('editor-preview-switches')).toBeTruthy()
   })
 })

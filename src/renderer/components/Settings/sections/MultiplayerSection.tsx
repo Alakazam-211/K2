@@ -18,6 +18,7 @@ import {
   failedWriteBackLine,
   plainCore,
   fetchDocCores,
+  multiplayerCoresAvailable,
   setBoardFilePreview,
   openNowLine,
   setDocCore,
@@ -57,9 +58,10 @@ export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
     description: 'Turn each multiplayer core on or off for this server: Markdown, Text and code, Any other file (PSD, CAD, 3D and .blend files), Board. And open .k5board files in a Board tab.',
     keywords: ['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard', 'PSD', 'CAD', '3D', 'blend', 'DWG', 'STEP', 'STL', 'any other file', 'file lock', 'versions'],
   },
-  { id: 'multiplayer.new-markdown-editor', section: 'multiplayer', group: 'New editors (preview)', label: 'New markdown editor', description: 'Markdown files open in the new editor: Write, Read and Source', keywords: ['editor', 'new editor', 'preview', 'write', 'read', 'source', 'markdown', 'beta'] },
-  { id: 'multiplayer.new-code-editor', section: 'multiplayer', group: 'New editors (preview)', label: 'New code editor', description: 'Code, config, text and logs open in the new editor', keywords: ['editor', 'new editor', 'preview', 'code', 'source', 'json', 'yaml', 'csv', 'html', 'beta'] },
 ]
+
+/** The page on a server without multiplayer cores: only this computer's switches, and no error. */
+export const MULTIPLAYER_EDITORS_ONLY_INTRO = 'Preview switches for this computer.'
 
 const CONTENT_WIDTH = 'max-w-[52rem]'
 
@@ -74,7 +76,23 @@ function shapeLine(shape: string): string {
  *  no in the dialog), or the error the write threw. */
 type FlipResult = { ok: true } | { ok: false; cancelled: true } | { ok: false; cancelled: false; err: unknown }
 
+/** Settings → Multiplayer, always reachable: the cores (and the owner's live
+ *  preview switches) on a server with `docs-cores-v1`; on any server, the new
+ *  editors' per-computer switches. */
 export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerScope }): React.JSX.Element {
+  if (multiplayerCoresAvailable(scope)) return <MultiplayerCoresPage scope={scope} />
+  return (
+    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-testid="multiplayer-section" data-cores="none">
+      <header className="min-w-0">
+        <h2 className="type-title text-[var(--color-text-primary)]">Multiplayer</h2>
+        <p className={SETTING_ROW_HINT}>{MULTIPLAYER_EDITORS_ONLY_INTRO}</p>
+      </header>
+      <EditorPreviewSwitch />
+    </div>
+  )
+}
+
+function MultiplayerCoresPage({ scope }: { scope: ServerScope }): React.JSX.Element {
   const [data, setData] = useState<DocCores | null>(null)
   const [loadError, setLoadError] = useState<unknown>(null)
   const [busy, setBusy] = useState<string | null>(null)

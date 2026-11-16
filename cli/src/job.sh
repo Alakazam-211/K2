@@ -6,21 +6,24 @@ k2 job — scheduled jobs the K2 daemon runs (no session, no LLM, no cron)
   k2 job add NAME (--every 15m | --cron '*/15 * * * *') [--timeout 10m]
              [--cwd <dir>] -- <cmd> [args…]
   k2 job edit NAME [--every …|--cron …] [--timeout …] [--cwd …] [-- <cmd> …]
-  k2 job list [--all] [--json]          show NAME [--json]
-  k2 job logs NAME [--run ID] [--json]  run NAME (same: run-now)
+  k2 job list                           show NAME
+  k2 job logs NAME [--run ID]           run NAME (same: run-now)
   k2 job enable|disable NAME            (same: resume|pause NAME)
   k2 job kill NAME                      stop the run in progress
   k2 job rm NAME                        remove it and its secret grants
   k2 job pause --all | resume --all     every job (owner or admin only)
+  k2 job list --all                     every workspace's jobs (the same)
   --workspace <name>                    people: which workspace (default:
                                         the one this folder is in)
+  --json                                on any verb: the daemon's JSON
 
 Each run gets its own K2 identity (k2 vault fetch, k2 db dsn and k2 msg
 work as in a K2 tab), only the secrets granted to job:NAME
 (k2 vault grant KEY --to job:NAME --as env|file|agent|fetch), the workspace
-folder as its working folder, and a PATH with k2 on it. No shell unless
-you write one: -- sh -c '…'. Runs never overlap. The timeout (default
-10m, max 6h) stops the whole process group. Logs are redacted
+folder (or --cwd, a folder inside it: relative, no ..) as its working
+folder, and a PATH with k2 on it. No shell unless you write one:
+-- sh -c '…'. Runs never overlap. The timeout (default 10m, max 6h)
+stops the whole process group. Logs are redacted
 ([k2v:NAME]) and capped at 1 MiB; the last 20 are kept.
 Agents may add jobs in their own workspace; each add, edit and removal
 posts a line on the workspace's Thread.

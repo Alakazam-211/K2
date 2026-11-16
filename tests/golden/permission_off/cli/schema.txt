@@ -5900,6 +5900,154 @@ exit: 0
       ]
     },
     {
+      "name": "job",
+      "usage": "k2 job <add|edit|list|show|logs|run|enable|disable|kill|rm|pause|resume> [...]",
+      "description": "Scheduled jobs the K2 daemon runs (no session, no LLM, no cron). Each run gets its own K2 identity, only the secrets granted to job:NAME (k2 vault grant KEY --to job:NAME), the workspace folder (or --cwd) as its working folder, and a PATH with k2 on it. Runs never overlap. The owner, an admin, or a workspace's own agent (its own workspace only) manage jobs; a job run can't. Each add, edit and removal posts a line on the workspace's Thread. Exit 0 ok, 2 usage or bad request, 3 refused, 4 no such job or workspace, 1 otherwise (a job that is off, paused or not running). More: k2 study jobs.",
+      "args": [{"name": "verb", "required": true, "description": "add | edit | list | show | logs | run | enable | disable | kill | rm | pause | resume"}],
+      "flags": [
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in). An agent's jobs are its own workspace's."},
+        {"name": "--json", "arg": null, "description": "On any verb: the daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job add",
+      "usage": "k2 job add NAME (--every 15m | --cron '*/15 * * * *') [--timeout 10m] [--cwd <dir>] [--workspace <name>] [--json] -- <cmd> [args...]",
+      "description": "Add a scheduled job, on. The command is argv: no shell unless you write one (-- sh -c '...'). Names are 1-64 of a-z 0-9 _ . - (starting with a letter or digit). At most 50 jobs per workspace.",
+      "args": [
+        {"name": "NAME", "required": true, "description": "The job's name."},
+        {"name": "cmd", "required": true, "description": "After --: the command and its arguments."}
+      ],
+      "flags": [
+        {"name": "--every", "arg": "15m", "description": "Run on this interval: 90s, 15m, 2h, 1d (1m to 31d). Not with --cron."},
+        {"name": "--cron", "arg": "'*/15 * * * *'", "description": "Run on this 5-field cron schedule (minute hour day month weekday), local time. Not with --every."},
+        {"name": "--timeout", "arg": "10m", "description": "Stops the whole process group: 30s, 10m, 1h (default 10m, max 6h)."},
+        {"name": "--cwd", "arg": "dir", "description": "The working folder: a folder inside the workspace, relative, no .. (default: the workspace folder)."},
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job edit",
+      "usage": "k2 job edit NAME [--every ...|--cron ...] [--timeout ...] [--cwd ...] [--workspace <name>] [--json] [-- <cmd> ...]",
+      "description": "Change a job's schedule, timeout, folder or command. Give at least one.",
+      "args": [
+        {"name": "NAME", "required": true, "description": "The job's name."},
+        {"name": "cmd", "required": false, "description": "After --: the new command and its arguments."}
+      ],
+      "flags": [
+        {"name": "--every", "arg": "15m", "description": "A new interval: 90s, 15m, 2h, 1d (1m to 31d). Not with --cron."},
+        {"name": "--cron", "arg": "'*/15 * * * *'", "description": "A new 5-field cron schedule, local time. Not with --every."},
+        {"name": "--timeout", "arg": "10m", "description": "A new timeout (max 6h)."},
+        {"name": "--cwd", "arg": "dir", "description": "A new working folder inside the workspace (relative; . for the workspace folder)."},
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job list",
+      "usage": "k2 job list [--all] [--workspace <name>] [--json]",
+      "description": "The workspace's jobs: schedule, state (on, off, running), last run, command. Says so when every job is paused.",
+      "args": [],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Every workspace's jobs (owner or admin only)."},
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job show",
+      "usage": "k2 job show NAME [--workspace <name>] [--json]",
+      "description": "One job: schedule, state, next run, command, folder, timeout, who made and changed it, its secret grants and its last 10 runs.",
+      "args": [{"name": "NAME", "required": true, "description": "The job's name."}],
+      "flags": [
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job logs",
+      "usage": "k2 job logs NAME [--run ID] [--workspace <name>] [--json]",
+      "description": "A run's log, redacted ([k2v:NAME]); the newest run with a log unless --run. Shows the last 256 KiB. Logs are capped at 1 MiB and the last 20 are kept.",
+      "args": [{"name": "NAME", "required": true, "description": "The job's name."}],
+      "flags": [
+        {"name": "--run", "arg": "ID", "description": "Which run (ids: k2 job show NAME)."},
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job run",
+      "usage": "k2 job run NAME [--workspace <name>] [--json]",
+      "description": "Start a run now (same: run-now). Refused while the job is off, every job is paused, or a run is going.",
+      "args": [{"name": "NAME", "required": true, "description": "The job's name."}],
+      "flags": [
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job enable",
+      "usage": "k2 job enable NAME [--workspace <name>] [--json]",
+      "description": "Turn a job on (same: resume NAME).",
+      "args": [{"name": "NAME", "required": true, "description": "The job's name."}],
+      "flags": [
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job disable",
+      "usage": "k2 job disable NAME [--workspace <name>] [--json]",
+      "description": "Turn a job off (same: pause NAME).",
+      "args": [{"name": "NAME", "required": true, "description": "The job's name."}],
+      "flags": [
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job kill",
+      "usage": "k2 job kill NAME [--workspace <name>] [--json]",
+      "description": "Stop the run in progress (the job stays on).",
+      "args": [{"name": "NAME", "required": true, "description": "The job's name."}],
+      "flags": [
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job rm",
+      "usage": "k2 job rm NAME [--workspace <name>] [--json]",
+      "description": "Remove the job, its logs and its secret grants; a run in progress is stopped.",
+      "args": [{"name": "NAME", "required": true, "description": "The job's name."}],
+      "flags": [
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job pause",
+      "usage": "k2 job pause NAME [--workspace <name>] [--json] | k2 job pause --all [--json]",
+      "description": "Pause one job (the same as disable), or with --all every job on this box (owner or admin only).",
+      "args": [{"name": "NAME", "required": false, "description": "The job's name (not with --all)."}],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Every job (owner or admin only)."},
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "job resume",
+      "usage": "k2 job resume NAME [--workspace <name>] [--json] | k2 job resume --all [--json]",
+      "description": "Resume one job (the same as enable), or with --all lift the pause on every job (owner or admin only).",
+      "args": [{"name": "NAME", "required": false, "description": "The job's name (not with --all)."}],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Every job (owner or admin only)."},
+        {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
       "name": "skills",
       "usage": "k2 skills <list|create|remove|profile|...> [...]",
       "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",

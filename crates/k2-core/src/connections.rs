@@ -452,7 +452,8 @@ const K2_ZONE: &str = crate::hosts::ZONE_SUFFIX;
 pub fn normalize_remote_host(host: &str) -> String {
     let mut h = host.trim().to_lowercase();
     // Collapse repeated `.k2.dev` suffixes down to a single trailing zone.
-    while h.ends_with(".k2.dev.k2.dev") {
+    let doubled = format!("{K2_ZONE}{K2_ZONE}");
+    while h.ends_with(doubled.as_str()) {
         h.truncate(h.len() - K2_ZONE.len());
     }
     h

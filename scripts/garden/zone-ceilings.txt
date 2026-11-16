@@ -9,7 +9,6 @@
 9 crates/k2-core/src/tunnel/failover.rs
 7 crates/k2-daemon/src/sew/voice.rs
 6 crates/k2-daemon/src/domains/acme.rs
-4 crates/k2-core/src/connections.rs
 4 crates/k2-core/src/federation/pairing.rs
 4 crates/k2-core/src/skin.rs
 4 crates/k2-daemon/src/apps/custom_domain_flow.rs
@@ -17,7 +16,7 @@
 4 crates/k2-daemon/src/domains/routes.rs
 4 crates/k2-node/src/main_unix.rs
 4 src-tauri/src/commands/connect_hosts.rs
-3 crates/k2-core/src/tunnel/render.rs
+3 crates/k2-core/src/connections.rs
 3 crates/k2-daemon/src/app_pairing/owner_routes.rs
 3 crates/k2-daemon/src/domains/bind.rs
 3 crates/k2-daemon/src/mail/ptr.rs
@@ -26,6 +25,7 @@
 2 crates/k2-core/src/federation/dial.rs
 2 crates/k2-core/src/skin_door.rs
 2 crates/k2-core/src/tunnel/relay_list.rs
+2 crates/k2-core/src/tunnel/render.rs
 2 crates/k2-daemon/src/apps/domains.rs
 2 crates/k2-daemon/src/apps/process_engine.rs
 2 crates/k2-daemon/src/apps/relay_claims.rs

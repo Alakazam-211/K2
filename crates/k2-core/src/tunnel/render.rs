@@ -220,7 +220,7 @@ pub fn voice_proxy_name(label: &str) -> String {
 /// The TURN host the voice lane carries for `label` (§6.6 M1/M4): a nested
 /// name under the box's label, so the relay serves it for Pro labels only.
 pub fn voice_turn_host(label: &str) -> String {
-    format!("turn.{label}.k2.dev")
+    format!("turn.{}", crate::hosts::box_host(label))
 }
 
 /// The local TURN-TLS listener frpc-voice dials: sew-media's `passthrough`

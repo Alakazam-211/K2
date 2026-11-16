@@ -4,6 +4,7 @@
 // window is doing (signing in, turning on). Pure, so every state is tested.
 
 import type { HealthTone } from './ConnectionsParts'
+import { boxHost } from '@/lib/hosts'
 
 export type TunnelState =
   | 'loading'
@@ -59,7 +60,7 @@ export interface TunnelSummary {
   detail: string | null
 }
 
-export const hostOf = (sub: string): string => `${sub}.k2.dev`
+export const hostOf = (sub: string): string => boxHost(sub)
 
 export function summarizeTunnel(f: TunnelFacts): TunnelSummary {
   const sub = f.subdomain.trim()

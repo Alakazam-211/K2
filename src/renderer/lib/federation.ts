@@ -24,7 +24,7 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
-import { ZONE_SUFFIX } from '@/lib/hosts'
+import { ZONE, ZONE_SUFFIX, boxHost } from '@/lib/hosts'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -378,7 +378,7 @@ export function peerMatchesHostname(peer: FederationPeer, hostname: string): boo
   const sub = (peer.subdomain || '').trim().toLowerCase()
   if (sub) {
     if (sameHost(sub)) return true
-    if (hostOnly === `${sub}.k2.dev`) return true
+    if (hostOnly === boxHost(sub)) return true
   }
   const base = (peer.base_url || peer.baseUrl || '').trim().toLowerCase()
   if (base) {
@@ -810,7 +810,7 @@ export function federatedHostFromSubdomain(subdomain: string): string {
   const sub = stripAccidentalLanK2Dev(subdomain).trim()
   if (!sub) return ''
   if (sub.includes('.') || sub.includes(':') || isK2DevHostname(sub)) return sub
-  return `${sub}.k2.dev`
+  return boxHost(sub)
 }
 
 /** Dial / address-book host for a pinned peer. Prefer `base_url`, else subdomain. */
@@ -831,12 +831,12 @@ function looksLikeHost(host: string): boolean {
   if (!h) return false
   // F5: IPv4:port (`192.168.1.50:38471`) and MagicDNS (`box.ts.net`).
   if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(h)) return true
-  return h.includes('.') || h.toLowerCase().endsWith('.k2.dev')
+  return h.includes('.') || h.toLowerCase().endsWith(ZONE_SUFFIX)
 }
 
 function isK2DevHostname(hostname: string): boolean {
   const h = hostname.trim().toLowerCase()
-  return h === 'k2.dev' || h.endsWith('.k2.dev')
+  return h === ZONE || h.endsWith(ZONE_SUFFIX)
 }
 
 function isLoopbackHost(hostname: string): boolean {

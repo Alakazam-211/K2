@@ -12,6 +12,8 @@
 // and the daemon's E2E listener kept serving the OLD certificate after a
 // switch (`CertificateUnknown` for every direct client until a restart).
 
+import { boxHost } from '@/lib/hosts'
+
 /** One step the daemon reports (`config`, `listener`, `routing`,
  *  `certificate`, `tunnel`, `rollback`). */
 export interface TunnelSwitchStep {
@@ -76,7 +78,7 @@ export interface TunnelSwitchOutcome {
   report: TunnelSwitchReport | null
 }
 
-const host = (label: string): string => `${label}.k2.dev`
+const host = (label: string): string => boxHost(label)
 
 async function errorOf(res: Response): Promise<string> {
   const text = await res.text()

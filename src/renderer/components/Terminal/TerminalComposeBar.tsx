@@ -107,6 +107,7 @@ import {
   threadComposeTextSlotStyle,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadReplyChip, useThreadReply } from '@/components/Thread/ThreadMessageMenu'
+import { THREAD_EAR_INSET_PX, ThreadReplyBar } from '@/components/Thread/ThreadReplyBar'
 import { formatThreadReply, threadReplyKey } from '@/lib/thread-reply'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
@@ -1395,7 +1396,11 @@ export function TerminalComposeBar({
     ),
   )
   const hasChips = imagePaths.length > 0 || fileChips.length > 0
-  const replyChip = sendOnThread && reply.target ? <ThreadReplyChip target={reply.target} onCancel={reply.clear} /> : null
+  const replyChip = !sendOnThread || !reply.target ? null : zenLook ? (
+    <ThreadReplyBar target={reply.target} onCancel={reply.clear} />
+  ) : (
+    <ThreadReplyChip target={reply.target} onCancel={reply.clear} />
+  )
   // Must match composeTextareaHeight: 4px pad × 2 + line-height 1.4.
   const firstLineH = Math.round(editorFontSize * 1.4 + 8)
   const btnSize = Math.min(firstLineH, Math.max(16, Math.round(editorFontSize * 1.4)))
@@ -1719,7 +1724,7 @@ export function TerminalComposeBar({
             // The box's top edge: the activity bar, its full width (or,
             // while it is open, the stash, which slides up in its place as
             // the bar slides away; the two share the one spot).
-            <div data-zen-stash-row="" className="flex min-w-0 items-end" style={{ margin: '0 14px -1px' }}>
+            <div data-zen-stash-row="" className="flex min-w-0 items-end" style={{ margin: `0 ${THREAD_EAR_INSET_PX}px -1px` }}>
               <div className="grid min-w-0 flex-1 items-end">
                 {threadDrawer ? (
                   <div style={{ gridArea: '1 / 1', minWidth: 0 }}>

@@ -266,6 +266,21 @@ describe('Reply', () => {
     expect(threadPosts()).toEqual([])
   })
 
+  it("the Thread's reply bar says who, and stands on the ear's edges (the activity bar's and the stash's row)", async () => {
+    renderThread([item(42, 'Ship it?')])
+    fireEvent.contextMenu(bubbles()[0])
+    act(() => useContextMenuStore.getState().selectItem('reply'))
+    const chip = await screen.findByTestId('thread-reply-chip')
+    expect(chip.querySelector('[data-reply-chip-who]')?.textContent).toBe('Replying to sales')
+    const row = chip.closest('[data-thread-reply-row]') as HTMLElement | null
+    const ear = document.querySelector('[data-zen-stash-row]') as HTMLElement | null
+    expect(row).not.toBeNull()
+    expect(ear).not.toBeNull()
+    expect(row!.style.marginLeft).toBe(ear!.style.marginLeft)
+    expect(row!.style.marginRight).toBe(ear!.style.marginRight)
+    expect(row!.style.marginLeft).toBe('14px')
+  })
+
   it('Send posts the quote, the reference and the words, then clears the chip', async () => {
     renderThread([item(42, 'Ship it?')])
     fireEvent.contextMenu(bubbles()[0])

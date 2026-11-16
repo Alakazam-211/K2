@@ -61,6 +61,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Projects/ProjectsPage.tsx': 'Projects page: the room is hidden',
   'components/Projects/ProjectChatPanel.tsx': 'Projects page: the room is hidden',
   'components/FileViewerPane/BoardFilePane.tsx': 'the chip and sheets stay in the pane, beside a Browser column, never over it',
+  'components/LiveView/timeline/ViewMenu.tsx': 'the live timeline’s View menu opens inside its own tab (absolute, clipped by the tab), never over another pane',
   'components/Feedback/FeedbackPage.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/TicketBoard.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/TicketWindow.tsx': 'Feedback page: the room is hidden',

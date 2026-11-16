@@ -22,11 +22,17 @@ const step = (n: number): void => {
   for (let i = 0; i < n; i++) fireEvent.click(screen.getByTestId('lv-sample-step'))
 }
 
+/** The banner's scenarios are a grouped menu (more than five): open it and pick one. */
+function pick(id: string): void {
+  fireEvent.click(within(screen.getByTestId('lv-sample-scenarios')).getByRole('button'))
+  fireEvent.click(document.querySelector(`[data-setting-dropdown-menu] button[data-value="${id}"]`) as HTMLElement)
+}
+
 describe('the timeline tab on its sample', () => {
   it('opens on the watched edit under the banner: Watching has everyone, the content a placeholder', async () => {
     await mount()
     expect(screen.getByTestId('lv-sample-banner').textContent).toContain('Sample data, not this file')
-    expect(screen.getByTestId('lv-sample-scenario-watch').getAttribute('aria-checked') ?? screen.getByTestId('lv-sample-scenario-watch').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('lv-sample-scenarios').textContent).toContain('Watching an edit')
     expect(screen.getByTestId('lv-state').textContent).toBe('Live')
     expect(screen.getByTestId('lv-watching-count').textContent).toBe('4')
     const w = screen.getByTestId('lv-watching')
@@ -57,11 +63,11 @@ describe('the timeline tab on its sample', () => {
 
   it('outside saves and the connection reach the notice bar', async () => {
     await mount()
-    fireEvent.click(screen.getByTestId('lv-sample-scenario-saves'))
+    pick('saves')
     expect(screen.getByTestId('lv-notice').textContent).toContain('Saved outside K2 · now in the live file')
     step(1)
     expect(screen.getByRole('button', { name: 'Open the copy' })).toBeTruthy()
-    fireEvent.click(screen.getByTestId('lv-sample-scenario-connection'))
+    pick('connection')
     step(1)
     expect(screen.getByTestId('lv-notice').textContent).toContain('Reconnecting…')
     expect(screen.getByTestId('lv-watching-count').textContent).toBe('as you last saw')

@@ -1,24 +1,14 @@
-// The live timeline tab on the shared shell. Phase 1: the header (its
-// sentence takes its own row when narrow), the side panel (Watching,
-// Messages, Changes), the notices and the say row, always there while live
-// so the lanes never jump. "Back to X" lives in the transport here, so
-// Phase 1 keeps a place for it under the monitor. Later phases
-// (build-live-timeline.md T2–T8) fill the monitor, transport and lanes.
+// The live timeline tab on the shared shell: the header (its sentence takes
+// its own row when narrow), the side panel (Watching, Messages, Changes),
+// the notices and the say row, always there while live so the lanes never
+// jump. The content (TimelineHero) is the monitor's place, a row with Back
+// to X, zoom and View, and the lanes and ruler (T3); the monitor and
+// transport fill in with T4 (build-live-timeline.md).
 
 import { personById } from '@/lib/live-view/shared/people'
 import { FilmGlyph } from '../shell/glyphs'
-import type { ShellConfig, ShellHeroProps } from '../shell/shell-config'
-import { StagePlaceholder } from '../shell/StagePlaceholder'
-
-function TimelineHero(p: ShellHeroProps): React.JSX.Element {
-  const line = p.state === 'loading' ? 'Opening the edit. The lanes come first, then the pictures.' : 'The edit’s monitor and lanes show here: everyone’s playhead, and each change as it lands.'
-  const below = p.back ? (
-    <div data-testid="lv-transport-place" className="flex flex-none items-center justify-center">
-      {p.back}
-    </div>
-  ) : null
-  return <StagePlaceholder kind="timeline" line={line} p={p} below={below} />
-}
+import type { ShellConfig } from '../shell/shell-config'
+import { TimelineHero } from './TimelineHero'
 
 export const TIMELINE_SHELL: ShellConfig = {
   kind: 'timeline',

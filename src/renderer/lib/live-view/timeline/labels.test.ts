@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { modelOf } from './fold'
-import { bestName, clipLabel, kindGlyphOf, shortNames, twoLines } from './labels'
+import { bestName, clipLabel, GLYPH_W, kindGlyphOf, labelForRoom, LABEL_PAD, shortNames, twoLines } from './labels'
 import { LARGE } from './scenarios-large'
 import { B30IMG } from './scenarios-monitor'
 
@@ -63,5 +63,42 @@ describe('clip labels, measured as painted', () => {
   it('a status in two lines drops trailing phrases whole, never “…”', () => {
     expect(twoLines('holding 2 clips · since 14:02 · tightening the open', 20)).toBe('holding 2 clips')
     expect(twoLines('its hold on Music ended: the track was renamed outside K2', 30)).toBe('its hold on Music ended')
+  })
+})
+
+describe('a clip’s label in the room its visible part leaves (T3)', () => {
+  // 7 px a character: the tests' stand-in for the painted width
+  const w = (t: string): number => t.length * 7
+
+  it('takes the longest whole form that fits the band less its padding and badges', () => {
+    const room = (n: number): number => n * 7 + LABEL_PAD
+    expect(labelForRoom('Harbour at dawn', 'video', room(15), w).text).toBe('Harbour at dawn')
+    expect(labelForRoom('Harbour at dawn', 'video', room(14), w).text).toBe('Harbour')
+    expect(labelForRoom('B-roll 03', 'video', room(8), w).text).toBe('B-roll 3')
+    expect(labelForRoom('Harbour at dawn', 'video', room(15) + 20, w, 20).text).toBe('Harbour at dawn')
+    expect(labelForRoom('Harbour at dawn', 'video', room(15), w, 20).text).toBe('Harbour')
+  })
+
+  it('gives way to the kind glyph when no name fits, and to nothing when the glyph doesn’t either', () => {
+    expect(labelForRoom('Interview B', 'video', 40, w)).toMatchObject({ text: null, glyph: 'video' })
+    expect(labelForRoom('Interview B', 'video', GLYPH_W + LABEL_PAD - 1, w)).toMatchObject({ text: null, glyph: null })
+  })
+
+  it('a title leads with its glyph, and its name needs the glyph’s room too', () => {
+    const r = labelForRoom('Title', 'title', 5 * 7 + LABEL_PAD + GLYPH_W, w)
+    expect(r).toMatchObject({ text: 'Title', glyph: 'title' })
+    expect(labelForRoom('Title', 'title', 5 * 7 + LABEL_PAD + GLYPH_W - 1, w).text).toBeNull()
+  })
+
+  it('every label it gives is the full name or one of its short names, never cut', () => {
+    const names = [...new Set([...Object.values(modelOf(B30IMG).items), ...Object.values(modelOf(LARGE.B0).items)].map((x) => x.name))]
+    for (const full of names)
+      for (let room = 0; room < 240; room += 3) {
+        const r = labelForRoom(full, 'video', room, w)
+        if (r.text !== null) {
+          expect(shortNames(full)).toContain(r.text)
+          expect(w(r.text) + LABEL_PAD).toBeLessThanOrEqual(room)
+        }
+      }
   })
 })

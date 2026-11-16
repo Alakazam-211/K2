@@ -10,7 +10,7 @@
 import type { PlayerScenario, PlayerStep } from '../shared/sample-player'
 import { SampleShellSource, type SampleShellOptions } from '../shared/sample-shell'
 import type { ShellSample } from '../shared/samples'
-import { CONN, HOLDGONE, OPEN, SAVES, TURN, WATCH } from './scenarios'
+import { CONN, GOLDEN, HOLDGONE, LARGE_SC, OPEN, SAVES, TURN, WATCH } from './scenarios'
 import { simulate, type Scenario } from './sim'
 import { SAMPLE_CLOCK0, timelineSnapshot, type TimelineSnapshot } from './snapshot'
 import { CTX, FACTS } from './world'
@@ -31,22 +31,30 @@ function lazyStep(sc: Scenario, i: number, label?: string): PlayerStep<TimelineS
   }
 }
 
-const whole = (sc: Scenario, id: string, label: string): PlayerScenario<TimelineSnapshot> => ({ id, label, steps: sc.steps.map((_, i) => lazyStep(sc, i)) })
+const whole = (sc: Scenario, id: string, label: string, group: string): PlayerScenario<TimelineSnapshot> => ({ id, label, group, steps: sc.steps.map((_, i) => lazyStep(sc, i)) })
 
-/** The banner's scenarios: what the panel shows in T2. Every mock scenario stays in `SCENARIOS` for the lanes and monitor. */
+/** The banner's menu headings: the people and changes (T2), then the lanes (T3). */
+const PEOPLE = 'People and changes'
+const LANES = 'The lanes'
+
+/** The banner's scenarios: the panel's (T2) and the lanes' (T3). Every mock scenario stays in `SCENARIOS` for the monitor. */
 export function timelineBannerScenarios(): PlayerScenario<TimelineSnapshot>[] {
   const last = (sc: Scenario, label: string): PlayerStep<TimelineSnapshot> => lazyStep(sc, sc.steps.length - 1, label)
   const save = (id: string): Scenario => SAVES.find((s) => s.id === id)!
   return [
-    whole(OPEN, 'open', 'First open'),
-    whole(WATCH, 'watch', 'Watching an edit'),
-    whole(TURN, 'turn', 'Two agents'),
+    whole(OPEN, 'open', 'First open', PEOPLE),
+    whole(WATCH, 'watch', 'Watching an edit', PEOPLE),
+    whole(TURN, 'turn', 'Two agents', PEOPLE),
     {
       id: 'saves',
       label: 'Outside saves',
+      group: PEOPLE,
       steps: [last(save('save-ingested'), 'Taken in'), last(save('save-both'), 'Kept both'), last(save('save-declined'), 'Declined'), last(save('save-missing'), 'Missing'), last(HOLDGONE, 'A hold ended outside')],
     },
-    whole(CONN, 'connection', 'Connection'),
+    whole(CONN, 'connection', 'Connection', PEOPLE),
+    // The lanes (T3): the pinned file as K2 Cores pinned it, and a long edit (the overview, small lanes, virtualising).
+    whole(GOLDEN, 'golden', 'Pinned file', LANES),
+    whole(LARGE_SC, 'large', 'Long edit', LANES),
   ]
 }
 

@@ -61,6 +61,24 @@ export function clipLabel(full: string, glyph: KindGlyph, fits: (text: string) =
   return { text: null, glyph: lead || glyphFits ? glyph : null, full }
 }
 
+/** The name band's padding (6 px before the name, 4 after). */
+export const LABEL_PAD = 10
+/** A kind glyph's room in the band: 10 px and the band's 4 px gap. */
+export const GLYPH_W = 14
+
+/**
+ * A clip's label in `room` px (the visible part of its name band), measured
+ * as painted: `width(text)` is the painted width of a name form, `badges`
+ * the room its badges take. Titles and nests need their glyph's room too.
+ * When no name fits, the glyph shows if it fits; else nothing.
+ */
+export function labelForRoom(full: string, glyph: KindGlyph, room: number, width: (text: string) => number, badges = 0): ClipLabel {
+  const lead = glyph === 'title' || glyph === 'nest' ? GLYPH_W : 0
+  const space = room - LABEL_PAD - badges
+  const r = clipLabel(full, glyph, (t) => width(t) + lead <= space + 0.01, space >= GLYPH_W)
+  return r.text === null && space < GLYPH_W ? { ...r, glyph: null } : r
+}
+
 /** A status in at most two lines, no ellipsis: when longer, trailing " · " phrases drop whole, then anything after a colon. */
 export function twoLines(t: string, n: number): string {
   let x = String(t || '')

@@ -37,6 +37,8 @@ export interface ShellHeroProps {
   follow?: { id: string | null; state: FollowState; dispatch: (a: FollowAction) => void }
   /** The view says what the say row points at (the timeline: the clip under its playhead); null goes back to the config's. */
   setSayAt?: (a: SayAt | null) => void
+  /** The view's own actions (a card's Open saved versions) go to the same handler as the notices'. */
+  onAction?: (id: NoticeActionId) => void
 }
 
 /** What a message points at: the chip's words and tooltip, the address it carries, and a time (the playhead's time position) where the view has one. */
@@ -81,6 +83,6 @@ export interface ShellConfig {
   placesSayAndPanel?: boolean
   /** The view's own side panel, for the snapshots it knows (`when`); the shell's sections otherwise. */
   Panel?: { when: (snap: LiveShellSnapshot) => boolean; View: (p: ShellPanelProps) => React.JSX.Element | null }
-  /** Open the copy, History, Open saved versions, Save it again, Ask: wired by the view. */
-  onNoticeAction?: (id: NoticeActionId, n: LiveNotice) => void
+  /** Open the copy, History, Open saved versions, Save it again, Ask: wired by the view. `n` is null for an action from the view's own content (a card in the picture). */
+  onNoticeAction?: (id: NoticeActionId, n: LiveNotice | null) => void
 }

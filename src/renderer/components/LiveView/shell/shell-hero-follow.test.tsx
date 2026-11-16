@@ -58,4 +58,15 @@ describe('the hero’s Follow and Say hooks', () => {
     fireEvent.keyDown(screen.getByTestId('lv-say-field'), { key: 'Enter' })
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Is this the take?', address: '@item:5', time: { at: '1234', in: '@seq:S1' } }))
   })
+
+  it('the hero’s own actions (a card’s Open saved versions) reach the view’s notice handler', () => {
+    const src = new SampleShellSource(shellSample('scene'), { autoplay: false, scenario: 'people' })
+    const seen: string[] = []
+    function Hero(p: ShellHeroProps): React.JSX.Element {
+      return <button type="button" data-testid="open-saved" onClick={() => p.onAction?.('open-saved')} />
+    }
+    render(<LiveShellView source={src} config={{ ...SCENE_SHELL, Hero, onNoticeAction: (id, n) => seen.push(`${id}:${n ? n.kind : 'card'}`) }} width={1440} />)
+    fireEvent.click(screen.getByTestId('open-saved'))
+    expect(seen).toEqual(['open-saved:card'])
+  })
 })

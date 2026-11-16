@@ -78,7 +78,7 @@ export interface Golden {
     _golden?: { sample?: boolean }
     views: ViewEntry[]
     background: { alpha: boolean } & Record<string, unknown>
-    bounds: Record<string, { approx?: string; why?: string } & Record<string, unknown>>
+    bounds: Record<string, { approx?: boolean; approx_reason?: 'modifiers' | 'driven' } & Record<string, unknown>>
     records: { rev: number; view: string; state: string; width: number; ms: number; without_modifiers: boolean }[]
   }
   pinned: { outliner: IndexJson; rig: { index: IndexJson; crowd_pages: { budget: number; pages: { container: string; from: number; next: number | null; total: number; units: string[] }[] } } }

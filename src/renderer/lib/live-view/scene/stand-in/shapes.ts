@@ -4,7 +4,9 @@
 // K2 Render draws the still. Retirement ledger: goes when real stills are
 // proven (build-live-scene.md §6).
 
-import { UNITS, objOf, worldOf } from '../fold'
+import { GOLD } from '../samples'
+import { UNITS, collOf, objOf, worldOf } from '../fold'
+import type { ObjectBounds } from '../picture-source'
 import type { Doc } from '../types'
 
 type Prim = { box: number[] } | { cyl: number[]; caps: 'both' | 'top' | 'bottom' | 'none' }
@@ -115,6 +117,28 @@ export function drawable(D: Doc, a: string): boolean {
 export function boundsOf(D: Doc, a: string): { min: number[]; max: number[] } | null {
   const t = trisOf(shapeKey(D, a))
   return t ? { min: t.min, max: t.max } : null
+}
+
+/** The listing's entry as K2 Render will send it: local min and max; `approx` a bool with `approx_reason`; `hidden` and `hidden_by` (the object, or a collection it sits in). None for what isn't drawn. */
+export function sampleBounds(D: Doc, a: string): ObjectBounds | null {
+  if (!drawable(D, a)) return null
+  const b = boundsOf(D, a)
+  if (!b) return null
+  const g = GOLD.previews.bounds?.[a]
+  const by = hiddenBy(D, a)
+  return { ...b, approx: g?.approx === true, approx_reason: g?.approx === true ? (g.approx_reason ?? null) : null, hidden: by !== null, hidden_by: by }
+}
+
+/** What hides an object in the file: itself, a collection it sits in, or nothing. */
+export function hiddenBy(D: Doc, a: string): 'self' | 'collection' | null {
+  const o = objOf(D, a)
+  if (o.hidden) return 'self'
+  const seen = new Set<string>()
+  for (let c: string | null = o.container; c && !seen.has(c); c = collOf(D, c).parent) {
+    seen.add(c)
+    if (collOf(D, c).hidden) return 'collection'
+  }
+  return null
 }
 
 const xf = (m: ArrayLike<number>, p: ArrayLike<number>): number[] => [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]]

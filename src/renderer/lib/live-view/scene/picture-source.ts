@@ -14,6 +14,7 @@
 
 import type { IdLayer } from './ids'
 import type { StillCamera } from './project'
+import type { Doc } from './types'
 
 /** K2 Render's view address (view-address.ts): `@scene:main`, `@cam:<enc(id)>`, `@obj:<enc(id)>`, `@turntable:<0-7>`, `@cam-n:<i>` / `@obj-n:<i>`. */
 export type ViewAddress = string
@@ -51,12 +52,39 @@ export interface Still {
   /** The id image and table, when asked for and drawn with one. */
   ids: IdLayer | null
   renderMs: number | null
+  /** The response meta; null when the source has none. */
+  meta?: StillMeta | null
+}
+
+/** An object in K2 Render's listing: its local bounds (mesh-local, from the mesh read), read by listing-read.ts. */
+export interface ObjectBounds {
+  min: number[]
+  max: number[]
+  /** The bounds miss geometry: the box is dashed. A bool; the why is `approx_reason`. */
+  approx?: boolean
+  approx_reason?: 'modifiers' | 'driven' | null
+  /** Hidden in the file: no clay, and a dashed "(hidden)" ghost box only while an agent acts on or holds it. */
+  hidden?: boolean
+  /** What hides it ("self", "collection"). */
+  hidden_by?: string | null
+}
+
+/** A still's response meta: what K2 Render left out of it (counts are 0 when nothing was). */
+export interface StillMeta {
+  /** Drawn from base values (provisional: modelled, not shown yet). */
+  base_values: boolean
+  /** Hidden objects were left out of the picture. */
+  hidden_left_out: boolean
+  objects_hidden: number
+  objects_not_evaluated: number
 }
 
 export interface PictureSource {
   readonly kind: 'sample' | 'docs-preview'
   /** The still of `rev` from `view`. Null when this view has no still (the snapshot's PictureStatus says why). Cached by (rev, view, shape, width). */
   still(req: StillRequest, signal?: AbortSignal): Promise<Still | null>
+  /** An object's local bounds, for its box over the picture; null when it isn't drawn. Absent: no boxes. */
+  bounds?(D: Doc, a: string): ObjectBounds | null
   close(): void
 }
 

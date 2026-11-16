@@ -12,6 +12,7 @@ import { stillHeight, type PictureSource, type Still, type StillRequest } from '
 import type { Doc } from '../types'
 import { standInCamera } from './camera'
 import { rasterise } from './raster'
+import { sampleBounds } from './shapes'
 
 /** About 1920 × 1080: a tall still keeps the same pixel count (the stand-in draws on the main thread). */
 const MAX_PIXELS = 1920 * 1080
@@ -61,6 +62,7 @@ export class StandInStills implements PictureSource {
       camera: stillCamera(cam),
       ids: { width: W, height: H, values: r.ids, objects: r.objects },
       renderMs: r.ms,
+      meta: { base_values: false, hidden_left_out: false, objects_hidden: 0, objects_not_evaluated: 0 },
     }
     this.cache.set(key, still)
     if (this.cache.size > CACHE) this.cache.delete(this.cache.keys().next().value as string)
@@ -72,6 +74,10 @@ export class StandInStills implements PictureSource {
       // Let the tab paint first: a 1920 px still with AO takes a moment.
       setTimeout(() => resolve(this.closed || signal?.aborted ? null : this.draw(req)), 0)
     })
+  }
+
+  bounds(D: Doc, a: string) {
+    return sampleBounds(D, a)
   }
 
   close(): void {

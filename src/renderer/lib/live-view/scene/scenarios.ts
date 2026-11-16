@@ -131,6 +131,10 @@ export function buildPresence(): Scenario[] {
       step('Home', [ev('view', { v: SCENE_VIEW })], 'Ada presses Home (Scene). Choosing a view ends the follow; the one way back is the header button, now "Back to Atlas".'),
       step('Sam away', [ev('presence', { who: SAM, type: 'away', value: true })], 'Sam goes away: the avatar and the outline dim; the selection stays.'),
     ] },
+    { id: 'onpic', group: G, title: 'On the picture: a hidden object held, your pick off the picture', base: fromTurn(jAfter63), steps: [
+      step('hidden held', [ev('follow', { v: false }), ev('claim_started', { claim: { id: 'claim-wall', actor: ACTORS[ATLAS], root: 'objs', keys: ['@obj:6'], label: 'rebuilding the left wall', hold: true, started_ms: null, expires_ms: null } })], 'Atlas holds Wall.Left, which is hidden in the file. Hidden objects get no box, but while an agent holds or acts on one a dashed ghost box marks where it is, labelled "(hidden)".'),
+      step('off the picture', [ev('view', { v: '@cam:26' }), ev('pick', { addr: '@obj:15' })], 'Ada looks through Camera 2 and picks Sofa, which this camera doesn\'t see: a chip on the picture\'s edge points to it. Clicking the chip frames Sofa.'),
+    ] },
     { id: 'keys', group: G, title: 'Choosing a view with the keyboard', base: fromTurn(jAfter63), steps: [
       step('menu open', [ev('follow', { v: false }), ev('menu', { v: true }), ev('ui', { menuCur: SCENE_VIEW })], 'The views menu is open from the keyboard: the highlight starts on the view you have (Scene).'),
       step('down twice', [ev('menu', { v: true }), ev('ui', { menuCur: '@cam:26' })], 'Down, Down: the highlight moves to Camera 2, on the row itself.'),

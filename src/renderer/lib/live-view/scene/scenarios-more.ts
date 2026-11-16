@@ -95,5 +95,5 @@ export const STATES = buildStates()
 export const PRES = buildPresence()
 export const SAVES = buildSaves()
 export const PINNED = buildPinned()
-/** All 24, in the mock's order. */
+/** The mock's 24 in its order, with S4's "on the picture" among People and views. */
 export const SCENARIOS: Scenario[] = [TURN, ...PRES, ...STATES, ...SAVES, ...PINNED]

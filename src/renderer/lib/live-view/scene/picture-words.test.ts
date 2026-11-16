@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { pictureWords, type PictureContext } from './picture-words'
 import { pictureContext, pictureDetails, pictureStatus } from './picture-model'
+import { sampleBounds } from './stand-in/shapes'
 import { simulate } from './turn'
 import { SCENARIOS } from './scenarios-more'
 import type { PictureStatus } from './picture-source'
@@ -117,16 +118,26 @@ describe('the picture’s words', () => {
 describe('the details popover', () => {
   it('speaks plainly, and keeps the raw facts for "Copy for an agent"', () => {
     const S = at('nomod', 'approximate box')
-    const d = pictureDetails(S, { view: '@scene:main', pick: undefined, size: { width: 1920, height: 1080 } })
+    const d = pictureDetails(S, { view: '@scene:main', pick: undefined, size: { width: 1920, height: 1080 }, bounds: sampleBounds })
     expect(d.rows).toEqual([
       { label: 'Picture', value: 'Up to date' },
       { label: 'Size', value: '1920 × 1080, drawn in 164 ms' },
       { label: 'Looking at', value: 'the whole scene' },
       { label: 'Modifiers', value: 'Not shown in this picture' },
       { label: 'Selected', value: 'Shelf' },
-      { label: 'Its box', value: 'Approximate: an array modifier adds boards the bounds leave out' },
+      { label: 'Its box', value: 'Approximate: a modifier adds parts the box leaves out' },
     ])
     expect(d.forAgents).toBe('change 60 · picture of change 60 · @scene:main · @obj:16')
+  })
+
+  it('counts what the picture leaves out, quietly, only when there is any', () => {
+    const S = at('nomod', 'approximate box')
+    const rows = (meta: Parameters<typeof pictureDetails>[1]['meta']) => pictureDetails(S, { view: '@scene:main', pick: undefined, size: null, meta }).rows.filter((r) => r.label === 'Left out')
+    expect(rows({ base_values: false, hidden_left_out: true, objects_hidden: 3, objects_not_evaluated: 1 }).map((r) => r.value)).toEqual(['3 hidden objects', '1 object that couldn’t be evaluated'])
+    expect(rows({ base_values: false, hidden_left_out: true, objects_hidden: 1, objects_not_evaluated: 0 }).map((r) => r.value)).toEqual(['1 hidden object'])
+    expect(rows({ base_values: false, hidden_left_out: false, objects_hidden: 0, objects_not_evaluated: 0 })).toEqual([])
+    expect(rows(null)).toEqual([])
+    expect(pictureDetails(S, { view: '@scene:main', pick: undefined, size: null, meta: { base_values: false, hidden_left_out: true, objects_hidden: 3, objects_not_evaluated: 1 } }).forAgents).toContain('objects_hidden 3 · objects_not_evaluated 1')
   })
 
   it('says how current the picture is while it redraws or failed', () => {

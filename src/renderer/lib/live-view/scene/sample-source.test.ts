@@ -1,4 +1,4 @@
-// The scene's sample source: a LiveSource with the mock's 24 scenarios, each
+// The scene's sample source: a LiveSource with the mock's 24 scenarios (and S4's one), each
 // step the shell's snapshot (people, state, changes, messages, notices) and
 // the scene's own state for the panel.
 
@@ -20,14 +20,14 @@ const chip = (s: SampleSceneSource): string => {
 }
 
 describe('SampleSceneSource', () => {
-  it('plays all 24 of the mock’s scenarios, grouped as its player groups them', () => {
+  it('plays the mock’s 24 scenarios and S4’s one (on the picture), grouped as its player groups them', () => {
     const list = sceneScenarios()
-    expect(list.map((s) => s.id)).toEqual(['turn', 'who', 'keys', 'follow', 'two', 'refuse', 'limits', 'first', 'failed', 'failfirst', 'nopic', 'nomod', 'turntable', 'large', 'lost', 'empty', 'blob', 'O1', 'O2', 'O3', 'O4', 'O5', 'pin-outliner', 'pin-rig'])
+    expect(list.map((s) => s.id)).toEqual(['turn', 'who', 'onpic', 'keys', 'follow', 'two', 'refuse', 'limits', 'first', 'failed', 'failfirst', 'nopic', 'nomod', 'turntable', 'large', 'lost', 'empty', 'blob', 'O1', 'O2', 'O3', 'O4', 'O5', 'pin-outliner', 'pin-rig'])
     expect(new Set(list.map((s) => s.group)).size).toBe(5)
-    expect(list.reduce((n, s) => n + s.steps.length, 0)).toBe(98)
+    expect(list.reduce((n, s) => n + s.steps.length, 0)).toBe(100)
     const s = open('turn')
     expect(s.kind).toBe('sample')
-    expect(s.player.scenarioList()).toHaveLength(24)
+    expect(s.player.scenarioList()).toHaveLength(25)
   })
 
   it('each step is the shell’s snapshot plus the scene', () => {

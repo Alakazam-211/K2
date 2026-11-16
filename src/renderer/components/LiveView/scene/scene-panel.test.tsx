@@ -133,9 +133,9 @@ describe('the scene panel', () => {
     expect(tree.querySelectorAll('[role="treeitem"]').length).toBeLessThan(60)
   })
 
-  it('the banner picks any of the 24 scenarios, grouped', () => {
+  it('the banner picks any of the 25 scenarios, grouped', () => {
     const s = mount('who')
-    expect(s.player.scenarioList()).toHaveLength(24)
+    expect(s.player.scenarioList()).toHaveLength(25)
     expect(within(screen.getByTestId('lv-sample-banner')).getByTestId('lv-sample-scenarios').textContent).toContain('Who is on what')
   })
 })

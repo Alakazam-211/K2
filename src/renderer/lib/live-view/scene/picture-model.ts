@@ -3,13 +3,12 @@
 // context, and the details popover's rows (plain rows, then the raw facts
 // once, for an agent). Pure.
 
-import { GOLD } from './samples'
 import { UNITS, collTitle, nameOf, objOf } from './fold'
 import { sceneTree } from './tree'
 import { refusalText } from './wording'
 import { agentId, agentTarget, type SimState } from './sim'
 import { approxOf, myPick, peerView, target, viewNow } from './panel'
-import type { PictureStatus } from './picture-source'
+import type { ObjectBounds, PictureStatus, StillMeta } from './picture-source'
 import type { PictureContext } from './picture-words'
 import { pictureFreshness } from './picture-words'
 import { cameraLabel, kindOf, mainCamera, objectView, viewName } from './views'
@@ -88,7 +87,7 @@ export interface Details {
 }
 
 /** The details popover: plain rows, then the raw facts once (copied, never shown). */
-export function pictureDetails(S: SimState, o: { view: string; pick: string | null | undefined; size: { width: number; height: number } | null }): Details {
+export function pictureDetails(S: SimState, o: { view: string; pick: string | null | undefined; size: { width: number; height: number } | null; bounds?: (D: Doc, a: string) => ObjectBounds | null; meta?: StillMeta | null }): Details {
   const pv = S.pv
   const rows: Details['rows'] = []
   const fresh = pictureFreshness(pictureStatus(S))
@@ -99,11 +98,17 @@ export function pictureDetails(S: SimState, o: { view: string; pick: string | nu
   const t = target(S, o.pick)
   if (t && S.D.props[t]) {
     rows.push({ label: 'Selected', value: nameOf(S.D, t) })
-    const ap = approxOf(S.D, t)
-    const why = GOLD.previews.bounds?.[t]?.why
+    // Driven by the place op, else the listing's approx (a bool) and its approx_reason.
+    const b = o.bounds?.(S.D, t) ?? null
+    const ap = approxOf(S.D, t) === 'driven' ? 'driven' : b?.approx === true ? (b.approx_reason ?? 'modifiers') : null
     if (ap === 'driven') rows.push({ label: 'Its box', value: 'Approximate: animation moves it, so the box shows where it is saved' })
-    else if (ap) rows.push({ label: 'Its box', value: `Approximate: ${why || 'it misses some parts'}` })
+    else if (ap) rows.push({ label: 'Its box', value: 'Approximate: a modifier adds parts the box leaves out' })
   }
+  // What the picture left out, quietly, only when there is any.
+  const m = o.meta
+  const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+  if (m?.objects_hidden) rows.push({ label: 'Left out', value: plural(m.objects_hidden, 'hidden object', 'hidden objects') })
+  if (m?.objects_not_evaluated) rows.push({ label: 'Left out', value: plural(m.objects_not_evaluated, 'object that couldn’t be evaluated', 'objects that couldn’t be evaluated') })
   if (S.callout) rows.push({ label: 'Refusal', value: refusalText(S.callout.r, S.D).line })
   for (const r of sceneTree(S.D).refused) {
     const why = r.why === 'unknown' ? 'it isn’t in this file' : r.why === 'cycle' ? 'it would put the collection inside itself' : 'it nests too deep'
@@ -111,6 +116,7 @@ export function pictureDetails(S: SimState, o: { view: string; pick: string | nu
   }
   if (S.notice?.copy) rows.push({ label: 'The copy', value: S.notice.copy.path })
   const refs = [...new Set([o.view, t, S.callout?.r.unit].filter((x): x is string => !!x))]
-  const facts = [`change ${S.D.rev}`, ...(pv.shown != null ? [`picture of change ${pv.shown}`] : []), ...refs, ...(S.callout ? [S.callout.r.code] : []), ...(S.notice?.code ? [S.notice.code] : [])]
+  const left = m ? [...(m.objects_hidden ? [`objects_hidden ${m.objects_hidden}`] : []), ...(m.objects_not_evaluated ? [`objects_not_evaluated ${m.objects_not_evaluated}`] : [])] : []
+  const facts = [`change ${S.D.rev}`, ...(pv.shown != null ? [`picture of change ${pv.shown}`] : []), ...refs, ...(S.callout ? [S.callout.r.code] : []), ...(S.notice?.code ? [S.notice.code] : []), ...left]
   return { rows, forAgents: facts.join(' · ') }
 }

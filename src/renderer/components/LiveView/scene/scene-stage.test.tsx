@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SCENARIOS } from '@/lib/live-view/scene/scenarios-more'
 import { simulate } from '@/lib/live-view/scene/turn'
 import type { PictureSource, Still, StillRequest } from '@/lib/live-view/scene/picture-source'
+import { sampleBounds } from '@/lib/live-view/scene/stand-in/shapes'
 import { SceneStage } from './SceneStage'
 
 const sc = (id: string) => SCENARIOS.find((s) => s.id === id)!
@@ -31,6 +32,7 @@ function fakeSource(): PictureSource & { asked: StillRequest[] } {
       const st: Still = { rev: req.rev, view: req.view, shape: req.shape, width: 1920, height: 1080, image: { kind: 'rgba', data: new Uint8ClampedArray(4) }, camera: { view: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -5, 1], proj: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, -1, 0, 0, -0.1, 0] }, ids: null, renderMs: 200 }
       return Promise.resolve(st)
     },
+    bounds: sampleBounds,
     close: () => undefined,
   }
 }

@@ -6,11 +6,13 @@
 // beside it, the key hint and ⓘ bottom-right. The card says what the
 // picture can't show. Keys on the picture: Home Scene, 0 the file's main
 // camera, . frames the selection, Esc closes the details or the menu, else
-// goes back. Overlays (S4), people on other views and two views (S5) come
-// later.
+// goes back. Over the still, the overlay (S4): boxes, holds, selections,
+// the live change and chips for what is off the picture. People on other
+// views and two views (S5) come later.
 
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { cx } from '@/components/ui'
+import { nameOf } from '@/lib/live-view/scene/fold'
 import { localStore, type SceneLocal } from '@/lib/live-view/scene/local'
 import { agentView, framedOf, pictureContext, pictureDetails, pictureStatus, viewOnScreen } from '@/lib/live-view/scene/picture-model'
 import { STILL_WIDTH, letterbox, type PictureSource } from '@/lib/live-view/scene/picture-source'
@@ -19,13 +21,16 @@ import type { SceneControl } from '@/lib/live-view/scene/sample-source'
 import { fromMockView } from '@/lib/live-view/scene/sample-views'
 import type { SimState } from '@/lib/live-view/scene/sim'
 import { SCENE_VIEW } from '@/lib/live-view/scene/view-address'
-import { goView, isTurntable, mainCamera, sameView, stillView, viewKey, viewName, viewRows, type ViewRow } from '@/lib/live-view/scene/views'
+import { goView, isTurntable, mainCamera, objectView, sameView, stillView, viewKey, viewName, viewRows, type ViewRow } from '@/lib/live-view/scene/views'
+import type { Doc } from '@/lib/live-view/scene/types'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import { EdgeStack, type Edge } from '../shell/EdgeStack'
 import { OkGlyph } from '../shell/glyphs'
 import { Compass } from './Compass'
 import { DetailsPopover, InfoButton } from './DetailsPopover'
+import { OVERLAY_CSS } from './overlayCss'
 import { KeyHint, OlderMark, PictureCard, PictureChips } from './PictureChrome'
+import { SceneOverlay } from './SceneOverlay'
 import { ScenePicture } from './ScenePicture'
 import { STAGE_CSS } from './stageCss'
 import { usePaneSize, useStageScope, useStill } from './useStage'
@@ -80,7 +85,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const ag = agentView(S)
   const rows = useMemo(() => (S.D ? viewRows(S.D, { framed, agent: ag ? { name: ag.name, view: ag.view } : null }) : []), [S.D, framed, ag?.name, ag?.view])
   const menu = L.menu ?? S.menu
-  const details = L.info && S.D ? pictureDetails(S, { view, pick: L.pick, size: still ? { width: still.width, height: still.height } : null }) : null
+  const details = L.info && S.D ? pictureDetails(S, { view, pick: L.pick, size: still ? { width: still.width, height: still.height } : null, bounds: source?.bounds ? (D, a) => source.bounds?.(D, a) ?? null : undefined, meta: still?.meta ?? null }) : null
 
   // The quiet line: your view change, or the scenario's.
   const flash = L.flash ?? (S.toast?.text?.startsWith('Now looking through') ? S.toast.text : null)
@@ -122,11 +127,17 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
     e.stopPropagation()
   }
 
+  // Something off the picture: frame it.
+  const frameObject = (a: string): void => {
+    if (S.D) go(objectView(S.D, a), `Now looking at ${nameOf(S.D, a)}, framed`)
+  }
+  const bounds = useCallback((D: Doc, a: string) => source?.bounds?.(D, a) ?? null, [source])
+
   const ready = !!S.D && !S.loading
   const keys = !narrow && !isTurntable(view) && ready
   return (
     <div className="lv-scene-hero" data-testid="lv-hero" data-kind="scene">
-      <style>{STAGE_CSS}</style>
+      <style>{STAGE_CSS + OVERLAY_CSS}</style>
       <div
         ref={ref}
         data-testid="lv-scene-stage"
@@ -142,6 +153,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
         onKeyDown={onKeyDown}
       >
         {lb ? <ScenePicture lb={lb} still={still} label={`Clay picture of the scene, ${name}`} dim={words.dim} ground={ground} motion={!reducedMotion()} /> : null}
+        {lb && pane && still?.camera && source?.bounds && words.still ? <SceneOverlay S={S} pick={L.pick} still={still} lb={lb} bounds={bounds} motion={!reducedMotion()} stage={ref} pane={pane} onFrame={frameObject} /> : null}
         {words.card ? <PictureCard card={words.card} onAction={onCard} /> : null}
         {ready ? (
           <div className="lv-vtop">

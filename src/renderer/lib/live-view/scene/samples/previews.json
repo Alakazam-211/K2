@@ -54,10 +54,10 @@
   "alpha": true
  },
  "bounds": {
-  "_note": "local bounds from the mesh read; approx: modifiers marks bounds that miss geometry a modifier adds (the box is drawn dashed, the note is in the picture details)",
+  "_note": "local bounds from the mesh read; approx is a bool (true: the bounds miss geometry, the box is drawn dashed) and approx_reason says why (modifiers | driven), shown in the picture details (K2 Render's listing corrections, 2026-11-16)",
   "@obj:16": {
-   "approx": "modifiers",
-   "why": "an array modifier adds boards the bounds leave out"
+   "approx": true,
+   "approx_reason": "modifiers"
   }
  },
  "records": [

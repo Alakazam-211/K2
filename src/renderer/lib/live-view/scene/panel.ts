@@ -297,7 +297,9 @@ export function approxOf(D: Doc, a: string): 'driven' | string | null {
   const u = D.units?.[a]
   const o = objOf(D, a)
   if (o.edit === 'a' || u?.placement?.approx === 'driven') return 'driven'
-  return GOLD.previews.bounds?.[a]?.approx ?? null
+  // The sample's listing: approx is a bool, the why is approx_reason.
+  const b = GOLD.previews.bounds?.[a]
+  return b?.approx === true ? (b.approx_reason ?? 'modifiers') : null
 }
 
 export const fmt = (n: number): string => (Math.abs(n) < 0.0005 ? 0 : n).toFixed(3)

@@ -298,6 +298,6 @@ describe('The picture (K2 Render previews; provisional)', () => {
   it("the still is a lossless WebP with alpha and no background; cameras show as Camera 1, Camera 2 until the mesh read carries names; Shelf's bounds are approximate (modifiers)", () => {
     const P = GOLD.previews
     const cams = P.views.filter((v) => v.kind === 'camera')
-    expect(P.background.alpha === true && !('gd' in P.background) && cams.every((v) => v._name) && cams.map((v) => camLabel(v.view)).join(', ') === 'Camera 1, Camera 2' && P.bounds['@obj:16'].approx === 'modifiers').toBe(true)
+    expect(P.background.alpha === true && !('gd' in P.background) && cams.every((v) => v._name) && cams.map((v) => camLabel(v.view)).join(', ') === 'Camera 1, Camera 2' && P.bounds['@obj:16'].approx === true && P.bounds['@obj:16'].approx_reason === 'modifiers').toBe(true)
   })
 })

@@ -33,7 +33,7 @@ cat > "$T/crates/a/src/old.rs" <<'RS'
 fn a() -> &'static str { "K2 restarts" }
 fn b() -> String { format!("{n} on K2") } // a note about K2
 fn c() -> &'static str { "the K5 Space" }
-fn d() -> &'static str { "K2_PORT K2Error X-K2-Client k2 k2.dev K2SO" }
+fn d() -> &'static str { let _ = (Who::K2, K2::new()); "K2_PORT K2Error X-K2-Client k2 k2.dev K2SO" }
 #[cfg(all(test, unix))]
 mod tests {
     fn t() { assert_eq!(x, "K2 and K5 and Alakazam-211/K2"); }

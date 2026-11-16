@@ -20,7 +20,8 @@ reason says so, starting `keeper:`, and say why in the commit.
 
 Kinds:
   K2    the word K2 on its own ("K2", "K2 Connect", K2.app; not K2_X,
-        K2Error, X-K2-Header or k2): the brand-inventory product-name rule
+        K2Error, X-K2-Header, a path segment such as Who::K2, or k2): the
+        brand-inventory product-name rule, less Rust paths
   K5    the word K5 on its own: today the K5 Space and old review labels;
         a new one is either the future name used too early or a collision
   repo  the release repo, Alakazam-211/K2 (not K2SO)
@@ -57,7 +58,7 @@ MODULES = {
     "src/renderer/lib/hosts.ts",
 }
 KINDS = {
-    "K2": re.compile(r"(?<![A-Za-z0-9_])(?<![Xx]-)K2(?![A-Za-z0-9_])"),
+    "K2": re.compile(r"(?<![A-Za-z0-9_])(?<![Xx]-)(?<!::)K2(?![A-Za-z0-9_]|::)"),
     "K5": re.compile(r"(?<![A-Za-z0-9_])(?<![Xx]-)K5(?![A-Za-z0-9_])"),
     "repo": re.compile(r"Alakazam-211/K2(?![A-Za-z0-9_])"),
 }

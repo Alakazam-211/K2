@@ -1,0 +1,27 @@
+M48
+; #@! TF.GenerationSoftware,Hand,Editor,1.0
+; #@! TF.FileFunction,Plated,1,2,PTH
+METRIC
+; #@! TA.AperFunction,ViaDrill
+T01C0.3
+; #@! TA.AperFunction,ComponentDrill
+T02C0.9
+T03C1.0
+%
+G05
+T01
+X1.0Y1.0
+X2.5Y1.0
+; #@! TO.N,GND
+T02
+X10Y20
+; #@! TD
+T03
+G00X5.0Y2.6
+M15
+G03X6.0Y1.6A1.0
+G01X11.0Y1.6
+M16
+G05
+X8.0Y8.0
+M30

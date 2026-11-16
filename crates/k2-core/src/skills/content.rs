@@ -1474,6 +1474,14 @@ Run it as printed. `k2 compute node packages request <node> <names> --why "..."`
 
 What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
 
+## Your compute node list
+
+With a node list (`k2 compute allow-nodes`), your jobs run only on the nodes on it. Narrowing it (`--remove`) is yours. Adding a node is a person's: `k2 compute allow-nodes --add <node>[,<node>…]` is refused with `allow_nodes_needs_person` (exit 3) and ends with:
+
+    k2 permission request compute.allow-nodes nodes=<node>[,<node>…] --why "<what you need it for>"
+
+Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list: another agent asks for its own. `--clear` opens every granted node at once, so ask for the nodes you need instead.
+
 ## GitHub access for compute jobs
 
 A job reads a private GitHub repo only with a grant, and every grant needs this server's GitHub credential. With none set yet, `k2 compute git-access grant --github <owner>/<repo>` is refused with `git_access_needs_setup` (exit 3) and ends with:
@@ -2551,6 +2559,9 @@ mod tests {
             // 0.46.10: a secret another agent sent waits on K2's card.
             "k2 permission request vault.incoming.accept id=",
             "K2 puts a card on your Thread itself",
+            // 0.46.15: adding a node to the agent's own compute node list.
+            "k2 permission request compute.allow-nodes nodes=<node>[,<node>…]",
+            "allow_nodes_not_granted",
         ] {
             assert!(body.contains(must), "the k2-permissions skill must teach: {must}");
         }

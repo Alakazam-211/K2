@@ -28429,8 +28429,12 @@ Agents:
   k2 compute allow-nodes <node>[,<node>…] | --add N | --remove N | --clear [--workspace WS]
                  set it. An agent may only narrow its own (a first list, --remove);
                  adding a node or --clear is a person's: the owner or an Admin,
-                 from a terminal outside K2 (an agent gets allow_nodes_needs_person,
-                 exit 3, and asks on a card). Nodes by name; a node removed and
+                 from a terminal outside K2. An agent's --add N[,N…] gets
+                 allow_nodes_needs_person (exit 3) and asks on a card for its own
+                 list: k2 permission request compute.allow-nodes nodes=N[,N…]
+                 --why "…" (Allow adds exactly those). Only nodes granted to it
+                 (else allow_nodes_not_granted); --clear opens every granted node,
+                 so ask for the nodes it needs. Nodes by name; a node removed and
                  enrolled again is a new node, off the list until added
   k2 compute git-access [--json] | grant --github <owner>/<repo>[,…] | revoke … | setup …
                  let this workspace's jobs read private GitHub repos: git clone
@@ -63868,7 +63872,12 @@ NODE LIST (0.46.8)
   that must not reach other machines.
   You may narrow your own list (k2 compute allow-nodes k2n9,k2-arch, or
   --remove N). Adding a node or --clear is a person's (the owner or an
-  Admin): allow_nodes_needs_person, exit 3; ask on the card it names.
+  Admin): allow_nodes_needs_person, exit 3; ask on the card it names:
+  k2 permission request compute.allow-nodes nodes=N[,N…] --why "…". The
+  card shows each node's size and owner; Allow adds exactly those nodes
+  to your own list. Only nodes granted to you (allow_nodes_not_granted,
+  exit 3: a person grants the node first) and only your own list.
+  --clear opens every granted node at once: ask for the nodes you need.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
 
 GIT ACCESS (0.46.9)
@@ -65040,6 +65049,9 @@ COMMON ERRORS
                          node's owner updates k2-node; exit 3
   allow_nodes_needs_person  adding a node to the list or --clear: a person's
                          (the owner or an Admin); exit 3, ask on a card
+                         (compute.allow-nodes nodes=N for an add)
+  allow_nodes_not_granted  adding a node not granted to your workspace: a
+                         person grants it first; exit 3, can't be requested
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says
@@ -94776,6 +94788,14 @@ A job whose `--needs` asks for a system package its node's owner hasn't approved
 Run it as printed. `k2 compute node packages request <node> <names> --why "..."` (before a job) and `k2 compute prewarm` file the same kind of request and print the same line. The owner or an admin sees exactly what installs, on which machine, the number of packages with dependencies and the size. Several of your package requests can share one card; other kinds never join it. When the `[permission:]` turn says approved, root installs them on the node, and a `[compute]` message says when it's done: then run your job again. A node another server owns is that server's owner's to decide: you hear back in a `[compute]` message, and there is nothing to ask here.
 
 What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
+
+## Your compute node list
+
+With a node list (`k2 compute allow-nodes`), your jobs run only on the nodes on it. Narrowing it (`--remove`) is yours. Adding a node is a person's: `k2 compute allow-nodes --add <node>[,<node>…]` is refused with `allow_nodes_needs_person` (exit 3) and ends with:
+
+    k2 permission request compute.allow-nodes nodes=<node>[,<node>…] --why "<what you need it for>"
+
+Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list: another agent asks for its own. `--clear` opens every granted node at once, so ask for the nodes you need instead.
 
 ## GitHub access for compute jobs
 

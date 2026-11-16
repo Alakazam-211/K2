@@ -96,7 +96,12 @@ NODE LIST (0.46.8)
   that must not reach other machines.
   You may narrow your own list (k2 compute allow-nodes k2n9,k2-arch, or
   --remove N). Adding a node or --clear is a person's (the owner or an
-  Admin): allow_nodes_needs_person, exit 3; ask on the card it names.
+  Admin): allow_nodes_needs_person, exit 3; ask on the card it names:
+  k2 permission request compute.allow-nodes nodes=N[,N…] --why "…". The
+  card shows each node's size and owner; Allow adds exactly those nodes
+  to your own list. Only nodes granted to you (allow_nodes_not_granted,
+  exit 3: a person grants the node first) and only your own list.
+  --clear opens every granted node at once: ask for the nodes you need.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
 
 GIT ACCESS (0.46.9)
@@ -1268,6 +1273,9 @@ COMMON ERRORS
                          node's owner updates k2-node; exit 3
   allow_nodes_needs_person  adding a node to the list or --clear: a person's
                          (the owner or an Admin); exit 3, ask on a card
+                         (compute.allow-nodes nodes=N for an add)
+  allow_nodes_not_granted  adding a node not granted to your workspace: a
+                         person grants it first; exit 3, can't be requested
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says

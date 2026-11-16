@@ -38,8 +38,12 @@ Agents:
   k2 compute allow-nodes <node>[,<node>…] | --add N | --remove N | --clear [--workspace WS]
                  set it. An agent may only narrow its own (a first list, --remove);
                  adding a node or --clear is a person's: the owner or an Admin,
-                 from a terminal outside K2 (an agent gets allow_nodes_needs_person,
-                 exit 3, and asks on a card). Nodes by name; a node removed and
+                 from a terminal outside K2. An agent's --add N[,N…] gets
+                 allow_nodes_needs_person (exit 3) and asks on a card for its own
+                 list: k2 permission request compute.allow-nodes nodes=N[,N…]
+                 --why "…" (Allow adds exactly those). Only nodes granted to it
+                 (else allow_nodes_not_granted); --clear opens every granted node,
+                 so ask for the nodes it needs. Nodes by name; a node removed and
                  enrolled again is a new node, off the list until added
   k2 compute git-access [--json] | grant --github <owner>/<repo>[,…] | revoke … | setup …
                  let this workspace's jobs read private GitHub repos: git clone

@@ -682,6 +682,71 @@ fn apply_allow_nodes_clear(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) ->
     apply_allow_to(who, body, message)
 }
 
+/// The card's extra values for `compute.allow-nodes` (0.46.15): one row
+/// per named node with what the person is letting the agent's jobs reach,
+/// its platform, its size for this server and who owns it ("lc: linux
+/// x86_64 · 8 CPUs · 32 GB · owned by this server"). Values sit outside
+/// the card's text hash, so a node coming online between the ask and the
+/// click never makes the card stale. Empty for every other action.
+pub(crate) fn card_values(action: &str, ctx: &Ctx) -> Vec<k2_core::permission::card::KeyValue> {
+    if action != ALLOW_NODES.id {
+        return Vec::new();
+    }
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    node_names(ctx)
+        .into_iter()
+        .map(|name| {
+            let value = match k2_core::compute::store::find_node(&conn, &name).filter(|n| n.state != "revoked") {
+                Some(n) => node_facts(&n),
+                None => "not a compute node on this server".to_string(),
+            };
+            k2_core::permission::card::KeyValue { key: name, value }
+        })
+        .collect()
+}
+
+/// "linux x86_64 · 8 CPUs · 32 GB · owned by this server" (parts it
+/// doesn't know are left out; no offer yet says so).
+fn node_facts(n: &k2_core::compute::store::NodeRow) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let platform = [n.os.as_deref(), n.arch.as_deref()].into_iter().flatten().filter(|x| !x.trim().is_empty()).collect::<Vec<_>>().join(" ");
+    if !platform.is_empty() {
+        parts.push(platform);
+    }
+    match n.last_offer.as_ref() {
+        Some(o) => {
+            let cpus = o.caps.cpu_millis as f64 / 1000.0;
+            parts.push(format!("{} CPU{}", fmt_num(cpus), if (cpus - 1.0).abs() < 1e-9 { "" } else { "s" }));
+            parts.push(format!("{} GB", fmt_num((o.caps.mem_bytes as f64 / (1u64 << 30) as f64 * 10.0).round() / 10.0)));
+            if o.caps.gpus > 0 {
+                parts.push(format!("{} GPU{}", o.caps.gpus, if o.caps.gpus == 1 { "" } else { "s" }));
+            }
+        }
+        None => parts.push("size not reported yet".to_string()),
+    }
+    parts.push(if n.is_tenant() {
+        format!("owned by {}", n.owner_label.as_deref().filter(|x| !x.trim().is_empty()).unwrap_or("another server"))
+    } else if n.shared {
+        "owned by this server, shared with others".to_string()
+    } else {
+        "owned by this server".to_string()
+    });
+    if n.state != "active" {
+        parts.push(n.state.clone());
+    }
+    parts.join(" · ")
+}
+
+/// 8 → "8", 7.5 → "7.5".
+fn fmt_num(x: f64) -> String {
+    if (x - x.round()).abs() < 1e-9 {
+        format!("{}", x.round() as i64)
+    } else {
+        format!("{x:.1}")
+    }
+}
+
 // ── ci.cache-trust (prd-compute-blacksmith-class-v1 B2, §4.1.5) ─────
 
 /// `ci.cache-trust branches=`: add branches to the asking workspace's

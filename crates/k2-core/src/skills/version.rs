@@ -368,7 +368,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 61;
 /// "A server secret you need" (`vault.grant-server`).
 /// v14 = 0.46.11: the opening line (cards are on by default; who turned on
 /// the agent's own switch, by its Settings name).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 14;
+/// v15 = 0.46.15: "Your compute node list" (`compute.allow-nodes`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 15;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

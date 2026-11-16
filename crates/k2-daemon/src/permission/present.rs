@@ -338,6 +338,9 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
             values.push(KeyValue { key: p.key.to_string(), value: shown });
         }
     }
+    // What each named node is (`compute.allow-nodes`, 0.46.15): shown, not
+    // hashed, so a node's live size never makes the card stale.
+    values.extend(super::actions::compute::card_values(spec.id, &ctx));
     let why_text = req.updated_why.clone().unwrap_or_else(|| req.why.clone());
     let answer = decision_of(req).map(|d| AnswerView {
         decision: d.to_string(),

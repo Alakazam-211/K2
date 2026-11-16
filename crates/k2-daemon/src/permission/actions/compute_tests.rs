@@ -373,6 +373,107 @@ fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
     assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": b_name })).contains("compute nodes are off"));
 }
 
+/// A node's offer: its caps for this server (`cpus` cores, `gb` memory).
+fn sized_offer(cpus: u64, gb: u64) -> k2_core::compute::proto::frames::Offer {
+    use k2_core::compute::proto::frames::{Availability, Caps, Control, Free, Offer};
+    const GB: u64 = 1 << 30;
+    Offer {
+        share: None,
+        revision: 1,
+        control: Control::Active,
+        control_by: None,
+        control_at: None,
+        availability: Availability { ok: true, reasons: vec![] },
+        caps: Caps { cpu_millis: cpus * 1000, mem_bytes: gb * GB, disk_budget_bytes: 100 * GB, hard: true, gpus: 0 },
+        free: Free { cpu_millis: cpus * 1000, mem_bytes: gb * GB, disk_free_bytes: 500 * GB, gpus: 0 },
+        slots: vec![],
+        running: 0,
+        parallel_max: 4,
+        refusal: None,
+        labels: [("os".to_string(), "linux".to_string()), ("arch".to_string(), "x86_64".to_string())].into(),
+        tools: Default::default(),
+        protocol: 8,
+        boot_id: "b".into(),
+        ledger_id: "l".into(),
+        node_version: "0.46.13".into(),
+        features: vec![],
+        host: None,
+        pkg: None,
+        sim: None,
+    }
+}
+
+/// The card's values as `key → value`.
+fn values_of(vw: &Value) -> Vec<(String, String)> {
+    vw["values"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no values: {vw}"))
+        .iter()
+        .map(|kv| (kv["key"].as_str().expect("key").to_string(), kv["value"].as_str().expect("value").to_string()))
+        .collect()
+}
+
+/// 0.46.15: the card shows the person the asking workspace and, for each
+/// named node, its platform, its size for this server and who owns it,
+/// and says the agent's jobs may then run there. A request can only ever
+/// be for the asker's own list: naming a workspace is refused before any
+/// card, and so is a node that doesn't exist or isn't granted.
+#[test]
+fn allow_nodes_card_names_each_node_and_only_the_askers_list() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("alnv");
+    let other = seed("alno");
+    let (a, _) = list_node(&ws, "al-v", true);
+    let (b, b_name) = list_node(&ws, "al-w", true);
+    let (c, c_name) = list_node(&ws, "al-x", true);
+    let (_d, d_name) = list_node(&ws, "al-y", false);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        // b reported its size; c is another server's node and never did.
+        k2_core::compute::store::store_offer(&conn, &b, &sized_offer(8, 32), k2_core::compute::now());
+        k2_core::compute::store::set_tenant_of(&conn, &c, "lab.example.test").expect("tenant");
+    }
+    set_list(&ws, Some(std::slice::from_ref(&a)));
+
+    // Never another workspace's list, never an unknown or ungranted node.
+    for params in [json!({ "nodes": b_name, "workspace": other.id }), json!({ "nodes": b_name, "workspace": ws.id })] {
+        let (s, v) = ask(&ws, "compute.allow-nodes", params.clone());
+        assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{params}: {v}");
+        assert!(v["error"]["hint"].as_str().unwrap_or("").contains("the workspace is always yours"), "{params}: {v}");
+    }
+    assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": format!("{b_name},no-such-node") })).contains("no compute node 'no-such-node'"));
+    assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": format!("{b_name},{d_name}") })).contains("has no grant on"));
+    let stored: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM permission_requests WHERE workspace_id = ?1", [&ws.id], |r| r.get(0)).expect("count")
+    };
+    assert_eq!(stored, 0, "a refused ask stores no request and makes no card");
+
+    let v = ask_ok(&ws, "compute.allow-nodes", json!({ "nodes": format!("{b_name},{c_name}") }));
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Add {b_name}, {c_name} to {}'s compute node list.", ws.handle), "{vw}");
+    assert!(
+        vw["consequences"].as_str().unwrap_or("").starts_with(&format!("{}'s jobs may then run on {b_name}, {c_name}", ws.handle)),
+        "{vw}"
+    );
+    assert_eq!(
+        values_of(&vw),
+        vec![
+            ("workspace".to_string(), ws.handle.clone()),
+            ("nodes".to_string(), format!("{b_name}, {c_name}")),
+            (b_name.clone(), "linux x86_64 · 8 CPUs · 32 GB · owned by this server".to_string()),
+            (c_name.clone(), "linux · size not reported yet · owned by lab.example.test".to_string()),
+        ],
+        "{vw}"
+    );
+    assert_eq!(vw["direction"], "loosen", "{vw}");
+    assert_eq!(vw["approvers"]["floor"], "admin", "{vw}");
+}
+
 /// B2: adding a trusted CI branch is a person's card (Admin floor); a
 /// branch already trusted (main, by default) asks nothing; a glob is
 /// refused at the ask.

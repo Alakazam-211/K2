@@ -35,7 +35,7 @@ const SPIKE_FRAMES: Record<string, { reason: string; gate: RegExp }> = {
 
 /** Surfaces that must use HtmlFrame, and the profile each must ask for. */
 const SURFACES: ReadonlyArray<{ file: string; profile: 'scripted' | 'inert' | 'widget' }> = [
-  { file: 'components/FileViewerPane/FileViewerPane.tsx', profile: 'scripted' },
+  { file: 'components/FileViewerPane/FilePreview.tsx', profile: 'scripted' }, // the file tab's HTML preview (both views)
   { file: 'components/Projects/ProjectDashboard.tsx', profile: 'scripted' },
   { file: 'components/AgentPane/AgentInboxPane.tsx', profile: 'inert' },
   // prd-ocmail-admin-in-k2-v1 T13: the Mail page's slot for @k2/mail-reader.

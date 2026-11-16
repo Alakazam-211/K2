@@ -405,7 +405,7 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
         plan_voice(folder, base, host, entitlements.as_deref(), p);
     }
     // CE-3: a preset stub when the repo already keeps compute presets.
-    let compute = folder.join(".k2/compute.toml");
+    let compute = crate::workspace_dir::workspace_dot_dir(folder).join("compute.toml");
     if let Ok(t) = std::fs::read_to_string(&compute) {
         if t.contains("[presets.") && !t.contains("[presets.tauri-linux]") {
             let mut after = t.clone();
@@ -474,7 +474,7 @@ fn plan_ci(folder: &Path, project: &str, facts: Option<&ci::CiFacts>, p: &mut Pl
     new_file(folder, "k2/ci/build-linux.sh", &ci::build_linux_sh(), p);
     new_file(folder, "k2/ci/build-macos.sh", &ci::build_macos_sh(), p);
     let toml = ci::ci_toml(project, f);
-    let ci_path = folder.join(".k2/ci.toml");
+    let ci_path = crate::workspace_dir::workspace_dot_dir(folder).join("ci.toml");
     match std::fs::read_to_string(&ci_path) {
         Ok(t) if !t.contains("[release]") => {
             let section = toml.split_once("\n[release]\n").map(|(_, rest)| format!("[release]\n{rest}")).unwrap_or_default();

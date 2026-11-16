@@ -994,7 +994,7 @@ impl Manager {
             img = encode::crop_points(&img, r).map_err(|e| SimError::new(400, "sim_invalid", e))?;
         }
         let png = encode::png(&img).map_err(|e| SimError::new(500, "sim_io", e))?;
-        let dir = ws.path.join(".k2").join("sim").join("shots");
+        let dir = crate::workspace_dir::workspace_dot_dir(&ws.path).join("sim").join("shots");
         std::fs::create_dir_all(&dir).map_err(|e| SimError::new(500, "sim_io", format!("create {}: {e}", dir.display())))?;
         let name = format!("{}-{}{}.png", chrono::Utc::now().format("%Y%m%d-%H%M%S%3f"), row.wire_id(), region.map(|r| format!("-{r}")).unwrap_or_default());
         let path = dir.join(sanitize_file(&name));

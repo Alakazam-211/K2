@@ -386,8 +386,7 @@ pub fn resolve_session_storage_path(
             if let Some(live) = resolve_claude_session_file(session_id, project) {
                 live
             } else {
-                let arch = PathBuf::from(project)
-                    .join(".k2")
+                let arch = crate::workspace_dir::workspace_dot_dir(project)
                     .join("session-archive")
                     .join("user")
                     .join("claude")

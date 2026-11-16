@@ -640,7 +640,7 @@ fn log_writers_near_cap(key: &DocKey, count: u64, max: u64) {
 /// there is none. Creates the folder and its `.gitignore` once.
 pub fn conflict_dir_for(file: &std::path::Path) -> Option<std::path::PathBuf> {
     let root = file.ancestors().skip(1).find(|d| d.join(".k2").is_dir())?;
-    let dir = root.join(".k2").join("conflicts");
+    let dir = k2_core::workspace_dot_dir(root).join("conflicts");
     let ignore = dir.join(".gitignore");
     if !ignore.exists() {
         if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&ignore, "*\n")) {

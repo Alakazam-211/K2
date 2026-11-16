@@ -655,7 +655,7 @@ pub struct BriefInfo {
 /// never committed in a workspace that tracks `.k2/`.
 pub fn write_brief(project_path: &Path, slug: &str, text: &str) -> Result<BriefInfo, String> {
     check_brief(text).map_err(|e| e.hint)?;
-    let root = project_path.join(".k2").join("sidecars");
+    let root = crate::workspace_dir::workspace_dot_dir(project_path).join("sidecars");
     let dir = root.join(slug);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let ignore = root.join(".gitignore");

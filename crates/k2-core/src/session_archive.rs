@@ -181,8 +181,7 @@ pub fn archive_project_sessions(
     if !src.is_dir() {
         return ArchiveStats::default();
     }
-    let dest = Path::new(project_path)
-        .join(".k2")
+    let dest = crate::workspace_dir::workspace_dot_dir(project_path)
         .join("session-archive")
         .join("claude")
         .join(&slug);
@@ -198,7 +197,7 @@ pub fn archive_global_catchall(
     now: SystemTime,
 ) -> ArchiveStats {
     let projects_dir = home.join(".claude").join("projects");
-    let dest_root = home.join(".k2").join("session-archive").join("claude");
+    let dest_root = crate::paths::k2_home_in(home).join("session-archive").join("claude");
     let mut stats = ArchiveStats::default();
     let Ok(entries) = std::fs::read_dir(&projects_dir) else {
         return stats;

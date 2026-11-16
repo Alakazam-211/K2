@@ -415,8 +415,7 @@ fn find_claude(session_id: &str, project_path: &str) -> Option<PathBuf> {
     if project_path.is_empty() {
         return None;
     }
-    let archived = PathBuf::from(project_path)
-        .join(".k2")
+    let archived = crate::workspace_dir::workspace_dot_dir(project_path)
         .join("session-archive")
         .join("user")
         .join("claude")

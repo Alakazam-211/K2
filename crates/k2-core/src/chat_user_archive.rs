@@ -35,8 +35,7 @@ pub struct ArchivedSessionMeta {
 
 /// `<project>/.k2/session-archive/user/<provider>/`
 pub fn user_archive_dir(project_path: &str, provider: &str) -> PathBuf {
-    PathBuf::from(project_path)
-        .join(".k2")
+    crate::workspace_dir::workspace_dot_dir(project_path)
         .join("session-archive")
         .join("user")
         .join(provider)

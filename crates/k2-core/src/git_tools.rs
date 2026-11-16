@@ -117,7 +117,7 @@ impl PendingFlag {
 static MAYBE_PENDING: PendingFlag = PendingFlag::new();
 
 pub fn marker_path(root: &Path) -> PathBuf {
-    root.join(".k2").join("git-deferred.json")
+    crate::workspace_dir::workspace_dot_dir(root).join("git-deferred.json")
 }
 
 pub fn read_deferred(root: &Path) -> Option<Deferred> {
@@ -380,7 +380,7 @@ exit 1
 
 /// `<home>/.k2/bin/git-wait`.
 pub fn wait_shim_dir_at(home: &Path) -> PathBuf {
-    home.join(".k2").join("bin").join("git-wait")
+    crate::paths::k2_home_in(home).join("bin").join("git-wait")
 }
 
 /// Write the shim (`body`, from [`wait_shim_script`]) under `home`;

@@ -55,7 +55,6 @@
     "src/renderer/components/Settings/IconCropDialog.tsx": 1,
     "src/renderer/components/Settings/SettingsSearchModal.tsx": 1,
     "src/renderer/components/Settings/sections/CanonicalAgentModal.tsx": 12,
-    "src/renderer/components/Settings/sections/ContextLayersPreview.tsx": 5,
     "src/renderer/components/Settings/sections/DataSourcesBatchDialog.tsx": 1,
     "src/renderer/components/Settings/sections/HeartbeatsSection.tsx": 1,
     "src/renderer/components/Settings/sections/data-sources-ui.ts": 3,

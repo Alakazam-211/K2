@@ -176,7 +176,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/CanonicalAgentButtons.tsx',
   'components/Settings/sections/CanonicalAgentModal.tsx',
   'components/Settings/sections/CompanionSection.tsx',
-  'components/Settings/sections/ContextLayersPreview.tsx',
   'components/Settings/sections/ContextStackEditor.tsx',
   'components/Settings/sections/DomainsSection.tsx',
   'components/Settings/sections/FanoutConfirmModal.tsx',

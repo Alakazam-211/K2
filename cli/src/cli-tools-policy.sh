@@ -57,7 +57,7 @@ _cli_tool_id_for_verb() {
         inbox) echo "inbox" ;;
         wiki) echo "wiki" ;;
         respond) echo "respond" ;;
-        connections|reserve|release|roster|who) echo "connections" ;;
+        connections|reserve|release) echo "connections" ;;
         # k2 sidecar v1 (SC35): an `id` tool, so inside a K2 terminal the
         # daemon sees the session's passport, never the owner token.
         sidecar) echo "sidecar" ;;

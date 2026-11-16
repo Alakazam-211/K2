@@ -14,6 +14,29 @@
 #   connections / workspace / activity / --schema / ...), not
 #   every internal/deprecated arm. See the report note re: a generated
 #   approach (feasible later via a router+help introspection pass).
+#
+# Every top-level word the router takes needs an entry here, or a line in
+# the list below saying why it has none (one of: retired, stub, internal,
+# person-only, beta). tests/cli/schema_drift.sh reads both and fails on a
+# word with neither. An alias (feedback|tickets, k2 reminders) is covered
+# by its command's entry.
+#
+# BEGIN_SCHEMA_LEFT_OUT
+#   state           retired
+#   status          retired
+#   checkin         retired
+#   app-update      retired
+#   context         stub
+#   commit          internal
+#   reviews         internal
+#   hooks           internal
+#   reserve         internal
+#   release         internal
+#   trust-folders   internal
+#   onboarding      person-only
+#   api             person-only
+#   permission      beta
+# END_SCHEMA_LEFT_OUT
 cmd_schema() {
     # The manifest body is a QUOTED heredoc (<<'EOF'), so nothing in it is
     # interpolated: backticks, `$`, and `\\` are literal bytes and the body

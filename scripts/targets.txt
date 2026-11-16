@@ -1,0 +1,14 @@
+# Every test target, test-only feature and pending #[ignore] of the pack (scripts/check-targets.sh
+# reads this file and checks it). One row per line: PACKAGE|KIND|NAME|FEATURES|PARTS, the format
+# and the rules in scripts/check-targets.sh's header. The part is `check`: scripts/check.sh.
+# A row whose PARTS holds "pending ruling" waits on a decision; none may be left when a change
+# lands (CHECK_TARGETS_LANDING=1).
+
+# ---- k2-mpc-text --------------------------------------------------------------------------------
+k2-mpc-text|lib|k2_mpc_text||check
+k2-mpc-text|doctest|k2_mpc_text||excluded: the crate's docs hold no runnable example (cargo test --all-targets runs no doc examples)
+k2-mpc-text|test|agent_parity||check
+k2-mpc-text|test|docs||check
+k2-mpc-text|test|engineering_files||check
+k2-mpc-text|test|fidelity||check
+k2-mpc-text|test|session||check

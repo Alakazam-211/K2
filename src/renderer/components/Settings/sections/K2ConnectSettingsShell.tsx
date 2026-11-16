@@ -1,8 +1,10 @@
 // Settings → Network → Tunnel / Connected Servers and Settings → Access →
-// Admin Access (sidebar; one K2 Server group before 0.45.7). Tunnel and
-// Admin Access are one column at the Settings content width, like General.
-// Tunnel: status first, then the account, addresses, policies and Advanced.
-// Admin Access: People, then Password rules. Deep-link: `connections` →
+// Admin Access (sidebar; one K2 Server group before 0.45.7). Tunnel has two
+// sides under a fixed header, like Settings → Projects and Providers /
+// Models: status, the account and addresses on the left, Policies and
+// Advanced on the right, each side scrolling on its own. Admin Access is
+// one column at the Settings content width, like General: People, then
+// Password rules. Deep-link: `connections` →
 // Connected Servers; `k2-connect` → Tunnel; `k2-access` → Admin Access.
 
 import React from 'react'
@@ -12,6 +14,7 @@ import { K2ConnectSection } from './K2ConnectSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
+import { SETTING_ROW_HINT } from '../controls/SettingControls'
 
 type ConnectTab = 'tunnel' | 'people' | 'servers'
 
@@ -42,6 +45,26 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
   const activeSection = useSettingsStore((s) => s.activeSection)
   const hideTunnel = isAirgap()
   const tab = tabFromSection(activeSection, hideTunnel)
+
+  if (tab === 'tunnel' && !hideTunnel) {
+    // The two sides fill the page edge to edge, each with its own scroll
+    // and side padding (controls/halves), under the header's hairline.
+    return (
+      <div className="flex flex-col h-full min-h-0 overflow-hidden">
+        <header className="flex-shrink-0 px-6 pt-6 pb-4 border-b border-[var(--color-border)]">
+          <div className="min-w-0 max-w-[52rem]">
+            <h2 className="type-title text-[var(--color-text-primary)]">{PAGE.tunnel.title}</h2>
+            <p className={SETTING_ROW_HINT}>{PAGE.tunnel.blurb}</p>
+          </div>
+        </header>
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <SectionErrorBoundary>
+            <K2ConnectSection panel="tunnel" />
+          </SectionErrorBoundary>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden p-6">
@@ -77,18 +100,9 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
             </SectionErrorBoundary>
           </div>
           )
-        ) : tab === 'tunnel' && !hideTunnel ? (
-          /* One column: status, account, addresses, policies, Advanced. */
-          <div className="h-full min-h-0 overflow-y-auto pr-3 pb-8 [scrollbar-gutter:stable]">
-            <div className="w-full max-w-[52rem]">
-              <SectionErrorBoundary>
-                <K2ConnectSection panel="tunnel" />
-              </SectionErrorBoundary>
-            </div>
-          </div>
         ) : (
           /* Admin Access: one column at the Settings content width, like
-             Tunnel: People, then Password rules. */
+             General: People, then Password rules. */
           <div className="h-full min-h-0 overflow-y-auto pr-3 pb-8 [scrollbar-gutter:stable]">
             <div className="w-full max-w-[52rem]">
               <SectionErrorBoundary>

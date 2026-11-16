@@ -39,20 +39,17 @@ import {
   SaveNote,
   SaveError,
   useSaveStatus,
-  SETTING_FIELD_WIDTH,
 } from '../controls/SettingControls'
+import { HALVES_MIN_WIDTH, ScrollEdge, halves, useCssWidth } from '../controls/halves'
 import { summarizeTunnel, hostOf } from './tunnel-status'
 import { HealthWord, StatusDot } from './ConnectionsParts'
 import { parseK2Role, type K2Role } from './connect-user-roles'
 import { AdminAccessPanel } from './AdminAccessPanel'
 import { errText, whoamiGet } from './admin-access-api'
-import { BetaTag, Toggle, Button, Callout, Input } from '@/components/ui'
-import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
-import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
-import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
-import { ConnectLoginIngressRow } from '../shared/ConnectLoginIngressRow'
-import { BootStatusPublicRow } from '../shared/BootStatusPublicRow'
+import { BetaTag, Toggle, Button, Callout, Input, cx } from '@/components/ui'
 import { TunnelUrlsPanel } from './TunnelUrlsPanel'
+import { TunnelPolicies } from './TunnelPolicies'
+import { TunnelAdvanced } from './TunnelAdvanced'
 import { canManagePublishedSubdomains } from '@/lib/published-subdomains'
 import {
   signIn as accountSignIn,
@@ -67,18 +64,11 @@ import {
 } from '../lib/k2-account'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { useSettingsStore } from '@/stores/settings'
 import { primaryScope } from '@/kessel/server-scope'
 import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 import { isAirgap } from '@/lib/airgap'
-import { RELAY_HOST, ZONE_SUFFIX, boxHost } from '@/lib/hosts'
-
-// 0.46.6: no relay address lives here. The daemon owns the default
-// (relay.k2.dev) and the relay list; the form shows what the daemon
-// stores and only placeholders otherwise (an empty field is never sent).
-const RELAY_PLACEHOLDER = RELAY_HOST
-const PORT_PLACEHOLDER = '7000'
+import { boxHost } from '@/lib/hosts'
 
 /** POST /cli/tunnel/config body for a subdomain bind (account flow). No
  *  relay address: like `k2 connect login`, a bind never pins one, so the
@@ -480,18 +470,6 @@ export function K2ConnectSection({
   // remote daemon's users, already role-gated via /cli/auth/whoami).
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isRemote = activeHost !== 'local'
-  // Federation master switch for the ACTIVE host. persistAndApply is
-  // host-aware, so toggling while connected to a remote server writes to THAT
-  // server's daemon — that's the per-server enable.
-  const federationEnabled = useSettingsStore((s) => s.federationEnabled)
-  const setFederationEnabled = useSettingsStore((s) => s.setFederationEnabled)
-  // 0.40.43 (1c): public /v1 API switch for the ACTIVE host. Same
-  // host-aware persist as the federation master above; the daemon checks
-  // the flag PER REQUEST, so this toggle needs no restart and therefore
-  // NO confirm+reboot dialog — flipping it is immediately effective and
-  // immediately reversible.
-  const apiEnabled = useSettingsStore((s) => s.apiEnabled)
-  const setApiEnabled = useSettingsStore((s) => s.setApiEnabled)
   // K2 #629: the viewer's role on the server this window is on (whoami).
   // It gates Policies and the published-sites actions on Tunnel. Admin
   // Access (AdminAccessPanel) reads its own.
@@ -1117,117 +1095,27 @@ export function K2ConnectSection({
         ))}
       </div>
     ) : undefined
-  // Advanced → Set up by hand: the address, token and relay as rows.
-  const manualRows = (
-    <div className="space-y-3" data-testid="tunnel-manual">
-      <div className="flex items-center justify-between gap-6" data-settings-id="k2-connect.subdomain">
-        <label htmlFor="tunnel-manual-sub" className="type-row text-[var(--color-text-primary)]">Address</label>
-        <div className={`${SETTING_FIELD_WIDTH} flex items-center gap-1.5 flex-shrink-0`}>
-          <Input id="tunnel-manual-sub" className="flex-1 min-w-0 type-control" placeholder="alex" value={subdomain} onChange={(e) => setSubdomain(e.target.value)} />
-          <span className="type-hint text-[var(--color-text-secondary)]">{ZONE_SUFFIX}</span>
+  if (panel !== 'tunnel') {
+    return (
+      <div className="w-full h-full min-h-0 flex flex-col">
+        {/* Scroll owned by parent shell panes; avoid nested overflow here. */}
+        <div className="space-y-6 pb-4">
+          {/* ── Policies alone (Connected Servers under air-gap) ── */}
+          {panel === 'policies' && <TunnelPolicies isRemote={isRemote} myRole={myRole} />}
+          {/* ── Admin Access: the people who can sign in, and the password rules. ── */}
+          {panel === 'people' && <AdminAccessPanel />}
         </div>
       </div>
-      <div className="flex items-center justify-between gap-6" data-settings-id="k2-connect.token">
-        <label htmlFor="tunnel-manual-token" className="type-row text-[var(--color-text-primary)]">
-          Token{tokenSet && <span className="type-hint text-[var(--color-text-secondary)] ml-2">saved</span>}
-        </label>
-        <Input
-          id="tunnel-manual-token"
-          className={`${SETTING_FIELD_WIDTH} flex-shrink-0 type-control`}
-          type="password"
-          placeholder={tokenSet ? 'Leave blank to keep the saved one' : 'From your k2.dev account'}
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-        />
-      </div>
-      <div className="flex items-center justify-between gap-6" data-settings-id="k2-connect.server-addr">
-        <label htmlFor="tunnel-manual-relay" className="type-row text-[var(--color-text-primary)]">Relay and port</label>
-        <div className={`${SETTING_FIELD_WIDTH} flex items-center gap-1.5 flex-shrink-0`}>
-          <Input
-            id="tunnel-manual-relay"
-            className="flex-1 min-w-0 type-control"
-            placeholder={RELAY_PLACEHOLDER}
-            value={serverAddr}
-            onChange={(e) => {
-              setServerAddr(e.target.value)
-              setRelayEdited(true)
-            }}
-          />
-          <Input
-            aria-label="Relay port"
-            className="w-16 flex-shrink-0 type-control"
-            placeholder={PORT_PLACEHOLDER}
-            value={serverPort}
-            onChange={(e) => {
-              setServerPort(e.target.value)
-              setRelayEdited(true)
-            }}
-          />
-        </div>
-      </div>
-      <SaveError state={manualSave.state} />
-      <div className="flex items-center justify-end gap-2">
-        <SaveNote state={manualSave.state} />
-        <Button onClick={() => void saveConfig()} disabled={busy}>
-          {busy ? 'Saving…' : 'Save'}
-        </Button>
-      </div>
-    </div>
-  )
+    )
+  }
 
-  // Policies: what other servers, apps and agents may do on the server
-  // you're viewing. On Tunnel, and alone on Connected Servers under air-gap.
-  const policiesGroup = (
-    <SettingsGroup
-      title="Policies"
-      hint={`What other servers, apps and agents may do on ${isRemote ? 'the server you are viewing' : 'this server'}.`}
-      card
-      testId="tunnel-policies"
-    >
-      {myRole !== 'member' ? (
-        <>
-          <SettingRow
-            settingId="k2-connect.federation"
-            label="Connect agents across servers"
-            hint="Agents here can message agents on the servers you add under Connected Servers."
-          >
-            <Toggle
-              checked={federationEnabled}
-              onChange={(next) => void setFederationEnabled(next)}
-              aria-label="Connect agents across servers"
-            />
-          </SettingRow>
-          <AllowRemoteInstructRow />
-          <SettingRow
-            settingId="k2-connect.public-api"
-            label="Public API"
-            hint="Apps with a key from Settings → API Keys can use this server. Takes effect right away."
-          >
-            <Toggle checked={apiEnabled} onChange={(next) => void setApiEnabled(next)} aria-label="Public API" />
-          </SettingRow>
-          <DnsManageEnabledRow />
-          <AgentsCanCreateConnectionsRow />
-          <ConnectLoginIngressRow />
-          <BootStatusPublicRow />
-        </>
-      ) : (
-        <SettingRow label="Only an admin can change these." hint="Ask the owner of this server if something here needs to change.">
-          {null}
-        </SettingRow>
-      )}
-    </SettingsGroup>
-  )
+  // ── Tunnel: two sides. Left: status first (can this server be reached,
+  // where, and the one next step), then the k2.dev account and address,
+  // and the addresses it serves. Right: Policies, then Advanced, so a long
+  // list of sites never pushes them far down. ──
   return (
-    <div className="w-full h-full min-h-0 flex flex-col">
-      {/* Scroll owned by parent shell panes; avoid nested overflow here. */}
-      <div className="space-y-6 pb-4">
-        {/* ── Policies alone (Connected Servers under air-gap) ── */}
-        {panel === 'policies' && policiesGroup}
-
-        {/* ── Tunnel: status first (can this server be reached, where, and
-            the one next step), then the k2.dev account and address, the
-            addresses it serves, the policies, and Advanced last. ── */}
-        {panel === 'tunnel' && (
+    <TunnelSides
+      left={
         <>
         {isRemote ? (
           <SettingsLoadState
@@ -1492,54 +1380,70 @@ export function K2ConnectSection({
             serverStatus={isRemote ? undefined : status}
           />
         </SettingsGroup>
-
-        {policiesGroup}
-
-        {/* ── Advanced: manual setup and removing the tunnel ── */}
-        {!isRemote && summary.state !== 'loading' && summary.state !== 'read-failed' && (
-          <SettingsGroup
-            title="Advanced"
-            hint="Set the tunnel up by hand, or remove it from this computer."
-            card
-            testId="tunnel-advanced"
-          >
-            <SettingRow
-              label="Set up by hand"
-              hint="Enter an address and token yourself instead of signing in."
-              below={showAdvanced ? manualRows : undefined}
-            >
-              <Button variant="quiet" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((v) => !v)}>
-                {showAdvanced ? 'Hide' : 'Set up by hand'}
-              </Button>
-            </SettingRow>
-            {tokenSet && !tunnelReleased && (
-              <SettingRow
-                settingId="k2-connect.release-device"
-                label={`Release ${subdomain.trim() ? hostOf(subdomain.trim()) : 'the address'} from this computer`}
-                hint="It stops reaching this computer. Your account keeps the address for another computer."
-              >
-                <Button variant="danger-quiet" onClick={() => void releaseFromDevice('release')} disabled={busy || swapBusy}>
-                  Release…
-                </Button>
-              </SettingRow>
-            )}
-            {tokenSet && !tunnelReleased && (
-              <SettingRow
-                label="Forget the tunnel settings"
-                hint="Deletes this computer's tunnel settings without telling k2.dev. For settings copied from another computer."
-              >
-                <Button variant="danger-quiet" onClick={() => void releaseFromDevice('forget')} disabled={busy || swapBusy}>
-                  Forget…
-                </Button>
-              </SettingRow>
-            )}
-          </SettingsGroup>
-        )}
         </>
-        )}
+      }
+      right={
+        <>
+          <TunnelPolicies isRemote={isRemote} myRole={myRole} />
+          {/* ── Advanced: manual setup and removing the tunnel ── */}
+          {!isRemote && summary.state !== 'loading' && summary.state !== 'read-failed' && (
+            <TunnelAdvanced
+              showManual={showAdvanced}
+              onToggleManual={() => setShowAdvanced((v) => !v)}
+              form={{
+                subdomain,
+                onSubdomain: setSubdomain,
+                token,
+                onToken: setToken,
+                tokenSet,
+                serverAddr,
+                onServerAddr: (v) => {
+                  setServerAddr(v)
+                  setRelayEdited(true)
+                },
+                serverPort,
+                onServerPort: (v) => {
+                  setServerPort(v)
+                  setRelayEdited(true)
+                },
+                saveState: manualSave.state,
+                busy,
+                onSave: () => void saveConfig(),
+              }}
+              releaseHost={tokenSet && !tunnelReleased ? (subdomain.trim() ? hostOf(subdomain.trim()) : 'the address') : null}
+              onRelease={() => void releaseFromDevice('release')}
+              onForget={() => void releaseFromDevice('forget')}
+              disabled={busy || swapBusy}
+            />
+          )}
+        </>
+      }
+    />
+  )
+}
 
-        {/* ── Admin Access: the people who can sign in, and the password rules. ── */}
-        {panel === 'people' && <AdminAccessPanel />}
+/** The Tunnel page's body (controls/halves, as on Settings → Projects and
+ *  Providers / Models): two sides each scrolling on its own, stacking left
+ *  above right in one scroll below HALVES_MIN_WIDTH. The page title sits
+ *  above, in the shell. */
+function TunnelSides({ left, right }: { left: React.ReactNode; right: React.ReactNode }): React.JSX.Element {
+  const [bodyRef, bodyWidth] = useCssWidth(HALVES_MIN_WIDTH)
+  const stacked = bodyWidth < HALVES_MIN_WIDTH
+  return (
+    <div className="w-full h-full min-h-0 flex flex-col">
+      <div ref={bodyRef} data-testid="tunnel-halves" data-layout={stacked ? 'stacked' : 'split'} className={halves.body(stacked)}>
+        {stacked && <ScrollEdge at="top" />}
+        <div data-testid="tunnel-left" className={halves.left(stacked)}>
+          {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+          <div className="pt-5 space-y-6">{left}</div>
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+        </div>
+        <div data-testid="tunnel-right" className={halves.right(stacked)}>
+          {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+          <div className={cx(halves.rightTop(stacked), 'space-y-6')}>{right}</div>
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+        </div>
+        {stacked && <ScrollEdge at="bottom" />}
       </div>
     </div>
   )

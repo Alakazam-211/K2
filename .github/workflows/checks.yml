@@ -156,14 +156,16 @@ jobs:
       - name: k2-home gate (PRD prd-k2so-cleanup-v1 §5)
         run: bash scripts/k2-home-gate.sh
 
-      - name: Zone gate (no new hard-coded k2.dev in Rust code)
-        run: python3 scripts/garden/zone-gate.py
-
-      - name: Zone gate (no new hard-coded k2.dev in renderer code)
-        run: python3 scripts/garden/zone-gate.py --area renderer
+      # k2.dev (the zone gate, Rust and renderer) and the product's names
+      # (K2, K5, the release repo) outside the brand and hosts modules.
+      - name: Brand gate (no new hard-coded product name or k2.dev)
+        run: bash scripts/brand-gate.sh
 
       - name: Zone gate on broken trees
         run: bash tests/garden/zone-gate.sh
+
+      - name: Brand gate on broken trees
+        run: bash tests/garden/brand-gate.sh
 
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh
